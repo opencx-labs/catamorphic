@@ -1443,6 +1443,7 @@ export interface WorkWorkers {
   pending_credential_hash: string | null;
   pending_issued_at: Timestamp | null;
   pending_public_key: string | null;
+  pending_rotation: string | null;
   pool: Generated<boolean>;
   released_at: Timestamp | null;
   retain_days: number | null;

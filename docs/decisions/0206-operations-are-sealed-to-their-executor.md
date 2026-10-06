@@ -26,19 +26,27 @@ data. A row holds the kind in the clear and the ciphertext; Postgres, its
 log and its backups hold nothing else of it. An executor without a key
 cannot connect and receives nothing; a worker presenting another key than
 the one it enrolled with is refused. Receipts stay plain: their results
-enter the session log anyway. Workers older than this speak protocol 1 and
+enter the session log anyway. Their errors lose any URL's credentials on
+the executor and again before they are stored, and a failed clone never
+names its credentialed URL. Workers older than this speak protocol 1 and
 are refused.
 
 **Credentials rotate.** A worker replaces its credential and key pair when
 its credential is 30 days old and when the operator asks
 (`POST /_work/operator/workers/:name/rotate`): the control plane says so in
 its answers to connect, poll and renew, never by refusing work. The worker
-generates a key pair and calls `POST /api/workers/rotate`; the new
-credential stays pending beside the current one, and asking again replaces
-it. The worker writes the new credential and key to disk before using
-them, and their first use makes them current and ends the old credential,
-so a lost response never strands a worker. It keeps its previous key in
-memory for operations sealed before then.
+generates a key pair and calls `POST /api/workers/rotate` with a UUIDv7
+rotation id; the new credential stays pending beside the current one, and
+only a later id replaces it, so a request delayed on its way never
+replaces the credential a later one issued. The worker writes the new
+credential and key to disk, beside the pair they replace, before using
+them; their first use makes them current and ends the old credential, so
+a lost response never strands a worker. Should the control plane still
+refuse the new credential, the worker goes back to the old one, which was
+never ended, and rotates again. It keeps keys it rotated away from for 35
+minutes, the longest an operation other than a long command waits; an
+operation the executor can no longer open did not run, so its controller
+seals it again to the current key.
 
 **Local wakeups.** A replica that queues or settles an operation wakes its
 own waiting polls and controllers at once, as working state of requests it

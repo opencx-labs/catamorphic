@@ -6,6 +6,7 @@ import {
   type ExecOpts,
   type ExecResult,
   type GitCloneOpts,
+  gitCloneFailure,
   refuseSignIns,
   type SandboxHandle,
   type SandboxProvider,
@@ -195,7 +196,11 @@ export class CloudflareSandboxProvider implements SandboxProvider {
     const clone = await this.executeCommand(sandboxId, shellJoin(args));
     if (clone.exitCode !== 0) {
       throw new CloudflareSandboxError({
-        message: `git clone failed: ${clone.result}`,
+        // Never the credentialed URL git may repeat.
+        message: gitCloneFailure({
+          output: clone.result,
+          ...(opts ? { opts } : {}),
+        }).message,
         status: 500,
         code: "git_clone_failed",
       });

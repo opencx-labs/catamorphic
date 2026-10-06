@@ -5,6 +5,7 @@ import {
   ExecutorPublicKeySchema,
   openOperation,
   PROCESS_SIGNALS,
+  redactUrlCredentials,
   type SandboxProcessProvider,
   type SandboxProvider,
   SealedOperationOpenError,
@@ -577,6 +578,37 @@ export interface RemoteExecutorLease {
   leaseToken: string;
 }
 
+const IMAGE_BUILD_TIMEOUT_MS = 35 * 60_000;
+
+/**
+ * How long an executor keeps a key it rotated away from (ADR 0206): the
+ * longest an operation other than a long command can wait in the queue, so
+ * every operation sealed to that key before the rotation still opens. A
+ * command whose own timeout is longer, sealed to a key the executor no
+ * longer holds, did not run; its controller seals it again to the current
+ * key.
+ */
+export const RETIRED_KEY_RETENTION_MS = IMAGE_BUILD_TIMEOUT_MS;
+
+/**
+ * The receipt error of an operation its executor could not open: it was
+ * sealed to a key the executor no longer holds, so it did not run, and its
+ * controller seals it again to the executor's current key.
+ */
+export const OPERATION_NOT_OPENED_ERROR =
+  "This operation was not sealed to this machine's key; it did not run";
+
+/** How many times a controller seals an operation its executor could not open. */
+const RESEAL_ATTEMPTS = 3;
+
+/** The executor could not open the operation; it did not run. */
+class OperationNotOpenedError extends Error {
+  constructor() {
+    super(OPERATION_NOT_OPENED_ERROR);
+    this.name = "OperationNotOpenedError";
+  }
+}
+
 /** How long a controller waits for one operation's receipt. */
 function operationTimeoutMs(operation: RemoteOperation): number {
   // A first sandbox from a Dockerfile builds its image on the executor,
@@ -585,7 +617,7 @@ function operationTimeoutMs(operation: RemoteOperation): number {
     operation.kind === "create" &&
     operation.options.image?.kind === "dockerfile"
   )
-    return 35 * 60_000;
+    return IMAGE_BUILD_TIMEOUT_MS;
   // Destroying every sandbox and deleting large volumes.
   if (operation.kind === "machine.reset") return 15 * 60_000;
   // A command's own timeout plus a margin, never less than five minutes.
@@ -730,7 +762,31 @@ export class RemoteOperationQueue {
     );
   }
 
+  /**
+   * Queue one operation and wait for its receipt. An operation its executor
+   * could not open (sealed to a key it rotated away from, ADR 0206) did not
+   * run, so it is sealed again to the executor's current key.
+   */
   private async dispatch(args: {
+    executor: string;
+    leaseToken: string;
+    operation: RemoteOperation;
+    leaseHeld: (leaseToken: string) => Promise<boolean>;
+    label: string;
+    span: Span;
+  }): Promise<unknown> {
+    for (let attempt = 1; ; attempt++) {
+      try {
+        return await this.deliver(args);
+      } catch (error) {
+        if (!(error instanceof OperationNotOpenedError)) throw error;
+        args.span.setAttribute("catamorphic.executor.resealed", attempt);
+        if (attempt >= RESEAL_ATTEMPTS) throw error;
+      }
+    }
+  }
+
+  private async deliver(args: {
     executor: string;
     leaseToken: string;
     operation: RemoteOperation;
@@ -782,7 +838,9 @@ export class RemoteOperationQueue {
             .executeTakeFirstOrThrow();
           if (job.status === "completed") return job.response;
           if (job.status === "failed")
-            throw new Error(job.error ?? "Remote execution failed");
+            throw job.error === OPERATION_NOT_OPENED_ERROR
+              ? new OperationNotOpenedError()
+              : new Error(job.error ?? "Remote execution failed");
           if (Date.now() - leaseCheckedAt >= LEASE_CHECK_MS) {
             leaseCheckedAt = Date.now();
             if (!(await args.leaseHeld(args.leaseToken))) break;
@@ -927,8 +985,9 @@ export class RemoteOperationQueue {
 
   /**
    * Executor side: record one operation's outcome and drop its payload, and
-   * wake its controller if it waits in this process. Idempotent: a receipt
-   * retried after its response was lost succeeds.
+   * wake its controller if it waits in this process. An error is stored
+   * without any URL's credentials (ADR 0206). Idempotent: a receipt retried
+   * after its response was lost succeeds.
    */
   async complete(
     args: RemoteExecutorLease & {
@@ -938,13 +997,17 @@ export class RemoteOperationQueue {
     },
   ): Promise<void> {
     const status = args.error === undefined ? "completed" : "failed";
+    const error =
+      args.error === undefined
+        ? null
+        : withoutNul(redactUrlCredentials(args.error));
     const updated = await this.db
       .updateTable("remote_operations")
       .set({
         status,
         // A bare string result must reach jsonb as JSON, not raw text.
         response: jsonColumn(storableJson(args.response)),
-        error: args.error === undefined ? null : withoutNul(args.error),
+        error,
         // The sealed payload leaves Postgres once the operation has run.
         operation: sql`jsonb_build_object('kind', operation->'kind')`,
       })
@@ -965,11 +1028,7 @@ export class RemoteOperationQueue {
       .where("executor", "=", args.executor)
       .where("lease_token", "=", args.leaseToken)
       .where("status", "=", status)
-      .where(
-        "error",
-        args.error === undefined ? "is" : "=",
-        args.error === undefined ? null : withoutNul(args.error),
-      )
+      .where("error", error === null ? "is" : "=", error)
       .executeTakeFirst();
     if (!recorded) throw new RemoteReceiptRefusedError();
   }

@@ -19,6 +19,8 @@ import {
   assertSandboxResources,
   assertSandboxVolumes,
   dockerfileImageReference,
+  gitCloneFailure,
+  gitCloneUrl,
   imageUserHome,
   machineSignInHome,
   SANDBOX_CAPABILITIES,
@@ -547,7 +549,7 @@ export class ContainerSandboxProvider implements SandboxProvider {
     clonePath: string,
     opts?: GitCloneOpts,
   ): Promise<void> {
-    const cloneUrl = withCredentials(url, opts);
+    const cloneUrl = gitCloneUrl(url, opts);
     const branchArg = opts?.branch
       ? ` --branch ${shellQuote(opts.branch)}`
       : "";
@@ -557,7 +559,10 @@ export class ContainerSandboxProvider implements SandboxProvider {
       { timeout: 120 },
     );
     if (clone.exitCode !== 0)
-      throw new Error(`git clone failed: ${clone.result}`);
+      throw gitCloneFailure({
+        output: clone.result,
+        ...(opts ? { opts } : {}),
+      });
     if (opts?.commitId)
       await this.gitCheckout(sandboxId, clonePath, opts.commitId);
   }
@@ -1143,14 +1148,6 @@ async function* stdoutOf(
 ): AsyncGenerator<Uint8Array> {
   for await (const frame of frames)
     if (frame.stream === "stdout") yield frame.data;
-}
-
-function withCredentials(url: string, opts?: GitCloneOpts): string {
-  if (!opts?.username && !opts?.password) return url;
-  const parsed = new URL(url);
-  if (opts.username) parsed.username = opts.username;
-  if (opts.password) parsed.password = opts.password;
-  return parsed.toString();
 }
 
 function shellQuote(value: string): string {

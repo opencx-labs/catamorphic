@@ -164,12 +164,14 @@ describe.skipIf(!process.env.DATABASE_URL)(
       const lostKeys = generateExecutorKeyPair();
       const lost = await call(first.credential, "rotate", {
         publicKey: lostKeys.publicKey,
+        rotation: epoch(),
       });
       expect(lost.statusCode).toBe(200);
       // The worker asks again with the credential it still holds.
       const nextKeys = generateExecutorKeyPair();
       const rotated = await call(first.credential, "rotate", {
         publicKey: nextKeys.publicKey,
+        rotation: epoch(),
       });
       expect(rotated.statusCode).toBe(200);
       const next = String(rotated.json().credential);
