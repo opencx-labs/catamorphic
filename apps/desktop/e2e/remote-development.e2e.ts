@@ -87,18 +87,31 @@ async function command(label: string): Promise<void> {
   await runWait(`return !overlayOpen();`, { label: `palette ran ${label}` });
 }
 
-/** Type a line into the focused chat terminal and run it. */
+/**
+ * Type a line into the chat terminal and run it. The line ends with a
+ * newline the terminal sends as Return, as it does for text typed or
+ * pasted into it.
+ */
 async function type(line: string): Promise<void> {
   await run(`$('textarea[aria-label="Terminal input"]').focus(); return true;`);
-  await app.insertText(line);
-  await app.press("Enter");
+  await app.insertText(`${line}\n`);
 }
 
-/** Wait until the chat terminal has printed this text. */
-function terminalShows(text: string): Promise<unknown> {
-  return runWait(
-    `return window.catamorphicDesktop.terminalBuffer(window.__terminalIds[0]).then((b) => !!b?.buffer.includes(${JSON.stringify(text)}));`,
-    { timeoutMs: 30_000, label: `terminal shows ${text}` },
+/** Wait until the chat terminal has printed this text; say what it printed otherwise. */
+async function terminalShows(text: string): Promise<void> {
+  const buffer = () =>
+    app.eval<string>(
+      `window.catamorphicDesktop.terminalBuffer(window.__terminalIds[0]).then((b) => b?.buffer ?? '')`,
+    );
+  const deadline = Date.now() + 30_000;
+  let printed = "";
+  while (Date.now() < deadline) {
+    printed = await buffer();
+    if (printed.includes(text)) return;
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  throw new Error(
+    `The terminal never showed ${JSON.stringify(text)}; it printed ${JSON.stringify(printed.slice(-1500))}`,
   );
 }
 
