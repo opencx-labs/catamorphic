@@ -46,6 +46,18 @@ const installedSchema = z.object({
     .nullable()
     .default(null),
   uninstallUrl: z.string().nullable().default(null),
+  /**
+   * A downloaded update that asks for nothing new, waiting for the running
+   * version to be idle (or for the next start).
+   */
+  stagedUpdate: z
+    .object({
+      version: z.string(),
+      path: z.string(),
+      approved: permissionSetSchema,
+    })
+    .nullable()
+    .default(null),
 });
 export type InstalledExtension = z.infer<typeof installedSchema>;
 

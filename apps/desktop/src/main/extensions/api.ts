@@ -1189,7 +1189,12 @@ export function createApi(host: ExtensionsHost): Record<string, ApiHandler> {
         typeof props.filename === "string" && props.filename
           ? (props.filename.split(/[\\/]/).at(-1) ?? null)
           : null;
-      const started = host.downloads.expect(profile(caller), url, filename);
+      // Chromium names the item by the parsed address, as URL parses it.
+      const started = host.downloads.expect(
+        profile(caller),
+        parsed.href,
+        filename,
+      );
       const headers = Object.fromEntries(
         (Array.isArray(props.headers) ? props.headers : []).flatMap(
           (header) => {
@@ -1202,7 +1207,7 @@ export function createApi(host: ExtensionsHost): Record<string, ApiHandler> {
         ),
       );
       session.downloadURL(
-        url,
+        parsed.href,
         Object.keys(headers).length > 0 ? { headers } : {},
       );
       const id = await started;

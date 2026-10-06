@@ -19,6 +19,8 @@ export const EXTENSION_CHANNELS = {
   popupMode: "catamorphic:extension-popup-mode",
   /** A popup view → its renderer (sendToHost); main → a popup to close. */
   popupClose: "catamorphic:extension-popup-close",
+  /** A page (any frame of a tab or side panel) → main: the person pressed in it. */
+  pagePressed: "catamorphic:extension-page-pressed",
   /** The Chrome Web Store page → main. */
   webstore: "catamorphic:extension-webstore",
   /** Main → the Chrome Web Store page. */

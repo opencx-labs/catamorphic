@@ -80,14 +80,19 @@ store check runs on its own), and `fontSettings` reports default fonts.
   with an extension that filters requests drops the Sec-CH-UA listener and
   loads the hidden brand extension (`main/extensions/brand.ts`) instead. Do
   not add another `webRequest` listener to a browsing session.
-- **Debugger.** One extension per tab, on its own session, and only on web
-  pages: the session ends as the page leaves the web (another extension's
-  page, the Web Store, a local file), and child targets that aren't web
-  pages are detached before the client hears of them. No `Browser`,
-  `Target` beyond auto-attaching (flattened) frames, tracing, memory, file
-  inputs or file drags, other sites' cookies, downloads or certificate
-  commands; `Page.navigate` only to web addresses. The tab shows who is
-  controlling it, with Stop.
+- **Debugger.** One extension per tab, and only on web pages: the session
+  ends as the page leaves the web, directly or through a redirect (another
+  extension's page, the Web Store, a local file), and child targets that
+  aren't web pages are detached before the client hears of them. Other
+  extensions' content-script worlds stay hidden: their contexts aren't
+  reported, and commands naming them (by context or object id) fail. No
+  `Browser`, `Target` beyond auto-attaching (flattened) frames, `Debugger`
+  or `HeapProfiler` (both reach every world in the page), tracing, memory,
+  file inputs or file drags, other sites' cookies, downloads or certificate
+  commands; `Page.navigate` only to web addresses. A tab Work's own browser
+  driver holds is shared, and the extension's end detaches it all the
+  same, so nothing it set up stays. The tab shows who is controlling it,
+  with Stop.
 - **Native messaging.** Hosts registered for Work
   (`<userData>/NativeMessagingHosts`), Google Chrome or Chromium, when the
   host's manifest names the calling extension and the extension has
@@ -113,8 +118,9 @@ pattern covers, permissions that warn), never as warning text. Updates are
 checked a minute after the profile opens once five hours have passed, then
 every five hours. One that asks for more turns the extension off until the
 person accepts; one for an extension in use (a popup or side panel open, a
-debugger session, a native host) waits until it is idle and fires
-`runtime.onUpdateAvailable`; one the person turned off stays off. Installs,
+debugger session, a native host) is downloaded and waits beside it, fires
+`runtime.onUpdateAvailable` once, and goes in when the extension is idle,
+reloads or next starts; one the person turned off stays off. Installs,
 turning on or off and removals from the store page need a click there.
 Developer mode loads unpacked folders, which stay where they are and are
 never deleted.

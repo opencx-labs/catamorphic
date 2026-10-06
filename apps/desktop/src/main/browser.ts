@@ -423,7 +423,7 @@ export function registerBrowserSupport(
   // the address it asked for (a redirect changes the item's final one).
   const expectedDownloads = new Map<
     string,
-    { name: string | null; claimed: (id: string) => void }
+    { name: string | null; claimed: (id: string) => void }[]
   >();
   const downloadListeners = new Set<(profileId: string) => void>();
   const downloads = new DownloadsManager(new DownloadsStore(profilesDir), {
@@ -431,9 +431,10 @@ export function registerBrowserSupport(
       process.env.CATAMORPHIC_DOWNLOADS_DIR || app.getPath("downloads"),
     claim: (profileId, item) => {
       const key = `${profileId}\n${item.getURLChain()[0] ?? item.getURL()}`;
-      const expected = expectedDownloads.get(key);
-      expectedDownloads.delete(key);
-      return expected ?? null;
+      const waiting = expectedDownloads.get(key);
+      const expected = waiting?.shift() ?? null;
+      if (waiting?.length === 0) expectedDownloads.delete(key);
+      return expected;
     },
     broadcast: (profileId, list) => {
       for (const window of windows.windowsFor(profileId))
@@ -558,11 +559,17 @@ export function registerBrowserSupport(
             },
           };
           const timer = setTimeout(() => {
-            if (expectedDownloads.get(key) === entry)
-              expectedDownloads.delete(key);
+            const waiting = expectedDownloads.get(key) ?? [];
+            const rest = waiting.filter((other) => other !== entry);
+            if (rest.length > 0) expectedDownloads.set(key, rest);
+            else expectedDownloads.delete(key);
             resolve(null);
           }, 10_000);
-          expectedDownloads.set(key, entry);
+          // Two downloads of one address are claimed in order.
+          expectedDownloads.set(key, [
+            ...(expectedDownloads.get(key) ?? []),
+            entry,
+          ]);
         }),
     },
   });
@@ -1080,12 +1087,6 @@ export function registerBrowserSupport(
         if (/^https?:/i.test(url)) openAsTab(url);
         return { action: "deny" };
       });
-    });
-    // A press in another page (a tab, a side panel) closes an extension
-    // popup, as Chrome's closes when it loses focus: guests share their
-    // window's focus, and a page can hold on to it.
-    contents.on("before-mouse-event", (_event, mouse) => {
-      if (mouse.type === "mouseDown") extensions.closePopupsBeside(contents);
     });
     contents.on("before-input-event", (event, input) => {
       if (input.type !== "keyDown") return;

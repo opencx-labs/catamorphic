@@ -239,6 +239,13 @@ describe("permissionWarnings", () => {
         { permissions: [], origins: ["*://*.google.com/*"] },
       ).origins,
     ).toEqual(["*://*.google.com/*"]);
+    // `tabs` warns of nothing new to an extension that reads every site.
+    expect(
+      accessIncrease(
+        { permissions: [], origins: ["<all_urls>"] },
+        { permissions: ["tabs", "webNavigation"], origins: ["<all_urls>"] },
+      ).permissions,
+    ).toEqual([]);
     // Access the approval already covers adds nothing.
     expect(
       isEmptyAccess(

@@ -249,8 +249,9 @@ export function ExtensionToolbar({
                 if (node) buttons.current.set(action.extensionId, node);
                 else buttons.current.delete(action.extensionId);
               }}
-              onPointerDown={() => {
+              onPointerDown={(event) => {
                 pressedOpen.current =
+                  event.button === 0 &&
                   popupRef.current?.extensionId === action.extensionId
                     ? action.extensionId
                     : null;

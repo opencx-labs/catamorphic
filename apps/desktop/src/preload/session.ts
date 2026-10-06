@@ -136,6 +136,20 @@ function installForWebStore(): void {
   contextBridge.executeInMainWorld({ func: installWebStoreApis });
 }
 
+/**
+ * A press in a page closes the window's extension popup, as Chrome's
+ * closes when it loses focus: a window's guests share its focus, and a
+ * loading page can hold on to it. Registered before the page's own
+ * scripts, so they can't stop it.
+ */
+function reportPresses(): void {
+  window.addEventListener(
+    "pointerdown",
+    () => ipcRenderer.send(EXTENSION_CHANNELS.pagePressed),
+    { capture: true },
+  );
+}
+
 /** One job failing (an unusual context) must not stop the others. */
 function attempt(job: () => void): void {
   try {
@@ -148,9 +162,12 @@ function attempt(job: () => void): void {
 attempt(alignClientHintBrands);
 if (process.type === "service-worker") {
   attempt(installForExtension);
-} else if (location.protocol === "chrome-extension:") {
-  attempt(installForExtension);
-  if (window.top === window) attempt(watchPopupMode);
-} else if (location.origin === webStoreOrigin() && window.top === window) {
-  attempt(installForWebStore);
+} else {
+  attempt(reportPresses);
+  if (location.protocol === "chrome-extension:") {
+    attempt(installForExtension);
+    if (window.top === window) attempt(watchPopupMode);
+  } else if (location.origin === webStoreOrigin() && window.top === window) {
+    attempt(installForWebStore);
+  }
 }

@@ -328,11 +328,6 @@ export function searchProvider(manifest: Manifest): SearchProvider | null {
 }
 
 /**
- * What an extension can do, in Chrome's install-prompt words. Host access
- * comes first; API warnings follow in a stable order. Permissions without a
- * warning in Chrome (storage, alarms, scripting...) add nothing.
- */
-/**
  * What a manifest asks for, as the person approves it: its required
  * permissions, and every site its permissions or content scripts reach.
  */
@@ -359,11 +354,16 @@ export function accessIncrease(
       (pattern) => coversAllHosts(pattern) || patternCovers(pattern, origin),
     );
   return {
-    permissions: next.permissions.filter(
-      (permission) =>
-        !approved.permissions.includes(permission) &&
-        accessWarnings({ permissions: [permission], origins: [] }).length > 0,
-    ),
+    // A new permission counts when it adds a warning to what was approved
+    // (`tabs` adds none to an extension that already reads every site).
+    permissions: next.permissions.filter((permission) => {
+      if (approved.permissions.includes(permission)) return false;
+      const before = new Set(accessWarnings(approved));
+      return accessWarnings({
+        permissions: [...approved.permissions, permission],
+        origins: approved.origins,
+      }).some((warning) => !before.has(warning));
+    }),
     origins: [...new Set(next.origins.filter((origin) => !covered(origin)))],
   };
 }
@@ -394,7 +394,11 @@ export function permissionWarnings(
   return warnings;
 }
 
-/** Chrome's warnings for a set of permissions and sites. */
+/**
+ * What an extension can do, in Chrome's install-prompt words. Host access
+ * comes first; API warnings follow in a stable order. Permissions without a
+ * warning in Chrome (storage, alarms, scripting...) add nothing.
+ */
 export function accessWarnings(access: PermissionSet): string[] {
   const permissions = new Set(access.permissions);
   const hostPatterns = access.origins;

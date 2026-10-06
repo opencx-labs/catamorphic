@@ -131,15 +131,76 @@ describe("debugger sessions", () => {
     ).toThrow("Another debugger");
   });
 
-  it("refuse a tab another client already debugs", () => {
+  it("share a tab Work's driver holds, and end it all the same", () => {
     const guest = new FakeGuest("https://site.test/");
     guest.debugger.attached = true;
     const debuggers = new ExtensionDebuggers(
       { onEvent: () => {}, onDetach: () => {}, onChange: () => {} },
       scriptableUrl,
     );
-    expect(() => debuggers.attach("p:ext", { guest, tabId: 1 }, "1.3")).toThrow(
-      "Another debugger",
+    debuggers.attach("p:ext", { guest, tabId: 1 }, "1.3");
+    debuggers.detach("p:ext", 1);
+    // What the extension set up goes with the session.
+    expect(guest.debugger.attached).toBe(false);
+  });
+
+  it("end on a redirect that leaves the web", () => {
+    const { guest, detached } = setup();
+    guest.emit("did-redirect-navigation", {
+      url: "chrome-extension://victim/page.html",
+      isMainFrame: true,
+    });
+    expect(detached).toEqual(["target_closed"]);
+  });
+
+  it("hide other extensions' script worlds in the page", async () => {
+    const { debuggers, events, message } = setup();
+    message("Runtime.executionContextCreated", {
+      context: { id: 1, origin: "https://site.test", uniqueId: "a" },
+    });
+    message("Runtime.executionContextCreated", {
+      context: { id: 4, origin: "chrome-extension://victim", uniqueId: "v" },
+    });
+    message("Runtime.executionContextCreated", {
+      context: { id: 5, origin: "chrome-extension://ext", uniqueId: "o" },
+    });
+    expect(events.map((event) => event.method)).toEqual([
+      "Runtime.executionContextCreated",
+      "Runtime.executionContextCreated",
+    ]);
+    for (const params of [
+      { expression: "1", contextId: 4 },
+      { expression: "1", uniqueContextId: "v" },
+      { functionDeclaration: "f", objectId: "77.4.9" },
+      {
+        functionDeclaration: "f",
+        objectId: "77.1.2",
+        arguments: [{ objectId: "77.4.3" }],
+      },
+    ])
+      await expect(
+        debuggers.sendCommand(
+          "p:ext",
+          7,
+          "Runtime.evaluate",
+          params,
+          undefined,
+        ),
+      ).rejects.toThrow("Cannot find context");
+    // The page's world and the extension's own content scripts stay open.
+    await debuggers.sendCommand(
+      "p:ext",
+      7,
+      "Runtime.evaluate",
+      { expression: "1", contextId: 1 },
+      undefined,
+    );
+    await debuggers.sendCommand(
+      "p:ext",
+      7,
+      "Runtime.evaluate",
+      { expression: "1", contextId: 5 },
+      undefined,
     );
   });
 });
@@ -159,6 +220,8 @@ describe("debugger commands that reach local files or other sites", () => {
       }),
     ).toBeNull();
     for (const method of [
+      "Debugger.enable",
+      "HeapProfiler.takeHeapSnapshot",
       "DOM.getFileInfo",
       "Network.loadNetworkResource",
       "Network.setCookie",

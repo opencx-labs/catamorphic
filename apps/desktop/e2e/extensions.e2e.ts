@@ -330,7 +330,7 @@ let extensionId = "";
 let popup: FrameHandle | null = null;
 
 describe("an unpacked extension", () => {
-  it("loads from developer mode and runs in the tab", async () => {
+  it("loads from developer mode, and can't ask for more out of the blue", async () => {
     await app.waitFor(
       `(() => { try { return ${pageView}?.getTitle() === 'Lab blocked' || ${pageView}?.getTitle() === 'Lab loaded'; } catch { return false; } })()`,
       { label: "page loaded" },
@@ -362,6 +362,14 @@ describe("an unpacked extension", () => {
       `${card}.querySelector('[data-testid="extension-card-pin"]').textContent === 'Unpin'`,
       { label: "pinned" },
     );
+    // Nothing the person did asks for it yet: as in Chrome, it may not ask.
+    const worker = await app.connectToFrame(`${extensionId}/sw.js`);
+    expect(
+      await worker.eval(
+        "chrome.permissions.request({ permissions: ['bookmarks'] }).then(() => 'asked', (error) => error.message)",
+      ),
+    ).toContain("user gesture");
+    worker.close();
   });
 
   it("blocks requests, sets the brand headers and shows its badge", async () => {
@@ -599,13 +607,8 @@ describe("an unpacked extension", () => {
   it("asks before an optional permission and then offers its API", async () => {
     const worker = await app.connectToFrame(`${extensionId}/sw.js`);
     expect(await worker.eval("typeof chrome.bookmarks")).toBe("undefined");
-    // Out of the blue, as in Chrome, it may not ask.
-    expect(
-      await worker.eval(
-        "chrome.permissions.request({ permissions: ['bookmarks'] }).then(() => 'asked', (error) => error.message)",
-      ),
-    ).toContain("user gesture");
-    // Right after the person ran one of its commands, it may.
+    // Right after the person ran one of its commands, it may ask (out of
+    // the blue it may not: see the first test).
     await typeInPage("A");
     const granted = worker.eval(
       "chrome.permissions.request({ permissions: ['bookmarks'] })",
@@ -673,7 +676,8 @@ describe("an unpacked extension", () => {
     await worker.eval(`(async () => {
       const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
       await chrome.debugger.attach({ tabId: tab.id }, '1.3');
-      await chrome.debugger.sendCommand({ tabId: tab.id }, 'Runtime.evaluate', { expression: ${JSON.stringify(`location.href = ${JSON.stringify(`${storeOrigin}/`)}`)} });
+      // Navigating after the command answers: the session ends with it.
+      await chrome.debugger.sendCommand({ tabId: tab.id }, 'Runtime.evaluate', { expression: ${JSON.stringify(`setTimeout(() => { location.href = ${JSON.stringify(`${storeOrigin}/`)}; }, 50); true`)} });
       return true;
     })()`);
     await worker.waitFor(

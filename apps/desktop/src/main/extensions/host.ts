@@ -418,9 +418,12 @@ export class ExtensionsHost {
     session.extensions.on("extension-unloaded", (_event, extension) => {
       const id = key(profileId, extension.id);
       if (this.expectedUnloads.delete(id)) return;
-      // The extension reloaded itself (runtime.reload) or crashed out.
+      // The extension reloaded itself (runtime.reload, the answer to
+      // onUpdateAvailable) or crashed out: a waiting update goes in now.
       const loaded = this.loaded.get(id);
       if (loaded) this.forgetRuntime(loaded);
+      if (this.registry.get(profileId, extension.id)?.stagedUpdate)
+        this.retryStaged(profileId, 0);
     });
     session.extensions.on("extension-loaded", (_event, extension) => {
       const loaded = this.loaded.get(key(profileId, extension.id));
@@ -428,8 +431,22 @@ export class ExtensionsHost {
         this.initRuntime(loaded);
     });
     for (const record of this.registry.list(profileId)) {
-      if (!record.enabled) continue;
-      await this.load(profileId, record);
+      // An update that waited for its extension starts with it.
+      const staged = record.stagedUpdate;
+      const current = staged
+        ? this.registry.update(profileId, record.id, (entry) => ({
+            ...entry,
+            path: staged.path,
+            version: staged.version,
+            updatedAt: Date.now(),
+            approved: staged.approved,
+            stagedUpdate: null,
+            enabledRulesets: null,
+          }))
+        : record;
+      if (staged) this.pruneVersions(profileId, record.id, staged.path);
+      if (!current?.enabled) continue;
+      await this.load(profileId, current);
     }
     await this.syncBrand(profileId);
     this.scheduleUpdates(profileId);
@@ -548,16 +565,19 @@ export class ExtensionsHost {
     }
     this.loaded.set(id, extension);
     this.initRuntime(extension);
-    // Extensions without a worker still need their default rulesets.
-    if (
-      this.rulesetsPending(extension) &&
-      !(
-        extension.manifest.background as
-          | { service_worker?: unknown }
-          | undefined
-      )?.service_worker
-    )
-      void this.bootHidden(extension);
+    // Its rulesets apply as one of its contexts starts: start one now, so
+    // a page loaded before the extension next wakes is filtered too.
+    if (allRulesets(extension.manifest).length > 0) {
+      const hasWorker = Boolean(
+        (
+          extension.manifest.background as
+            | { service_worker?: unknown }
+            | undefined
+        )?.service_worker,
+      );
+      if (hasWorker) this.startWorker(profileId, record.id);
+      else void this.bootHidden(extension);
+    }
     return extension;
   }
 
@@ -663,13 +683,6 @@ export class ExtensionsHost {
     } finally {
       if (!window.isDestroyed()) window.destroy();
     }
-  }
-
-  private rulesetsPending(extension: LoadedExtension): boolean {
-    return (
-      allRulesets(extension.manifest).length > 0 &&
-      extension.record.enabledRulesets === null
-    );
   }
 
   /** The rulesets an extension's version should run with now. */
@@ -1069,6 +1082,12 @@ export class ExtensionsHost {
       (channel, listener) => this.on(channel, listener),
       (event) => this.frameCaller(event, false)?.context ?? null,
     );
+    // A press in a page or side panel (the session preload) closes the
+    // window's popup; the popup's own presses are its own.
+    this.on(EXTENSION_CHANNELS.pagePressed, (event) => {
+      if (event.sender.getType() === "webview")
+        this.closePopupsBeside(event.sender);
+    });
 
     // The Chrome Web Store page.
     ipcMain.handle(
@@ -1198,9 +1217,15 @@ export class ExtensionsHost {
       let reports = this.tabReports.get(window.id);
       if (!reports) {
         const windowId = window.id;
-        reports = new Map();
-        this.tabReports.set(windowId, reports);
+        const fresh = new Map<string, ExtensionTabsReport>();
+        reports = fresh;
+        this.tabReports.set(windowId, fresh);
         window.once("closed", () => this.tabReports.delete(windowId));
+        // A reloaded window ("Reload App") runs no cleanup: its projects
+        // report again from scratch.
+        window.webContents.on("did-start-navigation", (details) => {
+          if (details.isMainFrame && !details.isSameDocument) fresh.clear();
+        });
       }
       if (!report.visible && report.guestIds.length === 0)
         reports.delete(report.reporter);
@@ -2821,6 +2846,7 @@ export class ExtensionsHost {
         enabledRulesets: null,
         pendingUpdate: null,
         uninstallUrl: null,
+        stagedUpdate: null,
       };
       this.registry.put(profileId, record);
       this.pruneVersions(profileId, extensionId, dir);
@@ -2934,6 +2960,7 @@ export class ExtensionsHost {
       enabledRulesets: null,
       pendingUpdate: null,
       uninstallUrl: null,
+      stagedUpdate: null,
     };
     this.registry.put(profileId, record);
     await this.load(profileId, record);
@@ -3106,17 +3133,12 @@ export class ExtensionsHost {
     offer: Awaited<ReturnType<WebStore["check"]>>[number],
   ): Promise<void> {
     const record = this.registry.get(profileId, offer.id);
-    if (!record || record.pendingUpdate?.version === offer.version) return;
-    // An extension at work (a popup or side panel open, a tab under its
-    // debugger, a native host connected) keeps its version until it is
-    // idle, as Chrome waits; it hears the update is ready.
-    if (record.enabled && this.isBusy(profileId, offer.id)) {
-      this.events.dispatch(profileId, offer.id, "runtime.onUpdateAvailable", [
-        { version: offer.version },
-      ]);
-      this.retryUpdates(profileId);
+    if (
+      !record ||
+      record.pendingUpdate?.version === offer.version ||
+      record.stagedUpdate?.version === offer.version
+    )
       return;
-    }
     const crx = await this.webStore.download(offer);
     const { dir, manifest } = this.unpack(profileId, crx, offer.version);
     const access = accessOf(manifest);
@@ -3142,12 +3164,49 @@ export class ExtensionsHost {
       await this.syncBrand(profileId);
       return;
     }
+    // An extension at work (a popup or side panel open, a tab under its
+    // debugger, a native host connected) keeps its version until it is
+    // idle, as Chrome waits: the update waits beside it, and the extension
+    // hears once that it is ready.
+    if (record.enabled && this.isBusy(profileId, offer.id)) {
+      this.registry.update(profileId, offer.id, (current) => ({
+        ...current,
+        stagedUpdate: { version: offer.version, path: dir, approved: access },
+      }));
+      this.pruneVersions(profileId, offer.id, record.path, dir);
+      this.events.dispatch(profileId, offer.id, "runtime.onUpdateAvailable", [
+        { version: offer.version },
+      ]);
+      this.retryStaged(profileId);
+      return;
+    }
+    // Turned off only because an earlier update asked for more: a version
+    // that no longer does runs again.
     await this.swapVersion(profileId, offer.id, {
       dir,
       version: String(manifest.version),
       approved: access,
-      enable: record.enabled,
+      enable: record.enabled || record.disabledReason === "permissions",
     });
+  }
+
+  /** Install staged updates whose extensions are idle now. */
+  private async applyStaged(profileId: string): Promise<void> {
+    for (const record of this.registry.list(profileId)) {
+      const staged = record.stagedUpdate;
+      if (!staged) continue;
+      if (record.enabled && this.isBusy(profileId, record.id)) {
+        this.retryStaged(profileId);
+        continue;
+      }
+      await this.swapVersion(profileId, record.id, {
+        dir: staged.path,
+        version: staged.version,
+        approved: staged.approved,
+        enable: record.enabled,
+      });
+      this.changed(profileId);
+    }
   }
 
   /** Install a version; it runs only when `enable` says so. */
@@ -3169,8 +3228,13 @@ export class ExtensionsHost {
       updatedAt: Date.now(),
       approved: next.approved,
       enabled: next.enable,
-      disabledReason: next.enable ? null : (current.disabledReason ?? "user"),
+      disabledReason: next.enable
+        ? null
+        : current.disabledReason === "permissions"
+          ? "user"
+          : (current.disabledReason ?? "user"),
       pendingUpdate: null,
+      stagedUpdate: null,
       enabledRulesets: null,
     }));
     this.pruneVersions(profileId, extensionId, next.dir);
@@ -3192,16 +3256,24 @@ export class ExtensionsHost {
     return this.debuggers.allClients().includes(`${profileId}:${extensionId}`);
   }
 
-  /** Check again soon for an update that waited for its extension. */
-  private retryUpdates(profileId: string): void {
-    if (this.retryTimers.has(profileId)) return;
+  /** Look again soon for a staged update's extension to be idle. */
+  private retryStaged(profileId: string, delay = UPDATE_RETRY_MS): void {
+    if (this.retryTimers.has(profileId)) {
+      if (delay > 0) return;
+      clearTimeout(this.retryTimers.get(profileId));
+    }
     this.retryTimers.set(
       profileId,
       setTimeout(() => {
         this.retryTimers.delete(profileId);
         if (this.sessions.has(profileId))
-          void this.checkUpdates(profileId, false);
-      }, UPDATE_RETRY_MS),
+          void this.applyStaged(profileId).catch((cause: unknown) =>
+            console.warn(
+              "[extensions] a waiting update failed:",
+              errorMessage(cause),
+            ),
+          );
+      }, delay),
     );
   }
 
