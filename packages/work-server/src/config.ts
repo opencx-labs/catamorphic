@@ -12,7 +12,6 @@ import {
   type GatewayConfig,
   gatewayConfigFromFile,
 } from "./gateway/gateway-config.js";
-import { WORK_IMAGE_REPOSITORY } from "./workers/install-script.js";
 import {
   type MachinesConfig,
   machineClassesProblem,
@@ -132,8 +131,8 @@ export interface WorkServerConfig {
   hetznerToken?: string;
   /**
    * The worker image machines run (ADR 0204): `WORK_WORKER_IMAGE`, else
-   * this release's own image when the server knows its version
-   * (`WORK_VERSION`, set in the published image).
+   * the published image's own, `WORK_IMAGE_REPOSITORY:WORK_VERSION`, which
+   * its build bakes in.
    */
   workerImage?: string;
 }
@@ -228,11 +227,13 @@ function machineSettingsFromEnv(
     });
     if (problem) throw new Error(problem);
   }
+  // The published image knows where it was published and which release it
+  // is (both baked in at build time); machines run that same image.
+  const repository = env.WORK_IMAGE_REPOSITORY?.trim();
+  const version = env.WORK_VERSION?.trim();
   const workerImage =
     env.WORK_WORKER_IMAGE?.trim() ||
-    (env.WORK_VERSION?.trim()
-      ? `${WORK_IMAGE_REPOSITORY}:${env.WORK_VERSION.trim()}`
-      : undefined);
+    (repository && version ? `${repository}:${version}` : undefined);
   return {
     ...(machines ? { machines } : {}),
     ...(hetznerToken ? { hetznerToken } : {}),

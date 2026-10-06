@@ -52,9 +52,11 @@ RUN bun install --frozen-lockfile --ignore-scripts \
   && mkdir -p /data \
   && chown bun:bun /data
 
-# The release this image is: machines the server provisions run the worker
-# image of the same release (ADR 0204). Release builds pass it.
+# Where this image is published and which release it is: machines the
+# server provisions run this same image (ADR 0204). Release builds pass both.
+ARG WORK_IMAGE_REPOSITORY
 ARG WORK_VERSION
+ENV WORK_IMAGE_REPOSITORY=$WORK_IMAGE_REPOSITORY
 ENV WORK_VERSION=$WORK_VERSION
 
 # The server and every local-process sandbox run as the unprivileged image
