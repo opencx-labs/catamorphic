@@ -326,6 +326,7 @@ beforeAll(async () => {
       dataDir: workerDir,
       enrollmentCode: enrollment.json().code,
       execution: executionSettingsFromEnv({
+        WORK_SANDBOX: "local-process",
         PATH: process.env.PATH,
         WORK_MAX_WORKSPACES: "2",
       }),

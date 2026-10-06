@@ -16,10 +16,12 @@ import {
 } from "@catamorphic/server-sdk";
 import { isSecurePublicUrl } from "../config.js";
 import {
+  resolveExecutionSettings,
   type WorkExecutionSettings,
   workExecution,
 } from "../execution-config.js";
 import { removeMachineSignIns, signInCapabilities } from "./sign-ins.js";
+import { startVolumePruning } from "./volume-pruning.js";
 import {
   loadWorkerIdentity,
   saveWorkerIdentity,
@@ -133,11 +135,22 @@ export async function startWorkWorker(options: WorkWorkerOptions): Promise<{
     publicKey: executorPublicKey(enrolled.privateKey),
     privateKeys: [createPrivateKey(enrolled.privateKey)],
   };
-  const execution = workExecution({
+  const resolved = await resolveExecutionSettings({
     settings: options.execution,
+  });
+  log(`Sandboxes: ${resolved.backend} (${resolved.reason})`);
+  const execution = workExecution({
+    settings: resolved,
     dataDir: options.dataDir,
+    log,
   });
   const provider: SandboxProvider = execution.provider;
+  // Volumes nobody used for long leave the machine (ADR 0207).
+  const stopPruning = startVolumePruning({
+    provider,
+    retentionMs: execution.volumeRetentionMs,
+    log,
+  });
   /**
    * What this worker offers, read again for every connect: members'
    * sign-ins come and go on the machine (ADR 0199), and only the fact that
@@ -156,6 +169,7 @@ export async function startWorkWorker(options: WorkWorkerOptions): Promise<{
     capacity: execution.capacity,
     defaults: execution.defaults,
     ...(options.version ? { version: options.version } : {}),
+    backend: execution.backend,
   });
   // This process's epoch: the node's lease token while it runs. A restart
   // chooses a later one, and the control plane fails what the old one was
@@ -495,6 +509,7 @@ export async function startWorkWorker(options: WorkWorkerOptions): Promise<{
     nodeId,
     stop: async () => {
       stopping.abort();
+      stopPruning();
       await loop;
       await Promise.allSettled(
         [...sandboxes].map((id) => provider.stopSandbox(id)),

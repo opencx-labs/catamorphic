@@ -25,9 +25,16 @@ volumes (ADR 0207), background processes, and nested containers: the image's
 own Docker daemon runs inside the sandbox. gVisor virtualizes the
 capabilities that daemon needs and has no NAT, so nested Docker runs without
 iptables: published ports and container-to-container traffic work, and
-nested containers reach the outside only through the sandbox's proxy. Under
-runc the sandbox would have to be privileged, which is one more reason runc
-stays process isolation.
+nested containers reach the outside only through the sandbox's proxy (an
+open sandbox that runs containers under gVisor gets a proxy that admits
+anything, for them). Under runc the sandbox would have to be privileged,
+which is one more reason runc stays process isolation, and the operator must
+accept it (`WORK_CONTAINER_PRIVILEGED=1`). The workspace is a Docker volume
+of the sandbox's own, removed with it: gVisor's root filesystem
+(`--overlay2=root:self`, its default) starts over from the image when a
+container restarts, so a restarted sandbox keeps its workspace and volumes,
+and runs its setup again. Persistent volumes are Docker volumes too, which
+the daemon removes whatever user wrote into them.
 
 **Egress without a firewall.** An open sandbox joins the daemon's bridge. A
 restricted one has no network interface but loopback. Its only way out is a
@@ -66,5 +73,8 @@ Any Linux machine with Docker runs isolated sandboxes for several people,
 with images, egress policy and limits enforced, and `auto` picks the best a
 machine offers. gVisor adds system call overhead to I/O-heavy builds. Nested
 containers under gVisor cannot reach the internet except through the proxy.
-Tools that ignore proxy variables have no network in restricted
-Environments, as with microsandbox's domain rules.
+Tools that ignore proxy variables, and protocols other than HTTP (Git over
+SSH), have no network in restricted Environments, as with microsandbox's
+domain rules. Under gVisor, what an agent installs outside its workspace and
+volumes is gone after a restart. The container backend cannot cap a
+sandbox's disk (`storageMb`); microsandbox sizes its VM's root disk.

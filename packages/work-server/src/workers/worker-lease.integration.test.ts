@@ -20,6 +20,7 @@ import { sql } from "kysely";
 import { expect, it } from "vitest";
 import {
   executionSettingsFromEnv,
+  resolveExecutionSettings,
   workExecution,
 } from "../execution-config.js";
 import {
@@ -203,6 +204,7 @@ it.skipIf(!process.env.DATABASE_URL)(
       const workerDir = path.join(root, "worker");
       const execution = executionSettingsFromEnv({
         PATH: process.env.PATH,
+        WORK_SANDBOX: "local-process",
         WORK_MAX_WORKSPACES: "4",
       });
       let firstWorkerDown = false;
@@ -492,7 +494,7 @@ it.skipIf(!process.env.DATABASE_URL)(
         return service;
       };
       const machine = workExecution({
-        settings: execution,
+        settings: await resolveExecutionSettings({ settings: execution }),
         dataDir: path.join(root, "laptop"),
       });
       const laptopKeys = generateExecutorKeyPair();

@@ -139,7 +139,7 @@ export function personalCredentialsDecision(input: {
   if (placementIsolatesOwner(input)) return { allowed: true };
   return {
     allowed: false,
-    reason: `The machine for Environment '${input.environment}' runs other people's work as plain processes, so your own sign-in may not run there. Use microsandbox, a machine only you use, or set WORK_PERSONAL_CREDENTIALS=accept on that machine`,
+    reason: `The machine for Environment '${input.environment}' runs other people's work as plain processes, so your own sign-in may not run there. Use isolated sandboxes there (microsandbox, or gVisor containers), a machine only you use, or set WORK_PERSONAL_CREDENTIALS=accept on that machine`,
   };
 }
 

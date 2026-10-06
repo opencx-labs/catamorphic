@@ -21,8 +21,12 @@ export {
   workServerConfigFromEnv,
 } from "./config.js";
 export {
+  type ExecutionProbes,
   executionSettingsFromEnv,
+  type ResolvedExecutionSettings,
+  resolveExecutionSettings,
   type WorkExecutionSettings,
+  type WorkSandboxBackend,
 } from "./execution-config.js";
 export {
   type GatewayConfig,

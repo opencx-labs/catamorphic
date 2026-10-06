@@ -25,6 +25,7 @@
     "@catamorphic/agent-runner": "workspace:*",
     "@catamorphic/ai-sdk": "workspace:*",
     "@catamorphic/app": "workspace:*",
+    "@catamorphic/container": "workspace:*",
     "@catamorphic/core": "workspace:*",
     "@catamorphic/db": "workspace:*",
     "@catamorphic/fastify-plugin": "workspace:*",

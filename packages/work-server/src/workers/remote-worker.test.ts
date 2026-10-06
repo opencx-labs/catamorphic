@@ -99,6 +99,7 @@ async function enrollWorker(args: {
       dataDir,
       enrollmentCode: enrollment.json().code,
       execution: executionSettingsFromEnv({
+        WORK_SANDBOX: "local-process",
         PATH: process.env.PATH,
         WORK_MAX_WORKSPACES: args.workspaces,
         ...args.env,
@@ -190,11 +191,35 @@ describe("remote workers (ADR 0164)", () => {
       dataDir: workerDir,
       enrollmentCode: code,
       execution: executionSettingsFromEnv({
+        WORK_SANDBOX: "local-process",
         PATH: process.env.PATH,
         WORK_MAX_WORKSPACES: "2",
       }),
     });
     await waitFor(workerAvailable, "the worker to connect");
+    // Operators see what runs each machine's sandboxes and why (ADR 0203).
+    const listed = (await operator("GET", "/_work/operator/machines")).json();
+    const backendOf = (id: string) =>
+      listed.machines.find(
+        (machine: { id: string; descriptor: { backend?: unknown } }) =>
+          machine.id === id,
+      )?.descriptor.backend;
+    expect(backendOf("worker.builder")).toEqual({
+      kind: "local-process",
+      reason: "WORK_SANDBOX=local-process",
+    });
+    expect(
+      listed.machines.some(
+        (machine: {
+          descriptor: {
+            backend?: { kind?: string };
+            labels?: Record<string, string>;
+          };
+        }) =>
+          machine.descriptor.backend?.kind === "local-process" &&
+          machine.descriptor.labels?.plane === "control",
+      ),
+    ).toBe(true);
 
     // The code was single use.
     const replay = await server.app.inject({
@@ -237,6 +262,7 @@ describe("remote workers (ADR 0164)", () => {
       controlPlaneUrl: base,
       dataDir: workerDir,
       execution: executionSettingsFromEnv({
+        WORK_SANDBOX: "local-process",
         PATH: process.env.PATH,
         WORK_MAX_WORKSPACES: "2",
       }),

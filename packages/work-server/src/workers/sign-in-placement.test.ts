@@ -205,6 +205,7 @@ async function enroll(input: {
       dataDir,
       enrollmentCode: enrollment.json().code,
       execution: executionSettingsFromEnv({
+        WORK_SANDBOX: "local-process",
         PATH: `${input.bin}${path.delimiter}${process.env.PATH ?? ""}`,
         WORK_MAX_WORKSPACES: "4",
       }),

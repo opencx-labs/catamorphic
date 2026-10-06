@@ -133,7 +133,10 @@ describe("worker protocol versions", () => {
     const worker = await startWorkWorker({
       controlPlaneUrl: "http://127.0.0.1:1",
       dataDir,
-      execution: executionSettingsFromEnv({ PATH: process.env.PATH }),
+      execution: executionSettingsFromEnv({
+        WORK_SANDBOX: "local-process",
+        PATH: process.env.PATH,
+      }),
       protocol: WORKER_PROTOCOL.minimum - 1,
       log: (line) => log.push(line),
       fetch: async (input, init) => {

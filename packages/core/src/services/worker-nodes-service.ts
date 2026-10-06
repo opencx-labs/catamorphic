@@ -43,6 +43,14 @@ const descriptorSchema = z.object({
     maxConcurrency: z.number().optional(),
   }),
   labels: z.record(z.string(), z.string()).optional(),
+  // What runs the machine's sandboxes and why (ADR 0203), for operators.
+  backend: z
+    .object({
+      kind: z.string().max(40),
+      runtime: z.string().max(40).optional(),
+      reason: z.string().max(1000).optional(),
+    })
+    .optional(),
 });
 
 export interface WorkerNodeLease {

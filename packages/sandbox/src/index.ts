@@ -174,6 +174,12 @@ export {
   splitUtf8,
 } from "./sandbox-stdio.js";
 export {
+  assertSandboxVolumes,
+  imageUserHome,
+  VolumeUsageLog,
+  volumeMountPath,
+} from "./sandbox-volumes.js";
+export {
   machineSignInHome,
   parseSandboxPaths,
   parseSignInCapability,

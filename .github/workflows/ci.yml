@@ -253,9 +253,48 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+  container:
+    name: Container sandboxes
+    needs: access
+    if: needs.access.outputs.allowed == 'true'
+    # A GitHub-hosted runner: its own Docker daemon under systemd, which
+    # the job reconfigures with a gVisor runtime (ADR 0203).
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/test-setup
+        id: setup
+        with:
+          cache-suffix: container
+      - name: Install gVisor
+        run: |
+          curl -fsSL https://gvisor.dev/archive.key | sudo gpg --dearmor -o /usr/share/keyrings/gvisor-archive-keyring.gpg
+          echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/gvisor-archive-keyring.gpg] https://storage.googleapis.com/gvisor/releases release main" | sudo tee /etc/apt/sources.list.d/gvisor.list
+          sudo apt-get update
+          sudo apt-get install --yes runsc
+      - name: Register runsc with Work's runtime arguments
+        run: |
+          sudo mkdir -p /etc/docker
+          current=$(sudo cat /etc/docker/daemon.json 2>/dev/null || echo '{}')
+          echo "$current" | jq --arg path "$(command -v runsc)" '.runtimes.runsc = {path: $path, runtimeArgs: ["--host-uds=open", "--net-raw"]}' | sudo tee /etc/docker/daemon.json
+          sudo systemctl restart docker
+          for i in $(seq 1 60); do docker info >/dev/null 2>&1 && break; sleep 1; done
+          docker info --format '{{json .Runtimes.runsc}}'
+          docker run --rm --runtime=runsc --network none alpine echo gVisor runs
+      - run: bun scripts/tool-runtime.ts turbo run build --filter=@catamorphic/container... --output-logs=errors-only
+      - name: Real container sandboxes under gVisor
+        env:
+          WORK_TEST_CONTAINER: "1"
+        run: bun scripts/tool-runtime.ts vitest --tool-cwd packages/container --config ../../vitest.config.ts src/__tests__/sandbox-provider.container.test.ts
+      - uses: ./.github/actions/test-cache-save
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
+        with:
+          key: ${{ steps.setup.outputs.task-cache-key }}
+
   checks:
     name: checks
-    needs: [access, shards, validation, workspace, pwa, desktop-linux, desktop-macos]
+    needs: [access, shards, validation, workspace, pwa, desktop-linux, desktop-macos, container]
     if: always() && needs.access.outputs.allowed == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5

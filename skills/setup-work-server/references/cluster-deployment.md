@@ -9,10 +9,69 @@ deployment.
 
 | Situation | Topology |
 | --- | --- |
-| A person or a small trusted team | One Work server, PGlite, default execution. Nothing below applies. |
+| A person or a small trusted team | One Work server, PGlite, default execution (`WORK_SANDBOX=auto`). Nothing below applies. |
 | More agent capacity, or agents that must not run beside the server's secrets | One server (the control plane) plus enrolled **workers** |
 | Each person or team gets their own machine | Workers with **access** lists, created by hand or by **machine rules** |
+| Cloud VMs or dedicated servers without hardware virtualization | Workers with the **container backend** under gVisor (see [sandbox backends](#sandbox-backends)) |
 | The brain must survive a machine failure | Control-plane **replicas** on shared Postgres, plus workers |
+
+## Sandbox backends
+
+Every machine (control plane or worker) runs its sandboxes with one backend
+(ADR 0203), chosen by `WORK_SANDBOX`:
+
+| `WORK_SANDBOX` | Sandboxes | Isolation |
+| --- | --- | --- |
+| `auto` (default) | The best this machine offers, in this order: microsandbox, the container backend under gVisor, the container backend under runc, local processes | As chosen |
+| `microsandbox` | One microVM each. Needs an Apple silicon Mac, or Linux (x64, arm64) with a `/dev/kvm` the server can open read-write, and the `msb` runtime (`MSB_PATH`, `~/.microsandbox/bin/msb`, or the SDK's own) | `sandbox` |
+| `container` | One OCI container each through the Docker Engine API (`DOCKER_HOST` as `unix://` or plain `tcp://`, or `/var/run/docker.sock`), under `WORK_CONTAINER_RUNTIME=runsc` (gVisor) or `runc`. Unset, gVisor when the daemon has a `runsc` runtime, else runc | `sandbox` under gVisor, `process` under runc |
+| `local-process` | Plain processes of the server, for a trusted single-tenant machine (ADR 0047) | `process` |
+
+The machine logs its choice and the reason at start (`Sandboxes: container
+(auto: This machine has no usable /dev/kvm, so microsandbox cannot run here;
+containers run under gVisor (runsc))`), and `GET /_work/operator/machines`
+shows it as each machine's `descriptor.backend` (`kind`, `runtime`,
+`reason`). A backend named explicitly that cannot run refuses to start and
+says what is missing; microsandbox without KVM, for example, answers "This
+machine has no usable /dev/kvm, so microsandbox cannot run here. Use
+WORK_SANDBOX=container (gVisor) or auto." With `auto`, a machine whose only
+choice is local processes refuses CPU or memory budgets it cannot enforce.
+
+**gVisor for the container backend.** Install gVisor from its apt repository
+(`https://storage.googleapis.com/gvisor/releases release main`, key
+`https://gvisor.dev/archive.key`) or its release archive, which holds `runsc`,
+`containerd-shim-runsc-v1`, and the `gvisor-bin/` sidecars `runsc` runs from
+beside itself. Register it in `/etc/docker/daemon.json` with Work's runtime
+arguments and restart Docker:
+
+```json
+{
+  "runtimes": {
+    "runsc": {
+      "path": "/usr/bin/runsc",
+      "runtimeArgs": ["--host-uds=open", "--net-raw"]
+    }
+  }
+}
+```
+
+`--host-uds=open` lets a sandbox reach the egress proxy's socket, so the
+machine offers `network.policy`; `--net-raw` lets the sandbox's own Docker
+daemon run, so it offers `containers`. A `runsc` runtime without them works,
+and the machine simply does not advertise those capabilities (its start log
+says which are missing). Check it with
+`docker run --rm --runtime=runsc --network none alpine echo ok`.
+
+Under runc, the container backend isolates only by kernel namespaces, as
+local processes do by process: it counts as `process` isolation everywhere
+(placement, personal credentials), and nested Docker needs privileged
+containers, which the operator must accept with `WORK_CONTAINER_PRIVILEGED=1`.
+
+A worker that runs in a container finds the host path of its data
+directory by inspecting its own container, so sign-ins, egress sockets, and
+project data it bind-mounts into sandboxes must live on a mount from the
+machine: mount the data directory from the machine, preferably at the same
+path.
 
 A worker holds only its own machine credential and the private key its
 operations are sealed to: no `DATABASE_URL`, `WORK_SECRET`, `WORK_VAULT_KEY`,
@@ -36,16 +95,25 @@ brain become replicas. Never add a replica just for capacity.
    (`curl -fsSL https://brain.example.com/api/workers/install.sh | sudo sh -s -- --code <code>`;
    the enrollment response's `install` is that command). It installs Docker,
    and gVisor on a machine without KVM, and starts the worker. Or run the
-   same image version with the worker command and its own empty data volume
-   yourself:
+   same image version with the worker command yourself. With the container
+   backend the worker drives the machine's Docker daemon, so it gets the
+   daemon's socket (and its group, since the image runs as an unprivileged
+   user) and its data directory from the machine at the same path:
 
    ```bash
-   docker run -d --name work-worker -v work-worker-data:/data \
+   docker run -d --name work-worker \
+     -v /srv/work-worker:/srv/work-worker -e WORK_DATA_DIR=/srv/work-worker \
+     -v /var/run/docker.sock:/var/run/docker.sock \
+     --group-add "$(stat -c %g /var/run/docker.sock)" \
      -e WORK_CONTROL_PLANE_URL=https://brain.example.com \
      -e WORK_WORKER_ENROLLMENT=<code> \
-     -e WORK_SANDBOX=microsandbox -e WORK_MAX_WORKSPACES=4 \
+     -e WORK_MAX_WORKSPACES=4 \
      <work-server image> bun apps/server/src/worker.ts
    ```
+
+   `WORK_SANDBOX` defaults to `auto` ([sandbox backends](#sandbox-backends)):
+   on a machine without KVM and with a gVisor runtime this runs gVisor
+   containers. Check the worker's start log for its choice.
 
    Pass the code through the deployment's secret mechanism; it is needed only
    for the first start. Every worker call states the worker's protocol; a
@@ -102,16 +170,19 @@ worker whose key does not match the one it enrolled with is refused with
 Workers run agent sandboxes only. Workflow runs, which receive project secrets,
 execute on the control plane; a worker's sandboxes receive only the secrets a
 project lists on their Environment, where the placement isolates the work's
-owner ([secrets in Environments](secrets-and-gateway.md#secrets-in-environments)). For developer and review agents use
-`WORK_SANDBOX=microsandbox` on workers (see capacity below).
+owner ([secrets in Environments](secrets-and-gateway.md#secrets-in-environments)).
+For developer and review agents use an isolating backend on workers:
+microsandbox, or the container backend under gVisor, which `auto` picks where
+they can run (see capacity below).
 
 ## Keep agent code away from the control plane
 
 A company deployment should run agents on workers, not beside the control
 plane's secrets. Set `WORK_CONTROL_PLANE_WORKLOADS=workflow` on the control
 plane (or empty to run nothing locally). A Postgres control plane refuses to
-start agents as plain subprocesses unless `WORK_SANDBOX=microsandbox` or the
-operator sets `WORK_TRUST_CONTROL_PLANE_AGENTS=1` for a fully trusted team.
+start agents as plain subprocesses: its backend must be microsandbox or the
+container backend (named, or what `auto` found), unless the operator sets
+`WORK_TRUST_CONTROL_PLANE_AGENTS=1` for a fully trusted team.
 
 The `default` Environment then puts workflows on the control plane (the only
 machines offering workflows) and agents on workers, with no project change.
@@ -145,9 +216,10 @@ its own Environment, so control-plane machines need no `review` label.
 
 When the narrowest tier is full, work falls back to the next unless the
 Environment sets `"strict": true`. A worker serving more than one person must
-run `WORK_SANDBOX=microsandbox`; the control plane refuses to connect a
-process-isolated shared worker unless the operator vouches for the people it
-serves with `"trusted": true`. A machine opened to exactly one project counts
+isolate its sandboxes (microsandbox, or gVisor containers); the control plane
+refuses to connect a process-isolated shared worker (local processes, or
+containers under runc) unless the operator vouches for the people it serves
+with `"trusted": true`. A machine opened to exactly one project counts
 as serving one owner. Change placement with
 `PATCH /_work/operator/workers/:name` (`labels`, `access`, `trusted`); it
 applies to the next placement, and an existing session re-checks it on its
@@ -499,17 +571,19 @@ external actions; never simulate enrollment through direct database writes.
 
 ## Capacity and isolated development
 
-For developer agents on managed machines, use `WORK_SANDBOX=microsandbox`.
-Install and verify the supported microsandbox runtime on that machine first;
-Linux needs virtualization support and access to KVM. The stock Docker image
-still defaults to trusted subprocess execution. Setting an environment variable
-alone does not supply virtualization or turn that container into a per-agent
-sandbox. Keep microsandbox's machine-local state on persistent storage.
+For developer agents on managed machines, use an isolating backend
+([sandbox backends](#sandbox-backends)): microsandbox where the machine has
+KVM (or is an Apple silicon Mac), else the container backend under gVisor.
+`WORK_SANDBOX=auto`, the default, picks between them and logs why. Install
+and verify the runtime first: microsandbox's `msb` and access to
+`/dev/kvm`, or Docker with a `runsc` runtime. Setting an environment
+variable alone supplies neither. Keep microsandbox's machine-local state,
+and the Docker daemon's data, on persistent storage.
 
 Set these environment variables on each machine's service before starting it:
 
 ```dotenv
-WORK_SANDBOX=microsandbox
+WORK_SANDBOX=auto
 WORK_MAX_WORKSPACES=4
 WORK_CAPACITY_CPU_MILLIS=8000
 WORK_CAPACITY_MEMORY_MB=16384
@@ -517,6 +591,9 @@ WORK_WORKSPACE_CPU_MILLIS=1000
 WORK_WORKSPACE_MEMORY_MB=1024
 WORK_SANDBOX_IMAGE=oven/bun
 ```
+
+With `auto`, a machine that can only run local processes refuses these
+budgets at start instead of ignoring them.
 
 Capacity is an admission budget, not total machine RAM or CPU. Leave room for
 Postgres (if colocated), the stock server, model controllers, builds, and the OS.
@@ -545,11 +622,15 @@ agent resource configuration file. For example, merge this into an ordinary
 }
 ```
 
-Microsandbox enforces whole-core CPU limits (multiples of 1000 millicores) and
-memory in MiB. Disk and GPU limits are currently rejected by the stock providers.
+Microsandbox enforces whole-core CPU limits (multiples of 1000 millicores),
+memory in MiB, and `storageMb` as the size of the VM's root disk, which holds
+the workspace. The container backend enforces CPU in any millicores and
+memory in MiB (Docker's `NanoCpus` and `Memory`, without swap), and rejects
+`storageMb`: Docker's default storage cannot cap one container's disk. GPU
+limits are rejected by the stock providers.
 Native host CLI execution does not enforce these sandbox limits; use controller
 agents for this setup. The stock controller and connection broker remain outside
-the VM. `resources.commandTimeoutSeconds` bounds one foreground command, an
+the sandbox. `resources.commandTimeoutSeconds` bounds one foreground command, an
 agent's shell command included (ten minutes when unset). Longer work runs as a
 background command: the built-in agent starts it with `run_background_command`,
 follows it with `read_background_output`, and stops it with
@@ -559,12 +640,16 @@ the worker and end when the chat closes or the workspace is destroyed
 CPU/memory budgets; it is still for trusted single-tenant work only.
 
 A managed session reserves its workspace at creation, including between turns.
-Background development servers stay within the same VM and budget. Full machines
+Background development servers stay within the same sandbox and budget. Full machines
 stop accepting new Allocations; already admitted sessions keep their placement.
 Archive, close, or move unused sessions to retire their workspaces. Restoring an
 archived session needs fresh admission. Workflow root allocations release on
 termination. Cleanup runs on the owning node; capacity returns only after its
-sandbox is destroyed. A stopped VM still has a reservation for safe restart.
+sandbox is destroyed. A stopped sandbox still has a reservation for safe
+restart. A restarted container sandbox keeps its workspace (a Docker volume of
+its own) and its volumes; under gVisor the rest of its filesystem starts over
+from the image, so the setup step runs again and what an agent installed
+outside the workspace and volumes is gone.
 
 Inspect `GET /_work/operator/machines` for budget, usage, and
 `acceptingWork`; `GET /_work/operator/machines/:id/workspaces` identifies
@@ -617,18 +702,33 @@ An Environment chooses its sandbox (ADR 0176) in `.work/project.json`:
 }
 ```
 
-- `image` is an OCI reference (`node:22`) or a project Dockerfile. Only
-  microsandbox machines boot images. A Dockerfile needs a machine with a
-  builder: set `WORK_IMAGE_BUILDER=docker` (or `podman`) and install that CLI
+- `image` is an OCI reference (`node:22`) or a project Dockerfile.
+  Microsandbox and container machines boot images; the container backend
+  pulls a missing image with its Docker daemon. A Dockerfile needs a machine
+  with a builder: the container backend builds with its own daemon (the
+  classic builder, so BuildKit-only Dockerfile features are not available);
+  microsandbox needs `WORK_IMAGE_BUILDER=docker` (or `podman`) and that CLI
   and its daemon on the machine. The build context is the Dockerfile alone;
   each machine builds a digest once and keeps it cached. Build steps (`RUN`)
   use the builder's network, not the Environment's `network.egress`, so
   review a Dockerfile's downloads like the rest of the program, or give the
   builder's daemon a restricted default network or proxy.
 - `requirements.containers` places the work where the sandbox gets its own
-  container runtime. On microsandbox, Docker runs inside the VM (on by
-  default; `WORK_SANDBOX_CONTAINERS=0` turns it off) on a private disk, and
-  the image must ship `dockerd`: use `docker:dind` or a Dockerfile `FROM` it.
+  container runtime, and the image must ship `dockerd`: use `docker:dind` or a
+  Dockerfile `FROM` it. On microsandbox, Docker runs inside the VM (on by
+  default; `WORK_SANDBOX_CONTAINERS=0` turns it off) on a private disk. On the
+  container backend under gVisor, the sandbox's own daemon runs inside the
+  sandbox (with all capabilities, which gVisor virtualizes, and without
+  iptables, since gVisor has no NAT): nested containers reach each other and
+  the sandbox, published ports answer on the sandbox's `127.0.0.1`, and
+  nested containers reach the outside only through the sandbox's proxy,
+  which the sandbox's Docker CLI hands every container and build it starts.
+  The machine's `runsc` needs `--net-raw` for this. Under runc the sandbox
+  must be privileged, so the container backend offers containers there only
+  with `WORK_CONTAINER_PRIVILEGED=1`; `WORK_SANDBOX_CONTAINERS=0` turns them
+  off on either runtime. Without a volume at `/var/lib/docker` the nested
+  daemon's images live in the sandbox and go with it (under gVisor, also
+  with a restart).
   A trusted local-process machine offers containers with
   `WORK_DOCKER_SOCKET=/var/run/docker.sock`: each sandbox gets its own
   endpoint as `DOCKER_HOST` that serves only the API routes and settings the
@@ -642,20 +742,42 @@ An Environment chooses its sandbox (ADR 0176) in `.work/project.json`:
   is a per-user plugin (Docker Desktop), also set `WORK_DOCKER_CLI_PLUGINS`
   to that plugin directory.
 - `network.egress` is `open` (default), `gateway` (only this server's public
-  host and port, from `WORK_PUBLIC_URL`, and DNS), or `allowlist`. Only microsandbox
-  enforces it, containers inside the VM included. A restricted image must
-  already contain git and bash, since the setup step cannot install them.
+  host and port, from `WORK_PUBLIC_URL`, and DNS), or `allowlist`.
+  Microsandbox enforces it in the VM's network, containers inside the VM
+  included. The container backend enforces it without a firewall (ADR 0203):
+  a restricted sandbox has no network interface but loopback, and its only
+  way out is a socket mounted from the machine, where the worker serves an
+  HTTP proxy that admits the allowlist (`CONNECT` for TLS, absolute URLs for
+  plain HTTP), resolves names itself, and refuses everything else with 403.
+  A forwarder in the sandbox, run with the image's Bun or Node, listens on
+  `127.0.0.1:3128`, and `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY` and
+  `NODE_USE_ENV_PROXY` point there. Tools that ignore proxy variables, and
+  anything that is not HTTP (Git over SSH, for example), have no network;
+  use HTTPS remotes. The machine's `runsc` needs `--host-uds=open` for this;
+  runc needs nothing. A restricted image must already contain git, bash,
+  and Bun or Node, since the setup step cannot install them.
   Local-process refuses such Environments unless the operator sets
   `WORK_UNENFORCED_EGRESS=accept`, which runs them with open egress.
+- `volumes` (ADR 0207) keep directories on the machine across a member's
+  sandboxes. Microsandbox keeps each as a named volume (a disk for an
+  `exclusive` one, sized by `sizeMb`), and the container backend as a Docker
+  volume named `work-volume-<key>`; both mount at absolute paths or under
+  `~`, the image user's home. Local-process keeps them only under `~` (each
+  sandbox's own home) and refuses absolute paths. A machine forgets a volume
+  no sandbox used for `WORK_VOLUME_RETENTION_DAYS` (default 30), checked
+  hourly; a volume a sandbox still mounts, even a stopped one, is kept.
+  Microsandbox keeps volumes only where the Work server gives it a state
+  directory, as the stock server and workers do.
 
-Machines advertise `images`, `images.build`, `containers`, and
-`network.policy`, `sign-ins` and one `sign-in:<harness>:<member>` per
-member signed in on them, and a local-process machine `harness.claude-code` and
-`harness.codex` when those CLIs are on its `PATH`;
-`GET /_work/operator/machines` shows them. An Environment
-no machine satisfies reports which capability is missing. VM budgets include
-nested containers; the Docker disk has its own size, and local-process
-containers are not budgeted.
+Machines advertise `images`, `images.build`, `containers`,
+`network.policy`, and `volumes`, `sign-ins` and one
+`sign-in:<harness>:<member>` per member signed in on them, and a
+local-process machine `harness.claude-code` and `harness.codex` when those
+CLIs are on its `PATH`; `GET /_work/operator/machines` shows them with the
+machine's `descriptor.backend`. An Environment no machine satisfies reports
+which capability is missing. Sandbox budgets include nested containers; the
+microsandbox Docker disk has its own size, and local-process containers are
+not budgeted.
 
 ### Setup and volumes
 
@@ -721,8 +843,9 @@ Claude Code or Codex on the member's own sign-in, made on a machine with
 listed files reach their own chats. The sign-in never leaves that machine:
 the worker reports only `sign-in:<harness>:<member>` in its offer, and
 placement takes only a machine reporting the chat owner's. Only placements
-that isolate the member qualify: microsandbox, a worker whose access names
-only that person, or the member's device. A local-process machine that
+that isolate the member qualify: microsandbox, gVisor containers, a worker
+whose access names only that person, or the member's device. A
+process-isolated machine (local processes, or containers under runc) that
 serves several people (a `trusted` worker, or the control plane itself)
 refuses them unless its operator sets `WORK_PERSONAL_CREDENTIALS=accept` on
 that machine (the worker's own environment, like `WORK_UNENFORCED_EGRESS`),

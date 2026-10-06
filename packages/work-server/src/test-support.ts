@@ -51,7 +51,12 @@ export function testServerOptions(args: {
 }): WorkServerOptions {
   return {
     config: {
-      ...workServerConfigFromEnv({ WORK_DATA_DIR: args.dataDir, ...args.env }),
+      ...workServerConfigFromEnv({
+        WORK_DATA_DIR: args.dataDir,
+        // Tests run trusted subprocesses unless they choose a backend.
+        WORK_SANDBOX: "local-process",
+        ...args.env,
+      }),
       dataDir: args.dataDir,
       ...(args.publicBases ? { publicBases: args.publicBases } : {}),
     },

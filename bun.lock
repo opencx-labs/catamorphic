@@ -296,6 +296,18 @@
         "@types/node": "^26.1.1",
       },
     },
+    "packages/container": {
+      "name": "@catamorphic/container",
+      "version": "0.0.1",
+      "dependencies": {
+        "@catamorphic/runtime": "workspace:*",
+        "@catamorphic/sandbox": "workspace:*",
+        "@catamorphic/workflow": "workspace:*",
+      },
+      "devDependencies": {
+        "@types/node": "^26.1.1",
+      },
+    },
     "packages/core": {
       "name": "@catamorphic/core",
       "version": "0.0.1",
@@ -709,6 +721,7 @@
         "@catamorphic/agent-runner": "workspace:*",
         "@catamorphic/ai-sdk": "workspace:*",
         "@catamorphic/app": "workspace:*",
+        "@catamorphic/container": "workspace:*",
         "@catamorphic/core": "workspace:*",
         "@catamorphic/db": "workspace:*",
         "@catamorphic/fastify-plugin": "workspace:*",
@@ -923,6 +936,8 @@
     "@catamorphic/cloudflare-sandbox-bridge": ["@catamorphic/cloudflare-sandbox-bridge@workspace:packages/cloudflare-sandbox-bridge"],
 
     "@catamorphic/codex": ["@catamorphic/codex@workspace:packages/codex"],
+
+    "@catamorphic/container": ["@catamorphic/container@workspace:packages/container"],
 
     "@catamorphic/core": ["@catamorphic/core@workspace:packages/core"],
 

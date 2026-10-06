@@ -37,6 +37,12 @@ export interface EnvironmentBinding {
   resourceLimits?: readonly ("cpuMillis" | "memoryMb" | "storageMb" | "gpu")[];
   /** Host-assigned labels an Environment's `pool` selects on (ADR 0167). */
   labels?: Readonly<Record<string, string>>;
+  /**
+   * What runs the machine's sandboxes and why it was chosen (ADR 0203),
+   * for operators: `microsandbox`, `container` with its runtime (`runsc`,
+   * `runc`), or `local-process`.
+   */
+  backend?: { kind: string; runtime?: string; reason?: string };
 }
 
 /** Internal realization. Provider objects never cross an API boundary. */
