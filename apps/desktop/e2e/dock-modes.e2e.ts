@@ -794,8 +794,8 @@ describe("dock modes", () => {
         },
       );
       // The person moves from the chat onto the page and clicks it.
-      // The chat may cover most of a small window's page: aim at page the
-      // chat does not cover.
+      // On a small window the chat covers most of the page: aim at page the
+      // chat leaves uncovered, its margins included.
       const points = await runWait<{
         dock: { x: number; y: number };
         page: { x: number; y: number };
@@ -804,22 +804,29 @@ describe("dock modes", () => {
         const view = $$('webview').find((w) => (w.src ?? '').startsWith(${JSON.stringify(origin)}));
         const page = view.getBoundingClientRect();
         const dock = frontDock().getBoundingClientRect();
-        const target = [
-          { x: page.left + 24, y: page.top + 24 },
-          { x: page.left + 24, y: (page.top + page.bottom) / 2 },
-          { x: page.right - 24, y: page.top + 24 },
-          { x: (page.left + page.right) / 2, y: page.top + 12 },
-        ].find((point) =>
-          (point.x < dock.left || point.x > dock.right ||
-           point.y < dock.top || point.y > dock.bottom) &&
-          document.elementFromPoint(point.x, point.y) === view);
+        let target;
+        for (let y = page.top + 6; !target && y < page.bottom - 6; y += 12)
+          for (const x of [page.left + 6, page.right - 6, (page.left + page.right) / 2]) {
+            const outside = x < dock.left || x > dock.right || y < dock.top || y > dock.bottom;
+            if (outside && document.elementFromPoint(x, y) === view) {
+              target = { x, y };
+              break;
+            }
+          }
         return target && {
           dock: { x: dock.left + dock.width / 2, y: dock.top + 40 },
           page: target,
         };
       `,
         { label: "a point on the page outside the chat" },
-      );
+      ).catch(async (error: unknown) => {
+        const rects = await run(`return {
+          page: $$('webview').find((w) => (w.src ?? '').startsWith(${JSON.stringify(origin)}))?.getBoundingClientRect().toJSON(),
+          dock: frontDock()?.getBoundingClientRect().toJSON(),
+          window: { width: innerWidth, height: innerHeight },
+        };`);
+        throw new Error(`${String(error)}; rects: ${JSON.stringify(rects)}`);
+      });
       await app.movePointerThrough([points.dock, points.page]);
       await app.clickPointer(points.page);
       await runWait(
