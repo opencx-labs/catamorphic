@@ -310,7 +310,7 @@ Every dependency is an axis with a heavy and a light end. Pick per axis:
 | Axis | Heavy end | Light end |
 | --- | --- | --- |
 | Database | Network Postgres (`{ pool }` / `{ connectionString }`) | **Embedded pglite** (Kysely `PGliteDialect` via `database: { db }`; migrations run statement-by-statement so single-connection dialects just work) |
-| Execution | Cloud sandboxes: `@catamorphic/cloudflare`, `@catamorphic/daytona` | **Local sandboxes** (`@catamorphic/microsandbox`, or `@catamorphic/container` with gVisor on any Linux machine with Docker), plain local processes (`@catamorphic/local-process`, trusted single-tenant hosts only), or none (read-only embed) |
+| Execution | Cloud sandboxes: `@catamorphic/cloudflare`, `@catamorphic/daytona` | **Local sandboxes** (`@catamorphic/microsandbox`, or `@catamorphic/container` under gVisor on any Linux machine with Docker and gVisor), plain local processes (`@catamorphic/local-process`, trusted single-tenant hosts only), or none (read-only embed) |
 | Code storage | S3-compatible bucket (`@catamorphic/s3`) or Cloudflare Artifacts | Two writable directories |
 | Identity | Host org/user per request | One fixed tenant/user |
 | Surface | HTTP API + React UI | In-process SDK calls, or migrations-only |
