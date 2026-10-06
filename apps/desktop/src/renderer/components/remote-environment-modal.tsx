@@ -22,6 +22,16 @@ const SERVER_NOTE: Record<PersonalEnvironmentServerState, string | null> = {
     "The project's server could not be reached. Work tries again in a few minutes.",
 };
 
+/** Where a setup command the server does not have yet stands. */
+const SETUP_NOT_SENT: Record<PersonalEnvironmentServerState, string> = {
+  unknown: "Checking the project's server",
+  allowed: "Not sent yet",
+  "not-allowed": "Not sent: no Environment allows personal credentials",
+  unsupported: "Not sent: the server does not support remote environments",
+  "sign-in": "Not sent: sign in to the project's server again",
+  unreachable: "Not sent: the project's server could not be reached",
+};
+
 /**
  * The member's remote environment for a linked project (ADR 0184): which
  * project files reach their sessions on the server, and their own setup
@@ -251,9 +261,7 @@ export function RemoteEnvironmentModal({
                   <p className="mt-1 truncate text-xs text-fg-faint">
                     {view.setup.server
                       ? `On the server, sent ${ago(view.setup.server.updatedAt, now)}`
-                      : view.server === "allowed"
-                        ? "Not sent yet"
-                        : "Runs after the project's setup"}
+                      : SETUP_NOT_SENT[view.server]}
                   </p>
                 </div>
               </article>
