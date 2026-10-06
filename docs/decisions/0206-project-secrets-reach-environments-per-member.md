@@ -64,7 +64,8 @@ again for every attempt and passes the variables to the harness, values
 untouched, with `BASH_ENV` pointing at the file (Bash skips `BASH_ENV` when
 its standard input is a socket, so the variables themselves are what shells
 inherit); the built-in agent's commands, terminals and workspace setup source
-it. A listed secret with no value for the owner is named to the agent with
+it, a project chat's terminal only for a person holding `secrets:write` (ADR
+0209). A listed secret with no value for the owner is named to the agent with
 who can set it. Each delivery is audited by name and fingerprint. A turn that
 received them in a member's chat takes only that member's input, as for
 personal files, and a refused answer says so.

@@ -18,7 +18,13 @@ editor and file browser work on the local copy (ADR 0098).
 `POST /projects/:id/agent/sessions/:sessionId/terminals`. It is a login
 shell on a pseudo-terminal, started through the workspace's background
 processes (ADR 0174) under `script` (an interactive shell on a pipe where
-the sandbox has none), with the Environment's secrets loaded (ADR 0206).
+the sandbox has none), with the Environment's secrets loaded (ADR 0206): in
+a member's chat the owner's, and in a project chat the shared values only
+for a person holding `secrets:write`, since the secrets API shows them to
+nobody else. Anyone else's terminal starts without them and says so in one
+line. That keeps them out of the shell's environment, not out of the
+workspace: a command there can still read the file the chat's turns use, as
+a teammate's turn can (ADR 0206).
 Output is read by cursor with a wait, input and resizes are posted, and a
 terminal ends with its workspace. A chat whose workspace was given back is
 admitted again as its next turn would be, under the Allocation's

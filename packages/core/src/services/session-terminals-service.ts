@@ -8,7 +8,11 @@ import {
   type SandboxProcessProvider,
 } from "@catamorphic/sandbox";
 import type { Kysely } from "kysely";
-import type { Identity } from "../identity.js";
+import {
+  hasProjectPermission,
+  type Identity,
+  isProjectPrincipal,
+} from "../identity.js";
 import type { AgentSessionsService } from "./agent-sessions-service.js";
 import {
   parseTerminalPty,
@@ -77,10 +81,11 @@ interface TerminalInput {
 /**
  * Terminals in a chat's workspace (ADR 0209): a login shell on a
  * pseudo-terminal, started as one of the workspace's background processes
- * (ADR 0174) with the Environment's secrets loaded (ADR 0206). Output is
- * read by cursor with a wait; input and resizes are posted. A terminal is
- * its opener's alone, and it ends with the workspace. Every call is a
- * request on its own, so any replica serves any of them.
+ * (ADR 0174) with the Environment's secrets loaded (ADR 0206) for a person
+ * who may have them. Output is read by cursor with a wait; input and
+ * resizes are posted. A terminal is its opener's alone, and it ends with
+ * the workspace. Every call is a request on its own, so any replica serves
+ * any of them.
  */
 export class SessionTerminalsService {
   constructor(
@@ -123,9 +128,11 @@ export class SessionTerminalsService {
         const processes = processesOf(workspace);
         const sessionFromProject = sessionDirectoryFromProject(workspace);
         const key = `term-${randomUUID().replaceAll("-", "").slice(0, 20)}`;
+        const secrets = await this.loadsSecrets(input);
+        span.setAttribute("catamorphic.terminal.secrets", secrets);
         const prepared = await workspace.provider.executeCommand(
           workspace.sandboxId,
-          prepareTerminalCommand({ sessionFromProject, key }),
+          prepareTerminalCommand({ sessionFromProject, key, secrets }),
           { cwd: workspace.projectDirectory, timeout: 30 },
         );
         if (prepared.exitCode !== 0)
@@ -296,6 +303,29 @@ export class SessionTerminalsService {
         .where("process_id", "=", processId)
         .execute();
     });
+  }
+
+  /**
+   * Whether the opener's shell loads the workspace's secrets (ADR 0209): a
+   * member's chat is its owner's alone, with their values; a project
+   * chat's shared values load only for a person who may manage them,
+   * since the secrets API never shows a value to anyone else.
+   */
+  private async loadsSecrets(input: {
+    identity: Identity;
+    projectId: string;
+    sessionId: string;
+  }): Promise<boolean> {
+    const session = await this.deps.db
+      .selectFrom("agent_sessions")
+      .select("external_user_id")
+      .where("id", "=", input.sessionId)
+      .where("project_id", "=", input.projectId)
+      .executeTakeFirstOrThrow();
+    return (
+      !isProjectPrincipal(session.external_user_id) ||
+      hasProjectPermission(input.identity, input.projectId, "secrets:write")
+    );
   }
 
   /**

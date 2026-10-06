@@ -937,7 +937,9 @@ processes, on a pseudo-terminal when the sandbox has util-linux `script` (or
 the BSD `script` of macOS for local-process there), else an interactive shell
 on a pipe, which the open answer reports as `pty: false`. It starts in the
 project folder with the Environment's secrets (ADR 0206) loaded when the
-workspace has them. `POST /api/projects/:id/agent/sessions/:sessionId/terminals`
+workspace has them; in a project chat, only for someone holding
+`secrets:write`, and anyone else's terminal says it started without them.
+`POST /api/projects/:id/agent/sessions/:sessionId/terminals`
 opens one, readmitting and starting the chat's workspace when it was given
 back; its output is read with `GET .../terminals/:terminalId/output?cursor&waitMs`,
 and `POST .../input`, `POST .../resize` and `DELETE .../terminals/:terminalId`
