@@ -293,7 +293,8 @@ it("switches to open tabs from search and the Tabs mode, above bookmarks and his
     throw new Error("Missing server address");
   const origin = `http://127.0.0.1:${address.port}`;
   try {
-    // A saved page nobody opened yet, in a folder of the imported library.
+    // A saved page nobody opened yet, in a folder of the imported library
+    // and pinned too: pinning keeps the library copy.
     const { defaultProfileId } = await app.eval<{ defaultProfileId: string }>(
       "window.catamorphicDesktop.profilesList()",
     );
@@ -301,23 +302,25 @@ it("switches to open tabs from search and the Tabs mode, above bookmarks and his
     const saved = fs.existsSync(bookmarksFile)
       ? JSON.parse(fs.readFileSync(bookmarksFile, "utf8"))
       : {};
+    const delta = {
+      id: "delta",
+      label: "Delta handbook",
+      url: `${origin}/delta`,
+    };
     fs.writeFileSync(
       bookmarksFile,
       JSON.stringify({
         ...saved,
+        pinnedByProfile: {
+          ...saved.pinnedByProfile,
+          [defaultProfileId]: { folders: [], bookmarks: [delta] },
+        },
         libraryByProfile: {
           ...saved.libraryByProfile,
           [defaultProfileId]: {
             // Imports keep most pages in folders.
             folders: [{ id: "docs", label: "Docs" }],
-            bookmarks: [
-              {
-                id: "delta",
-                label: "Delta handbook",
-                url: `${origin}/delta`,
-                folderId: "docs",
-              },
-            ],
+            bookmarks: [{ ...delta, folderId: "docs" }],
           },
         },
       }),
@@ -360,12 +363,16 @@ it("switches to open tabs from search and the Tabs mode, above bookmarks and his
     await type("handbook");
     await wait(
       `const ids=rows().map(row=>row.dataset.itemId);
-       return ids[0]?.startsWith('open-tab:browser:') && ids[1]==='bookmark:library:delta' &&
+       return ids[0]?.startsWith('open-tab:browser:') && ids[1]==='bookmark:pinned:delta' &&
          ['Beta handbook','Gamma handbook'].every(name=>labels().some(label=>label.includes(name)))`,
       "open tab, then bookmark, then history",
     );
     const order = await run<string[]>("return labels()");
     expect(order[0]).toContain("Alpha handbook");
+    // The pinned page and its library copy are one row.
+    expect(
+      order.filter((label) => label.includes("Delta handbook")),
+    ).toHaveLength(1);
     // The tab in front is not offered; its page and Gamma follow as history.
     expect(
       order.filter((label) => label.includes("Alpha handbook")),

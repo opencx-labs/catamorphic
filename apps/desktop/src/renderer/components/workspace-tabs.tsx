@@ -1,4 +1,4 @@
-import { Clock } from "lucide-react";
+import { Clock, Puzzle } from "lucide-react";
 import { tabKey, type WorkspaceTab } from "../lib/workspace-types.js";
 import { useSidebarContent } from "./sidebar-contribution.js";
 import { SidebarItemRow } from "./sidebar-item-row.js";
@@ -150,6 +150,7 @@ const TAB_ICONS = {
   sites: SlidersHorizontal,
   passwords: KeyRound,
   downloads: Download,
+  extensions: Puzzle,
   usage: ChartColumn,
   palette: Search,
   "agent-setup": Bot,

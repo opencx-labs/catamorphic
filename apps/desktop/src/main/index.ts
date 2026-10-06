@@ -677,6 +677,7 @@ app.whenReady().then(async () => {
         await state.current?.agentRegistry.nativeToolchainEnvironment();
       return env?.CATAMORPHIC_BUN ?? "bun";
     },
+    (window) => desktopWorkspaces?.isDock(window) ?? false,
   );
   terminalSupport = registerTerminalSupport(state, async (projectId) => ({
     ...((await state.current?.agentRegistry.nativeToolchainEnvironment()) ??

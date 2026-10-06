@@ -189,6 +189,60 @@ input[type="checkbox"]:disabled {
   cursor: default;
 }
 
+/* One switch (DESIGN.md "Switches"): the same checkbox with role="switch",
+   for a setting that takes effect at once. A 28x16 pill in the checkbox's
+   colors; its 12px thumb slides 12px over 150ms and stretches while pressed.
+   Screens never size or color one themselves. */
+input[type="checkbox"][role="switch"] {
+  width: 28px;
+  height: 16px;
+  padding-inline: 2px;
+  place-content: center start;
+  border-radius: 999px;
+}
+
+input[type="checkbox"][role="switch"]:active:not(:disabled) {
+  scale: 1;
+}
+
+input[type="checkbox"][role="switch"]::before {
+  width: 12px;
+  height: 12px;
+  border-radius: 999px;
+  mask: none;
+  clip-path: none;
+  opacity: 1;
+  background: light-dark(
+    color-mix(in srgb, var(--color-fg) 55%, transparent),
+    color-mix(in srgb, var(--color-fg) 50%, transparent)
+  );
+  transition:
+    translate 150ms var(--ease-standard),
+    width 100ms var(--ease-standard),
+    background-color 150ms var(--ease-standard);
+}
+
+input[type="checkbox"][role="switch"]:checked::before {
+  translate: 12px;
+  /* A white knob on the accent in both themes, as macOS draws one; the
+     accent foreground is dark in some themes. */
+  background: #fff;
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.25);
+  clip-path: none;
+  transition:
+    translate 150ms var(--ease-standard),
+    width 100ms var(--ease-standard),
+    background-color 150ms var(--ease-standard);
+}
+
+input[type="checkbox"][role="switch"]:active:not(:disabled)::before {
+  width: 14px;
+}
+
+input[type="checkbox"][role="switch"]:checked:active:not(:disabled)::before {
+  translate: 10px;
+}
+
 @media (prefers-reduced-motion: reduce) {
   select::picker(select),
   select::picker-icon,

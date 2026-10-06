@@ -212,6 +212,45 @@ export function createPaletteIndex<T extends Rankable>(items: readonly T[]) {
 }
 
 /**
+ * One row per destination: rows sharing a usage key (a page pinned and in
+ * the imported library, a bookmark and a sidebar link to it) collapse into
+ * one. An app surface keeps its own row and an open tab stands in for the
+ * page, bookmark, chat or file it shows; tabs are places, so two tabs of
+ * one page both stay. Otherwise the first copy the empty palette lists
+ * wins, starred and ranked with the sidebar when any copy is.
+ */
+export function oneRowPerDestination<
+  T extends Rankable & { searchOnly?: boolean; bookmarked?: boolean },
+>(rows: readonly T[]): T[] {
+  const standIns = new Set<string>();
+  const surfaces = new Set<string>();
+  const copies = new Map<string, T[]>();
+  for (const row of rows) {
+    if (!row.usage) continue;
+    if (row.category === "surface") surfaces.add(row.usage);
+    if (row.category === "surface" || row.category === "tab")
+      standIns.add(row.usage);
+    else copies.set(row.usage, [...(copies.get(row.usage) ?? []), row]);
+  }
+  return rows.flatMap((row) => {
+    const usage = row.usage;
+    if (!usage || row.category === "surface") return [row];
+    if (row.category === "tab") return surfaces.has(usage) ? [] : [row];
+    if (standIns.has(usage)) return [];
+    const group = copies.get(usage) ?? [row];
+    if ((group.find((copy) => !copy.searchOnly) ?? group[0]) !== row) return [];
+    if (group.length === 1) return [row];
+    return [
+      {
+        ...row,
+        ...(group.some((copy) => copy.sidebar) ? { sidebar: true } : {}),
+        ...(group.some((copy) => copy.bookmarked) ? { bookmarked: true } : {}),
+      },
+    ];
+  });
+}
+
+/**
  * The empty palette's "Frequent" rows: the most used destinations, each
  * once. Pages are capped so a heavily browsed site cannot crowd out the
  * app's own commands and surfaces, whose counts only grow through use.

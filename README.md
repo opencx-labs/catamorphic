@@ -267,10 +267,12 @@ isolation. Checkout management is harness-neutral, so Claude Code, Codex,
 and the built-in agent follow the same policy. Diff tabs render in Monaco;
 the sidebar has Changes and Pull Requests sections; PR review opens per-file
 diffs through the CodeHost seam. Terminals are real PTYs with shell
-integration (OSC 133); the embedded browser and the command palette round
-out the shell. All of it degrades quietly for non-technical users.
+integration (OSC 133); the embedded browser, which installs Chrome
+extensions from the Chrome Web Store, and the command palette round out the
+shell. All of it degrades quietly for non-technical users.
 (ADRs [0045](docs/decisions/0045-desktop-as-dev-shell.md),
-[0063](docs/decisions/0063-agent-checkout-coordination.md))
+[0063](docs/decisions/0063-agent-checkout-coordination.md),
+[0203](docs/decisions/0203-work-runs-chrome-extensions-from-the-web-store.md))
 
 The signed app ships the audited Claude Code and Codex adapters, then downloads
 each large, platform-specific executable only on first use. Every component is

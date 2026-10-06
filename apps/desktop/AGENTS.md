@@ -23,6 +23,7 @@ UI work. Every interaction matters; this is a polished product, not a demo.
 Main-process map (`src/main/`): `server/` embeds core (boot, agent
 registry, project agents ADR 0050, workspace tools, triggers, e2e fakes);
 `agent-bridge.ts` connects agent sessions to renderer surfaces;
+`extensions/` hosts Chrome extensions (ADR 0203);
 `terminal.ts` + `shared/terminal-text.ts` + `shell-integration.ts` are the PTY
 stack (`remote-terminal.ts` puts a remote chat's shell behind the same
 sessions, and `remote-previews.ts` gives each of its previews a loopback
@@ -134,13 +135,16 @@ test without an explicit request. Prefer the isolated Electron harness.
 | Delivery and embedding | [Chat state](docs/chat-state.md) | `packages/react` hook/reducer, registry source |
 | Idle CPU and memory | [Performance](docs/performance.md) | `scripts/desktop-soak.ts`, `e2e/runtime-idle.e2e.ts` |
 | Browser control and native computer use | [Computer use](docs/computer-use.md) | `main/browser-driver.ts`, `packages/codex` |
+| Chrome extensions | [Browser extensions](docs/browser-extensions.md) | `main/extensions/`, `preload/session.ts`, `renderer/components/extensions/` |
 | Styling and animation | [Design system](DESIGN.md) | tokens, list motion and native motion tests |
 | Loading buttons and modal stability | [Button contract](DESIGN.md#buttons) | `@catamorphic/ui` PendingButton, reserved status space |
 | Dropdowns and checkboxes | [Control contract](DESIGN.md#dropdowns-and-checkboxes) | `renderer/form-controls.css`, semantic select/checkbox HTML |
+| Switches (on/off at once) | [Switches](DESIGN.md#switches) | `<input type="checkbox" role="switch">`, `renderer/form-controls.css`, design lint |
 | Focus rings | [Focus rings](DESIGN.md#focus-rings) | ring tokens in `styles.css`, `lib/focus-modality.ts`, design lint |
 
-All desktop dropdowns and checkboxes use the app's shared control styling, never
-OS-native dropdown menus or browser-default checkboxes. Read the linked control
+All desktop dropdowns, checkboxes and switches use the app's shared control
+styling, never OS-native dropdown menus, browser-default checkboxes or custom
+switch components. Read the linked control
 contract before changing a form. Onboarding and Settings reuse the same import
 and default-browser actions.
 

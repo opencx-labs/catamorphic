@@ -36,7 +36,9 @@ instructions to restore superseded behavior.
 - Forms use semantic `<select>` and `<input type="checkbox">`, styled only by
   [form-controls.css](../../../apps/desktop/src/renderer/form-controls.css)
   (`appearance: base-select`). No JavaScript select replacements, OS-native menus,
-  browser-default checkboxes or per-screen control styles.
+  browser-default checkboxes or per-screen control styles. A setting that applies
+  at once is a switch, `<input type="checkbox" role="switch">` from the same
+  stylesheet ([Switches](../../../apps/desktop/DESIGN.md#switches)).
 - Focus rings come from the ring tokens and follow keyboard navigation. Do not
   add `focus-visible:outline-*` utilities; use `.focus-ring-inset` for rows and
   clipped containers.

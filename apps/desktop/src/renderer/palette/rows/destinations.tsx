@@ -3,11 +3,14 @@ import {
   Download,
   History,
   KeyRound,
+  Puzzle,
   Settings2,
   Settings as SettingsIcon,
   SlidersHorizontal,
+  Store,
 } from "lucide-react";
 import { useMemo } from "react";
+import { CHROME_WEB_STORE_URL } from "../../../shared/extensions.js";
 import { surfaceUsageKey } from "../../../shared/palette.js";
 import { formatBinding, useKeybindings } from "../../lib/keybindings.js";
 import { usePaletteHost } from "../host.js";
@@ -22,6 +25,7 @@ export function useDestinationRows() {
   const {
     profileId,
     onOpenTab,
+    onOpenUrl,
     focusedSite = null,
     onOpenSiteSettings,
   } = usePaletteHost();
@@ -131,8 +135,41 @@ export function useDestinationRows() {
       run: (mode) =>
         onOpenTab({ kind: "sites", name: "sites", label: "Sites" }, mode),
     });
+    items.push({
+      id: "open-extensions",
+      icon: Puzzle,
+      label: "Extensions",
+      detail: "Chrome extensions in this profile",
+      keywords: ["extensions", "add-ons", "plugins", "chrome", "ad blocker"],
+      kind: "navigate",
+      category: "surface",
+      usage: surfaceUsageKey("extensions"),
+      run: (mode) =>
+        onOpenTab(
+          { kind: "extensions", name: "extensions", label: "Extensions" },
+          mode,
+        ),
+    });
+    items.push({
+      id: "open-chrome-web-store",
+      icon: Store,
+      label: "Chrome Web Store",
+      detail: "Find extensions to add",
+      keywords: ["extensions", "store", "chrome", "add-ons", "install"],
+      kind: "navigate",
+      category: "surface",
+      usage: "chrome-web-store",
+      run: (mode) => onOpenUrl(CHROME_WEB_STORE_URL, mode),
+    });
     return items;
-  }, [focusedSite, onOpenSiteSettings, onOpenTab, profileId, keybindings]);
+  }, [
+    focusedSite,
+    onOpenSiteSettings,
+    onOpenTab,
+    onOpenUrl,
+    profileId,
+    keybindings,
+  ]);
   const historyPageItem = useMemo<PaletteItem>(
     () => ({
       id: "open-history",

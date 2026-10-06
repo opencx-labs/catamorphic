@@ -346,11 +346,16 @@ describe("terminal tabs", () => {
   it("opens a terminal with the new-terminal-tab shortcut", async () => {
     await run(`pressKey('\\u0060', { ctrlKey: true }); return true;`);
     // The emulator (ghostty-web) mounts a canvas once its WASM module
-    // loads and the PTY session is live.
-    await runWait(`return !!byText('button', 'Terminal') && !!$('canvas');`, {
-      timeoutMs: 30_000,
-      label: "terminal tab with canvas",
-    });
+    // loads and the PTY session is live. The tab is named by the shell's
+    // title when it sets one (Debian's .bashrc does), so find the terminal
+    // by its input.
+    await runWait(
+      `return !!$('textarea[aria-label="Terminal input"]') && !!$('canvas');`,
+      {
+        timeoutMs: 30_000,
+        label: "terminal tab with canvas",
+      },
+    );
   });
 
   it("hides the input textarea's caret (no phantom top-left cursor)", async () => {

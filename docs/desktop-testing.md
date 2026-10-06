@@ -12,6 +12,10 @@ unignored new files. It omits local environments, signing keys, dependencies,
 generated output, and agent settings. Host home directories, displays, and
 Docker sockets are never mounted. Each run owns its container and temp data;
 cancellation removes the container. Docker's immutable layers are shared.
+The container runs as the unprivileged `bun` user: on Linux the OS sandbox is
+off (`--no-sandbox`), and a suite that needs Electron's sandboxed renderers
+anyway (`launchApp({ sandboxedRenderers: true })`, for extension service
+workers) adds `--enable-sandbox`, which Chromium refuses as root.
 
 ```sh
 bun run --cwd apps/desktop test:e2e window-state

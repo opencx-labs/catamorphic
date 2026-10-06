@@ -1,7 +1,13 @@
 # 0194 — Browser tabs load like Chrome's and sleep when unused
 
-- **Status:** Accepted
+- **Status:** Accepted (amended by 0203)
 - **Date:** 2026-10-01
+
+> Amended by [0203](0203-work-runs-chrome-extensions-from-the-web-store.md):
+> a profile with an extension that filters requests drops the brand
+> rewrite's `webRequest` listener (any listener switches off extension
+> request filtering) and sets the same headers from a hidden built-in
+> extension instead.
 
 ## Context
 
