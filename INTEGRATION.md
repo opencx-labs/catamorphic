@@ -210,6 +210,21 @@ const events = startEventDispatcher({ core: catamorphic.core });
 // on shutdown: await events.stop();
 ```
 
+Directory events (ADR 0210) are Project Events about a whole tenant: register
+`DIRECTORY_TRIGGER_KINDS` from `@catamorphic/server-sdk`, and when an account
+joins, leaves, or changes groups, build
+`directoryProjectEvent({ kind, member, groups, occurredAt, revision })`,
+record it with the change, and once that commits deliver it with
+`core.projectEvents.appendToSubscribers({ tenantId, ...event })`, retrying
+until it succeeds: a failed delivery must never undo the change (a departed
+member stays disabled). Only projects with an active automation of that kind
+store it; `revision` counts the account's transitions, so a replay is stored
+once, and delivering one account's events in revision order keeps a join
+from arriving after the departure that followed it. A kind may require permissions of
+the workflows that bind it (`defineTriggerKind({ requiredPermissions })`);
+these require `memberships:read`, enforced at scan and by the project check.
+The Work server does all of this for every `DirectoryProvider`.
+
 Webhooks are a built-in trigger kind: register `webhook` from
 `@catamorphic/server-sdk` in `triggerKinds`, and pass `publicApiBase` (the
 public URL of the mounted API, including its prefix) to `catamorphicPlugin` or
@@ -956,8 +971,14 @@ A remote executor owns its node lease (ADR 0192): the host connects it with
 executor's own calls with `renewRemote`, and builds its sandbox provider from
 the row with `remoteProvider`; any host of the authority then claims its
 turns. `workerNode` names only the process's own local node.
-Enable `clientExecution: true` to accept authenticated member sandbox runners;
-`startClientRunner` supplies the transport-independent client loop. See the
+Every operation is sealed to its executor's X25519 public key (ADR 0207):
+register it with `registerExecutorKey({ db, executor: nodeExecutor(id),
+publicKey })` before `connectRemote`, which refuses an executor without one.
+Enable `clientExecution: true` to accept authenticated member sandbox runners,
+which register their public key when they connect; `startClientRunner`
+supplies the transport-independent client loop and opens what it receives
+with `keys: { executor, privateKeys }` (`generateExecutorKeyPair` makes a
+pair; the private key stays on the executor). See the
 [cluster setup reference](skills/setup-work-server/references/cluster-deployment.md)
 for the current limitations and required evidence. Custom hosts continue to
 inject their own infrastructure and auth.
@@ -1064,6 +1085,25 @@ as a process with standard input (providers implement
 runner runs the harness's CLI beside the workspace, with the gateway as its
 only model endpoint, and any replica can read it or reattach to it (ADR
 0198). Harness binaries come from the Environment image.
+
+HTTP APIs through the gateway (ADR 0212): a provider whose connection is an
+HTTP API code in sandboxes may call sets `http: { baseUrl, paths?,
+headers({ material }) }` (`defineHttpApiConnectionProvider` offers it for
+connections without named `actions`; `auth: { basic: true }` sends a
+`user:password` key as HTTP Basic). Its capabilities are the lowercase
+methods. The plugin serves `/gateway/http/:alias` and everything below it
+(public route; the grant is a bearer, the Basic password, or `x-work-grant`):
+GET, HEAD, POST, PUT, PATCH and DELETE below the base URL and inside
+`paths`, the method allowed by the binding (`get` covers HEAD), reads only
+for a contained agent, bodies up to 32 MiB byte for byte, answers streamed,
+the caller's authorization replaced by the stored key. Guards see kind = the
+provider, action = the lowercase method, input = `{ path, query }`; each
+request is audited as `connection.http`. At each sandbox turn core issues a
+`sandbox` grant per HTTP alias and writes `.work-session/env/gateway.sh`
+exporting `WORK_HTTP_<ALIAS>` (`<gatewayUrl>/http/<alias>`) and
+`WORK_HTTP_<ALIAS>_GRANT_FILE`; the runner (`AttemptStart.envFiles`),
+host harnesses' commands, setup and terminals load it beside `secrets.sh`.
+Grants rotate on renewal, so code reads the file per request.
 
 Personal credentials (ADRs 0184, 0199): a member's listed files may reach
 sandboxes that run only that member's work. The member's client calls

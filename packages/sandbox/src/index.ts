@@ -85,6 +85,11 @@ export {
 } from "./coding-agent/types.js";
 export { CommandDeploymentRuntimeProvider } from "./command-deployment-runtime.js";
 export {
+  gitCloneFailure,
+  gitCloneUrl,
+  redactUrlCredentials,
+} from "./credential-redaction.js";
+export {
   type AgentExecutionTopology,
   accessTier,
   type EnvironmentBinding,
@@ -105,6 +110,17 @@ export {
   type WorkloadKind,
 } from "./execution-environment.js";
 export { instrumentSandboxProvider } from "./instrumented-provider.js";
+export {
+  type ExecutorKeyPair,
+  ExecutorPublicKeySchema,
+  executorPublicKey,
+  generateExecutorKeyPair,
+  openOperation,
+  type SealedOperation,
+  SealedOperationOpenError,
+  SealedOperationSchema,
+  sealOperation,
+} from "./operation-sealing.js";
 export {
   type PluginPayload,
   uploadPluginPayloads,
@@ -163,6 +179,12 @@ export {
   splitUtf8,
 } from "./sandbox-stdio.js";
 export {
+  assertSandboxVolumes,
+  imageUserHome,
+  VolumeUsageLog,
+  volumeMountPath,
+} from "./sandbox-volumes.js";
+export {
   machineSignInHome,
   parseSandboxPaths,
   parseSignInCapability,
@@ -213,6 +235,8 @@ export type {
   SandboxResources,
   SandboxStatus,
   SandboxType,
+  SandboxVolume,
+  SandboxVolumeProvider,
   StepEntry,
 } from "./types.js";
 export {
@@ -224,6 +248,9 @@ export {
   type SignInHarness,
   signInCapability,
   signInHomePath,
+  VOLUME_KEY_PATTERN,
+  VOLUME_NAME_PATTERN,
+  volumeKey,
 } from "./types.js";
 export type { WorkflowPackagePayload } from "./workflow-package.js";
 export {

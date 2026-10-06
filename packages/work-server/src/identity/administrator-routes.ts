@@ -6,6 +6,32 @@ import {
   type WorkAdministrators,
 } from "./administrators.js";
 
+/** Who may use an administrators' route (ADR 0172). */
+export interface AdministratorAccess {
+  administrators: WorkAdministrators;
+  caller(request: FastifyRequest): Promise<Identity | null>;
+}
+
+/**
+ * Whether the request's caller is an organization administrator: 401 for
+ * nobody signed in, 403 for a member who is not one.
+ */
+export function administratorCaller(
+  access: AdministratorAccess,
+): (
+  request: FastifyRequest,
+) => Promise<{ status: 200; identity: Identity } | { status: 401 | 403 }> {
+  return async (request) => {
+    const identity = await access.caller(request);
+    if (!identity) return { status: 401 };
+    return (await access.administrators.isAdministrator(
+      identity.externalUserId,
+    ))
+      ? { status: 200, identity }
+      : { status: 403 };
+  };
+}
+
 /**
  * Organization administrators manage each other from the app (ADR 0172).
  * Service connections themselves are the ordinary `/api/service-connections`
@@ -13,20 +39,9 @@ import {
  */
 export function registerAdministratorRoutes(
   app: FastifyInstance,
-  options: {
-    administrators: WorkAdministrators;
-    caller(request: FastifyRequest): Promise<Identity | null>;
-  },
+  options: AdministratorAccess,
 ): void {
-  const administrator = async (request: FastifyRequest) => {
-    const identity = await options.caller(request);
-    if (!identity) return { status: 401 as const };
-    return (await options.administrators.isAdministrator(
-      identity.externalUserId,
-    ))
-      ? { status: 200 as const, identity }
-      : { status: 403 as const };
-  };
+  const administrator = administratorCaller(options);
   const refusal = (status: 401 | 403) =>
     status === 401
       ? { error: "Unauthorized" }

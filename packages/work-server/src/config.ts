@@ -12,6 +12,11 @@ import {
   type GatewayConfig,
   gatewayConfigFromFile,
 } from "./gateway/gateway-config.js";
+import {
+  type MachinesConfig,
+  machineClassesProblem,
+  machinesConfigFromFile,
+} from "./workers/machine-classes.js";
 import { NodeLabelsSchema } from "./workers/placement.js";
 
 export type WorkAgentEffort = "low" | "medium" | "high";
@@ -113,6 +118,23 @@ export interface WorkServerConfig {
    * `WORK_WEBHOOK_MAX_BYTES` (default 1 MiB, at most 64 MiB).
    */
   webhookMaxBodyBytes?: number;
+  /**
+   * Machine classes machine rules name (ADR 0205): Hetzner Cloud servers,
+   * pools of enrolled machines, or the `machineProvisioner` hook's. The
+   * image reads them from the JSON file `WORK_MACHINES_CONFIG`.
+   */
+  machines?: MachinesConfig;
+  /**
+   * Hetzner Cloud API token for `hetzner-cloud` classes, from
+   * `WORK_HETZNER_TOKEN`; never part of the machines file.
+   */
+  hetznerToken?: string;
+  /**
+   * The worker image machines run (ADR 0205): `WORK_WORKER_IMAGE`, else
+   * the published image's own, `WORK_IMAGE_REPOSITORY:WORK_VERSION`, which
+   * its build bakes in.
+   */
+  workerImage?: string;
 }
 
 export function workServerConfigFromEnv(
@@ -183,6 +205,39 @@ export function workServerConfigFromEnv(
     ...(env.WORK_WEBHOOK_MAX_BYTES
       ? { webhookMaxBodyBytes: webhookMaxBytes(env.WORK_WEBHOOK_MAX_BYTES) }
       : {}),
+    ...machineSettingsFromEnv(env),
+  };
+}
+
+/** Machine classes, the Hetzner token, and the worker image (ADR 0205). */
+function machineSettingsFromEnv(
+  env: Record<string, string | undefined>,
+): Pick<WorkServerConfig, "machines" | "hetznerToken" | "workerImage"> {
+  const machines = env.WORK_MACHINES_CONFIG
+    ? machinesConfigFromFile(env.WORK_MACHINES_CONFIG)
+    : undefined;
+  const hetznerToken = env.WORK_HETZNER_TOKEN?.trim() || undefined;
+  if (machines) {
+    // Custom classes need the hook, which only a custom server has; the
+    // server checks that when it starts.
+    const problem = machineClassesProblem({
+      classes: machines.classes,
+      hetznerToken: Boolean(hetznerToken),
+      provisioner: true,
+    });
+    if (problem) throw new Error(problem);
+  }
+  // The published image knows where it was published and which release it
+  // is (both baked in at build time); machines run that same image.
+  const repository = env.WORK_IMAGE_REPOSITORY?.trim();
+  const version = env.WORK_VERSION?.trim();
+  const workerImage =
+    env.WORK_WORKER_IMAGE?.trim() ||
+    (repository && version ? `${repository}:${version}` : undefined);
+  return {
+    ...(machines ? { machines } : {}),
+    ...(hetznerToken ? { hetznerToken } : {}),
+    ...(workerImage ? { workerImage } : {}),
   };
 }
 

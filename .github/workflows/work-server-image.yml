@@ -92,6 +92,10 @@ jobs:
           file: apps/server/Dockerfile
           platforms: ${{ matrix.platform }}
           labels: ${{ steps.meta.outputs.labels }}
+          # Machines this server provisions run this same image.
+          build-args: |
+            WORK_IMAGE_REPOSITORY=${{ needs.release.outputs.image }}
+            WORK_VERSION=${{ needs.release.outputs.version }}
           load: true
           tags: work-server:smoke
           cache-from: type=gha,scope=work-server-${{ matrix.arch }}
@@ -115,6 +119,13 @@ jobs:
           test "$(docker exec work-server-smoke id -u)" != "0"
           logs="$(docker logs work-server-smoke 2>&1)"
           grep -q "Work server is up." <<<"$logs"
+          # Members sign in to Codex with the CLI this image carries (ADR
+          # 0213): it runs here, and finds the system trust store it
+          # verifies OpenAI's TLS with.
+          docker exec work-server-smoke test -s /etc/ssl/certs/ca-certificates.crt
+          docker exec -w /app/packages/work-server work-server-smoke \
+            bun -e 'const r = Bun.spawnSync([process.execPath, require.resolve("@openai/codex/bin/codex.js"), "--version"]); process.stdout.write(r.stdout); process.exit(r.exitCode)' \
+            | grep -q '^codex-cli '
 
       - name: Show server logs
         if: failure()
@@ -136,6 +147,9 @@ jobs:
           file: apps/server/Dockerfile
           platforms: ${{ matrix.platform }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            WORK_IMAGE_REPOSITORY=${{ needs.release.outputs.image }}
+            WORK_VERSION=${{ needs.release.outputs.version }}
           outputs: type=image,name=${{ needs.release.outputs.image }},push-by-digest=true,name-canonical=true,push=true
           cache-from: type=gha,scope=work-server-${{ matrix.arch }}
 

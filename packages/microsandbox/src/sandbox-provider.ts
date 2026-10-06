@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import path from "node:path";
 import type {
   CreateSandboxOpts,
   DeploymentRuntimeProvider,
@@ -10,23 +11,34 @@ import type {
   SandboxProcessProvider,
   SandboxProvider,
   SandboxStatus,
+  SandboxVolume,
+  SandboxVolumeProvider,
 } from "@catamorphic/sandbox";
 import {
   assertSandboxResources,
+  assertSandboxVolumes,
   dockerfileImageReference,
+  gitCloneFailure,
+  gitCloneUrl,
+  imageUserHome,
   machineSignInHome,
   SANDBOX_CAPABILITIES,
   shellSandboxProcesses,
   signInHomePath,
+  VOLUME_KEY_PATTERN,
+  VolumeUsageLog,
+  volumeMountPath,
 } from "@catamorphic/sandbox";
 import {
   APP_DATA_ENV,
   APP_DATA_MOUNT,
 } from "@catamorphic/workflow/project-layout";
 import {
+  Image,
   type SandboxStatus as MsbSandboxStatus,
   type NetworkProfile,
   Sandbox,
+  Volume,
 } from "microsandbox";
 import { microsandboxEgressPolicy } from "./egress-policy.js";
 import { cachedImageBuilder, type ImageBuilder } from "./image-builder.js";
@@ -106,7 +118,17 @@ export interface MicrosandboxProviderConfig {
    * refuses `signIns`.
    */
   signInRoot?: string;
+  /**
+   * Where the provider records when each volume was last mounted (ADR
+   * 0208). With it, sandboxes mount volumes (microsandbox named volumes:
+   * directories, or disks for exclusive ones) and the provider advertises
+   * `volumes`.
+   */
+  stateDirectory?: string;
 }
+
+/** Labels a sandbox with the volumes it mounts, so pruning keeps them. */
+const VOLUMES_LABEL = "work.volumes";
 
 /**
  * Runs once per new sandbox; ~20s on first use, no-op when everything
@@ -138,7 +160,8 @@ const ENSURE_DOCKER = [
 export class MicrosandboxSandboxProvider implements SandboxProvider {
   readonly isolation = "sandbox";
   readonly workspaceRoot = "/workspace";
-  readonly resourceLimits = ["cpuMillis", "memoryMb"] as const;
+  /** `storageMb` sizes the VM's root disk, which holds the workspace. */
+  readonly resourceLimits = ["cpuMillis", "memoryMb", "storageMb"] as const;
   readonly capabilities: readonly SandboxCapability[];
   readonly deploymentRuntime: DeploymentRuntimeProvider;
   /**
@@ -150,17 +173,28 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
       this.executeCommand(sandboxId, command, opts),
     workspaceRoot: this.workspaceRoot,
   });
+  /** Named volumes kept across sandboxes (ADR 0208), with `stateDirectory`. */
+  readonly volumes?: SandboxVolumeProvider;
   private readonly config: Required<
     Omit<
       MicrosandboxProviderConfig,
-      "projectDataDirectory" | "networkProfiles" | "imageBuilder" | "signInRoot"
+      | "projectDataDirectory"
+      | "networkProfiles"
+      | "imageBuilder"
+      | "signInRoot"
+      | "stateDirectory"
     >
   > &
     Pick<
       MicrosandboxProviderConfig,
-      "projectDataDirectory" | "networkProfiles" | "imageBuilder" | "signInRoot"
+      | "projectDataDirectory"
+      | "networkProfiles"
+      | "imageBuilder"
+      | "signInRoot"
+      | "stateDirectory"
     >;
   private readonly connections = new Map<string, Sandbox>();
+  private readonly usage: VolumeUsageLog | undefined;
 
   constructor(config?: MicrosandboxProviderConfig) {
     this.config = {
@@ -178,12 +212,23 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
       containers: config?.containers ?? true,
       containerDiskMib: config?.containerDiskMib ?? DEFAULT_CONTAINER_DISK_MIB,
       signInRoot: config?.signInRoot,
+      stateDirectory: config?.stateDirectory,
     };
+    const stateDirectory = this.config.stateDirectory;
+    this.usage = stateDirectory
+      ? new VolumeUsageLog(path.join(stateDirectory, "volumes.json"))
+      : undefined;
+    if (this.usage)
+      this.volumes = {
+        prune: (args) => this.pruneVolumes(args),
+        removeAll: (args) => this.removeAllVolumes(args),
+      };
     this.capabilities = [
       SANDBOX_CAPABILITIES.images,
       SANDBOX_CAPABILITIES.egressPolicy,
       ...(this.config.containers ? [SANDBOX_CAPABILITIES.containers] : []),
       ...(this.config.imageBuilder ? [SANDBOX_CAPABILITIES.imageBuild] : []),
+      ...(this.usage ? [SANDBOX_CAPABILITIES.volumes] : []),
     ];
     this.deploymentRuntime = msbStdioRuntimeProvider({
       connect: (sandboxId) => this.connect(sandboxId),
@@ -201,8 +246,12 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
       );
     if (opts.containers && !this.config.containers)
       throw new Error("This machine does not run containers in sandboxes");
+    if (opts.volumes?.length && !this.usage)
+      throw new Error("This machine keeps no volumes for its sandboxes");
+    assertSandboxVolumes(opts.volumes);
     const signIns = this.signInMounts(opts);
     const image = await this.imageFor(opts);
+    const volumes = await this.volumeMounts({ image, volumes: opts.volumes });
     const name = `${this.config.namePrefix}-${crypto.randomUUID().slice(0, 12)}`;
     let builder = Sandbox.builder(name)
       .image(image)
@@ -217,14 +266,31 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
       .patch((patch) => patch.mkdir(this.workspaceRoot, { mode: 0o755 }))
       .workdir(this.workspaceRoot)
       .detached(true);
+    if (opts.resources?.storageMb)
+      builder = builder.rootDisk(opts.resources.storageMb);
     if (opts.envVars) builder = builder.envs(opts.envVars);
-    if (opts.labels) builder = builder.labels(opts.labels);
+    const persistent = volumes.filter((volume) => !volume.temporary);
+    const labels = {
+      ...opts.labels,
+      ...(persistent.length > 0
+        ? { [VOLUMES_LABEL]: persistent.map((volume) => volume.key).join(",") }
+        : {}),
+    };
+    if (Object.keys(labels).length > 0) builder = builder.labels(labels);
     const policy = microsandboxEgressPolicy({
       egress: opts.egress,
       profiles: this.config.networkProfiles,
     });
     if (policy) builder = builder.network((network) => network.policy(policy));
-    if (opts.containers) {
+    for (const volume of volumes)
+      builder = builder.volume(volume.target, volume.mount);
+    this.usage?.touch(persistent.map((volume) => volume.key));
+    // A volume the Environment keeps at the Docker data root replaces the
+    // sandbox's own Docker disk.
+    if (
+      opts.containers &&
+      !volumes.some((volume) => volume.target === DOCKER_DATA)
+    ) {
       // Docker's overlay storage cannot sit on the VM's overlay root; a
       // disk owned by this sandbox can, and is removed with it.
       builder = builder.volume(DOCKER_DATA, (mount) =>
@@ -279,6 +345,113 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
     const handle = await Sandbox.get(sandboxId);
     if (handle.status === "running") return;
     this.connections.set(sandboxId, await booted(await bringUp(handle)));
+    this.usage?.touch(volumeKeysOf(handle));
+  }
+
+  /**
+   * How each volume mounts (ADR 0208): a named volume, a directory, or a
+   * disk for an exclusive one (a Docker data root needs a filesystem of
+   * its own); a temporary one is owned by the sandbox and removed with it.
+   */
+  private async volumeMounts(args: {
+    image: string;
+    volumes: readonly SandboxVolume[] | undefined;
+  }): Promise<
+    Array<{
+      key: string;
+      temporary: boolean;
+      target: string;
+      mount: MountConfigure;
+    }>
+  > {
+    const volumes = args.volumes ?? [];
+    if (volumes.length === 0) return [];
+    // `~` is the image user's home; an image not yet cached counts as root's.
+    const detail = volumes.some((volume) => volume.path.startsWith("~"))
+      ? await Image.inspect(args.image).catch(() => undefined)
+      : undefined;
+    const home = imageUserHome({
+      user: detail?.config?.user ?? null,
+      env: detail?.config?.env ?? null,
+    });
+    // A disk keeps the size it was made with: one that exists mounts as is.
+    const existing = new Set(
+      (await Volume.list().catch(() => [])).map((volume) => volume.name),
+    );
+    return volumes.map((volume) => {
+      const disk = volume.exclusive === true;
+      const sizeMib = volume.sizeMb ?? this.config.containerDiskMib;
+      return {
+        key: volume.key,
+        temporary: volume.temporary === true,
+        target: volumeMountPath({ path: volume.path, home }),
+        mount: (mount) =>
+          volume.temporary
+            ? mount.owned(disk ? { kind: "disk", sizeMib } : { kind: "dir" })
+            : existing.has(volume.key)
+              ? mount.named(volume.key)
+              : mount.namedWith(
+                  volume.key,
+                  "ensure-exists",
+                  disk ? "disk" : "dir",
+                  disk ? sizeMib : undefined,
+                ),
+      };
+    });
+  }
+
+  /** Remove volumes no sandbox mounts that went unused for `unusedForMs`. */
+  private async pruneVolumes(args: { unusedForMs: number }): Promise<string[]> {
+    const usage = this.usage;
+    if (!usage) return [];
+    const mounted = await mountedVolumeKeys();
+    const removed: string[] = [];
+    for (const volume of await Volume.list()) {
+      if (!VOLUME_KEY_PATTERN.test(volume.name) || mounted.has(volume.name))
+        continue;
+      if (
+        !usage.unused({
+          key: volume.name,
+          unusedForMs: args.unusedForMs,
+          ...(volume.createdAt ? { since: volume.createdAt.getTime() } : {}),
+        })
+      )
+        continue;
+      await Volume.remove(volume.name).then(
+        () => removed.push(volume.name),
+        () => {},
+      );
+    }
+    usage.forget(removed);
+    return removed;
+  }
+
+  /**
+   * Remove every volume. With `destroySandboxes`, the sandboxes that mount
+   * any first (a pooled machine's reset); without, mounted ones are kept.
+   */
+  private async removeAllVolumes(args?: {
+    destroySandboxes?: boolean;
+  }): Promise<void> {
+    if (args?.destroySandboxes)
+      for (const name of await sandboxesMountingVolumes())
+        await this.destroySandbox(name);
+    const mounted = await mountedVolumeKeys();
+    const kept: string[] = [];
+    const removed: string[] = [];
+    for (const volume of await Volume.list()) {
+      if (!VOLUME_KEY_PATTERN.test(volume.name)) continue;
+      if (mounted.has(volume.name)) kept.push(volume.name);
+      else {
+        await Volume.remove(volume.name);
+        removed.push(volume.name);
+      }
+    }
+    this.usage?.forget(removed);
+    if (kept.length > 0)
+      throw new Error(
+        `Volumes still mounted by sandboxes were kept: ${kept.join(", ")}. Destroy those sandboxes first.`,
+      );
   }
 
   /**
@@ -336,6 +509,7 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
   }
 
   async destroySandbox(sandboxId: string): Promise<void> {
+    const connected = this.connections.get(sandboxId);
     this.connections.delete(sandboxId);
     const handle = await Sandbox.get(sandboxId).catch((error: unknown) => {
       if (
@@ -350,7 +524,18 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
       await this.deploymentRuntime.releaseSandbox?.({ sandboxId });
       return;
     }
-    if (handle.status === "running") await handle.kill();
+    if (handle.status === "running") {
+      // A disk volume's writes wait in the guest's cache; killing the VM
+      // would lose them, so they reach the disk first. A VM that does not
+      // answer within the minute is killed anyway: destroying never hangs.
+      if (volumeKeysOf(handle).length > 0)
+        await withTimeout(
+          (async () =>
+            shellIn(connected ?? (await handle.connect()), "sync", 60))(),
+          60_000,
+        ).catch(() => {});
+      await handle.kill();
+    }
     await handle.remove();
     await this.deploymentRuntime.releaseSandbox?.({ sandboxId });
   }
@@ -419,7 +604,7 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
     path: string,
     opts?: GitCloneOpts,
   ): Promise<void> {
-    const cloneUrl = withCredentials(url, opts);
+    const cloneUrl = gitCloneUrl(url, opts);
     const branchArg = opts?.branch
       ? ` --branch ${shellQuote(opts.branch)}`
       : "";
@@ -429,7 +614,10 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
       { timeout: 120 },
     );
     if (clone.exitCode !== 0) {
-      throw new Error(`git clone failed: ${clone.result}`);
+      throw gitCloneFailure({
+        output: clone.result,
+        ...(opts ? { opts } : {}),
+      });
     }
     if (opts?.commitId) {
       await this.gitCheckout(sandboxId, path, opts.commitId);
@@ -510,12 +698,72 @@ async function booted(sandbox: Sandbox): Promise<Sandbox> {
   return sandbox;
 }
 
-function withCredentials(url: string, opts?: GitCloneOpts): string {
-  if (!opts?.username && !opts?.password) return url;
-  const parsed = new URL(url);
-  if (opts.username) parsed.username = opts.username;
-  if (opts.password) parsed.password = opts.password;
-  return parsed.toString();
+/** How one volume mounts, as the sandbox builder takes it. */
+type MountConfigure = Parameters<
+  ReturnType<typeof Sandbox.builder>["volume"]
+>[1];
+
+/** The volumes a sandbox was created with, from its labels. */
+function volumeKeysOf(handle: { config(): Record<string, unknown> }): string[] {
+  try {
+    const labels = handle.config().labels;
+    const keys =
+      typeof labels === "object" && labels !== null
+        ? Reflect.get(labels, VOLUMES_LABEL)
+        : undefined;
+    return typeof keys === "string" ? keys.split(",").filter(Boolean) : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Every volume an existing sandbox (running or not) mounts. */
+async function mountedVolumeKeys(): Promise<Set<string>> {
+  const keys = new Set<string>();
+  for (const handle of await everySandbox())
+    for (const key of volumeKeysOf(handle)) keys.add(key);
+  return keys;
+}
+
+/** The sandboxes (running or not) that mount any volume. */
+async function sandboxesMountingVolumes(): Promise<string[]> {
+  return (await everySandbox())
+    .filter((handle) => volumeKeysOf(handle).length > 0)
+    .map((handle) => handle.name);
+}
+
+async function everySandbox(): Promise<
+  Awaited<ReturnType<typeof Sandbox.list>>["sandboxes"]
+> {
+  const handles: Awaited<ReturnType<typeof Sandbox.list>>["sandboxes"] = [];
+  let cursor: string | undefined;
+  do {
+    const after = cursor;
+    const page = await Sandbox.listWith((list) =>
+      after ? list.cursor(after) : list,
+    );
+    handles.push(...page.sandboxes);
+    cursor = page.nextCursor;
+  } while (cursor);
+  return handles;
+}
+
+/** `promise`, or a rejection after `ms`. */
+async function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`No answer within ${ms}ms`)),
+          ms,
+        );
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 function shellQuote(value: string): string {

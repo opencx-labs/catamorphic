@@ -1,11 +1,36 @@
+import { readFileSync } from "node:fs";
 import {
   encodeLine,
   framePayload,
   type HarnessAdapter,
   parseCommandFrame,
+  parseEnvFile,
   splitLines,
 } from "@catamorphic/agent-protocol/runner";
-import { AttemptRunner, errorMessage } from "./runner.js";
+import {
+  AttemptRunner,
+  type AttemptRunnerOptions,
+  errorMessage,
+} from "./runner.js";
+
+/**
+ * The variables in an environment file on this machine (ADR 0206), or
+ * undefined when there is none. Any other failure to read it fails the
+ * attempt: running without the variables would hide the problem.
+ */
+export function readEnvFile(path: string): Record<string, string> | undefined {
+  try {
+    return parseEnvFile(readFileSync(path, "utf8"));
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      "code" in error &&
+      (error.code === "ENOENT" || error.code === "ENOTDIR")
+    )
+      return undefined;
+    throw error;
+  }
+}
 
 /**
  * The runner as a process (ADR 0198): commands arrive on standard input,
@@ -18,12 +43,15 @@ export async function runStdioRunner(input: {
   version: string;
   stdin?: NodeJS.ReadableStream;
   stdout?: NodeJS.WritableStream;
+  /** Reads an attempt's environment file; {@link readEnvFile} by default. */
+  envFile?: AttemptRunnerOptions["envFile"];
 }): Promise<void> {
   const stdin: NodeJS.ReadableStream = input.stdin ?? process.stdin;
   const stdout = input.stdout ?? process.stdout;
   const runner = new AttemptRunner({
     adapters: input.adapters,
     version: input.version,
+    envFile: input.envFile ?? readEnvFile,
     write: (frame) => {
       stdout.write(encodeLine(frame));
     },

@@ -24,9 +24,10 @@ import {
 
 /**
  * Keeps each linked project's remote environment (ADR 0184) current: the
- * member's listed files, sent to the Work server when they change and
- * checked on a timer and on focus. Sign-ins are never sent: they stay on
- * the machine they were made on (ADR 0199).
+ * member's listed files and their own setup command (ADR 0208), sent to
+ * the Work server when they change and checked on a timer and on focus.
+ * Sign-ins are never sent: they stay on the machine they were made on
+ * (ADR 0199).
  */
 
 /** How often each linked server is asked about the environment. */
@@ -49,17 +50,21 @@ export interface PersonalEnvironmentLink {
 
 export interface PersonalEnvironmentSnapshot {
   files: ListedFile[];
+  /** The member's own setup command (ADR 0208). */
+  setup?: string;
   fingerprint: string;
 }
 
 export function snapshotFingerprint(args: {
   files: readonly ListedFile[];
+  setup?: string;
 }): string {
   return sha256(
     JSON.stringify({
       files: args.files.flatMap((file) =>
         file.fingerprint ? [[file.path, file.fingerprint]] : [],
       ),
+      setup: args.setup ?? null,
     }),
   );
 }
@@ -73,6 +78,7 @@ export function uploadFromSnapshot(
         ? [{ path: file.path, content: file.content.toString("base64") }]
         : [],
     ),
+    ...(snapshot.setup ? { setup: snapshot.setup } : {}),
   };
 }
 
@@ -91,7 +97,20 @@ export function shouldUpload(args: {
     .filter((file) => file.content)
     .map((file) => file.path)
     .sort();
-  return remoteFiles.join("\u0000") !== localFiles.join("\u0000");
+  return (
+    remoteFiles.join("\u0000") !== localFiles.join("\u0000") ||
+    (args.remote.setup?.command ?? null) !== (args.snapshot.setup ?? null)
+  );
+}
+
+/** The config and listed files as read from the project folder. */
+interface LocalEnvironment {
+  configFingerprint: string;
+  config: PersonalEnvironmentConfig | null;
+  exists: boolean;
+  error: string | null;
+  files: ListedFile[];
+  snapshot: PersonalEnvironmentSnapshot | null;
 }
 
 interface LinkState {
@@ -191,16 +210,42 @@ export class PersonalEnvironmentSync {
     }
   }
 
-  /** Current view, starting a check when this link was never checked. */
-  view(args: {
+  /**
+   * Current view with the config as it is on disk now, starting a check
+   * when this link was never checked or its config changed since.
+   */
+  async view(args: {
     profileId: string;
     projectId: string;
-  }): PersonalEnvironmentView {
+  }): Promise<PersonalEnvironmentView> {
+    const key = linkKey(args.profileId, args.projectId);
     const link = this.link(args);
-    const state = this.states.get(linkKey(args.profileId, args.projectId));
-    if (link && !state?.lastCheckedAt && !state?.running)
+    const known = this.states.get(key);
+    if (link && !known?.lastCheckedAt && !known?.running)
       void this.sync(link).catch(() => {});
+    else if (link && known && !known.running)
+      await this.refreshLocal(link, known).catch(() => {
+        // The next check reports what could not be read.
+      });
+    const state = this.states.get(key);
     return this.render(args.projectId, state, Boolean(state?.running));
+  }
+
+  /**
+   * Reads the config again, which is cheap, and the listed files only when
+   * it changed; a change the server can take is sent, as the local check
+   * would.
+   */
+  private async refreshLocal(
+    link: PersonalEnvironmentLink,
+    state: LinkState,
+  ): Promise<void> {
+    const root = await this.deps.projectRoot(link.localProjectId);
+    if (!root) return;
+    const file = await readPersonalEnvironmentConfig({ root });
+    if (file.fingerprint === state.configFingerprint || state.running) return;
+    await this.readLocal(link, state, root);
+    if (state.server === "allowed") void this.sync(link).catch(() => {});
   }
 
   /** Check and send now; resolves with the resulting view. */
@@ -272,7 +317,17 @@ export class PersonalEnvironmentSync {
             // Every outcome reaches agents, including sign-in and
             // unreachable states that end a run early.
             const root = await this.deps.projectRoot(link.localProjectId);
-            if (root) await this.writeStatus(root, state);
+            if (root) {
+              await this.writeStatus(root, state);
+              // The first status may have just created the personal
+              // folder, which could not be watched before it existed.
+              if (
+                this.states.get(
+                  linkKey(link.profileId, link.localProjectId),
+                ) === state
+              )
+                this.reconcileWatchers(link, state, root);
+            }
           }
         } while (state.again && !this.stopped);
       } finally {
@@ -284,14 +339,7 @@ export class PersonalEnvironmentSync {
     return state.running;
   }
 
-  private async collect(root: string): Promise<{
-    configFingerprint: string;
-    config: PersonalEnvironmentConfig | null;
-    exists: boolean;
-    error: string | null;
-    files: ListedFile[];
-    snapshot: PersonalEnvironmentSnapshot | null;
-  }> {
+  private async collect(root: string): Promise<LocalEnvironment> {
     const file = await readPersonalEnvironmentConfig({ root });
     if (!file.parsed.ok)
       return {
@@ -304,14 +352,38 @@ export class PersonalEnvironmentSync {
       };
     const config = file.parsed.config;
     const files = await readListedFiles({ root, files: config.files });
+    const setup = config.setup ? { setup: config.setup } : {};
     return {
       configFingerprint: file.fingerprint,
       config,
       exists: file.exists,
       error: null,
       files,
-      snapshot: { files, fingerprint: snapshotFingerprint({ files }) },
+      snapshot: {
+        files,
+        ...setup,
+        fingerprint: snapshotFingerprint({ files, ...setup }),
+      },
     };
+  }
+
+  /** The config and listed files as they are now, watched for changes. */
+  private async readLocal(
+    link: PersonalEnvironmentLink,
+    state: LinkState,
+    root: string,
+  ): Promise<LocalEnvironment> {
+    const local = await this.collect(root);
+    state.configFingerprint = local.configFingerprint;
+    state.localFingerprint = local.snapshot?.fingerprint ?? null;
+    state.config = {
+      exists: local.exists,
+      error: local.error,
+      config: local.config,
+    };
+    state.files = local.files;
+    this.reconcileWatchers(link, state, root);
+    return local;
   }
 
   private async run(
@@ -323,17 +395,8 @@ export class PersonalEnvironmentSync {
       state.error = "The project folder is unavailable";
       return;
     }
-    const local = await this.collect(root);
-    state.configFingerprint = local.configFingerprint;
-    state.localFingerprint = local.snapshot?.fingerprint ?? null;
-    state.config = {
-      exists: local.exists,
-      error: local.error,
-      config: local.config,
-    };
-    state.files = local.files;
+    const local = await this.readLocal(link, state, root);
     state.error = null;
-    this.reconcileWatchers(link, state, root);
     if (!link.client) {
       state.server = "sign-in";
       return;
@@ -357,7 +420,7 @@ export class PersonalEnvironmentSync {
     try {
       if (!remote.allowed) {
         // Nothing may use it: take back what an earlier Environment allowed.
-        if (remote.files.length > 0) {
+        if (remote.files.length > 0 || remote.setup) {
           await link.client.deletePersonalEnvironment();
           state.remote = await link.client.personalEnvironment();
           state.lastSentFingerprint = null;
@@ -436,6 +499,8 @@ export class PersonalEnvironmentSync {
     const localFiles = new Map(
       (state?.files ?? []).map((file) => [file.path, file]),
     );
+    const setup = config?.setup;
+    const remoteSetup = state?.remote?.setup;
     return {
       projectId,
       configPath: PERSONAL_ENVIRONMENT_PATH,
@@ -454,6 +519,15 @@ export class PersonalEnvironmentSync {
             : null,
         };
       }),
+      setup: setup
+        ? {
+            command: setup,
+            server:
+              remoteSetup?.command === setup
+                ? { updatedAt: remoteSetup.updatedAt }
+                : null,
+          }
+        : null,
       lastSyncAt: state?.lastSyncAt ?? null,
       lastCheckedAt: state?.lastCheckedAt ?? null,
       error: state?.error ?? null,
@@ -476,6 +550,9 @@ export class PersonalEnvironmentSync {
         problem: file.problem,
         onServer: file.server !== null,
       })),
+      setup: view.setup
+        ? { command: view.setup.command, onServer: view.setup.server !== null }
+        : null,
     };
     const text = `${JSON.stringify(status, null, 2)}\n`;
     if (text === state.statusText) return;

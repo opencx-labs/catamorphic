@@ -13,6 +13,7 @@ import {
   nativeTheme,
   powerMonitor,
   safeStorage,
+  session,
   type WebContents,
 } from "electron";
 import type { DesktopUpdateChannel } from "../shared/update.js";
@@ -42,6 +43,7 @@ import { prepareVersionBackup } from "./pre-migration-backup.js";
 import { ProfileConfigManager } from "./profile-config.js";
 import { ProfilesStore } from "./profiles.js";
 import { type EmbeddedServer, startEmbeddedServer } from "./server/boot.js";
+import { DESKTOP_API_TOKEN_HEADER } from "./server/local-api-guard.js";
 import { resolveDataPaths } from "./server/paths.js";
 import {
   registerDesktopShutdown,
@@ -640,6 +642,7 @@ app.whenReady().then(async () => {
     file: path.join(paths.root, "..", "mobile-pairing.json"),
     profileConfig,
     serverUrl: () => state.current?.url ?? null,
+    apiToken: () => state.current?.apiToken ?? null,
     ...(e2eMobilePairingAddress && e2eDataDir
       ? {
           lanAddresses: () => [e2eMobilePairingAddress],
@@ -726,6 +729,10 @@ app.whenReady().then(async () => {
       [desktopProfileMcpProvider],
     );
     versionBackup.markBootSuccessful();
+    // The app's own windows (the default session; browser tabs have their
+    // profiles' sessions) carry this run's token to the embedded API, which
+    // refuses web pages without it.
+    allowDesktopWindowsApi({ url: server.url, token: server.apiToken });
     telemetry.configureProjects({
       resolve: (projectId) =>
         projectTelemetrySettings({
@@ -833,3 +840,26 @@ registerDesktopShutdown({
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
 });
+
+/**
+ * Add the embedded API's token to the app windows' requests to it, and to
+ * no other port: a preview origin forwards headers to a remote server.
+ */
+function allowDesktopWindowsApi(input: { url: string; token: string }): void {
+  const api = new URL(input.url);
+  session.defaultSession.webRequest.onBeforeSendHeaders(
+    { urls: [`${api.protocol}//${api.hostname}/*`] },
+    (details, callback) => {
+      const target = new URL(details.url);
+      callback({
+        requestHeaders:
+          target.host === api.host
+            ? {
+                ...details.requestHeaders,
+                [DESKTOP_API_TOKEN_HEADER]: input.token,
+              }
+            : details.requestHeaders,
+      });
+    },
+  );
+}

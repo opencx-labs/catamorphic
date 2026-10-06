@@ -1,6 +1,11 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import {
   type AttemptStart,
+  formatEnvFile,
   type HarnessEvent,
+  parseEnvFile,
   RUNNER_PROTOCOL_VERSION,
   type RunnerFrame,
 } from "@catamorphic/agent-protocol/runner";
@@ -9,11 +14,13 @@ import { EchoAdapter } from "../echo-adapter.js";
 import { InProcessRunner } from "../in-process.js";
 import {
   APPEND_BATCH_BYTES,
+  AttemptRunner,
   appendBatches,
   boundFrame,
   lineBytes,
   MAX_FRAME_BYTES,
 } from "../runner.js";
+import { readEnvFile } from "../stdio.js";
 
 /*
  * The attempt runner's protocol (ADR 0198): sequenced frames out, commands
@@ -449,5 +456,171 @@ describe("attempt runner", () => {
     expect(events().some((event) => event.type === "turn.completed")).toBe(
       false,
     );
+  });
+});
+
+/** Everything the echo harness said: whole messages and streamed text. */
+function spoken(frames: readonly RunnerFrame[]): string {
+  return frames
+    .flatMap((frame) => {
+      if (frame.type !== "event") return [];
+      const { event } = frame;
+      if (event.type === "item.delta") return [event.text];
+      if (
+        event.type === "item.started" &&
+        event.item.kind === "assistant_message"
+      )
+        return [event.item.text];
+      return [];
+    })
+    .join("");
+}
+
+describe("the session's environment file (ADR 0206)", () => {
+  /** A runner whose environment file reader serves `files`, and its frames. */
+  function withFiles(files: Record<string, string>) {
+    const frames: RunnerFrame[] = [];
+    const runner = new AttemptRunner({
+      adapters: { echo: new EchoAdapter() },
+      version: "test",
+      write: (frame) => frames.push(frame),
+      envFile: (file) =>
+        files[file] === undefined ? undefined : parseEnvFile(files[file]),
+    });
+    const said = () => spoken(frames);
+    // The echo harness's native state calls: answer as an empty store.
+    const answer = () => {
+      for (const frame of frames)
+        if (frame.type === "call")
+          runner.handle({
+            id: `result:${frame.callId}`,
+            command: {
+              kind: "host_result",
+              callId: frame.callId,
+              result: frame.call.kind === "native_state.load" ? [] : null,
+            },
+          });
+    };
+    return { runner, frames, said, answer };
+  }
+
+  it("adds the files' variables and BASH_ENV to the harness's environment", async () => {
+    const gateway = "/workspace/.work-session/env/gateway.sh";
+    const file = "/workspace/.work-session/env/secrets.sh";
+    const { runner, frames, said, answer } = withFiles({
+      [gateway]: formatEnvFile({
+        WORK_HTTP_LOGS: "https://work.test/api/gateway/http/logs",
+        SHARED: "gateway",
+      }),
+      [file]: formatEnvFile({
+        CLICKHOUSE_API_KEY: "ch-key-123",
+        OWN: "x",
+        SHARED: "secrets",
+      }),
+    });
+    runner.handle({
+      id: "start",
+      command: {
+        kind: "start",
+        attempt: attempt(
+          "[[env CLICKHOUSE_API_KEY]] [[env WORK_HTTP_LOGS]] [[env SHARED]] [[env BASH_ENV]] [[env OWN]]",
+          { envFiles: [gateway, file], env: { OWN: "the host's" } },
+        ),
+      },
+    });
+    const deadline = Date.now() + 5_000;
+    while (!frames.some((frame) => frame.type === "exit")) {
+      if (Date.now() > deadline) throw new Error("The attempt never finished");
+      answer();
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    expect(said()).toContain("CLICKHOUSE_API_KEY=ch-key-123");
+    expect(said()).toContain(
+      "WORK_HTTP_LOGS=https://work.test/api/gateway/http/logs",
+    );
+    // A later file's variables win, and BASH_ENV names the last file.
+    expect(said()).toContain("SHARED=secrets");
+    expect(said()).toContain(`BASH_ENV=${file}`);
+    // The attempt's own variables win over the files'.
+    expect(said()).toContain("OWN=the host's");
+  });
+
+  it("points BASH_ENV at the last file present", async () => {
+    const gateway = "/workspace/.work-session/env/gateway.sh";
+    const { runner, frames, said, answer } = withFiles({
+      [gateway]: formatEnvFile({ WORK_HTTP_LOGS: "https://work.test/logs" }),
+    });
+    runner.handle({
+      id: "start",
+      command: {
+        kind: "start",
+        attempt: attempt("[[env WORK_HTTP_LOGS]] [[env BASH_ENV]]", {
+          envFiles: [gateway, "/workspace/.work-session/env/secrets.sh"],
+        }),
+      },
+    });
+    const deadline = Date.now() + 5_000;
+    while (!frames.some((frame) => frame.type === "exit")) {
+      if (Date.now() > deadline) throw new Error("The attempt never finished");
+      answer();
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    expect(said()).toContain("WORK_HTTP_LOGS=https://work.test/logs");
+    expect(said()).toContain(`BASH_ENV=${gateway}`);
+  });
+
+  it("adds nothing when the file is missing, or the runner reads none", async () => {
+    for (const files of [{}, undefined]) {
+      const frames: RunnerFrame[] = [];
+      const runner = new AttemptRunner({
+        adapters: { echo: new EchoAdapter() },
+        version: "test",
+        write: (frame) => frames.push(frame),
+        ...(files ? { envFile: () => undefined } : {}),
+      });
+      runner.handle({
+        id: "start",
+        command: {
+          kind: "start",
+          attempt: attempt("[[env BASH_ENV]]", {
+            envFiles: [
+              "/workspace/.work-session/env/gateway.sh",
+              "/workspace/.work-session/env/secrets.sh",
+            ],
+          }),
+        },
+      });
+      const deadline = Date.now() + 5_000;
+      const text = () => spoken(frames);
+      while (!frames.some((frame) => frame.type === "exit")) {
+        if (Date.now() > deadline)
+          throw new Error("The attempt never finished");
+        for (const frame of frames)
+          if (frame.type === "call")
+            runner.handle({
+              id: `result:${frame.callId}`,
+              command: {
+                kind: "host_result",
+                callId: frame.callId,
+                result: frame.call.kind === "native_state.load" ? [] : null,
+              },
+            });
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      expect(text()).toContain("BASH_ENV is not set");
+    }
+  });
+
+  it("reads a file on this machine, and none when it is missing", async () => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "runner-env-"));
+    try {
+      const file = path.join(directory, "secrets.sh");
+      expect(readEnvFile(file)).toBeUndefined();
+      expect(readEnvFile(path.join(file, "below-a-file"))).toBeUndefined();
+      await fs.writeFile(file, formatEnvFile({ A: "1", B: "two words" }));
+      expect(readEnvFile(file)).toEqual({ A: "1", B: "two words" });
+    } finally {
+      await fs.rm(directory, { recursive: true, force: true });
+    }
   });
 });

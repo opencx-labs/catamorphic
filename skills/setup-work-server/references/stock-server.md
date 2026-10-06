@@ -43,10 +43,13 @@ Environment variables parsed by `workServerConfigFromEnv` in
 | `WORK_SANDBOX` and budget variables | `local-process` (default) or `microsandbox`; see the machines reference. |
 | `WORK_IMAGE_BUILDER`, `WORK_SANDBOX_CONTAINERS` | Microsandbox: build project Dockerfiles with `docker` or `podman`; `0` turns off Docker inside sandboxes. See [images, containers, and egress](cluster-deployment.md#images-containers-and-egress). |
 | `WORK_DOCKER_SOCKET`, `WORK_DOCKER_CLI_PLUGINS`, `WORK_UNENFORCED_EGRESS` | Local-process: give sandboxes filtered Docker access through this daemon socket; `accept` runs restricted-egress Environments without enforcement. |
-| `WORK_PERSONAL_CREDENTIALS` | Local-process: `accept` lets members' own Claude Code and Codex sign-ins on this machine, and their files, run their chats although it runs other people's work as processes (a single person's server, development); see [members' own sign-ins](harnesses.md#members-own-sign-ins). |
+| `WORK_PERSONAL_CREDENTIALS` | Local-process: `accept` lets members' own files reach their chats although this machine runs other people's work as processes, and makes a single server a person's own machine for one member's Codex sign-in, made from the Work app (a single person's server, development); see [members' own sign-ins](harnesses.md#members-own-sign-ins). |
 | `WORK_MACHINE_NAME`, `WORK_MACHINE_LABELS` | This machine's name and labels (`pool=agents,class=large`) that Environment pools select; see the machines reference. |
 | `WORK_WEBHOOK_MAX_BYTES` | Largest webhook body any endpoint may accept (default 1 MiB, at most 64 MiB); a binding opts in with `maxBodyBytes`. |
 | `WORK_CONTROL_PLANE_WORKLOADS` | What the server runs itself: `agent,workflow` (default), `workflow`, or empty. Agents then run on enrolled workers. |
+| `WORK_MACHINES_CONFIG` | Path to the machine classes file that machine rules name: Hetzner Cloud servers, pools of enrolled machines; see [a machine for every person or team](cluster-deployment.md#a-machine-for-every-person-or-team). |
+| `WORK_HETZNER_TOKEN` | Hetzner Cloud API token (read and write) for `hetzner-cloud` classes. Never in the classes file. |
+| `WORK_WORKER_IMAGE` | The worker image machines install (default: the published image itself, `WORK_IMAGE_REPOSITORY:WORK_VERSION`, both set by its build). |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | Telemetry export (`OBSERVABILITY.md`). |
 
 ### Sign-in methods

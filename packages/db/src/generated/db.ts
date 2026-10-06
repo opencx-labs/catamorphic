@@ -175,6 +175,8 @@ export interface AgentSessions {
   project_id: string;
   rewind_until: Timestamp | null;
   sandbox_id: string | null;
+  secrets_delivered_ref: string | null;
+  secrets_held_at: Timestamp | null;
   source: Generated<string>;
   source_action_id: string | null;
   state_revision: Generated<Int8>;
@@ -597,6 +599,12 @@ export interface ExecutionJobs {
   workflow_step_attempt_id: string | null;
 }
 
+export interface ExecutorKeys {
+  executor: string;
+  public_key: string;
+  registered_at: Generated<Timestamp>;
+}
+
 export interface MemberConnectionAttachments {
   alias: string;
   connection_id: string;
@@ -659,6 +667,14 @@ export interface PersonalEnvironmentEntries {
   fingerprint: string;
   kind: string;
   name: string;
+  project_id: string;
+  tenant_id: string;
+  updated_at: Generated<Timestamp>;
+}
+
+export interface PersonalEnvironmentSetups {
+  command: string;
+  external_user_id: string;
   project_id: string;
   tenant_id: string;
   updated_at: Generated<Timestamp>;
@@ -745,8 +761,10 @@ export interface ProjectSandboxes {
 export interface ProjectSecrets {
   created_at: Generated<Timestamp>;
   credential_ref: string | null;
+  member_external_user_id: string | null;
   name: string;
   project_id: string;
+  set_by: string | null;
   updated_at: Generated<Timestamp>;
   value: string | null;
 }
@@ -799,6 +817,7 @@ export interface RemoteOperations {
   lease_token: string;
   operation: Json;
   poll_id: string | null;
+  reply_key: string;
   response: Json | null;
   status: Generated<string>;
 }
@@ -919,6 +938,21 @@ export interface SessionSyncIntents {
   updated_at: Generated<Timestamp>;
 }
 
+export interface SessionTerminals {
+  external_user_id: string;
+  opened_at: Generated<Timestamp>;
+  process_id: string;
+  pty: boolean;
+  sandbox_id: string;
+  session_id: string;
+  terminal_key: string;
+}
+
+export interface SessionWorkspaceUse {
+  session_id: string;
+  used_at: Generated<Timestamp>;
+}
+
 export interface StoredObjects {
   data: Buffer;
   etag: Generated<string>;
@@ -1024,6 +1058,13 @@ export interface UserNotificationEvents {
   title: string;
 }
 
+export interface VolumeHolds {
+  allocation_id: string;
+  created_at: Generated<Timestamp>;
+  node: string;
+  volume_key: string;
+}
+
 export interface WatcherRuns {
   created_at: Generated<Timestamp>;
   event_id: string;
@@ -1065,9 +1106,27 @@ export interface WorkAccounts {
   administrator: Generated<boolean>;
   directory_checked_at: Timestamp | null;
   directory_groups: Generated<Json>;
+  directory_tracked_groups: Generated<Json>;
   disabled_at: Timestamp | null;
   disabled_reason: string | null;
+  joined_at: Timestamp | null;
+  lifecycle_revision: Generated<number>;
   updated_at: Generated<Timestamp>;
+  user_id: string;
+}
+
+export interface WorkDirectoryAnnouncements {
+  attempts: Generated<number>;
+  created_at: Generated<Timestamp>;
+  external_id: string;
+  id: Generated<string>;
+  kind: string;
+  last_error: string | null;
+  next_attempt_at: Generated<Timestamp>;
+  occurred_at: Timestamp;
+  payload: Json;
+  revision: number;
+  tenant_id: string;
   user_id: string;
 }
 
@@ -1268,15 +1327,11 @@ export interface WorkGithubAppRegistrations {
   tenant_id: string;
 }
 
-export interface WorkMachineReconciler {
-  expires_at: Timestamp;
-  holder: string;
-  tenant_id: string;
-}
-
 export interface WorkMachineRules {
   created_at: Generated<Timestamp>;
   definition: Json;
+  last_failure: string | null;
+  last_failure_at: Timestamp | null;
   name: string;
   tenant_id: string;
   updated_at: Generated<Timestamp>;
@@ -1369,6 +1424,7 @@ export interface WorkWorkerEnrollments {
   machine_ref: string | null;
   machine_rule: string | null;
   name: string;
+  pool: Generated<boolean>;
   tenant_id: string;
   trusted: Generated<boolean>;
   used_at: Timestamp | null;
@@ -1377,14 +1433,26 @@ export interface WorkWorkerEnrollments {
 export interface WorkWorkers {
   access: Generated<Json>;
   credential_hash: string;
+  credential_issued_at: Generated<Timestamp>;
   enrolled_at: Generated<Timestamp>;
   labels: Generated<Json>;
   last_seen_at: Timestamp | null;
+  machine_destroyed_at: Timestamp | null;
+  machine_member: string | null;
   machine_ref: string | null;
   machine_rule: string | null;
+  machine_slot: number | null;
   name: string;
   node_id: string;
+  pending_credential_hash: string | null;
+  pending_issued_at: Timestamp | null;
+  pending_public_key: string | null;
+  pending_rotation: string | null;
+  pool: Generated<boolean>;
+  released_at: Timestamp | null;
+  retain_days: number | null;
   revoked_at: Timestamp | null;
+  rotation_requested_at: Timestamp | null;
   tenant_id: string;
   trusted: Generated<boolean>;
 }
@@ -1423,11 +1491,13 @@ export interface DB {
   deployment_runtimes: DeploymentRuntimes;
   execution_allocations: ExecutionAllocations;
   execution_jobs: ExecutionJobs;
+  executor_keys: ExecutorKeys;
   member_connection_attachments: MemberConnectionAttachments;
   memberships: Memberships;
   model_usage: ModelUsage;
   notification_deliveries: NotificationDeliveries;
   personal_environment_entries: PersonalEnvironmentEntries;
+  personal_environment_setups: PersonalEnvironmentSetups;
   project_event_deliveries: ProjectEventDeliveries;
   project_event_monitors: ProjectEventMonitors;
   project_events: ProjectEvents;
@@ -1447,6 +1517,8 @@ export interface DB {
   session_artifacts: SessionArtifacts;
   session_mailbox_items: SessionMailboxItems;
   session_sync_intents: SessionSyncIntents;
+  session_terminals: SessionTerminals;
+  session_workspace_use: SessionWorkspaceUse;
   store_document_versions: StoreDocumentVersions;
   store_documents: StoreDocuments;
   stored_objects: StoredObjects;
@@ -1456,13 +1528,14 @@ export interface DB {
   trigger_definition_scans: TriggerDefinitionScans;
   trigger_definitions: TriggerDefinitions;
   user_notification_events: UserNotificationEvents;
+  volume_holds: VolumeHolds;
   watcher_runs: WatcherRuns;
   watchers: Watchers;
   webhook_endpoints: WebhookEndpoints;
   work_accounts: WorkAccounts;
+  work_directory_announcements: WorkDirectoryAnnouncements;
   work_directory_grants: WorkDirectoryGrants;
   work_github_app_registrations: WorkGithubAppRegistrations;
-  work_machine_reconciler: WorkMachineReconciler;
   work_machine_rules: WorkMachineRules;
   work_project_access_requests: WorkProjectAccessRequests;
   work_project_admission_policies: WorkProjectAdmissionPolicies;

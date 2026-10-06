@@ -859,6 +859,7 @@ export function CommandPalette({
     <div
       role="dialog"
       aria-label="Command palette"
+      data-palette={variant}
       className="pointer-events-auto flex w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-border bg-bg-raised shadow-2xl"
     >
       <div className="mx-3 flex items-start gap-2 border-b border-border">

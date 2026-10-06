@@ -52,9 +52,11 @@ import { desktopPersonalEnvironment } from "../personal-environment-host.js";
 import type { PersonalEnvironmentSync } from "../personal-environment-sync.js";
 import type { ProfileConfigManager } from "../profile-config.js";
 import type { ProfilesStore } from "../profiles.js";
-import { forwardRemoteApi } from "../remote-api.js";
+import { forwardRemoteApi, remoteTerminalRequest } from "../remote-api.js";
 import { RemoteClientRunners } from "../remote-client-runner.js";
 import { RemoteSessionMirror } from "../remote-mirror.js";
+import { RemotePreviewOrigins } from "../remote-previews.js";
+import type { RemoteTerminalRequest } from "../remote-terminal.js";
 import { shutdownDesktopServices } from "../shutdown.js";
 import { userSkillFiles, userSkillInfos } from "../user-skills.js";
 import {
@@ -73,6 +75,7 @@ import {
   type HostSkillsRuntime,
   materializeHostSkills,
 } from "./host-skills.js";
+import { localApiRefusal, newDesktopApiToken } from "./local-api-guard.js";
 import type { DataPaths } from "./paths.js";
 import { ProjectRootsStore } from "./project-roots.js";
 import { REMOTE_ENVIRONMENT_SKILL } from "./remote-environment-skill.js";
@@ -96,6 +99,11 @@ export const DESKTOP_USER_ID = "desktop-user";
 
 export interface EmbeddedServer {
   url: string;
+  /**
+   * What the desktop's own windows send in {@link DESKTOP_API_TOKEN_HEADER}
+   * so the API tells them from web pages; the main process adds it.
+   */
+  apiToken: string;
   clientRunners: RemoteClientRunners;
   catamorphic: Catamorphic;
   /**
@@ -140,6 +148,20 @@ export interface EmbeddedServer {
     projectId: string,
     sessionId: string,
   ) => Promise<{ ok: true; serverUrl: string; remoteProjectId: string }>;
+  /**
+   * Requests to a remote chat's terminals on its project's server, as the
+   * member (ADR 0209); undefined when the project has no server.
+   */
+  remoteTerminalRequest: (input: {
+    projectId: string;
+    sessionId: string;
+  }) => RemoteTerminalRequest | undefined;
+  /** A remote chat's preview on its own loopback origin (ADR 0209). */
+  openRemotePreview: (input: {
+    projectId: string;
+    sessionId: string;
+    port: number;
+  }) => Promise<string>;
   shutdown: () => Promise<void>;
 }
 
@@ -1076,6 +1098,19 @@ export async function startEmbeddedServer(
     } else done(null, payload);
   });
   instrumentHttpServer(app);
+  // The API answers as the person at this computer: web pages in any
+  // browser on it must not reach it (local-api-guard.ts).
+  const apiToken = newDesktopApiToken();
+  app.addHook("onRequest", async (request, reply) => {
+    const refusal = localApiRefusal({
+      method: request.method,
+      url: request.url,
+      headers: request.headers,
+      port: request.socket.localPort ?? 0,
+      token: apiToken,
+    });
+    if (refusal) return reply.status(403).send({ error: refusal });
+  });
   await app.register(cors, {
     origin: true,
     methods: ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
@@ -1120,6 +1155,17 @@ export async function startEmbeddedServer(
   const url = `http://127.0.0.1:${address.port}`;
   apiBaseUrl = url;
   console.log(`[desktop] API ready on ${url}/api`);
+  // Remote chats' previews, each on its own loopback origin; restored tabs
+  // find theirs again (ADR 0209).
+  const remotePreviews = new RemotePreviewOrigins({
+    file: path.join(paths.root, "remote-previews.json"),
+    profiles: profileConfig,
+  });
+  void remotePreviews
+    .restore()
+    .catch((error) =>
+      console.warn("[desktop] Previews could not listen again", error),
+    );
 
   let shutdownDone: Promise<void> | undefined;
 
@@ -1271,6 +1317,7 @@ export async function startEmbeddedServer(
             dispose: () => eventDispatcher.stop(),
           },
           { name: "workflow execution", dispose: suspendExecution },
+          { name: "previews", dispose: () => remotePreviews.close() },
           { name: "HTTP server", dispose: () => app.close() },
           { name: "framework services", dispose: () => catamorphic.close() },
           // The host owns Kysely. Always attempt its WAL flush last and report
@@ -1284,6 +1331,7 @@ export async function startEmbeddedServer(
 
   return {
     url,
+    apiToken,
     clientRunners,
     catamorphic,
     github,
@@ -1304,6 +1352,9 @@ export async function startEmbeddedServer(
       sessionMirror.eligibility(projectId, sessionId),
     moveSessionToServer: (projectId, sessionId) =>
       sessionMirror.moveToServer(projectId, sessionId),
+    remoteTerminalRequest: ({ projectId, sessionId }) =>
+      remoteTerminalRequest({ profiles: profileConfig, projectId, sessionId }),
+    openRemotePreview: (address) => remotePreviews.open(address),
     shutdown,
   };
 }

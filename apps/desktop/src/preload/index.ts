@@ -531,6 +531,12 @@ const api = {
   }) => invoke("catamorphic:remote-enable-local-execution", input),
   remoteAuthority: (projectId: string): Promise<unknown> =>
     invoke("catamorphic:remote-authority", projectId),
+  remotePreviewOpen: (input: {
+    projectId: string;
+    sessionId: string;
+    port: number;
+  }): Promise<{ url: string }> =>
+    invoke("catamorphic:remote-preview-open", input),
   remoteStatus: (projectId: string): Promise<unknown> =>
     invoke("catamorphic:remote-status", projectId),
   remoteSync: (projectId: string): Promise<unknown> =>
@@ -560,6 +566,24 @@ const api = {
     invoke("catamorphic:remote-member-set-roles", input),
   remoteMemberInvite: (input: unknown): Promise<unknown> =>
     invoke("catamorphic:remote-member-invite", input),
+  remoteSecrets: (input: unknown): Promise<unknown> =>
+    invoke("catamorphic:remote-secrets", input),
+  remoteSecretSet: (input: unknown): Promise<void> =>
+    invoke("catamorphic:remote-secret-set", input),
+  remoteSecretDelete: (input: unknown): Promise<void> =>
+    invoke("catamorphic:remote-secret-delete", input),
+  remoteMachines: (projectId: string): Promise<unknown> =>
+    invoke("catamorphic:remote-machines", projectId),
+  remoteCodexSignIn: (input: unknown): Promise<unknown> =>
+    invoke("catamorphic:remote-codex-sign-in", input),
+  remoteCodexSignInStatus: (input: unknown): Promise<unknown> =>
+    invoke("catamorphic:remote-codex-sign-in-status", input),
+  remoteCodexSignInCancel: (input: unknown): Promise<void> =>
+    invoke("catamorphic:remote-codex-sign-in-cancel", input),
+  remoteCodexSignOut: (input: unknown): Promise<unknown> =>
+    invoke("catamorphic:remote-codex-sign-out", input),
+  openSignInLink: (url: string): Promise<void> =>
+    invoke("catamorphic:open-sign-in-link", url),
   remoteServiceConnections: (projectId: string): Promise<unknown> =>
     invoke("catamorphic:remote-service-connections", projectId),
   remoteServiceConnectionCreate: (input: unknown): Promise<unknown> =>
@@ -1106,6 +1130,7 @@ const api = {
     projectId?: string;
     cols?: number;
     rows?: number;
+    remoteChat?: { sessionId: string };
   }): Promise<{ sessionId: string; cwd: string }> =>
     invoke("catamorphic:terminal-create", input),
   terminalWrite: (sessionId: string, data: string): Promise<void> =>
@@ -1160,11 +1185,15 @@ const api = {
       ipcRenderer.removeListener("catamorphic:terminal-busy", handler);
   },
   onTerminalExit: (
-    listener: (payload: { sessionId: string; exitCode: number }) => void,
+    listener: (payload: {
+      sessionId: string;
+      exitCode: number;
+      message?: string;
+    }) => void,
   ): (() => void) => {
     const handler = (
       _event: unknown,
-      payload: { sessionId: string; exitCode: number },
+      payload: { sessionId: string; exitCode: number; message?: string },
     ) => listener(payload);
     ipcRenderer.on("catamorphic:terminal-exit", handler);
     return () =>

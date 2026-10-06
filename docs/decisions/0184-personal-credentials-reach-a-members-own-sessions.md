@@ -1,6 +1,6 @@
 # 0184: Personal credentials reach a member's own sessions
 
-- **Status:** Accepted (logins superseded by [0199](0199-subscription-sign-ins-stay-on-the-machine.md): sign-ins stay on their machine; personal files stand)
+- **Status:** Accepted (logins superseded by [0199](0199-subscription-sign-ins-stay-on-the-machine.md): sign-ins stay on their machine; personal files stand; amended by [0206](0206-project-secrets-reach-environments-per-member.md): project secrets with a value per member)
 - **Date:** 2026-09-28
 - **Amends:** [0162](0162-connection-gateway-guards-and-sealed-secrets.md), [0175](0175-grants-reach-sandboxes.md), [0180](0180-harnesses-run-in-the-sandbox-models-through-the-gateway.md)
 

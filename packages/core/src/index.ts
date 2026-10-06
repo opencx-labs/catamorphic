@@ -237,6 +237,7 @@ export {
   type ConnectionAuthorizationResult,
   type ConnectionCredentialVersion,
   type ConnectionGitRemotes,
+  type ConnectionHttpEndpoint,
   type ConnectionModelEndpoint,
   type ConnectionProvider,
   ConnectionProviderRegistry,
@@ -258,6 +259,8 @@ export {
   connectionMcpServerName,
   type EnvironmentConnectionBinding,
   GIT_CAPABILITIES,
+  HTTP_METHOD_CAPABILITIES,
+  isHttpMethodCapability,
   isProtocolCapability,
   MODEL_CAPABILITY,
   normalizeConnectionRequirement,
@@ -335,6 +338,8 @@ export {
 export {
   type AllocationReleaseReason,
   type EnvironmentAllocationPolicy,
+  type EnvironmentSandbox,
+  type EnvironmentSandboxVolume,
   type ExecutionAllocation,
   ExecutionAllocationConflictError,
   ExecutionAllocationsService,
@@ -350,6 +355,8 @@ export {
   NoCompatibleEnvironmentError,
   type PlacementReason,
   personalCredentialsDecision,
+  placementIsolatesOwner,
+  signInPlacementDecision,
 } from "./services/execution-environments-service.js";
 export {
   type ExecutionJob,
@@ -384,12 +391,29 @@ export {
 } from "./services/git-gateway.js";
 export { executeHostCall, type HostCallInput } from "./services/host-calls.js";
 export {
+  dbHttpGatewayStore,
+  GRANT_HEADER,
+  HTTP_REQUEST_MAX_BYTES,
+  type HttpGatewayAdmission,
+  type HttpGatewayAdmitResult,
+  HttpGatewayError,
+  type HttpGatewayRequest,
+  type HttpGatewayResponse,
+  HttpGatewayService,
+  type HttpGatewayStore,
+  httpMethodCapability,
+  httpQueryInput,
+  httpUpstreamTarget,
+  type LiveHttpGrant,
+} from "./services/http-gateway.js";
+export {
   type GrantMembershipInput,
   type Membership,
   MembershipsService,
 } from "./services/memberships-service.js";
 export {
   dbModelGatewayStore,
+  dotPathSegment,
   type LiveModelGrant,
   MODEL_REQUEST_MAX_BYTES,
   type ModelCallUsage,
@@ -418,6 +442,7 @@ export {
 export {
   PERSONAL_FILE_MAX_BYTES,
   PERSONAL_FILES_MAX,
+  PERSONAL_SETUP_MAX_LENGTH,
   type PersonalEnvironmentInput,
   PersonalEnvironmentInvalidError,
   PersonalEnvironmentService,
@@ -426,6 +451,7 @@ export {
   type PersonalFileStatus,
   personalFilePathProblem,
   personalFingerprint,
+  personalSetupProblem,
   validatePersonalEnvironment,
 } from "./services/personal-environment-service.js";
 export {
@@ -438,6 +464,7 @@ export {
 export {
   DEFAULT_ENVIRONMENT,
   DEFAULT_IDLE_RELEASE_MINUTES,
+  DEFAULT_SETUP_TIMEOUT_MINUTES,
   type ProjectEnvironmentDefinition,
   type ProjectEnvironmentEntry,
   type ProjectEnvironmentPolicy,
@@ -506,8 +533,17 @@ export {
   RateReservationsService,
 } from "./services/rate-reservations-service.js";
 export {
+  clientExecutor,
   EXECUTOR_RESTARTED_ERROR,
+  ExecutorKeyMissingError,
+  ExecutorNotConnectedError,
+  executorKey,
+  forgetExecutorKey,
   nodeExecutor,
+  OPERATION_NOT_OPENED_ERROR,
+  OperationWakeups,
+  openRemoteOperation,
+  RETIRED_KEY_RETENTION_MS,
   type RemoteExecutorLease,
   RemoteExecutorLeaseLostError,
   type RemoteOperation,
@@ -515,6 +551,10 @@ export {
   RemoteOperationResultSchema,
   RemoteOperationSchema,
   RemoteReceiptRefusedError,
+  registerExecutorKey,
+  type SealedRemoteOperation,
+  SealedRemoteOperationSchema,
+  sealRemoteOperation,
 } from "./services/remote-operations.js";
 export {
   type RemoteSyncOutcome,
@@ -601,12 +641,29 @@ export {
   type WorkflowStepAttempt,
   type WorkflowStepAttemptStatus,
 } from "./services/runs-service.js";
+export { httpAliasVariable } from "./services/sandbox-git.js";
+export {
+  SANDBOX_GATEWAY_ENV_PATH,
+  SANDBOX_SECRETS_PATH,
+  sandboxEnvFiles,
+  sandboxSecretsFile,
+  sandboxSecretsPrelude,
+} from "./services/sandbox-secrets.js";
 export { parseSnapshot } from "./services/sandbox-sync.js";
 export { SchedulesService } from "./services/schedules-service.js";
+export { SECRETS_CAPABILITY } from "./services/secrets-capability.js";
 export {
+  type SandboxSecretGap,
+  type SandboxSecrets,
+  SECRET_VALUE_MAX_BYTES,
   SecretDeclarationConflictError,
+  SecretMemberNotFoundError,
+  type SecretMemberValue,
   type SecretStatus,
   SecretsService,
+  type SecretValueChange,
+  SecretValueInvalidError,
+  secretFingerprint,
 } from "./services/secrets-service.js";
 export {
   SESSION_ACTION_SCHEMAS,
@@ -638,12 +695,32 @@ export {
   type SessionMirrorInput,
 } from "./services/session-mirror.js";
 export {
+  PREVIEW_REQUEST_MAX_BYTES,
+  type PreviewRequest,
+  type PreviewResponse,
+  SessionPreviewError,
+  type SessionPreviewErrorReason,
+  SessionPreviewsService,
+} from "./services/session-previews-service.js";
+export {
   type SessionSyncIntent,
   SessionSyncLeaseError,
   SessionSyncService,
   type SessionSyncStatus,
   SessionSyncWatermarkError,
 } from "./services/session-sync-service.js";
+export {
+  type SessionTerminal,
+  SessionTerminalNotFoundError,
+  type SessionTerminalOutput,
+  SessionTerminalSecretsError,
+  SessionTerminalsService,
+} from "./services/session-terminals-service.js";
+export {
+  type SessionWorkspaceHandle,
+  SessionWorkspaceUnavailableError,
+  type SessionWorkspaceUnavailableReason,
+} from "./services/session-workspace.js";
 export {
   basePin,
   movePin,

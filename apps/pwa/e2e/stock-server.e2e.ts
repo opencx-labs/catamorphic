@@ -61,6 +61,7 @@ describe.skipIf(!chromeBinary())("pwa against the stock server", () => {
           WORK_OPERATOR_PORT: String(operatorPort),
           WORK_DATA_DIR: dataDir,
           WORK_FAKE_AGENT: "1",
+          WORK_SANDBOX: "local-process",
           WORK_MDNS: "off",
         },
       }),

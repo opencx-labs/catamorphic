@@ -22,16 +22,18 @@
 #     -e WORK_WORKER_ENROLLMENT=<one-time code> \
 #     work-server bun apps/server/src/worker.ts
 #
-# A member signs in to Claude Code or Codex on the machine that runs their
-# chats with the harness's own login (ADR 0199); the sign-in stays in /data:
+# A member signs in to Codex on a machine of their own from the Work app,
+# or in a terminal there with Codex's own login (ADRs 0199, 0213); the
+# sign-in stays in /data:
 #
-#   docker exec -it <worker> work worker sign-in claude-code --member <id>
+#   docker exec -it <worker> work worker sign-in codex --member <id>
 FROM oven/bun:1.3.14
 
 # The local-process execution provider (ADR 0047) runs agent/workflow
 # commands as plain processes: the container IS the sandbox. bash + git
-# are its runtime contract.
-RUN apt-get update && apt-get install -y --no-install-recommends git \
+# are its runtime contract. The system's CA certificates let programs that
+# do not bundle their own (Codex, git over HTTPS) verify TLS.
+RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates \
   && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -51,6 +53,13 @@ RUN bun install --frozen-lockfile --ignore-scripts \
   && chmod 755 /usr/local/bin/work \
   && mkdir -p /data \
   && chown bun:bun /data
+
+# Where this image is published and which release it is: machines the
+# server provisions run this same image (ADR 0205). Release builds pass both.
+ARG WORK_IMAGE_REPOSITORY
+ARG WORK_VERSION
+ENV WORK_IMAGE_REPOSITORY=$WORK_IMAGE_REPOSITORY
+ENV WORK_VERSION=$WORK_VERSION
 
 # The server and every local-process sandbox run as the unprivileged image
 # user. The application tree stays root-owned and read-only to them.

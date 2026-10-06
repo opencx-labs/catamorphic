@@ -12,3 +12,4 @@ export {
   type MsbStdioTransportOptions,
   msbStdioRuntimeProvider,
 } from "./stdio-runtime-provider.js";
+export { type MicrosandboxSupport, microsandboxSupport } from "./support.js";

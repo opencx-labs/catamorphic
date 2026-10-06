@@ -62,6 +62,30 @@ export function assertAgentSessionAccess(args: {
   }
 }
 
+/**
+ * Who may work in a chat's workspace beside its agent (ADR 0209): a
+ * terminal there runs as the chat, with its files and the Environment's
+ * secrets. A member's own chat is only its owner's, while they may still
+ * change it; a project chat is anyone's with `sessions:write`. Reading or
+ * changing other people's chats does not reach their workspaces, and guests
+ * hold neither.
+ */
+export function assertSessionWorkspaceAccess(args: {
+  identity: Identity;
+  projectId: string;
+  externalUserId: string;
+  agentId: string | null;
+}): void {
+  if (isProjectPrincipal(args.externalUserId)) {
+    if (hasProjectPermission(args.identity, args.projectId, "sessions:write"))
+      return;
+    throw new AccessDeniedError();
+  }
+  if (args.externalUserId !== args.identity.externalUserId)
+    throw new AccessDeniedError();
+  assertAgentSessionAccess({ ...args, intent: "change" });
+}
+
 function coveringProjectAgentRef(args: {
   identity: Identity;
   projectId: string;

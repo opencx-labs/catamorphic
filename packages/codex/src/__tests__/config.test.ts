@@ -40,6 +40,26 @@ describe("codexLaunch", () => {
     expect(launch({ permissions: {} }).approvalPolicy).toBe("on-request");
   });
 
+  it("gives Codex the session's secrets the runner read, under Work's own settings (ADR 0206)", () => {
+    const result = launch({
+      envFiles: [
+        "/workspace/.work-session/env/gateway.sh",
+        "/workspace/.work-session/env/secrets.sh",
+      ],
+      // What the runner adds from the file before the adapter starts.
+      env: {
+        CLICKHOUSE_API_KEY: "ch-key",
+        BASH_ENV: "/workspace/.work-session/env/secrets.sh",
+      },
+    });
+    expect(result.spawn.env).toEqual({
+      CLICKHOUSE_API_KEY: "ch-key",
+      BASH_ENV: "/workspace/.work-session/env/secrets.sh",
+      WORK_MODEL_KEY_FILE: "/work-root/model-key",
+      CODEX_HOME: "/work-root/state/codex-home",
+    });
+  });
+
   it("refuses a gateway connection that does not speak the OpenAI API", () => {
     expect(
       codexLaunch({

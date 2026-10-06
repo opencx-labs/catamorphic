@@ -5,6 +5,7 @@ import {
   machineSignInHome,
   parseSandboxPaths,
   signInHomePath,
+  volumeKey,
 } from "@catamorphic/sandbox";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { LocalProcessSandboxProvider } from "../sandbox-provider.js";
@@ -43,10 +44,117 @@ describe("LocalProcessSandboxProvider", () => {
     }
   });
 
+  it("keeps volumes under ~ across sandboxes and refuses other paths (ADR 0208)", async () => {
+    const machine = new LocalProcessSandboxProvider({
+      root: path.join(root, "volume-sandboxes"),
+    });
+    expect(machine.capabilities).toContain("volumes");
+    const cache = volumeKey({ projectId: "p", owner: "m", name: "cache" });
+    const scratch = volumeKey({ projectId: "p", owner: "m", name: "scratch" });
+    await expect(
+      machine.createSandbox({ volumes: [{ key: cache, path: "/var/cache" }] }),
+    ).rejects.toThrow("only under ~");
+    const first = await machine.createSandbox({
+      volumes: [
+        { key: cache, path: "~/.cache/tool" },
+        { key: scratch, path: "~/scratch", temporary: true },
+      ],
+    });
+    await machine.executeCommand(
+      first.id,
+      "echo kept > ~/.cache/tool/file && echo gone > ~/scratch/file",
+    );
+    // Removing the sandbox's directory never follows the link.
+    await machine.destroySandbox(first.id);
+    const second = await machine.createSandbox({
+      volumes: [
+        { key: cache, path: "~/.cache/tool" },
+        { key: scratch, path: "~/scratch", temporary: true },
+      ],
+    });
+    const seen = await machine.executeCommand(
+      second.id,
+      "cat ~/.cache/tool/file; ls -A ~/scratch | wc -l",
+    );
+    expect(seen.result.replace(/ +/g, "")).toBe("kept\n0\n");
+    expect(await machine.volumes.prune({ unusedForMs: 0 })).toEqual([]);
+    await machine.destroySandbox(second.id);
+    expect(await machine.volumes.prune({ unusedForMs: 60_000 })).toEqual([]);
+    expect(await machine.volumes.prune({ unusedForMs: 0 })).toEqual([cache]);
+    const third = await machine.createSandbox({
+      volumes: [{ key: cache, path: "~/.cache/tool" }],
+    });
+    const fresh = await machine.executeCommand(
+      third.id,
+      "ls -A ~/.cache/tool | wc -l",
+    );
+    expect(fresh.result.trim()).toBe("0");
+    await expect(machine.volumes.removeAll()).rejects.toThrow(
+      "still linked by sandboxes",
+    );
+    // A pooled machine's reset removes the sandboxes holding them too.
+    await machine.volumes.removeAll({ destroySandboxes: true });
+    expect(fs.existsSync(path.join(root, "volume-sandboxes", third.id))).toBe(
+      false,
+    );
+    await machine.volumes.removeAll();
+    expect(
+      fs.readdirSync(path.join(root, "volume-sandboxes", ".volumes")),
+    ).toEqual(["usage.json"]);
+  });
+
+  it("refuses nested volumes and leaves nothing behind when creation fails", async () => {
+    const sandboxRoot = path.join(root, "nested-volume-sandboxes");
+    const machine = new LocalProcessSandboxProvider({ root: sandboxRoot });
+    const home = volumeKey({ projectId: "p", owner: "m", name: "home" });
+    const cache = volumeKey({ projectId: "p", owner: "m", name: "cache" });
+    await expect(
+      machine.createSandbox({
+        volumes: [
+          { key: home, path: "~" },
+          { key: cache, path: "~/.cache" },
+        ],
+      }),
+    ).rejects.toThrow("are nested");
+    // The whole home as a volume works, and works again.
+    for (let round = 0; round < 2; round++) {
+      const sandbox = await machine.createSandbox({
+        volumes: [{ key: home, path: "~" }],
+      });
+      await machine.destroySandbox(sandbox.id);
+    }
+    // A sign-in that cannot be linked fails creation; its directory goes.
+    const signInRoot = path.join(root, "broken-sign-ins");
+    fs.mkdirSync(
+      machineSignInHome({
+        root: signInRoot,
+        harness: "codex",
+        member: "dana",
+      }),
+      { recursive: true },
+    );
+    const broken = new LocalProcessSandboxProvider({
+      root: sandboxRoot,
+      signInRoot,
+      projectDataDirectory: async () => {
+        throw new Error("no project data");
+      },
+    });
+    await expect(
+      broken.createSandbox({
+        signIns: [{ harness: "codex", member: "dana" }],
+        labels: { purpose: "deployment-runtime", projectId: "p" },
+      }),
+    ).rejects.toThrow("no project data");
+    expect(
+      fs.readdirSync(sandboxRoot).filter((name) => name.startsWith("local-")),
+    ).toEqual([]);
+  });
+
   it("links exactly the owner's sign-in home from the machine (ADR 0199)", async () => {
     const signInRoot = path.join(root, "sign-ins");
     const home = (member: string) =>
-      machineSignInHome({ root: signInRoot, harness: "claude-code", member });
+      machineSignInHome({ root: signInRoot, harness: "codex", member });
     for (const member of ["alice", "bob"]) {
       fs.mkdirSync(home(member), { recursive: true });
       fs.writeFileSync(path.join(home(member), "owner"), member);
@@ -56,20 +164,20 @@ describe("LocalProcessSandboxProvider", () => {
       signInRoot,
     });
     const sandbox = await machine.createSandbox({
-      signIns: [{ harness: "claude-code", member: "alice" }],
+      signIns: [{ harness: "codex", member: "alice" }],
     });
     const inside = signInHomePath({
       workspaceRoot: machine.workspaceRoot,
-      harness: "claude-code",
+      harness: "codex",
     });
     const seen = await machine.executeCommand(
       sandbox.id,
-      'cat .work-sign-in/claude-code/owner && echo && ls -A .work-sign-in && printf "%s" "$CATAMORPHIC_SANDBOX_PATHS"',
+      'cat .work-sign-in/codex/owner && echo && ls -A .work-sign-in && printf "%s" "$CATAMORPHIC_SANDBOX_PATHS"',
     );
     expect(seen.exitCode).toBe(0);
     const [owner, listed, paths] = seen.result.split("\n");
     expect(owner).toBe("alice");
-    expect(listed).toBe("claude-code");
+    expect(listed).toBe("codex");
     // Processes learn where their virtual paths really are.
     const mapping = parseSandboxPaths(paths);
     expect(mapping?.virtual).toBe(machine.workspaceRoot);
@@ -84,7 +192,7 @@ describe("LocalProcessSandboxProvider", () => {
     // The CLI refreshing its token writes to the machine's home.
     await machine.executeCommand(
       sandbox.id,
-      "printf refreshed > .work-sign-in/claude-code/token",
+      "printf refreshed > .work-sign-in/codex/token",
     );
     expect(fs.readFileSync(path.join(home("alice"), "token"), "utf8")).toBe(
       "refreshed",
@@ -97,14 +205,14 @@ describe("LocalProcessSandboxProvider", () => {
 
     await expect(
       machine.createSandbox({
-        signIns: [{ harness: "codex", member: "alice" }],
+        signIns: [{ harness: "codex", member: "carol" }],
       }),
-    ).rejects.toThrow("work worker sign-in codex --member alice");
+    ).rejects.toThrow("work worker sign-in codex --member carol");
     await expect(
       new LocalProcessSandboxProvider({
         root: path.join(root, "no-sign-ins"),
       }).createSandbox({
-        signIns: [{ harness: "claude-code", member: "alice" }],
+        signIns: [{ harness: "codex", member: "alice" }],
       }),
     ).rejects.toThrow("keeps no members' sign-ins");
   });
@@ -290,5 +398,27 @@ describe("LocalProcessSandboxProvider", () => {
     expect(await provider.getSandboxStatus(sandbox.id)).toBe("started");
     await provider.destroySandbox(sandbox.id);
     expect(await provider.getSandboxStatus(sandbox.id)).toBe("stopped");
+  });
+
+  it("never says a clone's credentials when it fails (ADR 0207)", async () => {
+    const sandbox = await provider.createSandbox({});
+    // Nothing listens on the discard port: the clone fails at once.
+    const failure = await provider
+      .gitClone(
+        sandbox.id,
+        "http://127.0.0.1:9/acme/app.git",
+        "/workspace/app",
+        {
+          username: "x-access-token",
+          password: "ghs_clone_secret",
+        },
+      )
+      .catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(Error);
+    const message = failure instanceof Error ? failure.message : "";
+    expect(message).toContain("git clone failed");
+    expect(message).not.toContain("ghs_clone_secret");
+    expect(message).not.toContain("x-access-token");
+    await provider.destroySandbox(sandbox.id);
   });
 });

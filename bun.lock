@@ -297,6 +297,18 @@
         "@types/node": "^26.1.1",
       },
     },
+    "packages/container": {
+      "name": "@catamorphic/container",
+      "version": "0.0.1",
+      "dependencies": {
+        "@catamorphic/runtime": "workspace:*",
+        "@catamorphic/sandbox": "workspace:*",
+        "@catamorphic/workflow": "workspace:*",
+      },
+      "devDependencies": {
+        "@types/node": "^26.1.1",
+      },
+    },
     "packages/core": {
       "name": "@catamorphic/core",
       "version": "0.0.1",
@@ -400,6 +412,17 @@
     "packages/github": {
       "name": "@catamorphic/github",
       "version": "0.0.1",
+      "devDependencies": {
+        "@types/node": "^26.1.1",
+      },
+    },
+    "packages/hetzner": {
+      "name": "@catamorphic/hetzner",
+      "version": "0.0.1",
+      "dependencies": {
+        "@catamorphic/otel": "workspace:*",
+        "zod": "4.4.3",
+      },
       "devDependencies": {
         "@types/node": "^26.1.1",
       },
@@ -699,9 +722,11 @@
         "@catamorphic/agent-runner": "workspace:*",
         "@catamorphic/ai-sdk": "workspace:*",
         "@catamorphic/app": "workspace:*",
+        "@catamorphic/container": "workspace:*",
         "@catamorphic/core": "workspace:*",
         "@catamorphic/db": "workspace:*",
         "@catamorphic/fastify-plugin": "workspace:*",
+        "@catamorphic/hetzner": "workspace:*",
         "@catamorphic/local-process": "workspace:*",
         "@catamorphic/mcp": "workspace:*",
         "@catamorphic/microsandbox": "workspace:*",
@@ -710,6 +735,7 @@
         "@catamorphic/server-sdk": "workspace:*",
         "@catamorphic/workflow": "workspace:*",
         "@electric-sql/pglite": "^0.5.4",
+        "@openai/codex": "0.160.0",
         "better-auth": "1.6.26",
         "fastify": "^5.10.0",
         "kysely": "^0.29.3",
@@ -913,6 +939,8 @@
 
     "@catamorphic/codex": ["@catamorphic/codex@workspace:packages/codex"],
 
+    "@catamorphic/container": ["@catamorphic/container@workspace:packages/container"],
+
     "@catamorphic/core": ["@catamorphic/core@workspace:packages/core"],
 
     "@catamorphic/daytona": ["@catamorphic/daytona@workspace:packages/daytona"],
@@ -924,6 +952,8 @@
     "@catamorphic/git": ["@catamorphic/git@workspace:packages/git"],
 
     "@catamorphic/github": ["@catamorphic/github@workspace:packages/github"],
+
+    "@catamorphic/hetzner": ["@catamorphic/hetzner@workspace:packages/hetzner"],
 
     "@catamorphic/local-process": ["@catamorphic/local-process@workspace:packages/local-process"],
 

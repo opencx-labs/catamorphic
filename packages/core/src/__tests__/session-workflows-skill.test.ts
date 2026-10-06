@@ -276,3 +276,101 @@ it("the shipped close recipe closes the same project-keyed chat when a pull requ
     },
   ]);
 });
+
+it("the shipped onboarding recipe issues one key per joiner, stores it as theirs, and revokes it when they leave", async () => {
+  const recipe = [
+    ...SESSION_WORKFLOWS_SKILL.matchAll(/```typescript\n([\s\S]*?)```/g),
+  ]
+    .map((match) => match[1] ?? "")
+    .find((source) => source.includes("export const issueEngineerKeys"));
+  if (!recipe) throw new Error("Missing onboarding recipe");
+  const graph = parseWorkflow(recipe);
+  expect(graph.permissions).toEqual(["memberships:read", "secrets:write"]);
+  expect(graph.triggers).toMatchObject([
+    {
+      kind: "directory.member-joined",
+      config: { groups: ["engineering@example.com"] },
+    },
+  ]);
+  const directory = await fs.mkdtemp(
+    path.join(os.tmpdir(), "onboarding-recipe-"),
+  );
+  try {
+    await fs.writeFile(
+      path.join(directory, "recipe.ts"),
+      recipe.replace(
+        '"@catamorphic/workflow"',
+        JSON.stringify(
+          path.resolve(import.meta.dirname, "../../../workflow/src/index.ts"),
+        ),
+      ),
+    );
+    // A fake ClickHouse Cloud API: one key a failed attempt left behind,
+    // another member's key, and a fresh key on create.
+    await fs.writeFile(
+      path.join(directory, "verify.ts"),
+      `
+      process.env.CLICKHOUSE_ORGANIZATION_ID = "org-1";
+      process.env.CLICKHOUSE_ADMIN_KEY = "admin-id:admin-secret";
+      const calls = [];
+      globalThis.fetch = async (url, init = {}) => {
+        calls.push({ url: String(url), method: init.method ?? "GET", authorization: init.headers?.authorization, ...(init.body ? { body: JSON.parse(init.body) } : {}) });
+        const json = init.method === "POST"
+          ? { result: { keyId: "key-2", keySecret: "secret-2" } }
+          : { result: [{ id: "key-1", name: "work ada@example.com" }, { id: "key-9", name: "work bob@example.com" }] };
+        return new Response(JSON.stringify(json), { status: 200 });
+      };
+      const { issueEngineerKeys, revokeLeaverKeys } = await import("./recipe.ts");
+      const host = { "catamorphic.secrets": Object.fromEntries(["set", "delete"].map(operation => [operation, args => ({ operation, args })])) };
+      const event = { id: "event-1", payload: { member: { id: "user-1", email: "ada@example.com", name: "Ada", domain: "example.com" }, groups: ["engineering@example.com"] } };
+      const joined = await issueEngineerKeys.steps[0].run({ input: event, host });
+      const issueCalls = calls.splice(0);
+      const left = await revokeLeaverKeys.steps[0].run({ input: event, host });
+      const deleted = await revokeLeaverKeys.steps[1].run({ input: left, host });
+      console.log(JSON.stringify({ joined, issueCalls, revokeCalls: calls, deleted }));
+    `,
+    );
+    const result = JSON.parse(
+      (
+        await promisify(execFile)("bun", ["run", "verify.ts"], {
+          cwd: directory,
+          timeout: 10000,
+        })
+      ).stdout,
+    );
+    const keys = "https://api.clickhouse.cloud/v1/organizations/org-1/keys";
+    const authorization = `Basic ${Buffer.from("admin-id:admin-secret").toString("base64")}`;
+    expect(result.joined).toEqual({
+      operation: "set",
+      args: {
+        name: "CLICKHOUSE_API_KEY",
+        value: "key-2:secret-2",
+        member: "ada@example.com",
+      },
+    });
+    expect(result.issueCalls).toEqual([
+      { url: keys, method: "GET", authorization },
+      { url: `${keys}/key-1`, method: "DELETE", authorization },
+      {
+        url: keys,
+        method: "POST",
+        authorization,
+        body: {
+          name: "work ada@example.com",
+          roles: ["developer"],
+          state: "enabled",
+        },
+      },
+    ]);
+    expect(result.revokeCalls).toEqual([
+      { url: keys, method: "GET", authorization },
+      { url: `${keys}/key-1`, method: "DELETE", authorization },
+    ]);
+    expect(result.deleted).toEqual({
+      operation: "delete",
+      args: { name: "CLICKHOUSE_API_KEY", member: "ada@example.com" },
+    });
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+});

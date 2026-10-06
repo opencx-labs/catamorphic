@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { DB } from "@catamorphic/db";
 import {
   type EnvironmentRuntimeBinding,
+  ExecutorPublicKeySchema,
   SANDBOX_CAPABILITIES,
   type SandboxCapability,
 } from "@catamorphic/sandbox";
@@ -15,8 +16,10 @@ import {
 import { AccessDeniedError } from "./artifact-scope.js";
 import type { ProjectEnvironmentsService } from "./project-environments-service.js";
 import {
+  clientExecutor,
   RemoteExecutorLeaseLostError,
   RemoteOperationQueue,
+  registerExecutorKey,
 } from "./remote-operations.js";
 import { toJson } from "./run-coordinator.js";
 
@@ -30,13 +33,9 @@ const capabilitiesSchema = z.array(
     SANDBOX_CAPABILITIES.imageBuild,
     SANDBOX_CAPABILITIES.containers,
     SANDBOX_CAPABILITIES.egressPolicy,
+    SANDBOX_CAPABILITIES.volumes,
   ]),
 );
-/** A member runner's address in the remote operation queue. */
-function clientExecutor(id: string): string {
-  return `client:${id}`;
-}
-
 /** Authenticated member clients provide execution, never database access. */
 export class ClientRunnersService {
   private readonly queue: RemoteOperationQueue;
@@ -61,6 +60,11 @@ export class ClientRunnersService {
     processes?: boolean;
     /** What its sandboxes can be given: images, image builds (ADR 0176). */
     capabilities?: readonly SandboxCapability[];
+    /**
+     * The runner's X25519 public key: every operation for this connection is
+     * sealed to it (ADR 0207). Its private key stays on the member's machine.
+     */
+    publicKey: string;
   }) {
     if (
       !args.workspaceRoot.startsWith("/") ||
@@ -69,6 +73,7 @@ export class ClientRunnersService {
       throw new Error(
         "The client workspace root must be an absolute sandbox path",
       );
+    const publicKey = ExecutorPublicKeySchema.parse(args.publicKey);
     await this.authorize(args);
     const token = randomUUID();
     const resourceLimits = toJson(
@@ -77,49 +82,59 @@ export class ClientRunnersService {
     const capabilities = toJson(
       capabilitiesSchema.parse(args.capabilities ?? []),
     );
-    const row = await this.db
-      .insertInto("client_runners")
-      .values({
-        id: args.id,
-        tenant_id: args.identity.tenantId,
-        project_id: args.projectId,
-        external_user_id: args.identity.externalUserId,
-        environment_name: args.environment,
-        label: args.label,
-        workspace_root: args.workspaceRoot,
-        resource_limits: resourceLimits,
-        isolation: isolationSchema.parse(args.isolation ?? "none"),
-        processes: args.processes ?? false,
-        capabilities,
-        lease_token: token,
-        lease_expires_at: sql`now() + interval '45 seconds'`,
-      })
-      .onConflict((oc) =>
-        oc
-          .column("id")
-          .doUpdateSet({
-            lease_token: token,
-            lease_expires_at: sql`now() + interval '45 seconds'`,
-            updated_at: sql`now()`,
-            label: args.label,
-            workspace_root: args.workspaceRoot,
-            resource_limits: resourceLimits,
-            isolation: isolationSchema.parse(args.isolation ?? "none"),
-            processes: args.processes ?? false,
-            capabilities,
-            environment_name: args.environment,
-          })
-          .where("client_runners.tenant_id", "=", args.identity.tenantId)
-          .where("client_runners.project_id", "=", args.projectId)
-          .where(
-            "client_runners.external_user_id",
-            "=",
-            args.identity.externalUserId,
-          )
-          .where("client_runners.lease_expires_at", "<=", sql<Date>`now()`),
-      )
-      .returning("id")
-      .executeTakeFirst();
+    const row = await this.db.transaction().execute(async (trx) => {
+      const registered = await trx
+        .insertInto("client_runners")
+        .values({
+          id: args.id,
+          tenant_id: args.identity.tenantId,
+          project_id: args.projectId,
+          external_user_id: args.identity.externalUserId,
+          environment_name: args.environment,
+          label: args.label,
+          workspace_root: args.workspaceRoot,
+          resource_limits: resourceLimits,
+          isolation: isolationSchema.parse(args.isolation ?? "none"),
+          processes: args.processes ?? false,
+          capabilities,
+          lease_token: token,
+          lease_expires_at: sql`now() + interval '45 seconds'`,
+        })
+        .onConflict((oc) =>
+          oc
+            .column("id")
+            .doUpdateSet({
+              lease_token: token,
+              lease_expires_at: sql`now() + interval '45 seconds'`,
+              updated_at: sql`now()`,
+              label: args.label,
+              workspace_root: args.workspaceRoot,
+              resource_limits: resourceLimits,
+              isolation: isolationSchema.parse(args.isolation ?? "none"),
+              processes: args.processes ?? false,
+              capabilities,
+              environment_name: args.environment,
+            })
+            .where("client_runners.tenant_id", "=", args.identity.tenantId)
+            .where("client_runners.project_id", "=", args.projectId)
+            .where(
+              "client_runners.external_user_id",
+              "=",
+              args.identity.externalUserId,
+            )
+            .where("client_runners.lease_expires_at", "<=", sql<Date>`now()`),
+        )
+        .returning("id")
+        .executeTakeFirst();
+      // Only the connection that took the lease brings its key.
+      if (registered)
+        await registerExecutorKey({
+          db: trx,
+          executor: clientExecutor(registered.id),
+          publicKey,
+        });
+      return registered;
+    });
     if (!row) throw new Error("This client runner is already connected");
     return { id: row.id, token };
   }

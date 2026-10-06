@@ -1,12 +1,23 @@
-import { FileText, Plus, RefreshCw, ServerCog } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import {
+  FileText,
+  Plus,
+  RefreshCw,
+  Server,
+  ServerCog,
+  Terminal,
+} from "lucide-react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import type {
   PersonalEnvironmentServerState,
   PersonalEnvironmentView,
 } from "../../shared/personal-environment.js";
+import type { RemoteMachine } from "../../shared/remote-machines.js";
 import { desktopApi } from "../lib/desktop-api.js";
+import { ipcErrorText } from "../lib/remote-workspace.js";
+import { CodexSignInDialog, useCodexSignIn } from "./codex-sign-in-dialog.js";
 import { Modal } from "./modal.js";
 import { PendingButton } from "./pending-button.js";
+import { refreshRemoteAgentCatalog } from "./project-authority-provider.js";
 
 const message = (cause: unknown) =>
   cause instanceof Error ? cause.message : String(cause);
@@ -22,12 +33,24 @@ const SERVER_NOTE: Record<PersonalEnvironmentServerState, string | null> = {
     "The project's server could not be reached. Work tries again in a few minutes.",
 };
 
+/** Where a setup command the server does not have yet stands. */
+const SETUP_NOT_SENT: Record<PersonalEnvironmentServerState, string> = {
+  unknown: "Checking the project's server",
+  allowed: "Not sent yet",
+  "not-allowed": "Not sent: no Environment allows personal credentials",
+  unsupported: "Not sent: the server does not support remote environments",
+  "sign-in": "Not sent: sign in to the project's server again",
+  unreachable: "Not sent: the project's server could not be reached",
+};
+
 /**
  * The member's remote environment for a linked project (ADR 0184): which
- * project files reach their sessions on the server. Sign-ins never leave
- * the machine they were made on (ADR 0199), so the modal says where a
- * subscription runs instead of offering to send it. Everything here edits
- * `.work/personal/environment.json`.
+ * project files reach their sessions on the server, and their own setup
+ * command for new workspaces there (ADR 0208), shown as the config says it.
+ * Sign-ins never leave the machine they were made on (ADR 0199): Claude
+ * Code's run only on this computer, and Codex signs in on each of the
+ * member's own machines with its device code login (ADR 0213). Files and
+ * setup edit `.work/personal/environment.json`.
  */
 export function RemoteEnvironmentModal({
   open,
@@ -43,20 +66,68 @@ export function RemoteEnvironmentModal({
   const [view, setView] = useState<PersonalEnvironmentView | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const titleId = useId();
+  // Undefined while loading; null when the server has no machines route.
+  const [machines, setMachines] = useState<RemoteMachine[] | null>();
+  const [machinesError, setMachinesError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setView(await desktopApi.personalEnvironment(projectId));
   }, [projectId]);
 
+  const loadMachines = useCallback(async () => {
+    setMachinesError(null);
+    try {
+      setMachines(await desktopApi.remoteMachines(projectId));
+    } catch (cause) {
+      setMachinesError(ipcErrorText(cause));
+    }
+  }, [projectId]);
+
+  const setCodex = (machineId: string, codex: RemoteMachine["codex"]) => {
+    setMachines((current) =>
+      current?.map((machine) =>
+        machine.id === machineId ? { ...machine, codex } : machine,
+      ),
+    );
+    // Codex in a new chat's agent list follows at once.
+    refreshRemoteAgentCatalog(projectId);
+  };
+  const codexSignIn = useCodexSignIn({
+    projectId,
+    onSignedIn: (machineId) => setCodex(machineId, "signed-in"),
+  });
+  const closeCodexSignIn = codexSignIn.close;
+
   useEffect(() => {
-    if (!open) return;
+    if (!open) {
+      closeCodexSignIn();
+      return;
+    }
     setError(null);
     void load().catch((cause: unknown) => setError(message(cause)));
+    void loadMachines();
     return desktopApi.onPersonalEnvironmentChanged((change) => {
       if (change.projectId === projectId)
         void load().catch((cause: unknown) => setError(message(cause)));
     });
-  }, [open, projectId, load]);
+  }, [open, projectId, load, loadMachines, closeCodexSignIn]);
+
+  const signOut = async (machine: RemoteMachine) => {
+    setBusy(`sign-out:${machine.id}`);
+    setError(null);
+    try {
+      await desktopApi.remoteCodexSignOut({
+        projectId,
+        machineId: machine.id,
+      });
+      setCodex(machine.id, "signed-out");
+    } catch (cause) {
+      setError(ipcErrorText(cause));
+    } finally {
+      setBusy(null);
+    }
+  };
 
   const act = async (
     name: string,
@@ -108,19 +179,20 @@ export function RemoteEnvironmentModal({
   const statusIsError = Boolean(error ?? view?.configError ?? view?.error);
 
   return (
-    <Modal open={open} onClose={onClose} width={520}>
+    <Modal open={open} onClose={onClose} width={520} labelledBy={titleId}>
       <div className="flex max-h-[min(680px,80vh)] flex-col">
         <header className="border-b border-border px-5 py-4">
           <div className="flex items-center gap-2">
             <ServerCog className="size-4 text-fg-muted" />
-            <h2 className="text-[15px] font-semibold text-fg">
+            <h2 id={titleId} className="text-[15px] font-semibold text-fg">
               Remote environment
             </h2>
           </div>
           <p className="mt-1 text-xs leading-5 text-fg-muted">
-            Files you choose, for your sessions on this project's server. Only
-            your sessions receive them, and they are never committed or shared
-            with other members.
+            Files you choose and your own setup, for your sessions on this
+            project's server. Only your sessions receive them, and they are
+            never committed or shared with other members. Keys and other values
+            your sessions need as environment variables belong under Secrets.
           </p>
         </header>
 
@@ -142,12 +214,55 @@ export function RemoteEnvironmentModal({
               Sign-ins
             </h3>
             <p className="text-xs leading-5 text-fg-muted">
-              Claude Code and Codex subscriptions stay on the computer you
-              signed in on. A chat that uses one runs only on a machine where
-              you signed in to it yourself, such as this computer when it is
-              connected to the project. Nothing about your sign-ins is sent to
-              the server.
+              Claude Code runs on your own subscription only on this computer.
+              On the project's server, it runs through your organization's model
+              connection.
             </p>
+            {machines !== null &&
+              (machines !== undefined || machinesError !== null) && (
+                <div
+                  className="mt-1 flex flex-col gap-2"
+                  data-testid="remote-machines"
+                >
+                  <h4 className="text-xs font-medium text-fg">Your machines</h4>
+                  {machinesError ? (
+                    <div className="flex items-center gap-3">
+                      <p className="min-w-0 flex-1 text-xs leading-5 text-fg-muted">
+                        Your machines could not be listed. {machinesError}
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => void loadMachines()}
+                        className="button-ghost button-sm"
+                      >
+                        Try again
+                      </button>
+                    </div>
+                  ) : machines?.length === 0 ? (
+                    <p className="text-xs leading-5 text-fg-muted">
+                      Codex sign-ins need a machine of your own: ask an
+                      administrator for one. Codex on this computer uses this
+                      computer's sign-in.
+                    </p>
+                  ) : (
+                    machines?.map((machine) => (
+                      <MachineRow
+                        key={machine.id}
+                        machine={machine}
+                        pending={busy === `sign-out:${machine.id}`}
+                        disabled={busy !== null}
+                        onSignIn={() =>
+                          codexSignIn.start({
+                            id: machine.id,
+                            name: machine.name,
+                          })
+                        }
+                        onSignOut={() => void signOut(machine)}
+                      />
+                    ))
+                  )}
+                </div>
+              )}
           </section>
 
           <section className="flex flex-col gap-2">
@@ -231,6 +346,36 @@ export function RemoteEnvironmentModal({
               </article>
             ))}
           </section>
+
+          <section
+            className="flex flex-col gap-2"
+            data-testid="remote-environment-setup"
+          >
+            <h3 className="text-[11px] font-semibold uppercase tracking-wider text-fg-faint">
+              Setup
+            </h3>
+            {view?.setup ? (
+              <article className="flex items-start gap-3 rounded-xl border border-border p-3">
+                <Terminal className="mt-0.5 size-4 shrink-0 text-fg-faint" />
+                <div className="min-w-0 flex-1">
+                  <pre className="max-h-32 overflow-auto whitespace-pre-wrap break-all font-mono text-[12px] text-fg">
+                    {view.setup.command}
+                  </pre>
+                  <p className="mt-1 truncate text-xs text-fg-faint">
+                    {view.setup.server
+                      ? `On the server, sent ${ago(view.setup.server.updatedAt, now)}`
+                      : SETUP_NOT_SENT[view.server]}
+                  </p>
+                </div>
+              </article>
+            ) : (
+              <p className="text-xs leading-5 text-fg-muted">
+                No setup command. Add <code className="font-mono">"setup"</code>{" "}
+                to the config to install your own tools in each new workspace,
+                after the project's setup runs.
+              </p>
+            )}
+          </section>
         </div>
 
         <footer className="flex items-center gap-2 border-t border-border px-5 py-3.5">
@@ -271,7 +416,135 @@ export function RemoteEnvironmentModal({
           </button>
         </footer>
       </div>
+      <CodexSignInDialog signIn={codexSignIn} />
     </Modal>
+  );
+}
+
+/**
+ * One of the member's machines: whether it is online and signed in to
+ * Codex. Signing out asks first, in place.
+ */
+function MachineRow({
+  machine,
+  pending,
+  disabled,
+  onSignIn,
+  onSignOut,
+}: {
+  machine: RemoteMachine;
+  pending: boolean;
+  disabled: boolean;
+  onSignIn: () => void;
+  onSignOut: () => void;
+}) {
+  const signedIn = machine.codex === "signed-in";
+  const [confirming, setConfirming] = useState(false);
+  useEffect(() => {
+    if (!signedIn) setConfirming(false);
+  }, [signedIn]);
+  const questionId = useId();
+  const rowRef = useRef<HTMLElement>(null);
+  const keepButton = useRef<HTMLButtonElement>(null);
+  const refocusAction = useRef(false);
+  useEffect(() => {
+    // Keyboard focus follows the question in and back out.
+    if (confirming) {
+      keepButton.current?.focus();
+      return;
+    }
+    if (!refocusAction.current) return;
+    refocusAction.current = false;
+    rowRef.current
+      ?.querySelector<HTMLButtonElement>("[data-row-action]")
+      ?.focus();
+  }, [confirming]);
+  const waitReason = "Wait for the current action to finish";
+
+  return (
+    <article
+      ref={rowRef}
+      className="flex items-center gap-3 rounded-xl border border-border p-3"
+      data-testid="remote-machine"
+    >
+      {confirming ? (
+        <>
+          <p
+            id={questionId}
+            className="min-w-0 flex-1 text-[13px] leading-5 text-fg"
+          >
+            Sign out of Codex on {machine.name}? Codex chats there need you to
+            sign in again.
+          </p>
+          <button
+            ref={keepButton}
+            type="button"
+            disabled={pending}
+            data-disabled-reason={waitReason}
+            aria-describedby={questionId}
+            onClick={() => {
+              refocusAction.current = true;
+              setConfirming(false);
+            }}
+            className="button-ghost button-sm"
+          >
+            Cancel
+          </button>
+          <PendingButton
+            type="button"
+            pending={pending}
+            disabled={disabled}
+            data-disabled-reason={waitReason}
+            aria-describedby={questionId}
+            onClick={() => {
+              refocusAction.current = true;
+              onSignOut();
+            }}
+            className="button-danger button-sm"
+          >
+            Sign out
+          </PendingButton>
+        </>
+      ) : (
+        <>
+          <Server className="size-4 shrink-0 text-fg-faint" />
+          <div className="min-w-0 flex-1">
+            <p className="truncate text-[13px] text-fg">{machine.name}</p>
+            <p className="truncate text-xs text-fg-faint">
+              {machine.available ? "Online" : "Offline"} ·{" "}
+              {signedIn ? "Codex signed in" : "Codex not signed in"}
+            </p>
+          </div>
+          {signedIn ? (
+            <button
+              type="button"
+              disabled={disabled}
+              data-disabled-reason={waitReason}
+              data-row-action=""
+              onClick={() => setConfirming(true)}
+              aria-label={`Sign out of Codex on ${machine.name}`}
+              className="button-ghost button-sm"
+            >
+              Sign out
+            </button>
+          ) : (
+            <button
+              type="button"
+              disabled={disabled || !machine.available}
+              data-disabled-reason={
+                machine.available ? waitReason : "This machine is offline"
+              }
+              data-row-action=""
+              onClick={onSignIn}
+              aria-label={`Sign in to Codex on ${machine.name}`}
+              className="button-secondary button-sm"
+            >
+              Sign in to Codex
+            </button>
+          )}
+        </>
+      )}
+    </article>
   );
 }
 

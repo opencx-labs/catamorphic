@@ -178,6 +178,11 @@ export type {
   EnvironmentRuntimeBinding,
   SandboxProvider,
 } from "@catamorphic/sandbox";
+export {
+  type ExecutorKeyPair,
+  executorPublicKey,
+  generateExecutorKeyPair,
+} from "@catamorphic/sandbox";
 export { aiToolCall, aiToolKind } from "./ai-tool-trigger-kind.js";
 export { connectionAuthorizationPage } from "./authorization-page.js";
 export type {
@@ -188,6 +193,7 @@ export type {
 } from "./catamorphic.js";
 export { Catamorphic, createCatamorphic } from "./catamorphic.js";
 export {
+  type ClientRunnerKeys,
   type ClientRunnerTransport,
   ReceiptRefusedError,
   ResultRejectedError,
@@ -206,6 +212,17 @@ export {
   hole,
   mcpToolKind,
 } from "./define-trigger-kind.js";
+export {
+  DIRECTORY_EVENT_KINDS,
+  DIRECTORY_EVENT_SOURCE,
+  DIRECTORY_TRIGGER_KINDS,
+  type DirectoryEventKind,
+  type DirectoryMember,
+  directoryGroupsChanged,
+  directoryMemberJoined,
+  directoryMemberLeft,
+  directoryProjectEvent,
+} from "./directory-trigger-kinds.js";
 export { FsBundleStore } from "./fs-bundle-store.js";
 export {
   defineGitConnectionProvider,
@@ -221,6 +238,7 @@ export {
 export {
   defineHttpApiConnectionProvider,
   type HttpApiAction,
+  type HttpApiAuth,
   type HttpApiConnectionOptions,
   type HttpMethod,
 } from "./http-connection-provider.js";

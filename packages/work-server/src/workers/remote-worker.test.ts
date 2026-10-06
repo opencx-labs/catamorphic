@@ -2,6 +2,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { Identity } from "@catamorphic/core";
+import { generateExecutorKeyPair } from "@catamorphic/sandbox";
+import { sql } from "kysely";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { executionSettingsFromEnv } from "../execution-config.js";
 import {
@@ -98,6 +100,7 @@ async function enrollWorker(args: {
       dataDir,
       enrollmentCode: enrollment.json().code,
       execution: executionSettingsFromEnv({
+        WORK_SANDBOX: "local-process",
         PATH: process.env.PATH,
         WORK_MAX_WORKSPACES: args.workspaces,
         ...args.env,
@@ -189,20 +192,45 @@ describe("remote workers (ADR 0164)", () => {
       dataDir: workerDir,
       enrollmentCode: code,
       execution: executionSettingsFromEnv({
+        WORK_SANDBOX: "local-process",
         PATH: process.env.PATH,
         WORK_MAX_WORKSPACES: "2",
       }),
     });
     await waitFor(workerAvailable, "the worker to connect");
+    // Operators see what runs each machine's sandboxes and why (ADR 0204).
+    const listed = (await operator("GET", "/_work/operator/machines")).json();
+    const backendOf = (id: string) =>
+      listed.machines.find(
+        (machine: { id: string; descriptor: { backend?: unknown } }) =>
+          machine.id === id,
+      )?.descriptor.backend;
+    expect(backendOf("worker.builder")).toEqual({
+      kind: "local-process",
+      reason: "WORK_SANDBOX=local-process",
+    });
+    expect(
+      listed.machines.some(
+        (machine: {
+          descriptor: {
+            backend?: { kind?: string };
+            labels?: Record<string, string>;
+          };
+        }) =>
+          machine.descriptor.backend?.kind === "local-process" &&
+          machine.descriptor.labels?.plane === "control",
+      ),
+    ).toBe(true);
 
     // The code was single use.
     const replay = await server.app.inject({
       method: "POST",
       url: "/api/workers/enroll",
       headers: PROTOCOL,
-      payload: { code },
+      payload: { code, publicKey: generateExecutorKeyPair().publicKey },
     });
     expect(replay.statusCode).toBe(400);
+    expect(replay.json().error).toContain("invalid, used, or expired");
 
     const sessions = server.catamorphic.core.agentSessions;
     if (!sessions) throw new Error("Agent sessions are unavailable");
@@ -235,6 +263,7 @@ describe("remote workers (ADR 0164)", () => {
       controlPlaneUrl: base,
       dataDir: workerDir,
       execution: executionSettingsFromEnv({
+        WORK_SANDBOX: "local-process",
         PATH: process.env.PATH,
         WORK_MAX_WORKSPACES: "2",
       }),
@@ -249,15 +278,15 @@ describe("remote workers (ADR 0164)", () => {
       ),
     );
     expect(afterRestart.content).toContain(path.join(workerDir, "sandboxes"));
-    // The worker holds its credential and sandboxes, nothing else.
+    // The worker holds its credential, its key and sandboxes, nothing else.
     expect(fs.readdirSync(workerDir).sort()).toEqual([
       "sandboxes",
       "sandboxes.json",
       "worker-credential",
+      "worker-key",
     ]);
-    expect(
-      fs.statSync(path.join(workerDir, "worker-credential")).mode & 0o777,
-    ).toBe(0o600);
+    for (const file of ["worker-credential", "worker-key"])
+      expect(fs.statSync(path.join(workerDir, file)).mode & 0o777).toBe(0o600);
   }, 60_000);
 
   it("runs background processes on the worker and ends them with the chat (ADR 0174)", async () => {
@@ -388,6 +417,72 @@ describe("placement by owner (ADR 0167)", () => {
     ).rejects.toThrow();
   }, 90_000);
 
+  it("keeps a released machine's chats until their workspaces are given back (ADR 0205)", async () => {
+    const dana = await person("dana");
+    // Room for two: a new chat that lands elsewhere was refused, not full.
+    const danaDesk = await startWorker({
+      name: "dana-desk",
+      placement: { access: { people: ["dana@example.com"] } },
+      workspaces: "2",
+    });
+    const core = server.catamorphic.core;
+    const sessions = core.agentSessions;
+    if (!sessions) throw new Error("Agent sessions are unavailable");
+    const location = async (sessionId: string) =>
+      replyOf(
+        await sessions.sendMessage(
+          dana,
+          projectId,
+          sessionId,
+          "execution-location",
+        ),
+      ).content;
+    const chat = await sessions.create(dana, projectId, {
+      environment: "build",
+    });
+    expect(await location(chat.id)).toContain(danaDesk);
+    const { allocationId } = await sessions.get(dana, projectId, chat.id);
+
+    // Her machine is released: it takes no new work at once, while the
+    // chat already there keeps reaching its workspace.
+    await core.db
+      .updateTable("work_workers")
+      .set({ released_at: sql`now()` })
+      .where("node_id", "=", "worker.dana-desk")
+      .execute();
+    const next = await sessions.create(dana, projectId, {
+      environment: "build",
+    });
+    const elsewhere = await location(next.id);
+    expect(elsewhere).toContain(path.join(root, "shared", "sandboxes"));
+    expect(await location(chat.id)).toContain(danaDesk);
+
+    // Once idle (the default 30 minutes), the workspace is saved and given
+    // back, and the machine frees its slot.
+    await sessions.releaseIdleWorkspaces({
+      now: new Date(Date.now() + 60 * 60_000),
+    });
+    expect(
+      await core.db
+        .selectFrom("execution_allocations")
+        .select(["status", "release_reason"])
+        .where("id", "=", allocationId ?? "")
+        .executeTakeFirstOrThrow(),
+    ).toEqual({ status: "released", release_reason: "idle" });
+    await waitFor(async () => {
+      const row = await core.db
+        .selectFrom("execution_allocations")
+        .select("capacity_released_at")
+        .where("id", "=", allocationId ?? "")
+        .executeTakeFirstOrThrow();
+      return row.capacity_released_at !== null;
+    }, "the released machine to free the idle workspace");
+    // Its next turn runs on another machine.
+    const after = await location(chat.id);
+    expect(after).not.toContain(danaDesk);
+    expect(after).toContain(path.join(root, "shared", "sandboxes"));
+  }, 90_000);
+
   it("places container Environments only on workers that offer containers (ADR 0176)", async () => {
     const carol = await person("carol");
     const dockerBox = await startWorker({
@@ -422,11 +517,12 @@ describe("placement by owner (ADR 0167)", () => {
       name: "team-box",
       access: { groups: ["eng@example.com"] },
     });
+    const keys = generateExecutorKeyPair();
     const enrolled = await server.app.inject({
       method: "POST",
       url: "/api/workers/enroll",
       headers: PROTOCOL,
-      payload: { code: enrollment.json().code },
+      payload: { code: enrollment.json().code, publicKey: keys.publicKey },
     });
     const connect = await server.app.inject({
       method: "POST",
@@ -443,6 +539,7 @@ describe("placement by owner (ADR 0167)", () => {
           workspaceRoot: "/workspace",
           capacity: { workspaces: 1 },
         },
+        publicKey: keys.publicKey,
       },
     });
     expect(connect.statusCode).toBe(403);

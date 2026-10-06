@@ -3,7 +3,49 @@ import type { AgentTurnUsage, Item, Turn } from "@catamorphic/agent-protocol";
 import type { AgentSessionsService, Identity } from "@catamorphic/core";
 import pg from "pg";
 import { workServerConfigFromEnv } from "./config.js";
+import {
+  executionSettingsFromEnv,
+  type WorkExecutionSettings,
+} from "./execution-config.js";
+import {
+  type DirectoryAccountStatus,
+  type DirectoryProvider,
+  DirectoryUnavailableError,
+} from "./identity/directory.js";
 import type { WorkServerOptions } from "./server.js";
+
+/**
+ * A directory (ADR 0161) governing Better Auth's local "credential"
+ * accounts, whose account id is the user id, so every lifecycle path runs
+ * through the real OAuth server and token gate. Accounts it does not know
+ * are active in no group; it answers only about the groups it is asked.
+ */
+export class FakeDirectory implements DirectoryProvider {
+  readonly providerId = "credential";
+  readonly requiredGroups: string[] = [];
+  /** Replica memory (single process): a test's directory, never a host's. */
+  readonly accounts = new Map<string, DirectoryAccountStatus>();
+  unavailable = false;
+  calls = 0;
+
+  async check(args: {
+    accountId: string;
+    groups: readonly string[];
+  }): Promise<DirectoryAccountStatus> {
+    this.calls += 1;
+    if (this.unavailable) throw new DirectoryUnavailableError("offline");
+    const status = this.accounts.get(args.accountId) ?? {
+      active: true,
+      groups: [],
+    };
+    return status.active
+      ? {
+          active: true,
+          groups: status.groups.filter((group) => args.groups.includes(group)),
+        }
+      : status;
+  }
+}
 
 /** Test servers boot from the same env parser as the image. */
 export function testServerOptions(args: {
@@ -13,11 +55,27 @@ export function testServerOptions(args: {
 }): WorkServerOptions {
   return {
     config: {
-      ...workServerConfigFromEnv({ WORK_DATA_DIR: args.dataDir, ...args.env }),
+      ...workServerConfigFromEnv({
+        WORK_DATA_DIR: args.dataDir,
+        // Tests run trusted subprocesses unless they choose a backend.
+        WORK_SANDBOX: "local-process",
+        ...args.env,
+      }),
       dataDir: args.dataDir,
       ...(args.publicBases ? { publicBases: args.publicBases } : {}),
     },
   };
+}
+
+/**
+ * A test worker's execution settings, from the same parser as the image.
+ * Like {@link testServerOptions}, trusted subprocesses unless the test
+ * chooses a backend: `auto` would pick containers on a runner with Docker.
+ */
+export function testExecutionSettings(
+  env: Record<string, string | undefined>,
+): WorkExecutionSettings {
+  return executionSettingsFromEnv({ WORK_SANDBOX: "local-process", ...env });
 }
 
 /**

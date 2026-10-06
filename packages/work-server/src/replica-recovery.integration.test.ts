@@ -71,6 +71,7 @@ it.skipIf(!process.env.DATABASE_URL)(
       WORK_VAULT_KEY: Buffer.alloc(32, 11).toString("base64"),
       // Trusted test replicas run agents as subprocesses (ADR 0164).
       WORK_TRUST_CONTROL_PLANE_AGENTS: "1",
+      WORK_SANDBOX: "local-process",
       WORK_FAKE_AGENT: "1",
       WORK_MACHINE_NAME: name,
       ...(labels ? { WORK_MACHINE_LABELS: labels } : {}),

@@ -1,6 +1,7 @@
-import type {
-  ConnectionActionDefinition,
-  ConnectionProvider,
+import {
+  type ConnectionActionDefinition,
+  type ConnectionProvider,
+  dotPathSegment,
 } from "@catamorphic/core";
 import type { Json } from "@catamorphic/db";
 
@@ -27,13 +28,20 @@ export interface HttpApiAction {
 const RESERVED_HEADERS =
   /^(authorization|cookie|host|proxy-.*|x-forwarded-.*|forwarded|content-length|transfer-encoding|connection)$/i;
 
+/**
+ * How the stored key goes upstream: in `header` (after `scheme` and a
+ * space, when given), or, with `basic`, as HTTP Basic credentials, the key
+ * being `user:password` (as ClickHouse's HTTP interface takes them).
+ */
+export type HttpApiAuth = { header: string; scheme?: string } | { basic: true };
+
 export interface HttpApiConnectionOptions {
   kind: string;
   displayName: string;
   /** HTTPS origin plus optional base path, e.g. `https://api.example.com/v1`. */
   baseUrl: string;
   /** How the stored key is sent. Defaults to `Authorization: Bearer <key>`. */
-  auth?: { header: string; scheme?: string };
+  auth?: HttpApiAuth;
   /** Path prefixes (below `baseUrl`) callers may reach; default everything. */
   paths?: readonly string[];
   /**
@@ -63,10 +71,12 @@ const DEFAULT_MAX_BODY_BYTES = 64 * 1024 * 1024;
  * A brokered HTTP API (ADR 0162). An operator or member pastes an API key
  * once; it lives in the credential vault and the gateway adds it to requests
  * for this one origin. Agents and workflows call `get`, `post`, ... with a
- * path and body and never see the key. Roles narrow methods through the
- * connection's capabilities. With `actions`, each action is instead one
- * fixed operation of the API, so capabilities can name single operations
- * (ADR 0179).
+ * path and body and never see the key, and code in sandboxes sends the
+ * API's own requests through the gateway's HTTP route (ADR 0212). Roles
+ * narrow methods through the connection's capabilities. With `actions`,
+ * each action is instead one fixed operation of the API, so capabilities
+ * can name single operations (ADR 0179), and the connection has no route
+ * for code: any method and path would reach past them.
  */
 export function defineHttpApiConnectionProvider(
   options: HttpApiConnectionOptions,
@@ -76,9 +86,8 @@ export function defineHttpApiConnectionProvider(
     throw new Error(`${options.kind}: baseUrl must use HTTPS`);
   }
   const basePath = base.pathname.replace(/\/+$/, "");
-  const header = options.auth?.header ?? "authorization";
-  const scheme =
-    options.auth?.scheme ?? (options.auth?.header ? undefined : "Bearer");
+  const auth = keyAuth(options.auth);
+  const header = auth.header;
   const maxBytes = options.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES;
   const maxBodyBytes = Math.max(
     maxBytes,
@@ -106,20 +115,43 @@ export function defineHttpApiConnectionProvider(
         annotations: { readOnlyHint: method === "get" },
       }));
 
+  const keyHeaders = (material: Uint8Array): Record<string, string> => ({
+    [header]: auth.value(new TextDecoder().decode(material)),
+  });
+
   return {
     kind: options.kind,
     displayName: options.displayName,
+    // Code in sandboxes reaches the generic API, never named operations.
+    ...(named
+      ? {}
+      : {
+          http: {
+            baseUrl: origin,
+            ...(options.paths ? { paths: options.paths } : {}),
+            headers: ({ material }) => keyHeaders(material),
+          },
+        }),
     beginAuthorization: async () => ({
       challenge: {
         kind: "form",
         fields: [
-          { name: "apiKey", label: "API key", secret: true, required: true },
+          {
+            name: "apiKey",
+            label: auth.basic
+              ? "User and password, as user:password"
+              : "API key",
+            secret: true,
+            required: true,
+          },
         ],
       },
     }),
     completeAuthorization: async ({ callback }) => {
       const apiKey = callback.apiKey?.trim();
       if (!apiKey) throw new Error("An API key is required");
+      if (auth.basic && apiKey.indexOf(":") <= 0)
+        throw new Error("Enter the user and password as user:password");
       return {
         material: new TextEncoder().encode(apiKey),
         capabilities: actions.map((action) => action.name),
@@ -159,8 +191,8 @@ export function defineHttpApiConnectionProvider(
         }
         headers.set(name, value);
       }
-      const key = new TextDecoder().decode(material);
-      headers.set(header, scheme ? `${scheme} ${key}` : key);
+      for (const [name, value] of Object.entries(keyHeaders(material)))
+        headers.set(name, value);
       const hasBody = request.body !== undefined && method !== "get";
       if (hasBody && !headers.has("content-type")) {
         headers.set("content-type", "application/json; charset=utf-8");
@@ -181,6 +213,32 @@ export function defineHttpApiConnectionProvider(
         rangeable: method === "get",
       });
     },
+  };
+}
+
+/** The header the stored key goes in, and its value there. */
+function keyAuth(auth: HttpApiAuth | undefined): {
+  header: string;
+  basic: boolean;
+  value: (key: string) => string;
+} {
+  if (!auth)
+    return {
+      header: "authorization",
+      basic: false,
+      value: (key) => `Bearer ${key}`,
+    };
+  if ("basic" in auth)
+    return {
+      header: "authorization",
+      basic: true,
+      value: (key) => `Basic ${Buffer.from(key, "utf8").toString("base64")}`,
+    };
+  const scheme = auth.scheme;
+  return {
+    header: auth.header.toLowerCase(),
+    basic: false,
+    value: (key) => (scheme ? `${scheme} ${key}` : key),
   };
 }
 
@@ -347,10 +405,12 @@ function resolveTarget(args: {
     path.includes("..") ||
     path.includes("\\") ||
     /[?#]/.test(path) ||
-    /%(2e|2f|5c)/i.test(path)
+    /%(2e|2f|5c)/i.test(path) ||
+    // `.;x` is `.` to a server that strips path parameters.
+    path.split("/").some(dotPathSegment)
   ) {
     throw new Error(
-      "Paths may not contain '..', '?', '#', backslashes, or encoded dots and slashes",
+      "Paths may not contain '..', '?', '#', backslashes, dot segments, or encoded dots and slashes",
     );
   }
   const target = new URL(`${args.basePath}${path}`, args.base.origin);

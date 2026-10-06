@@ -22,10 +22,12 @@ export const NodeLabelsSchema = z
 /**
  * Whose work a worker takes: everyone, or named people and directory groups
  * by email, and the owner-less work (project chats and automations) of named
- * projects (ADR 0173). Control-plane state; a worker never declares it.
+ * projects (ADR 0173), or nobody: a pooled machine no rule holds (ADR 0205).
+ * Control-plane state; a worker never declares it.
  */
 export const WorkerAccessSchema = z.union([
   z.strictObject({ everyone: z.literal(true) }),
+  z.strictObject({ nobody: z.literal(true) }),
   z
     .strictObject({
       people: z.array(z.email().toLowerCase()).max(500).default([]),
@@ -52,14 +54,20 @@ export const WorkerPlacementSchema = z.strictObject({
 });
 export type WorkerPlacement = z.output<typeof WorkerPlacementSchema>;
 
+/**
+ * A worker's placement as the scheduler reads it. A released machine (ADR
+ * 0205) takes no new work and keeps serving the Allocations it holds.
+ */
+export type ScheduledPlacement = WorkerPlacement & { released: boolean };
+
 export function nodeAccess(access: WorkerAccess): NodeAccess {
-  return "everyone" in access
-    ? { everyone: true }
-    : {
-        users: access.people,
-        groups: access.groups,
-        projects: access.projects,
-      };
+  if ("everyone" in access) return { everyone: true };
+  if ("nobody" in access) return { users: [], groups: [], projects: [] };
+  return {
+    users: access.people,
+    groups: access.groups,
+    projects: access.projects,
+  };
 }
 
 /**
@@ -67,9 +75,19 @@ export function nodeAccess(access: WorkerAccess): NodeAccess {
  * else's work lands here, so process isolation is enough.
  */
 export function servesOneOwner(access: WorkerAccess): boolean {
-  if ("everyone" in access) return false;
+  if ("everyone" in access || "nobody" in access) return false;
   const { people, groups, projects } = access;
   return groups.length === 0 && people.length + projects.length === 1;
+}
+
+/** A worker taking no one's work: any isolation is enough. */
+export function servesNobody(access: WorkerAccess): boolean {
+  return "nobody" in access;
+}
+
+/** The directory groups an access list names. */
+export function accessGroupsOf(access: WorkerAccess): readonly string[] {
+  return "groups" in access ? access.groups : [];
 }
 
 /** Stored placement, validated on the way out of the database. */

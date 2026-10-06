@@ -9,6 +9,11 @@ export type {
 export function chatSessionMenu(args: {
   unread: boolean;
   archived: boolean;
+  /**
+   * The chat lives on its project's server, so a person can work in its
+   * workspace beside the agent (ADR 0209).
+   */
+  remote?: boolean;
 }): ChatSessionMenuEntry[] {
   return [
     ...(args.archived
@@ -19,6 +24,12 @@ export function chatSessionMenu(args: {
             action: "new-subsession" as const,
           },
         ]),
+    ...(args.remote && !args.archived
+      ? [
+          { label: "Open terminal", action: "open-terminal" as const },
+          { label: "Open preview…", action: "open-preview" as const },
+        ]
+      : []),
     {
       label: args.unread ? "Mark as read" : "Mark as unread",
       action: args.unread ? "mark-read" : "mark-unread",

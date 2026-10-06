@@ -9,27 +9,45 @@ import type {
 } from "@catamorphic/sandbox";
 import { type Kysely, sql } from "kysely";
 import type { ExecutionAllocation } from "./execution-allocations-service.js";
+import {
+  holdVolumes,
+  sweepVolumeHolds,
+  volumeHoldNode,
+} from "./volume-holds.js";
 
 /**
- * The Allocation's image, containers and egress (ADR 0176) on a provider
- * that keeps its own sandbox lifecycle, such as a member's computer: the
- * Environment decides what its sandboxes boot, wherever they run.
+ * The Allocation's image, containers and egress (ADR 0176) and volumes (ADR
+ * 0208) on a provider that keeps its own sandbox lifecycle, such as a
+ * member's computer: the Environment decides what its sandboxes boot,
+ * wherever they run.
  */
 export function withAllocationSandboxPolicy(args: {
+  db: Kysely<DB>;
   allocation: ExecutionAllocation;
   provider: SandboxProvider;
 }): SandboxProvider {
   const { provider } = args;
   const sandbox = args.allocation.policy.sandbox;
-  if (!sandbox?.image && !sandbox?.containers && !sandbox?.egress)
+  if (
+    !sandbox?.image &&
+    !sandbox?.containers &&
+    !sandbox?.egress &&
+    !sandbox?.volumes?.length
+  )
     return provider;
-  const createSandbox = (opts: CreateSandboxOpts) =>
-    provider.createSandbox({
+  const createSandbox = async (opts: CreateSandboxOpts) => {
+    const volumes = await holdVolumes({
+      db: args.db,
+      allocation: args.allocation,
+    });
+    return provider.createSandbox({
       ...opts,
       ...(sandbox.image ? { image: sandbox.image } : {}),
       ...(sandbox.containers ? { containers: true } : {}),
       ...(sandbox.egress ? { egress: sandbox.egress } : {}),
+      ...(volumes.length > 0 ? { volumes } : {}),
     });
+  };
   return new Proxy(provider, {
     get(target, property) {
       if (property === "createSandbox") return createSandbox;
@@ -117,13 +135,19 @@ export function allocationSandboxProvider(args: {
     // Keep the reservation on an uncertain create. Lease expiry does not prove
     // that the provider failed to allocate a machine.
     // The Environment's image, containers and egress were fixed when the
-    // Allocation was admitted; no caller can widen them (ADR 0176).
+    // Allocation was admitted; no caller can widen them (ADR 0176). Its
+    // exclusive volumes are held for this sandbox on the node (ADR 0208),
+    // taken over from released workspaces there that run nothing (a chat
+    // readmitted right after it idled).
     const sandbox = allocation.policy.sandbox;
+    await retireVolumeHolders({ db, allocation, provider });
+    const volumes = await holdVolumes({ db, allocation });
     const handle = await provider.createSandbox({
       ...opts,
       ...(sandbox?.image ? { image: sandbox.image } : {}),
       ...(sandbox?.containers ? { containers: true } : {}),
       ...(sandbox?.egress ? { egress: sandbox.egress } : {}),
+      ...(volumes.length > 0 ? { volumes } : {}),
       resources,
       labels: {
         ...opts.labels,
@@ -389,83 +413,33 @@ export async function cleanupWorkerAllocations(args: {
         )
         .executeTakeFirst();
       if (!live) return 0;
-      const rows = await args.db
-        .selectFrom("execution_allocations")
-        .selectAll()
-        .where("worker_node_id", "=", args.workerNode.id)
-        .where("status", "=", "released")
-        .where("capacity_released_at", "is", null)
-        .where(({ not, exists, selectFrom }) =>
-          not(
-            exists(
-              selectFrom("agent_sessions as session")
-                .innerJoin(
-                  "agent_turns as turn",
-                  "turn.session_id",
-                  "session.id",
-                )
-                .select("turn.id")
-                .whereRef(
-                  "session.allocation_id",
-                  "=",
-                  "execution_allocations.id",
-                )
-                .where("turn.status", "in", [...ACTIVE_TURN_STATUSES])
-                .where("turn.lease_expires_at", ">", sql<Date>`now()`),
-            ),
-          ),
-        )
-        .where(({ not, exists, selectFrom }) =>
-          not(
-            exists(
-              selectFrom("workflow_runs as run")
-                .innerJoin(
-                  "execution_jobs as job",
-                  "job.workflow_run_id",
-                  "run.id",
-                )
-                .select("job.id")
-                .whereRef("run.allocation_id", "=", "execution_allocations.id")
-                .where("job.status", "=", "running")
-                .where("job.lease_expires_at", ">", sql<Date>`now()`),
-            ),
-          ),
-        )
+      const rows = await retirableAllocations({
+        db: args.db,
+        workerNodeId: node.id,
+      })
         .limit(100)
         .execute();
       let cleaned = 0;
       const failures: unknown[] = [];
       for (const row of rows) {
-        if (row.sandbox_creation_started && !row.sandbox_provider_id) continue;
-        const claim = await claimAllocationMaintenance({
-          db: args.db,
-          allocationId: row.id,
-          status: "released",
-        });
-        if (!claim) continue;
         try {
-          await withAllocationMaintenance({
-            db: args.db,
-            claim,
-            work: async (held) => {
-              // Destroying is idempotent: a sandbox already gone counts.
-              await held();
-              if (row.sandbox_provider_id)
-                await args.provider.destroySandbox(row.sandbox_provider_id);
-              await args.db
-                .updateTable("execution_allocations")
-                .set({ capacity_released_at: sql`now()` })
-                .where("id", "=", row.id)
-                .where("status", "=", "released")
-                .where("maintenance_claim", "=", claim.token)
-                .execute();
-            },
-          });
-          cleaned++;
+          if (
+            await retireAllocation({
+              db: args.db,
+              allocation: row,
+              provider: args.provider,
+            })
+          )
+            cleaned++;
         } catch (error) {
           failures.push(error);
         }
       }
+      // Holds end with their sandboxes (migration 051's trigger); any whose
+      // Allocation is gone some other way are let go here.
+      await sweepVolumeHolds({ db: args.db, node: node.id }).catch(
+        (error: unknown) => failures.push(error),
+      );
       if (failures.length > 0)
         throw new AggregateError(
           failures,
@@ -475,4 +449,128 @@ export async function cleanupWorkerAllocations(args: {
       return cleaned;
     },
   );
+}
+
+/**
+ * A node's released Allocations whose workspace may be destroyed now:
+ * capacity not yet released, and no turn with a live lease or running job
+ * still in them.
+ */
+function retirableAllocations(args: { db: Kysely<DB>; workerNodeId: string }) {
+  return args.db
+    .selectFrom("execution_allocations")
+    .select(["id", "sandbox_creation_started", "sandbox_provider_id"])
+    .where("worker_node_id", "=", args.workerNodeId)
+    .where("status", "=", "released")
+    .where("capacity_released_at", "is", null)
+    .where(({ not, exists, selectFrom }) =>
+      not(
+        exists(
+          selectFrom("agent_sessions as session")
+            .innerJoin("agent_turns as turn", "turn.session_id", "session.id")
+            .select("turn.id")
+            .whereRef("session.allocation_id", "=", "execution_allocations.id")
+            .where("turn.status", "in", [...ACTIVE_TURN_STATUSES])
+            .where("turn.lease_expires_at", ">", sql<Date>`now()`),
+        ),
+      ),
+    )
+    .where(({ not, exists, selectFrom }) =>
+      not(
+        exists(
+          selectFrom("workflow_runs as run")
+            .innerJoin("execution_jobs as job", "job.workflow_run_id", "run.id")
+            .select("job.id")
+            .whereRef("run.allocation_id", "=", "execution_allocations.id")
+            .where("job.status", "=", "running")
+            .where("job.lease_expires_at", ">", sql<Date>`now()`),
+        ),
+      ),
+    );
+}
+
+/**
+ * Destroy one released Allocation's workspace under a claim and release its
+ * capacity; its volume holds end with it (migration 051's trigger). False
+ * when another host holds the claim, or its sandbox's creation started and
+ * was never recorded.
+ */
+async function retireAllocation(args: {
+  db: Kysely<DB>;
+  allocation: {
+    id: string;
+    sandbox_creation_started: boolean;
+    sandbox_provider_id: string | null;
+  };
+  provider: SandboxProvider;
+}): Promise<boolean> {
+  const { allocation } = args;
+  if (allocation.sandbox_creation_started && !allocation.sandbox_provider_id)
+    return false;
+  const claim = await claimAllocationMaintenance({
+    db: args.db,
+    allocationId: allocation.id,
+    status: "released",
+  });
+  if (!claim) return false;
+  await withAllocationMaintenance({
+    db: args.db,
+    claim,
+    work: async (held) => {
+      // Destroying is idempotent: a sandbox already gone counts.
+      await held();
+      if (allocation.sandbox_provider_id)
+        await args.provider.destroySandbox(allocation.sandbox_provider_id);
+      await args.db
+        .updateTable("execution_allocations")
+        .set({ capacity_released_at: sql`now()` })
+        .where("id", "=", allocation.id)
+        .where("status", "=", "released")
+        .where("maintenance_claim", "=", claim.token)
+        .execute();
+    },
+  });
+  return true;
+}
+
+/**
+ * Destroy now, as their cleanup would in the background, the workspaces of
+ * released Allocations on this one's node that still hold any of its
+ * exclusive volumes and run nothing, so its sandbox takes those volumes
+ * over rather than living with empty ones (ADR 0208). Two sandboxes never
+ * mount one at once: a holder that could not be destroyed keeps it.
+ */
+async function retireVolumeHolders(args: {
+  db: Kysely<DB>;
+  allocation: ExecutionAllocation;
+  provider: SandboxProvider;
+}): Promise<void> {
+  const { allocation } = args;
+  const keys = (allocation.policy.sandbox?.volumes ?? [])
+    .filter((volume) => volume.exclusive)
+    .map((volume) => volume.key);
+  if (!allocation.workerNodeId || keys.length === 0) return;
+  const holders = await retirableAllocations({
+    db: args.db,
+    workerNodeId: allocation.workerNodeId,
+  })
+    .where("id", "in", (eb) =>
+      eb
+        .selectFrom("volume_holds")
+        .select("volume_holds.allocation_id")
+        .where("volume_holds.node", "=", volumeHoldNode(allocation))
+        .where("volume_holds.volume_key", "in", keys),
+    )
+    .execute();
+  for (const holder of holders)
+    await retireAllocation({
+      db: args.db,
+      allocation: holder,
+      provider: args.provider,
+    }).catch((error: unknown) =>
+      console.warn(
+        `[catamorphic] Released workspace ${holder.id} keeps its volumes`,
+        error,
+      ),
+    );
 }

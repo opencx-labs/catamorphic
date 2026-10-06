@@ -11,6 +11,16 @@ import {
 import { LocalProcessSandboxProvider } from "@catamorphic/local-process";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
+  configureSandboxGateway,
+  removeSandboxGateway,
+} from "../services/sandbox-git.js";
+import {
+  deliverSandboxSecrets,
+  removeSandboxSecrets,
+  sandboxEnvFiles,
+  sandboxSecretsFile,
+} from "../services/sandbox-secrets.js";
+import {
   type RunnerChannel,
   sandboxChannel,
   startSandboxRunner,
@@ -280,5 +290,99 @@ describe("sandbox runner", () => {
       frames.map((_, index) => index + 1),
     );
     await channel.kill();
+  }, 60_000);
+
+  it("gives every attempt the session's environment files as they are then (ADRs 0206, 0212)", async () => {
+    const sandbox = await provider.createSandbox({});
+    const stateDirectory = "/workspace/.work-session";
+    const target = {
+      provider,
+      sandboxId: sandbox.id,
+      projectDir: "/workspace/project",
+    };
+    const envFile = sandboxSecretsFile({
+      workspaceRoot: provider.workspaceRoot,
+    });
+    const envFiles = sandboxEnvFiles({
+      workspaceRoot: provider.workspaceRoot,
+    });
+    /** What the echo harness says the attempt's environment holds. */
+    const run = async () => {
+      const channel = await startSandboxRunner({
+        provider,
+        allocationId: "allocation",
+        sandboxId: sandbox.id,
+        stateDirectory,
+      });
+      await channel.send([
+        {
+          id: "start",
+          command: {
+            kind: "start",
+            attempt: {
+              ...attempt(
+                "[[env CLICKHOUSE_API_KEY]] [[env BASH_ENV]] [[env WORK_HTTP_LOGS]] [[env WORK_HTTP_LOGS_GRANT_FILE]] [[env DATA_PATH]]",
+              ),
+              envFiles,
+            },
+          },
+        },
+      ]);
+      const frames: RunnerFrame[] = [];
+      await readUntil({ channel, cursor: 0, frames, done: completed });
+      await channel.kill();
+      return events(frames)
+        .flatMap((event) =>
+          event.type === "item.started" &&
+          event.item.kind === "assistant_message"
+            ? [event.item.text]
+            : [],
+        )
+        .join("\n");
+    };
+    await deliverSandboxSecrets({
+      ...target,
+      variables: {
+        CLICKHOUSE_API_KEY: "ch-key-'one'",
+        DATA_PATH: "/workspace/project/data",
+      },
+    });
+    await configureSandboxGateway({
+      provider,
+      sandboxId: sandbox.id,
+      gatewayGitUrl: "http://127.0.0.1:9/api/gateway/git",
+      grants: [{ alias: "logs", grant: "grant-one" }],
+      gitAliases: [],
+      httpAliases: [
+        { alias: "logs", url: "http://127.0.0.1:9/api/gateway/http/logs" },
+      ],
+    });
+    const first = await run();
+    expect(first).toContain("CLICKHOUSE_API_KEY=ch-key-'one'");
+    // A value is passed as the secret holds it, even one that looks like
+    // a path the provider maps.
+    expect(first).toContain("DATA_PATH=/workspace/project/data");
+    // The provider's virtual path, mapped where this sandbox really is.
+    expect(first).toMatch(/BASH_ENV=\/.+\/\.work-session\/env\/secrets\.sh/);
+    expect(first).not.toContain(`BASH_ENV=${envFile}`);
+    expect(first).toContain(
+      "WORK_HTTP_LOGS=http://127.0.0.1:9/api/gateway/http/logs",
+    );
+    // The grant file where code in this sandbox really finds it.
+    const grantFile = /WORK_HTTP_LOGS_GRANT_FILE=(\S+)/.exec(first)?.[1] ?? "";
+    expect(grantFile).toMatch(/\/\.work-session\/grants\/logs$/);
+    expect(grantFile.startsWith(provider.workspaceRoot)).toBe(false);
+    expect(fs.readFileSync(grantFile, "utf8")).toBe("grant-one");
+    // Read again for the next attempt: gone once removed.
+    await removeSandboxSecrets(target);
+    const second = await run();
+    expect(second).toContain("CLICKHOUSE_API_KEY is not set");
+    expect(second).toMatch(/BASH_ENV=\/.+\/\.work-session\/env\/gateway\.sh/);
+    expect(second).toContain("WORK_HTTP_LOGS=http://127.0.0.1:9");
+    await removeSandboxGateway(target);
+    const third = await run();
+    expect(third).toContain("BASH_ENV is not set");
+    expect(third).toContain("WORK_HTTP_LOGS is not set");
+    expect(fs.existsSync(grantFile)).toBe(false);
   }, 60_000);
 });

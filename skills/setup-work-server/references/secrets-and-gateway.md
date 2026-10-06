@@ -1,10 +1,11 @@
 # Secrets, connections, and the gateway
 
 Use this when a Work server should let agents or workflows act on company
-systems: APIs, a production database, internal MCP tools (ADRs 0162, 0163).
-The rule: workloads get permission to act, never the credential. The Work
-server holds credentials in its vault and makes each call itself, after any
-guards the company added review it.
+systems: APIs, a production database, internal MCP tools (ADRs 0162, 0163),
+or when developers' remote Environments need the variables they have on their
+laptops (ADR 0206). The rule for company systems: workloads get permission to
+act, never the credential. The Work server holds credentials in its vault and
+makes each call itself, after any guards the company added review it.
 
 Simple servers need none of this. Add it when a project needs a system that
 holds company data.
@@ -13,14 +14,20 @@ holds company data.
 
 | Need | Use |
 | --- | --- |
-| An HTTP API with a key (billing, CRM, internal service) | An `http` gateway connection |
+| An HTTP API with a key (billing, CRM, internal service) that agents call | An `http` gateway connection |
+| An HTTP API with a shared key that code in a sandbox calls (a dev server or tests reading a logging cluster) | The same `http` gateway connection, reached at `WORK_HTTP_<ALIAS>`: [HTTP APIs from sandboxes](#http-apis-from-sandboxes-through-the-gateway) |
 | Reading a production database | A `postgres` gateway connection to a read-only replica role |
 | Tools behind an MCP server | An `mcp` gateway connection |
 | Git with a company remote from agents' sandboxes (fetch, push a fix branch) | A Git-capable connection (`git` gateway entry, or the GitHub provider) bound with `git` rules |
 | A value a workflow's own code must read (a webhook signing secret, a non-sensitive token) | A project secret (`defineSecrets`), sealed in the vault |
+| A variable developers' code needs in remote Environments (a Sentry DSN, a test Stripe key) | A project secret listed on the Environment: [Secrets in Environments](#secrets-in-environments) |
+| A key each engineer has their own of (a ClickHouse key issued per person) | The same, with a value per member, set by them, an admin, or an onboarding workflow |
 
-Prefer a gateway connection whenever the value is a credential: the call is
-reviewed and audited, and the key never enters a sandbox.
+Prefer a gateway connection whenever the value grants access to a company
+system: the call is reviewed and audited, and the key never enters a sandbox.
+A secret listed on an Environment is readable by any code running in its
+sandboxes, a compromised dependency included; restrict egress where that
+matters.
 
 ## Keys the server itself needs
 
@@ -51,6 +58,8 @@ print them, or pass them to agents.
       "maxRows": 500, "maxCost": 100000, "statementTimeoutMs": 10000, "poolSize": 4 },
     { "type": "http", "kind": "billing", "displayName": "Billing API",
       "baseUrl": "https://api.billing.example/v1", "paths": ["/invoices", "/customers"] },
+    { "type": "http", "kind": "logs-cluster", "displayName": "Logs (ClickHouse)",
+      "baseUrl": "https://logs.example.com:8443", "auth": { "basic": true } },
     { "type": "http", "kind": "slack", "displayName": "Slack", "baseUrl": "https://slack.com/api",
       "actions": [
         { "name": "conversations.replies", "method": "get", "path": "/conversations.replies" },
@@ -85,7 +94,14 @@ not declare it here.
   grant single operations of an RPC-style API and guards see them by name
   (ADR 0179). A caller of
   a named action passes `query`, `headers`, and `body`, never a path.
-  [Connect Slack](connect-slack.md) is the worked example.
+  [Connect Slack](connect-slack.md) is the worked example. `auth` says how
+  the stored key goes upstream: `Authorization: Bearer <key>` by default,
+  `{ "header": "X-Api-Key" }` (with an optional `scheme`), or
+  `{ "basic": true }`, where the service connection stores `user:password`
+  and the gateway sends HTTP Basic. An entry without `actions` is also
+  reachable by code in sandboxes
+  ([HTTP APIs from sandboxes](#http-apis-from-sandboxes-through-the-gateway));
+  one with `actions` is not, since a raw route would reach past them.
 - `postgres`: each service connection keeps up to `poolSize` sessions (at most
   16, default 4), closed after `poolIdleTimeoutMs` idle and at once when the
   credential rotates or is revoked. Every call still gets its own read-only
@@ -107,6 +123,83 @@ not declare it here.
   passes any path below the base URL through with the stored key.
   `anthropic` and `openai` are built in; see
   [Harnesses on the server](harnesses.md).
+
+## Secrets in Environments
+
+A project secret holds a shared value and may hold one value per member
+(ADR 0206). Values are sealed in the vault and write-only: APIs report which
+values exist, who set them and when, never a value.
+
+Declare the names in `.work/project.json` (or with `defineSecrets` in
+workflow code) and list on each Environment the ones its sandboxes receive;
+both are reviewed project changes:
+
+```json
+{
+  "secrets": {
+    "CLICKHOUSE_API_KEY": { "description": "Your ClickHouse key" },
+    "SENTRY_DSN": {}
+  },
+  "environments": {
+    "dev": { "workloads": ["agent"], "secrets": ["CLICKHOUSE_API_KEY", "SENTRY_DSN"] }
+  }
+}
+```
+
+Names are `SCREAMING_SNAKE_CASE` and never start with `CATAMORPHIC_` or
+`WORK_`; variables that change how the sandbox's shells, Git, Node, TLS, the
+harnesses or the proxy behave (`PATH`, `HOME`, `NODE_OPTIONS`, `GIT_CONFIG_*`,
+`SSL_CERT_FILE`, `LD_PRELOAD`, `ANTHROPIC_BASE_URL`, the proxy variables and
+the like) are listed but never set. Declarations in `project.json` are for
+Environments; workflow runs keep receiving the shared values of secrets their
+code declares, as before.
+
+Who sets values:
+
+- **Shared value**: anyone holding `secrets:write`, in the app (**Secrets**
+  in a connected project's Server section) or with
+  `PUT /api/projects/:id/secrets/:name` `{ "value": … }`.
+- **A member's own value**: that member (`PUT
+  /api/projects/:id/secrets/:name/members/me`), anyone holding
+  `secrets:write` for any member (`…/members/:userId`), or a workflow that
+  declared `secrets:write`:
+  `host["catamorphic.secrets"].set({ name, value, member: "ada@example.com" })`
+  (ADR 0210), as in an onboarding workflow that issues each new engineer's
+  key. `DELETE` on the same paths clears a value.
+- `GET /api/projects/:id/secrets` lists each secret with its Environments,
+  whether a shared value exists, the caller's own, and (with `secrets:read`)
+  which members hold theirs.
+
+Where values go:
+
+- A member's own chat gets their value, else the shared one, for turns that
+  answer that member's own messages, on a placement that isolates them: a VM
+  or gVisor sandbox, a machine only they use, their own computer, or a machine
+  with `WORK_PERSONAL_CREDENTIALS=accept`.
+- A project chat gets the shared value on a sandbox or a machine only that
+  project's work reaches.
+- Elsewhere the agent is told which names it did not get and who can set
+  them, and the turn goes on without them.
+
+Before each turn the variables are written to
+`.work-session/env/secrets.sh` (mode 0600, outside the repository); the agent
+runner, shells, terminals and workspace setup load it, and it is removed
+when a turn may not have it and when the workspace is given back. A project
+chat whose workspace holds it opens a terminal only for someone holding
+`secrets:write`. Each
+delivery is audited by name and fingerprint (`project_secrets.deliver` in the
+connection audit). Once a chat has held secrets, every later turn of it, and
+of its forks, replaces every value it could repeat with `[secret NAME]` in
+what is recorded, whoever wrote the message, including values rotated since
+they were delivered (the server keeps a sealed record of them in its vault).
+Values shorter than six characters cannot be masked; the agent is told not to
+print them. Processes and files the owner left in the workspace keep what
+they hold when someone else's turn runs there.
+
+Verify: a member sets their own value in the app; their chat's
+`printenv CLICKHOUSE_API_KEY` works in the agent's shell and shows as
+`[secret CLICKHOUSE_API_KEY]` in the transcript; a message from someone else
+in that chat runs without it; the audit lists the delivery without the value.
 
 ## Service connections and administrators
 
@@ -331,6 +424,76 @@ Verify: from a chat in that Environment, `git fetch origin` succeeds,
 `git push origin work/<name>` succeeds, `git push --force origin HEAD:main` is
 refused with a readable reason, `env` and the worker's files hold no remote
 credential, and after closing the chat its grant is refused.
+
+## HTTP APIs from sandboxes, through the gateway
+
+Code running in a chat's sandbox (a dev server, a CLI, an SDK, a test suite)
+often needs a company API with a shared key: a logging cluster's HTTP
+interface, an internal service. Bind an `http` gateway connection instead of
+listing the key as a secret (ADR 0212): the code gets the session's grant,
+never the key.
+
+```json
+"connections": {
+  "logs": { "provider": "logs-cluster", "principal": "service", "service": "logs-cluster",
+            "capabilities": ["get", "post"] }
+}
+```
+
+- A chat's sandbox gets the aliases its agent uses: list the alias in the
+  agent's `connections` (`.work/agents/developer.json`:
+  `"connections": ["logs"]`), and grant it in the member's role
+  (`"connections": [{ "environment": "dev", "alias": "logs" }]`). Terminals
+  in that chat's workspace see the same aliases.
+- The capabilities are the HTTP methods the alias may send (`get` also
+  allows HEAD); leave them out to keep the connection's own. The entry's
+  `paths`, when set, bound what may be reached. A contained agent's chat
+  only reads (GET and HEAD).
+- Each turn writes `.work-session/env/gateway.sh` beside the project folder:
+  `WORK_HTTP_<ALIAS>` (the alias in capitals, `-` as `_`) is the alias's
+  gateway URL, and `WORK_HTTP_<ALIAS>_GRANT_FILE` the file holding the
+  session's grant. The agent's commands, terminals and workspace setup load
+  it; a shell started some other way runs
+  `. ../.work-session/env/gateway.sh` from the project folder.
+- Send the API's own requests to `$WORK_HTTP_<ALIAS>` with the grant as a
+  bearer, as the HTTP Basic password (any user name), or in `x-work-grant`.
+  The gateway replaces whatever authorization was sent with the stored key.
+  The grant renews every 20 minutes and with each turn, with a new value, so
+  read the file for each request (or again after a 401); never copy it into
+  a config file.
+
+```sh
+# A query from a terminal or a test script.
+curl -sS -u "work:$(cat "$WORK_HTTP_LOGS_GRANT_FILE")" \
+  "$WORK_HTTP_LOGS/?query=SELECT%20count()%20FROM%20events"
+```
+
+```ts
+// A dev server's query helper: the grant read for each request.
+import { readFileSync } from "node:fs";
+
+export async function queryLogs(sql: string): Promise<string> {
+  const grant = readFileSync(process.env.WORK_HTTP_LOGS_GRANT_FILE ?? "", "utf8");
+  const response = await fetch(
+    `${process.env.WORK_HTTP_LOGS}/?query=${encodeURIComponent(sql)}`,
+    { headers: { authorization: `Bearer ${grant}` } },
+  );
+  if (!response.ok) throw new Error(await response.text());
+  return response.text();
+}
+```
+
+- Guards for the connection's kind review each request (action: the
+  lowercase method; input: `{ path, query }`, never the body), and each is
+  audited as `connection.http` with its status. Request bodies are limited to
+  32 MiB; answers stream back as the API sends them.
+- Sandboxes reach `WORK_PUBLIC_URL/api/gateway/http/<alias>`. If an
+  Environment restricts egress, allow that URL.
+
+Verify: from a chat in that Environment, `printenv WORK_HTTP_LOGS` names the
+gateway, the `curl` above returns rows, a method the binding leaves out is
+refused with a readable reason, `env` and the worker's files hold no key, the
+audit lists each request, and after closing the chat its grant is refused.
 
 ## A production database, safely
 

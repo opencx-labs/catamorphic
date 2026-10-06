@@ -1,27 +1,44 @@
 import { Readable } from "node:stream";
 import type { FastifyReply, FastifyRequest } from "fastify";
+import type { RemoteMachinesRequest } from "./remote-machines.js";
 import { refreshRemoteCredentials } from "./remote-oauth.js";
 import type { RemoteProjectsStore } from "./remote-projects-store.js";
+import type { RemoteTerminalRequest } from "./remote-terminal.js";
+import { DESKTOP_API_TOKEN_HEADER } from "./server/local-api-guard.js";
 
-/** Desktop transport only. The remote resolves identity and enforces policy. */
-export async function forwardRemoteApi(args: {
-  request: FastifyRequest;
-  reply: FastifyReply;
-  profiles: {
-    forProject(projectId: string): { remoteProjects: RemoteProjectsStore };
-  };
+/** Where the desktop finds each linked project's server and credentials. */
+export interface RemoteProjectProfiles {
+  forProject(projectId: string): { remoteProjects: RemoteProjectsStore };
+}
+
+/** The member is not signed in to the project's server. */
+export class RemoteSignInRequiredError extends Error {
+  constructor() {
+    super("Sign in to this project's server to continue");
+    this.name = "RemoteSignInRequiredError";
+  }
+}
+
+/**
+ * One request to a linked project's server as its member (ADR 0055): the
+ * local project id in the path (and in an `agentId` query) becomes the
+ * remote one, and the member's bearer is added, refreshed once on a 401.
+ * Undefined when the project has no remote.
+ */
+export async function remoteProjectFetch(args: {
+  profiles: RemoteProjectProfiles;
   projectId: string;
+  /** Below the server's API base, e.g. `/projects/<local id>/...`. */
   apiPath: string;
-}): Promise<boolean> {
+  method: string;
+  headers?: Record<string, string>;
+  body?: Buffer | string;
+  signal?: AbortSignal;
+}): Promise<{ response: Response; target: URL } | undefined> {
   const store = args.profiles.forProject(args.projectId).remoteProjects;
   const inspected = store.inspect(args.projectId);
-  if (!inspected) return false;
-  if (!inspected.credentials) {
-    await args.reply
-      .status(401)
-      .send({ error: "Sign in to this project's server to continue" });
-    return true;
-  }
+  if (!inspected) return undefined;
+  if (!inspected.credentials) throw new RemoteSignInRequiredError();
   const link = inspected.link;
   const upstreamPath = args.apiPath.replace(
     `/projects/${args.projectId}`,
@@ -39,6 +56,138 @@ export async function forwardRemoteApi(args: {
         `project:${link.remoteProjectId}:`,
       ),
     );
+  const send = async (forceRefresh = false) => {
+    const token = await store.accessToken(args.projectId, {
+      forceRefresh,
+      refresh: (credentials) => refreshRemoteCredentials({ credentials }),
+    });
+    return fetch(target, {
+      method: args.method,
+      headers: {
+        // This computer's own API credential never leaves it.
+        ...Object.fromEntries(
+          Object.entries(args.headers ?? {}).filter(
+            ([name]) => name.toLowerCase() !== DESKTOP_API_TOKEN_HEADER,
+          ),
+        ),
+        authorization: `Bearer ${token}`,
+        "x-catamorphic-runner": link.connectionId,
+      },
+      body: args.body,
+      redirect: "manual",
+      ...(args.signal ? { signal: args.signal } : {}),
+    });
+  };
+  let response = await send();
+  if (response.status === 401) {
+    await response.body?.cancel();
+    response = await send(true);
+  }
+  return { response, target };
+}
+
+/**
+ * JSON requests to a remote chat's terminals on its project's server
+ * (ADR 0209), or undefined when the project has no server.
+ */
+export function remoteTerminalRequest(args: {
+  profiles: RemoteProjectProfiles;
+  projectId: string;
+  sessionId: string;
+}): RemoteTerminalRequest | undefined {
+  const linked = args.profiles
+    .forProject(args.projectId)
+    .remoteProjects.inspect(args.projectId);
+  if (!linked) return undefined;
+  return (request) =>
+    remoteJson({
+      profiles: args.profiles,
+      projectId: args.projectId,
+      apiPath: `/projects/${args.projectId}/agent/sessions/${args.sessionId}/terminals${request.path}`,
+      method: request.method,
+      body: request.body,
+      ...(request.signal ? { signal: request.signal } : {}),
+    });
+}
+
+/**
+ * JSON requests to the member's own machines on a linked project's server
+ * (ADR 0213). A project without a server answers 404, as an older server
+ * without the routes does.
+ */
+export function remoteMachinesRequest(args: {
+  profiles: RemoteProjectProfiles;
+  projectId: string;
+}): RemoteMachinesRequest {
+  return (request) =>
+    remoteJson({
+      profiles: args.profiles,
+      projectId: args.projectId,
+      apiPath: `/work/me/machines${request.path}`,
+      method: request.method,
+    });
+}
+
+/** One JSON request to a linked project's server as its member. */
+async function remoteJson(args: {
+  profiles: RemoteProjectProfiles;
+  projectId: string;
+  apiPath: string;
+  method: string;
+  body?: unknown;
+  signal?: AbortSignal;
+}): Promise<{ status: number; body: unknown }> {
+  const sent = await remoteProjectFetch({
+    profiles: args.profiles,
+    projectId: args.projectId,
+    apiPath: args.apiPath,
+    method: args.method,
+    ...(args.body === undefined
+      ? {}
+      : {
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(args.body),
+        }),
+    ...(args.signal ? { signal: args.signal } : {}),
+  });
+  if (!sent)
+    return {
+      status: 404,
+      body: { error: "This project is no longer linked to its server." },
+    };
+  return {
+    status: sent.response.status,
+    body: jsonBody(await sent.response.text()),
+  };
+}
+
+function jsonBody(text: string): unknown {
+  if (!text) return null;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return { error: text.slice(0, 500) };
+  }
+}
+
+/** Desktop transport only. The remote resolves identity and enforces policy. */
+export async function forwardRemoteApi(args: {
+  request: FastifyRequest;
+  reply: FastifyReply;
+  profiles: RemoteProjectProfiles;
+  projectId: string;
+  apiPath: string;
+}): Promise<boolean> {
+  const store = args.profiles.forProject(args.projectId).remoteProjects;
+  const inspected = store.inspect(args.projectId);
+  if (!inspected) return false;
+  if (!inspected.credentials) {
+    await args.reply
+      .status(401)
+      .send({ error: "Sign in to this project's server to continue" });
+    return true;
+  }
+  const link = inspected.link;
   const body = args.request.body;
   const serialized =
     body === undefined
@@ -54,33 +203,24 @@ export async function forwardRemoteApi(args: {
   };
   args.reply.raw.once("close", disconnect);
   try {
-    const send = async (forceRefresh = false) => {
-      const token = await store.accessToken(args.projectId, {
-        forceRefresh,
-        refresh: (credentials) => refreshRemoteCredentials({ credentials }),
-      });
-      return fetch(target, {
-        method: args.request.method,
-        headers: {
-          authorization: `Bearer ${token}`,
-          "x-catamorphic-runner": link.connectionId,
-          ...(args.request.headers["content-type"]
-            ? { "content-type": args.request.headers["content-type"] }
-            : {}),
-          ...(args.request.headers.accept
-            ? { accept: args.request.headers.accept }
-            : {}),
-        },
-        body: serialized,
-        redirect: "manual",
-        signal: controller.signal,
-      });
-    };
-    let response = await send();
-    if (response.status === 401) {
-      await response.body?.cancel();
-      response = await send(true);
-    }
+    const sent = await remoteProjectFetch({
+      profiles: args.profiles,
+      projectId: args.projectId,
+      apiPath: args.apiPath,
+      method: args.request.method,
+      headers: {
+        ...(args.request.headers["content-type"]
+          ? { "content-type": args.request.headers["content-type"] }
+          : {}),
+        ...(args.request.headers.accept
+          ? { accept: args.request.headers.accept }
+          : {}),
+      },
+      ...(serialized === undefined ? {} : { body: serialized }),
+      signal: controller.signal,
+    });
+    if (!sent) return false;
+    const { response, target } = sent;
     args.reply.status(response.status);
     for (const key of [
       "content-type",

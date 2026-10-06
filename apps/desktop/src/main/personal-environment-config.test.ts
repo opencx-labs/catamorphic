@@ -8,6 +8,7 @@ import {
   PERSONAL_ENVIRONMENT_PATH,
   PERSONAL_FILE_MAX_BYTES,
   PERSONAL_FILES_MAX,
+  PERSONAL_SETUP_MAX_LENGTH,
   parsePersonalEnvironmentConfig,
   personalFilePathProblem,
   projectRelativePath,
@@ -39,6 +40,32 @@ describe("parsePersonalEnvironmentConfig", () => {
       ok: true,
       config: { files: [".env", "apps/api/.env.local"] },
     });
+  });
+
+  it("reads the member's own setup command, and none when blank", () => {
+    expect(
+      parsePersonalEnvironmentConfig(
+        JSON.stringify({ files: [".env"], setup: "mise install" }),
+      ),
+    ).toEqual({
+      ok: true,
+      config: { files: [".env"], setup: "mise install" },
+    });
+    expect(
+      parsePersonalEnvironmentConfig(JSON.stringify({ setup: "  " })),
+    ).toEqual({ ok: true, config: { files: [] } });
+    for (const setup of [["mise install"], 1])
+      expect(parsePersonalEnvironmentConfig(JSON.stringify({ setup }))).toEqual(
+        {
+          ok: false,
+          error: expect.stringContaining('"setup" must be a shell command'),
+        },
+      );
+    expect(
+      parsePersonalEnvironmentConfig(
+        JSON.stringify({ setup: "x".repeat(PERSONAL_SETUP_MAX_LENGTH + 1) }),
+      ),
+    ).toEqual({ ok: false, error: expect.stringContaining("longer than") });
   });
 
   it("defaults to no files when the key is absent", () => {
@@ -125,6 +152,21 @@ describe("config file", () => {
     const present = await readPersonalEnvironmentConfig({ root });
     expect(present.exists).toBe(true);
     expect(present.fingerprint).not.toBe("absent");
+  });
+
+  it("keeps the setup command when files are added", async () => {
+    const root = project();
+    const file = path.join(root, PERSONAL_ENVIRONMENT_PATH);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify({ setup: "mise install" }));
+    await updatePersonalEnvironmentConfig({
+      root,
+      update: (config) => ({ ...config, files: [".env"] }),
+    });
+    expect(JSON.parse(fs.readFileSync(file, "utf8"))).toEqual({
+      files: [".env"],
+      setup: "mise install",
+    });
   });
 
   it("never overwrites a broken file", async () => {

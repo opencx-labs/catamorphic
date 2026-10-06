@@ -80,6 +80,11 @@ import type {
   PrDetails,
 } from "../../shared/pr-details.js";
 import type {
+  CodexSignIn,
+  CodexSignInStatus,
+  RemoteMachine,
+} from "../../shared/remote-machines.js";
+import type {
   ScreenShareAnswer,
   ScreenShareKind,
   ScreenShareRequest,
@@ -582,6 +587,25 @@ export interface RemoteProjectMember {
   roles: string[];
 }
 
+/**
+ * One project secret on the server (ADR 0206): where it is declared, which
+ * Environments receive it, and which values exist. Never a value.
+ */
+export interface RemoteProjectSecret {
+  name: string;
+  label?: string;
+  description?: string;
+  required: boolean;
+  source: "project" | "plugin";
+  environments: string[];
+  shared: boolean;
+  updatedAt: string | null;
+  setBy: string | null;
+  own: boolean;
+  ownUpdatedAt: string | null;
+  members: Array<{ member: string; updatedAt: string; setBy: string | null }>;
+}
+
 export interface RemoteProjectAccessRequest {
   id: string;
   externalUserId: string;
@@ -947,6 +971,12 @@ export interface CatamorphicDesktopApi {
     credentialEpoch: string;
   } | null>;
   remoteStatus: (projectId: string) => Promise<RemoteProjectStatus | null>;
+  /** A remote chat's preview on its own loopback address (ADR 0209). */
+  remotePreviewOpen: (input: {
+    projectId: string;
+    sessionId: string;
+    port: number;
+  }) => Promise<{ url: string }>;
   remoteMembers: (projectId: string) => Promise<{
     roles: RemoteProjectRole[];
     members: RemoteProjectMember[];
@@ -972,6 +1002,53 @@ export interface CatamorphicDesktopApi {
     connectLinks: string[];
     webLinks: string[];
   }>;
+  /**
+   * The project's secrets (ADR 0206), and its members when `members` asks
+   * for them (needs `memberships:read`, else null).
+   */
+  remoteSecrets: (input: { projectId: string; members: boolean }) => Promise<{
+    secrets: RemoteProjectSecret[];
+    members: RemoteProjectMember[] | null;
+  }>;
+  /** Set a secret's shared value, or `member`'s own (`me` for yours). */
+  remoteSecretSet: (input: {
+    projectId: string;
+    name: string;
+    value: string;
+    member?: string;
+  }) => Promise<void>;
+  /** Clear a secret's shared value, or `member`'s own. */
+  remoteSecretDelete: (input: {
+    projectId: string;
+    name: string;
+    member?: string;
+  }) => Promise<void>;
+  /**
+   * The member's own machines on the project's server (ADR 0213), or null
+   * when the server has no such route.
+   */
+  remoteMachines: (projectId: string) => Promise<RemoteMachine[] | null>;
+  /** Start Codex's device code sign-in on one of those machines. */
+  remoteCodexSignIn: (input: {
+    projectId: string;
+    machineId: string;
+  }) => Promise<CodexSignIn>;
+  remoteCodexSignInStatus: (input: {
+    projectId: string;
+    machineId: string;
+    attempt: string;
+  }) => Promise<CodexSignInStatus>;
+  remoteCodexSignInCancel: (input: {
+    projectId: string;
+    machineId: string;
+    attempt: string;
+  }) => Promise<void>;
+  remoteCodexSignOut: (input: {
+    projectId: string;
+    machineId: string;
+  }) => Promise<{ signedOut: boolean }>;
+  /** Opens an https sign-in page in a browser tab of this window. */
+  openSignInLink: (url: string) => Promise<void>;
   /** Organization service connections; administrators only (ADR 0172). */
   remoteServiceConnections: (projectId: string) => Promise<{
     providers: RemoteConnectionProvider[];
@@ -1365,6 +1442,8 @@ export interface CatamorphicDesktopApi {
     projectId?: string;
     cols?: number;
     rows?: number;
+    /** A shell in this remote chat's workspace (ADR 0209). */
+    remoteChat?: { sessionId: string };
   }) => Promise<{ sessionId: string; cwd: string }>;
   terminalWrite: (sessionId: string, data: string) => Promise<void>;
   terminalResize: (
@@ -1390,7 +1469,12 @@ export interface CatamorphicDesktopApi {
     listener: (payload: { sessionId: string; data: string }) => void,
   ) => () => void;
   onTerminalExit: (
-    listener: (payload: { sessionId: string; exitCode: number }) => void,
+    listener: (payload: {
+      sessionId: string;
+      exitCode: number;
+      /** Why it ended, when its shell did not exit: shown, not closed. */
+      message?: string;
+    }) => void,
   ) => () => void;
 
   onBridgeRequest: (

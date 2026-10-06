@@ -1463,6 +1463,11 @@ export interface paths {
                                 bytes: number;
                                 updatedAt: string;
                             }[];
+                            /** @description The caller's own setup command, when they sent one */
+                            setup: {
+                                command: string;
+                                updatedAt: string;
+                            } | null;
                         };
                     };
                 };
@@ -1510,7 +1515,7 @@ export interface paths {
                 };
                 cookie?: never;
             };
-            /** @description The caller's personal files for this project; replaces what the server holds */
+            /** @description The caller's personal files and setup for this project; replaces what the server holds */
             requestBody: {
                 content: {
                     "application/json": {
@@ -1521,6 +1526,8 @@ export interface paths {
                             /** @description The file's bytes, base64 */
                             content: string;
                         }[];
+                        /** @description The caller's own setup command, run after the Environment's in each new workspace of their own chats (ADR 0208); absent or blank for none */
+                        setup?: string;
                     };
                 };
             };
@@ -1540,6 +1547,11 @@ export interface paths {
                                 bytes: number;
                                 updatedAt: string;
                             }[];
+                            /** @description The caller's own setup command, when they sent one */
+                            setup: {
+                                command: string;
+                                updatedAt: string;
+                            } | null;
                         };
                     };
                 };
@@ -4831,6 +4843,7 @@ export interface paths {
                             payloadJsonSchema: unknown;
                             configJsonSchema: unknown;
                             outputJsonSchema?: unknown;
+                            requiredPermissions?: string[];
                         }[];
                     };
                 };
@@ -9971,7 +9984,8 @@ export interface paths {
                         /** @enum {string} */
                         isolation?: "none" | "process" | "sandbox";
                         processes?: boolean;
-                        capabilities?: ("images" | "images.build" | "containers" | "network.policy")[];
+                        capabilities?: ("images" | "images.build" | "containers" | "network.policy" | "volumes")[];
+                        publicKey?: string;
                     };
                 };
             };
@@ -9987,6 +10001,17 @@ export interface paths {
                             id: string;
                             /** Format: uuid */
                             token: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
                         };
                     };
                 };
@@ -10071,134 +10096,14 @@ export interface paths {
                             /** Format: uuid */
                             id: string;
                             operation: {
-                                /** @enum {string} */
-                                kind: "create";
-                                options: {
-                                    resources?: {
-                                        cpuMillis?: number;
-                                        memoryMb?: number;
-                                        storageMb?: number;
-                                        gpu?: boolean;
-                                    };
-                                    snapshotName?: string;
-                                    image?: {
-                                        /** @enum {string} */
-                                        kind: "oci";
-                                        reference: string;
-                                    } | {
-                                        /** @enum {string} */
-                                        kind: "dockerfile";
-                                        path: string;
-                                        content: string;
-                                        digest: string;
-                                    };
-                                    containers?: boolean;
-                                    egress?: {
-                                        /** @enum {string} */
-                                        mode: "open";
-                                    } | {
-                                        /** @enum {string} */
-                                        mode: "allowlist";
-                                        readonly allow: string[];
-                                    };
-                                    language?: string;
-                                    envVars?: {
-                                        [key: string]: string;
-                                    };
-                                    autoStopInterval?: number;
-                                    labels?: {
-                                        [key: string]: string;
-                                    };
-                                    readonly signIns?: {
-                                        /** @enum {string} */
-                                        harness: "claude-code" | "codex";
-                                        member: string;
-                                    }[];
+                                kind: string;
+                                sealed: {
+                                    /** @enum {number} */
+                                    v: 1;
+                                    epk: string;
+                                    nonce: string;
+                                    ct: string;
                                 };
-                            } | {
-                                /** @enum {string} */
-                                kind: "start" | "stop" | "destroy" | "status";
-                                sandboxId: string;
-                            } | {
-                                /** @enum {string} */
-                                kind: "execute";
-                                sandboxId: string;
-                                command: string;
-                                options?: {
-                                    cwd?: string;
-                                    timeout?: number;
-                                    env?: {
-                                        [key: string]: string;
-                                    };
-                                };
-                            } | {
-                                /** @enum {string} */
-                                kind: "upload";
-                                sandboxId: string;
-                                files: {
-                                    [key: string]: string;
-                                };
-                                basePath: string;
-                            } | {
-                                /** @enum {string} */
-                                kind: "download";
-                                sandboxId: string;
-                                path: string;
-                            } | {
-                                /** @enum {string} */
-                                kind: "clone";
-                                sandboxId: string;
-                                url: string;
-                                path: string;
-                                options?: {
-                                    branch?: string;
-                                    commitId?: string;
-                                    username?: string;
-                                    password?: string;
-                                };
-                            } | {
-                                /** @enum {string} */
-                                kind: "checkout";
-                                sandboxId: string;
-                                path: string;
-                                ref: string;
-                            } | {
-                                /** @enum {string} */
-                                kind: "process.start";
-                                sandboxId: string;
-                                command: string;
-                                cwd?: string;
-                                env?: {
-                                    [key: string]: string;
-                                };
-                                name?: string;
-                                stdin?: boolean;
-                            } | {
-                                /** @enum {string} */
-                                kind: "process.write";
-                                sandboxId: string;
-                                processId: string;
-                                data: string;
-                                end?: boolean;
-                            } | {
-                                /** @enum {string} */
-                                kind: "process.read";
-                                sandboxId: string;
-                                processId: string;
-                                cursor?: number;
-                                maxBytes?: number;
-                                waitMs?: number;
-                            } | {
-                                /** @enum {string} */
-                                kind: "process.signal";
-                                sandboxId: string;
-                                processId: string;
-                                /** @enum {string} */
-                                signal: "SIGINT" | "SIGTERM" | "SIGKILL" | "SIGHUP";
-                            } | {
-                                /** @enum {string} */
-                                kind: "process.list";
-                                sandboxId: string;
                             };
                         }[];
                     };
@@ -10690,6 +10595,480 @@ export interface paths {
             };
         };
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{projectId}/agent/sessions/{sessionId}/terminals": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    projectId: string;
+                    sessionId: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        /** @default 80 */
+                        cols?: number;
+                        /** @default 24 */
+                        rows?: number;
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            terminalId: string;
+                            pty: boolean;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            code: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{projectId}/agent/sessions/{sessionId}/terminals/{terminalId}/output": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: {
+            parameters: {
+                query?: {
+                    cursor?: number;
+                    waitMs?: number;
+                };
+                header?: never;
+                path: {
+                    projectId: string;
+                    sessionId: string;
+                    terminalId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            data: string;
+                            cursor: number;
+                            nextCursor: number;
+                            more: boolean;
+                            exited: boolean;
+                            exitCode: number | null;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            code: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{projectId}/agent/sessions/{sessionId}/terminals/{terminalId}/input": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    projectId: string;
+                    sessionId: string;
+                    terminalId: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        data: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @enum {boolean} */
+                            ok: true;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            code: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                413: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{projectId}/agent/sessions/{sessionId}/terminals/{terminalId}/resize": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    projectId: string;
+                    sessionId: string;
+                    terminalId: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        cols: number;
+                        rows: number;
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @enum {boolean} */
+                            ok: true;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            code: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{projectId}/agent/sessions/{sessionId}/terminals/{terminalId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    projectId: string;
+                    sessionId: string;
+                    terminalId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @enum {boolean} */
+                            ok: true;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            code: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
         options?: never;
         head?: never;
         patch?: never;
@@ -16052,14 +16431,25 @@ export interface paths {
                     content: {
                         "application/json": {
                             name: string;
-                            hasValue: boolean;
-                            /** Format: date-time */
-                            updatedAt: string | null;
                             label?: string;
                             description?: string;
                             required: boolean;
                             /** @enum {string} */
                             source: "project" | "plugin";
+                            environments: string[];
+                            shared: boolean;
+                            /** Format: date-time */
+                            updatedAt: string | null;
+                            setBy: string | null;
+                            own: boolean;
+                            /** Format: date-time */
+                            ownUpdatedAt: string | null;
+                            members: {
+                                member: string;
+                                /** Format: date-time */
+                                updatedAt: string;
+                                setBy: string | null;
+                            }[];
                         }[];
                     };
                 };
@@ -16118,14 +16508,25 @@ export interface paths {
                     content: {
                         "application/json": {
                             name: string;
-                            hasValue: boolean;
-                            /** Format: date-time */
-                            updatedAt: string | null;
                             label?: string;
                             description?: string;
                             required: boolean;
                             /** @enum {string} */
                             source: "project" | "plugin";
+                            environments: string[];
+                            shared: boolean;
+                            /** Format: date-time */
+                            updatedAt: string | null;
+                            setBy: string | null;
+                            own: boolean;
+                            /** Format: date-time */
+                            ownUpdatedAt: string | null;
+                            members: {
+                                member: string;
+                                /** Format: date-time */
+                                updatedAt: string;
+                                setBy: string | null;
+                            }[];
                         };
                     };
                 };
@@ -16174,6 +16575,136 @@ export interface paths {
                     content: {
                         "application/json": {
                             deleted: boolean;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/projects/{projectId}/secrets/{name}/members/{member}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    projectId: string;
+                    name: string;
+                    member: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        value: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            name: string;
+                            member: string | null;
+                            /** Format: date-time */
+                            updatedAt: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        post?: never;
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    projectId: string;
+                    name: string;
+                    member: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            deleted: boolean;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
                         };
                     };
                 };

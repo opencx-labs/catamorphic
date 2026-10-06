@@ -4,66 +4,315 @@ import path from "node:path";
 import { WorkerNodesService } from "@catamorphic/core";
 import { expect, it } from "vitest";
 import {
+  agentsReachMachine,
+  type ExecutionProbes,
   executionSettingsFromEnv,
   machineCapabilities,
+  resolveExecutionSettings,
   workExecution,
 } from "./execution-config.js";
 import { createWorkServer, SERVER_TENANT_ID } from "./server.js";
 import { say, testServerOptions } from "./test-support.js";
+
+const full = { hostSockets: true, netRaw: true };
+const local = { WORK_SANDBOX: "local-process" } as const;
+
+/** Probes for a machine with nothing but what the test says. */
+const machine = (args: {
+  kvm?: boolean;
+  docker?: boolean;
+  runsc?: { hostSockets: boolean; netRaw: boolean };
+}): ExecutionProbes => ({
+  microsandbox: () =>
+    args.kvm
+      ? { ok: true }
+      : {
+          ok: false,
+          reason:
+            "This machine has no usable /dev/kvm, so microsandbox cannot run here. Use WORK_SANDBOX=container (gVisor) or auto.",
+        },
+  container: async () =>
+    args.docker
+      ? {
+          ok: true,
+          ...(args.runsc
+            ? { runsc: { kind: "runsc", name: "runsc", ...args.runsc } }
+            : {}),
+          runc: { name: "runc" },
+        }
+      : {
+          ok: false,
+          reason: "No Docker daemon answers at /var/run/docker.sock",
+        },
+});
 
 it("rejects invalid budgets and subprocess resource guarantees before boot", () => {
   expect(() => executionSettingsFromEnv({ WORK_MAX_WORKSPACES: "0" })).toThrow(
     "positive integer",
   );
   expect(() =>
-    executionSettingsFromEnv({ WORK_CAPACITY_MEMORY_MB: "1024" }),
-  ).toThrow("require WORK_SANDBOX");
+    executionSettingsFromEnv({ ...local, WORK_CAPACITY_MEMORY_MB: "1024" }),
+  ).toThrow("require WORK_SANDBOX=microsandbox, container, or auto");
   expect(() =>
     executionSettingsFromEnv({
       WORK_SANDBOX: "microsandbox",
       WORK_WORKSPACE_CPU_MILLIS: "500",
     }),
   ).toThrow("whole cores");
+  expect(() => executionSettingsFromEnv({ WORK_SANDBOX: "docker" })).toThrow(
+    "auto, microsandbox, container, or local-process",
+  );
+  expect(() =>
+    executionSettingsFromEnv({ ...local, WORK_CONTAINER_RUNTIME: "runsc" }),
+  ).toThrow("apply to WORK_SANDBOX=container or auto");
+  expect(() =>
+    executionSettingsFromEnv({ WORK_CONTAINER_RUNTIME: "kata" }),
+  ).toThrow("runsc or runc");
+  expect(() =>
+    executionSettingsFromEnv({ WORK_VOLUME_RETENTION_DAYS: "0" }),
+  ).toThrow("WORK_VOLUME_RETENTION_DAYS must be a positive integer");
+  expect(() => executionSettingsFromEnv({ DOCKER_HOST: "ssh://x" })).toThrow(
+    "not supported",
+  );
 });
 
-it("configures images, containers and unenforced egress per backend (ADR 0176)", () => {
-  const micro = executionSettingsFromEnv({
-    WORK_SANDBOX: "microsandbox",
-    WORK_IMAGE_BUILDER: "podman",
+it("defaults to auto with budgets an isolated backend enforces (ADR 0204)", () => {
+  const settings = executionSettingsFromEnv({
+    WORK_CAPACITY_CPU_MILLIS: "4000",
+    WORK_WORKSPACE_CPU_MILLIS: "500",
+    WORK_VOLUME_RETENTION_DAYS: "7",
+    DOCKER_HOST: "unix:///run/docker.sock",
+    WORK_CONTAINER_PRIVILEGED: "1",
+  });
+  expect(settings).toMatchObject({
+    backend: "auto",
+    capacity: { cpuMillis: 4000 },
+    defaults: { cpuMillis: 500, memoryMb: 1024 },
+    explicitResources: true,
+    volumeRetentionDays: 7,
+    dockerHost: "unix:///run/docker.sock",
+    privilegedContainers: true,
+  });
+  expect(executionSettingsFromEnv({}).volumeRetentionDays).toBe(30);
+});
+
+it("auto takes microsandbox, then gVisor, then runc, then local processes", async () => {
+  const settings = executionSettingsFromEnv({ PATH: "/usr/bin" });
+  const resolve = (probes: ExecutionProbes, env = {}) =>
+    resolveExecutionSettings({
+      settings: { ...settings, ...env },
+      probes,
+    });
+  expect(
+    await resolve(machine({ kvm: true, docker: true, runsc: full })),
+  ).toMatchObject({
+    backend: "microsandbox",
+    reason: "auto: microsandbox can run on this machine",
+  });
+  const gvisor = await resolve(machine({ docker: true, runsc: full }));
+  expect(gvisor).toMatchObject({
+    backend: "container",
+    containerRuntime: { kind: "runsc", name: "runsc" },
+    capacity: { cpuMillis: expect.any(Number) },
+  });
+  expect(gvisor.reason).toBe(
+    "auto: This machine has no usable /dev/kvm, so microsandbox cannot run here; containers run under gVisor (runsc)",
+  );
+  const limited = await resolve(
+    machine({ docker: true, runsc: { hostSockets: false, netRaw: false } }),
+  );
+  expect(limited.reason).toContain("lacks --host-uds=open");
+  expect(limited.reason).toContain("lacks --net-raw");
+  const runc = await resolve(machine({ docker: true }));
+  expect(runc).toMatchObject({
+    backend: "container",
+    containerRuntime: { kind: "runc", name: "runc" },
+  });
+  expect(runc.reason).toContain("no runsc runtime");
+  // An operator who asks for runc gets it even beside gVisor.
+  expect(
+    await resolve(machine({ docker: true, runsc: full }), {
+      containerRuntime: "runc",
+    }),
+  ).toMatchObject({ containerRuntime: { kind: "runc" } });
+  const none = await resolve(machine({}));
+  expect(none).toMatchObject({
+    backend: "local-process",
+    capacity: { workspaces: 8 },
+    defaults: {},
+  });
+  expect(none.capacity.cpuMillis).toBeUndefined();
+  expect(none.reason).toContain("No Docker daemon answers");
+  // Budgets the fallback could not enforce stop the machine instead.
+  await expect(
+    resolveExecutionSettings({
+      settings: executionSettingsFromEnv({ WORK_CAPACITY_MEMORY_MB: "2048" }),
+      probes: machine({}),
+    }),
+  ).rejects.toThrow("CPU and memory limits need an isolated sandbox backend");
+});
+
+it("treats privileged runc containers as able to reach the machine (ADR 0204)", async () => {
+  const resolved = (env: Record<string, string>, probes: ExecutionProbes) =>
+    resolveExecutionSettings({
+      settings: executionSettingsFromEnv(env),
+      probes,
+    });
+  const dataDir = path.join(os.tmpdir(), "catamorphic-exec-config");
+  const privileged = await resolved(
+    { WORK_SANDBOX: "container", WORK_CONTAINER_PRIVILEGED: "1" },
+    machine({ docker: true }),
+  );
+  expect(agentsReachMachine(privileged)).toBe(true);
+  // It offers containers, and no egress policy a privileged one could leave.
+  expect(
+    workExecution({ settings: privileged, dataDir }).provider.capabilities,
+  ).toEqual(["images", "images.build", "containers", "volumes"]);
+  expect(
+    agentsReachMachine(
+      await resolved({ WORK_SANDBOX: "container" }, machine({ docker: true })),
+    ),
+  ).toBe(false);
+  // gVisor needs no privilege, whatever the operator accepted.
+  expect(
+    agentsReachMachine(
+      await resolved(
+        { WORK_SANDBOX: "container", WORK_CONTAINER_PRIVILEGED: "1" },
+        machine({ docker: true, runsc: full }),
+      ),
+    ),
+  ).toBe(false);
+  expect(agentsReachMachine(await resolved(local, machine({})))).toBe(true);
+  expect(
+    executionSettingsFromEnv({ WORK_SANDBOX_PIDS_LIMIT: "512" }).pidsLimit,
+  ).toBe(512);
+  expect(() =>
+    executionSettingsFromEnv({ ...local, WORK_SANDBOX_PIDS_LIMIT: "512" }),
+  ).toThrow("apply to WORK_SANDBOX=container or auto");
+});
+
+it("an explicit backend that cannot run refuses with the fix", async () => {
+  await expect(
+    resolveExecutionSettings({
+      settings: executionSettingsFromEnv({ WORK_SANDBOX: "microsandbox" }),
+      probes: machine({ docker: true, runsc: full }),
+    }),
+  ).rejects.toThrow(
+    "This machine has no usable /dev/kvm, so microsandbox cannot run here. Use WORK_SANDBOX=container (gVisor) or auto.",
+  );
+  await expect(
+    resolveExecutionSettings({
+      settings: executionSettingsFromEnv({ WORK_SANDBOX: "container" }),
+      probes: machine({}),
+    }),
+  ).rejects.toThrow("so the container backend cannot run here");
+  await expect(
+    resolveExecutionSettings({
+      settings: executionSettingsFromEnv({
+        WORK_SANDBOX: "container",
+        WORK_CONTAINER_RUNTIME: "runsc",
+      }),
+      probes: machine({ docker: true }),
+    }),
+  ).rejects.toThrow("no runsc (gVisor) runtime");
+  expect(
+    await resolveExecutionSettings({
+      settings: executionSettingsFromEnv({ WORK_SANDBOX: "local-process" }),
+      probes: machine({}),
+    }),
+  ).toMatchObject({
+    backend: "local-process",
+    reason: "WORK_SANDBOX=local-process",
+  });
+});
+
+it("configures images, containers and unenforced egress per backend (ADR 0176)", async () => {
+  const micro = await resolveExecutionSettings({
+    settings: executionSettingsFromEnv({
+      WORK_SANDBOX: "microsandbox",
+      WORK_IMAGE_BUILDER: "podman",
+    }),
+    probes: machine({ kvm: true }),
   });
   expect(micro).toMatchObject({
     images: { builder: "podman" },
     containers: true,
   });
+  const dataDir = path.join(os.tmpdir(), "catamorphic-exec-config");
   expect(
-    workExecution({ settings: micro, dataDir: os.tmpdir() }).provider
-      .capabilities,
-  ).toEqual(["images", "network.policy", "containers", "images.build"]);
+    workExecution({ settings: micro, dataDir }).provider.capabilities,
+  ).toEqual([
+    "images",
+    "network.policy",
+    "containers",
+    "images.build",
+    "volumes",
+  ]);
   expect(
     executionSettingsFromEnv({
       WORK_SANDBOX: "microsandbox",
       WORK_SANDBOX_CONTAINERS: "0",
     }).containers,
   ).toBe(false);
-  const local = executionSettingsFromEnv({
-    WORK_DOCKER_SOCKET: "/var/run/docker.sock",
-    WORK_UNENFORCED_EGRESS: "accept",
+  const gvisor = workExecution({
+    settings: await resolveExecutionSettings({
+      settings: executionSettingsFromEnv({ WORK_SANDBOX: "container" }),
+      probes: machine({ docker: true, runsc: full }),
+    }),
+    dataDir,
+  });
+  expect(gvisor.provider.capabilities).toEqual([
+    "images",
+    "images.build",
+    "network.policy",
+    "containers",
+    "volumes",
+  ]);
+  expect(gvisor.isolation).toBe("sandbox");
+  expect(gvisor.backend).toMatchObject({ kind: "container", runtime: "runsc" });
+  const runc = workExecution({
+    settings: await resolveExecutionSettings({
+      settings: executionSettingsFromEnv({ WORK_SANDBOX: "container" }),
+      probes: machine({ docker: true }),
+    }),
+    dataDir,
+  });
+  // Nested Docker under runc only with the operator's acceptance.
+  expect(runc.provider.capabilities).toEqual([
+    "images",
+    "images.build",
+    "network.policy",
+    "volumes",
+  ]);
+  expect(runc.isolation).toBe("process");
+  const localSettings = await resolveExecutionSettings({
+    settings: executionSettingsFromEnv({
+      ...local,
+      WORK_DOCKER_SOCKET: "/var/run/docker.sock",
+      WORK_UNENFORCED_EGRESS: "accept",
+    }),
   });
   expect(
-    workExecution({
-      settings: local,
-      dataDir: path.join(os.tmpdir(), "catamorphic-exec-config"),
-    }).provider.capabilities,
-  ).toEqual(["containers", "network.policy"]);
-  // A plain local-process machine offers none of them.
+    workExecution({ settings: localSettings, dataDir }).provider.capabilities,
+  ).toEqual(["containers", "network.policy", "volumes"]);
+  // A plain local-process machine offers only volumes under ~.
   expect(
     workExecution({
-      settings: executionSettingsFromEnv({}),
-      dataDir: path.join(os.tmpdir(), "catamorphic-exec-config"),
+      settings: await resolveExecutionSettings({
+        settings: executionSettingsFromEnv(local),
+      }),
+      dataDir,
     }).provider.capabilities,
-  ).toEqual([]);
+  ).toEqual(["volumes"]);
   for (const [env, message] of [
-    [{ WORK_IMAGE_BUILDER: "docker" }, "requires WORK_SANDBOX=microsandbox"],
+    [
+      { ...local, WORK_IMAGE_BUILDER: "docker" },
+      "requires WORK_SANDBOX=microsandbox",
+    ],
+    [
+      { WORK_SANDBOX: "container", WORK_IMAGE_BUILDER: "docker" },
+      "builds images with its own Docker daemon",
+    ],
     [
       { WORK_SANDBOX: "microsandbox", WORK_IMAGE_BUILDER: "kaniko" },
       "docker or podman",
@@ -71,6 +320,10 @@ it("configures images, containers and unenforced egress per backend (ADR 0176)",
     [
       { WORK_SANDBOX: "microsandbox", WORK_DOCKER_SOCKET: "/x.sock" },
       "microsandbox runs Docker inside each VM",
+    ],
+    [
+      { WORK_SANDBOX: "container", WORK_DOCKER_SOCKET: "/x.sock" },
+      "set DOCKER_HOST",
     ],
     [
       { WORK_SANDBOX: "microsandbox", WORK_UNENFORCED_EGRESS: "accept" },
@@ -94,8 +347,13 @@ it("advertises accepted personal credentials and the harness CLIs on its path (A
     });
     // Not executable: not a CLI.
     await fs.writeFile(path.join(bin, "codex"), "", { mode: 0o644 });
-    const settings = executionSettingsFromEnv({
-      PATH: bin,
+    const resolved = (env: Record<string, string>, probes = machine({})) =>
+      resolveExecutionSettings({
+        settings: executionSettingsFromEnv({ PATH: bin, ...env }),
+        probes,
+      });
+    const settings = await resolved({
+      ...local,
       WORK_PERSONAL_CREDENTIALS: "accept",
     });
     expect(settings.acceptPersonalCredentials).toBe(true);
@@ -103,15 +361,35 @@ it("advertises accepted personal credentials and the harness CLIs on its path (A
       "credentials.personal",
       "harness.claude-code",
     ]);
-    expect(
-      machineCapabilities(executionSettingsFromEnv({ PATH: bin })),
-    ).toEqual(["harness.claude-code"]);
-    // A VM gets its CLIs from the Environment's image.
+    expect(machineCapabilities(await resolved(local))).toEqual([
+      "harness.claude-code",
+    ]);
+    // A VM or a gVisor container gets its CLIs from the Environment's image.
     expect(
       machineCapabilities(
-        executionSettingsFromEnv({ PATH: bin, WORK_SANDBOX: "microsandbox" }),
+        await resolved(
+          { WORK_SANDBOX: "microsandbox" },
+          machine({ kvm: true }),
+        ),
       ),
     ).toEqual([]);
+    expect(
+      machineCapabilities(
+        await resolved(
+          { WORK_SANDBOX: "container", WORK_PERSONAL_CREDENTIALS: "accept" },
+          machine({ docker: true, runsc: full }),
+        ),
+      ),
+    ).toEqual([]);
+    // runc containers are process isolation, as local processes are.
+    expect(
+      machineCapabilities(
+        await resolved(
+          { WORK_SANDBOX: "container", WORK_PERSONAL_CREDENTIALS: "accept" },
+          machine({ docker: true }),
+        ),
+      ),
+    ).toEqual(["credentials.personal"]);
   } finally {
     await fs.rm(bin, { recursive: true, force: true });
   }

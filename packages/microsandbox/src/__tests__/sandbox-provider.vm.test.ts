@@ -1,4 +1,7 @@
-import { dockerfileDigest } from "@catamorphic/sandbox";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { dockerfileDigest, volumeKey } from "@catamorphic/sandbox";
 import { describe, expect, it } from "vitest";
 import { dockerImageBuilder } from "../image-builder.js";
 import { MicrosandboxSandboxProvider } from "../sandbox-provider.js";
@@ -99,6 +102,64 @@ describe.skipIf(!enabled)("microsandbox Environments (ADR 0176)", () => {
       expect(denied.exitCode).not.toBe(0);
     } finally {
       await provider.destroySandbox(sandbox.id);
+    }
+  }, 600_000);
+
+  it("keeps volumes across sandboxes and sizes the root disk (ADR 0208)", async () => {
+    const stateDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "work-msb-"));
+    const provider = new MicrosandboxSandboxProvider({
+      namePrefix: "test-volumes",
+      // The bash image: commands run with bash, and it needs no setup.
+      image: "bash",
+      setupCommand: "",
+      stateDirectory,
+    });
+    expect(provider.capabilities).toContain("volumes");
+    const cache = volumeKey({ projectId: "test", owner: "m", name: "cache" });
+    const db = volumeKey({ projectId: "test", owner: "m", name: "db" });
+    const ids: string[] = [];
+    try {
+      const first = await provider.createSandbox({
+        volumes: [
+          { key: cache, path: "/data/cache" },
+          { key: db, path: "/data/db", exclusive: true, sizeMb: 256 },
+          {
+            key: "scratch-0123456789abcdef01234567",
+            path: "/scratch",
+            temporary: true,
+          },
+        ],
+        resources: { storageMb: 2048 },
+      });
+      ids.push(first.id);
+      const sized = await provider.executeCommand(
+        first.id,
+        "echo kept > /data/cache/file && echo db > /data/db/file && df -m / | tail -1 | awk '{print $2}'",
+      );
+      expect(Number(sized.result.trim())).toBeGreaterThan(1500);
+      expect(Number(sized.result.trim())).toBeLessThanOrEqual(2048);
+      await provider.destroySandbox(first.id);
+      const second = await provider.createSandbox({
+        volumes: [
+          { key: cache, path: "/data/cache" },
+          { key: db, path: "/data/db", exclusive: true },
+        ],
+      });
+      ids.push(second.id);
+      const seen = await provider.executeCommand(
+        second.id,
+        "cat /data/cache/file /data/db/file",
+      );
+      expect(seen.result).toBe("kept\ndb\n");
+      expect(await provider.volumes?.prune({ unusedForMs: 0 })).toEqual([]);
+      await provider.destroySandbox(second.id);
+      expect(
+        (await provider.volumes?.prune({ unusedForMs: 0 }))?.sort(),
+      ).toEqual([cache, db].sort());
+    } finally {
+      for (const id of ids) await provider.destroySandbox(id).catch(() => {});
+      await provider.volumes?.removeAll().catch(() => {});
+      fs.rmSync(stateDirectory, { recursive: true, force: true });
     }
   }, 600_000);
 });

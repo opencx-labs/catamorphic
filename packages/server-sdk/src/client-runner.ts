@@ -1,5 +1,14 @@
-import { type RemoteOperation, RemoteOperationSchema } from "@catamorphic/core";
-import type { SandboxProvider } from "@catamorphic/sandbox";
+import type { KeyObject } from "node:crypto";
+import {
+  OPERATION_NOT_OPENED_ERROR,
+  openRemoteOperation,
+  type RemoteOperation,
+} from "@catamorphic/core";
+import {
+  redactUrlCredentials,
+  type SandboxProvider,
+  SealedOperationOpenError,
+} from "@catamorphic/sandbox";
 
 /**
  * The control plane ended this runner's session: its lease moved on, its
@@ -45,9 +54,10 @@ export class ResultRejectedError extends Error {
 export interface ClientRunnerTransport {
   renew(): Promise<void>;
   /**
-   * Take up to `max` operations, long-polling. A retry repeats `pollId`,
-   * and the control plane answers it with what that poll took, so an
-   * operation is never lost with a response.
+   * Take up to `max` operations, long-polling, each still sealed to this
+   * runner's key (ADR 0207). A retry repeats `pollId`, and the control plane
+   * answers it with what that poll took, so an operation is never lost with
+   * a response.
    */
   poll(args: {
     pollId: string;
@@ -84,6 +94,18 @@ function definite(error: unknown): boolean {
 class RunnerStoppedError extends Error {}
 
 /**
+ * How a runner opens what it receives (ADR 0207): its address in the queue
+ * (`node:<id>` for a worker, `client:<id>` for a member's runner) and its
+ * private keys, the current one first. A worker that rotated keeps its
+ * previous key, since operations sealed before the rotation may still
+ * arrive. Read for every operation.
+ */
+export interface ClientRunnerKeys {
+  executor: string;
+  privateKeys(): readonly (string | KeyObject)[];
+}
+
+/**
  * Runs only operations the remote authority admitted for this runner. A
  * member's desktop runner stops its sandboxes when the connection ends; a
  * remote worker (ADR 0164) passes `sandboxes` to keep ownership across
@@ -93,11 +115,13 @@ class RunnerStoppedError extends Error {}
  * failures retry the same call in place while the lease lasts, so a load
  * balancer's 502 or an instance restarting never costs running work its
  * executor (ADR 0187). An operation runs at most once; only its receipt is
- * ever retried.
+ * ever retried. Every operation arrives sealed to this runner's key, and one
+ * that does not open with `keys` fails without running (ADR 0207).
  */
 export function startClientRunner(args: {
   provider: SandboxProvider;
   transport: ClientRunnerTransport;
+  keys: ClientRunnerKeys;
   /** The session ended: {@link RunnerSessionEndedError} or a fault. */
   onError?: (error: unknown) => void;
   /** A transient failure the runner is riding out. */
@@ -108,6 +132,22 @@ export function startClientRunner(args: {
   maxSandboxes?: number;
   /** Operations run at once; 4 by default. */
   concurrency?: number;
+  /**
+   * Return this machine to its pool (ADR 0205): destroy every sandbox it
+   * holds and delete members' volumes and sign-ins. Only a pooled worker
+   * supplies it; a runner without it refuses the operation.
+   */
+  resetMachine?: () => Promise<void>;
+  /**
+   * A member's Codex sign-in on this machine (ADR 0213). Only a worker
+   * supplies it; a runner without it refuses the operation.
+   */
+  codexSignIn?: (
+    request: Extract<
+      RemoteOperation,
+      { kind: "machine.codexSignIn" }
+    >["request"],
+  ) => Promise<unknown>;
 }) {
   const stopping = new AbortController();
   const stopped = () => stopping.signal.aborted;
@@ -209,7 +249,7 @@ export function startClientRunner(args: {
     let receipt: { jobId: string; response?: unknown; error?: string };
     let reserved = false;
     try {
-      const operation = RemoteOperationSchema.parse(job.operation);
+      const operation = openOperationFor({ job, keys: args.keys });
       // A server may only address sandboxes created for this connection.
       // Destroying one that is already gone succeeds, so a cleanup whose
       // receipt was lost can be retried.
@@ -227,7 +267,12 @@ export function startClientRunner(args: {
         reserved = true;
       }
       const response = owned
-        ? await executeClientOperation({ provider: args.provider, operation })
+        ? await executeClientOperation({
+            provider: args.provider,
+            operation,
+            ...(args.resetMachine ? { resetMachine: args.resetMachine } : {}),
+            ...(args.codexSignIn ? { codexSignIn: args.codexSignIn } : {}),
+          })
         : null;
       if (operation.kind === "create") {
         const handle = response;
@@ -299,12 +344,41 @@ export function startClientRunner(args: {
   };
 }
 
+/** One received operation, opened with this runner's keys. */
+function openOperationFor(args: {
+  job: { id: string; operation: unknown };
+  keys: ClientRunnerKeys;
+}): RemoteOperation {
+  try {
+    return openRemoteOperation({
+      operationId: args.job.id,
+      executor: args.keys.executor,
+      envelope: args.job.operation,
+      privateKeys: args.keys.privateKeys(),
+    });
+  } catch (error) {
+    // Its controller seals it again to this machine's current key.
+    if (error instanceof SealedOperationOpenError)
+      throw new Error(OPERATION_NOT_OPENED_ERROR);
+    throw error;
+  }
+}
+
 async function executeClientOperation({
   provider,
   operation,
+  resetMachine,
+  codexSignIn,
 }: {
   provider: SandboxProvider;
   operation: RemoteOperation;
+  resetMachine?: () => Promise<void>;
+  codexSignIn?: (
+    request: Extract<
+      RemoteOperation,
+      { kind: "machine.codexSignIn" }
+    >["request"],
+  ) => Promise<unknown>;
 }): Promise<unknown> {
   switch (operation.kind) {
     case "create":
@@ -365,16 +439,30 @@ async function executeClientOperation({
       return processesOf(provider).listProcesses({
         sandboxId: operation.sandboxId,
       });
+    case "machine.reset":
+      if (!resetMachine) throw new Error("This runner does not reset machines");
+      await resetMachine();
+      return null;
+    case "machine.codexSignIn":
+      if (!codexSignIn)
+        throw new Error("This runner does not sign members in to Codex");
+      return codexSignIn(operation.request);
   }
 }
 
 /** Receipt routes cap an error's length; its start says what went wrong. */
 const RECEIPT_ERROR_MAX = 4000;
 
+/**
+ * A receipt's error as it may leave this machine: a provider's message can
+ * repeat what the operation carried, such as a URL with credentials, so
+ * those are removed before it is capped (ADR 0207).
+ */
 function receiptError(message: string): string {
-  return message.length > RECEIPT_ERROR_MAX
-    ? `${message.slice(0, RECEIPT_ERROR_MAX - 1)}…`
-    : message;
+  const redacted = redactUrlCredentials(message);
+  return redacted.length > RECEIPT_ERROR_MAX
+    ? `${redacted.slice(0, RECEIPT_ERROR_MAX - 1)}…`
+    : redacted;
 }
 
 function processesOf(provider: SandboxProvider) {

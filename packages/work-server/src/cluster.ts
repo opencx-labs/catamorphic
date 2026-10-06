@@ -23,8 +23,8 @@ import {
 import { type Kysely, sql } from "kysely";
 import {
   nodeAccess,
+  type ScheduledPlacement,
   servesOneOwner,
-  type WorkerPlacement,
 } from "./workers/placement.js";
 import { isWorkerNode } from "./workers/worker-registry.js";
 
@@ -54,6 +54,8 @@ export async function registerWorkMachine(args: {
   labels?: Readonly<Record<string, string>>;
   /** What this machine offers beside its sandbox provider (ADR 0184). */
   capabilities?: readonly string[];
+  /** What runs its sandboxes and why (ADR 0204), for operators. */
+  backend?: EnvironmentBinding["backend"];
   /**
    * Members' sign-ins on this machine (ADR 0199), read again every few
    * seconds: a sign-in made or removed here reaches placement without a
@@ -61,11 +63,16 @@ export async function registerWorkMachine(args: {
    */
   signIns?: () => readonly string[];
   /**
+   * This machine may hold its members' own sign-ins (ADR 0213): a single
+   * person's server whose operator accepted personal credentials on it.
+   */
+  ownSignIns?: boolean;
+  /**
    * Whose work each worker takes, and who owns a piece of work: an email
    * and directory groups matched against worker access (ADR 0167).
    */
   placement?: {
-    workers(): Promise<Map<string, WorkerPlacement>>;
+    workers(): Promise<Map<string, ScheduledPlacement>>;
     owner(
       userId: string,
     ): Promise<{ userId: string; groups: readonly string[] } | undefined>;
@@ -94,6 +101,7 @@ export async function registerWorkMachine(args: {
     },
     resourceLimits: args.sandboxProvider.resourceLimits,
     labels: { ...args.labels, node: args.nodeId, plane: "control" },
+    ...(args.backend ? { backend: args.backend } : {}),
   });
   // A single server that died without releasing its lease restarts into
   // that lease: wait for it to lapse rather than refuse to boot. A
@@ -136,7 +144,8 @@ export async function registerWorkMachine(args: {
         authorityId: args.authorityId,
       });
       const workerPlacements =
-        (await args.placement?.workers()) ?? new Map<string, WorkerPlacement>();
+        (await args.placement?.workers()) ??
+        new Map<string, ScheduledPlacement>();
       const owner = ownerUserId
         ? ((await args.placement?.owner(ownerUserId)) ?? {
             userId: ownerUserId,
@@ -160,10 +169,16 @@ export async function registerWorkMachine(args: {
           },
         };
       });
+      // A released machine takes no new work, and keeps serving an
+      // Allocation it already holds (ADR 0205): a lookup naming it as both
+      // the Allocation's binding and its machine.
+      const holdsAllocation = (nodeId: string) =>
+        allocationBindingId === nodeId && workerNodeId === nodeId;
       const eligible = described.filter(
         ({ node, policy, worker, labels }) =>
           node.available &&
-          (!worker || policy) &&
+          (!worker ||
+            (policy && (!policy.released || holdsAllocation(node.id)))) &&
           (!allocationBindingId || allocationBindingId === node.id) &&
           (!workerNodeId || workerNodeId === node.id) &&
           poolMatches(labels, pool) &&
@@ -205,17 +220,27 @@ export async function registerWorkMachine(args: {
         ...chosen.node,
         descriptor: { ...chosen.node.descriptor, labels: chosen.labels },
       };
-      // A worker whose access names only this owner takes no one else's
-      // work, so it may hold their personal credentials (ADR 0184).
+      // A worker whose access names only this owner (a member, or for a
+      // project's own work that project) takes no one else's work, so it
+      // may hold their personal credentials (ADR 0184) and secrets (ADR
+      // 0206).
       const servesOnlyOwner = Boolean(
-        owner &&
-          chosen.policy &&
-          accessTier({ access: nodeAccess(chosen.policy.access), owner }) === 0,
+        chosen.policy &&
+          accessTier({
+            access: nodeAccess(chosen.policy.access),
+            owner,
+            ...(projectId ? { projectId } : {}),
+          }) === 0,
       );
+      // A member's sign-in only on a machine that holds no one else's
+      // (ADR 0213), or a single person's server that accepted them.
+      const ownSignIns =
+        servesOnlyOwner || (selected.id === lease.id && args.ownSignIns);
       return {
         descriptor: selected.descriptor,
         workerNodeId: selected.id,
         ...(servesOnlyOwner ? { servesOnlyOwner } : {}),
+        ...(ownSignIns ? { ownSignIns: true } : {}),
         // This process's own machine, or a worker any replica reaches
         // through the operation queue (ADR 0192). Another replica's own
         // machine has no provider here.
@@ -342,11 +367,17 @@ export async function registerWorkMachine(args: {
   }, 5_000);
   cleanupTimer.unref();
   // Sign-ins made or removed on this machine update its offer in place,
-  // under the lease it holds.
+  // under the lease it holds: every few seconds, and at once when a member
+  // signs in from the app.
   let refreshing: Promise<unknown> | undefined;
-  const signInTimer = setInterval(() => {
+  let again = false;
+  const refreshSignIns = (): void => {
+    if (refreshing) {
+      again = true;
+      return;
+    }
     const next = args.signIns?.() ?? [];
-    if (refreshing || JSON.stringify(next) === JSON.stringify(signIns)) return;
+    if (JSON.stringify(next) === JSON.stringify(signIns)) return;
     signIns = next;
     refreshing = args.db
       .updateTable("worker_nodes")
@@ -362,8 +393,12 @@ export async function registerWorkMachine(args: {
       )
       .finally(() => {
         refreshing = undefined;
+        if (!again) return;
+        again = false;
+        refreshSignIns();
       });
-  }, 5_000);
+  };
+  const signInTimer = setInterval(refreshSignIns, 5_000);
   signInTimer.unref();
   let stopping: Promise<void> | undefined;
   return {
@@ -376,6 +411,8 @@ export async function registerWorkMachine(args: {
     isLost: () => isLost,
     /** Resolves when a disposable node's lease can never be renewed. */
     lost,
+    /** Tell placement now that this machine's sign-ins changed. */
+    refreshSignIns,
     /** Stop renewing and give the lease back; later calls share the first. */
     stop: () =>
       (stopping ??= (async () => {
