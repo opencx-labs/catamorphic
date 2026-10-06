@@ -794,17 +794,32 @@ describe("dock modes", () => {
         },
       );
       // The person moves from the chat onto the page and clicks it.
-      const points = await run<{
+      // The chat may cover most of a small window's page: aim at page the
+      // chat does not cover.
+      const points = await runWait<{
         dock: { x: number; y: number };
         page: { x: number; y: number };
-      }>(`
-        const page = $$('webview').find((w) => (w.src ?? '').startsWith(${JSON.stringify(origin)})).getBoundingClientRect();
+      }>(
+        `
+        const view = $$('webview').find((w) => (w.src ?? '').startsWith(${JSON.stringify(origin)}));
+        const page = view.getBoundingClientRect();
         const dock = frontDock().getBoundingClientRect();
-        return {
+        const target = [
+          { x: page.left + 24, y: page.top + 24 },
+          { x: page.left + 24, y: (page.top + page.bottom) / 2 },
+          { x: page.right - 24, y: page.top + 24 },
+          { x: (page.left + page.right) / 2, y: page.top + 12 },
+        ].find((point) =>
+          (point.x < dock.left || point.x > dock.right ||
+           point.y < dock.top || point.y > dock.bottom) &&
+          document.elementFromPoint(point.x, point.y) === view);
+        return target && {
           dock: { x: dock.left + dock.width / 2, y: dock.top + 40 },
-          page: { x: page.left + 60, y: page.top + 60 },
+          page: target,
         };
-      `);
+      `,
+        { label: "a point on the page outside the chat" },
+      );
       await app.movePointerThrough([points.dock, points.page]);
       await app.clickPointer(points.page);
       await runWait(

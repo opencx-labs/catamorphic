@@ -1,5 +1,5 @@
 import { GitPullRequest } from "lucide-react";
-import { type RefObject, useEffect, useState } from "react";
+import { type RefObject, useEffect, useRef, useState } from "react";
 import type { OpenMode } from "../../shared/open-mode.js";
 import { desktopApi, type PullRequestSummary } from "../lib/desktop-api.js";
 import { useAppPreferences } from "../lib/use-app-preferences.js";
@@ -74,15 +74,17 @@ export function PrsNav({
     empty: company ? "No proposals awaiting review." : "No open pull requests.",
   });
 
-  // Another project, a reconnect or Retry starts from nothing. Hiding the
-  // section only pauses it: the list stays on screen while the sidebar
-  // slides, and showing it again refreshes the list in place.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: reconnect and Retry invalidate remote data
+  // Another project or connection starts from nothing. Refresh, Retry and
+  // hiding the section keep the rows on screen: hidden, it pauses, and it
+  // reads in place when shown again.
+  const answered = useRef(false);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: a new project or connection invalidates remote data
   useEffect(() => {
+    answered.current = false;
     setPrs(null);
     setError(null);
-  }, [projectId, refresh, prefs.githubCliEnabled, company]);
-  // biome-ignore lint/correctness/useExhaustiveDependencies: reconnect and Retry invalidate remote data
+  }, [projectId, prefs.githubCliEnabled, company]);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: Refresh and Retry read again
   useEffect(() => {
     let cancelled = false;
     let revision = 0;
@@ -105,20 +107,24 @@ export function PrsNav({
         .prList(projectId)
         .then((next) => {
           if (!cancelled && request === revision) {
+            answered.current = true;
             setPrs(next);
             setError(null);
           }
         })
         .catch((reason) => {
-          if (!cancelled && request === revision)
+          if (!cancelled && request === revision) {
+            answered.current = true;
             setError(
               reason instanceof Error
                 ? reason.message
                 : "Could not load pull requests.",
             );
+          }
         });
     };
-    load();
+    // Hidden, it reads only until it can say what it holds.
+    if (visible || !answered.current) load();
     if (!visible)
       return () => {
         cancelled = true;

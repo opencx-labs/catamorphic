@@ -231,15 +231,23 @@ it("keeps its sections live while the panel slides away, on either side", async 
     constructor(readonly finished: Promise<void>) {}
   }
   let finish = () => {};
-  const getAnimations = HTMLElement.prototype.getAnimations;
+  // jsdom has no getAnimations; whatever was there is put back afterwards.
+  const original = Object.getOwnPropertyDescriptor(
+    HTMLElement.prototype,
+    "getAnimations",
+  );
   Reflect.set(globalThis, "CSSTransition", SlideTransition);
-  HTMLElement.prototype.getAnimations = function (this: HTMLElement) {
-    if (!this.classList.contains("sidebar-inner")) return [];
-    const finished = new Promise<void>((resolve) => {
-      finish = resolve;
-    });
-    return [new SlideTransition(finished) as unknown as Animation];
-  };
+  Reflect.set(
+    HTMLElement.prototype,
+    "getAnimations",
+    function (this: HTMLElement) {
+      if (!this.classList.contains("sidebar-inner")) return [];
+      const finished = new Promise<void>((resolve) => {
+        finish = resolve;
+      });
+      return [new SlideTransition(finished)];
+    },
+  );
   Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", true);
   try {
     for (const side of ["left", "right"] as const) {
@@ -289,7 +297,10 @@ it("keeps its sections live while the panel slides away, on either side", async 
       }
     }
   } finally {
-    HTMLElement.prototype.getAnimations = getAnimations;
+    if (original)
+      Object.defineProperty(HTMLElement.prototype, "getAnimations", original);
+    else Reflect.deleteProperty(HTMLElement.prototype, "getAnimations");
     Reflect.deleteProperty(globalThis, "CSSTransition");
+    Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", false);
   }
 });

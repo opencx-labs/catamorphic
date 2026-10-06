@@ -185,7 +185,7 @@ it("lists a company project's proposals with the GitHub CLI connection off", asy
   }
 });
 
-it("keeps the list on screen while the section is hidden and shown again", async () => {
+it("keeps the list on screen through hiding, showing and Refresh, reading only when shown", async () => {
   Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", true);
   vi.mocked(desktopApi.getPrefs).mockResolvedValue({
     ...DEFAULT_PREFS,
@@ -203,7 +203,9 @@ it("keeps the list on screen while the section is hidden and shown again", async
     draft: false,
     updatedAt: "1",
   };
+  vi.mocked(desktopApi.prList).mockReset();
   vi.mocked(desktopApi.prList).mockResolvedValueOnce([pr]);
+  let refresh: () => unknown = () => {};
   const node = document.createElement("div");
   const root = createRoot(node);
   const render = (visible: boolean) =>
@@ -218,6 +220,10 @@ it("keeps the list on screen while the section is hidden and shown again", async
             status: { state: "ready" },
             report: () => {},
             open: () => {},
+            registerRefresh: (next) => {
+              refresh = next;
+              return () => {};
+            },
           }}
         >
           <PrsNav projectId="p" onOpenDiff={() => {}} onOpenUrl={() => {}} />
@@ -227,14 +233,22 @@ it("keeps the list on screen while the section is hidden and shown again", async
   try {
     await render(true);
     expect(node.textContent).toContain("Keep me on screen");
+    const reads = vi.mocked(desktopApi.prList).mock.calls.length;
     // Later reads are slow, as GitHub is: the list must not wait on them.
     vi.mocked(desktopApi.prList).mockReturnValue(new Promise(() => {}));
     await render(false);
     expect(node.textContent).toContain("Keep me on screen");
+    // Hidden after it answered: nothing to read.
+    expect(vi.mocked(desktopApi.prList).mock.calls.length).toBe(reads);
     await render(true);
     expect(node.textContent).toContain("Keep me on screen");
+    expect(vi.mocked(desktopApi.prList).mock.calls.length).toBe(reads + 1);
+    await act(async () => refresh());
+    expect(node.textContent).toContain("Keep me on screen");
+    expect(vi.mocked(desktopApi.prList).mock.calls.length).toBe(reads + 2);
   } finally {
     await act(async () => root.unmount());
     vi.mocked(desktopApi.prList).mockReset();
+    Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", false);
   }
 });
