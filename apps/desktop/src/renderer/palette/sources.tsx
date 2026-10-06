@@ -28,7 +28,7 @@ import {
   useWorkspaceSourcesContext,
   type WorkspaceSources,
 } from "../lib/workspace-sources.js";
-import type { PaletteCategory } from "./rank.js";
+import { oneRowPerDestination, type PaletteCategory } from "./rank.js";
 import type { PaletteItem } from "./types.js";
 import { bareUrl, hostOf } from "./urls.js";
 
@@ -294,7 +294,11 @@ export function sourcePaletteRow({
   };
 }
 
-/** Every openable row of a source, filtered and sorted like its section. */
+/**
+ * Every openable row of a source, filtered and sorted like its section,
+ * once per destination: a pinned page that is also in the imported
+ * library is one row.
+ */
 export async function loadSourceRows({
   sources,
   source,
@@ -327,15 +331,17 @@ export async function loadSourceRows({
     ...(await read(false)),
     ...(archived && source === "chats" ? await read(true) : []),
   ];
-  return projectSourceItems(items, filter)
-    .filter(
-      (item) =>
-        (keep?.(item) ?? true) &&
-        item.actions?.some((action) => action.id === "open"),
-    )
-    .map((item) =>
-      sourcePaletteRow({ source, item, sources, projectId, listed, onError }),
-    );
+  return oneRowPerDestination(
+    projectSourceItems(items, filter)
+      .filter(
+        (item) =>
+          (keep?.(item) ?? true) &&
+          item.actions?.some((action) => action.id === "open"),
+      )
+      .map((item) =>
+        sourcePaletteRow({ source, item, sources, projectId, listed, onError }),
+      ),
+  );
 }
 
 /**

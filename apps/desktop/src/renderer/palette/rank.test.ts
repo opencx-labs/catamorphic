@@ -41,6 +41,8 @@ type Row = {
   sidebar?: boolean;
   usage?: string;
   disabled?: boolean;
+  searchOnly?: boolean;
+  bookmarked?: boolean;
 };
 const row = (id: string, label: string, extra: Partial<Row> = {}): Row => ({
   id,
@@ -225,4 +227,74 @@ it("orders frequent rows by use, once each, with pages capped", async () => {
   expect(frequentItems(rows, { signals: used }).map((item) => item.id)).toEqual(
     ["p1", "p2", "p3", "dup", "c1"],
   );
+});
+
+it("lists one row per destination", async () => {
+  const { oneRowPerDestination } = await import("./rank.js");
+  const page = "web:https://platform.open.cx/inbox";
+  const ids = (rows: Row[]) => oneRowPerDestination(rows).map((row) => row.id);
+  // A pinned page also in the imported library: the listed copy wins,
+  // wherever it comes.
+  expect(
+    ids([
+      row("library", "OpenCX", {
+        usage: page,
+        category: "bookmark",
+        searchOnly: true,
+      }),
+      row("pinned", "OpenCX", { usage: page, category: "bookmark" }),
+      row("other", "Open", { category: "bookmark" }),
+    ]),
+  ).toEqual(["pinned", "other"]);
+  // A bookmark and a sidebar link to the same page: one row, starred and
+  // ranked with the sidebar.
+  expect(
+    oneRowPerDestination([
+      row("bookmark", "OpenCX", {
+        usage: page,
+        category: "bookmark",
+        bookmarked: true,
+      }),
+      row("link", "Inbox", {
+        usage: page,
+        category: "bookmark",
+        sidebar: true,
+      }),
+    ]),
+  ).toEqual([
+    row("bookmark", "OpenCX", {
+      usage: page,
+      category: "bookmark",
+      bookmarked: true,
+      sidebar: true,
+    }),
+  ]);
+  // An open tab stands in for the page; two tabs of it are two places.
+  expect(
+    ids([
+      row("bookmark", "OpenCX", { usage: page, category: "bookmark" }),
+      row("tab-1", "OpenCX", { usage: page, category: "tab" }),
+      row("tab-2", "OpenCX", { usage: page, category: "tab" }),
+    ]),
+  ).toEqual(["tab-1", "tab-2"]);
+  // An app surface keeps its own row over its open tab.
+  expect(
+    ids([
+      row("settings-tab", "Settings", {
+        usage: "surface:settings",
+        category: "tab",
+      }),
+      row("settings", "Settings", {
+        usage: "surface:settings",
+        category: "surface",
+      }),
+    ]),
+  ).toEqual(["settings"]);
+  // Rows that learn nothing are never merged.
+  expect(
+    ids([
+      row("a", "A", { usage: undefined }),
+      row("b", "B", { usage: undefined }),
+    ]),
+  ).toEqual(["a", "b"]);
 });
