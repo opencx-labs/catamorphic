@@ -29,6 +29,14 @@ const ARTIFACTS = process.env.CATAMORPHIC_E2E_ARTIFACTS_DIR ?? os.tmpdir();
 const OWN_KEY = "ck-bob-own-0123456789";
 const SHARED_DSN = "https://shared-dsn@example.ingest/1";
 const PASSWORD = (username: string) => `${username}-e2e-password-123`;
+/** The Bun on this machine, for a dev server started in the workspace. */
+const bun = (() => {
+  for (const dir of (process.env.PATH ?? "").split(path.delimiter)) {
+    const candidate = path.join(dir, "bun");
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  throw new Error("No bun on PATH");
+})();
 
 let app: AppHandle;
 let server: ChildProcess | undefined;
@@ -556,6 +564,12 @@ describe("remote development on a Work server", () => {
       `return window.__terminalIds.length === 1 && !!$('textarea[aria-label="Terminal input"]');`,
       { timeoutMs: 60_000, label: "remote shell" },
     );
+    // TEMPORARY diagnosis: which of the machine's profile files a login
+    // shell reads sets HOME (shown in the failure message below).
+    await type(
+      'echo "diag home=$HOME"; grep -lsE "(^|[^A-Z_])HOME=" /etc/profile /etc/profile.d/* /etc/bash.bashrc /etc/environment | tr "\\n" " "; echo "diag-$((1 + 1))"',
+    );
+    await terminalShows("diag-2");
     // Output, not the typed line: the command's text never contains it.
     await type(
       'echo "terminal key $(printf %s "$CLICKHOUSE_API_KEY" | wc -c | tr -d " ") $(cat "$HOME/.personal-setup")"',
@@ -567,9 +581,11 @@ describe("remote development on a Work server", () => {
   it("previews a server started in that terminal", async () => {
     const port = await freePort();
     const marker = `Preview of bob's workspace on ${port}`;
-    // Started as a person would, then waited for until it answers.
+    // Started as a person would (with the Bun this test runs on), then
+    // waited for until its port answers.
+    const html = JSON.stringify(`<h1>${marker}</h1>`);
     await type(
-      `mkdir -p "$HOME/site" && printf '<h1>%s</h1>' "${marker}" > "$HOME/site/index.html" && (cd "$HOME/site" && python3 -m http.server ${port} --bind 127.0.0.1 > /dev/null 2>&1 &) && until python3 -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:${port}/')" 2> /dev/null; do sleep 0.2; done && echo "serving $((${port} + 1))"`,
+      `"${bun}" -e 'Bun.serve({ hostname: "127.0.0.1", port: ${port}, fetch: () => new Response(${html.replaceAll("'", "'\\''")}, { headers: { "content-type": "text/html" } }) })' & until (exec 3<>/dev/tcp/127.0.0.1/${port}) 2> /dev/null; do sleep 0.2; done; echo "serving $((${port} + 1))"`,
     );
     await terminalShows(`serving ${port + 1}`);
     await command("Open preview of this chat's workspace");
