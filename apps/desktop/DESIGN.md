@@ -498,6 +498,21 @@ the historical log explains how it arrived here.
 - [Performance](docs/performance.md): idle lifecycle checks and sustained measurement.
 
 ## Design log
+### 2026-10-06: Codex signs in on your own machines
+
+Remote environment's Sign-ins section now says plainly where each harness
+runs on a person's behalf (ADR 0213): Claude Code on their own
+subscription only on this computer, and on the server through the
+organization's model connection. Below it, Your machines lists the
+machines that run only their work, each online or not and signed in to
+Codex or not. Sign in to Codex opens a small dialog with Codex's own
+device code steps: the sign-in page (a Work browser tab, with the link
+shown too) and the one-time code, large and copyable. The token stays on
+the machine; the desktop only ever sees the code. The dialog checks every
+two seconds, closing it cancels a waiting attempt, and an answer to an
+attempt closed since never touches it. Sign out asks in place, like
+clearing a secret. A server without the route hides the list.
+
 ### 2026-10-06: Work beside a server chat
 
 A chat that runs on the project's server now offers Open terminal and Open
