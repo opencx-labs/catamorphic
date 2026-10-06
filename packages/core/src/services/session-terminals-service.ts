@@ -7,7 +7,7 @@ import {
   type ProcessOutput,
   type SandboxProcessProvider,
 } from "@catamorphic/sandbox";
-import { type Kysely, sql } from "kysely";
+import type { Kysely } from "kysely";
 import type { Identity } from "../identity.js";
 import type { AgentSessionsService } from "./agent-sessions-service.js";
 import {
@@ -19,6 +19,7 @@ import {
   terminalProcessCommand,
 } from "./session-terminal-scripts.js";
 import {
+  markWorkspaceUsed,
   type SessionWorkspaceHandle,
   SessionWorkspaceUnavailableError,
 } from "./session-workspace.js";
@@ -30,8 +31,6 @@ const tracer = getTracer("@catamorphic/core");
  * `script` outlives a TERM until killed.
  */
 const CLOSE_GRACE_MS = 1_500;
-/** Typing refreshes a terminal's use at most this often (idle release). */
-const USE_REFRESH_SECONDS = 30;
 const SIZE_LIMIT = 1_000;
 
 /** A terminal just opened in a chat's workspace. */
@@ -114,6 +113,12 @@ export class SessionTerminalsService {
           projectId: input.projectId,
           sessionId: input.sessionId,
           start: true,
+        });
+        // Used from now on, before the shell starts: the idle sweep never
+        // gives the workspace back between the shell starting and its row.
+        await markWorkspaceUsed({
+          db: this.deps.db,
+          sessionId: input.sessionId,
         });
         const processes = processesOf(workspace);
         const sessionFromProject = sessionDirectoryFromProject(workspace);
@@ -215,13 +220,6 @@ export class SessionTerminalsService {
           data: input.data,
         }),
       );
-      if (terminal.usedSecondsAgo >= USE_REFRESH_SECONDS)
-        await this.deps.db
-          .updateTable("session_terminals")
-          .set({ used_at: sql<Date>`now()` })
-          .where("session_id", "=", input.sessionId)
-          .where("process_id", "=", input.terminalId)
-          .execute();
     });
   }
 
@@ -310,7 +308,6 @@ export class SessionTerminalsService {
     processes: SandboxProcessProvider;
     key: string;
     pty: boolean;
-    usedSecondsAgo: number;
   }> {
     let workspace: SessionWorkspaceHandle;
     try {
@@ -332,23 +329,20 @@ export class SessionTerminalsService {
     }
     const row = await this.deps.db
       .selectFrom("session_terminals")
-      .select([
-        "terminal_key",
-        "pty",
-        sql<number>`extract(epoch from now() - used_at)`.as("used_seconds_ago"),
-      ])
+      .select(["terminal_key", "pty"])
       .where("session_id", "=", input.sessionId)
       .where("process_id", "=", input.terminalId)
       .where("sandbox_id", "=", workspace.sandboxId)
       .where("external_user_id", "=", input.identity.externalUserId)
       .executeTakeFirst();
     if (!row) throw new SessionTerminalNotFoundError();
+    // Typing, and watching output (a dev server's log), keep the workspace.
+    await markWorkspaceUsed({ db: this.deps.db, sessionId: input.sessionId });
     return {
       workspace,
       processes: processesOf(workspace),
       key: row.terminal_key,
       pty: row.pty,
-      usedSecondsAgo: Number(row.used_seconds_ago),
     };
   }
 }

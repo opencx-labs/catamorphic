@@ -1290,6 +1290,7 @@ export class CatamorphicCore {
         sessions: this.agentSessions,
       });
       this.sessionPreviews = new SessionPreviewsService({
+        db: this.db,
         sessions: this.agentSessions,
       });
       this.agentSessions.setSessionActionHandler(async (input) => {

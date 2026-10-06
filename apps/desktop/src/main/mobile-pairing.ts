@@ -10,6 +10,7 @@ import {
 import { app as electronApp } from "electron";
 import Fastify, { type FastifyInstance } from "fastify";
 import type { ProfileConfigManager } from "./profile-config.js";
+import { DESKTOP_API_TOKEN_HEADER } from "./server/local-api-guard.js";
 
 /**
  * "Continue on mobile" (ADR 0058/0059 companion piece): the desktop is a
@@ -102,6 +103,8 @@ interface MobilePairingDeps {
   profileConfig: ProfileConfigManager;
   /** Loopback base of the embedded server ("http://127.0.0.1:NNNN"). */
   serverUrl: () => string | null;
+  /** The embedded API's token for this run (ADR 0210), once it booted. */
+  apiToken?: () => string | null;
   /** Override for tests; defaults next to the repo / packaged resources. */
   pwaDist?: string;
   /** Test seams for the OS-facing listener and network interfaces. */
@@ -355,19 +358,14 @@ export class MobilePairingService {
             .status(503)
             .send({ error: "The desktop is still booting" });
         }
-        const url = `${upstream}${request.url}`;
-        const method = request.method;
-        const body = Buffer.isBuffer(request.body) ? request.body : undefined;
-        const response = await fetch(url, {
-          method,
-          headers: {
-            ...(typeof request.headers["content-type"] === "string"
-              ? { "content-type": request.headers["content-type"] }
-              : {}),
-          },
-          ...(body && body.length > 0 && method !== "GET" && method !== "HEAD"
-            ? { body }
+        const response = await forwardToEmbeddedApi({
+          url: `${upstream}${request.url}`,
+          method: request.method,
+          ...(typeof request.headers["content-type"] === "string"
+            ? { contentType: request.headers["content-type"] }
             : {}),
+          ...(Buffer.isBuffer(request.body) ? { body: request.body } : {}),
+          token: this.deps.apiToken?.() ?? null,
         });
         const payload = Buffer.from(await response.arrayBuffer());
         return reply
@@ -762,4 +760,29 @@ function isPhysicalLanInterface(name: string): boolean {
   if (process.platform === "darwin") return /^en\d+$/i.test(name);
   if (process.platform === "win32") return /wi-?fi|ethernet/i.test(name);
   return /^(?:en|eth|wl)/i.test(name);
+}
+
+/**
+ * One request of a paired phone, on to the embedded API: its content type
+ * and body, and this run's API token (ADR 0210), which the phone never
+ * sees.
+ */
+export function forwardToEmbeddedApi(input: {
+  url: string;
+  method: string;
+  contentType?: string;
+  body?: Buffer;
+  token: string | null;
+}): Promise<Response> {
+  const { body, method } = input;
+  return fetch(input.url, {
+    method,
+    headers: {
+      ...(input.contentType ? { "content-type": input.contentType } : {}),
+      ...(input.token ? { [DESKTOP_API_TOKEN_HEADER]: input.token } : {}),
+    },
+    ...(body && body.length > 0 && method !== "GET" && method !== "HEAD"
+      ? { body }
+      : {}),
+  });
 }

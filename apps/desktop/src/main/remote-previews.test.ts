@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import Fastify, { type FastifyInstance } from "fastify";
@@ -15,6 +16,7 @@ vi.mock("electron", () => ({
 import {
   forwardPreview,
   localPreviewLocation,
+  previewHost,
   RemotePreviewOrigins,
 } from "./remote-previews.js";
 import { RemoteProjectsStore } from "./remote-projects-store.js";
@@ -25,10 +27,55 @@ const PREVIEW = `/api/projects/remote/agent/sessions/${SESSION}/previews/3000`;
 interface Seen {
   method: string;
   url: string;
-  authorization?: string;
-  origin?: string;
-  cookie?: string;
+  headers: http.IncomingHttpHeaders;
   body: string;
+}
+
+interface Answer {
+  status: number;
+  headers: http.IncomingHttpHeaders;
+  body: string;
+}
+
+/**
+ * A request as a browser tab sends it to a preview: to the loopback port,
+ * naming the preview's host (Chromium resolves `*.localhost` itself), or
+ * another host when `host` says so.
+ */
+function send(
+  url: string,
+  init: {
+    method?: string;
+    headers?: Record<string, string>;
+    body?: string;
+    host?: string;
+  } = {},
+): Promise<Answer> {
+  const target = new URL(url);
+  return new Promise((resolve, reject) => {
+    const request = http.request(
+      {
+        host: "127.0.0.1",
+        port: target.port,
+        path: `${target.pathname}${target.search}`,
+        method: init.method ?? "GET",
+        headers: { host: init.host ?? target.host, ...init.headers },
+      },
+      (response) => {
+        const chunks: Buffer[] = [];
+        response.on("data", (chunk: Buffer) => chunks.push(chunk));
+        response.on("end", () =>
+          resolve({
+            status: response.statusCode ?? 0,
+            headers: response.headers,
+            body: Buffer.concat(chunks).toString(),
+          }),
+        );
+      },
+    );
+    request.on("error", reject);
+    request.end(init.body);
+  });
 }
 
 describe("previews of a remote chat's workspace (ADR 0208)", () => {
@@ -51,11 +98,7 @@ describe("previews of a remote chat's workspace (ADR 0208)", () => {
       seen.push({
         method: request.method,
         url: request.url,
-        ...(request.headers.authorization
-          ? { authorization: request.headers.authorization }
-          : {}),
-        ...(request.headers.origin ? { origin: request.headers.origin } : {}),
-        ...(request.headers.cookie ? { cookie: request.headers.cookie } : {}),
+        headers: request.headers,
         body: Buffer.isBuffer(request.body) ? request.body.toString() : "",
       });
       if (request.url.endsWith("/go"))
@@ -103,36 +146,50 @@ describe("previews of a remote chat's workspace (ADR 0208)", () => {
   });
 
   const profiles = () => ({ forProject: () => ({ remoteProjects: store }) });
+  const address = { projectId: "local", sessionId: SESSION, port: 3000 };
 
-  it("gives each preview its own origin, forwarding as the member", async () => {
+  it("gives each preview a host of its own, forwarding as the member", async () => {
     const origins = new RemotePreviewOrigins({
       file: path.join(directory, "previews.json"),
       profiles: profiles(),
     });
     try {
-      const url = await origins.open({
-        projectId: "local",
-        sessionId: SESSION,
-        port: 3000,
-      });
-      expect(url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/$/);
+      const url = await origins.open(address);
+      expect(url).toMatch(/^http:\/\/p-[0-9a-f]{20}\.localhost:\d+\/$/);
+      expect(new URL(url).hostname).toBe(previewHost(address));
+      // Another preview, of another chat or port, is another host.
+      expect(previewHost({ ...address, port: 3001 })).not.toBe(
+        previewHost(address),
+      );
       const own = url.slice(0, -1);
 
-      const page = await fetch(`${url}assets/app.js?v=1`, {
-        headers: { cookie: "session=abc", origin: own },
+      const page = await send(`${url}assets/app.js?v=1`, {
+        headers: {
+          cookie: "session=abc",
+          origin: own,
+          "x-work-desktop-token": "this-computer",
+          "x-catamorphic-runner": "spoofed",
+          "x-forwarded-for": "10.0.0.1",
+          authorization: "Bearer page-supplied",
+        },
       });
       expect(page.status).toBe(200);
-      expect(await page.text()).toBe("answer to GET");
-      expect(page.headers.get("access-control-allow-origin")).toBeNull();
-      expect(seen.at(-1)).toMatchObject({
-        url: `${PREVIEW}/assets/app.js?v=1`,
+      expect(page.body).toBe("answer to GET");
+      expect(page.headers["access-control-allow-origin"]).toBeUndefined();
+      const forwarded = seen.at(-1);
+      expect(forwarded).toMatchObject({ url: `${PREVIEW}/assets/app.js?v=1` });
+      expect(forwarded?.headers).toMatchObject({
         authorization: "Bearer member-token",
         cookie: "session=abc",
         // The page's own origin is the server's own in the sandbox.
         origin: "http://127.0.0.1:3000",
+        "x-catamorphic-runner": "runner-id",
       });
+      // This computer's credentials and host-internal headers stay here.
+      expect(forwarded?.headers["x-work-desktop-token"]).toBeUndefined();
+      expect(forwarded?.headers["x-forwarded-for"]).toBeUndefined();
 
-      const posted = await fetch(`${url}submit`, {
+      const posted = await send(`${url}submit`, {
         method: "POST",
         headers: { "content-type": "application/octet-stream", origin: own },
         body: "payload",
@@ -140,35 +197,43 @@ describe("previews of a remote chat's workspace (ADR 0208)", () => {
       expect(posted.status).toBe(201);
       expect(seen.at(-1)).toMatchObject({ method: "POST", body: "payload" });
 
-      // Another site, in any browser, gets nothing from the preview.
-      const forwarded = seen.length;
-      const foreign = await fetch(`${url}submit`, {
-        method: "POST",
-        headers: {
-          "content-type": "application/octet-stream",
-          origin: "https://elsewhere.example",
-        },
-        body: "payload",
-      });
-      expect(foreign.status).toBe(403);
-      const embedded = await fetch(`${url}assets/app.js`, {
-        headers: { "sec-fetch-site": "cross-site" },
-      });
-      expect(embedded.status).toBe(403);
-      expect(seen.length).toBe(forwarded);
+      // Another site, in any browser, gets nothing from the preview, nor
+      // does a request to the bare loopback address, which shares the
+      // person's own cookies.
+      const before = seen.length;
+      for (const refused of [
+        await send(`${url}submit`, {
+          method: "POST",
+          headers: {
+            "content-type": "application/octet-stream",
+            origin: "https://elsewhere.example",
+            cookie: "session=abc",
+          },
+          body: "payload",
+        }),
+        await send(`${url}assets/app.js`, {
+          headers: { "sec-fetch-site": "cross-site", cookie: "session=abc" },
+        }),
+        await send(`${url}assets/app.js`, {
+          host: `127.0.0.1:${new URL(url).port}`,
+          headers: { cookie: "mine=1" },
+        }),
+      ])
+        expect(refused.status).toBe(403);
+      expect(seen.length).toBe(before);
 
-      const redirected = await fetch(`${url}go`, { redirect: "manual" });
+      const redirected = await send(`${url}go`);
       expect(redirected.status).toBe(302);
-      expect(redirected.headers.get("location")).toBe("/landing?from=go");
-      expect(redirected.headers.getSetCookie()).toEqual([
+      expect(redirected.headers.location).toBe("/landing?from=go");
+      expect(redirected.headers["set-cookie"]).toEqual([
         "a=1; Path=/",
         "b=2; Path=/; HttpOnly",
       ]);
 
-      const refused = await fetch(`${url}down`);
+      const refused = await send(`${url}down`);
       expect(refused.status).toBe(502);
-      expect(refused.headers.get("content-type")).toContain("text/html");
-      expect(await refused.text()).toContain(
+      expect(refused.headers["content-type"]).toContain("text/html");
+      expect(refused.body).toContain(
         "Nothing in this chat's workspace answers on port 3000.",
       );
     } finally {
@@ -178,7 +243,6 @@ describe("previews of a remote chat's workspace (ADR 0208)", () => {
 
   it("keeps a preview's address across restarts", async () => {
     const file = path.join(directory, "previews.json");
-    const address = { projectId: "local", sessionId: SESSION, port: 3000 };
     const first = new RemotePreviewOrigins({ file, profiles: profiles() });
     const url = await first.open(address);
     await first.close();
@@ -186,31 +250,29 @@ describe("previews of a remote chat's workspace (ADR 0208)", () => {
     const second = new RemotePreviewOrigins({ file, profiles: profiles() });
     try {
       await second.restore();
-      const page = await fetch(`${url}again`);
-      expect(await page.text()).toBe("answer to GET");
+      const page = await send(`${url}again`);
+      expect(page.body).toBe("answer to GET");
       expect(await second.open(address)).toBe(url);
     } finally {
       await second.close();
     }
   });
 
-  it("keeps redirects below a path-based proxy's prefix", async () => {
-    const local = `/desktop/projects/local/remote-api/api/projects/local/agent/sessions/${SESSION}/previews/3000`;
+  it("forwards the member's bearer only as the authorization it adds", async () => {
     const answer = await forwardPreview({
       profiles: profiles(),
-      address: { projectId: "local", sessionId: SESSION, port: 3000 },
+      address,
       path: "/go",
       method: "GET",
-      headers: [["authorization", "Bearer desktop-root"]],
-      localPrefix: local,
+      headers: [
+        ["authorization", "Bearer desktop-root"],
+        ["X-Work-Desktop-Token", "this-computer"],
+      ],
     });
     expect(answer?.status).toBe(302);
-    expect(answer?.headers).toContainEqual([
-      "location",
-      `${local}/landing?from=go`,
-    ]);
-    // The desktop's own credential never travels; the member's does.
-    expect(seen.at(-1)?.authorization).toBe("Bearer member-token");
+    expect(answer?.headers).toContainEqual(["location", "/landing?from=go"]);
+    expect(seen.at(-1)?.headers.authorization).toBe("Bearer member-token");
+    expect(seen.at(-1)?.headers["x-work-desktop-token"]).toBeUndefined();
   });
 });
 
@@ -228,13 +290,8 @@ describe("localPreviewLocation", () => {
       "/api/projects/r/agent/sessions/s/previews/4000/x",
     ],
   ])("%s", (location, expected) => {
-    expect(
-      localPreviewLocation({
-        location,
-        sessionId,
-        port: 3000,
-        localPrefix: "",
-      }),
-    ).toBe(expected);
+    expect(localPreviewLocation({ location, sessionId, port: 3000 })).toBe(
+      expected,
+    );
   });
 });

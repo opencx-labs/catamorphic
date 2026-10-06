@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
+import type { DB } from "@catamorphic/db";
 import { shellQuote } from "@catamorphic/git";
 import { getTracer, withSpan } from "@catamorphic/otel";
+import type { Kysely } from "kysely";
 import type { Identity } from "../identity.js";
 import type { AgentSessionsService } from "./agent-sessions-service.js";
 import {
@@ -10,7 +12,10 @@ import {
   PREVIEW_RESPONSE_MAX_BYTES,
 } from "./session-preview-script.js";
 import { sessionDirectoryFromProject } from "./session-terminal-scripts.js";
-import type { SessionWorkspaceHandle } from "./session-workspace.js";
+import {
+  markWorkspaceUsed,
+  type SessionWorkspaceHandle,
+} from "./session-workspace.js";
 
 const tracer = getTracer("@catamorphic/core");
 
@@ -26,14 +31,18 @@ const INLINE_REQUEST_BYTES = 64 * 1024;
 
 /**
  * Request headers that never reach the sandbox: the caller's own
- * credential for this server, and how the request reached it.
+ * credentials (for this server, or a desktop's own API), and how the
+ * request reached it.
  */
 const WITHHELD_REQUEST_HEADERS = [
   "authorization",
   "x-catamorphic-runner",
+  "x-work-desktop-token",
+  "forwarded",
   "x-forwarded-for",
   "x-forwarded-host",
   "x-forwarded-proto",
+  "x-real-ip",
 ];
 
 /** An HTTP request a person sends to a port in a chat's workspace. */
@@ -87,6 +96,7 @@ export class SessionPreviewError extends Error {
 export class SessionPreviewsService {
   constructor(
     private readonly deps: {
+      db: Kysely<DB>;
       sessions: Pick<AgentSessionsService, "personWorkspace">;
     },
   ) {}
@@ -127,6 +137,11 @@ export class SessionPreviewsService {
           projectId: input.projectId,
           sessionId: input.sessionId,
           start: false,
+        });
+        // Someone looking at a preview keeps the workspace it runs in.
+        await markWorkspaceUsed({
+          db: this.deps.db,
+          sessionId: input.sessionId,
         });
         const answer = await this.fetchInSandbox({ workspace, input });
         span.setAttribute("http.response.status_code", answer.status);

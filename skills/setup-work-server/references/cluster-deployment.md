@@ -892,8 +892,8 @@ opens one, readmitting and starting the chat's workspace when it was given
 back; its output is read with `GET .../terminals/:terminalId/output?cursor&waitMs`,
 and `POST .../input`, `POST .../resize` and `DELETE .../terminals/:terminalId`
 follow. Only the person who opened a terminal reaches it. A terminal ends
-with its workspace, and typing in one keeps the workspace from being released
-as idle.
+with its workspace. Using a terminal (typing, or reading its output) or a
+preview keeps the workspace from being released as idle, as a turn does.
 
 `/api/projects/:id/agent/sessions/:sessionId/previews/:port/*` forwards any
 HTTP request to that port inside a running workspace, made by the sandbox's

@@ -3,10 +3,12 @@ import fs from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
-import { createDatabase, migrateToLatest } from "@catamorphic/db";
+import { createDatabase, type DB, migrateToLatest } from "@catamorphic/db";
 import { FsBackend, ProjectManager } from "@catamorphic/git";
 import { LocalProcessSandboxProvider } from "@catamorphic/local-process";
-import { sql } from "kysely";
+import { PGlite } from "@electric-sql/pglite";
+import { pgcrypto } from "@electric-sql/pglite/contrib/pgcrypto";
+import { Kysely, PGliteDialect, sql, WithSchemaPlugin } from "kysely";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { CatamorphicCore } from "../core.js";
 import type { Identity } from "../identity.js";
@@ -26,8 +28,8 @@ import { testEnvironmentProvider } from "./test-environment.js";
  * made inside the sandbox to a server listening there.
  */
 
+// Postgres when the run has one, else PGlite in this process.
 const connectionString = process.env.DATABASE_URL ?? "";
-const describeIf = connectionString ? describe : describe.skip;
 const schema = `catamorphic_terminals_${crypto.randomUUID().replaceAll("-", "")}`;
 const tenantId = crypto.randomUUID();
 const alice: Identity = { tenantId, externalUserId: "alice" };
@@ -76,9 +78,9 @@ http.createServer((req, res) => {
 }).listen(port, "127.0.0.1", () => console.log("listening"));
 `;
 
-describeIf("terminals and previews in a chat's workspace (ADR 0208)", () => {
+describe("terminals and previews in a chat's workspace (ADR 0208)", () => {
   let tmpDir: string;
-  let db: ReturnType<typeof createDatabase>;
+  let db: Kysely<DB>;
   let core: CatamorphicCore;
   let provider: LocalProcessSandboxProvider;
   let projectId: string;
@@ -90,7 +92,14 @@ describeIf("terminals and previews in a chat's workspace (ADR 0208)", () => {
     provider = new LocalProcessSandboxProvider({
       root: path.join(tmpDir, "sandboxes"),
     });
-    db = createDatabase({ connectionString, schema, poolSize: 4 });
+    db = connectionString
+      ? createDatabase({ connectionString, schema, poolSize: 4 })
+      : new Kysely<DB>({
+          dialect: new PGliteDialect({
+            pglite: new PGlite({ extensions: { pgcrypto } }),
+          }),
+          plugins: [new WithSchemaPlugin(schema)],
+        });
     await migrateToLatest({ db, schema });
     const agent = {
       id: "worker",
@@ -213,19 +222,47 @@ describeIf("terminals and previews in a chat's workspace (ADR 0208)", () => {
     await terminals().write({ ...base, projectId, data: "stty size\n" });
     ({ cursor } = await readUntil({ ...base, cursor, match: /40 120/ }));
 
-    // Someone typing keeps the workspace from counting as idle.
-    await db
-      .updateTable("session_terminals")
-      .set({ used_at: sql<Date>`now() - interval '1 hour'` })
-      .where("process_id", "=", opened.terminalId)
-      .execute();
+    // Typing, and reading output, keep the workspace from counting as
+    // idle, recorded at most once a minute.
+    const usedAgo = async () =>
+      Number(
+        (
+          await db
+            .selectFrom("session_workspace_use")
+            .select(sql<number>`extract(epoch from now() - used_at)`.as("ago"))
+            .where("session_id", "=", sessionId)
+            .executeTakeFirstOrThrow()
+        ).ago,
+      );
+    const longAgo = () =>
+      db
+        .updateTable("session_workspace_use")
+        .set({ used_at: sql<Date>`now() - interval '1 hour'` })
+        .where("session_id", "=", sessionId)
+        .execute();
+    expect(await usedAgo()).toBeLessThan(60);
+    await longAgo();
     await terminals().write({ ...base, projectId, data: "true\n" });
-    const used = await db
-      .selectFrom("session_terminals")
-      .select(sql<number>`extract(epoch from now() - used_at)`.as("ago"))
-      .where("process_id", "=", opened.terminalId)
-      .executeTakeFirstOrThrow();
-    expect(Number(used.ago)).toBeLessThan(60);
+    expect(await usedAgo()).toBeLessThan(60);
+    await longAgo();
+    await terminals().read({ ...base, projectId, cursor, waitMs: 0 });
+    expect(await usedAgo()).toBeLessThan(60);
+    const marked = (
+      await db
+        .selectFrom("session_workspace_use")
+        .select("used_at")
+        .where("session_id", "=", sessionId)
+        .executeTakeFirstOrThrow()
+    ).used_at;
+    await terminals().read({ ...base, projectId, cursor, waitMs: 0 });
+    const again = (
+      await db
+        .selectFrom("session_workspace_use")
+        .select("used_at")
+        .where("session_id", "=", sessionId)
+        .executeTakeFirstOrThrow()
+    ).used_at;
+    expect(new Date(again).getTime()).toBe(new Date(marked).getTime());
 
     await terminals().close({ ...base, projectId });
     await expect(
@@ -315,6 +352,78 @@ describeIf("terminals and previews in a chat's workspace (ADR 0208)", () => {
       sessionId,
       terminalId: again.terminalId,
     });
+  }, 120_000);
+
+  it("keeps a workspace someone uses from being given back as idle", async () => {
+    const sessionId = await chat(alice);
+    const opened = await terminals().open({
+      identity: alice,
+      projectId,
+      sessionId,
+      cols: 80,
+      rows: 24,
+    });
+    const row = await db
+      .selectFrom("agent_sessions")
+      .select("allocation_id")
+      .where("id", "=", sessionId)
+      .executeTakeFirstOrThrow();
+    const allocationId = row.allocation_id ?? "";
+    // The workspace sits on a remote machine and has idled past its
+    // Environment's 30 minutes, with no turn since.
+    const nodeId = `node-${crypto.randomUUID()}`;
+    await db
+      .insertInto("worker_nodes")
+      .values({
+        id: nodeId,
+        tenant_id: tenantId,
+        authority_id: "test",
+        descriptor: JSON.stringify({}),
+        lease_token: crypto.randomUUID(),
+        lease_expires_at: new Date(Date.now() + 3_600_000),
+        remote: JSON.stringify({}),
+      })
+      .execute();
+    await db
+      .updateTable("execution_allocations")
+      .set({
+        worker_node_id: nodeId,
+        created_at: new Date(Date.now() - 2 * 3_600_000),
+      })
+      .where("id", "=", allocationId)
+      .execute();
+    const status = async () =>
+      (
+        await db
+          .selectFrom("execution_allocations")
+          .select("status")
+          .where("id", "=", allocationId)
+          .executeTakeFirstOrThrow()
+      ).status;
+    const sessions = core.agentSessions;
+    if (!sessions) throw new Error("sessions not configured");
+
+    // Opening the terminal marked it used a moment ago: it stays.
+    expect(await sessions.releaseIdleWorkspaces()).toBe(0);
+    expect(await status()).toBe("active");
+
+    // Nobody has used it for an hour: it goes, and its terminal with it.
+    await db
+      .updateTable("session_workspace_use")
+      .set({ used_at: sql<Date>`now() - interval '1 hour'` })
+      .where("session_id", "=", sessionId)
+      .execute();
+    expect(await sessions.releaseIdleWorkspaces()).toBe(1);
+    expect(await status()).toBe("released");
+    await expect(
+      terminals().read({
+        identity: alice,
+        projectId,
+        sessionId,
+        terminalId: opened.terminalId,
+        cursor: 0,
+      }),
+    ).rejects.toThrow("This terminal ended with its chat's workspace.");
   }, 120_000);
 
   it("loads the Environment's secrets into the shell when the workspace has them", async () => {
@@ -545,6 +654,12 @@ describeIf("terminals and previews in a chat's workspace (ADR 0208)", () => {
     const decode = (body: Uint8Array) =>
       JSON.parse(new TextDecoder().decode(body));
 
+    // Looking at a preview keeps the workspace.
+    await db
+      .updateTable("session_workspace_use")
+      .set({ used_at: sql<Date>`now() - interval '1 hour'` })
+      .where("session_id", "=", sessionId)
+      .execute();
     const got = await preview({
       method: "GET",
       path: "/hello?x=1",
@@ -557,6 +672,12 @@ describeIf("terminals and previews in a chat's workspace (ADR 0208)", () => {
       ],
     });
     expect(got.status).toBe(200);
+    const previewUse = await db
+      .selectFrom("session_workspace_use")
+      .select(sql<number>`extract(epoch from now() - used_at)`.as("ago"))
+      .where("session_id", "=", sessionId)
+      .executeTakeFirstOrThrow();
+    expect(Number(previewUse.ago)).toBeLessThan(60);
     expect(decode(got.body)).toMatchObject({
       method: "GET",
       url: "/hello?x=1",

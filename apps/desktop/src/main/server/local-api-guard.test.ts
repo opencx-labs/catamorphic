@@ -1,3 +1,4 @@
+import http from "node:http";
 import { describe, expect, it } from "vitest";
 import {
   DESKTOP_API_TOKEN_HEADER,
@@ -101,24 +102,106 @@ describe("the embedded API's callers", () => {
   });
 });
 
-describe("a preview's callers (ADR 0208)", () => {
-  const own = `http://127.0.0.1:${port}`;
-  it("serves its own pages, their resources, and a typed address", () => {
-    for (const headers of [
-      { host },
-      { host, "sec-fetch-site": "none" },
-      { host, "sec-fetch-site": "same-origin", origin: own },
-    ])
-      expect(previewRequestRefusal({ headers, port })).toBeUndefined();
+/** The headers a real request of Node's own `fetch` (undici) arrives with. */
+async function nodeFetchHeaders(): Promise<{
+  headers: http.IncomingHttpHeaders;
+  port: number;
+}> {
+  let seen: http.IncomingHttpHeaders = {};
+  const server = http.createServer((request, response) => {
+    seen = request.headers;
+    response.end("{}");
+  });
+  await new Promise<void>((resolve) =>
+    server.listen(0, "127.0.0.1", () => resolve()),
+  );
+  const address = server.address();
+  const listening = typeof address === "object" && address ? address.port : 0;
+  try {
+    await fetch(`http://127.0.0.1:${listening}/api/projects`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{}",
+    });
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+  return { headers: seen, port: listening };
+}
+
+describe("local programs on Node's fetch", () => {
+  it("pass without the token although undici sends Sec-Fetch-Mode", async () => {
+    const { headers, port: listening } = await nodeFetchHeaders();
+    // What made them look like a browser before.
+    expect(headers["sec-fetch-mode"]).toBe("cors");
+    expect(headers["sec-fetch-site"]).toBeUndefined();
+    expect(
+      localApiRefusal({
+        method: "POST",
+        url: "/api/projects",
+        headers,
+        port: listening,
+        token,
+      }),
+    ).toBeUndefined();
   });
 
-  it("gives another site nothing", () => {
-    for (const headers of [
-      { host, origin: "https://evil.example" },
-      { host, "sec-fetch-site": "cross-site" },
-      { host, "sec-fetch-site": "same-site" },
-      { host: `rebound.example:${port}` },
+  it("still refuses what a browser stamps alongside it", () => {
+    for (const browser of [
+      { "sec-fetch-mode": "cors", "sec-fetch-site": "cross-site" },
+      { "sec-fetch-mode": "navigate", "sec-fetch-site": "none" },
+      { "sec-fetch-mode": "cors", origin: "https://evil.example" },
     ])
-      expect(previewRequestRefusal({ headers, port })).toBeDefined();
+      expect(
+        localApiRefusal({
+          method: "POST",
+          url: "/api/projects",
+          headers: { host, ...browser },
+          port,
+          token,
+        }),
+      ).toBe("Web pages cannot use the desktop's API");
+  });
+});
+
+describe("a preview's callers (ADR 0208)", () => {
+  const own = "http://p-0123456789abcdef0123.localhost:41234";
+  const ownHost = "p-0123456789abcdef0123.localhost:41234";
+
+  it("serves its own pages, their resources, and a typed address", () => {
+    for (const headers of [
+      { host: ownHost },
+      { host: ownHost, "sec-fetch-site": "none" },
+      { host: ownHost, "sec-fetch-site": "same-origin", origin: own },
+    ])
+      expect(previewRequestRefusal({ headers, origin: own })).toBeUndefined();
+  });
+
+  it("gives another site nothing, a plain link included", () => {
+    for (const headers of [
+      { host: ownHost, origin: "https://evil.example" },
+      { host: ownHost, "sec-fetch-site": "cross-site" },
+      { host: ownHost, "sec-fetch-site": "same-site" },
+      // Another preview of this desktop is another site.
+      {
+        host: ownHost,
+        origin: "http://p-ffffffffffffffffffff.localhost:41234",
+      },
+    ])
+      expect(previewRequestRefusal({ headers, origin: own })).toBe(
+        "Another site cannot use this preview",
+      );
+  });
+
+  it("answers only its own host", () => {
+    for (const hostHeader of [
+      "127.0.0.1:41234",
+      "localhost:41234",
+      "p-ffffffffffffffffffff.localhost:41234",
+      "rebound.example:41234",
+    ])
+      expect(
+        previewRequestRefusal({ headers: { host: hostHeader }, origin: own }),
+      ).toBe("A preview answers only on its own address");
   });
 });

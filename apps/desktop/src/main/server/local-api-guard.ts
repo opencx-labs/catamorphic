@@ -11,13 +11,12 @@ import { randomBytes, timingSafeEqual } from "node:crypto";
  * - the desktop's own windows carry a token the main process adds to their
  *   requests, which no page can learn;
  * - local programs that are not browsers (agent harnesses, the phone's
- *   proxy, command-line tools) send no browser headers and are trusted as
- *   any program the person runs is;
- * - anything else a browser sends (an `Origin` or a `Sec-Fetch-*` header)
- *   is refused.
+ *   proxy, command-line tools) send neither `Origin` nor `Sec-Fetch-Site`
+ *   and are trusted as any program the person runs is;
+ * - anything else a browser sends is refused.
  *
- * Both also refuse a `Host` that is not the loopback address they listen
- * on, which a DNS rebinding attack would send.
+ * Both also refuse a `Host` other than the address they serve, which a DNS
+ * rebinding attack would send.
  */
 
 /** The header the desktop's own windows carry to the embedded API. */
@@ -35,11 +34,17 @@ function header(headers: Headers, name: string): string | undefined {
   return Array.isArray(value) ? value[0] : value;
 }
 
-/** A browser stamped this request: a page, not a local program. */
+/**
+ * A browser stamped this request: a page, not a local program. Browsers
+ * send `Sec-Fetch-Site` with every request to a trustworthy URL (loopback
+ * is one), and `Origin` with every cross-origin one. Node's `fetch`
+ * (undici, in this main process, the phone's proxy, or code in a local
+ * sandbox) sends `Sec-Fetch-Mode` alone, so that one says nothing.
+ */
 function fromBrowser(headers: Headers): boolean {
   return (
     header(headers, "origin") !== undefined ||
-    Object.keys(headers).some((name) => name.startsWith("sec-fetch-"))
+    header(headers, "sec-fetch-site") !== undefined
   );
 }
 
@@ -89,22 +94,22 @@ export function localApiRefusal(input: {
 }
 
 /**
- * Why a preview's loopback origin (ADR 0208) refuses a request, or
- * undefined. A preview tab loads its own pages and their resources; a page
- * on another origin, in any browser, gets nothing from it.
+ * Why a preview (ADR 0208) refuses a request, or undefined. A preview is
+ * served on a loopback host of its own (`http://p-<id>.localhost:<port>`),
+ * so its cookies are its alone; it answers only that host. A preview tab
+ * loads its own pages and their resources, and a typed address; every
+ * request from another site, a plain link included, gets nothing.
  */
 export function previewRequestRefusal(input: {
   headers: Headers;
-  port: number;
+  /** The preview's own origin. */
+  origin: string;
 }): string | undefined {
-  if (!loopbackHost(input))
-    return "A preview answers only on its loopback address";
+  const own = new URL(input.origin);
+  if (header(input.headers, "host")?.toLowerCase() !== own.host)
+    return "A preview answers only on its own address";
   const origin = header(input.headers, "origin");
-  if (
-    origin !== undefined &&
-    origin !== `http://127.0.0.1:${input.port}` &&
-    origin !== `http://localhost:${input.port}`
-  )
+  if (origin !== undefined && origin !== own.origin)
     return "Another site cannot use this preview";
   const site = header(input.headers, "sec-fetch-site");
   if (site !== undefined && site !== "same-origin" && site !== "none")

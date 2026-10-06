@@ -642,6 +642,7 @@ app.whenReady().then(async () => {
     file: path.join(paths.root, "..", "mobile-pairing.json"),
     profileConfig,
     serverUrl: () => state.current?.url ?? null,
+    apiToken: () => state.current?.apiToken ?? null,
     ...(e2eMobilePairingAddress && e2eDataDir
       ? {
           lanAddresses: () => [e2eMobilePairingAddress],
