@@ -34,6 +34,22 @@ function onPath(command: string): string | undefined {
   return undefined;
 }
 
+/**
+ * The machine's own commands, without the ones the script installs or
+ * stubs: a runner image's real Docker must not stand in for the stub.
+ */
+const system = path.join(root, "system");
+fs.mkdirSync(system);
+for (const dir of ["/usr/bin", "/bin"]) {
+  for (const name of fs.readdirSync(dir)) {
+    if (/^(docker|dockerd|containerd|runsc)/.test(name)) continue;
+    // The first directory wins, as on PATH; /bin is often /usr/bin.
+    const link = path.join(system, name);
+    if (!fs.lstatSync(link, { throwIfNoEntry: false }))
+      fs.symlinkSync(path.join(dir, name), link);
+  }
+}
+
 function write(name: string, content: string): string {
   const file = path.join(root, name);
   fs.writeFileSync(file, content, { mode: 0o755 });
@@ -161,7 +177,7 @@ describe("the worker install script", () => {
     const result = spawnSync(shell, [file, ...args.argv], {
       encoding: "utf8",
       env: {
-        PATH: `${stubs}:/usr/bin:/bin`,
+        PATH: `${stubs}:${system}`,
         STUB_LOG: log,
         STUB_STATE: args.state,
         FAKE_UID: String(args.uid ?? 0),
