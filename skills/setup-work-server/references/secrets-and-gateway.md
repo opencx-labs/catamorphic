@@ -431,6 +431,11 @@ never the key.
 }
 ```
 
+- A chat's sandbox gets the aliases its agent uses: list the alias in the
+  agent's `connections` (`.work/agents/developer.json`:
+  `"connections": ["logs"]`), and grant it in the member's role
+  (`"connections": [{ "environment": "dev", "alias": "logs" }]`). Terminals
+  in that chat's workspace see the same aliases.
 - The capabilities are the HTTP methods the alias may send (`get` also
   allows HEAD); leave them out to keep the connection's own. The entry's
   `paths`, when set, bound what may be reached. A contained agent's chat

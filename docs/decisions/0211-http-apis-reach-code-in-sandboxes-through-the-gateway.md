@@ -21,8 +21,10 @@ and every path below it forward any of GET, HEAD, POST, PUT, PATCH and DELETE
 to the connection's base URL, modelled on the model route: the session's
 `sandbox` grant authenticates (as a bearer, as the HTTP Basic password with
 any user name, or in `x-work-grant`) and is checked before the body is read;
-the alias must be bound in the session's Environment (ADR 0172) to a
-connection whose provider declares `http: { baseUrl, paths?, headers }`; the
+the alias must be bound in the session's Environment (ADR 0172), used by the
+chat's agent (its definition's `connections`, as for every alias an agent
+reaches) and granted by the member's role, to a connection whose provider
+declares `http: { baseUrl, paths?, headers }`; the
 path stays below the base URL (no dot segments or encoded slashes) and inside
 `paths` when set; the binding's capabilities are the methods (`get` also
 allows HEAD; a binding without `capabilities` keeps the connection's own); a
