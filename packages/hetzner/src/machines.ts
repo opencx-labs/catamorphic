@@ -1,10 +1,12 @@
 import { getTracer, withSpan } from "@catamorphic/otel";
 import { z } from "zod";
 import {
+  type HetznerAction,
   HetznerActionSchema,
   HetznerCloudClient,
   type HetznerCloudClientOptions,
   HetznerCloudError,
+  type HetznerImage,
   HetznerImageSchema,
   type HetznerServer,
   HetznerServerSchema,
@@ -41,10 +43,13 @@ export interface HetznerMachineSpec {
 export interface HetznerCloudMachinesOptions {
   /** A client, or what to build one from. */
   client: HetznerCloudClient | HetznerCloudClientOptions;
-  /** How long a snapshot may take (default 60 minutes). */
-  snapshotTimeoutMs?: number;
-  /** How long a deletion may take (default 5 minutes). */
-  deleteTimeoutMs?: number;
+  /**
+   * How long one `destroy` waits for a snapshot it started (default 0: it
+   * returns at once, and a later call finishes the destruction).
+   */
+  snapshotWaitMs?: number;
+  /** How long one `destroy` waits for a deletion (default 1 minute). */
+  deleteWaitMs?: number;
 }
 
 /**
@@ -52,7 +57,7 @@ export interface HetznerCloudMachinesOptions {
  * name: a server already named so and labeled as this machine is the
  * machine. Destruction finds the server by its id or by its
  * `work-machine` label, succeeds when it is already gone, and can keep a
- * snapshot of its disk first.
+ * snapshot of its disk first, over as many calls as that takes.
  */
 export class HetznerCloudMachines {
   readonly client: HetznerCloudClient;
@@ -135,7 +140,9 @@ export class HetznerCloudMachines {
   /**
    * Delete the machine's server. `ref` is its id when known; otherwise it is
    * found by its `work-machine` label. With `snapshot`, an image of its disk
-   * is kept first (one per server, so a retry reuses it).
+   * is kept first: the first call starts it, and until it is written a call
+   * returns `done: false`, as it does while Hetzner is still deleting the
+   * server. One call waits about a minute at most; call again until done.
    */
   destroy(args: {
     name: string;
@@ -144,7 +151,7 @@ export class HetznerCloudMachines {
       description: string;
       labels?: Readonly<Record<string, string>>;
     };
-  }): Promise<{ deleted: number[]; snapshots: number[] }> {
+  }): Promise<{ done: boolean; deleted: number[]; snapshots: number[] }> {
     return withSpan(
       {
         tracer,
@@ -154,42 +161,36 @@ export class HetznerCloudMachines {
           "catamorphic.machine.snapshot": Boolean(args.snapshot),
         },
       },
-      async () => {
+      async (span) => {
         const servers = await this.find(args);
         const deleted: number[] = [];
         const snapshots: number[] = [];
+        let done = true;
         for (const server of servers) {
-          if (args.snapshot)
-            snapshots.push(
-              await this.snapshot({
-                server,
-                ...args.snapshot,
-                name: args.name,
-              }),
-            );
-          try {
-            const body = await this.client.request({
-              method: "DELETE",
-              path: `/servers/${server.id}`,
+          if (server.status === "deleting") {
+            done = false;
+            continue;
+          }
+          if (args.snapshot) {
+            const image = await this.snapshot({
+              server,
+              ...args.snapshot,
+              name: args.name,
             });
-            const { action } = z
-              .object({ action: HetznerActionSchema })
-              .parse(body);
-            // A name is reused only once its old server is gone.
-            await this.client.waitForAction({
-              id: action.id,
-              timeoutMs: this.options.deleteTimeoutMs ?? 5 * 60_000,
-            });
-          } catch (error) {
-            if (
-              !(error instanceof HetznerCloudError) ||
-              error.code !== "not_found"
-            )
-              throw error;
+            if (image.status !== "available") {
+              done = false;
+              continue;
+            }
+            snapshots.push(image.id);
+          }
+          if (!(await this.delete(server))) {
+            done = false;
+            continue;
           }
           deleted.push(server.id);
         }
-        return { deleted, snapshots };
+        span.setAttribute("catamorphic.machine.done", done);
+        return { done, deleted, snapshots };
       },
     );
   }
@@ -209,23 +210,65 @@ export class HetznerCloudMachines {
     });
   }
 
-  /** Keep an image of the server's disk; resolves with the image's id. */
+  /** Delete one server; false while Hetzner is still deleting it. */
+  private async delete(server: HetznerServer): Promise<boolean> {
+    let actionId: number;
+    try {
+      const body = await this.client.request({
+        method: "DELETE",
+        path: `/servers/${server.id}`,
+      });
+      actionId = z.object({ action: HetznerActionSchema }).parse(body)
+        .action.id;
+    } catch (error) {
+      if (error instanceof HetznerCloudError && error.code === "not_found")
+        return true;
+      throw error;
+    }
+    try {
+      // A name is reused only once its old server is gone.
+      await this.client.waitForAction({
+        id: actionId,
+        timeoutMs: this.options.deleteWaitMs ?? 60_000,
+      });
+      return true;
+    } catch (error) {
+      if (error instanceof HetznerCloudError && error.code === "timeout")
+        return false;
+      throw error;
+    }
+  }
+
+  /** The snapshot kept of a server, or being written, if any. */
+  private async snapshotOf(
+    server: HetznerServer,
+  ): Promise<HetznerImage | undefined> {
+    const images = await this.client.images({
+      type: "snapshot",
+      labelSelector: `${SNAPSHOT_SERVER_LABEL}=${server.id}`,
+    });
+    return images.find((image) => image.status === "available") ?? images[0];
+  }
+
+  /**
+   * The server's snapshot: the one an earlier call kept or started, or one
+   * started now. Starting one is never retried blindly, since a retry after
+   * a lost answer would bill a second image: it looks for it instead.
+   */
   private async snapshot(args: {
     server: HetznerServer;
     name: string;
     description: string;
     labels?: Readonly<Record<string, string>>;
-  }): Promise<number> {
-    const timeoutMs = this.options.snapshotTimeoutMs ?? 60 * 60_000;
-    const [kept] = await this.client.images({
-      type: "snapshot",
-      labelSelector: `${SNAPSHOT_SERVER_LABEL}=${args.server.id}`,
-    });
-    if (kept?.status === "available") return kept.id;
-    if (!kept) {
+  }): Promise<Pick<HetznerImage, "id" | "status">> {
+    const kept = await this.snapshotOf(args.server);
+    if (kept) return kept;
+    let started: { image: HetznerImage; action: HetznerAction };
+    try {
       const body = await this.client.request({
         method: "POST",
         path: `/servers/${args.server.id}/actions/create_image`,
+        idempotent: false,
         body: {
           type: "snapshot",
           description: args.description,
@@ -236,29 +279,26 @@ export class HetznerCloudMachines {
           },
         },
       });
-      const created = z
+      started = z
         .object({ image: HetznerImageSchema, action: HetznerActionSchema })
         .parse(body);
-      await this.client.waitForAction({ id: created.action.id, timeoutMs });
-      return created.image.id;
+    } catch (error) {
+      if (error instanceof HetznerCloudError && !error.definite) {
+        const appeared = await this.snapshotOf(args.server);
+        if (appeared) return appeared;
+      }
+      throw error;
     }
-    // A snapshot an earlier call started is still being written.
-    return this.client.poll({
-      timeoutMs,
-      what: `The snapshot of ${args.name}`,
-      check: async () => {
-        const [image] = await this.client.images({
-          type: "snapshot",
-          labelSelector: `${SNAPSHOT_SERVER_LABEL}=${args.server.id}`,
-        });
-        if (!image)
-          throw new HetznerCloudError(
-            0,
-            "snapshot_lost",
-            `The snapshot of ${args.name} disappeared while it was being written`,
-          );
-        return image.status === "available" ? image.id : undefined;
-      },
-    });
+    try {
+      await this.client.waitForAction({
+        id: started.action.id,
+        timeoutMs: this.options.snapshotWaitMs ?? 0,
+      });
+      return { id: started.image.id, status: "available" };
+    } catch (error) {
+      if (error instanceof HetznerCloudError && error.code === "timeout")
+        return started.image;
+      throw error;
+    }
   }
 }

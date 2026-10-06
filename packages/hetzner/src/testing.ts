@@ -55,6 +55,8 @@ export interface FakeFailure {
   times?: number;
   /** Throw as a network error instead of answering. */
   network?: boolean;
+  /** Carry the call out before failing, as when an answer is lost. */
+  processed?: boolean;
 }
 
 export class FakeHetznerCloud {
@@ -82,6 +84,30 @@ export class FakeHetznerCloud {
   /** Answer the next matching call(s) with this failure. */
   fail(failure: FakeFailure): void {
     this.failures.push({ times: 1, ...failure });
+  }
+
+  /** Time passes: every running action finishes, or fails as configured. */
+  advance(): void {
+    for (const action of this.actions.values())
+      if (action.status === "running") this.settle(action);
+  }
+
+  private settle(action: FakeAction): void {
+    if (this.failAction === action.command) {
+      action.status = "error";
+      action.error = {
+        code: "action_failed",
+        message: `${action.command} failed`,
+      };
+      this.failAction = undefined;
+      // A failed image is not kept.
+      for (const resource of action.resources)
+        if (resource.type === "image") this.images.delete(resource.id);
+      return;
+    }
+    action.status = "success";
+    action.progress = 100;
+    action.finish();
   }
 
   /** Servers whose name is `name`, any status. */
@@ -113,6 +139,9 @@ export class FakeHetznerCloud {
       failure.times = (failure.times ?? 1) - 1;
       if (failure.times <= 0)
         this.failures.splice(this.failures.indexOf(failure), 1);
+      // Done, and the answer lost on the way back.
+      if (failure.processed)
+        this.route({ method, path, query: url.searchParams, body });
       if (failure.network) throw new TypeError("fetch failed");
       return errorResponse(
         failure.status,
@@ -227,20 +256,8 @@ export class FakeHetznerCloud {
           `action with ID '${actionMatch[1]}' not found`,
         );
       if (action.status === "running") {
-        if (action.remaining <= 0) {
-          if (this.failAction === action.command) {
-            action.status = "error";
-            action.error = {
-              code: "action_failed",
-              message: `${action.command} failed`,
-            };
-            this.failAction = undefined;
-          } else {
-            action.status = "success";
-            action.progress = 100;
-            action.finish();
-          }
-        } else action.remaining -= 1;
+        if (action.remaining <= 0) this.settle(action);
+        else action.remaining -= 1;
       }
       return json(200, { action: actionJson(action) });
     }
