@@ -123,7 +123,15 @@ import {
   setProjectDefaultAgentSlug,
 } from "./project-manifest.js";
 import { createReservedProject } from "./project-path.js";
+import { remoteMachinesRequest } from "./remote-api.js";
 import { probeRemoteConnection } from "./remote-connection-status.js";
+import {
+  beginCodexSignIn,
+  cancelCodexSignIn,
+  codexSignInStatus,
+  listRemoteMachines,
+  signOutOfCodex,
+} from "./remote-machines.js";
 import {
   authorizeRemoteServer,
   type RemoteOAuthCredentials,
@@ -2579,6 +2587,62 @@ export function registerIpcHandlers(
       });
     },
   );
+
+  // The member's own machines on the project's server and Codex sign-ins
+  // there (ADR 0213). Codex's device code login runs on the machine, so
+  // only the one-time code passes through here.
+  const machinesRequest = (
+    event: Electron.IpcMainInvokeEvent,
+    projectId: string,
+  ) =>
+    remoteMachinesRequest({
+      profiles: { forProject: () => storesFor(event) },
+      projectId,
+    });
+  ipcMain.handle("catamorphic:remote-machines", (event, projectId: string) =>
+    listRemoteMachines({ request: machinesRequest(event, projectId) }),
+  );
+  ipcMain.handle(
+    "catamorphic:remote-codex-sign-in",
+    (event, input: { projectId: string; machineId: string }) =>
+      beginCodexSignIn({
+        request: machinesRequest(event, input.projectId),
+        machineId: input.machineId,
+      }),
+  );
+  ipcMain.handle(
+    "catamorphic:remote-codex-sign-in-status",
+    (event, input: { projectId: string; machineId: string; attempt: string }) =>
+      codexSignInStatus({
+        request: machinesRequest(event, input.projectId),
+        machineId: input.machineId,
+        attempt: input.attempt,
+      }),
+  );
+  ipcMain.handle(
+    "catamorphic:remote-codex-sign-in-cancel",
+    (event, input: { projectId: string; machineId: string; attempt: string }) =>
+      cancelCodexSignIn({
+        request: machinesRequest(event, input.projectId),
+        machineId: input.machineId,
+        attempt: input.attempt,
+      }),
+  );
+  ipcMain.handle(
+    "catamorphic:remote-codex-sign-out",
+    (event, input: { projectId: string; machineId: string }) =>
+      signOutOfCodex({
+        request: machinesRequest(event, input.projectId),
+        machineId: input.machineId,
+      }),
+  );
+  // The device code page opens in a browser tab of the asking window, as
+  // the project's own sign-in page does.
+  ipcMain.handle("catamorphic:open-sign-in-link", (event, url: string) => {
+    if (!URL.canParse(url) || new URL(url).protocol !== "https:")
+      throw new Error("A sign-in link starts with https://");
+    openWorkspaceUrl(event.sender, url);
+  });
 
   // Organization service connections (ADR 0172), reached through any
   // project linked to the server; the server refuses non-administrators.

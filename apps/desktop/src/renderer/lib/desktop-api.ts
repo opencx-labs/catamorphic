@@ -66,6 +66,11 @@ import type {
   PrDetails,
 } from "../../shared/pr-details.js";
 import type {
+  CodexSignIn,
+  CodexSignInStatus,
+  RemoteMachine,
+} from "../../shared/remote-machines.js";
+import type {
   ScreenShareAnswer,
   ScreenShareKind,
   ScreenShareRequest,
@@ -1004,6 +1009,32 @@ export interface CatamorphicDesktopApi {
     name: string;
     member?: string;
   }) => Promise<void>;
+  /**
+   * The member's own machines on the project's server (ADR 0213), or null
+   * when the server has no such route.
+   */
+  remoteMachines: (projectId: string) => Promise<RemoteMachine[] | null>;
+  /** Start Codex's device code sign-in on one of those machines. */
+  remoteCodexSignIn: (input: {
+    projectId: string;
+    machineId: string;
+  }) => Promise<CodexSignIn>;
+  remoteCodexSignInStatus: (input: {
+    projectId: string;
+    machineId: string;
+    attempt: string;
+  }) => Promise<CodexSignInStatus>;
+  remoteCodexSignInCancel: (input: {
+    projectId: string;
+    machineId: string;
+    attempt: string;
+  }) => Promise<void>;
+  remoteCodexSignOut: (input: {
+    projectId: string;
+    machineId: string;
+  }) => Promise<{ signedOut: boolean }>;
+  /** Opens an https sign-in page in a browser tab of this window. */
+  openSignInLink: (url: string) => Promise<void>;
   /** Organization service connections; administrators only (ADR 0172). */
   remoteServiceConnections: (projectId: string) => Promise<{
     providers: RemoteConnectionProvider[];

@@ -572,6 +572,18 @@ const api = {
     invoke("catamorphic:remote-secret-set", input),
   remoteSecretDelete: (input: unknown): Promise<void> =>
     invoke("catamorphic:remote-secret-delete", input),
+  remoteMachines: (projectId: string): Promise<unknown> =>
+    invoke("catamorphic:remote-machines", projectId),
+  remoteCodexSignIn: (input: unknown): Promise<unknown> =>
+    invoke("catamorphic:remote-codex-sign-in", input),
+  remoteCodexSignInStatus: (input: unknown): Promise<unknown> =>
+    invoke("catamorphic:remote-codex-sign-in-status", input),
+  remoteCodexSignInCancel: (input: unknown): Promise<void> =>
+    invoke("catamorphic:remote-codex-sign-in-cancel", input),
+  remoteCodexSignOut: (input: unknown): Promise<unknown> =>
+    invoke("catamorphic:remote-codex-sign-out", input),
+  openSignInLink: (url: string): Promise<void> =>
+    invoke("catamorphic:open-sign-in-link", url),
   remoteServiceConnections: (projectId: string): Promise<unknown> =>
     invoke("catamorphic:remote-service-connections", projectId),
   remoteServiceConnectionCreate: (input: unknown): Promise<unknown> =>

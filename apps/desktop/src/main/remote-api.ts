@@ -1,5 +1,6 @@
 import { Readable } from "node:stream";
 import type { FastifyReply, FastifyRequest } from "fastify";
+import type { RemoteMachinesRequest } from "./remote-machines.js";
 import { refreshRemoteCredentials } from "./remote-oauth.js";
 import type { RemoteProjectsStore } from "./remote-projects-store.js";
 import type { RemoteTerminalRequest } from "./remote-terminal.js";
@@ -98,29 +99,65 @@ export function remoteTerminalRequest(args: {
     .forProject(args.projectId)
     .remoteProjects.inspect(args.projectId);
   if (!linked) return undefined;
-  return async (request) => {
-    const sent = await remoteProjectFetch({
+  return (request) =>
+    remoteJson({
       profiles: args.profiles,
       projectId: args.projectId,
       apiPath: `/projects/${args.projectId}/agent/sessions/${args.sessionId}/terminals${request.path}`,
       method: request.method,
-      ...(request.body === undefined
-        ? {}
-        : {
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify(request.body),
-          }),
+      body: request.body,
       ...(request.signal ? { signal: request.signal } : {}),
     });
-    if (!sent)
-      return {
-        status: 404,
-        body: { error: "This project is no longer linked to its server." },
-      };
+}
+
+/**
+ * JSON requests to the member's own machines on a linked project's server
+ * (ADR 0213). A project without a server answers 404, as an older server
+ * without the routes does.
+ */
+export function remoteMachinesRequest(args: {
+  profiles: RemoteProjectProfiles;
+  projectId: string;
+}): RemoteMachinesRequest {
+  return (request) =>
+    remoteJson({
+      profiles: args.profiles,
+      projectId: args.projectId,
+      apiPath: `/work/me/machines${request.path}`,
+      method: request.method,
+    });
+}
+
+/** One JSON request to a linked project's server as its member. */
+async function remoteJson(args: {
+  profiles: RemoteProjectProfiles;
+  projectId: string;
+  apiPath: string;
+  method: string;
+  body?: unknown;
+  signal?: AbortSignal;
+}): Promise<{ status: number; body: unknown }> {
+  const sent = await remoteProjectFetch({
+    profiles: args.profiles,
+    projectId: args.projectId,
+    apiPath: args.apiPath,
+    method: args.method,
+    ...(args.body === undefined
+      ? {}
+      : {
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(args.body),
+        }),
+    ...(args.signal ? { signal: args.signal } : {}),
+  });
+  if (!sent)
     return {
-      status: sent.response.status,
-      body: jsonBody(await sent.response.text()),
+      status: 404,
+      body: { error: "This project is no longer linked to its server." },
     };
+  return {
+    status: sent.response.status,
+    body: jsonBody(await sent.response.text()),
   };
 }
 
