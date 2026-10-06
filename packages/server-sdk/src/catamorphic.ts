@@ -147,7 +147,7 @@ export interface CatamorphicHostConfig {
   connectionBindings?: CatamorphicCoreConfig["connectionBindings"];
   /** Re-resolve current member authority before unattended dispatch. */
   resolveMemberIdentity?: CatamorphicCoreConfig["resolveMemberIdentity"];
-  /** Name members by email in workflows' host calls (ADR 0209). */
+  /** Name members by email in workflows' host calls (ADR 0210). */
   memberIdForEmail?: CatamorphicCoreConfig["memberIdForEmail"];
   /** URL resolver for the Fastify plugin's brokered `/connection-mcp` route. */
   connectionMcpUrl?: (args: {

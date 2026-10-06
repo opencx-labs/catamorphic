@@ -10,7 +10,7 @@ import { remapPaths, type SandboxPathMap } from "@catamorphic/sandbox";
  * become real ones before the harness sees them, and the paths the harness
  * reports become virtual again, so the host sees the same paths whatever
  * the sandbox. The attempt's environment keeps its values as they are
- * (they are the session's secrets and variables, ADR 0205), except
+ * (they are the session's secrets and variables, ADR 0206), except
  * `BASH_ENV`, which names one of the session's files.
  */
 export function withSandboxPaths(

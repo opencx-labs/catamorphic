@@ -84,7 +84,7 @@ describe("model access", () => {
     }
   });
 
-  it("gives the CLI the session's secrets the runner read, under Work's own settings (ADR 0205)", () => {
+  it("gives the CLI the session's secrets the runner read, under Work's own settings (ADR 0206)", () => {
     const built = options(
       attempt({
         modelAccess: {

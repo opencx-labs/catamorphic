@@ -1,4 +1,4 @@
--- A chat whose workspace has held project secrets (ADR 0205) masks, in
+-- A chat whose workspace has held project secrets (ADR 0206) masks, in
 -- every later turn and in its forks, every value it could hold: when it
 -- first held one, and a sealed record (a credential vault reference) of
 -- every value ever delivered to it, so a rotated value stays masked.

@@ -91,7 +91,7 @@ function median(values: number[]): number {
   return sorted[Math.floor(sorted.length / 2)] ?? Number.NaN;
 }
 
-describeIf("operations sealed to their executor (ADR 0206)", () => {
+describeIf("operations sealed to their executor (ADR 0207)", () => {
   beforeAll(async () => {
     await migrateToLatest({ db, schema });
   }, 120_000);
@@ -326,7 +326,7 @@ describeIf("operations sealed to their executor (ADR 0206)", () => {
       true,
     );
     console.info(
-      `[ADR 0206] one replica, local wakeups: median round trip ${median(times).toFixed(1)} ms (${times.map((time) => time.toFixed(1)).join(", ")})`,
+      `[ADR 0207] one replica, local wakeups: median round trip ${median(times).toFixed(1)} ms (${times.map((time) => time.toFixed(1)).join(", ")})`,
     );
   }, 60_000);
 
@@ -345,7 +345,7 @@ describeIf("operations sealed to their executor (ADR 0206)", () => {
     expect(woken(controllerReplica.workQueued)).toEqual(Array(15).fill(0));
     expect(woken(executorReplica.receiptRecorded)).toEqual(Array(15).fill(0));
     console.info(
-      `[ADR 0206] two replicas, polling only (as before local wakeups): median round trip ${median(times).toFixed(1)} ms (${times.map((time) => time.toFixed(1)).join(", ")})`,
+      `[ADR 0207] two replicas, polling only (as before local wakeups): median round trip ${median(times).toFixed(1)} ms (${times.map((time) => time.toFixed(1)).join(", ")})`,
     );
   }, 60_000);
 });

@@ -1,4 +1,4 @@
-# 0206 — Operations are sealed to their executor; worker credentials rotate
+# 0207 — Operations are sealed to their executor; worker credentials rotate
 
 - **Status:** Accepted
 - **Date:** 2026-10-06
@@ -9,9 +9,9 @@
 Every sandbox operation for a worker or a member's runner waits in a
 Postgres row until the executor takes it (ADR 0187). Its payload leaves the
 row once it runs, but Postgres keeps it in its write-ahead log and backups,
-and payloads now carry secrets and personal files (ADR 0205). A worker's
+and payloads now carry secrets and personal files (ADR 0206). A worker's
 credential was a static bearer for life. Each operation also waited for
-polling on both sides, which a terminal (ADR 0208) cannot afford.
+polling on both sides, which a terminal (ADR 0209) cannot afford.
 
 ## Decision
 

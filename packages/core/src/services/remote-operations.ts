@@ -74,7 +74,7 @@ export const RemoteOperationSchema = z.discriminatedUnion("kind", [
         )
         .readonly()
         .optional(),
-      // Directories the executor keeps across sandboxes (ADR 0207).
+      // Directories the executor keeps across sandboxes (ADR 0208).
       volumes: z
         .array(
           z.object({
@@ -173,7 +173,7 @@ export const RemoteOperationSchema = z.discriminatedUnion("kind", [
     kind: z.literal("process.list"),
     sandboxId: z.string(),
   }),
-  // A pooled machine returns to its pool (ADR 0204): the executor destroys
+  // A pooled machine returns to its pool (ADR 0205): the executor destroys
   // every sandbox it holds and deletes members' volumes and sign-ins.
   z.object({ kind: z.literal("machine.reset") }),
 ]);
@@ -228,7 +228,7 @@ export const RemoteOperationResultSchema = z.union([
 ]);
 
 /**
- * An operation as the queue stores and delivers it (ADR 0206): its kind in
+ * An operation as the queue stores and delivers it (ADR 0207): its kind in
  * the clear, everything else sealed to its executor's key. Postgres, its
  * log and its backups never see the operation itself.
  */
@@ -313,7 +313,7 @@ export function clientExecutor(id: string): string {
 
 /**
  * Register the public key operations for `executor` are sealed to from now
- * on (ADR 0206). Operations already queued stay sealed to the key they were
+ * on (ADR 0207). Operations already queued stay sealed to the key they were
  * sealed to. With `ifAbsent`, a key already registered stays. Returns the
  * key registered after the call.
  */
@@ -388,7 +388,7 @@ interface Wakeup {
 }
 
 /**
- * Local wakeups (ADR 0206): a replica that queues an operation wakes its own
+ * Local wakeups (ADR 0207): a replica that queues an operation wakes its own
  * polls waiting for that executor at once, and one that records a receipt
  * wakes its own controller waiting for that operation. A wakeup is only a
  * hint: whoever wakes reads Postgres again, and every waiter still polls, so
@@ -581,7 +581,7 @@ export interface RemoteExecutorLease {
 const IMAGE_BUILD_TIMEOUT_MS = 35 * 60_000;
 
 /**
- * How long an executor keeps a key it rotated away from (ADR 0206): the
+ * How long an executor keeps a key it rotated away from (ADR 0207): the
  * longest an operation other than a long command can wait in the queue, so
  * every operation sealed to that key before the rotation still opens. A
  * command whose own timeout is longer, sealed to a key the executor no
@@ -631,7 +631,7 @@ const SWEEP_EVERY_MS = 60_000;
 /**
  * How often a waiting controller reads its operation, and a waiting poll its
  * executor's queue, when no local wakeup comes: what an operation queued or
- * settled on another replica waits for (ADR 0206).
+ * settled on another replica waits for (ADR 0207).
  */
 const RECEIPT_POLL_MS = 100;
 const WORK_POLL_MS = 250;
@@ -645,7 +645,7 @@ const WORK_POLL_MS = 250;
  * executor's lease token, so no instance keeps per-operation state.
  *
  * Each operation is sealed to its executor's public key, read when it is
- * queued (ADR 0206): a row holds its kind and ciphertext, which only that
+ * queued (ADR 0207): a row holds its kind and ciphertext, which only that
  * executor opens. The instance that queues an operation wakes its own polls
  * for that executor at once, and the one that records a receipt its own
  * controller; operations queued or settled elsewhere are found by polling.
@@ -725,7 +725,7 @@ export class RemoteOperationQueue {
   }
 
   /**
-   * Return a pooled machine to its pool (ADR 0204): its executor destroys
+   * Return a pooled machine to its pool (ADR 0205): its executor destroys
    * every sandbox it holds and deletes members' volumes and sign-ins.
    * Resolves once the receipt arrives; fails at once while the executor is
    * not connected, so a caller tries again after it reconnects.
@@ -772,7 +772,7 @@ export class RemoteOperationQueue {
 
   /**
    * Queue one operation and wait for its receipt. An operation its executor
-   * could not open (sealed to a key it rotated away from, ADR 0206) did not
+   * could not open (sealed to a key it rotated away from, ADR 0207) did not
    * run, so it is sealed again to the executor's current key.
    */
   private async dispatch(args: {
@@ -831,7 +831,7 @@ export class RemoteOperationQueue {
       })
       .execute();
     // Whether this replica serves the executor's poll: then the operation
-    // leaves at once rather than at the poll's next look (ADR 0206).
+    // leaves at once rather than at the poll's next look (ADR 0207).
     args.span.setAttribute(
       "catamorphic.executor.local_poll",
       this.wakeups.workQueued(args.executor) > 0,
@@ -997,7 +997,7 @@ export class RemoteOperationQueue {
   /**
    * Executor side: record one operation's outcome and drop its payload, and
    * wake its controller if it waits in this process. An error is stored
-   * without any URL's credentials (ADR 0206). Idempotent: a receipt retried
+   * without any URL's credentials (ADR 0207). Idempotent: a receipt retried
    * after its response was lost succeeds.
    */
   async complete(

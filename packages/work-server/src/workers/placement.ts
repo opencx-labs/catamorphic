@@ -22,7 +22,7 @@ export const NodeLabelsSchema = z
 /**
  * Whose work a worker takes: everyone, or named people and directory groups
  * by email, and the owner-less work (project chats and automations) of named
- * projects (ADR 0173), or nobody: a pooled machine no rule holds (ADR 0204).
+ * projects (ADR 0173), or nobody: a pooled machine no rule holds (ADR 0205).
  * Control-plane state; a worker never declares it.
  */
 export const WorkerAccessSchema = z.union([

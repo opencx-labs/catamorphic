@@ -291,7 +291,7 @@ it.skipIf(!process.env.DATABASE_URL)(
         content.split("\n---\n").at(-1)?.trim();
       /**
        * Wait until the turn is inside its `sleep`, on the worker. Only the
-       * worker's key reads a queued command (ADR 0206).
+       * worker's key reads a queued command (ADR 0207).
        */
       const sleeping = async (since = new Date(Date.now() - 1_000)) =>
         expect

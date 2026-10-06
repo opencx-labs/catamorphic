@@ -18,7 +18,7 @@ import { SECRETS_CAPABILITY } from "../services/secrets-capability.js";
 import { testEnvironmentProvider } from "./test-environment.js";
 
 /**
- * `host["catamorphic.secrets"]` from inside a workflow (ADR 0209): a run
+ * `host["catamorphic.secrets"]` from inside a workflow (ADR 0210): a run
  * whose workflow declared `secrets:write` gives a member, named by email,
  * a value of their own; a workflow that declared nothing is refused, and
  * no call returns a value. The runtime is faked at the invocation boundary,
@@ -160,7 +160,7 @@ class FakeSandboxProvider implements SandboxProvider {
   async gitCheckout(): Promise<void> {}
 }
 
-describeIf("catamorphic.secrets host calls (ADR 0209)", () => {
+describeIf("catamorphic.secrets host calls (ADR 0210)", () => {
   let tmpDir: string;
   let core: CatamorphicCore;
   let db: ReturnType<typeof createDatabase>;

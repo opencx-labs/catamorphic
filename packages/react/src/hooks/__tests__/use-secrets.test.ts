@@ -107,7 +107,7 @@ describe("useUpsertProjectSecret / useDeleteProjectSecret", () => {
   });
 });
 
-describe("members' own values (ADR 0205)", () => {
+describe("members' own values (ADR 0206)", () => {
   it("sets the caller's own value at members/me", async () => {
     let body: unknown;
     server.use(

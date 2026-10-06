@@ -569,7 +569,7 @@ export interface RemoteProjectMember {
 }
 
 /**
- * One project secret on the server (ADR 0205): where it is declared, which
+ * One project secret on the server (ADR 0206): where it is declared, which
  * Environments receive it, and which values exist. Never a value.
  */
 export interface RemoteProjectSecret {
@@ -952,7 +952,7 @@ export interface CatamorphicDesktopApi {
     credentialEpoch: string;
   } | null>;
   remoteStatus: (projectId: string) => Promise<RemoteProjectStatus | null>;
-  /** A remote chat's preview on its own loopback address (ADR 0208). */
+  /** A remote chat's preview on its own loopback address (ADR 0209). */
   remotePreviewOpen: (input: {
     projectId: string;
     sessionId: string;
@@ -984,7 +984,7 @@ export interface CatamorphicDesktopApi {
     webLinks: string[];
   }>;
   /**
-   * The project's secrets (ADR 0205), and its members when `members` asks
+   * The project's secrets (ADR 0206), and its members when `members` asks
    * for them (needs `memberships:read`, else null).
    */
   remoteSecrets: (input: { projectId: string; members: boolean }) => Promise<{
@@ -1397,7 +1397,7 @@ export interface CatamorphicDesktopApi {
     projectId?: string;
     cols?: number;
     rows?: number;
-    /** A shell in this remote chat's workspace (ADR 0208). */
+    /** A shell in this remote chat's workspace (ADR 0209). */
     remoteChat?: { sessionId: string };
   }) => Promise<{ sessionId: string; cwd: string }>;
   terminalWrite: (sessionId: string, data: string) => Promise<void>;

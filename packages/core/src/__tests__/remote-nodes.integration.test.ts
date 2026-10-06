@@ -67,7 +67,7 @@ function descriptor(id: string): EnvironmentBinding {
 }
 
 const offer = { workspaceRoot: "/workspace", processes: false };
-/** Every executor here seals to the same key (ADR 0206). */
+/** Every executor here seals to the same key (ADR 0207). */
 const KEYS = generateExecutorKeyPair();
 
 async function connect(id: string, epoch: string) {
@@ -322,7 +322,7 @@ describe("remote nodes own their lease (ADR 0192)", () => {
     expect(await claim(released.sessionId)).toBeNull();
   });
 
-  it("refuses a remote executor that registered no key (ADR 0206)", async () => {
+  it("refuses a remote executor that registered no key (ADR 0207)", async () => {
     const id = `worker.${crypto.randomUUID().slice(0, 8)}`;
     await expect(
       connectWithoutKey(id, epochAt(Date.now())),

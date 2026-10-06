@@ -27,7 +27,7 @@ export interface DeleteMemberSecretInput {
 }
 
 /**
- * Set or replace one member's own value of a project secret (ADR 0205):
+ * Set or replace one member's own value of a project secret (ADR 0206):
  * the caller's own (`me`), or anyone's with `secrets:write`. The member's
  * own chats receive it instead of the shared value.
  */

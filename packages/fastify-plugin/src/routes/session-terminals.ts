@@ -56,7 +56,7 @@ export function workspaceRefusal(
 }
 
 /**
- * Terminals in a chat's workspace (ADR 0208): open one (starting the
+ * Terminals in a chat's workspace (ADR 0209): open one (starting the
  * workspace when it was given back), read its output by cursor with a
  * wait, type into it, resize it, close it. Only the person who opened a
  * terminal reaches it.

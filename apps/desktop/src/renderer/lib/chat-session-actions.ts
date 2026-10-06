@@ -11,7 +11,7 @@ export function chatSessionMenu(args: {
   archived: boolean;
   /**
    * The chat lives on its project's server, so a person can work in its
-   * workspace beside the agent (ADR 0208).
+   * workspace beside the agent (ADR 0209).
    */
   remote?: boolean;
 }): ChatSessionMenuEntry[] {

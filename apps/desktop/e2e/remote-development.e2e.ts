@@ -15,7 +15,7 @@ import {
 } from "./harness.js";
 
 /**
- * Remote development end to end (ADRs 0205, 0207, 0208): a member connects
+ * Remote development end to end (ADRs 0206, 0208, 0209): a member connects
  * the desktop to a real Work server, sets their own value of a project
  * secret, chats with an agent whose workspace has the Environment's secrets
  * and setup, then opens a terminal in that workspace, starts a server there
@@ -294,7 +294,7 @@ describe("remote development on a Work server", () => {
         WORK_FAKE_AGENT: "1",
         WORK_SANDBOX: "local-process",
         // A member's own chat is theirs alone here (ADR 0184), so it
-        // receives the Environment's secrets (ADR 0205).
+        // receives the Environment's secrets (ADR 0206).
         WORK_PERSONAL_CREDENTIALS: "accept",
       },
       stdio: ["ignore", log, log],

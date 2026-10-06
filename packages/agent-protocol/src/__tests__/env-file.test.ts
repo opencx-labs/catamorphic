@@ -9,7 +9,7 @@ import { formatEnvFile, parseEnvFile, shellSingleQuote } from "../env-file.js";
 const execute = promisify(execFile);
 
 /*
- * The environment file a sandbox's shells and runner load (ADR 0205): the
+ * The environment file a sandbox's shells and runner load (ADR 0206): the
  * parser reads back exactly what the writer wrote, and a shell sourcing it
  * sees the same values.
  */

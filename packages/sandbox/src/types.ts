@@ -82,14 +82,14 @@ export interface CreateSandboxOpts {
    */
   signIns?: ReadonlyArray<{ harness: SignInHarness; member: string }>;
   /**
-   * Directories kept on the machine across sandboxes (ADR 0207), mounted
+   * Directories kept on the machine across sandboxes (ADR 0208), mounted
    * at their paths. Needs the `volumes` capability.
    */
   volumes?: readonly SandboxVolume[];
 }
 
 /**
- * A directory that persists on the machine across sandboxes (ADR 0207).
+ * A directory that persists on the machine across sandboxes (ADR 0208).
  * The control plane names it with {@link volumeKey}, so every sandbox of
  * the same owner, project and volume name sees the same directory.
  */
@@ -111,11 +111,11 @@ export interface SandboxVolume {
   temporary?: boolean;
 }
 
-/** Volume names an Environment may declare (ADR 0207). */
+/** Volume names an Environment may declare (ADR 0208). */
 export const VOLUME_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,39}$/;
 
 /**
- * The machine-unique key of one owner's volume in one project (ADR 0207):
+ * The machine-unique key of one owner's volume in one project (ADR 0208):
  * readable name, then a digest of what identifies it.
  */
 export function volumeKey(input: {
@@ -137,8 +137,8 @@ export function volumeKey(input: {
 export const VOLUME_KEY_PATTERN = /^[a-z0-9][a-z0-9-]{0,39}-[0-9a-f]{24}$/;
 
 /**
- * A provider's volumes on its machine (ADR 0207): forgotten when unused for
- * long, and all removed when a pooled machine is reset (ADR 0204).
+ * A provider's volumes on its machine (ADR 0208): forgotten when unused for
+ * long, and all removed when a pooled machine is reset (ADR 0205).
  */
 export interface SandboxVolumeProvider {
   /** Remove volumes no sandbox mounted for `unusedForMs`; returns their keys. */
@@ -254,7 +254,7 @@ export interface SandboxProvider {
    */
   readonly processes?: SandboxProcessProvider;
 
-  /** Persistent volumes (ADR 0207); present when the provider mounts them. */
+  /** Persistent volumes (ADR 0208); present when the provider mounts them. */
   readonly volumes?: SandboxVolumeProvider;
 }
 

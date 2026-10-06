@@ -19,7 +19,7 @@ export function ownContainerId(mountinfo: string): string | undefined {
 
 /**
  * How bind mount sources name this process's files on the daemon's
- * machine (ADR 0203). A worker running in a container that shares the
+ * machine (ADR 0204). A worker running in a container that shares the
  * machine's daemon sees its data directory at the mount's destination;
  * the daemon needs the mount's source. Outside a container the paths are
  * the same.

@@ -23,7 +23,7 @@ export interface MachineManagement {
   publicBase: string;
   tenantId: string;
   authorityId: string;
-  /** Machine classes (ADR 0204), to check pooled enrollments. */
+  /** Machine classes (ADR 0205), to check pooled enrollments. */
   classes: Readonly<Record<string, MachineClass>>;
   /** What machines install, for the printed install command. */
   install: { target: InstallTarget } | { unavailable: string };
@@ -38,7 +38,7 @@ type Handler = (
 
 /**
  * One machine action and where it lives: the loopback operator listener,
- * and for what administrators may also do, the public API (ADR 0204).
+ * and for what administrators may also do, the public API (ADR 0205).
  */
 interface MachineRoute {
   method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
@@ -75,7 +75,7 @@ export function registerMachineSetup(
 
 /**
  * Organization administrators manage workers and machine rules through the
- * public API as the operator does on the loopback listener (ADR 0204), with
+ * public API as the operator does on the loopback listener (ADR 0205), with
  * the same handlers.
  */
 export function registerMachineAdministration(
@@ -135,7 +135,7 @@ function machineRoutes(args: MachineManagement): MachineRoute[] {
             labels: z.unknown().optional(),
             access: z.unknown().optional(),
             trusted: z.boolean().optional(),
-            /** A pooled machine rules assign (ADR 0204). */
+            /** A pooled machine rules assign (ADR 0205). */
             pool: z.boolean().optional(),
           })
           .safeParse(request.body);
@@ -234,7 +234,7 @@ function machineRoutes(args: MachineManagement): MachineRoute[] {
         }
       },
     },
-    // The worker rotates its credential and key at its next call (ADR 0206);
+    // The worker rotates its credential and key at its next call (ADR 0207);
     // it also does so on its own every 30 days.
     {
       method: "POST",

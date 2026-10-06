@@ -14,7 +14,7 @@ interface StoredKey {
 }
 
 /**
- * The key a Work server seals this machine's operations to (ADR 0206):
+ * The key a Work server seals this machine's operations to (ADR 0207):
  * `<userData>/profiles/<id>/runner-key.json`, owner-only, its private half
  * encrypted at rest via safeStorage like remote credentials. Created on
  * first use; the This machine runner registers its public half every time

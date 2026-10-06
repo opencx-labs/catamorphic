@@ -46,7 +46,7 @@ export interface TerminalScreenProps {
   readOnly?: boolean;
   /**
    * A shell in this remote chat's workspace on the project's server (ADR
-   * 0208) instead of one on this computer.
+   * 0209) instead of one on this computer.
    */
   remoteChat?: { sessionId: string };
   /** Shell title changes (OSC 0/2) — feeds the tab label. */

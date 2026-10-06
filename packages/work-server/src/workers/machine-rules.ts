@@ -43,7 +43,7 @@ export const DEFAULT_RETAIN_DAYS = 7;
 const DAY_MS = 24 * 60 * 60_000;
 
 /**
- * A machine rule (ADRs 0167, 0204): every active member of a directory
+ * A machine rule (ADRs 0167, 0205): every active member of a directory
  * group gets a machine of their own, or the group shares a fixed number of
  * machines, of a machine class. A machine nobody should have any more is
  * released and kept for `retainDays` before it is destroyed or reset.
@@ -85,7 +85,7 @@ export interface MachineProvisioner {
       code: string;
       /**
        * Cloud-init user data that installs the worker with this code (ADR
-       * 0204), when the server knows its worker image.
+       * 0205), when the server knows its worker image.
        */
       cloudInit?: string;
     };
@@ -177,7 +177,7 @@ interface Desired {
 const HETZNER_REF = "hcloud:";
 
 /**
- * Keeps workers in step with machine rules and the directory (ADR 0204):
+ * Keeps workers in step with machine rules and the directory (ADR 0205):
  * creates cloud machines and assigns pooled ones that are missing, updates
  * placement that drifted, releases machines nobody should have any more,
  * and destroys or resets them once their retention ends. Retention runs on
@@ -708,7 +708,7 @@ export class MachineReconciler {
   }
 
   /**
-   * Pooled machines (ADR 0204): each place a pool rule calls for holds one
+   * Pooled machines (ADR 0205): each place a pool rule calls for holds one
    * free machine of its class. Machines nobody holds any more are released,
    * then reset through their worker once their retention ends.
    */

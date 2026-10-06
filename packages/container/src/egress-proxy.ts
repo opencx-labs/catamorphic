@@ -17,7 +17,7 @@ export type EgressPolicy =
   | { allow: readonly string[] }
   /**
    * Open egress for a sandbox whose nested containers have no route of
-   * their own (gVisor has no NAT, ADR 0203).
+   * their own (gVisor has no NAT, ADR 0204).
    */
   | { any: true };
 
@@ -184,7 +184,7 @@ const HEAD_TIMEOUT_MS = 30_000;
 const MAX_CONNECTIONS = 256;
 
 /**
- * Decide where a request may go (ADR 0203); `host` is valid already. A
+ * Decide where a request may go (ADR 0204); `host` is valid already. A
  * name is resolved here, once: every address it resolves to is checked,
  * and the connection goes to a checked address. A name on the allowlist
  * (or any name, for an open policy) reaches public addresses. The
@@ -233,7 +233,7 @@ export async function egressDecision(args: {
 }
 
 /**
- * The machine side of a restricted sandbox's only way out (ADR 0203): an
+ * The machine side of a restricted sandbox's only way out (ADR 0204): an
  * HTTP proxy on a Unix socket mounted into the sandbox. It tunnels
  * `CONNECT host:port` and forwards absolute-form plain HTTP requests to
  * what {@link egressDecision} admits, answers 400 to a request it cannot

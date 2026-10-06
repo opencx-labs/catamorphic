@@ -230,7 +230,7 @@ describe("project Environment policy", () => {
     expect(parsed.entries[0]?.invalid).toBeDefined();
   });
 
-  it("parses secrets, setup and volumes (ADRs 0205, 0207)", () => {
+  it("parses secrets, setup and volumes (ADRs 0206, 0208)", () => {
     const parsed = parseProjectEnvironmentPolicy({
       secrets: {
         CLICKHOUSE_API_KEY: { description: "Your ClickHouse key" },

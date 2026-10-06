@@ -55,7 +55,7 @@ export interface ClientRunnerTransport {
   renew(): Promise<void>;
   /**
    * Take up to `max` operations, long-polling, each still sealed to this
-   * runner's key (ADR 0206). A retry repeats `pollId`, and the control plane
+   * runner's key (ADR 0207). A retry repeats `pollId`, and the control plane
    * answers it with what that poll took, so an operation is never lost with
    * a response.
    */
@@ -94,7 +94,7 @@ function definite(error: unknown): boolean {
 class RunnerStoppedError extends Error {}
 
 /**
- * How a runner opens what it receives (ADR 0206): its address in the queue
+ * How a runner opens what it receives (ADR 0207): its address in the queue
  * (`node:<id>` for a worker, `client:<id>` for a member's runner) and its
  * private keys, the current one first. A worker that rotated keeps its
  * previous key, since operations sealed before the rotation may still
@@ -116,7 +116,7 @@ export interface ClientRunnerKeys {
  * balancer's 502 or an instance restarting never costs running work its
  * executor (ADR 0187). An operation runs at most once; only its receipt is
  * ever retried. Every operation arrives sealed to this runner's key, and one
- * that does not open with `keys` fails without running (ADR 0206).
+ * that does not open with `keys` fails without running (ADR 0207).
  */
 export function startClientRunner(args: {
   provider: SandboxProvider;
@@ -133,7 +133,7 @@ export function startClientRunner(args: {
   /** Operations run at once; 4 by default. */
   concurrency?: number;
   /**
-   * Return this machine to its pool (ADR 0204): destroy every sandbox it
+   * Return this machine to its pool (ADR 0205): destroy every sandbox it
    * holds and delete members' volumes and sign-ins. Only a pooled worker
    * supplies it; a runner without it refuses the operation.
    */
@@ -434,7 +434,7 @@ const RECEIPT_ERROR_MAX = 4000;
 /**
  * A receipt's error as it may leave this machine: a provider's message can
  * repeat what the operation carried, such as a URL with credentials, so
- * those are removed before it is capped (ADR 0206).
+ * those are removed before it is capped (ADR 0207).
  */
 function receiptError(message: string): string {
   const redacted = redactUrlCredentials(message);

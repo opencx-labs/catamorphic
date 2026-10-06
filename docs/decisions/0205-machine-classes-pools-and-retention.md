@@ -1,4 +1,4 @@
-# 0204 — Machine classes: cloud servers, pooled machines, and retention
+# 0205 — Machine classes: cloud servers, pooled machines, and retention
 
 - **Status:** Accepted
 - **Date:** 2026-10-06
@@ -34,7 +34,7 @@ confirms it is gone, whether or not its reference was ever recorded.
 
 **Every machine installs the same way.** `GET /api/workers/install.sh` serves
 a script that installs Docker where it is missing, installs gVisor with
-Work's runtime arguments where `/dev/kvm` is missing (ADR 0203), and runs the
+Work's runtime arguments where `/dev/kvm` is missing (ADR 0204), and runs the
 control plane's own image (its build bakes in the repository and release;
 `WORK_WORKER_IMAGE` overrides it) with `WORK_SANDBOX=auto`, the Docker socket, `/dev/kvm` when
 present, and its data directory mounted at the same path. Cloud classes pass

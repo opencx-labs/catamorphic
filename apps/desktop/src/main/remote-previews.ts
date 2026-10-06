@@ -13,7 +13,7 @@ import {
 } from "./server/local-api-guard.js";
 
 /*
- * Previews of servers running in a remote chat's workspace (ADR 0208). The
+ * Previews of servers running in a remote chat's workspace (ADR 0209). The
  * project's server forwards each request into the sandbox; the desktop adds
  * the member's credentials. Each preview gets a loopback host of its own
  * here (`p-<id>.localhost`, which Chromium resolves to loopback), so a

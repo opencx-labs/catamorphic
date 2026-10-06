@@ -1,4 +1,4 @@
--- Operations are sealed to their executor (ADR 0206). Each executor (an
+-- Operations are sealed to their executor (ADR 0207). Each executor (an
 -- enrolled worker's node, `node:<id>`, or a member's runner, `client:<id>`)
 -- registers the X25519 public key the queue seals its operations to; the
 -- private key never leaves its machine. A worker registers it when it
@@ -15,7 +15,7 @@ CREATE TABLE executor_keys (
 -- controllers already fail them as uncertain.
 DELETE FROM remote_operations;
 
--- Worker credentials rotate (ADR 0206). `credential_issued_at` dates the
+-- Worker credentials rotate (ADR 0207). `credential_issued_at` dates the
 -- current credential. A rotation leaves the new credential pending, with the
 -- public key the worker generated beside it, while the current one keeps
 -- working: the first call made with the pending credential makes it current,

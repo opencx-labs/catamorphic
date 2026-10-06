@@ -174,7 +174,7 @@ export {
   type ForkAgentSessionInput,
   useForkAgentSession,
 } from "./hooks/use-fork-agent-session.js";
-// Secrets (Track A); members' own values (ADR 0205)
+// Secrets (Track A); members' own values (ADR 0206)
 export {
   type DeleteMemberSecretInput,
   type SetMemberSecretInput,

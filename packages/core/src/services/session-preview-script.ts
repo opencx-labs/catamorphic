@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 
-/** Most response bytes a preview carries (ADR 0208). */
+/** Most response bytes a preview carries (ADR 0209). */
 export const PREVIEW_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
 
 /**
@@ -14,7 +14,7 @@ export const PREVIEW_ANSWER_MARKER = "WORK-PREVIEW ";
 
 /**
  * The script that makes a preview's request inside a chat's sandbox (ADR
- * 0208), with the sandbox's own runtime (Bun, or Node 20+), so it reaches
+ * 0209), with the sandbox's own runtime (Bun, or Node 20+), so it reaches
  * a server listening on the sandbox's loopback on every backend and behind
  * restricted egress. Its argument is a request file (JSON: port, method,
  * path, header pairs, base64 body, where a large response goes), which it
@@ -24,7 +24,7 @@ export const PREVIEW_ANSWER_MARKER = "WORK-PREVIEW ";
  * compressed or not, and every `Set-Cookie` survives. Redirects are
  * answered, never followed.
  */
-export const PREVIEW_FETCH_SCRIPT = `// Work preview request (ADR 0208).
+export const PREVIEW_FETCH_SCRIPT = `// Work preview request (ADR 0209).
 import { request } from "node:http";
 import { mkdirSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";

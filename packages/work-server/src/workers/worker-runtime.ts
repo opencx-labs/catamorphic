@@ -43,7 +43,7 @@ export interface WorkWorkerOptions {
   controlPlaneUrl: string;
   /**
    * Owner-only local state: the machine credential, the private key its
-   * operations are sealed to (ADR 0206), and sandboxes. Losing it means
+   * operations are sealed to (ADR 0207), and sandboxes. Losing it means
    * enrolling the worker again.
    */
   dataDir: string;
@@ -97,7 +97,7 @@ const CALL_TIMEOUT_MS = {
  * process chooses once at start, so any replica can serve any of its calls
  * and reconnecting never interrupts running work. Its operations arrive
  * sealed to a key only it holds, and it rotates that key with its credential
- * whenever the control plane asks (ADR 0206).
+ * whenever the control plane asks (ADR 0207).
  */
 export async function startWorkWorker(options: WorkWorkerOptions): Promise<{
   nodeId: string;
@@ -130,7 +130,7 @@ export async function startWorkWorker(options: WorkWorkerOptions): Promise<{
   const nodeId = enrolled.credential.split(":")[0] ?? "";
   /**
    * The credential this worker calls with and, until the control plane has
-   * accepted it once, the one a rotation replaced (ADR 0206). Should the
+   * accepted it once, the one a rotation replaced (ADR 0207). Should the
    * control plane refuse the new credential, the worker goes back to the
    * old one, which still works, and rotates again.
    */
@@ -210,7 +210,7 @@ export async function startWorkWorker(options: WorkWorkerOptions): Promise<{
     log,
   });
   const provider: SandboxProvider = execution.provider;
-  // Volumes nobody used for long leave the machine (ADR 0207).
+  // Volumes nobody used for long leave the machine (ADR 0208).
   const stopPruning = startVolumePruning({
     provider,
     retentionMs: execution.volumeRetentionMs,
@@ -333,7 +333,7 @@ export async function startWorkWorker(options: WorkWorkerOptions): Promise<{
     path.join(options.dataDir, "sandboxes.json"),
   );
   // One reset at a time: the control plane asks again when it stopped
-  // waiting for a long one (ADR 0204), and the next one starts after it.
+  // waiting for a long one (ADR 0205), and the next one starts after it.
   const resets = { last: Promise.resolve() };
   const reset = (): Promise<void> => {
     const next = resets.last
@@ -369,7 +369,7 @@ export async function startWorkWorker(options: WorkWorkerOptions): Promise<{
   let rotating = false;
   let lastRotation = Number.NEGATIVE_INFINITY;
   /**
-   * Rotate the credential and key once the control plane asks (ADR 0206),
+   * Rotate the credential and key once the control plane asks (ADR 0207),
    * one rotation at a time. A rotation that fails leaves the current
    * credential working; the next answer that asks again starts another.
    */
@@ -504,7 +504,7 @@ export async function startWorkWorker(options: WorkWorkerOptions): Promise<{
         privateKeys,
       },
       sandboxes,
-      // A pooled machine returns to its pool (ADR 0204).
+      // A pooled machine returns to its pool (ADR 0205).
       resetMachine: reset,
       keepSandboxes: true,
       maxSandboxes: execution.capacity.workspaces,
@@ -615,7 +615,7 @@ export async function startWorkWorker(options: WorkWorkerOptions): Promise<{
 }
 
 /**
- * Return this machine to its pool (ADR 0204): destroy every sandbox it
+ * Return this machine to its pool (ADR 0205): destroy every sandbox it
  * holds, then remove every volume and member's sign-in on it, so the next
  * person it serves finds nothing of the last. A sandbox that cannot be
  * destroyed fails the reset, and the control plane asks again.
@@ -688,7 +688,7 @@ function uuidV7(): string {
  * This worker's credential and private key, from its data directory, or
  * from enrolling with `code` on its first start. A worker enrolled before
  * operations were sealed generates its key now and registers it when it
- * connects (ADR 0206).
+ * connects (ADR 0207).
  */
 async function loadOrEnroll(args: {
   base: string;
@@ -799,7 +799,7 @@ class WorkerSupersededError extends RunnerSessionEndedError {
 
 /**
  * A call left with the previous credential, which ended once the rotated one
- * was first used (ADR 0206). Transient: the call goes again.
+ * was first used (ADR 0207). Transient: the call goes again.
  */
 class CredentialRotatedError extends Error {
   constructor() {

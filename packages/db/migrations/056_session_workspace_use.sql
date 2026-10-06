@@ -1,4 +1,4 @@
--- A person working in a chat's workspace beside its agent (ADR 0208), at a
+-- A person working in a chat's workspace beside its agent (ADR 0209), at a
 -- terminal or through a preview, keeps it from being given back as idle,
 -- as a turn does. Marked at most once a minute per chat.
 CREATE TABLE session_workspace_use (

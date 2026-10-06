@@ -7,7 +7,7 @@ import { PROJECT_PERSONAL_DIR } from "@catamorphic/workflow/project-layout";
 /**
  * `.work/personal/environment.json` (ADR 0184): which project files reach
  * the member's sessions on the linked Work server, and the member's own
- * `setup` command for their workspaces there (ADR 0207). Sign-ins never do
+ * `setup` command for their workspaces there (ADR 0208). Sign-ins never do
  * (ADR 0199). Inside the git-excluded personal folder, so it never ships.
  */
 export const PERSONAL_ENVIRONMENT_PATH = `${PROJECT_PERSONAL_DIR}/environment.json`;
@@ -20,7 +20,7 @@ export const PERSONAL_SETUP_MAX_LENGTH = 16_384;
 
 export interface PersonalEnvironmentConfig {
   files: string[];
-  /** Runs after the Environment's setup in each new workspace (ADR 0207). */
+  /** Runs after the Environment's setup in each new workspace (ADR 0208). */
   setup?: string;
 }
 

@@ -25,7 +25,7 @@ function delivered(event: ReturnType<typeof directoryProjectEvent>) {
   };
 }
 
-describe("directory trigger kinds (ADR 0209)", () => {
+describe("directory trigger kinds (ADR 0210)", () => {
   it("builds one idempotent event per transition, with the member's domain and normalized groups", () => {
     const joined = directoryProjectEvent({
       kind: "directory.member-joined",

@@ -126,7 +126,7 @@ const NetworkSchema = z.discriminatedUnion("egress", [
 
 /**
  * A secret name an Environment may list or `project.json` may declare (ADR
- * 0205): an environment variable name, outside the prefixes Work sets.
+ * 0206): an environment variable name, outside the prefixes Work sets.
  */
 export const ENVIRONMENT_SECRET_NAME =
   /^(?!CATAMORPHIC_|WORK_)[A-Z][A-Z0-9_]*$/;
@@ -156,7 +156,7 @@ const VolumeSchema = z.union([
   VolumePathSchema,
   z.strictObject({
     path: VolumePathSchema,
-    /** Mounted into one sandbox at a time (ADR 0207). */
+    /** Mounted into one sandbox at a time (ADR 0208). */
     exclusive: z.boolean().optional(),
     sizeMb: z
       .number()
@@ -167,7 +167,7 @@ const VolumeSchema = z.union([
   }),
 ]);
 
-/** `project.json`'s own secret declarations (ADR 0205). */
+/** `project.json`'s own secret declarations (ADR 0206). */
 const ProjectSecretDeclarationsSchema = z.record(
   SecretNameSchema,
   z.strictObject({
@@ -230,12 +230,12 @@ const ProjectEnvironmentDefinitionSchema = z
      * credentials: harness logins and listed files (ADR 0184).
      */
     personalCredentials: z.boolean().optional(),
-    /** Project secrets this Environment's sandboxes receive (ADR 0205). */
+    /** Project secrets this Environment's sandboxes receive (ADR 0206). */
     secrets: z.array(SecretNameSchema).max(200).optional(),
-    /** Run in every new workspace's project folder (ADR 0207). */
+    /** Run in every new workspace's project folder (ADR 0208). */
     setup: z.string().min(1).max(16_384).optional(),
     setupTimeoutMinutes: z.number().int().positive().max(240).optional(),
-    /** Directories kept on the machine for each owner (ADR 0207). */
+    /** Directories kept on the machine for each owner (ADR 0208). */
     volumes: z
       .record(
         z
@@ -265,7 +265,7 @@ export const DEFAULT_ENVIRONMENT = "default";
 /** Minutes an idle chat keeps its workspace unless its Environment says otherwise. */
 export const DEFAULT_IDLE_RELEASE_MINUTES = 30;
 
-/** Minutes a workspace's setup may run unless its Environment says otherwise (ADR 0207). */
+/** Minutes a workspace's setup may run unless its Environment says otherwise (ADR 0208). */
 export const DEFAULT_SETUP_TIMEOUT_MINUTES = 30;
 
 /** The image an Environment declares, before a Dockerfile is read. */
@@ -289,23 +289,23 @@ export interface ProjectEnvironmentDefinition {
   approvals?: { waitMinutes: number };
   /** Members' own chats here may carry their personal credentials (ADR 0184). */
   personalCredentials?: boolean;
-  /** Project secrets this Environment's sandboxes receive (ADR 0205). */
+  /** Project secrets this Environment's sandboxes receive (ADR 0206). */
   secrets?: readonly string[];
-  /** Run in every new workspace's project folder (ADR 0207). */
+  /** Run in every new workspace's project folder (ADR 0208). */
   setup?: string;
   setupTimeoutMinutes?: number;
-  /** Directories kept on the machine for each owner (ADR 0207). */
+  /** Directories kept on the machine for each owner (ADR 0208). */
   volumes?: Readonly<Record<string, EnvironmentVolume>>;
 }
 
-/** One volume an Environment declares (ADR 0207). */
+/** One volume an Environment declares (ADR 0208). */
 export interface EnvironmentVolume {
   path: string;
   exclusive?: boolean;
   sizeMb?: number;
 }
 
-/** A secret `project.json` declares for Environments (ADR 0205). */
+/** A secret `project.json` declares for Environments (ADR 0206). */
 export interface ProjectSecretDeclaration {
   label?: string;
   description?: string;
@@ -328,7 +328,7 @@ export interface ProjectEnvironmentPolicy {
   environments: Readonly<Record<string, ProjectEnvironmentDefinition>>;
   defaultEnvironment?: string;
   entries: readonly ProjectEnvironmentEntry[];
-  /** Secrets `project.json` declares for Environments (ADR 0205). */
+  /** Secrets `project.json` declares for Environments (ADR 0206). */
   secrets: Readonly<Record<string, ProjectSecretDeclaration>>;
   invalid?: { error: string };
 }

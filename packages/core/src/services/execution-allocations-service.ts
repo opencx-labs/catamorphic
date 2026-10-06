@@ -122,12 +122,12 @@ export interface EnvironmentSandbox {
   image?: SandboxImage;
   containers?: boolean;
   egress?: SandboxEgress;
-  /** The Environment's volumes, keyed for the work's owner (ADR 0207). */
+  /** The Environment's volumes, keyed for the work's owner (ADR 0208). */
   volumes?: readonly EnvironmentSandboxVolume[];
 }
 
 /**
- * One volume an Allocation's sandbox mounts (ADR 0207): the Environment's
+ * One volume an Allocation's sandbox mounts (ADR 0208): the Environment's
  * name for it, and the machine-unique key of the owner's copy.
  */
 export interface EnvironmentSandboxVolume {

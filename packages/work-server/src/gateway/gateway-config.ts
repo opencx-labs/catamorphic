@@ -74,7 +74,7 @@ const HttpAction = z.strictObject({
 /**
  * An API reached through the gateway with a stored key (ADR 0162), by
  * agents' connection tools and, without `actions`, by code in sandboxes
- * (ADR 0211). `auth` names the header the key goes in, or `basic` for a
+ * (ADR 0212). `auth` names the header the key goes in, or `basic` for a
  * `user:password` key sent as HTTP Basic.
  */
 const HttpEntry = z

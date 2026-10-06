@@ -3,7 +3,7 @@ import type { GitCloneOpts } from "./types.js";
 /**
  * What a machine says about a failure is recorded and shown: in a remote
  * operation's receipt, a chat's log, a span. Credentials never travel in it
- * (ADR 0206).
+ * (ADR 0207).
  */
 
 /** A URL's user information, `user:password@`, up to its host. */

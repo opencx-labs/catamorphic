@@ -112,7 +112,7 @@ export interface ConnectionModelEndpoint {
 
 /**
  * A provider whose connection is an HTTP API that code in sandboxes calls
- * through the gateway (ADR 0211): a dev server, a CLI, an SDK or a test
+ * through the gateway (ADR 0212): a dev server, a CLI, an SDK or a test
  * suite sends the API's own requests to `/gateway/http/<alias>/…` with the
  * session's grant, and the gateway adds the stored key. Such a
  * connection's capabilities are the lowercase methods a binding may use
@@ -139,7 +139,7 @@ export interface ConnectionProvider {
   readonly model?: ConnectionModelEndpoint;
   /**
    * Present when code in sandboxes may call the connection's HTTP API
-   * through the gateway (ADR 0211).
+   * through the gateway (ADR 0212).
    */
   readonly http?: ConnectionHttpEndpoint;
   /**

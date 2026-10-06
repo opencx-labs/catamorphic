@@ -14,7 +14,7 @@ const HTTP_ROUTE = "/gateway/http/";
 const admissions = new WeakMap<IncomingMessage, HttpGatewayAdmission>();
 
 /**
- * HTTP APIs through the gateway (ADR 0211), for code in sandboxes:
+ * HTTP APIs through the gateway (ADR 0212), for code in sandboxes:
  * `<prefix>/gateway/http/<alias>` and anything below it, the API's own
  * requests below the connection's base URL with the session's grant as a
  * bearer, the Basic password, or `x-work-grant`. The grant is checked

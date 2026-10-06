@@ -17,7 +17,7 @@ import {
 } from "../services/workspace-setup.js";
 
 /*
- * Workspace setup (ADR 0207): what runs when, the script that runs it, and
+ * Workspace setup (ADR 0208): what runs when, the script that runs it, and
  * running it in a local-process sandbox.
  */
 

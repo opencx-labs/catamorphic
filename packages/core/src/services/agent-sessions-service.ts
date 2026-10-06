@@ -280,11 +280,11 @@ interface AgentExecutionRuntime {
   commandTimeoutSeconds?: number;
   /** The placement may run the owner's own sign-ins (ADR 0199). */
   personalCredentials?: boolean;
-  /** The placement isolates the work's owner (ADR 0205). */
+  /** The placement isolates the work's owner (ADR 0206). */
   isolated?: boolean;
   /** Where the sandbox sees the owner's sign-in for the agent's harness. */
   signInHome?: string;
-  /** The Environment's setup for new workspaces (ADR 0207). */
+  /** The Environment's setup for new workspaces (ADR 0208). */
   setup?: { command: string; timeoutMinutes: number };
   /** The Allocation the workspace belongs to. */
   allocation?: ExecutionAllocation;
@@ -606,7 +606,7 @@ const tracer = getTracer("@catamorphic/core");
 
 /**
  * How long a person opening a chat's workspace waits for a turn (or
- * another server) preparing it at that moment (ADR 0208).
+ * another server) preparing it at that moment (ADR 0209).
  */
 const PERSON_WORKSPACE_WAIT_MS = 60_000;
 /** Steps (readmit, wait, create) one opening takes at most. */
@@ -818,7 +818,7 @@ interface AgentSessionsDeps {
   /** Workspaces at a ref of the project's linked remote (ADR 0178). */
   workspaces?: SessionWorkspaces;
   /**
-   * The gateway as sandboxes reach it (ADRs 0175, 0180, 0211): its base
+   * The gateway as sandboxes reach it (ADRs 0175, 0180, 0212): its base
    * URL (`…/gateway`, serving `git/<alias>/…`, `model/<alias>/…` and
    * `http/<alias>/…`), the remote base URLs a connection provider serves
    * with Git, the API a model provider speaks (undefined when it serves
@@ -841,7 +841,7 @@ interface AgentSessionsDeps {
    */
   personalEnvironments?: PersonalEnvironmentService;
   /**
-   * Project secrets (ADR 0205), delivered into sandboxes of Environments
+   * Project secrets (ADR 0206), delivered into sandboxes of Environments
    * that list them where the placement isolates the work's owner.
    */
   secrets?: SecretsService;
@@ -4039,7 +4039,7 @@ export class AgentSessionsService {
   }
 
   /**
-   * Every secret value a chat could repeat (ADR 0205), once it, or a chat
+   * Every secret value a chat could repeat (ADR 0206), once it, or a chat
    * it came from (a fork's source, a subsession's parent), has held
    * secrets: its workspace's processes and files and its own transcript
    * keep them, whoever writes next. The owners' and shared values,
@@ -4290,7 +4290,7 @@ export class AgentSessionsService {
     // A sign-in outranks secrets and files in what the refusal says.
     let ownerOnlyBecause: OwnerOnlyCause | undefined;
     // What this attempt masks, read once the workspace's secrets are in
-    // place (ADR 0205).
+    // place (ADR 0206).
     let masked: Promise<Record<string, string[]>> | undefined;
     const secretValuesOfChat = () => {
       masked ??= this.sessionSecretValues({
@@ -4406,7 +4406,7 @@ export class AgentSessionsService {
         ownerOnlyBecause ??= "credentials";
       }
       // A new workspace that could not have an exclusive volume of its own
-      // (ADR 0207) says so once.
+      // (ADR 0208) says so once.
       if (!hadSandbox && runtime.allocation) {
         const volumes = temporaryVolumesNote({
           volumes: await temporaryVolumes({
@@ -4429,7 +4429,7 @@ export class AgentSessionsService {
         signal: input.signal,
       });
       // The log's tail may print any secret the workspace ever held,
-      // this turn's or an earlier one's (ADR 0205).
+      // this turn's or an earlier one's (ADR 0206).
       if (setup)
         notes.push(new SecretMask(await secretValuesOfChat()).text(setup));
       if (session.allocation_id)
@@ -4592,7 +4592,7 @@ export class AgentSessionsService {
           : [],
       env: agent.harness.placement === "host" ? { ...agent.harness.env } : {},
       // A runner beside the workspace loads the gateway's variables and
-      // the session's secrets for every attempt (ADRs 0205, 0211); a
+      // the session's secrets for every attempt (ADRs 0206, 0212); a
       // missing file adds nothing.
       ...(agent.harness.placement === "sandbox" && runtime.provider
         ? {
@@ -4628,7 +4628,7 @@ export class AgentSessionsService {
                       sandboxId: sandboxProviderId,
                       workingDirectory,
                       // Its commands load the gateway's variables and the
-                      // session's secrets (ADRs 0205, 0211), named from
+                      // session's secrets (ADRs 0206, 0212), named from
                       // where they start.
                       envFiles: sandboxEnvFiles({
                         workspaceRoot: provider.workspaceRoot,
@@ -5477,7 +5477,7 @@ export class AgentSessionsService {
   }
 
   /**
-   * Issue the session's sandbox grants (ADRs 0175, 0180, 0211) for its
+   * Issue the session's sandbox grants (ADRs 0175, 0180, 0212) for its
    * aliases served to sandboxes, Git, models and HTTP APIs, and write them
    * into the sandbox, with the Git configuration and the variables naming
    * each HTTP alias unless renewing. Returns how the sandbox reaches each
@@ -5632,7 +5632,7 @@ export class AgentSessionsService {
   }
 
   /**
-   * The Environment's secrets in a sandbox turn (ADR 0205): written to the
+   * The Environment's secrets in a sandbox turn (ADR 0206): written to the
    * session's secrets file where the placement isolates the work's owner
    * and, in a member's own chat, the owner wrote everything the turn
    * answers; taken back out otherwise. Returns the values delivered (the
@@ -5707,7 +5707,7 @@ export class AgentSessionsService {
     if (Object.keys(resolved.variables).length === 0) await withdraw();
     else {
       // From here on every turn of this chat, and of its forks, masks
-      // what it could hold, whoever writes (ADR 0205).
+      // what it could hold, whoever writes (ADR 0206).
       await service.rememberDelivery({
         tenantId: identity.tenantId,
         sessionId: session.id,
@@ -5738,7 +5738,7 @@ export class AgentSessionsService {
     });
     return {
       values: resolved.variables,
-      // Set because the owner wrote the input (ADR 0205): only the owner's
+      // Set because the owner wrote the input (ADR 0206): only the owner's
       // input may join the turn, as for personal files.
       ownerOnly: owner !== null && resolved.delivered.length > 0,
       ...(note ? { note } : {}),
@@ -5822,7 +5822,7 @@ export class AgentSessionsService {
   }
 
   /**
-   * Set up a sandbox turn's workspace (ADR 0207), after its secrets and
+   * Set up a sandbox turn's workspace (ADR 0208), after its secrets and
    * personal files are in place: the Environment's `setup`, then the
    * owner's own where their personal files may go, run in the project
    * folder when this workspace has not run them yet. The chat shows the
@@ -5893,7 +5893,7 @@ export class AgentSessionsService {
           },
         }),
     ).catch((error: unknown) => ({
-      // The turn goes on without it, as after a failed command (ADR 0207).
+      // The turn goes on without it, as after a failed command (ADR 0208).
       status: "unavailable" as const,
       reason: error instanceof Error ? error.message : String(error),
     }));
@@ -6096,8 +6096,8 @@ export class AgentSessionsService {
 
   /**
    * Withdraw the owner's personal environment (ADR 0184), the
-   * Environment's secrets (ADR 0205), and the session's gateway grants and
-   * variables (ADRs 0175, 0211) from a chat's current sandbox, wherever it
+   * Environment's secrets (ADR 0206), and the session's gateway grants and
+   * variables (ADRs 0175, 0212) from a chat's current sandbox, wherever it
    * runs, as its grants are revoked with the workspace. Best effort, and a
    * no-op for chats without a sandbox; a project chat has no personal
    * environment to withdraw.
@@ -7792,7 +7792,7 @@ export class AgentSessionsService {
   }
 
   /**
-   * The chat's workspace for a person working beside its agent (ADR 0208):
+   * The chat's workspace for a person working beside its agent (ADR 0209):
    * its owner, or anyone with `sessions:write` for a project chat. With
    * `start`, a chat whose workspace was given back while idle (or never
    * started) gets one as its next turn would: readmitted on its
@@ -7943,7 +7943,7 @@ export class AgentSessionsService {
               });
               // The person opening it may act on the chat as its owner
               // does, so the workspace starts with the Environment's
-              // secrets and the owner's files (ADRs 0205, 0184). Setup
+              // secrets and the owner's files (ADRs 0206, 0184). Setup
               // runs before the next turn, as for any new workspace.
               await held();
               await this.prepareSandboxSecrets({
@@ -8022,7 +8022,7 @@ export class AgentSessionsService {
 
   /**
    * Give back the workspaces of chats that have waited without a turn (or
-   * a person typing in one of their terminals, ADR 0208) for their
+   * a person typing in one of their terminals, ADR 0209) for their
    * Environment's `idleReleaseMinutes` (ADR 0173). The sandbox's
    * changes are saved to the session branch first; then the Allocation is
    * released, and the node destroys the sandbox and frees its slot and
@@ -8068,7 +8068,7 @@ export class AgentSessionsService {
           .whereRef("agent_turns.session_id", "=", "session.id")
           .as("last_turn_at"),
       )
-      // A person at a terminal or a preview there keeps it too (ADR 0208).
+      // A person at a terminal or a preview there keeps it too (ADR 0209).
       .select((eb) =>
         eb
           .selectFrom("session_workspace_use")
@@ -8200,7 +8200,7 @@ export class AgentSessionsService {
     });
     if (allocation?.status !== "active") return false;
     // A person who opened a terminal or a preview after the sweep looked
-    // keeps it (ADR 0208); they mark their use before they start anything.
+    // keeps it (ADR 0209); they mark their use before they start anything.
     const used = await this.db
       .selectFrom("session_workspace_use")
       .select("used_at")

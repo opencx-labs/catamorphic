@@ -185,7 +185,7 @@ export interface WorkServerHooks {
   directories?: readonly DirectoryProvider[];
   /**
    * Creates and destroys worker machines on a platform Work does not ship,
-   * for `custom` machine classes (ADRs 0167, 0204). With no classes
+   * for `custom` machine classes (ADRs 0167, 0205). With no classes
    * configured, every class a rule names is custom.
    */
   machineProvisioner?: MachineProvisioner;
@@ -290,7 +290,7 @@ async function createWorkServerInner(
       "Postgres deployments require the same WORK_SECRET on every instance",
     );
   }
-  // Machine classes (ADR 0204) need what their platforms need.
+  // Machine classes (ADR 0205) need what their platforms need.
   const machineClasses = config.machines
     ? MachinesConfigSchema.parse(config.machines).classes
     : {};
@@ -371,7 +371,7 @@ async function createWorkServerInner(
     databaseConfig = { db: ownDb };
   }
 
-  // --- execution: the best backend this machine offers (ADR 0203) ------
+  // --- execution: the best backend this machine offers (ADR 0204) ------
   // A shared control plane holds every member's credentials. Agent code run
   // as its plain subprocess could read them from the server's environment,
   // so it needs a VM or container sandbox, enrolled workers, or an explicit
@@ -400,7 +400,7 @@ async function createWorkServerInner(
     log,
   });
   const sandboxProvider = execution.provider;
-  // Volumes nobody used for long leave this machine too (ADR 0207).
+  // Volumes nobody used for long leave this machine too (ADR 0208).
   const stopVolumePruning = startVolumePruning({
     provider: sandboxProvider,
     retentionMs: execution.volumeRetentionMs,
@@ -565,8 +565,8 @@ async function createWorkServerInner(
             externalUserId,
           })
         : null,
-    // Workflows name members by the email they sign in with (ADR 0209).
-    // Only a verified email names someone (ADR 0209).
+    // Workflows name members by the email they sign in with (ADR 0210).
+    // Only a verified email names someone (ADR 0210).
     memberIdForEmail: ({ email }) =>
       verifiedUserIdForEmail({ auth: workAuth, email }),
     workerNode: machine.lease,
@@ -618,7 +618,7 @@ async function createWorkServerInner(
       objectStore ?? new FsBundleStore(path.join(data, "app-bundles")),
     documentBlobStore:
       objectStore ?? new FsBundleStore(path.join(data, "document-blobs")),
-    // Directory events (ADR 0209) start onboarding and offboarding
+    // Directory events (ADR 0210) start onboarding and offboarding
     // automations; the account lifecycle below appends them.
     triggerKinds: [
       aiToolCall,
@@ -831,7 +831,7 @@ async function createWorkServerInner(
       groups: groups.map((group) => group.toLowerCase()),
     };
   };
-  // Every machine installs the same way (ADR 0204): the script this
+  // Every machine installs the same way (ADR 0205): the script this
   // server serves, with its public origin and worker image baked in.
   const install = installTarget({
     publicBase,
@@ -941,7 +941,7 @@ async function createWorkServerInner(
     });
   }
   // Directory events a transition could not deliver at once retry here
-  // (ADR 0209); replicas share the queue through Postgres.
+  // (ADR 0210); replicas share the queue through Postgres.
   let announcing: Promise<unknown> | undefined;
   const announceTimer = setInterval(() => {
     announcing ??= accountLifecycle
@@ -1108,7 +1108,7 @@ async function createWorkServerInner(
   registerWorkerRoutes(app, workers);
   registerInstallScriptRoute(app, install);
   // Workers and machine rules: the operator on the loopback listener, and
-  // organization administrators through the API (ADR 0204).
+  // organization administrators through the API (ADR 0205).
   const machineManagement = {
     nodes: machine.nodes,
     workers,

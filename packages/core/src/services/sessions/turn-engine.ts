@@ -125,11 +125,11 @@ export interface PreparedAttempt {
   ownerOnly?: boolean;
   /**
    * Why: the owner's own harness sign-in (ADR 0199), or values that are
-   * theirs in the workspace (personal files, secrets; ADRs 0184, 0205).
+   * theirs in the workspace (personal files, secrets; ADRs 0184, 0206).
    */
   ownerOnlyBecause?: OwnerOnlyCause;
   /**
-   * Every secret value the chat could repeat, by name (ADR 0205): masked
+   * Every secret value the chat could repeat, by name (ADR 0206): masked
    * wherever the attempt's output is recorded, whoever wrote its input.
    */
   secretValues?: Readonly<Record<string, readonly string[]>>;
@@ -193,7 +193,7 @@ export interface TurnEngineHost {
   /** This holder stopped working the turn, however it ended: let go of what it kept. */
   released?(input: { sessionId: string; turnId: string }): void;
   /**
-   * Every secret value a session's sandbox could hold (ADR 0205), for a
+   * Every secret value a session's sandbox could hold (ADR 0206), for a
    * holder that took a running turn over and so never prepared it.
    */
   secretValues?(input: {
@@ -223,7 +223,7 @@ interface LocalTurn {
   results: Map<string, RunnerCommandFrame>;
   resultsSentAt: number;
   /**
-   * The secret values masked in the running attempt's output (ADR 0205);
+   * The secret values masked in the running attempt's output (ADR 0206);
    * undefined until this holder prepared or took over the attempt.
    */
   mask?: SecretMask;
@@ -1047,7 +1047,7 @@ export class TurnEngine {
         };
       local.channel = channel;
       // Taken over: every value the chat could repeat is masked, as its
-      // preparer masked it (ADR 0205).
+      // preparer masked it (ADR 0206).
       if (!local.mask)
         local.mask = new SecretMask(
           (await this.deps.host.secretValues?.({

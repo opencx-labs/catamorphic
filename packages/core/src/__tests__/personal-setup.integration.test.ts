@@ -17,7 +17,7 @@ import { ProjectEnvironmentsService } from "../services/project-environments-ser
 import { ProjectsService } from "../services/projects-service.js";
 
 /**
- * A member's own setup command (ADR 0207): kept with their personal
+ * A member's own setup command (ADR 0208): kept with their personal
  * environment, shown back only to them, replaced and removed with their
  * set, and audited by fingerprint.
  */
@@ -33,7 +33,7 @@ const tenantId = randomUUID();
 const ada: Identity = { tenantId, externalUserId: "ada" };
 const bob: Identity = { tenantId, externalUserId: "bob" };
 
-describeIf("personal setup (ADR 0207)", () => {
+describeIf("personal setup (ADR 0208)", () => {
   let tmpDir: string;
   let projectId: string;
   let service: PersonalEnvironmentService;

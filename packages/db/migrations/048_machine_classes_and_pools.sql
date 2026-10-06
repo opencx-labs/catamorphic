@@ -1,4 +1,4 @@
--- Machine classes, pools and retention (ADR 0204).
+-- Machine classes, pools and retention (ADR 0205).
 
 -- The machine reconciler runs under a replica claim (ADR 0193) named for
 -- its tenant; its own lease table goes.

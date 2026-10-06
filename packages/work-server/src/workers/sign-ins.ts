@@ -136,7 +136,7 @@ export function signInOnMachine(input: {
 
 /**
  * Delete every member's sign-in home from this machine, when a pooled
- * machine returns to its pool (ADR 0204). Returns how many went.
+ * machine returns to its pool (ADR 0205). Returns how many went.
  */
 export function removeMachineSignIns(root: string): number {
   const homes = listMachineSignIns(root);

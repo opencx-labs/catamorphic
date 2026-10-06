@@ -75,9 +75,9 @@ interface TerminalInput {
 }
 
 /**
- * Terminals in a chat's workspace (ADR 0208): a login shell on a
+ * Terminals in a chat's workspace (ADR 0209): a login shell on a
  * pseudo-terminal, started as one of the workspace's background processes
- * (ADR 0174) with the Environment's secrets loaded (ADR 0205). Output is
+ * (ADR 0174) with the Environment's secrets loaded (ADR 0206). Output is
  * read by cursor with a wait; input and resizes are posted. A terminal is
  * its opener's alone, and it ends with the workspace. Every call is a
  * request on its own, so any replica serves any of them.

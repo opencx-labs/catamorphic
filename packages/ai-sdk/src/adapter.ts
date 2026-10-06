@@ -148,7 +148,7 @@ export type AiSdkLocal = {
     /** The Environment's budget for one foreground command (ADR 0174). */
     commandBudgetSeconds?: number;
     /**
-     * The session's environment files (ADRs 0205, 0211), relative to
+     * The session's environment files (ADRs 0206, 0212), relative to
      * `workingDirectory` or absolute: every shell command loads each that
      * exists first.
      */

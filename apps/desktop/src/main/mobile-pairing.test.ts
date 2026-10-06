@@ -161,7 +161,7 @@ describe("MobilePairingService readiness", () => {
   });
 });
 
-describe("a paired phone's requests to the embedded API (ADR 0210)", () => {
+describe("a paired phone's requests to the embedded API (ADR 0211)", () => {
   it("carry this run's token, which the API's guard accepts", async () => {
     const token = newDesktopApiToken();
     const seen: http.IncomingHttpHeaders[] = [];

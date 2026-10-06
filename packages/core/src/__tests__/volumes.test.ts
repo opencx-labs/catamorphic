@@ -10,7 +10,7 @@ import {
   volumeHoldNode,
 } from "../services/volume-holds.js";
 
-/* Volumes an Environment declares, as placement and sandboxes see them (ADR 0207). */
+/* Volumes an Environment declares, as placement and sandboxes see them (ADR 0208). */
 
 describe("Environment volumes", () => {
   const volumes = {

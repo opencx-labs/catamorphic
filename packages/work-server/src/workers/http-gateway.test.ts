@@ -16,7 +16,7 @@ import { replyOf, testServerOptions } from "../test-support.js";
 import { startWorkWorker } from "./worker-runtime.js";
 
 /**
- * HTTP APIs through the gateway (ADR 0211), end to end: a logging
+ * HTTP APIs through the gateway (ADR 0212), end to end: a logging
  * cluster's HTTP interface behind Basic auth (as ClickHouse's is), a
  * service connection holding its password on the control plane, and a
  * chat on a local-process worker whose code calls it with nothing but the

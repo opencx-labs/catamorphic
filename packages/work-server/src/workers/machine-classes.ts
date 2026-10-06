@@ -42,7 +42,7 @@ const HetznerLabels = z
   );
 
 /**
- * A Hetzner Cloud server per machine (ADR 0204). The API token is
+ * A Hetzner Cloud server per machine (ADR 0205). The API token is
  * `WORK_HETZNER_TOKEN`, never part of the class.
  */
 export const HetznerCloudClassSchema = z.strictObject({

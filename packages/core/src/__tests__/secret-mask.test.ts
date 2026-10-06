@@ -26,7 +26,7 @@ import {
 
 /*
  * Values a turn's sandbox received never enter its recorded output (ADR
- * 0205): whole values become `[secret NAME]`, and streamed text holds back
+ * 0206): whole values become `[secret NAME]`, and streamed text holds back
  * whatever could still be the start of a value, across deltas and batches.
  */
 

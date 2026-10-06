@@ -950,7 +950,7 @@ export function registerIpcHandlers(
 
   // The project's workflow-tools MCP server, listed for the agent-policy
   // editor (which workflows an agent may run). Same endpoint agents mount
-  // per session; the embedded server answers this run's token (ADR 0210).
+  // per session; the embedded server answers this run's token (ADR 0211).
   ipcMain.handle(
     "catamorphic:project-workflow-tools",
     async (_event, projectId: string) => {
@@ -2119,7 +2119,7 @@ export function registerIpcHandlers(
       : null;
   });
 
-  // A remote chat's preview (ADR 0208): its own loopback address, which
+  // A remote chat's preview (ADR 0209): its own loopback address, which
   // the browser tab opens and this desktop forwards as the member.
   ipcMain.handle(
     "catamorphic:remote-preview-open",
@@ -2531,7 +2531,7 @@ export function registerIpcHandlers(
     },
   );
 
-  // Project secrets (ADR 0205): every member reads them and sets their own
+  // Project secrets (ADR 0206): every member reads them and sets their own
   // value; the people listing members need `memberships:read`.
   ipcMain.handle(
     "catamorphic:remote-secrets",

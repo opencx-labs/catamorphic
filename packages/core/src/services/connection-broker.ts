@@ -625,7 +625,7 @@ export class ConnectionBroker {
 
   /**
    * The upstream endpoint and key headers of an HTTP API alias for code in
-   * sandboxes (ADR 0211), with which of the binding's methods only read
+   * sandboxes (ADR 0212), with which of the binding's methods only read
    * and whether the session's agent is contained (ADR 0182). The gateway
    * keeps the result briefly per grant and connection revision, so a
    * request does not decrypt the key again; the headers never leave the
@@ -712,7 +712,7 @@ export class ConnectionBroker {
 
   /**
    * Review one request of code in a sandbox to an HTTP API alias (ADR
-   * 0211) and return how to audit its end. The method must be one of the
+   * 0212) and return how to audit its end. The method must be one of the
    * binding's capabilities; a contained agent's session may only read (ADR
    * 0182); then the guards see connection kind = the provider, action =
    * the lowercase method, and input = path and query, never the

@@ -1,4 +1,4 @@
--- Terminals people open in a chat's workspace (ADR 0208). A terminal is a
+-- Terminals people open in a chat's workspace (ADR 0209). A terminal is a
 -- background process of the workspace's sandbox and ends with it; this row
 -- says whose it is, so only the person who opened it reads and types into
 -- it, and when it was last used, so a workspace someone types in is not

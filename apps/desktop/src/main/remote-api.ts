@@ -87,7 +87,7 @@ export async function remoteProjectFetch(args: {
 
 /**
  * JSON requests to a remote chat's terminals on its project's server
- * (ADR 0208), or undefined when the project has no server.
+ * (ADR 0209), or undefined when the project has no server.
  */
 export function remoteTerminalRequest(args: {
   profiles: RemoteProjectProfiles;

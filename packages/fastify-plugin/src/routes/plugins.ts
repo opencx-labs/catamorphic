@@ -213,7 +213,7 @@ export function registerPluginRoutes(app: FastifyInstance, ctx: RouteContext) {
     },
   });
 
-  // A member's own value (ADR 0205): set by the member (`me`) or by anyone
+  // A member's own value (ADR 0206): set by the member (`me`) or by anyone
   // holding `secrets:write`.
   typed.route({
     method: "PUT",

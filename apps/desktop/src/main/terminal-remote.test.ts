@@ -23,7 +23,7 @@ import { registerTerminalSupport } from "./terminal.js";
 
 type Call = Parameters<RemoteTerminalRequest>[0];
 
-describe("terminal tabs on a remote chat's workspace (ADR 0208)", () => {
+describe("terminal tabs on a remote chat's workspace (ADR 0209)", () => {
   it("open, stream, type into and close a shell on the project's server", async () => {
     const calls: Call[] = [];
     let release: (() => void) | undefined;

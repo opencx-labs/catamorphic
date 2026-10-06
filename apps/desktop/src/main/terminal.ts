@@ -29,7 +29,7 @@ import { TerminalLifecycle } from "./terminal-lifecycle.js";
 const BUFFER_CAP = 200_000;
 
 interface TerminalSession {
-  /** A local PTY, or a shell in a remote chat's workspace (ADR 0208). */
+  /** A local PTY, or a shell in a remote chat's workspace (ADR 0209). */
   pty: TerminalBackend;
   releaseSender?: () => void;
   /** User sessions stream to their window; agent sessions broadcast. */
@@ -237,7 +237,7 @@ export function registerTerminalSupport(
   };
 
   /**
-   * A terminal in a remote chat's workspace (ADR 0208): the shell runs
+   * A terminal in a remote chat's workspace (ADR 0209): the shell runs
    * there, so it has no local folder or shell integration.
    */
   const openRemoteSession = async (input: {

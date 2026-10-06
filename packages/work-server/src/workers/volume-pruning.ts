@@ -4,7 +4,7 @@ import type { SandboxProvider } from "@catamorphic/sandbox";
 export const VOLUME_PRUNE_INTERVAL_MS = 60 * 60_000;
 
 /**
- * Forget volumes no sandbox used for `retentionMs` (ADR 0207,
+ * Forget volumes no sandbox used for `retentionMs` (ADR 0208,
  * `WORK_VOLUME_RETENTION_DAYS`), once at start and then every hour, on a
  * machine whose provider keeps volumes. Returns a stop function.
  */

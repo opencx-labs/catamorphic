@@ -5,7 +5,7 @@ import { SESSION_DIRECTORY } from "./sandbox-git.js";
 import { sandboxSecretsPrelude } from "./sandbox-secrets.js";
 
 /*
- * Workspace setup (ADR 0207): an Environment's `setup` command, then the
+ * Workspace setup (ADR 0208): an Environment's `setup` command, then the
  * member's own, run in the project folder of each new workspace before its
  * first turn and again when either command changes. What last succeeded is
  * recorded in the session directory (`setup.done`), beside the project and
@@ -108,7 +108,7 @@ export function planWorkspaceSetup(input: {
 /**
  * The script one setup runs from the project folder (POSIX shell, run
  * with bash): output appended to the log, the session's secrets loaded
- * when present (ADR 0205), then each part with `bash -e` so its first
+ * when present (ADR 0206), then each part with `bash -e` so its first
  * failing command stops it, and the record written only once every part
  * succeeded.
  */
@@ -130,8 +130,8 @@ export function workspaceSetupScript(input: {
     'exec >>"$work_session/setup.log" 2>&1',
     ...stale.map((file) => `rm -f "$work_session/setup/${file}"`),
     `printf '\\n== Workspace setup started %s ==\\n' "$(date -u '+%Y-%m-%d %H:%M:%S UTC')"`,
-    // The Environment's secrets (ADR 0205) and the gateway's variables
-    // (ADR 0211), from the project folder where the script starts.
+    // The Environment's secrets (ADR 0206) and the gateway's variables
+    // (ADR 0212), from the project folder where the script starts.
     sandboxSecretsPrelude(),
     "work_part() {",
     "  printf '\\n-- %s\\n' \"$1\"",
@@ -175,7 +175,7 @@ export function sessionDirectory(provider: SandboxProvider): string {
 }
 
 /**
- * Set up one workspace if it needs it (ADR 0207). A setup an earlier,
+ * Set up one workspace if it needs it (ADR 0208). A setup an earlier,
  * interrupted preparation started is waited for rather than started again.
  * `onRun` is called just before commands run, so the chat can show it.
  */
@@ -327,7 +327,7 @@ async function runSetupCommand(input: {
 }
 
 /**
- * What the agent is told when its workspace's setup failed (ADR 0207): what
+ * What the agent is told when its workspace's setup failed (ADR 0208): what
  * failed, the end of the log, and that it runs again before the next turn.
  */
 export function workspaceSetupFailedNote(input: {
@@ -368,7 +368,7 @@ export function workspaceSetupFailedNote(input: {
 
 /**
  * What the agent is told when its workspace's setup could not run at all,
- * such as when the sandbox did not answer (ADR 0207).
+ * such as when the sandbox did not answer (ADR 0208).
  */
 export function workspaceSetupUnavailableNote(input: {
   reason: string;

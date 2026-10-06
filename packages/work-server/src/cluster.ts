@@ -54,7 +54,7 @@ export async function registerWorkMachine(args: {
   labels?: Readonly<Record<string, string>>;
   /** What this machine offers beside its sandbox provider (ADR 0184). */
   capabilities?: readonly string[];
-  /** What runs its sandboxes and why (ADR 0203), for operators. */
+  /** What runs its sandboxes and why (ADR 0204), for operators. */
   backend?: EnvironmentBinding["backend"];
   /**
    * Members' sign-ins on this machine (ADR 0199), read again every few
@@ -211,7 +211,7 @@ export async function registerWorkMachine(args: {
       // A worker whose access names only this owner (a member, or for a
       // project's own work that project) takes no one else's work, so it
       // may hold their personal credentials (ADR 0184) and secrets (ADR
-      // 0205).
+      // 0206).
       const servesOnlyOwner = Boolean(
         chosen.policy &&
           accessTier({

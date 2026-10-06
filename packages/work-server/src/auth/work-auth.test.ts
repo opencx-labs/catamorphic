@@ -27,7 +27,7 @@ function createDataDirectory(): string {
 }
 
 describe("Work server Better Auth host", () => {
-  it("names a member by email only when the email is verified (ADR 0209)", async () => {
+  it("names a member by email only when the email is verified (ADR 0210)", async () => {
     const dataDir = createDataDirectory();
     const database = await openWorkAuthDatabase({ dataDir });
     const workAuth = createWorkAuth({

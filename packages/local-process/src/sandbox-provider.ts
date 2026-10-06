@@ -184,7 +184,7 @@ export class LocalProcessSandboxProvider implements SandboxProvider {
   private readonly volumeRoot: string;
   private readonly volumeUsage: VolumeUsageLog;
   /**
-   * Volumes (ADR 0207), only under `~`: each sandbox's home is its own
+   * Volumes (ADR 0208), only under `~`: each sandbox's home is its own
    * directory, so a volume is a link inside it. An absolute path would be
    * this machine's own.
    */
@@ -293,7 +293,7 @@ export class LocalProcessSandboxProvider implements SandboxProvider {
   }
 
   /**
-   * Link each volume into the sandbox's home (ADR 0207): a persistent one
+   * Link each volume into the sandbox's home (ADR 0208): a persistent one
    * is a directory under the machine's volume root, kept across sandboxes;
    * a temporary one is a plain directory removed with the sandbox.
    */

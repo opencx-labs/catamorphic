@@ -1526,7 +1526,7 @@ export interface paths {
                             /** @description The file's bytes, base64 */
                             content: string;
                         }[];
-                        /** @description The caller's own setup command, run after the Environment's in each new workspace of their own chats (ADR 0207); absent or blank for none */
+                        /** @description The caller's own setup command, run after the Environment's in each new workspace of their own chats (ADR 0208); absent or blank for none */
                         setup?: string;
                     };
                 };

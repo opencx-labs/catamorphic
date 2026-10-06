@@ -16,7 +16,7 @@ import { toJson } from "./run-coordinator.js";
 /*
  * A member's personal environment for one project (ADR 0184): the files
  * they listed in `.work/personal/environment.json`, and their own setup
- * command (ADR 0207). Harness sign-ins are never sent here; they stay on
+ * command (ADR 0208). Harness sign-ins are never sent here; they stay on
  * the machine they were made on (ADR 0199).
  * File values
  * are sealed in the credential vault; rows hold references, fingerprints,
@@ -38,7 +38,7 @@ export interface PersonalEnvironmentInput {
   files: ReadonlyArray<{ path: string; content: string }>;
   /**
    * Run after the Environment's setup in each new workspace of the
-   * member's own chats (ADR 0207). Absent or blank, none.
+   * member's own chats (ADR 0208). Absent or blank, none.
    */
   setup?: string;
 }
@@ -55,7 +55,7 @@ export interface PersonalEnvironmentStatus {
   /** Some Environment of the project gives this member's chats their credentials. */
   allowed: boolean;
   files: PersonalFileStatus[];
-  /** The member's own setup command (ADR 0207), shown back to them. */
+  /** The member's own setup command (ADR 0208), shown back to them. */
   setup: { command: string; updatedAt: string } | null;
 }
 
@@ -481,7 +481,7 @@ export class PersonalEnvironmentService {
 
   /**
    * The owner's own setup command, for a workspace of one of their own
-   * chats (ADR 0207). Host-only: never an API.
+   * chats (ADR 0208). Host-only: never an API.
    */
   async setup(args: {
     tenantId: string;

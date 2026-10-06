@@ -280,7 +280,7 @@ if (import.meta.main) {
             ...runtime.env,
             ...plan.env,
             // The development server keeps chats in plain processes unless
-            // the developer chooses a backend (ADR 0203's `auto` would boot
+            // the developer chooses a backend (ADR 0204's `auto` would boot
             // microVMs on a Mac).
             WORK_SANDBOX: runtime.env.WORK_SANDBOX ?? "local-process",
             CATAMORPHIC_DESKTOP_PREVIOUS_DATA_DIR: path.join(

@@ -27,7 +27,7 @@ vi.mock("electron", () => ({
 
 import { RunnerKeyStore } from "./runner-key-store.js";
 
-describe("RunnerKeyStore (ADR 0206)", () => {
+describe("RunnerKeyStore (ADR 0207)", () => {
   let dir: string;
   let file: string;
   beforeEach(() => {

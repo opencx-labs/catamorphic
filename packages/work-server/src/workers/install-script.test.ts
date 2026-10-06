@@ -69,7 +69,7 @@ describe("the worker install script", () => {
     expect(script).toContain(`IMAGE='${target.image}'`);
     const file = write("quoted.sh", script);
     expect(spawnSync(shell, ["-n", file]).status).toBe(0);
-    // Work's gVisor arguments (ADR 0203), and no secret of any kind.
+    // Work's gVisor arguments (ADR 0204), and no secret of any kind.
     expect(script).toContain("runsc install -- --host-uds=open --net-raw");
     expect(script).not.toMatch(/WORK_SECRET|DATABASE_URL|WORK_VAULT_KEY/);
   });

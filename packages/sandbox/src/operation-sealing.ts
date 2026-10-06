@@ -12,7 +12,7 @@ import {
 import { z } from "zod";
 
 /**
- * Operations are sealed to their executor (ADR 0206). Every executor (an
+ * Operations are sealed to their executor (ADR 0207). Every executor (an
  * enrolled worker, a member's runner) holds an X25519 key pair whose private
  * key never leaves its machine; the control plane seals each queued
  * operation to its public key, so Postgres, its log and its backups hold only

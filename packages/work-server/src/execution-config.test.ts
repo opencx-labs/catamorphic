@@ -76,7 +76,7 @@ it("rejects invalid budgets and subprocess resource guarantees before boot", () 
   );
 });
 
-it("defaults to auto with budgets an isolated backend enforces (ADR 0203)", () => {
+it("defaults to auto with budgets an isolated backend enforces (ADR 0204)", () => {
   const settings = executionSettingsFromEnv({
     WORK_CAPACITY_CPU_MILLIS: "4000",
     WORK_WORKSPACE_CPU_MILLIS: "500",
@@ -152,7 +152,7 @@ it("auto takes microsandbox, then gVisor, then runc, then local processes", asyn
   ).rejects.toThrow("CPU and memory limits need an isolated sandbox backend");
 });
 
-it("treats privileged runc containers as able to reach the machine (ADR 0203)", async () => {
+it("treats privileged runc containers as able to reach the machine (ADR 0204)", async () => {
   const resolved = (env: Record<string, string>, probes: ExecutionProbes) =>
     resolveExecutionSettings({
       settings: executionSettingsFromEnv(env),

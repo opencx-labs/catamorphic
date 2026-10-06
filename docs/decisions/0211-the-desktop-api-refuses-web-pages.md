@@ -1,8 +1,8 @@
-# 0210 — The desktop's loopback API refuses web pages
+# 0211 — The desktop's loopback API refuses web pages
 
 - **Status:** Accepted
 - **Date:** 2026-10-06
-- **Refines:** 0055, 0060, 0208
+- **Refines:** 0055, 0060, 0209
 
 ## Context
 
@@ -11,7 +11,7 @@ the person at this computer (ADR 0055), with permissive CORS. Any web page
 in any browser on the machine could find that port and use it: start agent
 turns, read projects, and, through a remote project's routes, reach the
 company server with the member's credentials. Terminals into remote
-workspaces (ADR 0208) made that a remote shell.
+workspaces (ADR 0209) made that a remote shell.
 
 ## Decision
 

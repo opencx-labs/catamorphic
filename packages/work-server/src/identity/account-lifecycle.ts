@@ -49,7 +49,7 @@ export type GrantDecision =
  *
  * Each transition (an account joins at its first sign-in or a sign-in that
  * re-enables it, leaves when disabled, or its groups change) is a durable
- * directory event (ADR 0209), recorded in the transaction that records the
+ * directory event (ADR 0210), recorded in the transaction that records the
  * transition, in every project that listens for it.
  */
 export class AccountLifecycle {
@@ -400,7 +400,7 @@ export class AccountLifecycle {
 
   /**
    * Deliver queued directory events to every project subscribed to their
-   * kind (ADR 0209). Each event is claimed under `SKIP LOCKED`, appended to
+   * kind (ADR 0210). Each event is claimed under `SKIP LOCKED`, appended to
    * its projects and removed in one transaction, so replicas share the
    * queue and none is delivered twice. One that fails waits and retries
    * with backoff; it holds back only the same account's later events.
@@ -787,7 +787,7 @@ export class AccountLifecycle {
   /**
    * Check every account that still holds a live session, and every member
    * who joined and is not disabled, so a departure is noticed (and
-   * announced, ADR 0209) whether or not they are signed in. The sweep
+   * announced, ADR 0210) whether or not they are signed in. The sweep
    * always asks the directory, so its interval bounds how long a departure
    * takes.
    */

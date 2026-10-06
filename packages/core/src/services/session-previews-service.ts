@@ -87,7 +87,7 @@ export class SessionPreviewError extends Error {
 }
 
 /**
- * Previews of servers running in a chat's workspace (ADR 0208): each HTTP
+ * Previews of servers running in a chat's workspace (ADR 0209): each HTTP
  * request is made inside the sandbox by its own runtime, so it works on
  * every backend and behind restricted egress. Access is as for terminals:
  * the chat's owner, or anyone with `sessions:write` for a project chat. A

@@ -42,7 +42,7 @@ const link = {
   remoteProjectId: "remote-project",
 };
 
-/** The profile's runner key (ADR 0206). */
+/** The profile's runner key (ADR 0207). */
 const KEYS = generateExecutorKeyPair();
 
 function runners(linked: { current: boolean }) {

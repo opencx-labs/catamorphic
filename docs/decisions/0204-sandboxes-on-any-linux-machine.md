@@ -1,4 +1,4 @@
-# 0203 — Sandboxes on any Linux machine: the container backend
+# 0204 — Sandboxes on any Linux machine: the container backend
 
 - **Status:** Accepted
 - **Date:** 2026-10-06
@@ -21,7 +21,7 @@ socket). Its runtime is `runsc` (gVisor, a user-space kernel: isolation
 `sandbox`) or `runc` (kernel namespaces: isolation `process`). It offers what
 microsandbox offers: images, Dockerfile builds (the build context is the
 Dockerfile alone, as in ADR 0176), CPU and memory limits, members' sign-ins,
-volumes (ADR 0207), background processes, and nested containers: the image's
+volumes (ADR 0208), background processes, and nested containers: the image's
 own Docker daemon runs inside the sandbox. gVisor virtualizes the
 capabilities that daemon needs and has no NAT, so nested Docker runs without
 iptables: published ports and container-to-container traffic work, and

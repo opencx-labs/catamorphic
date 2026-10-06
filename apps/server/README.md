@@ -51,7 +51,7 @@ Each worker takes work for everyone or for named people and directory groups,
 so a person's agents run on their own machine first; machine rules give every
 member of a group a machine of their own (ADR 0167), on Hetzner Cloud, from a
 pool of machines you enrolled with `GET /api/workers/install.sh`, or through a
-provisioner hook, and keep a released machine for a few days (ADR 0204).
+provisioner hook, and keep a released machine for a few days (ADR 0205).
 See [ADR 0164](../../docs/decisions/0164-control-plane-and-enrolled-workers.md)
 and the [machines reference](../../skills/setup-work-server/references/cluster-deployment.md).
 

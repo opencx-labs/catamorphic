@@ -18,7 +18,7 @@ function terminalsApp(terminals: Record<string, unknown>) {
   return createTestApp({ core: { sessionTerminals: terminals } as never });
 }
 
-describe("terminal routes (ADR 0208)", () => {
+describe("terminal routes (ADR 0209)", () => {
   it("opens a terminal for the caller, sized as asked", async () => {
     const open = vi.fn(async () => ({ terminalId: TERMINAL_ID, pty: true }));
     const app = terminalsApp({ open });
@@ -148,7 +148,7 @@ describe("terminal routes (ADR 0208)", () => {
   });
 });
 
-describe("preview routes (ADR 0208)", () => {
+describe("preview routes (ADR 0209)", () => {
   const PREVIEW = `${SESSION}/previews/5173`;
 
   function previewsApp(

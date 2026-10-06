@@ -31,7 +31,7 @@ import { WorkWorkerRegistry } from "./worker-registry.js";
 import { startWorkWorker } from "./worker-runtime.js";
 
 /**
- * Machine classes, pools and retention (ADR 0204). The test runs its own
+ * Machine classes, pools and retention (ADR 0205). The test runs its own
  * reconcilers against the server's database with a fake Hetzner Cloud;
  * pooled machines are real workers. Retention runs on the database's
  * clock, so time passes by moving a release back in the database.
@@ -245,7 +245,7 @@ afterAll(async () => {
   fs.rmSync(root, { recursive: true, force: true });
 }, 120_000);
 
-describe("machine classes, pools and retention (ADR 0204)", () => {
+describe("machine classes, pools and retention (ADR 0205)", () => {
   it("issues no code while machines cannot install, and withdraws one Hetzner refuses", async () => {
     const ivy = await member("ivy", ["support@example.com"]);
     const name = dedicatedName("help", ivy.userId, "cloud");

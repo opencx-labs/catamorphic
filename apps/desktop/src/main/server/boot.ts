@@ -150,13 +150,13 @@ export interface EmbeddedServer {
   ) => Promise<{ ok: true; serverUrl: string; remoteProjectId: string }>;
   /**
    * Requests to a remote chat's terminals on its project's server, as the
-   * member (ADR 0208); undefined when the project has no server.
+   * member (ADR 0209); undefined when the project has no server.
    */
   remoteTerminalRequest: (input: {
     projectId: string;
     sessionId: string;
   }) => RemoteTerminalRequest | undefined;
-  /** A remote chat's preview on its own loopback origin (ADR 0208). */
+  /** A remote chat's preview on its own loopback origin (ADR 0209). */
   openRemotePreview: (input: {
     projectId: string;
     sessionId: string;
@@ -1156,7 +1156,7 @@ export async function startEmbeddedServer(
   apiBaseUrl = url;
   console.log(`[desktop] API ready on ${url}/api`);
   // Remote chats' previews, each on its own loopback origin; restored tabs
-  // find theirs again (ADR 0208).
+  // find theirs again (ADR 0209).
   const remotePreviews = new RemotePreviewOrigins({
     file: path.join(paths.root, "remote-previews.json"),
     profiles: profileConfig,

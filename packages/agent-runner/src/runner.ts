@@ -36,7 +36,7 @@ export interface AttemptRunnerOptions {
   /** Host objects for in-process adapters (never serialized). */
   local?: Record<string, unknown>;
   /**
-   * Reads one of an attempt's environment files (ADRs 0205, 0211) where
+   * Reads one of an attempt's environment files (ADRs 0206, 0212) where
    * the runner runs beside the workspace; undefined when the file is
    * missing. Their variables join the harness's environment for that
    * attempt, read again for every attempt. In-process runners leave it
@@ -256,7 +256,7 @@ export class AttemptRunner {
   }
 
   /**
-   * The attempt with its environment files' variables (ADRs 0205, 0211),
+   * The attempt with its environment files' variables (ADRs 0206, 0212),
    * a later file's over an earlier's, and `BASH_ENV` naming the last file
    * present so the harness's shells load it too (the session's secrets,
    * which a harness that filters names like `*_KEY` would otherwise

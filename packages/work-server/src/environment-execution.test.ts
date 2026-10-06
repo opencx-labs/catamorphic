@@ -330,7 +330,7 @@ it("an authenticated member executes on this machine and loses execution immedia
     const sessions = cat.core.agentSessions;
     if (!service || !sessions || !identity.clientRunnerId)
       throw new Error("Client execution missing");
-    // Operations reach the member's machine sealed to its key (ADR 0206).
+    // Operations reach the member's machine sealed to its key (ADR 0207).
     const machineKeys = generateExecutorKeyPair();
     const keys = {
       executor: clientExecutor(identity.clientRunnerId),

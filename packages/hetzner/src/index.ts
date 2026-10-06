@@ -1,5 +1,5 @@
 /**
- * Hetzner Cloud for Work machines (ADR 0204): an API client and a
+ * Hetzner Cloud for Work machines (ADR 0205): an API client and a
  * provisioner that creates and destroys one server per machine.
  */
 export {

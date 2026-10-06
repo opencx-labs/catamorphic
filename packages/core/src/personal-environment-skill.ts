@@ -1,7 +1,7 @@
 /**
  * What a session's workspace receives beyond the repository, as an agent
  * there sees it: the project's secrets as environment variables (ADR
- * 0205), company APIs through the gateway (ADR 0211), a member's own
+ * 0206), company APIs through the gateway (ADR 0212), a member's own
  * private files (ADR 0184), and where sign-ins come from (ADR 0199).
  * Host-tier, so every project's sessions read it without seeded templates.
  */

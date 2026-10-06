@@ -9,7 +9,7 @@ import { FakeDirectory } from "../test-support.js";
 import { AccountLifecycle } from "./account-lifecycle.js";
 
 /**
- * Which account transitions become directory events (ADR 0209), against a
+ * Which account transitions become directory events (ADR 0210), against a
  * real schema: each transition is announced once with the account's next
  * revision, and nothing else is. Delivering an event to projects never
  * decides whether the transition happens.

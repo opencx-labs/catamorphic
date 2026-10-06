@@ -5,7 +5,7 @@ import {
 } from "./machine-classes.js";
 import { DEFAULT_RETAIN_DAYS, MachineRuleSchema } from "./machine-rules.js";
 
-describe("machine classes (ADR 0204)", () => {
+describe("machine classes (ADR 0205)", () => {
   it("names what a server lacks for its classes", () => {
     const { classes } = MachinesConfigSchema.parse({
       classes: {

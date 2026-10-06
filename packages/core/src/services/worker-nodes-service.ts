@@ -43,7 +43,7 @@ const descriptorSchema = z.object({
     maxConcurrency: z.number().optional(),
   }),
   labels: z.record(z.string(), z.string()).optional(),
-  // What runs the machine's sandboxes and why (ADR 0203), for operators.
+  // What runs the machine's sandboxes and why (ADR 0204), for operators.
   backend: z
     .object({
       kind: z.string().max(40),
@@ -228,7 +228,7 @@ export class WorkerNodesService {
    * process cannot take the machine back from its successor; after a lapse
    * any epoch may. Refused while the operator has the node disabled, and
    * with {@link ExecutorKeyMissingError} while the executor has registered
-   * no key to seal its operations to (ADR 0206).
+   * no key to seal its operations to (ADR 0207).
    */
   async connectRemote(args: {
     tenantId: string;
@@ -283,7 +283,7 @@ export class WorkerNodesService {
               current.authority_id !== args.authorityId)
           )
             throw new WorkerNodeLeaseHeldError();
-          // Every operation is sealed to the executor's key (ADR 0206).
+          // Every operation is sealed to the executor's key (ADR 0207).
           if (
             !(await executorKey({
               db: trx,

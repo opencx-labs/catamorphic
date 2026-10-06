@@ -72,7 +72,7 @@ const DEFAULT_MAX_BODY_BYTES = 64 * 1024 * 1024;
  * once; it lives in the credential vault and the gateway adds it to requests
  * for this one origin. Agents and workflows call `get`, `post`, ... with a
  * path and body and never see the key, and code in sandboxes sends the
- * API's own requests through the gateway's HTTP route (ADR 0211). Roles
+ * API's own requests through the gateway's HTTP route (ADR 0212). Roles
  * narrow methods through the connection's capabilities. With `actions`,
  * each action is instead one fixed operation of the API, so capabilities
  * can name single operations (ADR 0179), and the connection has no route

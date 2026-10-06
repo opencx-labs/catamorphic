@@ -53,7 +53,7 @@ RUN bun install --frozen-lockfile --ignore-scripts \
   && chown bun:bun /data
 
 # Where this image is published and which release it is: machines the
-# server provisions run this same image (ADR 0204). Release builds pass both.
+# server provisions run this same image (ADR 0205). Release builds pass both.
 ARG WORK_IMAGE_REPOSITORY
 ARG WORK_VERSION
 ENV WORK_IMAGE_REPOSITORY=$WORK_IMAGE_REPOSITORY

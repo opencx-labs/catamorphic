@@ -24,7 +24,7 @@ function flipped(value: string, byte = 0): string {
   return bytes.toString("base64");
 }
 
-describe("operations sealed to their executor (ADR 0206)", () => {
+describe("operations sealed to their executor (ADR 0207)", () => {
   it("opens for the executor it was sealed to", () => {
     const keys = generateExecutorKeyPair();
     expect(ExecutorPublicKeySchema.safeParse(keys.publicKey).success).toBe(

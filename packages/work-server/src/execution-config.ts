@@ -23,14 +23,14 @@ import {
 } from "@catamorphic/sandbox";
 import { signInRoot } from "./workers/sign-ins.js";
 
-/** A sandbox backend this machine can run (ADR 0203). */
+/** A sandbox backend this machine can run (ADR 0204). */
 export type WorkSandboxBackend = "microsandbox" | "container" | "local-process";
 
 /** How this machine executes agent and workflow sandboxes, as configured. */
 export interface WorkExecutionSettings {
   /**
    * The backend the operator chose, or `auto`: the best this machine
-   * offers, found at start by {@link resolveExecutionSettings} (ADR 0203).
+   * offers, found at start by {@link resolveExecutionSettings} (ADR 0204).
    */
   backend: WorkSandboxBackend | "auto";
   /**
@@ -97,7 +97,7 @@ export interface WorkExecutionSettings {
    */
   acceptPersonalCredentials?: boolean;
   /**
-   * Days a volume may go unused before the machine forgets it (ADR 0207,
+   * Days a volume may go unused before the machine forgets it (ADR 0208,
    * `WORK_VOLUME_RETENTION_DAYS`, default 30).
    */
   volumeRetentionDays: number;
@@ -303,7 +303,7 @@ const machineProbes: ExecutionProbes = {
 };
 
 /**
- * Choose this machine's backend (ADR 0203). `auto` takes microsandbox
+ * Choose this machine's backend (ADR 0204). `auto` takes microsandbox
  * where it can run (an Apple silicon Mac, or Linux with a usable
  * `/dev/kvm`), else the container backend under gVisor where the Docker
  * daemon has a `runsc` runtime, else under runc where a daemon answers,
@@ -622,7 +622,7 @@ export function workExecution(args: {
         : ("process" as const),
     machineCapabilities: machineCapabilities(settings),
     signInRoot: signIns,
-    /** What runs this machine's sandboxes and why, for operators (ADR 0203). */
+    /** What runs this machine's sandboxes and why, for operators (ADR 0204). */
     backend: {
       kind: settings.backend,
       ...(runtime ? { runtime: runtime.kind } : {}),

@@ -80,7 +80,7 @@ describe("brokered HTTP API connections (ADR 0162)", () => {
     expect(JSON.stringify(output)).not.toContain("sk-live-secret");
   });
 
-  it("offers code in sandboxes its base URL, paths and key headers (ADR 0211)", () => {
+  it("offers code in sandboxes its base URL, paths and key headers (ADR 0212)", () => {
     const { api } = provider({ paths: ["/invoices"] });
     expect(api.http?.baseUrl).toBe("https://api.billing.test/v1");
     expect(api.http?.paths).toEqual(["/invoices"]);

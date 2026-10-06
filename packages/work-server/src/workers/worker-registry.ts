@@ -55,7 +55,7 @@ export const WorkerOfferSchema = z.strictObject({
           "images.build",
           "containers",
           "network.policy",
-          // It keeps volumes across sandboxes (ADR 0207).
+          // It keeps volumes across sandboxes (ADR 0208).
           "volumes",
           // What the machine offers beside its provider (ADR 0184).
           "credentials.personal",
@@ -82,7 +82,7 @@ export const WorkerOfferSchema = z.strictObject({
     })
     .default({}),
   version: z.string().max(100).optional(),
-  /** What runs its sandboxes and why it was chosen (ADR 0203). */
+  /** What runs its sandboxes and why it was chosen (ADR 0204). */
   backend: z
     .strictObject({
       kind: z.enum(["microsandbox", "container", "local-process"]),
@@ -96,7 +96,7 @@ export type WorkerOffer = z.infer<typeof WorkerOfferSchema>;
 /**
  * What a worker sends to connect: the epoch its process chose at start
  * (ADR 0192), which every later call repeats as its session, its offer, and
- * the public key its operations are sealed to (ADR 0206).
+ * the public key its operations are sealed to (ADR 0207).
  */
 export const WorkerConnectSchema = z.strictObject({
   session: z.string().regex(REMOTE_EPOCH_PATTERN, "Use a UUIDv7 epoch"),
@@ -104,7 +104,7 @@ export const WorkerConnectSchema = z.strictObject({
   publicKey: ExecutorPublicKeySchema,
 });
 
-/** A credential older than this is due for rotation on its own (ADR 0206). */
+/** A credential older than this is due for rotation on its own (ADR 0207). */
 export const WORKER_CREDENTIAL_MAX_AGE_DAYS = 30;
 
 /** The enrolled worker a request's credential proves. */
@@ -128,11 +128,11 @@ export class WorkerIsolationError extends Error {
   }
 }
 
-/** Nobody may hold a pooled machine's access but its rule (ADR 0204). */
+/** Nobody may hold a pooled machine's access but its rule (ADR 0205). */
 const NOBODY = { nobody: true } as const;
 
 /**
- * What a worker is doing for machine rules (ADR 0204): serving its access,
+ * What a worker is doing for machine rules (ADR 0205): serving its access,
  * released (serving nobody, its disk kept for its retention), free in its
  * pool, being reset before it returns to its pool, revoked and still being
  * destroyed on its platform, or revoked.
@@ -191,7 +191,7 @@ export class WorkerDisabledError extends Error {
 }
 
 /**
- * A rotation request arrived after a later one (ADR 0206): it was delayed on
+ * A rotation request arrived after a later one (ADR 0207): it was delayed on
  * its way, and the worker may already hold the later request's credential,
  * so it replaces nothing.
  */
@@ -206,7 +206,7 @@ export class WorkerRotationSupersededError extends Error {
 
 /**
  * The worker connected with a key other than the one it enrolled or last
- * rotated with (ADR 0206): its data directory was replaced or altered.
+ * rotated with (ADR 0207): its data directory was replaced or altered.
  */
 export class WorkerKeyMismatchError extends Error {
   constructor(name: string) {
@@ -233,7 +233,7 @@ export class WorkerSupersededError extends RemoteExecutorLeaseLostError {
 /**
  * Enrolled remote workers (ADR 0164). A worker proves itself with a machine
  * credential issued at enrollment and rotated every 30 days or when the
- * operator asks (ADR 0206); it never receives database, vault, or sign-in
+ * operator asks (ADR 0207); it never receives database, vault, or sign-in
  * secrets. Its operations are sealed to the public key it registered with
  * that credential. The worker owns its node lease (ADR 0192): its token is
  * the epoch the worker process chose at start, and each of its calls to any
@@ -366,7 +366,7 @@ export class WorkWorkerRegistry {
 
   /**
    * Operator: a one-time code a new worker exchanges for its credential. A
-   * pooled machine (ADR 0204) enrolls serving nobody, with only its labels;
+   * pooled machine (ADR 0205) enrolls serving nobody, with only its labels;
    * a machine rule assigns it.
    */
   async createEnrollment(args: {
@@ -464,7 +464,7 @@ export class WorkWorkerRegistry {
 
   /**
    * Worker: exchange a one-time code for a machine credential, registering
-   * the public key its operations will be sealed to (ADR 0206).
+   * the public key its operations will be sealed to (ADR 0207).
    */
   async enroll(args: {
     code: string;
@@ -536,7 +536,7 @@ export class WorkWorkerRegistry {
 
   /**
    * The enrolled worker a request's credential proves, if any. The first
-   * call made with a rotated credential makes it current (ADR 0206): its key
+   * call made with a rotated credential makes it current (ADR 0207): its key
    * is registered and the previous credential stops working.
    */
   async authenticate(
@@ -629,7 +629,7 @@ export class WorkWorkerRegistry {
   }
 
   /**
-   * Worker: a new credential for the public key it generated (ADR 0206).
+   * Worker: a new credential for the public key it generated (ADR 0207).
    * The new credential stays pending, and the one this call was made with
    * keeps working, until the worker first uses the new one; asking again
    * before then replaces the pending credential. So an answer lost on the
@@ -699,7 +699,7 @@ export class WorkWorkerRegistry {
    * Any replica accepts it; the machine credential is the authority. The
    * same epoch again only refreshes the offer and the lease. A new epoch
    * takes over at once and fails the old epoch's operations as uncertain.
-   * Its key must be the one it enrolled or last rotated with (ADR 0206); a
+   * Its key must be the one it enrolled or last rotated with (ADR 0207); a
    * worker enrolled before operations were sealed registers its key here,
    * on the authority of its credential.
    */
@@ -777,7 +777,7 @@ export class WorkWorkerRegistry {
 
   /**
    * One enrolled worker's placement policy as placement sees it: a
-   * released machine serves nobody (ADR 0204), whatever access it keeps.
+   * released machine serves nobody (ADR 0205), whatever access it keeps.
    */
   async placement(nodeId: string): Promise<WorkerPlacement> {
     const row = await this.deps.db
@@ -1005,7 +1005,7 @@ export class WorkWorkerRegistry {
     ];
   }
 
-  /** Every pooled machine still enrolled, free or held (ADR 0204). */
+  /** Every pooled machine still enrolled, free or held (ADR 0205). */
   async pooledMachines(): Promise<PooledMachine[]> {
     const rows = await this.deps.db
       .selectFrom("work_workers")
@@ -1071,7 +1071,7 @@ export class WorkWorkerRegistry {
   }
 
   /**
-   * Release a machine nobody should have any more (ADR 0204): it serves
+   * Release a machine nobody should have any more (ADR 0205): it serves
    * nobody from now on and keeps its disk for `retainDays`, counted from
    * the database's clock.
    */
@@ -1251,12 +1251,12 @@ export class WorkWorkerRegistry {
       enrolledAt: string;
       lastSeenAt: string | null;
       revoked: boolean;
-      /** Enrolled into a pool rules draw on (ADR 0204). */
+      /** Enrolled into a pool rules draw on (ADR 0205). */
       pool: boolean;
       state: WorkerState;
       /** Since when it serves nobody, and for how many days it is kept. */
       released: { at: string; retainDays: number | null } | null;
-      /** When its current credential was issued (ADR 0206). */
+      /** When its current credential was issued (ADR 0207). */
       credentialIssuedAt: string;
       /** The operator asked for a rotation the worker has not made yet. */
       rotationRequested: boolean;

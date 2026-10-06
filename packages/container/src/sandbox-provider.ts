@@ -66,7 +66,7 @@ const OWNER_LABEL = "work.sandbox.owner";
 /**
  * The bridge network open sandboxes join, created on demand: containers on
  * it cannot reach each other (inter-container traffic is off), so open
- * sandboxes of different people on one machine stay apart (ADR 0203).
+ * sandboxes of different people on one machine stay apart (ADR 0204).
  */
 export const SANDBOX_NETWORK = "work-sandboxes";
 const NETWORK_LABEL = "work.network";
@@ -212,7 +212,7 @@ interface SandboxRecord {
 }
 
 /**
- * Sandboxes as OCI containers through the Docker Engine API (ADR 0203):
+ * Sandboxes as OCI containers through the Docker Engine API (ADR 0204):
  * one long-running container per sandbox under gVisor or runc, with the
  * workspace on a Docker volume of its own. It offers images and
  * Dockerfile builds, CPU and memory limits, members' sign-ins, volumes,
@@ -234,7 +234,7 @@ export class ContainerSandboxProvider implements SandboxProvider {
       this.executeCommand(sandboxId, command, opts),
     workspaceRoot: this.workspaceRoot,
   });
-  /** Docker volumes named for their keys (ADR 0207). */
+  /** Docker volumes named for their keys (ADR 0208). */
   readonly volumes: SandboxVolumeProvider = {
     prune: (args) => this.pruneVolumes(args),
     removeAll: (args) => this.removeAllVolumes(args),
@@ -794,7 +794,7 @@ export class ContainerSandboxProvider implements SandboxProvider {
   }
 
   /**
-   * The sandbox's way out (ADR 0203): its own Bun or Node pipes
+   * The sandbox's way out (ADR 0204): its own Bun or Node pipes
    * `127.0.0.1:3128` to the mounted proxy socket. Nested containers get a
    * second forwarder on their bridge's gateway ({@link ensureDocker}); no
    * forwarder listens on an address other sandboxes reach.
@@ -1229,7 +1229,7 @@ export class ContainerSandboxProvider implements SandboxProvider {
   /**
    * Remove every volume this provider made. With `destroySandboxes`, every
    * sandbox it made goes first, those no caller knows of included (a
-   * pooled machine's reset, ADR 0204); without, a volume a sandbox still
+   * pooled machine's reset, ADR 0205); without, a volume a sandbox still
    * mounts is kept and named.
    */
   private async removeAllVolumes(args?: {
@@ -1325,7 +1325,7 @@ const liveInstances = new Set<string>();
 
 /**
  * Sandboxes being created, in a small file in the provider's state
- * directory (ADR 0203): each with the process and provider instance making
+ * directory (ADR 0204): each with the process and provider instance making
  * it. A sandbox whose maker is gone was never handed over.
  */
 export class CreationRegistry {

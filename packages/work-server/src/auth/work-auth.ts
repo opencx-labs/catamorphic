@@ -350,7 +350,7 @@ function toGrant(row: unknown): WorkAuthGrant | null {
 /**
  * The user who signs in with `email`, when that email is verified: an
  * identity provider proved it, or the operator who created the local
- * account vouched for it. How workflows name members by email (ADR 0209);
+ * account vouched for it. How workflows name members by email (ADR 0210);
  * an unverified address names no one.
  */
 export async function verifiedUserIdForEmail(input: {

@@ -14,7 +14,7 @@ import {
 } from "./runner.js";
 
 /**
- * The variables in an environment file on this machine (ADR 0205), or
+ * The variables in an environment file on this machine (ADR 0206), or
  * undefined when there is none. Any other failure to read it fails the
  * attempt: running without the variables would hide the problem.
  */

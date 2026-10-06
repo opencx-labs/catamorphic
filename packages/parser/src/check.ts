@@ -47,7 +47,7 @@ export interface CheckTriggerKind {
   configJsonSchema?: unknown;
   /** Enables hole validation (ADR 0042) when present. */
   payloadJsonSchema?: unknown;
-  /** Permissions a binding workflow must declare (ADR 0209). */
+  /** Permissions a binding workflow must declare (ADR 0210). */
   requiredPermissions?: readonly string[];
 }
 

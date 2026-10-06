@@ -3,7 +3,7 @@
 Use this when a Work server should let agents or workflows act on company
 systems: APIs, a production database, internal MCP tools (ADRs 0162, 0163),
 or when developers' remote Environments need the variables they have on their
-laptops (ADR 0205). The rule for company systems: workloads get permission to
+laptops (ADR 0206). The rule for company systems: workloads get permission to
 act, never the credential. The Work server holds credentials in its vault and
 makes each call itself, after any guards the company added review it.
 
@@ -127,7 +127,7 @@ not declare it here.
 ## Secrets in Environments
 
 A project secret holds a shared value and may hold one value per member
-(ADR 0205). Values are sealed in the vault and write-only: APIs report which
+(ADR 0206). Values are sealed in the vault and write-only: APIs report which
 values exist, who set them and when, never a value.
 
 Declare the names in `.work/project.json` (or with `defineSecrets` in
@@ -164,7 +164,7 @@ Who sets values:
   `secrets:write` for any member (`…/members/:userId`), or a workflow that
   declared `secrets:write`:
   `host["catamorphic.secrets"].set({ name, value, member: "ada@example.com" })`
-  (ADR 0209), as in an onboarding workflow that issues each new engineer's
+  (ADR 0210), as in an onboarding workflow that issues each new engineer's
   key. `DELETE` on the same paths clears a value.
 - `GET /api/projects/:id/secrets` lists each secret with its Environments,
   whether a shared value exists, the caller's own, and (with `secrets:read`)
@@ -428,7 +428,7 @@ credential, and after closing the chat its grant is refused.
 Code running in a chat's sandbox (a dev server, a CLI, an SDK, a test suite)
 often needs a company API with a shared key: a logging cluster's HTTP
 interface, an internal service. Bind an `http` gateway connection instead of
-listing the key as a secret (ADR 0211): the code gets the session's grant,
+listing the key as a secret (ADR 0212): the code gets the session's grant,
 never the key.
 
 ```json

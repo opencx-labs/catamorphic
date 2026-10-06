@@ -210,7 +210,7 @@ const events = startEventDispatcher({ core: catamorphic.core });
 // on shutdown: await events.stop();
 ```
 
-Directory events (ADR 0209) are Project Events about a whole tenant: register
+Directory events (ADR 0210) are Project Events about a whole tenant: register
 `DIRECTORY_TRIGGER_KINDS` from `@catamorphic/server-sdk`, and when an account
 joins, leaves, or changes groups, build
 `directoryProjectEvent({ kind, member, groups, occurredAt, revision })`,
@@ -971,7 +971,7 @@ A remote executor owns its node lease (ADR 0192): the host connects it with
 executor's own calls with `renewRemote`, and builds its sandbox provider from
 the row with `remoteProvider`; any host of the authority then claims its
 turns. `workerNode` names only the process's own local node.
-Every operation is sealed to its executor's X25519 public key (ADR 0206):
+Every operation is sealed to its executor's X25519 public key (ADR 0207):
 register it with `registerExecutorKey({ db, executor: nodeExecutor(id),
 publicKey })` before `connectRemote`, which refuses an executor without one.
 Enable `clientExecution: true` to accept authenticated member sandbox runners,
@@ -1086,7 +1086,7 @@ runner runs the harness's CLI beside the workspace, with the gateway as its
 only model endpoint, and any replica can read it or reattach to it (ADR
 0198). Harness binaries come from the Environment image.
 
-HTTP APIs through the gateway (ADR 0211): a provider whose connection is an
+HTTP APIs through the gateway (ADR 0212): a provider whose connection is an
 HTTP API code in sandboxes may call sets `http: { baseUrl, paths?,
 headers({ material }) }` (`defineHttpApiConnectionProvider` offers it for
 connections without named `actions`; `auth: { basic: true }` sends a

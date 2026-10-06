@@ -1,4 +1,4 @@
--- Machine rules (ADR 0204): a machine leaves its rule only once its
+-- Machine rules (ADR 0205): a machine leaves its rule only once its
 -- platform confirmed it is gone. Until `machine_destroyed_at` is set, a
 -- revoked rule machine is still being destroyed, whether or not its
 -- platform reference was ever recorded.

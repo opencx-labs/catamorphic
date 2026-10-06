@@ -1,5 +1,5 @@
 /**
- * Secret values in a turn's recorded output (ADR 0205): every value the
+ * Secret values in a turn's recorded output (ADR 0206): every value the
  * turn's sandbox received is replaced with `[secret NAME]` before the
  * output enters the session log. Streamed text is held back while its end
  * could still be the start of a value, so no part of a value is ever

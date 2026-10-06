@@ -40,7 +40,7 @@ describe("codexLaunch", () => {
     expect(launch({ permissions: {} }).approvalPolicy).toBe("on-request");
   });
 
-  it("gives Codex the session's secrets the runner read, under Work's own settings (ADR 0205)", () => {
+  it("gives Codex the session's secrets the runner read, under Work's own settings (ADR 0206)", () => {
     const result = launch({
       envFiles: [
         "/workspace/.work-session/env/gateway.sh",

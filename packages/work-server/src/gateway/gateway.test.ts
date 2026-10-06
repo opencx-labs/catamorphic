@@ -264,7 +264,7 @@ describe("gateway configuration", () => {
     );
   });
 
-  it("serves an HTTP API without named operations to code in sandboxes, with Basic auth (ADR 0211)", () => {
+  it("serves an HTTP API without named operations to code in sandboxes, with Basic auth (ADR 0212)", () => {
     const config = gatewayConfigFromFile({
       path: write({
         connections: [

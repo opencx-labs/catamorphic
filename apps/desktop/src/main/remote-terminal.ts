@@ -1,5 +1,5 @@
 /*
- * A terminal in a remote chat's workspace (ADR 0208), as one more kind of
+ * A terminal in a remote chat's workspace (ADR 0209), as one more kind of
  * terminal session beside the local PTYs in terminal.ts: the shell runs in
  * the chat's sandbox on the project's server, and this side follows its
  * output with long-polling reads, batches keystrokes into ordered writes,

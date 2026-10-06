@@ -476,7 +476,7 @@ function spoken(frames: readonly RunnerFrame[]): string {
     .join("");
 }
 
-describe("the session's environment file (ADR 0205)", () => {
+describe("the session's environment file (ADR 0206)", () => {
   /** A runner whose environment file reader serves `files`, and its frames. */
   function withFiles(files: Record<string, string>) {
     const frames: RunnerFrame[] = [];

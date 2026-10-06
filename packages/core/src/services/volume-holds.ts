@@ -7,7 +7,7 @@ import type {
 } from "./execution-allocations-service.js";
 
 /*
- * Exclusive volumes (ADR 0207): a Docker data root or a database directory
+ * Exclusive volumes (ADR 0208): a Docker data root or a database directory
  * is mounted into one sandbox at a time on its machine. The hold lives in
  * Postgres beside the Allocation whose sandbox mounts it, so every replica
  * sees it, and it ends with that sandbox (migration 051's trigger, on
@@ -165,7 +165,7 @@ export async function sweepVolumeHolds(args: {
 /**
  * What the agent is told when its workspace got an empty temporary copy
  * of an exclusive volume because another workspace of the same owner on
- * the machine holds it (ADR 0207).
+ * the machine holds it (ADR 0208).
  */
 export function temporaryVolumesNote(input: {
   volumes: ReadonlyArray<Pick<EnvironmentSandboxVolume, "name" | "path">>;

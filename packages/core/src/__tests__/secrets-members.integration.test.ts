@@ -17,7 +17,7 @@ import {
 } from "../services/secrets-service.js";
 
 /*
- * Project secrets with a value per member (ADR 0205) on PGlite, the
+ * Project secrets with a value per member (ADR 0206) on PGlite, the
  * desktop's and stock server's database: one shared value and one per
  * member under the same name, write-only, set by the member or by whoever
  * manages secrets, and resolved per sandbox owner.
@@ -71,7 +71,7 @@ const POLICY = parseProjectEnvironmentPolicy({
   },
 });
 
-describe("project secrets with a value per member (ADR 0205)", () => {
+describe("project secrets with a value per member (ADR 0206)", () => {
   const vault = new MemoryCredentialVault();
   const secrets = new SecretsService({
     db,

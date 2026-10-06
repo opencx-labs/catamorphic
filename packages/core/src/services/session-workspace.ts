@@ -4,7 +4,7 @@ import { type Kysely, sql } from "kysely";
 
 /**
  * A chat's live workspace as a person working beside its agent reaches it
- * (ADR 0208): the sandbox its turns run in, through the same provider the
+ * (ADR 0209): the sandbox its turns run in, through the same provider the
  * turns use, fenced to the chat's Allocation.
  */
 export interface SessionWorkspaceHandle {
@@ -45,7 +45,7 @@ export const WORKSPACE_NOT_RUNNING_MESSAGE =
 export const WORKSPACE_USE_INTERVAL_SECONDS = 60;
 
 /**
- * A person used the chat's workspace (ADR 0208): typed in or read a
+ * A person used the chat's workspace (ADR 0209): typed in or read a
  * terminal, or requested a preview. Idle release counts it as it counts a
  * turn. Written at most once a minute per chat, so following a terminal's
  * output costs a statement that changes nothing most of the time.

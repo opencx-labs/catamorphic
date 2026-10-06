@@ -1,8 +1,8 @@
-# 0211 — HTTP APIs reach code in sandboxes through the gateway
+# 0212 — HTTP APIs reach code in sandboxes through the gateway
 
 - **Status:** Accepted
 - **Date:** 2026-10-06
-- **Refines:** [0162](0162-connection-gateway-guards-and-sealed-secrets.md), [0175](0175-grants-reach-sandboxes.md), [0205](0205-project-secrets-reach-environments-per-member.md)
+- **Refines:** [0162](0162-connection-gateway-guards-and-sealed-secrets.md), [0175](0175-grants-reach-sandboxes.md), [0206](0206-project-secrets-reach-environments-per-member.md)
 
 ## Context
 
@@ -11,7 +11,7 @@ tools, JSON in and out. Code the engineer or agent runs in the sandbox (a dev
 server, a CLI, an SDK, a test suite) could not use it: only Git (ADR 0175)
 and model APIs (ADR 0180) had sandbox routes. A shared organization key, such
 as a logging cluster's, had to be pasted into the sandbox as a project secret,
-though ADR 0205 says to prefer a gateway connection whenever a value grants
+though ADR 0206 says to prefer a gateway connection whenever a value grants
 access to a company system.
 
 ## Decision

@@ -28,7 +28,7 @@ const targetMember = (target: Target): string | undefined =>
       : undefined;
 
 /**
- * The project's secrets on its server (ADR 0205): what each one is for and
+ * The project's secrets on its server (ADR 0206): what each one is for and
  * which Environments set it, the member's own value, and for people who
  * manage secrets, the shared value and everyone's own. Values only ever
  * travel to the server; nothing here shows one again.

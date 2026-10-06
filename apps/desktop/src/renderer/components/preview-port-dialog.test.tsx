@@ -63,7 +63,7 @@ function type(value: string) {
   });
 }
 
-describe("Open preview (ADR 0208)", () => {
+describe("Open preview (ADR 0209)", () => {
   it("offers the chat's last port and opens what is entered", () => {
     const onOpen = vi.fn();
     mount({

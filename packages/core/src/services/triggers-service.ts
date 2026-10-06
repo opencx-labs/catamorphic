@@ -948,7 +948,7 @@ export class TriggersService {
           continue;
         }
         // A kind whose events name what only some members may read is bound
-        // only by workflows that ask for it when turned on (ADR 0209).
+        // only by workflows that ask for it when turned on (ADR 0210).
         const permissionError = triggerPermissionError({
           kind: kind.name,
           required: kind.requiredPermissions,

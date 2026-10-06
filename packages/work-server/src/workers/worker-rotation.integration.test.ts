@@ -40,11 +40,11 @@ function epoch(): string {
 
 /**
  * Worker credentials rotate, and operations stay sealed to the key that
- * came with the current one (ADR 0206). Postgres-backed, as a deployment's
+ * came with the current one (ADR 0207). Postgres-backed, as a deployment's
  * control plane is.
  */
 describe.skipIf(!process.env.DATABASE_URL)(
-  "worker credentials rotate (ADR 0206)",
+  "worker credentials rotate (ADR 0207)",
   () => {
     let root: string;
     let database: Awaited<ReturnType<typeof createTestDatabase>>;
@@ -312,7 +312,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
       }
       times.sort((a, b) => a - b);
       console.info(
-        `[ADR 0206] worker over HTTP, one replica: median status round trip ${times[5]?.toFixed(1)} ms`,
+        `[ADR 0207] worker over HTTP, one replica: median status round trip ${times[5]?.toFixed(1)} ms`,
       );
 
       const credentialFile = path.join(dataDir, "worker-credential");

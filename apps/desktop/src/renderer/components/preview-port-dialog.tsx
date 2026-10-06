@@ -12,7 +12,7 @@ export interface PreviewPortRequest {
 
 /**
  * Asks for the port of a server running in a remote chat's workspace and
- * opens it in a browser tab (ADR 0208).
+ * opens it in a browser tab (ADR 0209).
  */
 export function PreviewPortDialog({
   request,

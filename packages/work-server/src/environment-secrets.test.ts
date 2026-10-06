@@ -32,7 +32,7 @@ import { expect, it } from "vitest";
 import { replyOf } from "./test-support.js";
 
 /*
- * Project secrets in Environments, end to end (ADR 0205): a member's own
+ * Project secrets in Environments, end to end (ADR 0206): a member's own
  * value reaches their own chat's sandbox on an isolating machine when they
  * wrote the turn's input, and the recorded reply never holds it; another
  * person's turn, a machine that isolates no one, and the project's chats

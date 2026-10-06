@@ -88,7 +88,7 @@ disagree with the installed source, the source wins.
   A setup agent provisions the first ordinary user and membership through the
   server's own operations. Organization administrators manage the named
   service connections (ADR 0172) and the workers and machine rules
-  (ADR 0204); they gain nothing inside projects.
+  (ADR 0205); they gain nothing inside projects.
 - **After setup, configuration is project code.** Roles, agents,
   `.work/workspace.js`, and `.work/project.json` change through
   ordinary review. Do not create a parallel bootstrap config.
@@ -109,7 +109,7 @@ disagree with the installed source, the source wins.
   and workflows get reviewed actions, never keys. Workflow runs, which receive
   project secrets, stay on the control plane. Secrets a project lists on an
   Environment, with a value per member, reach that Environment's sandboxes
-  where the placement isolates their owner (ADR 0205). An administrator enters each
+  where the placement isolates their owner (ADR 0206). An administrator enters each
   service credential once; projects bind it by name to an Environment in
   `.work/project.json` (ADR 0172).
 - **Isolation matches trust.** Local-process execution is for trusted

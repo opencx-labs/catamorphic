@@ -21,7 +21,7 @@ import { RecordingAdapter } from "./recording-adapter.js";
 import { testEnvironmentProvider } from "./test-environment.js";
 
 /*
- * Terminals and previews in a chat's workspace (ADR 0208), on a real
+ * Terminals and previews in a chat's workspace (ADR 0209), on a real
  * local-process sandbox: a login shell on a pseudo-terminal that is typed
  * into, read by cursor, resized and closed; the Environment's secrets
  * loaded; access only for whom the chat's workspace is; and HTTP requests
@@ -78,7 +78,7 @@ http.createServer((req, res) => {
 }).listen(port, "127.0.0.1", () => console.log("listening"));
 `;
 
-describe("terminals and previews in a chat's workspace (ADR 0208)", () => {
+describe("terminals and previews in a chat's workspace (ADR 0209)", () => {
   let tmpDir: string;
   let db: Kysely<DB>;
   let core: CatamorphicCore;

@@ -213,7 +213,7 @@ export const TriggerKindInfoSchema = z.object({
   payloadJsonSchema: JsonOutSchema,
   configJsonSchema: JsonOutSchema,
   outputJsonSchema: JsonOutSchema.optional(),
-  /** Permissions a workflow must declare to bind the kind (ADR 0209). */
+  /** Permissions a workflow must declare to bind the kind (ADR 0210). */
   requiredPermissions: z.array(z.string()).optional(),
 });
 
@@ -1954,7 +1954,7 @@ export const WatcherIdParamsSchema = AgentSessionIdParamsSchema.extend({
 
 export const OkSchema = z.object({ ok: z.literal(true) });
 
-// --- Terminals in a chat's workspace (ADR 0208) ---
+// --- Terminals in a chat's workspace (ADR 0209) ---
 
 const TerminalSizeSchema = z.number().int().min(1).max(1000);
 
@@ -2396,7 +2396,7 @@ export const PluginPackageParamsSchema = ProjectIdParamsSchema.extend({
   packageName: z.string().min(1),
 });
 
-// --- Secrets (ADR 0205) ---
+// --- Secrets (ADR 0206) ---
 export const SecretMemberValueSchema = z.object({
   /** The member's external user id. */
   member: z.string(),
@@ -2562,7 +2562,7 @@ export const PutPersonalEnvironmentSchema = z
         .max(16_384)
         .optional()
         .describe(
-          "The caller's own setup command, run after the Environment's in each new workspace of their own chats (ADR 0207); absent or blank for none",
+          "The caller's own setup command, run after the Environment's in each new workspace of their own chats (ADR 0208); absent or blank for none",
         ),
     },
     {

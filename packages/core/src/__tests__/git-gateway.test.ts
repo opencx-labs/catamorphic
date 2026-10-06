@@ -475,7 +475,7 @@ describe("sandbox Git (ADRs 0175, 0178)", () => {
     expect(plain.stdout.trim()).toBe("https://git.example.test/org/repo.git");
   });
 
-  it("names each HTTP alias's URL and grant file for code in the sandbox (ADR 0211)", async () => {
+  it("names each HTTP alias's URL and grant file for code in the sandbox (ADR 0212)", async () => {
     const session = path.join(root, "workspace", ".work-session");
     const file = path.join(session, "env", "gateway.sh");
     const gateway = "http://127.0.0.1:9/api/gateway";

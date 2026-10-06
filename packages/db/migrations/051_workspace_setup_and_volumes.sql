@@ -1,4 +1,4 @@
--- Workspaces keep what members build (ADR 0207).
+-- Workspaces keep what members build (ADR 0208).
 --
 -- An exclusive volume (a Docker data root, a database) is mounted into one
 -- sandbox at a time on its machine. Each hold names the Allocation whose
@@ -36,7 +36,7 @@ CREATE TRIGGER execution_allocations_volume_holds
     )
     EXECUTE FUNCTION release_volume_holds();
 
--- A member's own setup command (ADR 0207), from their
+-- A member's own setup command (ADR 0208), from their
 -- `.work/personal/environment.json`: not secret, but the member's alone,
 -- like their files. It runs only in their own chats.
 CREATE TABLE personal_environment_setups (

@@ -119,7 +119,7 @@ export interface WorkServerConfig {
    */
   webhookMaxBodyBytes?: number;
   /**
-   * Machine classes machine rules name (ADR 0204): Hetzner Cloud servers,
+   * Machine classes machine rules name (ADR 0205): Hetzner Cloud servers,
    * pools of enrolled machines, or the `machineProvisioner` hook's. The
    * image reads them from the JSON file `WORK_MACHINES_CONFIG`.
    */
@@ -130,7 +130,7 @@ export interface WorkServerConfig {
    */
   hetznerToken?: string;
   /**
-   * The worker image machines run (ADR 0204): `WORK_WORKER_IMAGE`, else
+   * The worker image machines run (ADR 0205): `WORK_WORKER_IMAGE`, else
    * the published image's own, `WORK_IMAGE_REPOSITORY:WORK_VERSION`, which
    * its build bakes in.
    */
@@ -209,7 +209,7 @@ export function workServerConfigFromEnv(
   };
 }
 
-/** Machine classes, the Hetzner token, and the worker image (ADR 0204). */
+/** Machine classes, the Hetzner token, and the worker image (ADR 0205). */
 function machineSettingsFromEnv(
   env: Record<string, string | undefined>,
 ): Pick<WorkServerConfig, "machines" | "hetznerToken" | "workerImage"> {

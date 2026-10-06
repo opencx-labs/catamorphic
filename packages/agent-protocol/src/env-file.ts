@@ -1,5 +1,5 @@
 /**
- * The environment file a sandbox's shells and runner load (ADR 0205): one
+ * The environment file a sandbox's shells and runner load (ADR 0206): one
  * `export NAME='value'` line per variable, values single-quoted so a shell
  * takes them literally, newlines included. Work writes it; shells read it
  * as `BASH_ENV` or with `.`, and the agent runner reads it with

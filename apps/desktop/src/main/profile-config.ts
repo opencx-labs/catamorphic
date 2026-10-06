@@ -53,7 +53,7 @@ export interface ProfileStores {
   connections: ConnectionsStore;
   /** Remote projects: local folders synced from a hosting backend (ADR 0055). */
   remoteProjects: RemoteProjectsStore;
-  /** The key servers seal this machine's operations to (ADR 0206). */
+  /** The key servers seal this machine's operations to (ADR 0207). */
   runnerKey: RunnerKeyStore;
 }
 

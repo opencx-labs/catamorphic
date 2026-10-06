@@ -24,7 +24,7 @@ import { reservedSandboxVariable } from "../services/secrets-service.js";
 const execute = promisify(execFile);
 
 /*
- * An Environment's secrets in a sandbox (ADR 0205): where they may go, the
+ * An Environment's secrets in a sandbox (ADR 0206): where they may go, the
  * file shells and the runner load, and what the agent is told about the
  * ones it did not get.
  */

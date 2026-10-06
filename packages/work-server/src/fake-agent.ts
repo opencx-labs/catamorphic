@@ -16,7 +16,7 @@ interface FakeSandbox {
   provider: Pick<SandboxProvider, "executeCommand" | "processes">;
   sandboxId: string;
   workingDirectory: string;
-  /** The session's environment files from the working directory (ADRs 0205, 0211). */
+  /** The session's environment files from the working directory (ADRs 0206, 0212). */
   envFiles?: readonly string[];
 }
 

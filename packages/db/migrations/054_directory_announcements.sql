@@ -1,4 +1,4 @@
--- Directory events waiting to reach their projects (ADR 0209). A
+-- Directory events waiting to reach their projects (ADR 0210). A
 -- transition records its event here in the transaction that records the
 -- transition; reaching the subscribed projects happens after it commits
 -- and retries until it succeeds, so a failure there never undoes the

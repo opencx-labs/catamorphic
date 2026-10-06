@@ -211,7 +211,7 @@ describe("background command tools", () => {
     ).rejects.toThrow("not a valid regular expression");
   }, 30_000);
 
-  it("load the session's environment files first, from the project folder (ADRs 0205, 0211)", async () => {
+  it("load the session's environment files first, from the project folder (ADRs 0206, 0212)", async () => {
     const provider = sandbox({ ceilingMs: 30_000 });
     const project = path.join(root, "secrets-project");
     const nested = path.join(project, "apps", "api");

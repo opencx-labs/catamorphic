@@ -43,7 +43,7 @@ import {
 import { WorkerNodesService } from "../services/worker-nodes-service.js";
 
 /**
- * Volumes from admission to the sandbox (ADR 0207): keyed per project,
+ * Volumes from admission to the sandbox (ADR 0208): keyed per project,
  * owner and name; placed only where machines keep volumes; an exclusive
  * one held for one sandbox per machine at a time, in Postgres, until that
  * sandbox is gone.
@@ -104,7 +104,7 @@ function descriptor(capabilities: string[]): EnvironmentBinding {
   };
 }
 
-describeIf("volumes and exclusive holds (ADR 0207)", () => {
+describeIf("volumes and exclusive holds (ADR 0208)", () => {
   let tmpDir: string;
   let projectId: string;
   let projectManager: ProjectManager;

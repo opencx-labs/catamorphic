@@ -25,7 +25,7 @@ const db = new Kysely<DB>({
 
 /**
  * One executor whose lease the test holds or drops. Its operations are
- * sealed to its key (ADR 0206); `poll` opens what it takes.
+ * sealed to its key (ADR 0207); `poll` opens what it takes.
  */
 async function executor() {
   const lease = {
@@ -107,7 +107,7 @@ describe("remote operation queue (ADR 0187)", () => {
     expect(left).toEqual([]);
   });
 
-  it("resets a pooled machine through its executor, and only while it is connected (ADR 0204)", async () => {
+  it("resets a pooled machine through its executor, and only while it is connected (ADR 0205)", async () => {
     const remote = await executor();
     const reset = (connected: boolean) =>
       remote.queue.resetMachine({
@@ -342,7 +342,7 @@ describe("remote operation queue (ADR 0187)", () => {
     await expect(result).resolves.toEqual({ exitCode: 0, result: "later" });
   });
 
-  it("seals again an operation its executor could not open after rotating its key (ADR 0206)", async () => {
+  it("seals again an operation its executor could not open after rotating its key (ADR 0207)", async () => {
     const remote = await executor();
     const result = remote.provider.executeCommand("sandbox-1", "echo resealed");
     const take = () =>
@@ -388,7 +388,7 @@ describe("remote operation queue (ADR 0187)", () => {
     await expect(result).resolves.toEqual({ exitCode: 0, result: "resealed" });
   });
 
-  it("stores a receipt's error without any URL's credentials (ADR 0206)", async () => {
+  it("stores a receipt's error without any URL's credentials (ADR 0207)", async () => {
     const remote = await executor();
     const result = remote.provider.gitClone(
       "sandbox-1",

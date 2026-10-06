@@ -36,7 +36,7 @@ const Completion = z.strictObject({
 });
 
 /**
- * The worker protocol (ADRs 0164, 0187, 0192, 0206). Every call but
+ * The worker protocol (ADRs 0164, 0187, 0192, 0207). Every call but
  * enrollment carries the worker's machine credential; a session is the epoch
  * the worker process chose at start, and it is the node's lease token. Any
  * replica answers any call, and each call renews the lease: operations and
@@ -123,7 +123,7 @@ export function registerWorkerRoutes(
     }
   });
 
-  // A new credential for a new key (ADR 0206). The credential this call
+  // A new credential for a new key (ADR 0207). The credential this call
   // carries keeps working until the worker first uses the new one. A
   // request older than one already seen (its UUIDv7 `rotation`) is refused
   // with 409: it was delayed on its way and issues nothing.

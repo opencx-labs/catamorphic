@@ -1,6 +1,6 @@
 /**
  * A member's remote environment (ADR 0184): the project files they chose
- * and their own setup command (ADR 0207), sent by this desktop to a linked
+ * and their own setup command (ADR 0208), sent by this desktop to a linked
  * Work server for their own sessions there. Sign-ins stay on the machine
  * they were made on (ADR 0199). Plain data shared by main and renderer.
  */
@@ -28,7 +28,7 @@ export interface PersonalEnvironmentFileView {
   server: { bytes: number; updatedAt: string } | null;
 }
 
-/** The member's own setup command (ADR 0207), as the config file says. */
+/** The member's own setup command (ADR 0208), as the config file says. */
 export interface PersonalEnvironmentSetupView {
   command: string;
   /** When the server got this exact command, if it has it. */

@@ -13,7 +13,7 @@ import { holdVolumes, sweepVolumeHolds } from "./volume-holds.js";
 
 /**
  * The Allocation's image, containers and egress (ADR 0176) and volumes (ADR
- * 0207) on a provider that keeps its own sandbox lifecycle, such as a
+ * 0208) on a provider that keeps its own sandbox lifecycle, such as a
  * member's computer: the Environment decides what its sandboxes boot,
  * wherever they run.
  */
@@ -132,7 +132,7 @@ export function allocationSandboxProvider(args: {
     // that the provider failed to allocate a machine.
     // The Environment's image, containers and egress were fixed when the
     // Allocation was admitted; no caller can widen them (ADR 0176). Its
-    // exclusive volumes are held for this sandbox on the node (ADR 0207).
+    // exclusive volumes are held for this sandbox on the node (ADR 0208).
     const sandbox = allocation.policy.sandbox;
     const volumes = await holdVolumes({ db, allocation });
     const handle = await provider.createSandbox({

@@ -251,7 +251,7 @@ export class PluginsService {
       .selectFrom("project_secrets")
       .where("project_id", "=", projectId)
       .where("name", "in", names)
-      // The value runs receive: the shared one (ADR 0205).
+      // The value runs receive: the shared one (ADR 0206).
       .where("member_external_user_id", "is", null)
       .select(["name"])
       .execute();

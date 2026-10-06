@@ -38,7 +38,7 @@ export interface EnvironmentBinding {
   /** Host-assigned labels an Environment's `pool` selects on (ADR 0167). */
   labels?: Readonly<Record<string, string>>;
   /**
-   * What runs the machine's sandboxes and why it was chosen (ADR 0203),
+   * What runs the machine's sandboxes and why it was chosen (ADR 0204),
    * for operators: `microsandbox`, `container` with its runtime (`runsc`,
    * `runc`), or `local-process`.
    */
@@ -56,7 +56,7 @@ export interface EnvironmentRuntimeBinding {
    * The host placed the owner's work on a machine no one else's work
    * reaches (ADR 0167 access naming only that person, or for a project's
    * own work only that project), so it may hold the owner's personal
-   * credentials (ADR 0184) and the Environment's secrets (ADR 0205).
+   * credentials (ADR 0184) and the Environment's secrets (ADR 0206).
    */
   servesOnlyOwner?: boolean;
 }

@@ -62,7 +62,7 @@ export class ClientRunnersService {
     capabilities?: readonly SandboxCapability[];
     /**
      * The runner's X25519 public key: every operation for this connection is
-     * sealed to it (ADR 0206). Its private key stays on the member's machine.
+     * sealed to it (ADR 0207). Its private key stays on the member's machine.
      */
     publicKey: string;
   }) {

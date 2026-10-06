@@ -62,11 +62,11 @@ export interface EnvironmentAdmission {
   runtime: EnvironmentRuntimeBinding;
   binding: EnvironmentBinding;
   effectiveRequirements: EnvironmentRequirements;
-  /** What the sandbox is given: image, containers, egress (ADR 0176), volumes (ADR 0207). */
+  /** What the sandbox is given: image, containers, egress (ADR 0176), volumes (ADR 0208). */
   sandbox: EnvironmentSandbox;
   /**
    * What runs in each new workspace's project folder before its first turn
-   * (ADR 0207), as the Environment says now: a changed command runs again.
+   * (ADR 0208), as the Environment says now: a changed command runs again.
    */
   setup?: { command: string; timeoutMinutes: number };
   /** How long unattended escalations wait for a person (ADR 0176). */
@@ -80,14 +80,14 @@ export interface EnvironmentAdmission {
   /**
    * The placement isolates the work's owner (see
    * {@link placementIsolatesOwner}): what lets an Environment's secrets
-   * reach its sandboxes (ADR 0205).
+   * reach its sandboxes (ADR 0206).
    */
   isolated: boolean;
 }
 
 /**
  * Whether a placement keeps one owner's work apart from everyone else's
- * (ADRs 0184, 0205). A member's work: their own device, a sandbox (a VM or
+ * (ADRs 0184, 0206). A member's work: their own device, a sandbox (a VM or
  * gVisor), a machine only they use, or a machine whose operator accepted
  * personal credentials on shared processes. The project's own work
  * (`owner` null): a sandbox, or a machine only that project's work
@@ -201,7 +201,7 @@ export function sandboxCapabilitiesFor(
 }
 
 /**
- * An Environment's volumes as one owner's sandboxes mount them (ADR 0207):
+ * An Environment's volumes as one owner's sandboxes mount them (ADR 0208):
  * each keyed by project, owner and name, so every sandbox of that owner on
  * a machine sees the same directory and nobody else's does. `owner` is a
  * member, or null for the project's own work.

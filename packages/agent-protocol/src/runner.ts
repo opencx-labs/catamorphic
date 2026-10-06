@@ -211,7 +211,7 @@ export interface AttemptStart {
   /** Extra environment for the harness process (no credentials unless the host's own). */
   env: Record<string, string>;
   /**
-   * The session's environment files in the sandbox (ADRs 0205, 0211), in
+   * The session's environment files in the sandbox (ADRs 0206, 0212), in
    * order, absolute in the sandbox's own paths: a runner beside the
    * workspace reads each as the attempt starts and adds its variables to
    * the harness's environment (a later file's over an earlier's), with

@@ -5,7 +5,7 @@ import {
   redactUrlCredentials,
 } from "../credential-redaction.js";
 
-describe("credentials never travel in messages (ADR 0206)", () => {
+describe("credentials never travel in messages (ADR 0207)", () => {
   it("removes the user information of every URL", () => {
     expect(
       redactUrlCredentials(

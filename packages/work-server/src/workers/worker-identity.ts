@@ -9,7 +9,7 @@ export interface WorkerCredentialPair {
 }
 
 /**
- * A worker's identity on its own disk (ADRs 0164, 0206): its machine
+ * A worker's identity on its own disk (ADRs 0164, 0207): its machine
  * credential and the private key its operations are sealed to, each in an
  * owner-only file of its data directory. Nothing else of it exists anywhere:
  * losing the data directory means enrolling the worker again.

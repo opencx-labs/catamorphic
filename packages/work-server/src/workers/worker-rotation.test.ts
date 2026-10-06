@@ -24,11 +24,11 @@ function laterId(): string {
 }
 
 /**
- * Rotations are ordered (ADR 0206): a rotate request that was delayed on
+ * Rotations are ordered (ADR 0207): a rotate request that was delayed on
  * its way, arriving after a later one, never replaces the credential the
  * later one issued, which the worker may already hold.
  */
-describe("worker credential rotations are ordered (ADR 0206)", () => {
+describe("worker credential rotations are ordered (ADR 0207)", () => {
   let root: string;
   let server: WorkServer;
   let operatorSecret: string;

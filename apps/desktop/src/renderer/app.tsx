@@ -503,7 +503,7 @@ export function App({
     open: boolean;
     context: { projectId?: string; sessionId?: string } | null;
   }>({ open: false, context: null });
-  // Open preview (ADR 0208): the remote chat whose port is being asked for.
+  // Open preview (ADR 0209): the remote chat whose port is being asked for.
   const [previewRequest, setPreviewRequest] =
     useState<PreviewPortRequest | null>(null);
   const [previewPending, setPreviewPending] = useState(false);
@@ -1237,7 +1237,7 @@ export function App({
 
   /**
    * A remote chat's workspace is open to the person beside its agent (ADR
-   * 0208); an incognito chat stays on this computer.
+   * 0209); an incognito chat stays on this computer.
    */
   const remoteChatSession = (sessionId: string | undefined): boolean =>
     remoteSurfaceStatus !== null &&
@@ -1658,7 +1658,7 @@ export function App({
     floating?: boolean;
     initialCommand?: string;
     title?: string;
-    /** A shell in this remote chat's workspace (ADR 0208). */
+    /** A shell in this remote chat's workspace (ADR 0209). */
     remoteSessionId?: string;
   }) => {
     const floating = opts?.floating ?? Boolean(opts?.floatingTool);

@@ -144,13 +144,13 @@ export function sandboxGrantFile(input: {
 }
 
 /**
- * The gateway's variables file (ADR 0211), relative to the session
+ * The gateway's variables file (ADR 0212), relative to the session
  * directory: beside the secrets file, and not secret itself. It names
  * where code reaches each HTTP API alias and where the alias's grant is.
  */
 export const GATEWAY_ENV_IN_SESSION_DIRECTORY = "env/gateway.sh";
 
-/** One HTTP API alias as code in the sandbox reaches it (ADR 0211). */
+/** One HTTP API alias as code in the sandbox reaches it (ADR 0212). */
 export interface SandboxHttpAlias {
   alias: string;
   /** `<gateway>/http/<alias>`, as the sandbox reaches it. */
@@ -158,7 +158,7 @@ export interface SandboxHttpAlias {
 }
 
 /**
- * The variable holding an HTTP API alias's gateway URL (ADR 0211):
+ * The variable holding an HTTP API alias's gateway URL (ADR 0212):
  * `WORK_HTTP_` and the alias in SCREAMING_SNAKE_CASE (`logs-eu` is
  * `WORK_HTTP_LOGS_EU`). The same name with `_GRANT_FILE` after it holds
  * the path of the alias's grant file.
@@ -190,7 +190,7 @@ function gatewayEnvTemplate(aliases: readonly SandboxHttpAlias[]): string {
     variables[name] = http.url;
     variables[grantFile] = `${ROOT}/grants/${http.alias}`;
   }
-  return `# Work's gateway (ADR 0211): HTTP APIs this session may call. Read the grant file for each request: it changes as the session's grant renews.\n${formatEnvFile(variables)}`;
+  return `# Work's gateway (ADR 0212): HTTP APIs this session may call. Read the grant file for each request: it changes as the session's grant renews.\n${formatEnvFile(variables)}`;
 }
 
 /**
@@ -217,7 +217,7 @@ function gatewayEnvScript(write: boolean): string {
 }
 
 /**
- * Write the session's grants (ADRs 0175, 0180, 0211), one file per alias;
+ * Write the session's grants (ADRs 0175, 0180, 0212), one file per alias;
  * a Git configuration that sends every remote under a Git alias's base
  * URLs to the gateway, answering credential prompts with the current
  * grant; and the gateway's variables file naming each HTTP alias's URL and
@@ -233,7 +233,7 @@ export async function configureSandboxGateway(input: {
   gatewayGitUrl: string;
   grants: readonly { alias: string; grant: string }[];
   gitAliases: readonly SandboxGitAlias[];
-  /** HTTP API aliases code in the sandbox may call (ADR 0211). */
+  /** HTTP API aliases code in the sandbox may call (ADR 0212). */
   httpAliases?: readonly SandboxHttpAlias[];
   renewOnly?: boolean;
 }): Promise<void> {
@@ -331,7 +331,7 @@ export async function configureSandboxGateway(input: {
 
 /**
  * Take the session's grant files and the gateway's variables file (ADRs
- * 0175, 0211) out of its sandbox when its grants are revoked with the
+ * 0175, 0212) out of its sandbox when its grants are revoked with the
  * workspace: nothing there names a dead grant afterwards. Safe to repeat.
  */
 export async function removeSandboxGateway(input: {

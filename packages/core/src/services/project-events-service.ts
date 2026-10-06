@@ -80,7 +80,7 @@ export class ProjectEventsService {
 
   /**
    * Record an event that concerns a whole tenant rather than one project,
-   * such as a member joining the directory (ADR 0209), in every project of
+   * such as a member joining the directory (ADR 0210), in every project of
    * the tenant with an active activation of its kind. Projects that do not
    * listen store nothing. Each project's copy is idempotent by
    * `externalId`, and the dispatcher delivers it like any project event.

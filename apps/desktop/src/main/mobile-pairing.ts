@@ -103,7 +103,7 @@ interface MobilePairingDeps {
   profileConfig: ProfileConfigManager;
   /** Loopback base of the embedded server ("http://127.0.0.1:NNNN"). */
   serverUrl: () => string | null;
-  /** The embedded API's token for this run (ADR 0210), once it booted. */
+  /** The embedded API's token for this run (ADR 0211), once it booted. */
   apiToken?: () => string | null;
   /** Override for tests; defaults next to the repo / packaged resources. */
   pwaDist?: string;
@@ -764,7 +764,7 @@ function isPhysicalLanInterface(name: string): boolean {
 
 /**
  * One request of a paired phone, on to the embedded API: its content type
- * and body, and this run's API token (ADR 0210), which the phone never
+ * and body, and this run's API token (ADR 0211), which the phone never
  * sees.
  */
 export function forwardToEmbeddedApi(input: {

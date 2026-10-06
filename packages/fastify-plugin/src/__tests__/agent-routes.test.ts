@@ -413,7 +413,7 @@ describe("personal environments (ADR 0199)", () => {
     await server.close();
   });
 
-  it("takes the member's own setup command with their files (ADR 0207)", async () => {
+  it("takes the member's own setup command with their files (ADR 0208)", async () => {
     const replace = vi.fn(async () => ({
       allowed: true,
       files: [],

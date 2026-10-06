@@ -26,7 +26,7 @@ import {
 } from "../services/http-gateway.js";
 
 /*
- * HTTP APIs through the gateway for code in sandboxes (ADR 0211), with the
+ * HTTP APIs through the gateway for code in sandboxes (ADR 0212), with the
  * real broker, grants and audit over an embedded database, and a fake API
  * on this machine that holds the only valid keys.
  */
@@ -146,7 +146,7 @@ async function waitFor(check: () => Promise<boolean>): Promise<void> {
   }
 }
 
-describe("HTTP APIs through the gateway (ADR 0211)", () => {
+describe("HTTP APIs through the gateway (ADR 0212)", () => {
   const upstream = fakeApi();
   const base = { url: "" };
   const reads = (action: string) => action === "get";

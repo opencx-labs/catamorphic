@@ -25,7 +25,7 @@ import {
 import { WorkWorkerRegistry } from "./worker-registry.js";
 
 /**
- * Machine rules (ADRs 0167, 0204): the directory decides who gets a
+ * Machine rules (ADRs 0167, 0205): the directory decides who gets a
  * machine. A fake provisioner records what the reconciler asks a platform
  * to do, and fails when told to.
  */
@@ -215,7 +215,7 @@ describe("machine rules", () => {
       `.execute(server.catamorphic.core.db)
     ).rows;
     if (!alice) throw new Error("No member");
-    // No retention (ADR 0204): a released machine goes in the same pass.
+    // No retention (ADR 0205): a released machine goes in the same pass.
     await operator("PUT", "/_work/operator/machine-rules/desk", {
       group: "eng@example.com",
       machines: "each-member",

@@ -197,7 +197,7 @@ describe("remote workers (ADR 0164)", () => {
       }),
     });
     await waitFor(workerAvailable, "the worker to connect");
-    // Operators see what runs each machine's sandboxes and why (ADR 0203).
+    // Operators see what runs each machine's sandboxes and why (ADR 0204).
     const listed = (await operator("GET", "/_work/operator/machines")).json();
     const backendOf = (id: string) =>
       listed.machines.find(

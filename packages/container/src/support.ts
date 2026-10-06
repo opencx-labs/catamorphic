@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { DockerClient } from "./docker-client.js";
 
-/** What a gVisor runtime was registered with (ADR 0203). */
+/** What a gVisor runtime was registered with (ADR 0204). */
 export interface RunscFeatures {
   /** `--host-uds=open` (or `all`): sandboxes reach a mounted host socket, so egress policy works. */
   hostSockets: boolean;

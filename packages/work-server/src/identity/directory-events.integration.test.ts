@@ -18,7 +18,7 @@ import {
 } from "../test-support.js";
 
 /**
- * Directory events start workflows (ADR 0209), end to end on network
+ * Directory events start workflows (ADR 0210), end to end on network
  * Postgres: a fake directory governs local accounts, a project runs
  * automations bound to the three directory kinds, and each account
  * transition (first sign-in, a group change, a suspension, a sign-in after
@@ -318,7 +318,7 @@ afterAll(async () => {
 });
 
 describe.skipIf(!process.env.DATABASE_URL)(
-  "directory events (ADR 0209)",
+  "directory events (ADR 0210)",
   () => {
     let ada: string;
     let bob: string;

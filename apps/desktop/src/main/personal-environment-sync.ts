@@ -24,7 +24,7 @@ import {
 
 /**
  * Keeps each linked project's remote environment (ADR 0184) current: the
- * member's listed files and their own setup command (ADR 0207), sent to
+ * member's listed files and their own setup command (ADR 0208), sent to
  * the Work server when they change and checked on a timer and on focus.
  * Sign-ins are never sent: they stay on the machine they were made on
  * (ADR 0199).
@@ -50,7 +50,7 @@ export interface PersonalEnvironmentLink {
 
 export interface PersonalEnvironmentSnapshot {
   files: ListedFile[];
-  /** The member's own setup command (ADR 0207). */
+  /** The member's own setup command (ADR 0208). */
   setup?: string;
   fingerprint: string;
 }

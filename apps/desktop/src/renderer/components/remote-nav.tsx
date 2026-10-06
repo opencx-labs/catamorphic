@@ -142,7 +142,7 @@ export function RemoteNav({
   const canPropose = features ? features.proposals : true;
   const canManageMembers =
     status.capabilities?.permissions.includes("memberships:write") ?? false;
-  // Every member sets their own secret values (ADR 0205); `secrets:write`
+  // Every member sets their own secret values (ADR 0206); `secrets:write`
   // also sets the shared value and anyone's.
   const canManageSecrets =
     status.capabilities?.permissions.includes("secrets:write") ?? false;

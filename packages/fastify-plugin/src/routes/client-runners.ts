@@ -18,7 +18,7 @@ const Lease = z.object({ id: z.string().uuid(), token: z.string().uuid() });
 /**
  * A member's This machine runner (ADRs 0098, 0187). It registers the public
  * key its operations are sealed to, and poll hands them out sealed (ADR
- * 0206). Poll long-polls; a 409 from poll or renew means the lease moved on
+ * 0207). Poll long-polls; a 409 from poll or renew means the lease moved on
  * and the runner registers again, a 409 from complete refuses only that
  * receipt, and a 403 means the member may no longer serve this Environment.
  */
@@ -43,7 +43,7 @@ export function registerClientRunnerRoutes(
           isolation: z.enum(["none", "process", "sandbox"]).optional(),
           /** The runner's provider runs background processes (ADR 0174). */
           processes: z.boolean().optional(),
-          /** What its sandboxes can be given (ADRs 0176, 0207). */
+          /** What its sandboxes can be given (ADRs 0176, 0208). */
           capabilities: z
             .array(
               z.enum([
@@ -57,7 +57,7 @@ export function registerClientRunnerRoutes(
             .optional(),
           /**
            * The runner's X25519 public key, raw and base64: its operations
-           * are sealed to it (ADR 0206). A runner without one receives
+           * are sealed to it (ADR 0207). A runner without one receives
            * nothing.
            */
           publicKey: ExecutorPublicKeySchema.optional(),
@@ -114,7 +114,7 @@ export function registerClientRunnerRoutes(
           max: z.number().int().min(1).max(64).optional(),
         }),
         response: {
-          // Each operation sealed to the runner's key (ADR 0206).
+          // Each operation sealed to the runner's key (ADR 0207).
           200: z.array(
             z.object({
               id: z.string().uuid(),

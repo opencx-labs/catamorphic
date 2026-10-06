@@ -35,7 +35,7 @@ export interface ShellState {
 
 /**
  * The lines that start a command from the project folder: load the
- * session's environment files (ADRs 0205, 0211) while still there, then
+ * session's environment files (ADRs 0206, 0212) while still there, then
  * move to `cwd`. The command starts in the root already; a root only the
  * provider can map (a virtual `/workspace`) stays where the provider put
  * it.
@@ -73,7 +73,7 @@ export async function runShell(input: {
   budgetSeconds?: number;
   signal?: AbortSignal;
   /**
-   * The session's environment files (ADRs 0205, 0211), from the project
+   * The session's environment files (ADRs 0206, 0212), from the project
    * folder or absolute: each loaded before the command when it exists.
    */
   envFiles?: readonly string[];
@@ -233,7 +233,7 @@ export interface ShellToolContext {
   /** The Environment's budget for one foreground command, in seconds. */
   budgetSeconds?: number;
   /**
-   * The session's environment files (ADRs 0205, 0211), from the project
+   * The session's environment files (ADRs 0206, 0212), from the project
    * folder or absolute: every command loads each that exists first.
    */
   envFiles?: readonly string[];

@@ -78,7 +78,7 @@ function send(
   });
 }
 
-describe("previews of a remote chat's workspace (ADR 0208)", () => {
+describe("previews of a remote chat's workspace (ADR 0209)", () => {
   let directory: string;
   let remote: FastifyInstance;
   let store: RemoteProjectsStore;

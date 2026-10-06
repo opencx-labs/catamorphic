@@ -10,7 +10,7 @@ const NO_KVM =
   "This machine has no usable /dev/kvm, so microsandbox cannot run here. Use WORK_SANDBOX=container (gVisor) or auto.";
 
 /**
- * Whether microsandbox can run here (ADR 0203): an Apple silicon Mac, or
+ * Whether microsandbox can run here (ADR 0204): an Apple silicon Mac, or
  * Linux (x64, arm64) with a `/dev/kvm` this process may open read-write;
  * and an `msb` runtime the SDK resolves (`MSB_PATH`, the runtime home's
  * `~/.microsandbox/bin/msb`, or the SDK's platform package).

@@ -1,4 +1,4 @@
--- Worker credential rotations are ordered (ADR 0206). Each rotation a
+-- Worker credential rotations are ordered (ADR 0207). Each rotation a
 -- worker asks for carries an id it chose, a UUIDv7, so later requests sort
 -- after earlier ones. A request replaces the pending credential only when
 -- its id is later than the pending one's: a request that was delayed on its

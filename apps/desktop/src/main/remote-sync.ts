@@ -60,7 +60,7 @@ export interface RemoteInvitation {
 }
 
 /**
- * One project secret on the server (ADR 0205): where it is declared, which
+ * One project secret on the server (ADR 0206): where it is declared, which
  * Environments receive it, and which values exist. Never a value.
  */
 export interface RemoteSecret {
@@ -177,7 +177,7 @@ type DeployResult =
 /**
  * `PUT /projects/:projectId/personal-environment` (ADR 0184): replaces the
  * caller's own files for the project, contents as base64, and their own
- * setup command (ADR 0207). Sign-ins are never sent (ADR 0199).
+ * setup command (ADR 0208). Sign-ins are never sent (ADR 0199).
  */
 export type RemotePersonalEnvironmentUpload = PersonalEnvironmentInput;
 
@@ -278,7 +278,7 @@ export interface RemoteProjectClient extends RemoteDocumentsClient {
   personalEnvironment(): Promise<RemotePersonalEnvironment | null>;
   putPersonalEnvironment(input: RemotePersonalEnvironmentUpload): Promise<void>;
   deletePersonalEnvironment(): Promise<void>;
-  /** The project's secrets, without values (ADR 0205). */
+  /** The project's secrets, without values (ADR 0206). */
   listSecrets(): Promise<RemoteSecret[]>;
   /**
    * Set the shared value, or `member`'s own (`me` for the caller's). The
@@ -383,7 +383,7 @@ export function httpDocumentsClient(args: {
   const doFetch = args.fetch ?? fetch;
   const base = `${args.serverUrl.replace(/\/+$/, "")}/projects/${encodeURIComponent(args.projectId)}/documents`;
   const personalEnvironmentUrl = `${args.serverUrl.replace(/\/+$/, "")}/projects/${encodeURIComponent(args.projectId)}/personal-environment`;
-  // A secret's shared value, or one member's own (ADR 0205).
+  // A secret's shared value, or one member's own (ADR 0206).
   const secretsUrl = (target?: { name: string; member?: string }) =>
     [
       `${args.serverUrl.replace(/\/+$/, "")}/projects/${encodeURIComponent(args.projectId)}/secrets`,

@@ -502,14 +502,14 @@ the historical log explains how it arrived here.
 
 A chat that runs on the project's server now offers Open terminal and Open
 preview in its menu (dock bubble and sidebar row) and in the palette (ADR
-0208). The terminal is an ordinary terminal tab named "Terminal · <chat>":
+0209). The terminal is an ordinary terminal tab named "Terminal · <chat>":
 its session in the main process is a remote backend beside the local PTYs,
 so the emulator, keys, scrollback and Cmd+Shift+T behave as they do for a
 local shell. Closing the tab closes the shell. When the shell itself exits
 the tab closes; when the workspace went away the tab stays and says so.
 Open preview asks for a port (the chat's last one filled in) and opens a
 browser tab on that preview's own loopback host (`p-<id>.localhost`,
-ADR 0210), so a dev server's `/assets/...` URLs and its cookies work as on
+ADR 0211), so a dev server's `/assets/...` URLs and its cookies work as on
 the person's own machine and stay that preview's; the address stays the
 same across restarts, so a restored tab still opens. The
 server's own refusals (nothing listens, the workspace is not running) show

@@ -292,7 +292,7 @@ describe("sandbox runner", () => {
     await channel.kill();
   }, 60_000);
 
-  it("gives every attempt the session's environment files as they are then (ADRs 0205, 0211)", async () => {
+  it("gives every attempt the session's environment files as they are then (ADRs 0206, 0212)", async () => {
     const sandbox = await provider.createSandbox({});
     const stateDirectory = "/workspace/.work-session";
     const target = {

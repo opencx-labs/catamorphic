@@ -26,7 +26,7 @@ registry, project agents ADR 0050, workspace tools, triggers, e2e fakes);
 `terminal.ts` + `shared/terminal-text.ts` + `shell-integration.ts` are the PTY
 stack (`remote-terminal.ts` puts a remote chat's shell behind the same
 sessions, and `remote-previews.ts` gives each of its previews a loopback
-host of its own, `p-<id>.localhost`, ADRs 0208 and 0210); `git-view.ts` is the system-git read surface (worktrees, status,
+host of its own, `p-<id>.localhost`, ADRs 0209 and 0211); `git-view.ts` is the system-git read surface (worktrees, status,
 diffs); `browser*.ts`, `profiles.ts`, `connections-store.ts`,
 `mcp-apps.ts`, `workspace-config.ts`, `project-manifest.ts`, and
 `shared/project-experience.ts` cover browser, profiles, connectors, MCP apps,

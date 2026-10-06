@@ -57,7 +57,7 @@ function appWithSecrets(
   return { app, calls };
 }
 
-describe("project secret routes (ADR 0205)", () => {
+describe("project secret routes (ADR 0206)", () => {
   it("lists secrets with their Environments and values' metadata, never a value", async () => {
     const { app } = appWithSecrets();
     const response = await app.inject({

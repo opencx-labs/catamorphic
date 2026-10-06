@@ -16,7 +16,7 @@ const json = [...SKILL.matchAll(/```json\n([\s\S]*?)```/g)].map(
 
 /*
  * The skill an agent reads about its workspace's secrets and private files
- * (ADRs 0184, 0199, 0205) states what Work actually does.
+ * (ADRs 0184, 0199, 0206) states what Work actually does.
  */
 describe("the personal-environment skill", () => {
   it("has parseable frontmatter and no dashes a reader would trip on", () => {
@@ -39,7 +39,7 @@ describe("the personal-environment skill", () => {
 
   it("names the file and the places Work's notes send people", () => {
     expect(SKILL).toContain(`. ../${SANDBOX_SECRETS_PATH}`);
-    // Company APIs through the gateway (ADR 0211): the file and names.
+    // Company APIs through the gateway (ADR 0212): the file and names.
     expect(SKILL).toContain(`. ../${SANDBOX_GATEWAY_ENV_PATH}`);
     expect(SKILL).toContain(`$${httpAliasVariable("logs")}_GRANT_FILE`);
     const note =

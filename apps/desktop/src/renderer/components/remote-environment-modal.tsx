@@ -25,7 +25,7 @@ const SERVER_NOTE: Record<PersonalEnvironmentServerState, string | null> = {
 /**
  * The member's remote environment for a linked project (ADR 0184): which
  * project files reach their sessions on the server, and their own setup
- * command for new workspaces there (ADR 0207), shown as the config says it.
+ * command for new workspaces there (ADR 0208), shown as the config says it.
  * Sign-ins never leave the machine they were made on (ADR 0199), so the
  * modal says where a subscription runs instead of offering to send it.
  * Everything here edits `.work/personal/environment.json`.

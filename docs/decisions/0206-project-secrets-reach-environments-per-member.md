@@ -1,6 +1,6 @@
-# 0205 — Project secrets reach Environments, with a value per member
+# 0206 — Project secrets reach Environments, with a value per member
 
-- **Status:** Accepted (refined by [0211](0211-http-apis-reach-code-in-sandboxes-through-the-gateway.md): the gateway's variables load beside the secrets)
+- **Status:** Accepted (refined by [0212](0212-http-apis-reach-code-in-sandboxes-through-the-gateway.md): the gateway's variables load beside the secrets)
 - **Date:** 2026-10-06
 - **Amends:** [0162](0162-connection-gateway-guards-and-sealed-secrets.md), [0175](0175-grants-reach-sandboxes.md), [0184](0184-personal-credentials-reach-a-members-own-sessions.md)
 
@@ -26,7 +26,7 @@ presence, who set a value and when, never the value.
 **Who sets them.** A shared value needs `secrets:write`. A member's value may
 be set by that member, by anyone holding `secrets:write` (someone onboarding
 a new colleague), or by a workflow that declared `secrets:write`
-(`catamorphic.secrets`, ADR 0209).
+(`catamorphic.secrets`, ADR 0210).
 
 **Environments say what reaches their sandboxes.** An Environment lists
 names in `secrets`; the list is reviewed like the rest of `project.json`.
@@ -53,7 +53,7 @@ that Environment's sandboxes. Connection credentials still never do; prefer a
 gateway connection whenever a value grants access to a company system.
 
 **Delivery.** Before each sandbox turn (and when a person opens the
-workspace, ADR 0208) the resolved variables are written to
+workspace, ADR 0209) the resolved variables are written to
 `.work-session/env/secrets.sh` (mode 0600, in a folder made the sandbox
 user's alone before anything is uploaded into it, outside the repository).
 The chat records that it has held secrets before they are written, and the
@@ -82,7 +82,7 @@ line; streamed text that could be the start of one is held back. A process
 that takes a running turn over masks the same values. A value shorter than
 six characters cannot be masked: the agent is told not to print it, and the
 audit names it. Operations that carry values to a worker are sealed to that
-worker (ADR 0206).
+worker (ADR 0207).
 
 **Personal files** stay the member's own (ADR 0184): files listed in
 `.work/personal/environment.json`, behind `"personalCredentials": true`.

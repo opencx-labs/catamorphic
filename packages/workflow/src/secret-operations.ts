@@ -1,7 +1,7 @@
 import type { WorkflowTransition } from "./workflow.js";
 
 /**
- * One project secret as `list` reports it (ADR 0205). Never a value: only
+ * One project secret as `list` reports it (ADR 0206). Never a value: only
  * whether a shared value exists and which members hold their own.
  */
 export interface SecretStatusEntry {
@@ -26,7 +26,7 @@ type Call<Input, Output = unknown> = (
 ) => WorkflowTransition<Output>;
 
 /**
- * The project's secrets (ADR 0209), caller-bound like every host call. A
+ * The project's secrets (ADR 0210), caller-bound like every host call. A
  * run reaches them only when its workflow declared `secrets:read` (for
  * `list`) or `secrets:write`, and values stay write-only.
  */

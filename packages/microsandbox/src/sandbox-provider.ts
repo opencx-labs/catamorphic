@@ -120,7 +120,7 @@ export interface MicrosandboxProviderConfig {
   signInRoot?: string;
   /**
    * Where the provider records when each volume was last mounted (ADR
-   * 0207). With it, sandboxes mount volumes (microsandbox named volumes:
+   * 0208). With it, sandboxes mount volumes (microsandbox named volumes:
    * directories, or disks for exclusive ones) and the provider advertises
    * `volumes`.
    */
@@ -173,7 +173,7 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
       this.executeCommand(sandboxId, command, opts),
     workspaceRoot: this.workspaceRoot,
   });
-  /** Named volumes kept across sandboxes (ADR 0207), with `stateDirectory`. */
+  /** Named volumes kept across sandboxes (ADR 0208), with `stateDirectory`. */
   readonly volumes?: SandboxVolumeProvider;
   private readonly config: Required<
     Omit<
@@ -349,7 +349,7 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
   }
 
   /**
-   * How each volume mounts (ADR 0207): a named volume, a directory, or a
+   * How each volume mounts (ADR 0208): a named volume, a directory, or a
    * disk for an exclusive one (a Docker data root needs a filesystem of
    * its own); a temporary one is owned by the sandbox and removed with it.
    */

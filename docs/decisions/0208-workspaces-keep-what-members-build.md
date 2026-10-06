@@ -1,4 +1,4 @@
-# 0207 — Workspaces keep what members build: setup and volumes
+# 0208 — Workspaces keep what members build: setup and volumes
 
 - **Status:** Accepted
 - **Date:** 2026-10-06
@@ -35,7 +35,7 @@ a sandbox that starts while it is held gets an empty temporary one and is
 told. Machines advertise `volumes`; local-process supports only paths under
 `~`. A machine forgets volumes nobody used for 30 days
 (`WORK_VOLUME_RETENTION_DAYS`) and a member's volumes when a pooled machine
-is reset (ADR 0204).
+is reset (ADR 0205).
 
 Considered: a Dockerfile build context with the lockfile, so images hold
 dependencies (every lockfile change rebuilds every machine's image), and one

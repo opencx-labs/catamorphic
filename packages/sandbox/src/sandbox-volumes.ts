@@ -3,7 +3,7 @@ import path from "node:path";
 import { type SandboxVolume, VOLUME_KEY_PATTERN } from "./types.js";
 
 /**
- * Check the volumes a sandbox is handed (ADR 0207): keys from `volumeKey`,
+ * Check the volumes a sandbox is handed (ADR 0208): keys from `volumeKey`,
  * absolute or `~/` paths without `..`, not the root, and no volume at or
  * inside another's path (`~` and `~/.cache` cannot both be volumes: one
  * would be mounted into the other, which providers cannot do alike).
@@ -84,7 +84,7 @@ export function volumeMountPath(volume: {
 }
 
 /**
- * When each volume on a machine was last mounted (ADR 0207), kept in one
+ * When each volume on a machine was last mounted (ADR 0208), kept in one
  * small JSON file beside the provider's state, so `prune` can forget
  * volumes nobody used for a long time. Providers touch a volume whenever a
  * sandbox mounts it.

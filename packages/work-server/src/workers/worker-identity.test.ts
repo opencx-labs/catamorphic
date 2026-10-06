@@ -36,7 +36,7 @@ afterEach(() => {
 
 const mode = (file: string) => fs.statSync(file).mode & 0o777;
 
-describe("a worker's identity on disk (ADR 0206)", () => {
+describe("a worker's identity on disk (ADR 0207)", () => {
   it("keeps its credential and key owner-only", () => {
     const dir = dataDir();
     expect(loadWorkerIdentity(dir)).toBeUndefined();
@@ -191,7 +191,7 @@ function enrolledDir(
 
 const OLD = "worker.rotor:old-secret";
 
-describe("a worker rotates its credential and key (ADR 0206)", () => {
+describe("a worker rotates its credential and key (ADR 0207)", () => {
   it("rotates when asked, with both on disk before it calls with them", async () => {
     const dir = enrolledDir(OLD);
     const rotations: string[] = [];

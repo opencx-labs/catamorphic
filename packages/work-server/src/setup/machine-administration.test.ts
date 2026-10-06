@@ -15,7 +15,7 @@ import {
 
 /**
  * Organization administrators manage machines through the API as the
- * operator does on the loopback listener (ADR 0204), with the same
+ * operator does on the loopback listener (ADR 0205), with the same
  * handlers; members and anonymous callers cannot.
  */
 const OPERATOR_SECRET = "machine-admin-operator-secret-with-32-characters";
@@ -23,7 +23,7 @@ const PUBLIC = "https://brain.example.test";
 const IMAGE = "ghcr.io/acme/work-server:0.1.0-alpha.18";
 const TOKEN = "hcloud-admin-test-token";
 
-describe("machine administration (ADR 0204)", () => {
+describe("machine administration (ADR 0205)", () => {
   let root: string;
   let server: WorkServer;
   const cloud = new FakeHetznerCloud({ token: TOKEN });

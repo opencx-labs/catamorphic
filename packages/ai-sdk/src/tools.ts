@@ -57,7 +57,7 @@ export interface WorkspaceToolContext {
   budgetSeconds?: number;
   /**
    * The session's environment files, which every command loads (ADRs
-   * 0205, 0211).
+   * 0206, 0212).
    */
   envFiles?: readonly string[];
 }

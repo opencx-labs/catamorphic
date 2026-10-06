@@ -34,7 +34,7 @@ export interface TerminalEntry {
   attachSessionId?: string;
   /**
    * A shell in this remote chat's workspace on the project's server (ADR
-   * 0208), named for the chat; closing the tab closes it.
+   * 0209), named for the chat; closing the tab closes it.
    */
   remoteSessionId?: string;
   /** PTY session backing this tab (agents read terminals through it). */

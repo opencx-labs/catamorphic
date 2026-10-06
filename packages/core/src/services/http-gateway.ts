@@ -97,7 +97,7 @@ export interface LiveHttpGrant {
   };
 }
 
-/** What the HTTP gateway reads (ADR 0211). */
+/** What the HTTP gateway reads (ADR 0212). */
 export interface HttpGatewayStore {
   /** The live grant a bearer names, or undefined. */
   liveGrant(args: { token: string }): Promise<LiveHttpGrant | undefined>;
@@ -173,7 +173,7 @@ export function dbHttpGatewayStore(db: Kysely<DB>): HttpGatewayStore {
 }
 
 /**
- * The capability an HTTP method needs (ADR 0211): its lowercase name, and
+ * The capability an HTTP method needs (ADR 0212): its lowercase name, and
  * `get` for HEAD. Undefined for a method the gateway does not forward.
  */
 export function httpMethodCapability(method: string): string | undefined {
@@ -291,7 +291,7 @@ export type HttpGatewayAdmitResult =
   | { admitted: HttpGatewayAdmission };
 
 /**
- * HTTP APIs through the gateway (ADR 0211). Code in a sandbox (a dev
+ * HTTP APIs through the gateway (ADR 0212). Code in a sandbox (a dev
  * server, a CLI, an SDK, a test suite) sends an API's own requests to
  * `/gateway/http/<alias>/…` with its session's grant as a bearer, as the
  * Basic password, or in `x-work-grant`. The gateway checks the grant, the

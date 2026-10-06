@@ -4,7 +4,7 @@ import { GATEWAY_ENV_IN_SESSION_DIRECTORY } from "./sandbox-git.js";
 import { SECRETS_IN_SESSION_DIRECTORY } from "./sandbox-secrets.js";
 
 /*
- * The shell side of a terminal in a chat's workspace (ADR 0208). Every
+ * The shell side of a terminal in a chat's workspace (ADR 0209). Every
  * command runs from the project folder, and paths are relative to it: a
  * local-process sandbox maps only its working directory onto the machine,
  * so an absolute sandbox path in a command would not resolve there.
@@ -22,8 +22,8 @@ export function sessionDirectoryFromProject(input: {
 }
 
 /**
- * Loads the gateway's variables (ADR 0211) and the Environment's secrets
- * (ADR 0205) into a shell, each when this workspace has it: the files
+ * Loads the gateway's variables (ADR 0212) and the Environment's secrets
+ * (ADR 0206) into a shell, each when this workspace has it: the files
  * `sandboxSecretsPrelude` loads, named from a shell word for the session
  * directory instead of the project folder, since a terminal records where
  * it started.

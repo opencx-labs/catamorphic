@@ -4,9 +4,9 @@ export type ChatSessionAction =
   | "mark-unread"
   | "archive"
   | "unarchive"
-  /** A terminal in a remote chat's workspace (ADR 0208). */
+  /** A terminal in a remote chat's workspace (ADR 0209). */
   | "open-terminal"
-  /** A server in a remote chat's workspace, in a browser tab (ADR 0208). */
+  /** A server in a remote chat's workspace, in a browser tab (ADR 0209). */
   | "open-preview";
 
 export interface ChatSessionMenuEntry {

@@ -15,7 +15,7 @@ import {
 } from "../services/volume-holds.js";
 
 /*
- * Exclusive volume holds on PGlite with a schema plugin (ADR 0207), the
+ * Exclusive volume holds on PGlite with a schema plugin (ADR 0208), the
  * Work server's default database: taking, refusing, taking over and
  * sweeping a hold reference the target table and `excluded` correctly.
  */

@@ -53,7 +53,7 @@ export interface HetznerCloudMachinesOptions {
 }
 
 /**
- * Work machines on Hetzner Cloud (ADR 0204). Creation is idempotent by
+ * Work machines on Hetzner Cloud (ADR 0205). Creation is idempotent by
  * name: a server already named so and labeled as this machine is the
  * machine. Destruction finds the server by its id or by its
  * `work-machine` label, succeeds when it is already gone, and can keep a

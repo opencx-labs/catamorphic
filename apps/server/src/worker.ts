@@ -15,7 +15,7 @@ import { workerCommand } from "./worker-cli.js";
  *   WORK_CONTROL_PLANE_URL   the control plane's public origin (HTTPS)
  *   WORK_WORKER_ENROLLMENT   one-time code, needed only on first start
  *   WORK_DATA_DIR            local state: credential, the key its
- *                            operations are sealed to (ADR 0206),
+ *                            operations are sealed to (ADR 0207),
  *                            sandboxes, members' sign-ins (/data)
  *   WORK_SANDBOX, WORK_MAX_WORKSPACES, WORK_CAPACITY_*, WORK_WORKSPACE_*
  *                            execution backend and budgets, as on a server

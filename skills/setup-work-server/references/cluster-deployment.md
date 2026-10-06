@@ -18,7 +18,7 @@ deployment.
 ## Sandbox backends
 
 Every machine (control plane or worker) runs its sandboxes with one backend
-(ADR 0203), chosen by `WORK_SANDBOX`:
+(ADR 0204), chosen by `WORK_SANDBOX`:
 
 | `WORK_SANDBOX` | Sandboxes | Isolation |
 | --- | --- | --- |
@@ -158,7 +158,7 @@ node stop working at once. Re-enroll the same name with a new code.
 
 Every operation queued for a worker (commands, uploaded files, members'
 secrets and personal files) is sealed to that worker's public key before it
-is written to Postgres (ADR 0206): the row, the write-ahead log, and backups
+is written to Postgres (ADR 0207): the row, the write-ahead log, and backups
 hold only the operation's kind and ciphertext that only the worker's private
 key opens. Even the ciphertext is dropped once the operation has run.
 Results are not sealed; they enter the chat's record anyway.
@@ -258,7 +258,7 @@ lists, machine rules, and project role mappings name.
 
 ## A machine for every person or team
 
-Machine rules keep workers in step with the directory (ADRs 0167, 0204):
+Machine rules keep workers in step with the directory (ADRs 0167, 0205):
 every active member of a group gets a machine of their own, or the group
 shares a fixed number. A rule names a machine **class**, and classes live in
 the JSON file `WORK_MACHINES_CONFIG` names:
@@ -378,7 +378,7 @@ system directories. It:
   or added capabilities;
 - without KVM, installs gVisor from its apt repository (Debian and Ubuntu;
   elsewhere install `runsc` first) and registers the `runsc` runtime with
-  `--host-uds=open --net-raw` (ADR 0203), restarting Docker only when that
+  `--host-uds=open --net-raw` (ADR 0204), restarting Docker only when that
   changed;
 - creates the data directory for the image's user (uid 1000, mode 0700),
   pulls the image, replaces any container of that name, and runs the worker
@@ -498,7 +498,7 @@ fresh one with an empty disk at any time.
    fail as uncertain. When it calls again, the same process simply carries
    on. A replica that queues an operation wakes the worker's poll it is
    serving at once, and one that receives a result wakes its own waiting
-   turn at once (ADR 0206). Across replicas, a waiting poll checks the queue every
+   turn at once (ADR 0207). Across replicas, a waiting poll checks the queue every
    250 milliseconds and a waiting turn checks for its result every 100
    milliseconds, so each operation takes a little longer with several
    replicas.
@@ -578,7 +578,7 @@ and appropriate role grants. The desktop's **Connect This machine** action start
 an authenticated SDK runner using its local sandbox provider. It receives no
 Postgres credentials. Its operations are sealed to a key kept in the member's
 desktop profile, whose public half the runner registers each time it
-connects (ADR 0206). Discovery and every operation retain the member's current
+connects (ADR 0207). Discovery and every operation retain the member's current
 project and Environment permissions. Closing the desktop or losing authorization
 stops the runner. A new connection lifetime cannot revive an old allocation.
 The runner renews its own lease through any replica, so its chats belong to no
@@ -788,7 +788,7 @@ An Environment chooses its sandbox (ADR 0176) in `.work/project.json`:
 - `network.egress` is `open` (default), `gateway` (only this server's public
   host and port, from `WORK_PUBLIC_URL`, and DNS), or `allowlist`.
   Microsandbox enforces it in the VM's network, containers inside the VM
-  included. The container backend enforces it without a firewall (ADR 0203):
+  included. The container backend enforces it without a firewall (ADR 0204):
   a restricted sandbox has no network interface but loopback, and its only
   way out is a socket mounted from the machine, where the worker serves an
   HTTP proxy that admits the allowlist (`CONNECT` for TLS, absolute URLs for
@@ -807,7 +807,7 @@ An Environment chooses its sandbox (ADR 0176) in `.work/project.json`:
   and Bun or Node, since the setup step cannot install them.
   Local-process refuses such Environments unless the operator sets
   `WORK_UNENFORCED_EGRESS=accept`, which runs them with open egress.
-- `volumes` (ADR 0207) keep directories on the machine across a member's
+- `volumes` (ADR 0208) keep directories on the machine across a member's
   sandboxes. Microsandbox keeps each as a named volume (a disk for an
   `exclusive` one, sized by `sizeMb`), and the container backend as a Docker
   volume named `work-volume-<key>`; both mount at absolute paths or under
@@ -832,7 +832,7 @@ not budgeted.
 
 Images hold a team's toolchain; setup and volumes hold what the project
 installs with it, so the second workspace on a machine starts from warm
-caches (ADR 0207):
+caches (ADR 0208):
 
 ```json
 {
@@ -905,7 +905,7 @@ harnesses for everyone binds a model connection instead
 ([harnesses](harnesses.md)).
 
 The same placements receive the secrets an Environment lists, with each
-member's own value in their own chats (ADR 0205,
+member's own value in their own chats (ADR 0206,
 [secrets in Environments](secrets-and-gateway.md#secrets-in-environments)).
 A project chat receives the shared values on a sandboxed machine or on a
 worker whose access names only that project.
@@ -929,13 +929,13 @@ reason. A chat with no approvers refuses at once.
 
 ## Terminals and previews
 
-A member works in a chat's workspace beside its agent (ADR 0208): the chat's
+A member works in a chat's workspace beside its agent (ADR 0209): the chat's
 owner, or anyone with `sessions:write` for a project chat. A terminal is a
 login shell (bash, else sh) started as one of the workspace's background
 processes, on a pseudo-terminal when the sandbox has util-linux `script` (or
 the BSD `script` of macOS for local-process there), else an interactive shell
 on a pipe, which the open answer reports as `pty: false`. It starts in the
-project folder with the Environment's secrets (ADR 0205) loaded when the
+project folder with the Environment's secrets (ADR 0206) loaded when the
 workspace has them. `POST /api/projects/:id/agent/sessions/:sessionId/terminals`
 opens one, readmitting and starting the chat's workspace when it was given
 back; its output is read with `GET .../terminals/:terminalId/output?cursor&waitMs`,

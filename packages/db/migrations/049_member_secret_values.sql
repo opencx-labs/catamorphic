@@ -1,5 +1,5 @@
 -- A project secret holds a shared value and one value per member (ADR
--- 0205). A row with no member is the shared value; each name has at most
+-- 0206). A row with no member is the shared value; each name has at most
 -- one shared row and one row per member. `set_by` names who stored the
 -- value (a person, or the identity a workflow run acted as).
 ALTER TABLE project_secrets ADD COLUMN member_external_user_id text;

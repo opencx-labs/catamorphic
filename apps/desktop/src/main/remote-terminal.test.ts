@@ -92,7 +92,7 @@ const inputs = (calls: Call[]) =>
       : [],
   );
 
-describe("a terminal in a remote chat's workspace (ADR 0208)", () => {
+describe("a terminal in a remote chat's workspace (ADR 0209)", () => {
   it("streams output from the cursor and exits with the shell", async () => {
     const server = fakeServer();
     const terminal = await openRemoteTerminal({

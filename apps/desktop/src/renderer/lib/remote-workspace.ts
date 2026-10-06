@@ -1,5 +1,5 @@
 /*
- * Working in a remote chat's workspace from the desktop (ADR 0208): its
+ * Working in a remote chat's workspace from the desktop (ADR 0209): its
  * terminals and previews. The last preview port is remembered per chat in
  * this browser's storage, a convenience that may be missing.
  */

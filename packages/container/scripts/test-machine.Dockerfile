@@ -31,7 +31,7 @@ RUN set -e; \
   rm -f gvisor.tar.bz2; \
   runsc --version
 RUN npm install -g bun@1.3.14 && bun --version
-# Work's runtime arguments (ADR 0203): host sockets for the egress proxy,
+# Work's runtime arguments (ADR 0204): host sockets for the egress proxy,
 # raw sockets for nested Docker.
 RUN mkdir -p /etc/docker && printf '%s\n' \
   '{"runtimes":{"runsc":{"path":"/usr/local/bin/runsc","runtimeArgs":["--host-uds=open","--net-raw"]}}}' \

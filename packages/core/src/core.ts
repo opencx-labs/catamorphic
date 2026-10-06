@@ -200,7 +200,7 @@ export interface CatamorphicCoreConfig {
   }) => Promise<Identity | null>;
   /**
    * The external user id of whoever signs in with `email`, or null. Lets
-   * workflows name members by email (`catamorphic.secrets`, ADR 0209);
+   * workflows name members by email (`catamorphic.secrets`, ADR 0210);
    * without it they name members by id only.
    */
   memberIdForEmail?: (args: {
@@ -226,7 +226,7 @@ export interface CatamorphicCoreConfig {
    * mounts the plugin's gateway routes. Sandboxes get Git configured for
    * `<gatewayUrl>/git/<alias>/`, harnesses reach models at
    * `<gatewayUrl>/model/<alias>/`, and code reaches HTTP APIs at
-   * `<gatewayUrl>/http/<alias>` (ADR 0211). Absent, Git, model and HTTP
+   * `<gatewayUrl>/http/<alias>` (ADR 0212). Absent, Git, model and HTTP
    * aliases are not offered to sandboxes.
    */
   gatewayUrl?: (args: {
@@ -413,7 +413,7 @@ export class CatamorphicCore {
   readonly gitGateway?: GitGatewayService;
   /** Models through the gateway for sandbox harnesses (ADR 0180). */
   readonly modelGateway?: ModelGatewayService;
-  /** HTTP APIs through the gateway for code in sandboxes (ADR 0211). */
+  /** HTTP APIs through the gateway for code in sandboxes (ADR 0212). */
   readonly httpGateway?: HttpGatewayService;
   /** Workspaces at a ref of a project's linked remote (ADR 0178). */
   readonly sessionWorkspaces: SessionWorkspaces;
@@ -451,9 +451,9 @@ export class CatamorphicCore {
   readonly sessionSync?: SessionSyncService;
   readonly watchers?: WatchersService;
   readonly sessionActions?: SessionActionsService;
-  /** Terminals people open in a chat's workspace (ADR 0208). */
+  /** Terminals people open in a chat's workspace (ADR 0209). */
   readonly sessionTerminals?: SessionTerminalsService;
-  /** Previews of servers running in a chat's workspace (ADR 0208). */
+  /** Previews of servers running in a chat's workspace (ADR 0209). */
   readonly sessionPreviews?: SessionPreviewsService;
   readonly apps?: AppsService;
   readonly sessionArtifacts: SessionArtifactsService;

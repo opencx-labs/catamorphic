@@ -44,7 +44,7 @@ describe("LocalProcessSandboxProvider", () => {
     }
   });
 
-  it("keeps volumes under ~ across sandboxes and refuses other paths (ADR 0207)", async () => {
+  it("keeps volumes under ~ across sandboxes and refuses other paths (ADR 0208)", async () => {
     const machine = new LocalProcessSandboxProvider({
       root: path.join(root, "volume-sandboxes"),
     });
@@ -400,7 +400,7 @@ describe("LocalProcessSandboxProvider", () => {
     expect(await provider.getSandboxStatus(sandbox.id)).toBe("stopped");
   });
 
-  it("never says a clone's credentials when it fails (ADR 0206)", async () => {
+  it("never says a clone's credentials when it fails (ADR 0207)", async () => {
     const sandbox = await provider.createSandbox({});
     // Nothing listens on the discard port: the clone fails at once.
     const failure = await provider

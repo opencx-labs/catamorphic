@@ -105,7 +105,7 @@ describe.skipIf(!enabled)("microsandbox Environments (ADR 0176)", () => {
     }
   }, 600_000);
 
-  it("keeps volumes across sandboxes and sizes the root disk (ADR 0207)", async () => {
+  it("keeps volumes across sandboxes and sizes the root disk (ADR 0208)", async () => {
     const stateDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "work-msb-"));
     const provider = new MicrosandboxSandboxProvider({
       namePrefix: "test-volumes",

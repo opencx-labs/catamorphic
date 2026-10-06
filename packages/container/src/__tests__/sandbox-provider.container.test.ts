@@ -30,7 +30,7 @@ const DIND_IMAGE = "docker:29.8.2-dind";
 const NESTED_IMAGE = "alpine:3.22.2";
 const MINUTES = 60_000;
 
-describe.skipIf(!enabled)("container sandboxes (ADR 0203)", () => {
+describe.skipIf(!enabled)("container sandboxes (ADR 0204)", () => {
   const docker = new DockerClient(dockerEndpoint(process.env.DOCKER_HOST));
   let runtime: ContainerRuntime;
   let root: string;

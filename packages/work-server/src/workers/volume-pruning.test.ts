@@ -1,7 +1,7 @@
 import { expect, it, vi } from "vitest";
 import { startVolumePruning } from "./volume-pruning.js";
 
-it("prunes volumes unused past retention at start and on its interval (ADR 0207)", async () => {
+it("prunes volumes unused past retention at start and on its interval (ADR 0208)", async () => {
   const calls: number[] = [];
   const log: string[] = [];
   const stop = startVolumePruning({

@@ -23,7 +23,7 @@ What the server does once configured:
   removes exactly the roles the mapping granted.
 - Someone joining, leaving, or changing groups starts the project workflows
   bound to it, such as issuing a new engineer's keys and revoking them when
-  they leave (ADR 0209; see Onboarding and offboarding automations below).
+  they leave (ADR 0210; see Onboarding and offboarding automations below).
 
 ## 1. OAuth client
 
@@ -134,7 +134,7 @@ inject another directory through the `directories` hook of
 
 ## Onboarding and offboarding automations
 
-The account lifecycle above starts project workflows (ADR 0209), so a project
+The account lifecycle above starts project workflows (ADR 0210), so a project
 can issue a new engineer's keys when they join and revoke them when they leave.
 Three trigger kinds carry it:
 
@@ -181,7 +181,7 @@ change in anyone's groups.
   account's first sign-in; nothing there fires the other two.
 
 Workflows give a member a value of their own with
-`host["catamorphic.secrets"]` (ADRs 0205, 0209): `set({ name, value, member })` and
+`host["catamorphic.secrets"]` (ADRs 0206, 0210): `set({ name, value, member })` and
 `delete({ name, member })` name the member by email or id, need the workflow
 to declare `secrets:write`, and keep the value write-only. Declare the secret
 in `.work/project.json` and list it in the `secrets` of each Environment

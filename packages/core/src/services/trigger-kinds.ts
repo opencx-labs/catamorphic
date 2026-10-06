@@ -55,7 +55,7 @@ export interface TriggerKindRuntime {
   /**
    * Project permissions (ADR 0158) a workflow must declare to bind this
    * kind, because its events disclose what only they may read: directory
-   * events name people, so they need `memberships:read` (ADR 0209). The
+   * events name people, so they need `memberships:read` (ADR 0210). The
    * deploy scan and each project's check refuse a binding without them.
    */
   requiredPermissions?: readonly string[];

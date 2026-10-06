@@ -64,7 +64,7 @@ export function defineTriggerKind<
   correlationKey?: (payload: z.output<PayloadSchema>) => string | undefined;
   /**
    * Project permissions a workflow must declare to bind this kind, when its
-   * events disclose what only some members may read (ADR 0209), e.g.
+   * events disclose what only some members may read (ADR 0210), e.g.
    * `memberships:read` for events that name people.
    */
   requiredPermissions?: readonly ProjectPermissionName[];

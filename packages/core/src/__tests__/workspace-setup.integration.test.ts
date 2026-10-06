@@ -27,7 +27,7 @@ import { ProjectsService } from "../services/projects-service.js";
 import { RecordingAdapter } from "./recording-adapter.js";
 
 /**
- * Workspace setup in chats (ADR 0207): an Environment's `setup` runs once
+ * Workspace setup in chats (ADR 0208): an Environment's `setup` runs once
  * per workspace before its first turn, again when the command changes or
  * the workspace is rebuilt, with the session's secrets and after it the
  * owner's own setup; a failure is told to the agent and runs again next
@@ -46,7 +46,7 @@ const ada: Identity = { tenantId, externalUserId: "ada" };
 const bob: Identity = { tenantId, externalUserId: "bob" };
 const cy: Identity = { tenantId, externalUserId: "cy" };
 
-describeIf("workspace setup in chats (ADR 0207)", () => {
+describeIf("workspace setup in chats (ADR 0208)", () => {
   let tmpDir: string;
   let runs: string;
   let projectId: string;
@@ -287,7 +287,7 @@ describeIf("workspace setup in chats (ADR 0207)", () => {
     const chat = await sessions.create(ada, projectId);
     await send(ada, chat.id, "first");
     expect(await ranLines()).toEqual(["environment none", "personal ada"]);
-    // Secrets are written before setup (ADR 0205); setup loads them.
+    // Secrets are written before setup (ADR 0206); setup loads them.
     await machine.uploadFiles(
       await sandboxOf(chat.id),
       { "secrets.sh": "export DEMO_TOKEN=from-secrets\n" },

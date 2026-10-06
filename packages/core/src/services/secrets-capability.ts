@@ -10,7 +10,7 @@ import {
   type SecretsService,
 } from "./secrets-service.js";
 
-/** The host calls on a project's secrets (ADR 0209). */
+/** The host calls on a project's secrets (ADR 0210). */
 export const SECRETS_CAPABILITY = "catamorphic.secrets";
 
 const NameSchema = z.string().min(1).max(255);
@@ -44,7 +44,7 @@ function parse<T>(schema: z.ZodType<T>, args: unknown, call: string): T {
 }
 
 /**
- * `host["catamorphic.secrets"]` (ADR 0209): a workflow lists the
+ * `host["catamorphic.secrets"]` (ADR 0210): a workflow lists the
  * project's secrets and sets or removes shared and members' values, as its
  * run's caller confined to what the workflow declared (ADR 0158):
  * `secrets:read` to list, `secrets:write` to change. No call returns a

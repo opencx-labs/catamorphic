@@ -119,7 +119,7 @@ const RUNNER_KEYS: ClientRunnerKeys = {
   privateKeys: () => [KEYS.privateKey],
 };
 
-/** A pooled machine's reset (ADR 0204), sealed like every operation. */
+/** A pooled machine's reset (ADR 0205), sealed like every operation. */
 function sealedReset(id: string): Job {
   return {
     id,
@@ -335,7 +335,7 @@ describe("client runner transport (ADR 0187)", () => {
   });
 });
 
-describe("operations sealed to the runner (ADR 0206)", () => {
+describe("operations sealed to the runner (ADR 0207)", () => {
   it("runs nothing it cannot open with its own keys", async () => {
     const { provider, commands } = recordingProvider();
     const stranger = generateExecutorKeyPair();

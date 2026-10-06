@@ -11,7 +11,7 @@ export const WORKER_PROTOCOL_HEADER = "work-protocol";
 /**
  * The protocol this control plane speaks, and the oldest it still drives.
  * 2: operations are sealed to the worker's key, which it registers when it
- * enrolls, connects or rotates its credential (ADR 0206); a worker of
+ * enrolls, connects or rotates its credential (ADR 0207); a worker of
  * protocol 1 could open none of them.
  */
 export const WORKER_PROTOCOL = {

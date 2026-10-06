@@ -1,8 +1,8 @@
-# 0209 — Directory events start workflows; workflows set members' secrets
+# 0210 — Directory events start workflows; workflows set members' secrets
 
 - **Status:** Accepted
 - **Date:** 2026-10-06
-- **Refines:** 0158, 0161, 0171, 0205
+- **Refines:** 0158, 0161, 0171, 0206
 
 ## Context
 
@@ -36,7 +36,7 @@ so a departure is always noticed.
 
 **Workflows set secrets.** `host["catamorphic.secrets"]` offers `list()`,
 `set({ name, value, member? })` and `delete({ name, member? })` on the
-project's secrets (ADR 0205), naming a member by id or email; the host
+project's secrets (ADR 0206), naming a member by id or email; the host
 resolves an email to its user (`memberIdForEmail`, which the Work server
 answers from its sign-ins), and the member must belong to the project. Runs
 get them only if the workflow declared `secrets:read` or `secrets:write` and

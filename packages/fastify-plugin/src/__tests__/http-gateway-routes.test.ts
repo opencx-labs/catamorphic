@@ -107,7 +107,7 @@ function recordingFetch() {
   return { calls, fetch };
 }
 
-describe("HTTP gateway routes (ADR 0211)", () => {
+describe("HTTP gateway routes (ADR 0212)", () => {
   it("forwards the alias itself and the raw path below it, with any grant form", async () => {
     const { calls, fetch } = recordingFetch();
     const { app, counts } = appWithGateway({

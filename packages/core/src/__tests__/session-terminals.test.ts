@@ -46,7 +46,7 @@ const projectId = "11111111-1111-4111-8111-111111111111";
 const tenantId = "22222222-2222-4222-8222-222222222222";
 const PROJECT = PROJECT_PRINCIPAL_ID;
 
-describe("who may work in a chat's workspace (ADR 0208)", () => {
+describe("who may work in a chat's workspace (ADR 0209)", () => {
   const member = (
     externalUserId: string,
     permissions: string[] = [],
@@ -245,7 +245,7 @@ function workspace(answer: (command: string) => string): {
   };
 }
 
-describe("preview requests (ADR 0208)", () => {
+describe("preview requests (ADR 0209)", () => {
   const identity: Identity = { tenantId, externalUserId: "ada" };
   const service = (handle: SessionWorkspaceHandle) =>
     new SessionPreviewsService({

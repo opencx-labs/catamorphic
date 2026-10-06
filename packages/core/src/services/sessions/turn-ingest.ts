@@ -77,7 +77,7 @@ const STREAMED_FIELDS = ["text", "output"] as const;
  * from its cursor again) changes nothing: an item that exists is merged,
  * never duplicated. Deltas of one item in a batch arrive as one append.
  * With `mask`, the values the turn's sandbox received are replaced in
- * everything recorded (ADR 0205).
+ * everything recorded (ADR 0206).
  */
 export async function ingestHarnessEvents(input: {
   trx: Transaction<DB>;

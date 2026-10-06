@@ -71,7 +71,7 @@ it("reads trusted proxies and the sign-in limit switch", () => {
   ).toThrow("WORK_AUTH_RATE_LIMIT");
 });
 
-it("reads machine classes, the Hetzner token and the worker image (ADR 0204)", () => {
+it("reads machine classes, the Hetzner token and the worker image (ADR 0205)", () => {
   const env = { WORK_DATA_DIR: dir };
   const file = path.join(dir, "machines.json");
   const classes = {

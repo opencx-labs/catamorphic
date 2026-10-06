@@ -2,7 +2,7 @@ import type { JsonObject } from "@catamorphic/db";
 import { z } from "zod";
 import { defineTriggerKind } from "./define-trigger-kind.js";
 
-/** The project event source directory events carry (ADR 0209). */
+/** The project event source directory events carry (ADR 0210). */
 export const DIRECTORY_EVENT_SOURCE = "directory";
 
 /** The directory's three transitions, as trigger kind names. */
@@ -75,7 +75,7 @@ const NARROWING =
   "Config groups narrows to members of any of those groups; where on payload.member.domain selects one email domain. A subscribing workflow must declare memberships:read.";
 
 /**
- * A member's account became active (ADR 0209): their first sign-in, or a
+ * A member's account became active (ADR 0210): their first sign-in, or a
  * sign-in the directory approves after it was disabled.
  */
 export const directoryMemberJoined = defineTriggerKind({
@@ -92,7 +92,7 @@ export const directoryMemberJoined = defineTriggerKind({
 });
 
 /**
- * A member's account was disabled (ADR 0209): the directory reports them
+ * A member's account was disabled (ADR 0210): the directory reports them
  * suspended, deleted or outside every required group.
  */
 export const directoryMemberLeft = defineTriggerKind({
@@ -108,7 +108,7 @@ export const directoryMemberLeft = defineTriggerKind({
     inAnyGroup({ wanted: config.groups, groups: event.payload.groups }),
 });
 
-/** An active member's directory groups changed (ADR 0209). */
+/** An active member's directory groups changed (ADR 0210). */
 export const directoryGroupsChanged = defineTriggerKind({
   name: "directory.groups-changed",
   modes: ["async"],

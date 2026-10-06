@@ -1,6 +1,6 @@
 /**
  * Why a workflow may not bind a trigger kind that requires permissions
- * (ADR 0209), or undefined when it may. A kind whose events disclose what
+ * (ADR 0210), or undefined when it may. A kind whose events disclose what
  * only some members may read (directory events name people) requires the
  * workflow to declare those permissions, so turning it on asks for them
  * and its runs hold them only while the enabling member does (ADR 0158).

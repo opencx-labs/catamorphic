@@ -34,7 +34,7 @@ export interface SecretMemberValue {
 }
 
 /**
- * One declared secret as management APIs report it (ADR 0205): where it is
+ * One declared secret as management APIs report it (ADR 0206): where it is
  * declared, which Environments receive it, and which values exist. Never a
  * value.
  */
@@ -69,7 +69,7 @@ export interface SecretValueChange {
 
 /**
  * Why a name an Environment lists reaches its sandboxes without a value
- * (ADR 0205): no value for this person and no default, no declaration, a
+ * (ADR 0206): no value for this person and no default, no declaration, a
  * webhook signing secret (control plane only), or a variable Work and the
  * sandbox's shells depend on.
  */
@@ -87,7 +87,7 @@ export interface SandboxSecrets {
   missing: Array<{ name: string; reason: SandboxSecretGap }>;
   /**
    * Delivered names whose value is too short to mask in the chat's
-   * transcript (ADR 0205): the agent is told not to print them.
+   * transcript (ADR 0206): the agent is told not to print them.
    */
   unmasked: string[];
 }
@@ -100,7 +100,7 @@ interface DeclaredSecretEntry {
   /**
    * `run`: reaches workflow runs and Environments. `webhook`: verifies
    * deliveries on the control plane only. `environment`: declared in
-   * `project.json` for Environments only (ADR 0205).
+   * `project.json` for Environments only (ADR 0206).
    */
   use: "run" | "webhook" | "environment";
   source: "project" | "plugin";
@@ -111,7 +111,7 @@ interface DeclaredSecretEntry {
 /**
  * Variables a secret may not set in a sandbox: its shells, Git, Node, TLS,
  * the agent runner, the harnesses' model access and the egress proxy (ADR
- * 0203) depend on them, and some would run code or redirect traffic.
+ * 0204) depend on them, and some would run code or redirect traffic.
  * Replica memory (c): a constant, the same on every replica.
  */
 const RESERVED_SANDBOX_VARIABLES: ReadonlySet<string> = new Set([
@@ -244,7 +244,7 @@ type ValueRow = {
 };
 
 /**
- * Per-project secret store (ADR 0205). A secret declared by `defineSecrets`,
+ * Per-project secret store (ADR 0206). A secret declared by `defineSecrets`,
  * a plugin, or `project.json` may hold a shared value and one value per
  * member. Values are only read back through {@link loadForRun},
  * {@link value} and {@link resolveForSandbox}; management APIs expose
@@ -474,7 +474,7 @@ export class SecretsService {
       });
     }
 
-    // Secrets only Environments use belong in `project.json` (ADR 0205).
+    // Secrets only Environments use belong in `project.json` (ADR 0206).
     const manifest =
       args.manifest ??
       (await this.manifest({ identity, projectId })).declarations;
@@ -722,7 +722,7 @@ export class SecretsService {
   }
 
   /**
-   * Set or replace one member's own value (ADR 0205): the member's own
+   * Set or replace one member's own value (ADR 0206): the member's own
    * chats receive it instead of the shared value.
    */
   async setMember(opts: {
@@ -892,7 +892,7 @@ export class SecretsService {
     return result;
   }
 
-  /** The names an Environment lists in `project.json` (ADR 0205). */
+  /** The names an Environment lists in `project.json` (ADR 0206). */
   async environmentSecrets(opts: {
     identity: Identity;
     projectId: string;
@@ -903,7 +903,7 @@ export class SecretsService {
   }
 
   /**
-   * An Environment's secrets for one sandbox (ADR 0205): for a member's
+   * An Environment's secrets for one sandbox (ADR 0206): for a member's
    * own work their value, else the shared one, else the declared default;
    * for the project's own work (`owner` null) the shared value or the
    * default. Host-only: callers decide whether the placement may hold them.
@@ -994,7 +994,7 @@ export class SecretsService {
   }
 
   /**
-   * Every value a chat that has held secrets could repeat (ADR 0205), by
+   * Every value a chat that has held secrets could repeat (ADR 0206), by
    * name: each secret's shared value and declared default, the `owners`'
    * own values, and every value ever delivered to the `sessions` (which
    * keeps a value masked after it is rotated). What every later turn of
@@ -1059,7 +1059,7 @@ export class SecretsService {
 
   /**
    * Record that a chat's workspace is about to hold these values (ADR
-   * 0205), before they are written there: the chat masks every value it
+   * 0206), before they are written there: the chat masks every value it
    * could hold from now on, and with a vault, keeps a sealed record of
    * every value ever delivered to it, so a rotated value stays masked.
    */

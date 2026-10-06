@@ -11,10 +11,10 @@ import { type SandboxSecrets, secretFingerprint } from "./secrets-service.js";
 import { SECRET_MASK_MIN_LENGTH } from "./sessions/secret-mask.js";
 
 /*
- * An Environment's secrets inside one sandbox (ADR 0205): one file of
+ * An Environment's secrets inside one sandbox (ADR 0206): one file of
  * `export NAME='value'` lines in the session's own directory, beside the
  * project folder and never inside the repository, readable only by the
- * sandbox user. Beside it, the gateway's variables file (ADR 0211) names
+ * sandbox user. Beside it, the gateway's variables file (ADR 0212) names
  * the session's HTTP API aliases; it holds no secret. The agent runner
  * reads both for every attempt (shells also load the secrets file through
  * `BASH_ENV`), and setup and terminals source both with
@@ -46,7 +46,7 @@ export function sandboxSecretsFile(input: { workspaceRoot: string }): string {
 /**
  * The session's environment files in the provider's own paths, in the
  * order they load: the gateway's variables, then the secrets, which a
- * runner points `BASH_ENV` at (ADRs 0205, 0211).
+ * runner points `BASH_ENV` at (ADRs 0206, 0212).
  */
 export function sandboxEnvFiles(input: { workspaceRoot: string }): string[] {
   return [
@@ -152,7 +152,7 @@ function listed(names: readonly string[]): string {
 
 /**
  * What the agent is told about secrets its Environment lists but this
- * workspace did not get (ADR 0205), with who can set them; undefined when
+ * workspace did not get (ADR 0206), with who can set them; undefined when
  * every one was set.
  */
 export function sandboxSecretsNote(input: {

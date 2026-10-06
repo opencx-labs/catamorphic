@@ -29,7 +29,7 @@ const OWN_RESPONSE_HEADERS = [
 ];
 
 /**
- * Previews of servers running in a chat's workspace (ADR 0208):
+ * Previews of servers running in a chat's workspace (ADR 0209):
  * `<prefix>/projects/:projectId/agent/sessions/:sessionId/previews/:port/*`,
  * any method, forwarded to that port inside the workspace by the
  * sandbox's own runtime. The body travels byte for byte; the answer comes

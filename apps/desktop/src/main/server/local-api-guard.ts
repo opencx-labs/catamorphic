@@ -4,7 +4,7 @@ import { randomBytes, timingSafeEqual } from "node:crypto";
  * Who may reach the desktop's loopback listeners. The embedded API answers
  * every request as the person at this computer, and a remote project's
  * routes reach their server with that person's credentials, terminals
- * included (ADR 0208). Any web page in any browser on this machine can
+ * included (ADR 0209). Any web page in any browser on this machine can
  * send requests to a loopback port, so the listeners tell their own
  * callers from web pages:
  *
@@ -94,7 +94,7 @@ export function localApiRefusal(input: {
 }
 
 /**
- * Why a preview (ADR 0208) refuses a request, or undefined. A preview is
+ * Why a preview (ADR 0209) refuses a request, or undefined. A preview is
  * served on a loopback host of its own (`http://p-<id>.localhost:<port>`),
  * so its cookies are its alone; it answers only that host. A preview tab
  * loads its own pages and their resources, and a typed address; every

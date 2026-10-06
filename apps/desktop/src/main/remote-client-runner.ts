@@ -136,7 +136,7 @@ export class RemoteClientRunners {
       const started: Promise<ReturnType<typeof startClientRunner>> =
         (async () => {
           // Operations reach this machine sealed to its profile's key
-          // (ADR 0206); the private half never leaves the profile.
+          // (ADR 0207); the private half never leaves the profile.
           const keys = stores.runnerKey.keyPair();
           const privateKey = createPrivateKey(keys.privateKey);
           const register = () =>
