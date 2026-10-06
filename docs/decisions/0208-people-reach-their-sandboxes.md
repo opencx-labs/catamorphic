@@ -23,17 +23,22 @@ Output is read by cursor with a wait, input and resizes are posted, and a
 terminal ends with its workspace. A chat whose workspace was given back is
 admitted again as its next turn would be, under the Allocation's
 maintenance claim so no turn starts on it halfway. Postgres records who
-opened each terminal: only they reach it, and their typing keeps the
-workspace from being released as idle. The desktop opens one as an ordinary
-terminal tab named for the chat.
+opened each terminal: only they reach it. The desktop opens one as an
+ordinary terminal tab named for the chat.
 
 **Previews.** `/projects/:id/agent/sessions/:sessionId/previews/:port/*`
 forwards an HTTP request to that port inside a running workspace (a preview
 never starts one), made by the sandbox's own runtime, so it works on every
 backend and behind restricted egress. WebSocket upgrades are not forwarded.
-The desktop opens a preview in a browser tab on a loopback origin of its
-own, through its local proxy, which adds the member's credentials: a page's
-root-relative URLs and cookies stay that preview's.
+The desktop opens a preview in a browser tab on a loopback host of its own
+(`p-<id>.localhost`, ADR 0210), through its local proxy, which adds the
+member's credentials: a page's root-relative URLs and cookies stay that
+preview's.
+
+**Use keeps a workspace.** Opening, reading, typing in or resizing a
+terminal, and every preview request, record in Postgres that a person used
+the chat's workspace (at most once a minute), and idle release counts that
+as it counts a turn, checking again under its maintenance claim.
 
 Harness sign-ins remain the harness's own login on the machine (ADR 0199):
 a Work terminal passes through the control plane, so Work does not offer it
