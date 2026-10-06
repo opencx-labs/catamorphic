@@ -314,15 +314,90 @@ describe("project secrets with a value per member (ADR 0205)", () => {
         environment: "ci",
       }),
     ).toEqual(["SENTRY_DSN"]);
-    // What a turn taken over masks: the owner's and the shared value.
+    expect(forAda.unmasked).toEqual([]);
+    // What a chat that held secrets masks: its owners' and the shared
+    // values, and declared defaults, never anyone else's.
     expect(
       await secrets.valuesForMasking({
         identity: ada,
         projectId,
-        environment: "dev",
-        owner: "ada",
+        owners: ["ada", null],
+        sessionIds: [],
       }),
-    ).toEqual({ CLICKHOUSE_API_KEY: ["ada-ch-key", "shared-ch-key-2"] });
+    ).toEqual({
+      STRIPE_KEY: ["sk_test_default"],
+      CLICKHOUSE_API_KEY: expect.arrayContaining([
+        "ada-ch-key",
+        "shared-ch-key-2",
+      ]),
+    });
+    expect(
+      (
+        await secrets.valuesForMasking({
+          identity: ada,
+          projectId,
+          owners: ["ada"],
+          sessionIds: [],
+        })
+      ).CLICKHOUSE_API_KEY,
+    ).not.toContain("bob-ch-key");
+  });
+
+  it("remembers every value delivered to a chat, so a rotated one stays masked", async () => {
+    const sessionId = crypto.randomUUID();
+    await db
+      .insertInto("agent_sessions")
+      .values({ id: sessionId, project_id: projectId, external_user_id: "ada" })
+      .execute();
+    const held = () =>
+      db
+        .selectFrom("agent_sessions")
+        .select(["secrets_held_at", "secrets_delivered_ref"])
+        .where("id", "=", sessionId)
+        .executeTakeFirstOrThrow();
+    expect((await held()).secrets_held_at).toBeNull();
+    await secrets.rememberDelivery({
+      tenantId,
+      sessionId,
+      variables: { CLICKHOUSE_API_KEY: "ada-old-key-0001" },
+    });
+    const first = await held();
+    expect(first.secrets_held_at).not.toBeNull();
+    // The record is sealed: the row holds only a vault reference.
+    expect(JSON.stringify(first)).not.toContain("ada-old-key");
+    // The same delivery again changes nothing.
+    await secrets.rememberDelivery({
+      tenantId,
+      sessionId,
+      variables: { CLICKHOUSE_API_KEY: "ada-old-key-0001" },
+    });
+    expect((await held()).secrets_delivered_ref).toBe(
+      first.secrets_delivered_ref,
+    );
+    // Rotated: the new value is delivered, the old one is no longer stored.
+    await secrets.rememberDelivery({
+      tenantId,
+      sessionId,
+      variables: { CLICKHOUSE_API_KEY: "ada-new-key-0002" },
+    });
+    const second = await held();
+    expect(second.secrets_delivered_ref).not.toBe(first.secrets_delivered_ref);
+    await expect(
+      vault.withMaterial({
+        tenantId,
+        ref: { id: first.secrets_delivered_ref ?? "" },
+        use: () => 1,
+      }),
+    ).rejects.toThrow();
+    const masked = await secrets.valuesForMasking({
+      identity: ada,
+      projectId,
+      owners: [],
+      sessionIds: [sessionId],
+    });
+    expect(masked.CLICKHOUSE_API_KEY).toEqual(
+      expect.arrayContaining(["ada-old-key-0001", "ada-new-key-0002"]),
+    );
   });
 
   it("keeps runs on shared values and declared code secrets", async () => {

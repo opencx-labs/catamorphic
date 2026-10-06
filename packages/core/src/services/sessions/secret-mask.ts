@@ -23,6 +23,34 @@ function keyOf(key: StreamKey): string {
   return `${key.itemId}\u0000${key.field}`;
 }
 
+/**
+ * The forms a value takes in output: itself; JSON-escaped (inside a
+ * string of a tool's JSON result); URL-encoded; base64 (standard, without
+ * padding, URL-safe); a multi-line value with LF or CRLF endings and each
+ * of its lines. Forms shorter than {@link SECRET_MASK_MIN_LENGTH} are
+ * dropped by the caller.
+ */
+export function secretForms(value: string): string[] {
+  if (value.length < SECRET_MASK_MIN_LENGTH) return [];
+  const lf = value.replace(/\r\n/g, "\n");
+  const texts = /[\r\n]/.test(value)
+    ? [value, lf, lf.replace(/\n/g, "\r\n"), ...lf.split("\n")]
+    : [value];
+  const forms = new Set<string>();
+  for (const text of texts) {
+    forms.add(text);
+    forms.add(JSON.stringify(text).slice(1, -1));
+    forms.add(encodeURIComponent(text));
+  }
+  for (const text of new Set([value, lf])) {
+    const base64 = Buffer.from(text).toString("base64");
+    forms.add(base64);
+    forms.add(base64.replace(/=+$/, ""));
+    forms.add(Buffer.from(text).toString("base64url"));
+  }
+  return [...forms];
+}
+
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -60,12 +88,17 @@ export class SecretMask {
    */
   private held = new Map<string, { key: StreamKey; text: string }>();
 
-  /** `values`: each secret's name and the value (or values) to mask. */
+  /**
+   * `values`: each secret's name and the value (or values) to mask, each
+   * in the forms output carries it: as is, JSON-escaped, URL-encoded,
+   * base64, with either line ending, and line by line.
+   */
   constructor(values: Readonly<Record<string, string | readonly string[]>>) {
     for (const [name, entry] of Object.entries(values))
       for (const value of typeof entry === "string" ? [entry] : entry)
-        if (value.length >= SECRET_MASK_MIN_LENGTH && !this.labels.has(value))
-          this.labels.set(value, `[secret ${name}]`);
+        for (const form of secretForms(value))
+          if (form.length >= SECRET_MASK_MIN_LENGTH && !this.labels.has(form))
+            this.labels.set(form, `[secret ${name}]`);
     // Longest first: where two values start at one place, the longer wins.
     this.values = [...this.labels.keys()].sort(
       (left, right) => right.length - left.length,

@@ -7,6 +7,7 @@ import {
   assertOidcProfileAllowed,
   createWorkAuth,
   loadWorkAuthSecret,
+  verifiedUserIdForEmail,
 } from "./work-auth.js";
 
 const temporaryDirectories: string[] = [];
@@ -26,6 +27,48 @@ function createDataDirectory(): string {
 }
 
 describe("Work server Better Auth host", () => {
+  it("names a member by email only when the email is verified (ADR 0209)", async () => {
+    const dataDir = createDataDirectory();
+    const database = await openWorkAuthDatabase({ dataDir });
+    const workAuth = createWorkAuth({
+      database,
+      baseURL: "http://127.0.0.1:4700",
+      secret: "work-auth-host-test-secret-at-least-32-characters",
+    });
+    await workAuth.migrate();
+    // The operator vouches for an email given to a local account.
+    const vouched = await workAuth.createLocalUser({
+      username: "grace",
+      name: "Grace Hopper",
+      email: "grace@example.com",
+      password: "correct horse battery staple",
+    });
+    // Without one the account's placeholder address proves nothing.
+    await workAuth.createLocalUser({
+      username: "alan",
+      name: "Alan Turing",
+      password: "correct horse battery staple",
+    });
+    expect(
+      await verifiedUserIdForEmail({
+        auth: workAuth,
+        email: "grace@example.com",
+      }),
+    ).toBe(vouched.id);
+    expect(
+      await verifiedUserIdForEmail({
+        auth: workAuth,
+        email: "alan@local.invalid",
+      }),
+    ).toBeNull();
+    expect(
+      await verifiedUserIdForEmail({
+        auth: workAuth,
+        email: "nobody@example.com",
+      }),
+    ).toBeNull();
+  });
+
   it("enforces configured OIDC domains using a verified email", () => {
     expect(() =>
       assertOidcProfileAllowed(

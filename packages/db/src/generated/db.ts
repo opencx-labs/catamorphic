@@ -175,6 +175,8 @@ export interface AgentSessions {
   project_id: string;
   rewind_until: Timestamp | null;
   sandbox_id: string | null;
+  secrets_delivered_ref: string | null;
+  secrets_held_at: Timestamp | null;
   source: Generated<string>;
   source_action_id: string | null;
   state_revision: Generated<Int8>;

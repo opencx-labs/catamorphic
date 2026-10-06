@@ -147,8 +147,10 @@ both are reviewed project changes:
 ```
 
 Names are `SCREAMING_SNAKE_CASE` and never start with `CATAMORPHIC_` or
-`WORK_`; variables the sandbox's shells depend on (`PATH`, `HOME`, the proxy
-variables) are listed but not set. Declarations in `project.json` are for
+`WORK_`; variables that change how the sandbox's shells, Git, Node, TLS, the
+harnesses or the proxy behave (`PATH`, `HOME`, `NODE_OPTIONS`, `GIT_CONFIG_*`,
+`SSL_CERT_FILE`, `LD_PRELOAD`, `ANTHROPIC_BASE_URL`, the proxy variables and
+the like) are listed but never set. Declarations in `project.json` are for
 Environments; workflow runs keep receiving the shared values of secrets their
 code declares, as before.
 
@@ -184,8 +186,13 @@ Before each turn the variables are written to
 runner, shells, terminals and workspace setup load it, and it is removed
 when a turn may not have it and when the workspace is given back. Each
 delivery is audited by name and fingerprint (`project_secrets.deliver` in the
-connection audit), and values are replaced with `[secret NAME]` in the
-chat's recorded output.
+connection audit). Once a chat has held secrets, every later turn of it, and
+of its forks, replaces every value it could repeat with `[secret NAME]` in
+what is recorded, whoever wrote the message, including values rotated since
+they were delivered (the server keeps a sealed record of them in its vault).
+Values shorter than six characters cannot be masked; the agent is told not to
+print them. Processes and files the owner left in the workspace keep what
+they hold when someone else's turn runs there.
 
 Verify: a member sets their own value in the app; their chat's
 `printenv CLICKHOUSE_API_KEY` works in the agent's shell and shows as

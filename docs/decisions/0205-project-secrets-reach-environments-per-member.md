@@ -41,29 +41,48 @@ Each listed name becomes an environment variable:
 - in workflow runs, the shared value, as before.
 
 Secrets declared only in `project.json` are for Environments; runs keep
-receiving the secrets their code or plugins declare. Names a sandbox's shells
-depend on (`PATH`, `HOME`, `BASH_ENV`, the proxy variables) are reported to
-the agent, never set.
+receiving the secrets their code or plugins declare. Names that would change
+how the sandbox's shells, Git, Node, TLS, the harnesses' model access or the
+egress proxy behave (`PATH`, `HOME`, `BASH_ENV`, `NODE_OPTIONS`,
+`GIT_CONFIG_*`, `GIT_SSH_COMMAND`, `SSL_CERT_FILE`, `LD_PRELOAD`, `DYLD_*`,
+`ANTHROPIC_BASE_URL`, `CODEX_HOME`, the proxy variables and the like) are
+reported to the agent, never set.
 
 This amends ADR 0175: values a project lists for an Environment may reach
 that Environment's sandboxes. Connection credentials still never do; prefer a
 gateway connection whenever a value grants access to a company system.
 
-**Delivery.** Before each sandbox turn the resolved variables are written to
-`.work-session/env/secrets.sh` (mode 0600, outside the repository), and the
-file is removed when the turn may not have them and when the workspace is
-given back. The agent runner reads it again for every attempt and passes the
-variables to the harness with `BASH_ENV` pointing at the file (Bash skips
-`BASH_ENV` when its standard input is a socket, so the variables themselves
-are what shells inherit); the built-in agent's commands, terminals and
-workspace setup source it. A listed secret with no value for the owner is
-named to the agent with who can set it. Each delivery is audited by name and
-fingerprint. A turn that received them in a member's chat takes only that
-member's input, as for personal files. Values delivered to a turn are
-replaced with `[secret NAME]` wherever the turn's output is recorded, holding
-back streamed text that could be the start of a value; a process that takes
-a running turn over masks every value the sandbox could hold. Operations that
-carry them to a worker are sealed to that worker (ADR 0206).
+**Delivery.** Before each sandbox turn (and when a person opens the
+workspace, ADR 0208) the resolved variables are written to
+`.work-session/env/secrets.sh` (mode 0600, in a folder made the sandbox
+user's alone before anything is uploaded into it, outside the repository).
+The chat records that it has held secrets before they are written, and the
+file is removed whenever a turn may not have them (another person wrote the
+input, the placement no longer isolates the owner, the Environment no longer
+lists them) and when the workspace is given back. The agent runner reads it
+again for every attempt and passes the variables to the harness, values
+untouched, with `BASH_ENV` pointing at the file (Bash skips `BASH_ENV` when
+its standard input is a socket, so the variables themselves are what shells
+inherit); the built-in agent's commands, terminals and workspace setup source
+it. A listed secret with no value for the owner is named to the agent with
+who can set it. Each delivery is audited by name and fingerprint. A turn that
+received them in a member's chat takes only that member's input, as for
+personal files, and a refused answer says so.
+
+**Masking.** Once a chat has held secrets, every later turn of it, whoever
+wrote the input, and every turn of its forks and subsessions masks every
+value it could repeat: its transcript, its workspace's processes and files
+keep them. That is the owners' own and the shared values, declared defaults,
+and every value ever delivered to the chat, kept as a sealed record in the
+credential vault, so a value rotated since stays masked. Values become
+`[secret NAME]` wherever a turn's output is recorded or workspace output is
+handed to the agent (the setup log's tail), in the forms output carries them:
+as is, JSON-escaped, URL-encoded, base64, with either line ending and line by
+line; streamed text that could be the start of one is held back. A process
+that takes a running turn over masks the same values. A value shorter than
+six characters cannot be masked: the agent is told not to print it, and the
+audit names it. Operations that carry values to a worker are sealed to that
+worker (ADR 0206).
 
 **Personal files** stay the member's own (ADR 0184): files listed in
 `.work/personal/environment.json`, behind `"personalCredentials": true`.
@@ -74,3 +93,14 @@ A new joiner's key can be issued by an automation and reaches only their own
 chats. A value in a sandbox can be read by code running there, including a
 compromised dependency; restrict egress where that matters. Projects that
 list no secrets see no change.
+
+Values the owner's own processes, terminals or files hold stay in the
+workspace when the secrets file leaves it: a teammate's turn in that chat runs
+in the same workspace without the file, and its commands can read what those
+processes and files still hold; only what is recorded is masked. Masking
+covers values delivered to the chat and values that exist now: a value
+rotated before it ever reached the chat is not known to it, and a host
+without a credential vault keeps no record of delivered values, so there a
+rotated value is no longer masked. Masking is a guard on what is recorded,
+not a boundary: an agent asked to transform a value (reverse it, split it)
+can still print it.

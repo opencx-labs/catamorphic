@@ -238,6 +238,7 @@ import {
 } from "./sessions/session-rows.js";
 import {
   type FinalizedTurn,
+  type OwnerOnlyCause,
   type PreparedAttempt,
   TurnEngine,
   type TurnEngineHost,
@@ -3499,11 +3500,17 @@ export class AgentSessionsService {
         .select("runner")
         .where("id", "=", request.attemptId)
         .executeTakeFirst();
-      if ((attempt?.runner as { ownerOnly?: boolean } | null)?.ownerOnly) {
+      const runner = attempt?.runner as {
+        ownerOnly?: boolean;
+        ownerOnlyBecause?: OwnerOnlyCause;
+      } | null;
+      if (runner?.ownerOnly) {
         if (response.kind !== "approval")
           throw new SessionCommandRejectedError(
             "owner_only",
-            "This chat runs on its owner's own sign-in, so only they can answer it.",
+            runner.ownerOnlyBecause === "credentials"
+              ? "This turn has its owner's own secrets or files, so only they can answer it."
+              : "This chat runs on its owner's own sign-in, so only they can answer it.",
             403,
           );
         const { reason: _reason, ...decision } = response;
@@ -4022,31 +4029,66 @@ export class AgentSessionsService {
         this.stopGrantRenewal(sessionId);
         this.workingDirectories.delete(turnId);
       },
-      secretValues: (input) => this.sandboxSecretValues(input),
+      secretValues: ({ identity, session }) =>
+        this.sessionSecretValues({
+          identity,
+          projectId: session.project_id,
+          sessionId: session.id,
+        }),
     };
   }
 
   /**
-   * Every secret value a session's sandbox could hold (ADR 0205): the
-   * shared values its Environment lists and its owner's own. What a holder
-   * that took a running turn over masks in the turn's output.
+   * Every secret value a chat could repeat (ADR 0205), once it, or a chat
+   * it came from (a fork's source, a subsession's parent), has held
+   * secrets: its workspace's processes and files and its own transcript
+   * keep them, whoever writes next. The owners' and shared values,
+   * declared defaults, and every value ever delivered to those chats; empty
+   * for a chat that never held any. What every turn of it masks.
    */
-  private async sandboxSecretValues(input: {
+  private async sessionSecretValues(input: {
     identity: Identity;
-    session: SessionRow;
+    projectId: string;
+    sessionId: string;
   }): Promise<Record<string, string[]>> {
-    const { identity, session } = input;
-    if (!this.secrets || !session.allocation_id) return {};
-    const allocation = await this.executionAllocations.get({
-      identity,
-      allocationId: session.allocation_id,
-    });
-    if (!allocation) return {};
+    if (!this.secrets) return {};
+    const chain: Array<{ id: string; owner: string | null; held: boolean }> =
+      [];
+    const pending = [input.sessionId];
+    while (pending.length > 0 && chain.length < 32) {
+      const rows = await this.db
+        .selectFrom("agent_sessions")
+        .select([
+          "id",
+          "external_user_id",
+          "secrets_held_at",
+          "forked_from_session_id",
+          "parent_session_id",
+        ])
+        .where("project_id", "=", input.projectId)
+        .where("id", "in", pending.splice(0))
+        .execute();
+      for (const row of rows) {
+        if (chain.some((entry) => entry.id === row.id)) continue;
+        chain.push({
+          id: row.id,
+          owner: placementOwner(row.external_user_id),
+          held: row.secrets_held_at !== null,
+        });
+        for (const source of [
+          row.forked_from_session_id,
+          row.parent_session_id,
+        ])
+          if (source && !chain.some((entry) => entry.id === source))
+            pending.push(source);
+      }
+    }
+    if (!chain.some((entry) => entry.held)) return {};
     return this.secrets.valuesForMasking({
-      identity,
-      projectId: session.project_id,
-      environment: allocation.environmentName,
-      owner: placementOwner(session.external_user_id),
+      identity: input.identity,
+      projectId: input.projectId,
+      owners: [...new Set(chain.map((entry) => entry.owner))],
+      sessionIds: chain.map((entry) => entry.id),
     });
   }
 
@@ -4245,6 +4287,19 @@ export class AgentSessionsService {
       turn,
     });
     let ownerOnly = false;
+    // A sign-in outranks secrets and files in what the refusal says.
+    let ownerOnlyBecause: OwnerOnlyCause | undefined;
+    // What this attempt masks, read once the workspace's secrets are in
+    // place (ADR 0205).
+    let masked: Promise<Record<string, string[]>> | undefined;
+    const secretValuesOfChat = () => {
+      masked ??= this.sessionSecretValues({
+        identity,
+        projectId,
+        sessionId: session.id,
+      });
+      return masked;
+    };
 
     // A base a delivery asked for moves before the agent runs (ADR 0178).
     const workspaceMove = parseWorkspaceMove(session.workspace_move);
@@ -4304,6 +4359,7 @@ export class AgentSessionsService {
           );
         modelAccess = { kind: "sign_in", home: runtime.signInHome };
         ownerOnly = true;
+        ownerOnlyBecause = "sign-in";
       } else if (agent.harness.placement === "sandbox") {
         const gateway = agent.modelConnection
           ? models.find((model) => model.alias === agent.modelConnection)
@@ -4330,7 +4386,10 @@ export class AgentSessionsService {
         ownerAuthored,
       });
       if (delivery.note) notes.push(delivery.note);
-      if (delivery.ownerOnly) ownerOnly = true;
+      if (delivery.ownerOnly) {
+        ownerOnly = true;
+        ownerOnlyBecause ??= "credentials";
+      }
       secrets = delivery.values;
       const files = await this.preparePersonalFiles({
         identity,
@@ -4342,7 +4401,10 @@ export class AgentSessionsService {
         ownerAuthored,
       });
       if (files.note) notes.push(files.note);
-      if (files.delivered) ownerOnly = true;
+      if (files.delivered) {
+        ownerOnly = true;
+        ownerOnlyBecause ??= "credentials";
+      }
       // A new workspace that could not have an exclusive volume of its own
       // (ADR 0207) says so once.
       if (!hadSandbox && runtime.allocation) {
@@ -4366,8 +4428,10 @@ export class AgentSessionsService {
         personalAllowed: runtime.personalCredentials === true && ownerAuthored,
         signal: input.signal,
       });
-      // The log's tail may print a secret the setup used (ADR 0205).
-      if (setup) notes.push(new SecretMask(secrets).text(setup));
+      // The log's tail may print any secret the workspace ever held,
+      // this turn's or an earlier one's (ADR 0205).
+      if (setup)
+        notes.push(new SecretMask(await secretValuesOfChat()).text(setup));
       if (session.allocation_id)
         this.startGrantRenewal({
           identity,
@@ -4543,12 +4607,14 @@ export class AgentSessionsService {
     const provider = runtime.provider;
     const sandboxProviderId = workspace.sandboxProviderId;
     const delivered = Object.keys(secrets).length > 0;
+    const secretValues = await secretValuesOfChat();
     return {
       start,
       notes: notes.filter(Boolean),
       checkpointBefore,
       ownerOnly,
-      ...(delivered ? { secrets } : {}),
+      ...(ownerOnly && ownerOnlyBecause ? { ownerOnlyBecause } : {}),
+      ...(Object.keys(secretValues).length > 0 ? { secretValues } : {}),
       launch: async () => {
         if (harness.placement === "host")
           return startInProcessRunner({
@@ -5599,6 +5665,19 @@ export class AgentSessionsService {
       projectDir: this.projectDir(input.provider),
     };
     const owner = placementOwner(session.external_user_id);
+    // Recorded before any delivery, whichever path made it (a turn, a
+    // person opening the workspace), so what one left is always taken out.
+    const held =
+      (
+        await this.db
+          .selectFrom("agent_sessions")
+          .select("secrets_held_at")
+          .where("id", "=", session.id)
+          .executeTakeFirst()
+      )?.secrets_held_at != null;
+    const withdraw = async () => {
+      if (held) await removeSandboxSecrets(target);
+    };
     const listed = await service.environmentSecrets({
       identity,
       projectId,
@@ -5606,13 +5685,12 @@ export class AgentSessionsService {
     });
     if (listed.length === 0) {
       // Listed no longer (or never): take out what an earlier turn left.
-      if (await this.secretsMayLinger(session.id))
-        await removeSandboxSecrets(target);
+      await withdraw();
       return none;
     }
     const names = listed.join(", ");
     if (!input.isolated || (owner !== null && !input.ownerAuthored)) {
-      await removeSandboxSecrets(target);
+      await withdraw();
       return {
         ...none,
         note: !input.isolated
@@ -5626,9 +5704,15 @@ export class AgentSessionsService {
       environment,
       owner,
     });
-    if (Object.keys(resolved.variables).length === 0)
-      await removeSandboxSecrets(target);
+    if (Object.keys(resolved.variables).length === 0) await withdraw();
     else {
+      // From here on every turn of this chat, and of its forks, masks
+      // what it could hold, whoever writes (ADR 0205).
+      await service.rememberDelivery({
+        tenantId: identity.tenantId,
+        sessionId: session.id,
+        variables: resolved.variables,
+      });
       const { changed } = await deliverSandboxSecrets({
         ...target,
         variables: resolved.variables,
@@ -5643,12 +5727,14 @@ export class AgentSessionsService {
             : {}),
           delivered: resolved.delivered,
           missing: resolved.missing,
+          unmasked: resolved.unmasked,
         });
     }
     const note = sandboxSecretsNote({
       environment,
       owner,
       missing: resolved.missing,
+      unmasked: resolved.unmasked,
     });
     return {
       values: resolved.variables,
@@ -5657,28 +5743,6 @@ export class AgentSessionsService {
       ownerOnly: owner !== null && resolved.delivered.length > 0,
       ...(note ? { note } : {}),
     };
-  }
-
-  /**
-   * Whether the session's sandbox may still hold a secrets file: the last
-   * attempt that started received secrets (ADR 0205).
-   */
-  private async secretsMayLinger(sessionId: string): Promise<boolean> {
-    const last = await this.db
-      .selectFrom("agent_turn_attempts")
-      .select("runner")
-      .where("session_id", "=", sessionId)
-      .where("runner", "is not", null)
-      .orderBy("created_at", "desc")
-      .limit(1)
-      .executeTakeFirst();
-    const runner = last?.runner;
-    return (
-      typeof runner === "object" &&
-      runner !== null &&
-      !Array.isArray(runner) &&
-      runner.secrets === true
-    );
   }
 
   /**

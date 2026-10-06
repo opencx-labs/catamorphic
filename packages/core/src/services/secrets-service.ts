@@ -20,6 +20,7 @@ import {
 import type { ProjectEnvironmentsService } from "./project-environments-service.js";
 import { requireTenantProject } from "./projects-service.js";
 import { toJson } from "./run-coordinator.js";
+import { SECRET_MASK_MIN_LENGTH } from "./sessions/secret-mask.js";
 
 const tracer = getTracer("@catamorphic/core");
 
@@ -84,6 +85,11 @@ export interface SandboxSecrets {
     fingerprint: string;
   }>;
   missing: Array<{ name: string; reason: SandboxSecretGap }>;
+  /**
+   * Delivered names whose value is too short to mask in the chat's
+   * transcript (ADR 0205): the agent is told not to print them.
+   */
+  unmasked: string[];
 }
 
 interface DeclaredSecretEntry {
@@ -103,13 +109,24 @@ interface DeclaredSecretEntry {
 }
 
 /**
- * Variables a secret may not set in a sandbox: its shells, the agent
- * runner and the egress proxy (ADR 0203) depend on them.
+ * Variables a secret may not set in a sandbox: its shells, Git, Node, TLS,
+ * the agent runner, the harnesses' model access and the egress proxy (ADR
+ * 0203) depend on them, and some would run code or redirect traffic.
  * Replica memory (c): a constant, the same on every replica.
  */
 const RESERVED_SANDBOX_VARIABLES: ReadonlySet<string> = new Set([
+  "ALL_PROXY",
+  "ANTHROPIC_BASE_URL",
   "BASH_ENV",
+  "BASHOPTS",
+  "CLAUDE_CONFIG_DIR",
+  "CODEX_HOME",
   "ENV",
+  "GIT_ASKPASS",
+  "GIT_CONFIG_COUNT",
+  "GIT_CONFIG_GLOBAL",
+  "GIT_CONFIG_SYSTEM",
+  "GIT_SSH_COMMAND",
   "HOME",
   "HTTP_PROXY",
   "HTTPS_PROXY",
@@ -117,14 +134,38 @@ const RESERVED_SANDBOX_VARIABLES: ReadonlySet<string> = new Set([
   "LD_LIBRARY_PATH",
   "LD_PRELOAD",
   "LOGNAME",
+  "NODE_EXTRA_CA_CERTS",
+  "NODE_OPTIONS",
   "NODE_USE_ENV_PROXY",
   "NO_PROXY",
   "OLDPWD",
+  "OPENAI_BASE_URL",
   "PATH",
+  "PROMPT_COMMAND",
+  "PS4",
   "PWD",
   "SHELL",
+  "SHELLOPTS",
+  "SSL_CERT_DIR",
+  "SSL_CERT_FILE",
+  "TMPDIR",
   "USER",
 ]);
+
+/** Prefixes of variable families no secret may set (`GIT_CONFIG_KEY_0`). */
+const RESERVED_SANDBOX_PREFIXES = [
+  "DYLD_",
+  "GIT_CONFIG_KEY_",
+  "GIT_CONFIG_VALUE_",
+] as const;
+
+/** Whether a secret of this name would replace a variable Work relies on. */
+export function reservedSandboxVariable(name: string): boolean {
+  return (
+    RESERVED_SANDBOX_VARIABLES.has(name) ||
+    RESERVED_SANDBOX_PREFIXES.some((prefix) => name.startsWith(prefix))
+  );
+}
 
 /** The largest value a secret may hold. */
 export const SECRET_VALUE_MAX_BYTES = 64 * 1024;
@@ -888,6 +929,7 @@ export class SecretsService {
           variables: {},
           delivered: [],
           missing: [],
+          unmasked: [],
         };
         const { identity, projectId, owner } = opts;
         const manifest = await this.manifest({ identity, projectId });
@@ -906,7 +948,7 @@ export class SecretsService {
             ? "undeclared"
             : entry.use === "webhook" || entry.conflict
               ? "webhook"
-              : RESERVED_SANDBOX_VARIABLES.has(name)
+              : reservedSandboxVariable(name)
                 ? "reserved"
                 : undefined;
           if (reason) result.missing.push({ name, reason });
@@ -939,6 +981,7 @@ export class SecretsService {
             source,
             fingerprint: secretFingerprint(value),
           });
+          if (value.length < SECRET_MASK_MIN_LENGTH) result.unmasked.push(name);
         }
         span.setAttribute(
           "catamorphic.secrets.delivered",
@@ -951,32 +994,185 @@ export class SecretsService {
   }
 
   /**
-   * Every stored value an Environment's sandbox could hold for `owner`:
-   * the shared values and the owner's own. What a turn taken over from
-   * another process masks in its output (ADR 0205), whichever it was given.
+   * Every value a chat that has held secrets could repeat (ADR 0205), by
+   * name: each secret's shared value and declared default, the `owners`'
+   * own values, and every value ever delivered to the `sessions` (which
+   * keeps a value masked after it is rotated). What every later turn of
+   * such a chat, and of its forks, masks in its output, whoever wrote it.
    */
   async valuesForMasking(opts: {
     identity: Identity;
     projectId: string;
-    environment: string;
-    owner: string | null;
+    /** The chats' owners, by external user id (null for project chats). */
+    owners: readonly (string | null)[];
+    sessionIds: readonly string[];
   }): Promise<Record<string, string[]>> {
     const { identity, projectId } = opts;
-    const manifest = await this.manifest({ identity, projectId });
-    const names = manifest.environments[opts.environment] ?? [];
-    const stored = await this.storedValues({
-      tenantId: identity.tenantId,
+    const values = new Map<string, Set<string>>();
+    const add = (name: string, value: string | undefined) => {
+      if (value === undefined) return;
+      const set = values.get(name) ?? new Set<string>();
+      set.add(value);
+      values.set(name, set);
+    };
+    // Defaults are in the program; one that cannot be read masks nothing.
+    const declared = await this.declaredSecrets({
+      identity,
       projectId,
-      names,
-      owner: opts.owner,
-    });
+      purpose: "run",
+    }).catch(() => new Map<string, DeclaredSecretEntry>());
+    for (const [name, entry] of declared) add(name, entry.default);
+    // Every stored value of these people and the shared ones, declared
+    // or not any more: a declaration removed after delivery still masks.
+    const members = opts.owners.filter(
+      (owner): owner is string => owner !== null,
+    );
+    const rows = await this.db
+      .selectFrom("project_secrets")
+      .where("project_id", "=", projectId)
+      .where((eb) =>
+        eb.or([
+          eb("member_external_user_id", "is", null),
+          ...(members.length > 0
+            ? [eb("member_external_user_id", "in", members)]
+            : []),
+        ]),
+      )
+      .select(["name", "member_external_user_id", "value", "credential_ref"])
+      .execute();
+    for (const row of rows)
+      add(
+        row.name,
+        await this.unseal({ tenantId: identity.tenantId, projectId, row }),
+      );
+    for (const [name, delivered] of Object.entries(
+      await this.remembered({
+        tenantId: identity.tenantId,
+        sessionIds: opts.sessionIds,
+      }),
+    ))
+      for (const value of delivered) add(name, value);
     return Object.fromEntries(
-      [...stored].map(([name, values]) => [
-        name,
-        [values.own, values.shared].filter(
-          (value): value is string => value !== undefined,
-        ),
-      ]),
+      [...values].map(([name, set]) => [name, [...set]]),
+    );
+  }
+
+  /**
+   * Record that a chat's workspace is about to hold these values (ADR
+   * 0205), before they are written there: the chat masks every value it
+   * could hold from now on, and with a vault, keeps a sealed record of
+   * every value ever delivered to it, so a rotated value stays masked.
+   */
+  async rememberDelivery(opts: {
+    tenantId: string;
+    sessionId: string;
+    variables: Readonly<Record<string, string>>;
+  }): Promise<void> {
+    const vault = this.deps.vault;
+    const released = await this.db.transaction().execute(async (trx) => {
+      const row = await trx
+        .selectFrom("agent_sessions")
+        .select(["secrets_held_at", "secrets_delivered_ref"])
+        .where("id", "=", opts.sessionId)
+        .forUpdate()
+        .executeTakeFirst();
+      if (!row) return undefined;
+      if (!vault) {
+        if (!row.secrets_held_at)
+          await trx
+            .updateTable("agent_sessions")
+            .set({ secrets_held_at: new Date() })
+            .where("id", "=", opts.sessionId)
+            .execute();
+        return undefined;
+      }
+      const known = row.secrets_delivered_ref
+        ? await this.unsealDelivered({
+            tenantId: opts.tenantId,
+            ref: row.secrets_delivered_ref,
+          })
+        : {};
+      const added = Object.entries(opts.variables).filter(
+        ([name, value]) => !(known[name] ?? []).includes(value),
+      );
+      const grown = added.length > 0;
+      if (!grown && row.secrets_held_at) return undefined;
+      const next: Record<string, string[]> = { ...known };
+      for (const [name, value] of added)
+        next[name] = [...(next[name] ?? []), value];
+      const sealed = grown
+        ? await vault.put({
+            tenantId: opts.tenantId,
+            material: new TextEncoder().encode(JSON.stringify(next)),
+          })
+        : undefined;
+      await trx
+        .updateTable("agent_sessions")
+        .set({
+          secrets_held_at: row.secrets_held_at ?? new Date(),
+          ...(sealed ? { secrets_delivered_ref: sealed.id } : {}),
+        })
+        .where("id", "=", opts.sessionId)
+        .execute();
+      return sealed ? (row.secrets_delivered_ref ?? undefined) : undefined;
+    });
+    if (released && vault)
+      await vault
+        .delete({ tenantId: opts.tenantId, ref: { id: released } })
+        .catch(() => {});
+  }
+
+  /** Every value ever delivered to these chats, by name. */
+  private async remembered(args: {
+    tenantId: string;
+    sessionIds: readonly string[];
+  }): Promise<Record<string, string[]>> {
+    if (!this.deps.vault || args.sessionIds.length === 0) return {};
+    const rows = await this.db
+      .selectFrom("agent_sessions")
+      .select("secrets_delivered_ref")
+      .where("id", "in", [...args.sessionIds])
+      .where("secrets_delivered_ref", "is not", null)
+      .execute();
+    const merged: Record<string, string[]> = {};
+    for (const row of rows) {
+      if (!row.secrets_delivered_ref) continue;
+      const delivered = await this.unsealDelivered({
+        tenantId: args.tenantId,
+        ref: row.secrets_delivered_ref,
+      });
+      for (const [name, values] of Object.entries(delivered))
+        merged[name] = [...new Set([...(merged[name] ?? []), ...values])];
+    }
+    return merged;
+  }
+
+  private async unsealDelivered(args: {
+    tenantId: string;
+    ref: string;
+  }): Promise<Record<string, string[]>> {
+    const vault = this.deps.vault;
+    if (!vault) return {};
+    const text = await vault.withMaterial({
+      tenantId: args.tenantId,
+      ref: { id: args.ref },
+      use: (material) => new TextDecoder().decode(material),
+    });
+    const parsed: unknown = JSON.parse(text);
+    if (typeof parsed !== "object" || parsed === null) return {};
+    return Object.fromEntries(
+      Object.entries(parsed).flatMap(([name, values]) =>
+        Array.isArray(values)
+          ? [
+              [
+                name,
+                values.filter(
+                  (value): value is string => typeof value === "string",
+                ),
+              ],
+            ]
+          : [],
+      ),
     );
   }
 
@@ -988,6 +1184,8 @@ export class SecretsService {
     allocationId?: string;
     delivered: SandboxSecrets["delivered"];
     missing: SandboxSecrets["missing"];
+    /** Delivered values too short to mask in the chat's transcript. */
+    unmasked?: readonly string[];
   }): Promise<void> {
     await this.audit({
       identity: args.identity,
@@ -1002,6 +1200,7 @@ export class SecretsService {
           fingerprint,
         })),
         missing: args.missing.map(({ name, reason }) => ({ name, reason })),
+        unmasked: [...(args.unmasked ?? [])],
       },
     });
   }
