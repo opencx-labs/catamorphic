@@ -1,3 +1,4 @@
+import http from "node:http";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
 
@@ -5,7 +6,8 @@ import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
  * Floating-dock behaviors around a working agent:
  * - lurk mode: with a tab behind and the agent working, the dock shrinks
  *   vertically to a strip; hover/focus expands, leaving/focusing outside
- *   re-shrinks, and the end of the turn expands for good;
+ *   or clicking the page behind re-shrinks, and the end of the turn
+ *   expands for good;
  * - the `open` shim: `open <url>` in an agent terminal lands as an
  *   in-app browser tab (never the system browser);
  * - the attach button inserts files at the caret exactly like a paste;
@@ -758,4 +760,89 @@ describe("dock modes", () => {
     },
     60_000,
   );
+
+  it("lurks when the person clicks the page behind it while the agent works", async () => {
+    const server = http.createServer((_request, response) => {
+      response.setHeader("Content-Type", "text/html");
+      response.end(
+        `<title>Backdrop page</title><body style="height:3000px"><p>backdrop</p></body>`,
+      );
+    });
+    await new Promise<void>((resolve) =>
+      server.listen(0, "127.0.0.1", resolve),
+    );
+    const address = server.address();
+    if (!address || typeof address === "string")
+      throw new Error("Missing server address");
+    const origin = `http://127.0.0.1:${address.port}`;
+    try {
+      // The agent puts a page in front; the chat floats over it.
+      await run(`setComposer('show: ${origin}/'); send(); return true;`);
+      await runWait(
+        `const page = $$('webview').find((w) => (w.src ?? '').startsWith(${JSON.stringify(origin)}));
+         return !!page && page.checkVisibility() &&
+           !frontDock().querySelector('[data-testid="session-inspector-trigger"]')?.getAttribute('aria-label')?.includes(', Working,');`,
+        { label: "page in front behind the chat", timeoutMs: 30_000 },
+      );
+      await run(
+        `setComposer('terminal: sleep 15 && echo page-lurk-done'); send(); return true;`,
+      );
+      await runWait(
+        `return dockH() > 400 && !frontDock().hasAttribute('data-lurking');`,
+        {
+          label: "expanded while the composer has focus",
+        },
+      );
+      // The person moves from the chat onto the page and clicks it.
+      // On a small window the chat covers most of the page: aim at page the
+      // chat leaves uncovered, its margins included.
+      const points = await runWait<{
+        dock: { x: number; y: number };
+        page: { x: number; y: number };
+      }>(
+        `
+        const view = $$('webview').find((w) => (w.src ?? '').startsWith(${JSON.stringify(origin)}));
+        const page = view.getBoundingClientRect();
+        const dock = frontDock().getBoundingClientRect();
+        let target;
+        for (let y = page.top + 6; !target && y < page.bottom - 6; y += 12)
+          for (const x of [page.left + 6, page.right - 6, (page.left + page.right) / 2]) {
+            const outside = x < dock.left || x > dock.right || y < dock.top || y > dock.bottom;
+            if (outside && document.elementFromPoint(x, y) === view) {
+              target = { x, y };
+              break;
+            }
+          }
+        return target && {
+          dock: { x: dock.left + dock.width / 2, y: dock.top + 40 },
+          page: target,
+        };
+      `,
+        { label: "a point on the page outside the chat" },
+      ).catch(async (error: unknown) => {
+        const rects = await run(`return {
+          page: $$('webview').find((w) => (w.src ?? '').startsWith(${JSON.stringify(origin)}))?.getBoundingClientRect().toJSON(),
+          dock: frontDock()?.getBoundingClientRect().toJSON(),
+          window: { width: innerWidth, height: innerHeight },
+        };`);
+        throw new Error(`${String(error)}; rects: ${JSON.stringify(rects)}`);
+      });
+      await app.movePointerThrough([points.dock, points.page]);
+      await app.clickPointer(points.page);
+      await runWait(
+        `return frontDock().hasAttribute('data-lurking') && dockH() < 220;`,
+        { label: "lurks after the click on the page", timeoutMs: 10_000 },
+      ).catch(async (error: unknown) => {
+        const state = await run(`return {
+          active: document.activeElement?.tagName,
+          windowFocused: document.hasFocus(),
+          hovered: frontDock()?.matches(':hover'),
+          height: dockH(),
+        };`);
+        throw new Error(`${String(error)}; state: ${JSON.stringify(state)}`);
+      });
+    } finally {
+      server.close();
+    }
+  }, 90_000);
 });

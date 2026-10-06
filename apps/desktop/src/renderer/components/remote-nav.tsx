@@ -76,10 +76,15 @@ export function RemoteNav({
   }, [projectId]);
 
   useSidebarRefresh(refresh);
+  // Another project starts from nothing. Hiding the section only pauses it:
+  // its status and the chosen files stay while the sidebar slides away.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: a new project must not show the previous one's status
   useEffect(() => {
     setSelected([]);
     setMessage(null);
     setStatus(null);
+  }, [projectId]);
+  useEffect(() => {
     void refresh();
     if (!visible) return;
     const timer = setInterval(() => {

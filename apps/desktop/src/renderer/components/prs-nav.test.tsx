@@ -5,6 +5,7 @@ import { expect, it, vi } from "vitest";
 import { DEFAULT_PREFS } from "../../shared/app-prefs.js";
 import { desktopApi } from "../lib/desktop-api.js";
 import { PrsNav } from "./prs-nav.js";
+import { SidebarContribution } from "./sidebar-contribution.js";
 
 vi.mock("../lib/desktop-api.js", () => ({
   desktopApi: {
@@ -181,5 +182,73 @@ it("lists a company project's proposals with the GitHub CLI connection off", asy
     expect(node.textContent).not.toContain("GitHub not connected");
   } finally {
     await act(async () => root.unmount());
+  }
+});
+
+it("keeps the list on screen through hiding, showing and Refresh, reading only when shown", async () => {
+  Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", true);
+  vi.mocked(desktopApi.getPrefs).mockResolvedValue({
+    ...DEFAULT_PREFS,
+    githubCliEnabled: true,
+  });
+  const pr = {
+    number: 7,
+    title: "Keep me on screen",
+    url: "https://example.test/pr/7",
+    author: "test",
+    viewerLogin: "reviewer",
+    requestedReviewers: ["reviewer"],
+    head: "feature",
+    base: "main",
+    draft: false,
+    updatedAt: "1",
+  };
+  vi.mocked(desktopApi.prList).mockReset();
+  vi.mocked(desktopApi.prList).mockResolvedValueOnce([pr]);
+  let refresh: () => unknown = () => {};
+  const node = document.createElement("div");
+  const root = createRoot(node);
+  const render = (visible: boolean) =>
+    act(async () =>
+      root.render(
+        <SidebarContribution
+          value={{
+            section: { id: "prs", type: "prs" },
+            surface: { kind: "none" },
+            visible,
+            relevant: true,
+            status: { state: "ready" },
+            report: () => {},
+            open: () => {},
+            registerRefresh: (next) => {
+              refresh = next;
+              return () => {};
+            },
+          }}
+        >
+          <PrsNav projectId="p" onOpenDiff={() => {}} onOpenUrl={() => {}} />
+        </SidebarContribution>,
+      ),
+    );
+  try {
+    await render(true);
+    expect(node.textContent).toContain("Keep me on screen");
+    const reads = vi.mocked(desktopApi.prList).mock.calls.length;
+    // Later reads are slow, as GitHub is: the list must not wait on them.
+    vi.mocked(desktopApi.prList).mockReturnValue(new Promise(() => {}));
+    await render(false);
+    expect(node.textContent).toContain("Keep me on screen");
+    // Hidden after it answered: nothing to read.
+    expect(vi.mocked(desktopApi.prList).mock.calls.length).toBe(reads);
+    await render(true);
+    expect(node.textContent).toContain("Keep me on screen");
+    expect(vi.mocked(desktopApi.prList).mock.calls.length).toBe(reads + 1);
+    await act(async () => refresh());
+    expect(node.textContent).toContain("Keep me on screen");
+    expect(vi.mocked(desktopApi.prList).mock.calls.length).toBe(reads + 2);
+  } finally {
+    await act(async () => root.unmount());
+    vi.mocked(desktopApi.prList).mockReset();
+    Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", false);
   }
 });

@@ -668,6 +668,17 @@ if (typeof contextBridge.executeInMainWorld === "function") {
   });
 }
 
+// The host sees no input inside the page, so it learns of the person's
+// presses here: a press in the page is a press outside the floating chat.
+// Presses the page's own scripts synthesize are not the person's.
+window.addEventListener(
+  "pointerdown",
+  (event) => {
+    if (event.isTrusted) ipcRenderer.sendToHost("catamorphic:page-press");
+  },
+  { capture: true, passive: true },
+);
+
 // Electron's BrowserWindow `app-command` event covers browser mouse buttons
 // on Windows/Linux. macOS delivers the auxiliary buttons to the guest page,
 // so forward them to the trusted host instead of leaving them inert.

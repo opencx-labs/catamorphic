@@ -59,7 +59,11 @@ import {
 } from "../lib/agent-default-model.js";
 import { effectiveEffort, supportedEfforts } from "../lib/agent-effort.js";
 import { agentPermissionView } from "../lib/agent-permissions.js";
-import { appIsMovingFocus, moveFocusAsApp } from "../lib/app-focus.js";
+import {
+  appIsMovingFocus,
+  moveFocusAsApp,
+  onPagePress,
+} from "../lib/app-focus.js";
 import {
   type AgentInfo,
   desktopApi,
@@ -1058,15 +1062,18 @@ function ChatDockContent({
       setDockEngaged(false);
       setSlashDismissed(true);
     };
-    // Clicks on unfocusable chrome (a webview, blank pane space) never
-    // fire focusin — the pointer decides too.
-    const onPointerDown = (event: PointerEvent) => {
+    // Clicks on unfocusable chrome (blank pane space) never fire focusin,
+    // and a click inside a page moves focus with no input this window
+    // sees: the press decides too.
+    const pressed = (inside: boolean) => {
       userInteractionRef.current += 1;
       lastInputAtRef.current = performance.now();
-      const inside = inDock(event.target);
       setDockEngaged(inside);
       if (!inside) setSlashDismissed(true);
     };
+    const onPointerDown = (event: PointerEvent) =>
+      pressed(inDock(event.target));
+    const stopPagePress = onPagePress(() => pressed(false));
     const onKeyDown = () => {
       userInteractionRef.current += 1;
       lastInputAtRef.current = performance.now();
@@ -1099,6 +1106,7 @@ function ChatDockContent({
     window.addEventListener("paste", onTransfer, true);
     window.addEventListener("drop", onTransfer, true);
     return () => {
+      stopPagePress();
       window.removeEventListener("focusin", onFocusIn);
       window.removeEventListener("pointerdown", onPointerDown, true);
       window.removeEventListener("keydown", onKeyDown, true);
