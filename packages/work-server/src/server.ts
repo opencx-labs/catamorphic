@@ -947,6 +947,28 @@ async function createWorkServerInner(
       await sweeping;
     });
   }
+  // Directory events a transition could not deliver at once retry here
+  // (ADR 0209); replicas share the queue through Postgres.
+  let announcing: Promise<unknown> | undefined;
+  const announceTimer = setInterval(() => {
+    announcing ??= accountLifecycle
+      .deliverAnnouncements()
+      .catch((error) =>
+        log(
+          `Directory event delivery failed: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        ),
+      )
+      .finally(() => {
+        announcing = undefined;
+      });
+  }, 15_000);
+  announceTimer.unref();
+  disposers.push(async () => {
+    clearInterval(announceTimer);
+    await announcing;
+  });
   const notificationWorkerId = `work-notifications:${nodeId}`;
   let notificationWork: Promise<void> | undefined;
   const notificationTimer = setInterval(() => {

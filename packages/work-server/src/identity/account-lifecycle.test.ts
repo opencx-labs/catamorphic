@@ -11,7 +11,8 @@ import { AccountLifecycle } from "./account-lifecycle.js";
 /**
  * Which account transitions become directory events (ADR 0209), against a
  * real schema: each transition is announced once with the account's next
- * revision, and nothing else is.
+ * revision, and nothing else is. Delivering an event to projects never
+ * decides whether the transition happens.
  */
 
 const pglite = new PGlite({ extensions: { pgcrypto } });
@@ -30,6 +31,9 @@ interface Announced {
 function setup(options: { directory?: FakeDirectory; tracked?: string[] }) {
   const users = new Map<string, WorkAuthUser>();
   const announced: Announced[] = [];
+  const signedOut: string[] = [];
+  /** While set, reaching projects fails inside its transaction. */
+  const fanOut = { failing: false };
   const accounts = new AccountLifecycle({
     db,
     auth: {
@@ -40,7 +44,9 @@ function setup(options: { directory?: FakeDirectory; tracked?: string[] }) {
       findUserById: async ({ userId }) => users.get(userId) ?? null,
       grantByAccessToken: async () => null,
       deleteGrants: async () => {},
-      signOutEverywhere: async () => {},
+      signOutEverywhere: async ({ userId }) => {
+        signedOut.push(userId);
+      },
       // Nobody holds a live session: the sweep still finds members.
       usersSignedIn: async () => [],
     },
@@ -54,6 +60,12 @@ function setup(options: { directory?: FakeDirectory; tracked?: string[] }) {
     tenantId: randomUUID(),
     projectEvents: {
       appendToSubscribers: async (event) => {
+        // A statement that fails aborts the whole transaction, as a real
+        // failure while appending to a project would.
+        if (fanOut.failing)
+          await sql`select * from no_such_table`.execute(
+            event.transaction ?? db,
+          );
         announced.push({
           kind: event.kind,
           externalId: event.externalId,
@@ -77,7 +89,17 @@ function setup(options: { directory?: FakeDirectory; tracked?: string[] }) {
     });
     return id;
   };
-  return { accounts, announced, user };
+  return { accounts, announced, signedOut, fanOut, user };
+}
+
+/** The account's queued events, oldest first. */
+function queued(userId: string) {
+  return db
+    .selectFrom("work_directory_announcements")
+    .select(["external_id", "attempts", "last_error"])
+    .where("user_id", "=", userId)
+    .orderBy("revision")
+    .execute();
 }
 
 beforeAll(async () => {
@@ -187,5 +209,84 @@ describe("directory transitions", () => {
       `directory.member-left:${dee}:2`,
       `directory.member-joined:${dee}:3`,
     ]);
+  });
+
+  it("offboarding never waits on delivering its event, and a held event keeps its account's order", async () => {
+    const directory = new FakeDirectory();
+    const { accounts, announced, signedOut, fanOut, user } = setup({
+      directory,
+      tracked: ["eng@example.com"],
+    });
+    const eve = user("eve");
+    await accounts.refreshStanding({ userId: eve, signIn: true });
+    await db
+      .insertInto("work_token_families")
+      .values({
+        user_id: eve,
+        client_id: "desktop",
+        expires_at: new Date(Date.now() + 3_600_000),
+      })
+      .execute();
+
+    // Every project append fails: the departure still disables the
+    // account, revokes its sessions and signs it out.
+    fanOut.failing = true;
+    directory.accounts.set(eve, { active: false, reason: "suspended" });
+    expect(await accounts.refreshStanding({ userId: eve, force: true })).toBe(
+      "disabled",
+    );
+    expect(await accounts.isActive(eve)).toBe(false);
+    const families = await db
+      .selectFrom("work_token_families")
+      .select("revoked_at")
+      .where("user_id", "=", eve)
+      .execute();
+    expect(families.every((family) => family.revoked_at !== null)).toBe(true);
+    expect(signedOut).toContain(eve);
+    expect(await queued(eve)).toEqual([
+      {
+        external_id: `directory.member-left:${eve}:2`,
+        attempts: 1,
+        last_error: expect.stringContaining("no_such_table"),
+      },
+    ]);
+
+    // A join and a group change while delivery still fails are recorded,
+    // and wait behind the departure.
+    directory.accounts.set(eve, { active: true, groups: [] });
+    expect(await accounts.refreshStanding({ userId: eve, signIn: true })).toBe(
+      "active",
+    );
+    directory.accounts.set(eve, { active: true, groups: ["eng@example.com"] });
+    expect(await accounts.refreshStanding({ userId: eve, force: true })).toBe(
+      "active",
+    );
+    expect((await queued(eve)).map((row) => row.external_id)).toEqual([
+      `directory.member-left:${eve}:2`,
+      `directory.member-joined:${eve}:3`,
+      `directory.groups-changed:${eve}:4`,
+    ]);
+    expect(announced.map((event) => event.externalId)).toEqual([
+      `directory.member-joined:${eve}:1`,
+    ]);
+
+    // Once delivery works, the retries deliver every event in order.
+    fanOut.failing = false;
+    await db
+      .updateTable("work_directory_announcements")
+      .set({ next_attempt_at: new Date(0) })
+      .where("user_id", "=", eve)
+      .execute();
+    expect(await accounts.deliverAnnouncements()).toEqual({
+      delivered: 3,
+      failed: 0,
+    });
+    expect(announced.map((event) => event.externalId)).toEqual([
+      `directory.member-joined:${eve}:1`,
+      `directory.member-left:${eve}:2`,
+      `directory.member-joined:${eve}:3`,
+      `directory.groups-changed:${eve}:4`,
+    ]);
+    expect(await queued(eve)).toEqual([]);
   });
 });

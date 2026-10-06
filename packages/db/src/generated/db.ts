@@ -1108,6 +1108,21 @@ export interface WorkAccounts {
   user_id: string;
 }
 
+export interface WorkDirectoryAnnouncements {
+  attempts: Generated<number>;
+  created_at: Generated<Timestamp>;
+  external_id: string;
+  id: Generated<string>;
+  kind: string;
+  last_error: string | null;
+  next_attempt_at: Generated<Timestamp>;
+  occurred_at: Timestamp;
+  payload: Json;
+  revision: number;
+  tenant_id: string;
+  user_id: string;
+}
+
 export interface WorkDirectoryGrants {
   project_id: string;
   roles: Generated<Json>;
@@ -1506,6 +1521,7 @@ export interface DB {
   watchers: Watchers;
   webhook_endpoints: WebhookEndpoints;
   work_accounts: WorkAccounts;
+  work_directory_announcements: WorkDirectoryAnnouncements;
   work_directory_grants: WorkDirectoryGrants;
   work_github_app_registrations: WorkGithubAppRegistrations;
   work_machine_rules: WorkMachineRules;

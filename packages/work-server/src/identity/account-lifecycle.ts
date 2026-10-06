@@ -1,14 +1,15 @@
 import { createHash } from "node:crypto";
 import type { ProjectEventsService } from "@catamorphic/core";
-import type { DB } from "@catamorphic/db";
+import type { DB, Json, JsonObject } from "@catamorphic/db";
 import { getTracer, withSpan } from "@catamorphic/otel";
 import {
   DIRECTORY_EVENT_KINDS,
+  DIRECTORY_EVENT_SOURCE,
   type DirectoryEventKind,
   type DirectoryMember,
   directoryProjectEvent,
 } from "@catamorphic/server-sdk";
-import type { Kysely, Transaction } from "kysely";
+import { type Kysely, sql, type Transaction } from "kysely";
 import type {
   WorkDirectoryPolicy,
   WorkSessionPolicy,
@@ -167,13 +168,15 @@ export class AccountLifecycle {
       if (row?.disabled_at) return "disabled";
       // Without a directory an account joins at its first sign-in and
       // never leaves on its own.
-      if (args.signIn && !row?.joined_at)
-        await this.recordStanding({
+      if (args.signIn && !row?.joined_at) {
+        const { announcement } = await this.recordStanding({
           user: await this.deps.auth.findUserById({ userId: args.userId }),
           userId: args.userId,
           now,
           signIn: true,
         });
+        await this.deliverQueued(announcement);
+      }
       return "active";
     }
     const checkedAt = row?.directory_checked_at?.getTime() ?? 0;
@@ -219,7 +222,7 @@ export class AccountLifecycle {
         ? "active_within_grace"
         : "unknown";
     }
-    const { disabled } = await this.recordStanding({
+    const { disabled, announcement } = await this.recordStanding({
       user,
       userId: args.userId,
       now,
@@ -231,15 +234,16 @@ export class AccountLifecycle {
       userId: args.userId,
       groups: [...groups],
     });
+    await this.deliverQueued(announcement);
     return "active";
   }
 
   /**
    * Record an approving directory answer (or, without a directory, a
-   * sign-in) and the transition it makes, with its event, in one
+   * sign-in) and the transition it makes, with its queued event, in one
    * transaction under the account's row lock: concurrent checks of one
    * account record each transition once. Answers whether the account
-   * stays disabled.
+   * stays disabled, and the event to deliver once this commits.
    */
   private async recordStanding(args: {
     user: WorkAuthUser | null;
@@ -248,7 +252,7 @@ export class AccountLifecycle {
     signIn: boolean;
     /** The directory's groups, and the groups it was asked about. */
     directory?: { groups: readonly string[]; tracked: readonly string[] };
-  }): Promise<{ disabled: boolean }> {
+  }): Promise<{ disabled: boolean; announcement?: string }> {
     const { now } = args;
     return this.deps.db.transaction().execute(async (trx) => {
       await trx
@@ -307,27 +311,31 @@ export class AccountLifecycle {
         })
         .where("user_id", "=", args.userId)
         .execute();
-      if (kind)
-        await this.announce({
-          transaction: trx,
-          user: args.user,
-          userId: args.userId,
-          revision,
-          occurredAt: now,
-          ...(kind === "directory.groups-changed"
-            ? { kind, groups, added, removed }
-            : { kind, groups }),
-        });
-      return { disabled };
+      const announcement = kind
+        ? await this.queueAnnouncement({
+            transaction: trx,
+            user: args.user,
+            userId: args.userId,
+            revision,
+            occurredAt: now,
+            ...(kind === "directory.groups-changed"
+              ? { kind, groups, added, removed }
+              : { kind, groups }),
+          })
+        : undefined;
+      return { disabled, ...(announcement ? { announcement } : {}) };
     });
   }
 
   /**
-   * Append one transition's event to every project subscribed to its kind,
-   * in the transaction that records the transition. An account without a
-   * user record names nobody, so it announces nothing.
+   * Queue one transition's event in the transaction that records the
+   * transition, so it exists exactly when the transition does. Reaching the
+   * subscribed projects happens after commit ({@link deliverAnnouncements}):
+   * a failure there never undoes the transition. An account without a user
+   * record names nobody, so it announces nothing. Answers the event's
+   * external id.
    */
-  private async announce(
+  private async queueAnnouncement(
     args: {
       transaction: Transaction<DB>;
       user: WorkAuthUser | null;
@@ -343,12 +351,12 @@ export class AccountLifecycle {
           removed: readonly string[];
         }
     ),
-  ): Promise<void> {
+  ): Promise<string | undefined> {
     if (!args.user) {
       this.deps.log?.(
         `No user record for ${args.userId}; ${args.kind} not announced`,
       );
-      return;
+      return undefined;
     }
     const member: DirectoryMember = {
       id: args.userId,
@@ -374,11 +382,145 @@ export class AccountLifecycle {
             revision: args.revision,
           },
     );
-    await this.deps.projectEvents.appendToSubscribers({
-      tenantId: this.deps.tenantId,
-      transaction: args.transaction,
-      ...event,
-    });
+    await args.transaction
+      .insertInto("work_directory_announcements")
+      .values({
+        tenant_id: this.deps.tenantId,
+        user_id: args.userId,
+        revision: args.revision,
+        kind: event.kind,
+        external_id: event.externalId,
+        occurred_at: new Date(event.occurredAt),
+        payload: event.payload,
+      })
+      .onConflict((conflict) => conflict.column("external_id").doNothing())
+      .execute();
+    return event.externalId;
+  }
+
+  /**
+   * Deliver queued directory events to every project subscribed to their
+   * kind (ADR 0209). Each event is claimed under `SKIP LOCKED`, appended to
+   * its projects and removed in one transaction, so replicas share the
+   * queue and none is delivered twice. One that fails waits and retries
+   * with backoff; it holds back only the same account's later events.
+   * Hosts call this on a timer; a transition also delivers its own event
+   * as soon as it commits.
+   */
+  async deliverAnnouncements(
+    input: { limit?: number } = {},
+  ): Promise<{ delivered: number; failed: number }> {
+    return withSpan(
+      { tracer, name: "work.directory.deliver_announcements" },
+      async (span) => {
+        let delivered = 0;
+        let failed = 0;
+        for (let pass = 0; pass < (input.limit ?? 100); pass++) {
+          const outcome = await this.deliverOne({});
+          if (outcome === "none") break;
+          if (outcome === "delivered") delivered += 1;
+          else failed += 1;
+        }
+        span.setAttribute("catamorphic.directory.delivered", delivered);
+        span.setAttribute("catamorphic.directory.failed", failed);
+        return { delivered, failed };
+      },
+    );
+  }
+
+  /**
+   * Deliver the event a transition just queued, after its transaction
+   * committed. Never throws: an event that cannot be delivered now stays
+   * queued for {@link deliverAnnouncements}.
+   */
+  private async deliverQueued(externalId: string | undefined): Promise<void> {
+    if (!externalId) return;
+    await this.deliverOne({ externalId }).catch((error) =>
+      this.deps.log?.(
+        `Directory event ${externalId} stays queued: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      ),
+    );
+  }
+
+  /** Deliver one due queued event, or report that none is due. */
+  private async deliverOne(input: {
+    externalId?: string;
+  }): Promise<"delivered" | "failed" | "none"> {
+    // The row this attempt holds, so a failure can be recorded after the
+    // delivery transaction rolled back.
+    let claimed:
+      | { id: string; externalId: string; attempts: number }
+      | undefined;
+    try {
+      return await this.deps.db.transaction().execute(async (trx) => {
+        const row = await trx
+          .selectFrom("work_directory_announcements as event")
+          .selectAll("event")
+          .where("event.next_attempt_at", "<=", sql<Date>`now()`)
+          .$if(input.externalId !== undefined, (query) =>
+            query.where("event.external_id", "=", input.externalId ?? ""),
+          )
+          // One account's events go in order: an earlier one still
+          // waiting holds the later ones back.
+          .where(({ not, exists, selectFrom }) =>
+            not(
+              exists(
+                selectFrom("work_directory_announcements as earlier")
+                  .select("earlier.id")
+                  .whereRef("earlier.user_id", "=", "event.user_id")
+                  .whereRef("earlier.revision", "<", "event.revision"),
+              ),
+            ),
+          )
+          .orderBy("event.created_at")
+          .limit(1)
+          .forUpdate()
+          .skipLocked()
+          .executeTakeFirst();
+        if (!row) return "none";
+        claimed = {
+          id: row.id,
+          externalId: row.external_id,
+          attempts: row.attempts,
+        };
+        await this.deps.projectEvents.appendToSubscribers({
+          tenantId: row.tenant_id,
+          source: DIRECTORY_EVENT_SOURCE,
+          kind: row.kind,
+          externalId: row.external_id,
+          occurredAt: row.occurred_at.toISOString(),
+          payload: jsonObject(row.payload),
+          transaction: trx,
+        });
+        await trx
+          .deleteFrom("work_directory_announcements")
+          .where("id", "=", row.id)
+          .execute();
+        return "delivered";
+      });
+    } catch (error) {
+      if (!claimed) throw error;
+      const message = error instanceof Error ? error.message : String(error);
+      const { attempts } = claimed;
+      await this.deps.db
+        .updateTable("work_directory_announcements")
+        .set({
+          attempts: attempts + 1,
+          last_error: message,
+          next_attempt_at: sql<Date>`now() + make_interval(secs => ${Math.min(
+            300,
+            2 ** attempts,
+          )})`,
+        })
+        .where("id", "=", claimed.id)
+        .execute();
+      this.deps.log?.(
+        `Directory event ${claimed.externalId} did not reach its projects (attempt ${attempts + 1}): ${message}`,
+      );
+      return "failed";
+    }
   }
 
   /**
@@ -428,48 +570,53 @@ export class AccountLifecycle {
         const user = await this.deps.auth.findUserById({
           userId: args.userId,
         });
-        await this.deps.db.transaction().execute(async (trx) => {
-          await trx
-            .insertInto("work_accounts")
-            .values({ user_id: args.userId, updated_at: now })
-            .onConflict((conflict) => conflict.column("user_id").doNothing())
-            .execute();
-          const row = await trx
-            .selectFrom("work_accounts")
-            .select([
-              "disabled_at",
-              "joined_at",
-              "lifecycle_revision",
-              "directory_groups",
-            ])
-            .where("user_id", "=", args.userId)
-            .forUpdate()
-            .executeTakeFirstOrThrow();
-          // A member leaves once: an account that never joined, or is
-          // already disabled, has nothing to announce.
-          const leaves = Boolean(row.joined_at) && !row.disabled_at;
-          const revision = row.lifecycle_revision + (leaves ? 1 : 0);
-          await trx
-            .updateTable("work_accounts")
-            .set({
-              disabled_at: now,
-              disabled_reason: args.reason,
-              lifecycle_revision: revision,
-              updated_at: now,
-            })
-            .where("user_id", "=", args.userId)
-            .execute();
-          if (leaves)
-            await this.announce({
-              transaction: trx,
-              kind: "directory.member-left",
-              user,
-              userId: args.userId,
-              revision,
-              occurredAt: now,
-              groups: groupList(row.directory_groups),
-            });
-        });
+        const announcement = await this.deps.db
+          .transaction()
+          .execute(async (trx) => {
+            await trx
+              .insertInto("work_accounts")
+              .values({ user_id: args.userId, updated_at: now })
+              .onConflict((conflict) => conflict.column("user_id").doNothing())
+              .execute();
+            const row = await trx
+              .selectFrom("work_accounts")
+              .select([
+                "disabled_at",
+                "joined_at",
+                "lifecycle_revision",
+                "directory_groups",
+              ])
+              .where("user_id", "=", args.userId)
+              .forUpdate()
+              .executeTakeFirstOrThrow();
+            // A member leaves once: an account that never joined, or is
+            // already disabled, has nothing to announce.
+            const leaves = Boolean(row.joined_at) && !row.disabled_at;
+            const revision = row.lifecycle_revision + (leaves ? 1 : 0);
+            await trx
+              .updateTable("work_accounts")
+              .set({
+                disabled_at: now,
+                disabled_reason: args.reason,
+                lifecycle_revision: revision,
+                updated_at: now,
+              })
+              .where("user_id", "=", args.userId)
+              .execute();
+            // Only queued here: delivering it to projects happens after
+            // commit, so offboarding never depends on that fan-out.
+            return leaves
+              ? this.queueAnnouncement({
+                  transaction: trx,
+                  kind: "directory.member-left",
+                  user,
+                  userId: args.userId,
+                  revision,
+                  occurredAt: now,
+                  groups: groupList(row.directory_groups),
+                })
+              : undefined;
+          });
         await this.deps.db
           .updateTable("work_token_families")
           .set({ revoked_at: now, revoked_reason: `account_${args.reason}` })
@@ -479,6 +626,7 @@ export class AccountLifecycle {
         await this.deps.auth.signOutEverywhere({ userId: args.userId });
         await this.deps.onDisabled({ userId: args.userId });
         this.deps.log?.(`Disabled ${args.userId}: ${args.reason}`);
+        await this.deliverQueued(announcement);
       },
     );
   }
@@ -710,6 +858,13 @@ export class AccountLifecycle {
 
 function hashToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
+}
+
+/** A queued event's payload, which is always the object it was built as. */
+function jsonObject(value: Json): JsonObject {
+  if (value === null || typeof value !== "object" || Array.isArray(value))
+    throw new Error("A queued directory event's payload must be an object");
+  return value;
 }
 
 /** Stored or reported groups as one normalized, sorted list. */
