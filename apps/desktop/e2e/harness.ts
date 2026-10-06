@@ -46,6 +46,9 @@ async function freeCdpPort(): Promise<number> {
   return cdpPort();
 }
 
+/** The evaluated expression threw inside the page. */
+class PageException extends Error {}
+
 export interface FrameHandle {
   getRendererErrors: () => string[];
   /** Evaluate JS inside the frame; resolves the JSON-serialized result. */
@@ -474,7 +477,7 @@ async function createClient(ws: WebSocket, opts: { page?: boolean } = {}) {
       exceptionDetails?: { exception?: { description?: string } };
     };
     if (result.exceptionDetails) {
-      throw new Error(
+      throw new PageException(
         result.exceptionDetails.exception?.description ??
           "Evaluation threw in the page",
       );
@@ -489,13 +492,24 @@ async function createClient(ws: WebSocket, opts: { page?: boolean } = {}) {
     const timeoutMs = opts?.timeoutMs ?? 15_000;
     const deadline = Date.now() + timeoutMs;
     let last: unknown;
+    let thrown: string | undefined;
     while (Date.now() < deadline) {
-      last = await evaluate(expression);
+      try {
+        last = await evaluate(expression);
+        thrown = undefined;
+      } catch (error) {
+        // A condition that throws is not met yet: an element not rendered,
+        // a document still loading (a frame just connected to). A lost
+        // connection still fails at once.
+        if (!(error instanceof PageException)) throw error;
+        last = undefined;
+        thrown = error.message;
+      }
       if (last) return last as T;
       await sleep(200);
     }
     throw new Error(
-      `Timed out (${timeoutMs}ms) waiting for ${opts?.label ?? expression}; last value: ${JSON.stringify(last)}`,
+      `Timed out (${timeoutMs}ms) waiting for ${opts?.label ?? expression}; last value: ${JSON.stringify(last)}${thrown ? `; last error: ${thrown}` : ""}`,
     );
   };
 
