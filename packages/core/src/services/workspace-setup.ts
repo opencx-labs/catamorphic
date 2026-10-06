@@ -130,8 +130,8 @@ export function workspaceSetupScript(input: {
     'exec >>"$work_session/setup.log" 2>&1',
     ...stale.map((file) => `rm -f "$work_session/setup/${file}"`),
     `printf '\\n== Workspace setup started %s ==\\n' "$(date -u '+%Y-%m-%d %H:%M:%S UTC')"`,
-    // The Environment's secrets (ADR 0205), from the project folder where
-    // the script starts.
+    // The Environment's secrets (ADR 0205) and the gateway's variables
+    // (ADR 0211), from the project folder where the script starts.
     sandboxSecretsPrelude(),
     "work_part() {",
     "  printf '\\n-- %s\\n' \"$1\"",

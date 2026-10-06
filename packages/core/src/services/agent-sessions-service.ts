@@ -116,6 +116,7 @@ import type { ConnectionCapabilityGrantsService } from "./connection-capability-
 import type { ModelApi } from "./connection-providers.js";
 import {
   connectionMcpServerName,
+  isHttpMethodCapability,
   isProtocolCapability,
   MODEL_CAPABILITY,
 } from "./connection-types.js";
@@ -155,6 +156,7 @@ import {
 import {
   configureSandboxGateway,
   ensureSandboxBaseline,
+  removeSandboxGateway,
   SESSION_DIRECTORY,
   sandboxGrantFile,
   seedSandboxRepository,
@@ -162,6 +164,7 @@ import {
 import {
   deliverSandboxSecrets,
   removeSandboxSecrets,
+  sandboxEnvFiles,
   sandboxSecretsFile,
   sandboxSecretsNote,
 } from "./sandbox-secrets.js";
@@ -814,15 +817,17 @@ interface AgentSessionsDeps {
   /** Workspaces at a ref of the project's linked remote (ADR 0178). */
   workspaces?: SessionWorkspaces;
   /**
-   * The gateway as sandboxes reach it (ADRs 0175, 0180): its base URL
-   * (`…/gateway`, serving `git/<alias>/…` and `model/<alias>/…`), the
-   * remote base URLs a connection provider serves with Git, and the API a
-   * model provider speaks (undefined when it serves neither).
+   * The gateway as sandboxes reach it (ADRs 0175, 0180, 0211): its base
+   * URL (`…/gateway`, serving `git/<alias>/…`, `model/<alias>/…` and
+   * `http/<alias>/…`), the remote base URLs a connection provider serves
+   * with Git, the API a model provider speaks (undefined when it serves
+   * neither), and whether a provider is an HTTP API code may call.
    */
   sandboxGateway?: {
     url: (args: { projectId: string; sessionId: string }) => string | undefined;
     remoteBaseUrls: (providerKind: string) => readonly string[] | undefined;
     modelApi: (providerKind: string) => ModelApi | undefined;
+    servesHttp: (providerKind: string) => boolean;
     /** What a turn's model calls through the gateway used (ADR 0180). */
     turnUsage?: (args: {
       sessionId: string;
@@ -4522,11 +4527,12 @@ export class AgentSessionsService {
           ? [...(agent.harness.plugins ?? [])]
           : [],
       env: agent.harness.placement === "host" ? { ...agent.harness.env } : {},
-      // A runner beside the workspace loads the session's secrets for
-      // every attempt (ADR 0205); a missing file adds nothing.
+      // A runner beside the workspace loads the gateway's variables and
+      // the session's secrets for every attempt (ADRs 0205, 0211); a
+      // missing file adds nothing.
       ...(agent.harness.placement === "sandbox" && runtime.provider
         ? {
-            envFile: sandboxSecretsFile({
+            envFiles: sandboxEnvFiles({
               workspaceRoot: runtime.provider.workspaceRoot,
             }),
           }
@@ -4555,13 +4561,13 @@ export class AgentSessionsService {
                       provider,
                       sandboxId: sandboxProviderId,
                       workingDirectory,
-                      // Its commands load the session's secrets (ADR
-                      // 0205), named from where they start.
-                      envFile: path.posix.relative(
-                        workingDirectory,
-                        sandboxSecretsFile({
-                          workspaceRoot: provider.workspaceRoot,
-                        }),
+                      // Its commands load the gateway's variables and the
+                      // session's secrets (ADRs 0205, 0211), named from
+                      // where they start.
+                      envFiles: sandboxEnvFiles({
+                        workspaceRoot: provider.workspaceRoot,
+                      }).map((file) =>
+                        path.posix.relative(workingDirectory, file),
                       ),
                       ...(runtime.commandTimeoutSeconds
                         ? {
@@ -4582,8 +4588,14 @@ export class AgentSessionsService {
           allocationId: session.allocation_id,
           sandboxId: sandboxProviderId,
           stateDirectory,
-          ...(delivered && start.envFile
-            ? { env: { BASH_ENV: start.envFile } }
+          ...(delivered
+            ? {
+                env: {
+                  BASH_ENV: sandboxSecretsFile({
+                    workspaceRoot: provider.workspaceRoot,
+                  }),
+                },
+              }
             : {}),
         });
       },
@@ -5399,10 +5411,11 @@ export class AgentSessionsService {
   }
 
   /**
-   * Issue the session's sandbox grants (ADRs 0175, 0180) for its aliases
-   * served as protocols, Git and models, and write them (with the Git
-   * configuration unless renewing) into the sandbox. Returns how the
-   * sandbox reaches each model alias.
+   * Issue the session's sandbox grants (ADRs 0175, 0180, 0211) for its
+   * aliases served to sandboxes, Git, models and HTTP APIs, and write them
+   * into the sandbox, with the Git configuration and the variables naming
+   * each HTTP alias unless renewing. Returns how the sandbox reaches each
+   * model alias.
    */
   private async configureSandboxGateway(input: {
     identity: Identity;
@@ -5434,7 +5447,12 @@ export class AgentSessionsService {
         const api = binding.capabilities.includes(MODEL_CAPABILITY)
           ? gateway.modelApi(binding.providerKind)
           : undefined;
-        return git || api ? [{ alias: binding.alias, git, api }] : [];
+        const http =
+          binding.capabilities.some(isHttpMethodCapability) &&
+          gateway.servesHttp(binding.providerKind);
+        return git || api || http
+          ? [{ alias: binding.alias, git, api, http }]
+          : [];
       },
     );
     if (bindings.length === 0) return [];
@@ -5443,7 +5461,7 @@ export class AgentSessionsService {
       ?.replace(/\/+$/, "");
     if (!url) {
       console.warn(
-        "[catamorphic] The gateway is not reachable from sandboxes; Git and model aliases are unavailable",
+        "[catamorphic] The gateway is not reachable from sandboxes; Git, model and HTTP aliases are unavailable",
       );
       return [];
     }
@@ -5467,6 +5485,11 @@ export class AgentSessionsService {
       gitAliases: bindings.flatMap((binding) =>
         binding.git
           ? [{ alias: binding.alias, remoteBaseUrls: binding.git }]
+          : [],
+      ),
+      httpAliases: bindings.flatMap((binding) =>
+        binding.http
+          ? [{ alias: binding.alias, url: `${url}/http/${binding.alias}` }]
           : [],
       ),
       renewOnly: input.renewOnly,
@@ -6008,10 +6031,12 @@ export class AgentSessionsService {
   }
 
   /**
-   * Withdraw the owner's personal environment (ADR 0184) and the
-   * Environment's secrets (ADR 0205) from a chat's current sandbox,
-   * wherever it runs. Best effort, and a no-op for chats without a
-   * sandbox; a project chat has only secrets to withdraw.
+   * Withdraw the owner's personal environment (ADR 0184), the
+   * Environment's secrets (ADR 0205), and the session's gateway grants and
+   * variables (ADRs 0175, 0211) from a chat's current sandbox, wherever it
+   * runs, as its grants are revoked with the workspace. Best effort, and a
+   * no-op for chats without a sandbox; a project chat has no personal
+   * environment to withdraw.
    */
   private async withdrawFromSessionSandbox(input: {
     identity: Identity;
@@ -6020,7 +6045,8 @@ export class AgentSessionsService {
     allocation?: ExecutionAllocation;
     sandboxProviderId?: string;
   }): Promise<void> {
-    if (!this.personalEnvironments && !this.secrets) return;
+    if (!this.personalEnvironments && !this.secrets && !this.sandboxGateway)
+      return;
     try {
       const row = await this.db
         .selectFrom("agent_sessions")
@@ -6083,6 +6109,17 @@ export class AgentSessionsService {
         }).catch((error: unknown) =>
           console.warn(
             `[catamorphic] Could not remove the secrets of session ${input.sessionId}`,
+            error,
+          ),
+        );
+      if (this.sandboxGateway)
+        await removeSandboxGateway({
+          provider,
+          sandboxId: sandboxProviderId,
+          projectDir: this.projectDir(provider),
+        }).catch((error: unknown) =>
+          console.warn(
+            `[catamorphic] Could not remove the gateway grants of session ${input.sessionId}`,
             error,
           ),
         );

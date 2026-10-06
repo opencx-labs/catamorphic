@@ -211,12 +211,14 @@ export interface AttemptStart {
   /** Extra environment for the harness process (no credentials unless the host's own). */
   env: Record<string, string>;
   /**
-   * The session's environment file in the sandbox (ADR 0205), absolute in
-   * the sandbox's own paths: a runner beside the workspace reads it as the
-   * attempt starts and adds its variables to the harness's environment,
-   * with `BASH_ENV` pointing at it. A missing file adds nothing.
+   * The session's environment files in the sandbox (ADRs 0205, 0211), in
+   * order, absolute in the sandbox's own paths: a runner beside the
+   * workspace reads each as the attempt starts and adds its variables to
+   * the harness's environment (a later file's over an earlier's), with
+   * `BASH_ENV` pointing at the last one present. A missing file adds
+   * nothing.
    */
-  envFile?: string;
+  envFiles?: string[];
   /** Adapter-specific settings the host configured for this agent. */
   options: JsonObject;
 }

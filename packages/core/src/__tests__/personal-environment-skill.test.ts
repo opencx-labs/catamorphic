@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { HOST_SKILLS } from "../seeds.js";
 import { parseProjectEnvironmentPolicy } from "../services/project-environments-service.js";
+import { httpAliasVariable } from "../services/sandbox-git.js";
 import {
+  SANDBOX_GATEWAY_ENV_PATH,
   SANDBOX_SECRETS_PATH,
   sandboxSecretsNote,
 } from "../services/sandbox-secrets.js";
@@ -37,6 +39,9 @@ describe("the personal-environment skill", () => {
 
   it("names the file and the places Work's notes send people", () => {
     expect(SKILL).toContain(`. ../${SANDBOX_SECRETS_PATH}`);
+    // Company APIs through the gateway (ADR 0211): the file and names.
+    expect(SKILL).toContain(`. ../${SANDBOX_GATEWAY_ENV_PATH}`);
+    expect(SKILL).toContain(`$${httpAliasVariable("logs")}_GRANT_FILE`);
     const note =
       sandboxSecretsNote({
         environment: "dev",

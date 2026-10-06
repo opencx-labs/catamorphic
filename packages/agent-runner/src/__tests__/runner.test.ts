@@ -504,18 +504,27 @@ describe("the session's environment file (ADR 0205)", () => {
     return { runner, frames, said, answer };
   }
 
-  it("adds the file's variables and BASH_ENV to the harness's environment", async () => {
+  it("adds the files' variables and BASH_ENV to the harness's environment", async () => {
+    const gateway = "/workspace/.work-session/env/gateway.sh";
     const file = "/workspace/.work-session/env/secrets.sh";
     const { runner, frames, said, answer } = withFiles({
-      [file]: formatEnvFile({ CLICKHOUSE_API_KEY: "ch-key-123", OWN: "x" }),
+      [gateway]: formatEnvFile({
+        WORK_HTTP_LOGS: "https://work.test/api/gateway/http/logs",
+        SHARED: "gateway",
+      }),
+      [file]: formatEnvFile({
+        CLICKHOUSE_API_KEY: "ch-key-123",
+        OWN: "x",
+        SHARED: "secrets",
+      }),
     });
     runner.handle({
       id: "start",
       command: {
         kind: "start",
         attempt: attempt(
-          "[[env CLICKHOUSE_API_KEY]] [[env BASH_ENV]] [[env OWN]]",
-          { envFile: file, env: { OWN: "the host's" } },
+          "[[env CLICKHOUSE_API_KEY]] [[env WORK_HTTP_LOGS]] [[env SHARED]] [[env BASH_ENV]] [[env OWN]]",
+          { envFiles: [gateway, file], env: { OWN: "the host's" } },
         ),
       },
     });
@@ -526,9 +535,38 @@ describe("the session's environment file (ADR 0205)", () => {
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
     expect(said()).toContain("CLICKHOUSE_API_KEY=ch-key-123");
+    expect(said()).toContain(
+      "WORK_HTTP_LOGS=https://work.test/api/gateway/http/logs",
+    );
+    // A later file's variables win, and BASH_ENV names the last file.
+    expect(said()).toContain("SHARED=secrets");
     expect(said()).toContain(`BASH_ENV=${file}`);
-    // The attempt's own variables win over the file's.
+    // The attempt's own variables win over the files'.
     expect(said()).toContain("OWN=the host's");
+  });
+
+  it("points BASH_ENV at the last file present", async () => {
+    const gateway = "/workspace/.work-session/env/gateway.sh";
+    const { runner, frames, said, answer } = withFiles({
+      [gateway]: formatEnvFile({ WORK_HTTP_LOGS: "https://work.test/logs" }),
+    });
+    runner.handle({
+      id: "start",
+      command: {
+        kind: "start",
+        attempt: attempt("[[env WORK_HTTP_LOGS]] [[env BASH_ENV]]", {
+          envFiles: [gateway, "/workspace/.work-session/env/secrets.sh"],
+        }),
+      },
+    });
+    const deadline = Date.now() + 5_000;
+    while (!frames.some((frame) => frame.type === "exit")) {
+      if (Date.now() > deadline) throw new Error("The attempt never finished");
+      answer();
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    expect(said()).toContain("WORK_HTTP_LOGS=https://work.test/logs");
+    expect(said()).toContain(`BASH_ENV=${gateway}`);
   });
 
   it("adds nothing when the file is missing, or the runner reads none", async () => {
@@ -545,7 +583,10 @@ describe("the session's environment file (ADR 0205)", () => {
         command: {
           kind: "start",
           attempt: attempt("[[env BASH_ENV]]", {
-            envFile: "/workspace/.work-session/env/secrets.sh",
+            envFiles: [
+              "/workspace/.work-session/env/gateway.sh",
+              "/workspace/.work-session/env/secrets.sh",
+            ],
           }),
         },
       });

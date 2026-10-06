@@ -36,11 +36,12 @@ export interface AttemptRunnerOptions {
   /** Host objects for in-process adapters (never serialized). */
   local?: Record<string, unknown>;
   /**
-   * Reads an attempt's environment file (ADR 0205) where the runner runs
-   * beside the workspace; undefined when the file is missing. Its
-   * variables join the harness's environment for that attempt, read again
-   * for every attempt. In-process runners leave it out: their harness's
-   * commands load the file in the sandbox themselves.
+   * Reads one of an attempt's environment files (ADRs 0205, 0211) where
+   * the runner runs beside the workspace; undefined when the file is
+   * missing. Their variables join the harness's environment for that
+   * attempt, read again for every attempt. In-process runners leave it
+   * out: their harness's commands load the files in the sandbox
+   * themselves.
    */
   envFile?: (path: string) => Record<string, string> | undefined;
 }
@@ -221,7 +222,7 @@ export class AttemptRunner {
     });
     let control: AttemptControl;
     try {
-      const started = this.withEnvFile(attempt);
+      const started = this.withEnvFiles(attempt);
       control = adapter.start(started, this.host(started), this.options.local);
     } catch (error) {
       this.emitEvent({
@@ -255,17 +256,30 @@ export class AttemptRunner {
   }
 
   /**
-   * The attempt with its environment file's variables (ADR 0205), and
-   * `BASH_ENV` so the harness's shells load the file too. The attempt's
-   * own variables win.
+   * The attempt with its environment files' variables (ADRs 0205, 0211),
+   * a later file's over an earlier's, and `BASH_ENV` naming the last file
+   * present so the harness's shells load it too (the session's secrets,
+   * which a harness that filters names like `*_KEY` would otherwise
+   * drop). The attempt's own variables win.
    */
-  private withEnvFile(attempt: AttemptStart): AttemptStart {
-    const file = attempt.envFile;
-    const variables = file ? this.options.envFile?.(file) : undefined;
-    if (!file || !variables) return attempt;
+  private withEnvFiles(attempt: AttemptStart): AttemptStart {
+    const read = this.options.envFile;
+    if (!read) return attempt;
+    const found = (attempt.envFiles ?? []).flatMap((file) => {
+      const variables = read(file);
+      return variables ? [{ file, variables }] : [];
+    });
+    const last = found.at(-1);
+    if (!last) return attempt;
     return {
       ...attempt,
-      env: { ...variables, BASH_ENV: file, ...attempt.env },
+      env: {
+        ...Object.fromEntries(
+          found.flatMap((entry) => Object.entries(entry.variables)),
+        ),
+        BASH_ENV: last.file,
+        ...attempt.env,
+      },
     };
   }
 

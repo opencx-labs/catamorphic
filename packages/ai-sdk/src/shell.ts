@@ -35,21 +35,20 @@ export interface ShellState {
 
 /**
  * The lines that start a command from the project folder: load the
- * session's secrets (ADR 0205) while still there, then move to `cwd`. The
- * command starts in the root already; a root only the provider can map (a
- * virtual `/workspace`) stays where the provider put it.
+ * session's environment files (ADRs 0205, 0211) while still there, then
+ * move to `cwd`. The command starts in the root already; a root only the
+ * provider can map (a virtual `/workspace`) stays where the provider put
+ * it.
  */
 function commandPrelude(input: {
   root: string;
   cwd: string;
-  envFile?: string;
+  envFiles?: readonly string[];
 }): string[] {
   return [
-    ...(input.envFile
-      ? [
-          `if [ -f ${quote(input.envFile)} ]; then . ${quote(input.envFile)}; fi`,
-        ]
-      : []),
+    ...(input.envFiles ?? []).map(
+      (file) => `if [ -f ${quote(file)} ]; then . ${quote(file)}; fi`,
+    ),
     `cd ${quote(input.cwd)} 2>/dev/null || cd ${quote(input.root)} 2>/dev/null`,
   ];
 }
@@ -74,10 +73,10 @@ export async function runShell(input: {
   budgetSeconds?: number;
   signal?: AbortSignal;
   /**
-   * The session's secrets file (ADR 0205), from the project folder or
-   * absolute: loaded before the command when it exists.
+   * The session's environment files (ADRs 0205, 0211), from the project
+   * folder or absolute: each loaded before the command when it exists.
    */
-  envFile?: string;
+  envFiles?: readonly string[];
 }): Promise<{ exitCode: number; output: string }> {
   const marker = `__catamorphic_cwd_${crypto.randomUUID().replaceAll("-", "")}__`;
   const cwd = input.state.cwd ?? input.root;
@@ -85,7 +84,7 @@ export async function runShell(input: {
     ...commandPrelude({
       root: input.root,
       cwd,
-      ...(input.envFile ? { envFile: input.envFile } : {}),
+      ...(input.envFiles ? { envFiles: input.envFiles } : {}),
     }),
     input.command,
     "__catamorphic_status=$?",
@@ -234,10 +233,10 @@ export interface ShellToolContext {
   /** The Environment's budget for one foreground command, in seconds. */
   budgetSeconds?: number;
   /**
-   * The session's secrets file (ADR 0205), from the project folder or
-   * absolute: every command loads it first.
+   * The session's environment files (ADRs 0205, 0211), from the project
+   * folder or absolute: every command loads each that exists first.
    */
-  envFile?: string;
+  envFiles?: readonly string[];
 }
 
 type BackgroundStatus = "running" | "finished" | "stopped";
@@ -289,7 +288,7 @@ export function shellTools(context: ShellToolContext): Record<string, Tool> {
         budgetSeconds,
         ...(timeout !== undefined ? { timeoutMs: timeout } : {}),
         ...(abortSignal ? { signal: abortSignal } : {}),
-        ...(context.envFile ? { envFile: context.envFile } : {}),
+        ...(context.envFiles ? { envFiles: context.envFiles } : {}),
       }),
   });
   if (!processes) return { bash };
@@ -336,7 +335,7 @@ export function shellTools(context: ShellToolContext): Record<string, Tool> {
             ...commandPrelude({
               root,
               cwd: context.state.cwd ?? root,
-              ...(context.envFile ? { envFile: context.envFile } : {}),
+              ...(context.envFiles ? { envFiles: context.envFiles } : {}),
             }),
             command,
           ].join("\n"),

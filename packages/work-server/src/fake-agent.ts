@@ -16,8 +16,8 @@ interface FakeSandbox {
   provider: Pick<SandboxProvider, "executeCommand" | "processes">;
   sandboxId: string;
   workingDirectory: string;
-  /** The session's secrets file from the working directory (ADR 0205). */
-  envFile?: string;
+  /** The session's environment files from the working directory (ADRs 0205, 0211). */
+  envFiles?: readonly string[];
 }
 
 /**
@@ -85,7 +85,9 @@ function isFakeSandbox(value: unknown): value is FakeSandbox {
     typeof value.provider.executeCommand === "function" &&
     typeof value.sandboxId === "string" &&
     typeof value.workingDirectory === "string" &&
-    (value.envFile === undefined || typeof value.envFile === "string")
+    (value.envFiles === undefined ||
+      (Array.isArray(value.envFiles) &&
+        value.envFiles.every((file: unknown) => typeof file === "string")))
   );
 }
 
@@ -178,10 +180,11 @@ async function answer(input: {
   }
   const sandbox = input.sandbox;
   if (!sandbox) throw new Error("Allocated provider missing");
-  // Commands load the session's secrets first, as the built-in agent's do.
-  const prelude = sandbox.envFile
-    ? `if [ -f '${sandbox.envFile}' ]; then . '${sandbox.envFile}'; fi\n`
-    : "";
+  // Commands load the session's environment files first, as the
+  // built-in agent's do.
+  const prelude = (sandbox.envFiles ?? [])
+    .map((file) => `if [ -f '${file}' ]; then . '${file}'; fi\n`)
+    .join("");
   const exec = (shell: string) =>
     sandbox.provider.executeCommand(sandbox.sandboxId, `${prelude}${shell}`, {
       cwd: sandbox.workingDirectory,
