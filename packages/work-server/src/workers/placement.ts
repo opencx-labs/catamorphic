@@ -54,6 +54,12 @@ export const WorkerPlacementSchema = z.strictObject({
 });
 export type WorkerPlacement = z.output<typeof WorkerPlacementSchema>;
 
+/**
+ * A worker's placement as the scheduler reads it. A released machine (ADR
+ * 0205) takes no new work and keeps serving the Allocations it holds.
+ */
+export type ScheduledPlacement = WorkerPlacement & { released: boolean };
+
 export function nodeAccess(access: WorkerAccess): NodeAccess {
   if ("everyone" in access) return { everyone: true };
   if ("nobody" in access) return { users: [], groups: [], projects: [] };

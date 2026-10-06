@@ -392,9 +392,10 @@ does not know its worker image or has no public URL.
 ### Retention
 
 When a member leaves the group or is disabled, or the rule is removed or
-changes class, their machine is **released**: it takes nobody's work from
-that moment (a chat placed on it is refused there at its next turn; move
-it), and it keeps its disk for the rule's `retainDays` (0 to 365, default 7;
+changes class, their machine is **released**: it takes no new work from
+that moment (a chat already on it keeps reaching its workspace there until
+it idles and gives it back; its next turn after that lands elsewhere), and
+it keeps its disk for the rule's `retainDays` (0 to 365, default 7;
 kept with the machine, so it outlives the rule; counted by the database's
 clock). A member back within that time gets the same machine again.
 Afterwards:

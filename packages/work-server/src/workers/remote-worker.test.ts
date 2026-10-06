@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import type { Identity } from "@catamorphic/core";
 import { generateExecutorKeyPair } from "@catamorphic/sandbox";
+import { sql } from "kysely";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { executionSettingsFromEnv } from "../execution-config.js";
 import {
@@ -414,6 +415,72 @@ describe("placement by owner (ADR 0167)", () => {
     await expect(
       sessions.create(alice, projectId, { environment: "desk" }),
     ).rejects.toThrow();
+  }, 90_000);
+
+  it("keeps a released machine's chats until their workspaces are given back (ADR 0205)", async () => {
+    const dana = await person("dana");
+    // Room for two: a new chat that lands elsewhere was refused, not full.
+    const danaDesk = await startWorker({
+      name: "dana-desk",
+      placement: { access: { people: ["dana@example.com"] } },
+      workspaces: "2",
+    });
+    const core = server.catamorphic.core;
+    const sessions = core.agentSessions;
+    if (!sessions) throw new Error("Agent sessions are unavailable");
+    const location = async (sessionId: string) =>
+      replyOf(
+        await sessions.sendMessage(
+          dana,
+          projectId,
+          sessionId,
+          "execution-location",
+        ),
+      ).content;
+    const chat = await sessions.create(dana, projectId, {
+      environment: "build",
+    });
+    expect(await location(chat.id)).toContain(danaDesk);
+    const { allocationId } = await sessions.get(dana, projectId, chat.id);
+
+    // Her machine is released: it takes no new work at once, while the
+    // chat already there keeps reaching its workspace.
+    await core.db
+      .updateTable("work_workers")
+      .set({ released_at: sql`now()` })
+      .where("node_id", "=", "worker.dana-desk")
+      .execute();
+    const next = await sessions.create(dana, projectId, {
+      environment: "build",
+    });
+    const elsewhere = await location(next.id);
+    expect(elsewhere).toContain(path.join(root, "shared", "sandboxes"));
+    expect(await location(chat.id)).toContain(danaDesk);
+
+    // Once idle (the default 30 minutes), the workspace is saved and given
+    // back, and the machine frees its slot.
+    await sessions.releaseIdleWorkspaces({
+      now: new Date(Date.now() + 60 * 60_000),
+    });
+    expect(
+      await core.db
+        .selectFrom("execution_allocations")
+        .select(["status", "release_reason"])
+        .where("id", "=", allocationId ?? "")
+        .executeTakeFirstOrThrow(),
+    ).toEqual({ status: "released", release_reason: "idle" });
+    await waitFor(async () => {
+      const row = await core.db
+        .selectFrom("execution_allocations")
+        .select("capacity_released_at")
+        .where("id", "=", allocationId ?? "")
+        .executeTakeFirstOrThrow();
+      return row.capacity_released_at !== null;
+    }, "the released machine to free the idle workspace");
+    // Its next turn runs on another machine.
+    const after = await location(chat.id);
+    expect(after).not.toContain(danaDesk);
+    expect(after).toContain(path.join(root, "shared", "sandboxes"));
   }, 90_000);
 
   it("places container Environments only on workers that offer containers (ADR 0176)", async () => {

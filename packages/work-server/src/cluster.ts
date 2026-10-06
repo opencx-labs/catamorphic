@@ -23,8 +23,8 @@ import {
 import { type Kysely, sql } from "kysely";
 import {
   nodeAccess,
+  type ScheduledPlacement,
   servesOneOwner,
-  type WorkerPlacement,
 } from "./workers/placement.js";
 import { isWorkerNode } from "./workers/worker-registry.js";
 
@@ -67,7 +67,7 @@ export async function registerWorkMachine(args: {
    * and directory groups matched against worker access (ADR 0167).
    */
   placement?: {
-    workers(): Promise<Map<string, WorkerPlacement>>;
+    workers(): Promise<Map<string, ScheduledPlacement>>;
     owner(
       userId: string,
     ): Promise<{ userId: string; groups: readonly string[] } | undefined>;
@@ -139,7 +139,8 @@ export async function registerWorkMachine(args: {
         authorityId: args.authorityId,
       });
       const workerPlacements =
-        (await args.placement?.workers()) ?? new Map<string, WorkerPlacement>();
+        (await args.placement?.workers()) ??
+        new Map<string, ScheduledPlacement>();
       const owner = ownerUserId
         ? ((await args.placement?.owner(ownerUserId)) ?? {
             userId: ownerUserId,
@@ -163,10 +164,16 @@ export async function registerWorkMachine(args: {
           },
         };
       });
+      // A released machine takes no new work, and keeps serving an
+      // Allocation it already holds (ADR 0205): a lookup naming it as both
+      // the Allocation's binding and its machine.
+      const holdsAllocation = (nodeId: string) =>
+        allocationBindingId === nodeId && workerNodeId === nodeId;
       const eligible = described.filter(
         ({ node, policy, worker, labels }) =>
           node.available &&
-          (!worker || policy) &&
+          (!worker ||
+            (policy && (!policy.released || holdsAllocation(node.id)))) &&
           (!allocationBindingId || allocationBindingId === node.id) &&
           (!workerNodeId || workerNodeId === node.id) &&
           poolMatches(labels, pool) &&

@@ -21,6 +21,7 @@ import { type Kysely, sql } from "kysely";
 import { z } from "zod";
 import {
   accessGroupsOf,
+  type ScheduledPlacement,
   servesNobody,
   servesOneOwner,
   storedPlacement,
@@ -776,8 +777,9 @@ export class WorkWorkerRegistry {
   }
 
   /**
-   * One enrolled worker's placement policy as placement sees it: a
-   * released machine serves nobody (ADR 0205), whatever access it keeps.
+   * One enrolled worker's placement policy, as its connection is checked
+   * against: a released machine takes no new work (ADR 0205), so it serves
+   * nobody whatever access it keeps.
    */
   async placement(nodeId: string): Promise<WorkerPlacement> {
     const row = await this.deps.db
@@ -791,19 +793,25 @@ export class WorkWorkerRegistry {
   }
 
   /**
-   * Placement policy of every worker that takes work, for the scheduler. A
-   * released machine is missing: it serves nobody from the moment it is
-   * released, and a session placed on it re-checks on its next turn.
+   * Placement policy of every enrolled worker, for the scheduler. A
+   * released machine (ADR 0205) is flagged with the access it keeps: it
+   * takes no new work from the moment it is released, and the Allocations
+   * it already holds keep reaching it until their chats give their
+   * workspaces back.
    */
-  async placements(): Promise<Map<string, WorkerPlacement>> {
+  async placements(): Promise<Map<string, ScheduledPlacement>> {
     const rows = await this.deps.db
       .selectFrom("work_workers")
-      .select(["node_id", "labels", "access", "trusted"])
+      .select(["node_id", "labels", "access", "trusted", "released_at"])
       .where("tenant_id", "=", this.deps.tenantId)
       .where("revoked_at", "is", null)
-      .where("released_at", "is", null)
       .execute();
-    return new Map(rows.map((row) => [row.node_id, storedPlacement(row)]));
+    return new Map(
+      rows.map((row) => [
+        row.node_id,
+        { ...storedPlacement(row), released: row.released_at !== null },
+      ]),
+    );
   }
 
   /** Operator: change whose work a worker takes and how it is labeled. */
@@ -833,11 +841,16 @@ export class WorkWorkerRegistry {
     return next;
   }
 
-  /** Directory groups worker access names, for the directory mirror. */
+  /**
+   * Directory groups worker access names, for the directory mirror. A
+   * released machine takes no one's new work, so its groups are not asked.
+   */
   async accessGroups(): Promise<string[]> {
     const groups = new Set<string>();
-    for (const placement of (await this.placements()).values())
+    for (const placement of (await this.placements()).values()) {
+      if (placement.released) continue;
       for (const group of accessGroupsOf(placement.access)) groups.add(group);
+    }
     return [...groups];
   }
 
@@ -1124,7 +1137,9 @@ export class WorkWorkerRegistry {
 
   /**
    * A released pooled machine's retention ended: it leaves its rule, and
-   * stays released (serving nobody) until its reset is done.
+   * stays released (taking no new work) until its reset is done. It keeps
+   * its access until then, so the chats still on it reach their workspaces
+   * and give them back when they idle.
    */
   async beginReset(args: { name: string }): Promise<void> {
     await this.deps.db
@@ -1133,8 +1148,6 @@ export class WorkWorkerRegistry {
         machine_rule: null,
         machine_member: null,
         machine_slot: null,
-        access: JSON.stringify(NOBODY),
-        trusted: false,
       })
       .where("tenant_id", "=", this.deps.tenantId)
       .where("name", "=", args.name)
@@ -1186,11 +1199,16 @@ export class WorkWorkerRegistry {
     });
   }
 
-  /** A reset pooled machine is free in its pool again. */
+  /** A reset pooled machine is free in its pool again, serving nobody. */
   async freePooled(args: { name: string }): Promise<void> {
     await this.deps.db
       .updateTable("work_workers")
-      .set({ released_at: null, retain_days: null })
+      .set({
+        released_at: null,
+        retain_days: null,
+        access: JSON.stringify(NOBODY),
+        trusted: false,
+      })
       .where("tenant_id", "=", this.deps.tenantId)
       .where("name", "=", args.name)
       .where("pool", "=", true)
