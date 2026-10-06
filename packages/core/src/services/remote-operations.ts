@@ -69,7 +69,7 @@ export const RemoteOperationSchema = z.discriminatedUnion("kind", [
       signIns: z
         .array(
           z.object({
-            harness: z.enum(["claude-code", "codex"]),
+            harness: z.literal("codex"),
             member: z.string().min(1),
           }),
         )
@@ -177,6 +177,26 @@ export const RemoteOperationSchema = z.discriminatedUnion("kind", [
   // A pooled machine returns to its pool (ADR 0205): the executor destroys
   // every sandbox it holds and deletes members' volumes and sign-ins.
   z.object({ kind: z.literal("machine.reset") }),
+  // A member signs in to Codex on their machine from the app (ADR 0213):
+  // the executor runs Codex's own device-code login and answers with its
+  // link and one-time code, then with how it ended.
+  z.object({
+    kind: z.literal("machine.codexSignIn"),
+    request: z.discriminatedUnion("action", [
+      z.object({ action: z.literal("begin"), member: z.string().min(1) }),
+      z.object({
+        action: z.literal("status"),
+        member: z.string().min(1),
+        attempt: z.string().uuid(),
+      }),
+      z.object({
+        action: z.literal("cancel"),
+        member: z.string().min(1),
+        attempt: z.string().uuid(),
+      }),
+      z.object({ action: z.literal("signOut"), member: z.string().min(1) }),
+    ]),
+  }),
 ]);
 export type RemoteOperation = z.infer<typeof RemoteOperationSchema>;
 const statusSchema = z.enum([
@@ -410,6 +430,14 @@ export class ExecutorKeyMissingError extends Error {
       `${label} has registered no key to seal its operations to; it receives nothing until it registers one`,
     );
     this.name = "ExecutorKeyMissingError";
+  }
+}
+
+/** The executor is not connected right now: nothing was sent. */
+export class ExecutorNotConnectedError extends Error {
+  constructor(label: string) {
+    super(`${label} is not connected right now`);
+    this.name = "ExecutorNotConnectedError";
   }
 }
 
@@ -652,6 +680,8 @@ function operationTimeoutMs(operation: RemoteOperation): number {
     return IMAGE_BUILD_TIMEOUT_MS;
   // Destroying every sandbox and deleting large volumes.
   if (operation.kind === "machine.reset") return 15 * 60_000;
+  // Codex prints its sign-in code within seconds, or not at all.
+  if (operation.kind === "machine.codexSignIn") return 60_000;
   // A command's own timeout plus a margin, never less than five minutes.
   const commandSeconds =
     operation.kind === "execute" ? (operation.options?.timeout ?? 0) : 0;
@@ -797,6 +827,47 @@ export class RemoteOperationQueue {
           ...(args.timeoutMs !== undefined
             ? { timeoutMs: args.timeoutMs }
             : {}),
+        });
+      },
+    );
+  }
+
+  /**
+   * A member's Codex sign-in on an executor's machine (ADR 0213): begin
+   * Codex's device-code login, read how it went, cancel it, or sign out.
+   * Fails at once while the executor is not connected.
+   */
+  machineCodexSignIn(args: {
+    executor: string;
+    leaseToken: () => Promise<string | undefined>;
+    leaseHeld: (leaseToken: string) => Promise<boolean>;
+    label: string;
+    request: Extract<
+      RemoteOperation,
+      { kind: "machine.codexSignIn" }
+    >["request"];
+    attributes?: SpanAttributes;
+  }): Promise<unknown> {
+    return withSpan(
+      {
+        tracer,
+        name: "remote.machine_codex_sign_in",
+        attributes: {
+          ...args.attributes,
+          "catamorphic.executor": args.executor,
+          "catamorphic.sign_in.action": args.request.action,
+        },
+      },
+      async (span) => {
+        const leaseToken = await args.leaseToken();
+        if (!leaseToken) throw new ExecutorNotConnectedError(args.label);
+        return this.dispatch({
+          executor: args.executor,
+          leaseToken,
+          operation: { kind: "machine.codexSignIn", request: args.request },
+          leaseHeld: args.leaseHeld,
+          label: args.label,
+          span,
         });
       },
     );

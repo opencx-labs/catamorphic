@@ -356,6 +356,7 @@ export {
   type PlacementReason,
   personalCredentialsDecision,
   placementIsolatesOwner,
+  signInPlacementDecision,
 } from "./services/execution-environments-service.js";
 export {
   type ExecutionJob,
@@ -535,6 +536,7 @@ export {
   clientExecutor,
   EXECUTOR_RESTARTED_ERROR,
   ExecutorKeyMissingError,
+  ExecutorNotConnectedError,
   executorKey,
   forgetExecutorKey,
   nodeExecutor,

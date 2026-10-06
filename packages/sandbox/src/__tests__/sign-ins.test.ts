@@ -26,15 +26,14 @@ describe("sign-ins stay on the machine (ADR 0199)", () => {
   });
 
   it("reads back the capability a machine reports", () => {
-    const capability = signInCapability({
-      harness: "claude-code",
-      member: "user:1",
-    });
+    const capability = signInCapability({ harness: "codex", member: "user:1" });
     expect(parseSignInCapability(capability)).toEqual({
-      harness: "claude-code",
+      harness: "codex",
       member: "user:1",
     });
     expect(parseSignInCapability("sign-in:emacs:me")).toBeUndefined();
+    // Claude Code subscriptions never run on a machine (ADR 0213).
+    expect(parseSignInCapability("sign-in:claude-code:me")).toBeUndefined();
   });
 
   it("cloud sandboxes refuse to be handed one", () => {

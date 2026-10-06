@@ -10907,7 +10907,6 @@ function protocolMcpServers(
 }
 
 const SIGN_IN_HARNESS_NAMES: Record<SignInHarness, string> = {
-  "claude-code": "Claude Code",
   codex: "Codex",
 };
 

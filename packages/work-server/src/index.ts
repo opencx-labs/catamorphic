@@ -66,6 +66,7 @@ export {
 } from "./workers/machine-rules.js";
 export {
   listMachineSignIns,
+  MachineHeldError,
   type MachineSignIn,
   signInOnMachine,
   signInRoot,

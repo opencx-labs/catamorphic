@@ -508,11 +508,11 @@ describe("machine classes, pools and retention (ADR 0205)", () => {
     // Their own sign-in, and a sandbox nobody uses, on that machine.
     const home = machineSignInHome({
       root: signInRoot(dir),
-      harness: "claude-code",
+      harness: "codex",
       member: holder.userId,
     });
     fs.mkdirSync(home, { recursive: true });
-    fs.writeFileSync(path.join(home, ".credentials.json"), "{}");
+    fs.writeFileSync(path.join(home, "auth.json"), "{}");
     const offer = (
       await nodes.list({ tenantId: SERVER_TENANT_ID, authorityId })
     ).find((node) => node.id === machine.nodeId)?.remote;

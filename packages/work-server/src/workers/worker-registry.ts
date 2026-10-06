@@ -19,6 +19,7 @@ import {
 } from "@catamorphic/sandbox";
 import { type Kysely, sql } from "kysely";
 import { z } from "zod";
+import type { CodexSignInRequest } from "./codex-sign-ins.js";
 import {
   accessGroupsOf,
   type ScheduledPlacement,
@@ -1178,6 +1179,27 @@ export class WorkWorkerRegistry {
         nodeId: `${WORKER_NODE_PREFIX}${args.name}`,
       }),
     );
+  }
+
+  /**
+   * A member's Codex sign-in on a worker (ADR 0213), through the operation
+   * queue: the worker runs Codex's own device-code login and answers.
+   * Fails at once while the worker is not connected.
+   */
+  async codexSignIn(args: {
+    nodeId: string;
+    request: CodexSignInRequest;
+  }): Promise<unknown> {
+    const { nodeId } = args;
+    return this.queue.machineCodexSignIn({
+      executor: nodeExecutor(nodeId),
+      leaseToken: () => this.deps.nodes.liveToken({ nodeId }),
+      leaseHeld: async (token) =>
+        (await this.deps.nodes.liveToken({ nodeId })) === token,
+      label: "The machine",
+      request: args.request,
+      attributes: { "catamorphic.worker.id": nodeId },
+    });
   }
 
   /**

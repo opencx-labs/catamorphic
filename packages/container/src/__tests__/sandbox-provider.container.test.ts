@@ -506,7 +506,7 @@ describe.skipIf(!enabled)("container sandboxes (ADR 0204)", () => {
       const signInRoot = path.join(root, "sign-ins");
       const home = machineSignInHome({
         root: signInRoot,
-        harness: "claude-code",
+        harness: "codex",
         member: "member-1",
       });
       fs.mkdirSync(home, { recursive: true });
@@ -514,15 +514,15 @@ describe.skipIf(!enabled)("container sandboxes (ADR 0204)", () => {
       const sandboxProvider = provider({ setupCommand: "", signInRoot });
       await expect(
         sandboxProvider.createSandbox({
-          signIns: [{ harness: "codex", member: "member-1" }],
+          signIns: [{ harness: "codex", member: "member-2" }],
         }),
-      ).rejects.toThrow("This machine has no codex sign-in for member-1");
+      ).rejects.toThrow("This machine has no codex sign-in for member-2");
       const id = await created(sandboxProvider, {
-        signIns: [{ harness: "claude-code", member: "member-1" }],
+        signIns: [{ harness: "codex", member: "member-1" }],
       });
       const read = await sandboxProvider.executeCommand(
         id,
-        "cat /workspace/.work-sign-in/claude-code/token.json && echo refreshed > /workspace/.work-sign-in/claude-code/refresh",
+        "cat /workspace/.work-sign-in/codex/token.json && echo refreshed > /workspace/.work-sign-in/codex/refresh",
       );
       expect(read.result).toBe("{}");
       expect(fs.readFileSync(path.join(home, "refresh"), "utf8")).toBe(

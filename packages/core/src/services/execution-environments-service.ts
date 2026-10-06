@@ -144,9 +144,27 @@ export function personalCredentialsDecision(input: {
 }
 
 const HARNESS_NAMES: Record<SignInHarness, string> = {
-  "claude-code": "Claude Code",
   codex: "Codex",
 };
+
+/**
+ * Whether a member's own sign-in may run on one placement (ADR 0213): only
+ * where the host says the machine may hold it, a machine of that member's
+ * alone or a single person's server. A machine signed in to several
+ * people's accounts would show the provider several accounts from one
+ * address, which reads as a shared or resold account however well the
+ * sandboxes are isolated.
+ */
+export function signInPlacementDecision(input: {
+  harness: SignInHarness;
+  runtime: Pick<EnvironmentRuntimeBinding, "ownSignIns">;
+}): { allowed: true } | { allowed: false; reason: string } {
+  if (input.runtime.ownSignIns) return { allowed: true };
+  return {
+    allowed: false,
+    reason: `Your ${HARNESS_NAMES[input.harness]} sign-in runs only on a machine of your own, so the provider never sees several people's accounts from one machine. Ask an administrator for a machine of your own, or run the chat on This machine`,
+  };
+}
 
 /**
  * The policy an Allocation keeps from its admission: binding, requirements,
@@ -700,6 +718,9 @@ export class ExecutionEnvironmentsService {
     if (args.signIn) {
       if (!personal.allowed)
         return { bindingUnavailable: false, reasons: [personal.reason] };
+      const own = signInPlacementDecision({ harness: args.signIn, runtime });
+      if (!own.allowed)
+        return { bindingUnavailable: false, reasons: [own.reason] };
       // An Environment image supplies the CLI; otherwise the machine must.
       if (
         !definition.image &&

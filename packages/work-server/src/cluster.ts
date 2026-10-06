@@ -63,6 +63,11 @@ export async function registerWorkMachine(args: {
    */
   signIns?: () => readonly string[];
   /**
+   * This machine may hold its members' own sign-ins (ADR 0213): a single
+   * person's server whose operator accepted personal credentials on it.
+   */
+  ownSignIns?: boolean;
+  /**
    * Whose work each worker takes, and who owns a piece of work: an email
    * and directory groups matched against worker access (ADR 0167).
    */
@@ -227,10 +232,15 @@ export async function registerWorkMachine(args: {
             ...(projectId ? { projectId } : {}),
           }) === 0,
       );
+      // A member's sign-in only on a machine that holds no one else's
+      // (ADR 0213), or a single person's server that accepted them.
+      const ownSignIns =
+        servesOnlyOwner || (selected.id === lease.id && args.ownSignIns);
       return {
         descriptor: selected.descriptor,
         workerNodeId: selected.id,
         ...(servesOnlyOwner ? { servesOnlyOwner } : {}),
+        ...(ownSignIns ? { ownSignIns: true } : {}),
         // This process's own machine, or a worker any replica reaches
         // through the operation queue (ADR 0192). Another replica's own
         // machine has no provider here.

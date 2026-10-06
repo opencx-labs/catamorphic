@@ -17,28 +17,31 @@ import {
   SERVER_TENANT_ID,
   type WorkServer,
 } from "../server.js";
-import { say, testServerOptions } from "../test-support.js";
+import { oauthAccessToken, say, testServerOptions } from "../test-support.js";
 import { signInOnMachine, signInRoot, signOutOnMachine } from "./sign-ins.js";
 import { startWorkWorker } from "./worker-runtime.js";
 
 /**
- * Members' own sign-ins stay on the machine they were made on (ADR 0199),
- * end to end: a member signs in to Claude Code on workers with the CLI's
- * own login (a stand-in that writes its credentials file), and a chat on
- * the `claude-code` agent runs the CLI (a stand-in speaking the Agent
- * SDK's stdio protocol) in its sandbox there, with `CLAUDE_CONFIG_DIR` at
- * that member's home on the machine and no gateway. The chat places only
- * on a machine that reports its owner's sign-in, its sandbox sees that one
- * home and no other, only the owner's own messages run on it, and nothing
- * of it ever reaches the control plane.
+ * Members' own sign-ins stay on the machine they were made on (ADRs 0199,
+ * 0213), end to end: a member signs in to Codex on workers with Codex's own
+ * login (a stand-in that writes its credentials file), and a chat on the
+ * `codex` agent runs the CLI (a stand-in speaking enough of the app-server
+ * protocol) in its sandbox there, with `CODEX_HOME` at that member's home
+ * on the machine and no gateway. The chat places only on a machine of the
+ * owner's own that reports their sign-in, its sandbox sees that one home
+ * and no other, only the owner's own messages run on it, and nothing of it
+ * ever reaches the control plane. Claude Code subscriptions are not offered
+ * on a server at all.
  */
 
 const SECRET_ENV = `API_TOKEN=personal-${crypto.randomUUID()}\n`;
 const TOKENS = {
-  alice: `sk-ant-oat01-alice-${crypto.randomUUID()}`,
-  aliceSecondBox: `sk-ant-oat01-alice2-${crypto.randomUUID()}`,
-  bob: `sk-ant-oat01-bob-${crypto.randomUUID()}`,
+  alice: `codex-access-alice-${crypto.randomUUID()}`,
+  aliceSecondBox: `codex-access-alice2-${crypto.randomUUID()}`,
+  aliceFromApp: `codex-access-alice-app-${crypto.randomUUID()}`,
+  bob: `codex-access-bob-${crypto.randomUUID()}`,
 };
+const PASSWORD = "correct horse battery staple";
 
 const ENGINEER_ROLE = {
   version: 1,
@@ -103,27 +106,20 @@ function holding(directory: string, text: string): string[] {
 const sha256 = (text: string) =>
   createHash("sha256").update(text).digest("hex");
 const credentials = (token: string) =>
-  JSON.stringify({
-    claudeAiOauth: {
-      accessToken: token,
-      expiresAt: Date.now() + 8 * 60 * 60_000,
-      scopes: ["user:inference"],
-      subscriptionType: "max",
-    },
-  });
+  JSON.stringify({ tokens: { access_token: token } });
 
 /**
- * `work worker sign-in claude-code --member <id>` on a worker: the CLI's
- * own login, here a stand-in that writes the file the real one writes.
+ * `work worker sign-in codex --member <id>` on a worker: Codex's own
+ * login, here a stand-in that writes the file the real one writes.
  */
 function signIn(input: { worker: string; member: string; token: string }) {
   const { exitCode } = signInOnMachine({
     dataDir: workerDirs[input.worker] ?? "",
-    harness: "claude-code",
+    harness: "codex",
     member: input.member,
     spawn: (_command, _args, options) => {
       fs.writeFileSync(
-        path.join(options.env.CLAUDE_CONFIG_DIR ?? "", ".credentials.json"),
+        path.join(options.env.CODEX_HOME ?? "", "auth.json"),
         credentials(input.token),
         { mode: 0o600 },
       );
@@ -131,6 +127,22 @@ function signIn(input: { worker: string; member: string; token: string }) {
     },
   });
   expect(exitCode).toBe(0);
+}
+
+/**
+ * A sign-in someone else left on a machine, as one that changed hands
+ * might hold: a machine never takes a second person's login (ADR 0213).
+ */
+function leftBehind(input: { worker: string; member: string; token: string }) {
+  const home = machineSignInHome({
+    root: signInRoot(workerDirs[input.worker] ?? ""),
+    harness: "codex",
+    member: input.member,
+  });
+  fs.mkdirSync(home, { recursive: true, mode: 0o700 });
+  fs.writeFileSync(path.join(home, "auth.json"), credentials(input.token), {
+    mode: 0o600,
+  });
 }
 
 const operatorSecret = () =>
@@ -188,6 +200,8 @@ async function enroll(input: {
   labels: Record<string, string>;
   access: unknown;
   trusted?: boolean;
+  /** The operator accepted personal credentials on its processes. */
+  accept?: boolean;
   bin: string;
 }) {
   const enrollment = await operator("/_work/operator/workers", {
@@ -208,6 +222,7 @@ async function enroll(input: {
         WORK_SANDBOX: "local-process",
         PATH: `${input.bin}${path.delimiter}${process.env.PATH ?? ""}`,
         WORK_MAX_WORKSPACES: "4",
+        ...(input.accept ? { WORK_PERSONAL_CREDENTIALS: "accept" } : {}),
       }),
     }),
   );
@@ -245,14 +260,14 @@ async function settledTurn(turnId: string) {
 
 beforeAll(async () => {
   root = fs.mkdtempSync(path.join(os.tmpdir(), "work-sign-in-"));
-  // The "image": the workers' sandboxes find `claude` on their PATH.
+  // The "image": the workers' sandboxes find `codex` on their PATH.
   const bin = path.join(root, "bin");
   fs.mkdirSync(bin);
   fs.copyFileSync(
-    path.join(import.meta.dirname, "fake-claude-cli.ts"),
-    path.join(bin, "claude"),
+    path.join(import.meta.dirname, "fake-codex-cli.ts"),
+    path.join(bin, "codex"),
   );
-  fs.chmodSync(path.join(bin, "claude"), 0o755);
+  fs.chmodSync(path.join(bin, "codex"), 0o755);
 
   const port = await freePort();
   base = `http://127.0.0.1:${port}`;
@@ -285,7 +300,7 @@ beforeAll(async () => {
       username: who,
       name: who,
       email: `${who}@example.test`,
-      password: "correct horse battery staple",
+      password: PASSWORD,
       memberships: [{ projectId, roles: ["engineer"] }],
     });
     expect(user.statusCode).toBe(201);
@@ -323,8 +338,9 @@ beforeAll(async () => {
     },
   );
 
-  // Alice's own machines, and a shared one whose people trust each other.
-  // On her first machine Alice signed in, and so did Bob, who sat there.
+  // Alice's own machines, and a shared one whose people trust each other
+  // and whose operator accepted personal credentials there. On her first
+  // machine Alice signed in, and Bob's sign-in from before was left on it.
   for (const [name, labels, access, trusted] of [
     ["alice-box", { pool: "alice" }, { people: ["alice@example.test"] }],
     ["alice-box-2", { pool: "alice2" }, { people: ["alice@example.test"] }],
@@ -334,13 +350,13 @@ beforeAll(async () => {
     if (name !== "alice-box-2")
       signIn({ worker: name, member: users.alice, token: TOKENS.alice });
     if (name === "alice-box")
-      signIn({ worker: name, member: users.bob, token: TOKENS.bob });
+      leftBehind({ worker: name, member: users.bob, token: TOKENS.bob });
     await enroll({
       name,
       labels,
       access,
       bin,
-      ...(trusted ? { trusted } : {}),
+      ...(trusted ? { trusted, accept: true } : {}),
     });
   }
 }, 180_000);
@@ -351,16 +367,16 @@ afterAll(async () => {
   fs.rmSync(root, { recursive: true, force: true });
 }, 120_000);
 
-describe("members' own sign-ins on the machine (ADR 0199)", () => {
+describe("members' own sign-ins on the machine (ADRs 0199, 0213)", () => {
   let sessionId = "";
-  const agentId = () => `project:${projectId}:claude-code`;
+  const agentId = () => `project:${projectId}:codex`;
 
   it("a machine reports who is signed in, never a value", async () => {
     expect(await reported("alice-box")).toEqual(
       expect.arrayContaining([
         "sign-ins",
-        `sign-in:claude-code:${users.alice}`,
-        `sign-in:claude-code:${users.bob}`,
+        `sign-in:codex:${users.alice}`,
+        `sign-in:codex:${users.bob}`,
       ]),
     );
     expect(await reported("alice-box-2")).toContain("sign-ins");
@@ -377,11 +393,17 @@ describe("members' own sign-ins on the machine (ADR 0199)", () => {
       expect(JSON.stringify(nodes)).not.toContain(token);
   });
 
-  it("runs Claude Code on the owner's own sign-in, from that machine's disk", async () => {
+  it("runs Codex on the owner's own sign-in, from that machine's disk", async () => {
     const alice = await memberIdentity("alice");
     const catalog = await sessions().catalog({ identity: alice, projectId });
-    const claude = catalog.items.find((item) => item.id === agentId());
-    expect(claude).toMatchObject({ name: "Claude Code", available: true });
+    const codex = catalog.items.find((item) => item.id === agentId());
+    expect(codex).toMatchObject({ name: "Codex", available: true });
+    // Claude Code subscriptions run only on a member's own computer.
+    expect(
+      catalog.items.some(
+        (item) => item.id === `project:${projectId}:claude-code`,
+      ),
+    ).toBe(false);
     // Her listed files still reach her own chats (ADR 0184).
     await server.catamorphic.core.personalEnvironments.replace({
       identity: alice,
@@ -405,20 +427,17 @@ describe("members' own sign-ins on the machine (ADR 0199)", () => {
       sessionId,
       text: "report",
     });
-    expect(JSON.parse(report.content)).toMatchObject({
-      configDir: true,
-      credentials: true,
+    expect(JSON.parse(report.content)).toEqual({
+      codexHome: true,
+      signedIn: true,
       accessTokenSha256: sha256(TOKENS.alice),
-      refreshToken: false,
-      baseUrl: null,
       apiKey: null,
-      apiKeyHelper: false,
     });
 
     // The sandbox sees her home on this machine and no one else's.
     const home = machineSignInHome({
       root: signInRoot(workerDirs["alice-box"] ?? ""),
-      harness: "claude-code",
+      harness: "codex",
       member: users.alice,
     });
     const seen = await say({
@@ -426,9 +445,9 @@ describe("members' own sign-ins on the machine (ADR 0199)", () => {
       identity: alice,
       projectId,
       sessionId,
-      text: 'run: readlink "$CLAUDE_CONFIG_DIR" && ls -A "$(dirname "$CLAUDE_CONFIG_DIR")" && grep -c API_TOKEN .env',
+      text: 'run: readlink "$CODEX_HOME" && ls -A "$(dirname "$CODEX_HOME")" && grep -c API_TOKEN .env',
     });
-    expect(seen.content).toBe(`Done: ${home}\nclaude-code\n1\n`);
+    expect(seen.content).toBe(`Done: ${home}\ncodex\n1\n`);
     expect(seen.content).not.toContain(users.bob);
 
     // Nothing of a sign-in leaves the machine: not the control plane's
@@ -443,7 +462,7 @@ describe("members' own sign-ins on the machine (ADR 0199)", () => {
     expect(JSON.stringify(forwarded)).not.toContain(TOKENS.alice);
     // The sign-in stays where she made it, unchanged.
     expect(holding(workerDirs["alice-box"] ?? "", TOKENS.alice)).toEqual([
-      path.join(home, ".credentials.json"),
+      path.join(home, "auth.json"),
     ]);
   }, 120_000);
 
@@ -464,7 +483,7 @@ describe("members' own sign-ins on the machine (ADR 0199)", () => {
     await waitFor(
       async () =>
         (await reported("alice-box-2")).includes(
-          `sign-in:claude-code:${users.alice}`,
+          `sign-in:codex:${users.alice}`,
         ),
       "the machine to report the new sign-in",
     );
@@ -488,14 +507,14 @@ describe("members' own sign-ins on the machine (ADR 0199)", () => {
     expect(
       signOutOnMachine({
         dataDir: workerDirs["alice-box-2"] ?? "",
-        harness: "claude-code",
+        harness: "codex",
         member: users.alice,
       }),
     ).toBe(true);
     await waitFor(
       async () =>
         !(await reported("alice-box-2")).includes(
-          `sign-in:claude-code:${users.alice}`,
+          `sign-in:codex:${users.alice}`,
         ),
       "the machine to stop reporting the sign-in",
     );
@@ -509,6 +528,123 @@ describe("members' own sign-ins on the machine (ADR 0199)", () => {
     // Every turn is admitted again: this one finds no machine for her.
     expect(after.turn.status).toBe("failed");
     expect(after.content).toContain("No machine for Environment 'mine2'");
+  }, 120_000);
+
+  it("signs a member in to Codex from the app, on a machine of their own", async () => {
+    const [alice, bob] = await Promise.all(
+      (["alice", "bob"] as const).map((username) =>
+        oauthAccessToken({ app: server.app, username, password: PASSWORD }),
+      ),
+    );
+    const call = (method: "GET" | "POST" | "DELETE", url: string, as = alice) =>
+      server.app.inject({
+        method,
+        url: `/api/work/me/machines${url}`,
+        headers: { authorization: `Bearer ${as}` },
+      });
+    const machines = async (as = alice) =>
+      Object.fromEntries(
+        (await call("GET", "", as))
+          .json()
+          .machines.map((machine: { id: string; codex: string }) => [
+            machine.id,
+            machine.codex,
+          ]),
+      );
+
+    // Her own machines, never the one she shares; Bob has none.
+    expect(await machines()).toEqual({
+      "worker.alice-box": "signed-in",
+      "worker.alice-box-2": "signed-out",
+    });
+    expect(await machines(bob)).toEqual({});
+    expect((await call("GET", "", "not-a-token")).statusCode).toBe(401);
+    expect(
+      (await call("POST", "/worker.shared-box/codex/sign-in")).statusCode,
+    ).toBe(403);
+    expect(
+      (await call("POST", "/worker.alice-box-2/codex/sign-in", bob)).statusCode,
+    ).toBe(403);
+    // A machine holding someone else's sign-in takes no second one.
+    const held = await call("POST", "/worker.alice-box/codex/sign-in");
+    expect(held.statusCode).toBe(409);
+    expect(held.json()).toMatchObject({
+      code: "sign_in_refused",
+      error: expect.stringContaining("Another person's Codex sign-in"),
+    });
+
+    // Her machine runs Codex's device-code login and hands back its code.
+    const started = await call("POST", "/worker.alice-box-2/codex/sign-in");
+    expect(started.statusCode).toBe(201);
+    expect(started.json()).toMatchObject({
+      verificationUrl: "https://auth.openai.com/codex/device",
+      userCode: "TEST-12345",
+    });
+    const attempt = `/worker.alice-box-2/codex/sign-in/${started.json().attempt}`;
+    expect((await call("GET", attempt)).json()).toEqual({ state: "waiting" });
+    expect((await call("GET", attempt, bob)).statusCode).toBe(403);
+    // The code crossed the control plane sealed, never in the clear.
+    const forwarded = await server.catamorphic.core.db
+      .selectFrom("remote_operations")
+      .select(["operation", "response"])
+      .execute();
+    expect(JSON.stringify(forwarded)).not.toContain("TEST-12345");
+
+    // She approves in her browser; the token is issued to that machine.
+    const approve = path.join(
+      signInRoot(workerDirs["alice-box-2"] ?? ""),
+      "approve",
+    );
+    fs.writeFileSync(approve, TOKENS.aliceFromApp);
+    await waitFor(
+      async () => (await call("GET", attempt)).json().state === "signed-in",
+      "the sign-in to complete",
+    );
+    fs.rmSync(approve);
+    await waitFor(
+      async () =>
+        (await reported("alice-box-2")).includes(
+          `sign-in:codex:${users.alice}`,
+        ),
+      "the machine to report the sign-in",
+    );
+    expect((await machines())["worker.alice-box-2"]).toBe("signed-in");
+    expect(holding(root, TOKENS.aliceFromApp)).toEqual([
+      path.join(
+        machineSignInHome({
+          root: signInRoot(workerDirs["alice-box-2"] ?? ""),
+          harness: "codex",
+          member: users.alice,
+        }),
+        "auth.json",
+      ),
+    ]);
+
+    // Her chat there runs on it.
+    const identity = await memberIdentity("alice");
+    const session = await sessions().create(identity, projectId, {
+      agentId: agentId(),
+      environment: "mine2",
+    });
+    const report = await say({
+      sessions: sessions(),
+      identity,
+      projectId,
+      sessionId: session.id,
+      text: "report",
+    });
+    expect(JSON.parse(report.content)).toMatchObject({
+      accessTokenSha256: sha256(TOKENS.aliceFromApp),
+    });
+
+    // And she signs out from the app.
+    expect((await call("DELETE", "/worker.alice-box-2/codex")).json()).toEqual({
+      signedOut: true,
+    });
+    await waitFor(
+      async () => (await machines())["worker.alice-box-2"] === "signed-out",
+      "the machine to stop reporting the sign-in",
+    );
   }, 120_000);
 
   it("runs only the owner's own messages on their sign-in", async () => {
@@ -527,7 +663,7 @@ describe("members' own sign-ins on the machine (ADR 0199)", () => {
     const refused = await settledTurn(delivered.turnId);
     expect(refused.status).toBe("failed");
     expect(JSON.stringify(refused.error)).toContain(
-      "This chat runs on its owner's own Claude Code sign-in, so only they can send it messages.",
+      "This chat runs on its owner's own Codex sign-in, so only they can send it messages.",
     );
 
     // So is an automation's delivery into her chat, even on her behalf.
@@ -591,7 +727,7 @@ describe("members' own sign-ins on the machine (ADR 0199)", () => {
     });
   }, 120_000);
 
-  it("refuses Environments that do not allow it, or share a machine", async () => {
+  it("refuses Environments that do not allow it, or a machine of several people", async () => {
     const alice = await memberIdentity("alice");
     const plain = await sessions()
       .create(alice, projectId, { agentId: agentId(), environment: "plain" })
@@ -603,8 +739,12 @@ describe("members' own sign-ins on the machine (ADR 0199)", () => {
     const shared = await sessions()
       .create(alice, projectId, { agentId: agentId(), environment: "shared" })
       .catch((error: unknown) => error);
+    // Its processes may hold her credentials, but its one address would
+    // show OpenAI several people's accounts.
     expect(shared).toBeInstanceOf(EnvironmentIncompatibleError);
-    expect(String(shared)).toContain("WORK_PERSONAL_CREDENTIALS=accept");
+    expect(String(shared)).toContain(
+      "Your Codex sign-in runs only on a machine of your own",
+    );
   }, 60_000);
 
   it("refuses a project chat a member's sign-in", async () => {

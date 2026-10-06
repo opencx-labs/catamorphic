@@ -154,7 +154,7 @@ describe("LocalProcessSandboxProvider", () => {
   it("links exactly the owner's sign-in home from the machine (ADR 0199)", async () => {
     const signInRoot = path.join(root, "sign-ins");
     const home = (member: string) =>
-      machineSignInHome({ root: signInRoot, harness: "claude-code", member });
+      machineSignInHome({ root: signInRoot, harness: "codex", member });
     for (const member of ["alice", "bob"]) {
       fs.mkdirSync(home(member), { recursive: true });
       fs.writeFileSync(path.join(home(member), "owner"), member);
@@ -164,20 +164,20 @@ describe("LocalProcessSandboxProvider", () => {
       signInRoot,
     });
     const sandbox = await machine.createSandbox({
-      signIns: [{ harness: "claude-code", member: "alice" }],
+      signIns: [{ harness: "codex", member: "alice" }],
     });
     const inside = signInHomePath({
       workspaceRoot: machine.workspaceRoot,
-      harness: "claude-code",
+      harness: "codex",
     });
     const seen = await machine.executeCommand(
       sandbox.id,
-      'cat .work-sign-in/claude-code/owner && echo && ls -A .work-sign-in && printf "%s" "$CATAMORPHIC_SANDBOX_PATHS"',
+      'cat .work-sign-in/codex/owner && echo && ls -A .work-sign-in && printf "%s" "$CATAMORPHIC_SANDBOX_PATHS"',
     );
     expect(seen.exitCode).toBe(0);
     const [owner, listed, paths] = seen.result.split("\n");
     expect(owner).toBe("alice");
-    expect(listed).toBe("claude-code");
+    expect(listed).toBe("codex");
     // Processes learn where their virtual paths really are.
     const mapping = parseSandboxPaths(paths);
     expect(mapping?.virtual).toBe(machine.workspaceRoot);
@@ -192,7 +192,7 @@ describe("LocalProcessSandboxProvider", () => {
     // The CLI refreshing its token writes to the machine's home.
     await machine.executeCommand(
       sandbox.id,
-      "printf refreshed > .work-sign-in/claude-code/token",
+      "printf refreshed > .work-sign-in/codex/token",
     );
     expect(fs.readFileSync(path.join(home("alice"), "token"), "utf8")).toBe(
       "refreshed",
@@ -205,14 +205,14 @@ describe("LocalProcessSandboxProvider", () => {
 
     await expect(
       machine.createSandbox({
-        signIns: [{ harness: "codex", member: "alice" }],
+        signIns: [{ harness: "codex", member: "carol" }],
       }),
-    ).rejects.toThrow("work worker sign-in codex --member alice");
+    ).rejects.toThrow("work worker sign-in codex --member carol");
     await expect(
       new LocalProcessSandboxProvider({
         root: path.join(root, "no-sign-ins"),
       }).createSandbox({
-        signIns: [{ harness: "claude-code", member: "alice" }],
+        signIns: [{ harness: "codex", member: "alice" }],
       }),
     ).rejects.toThrow("keeps no members' sign-ins");
   });

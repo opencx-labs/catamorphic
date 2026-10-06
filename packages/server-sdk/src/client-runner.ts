@@ -138,6 +138,16 @@ export function startClientRunner(args: {
    * supplies it; a runner without it refuses the operation.
    */
   resetMachine?: () => Promise<void>;
+  /**
+   * A member's Codex sign-in on this machine (ADR 0213). Only a worker
+   * supplies it; a runner without it refuses the operation.
+   */
+  codexSignIn?: (
+    request: Extract<
+      RemoteOperation,
+      { kind: "machine.codexSignIn" }
+    >["request"],
+  ) => Promise<unknown>;
 }) {
   const stopping = new AbortController();
   const stopped = () => stopping.signal.aborted;
@@ -261,6 +271,7 @@ export function startClientRunner(args: {
             provider: args.provider,
             operation,
             ...(args.resetMachine ? { resetMachine: args.resetMachine } : {}),
+            ...(args.codexSignIn ? { codexSignIn: args.codexSignIn } : {}),
           })
         : null;
       if (operation.kind === "create") {
@@ -357,10 +368,17 @@ async function executeClientOperation({
   provider,
   operation,
   resetMachine,
+  codexSignIn,
 }: {
   provider: SandboxProvider;
   operation: RemoteOperation;
   resetMachine?: () => Promise<void>;
+  codexSignIn?: (
+    request: Extract<
+      RemoteOperation,
+      { kind: "machine.codexSignIn" }
+    >["request"],
+  ) => Promise<unknown>;
 }): Promise<unknown> {
   switch (operation.kind) {
     case "create":
@@ -425,6 +443,10 @@ async function executeClientOperation({
       if (!resetMachine) throw new Error("This runner does not reset machines");
       await resetMachine();
       return null;
+    case "machine.codexSignIn":
+      if (!codexSignIn)
+        throw new Error("This runner does not sign members in to Codex");
+      return codexSignIn(operation.request);
   }
 }
 

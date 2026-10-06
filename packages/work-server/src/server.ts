@@ -27,7 +27,7 @@ import {
   type HetznerCloudClientOptions,
   HetznerCloudMachines,
 } from "@catamorphic/hetzner";
-import { gatewayHostOf } from "@catamorphic/sandbox";
+import { gatewayHostOf, MACHINE_CAPABILITIES } from "@catamorphic/sandbox";
 import {
   aiToolCall,
   aiToolKind,
@@ -116,6 +116,7 @@ import {
 import { registerShareRoutes } from "./shares/share-routes.js";
 import { shareTools } from "./shares/share-tools.js";
 import { WorkSharesService } from "./shares/shares-service.js";
+import { CodexSignIns } from "./workers/codex-sign-ins.js";
 import {
   installTarget,
   registerInstallScriptRoute,
@@ -128,6 +129,8 @@ import {
   type MachineProvisioner,
   MachineReconciler,
 } from "./workers/machine-rules.js";
+import { registerMemberMachineRoutes } from "./workers/member-machine-routes.js";
+import { MemberMachines } from "./workers/member-machines.js";
 import { signInCapabilities } from "./workers/sign-ins.js";
 import { startVolumePruning } from "./workers/volume-pruning.js";
 import { WorkWorkerRegistry } from "./workers/worker-registry.js";
@@ -494,6 +497,13 @@ async function createWorkServerInner(
     authorityId: hostId,
     log,
   });
+  // A single person's server whose operator accepted personal credentials
+  // holds its members' own sign-ins (ADR 0213); a replica never does.
+  const singleServerSignIns =
+    !disposable &&
+    execution.machineCapabilities.includes(
+      MACHINE_CAPABILITIES.personalCredentials,
+    );
   const machine = await registerWorkMachine({
     db: ownDb,
     tenantId: SERVER_TENANT_ID,
@@ -509,6 +519,7 @@ async function createWorkServerInner(
     capabilities: execution.machineCapabilities,
     backend: execution.backend,
     signIns: () => signInCapabilities(execution.signInRoot),
+    ownSignIns: singleServerSignIns,
     sandboxProvider,
     placement: {
       workers: () => workers.placements(),
@@ -1166,6 +1177,32 @@ async function createWorkServerInner(
     app,
     ...administratorAccess,
     ...machineManagement,
+  });
+  // Members sign in to Codex on machines of their own from the app (ADR
+  // 0213). A single server whose operator accepted personal credentials
+  // is one of them for the first member to sign in there; a replica's own
+  // machine never is.
+  const ownSignIns = singleServerSignIns
+    ? new CodexSignIns({
+        signInRoot: execution.signInRoot,
+        dataDir: data,
+        env: { ...process.env, PATH: config.execution.path },
+      })
+    : undefined;
+  if (ownSignIns) disposers.push(async () => ownSignIns.stop());
+  const memberNodes = new WorkerNodesService(ownDb);
+  registerMemberMachineRoutes(app, {
+    caller: administratorAccess.caller,
+    machines: new MemberMachines({
+      nodes: () =>
+        memberNodes.list({ tenantId: SERVER_TENANT_ID, authorityId: hostId }),
+      placements: () => workers.placements(),
+      owner: (userId) => placementOwner(userId),
+      ...(ownSignIns
+        ? { ownMachine: { nodeId: machine.lease.id, signIns: ownSignIns } }
+        : {}),
+      worker: (args) => workers.codexSignIn(args),
+    }),
   });
   registerWorkAdmissionRoutes(app, {
     publicBases: config.publicBases,

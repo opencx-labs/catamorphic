@@ -152,13 +152,14 @@ export interface SandboxVolumeProvider {
   removeAll(args?: { destroySandboxes?: boolean }): Promise<void>;
 }
 
-/** A harness a member signs in to with its own flow (ADR 0199). */
-export type SignInHarness = "claude-code" | "codex";
+/**
+ * A harness a member signs in to on a machine with its own flow (ADR 0199).
+ * Only Codex: Claude Code subscriptions run only on the member's own
+ * computer (ADR 0213).
+ */
+export type SignInHarness = "codex";
 
-export const SIGN_IN_HARNESSES: readonly SignInHarness[] = [
-  "claude-code",
-  "codex",
-];
+export const SIGN_IN_HARNESSES: readonly SignInHarness[] = ["codex"];
 
 /** Where a sandbox sees its owner's sign-in for a harness (ADR 0199). */
 export function signInHomePath(input: {

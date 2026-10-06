@@ -59,6 +59,13 @@ export interface EnvironmentRuntimeBinding {
    * credentials (ADR 0184) and the Environment's secrets (ADR 0206).
    */
   servesOnlyOwner?: boolean;
+  /**
+   * The host lets this placement hold its owner's own harness sign-in (ADR
+   * 0213): a machine of theirs alone, or a single person's server whose
+   * operator accepted personal credentials on it. Never a machine several
+   * people's sign-ins would share.
+   */
+  ownSignIns?: boolean;
 }
 
 /**
