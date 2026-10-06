@@ -279,6 +279,9 @@ const machineProbes: ExecutionProbes = {
     try {
       return await probeContainerSupport(
         new DockerClient(dockerEndpoint(dockerHost)),
+        // A daemon starting beside this machine's worker (a reboot) gets
+        // a minute before the machine settles for a lesser backend.
+        { waitMs: 60_000 },
       );
     } catch (error) {
       return {

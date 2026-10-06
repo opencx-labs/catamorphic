@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -59,6 +61,49 @@ describe("runsc runtime arguments", () => {
     expect(
       await probeContainerSupport(
         new DockerClient({ host: "127.0.0.1", port: 1 }),
+      ),
+    ).toEqual({
+      ok: false,
+      reason: "No Docker daemon answers at tcp://127.0.0.1:1",
+    });
+  });
+});
+
+describe("a daemon still starting", () => {
+  it("is waited for when its socket is there, then answers", async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "work-docker-"));
+    const socketPath = path.join(directory, "docker.sock");
+    // The socket's file is there before anything listens on it.
+    fs.writeFileSync(socketPath, "");
+    const daemon = http.createServer((request, response) => {
+      response.setHeader("content-type", "application/json");
+      response.end(
+        request.url === "/_ping" ? "OK" : JSON.stringify({ Runtimes: {} }),
+      );
+    });
+    const late = setTimeout(() => {
+      fs.rmSync(socketPath);
+      daemon.listen(socketPath);
+    }, 300);
+    try {
+      expect(
+        await probeContainerSupport(new DockerClient({ socketPath }), {
+          waitMs: 10_000,
+          intervalMs: 50,
+        }),
+      ).toEqual({ ok: true, runc: {} });
+    } finally {
+      clearTimeout(late);
+      daemon.close();
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("gives up after its wait", async () => {
+    expect(
+      await probeContainerSupport(
+        new DockerClient({ host: "127.0.0.1", port: 1 }),
+        { waitMs: 200, intervalMs: 50 },
       ),
     ).toEqual({
       ok: false,

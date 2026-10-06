@@ -52,6 +52,17 @@ export type ContainerSupport =
  */
 export async function probeContainerSupport(
   docker: DockerClient,
+  options?: {
+    /**
+     * How long a daemon whose socket exists may take to answer: a machine
+     * that just booted starts its worker beside a daemon still starting,
+     * and a machine meant for containers must not fall back to plain
+     * processes for that. Default none.
+     */
+    waitMs?: number;
+    /** Between attempts; one second by default. */
+    intervalMs?: number;
+  },
 ): Promise<ContainerSupport> {
   if ("socketPath" in docker.endpoint) {
     const socketPath = docker.endpoint.socketPath;
@@ -69,11 +80,17 @@ export async function probeContainerSupport(
       };
     }
   }
-  if (!(await docker.ping()))
-    return {
-      ok: false,
-      reason: `No Docker daemon answers at ${describeEndpoint(docker)}`,
-    };
+  const deadline = Date.now() + (options?.waitMs ?? 0);
+  while (!(await docker.ping())) {
+    if (Date.now() >= deadline)
+      return {
+        ok: false,
+        reason: `No Docker daemon answers at ${describeEndpoint(docker)}`,
+      };
+    await new Promise((resolve) =>
+      setTimeout(resolve, options?.intervalMs ?? 1_000),
+    );
+  }
   const info = await docker.info();
   return { ok: true, ...runtimesFromInfo(info) };
 }
