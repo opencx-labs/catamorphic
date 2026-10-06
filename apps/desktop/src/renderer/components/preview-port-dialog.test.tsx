@@ -89,6 +89,11 @@ describe("Open preview (ADR 0209)", () => {
     expect(document.body.textContent).toContain(
       "A port is a number from 1 to 65535.",
     );
+    // The hint describes the field to assistive technology.
+    const hintId = portInput()?.getAttribute("aria-describedby");
+    expect(hintId ? document.getElementById(hintId)?.textContent : null).toBe(
+      "A port is a number from 1 to 65535.",
+    );
     act(() => openButton()?.click());
     expect(onOpen).not.toHaveBeenCalled();
   });
