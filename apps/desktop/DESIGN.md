@@ -1674,3 +1674,13 @@ Agents now see the browser and their subagents as direct tools, reach the
 person's login-shell PATH, and can upload, download and inspect a page's
 console, network and JavaScript. A subagent's result arrives in its parent's
 turn, labelled with the subagent's name. See ADR 0202.
+
+### 2026-10-06: A click on the page folds the chat
+
+A floating chat stayed open over a page the person had clicked while the
+agent worked. A page runs in its own process, so the window saw no press,
+and focus moving into the page did not count without one (the 2026-09-20
+rule). The page now reports its own presses (trusted ones only; a page's
+scripts cannot fold the chat), and `lib/app-focus` counts each as the
+person's input and as a press outside everything the app draws, so the
+chat lurks as it does after a click on any other part of the workspace.

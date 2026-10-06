@@ -3,7 +3,9 @@ import { expect, it } from "vitest";
 import {
   appIsMovingFocus,
   moveFocusAsApp,
+  notePagePress,
   notePersonInput,
+  onPagePress,
   personInputCount,
   personMovedOn,
 } from "./app-focus.js";
@@ -39,4 +41,19 @@ it("treats the person as moved on only once they acted and focus is somewhere", 
   composer.focus();
   expect(personMovedOn(asked)).toBe(true);
   composer.remove();
+});
+
+it("counts a press inside a page as the person's input and tells who listens", () => {
+  const before = personInputCount();
+  let heard = 0;
+  const stop = onPagePress(() => {
+    heard += 1;
+  });
+  notePagePress();
+  expect(personInputCount()).toBe(before + 1);
+  expect(heard).toBe(1);
+  stop();
+  notePagePress();
+  expect(heard).toBe(1);
+  expect(personInputCount()).toBe(before + 2);
 });

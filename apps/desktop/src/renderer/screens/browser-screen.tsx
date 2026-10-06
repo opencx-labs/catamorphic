@@ -40,6 +40,7 @@ import {
 import { ShortcutHint } from "../components/shortcut-hint.js";
 import {
   moveFocusAsApp,
+  notePagePress,
   personInputCount,
   personMovedOn,
 } from "../lib/app-focus.js";
@@ -599,6 +600,10 @@ export function BrowserScreen({
           return;
         }
         if (autofillMessageRef.current(message.channel, message.args)) return;
+        if (message.channel === "catamorphic:page-press") {
+          notePagePress();
+          return;
+        }
         if (message.channel === "catamorphic:dismiss-floating") {
           dismissFloatingRef.current?.();
           return;

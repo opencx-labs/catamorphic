@@ -9,7 +9,10 @@
 let moving = 0;
 let inputs = 0;
 
-/** A key or press from the person; keys inside a page arrive from main. */
+/**
+ * A key or press from the person; keys inside a page arrive from main,
+ * presses inside a page from the page (`notePagePress`).
+ */
 export function notePersonInput(): void {
   inputs += 1;
 }
@@ -22,6 +25,26 @@ if (typeof window !== "undefined") {
     window.removeEventListener("keydown", notePersonInput, true);
     window.removeEventListener("pointerdown", notePersonInput, true);
   });
+}
+
+const pagePressListeners = new Set<() => void>();
+
+/**
+ * A press inside a page. Pages run in their own process, so no window
+ * listener sees it; the page reports it (preload/webview.ts). It is the
+ * person's input and a press outside everything the app draws.
+ */
+export function notePagePress(): void {
+  notePersonInput();
+  for (const listener of pagePressListeners) listener();
+}
+
+/** Presses inside pages, as they are reported. Returns the unsubscribe. */
+export function onPagePress(listener: () => void): () => void {
+  pagePressListeners.add(listener);
+  return () => {
+    pagePressListeners.delete(listener);
+  };
 }
 
 /** Run `move` as the app's own focus move. */
