@@ -91,6 +91,7 @@ describe("PGlite migrations", () => {
       "052_session_terminals.sql",
       "053_directory_events.sql",
       "054_directory_announcements.sql",
+      "055_session_secrets_held.sql",
     ]);
 
     const rerun = await migrateToLatest({ db });

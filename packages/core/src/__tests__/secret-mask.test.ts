@@ -18,7 +18,7 @@ import {
   type QueryResult,
 } from "kysely";
 import { describe, expect, it } from "vitest";
-import { SecretMask } from "../services/sessions/secret-mask.js";
+import { SecretMask, secretForms } from "../services/sessions/secret-mask.js";
 import {
   derivedId,
   ingestHarnessEvents,
@@ -56,6 +56,31 @@ describe("secret masks", () => {
         "first-value other-value",
       ),
     ).toBe("[secret ONE] [secret ONE]");
+  });
+
+  it("masks the forms output carries a value in", () => {
+    const quoted = 'pa"ss\\word-0123';
+    const pem = "-----BEGIN KEY-----\nMIIEowIBAAKCAQEA\n-----END KEY-----";
+    const mask = new SecretMask({ QUOTED: quoted, PEM: pem, API_KEY: KEY });
+    // Inside a JSON string, as a tool's JSON result holds it.
+    expect(mask.text(JSON.stringify({ token: quoted }))).toBe(
+      '{"token":"[secret QUOTED]"}',
+    );
+    // Base64 (with and without padding, URL-safe) and URL-encoded.
+    const base64 = Buffer.from(KEY).toString("base64");
+    expect(mask.text(`a ${base64} b`)).toBe("a [secret API_KEY] b");
+    expect(mask.text(base64.replace(/=+$/, ""))).toBe("[secret API_KEY]");
+    expect(mask.text(Buffer.from(quoted).toString("base64url"))).toBe(
+      "[secret QUOTED]",
+    );
+    expect(mask.text(`?t=${encodeURIComponent(quoted)}`)).toBe(
+      "?t=[secret QUOTED]",
+    );
+    // A multi-line value with CRLF endings, and any one of its lines.
+    expect(mask.text(pem.replaceAll("\n", "\r\n"))).toBe("[secret PEM]");
+    expect(mask.text("line: MIIEowIBAAKCAQEA")).toBe("line: [secret PEM]");
+    expect(mask.text(JSON.stringify(pem))).toBe('"[secret PEM]"');
+    expect(secretForms("short")).toEqual([]);
   });
 
   it("holds back a split value until its stream says what it is", () => {

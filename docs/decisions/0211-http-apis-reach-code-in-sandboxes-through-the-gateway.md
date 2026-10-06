@@ -25,7 +25,9 @@ the alias must be bound in the session's Environment (ADR 0172), used by the
 chat's agent (its definition's `connections`, as for every alias an agent
 reaches) and granted by the member's role, to a connection whose provider
 declares `http: { baseUrl, paths?, headers }`; the
-path stays below the base URL (no dot segments or encoded slashes) and inside
+path stays below the base URL (no dot segments, including `..;` and
+`%2e%2e%3b` forms that servlet containers resolve after dropping path
+parameters, and no encoded slashes) and inside
 `paths` when set; the binding's capabilities are the methods (`get` also
 allows HEAD; a binding without `capabilities` keeps the connection's own); a
 contained agent's session sends only methods the provider marks read-only

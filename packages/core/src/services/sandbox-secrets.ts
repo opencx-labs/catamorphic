@@ -8,6 +8,7 @@ import {
   SESSION_DIRECTORY,
 } from "./sandbox-git.js";
 import { type SandboxSecrets, secretFingerprint } from "./secrets-service.js";
+import { SECRET_MASK_MIN_LENGTH } from "./sessions/secret-mask.js";
 
 /*
  * An Environment's secrets inside one sandbox (ADR 0205): one file of
@@ -89,9 +90,11 @@ async function run(input: {
 
 /**
  * Write the secrets file (mode 0600, its folder 0700), replacing what was
- * there. Returns whether its content changed since the last delivery, by
- * a fingerprint kept beside it, so unchanged deliveries are not audited
- * again.
+ * there. The folder is made the sandbox user's alone before anything is
+ * uploaded into it, so the value is never readable by anyone else, even
+ * on its way in. Returns whether its content changed since the last
+ * delivery, by a fingerprint kept beside it, so unchanged deliveries are
+ * not audited again.
  */
 export async function deliverSandboxSecrets(input: {
   provider: SandboxProvider;
@@ -102,6 +105,20 @@ export async function deliverSandboxSecrets(input: {
 }): Promise<{ changed: boolean }> {
   const content = formatEnvFile(input.variables);
   const fingerprint = secretFingerprint(content);
+  await run({
+    provider: input.provider,
+    sandboxId: input.sandboxId,
+    projectDir: input.projectDir,
+    what: "prepare the sandbox for this project's secrets",
+    command: [
+      "set -e",
+      "umask 077",
+      `mkdir -p ${DIRECTORY}`,
+      `chmod 700 ${DIRECTORY}`,
+      `rm -rf ${DIRECTORY}/incoming`,
+      `mkdir -m 700 ${DIRECTORY}/incoming`,
+    ].join("\n"),
+  });
   await input.provider.uploadFiles(
     input.sandboxId,
     { "secrets.b64": Buffer.from(content).toString("base64") },
@@ -115,7 +132,6 @@ export async function deliverSandboxSecrets(input: {
     command: [
       "set -e",
       "umask 077",
-      `chmod 700 ${DIRECTORY}`,
       `previous=$(cat ${DIRECTORY}/secrets.sha256 2>/dev/null || true)`,
       `rm -f ${DIRECTORY}/secrets.sh.new`,
       `base64 -d < ${DIRECTORY}/incoming/secrets.b64 > ${DIRECTORY}/secrets.sh.new`,
@@ -144,6 +160,8 @@ export function sandboxSecretsNote(input: {
   /** The chat's owner, or null for a project chat. */
   owner: string | null;
   missing: SandboxSecrets["missing"];
+  /** Set, but too short for Work to hide where the chat is recorded. */
+  unmasked?: readonly string[];
 }): string | undefined {
   const named = (reason: SandboxSecrets["missing"][number]["reason"]) =>
     input.missing.filter((gap) => gap.reason === reason).map((gap) => gap.name);
@@ -173,6 +191,13 @@ export function sandboxSecretsNote(input: {
     notes.push(
       `${listed(reserved)} would replace ${reserved.length === 1 ? "a variable" : "variables"} the workspace's shells depend on, so Work did not set ${reserved.length === 1 ? "it" : "them"}. Rename the secret in .work/project.json.`,
     );
+  const unmasked = input.unmasked ?? [];
+  if (unmasked.length > 0) {
+    const one = unmasked.length === 1;
+    notes.push(
+      `${listed(unmasked)} ${one ? "is" : "are"} set, but ${one ? "its value is" : "their values are"} shorter than ${SECRET_MASK_MIN_LENGTH} characters, so Work cannot hide ${one ? "it" : "them"} where this chat is recorded. Never print, echo or write ${one ? "it" : "them"} anywhere.`,
+    );
+  }
   return notes.length > 0 ? notes.join("\n\n") : undefined;
 }
 

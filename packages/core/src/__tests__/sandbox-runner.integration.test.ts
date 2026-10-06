@@ -321,7 +321,7 @@ describe("sandbox runner", () => {
             kind: "start",
             attempt: {
               ...attempt(
-                "[[env CLICKHOUSE_API_KEY]] [[env BASH_ENV]] [[env WORK_HTTP_LOGS]] [[env WORK_HTTP_LOGS_GRANT_FILE]]",
+                "[[env CLICKHOUSE_API_KEY]] [[env BASH_ENV]] [[env WORK_HTTP_LOGS]] [[env WORK_HTTP_LOGS_GRANT_FILE]] [[env DATA_PATH]]",
               ),
               envFiles,
             },
@@ -342,7 +342,10 @@ describe("sandbox runner", () => {
     };
     await deliverSandboxSecrets({
       ...target,
-      variables: { CLICKHOUSE_API_KEY: "ch-key-'one'" },
+      variables: {
+        CLICKHOUSE_API_KEY: "ch-key-'one'",
+        DATA_PATH: "/workspace/project/data",
+      },
     });
     await configureSandboxGateway({
       provider,
@@ -356,6 +359,9 @@ describe("sandbox runner", () => {
     });
     const first = await run();
     expect(first).toContain("CLICKHOUSE_API_KEY=ch-key-'one'");
+    // A value is passed as the secret holds it, even one that looks like
+    // a path the provider maps.
+    expect(first).toContain("DATA_PATH=/workspace/project/data");
     // The provider's virtual path, mapped where this sandbox really is.
     expect(first).toMatch(/BASH_ENV=\/.+\/\.work-session\/env\/secrets\.sh/);
     expect(first).not.toContain(`BASH_ENV=${envFile}`);

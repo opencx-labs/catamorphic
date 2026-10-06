@@ -83,8 +83,8 @@ export interface RunnerState {
   applied?: Record<string, true>;
   /** Runs on its owner's sign-in or personal files (see {@link PreparedAttempt}). */
   ownerOnly?: boolean;
-  /** Its sandbox received the Environment's secrets (ADR 0205). */
-  secrets?: true;
+  /** Why only the owner's input may join it (see {@link PreparedAttempt}). */
+  ownerOnlyBecause?: OwnerOnlyCause;
   /** Steered inputs the harness could not take; the attempt restarts with them. */
   restartWith: string[];
   /** Steered inputs the harness took in (an accepted one never taken is queued again). */
@@ -124,11 +124,19 @@ export interface PreparedAttempt {
    */
   ownerOnly?: boolean;
   /**
-   * The secrets the attempt's sandbox received, by name (ADR 0205): masked
-   * wherever the attempt's output is recorded.
+   * Why: the owner's own harness sign-in (ADR 0199), or values that are
+   * theirs in the workspace (personal files, secrets; ADRs 0184, 0205).
    */
-  secrets?: Readonly<Record<string, string>>;
+  ownerOnlyBecause?: OwnerOnlyCause;
+  /**
+   * Every secret value the chat could repeat, by name (ADR 0205): masked
+   * wherever the attempt's output is recorded, whoever wrote its input.
+   */
+  secretValues?: Readonly<Record<string, readonly string[]>>;
 }
+
+/** What makes an attempt its owner's alone. */
+export type OwnerOnlyCause = "sign-in" | "credentials";
 
 /** What a settled turn's finalization produced. */
 export interface FinalizedTurn {
@@ -717,7 +725,7 @@ export class TurnEngine {
     };
     const channel = await prepared.launch();
     local.channel = channel;
-    local.mask = new SecretMask(prepared.secrets ?? {});
+    local.mask = new SecretMask(prepared.secretValues ?? {});
     const runner: RunnerState = {
       location: channel.location,
       cursor: 0,
@@ -729,8 +737,8 @@ export class TurnEngine {
       consumed: steered,
       interruptSentAt: null,
       ...(prepared.ownerOnly ? { ownerOnly: true } : {}),
-      ...(Object.keys(prepared.secrets ?? {}).length > 0
-        ? { secrets: true }
+      ...(prepared.ownerOnly && prepared.ownerOnlyBecause
+        ? { ownerOnlyBecause: prepared.ownerOnlyBecause }
         : {}),
     };
     const running: Turn = {
@@ -1038,9 +1046,9 @@ export class TurnEngine {
           reason: "The machine running this turn stopped before it finished.",
         };
       local.channel = channel;
-      // Taken over: what the sandbox may hold is masked as the attempt's
+      // Taken over: every value the chat could repeat is masked, as its
       // preparer masked it (ADR 0205).
-      if (runner.secrets && !local.mask)
+      if (!local.mask)
         local.mask = new SecretMask(
           (await this.deps.host.secretValues?.({
             identity: ctx.identity,

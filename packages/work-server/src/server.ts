@@ -67,6 +67,7 @@ import { registerWorkAuthRoutes } from "./auth/fastify-auth.js";
 import {
   createWorkAuth,
   loadWorkAuthSecret,
+  verifiedUserIdForEmail,
   type WorkAuth,
 } from "./auth/work-auth.js";
 import { workMark } from "./brand.js";
@@ -564,8 +565,9 @@ async function createWorkServerInner(
           })
         : null,
     // Workflows name members by the email they sign in with (ADR 0209).
-    memberIdForEmail: async ({ email }) =>
-      (await workAuth.findUserByEmail({ email }))?.id ?? null,
+    // Only a verified email names someone (ADR 0209).
+    memberIdForEmail: ({ email }) =>
+      verifiedUserIdForEmail({ auth: workAuth, email }),
     workerNode: machine.lease,
     clientExecution: true,
     database: databaseConfig,

@@ -19,6 +19,7 @@ import {
   sandboxSecretsNote,
   sandboxSecretsPrelude,
 } from "../services/sandbox-secrets.js";
+import { reservedSandboxVariable } from "../services/secrets-service.js";
 
 const execute = promisify(execFile);
 
@@ -132,7 +133,52 @@ describe("what the agent is told about secrets it did not get", () => {
       sandboxSecretsNote({ environment: "dev", owner: null, missing: [] }),
     ).toBeUndefined();
   });
+
+  it("says which values are too short to hide in the transcript", () => {
+    const note = sandboxSecretsNote({
+      environment: "dev",
+      owner: "ada",
+      missing: [],
+      unmasked: ["PIN"],
+    });
+    expect(note).toContain("PIN is set, but its value is shorter than 6");
+    expect(note).toContain("Never print, echo or write it anywhere");
+  });
+
+  it("never sets what shells, Git, Node, TLS or the harnesses rely on", () => {
+    for (const name of [
+      "PATH",
+      "NODE_OPTIONS",
+      "GIT_CONFIG_GLOBAL",
+      "GIT_CONFIG_COUNT",
+      "GIT_CONFIG_KEY_0",
+      "GIT_CONFIG_VALUE_12",
+      "GIT_SSH_COMMAND",
+      "GIT_ASKPASS",
+      "ALL_PROXY",
+      "NODE_EXTRA_CA_CERTS",
+      "SSL_CERT_FILE",
+      "SSL_CERT_DIR",
+      "SHELLOPTS",
+      "BASHOPTS",
+      "PS4",
+      "PROMPT_COMMAND",
+      "TMPDIR",
+      "LD_PRELOAD",
+      "DYLD_INSERT_LIBRARIES",
+      "ANTHROPIC_BASE_URL",
+      "OPENAI_BASE_URL",
+      "CLAUDE_CONFIG_DIR",
+      "CODEX_HOME",
+    ])
+      expect(reservedSandboxVariable(name), name).toBe(true);
+    for (const name of ["CLICKHOUSE_API_KEY", "GIT_TOKEN", "NODE_ENV"])
+      expect(reservedSandboxVariable(name), name).toBe(false);
+  });
 });
+
+/** Where each upload landed, and its folder's mode as it did. */
+const uploads: Array<{ path: string; parentMode: number | null }> = [];
 
 /** A sandbox that is a directory on this machine, like local-process. */
 function directorySandbox(root: string): SandboxProvider {
@@ -172,6 +218,12 @@ function directorySandbox(root: string): SandboxProvider {
     async uploadFiles(_id, files, basePath) {
       for (const [name, content] of Object.entries(files)) {
         const target = path.join(real(basePath), name);
+        // What anyone else in the sandbox could read while it lands.
+        const parent = await fs
+          .stat(path.dirname(target))
+          .then((stat) => stat.mode & 0o777)
+          .catch(() => null);
+        uploads.push({ path: target, parentMode: parent });
         await fs.mkdir(path.dirname(target), { recursive: true });
         await fs.writeFile(target, content);
       }
@@ -212,6 +264,9 @@ describe("the secrets file in a sandbox", () => {
       variables: { CLICKHOUSE_API_KEY: "ch-'key'\n2", SENTRY_DSN: "https://x" },
     });
     expect(first.changed).toBe(true);
+    // The value travelled into a folder only the sandbox user can open.
+    expect(uploads.at(-1)?.path).toContain("/env/incoming/");
+    expect(uploads.at(-1)?.parentMode).toBe(0o700);
     expect(sandboxSecretsFile({ workspaceRoot: "/workspace" })).toBe(
       "/workspace/.work-session/env/secrets.sh",
     );
