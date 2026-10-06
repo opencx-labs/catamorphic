@@ -97,6 +97,10 @@ chrome.webNavigation.onCompleted.addListener((details) => {
 chrome.commands.onCommand.addListener((name, tab) => log({ event: "command", name, tabId: tab && tab.id }));
 chrome.debugger.onDetach.addListener((source, reason) => log({ event: "detached", tabId: source.tabId, reason }));
 chrome.runtime.onMessage.addListener((message, sender, reply) => {
+  if (message.type === "who") {
+    reply({ tab: sender.tab ? sender.tab.id : null, url: sender.url });
+    return;
+  }
   if (message.type !== "count") return;
   chrome.action.setBadgeText({ text: String(message.count), tabId: sender.tab.id });
   chrome.action.setBadgeBackgroundColor({ color: "#d63c0c" });
@@ -440,6 +444,14 @@ describe("an unpacked extension", () => {
         label: "storage.sync round trip",
       },
     );
+    // To its worker the popup is its own page, not a tab, as in Chrome
+    // (Electron names a tab for any page in a webview); a content script
+    // still comes from its tab (the badge above).
+    const sender = await popup.eval<{ tab: number | null; url: string }>(
+      "chrome.runtime.sendMessage({ type: 'who' })",
+    );
+    expect(sender.tab).toBeNull();
+    expect(sender.url).toContain("/popup.html");
     // It sized itself to its page (240px body + margins).
     const width = await app.eval<number>(
       `document.querySelector('[data-testid="extension-popup"]').getBoundingClientRect().width`,

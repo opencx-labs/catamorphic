@@ -114,6 +114,14 @@ store check runs on its own), and `fontSettings` reports default fonts.
   once per version, the first time it listens, and `onStartup` once per run
   for one installed before. Extensions set themselves up there: ChatGPT
   names its browser instance, and without it Codex has no browser to drive.
+- **Senders.** Electron names a `tab` in the sender of a message from any
+  page in a webview, and Work's popups and side panels are webviews. Chrome
+  never counts them as tabs, and extensions tell their own pages from
+  content scripts that way (Claude refuses its side panel otherwise). The
+  session preload drops `sender.tab` from `runtime.onMessage` and
+  `onConnect` when the sender is one of the extension's own pages that is
+  not a tab (main answers synchronously; never leave that question
+  unanswered, the asker blocks).
 - **Storage.** `storage.local` and `session` are Electron's, `sync` is
   Work's, and `managed` is an empty area (no administrator policy).
 
@@ -128,10 +136,12 @@ both work in Work as in Chrome, through native messaging:
   extension's debugger. Codex must have its Chrome plugin enabled; an
   update of the plugin while a host runs needs the side panel (or Work)
   reopened.
-- **Claude**: the Claude app registers `com.anthropic.claude_browser_extension`
-  for Chrome. The extension signs in to claude.ai in a tab (its redirect to
-  `chrome-extension://…/oauth_callback.html` is caught by its
-  `webNavigation.onBeforeNavigate` listener), then Claude can drive the tab.
+- **Claude**: the extension signs in to claude.ai in a tab (the page hands
+  the result back through `chrome.runtime.sendMessage`, which Electron
+  allows for its `externally_connectable` origins). Its side panel then
+  drives the tab with the debugger, after the person approves its plan.
+  The Claude app also registers `com.anthropic.claude_browser_extension`
+  for Chrome, which Work reads.
 
 Neither reads anything from Chrome itself: sign-ins happen in the Work
 profile, and hosts run as Chrome would run them.

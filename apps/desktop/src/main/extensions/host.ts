@@ -272,6 +272,8 @@ export class ExtensionsHost {
     number,
     Map<string, ExtensionTabsReport>
   >();
+  /** Workers of a copy a load replaced, by `profile:id`. */
+  private readonly staleWorkers = new Map<string, Set<number>>();
   /** Extensions told `runtime.onInstalled` or `onStartup` this run. */
   private readonly installedThisRun = new Set<string>();
   private readonly startedThisRun = new Set<string>();
@@ -572,6 +574,18 @@ export class ExtensionsHost {
     const id = key(profileId, record.id);
     this.loadErrors.delete(id);
     let extension: LoadedExtension;
+    // Workers of this extension running now belong to a copy being
+    // replaced (an update, a reload, the copy that named an unpacked
+    // folder): they never take this load's lifecycle events.
+    const scope = `chrome-extension://${record.id}/`;
+    this.staleWorkers.set(
+      id,
+      new Set(
+        Object.values(session.serviceWorkers.getAllRunning())
+          .filter((info) => info.scope === scope)
+          .map((info) => info.versionId),
+      ),
+    );
     try {
       extension = new LoadedExtension(profileId, record);
       const loaded = await session.extensions.loadExtension(record.path, {
@@ -716,10 +730,19 @@ export class ExtensionsHost {
    * instance there): install or update once per version, as the extension
    * first listens; startup once per run for one installed before it.
    */
-  private lifecycleListened(extension: LoadedExtension, name: string): void {
+  private lifecycleListened(
+    extension: LoadedExtension,
+    name: string,
+    context: ExtensionContext,
+  ): void {
     const { profileId, id } = extension;
     const record = this.registry.get(profileId, id);
     if (!record) return;
+    if (
+      context.worker &&
+      this.staleWorkers.get(key(profileId, id))?.has(context.worker.versionId)
+    )
+      return;
     if (name === "runtime.onInstalled") {
       if (record.installedEventFor === extension.version) return;
       const previous = record.installedEventFor;
@@ -728,8 +751,9 @@ export class ExtensionsHost {
         installedEventFor: extension.version,
       }));
       this.installedThisRun.add(key(profileId, id));
+      // To the context that listened, the one this load started.
       queueMicrotask(() =>
-        this.events.dispatch(profileId, id, "runtime.onInstalled", [
+        context.send("runtime.onInstalled", [
           previous === null
             ? { reason: "install" }
             : { reason: "update", previousVersion: previous },
@@ -741,9 +765,27 @@ export class ExtensionsHost {
         return;
       if (record.installedEventFor === null) return;
       this.startedThisRun.add(id_);
-      queueMicrotask(() =>
-        this.events.dispatch(profileId, id, "runtime.onStartup", []),
-      );
+      queueMicrotask(() => context.send("runtime.onStartup", []));
+    }
+  }
+
+  /**
+   * A "tab" Electron names in a message's sender that is really one of
+   * Work's popups or side panels: an extension page in a webview that no
+   * window reports as a tab.
+   */
+  private isExtensionView(tabId: unknown): boolean {
+    // Answered synchronously: it never throws, or the asker would wait.
+    try {
+      if (typeof tabId !== "number") return false;
+      if (this.views.has(tabId)) return true;
+      if (this.tabs.tab(tabId)) return false;
+      const guest = webContents.fromId(tabId);
+      if (!guest || guest.isDestroyed() || guest.getType() !== "webview")
+        return false;
+      return new URL(guest.getURL()).protocol === "chrome-extension:";
+    } catch {
+      return false;
     }
   }
 
@@ -807,6 +849,10 @@ export class ExtensionsHost {
       const resolved = contextOf();
       event.returnValue = resolved ? this.boot(resolved.extension) : null;
     });
+    // Synchronous: a worker blocks until it hears back, so it always does.
+    worker.ipc.on(EXTENSION_CHANNELS.isView, (event, tabId) => {
+      event.returnValue = this.isExtensionView(tabId);
+    });
     worker.ipc.handle(
       EXTENSION_CHANNELS.call,
       async (_event, method: unknown, args: unknown) => {
@@ -837,7 +883,8 @@ export class ExtensionsHost {
       const resolved = contextOf();
       if (!resolved || typeof name !== "string") return;
       this.events.listen(resolved.context, name, on === true);
-      if (on === true) this.lifecycleListened(resolved.extension, name);
+      if (on === true)
+        this.lifecycleListened(resolved.extension, name, resolved.context);
     });
     this.wireNative<Electron.IpcMainServiceWorkerEvent>(
       (channel, listener) => worker.ipc.on(channel, listener),
@@ -1116,6 +1163,9 @@ export class ExtensionsHost {
 
   private registerIpc(): void {
     // Extension pages.
+    this.on(EXTENSION_CHANNELS.isView, (event, tabId) => {
+      event.returnValue = this.isExtensionView(tabId);
+    });
     this.on(EXTENSION_CHANNELS.boot, (event) => {
       const caller = this.frameCaller(event, true);
       event.returnValue = caller ? this.boot(caller.ext) : null;
@@ -1143,7 +1193,7 @@ export class ExtensionsHost {
       // Lifecycle events go to the background: a worker's, or an MV2
       // background page's (no worker), never a popup that listened first.
       if (on === true && !hasServiceWorker(caller.ext.manifest))
-        this.lifecycleListened(caller.ext, name);
+        this.lifecycleListened(caller.ext, name, caller.context);
     });
     this.wireNative<IpcMainEvent>(
       (channel, listener) => this.on(channel, listener),

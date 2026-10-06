@@ -17,6 +17,11 @@ export interface ExtensionHostBridge {
   onEvent: (listener: (name: string, args: unknown[]) => void) => void;
   /** Synchronous: what main says before the extension's code runs. */
   boot: () => ExtensionBoot | null;
+  /**
+   * Synchronous: whether a sender's "tab" is one of Work's popups or side
+   * panels (webviews to Electron, never tabs in Chrome).
+   */
+  isView: (tabId: number) => boolean;
 }
 
 export interface ExtensionBoot {
@@ -108,6 +113,98 @@ export function installExtensionApis(): void {
   }
   for (const permission of boot?.granted ?? [])
     if (optional.has(permission)) permissions.add(permission);
+
+  // ---- Senders, as Chrome names them --------------------------------------
+
+  // Electron gives a message from any page in a webview a `tab`; Work's
+  // popups and side panels are webviews, which Chrome never counts as tabs.
+  // Extensions tell their own pages from content scripts by `sender.tab`
+  // (Claude refuses its side panel otherwise), so a sender that is one of
+  // this extension's popups or panels loses it, as in Chrome.
+  const ownOrigin = `chrome-extension://${String(runtime.id)}/`;
+  const chromeSender = (sender: unknown): unknown => {
+    if (!sender || typeof sender !== "object") return sender;
+    const { tab, url } = sender as { tab?: { id?: unknown }; url?: unknown };
+    if (
+      !tab ||
+      typeof tab.id !== "number" ||
+      typeof url !== "string" ||
+      !url.startsWith(ownOrigin) ||
+      !host.isView(tab.id)
+    )
+      return sender;
+    const { tab: _viewTab, ...rest } = sender as Bag;
+    return rest;
+  };
+  const wrappedEvents = new WeakSet<object>();
+  const wrapListeners = (target: unknown, wrap: (listener: Fn) => Fn) => {
+    if (!target || typeof target !== "object" || wrappedEvents.has(target))
+      return;
+    const event = target as Record<string, unknown>;
+    const { addListener, removeListener, hasListener } = event;
+    if (
+      typeof addListener !== "function" ||
+      typeof removeListener !== "function"
+    )
+      return;
+    wrappedEvents.add(target);
+    const wrapped = new Map<Fn, Fn>();
+    const members: Record<string, Fn> = {
+      addListener: (listener: unknown, ...rest: unknown[]) => {
+        if (typeof listener !== "function")
+          return (addListener as Fn).call(event, listener, ...rest);
+        if (wrapped.has(listener as Fn)) return undefined;
+        const inner = wrap(listener as Fn);
+        wrapped.set(listener as Fn, inner);
+        return (addListener as Fn).call(event, inner, ...rest);
+      },
+      removeListener: (listener: unknown) => {
+        const inner = wrapped.get(listener as Fn);
+        if (!inner) return (removeListener as Fn).call(event, listener);
+        wrapped.delete(listener as Fn);
+        return (removeListener as Fn).call(event, inner);
+      },
+      hasListener: (listener: unknown) =>
+        wrapped.has(listener as Fn) ||
+        (typeof hasListener === "function" &&
+          (hasListener as Fn).call(event, listener) === true),
+    };
+    for (const [key, value] of Object.entries(members)) {
+      try {
+        Object.defineProperty(event, key, {
+          configurable: true,
+          writable: true,
+          value,
+        });
+      } catch {
+        // A frozen native event keeps Electron's senders.
+      }
+    }
+  };
+  for (const namespace of browserNamespace
+    ? [chrome, browserNamespace]
+    : [chrome]) {
+    const each = namespace.runtime as Bag | undefined;
+    wrapListeners(
+      each?.onMessage,
+      (listener) =>
+        (message: unknown, sender: unknown, sendResponse: unknown) =>
+          listener(message, chromeSender(sender), sendResponse),
+    );
+    wrapListeners(each?.onConnect, (listener) => (port: unknown) => {
+      if (port && typeof port === "object")
+        try {
+          Object.defineProperty(port, "sender", {
+            configurable: true,
+            enumerable: true,
+            value: chromeSender((port as Bag).sender),
+          });
+        } catch {
+          // A frozen port keeps Electron's sender.
+        }
+      return listener(port);
+    });
+  }
 
   // ---- Errors, callbacks and promises -------------------------------------
 

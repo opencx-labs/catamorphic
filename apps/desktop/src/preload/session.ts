@@ -67,6 +67,13 @@ function bridge(): ExtensionHostBridge {
     },
     // Synchronous on purpose: main's answer (rulesets to enable, granted
     // permissions) must apply before the extension's own code runs.
+    isView: (tabId) => {
+      try {
+        return ipcRenderer.sendSync(EXTENSION_CHANNELS.isView, tabId) === true;
+      } catch {
+        return false;
+      }
+    },
     boot: () => {
       try {
         const boot: unknown = ipcRenderer.sendSync(EXTENSION_CHANNELS.boot);

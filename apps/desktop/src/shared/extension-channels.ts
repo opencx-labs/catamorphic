@@ -10,6 +10,8 @@
 export const EXTENSION_CHANNELS = {
   call: "catamorphic:extension-call",
   boot: "catamorphic:extension-boot",
+  /** Synchronous: is this "tab" one of Work's popups or side panels? */
+  isView: "catamorphic:extension-is-view",
   event: "catamorphic:extension-event",
   listen: "catamorphic:extension-listen",
   nativeConnect: "catamorphic:extension-native-connect",
