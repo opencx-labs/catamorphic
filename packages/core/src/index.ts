@@ -711,6 +711,7 @@ export {
   type SessionTerminal,
   SessionTerminalNotFoundError,
   type SessionTerminalOutput,
+  SessionTerminalSecretsError,
   SessionTerminalsService,
 } from "./services/session-terminals-service.js";
 export {

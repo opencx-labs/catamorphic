@@ -71,6 +71,16 @@ export class SessionTerminalNotFoundError extends Error {
   }
 }
 
+/** This chat's workspace holds the project's secrets, which the caller may not see. */
+export class SessionTerminalSecretsError extends Error {
+  constructor() {
+    super(
+      "This chat's workspace holds the project's secrets, so only people who manage them open a terminal in it.",
+    );
+    this.name = "SessionTerminalSecretsError";
+  }
+}
+
 interface TerminalInput {
   identity: Identity;
   projectId: string;
@@ -81,11 +91,10 @@ interface TerminalInput {
 /**
  * Terminals in a chat's workspace (ADR 0209): a login shell on a
  * pseudo-terminal, started as one of the workspace's background processes
- * (ADR 0174) with the Environment's secrets loaded (ADR 0206) for a person
- * who may have them. Output is read by cursor with a wait; input and
- * resizes are posted. A terminal is its opener's alone, and it ends with
- * the workspace. Every call is a request on its own, so any replica serves
- * any of them.
+ * (ADR 0174) with the Environment's secrets loaded (ADR 0206). Output is
+ * read by cursor with a wait; input and resizes are posted. A terminal is
+ * its opener's alone, and it ends with the workspace. Every call is a
+ * request on its own, so any replica serves any of them.
  */
 export class SessionTerminalsService {
   constructor(
@@ -119,6 +128,8 @@ export class SessionTerminalsService {
           sessionId: input.sessionId,
           start: true,
         });
+        // Opening the workspace delivered its secrets, if it has any.
+        await this.mayReachSecrets(input);
         // Used from now on, before the shell starts: the idle sweep never
         // gives the workspace back between the shell starting and its row.
         await markWorkspaceUsed({
@@ -128,11 +139,9 @@ export class SessionTerminalsService {
         const processes = processesOf(workspace);
         const sessionFromProject = sessionDirectoryFromProject(workspace);
         const key = `term-${randomUUID().replaceAll("-", "").slice(0, 20)}`;
-        const secrets = await this.loadsSecrets(input);
-        span.setAttribute("catamorphic.terminal.secrets", secrets);
         const prepared = await workspace.provider.executeCommand(
           workspace.sandboxId,
-          prepareTerminalCommand({ sessionFromProject, key, secrets }),
+          prepareTerminalCommand({ sessionFromProject, key }),
           { cwd: workspace.projectDirectory, timeout: 30 },
         );
         if (prepared.exitCode !== 0)
@@ -306,26 +315,30 @@ export class SessionTerminalsService {
   }
 
   /**
-   * Whether the opener's shell loads the workspace's secrets (ADR 0209): a
-   * member's chat is its owner's alone, with their values; a project
-   * chat's shared values load only for a person who may manage them,
-   * since the secrets API never shows a value to anyone else.
+   * A terminal reaches everything in its workspace, the Environment's
+   * secrets file included (ADR 0209). A member's chat holds only its
+   * owner's values; a project chat's workspace that has held the project's
+   * shared values is open only to a person who may manage them, since the
+   * secrets API shows a value to nobody else. Checked on every call, so a
+   * terminal opened before the workspace got them ends with that.
    */
-  private async loadsSecrets(input: {
+  private async mayReachSecrets(input: {
     identity: Identity;
     projectId: string;
     sessionId: string;
-  }): Promise<boolean> {
+  }): Promise<void> {
     const session = await this.deps.db
       .selectFrom("agent_sessions")
-      .select("external_user_id")
+      .select(["external_user_id", "secrets_held_at"])
       .where("id", "=", input.sessionId)
       .where("project_id", "=", input.projectId)
       .executeTakeFirstOrThrow();
-    return (
-      !isProjectPrincipal(session.external_user_id) ||
-      hasProjectPermission(input.identity, input.projectId, "secrets:write")
-    );
+    if (
+      isProjectPrincipal(session.external_user_id) &&
+      session.secrets_held_at !== null &&
+      !hasProjectPermission(input.identity, input.projectId, "secrets:write")
+    )
+      throw new SessionTerminalSecretsError();
   }
 
   /**
@@ -357,6 +370,7 @@ export class SessionTerminalsService {
         );
       throw error;
     }
+    await this.mayReachSecrets(input);
     const row = await this.deps.db
       .selectFrom("session_terminals")
       .select(["terminal_key", "pty"])

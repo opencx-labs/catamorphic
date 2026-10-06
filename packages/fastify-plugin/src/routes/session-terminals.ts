@@ -4,6 +4,7 @@ import {
   EnvironmentCapacityError,
   EnvironmentNotFoundError,
   SessionTerminalNotFoundError,
+  SessionTerminalSecretsError,
   SessionWorkspaceUnavailableError,
 } from "@catamorphic/core";
 import type { FastifyInstance, FastifyReply } from "fastify";
@@ -39,6 +40,8 @@ export function workspaceRefusal(
     error instanceof SessionTerminalNotFoundError
   )
     return reply.status(404).send({ error: error.message });
+  if (error instanceof SessionTerminalSecretsError)
+    return reply.status(403).send({ error: error.message });
   if (error instanceof SessionWorkspaceUnavailableError)
     return reply.status(409).send({ error: error.message, code: error.reason });
   if (error instanceof EnvironmentCapacityError)

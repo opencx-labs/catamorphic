@@ -15,8 +15,10 @@ import type { Identity } from "../identity.js";
 import { AccessDeniedError } from "../services/artifact-scope.js";
 import { projectChatIdentity } from "../services/chat-delivery.js";
 import { SessionPreviewError } from "../services/session-previews-service.js";
-import { TERMINAL_WITHOUT_SECRETS } from "../services/session-terminal-scripts.js";
-import { SessionTerminalNotFoundError } from "../services/session-terminals-service.js";
+import {
+  SessionTerminalNotFoundError,
+  SessionTerminalSecretsError,
+} from "../services/session-terminals-service.js";
 import { SessionWorkspaceUnavailableError } from "../services/session-workspace.js";
 import { RecordingAdapter } from "./recording-adapter.js";
 import { testEnvironmentProvider } from "./test-environment.js";
@@ -583,18 +585,21 @@ describe("terminals and previews in a chat's workspace (ADR 0209)", () => {
     });
   }, 120_000);
 
-  it("loads a project chat's shared secrets only for a person who may manage them", async () => {
+  it("opens a project chat holding shared secrets only to a person who may manage them", async () => {
     const projectChat = await chat(
       projectChatIdentity({ tenantId, projectId }),
     );
-    // Alice holds secrets:write; Carol may work in the chat, nothing more.
-    const alices = await terminals().open({
-      identity: alice,
-      projectId,
-      sessionId: projectChat,
-      cols: 80,
-      rows: 24,
-    });
+    const open = (identity: Identity) =>
+      terminals().open({
+        identity,
+        projectId,
+        sessionId: projectChat,
+        cols: 80,
+        rows: 24,
+      });
+    // Before the workspace holds any, Carol (who may work in the chat,
+    // nothing more) opens one.
+    const carols = await open(carol);
     const workspace = await core.agentSessions?.personWorkspace({
       identity: alice,
       projectId,
@@ -607,65 +612,47 @@ describe("terminals and previews in a chat's workspace (ADR 0209)", () => {
       { "env/secrets.sh": "export SHARED_SECRET='shared value'\n" },
       workspace.sessionDirectory,
     );
-    const managers = await terminals().open({
-      identity: alice,
-      projectId,
-      sessionId: projectChat,
-      cols: 80,
-      rows: 24,
-    });
-    const carols = await terminals().open({
-      identity: carol,
-      projectId,
-      sessionId: projectChat,
-      cols: 80,
-      rows: 24,
-    });
-    const print =
-      // biome-ignore lint/suspicious/noTemplateCurlyInString: a shell expansion
-      'echo "<${SHARED_SECRET:-none}>"\n';
+    await core.db
+      .updateTable("agent_sessions")
+      .set({ secrets_held_at: new Date() })
+      .where("id", "=", projectChat)
+      .execute();
+    // Alice holds secrets:write: her shell has them.
+    const alices = await open(alice);
     await terminals().write({
       identity: alice,
       projectId,
       sessionId: projectChat,
-      terminalId: managers.terminalId,
-      data: print,
+      terminalId: alices.terminalId,
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: a shell expansion
+      data: 'echo "<${SHARED_SECRET:-none}>"\n',
     });
     await readUntil({
       identity: alice,
       sessionId: projectChat,
-      terminalId: managers.terminalId,
+      terminalId: alices.terminalId,
       cursor: 0,
       match: /<shared value>/,
     });
-    // Hers says it starts without them, and has none.
-    await terminals().write({
-      identity: carol,
-      projectId,
-      sessionId: projectChat,
-      terminalId: carols.terminalId,
-      data: print,
-    });
-    const { text } = await readUntil({
-      identity: carol,
-      sessionId: projectChat,
-      terminalId: carols.terminalId,
-      cursor: 0,
-      match: /<none>/,
-    });
-    expect(text).toContain(TERMINAL_WITHOUT_SECRETS);
-    expect(text).not.toContain("shared value");
-    for (const [identity, opened] of [
-      [alice, alices],
-      [alice, managers],
-      [carol, carols],
-    ] as const)
-      await terminals().close({
-        identity,
+    // Carol opens none now, and the one she had answers no more.
+    await expect(open(carol)).rejects.toBeInstanceOf(
+      SessionTerminalSecretsError,
+    );
+    await expect(
+      terminals().read({
+        identity: carol,
         projectId,
         sessionId: projectChat,
-        terminalId: opened.terminalId,
-      });
+        terminalId: carols.terminalId,
+        cursor: 0,
+      }),
+    ).rejects.toBeInstanceOf(SessionTerminalSecretsError);
+    await terminals().close({
+      identity: alice,
+      projectId,
+      sessionId: projectChat,
+      terminalId: alices.terminalId,
+    });
   }, 120_000);
 
   it("previews a server in the workspace: methods, bodies, cookies, redirects and limits", async () => {

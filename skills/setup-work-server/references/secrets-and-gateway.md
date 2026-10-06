@@ -184,10 +184,9 @@ Where values go:
 Before each turn the variables are written to
 `.work-session/env/secrets.sh` (mode 0600, outside the repository); the agent
 runner, shells, terminals and workspace setup load it, and it is removed
-when a turn may not have it and when the workspace is given back. A terminal
-in a project chat loads it only for someone holding `secrets:write`; anyone
-else's starts without it and says so (the file itself stays in the
-workspace for the chat's turns). Each
+when a turn may not have it and when the workspace is given back. A project
+chat whose workspace holds it opens a terminal only for someone holding
+`secrets:write`. Each
 delivery is audited by name and fingerprint (`project_secrets.deliver` in the
 connection audit). Once a chat has held secrets, every later turn of it, and
 of its forks, replaces every value it could repeat with `[secret NAME]` in

@@ -27,7 +27,6 @@ import {
   prepareTerminalCommand,
   resizeTerminalCommand,
   sessionDirectoryFromProject,
-  TERMINAL_WITHOUT_SECRETS,
   terminalProcessCommand,
   terminalSecretsSnippet,
 } from "../services/session-terminal-scripts.js";
@@ -122,32 +121,14 @@ describe("terminal shell commands", () => {
   it("works from the project folder with paths relative to it", () => {
     expect(session).toBe("../.work-session");
     expect(
-      prepareTerminalCommand({
-        sessionFromProject: session,
-        key: "k",
-        secrets: true,
-      }),
+      prepareTerminalCommand({ sessionFromProject: session, key: "k" }),
     ).toContain("mkdir -p '../.work-session/terminals/k'");
   });
 
   it("loads the gateway's variables and the secrets, each only when it is there", () => {
-    expect(
-      terminalSecretsSnippet({ sessionDirectory: '"$s"', secrets: true }),
-    ).toBe(
+    expect(terminalSecretsSnippet('"$s"')).toBe(
       'if [ -f "$s"/env/gateway.sh ]; then . "$s"/env/gateway.sh; fi; if [ -f "$s"/env/secrets.sh ]; then . "$s"/env/secrets.sh; fi',
     );
-    // Without the secrets, a workspace that has them says so.
-    const without = terminalSecretsSnippet({
-      sessionDirectory: '"$s"',
-      secrets: false,
-    });
-    expect(without).toContain('. "$s"/env/gateway.sh');
-    expect(without).not.toContain('. "$s"/env/secrets.sh');
-    expect(without).toContain(
-      `if [ -f "$s"/env/secrets.sh ]; then printf '%s\\n' 'This terminal does not load the project'\\''s secrets`,
-    );
-    // One plain line.
-    expect(TERMINAL_WITHOUT_SECRETS).toMatch(/^[ -~]+$/);
   });
 
   it("reads the pseudo-terminal the sandbox offers", () => {
