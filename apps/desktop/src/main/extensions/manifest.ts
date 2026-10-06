@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { safeEntryPath } from "./archive.js";
+import { patternCovers } from "./url-policy.js";
 
 /**
  * Reading an extension's manifest the way the host needs it (ADR 0203):
@@ -331,12 +332,72 @@ export function searchProvider(manifest: Manifest): SearchProvider | null {
  * comes first; API warnings follow in a stable order. Permissions without a
  * warning in Chrome (storage, alarms, scripting...) add nothing.
  */
+/**
+ * What a manifest asks for, as the person approves it: its required
+ * permissions, and every site its permissions or content scripts reach.
+ */
+export function accessOf(manifest: Manifest): PermissionSet {
+  const required = requiredPermissions(manifest);
+  return {
+    permissions: required.permissions,
+    origins: [...required.origins, ...contentScriptMatches(manifest)],
+  };
+}
+
+/**
+ * What `next` asks for beyond what the person `approved`: sites no
+ * approved pattern covers, and new permissions that carry a warning.
+ * Compared as access, never as warning text, which collapses many sites
+ * into a count and subdomains into their parent.
+ */
+export function accessIncrease(
+  approved: PermissionSet,
+  next: PermissionSet,
+): PermissionSet {
+  const covered = (origin: string) =>
+    approved.origins.some(
+      (pattern) => coversAllHosts(pattern) || patternCovers(pattern, origin),
+    );
+  return {
+    permissions: next.permissions.filter(
+      (permission) =>
+        !approved.permissions.includes(permission) &&
+        accessWarnings({ permissions: [permission], origins: [] }).length > 0,
+    ),
+    origins: [...new Set(next.origins.filter((origin) => !covered(origin)))],
+  };
+}
+
+export function isEmptyAccess(access: PermissionSet): boolean {
+  return access.permissions.length === 0 && access.origins.length === 0;
+}
+
+/** Chrome's install warnings for a manifest (or what it was granted). */
 export function permissionWarnings(
   manifest: Manifest,
   granted: PermissionSet = requiredPermissions(manifest),
 ): string[] {
-  const permissions = new Set(granted.permissions);
-  const hostPatterns = [...granted.origins, ...contentScriptMatches(manifest)];
+  const warnings = accessWarnings({
+    permissions: granted.permissions,
+    origins: [...granted.origins, ...contentScriptMatches(manifest)],
+  });
+  const provider = searchProvider(manifest);
+  if (provider) {
+    let host = provider.keyword;
+    try {
+      host = new URL(provider.searchUrl.replace("{searchTerms}", "q")).host;
+    } catch {
+      // keyword stays
+    }
+    warnings.push(`Change your search settings to: ${host}`);
+  }
+  return warnings;
+}
+
+/** Chrome's warnings for a set of permissions and sites. */
+export function accessWarnings(access: PermissionSet): string[] {
+  const permissions = new Set(access.permissions);
+  const hostPatterns = access.origins;
   const warnings: string[] = [];
   const allHosts =
     hostPatterns.some(coversAllHosts) ||
@@ -394,21 +455,5 @@ export function permissionWarnings(
     );
   if (has("nativeMessaging"))
     warnings.push("Communicate with cooperating native applications");
-  const provider = searchProvider(manifest);
-  if (provider) {
-    let host = provider.keyword;
-    try {
-      host = new URL(provider.searchUrl.replace("{searchTerms}", "q")).host;
-    } catch {
-      // keyword stays
-    }
-    warnings.push(`Change your search settings to: ${host}`);
-  }
   return warnings;
-}
-
-/** Warnings in `next` that `previous` did not already show the person. */
-export function addedWarnings(previous: string[], next: string[]): string[] {
-  const shown = new Set(previous);
-  return next.filter((warning) => !shown.has(warning));
 }

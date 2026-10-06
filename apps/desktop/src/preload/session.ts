@@ -42,10 +42,16 @@ function bridge(): ExtensionHostBridge {
   };
   return {
     call: async (method, args) => {
+      // Read here, in the preload's world: the extension's code can patch
+      // its own navigator, never this one.
+      const gesture =
+        typeof navigator !== "undefined" &&
+        navigator.userActivation?.isActive === true;
       const answer: ExtensionCallAnswer = await ipcRenderer.invoke(
         EXTENSION_CHANNELS.call,
         method,
         args,
+        { gesture },
       );
       if ("error" in answer) throw new Error(answer.error);
       return answer.result;
@@ -113,7 +119,10 @@ function installForWebStore(): void {
   const store: WebStoreBridge = {
     call: (method, args) =>
       ipcRenderer
-        .invoke(EXTENSION_CHANNELS.webstore, method, args)
+        .invoke(EXTENSION_CHANNELS.webstore, method, args, {
+          // The page's own activation, read where its scripts can't fake it.
+          gesture: navigator.userActivation?.isActive === true,
+        })
         .catch((error: unknown) => {
           throw stripInvokeError(error);
         }),

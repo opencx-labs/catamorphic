@@ -19,7 +19,6 @@ import {
   scriptableUrl,
 } from "./url-policy.js";
 import { frameById, frameIds } from "./web-navigation.js";
-import { WEB_STORE_ORIGIN } from "./webstore.js";
 
 /**
  * The `chrome.*` methods Work answers for extensions (ADR 0203), keyed
@@ -36,6 +35,12 @@ export interface Caller {
   tabId: number | null;
   /** The window of the calling page; null for a service worker. */
   windowId: number | null;
+  /**
+   * The call comes from something the person just did: a click or key in
+   * the page (its own user activation), or, for a worker, an event the
+   * person caused (the action, a command, a menu item, a notification).
+   */
+  gesture: boolean;
 }
 
 export type ApiHandler = (caller: Caller, args: unknown[]) => unknown;
@@ -257,7 +262,10 @@ export function createApi(host: ExtensionsHost): Record<string, ApiHandler> {
     update: async (caller, args) => {
       const [first, second] = args;
       const tabId = typeof first === "number" ? first : undefined;
-      const props = bag(typeof first === "number" ? second : first);
+      // The tab id is optional and may be passed as undefined (null here).
+      const props = bag(
+        typeof first === "number" || first === null ? second : first,
+      );
       const record = tabFor(caller, tabId);
       if (props.url !== undefined) {
         const url = navigable(caller, props.url);
@@ -299,7 +307,9 @@ export function createApi(host: ExtensionsHost): Record<string, ApiHandler> {
         caller,
         typeof first === "number" ? first : undefined,
       );
-      const props = bag(typeof first === "number" ? second : first);
+      const props = bag(
+        typeof first === "number" || first === null ? second : first,
+      );
       if (props.bypassCache === true) record.guest.reloadIgnoringCache();
       else record.guest.reload();
     },
@@ -667,19 +677,38 @@ export function createApi(host: ExtensionsHost): Record<string, ApiHandler> {
         wanted.origins.every((origin) => caller.ext.holdsOrigin(origin))
       );
     },
-    request: (caller, [value]) =>
-      host.requestPermissions(caller, permissionSet(value)),
+    request: (caller, [value]) => {
+      if (!caller.gesture)
+        throw new Error("This function must be called during a user gesture");
+      return host.requestPermissions(caller, permissionSet(value));
+    },
     remove: (caller, [value]) =>
       host.removePermissions(caller.ext, permissionSet(value)),
     addHostAccessRequest: () => undefined,
     removeHostAccessRequest: () => undefined,
   });
 
+  // ---- declarativeNetRequest (internal) ------------------------------------------------------
+
+  // The session preload reports which static rulesets are on, so they
+  // survive restarts and reset on updates as in Chrome.
+  define(
+    "declarativeNetRequest",
+    (extension) =>
+      extension.has("declarativeNetRequest") ||
+      extension.has("declarativeNetRequestWithHostAccess"),
+    {
+      noteEnabledRulesets: (caller, [ids]) =>
+        host.noteEnabledRulesets(caller.ext, ids),
+    },
+  );
+
   // ---- contextMenus ------------------------------------------------------------------------------
 
   define("contextMenus", "contextMenus", {
     create: (caller, [properties]) => {
       host.menus.create(profile(caller), caller.ext.id, bag(properties));
+      host.saveMenus(caller.ext);
     },
     update: (caller, [id, properties]) => {
       host.menus.update(
@@ -688,12 +717,15 @@ export function createApi(host: ExtensionsHost): Record<string, ApiHandler> {
         String(id),
         bag(properties),
       );
+      host.saveMenus(caller.ext);
     },
     remove: (caller, [id]) => {
       host.menus.remove(profile(caller), caller.ext.id, String(id));
+      host.saveMenus(caller.ext);
     },
     removeAll: (caller) => {
       host.menus.removeAll(profile(caller), caller.ext.id);
+      host.saveMenus(caller.ext);
     },
   });
 
@@ -786,15 +818,8 @@ export function createApi(host: ExtensionsHost): Record<string, ApiHandler> {
         : typeof props.targetId === "string"
           ? Number(props.targetId.replace(/^tab-/, ""))
           : Number.NaN;
-    const record = host.tabOf(caller, raw);
-    try {
-      if (new URL(record.guest.getURL()).origin === WEB_STORE_ORIGIN)
-        throw new Error("Cannot attach to the Chrome Web Store.");
-    } catch (cause) {
-      if (cause instanceof Error && cause.message.startsWith("Cannot attach"))
-        throw cause;
-    }
-    return record;
+    // The page's address is checked by host.debuggers on every call.
+    return host.tabOf(caller, raw);
   };
   const client = (caller: Caller) => `${caller.ext.profileId}:${caller.ext.id}`;
   define("debugger", "debugger", {
@@ -965,19 +990,21 @@ export function createApi(host: ExtensionsHost): Record<string, ApiHandler> {
     const key = notificationKey(caller, id);
     const { profileId } = caller.ext;
     const extensionId = caller.ext.id;
-    notification.on("click", () =>
+    notification.on("click", () => {
+      host.noteGesture(profileId, extensionId);
       host.events.dispatch(profileId, extensionId, "notifications.onClicked", [
         id,
-      ]),
-    );
-    notification.on("action", (_event, index) =>
+      ]);
+    });
+    notification.on("action", (_event, index) => {
+      host.noteGesture(profileId, extensionId);
       host.events.dispatch(
         profileId,
         extensionId,
         "notifications.onButtonClicked",
         [id, index],
-      ),
-    );
+      );
+    });
     notification.on("close", () => {
       if (shown.get(key) !== notification) return;
       shown.delete(key);
@@ -1104,6 +1131,8 @@ export function createApi(host: ExtensionsHost): Record<string, ApiHandler> {
     return limit > 0 ? records.slice(0, limit) : records;
   };
   // Downloads change → onCreated / onChanged for listening extensions.
+  // Downloads from before this run are not new to anyone.
+  const runStartedAt = Date.now();
   const seen = new Map<string, Map<string, ReturnType<typeof downloadItem>>>();
   host.downloads.onChange((profileId) => {
     const previous = seen.get(profileId) ?? new Map();
@@ -1118,7 +1147,8 @@ export function createApi(host: ExtensionsHost): Record<string, ApiHandler> {
       next.set(record.id, item);
       const before = previous.get(record.id);
       if (!before) {
-        fire("downloads.onCreated", [item]);
+        if (record.startedAt >= runStartedAt)
+          fire("downloads.onCreated", [item]);
         continue;
       }
       const delta: Bag = { id: item.id };
@@ -1155,12 +1185,11 @@ export function createApi(host: ExtensionsHost): Record<string, ApiHandler> {
         throw new Error("Invalid URL.");
       const session = host.session(profile(caller));
       if (!session) throw new Error("The extension is not running.");
-      const before = new Set(downloadsOf(caller).map((record) => record.id));
       const filename =
         typeof props.filename === "string" && props.filename
           ? (props.filename.split(/[\\/]/).at(-1) ?? null)
           : null;
-      host.downloads.expect(profile(caller), url, filename);
+      const started = host.downloads.expect(profile(caller), url, filename);
       const headers = Object.fromEntries(
         (Array.isArray(props.headers) ? props.headers : []).flatMap(
           (header) => {
@@ -1176,14 +1205,9 @@ export function createApi(host: ExtensionsHost): Record<string, ApiHandler> {
         url,
         Object.keys(headers).length > 0 ? { headers } : {},
       );
-      for (let attempt = 0; attempt < 200; attempt++) {
-        const created = downloadsOf(caller).find(
-          (record) => !before.has(record.id) && record.url === url,
-        );
-        if (created) return downloadId(created.id);
-        await new Promise((resolve) => setTimeout(resolve, 50));
-      }
-      throw new Error("The download did not start.");
+      const id = await started;
+      if (!id) throw new Error("The download did not start.");
+      return downloadId(id);
     },
     search: (caller, [query]) => searchDownloads(caller, bag(query)),
     pause: (caller, [id]) => host.downloads.pause(recordFor(caller, id).id),

@@ -2,7 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-10-06
-- **Amends:** 0194 (browser performance), 0150 (site settings)
+- **Amends:** 0194 (the brand rewrite's request listener)
 
 ## Context
 
@@ -45,9 +45,12 @@ Work shows its own prompt with Chrome's permission warnings, downloads
 the package from Google's update service, checks the SHA-256 the service
 names, verifies every CRX3 signature, and requires the developer key that
 derives the id plus the Web Store publisher key. The manifest it installs
-may not ask for more than the person approved. Updates are checked at
-start and every five hours; an update with new warnings waits for the
-person. Developer mode adds "Load unpacked". Installed extensions,
+may not ask for more than the person approved, compared as access (sites
+and permissions), never as warning text. Updates are checked every five
+hours; one that asks for more waits for the person, one for an extension in
+use waits until it is idle, and one the person turned off stays off.
+Installs, removals and permission requests need a user gesture, as in
+Chrome. Developer mode adds "Load unpacked". Installed extensions,
 pinning, granted optional permissions and `storage.sync` data are
 per-profile files.
 
@@ -55,9 +58,10 @@ per-profile files.
 with badges and popups, a puzzle menu, an Extensions page, install and
 permission dialogs, context-menu items, keyboard commands, a side panel
 beside the page, and a bar on any tab an extension is debugging. Debugger
-access is limited to web pages and to the page's own domains (no
-`Browser` or `Target` control, no navigation to local files or internal
-pages). Native messaging runs hosts registered for Work or for Chrome
+access is one extension per tab, on web pages only: the session ends when
+the page leaves the web (another extension's page, the Web Store), child
+targets that aren't web pages are detached, and nothing reaches the browser,
+other targets, local files or other sites' cookies. Native messaging runs hosts registered for Work or for Chrome
 whose manifest allows the calling extension, so Claude and Codex can
 reach their extensions.
 

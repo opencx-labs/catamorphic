@@ -766,6 +766,8 @@ const api = {
     guestId: number | null;
   }): Promise<void> => invoke("catamorphic:extensions-action-menu", input),
   extensionsTabsReport: (input: {
+    reporter: string;
+    visible: boolean;
     guestIds: number[];
     activeGuestId: number | null;
   }): Promise<void> => invoke("catamorphic:extensions-tabs-report", input),

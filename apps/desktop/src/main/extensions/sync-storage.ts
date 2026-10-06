@@ -44,14 +44,29 @@ export class SyncStorage {
     const cached = this.cache.get(id);
     if (cached) return cached;
     let values: Values = {};
+    const file = this.fileFor(profileId, extensionId);
+    let text: string | null = null;
     try {
-      const parsed: unknown = JSON.parse(
-        fs.readFileSync(this.fileFor(profileId, extensionId), "utf-8"),
-      );
-      if (parsed && typeof parsed === "object" && !Array.isArray(parsed))
-        values = parsed as Values;
+      text = fs.readFileSync(file, "utf-8");
     } catch {
       /* Nothing stored yet. */
+    }
+    if (text !== null) {
+      let parsed: unknown = null;
+      try {
+        parsed = JSON.parse(text);
+      } catch {
+        // Unreadable: kept aside, never overwritten by the next write.
+      }
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed))
+        values = parsed as Values;
+      else {
+        try {
+          fs.renameSync(file, `${file}.damaged-${Date.now()}`);
+        } catch {
+          // The next write replaces it.
+        }
+      }
     }
     this.cache.set(id, values);
     return values;

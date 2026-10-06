@@ -26,12 +26,16 @@ const installedSchema = z.object({
   pinned: z.boolean(),
   installedAt: z.number(),
   updatedAt: z.number(),
-  /** The warnings the person accepted for this version. */
-  approvedWarnings: z.array(z.string()),
+  /** The access the person accepted (see `accessOf` in manifest.ts). */
+  approved: permissionSetSchema,
   /** Optional permissions granted while it ran. */
   granted: permissionSetSchema.default({ permissions: [], origins: [] }),
-  /** The version whose default rulesets were last applied. */
-  rulesetsAppliedFor: z.string().nullable().default(null),
+  /**
+   * The static rulesets this version last had enabled, restored each time
+   * it starts; null until it first starts, when the manifest's defaults
+   * apply (at install and after each update, as in Chrome).
+   */
+  enabledRulesets: z.array(z.string()).nullable().default(null),
   /** A downloaded update waiting for the person to accept new access. */
   pendingUpdate: z
     .object({
@@ -55,6 +59,8 @@ interface ProfileExtensions {
   developerMode: boolean;
   lastUpdateCheck: number | null;
   extensions: InstalledExtension[];
+  /** Entries this version can't read, kept as they were. */
+  unreadable: unknown[];
 }
 
 export class ExtensionRegistry {
@@ -82,31 +88,57 @@ export class ExtensionRegistry {
       developerMode: false,
       lastUpdateCheck: null,
       extensions: [],
+      unreadable: [],
     };
+    const file = this.file(profileId);
+    let text: string | null = null;
     try {
-      const parsed = profileSchema.parse(
-        JSON.parse(fs.readFileSync(this.file(profileId), "utf-8")),
-      );
-      loaded = {
-        developerMode: parsed.developerMode,
-        lastUpdateCheck: parsed.lastUpdateCheck,
-        // One damaged entry must not cost the others.
-        extensions: parsed.extensions.flatMap((entry) => {
-          const result = installedSchema.safeParse(entry);
-          return result.success ? [result.data] : [];
-        }),
-      };
+      text = fs.readFileSync(file, "utf-8");
     } catch {
       /* A profile without extensions has no file yet. */
+    }
+    if (text !== null) {
+      try {
+        const parsed = profileSchema.parse(JSON.parse(text));
+        const extensions: InstalledExtension[] = [];
+        const unreadable: unknown[] = [];
+        // One damaged entry must not cost the others, and is kept as it
+        // was rather than forgotten on the next save.
+        for (const entry of parsed.extensions) {
+          const result = installedSchema.safeParse(entry);
+          if (result.success) extensions.push(result.data);
+          else unreadable.push(entry);
+        }
+        loaded = {
+          developerMode: parsed.developerMode,
+          lastUpdateCheck: parsed.lastUpdateCheck,
+          extensions,
+          unreadable,
+        };
+      } catch (cause) {
+        // A file that doesn't parse moves aside, so the next save can't
+        // overwrite the list it held.
+        const aside = `${file}.damaged-${Date.now()}`;
+        try {
+          fs.renameSync(file, aside);
+        } catch {
+          // Saving will try again.
+        }
+        console.warn(
+          `[extensions] ${file} could not be read and was moved to ${aside}:`,
+          cause instanceof Error ? cause.message : String(cause),
+        );
+      }
     }
     this.cache.set(profileId, loaded);
     return loaded;
   }
 
   private save(profileId: string): void {
-    const data = this.load(profileId);
+    const { unreadable, extensions, ...rest } = this.load(profileId);
     const file = this.file(profileId);
     fs.mkdirSync(path.dirname(file), { recursive: true });
+    const data = { ...rest, extensions: [...extensions, ...unreadable] };
     fs.writeFileSync(`${file}.tmp`, `${JSON.stringify(data, null, 2)}\n`, {
       mode: 0o600,
     });

@@ -36,6 +36,9 @@ class FakeItem extends EventEmitter implements DownloadItemLike {
   getURL() {
     return `https://files.test/${this.filename}`;
   }
+  getURLChain() {
+    return [this.getURL()];
+  }
   getMimeType() {
     return "text/plain";
   }

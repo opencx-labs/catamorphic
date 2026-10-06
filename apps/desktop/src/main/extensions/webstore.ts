@@ -95,6 +95,25 @@ export interface WebStoreOptions {
   fetch: (url: string) => Promise<Response>;
 }
 
+/** The store page's origin (a local stand-in during E2E runs). */
+export function webStoreOrigin(): string {
+  return (
+    (process.env.CATAMORPHIC_E2E_DATA_DIR &&
+      process.env.CATAMORPHIC_E2E_WEBSTORE_ORIGIN) ||
+    WEB_STORE_ORIGIN
+  );
+}
+
+/** Whether a page is the store, which no extension may script or debug. */
+export function isWebStorePage(url: string): boolean {
+  try {
+    const { origin } = new URL(url);
+    return origin === WEB_STORE_ORIGIN || origin === webStoreOrigin();
+  } catch {
+    return false;
+  }
+}
+
 export function webStoreOptions(
   fetcher: WebStoreOptions["fetch"],
 ): WebStoreOptions {

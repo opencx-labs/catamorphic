@@ -1,5 +1,4 @@
 import { BrowserWindow, type WebContents, webContents } from "electron";
-import type { ExtensionTabsReport } from "../../shared/extensions.js";
 
 /**
  * The browser as extensions see it (ADR 0203): windows, their tabs in the
@@ -93,7 +92,7 @@ export class TabRegistry {
   report(
     window: BrowserWindow,
     profileId: string,
-    report: ExtensionTabsReport,
+    report: { guestIds: number[]; activeGuestId: number | null },
   ): void {
     const windowId = window.id;
     let entry = this.windows.get(windowId);

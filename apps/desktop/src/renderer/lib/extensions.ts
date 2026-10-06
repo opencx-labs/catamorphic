@@ -51,13 +51,29 @@ export function useExtensionActions(
   useEffect(() => {
     if (!enabled) return;
     let cancelled = false;
-    const load = () =>
+    // One load at a time; changes during it ask for one more after it.
+    let loading = false;
+    let again = false;
+    const load = () => {
+      if (loading) {
+        again = true;
+        return;
+      }
+      loading = true;
       void desktopApi
         .extensionsActions({ guestId })
         .then((next) => {
           if (!cancelled) setActions(next);
         })
-        .catch(() => {});
+        .catch(() => {})
+        .finally(() => {
+          loading = false;
+          if (again && !cancelled) {
+            again = false;
+            load();
+          }
+        });
+    };
     load();
     const stop = desktopApi.onExtensionActionsChanged(load);
     return () => {

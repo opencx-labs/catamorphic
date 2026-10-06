@@ -264,6 +264,7 @@ beforeAll(async () => {
   fs.writeFileSync(path.join(work, "pick"), extensionDir);
   app = await launchApp({
     urls: [`${origin}/page`],
+    sandboxedRenderers: true,
     env: {
       CATAMORPHIC_E2E_PICK_FILE: path.join(work, "pick"),
       CATAMORPHIC_E2E_WEBSTORE_ORIGIN: storeOrigin,
@@ -290,6 +291,11 @@ const pageView = `[...document.querySelectorAll('webview')].find((view) => (view
 const guestTitle = () =>
   app.eval<string>(
     `(() => { try { return ${pageView}?.getTitle() ?? ''; } catch { return ''; } })()`,
+  );
+/** Alt+Shift+key typed into the page, through main's before-input-event. */
+const typeInPage = (keyCode: string) =>
+  app.eval(
+    `(() => { const view = ${pageView}; view.focus(); view.sendInputEvent({ type: 'keyDown', keyCode: '${keyCode}', modifiers: ['alt', 'shift'] }); view.sendInputEvent({ type: 'keyUp', keyCode: '${keyCode}', modifiers: ['alt', 'shift'] }); return true; })()`,
   );
 const inPage = (code: string) =>
   app.eval(`${pageView}.executeJavaScript(${JSON.stringify(code)}, true)`);
@@ -367,11 +373,15 @@ describe("an unpacked extension", () => {
       { label: "page back" },
     );
     headers.length = 0;
+    // A marker the reload clears, so the waits below see the new document.
+    await inPage("document.title = 'Reloading'; true");
     await app.eval(`${pageView}.reload(); true`);
     await app.waitFor(
       `(() => { try { return ${pageView}?.getTitle() === 'Lab blocked'; } catch { return false; } })()`,
       { label: "script blocked by the extension's rules" },
     );
+    // The new document's request reached the lab with its headers.
+    expect(headers.length).toBeGreaterThan(0);
     expect(await inPage("document.documentElement.dataset.workTest")).toBe(
       "ran",
     );
@@ -532,10 +542,6 @@ describe("an unpacked extension", () => {
     );
     // Keys typed into the page, through main's before-input-event: the
     // command's own shortcut, then the action's.
-    const typeInPage = (keyCode: string) =>
-      app.eval(
-        `(() => { const view = ${pageView}; view.focus(); view.sendInputEvent({ type: 'keyDown', keyCode: '${keyCode}', modifiers: ['alt', 'shift'] }); view.sendInputEvent({ type: 'keyUp', keyCode: '${keyCode}', modifiers: ['alt', 'shift'] }); return true; })()`,
-      );
     await typeInPage("A");
     const worker = await app.connectToFrame(`${extensionId}/sw.js`);
     await worker.waitFor(
@@ -579,10 +585,9 @@ describe("an unpacked extension", () => {
       },
     );
     // A click back in the page closes it.
-    const inPageAt = await app.eval<{ x: number; y: number }>(
-      `(() => { const r = ${pageView}.getBoundingClientRect(); return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) }; })()`,
+    await app.eval(
+      `(() => { const view = ${pageView}; for (const type of ['mouseDown', 'mouseUp']) view.sendInputEvent({ type, x: 40, y: 40, button: 'left', clickCount: 1 }); return true; })()`,
     );
-    await app.clickPointer(inPageAt);
     await app.waitFor(
       `!document.querySelector('[data-testid="extension-popup"]')`,
       {
@@ -594,6 +599,14 @@ describe("an unpacked extension", () => {
   it("asks before an optional permission and then offers its API", async () => {
     const worker = await app.connectToFrame(`${extensionId}/sw.js`);
     expect(await worker.eval("typeof chrome.bookmarks")).toBe("undefined");
+    // Out of the blue, as in Chrome, it may not ask.
+    expect(
+      await worker.eval(
+        "chrome.permissions.request({ permissions: ['bookmarks'] }).then(() => 'asked', (error) => error.message)",
+      ),
+    ).toContain("user gesture");
+    // Right after the person ran one of its commands, it may.
+    await typeInPage("A");
     const granted = worker.eval(
       "chrome.permissions.request({ permissions: ['bookmarks'] })",
     );
@@ -653,6 +666,32 @@ describe("an unpacked extension", () => {
     await worker.waitFor(
       `chrome.storage.local.get('log').then(({ log }) => (log || []).some((entry) => entry.event === 'detached' && entry.reason === 'canceled_by_user'))`,
       { label: "extension told it was stopped" },
+    );
+    // A page that leaves the web (here for the store, which no extension
+    // may drive) ends the session before the store loads.
+    await app.eval(`window.__labView = ${pageView}; true`);
+    await worker.eval(`(async () => {
+      const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+      await chrome.debugger.attach({ tabId: tab.id }, '1.3');
+      await chrome.debugger.sendCommand({ tabId: tab.id }, 'Runtime.evaluate', { expression: ${JSON.stringify(`location.href = ${JSON.stringify(`${storeOrigin}/`)}`)} });
+      return true;
+    })()`);
+    await worker.waitFor(
+      `chrome.storage.local.get('log').then(({ log }) => (log || []).some((entry) => entry.event === 'detached' && entry.reason === 'target_closed'))`,
+      { label: "session ended when the page left the web" },
+    );
+    await app.waitFor(
+      `!document.querySelector('[data-testid="extension-debugging"]')`,
+      { label: "bar gone when the page left the web" },
+    );
+    await app.waitFor(
+      `(() => { try { return window.__labView.getTitle() === 'Store'; } catch { return false; } })()`,
+      { label: "the store loaded" },
+    );
+    await app.eval("window.__labView.goBack(); true");
+    await app.waitFor(
+      `(() => { try { return window.__labView.getTitle() === 'Lab blocked'; } catch { return false; } })()`,
+      { label: "back on the lab page" },
     );
     worker.close();
   });
@@ -798,6 +837,12 @@ describe("a Chrome Web Store install", () => {
         `${storeView}.executeJavaScript('typeof chrome.webstorePrivate', true)`,
       ),
     ).toBe("object");
+    // A script on the page can't start an install by itself.
+    expect(
+      await app.eval<string>(
+        `${storeView}.executeJavaScript("chrome.webstorePrivate.beginInstallWithManifest3({ id: 'x', manifest: '{}' })", false)`,
+      ),
+    ).toBe("user_gesture_required");
     await app.eval(`${storeView}.executeJavaScript('install(); true', true)`);
     await app.waitFor(
       `document.querySelector('[data-testid="extension-prompt"]')?.dataset.kind === 'install'`,

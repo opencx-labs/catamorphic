@@ -1,3 +1,4 @@
+import { z } from "zod";
 import { matchesAny } from "./url-policy.js";
 
 /**
@@ -5,11 +6,20 @@ import { matchesAny } from "./url-policy.js";
  * the extension stays loaded, and the menu entries a right-click shows.
  */
 
+function rawMenuId(value: unknown): string | number | null {
+  if (typeof value === "number") return value;
+  if (value === undefined || value === null) return null;
+  return String(value);
+}
+
 export type MenuItemType = "normal" | "checkbox" | "radio" | "separator";
 
 export interface MenuItem {
   id: string;
   parentId: string | null;
+  /** The ids as the extension gave them (a number stays a number). */
+  rawId: string | number;
+  rawParentId: string | number | null;
   title: string;
   type: MenuItemType;
   contexts: string[];
@@ -53,8 +63,46 @@ const asStrings = (value: unknown): string[] | null =>
     ? value.filter((item): item is string => typeof item === "string")
     : null;
 
+const savedItemSchema = z.object({
+  id: z.string().min(1),
+  parentId: z.string().nullable(),
+  rawId: z.union([z.string(), z.number()]),
+  rawParentId: z.union([z.string(), z.number()]).nullable(),
+  title: z.string().max(MAX_TITLE),
+  type: z.enum(["normal", "checkbox", "radio", "separator"]),
+  contexts: z.array(z.string()),
+  documentUrlPatterns: z.array(z.string()).nullable(),
+  targetUrlPatterns: z.array(z.string()).nullable(),
+  enabled: z.boolean(),
+  visible: z.boolean(),
+  checked: z.boolean(),
+});
+
+/** An extension's items as saved between runs, for one version. */
+export const savedMenusSchema = z.object({
+  version: z.string(),
+  items: z.array(savedItemSchema).max(MAX_ITEMS_PER_EXTENSION),
+});
+export type SavedMenus = z.infer<typeof savedMenusSchema>;
+
 export class ContextMenuStore {
   private readonly items = new Map<string, MenuItem[]>();
+  /** Items brought back from the last run, which a create may replace. */
+  private readonly restored = new WeakSet<MenuItem>();
+
+  /** What to save for the next run (Chrome keeps an extension's items). */
+  snapshot(profileId: string, extensionId: string): MenuItem[] {
+    return (this.items.get(this.key(profileId, extensionId)) ?? []).map(
+      (item) => ({ ...item }),
+    );
+  }
+
+  /** Items saved by an earlier run of the same version. */
+  restore(profileId: string, extensionId: string, items: MenuItem[]): void {
+    const list = items.map((item) => ({ ...item }));
+    for (const item of list) this.restored.add(item);
+    this.items.set(this.key(profileId, extensionId), list);
+  }
 
   private key(profileId: string, extensionId: string) {
     return `${profileId}:${extensionId}`;
@@ -100,7 +148,11 @@ export class ContextMenuStore {
       throw new Error(
         "Extensions using event pages or service workers must pass an id parameter to chrome.contextMenus.create",
       );
-    if (list.some((item) => item.id === id))
+    // An extension that creates its items each time it starts replaces
+    // the ones kept from its last run instead of colliding with them.
+    const kept = list.find((item) => item.id === id);
+    if (kept && this.restored.has(kept)) list.splice(list.indexOf(kept), 1);
+    else if (kept)
       throw new Error(`Cannot create item with duplicate id ${id}`);
     if (list.length >= MAX_ITEMS_PER_EXTENSION)
       throw new Error("Too many context menu items.");
@@ -113,6 +165,8 @@ export class ContextMenuStore {
     const item: MenuItem = {
       id,
       parentId,
+      rawId: typeof props.id === "number" ? props.id : id,
+      rawParentId: rawMenuId(props.parentId),
       title: "",
       type: "normal",
       contexts: ["page"],
@@ -146,6 +200,7 @@ export class ContextMenuStore {
       if (parentId === id)
         throw new Error("A menu item cannot be its own parent.");
       item.parentId = parentId;
+      item.rawParentId = rawMenuId(props.parentId);
     }
     this.apply(item, props);
   }

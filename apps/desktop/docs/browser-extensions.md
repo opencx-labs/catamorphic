@@ -49,27 +49,54 @@ and content scripts. Work adds `tabs`, `windows`, `action` (and MV2's
 `storage.sync`, `sidePanel`, `debugger`, `tabGroups`, `webNavigation`,
 `notifications`, `downloads`, `identity.launchWebAuthFlow`, `cookies`, read
 only `bookmarks`, `history` and `topSites`, `fontSettings.getFontList`,
-`runtime.getContexts`/`openOptionsPage`/`setUninstallURL` and native
-messaging. Anything else is absent rather than faked; a call to it fails
-with "not supported in Work".
+`runtime.getContexts`/`openOptionsPage`/`setUninstallURL`,
+`management.uninstallSelf`, `sessions` and native messaging. Anything else
+is absent; a call to it fails with "not supported in Work". A few answers
+stand in for what Work doesn't have: `sessions` has no recently closed tabs
+or other devices, `runtime.requestUpdateCheck` says there is no update (the
+store check runs on its own), and `fontSettings` reports default fonts.
 
-- **Rulesets.** Electron does not enable a manifest's default static
-  rulesets. The preload's synchronous boot answer enables them, at install
-  and after each update, before the extension's code can read them.
+- **Who is calling.** Main names the extension from the IPC sender and
+  answers with data (`{result}` or `{error}`, Chrome's `lastError`), never
+  a thrown IPC error. `permissions.request` needs a user gesture: the
+  frame's own activation, read in the preload's world where the extension
+  can't change it, or, for a worker, an event the person caused (its
+  button, a command, a menu item, a notification) in the last five seconds.
+- **activeTab.** Work's grant covers the APIs Work answers (`tabs`,
+  `captureVisibleTab`, cookies). Electron's own `scripting` checks
+  Chromium's permissions, which never see it: injecting a script still
+  needs host access.
+
+- **Rulesets.** Electron neither enables a manifest's default static
+  rulesets nor reliably keeps an extension's choice. Main keeps it
+  (`enabledRulesets`, reset to the defaults by an update, as Chrome does);
+  the session preload restores it as the extension starts and reports each
+  change the extension makes.
+- **Context menus.** Items live in main and are saved per version, so an
+  extension that creates them once at install still has them after a
+  restart; creating one again replaces the saved item.
 - **Brand headers.** Any `session.webRequest` listener stops extension
   `webRequest` and `declarativeNetRequest` for the whole session. A profile
   with an extension that filters requests drops the Sec-CH-UA listener and
   loads the hidden brand extension (`main/extensions/brand.ts`) instead. Do
   not add another `webRequest` listener to a browsing session.
-- **Debugger.** Only web pages, only the tab's own target: no `Browser`,
-  `Target` (beyond auto-attaching its frames), tracing, memory, file input,
-  download or certificate commands, and `Page.navigate` only to web
-  addresses. The tab shows who is controlling it, with Stop.
+- **Debugger.** One extension per tab, on its own session, and only on web
+  pages: the session ends as the page leaves the web (another extension's
+  page, the Web Store, a local file), and child targets that aren't web
+  pages are detached before the client hears of them. No `Browser`,
+  `Target` beyond auto-attaching (flattened) frames, tracing, memory, file
+  inputs or file drags, other sites' cookies, downloads or certificate
+  commands; `Page.navigate` only to web addresses. The tab shows who is
+  controlling it, with Stop.
 - **Native messaging.** Hosts registered for Work
   (`<userData>/NativeMessagingHosts`), Google Chrome or Chromium, when the
   host's manifest names the calling extension and the extension has
   `nativeMessaging`. The host runs without a shell, given the caller's
-  origin, as Chrome runs it.
+  origin, as Chrome runs it, and stops when the page or worker that opened
+  it goes away.
+- **Popups.** A popup takes focus once it shows. Escape or a press in any
+  other page of the window closes it, as does focus leaving it: a page can
+  take focus back while it loads, since a window's guests share its focus.
 - **Workers.** An event a stopped service worker listened to starts it
   again and waits until it listens. Events, API calls, debugger sessions
   and native ports keep it alive while they last.
@@ -81,10 +108,16 @@ Chrome" asks main, which shows Work's dialog with Chrome's warnings,
 downloads the package from Google's update service, checks its size and
 SHA-256, verifies every CRX3 signature, and requires the developer key that
 derives the id and the Web Store publisher key. The installed manifest may
-not ask for more than the person approved. Updates are checked at start and
-every five hours; one that adds warnings turns the extension off until the
-person accepts. Developer mode loads unpacked folders, which stay where
-they are and are never deleted.
+not ask for more than the person approved, compared as access (sites a
+pattern covers, permissions that warn), never as warning text. Updates are
+checked a minute after the profile opens once five hours have passed, then
+every five hours. One that asks for more turns the extension off until the
+person accepts; one for an extension in use (a popup or side panel open, a
+debugger session, a native host) waits until it is idle and fires
+`runtime.onUpdateAvailable`; one the person turned off stays off. Installs,
+turning on or off and removals from the store page need a click there.
+Developer mode loads unpacked folders, which stay where they are and are
+never deleted.
 
 The store page shows "Switch to Chrome to install extensions and themes"
 even so. For Chrome 142 and later its script asks Google's servers, which

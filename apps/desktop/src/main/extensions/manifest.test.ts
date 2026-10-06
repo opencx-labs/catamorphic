@@ -3,9 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
-  addedWarnings,
+  accessIncrease,
   bestIcon,
   defaultRulesets,
+  isEmptyAccess,
   localizer,
   ManifestError,
   manifestAction,
@@ -200,15 +201,52 @@ describe("permissionWarnings", () => {
     expect(warnings).toContain("Manage your downloads");
   });
 
-  it("reports only the warnings an update adds", () => {
+  it("finds what an update adds as access, not as warning text", () => {
+    // Four sites become four other sites: the warning text is the same.
     expect(
-      addedWarnings(
-        ["Read and change all your data on all websites"],
-        [
-          "Read and change all your data on all websites",
-          "Manage your downloads",
-        ],
+      accessIncrease(
+        {
+          permissions: ["storage"],
+          origins: [
+            "https://a.test/*",
+            "https://b.test/*",
+            "https://c.test/*",
+            "https://d.test/*",
+          ],
+        },
+        {
+          permissions: ["storage", "alarms", "downloads"],
+          origins: [
+            "https://a.test/*",
+            "https://bank.test/*",
+            "https://mail.test/*",
+            "https://pay.test/*",
+          ],
+        },
       ),
-    ).toEqual(["Manage your downloads"]);
+    ).toEqual({
+      permissions: ["downloads"],
+      origins: [
+        "https://bank.test/*",
+        "https://mail.test/*",
+        "https://pay.test/*",
+      ],
+    });
+    // A site's subdomains are more than the site.
+    expect(
+      accessIncrease(
+        { permissions: [], origins: ["https://google.com/*"] },
+        { permissions: [], origins: ["*://*.google.com/*"] },
+      ).origins,
+    ).toEqual(["*://*.google.com/*"]);
+    // Access the approval already covers adds nothing.
+    expect(
+      isEmptyAccess(
+        accessIncrease(
+          { permissions: ["tabs"], origins: ["<all_urls>"] },
+          { permissions: ["tabs", "storage"], origins: ["https://x.test/*"] },
+        ),
+      ),
+    ).toBe(true);
   });
 });

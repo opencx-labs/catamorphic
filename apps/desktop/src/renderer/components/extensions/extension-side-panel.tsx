@@ -10,6 +10,8 @@ import { ShortcutHint } from "../shortcut-hint.js";
 const WIDTH_KEY = "work.extension-side-panel-width";
 const DEFAULT_WIDTH = 360;
 const MIN_WIDTH = 280;
+/** What the page beside it always keeps. */
+const MIN_PAGE_WIDTH = 320;
 
 interface PanelWebview extends HTMLElement {
   getWebContentsId: () => number;
@@ -107,7 +109,11 @@ export function ExtensionSidePanelView({
     event.preventDefault();
     const startX = event.clientX;
     const startWidth = width;
-    const max = Math.max(MIN_WIDTH, Math.floor(window.innerWidth * 0.6));
+    // Within its pane (a split view, the dock): the page keeps room.
+    const pane =
+      event.currentTarget.closest("aside")?.parentElement?.clientWidth ??
+      window.innerWidth;
+    const max = Math.max(MIN_WIDTH, pane - MIN_PAGE_WIDTH);
     let next = startWidth;
     setDragging(true);
     const move = (moveEvent: MouseEvent) => {
@@ -137,7 +143,10 @@ export function ExtensionSidePanelView({
       data-testid="extension-side-panel"
       data-extension-id={panel.extensionId}
       aria-label={`${panel.name} side panel`}
-      style={{ width }}
+      style={{
+        width,
+        maxWidth: `max(${MIN_WIDTH}px, calc(100% - ${MIN_PAGE_WIDTH}px))`,
+      }}
       className="relative flex min-h-0 shrink-0 flex-col border-l border-border bg-bg"
     >
       {/* biome-ignore lint/a11y/noStaticElementInteractions: pointer-only resize handle, like the split divider; the panel works at its default width */}

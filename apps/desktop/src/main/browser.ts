@@ -419,19 +419,21 @@ export function registerBrowserSupport(
     ScreenShareRequest,
     ScreenShareAnswer
   >();
-  // Names an extension asked for (downloads.download), by profile and URL.
-  const expectedNames = new Map<string, { name: string; at: number }>();
+  // Downloads an extension started (downloads.download), by profile and
+  // the address it asked for (a redirect changes the item's final one).
+  const expectedDownloads = new Map<
+    string,
+    { name: string | null; claimed: (id: string) => void }
+  >();
   const downloadListeners = new Set<(profileId: string) => void>();
   const downloads = new DownloadsManager(new DownloadsStore(profilesDir), {
     downloadsDir: () =>
       process.env.CATAMORPHIC_DOWNLOADS_DIR || app.getPath("downloads"),
-    nameFor: (profileId, item) => {
-      const key = `${profileId}\n${item.getURL()}`;
-      const expected = expectedNames.get(key);
-      expectedNames.delete(key);
-      return expected && Date.now() - expected.at < 60_000
-        ? expected.name
-        : null;
+    claim: (profileId, item) => {
+      const key = `${profileId}\n${item.getURLChain()[0] ?? item.getURL()}`;
+      const expected = expectedDownloads.get(key);
+      expectedDownloads.delete(key);
+      return expected ?? null;
     },
     broadcast: (profileId, list) => {
       for (const window of windows.windowsFor(profileId))
@@ -496,6 +498,19 @@ export function registerBrowserSupport(
     preparedSessions.delete(partitionFor(profileId));
   });
   const bookmarks = profileConfig.bookmarks;
+  // Each profile's keybindings, read once and kept current: pages and
+  // extensions match them on every key they see.
+  const guestBindings = new Map<string, Keybindings>();
+  profileConfig.onKeybindingsChanged((profileId, bindings) =>
+    guestBindings.set(profileId, bindings),
+  );
+  const keybindingsOf = (profileId: string): Keybindings => {
+    const cached = guestBindings.get(profileId);
+    if (cached) return cached;
+    const loaded = profileConfig.forProfile(profileId).keybindings.load();
+    guestBindings.set(profileId, loaded);
+    return loaded;
+  };
   const extensions = new ExtensionsHost({
     profilesDir,
     userData,
@@ -504,8 +519,7 @@ export function registerBrowserSupport(
     isDock,
     brands: (ses) => chromeBrands(ses.getUserAgent()),
     setBrandListener: setBrandHeaderListener,
-    keybindings: (profileId) =>
-      profileConfig.forProfile(profileId).keybindings.load(),
+    keybindings: keybindingsOf,
     pickFolder: async (sender) => {
       const scripted = process.env.CATAMORPHIC_E2E_PICK_FILE;
       if (process.env.CATAMORPHIC_E2E_DATA_DIR && scripted) {
@@ -533,13 +547,23 @@ export function registerBrowserSupport(
         downloadListeners.add(listener);
         return () => downloadListeners.delete(listener);
       },
-      expect: (profileId, url, filename) => {
-        if (filename)
-          expectedNames.set(`${profileId}\n${url}`, {
+      expect: (profileId, url, filename) =>
+        new Promise<string | null>((resolve) => {
+          const key = `${profileId}\n${url}`;
+          const entry = {
             name: filename,
-            at: Date.now(),
-          });
-      },
+            claimed: (id: string) => {
+              clearTimeout(timer);
+              resolve(id);
+            },
+          };
+          const timer = setTimeout(() => {
+            if (expectedDownloads.get(key) === entry)
+              expectedDownloads.delete(key);
+            resolve(null);
+          }, 10_000);
+          expectedDownloads.set(key, entry);
+        }),
     },
   });
   extensionsHost = extensions;
@@ -986,13 +1010,9 @@ export function registerBrowserSupport(
     }
   };
 
-  const guestBindings = new Map<string, Keybindings>();
   const guestMacros = new Map<string, TerminalMacro[]>();
   profileConfig.onPrefsChanged((profileId, prefs) =>
     guestMacros.set(profileId, prefs.terminalMacros),
-  );
-  profileConfig.onKeybindingsChanged((profileId, bindings) =>
-    guestBindings.set(profileId, bindings),
   );
   // Guests send actions only to their owning window. Match the same configured
   // bindings as the renderer, including Ctrl/Option combinations inside pages.
@@ -1061,6 +1081,12 @@ export function registerBrowserSupport(
         return { action: "deny" };
       });
     });
+    // A press in another page (a tab, a side panel) closes an extension
+    // popup, as Chrome's closes when it loses focus: guests share their
+    // window's focus, and a page can hold on to it.
+    contents.on("before-mouse-event", (_event, mouse) => {
+      if (mouse.type === "mouseDown") extensions.closePopupsBeside(contents);
+    });
     contents.on("before-input-event", (event, input) => {
       if (input.type !== "keyDown") return;
       const browserDirection =
@@ -1092,10 +1118,7 @@ export function registerBrowserSupport(
         return;
       }
       const profileId = windows.profileFor(host);
-      const bindings =
-        guestBindings.get(profileId) ??
-        profileConfig.forProfile(profileId).keybindings.load();
-      guestBindings.set(profileId, bindings);
+      const bindings = keybindingsOf(profileId);
       const macros =
         guestMacros.get(profileId) ??
         profileConfig.forProfile(profileId).prefs.load().terminalMacros;

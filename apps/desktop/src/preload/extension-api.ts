@@ -22,8 +22,11 @@ export interface ExtensionHostBridge {
 export interface ExtensionBoot {
   /** Optional permissions granted earlier. */
   granted: string[];
-  /** Static rulesets to switch to the manifest's defaults (install, update). */
-  rulesets: { enable: string[]; disable: string[] } | null;
+  /**
+   * The static rulesets that should be on: the manifest's defaults after
+   * install or update, then whatever the extension last chose.
+   */
+  rulesets: string[] | null;
 }
 
 export function installExtensionApis(): void {
@@ -56,19 +59,52 @@ export function installExtensionApis(): void {
   const manifestVersion = manifest.manifest_version === 2 ? 2 : 3;
   const boot = host.boot();
   // Chrome enables a manifest's default rulesets at install and on every
-  // update; Electron does not. Main says when, and this runs before the
-  // extension's own code can read or change them.
+  // update, and keeps the extension's choice across restarts; Electron does
+  // neither. Main keeps the choice; this restores it as the extension
+  // starts, and reports every change the extension makes.
   const rulesets = boot?.rulesets;
   const dnr = chrome.declarativeNetRequest as Bag | undefined;
-  if (rulesets && typeof dnr?.updateEnabledRulesets === "function") {
-    const applied = (dnr.updateEnabledRulesets as Fn)({
-      enableRulesetIds: rulesets.enable,
-      disableRulesetIds: rulesets.disable,
-    });
-    if (applied instanceof Promise)
-      applied.catch((error: unknown) =>
-        console.error("Work could not enable default rulesets:", error),
+  if (
+    rulesets &&
+    dnr &&
+    typeof dnr.updateEnabledRulesets === "function" &&
+    typeof dnr.getEnabledRulesets === "function"
+  ) {
+    const update = (dnr.updateEnabledRulesets as Fn).bind(dnr);
+    const getEnabled = (dnr.getEnabledRulesets as Fn).bind(dnr);
+    const note = () =>
+      Promise.resolve(getEnabled())
+        .then((ids) =>
+          host.call("declarativeNetRequest.noteEnabledRulesets", [ids]),
+        )
+        .catch(() => {});
+    Promise.resolve(getEnabled())
+      .then((current) => {
+        const on = Array.isArray(current) ? current : [];
+        const enableRulesetIds = rulesets.filter((id) => !on.includes(id));
+        const disableRulesetIds = on.filter(
+          (id): id is string =>
+            typeof id === "string" && !rulesets.includes(id),
+        );
+        if (enableRulesetIds.length + disableRulesetIds.length === 0)
+          return note();
+        return Promise.resolve(
+          update({ enableRulesetIds, disableRulesetIds }),
+        ).then(note);
+      })
+      .catch((error: unknown) =>
+        console.error("Work could not restore the rulesets:", error),
       );
+    dnr.updateEnabledRulesets = (options: unknown, callback?: unknown) => {
+      if (typeof callback === "function")
+        return update(options, (...args: unknown[]) => {
+          void note();
+          (callback as Fn)(...args);
+        });
+      const result = update(options);
+      if (result instanceof Promise) result.then(note, () => {});
+      return result;
+    };
   }
   for (const permission of boot?.granted ?? [])
     if (optional.has(permission)) permissions.add(permission);
@@ -699,7 +735,8 @@ export function installExtensionApis(): void {
             typeof props.id === "string" || typeof props.id === "number"
               ? props.id
               : nextId++;
-          props.id = String(id);
+          // Kept as given: onClicked names a numeric id as a number.
+          props.id = id;
           takeClick(String(id), props);
           call(props, typeof callback === "function" ? callback : () => {});
           return id;

@@ -1,6 +1,7 @@
 import { MoreHorizontal, Pin, Puzzle, X } from "lucide-react";
 import {
   type CSSProperties,
+  type RefObject,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -74,12 +75,14 @@ export function ExtensionIcon({
 
 /** A popover hanging under a toolbar control, kept inside the window. */
 function useAnchoredPlace(
-  anchor: HTMLElement | null,
+  anchorRef: RefObject<HTMLElement | null>,
   open: boolean,
   width: number,
 ): CSSProperties {
   const [style, setStyle] = useState<CSSProperties>({ left: -10_000, top: 0 });
+  // Read after the commit: the anchor may mount in the same render.
   useLayoutEffect(() => {
+    const anchor = anchorRef.current;
     if (!open || !anchor) return;
     const rect = anchor.getBoundingClientRect();
     setStyle({
@@ -90,9 +93,15 @@ function useAnchoredPlace(
       top: rect.bottom + 6,
       width,
     });
-  }, [anchor, open, width]);
+  }, [anchorRef, open, width]);
   return style;
 }
+
+/** A pinned button and the gap after it. */
+const PIN_STEP = 32;
+const PIN_GAP = 4;
+/** What the address field keeps before pins move to the puzzle menu. */
+const MIN_ADDRESS_WIDTH = 160;
 
 /**
  * Extensions in a browser tab's toolbar (ADR 0203), as in Chrome: pinned
@@ -118,8 +127,17 @@ export function ExtensionToolbar({
   onOpenUrl: (url: string) => void;
 }) {
   const actions = useExtensionActions(guestId, visible);
+  const actionsRef = useRef(actions);
+  actionsRef.current = actions;
   const pinned = actions.filter((action) => action.pinned);
   const [popup, setPopup] = useState<ExtensionPopupTarget | null>(null);
+  const popupRef = useRef(popup);
+  popupRef.current = popup;
+  const nextOpenId = useRef(0);
+  // Pressing an open popup's own button moves focus out of the popup,
+  // which closes it before the click lands; the click then only finishes
+  // the toggle instead of opening it again.
+  const pressedOpen = useRef<string | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const puzzleRef = useRef<HTMLButtonElement>(null);
   const buttons = useRef(new Map<string, HTMLButtonElement>());
@@ -140,15 +158,19 @@ export function ExtensionToolbar({
     async (action: ExtensionActionState) => {
       setMenuOpen(false);
       // One popup at a time: its own button closes it, another's replaces it.
-      const open = popup?.extensionId;
-      if (open) setPopup(null);
+      const pressed = pressedOpen.current;
+      pressedOpen.current = null;
+      const open = popup?.extensionId ?? pressed;
+      if (popup) setPopup(null);
       if (open === action.extensionId) return;
       const result = await desktopApi
         .extensionsActionClick({ id: action.extensionId, guestId })
         .catch(() => null);
       if (result?.popupUrl)
         setPopup({
+          openId: ++nextOpenId.current,
           extensionId: action.extensionId,
+          name: action.name,
           url: result.popupUrl,
           anchor: anchorFor(action.extensionId),
         });
@@ -163,7 +185,12 @@ export function ExtensionToolbar({
       if (detail.guestId !== guestId || guestId === null) return;
       setMenuOpen(false);
       setPopup({
+        openId: ++nextOpenId.current,
         extensionId: detail.extensionId,
+        name:
+          actionsRef.current.find(
+            (action) => action.extensionId === detail.extensionId,
+          )?.name ?? "Extension",
         url: detail.url,
         anchor: anchorFor(detail.extensionId),
       });
@@ -183,34 +210,69 @@ export function ExtensionToolbar({
   const menu = (action: ExtensionActionState) =>
     void desktopApi.extensionsActionMenu({ id: action.extensionId, guestId });
 
+  // As many pinned buttons as fit beside an address field of a usable
+  // width; the rest stay in the puzzle menu, as in Chrome.
+  const pinnedRef = useRef<HTMLDivElement>(null);
+  const [fit, setFit] = useState(Number.POSITIVE_INFINITY);
+  const pinnedCount = pinned.length;
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the group mounts or empties as the pins change, and is measured again
+  useLayoutEffect(() => {
+    const group = pinnedRef.current;
+    const address = group?.parentElement?.querySelector<HTMLElement>(
+      "[data-address-field]",
+    );
+    if (!group || !address || typeof ResizeObserver === "undefined") return;
+    const measure = () => {
+      const room = address.offsetWidth + group.offsetWidth - MIN_ADDRESS_WIDTH;
+      setFit(Math.max(0, Math.floor((room + PIN_GAP) / PIN_STEP)));
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(address);
+    return () => observer.disconnect();
+  }, [pinnedCount]);
+  const shownPins = pinned.slice(0, fit);
+
   if (actions.length === 0) return null;
   return (
     <>
-      {pinned.map((action) => (
-        <ShortcutHint key={action.extensionId} label={action.title}>
-          <button
-            type="button"
-            ref={(node) => {
-              if (node) buttons.current.set(action.extensionId, node);
-              else buttons.current.delete(action.extensionId);
-            }}
-            onClick={() => void run(action)}
-            onContextMenu={(event) => {
-              event.preventDefault();
-              menu(action);
-            }}
-            aria-label={action.title}
-            aria-pressed={popup?.extensionId === action.extensionId}
-            data-testid="extension-action"
-            data-extension-id={action.extensionId}
-            className={`grid size-7 shrink-0 cursor-pointer place-items-center rounded-md transition-colors duration-150 hover:bg-bg-overlay ${
-              popup?.extensionId === action.extensionId ? "bg-bg-overlay" : ""
-            } ${action.enabled ? "" : "opacity-45"}`}
-          >
-            <ExtensionIcon action={action} />
-          </button>
-        </ShortcutHint>
-      ))}
+      <div
+        ref={pinnedRef}
+        data-testid="extension-pins"
+        className="flex shrink-0 items-center gap-1 empty:hidden"
+      >
+        {shownPins.map((action) => (
+          <ShortcutHint key={action.extensionId} label={action.title}>
+            <button
+              type="button"
+              ref={(node) => {
+                if (node) buttons.current.set(action.extensionId, node);
+                else buttons.current.delete(action.extensionId);
+              }}
+              onPointerDown={() => {
+                pressedOpen.current =
+                  popupRef.current?.extensionId === action.extensionId
+                    ? action.extensionId
+                    : null;
+              }}
+              onClick={() => void run(action)}
+              onContextMenu={(event) => {
+                event.preventDefault();
+                menu(action);
+              }}
+              aria-label={action.title}
+              aria-pressed={popup?.extensionId === action.extensionId}
+              data-testid="extension-action"
+              data-extension-id={action.extensionId}
+              className={`grid size-7 shrink-0 cursor-pointer place-items-center rounded-md transition-colors duration-150 hover:bg-bg-overlay ${
+                popup?.extensionId === action.extensionId ? "bg-bg-overlay" : ""
+              } ${action.enabled ? "" : "opacity-45"}`}
+            >
+              <ExtensionIcon action={action} />
+            </button>
+          </ShortcutHint>
+        ))}
+      </div>
       <ShortcutHint label="Extensions">
         <button
           ref={puzzleRef}
@@ -228,7 +290,7 @@ export function ExtensionToolbar({
       </ShortcutHint>
       <ExtensionsMenu
         open={menuOpen}
-        anchor={puzzleRef.current}
+        anchorRef={puzzleRef}
         actions={actions}
         onClose={() => setMenuOpen(false)}
         onRun={(action) => void run(action)}
@@ -250,7 +312,7 @@ export function ExtensionToolbar({
       />
       <InstalledNotice
         notice={installed}
-        anchor={puzzleRef.current}
+        anchorRef={puzzleRef}
         onDone={() => setInstalled(null)}
       />
     </>
@@ -259,7 +321,7 @@ export function ExtensionToolbar({
 
 function ExtensionsMenu({
   open,
-  anchor,
+  anchorRef,
   actions,
   onClose,
   onRun,
@@ -268,7 +330,7 @@ function ExtensionsMenu({
   onStore,
 }: {
   open: boolean;
-  anchor: HTMLElement | null;
+  anchorRef: RefObject<HTMLElement | null>;
   actions: ExtensionActionState[];
   onClose: () => void;
   onRun: (action: ExtensionActionState) => void;
@@ -282,12 +344,20 @@ function ExtensionsMenu({
     if (open) setMounted(true);
   }, [open]);
   const panelRef = useRef<HTMLDivElement>(null);
-  const place = useAnchoredPlace(anchor, open, 300);
+  const place = useAnchoredPlace(anchorRef, open, 300);
   useEffect(() => {
     if (!open) return;
+    // Portaled to the end of the page: keys reach its items only once
+    // focus moves in, as the profile menu does.
+    const frame = requestAnimationFrame(() =>
+      panelRef.current?.querySelector<HTMLElement>("button")?.focus(),
+    );
     const onPointerDown = (event: PointerEvent) => {
-      const target = event.target as Node | null;
-      if (panelRef.current?.contains(target) || anchor?.contains(target))
+      const target = event.target instanceof Node ? event.target : null;
+      if (
+        panelRef.current?.contains(target) ||
+        anchorRef.current?.contains(target)
+      )
         return;
       onClose();
     };
@@ -295,22 +365,24 @@ function ExtensionsMenu({
       if (event.key === "Escape") {
         event.stopPropagation();
         onClose();
-        anchor?.focus();
+        anchorRef.current?.focus();
       }
     };
     window.addEventListener("pointerdown", onPointerDown, true);
     window.addEventListener("keydown", onKeyDown, true);
     return () => {
+      cancelAnimationFrame(frame);
       window.removeEventListener("pointerdown", onPointerDown, true);
       window.removeEventListener("keydown", onKeyDown, true);
     };
-  }, [open, anchor, onClose]);
+  }, [open, anchorRef, onClose]);
   if (!mounted) return null;
   return createPortal(
     <div
       ref={panelRef}
       role="dialog"
       aria-label="Extensions"
+      inert={!open ? true : undefined}
       data-testid="extensions-menu"
       data-theme={theme?.appearance}
       style={{ ...themeStyle(theme), ...place }}
@@ -404,11 +476,11 @@ function ExtensionsMenu({
 /** After an install: where the new extension lives, and a way to pin it. */
 function InstalledNotice({
   notice,
-  anchor,
+  anchorRef,
   onDone,
 }: {
   notice: ExtensionInstalled | null;
-  anchor: HTMLElement | null;
+  anchorRef: RefObject<HTMLElement | null>;
   onDone: () => void;
 }) {
   const theme = useTheme();
@@ -418,12 +490,18 @@ function InstalledNotice({
     if (notice) setShown(notice);
   }, [notice]);
   const open = notice !== null;
-  const place = useAnchoredPlace(anchor, open, 300);
+  const place = useAnchoredPlace(anchorRef, open, 300);
+  // Its clock runs from when it appears, however often the page re-renders.
+  const onDoneRef = useRef(onDone);
+  onDoneRef.current = onDone;
   useEffect(() => {
     if (!open || held) return;
-    const timer = window.setTimeout(onDone, INSTALLED_LINGER_MS);
+    const timer = window.setTimeout(
+      () => onDoneRef.current(),
+      INSTALLED_LINGER_MS,
+    );
     return () => window.clearTimeout(timer);
-  }, [open, held, onDone]);
+  }, [open, held]);
   if (!shown) return null;
   return createPortal(
     <div

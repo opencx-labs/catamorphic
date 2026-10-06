@@ -25,7 +25,11 @@ interface PopupWebview extends HTMLElement {
 }
 
 export interface ExtensionPopupTarget {
+  /** Each opening is a new page, as in Chrome (a fresh webview). */
+  openId: number;
   extensionId: string;
+  /** Its name, for assistive technology. */
+  name: string;
   url: string;
   /** The button (or menu) it hangs from. */
   anchor: DOMRect;
@@ -56,6 +60,8 @@ export function ExtensionPopup({
   );
   const sizeRef = useRef(size);
   sizeRef.current = size;
+  const closingRef = useRef(closing);
+  closingRef.current = closing;
   const viewRef = useRef<PopupWebview | null>(null);
   const guestIdRef = useRef<number | null>(null);
   const panelRef = useRef<HTMLDivElement>(null);
@@ -67,6 +73,10 @@ export function ExtensionPopup({
       setShown(target);
       setClosing(false);
       setSize(null);
+    } else if (shown && !sizeRef.current) {
+      // Never seen: nothing to animate out, and nothing left behind.
+      setShown(null);
+      guestIdRef.current = null;
     } else if (shown) setClosing(true);
   }, [target, shown]);
 
@@ -92,7 +102,7 @@ export function ExtensionPopup({
   const takeFocus = useCallback(() => {
     const view = viewRef.current;
     const guestId = guestIdRef.current;
-    if (!view || guestId === null) return;
+    if (!view || guestId === null || closingRef.current) return;
     view.focus();
     void desktopApi.extensionsFocusPopup({ guestId });
   }, []);
@@ -227,7 +237,7 @@ export function ExtensionPopup({
       <div
         ref={panelRef}
         role="dialog"
-        aria-label="Extension"
+        aria-label={shown.name}
         data-testid="extension-popup"
         data-extension-id={shown.extensionId}
         onAnimationEnd={(event) => {
@@ -246,7 +256,7 @@ export function ExtensionPopup({
         }`}
       >
         <webview
-          key={`${shown.extensionId} ${shown.url}`}
+          key={shown.openId}
           ref={attach}
           src={shown.url}
           partition={partition}

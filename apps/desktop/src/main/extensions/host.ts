@@ -27,6 +27,7 @@ import {
   type ExtensionSidePanel,
   type ExtensionSummary,
   type ExtensionsState,
+  type ExtensionTabsReport,
   type ExtensionWindowRequest,
   extensionIdSchema,
   extensionPromptAnswerSchema,
@@ -50,6 +51,8 @@ import {
   ContextMenuStore,
   type MenuEntry,
   pageMenuTarget,
+  type SavedMenus,
+  savedMenusSchema,
 } from "./context-menus.js";
 import type { VerifiedCrx } from "./crx.js";
 import { ExtensionDebuggers } from "./debugger.js";
@@ -61,11 +64,16 @@ import {
 import { extensionFile, fileDataUrl } from "./icons.js";
 import { LoadedExtension } from "./loaded.js";
 import {
-  addedWarnings,
+  accessIncrease,
+  accessOf,
+  accessWarnings,
   allRulesets,
+  coversAllHosts,
   defaultRulesets,
+  isEmptyAccess,
   localizer,
   ManifestError,
+  type PermissionSet,
   parseManifest,
   permissionWarnings,
   readManifest,
@@ -84,9 +92,14 @@ import {
   TabRegistry,
   type WindowRecord,
 } from "./tabs.js";
-import { matchesAny, scriptableUrl } from "./url-policy.js";
+import { matchesAny, patternCovers, scriptableUrl } from "./url-policy.js";
 import { WebNavigationEvents } from "./web-navigation.js";
-import { WEB_STORE_ORIGIN, WebStore, webStoreOptions } from "./webstore.js";
+import {
+  isWebStorePage,
+  WebStore,
+  webStoreOptions,
+  webStoreOrigin,
+} from "./webstore.js";
 
 /**
  * Chrome extensions in Work's browser (ADR 0203). One host for the app:
@@ -97,6 +110,12 @@ import { WEB_STORE_ORIGIN, WebStore, webStoreOptions } from "./webstore.js";
  */
 
 const UPDATE_INTERVAL_MS = 5 * 60 * 60 * 1000;
+/** At most one toolbar refresh per frame or so. */
+const ACTIONS_CHANGED_MS = 50;
+/** How long an event the person caused lets a worker ask for more (Chromium's activation). */
+const GESTURE_MS = 5_000;
+/** How soon an update that waited for its extension to be idle tries again. */
+const UPDATE_RETRY_MS = 10 * 60 * 1000;
 const FIRST_UPDATE_DELAY_MS = 60 * 1000;
 const WINDOW_REQUEST_TIMEOUT_MS = 15_000;
 const PROMPT_LIFETIME_MS = 10 * 60 * 1000;
@@ -167,8 +186,15 @@ export interface DownloadsAccess {
   cancel: (id: string) => void;
   remove: (profileId: string, id: string) => void;
   onChange: (listener: (profileId: string) => void) => () => void;
-  /** Name the next download of `url` in this profile (downloads.download). */
-  expect: (profileId: string, url: string, filename: string | null) => void;
+  /**
+   * The next download of `url` in this profile (downloads.download): named
+   * as asked, its id once it starts, or null when it doesn't.
+   */
+  expect: (
+    profileId: string,
+    url: string,
+    filename: string | null,
+  ) => Promise<string | null>;
 }
 
 interface PendingPrompt {
@@ -181,21 +207,16 @@ interface PendingPrompt {
 
 interface StoreApproval {
   profileId: string;
-  warnings: string[];
+  /** What the person saw and accepted (see `accessOf`). */
+  access: PermissionSet;
   at: number;
 }
 
 const key = (profileId: string, extensionId: string) =>
   `${profileId}:${extensionId}`;
 
-/** The store page's origin (a local stand-in during E2E runs). */
-function storeOrigin(): string {
-  return (
-    (process.env.CATAMORPHIC_E2E_DATA_DIR &&
-      process.env.CATAMORPHIC_E2E_WEBSTORE_ORIGIN) ||
-    WEB_STORE_ORIGIN
-  );
-}
+const portKey = (context: ExtensionContext, portId: string) =>
+  `${context.key}|${portId}`;
 
 function errorMessage(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause);
@@ -226,8 +247,25 @@ export class ExtensionsHost {
     string,
     ReturnType<typeof setTimeout>
   >();
+  private readonly actionsTimers = new Map<
+    string,
+    ReturnType<typeof setTimeout>
+  >();
+  private readonly retryTimers = new Map<
+    string,
+    ReturnType<typeof setTimeout>
+  >();
   /** Open side panels, by the tab they sit beside. */
   private readonly sidePanels = new Map<number, ExtensionSidePanel>();
+  /** Each window's tab reports, one per project mounted in it. */
+  private readonly tabReports = new Map<
+    number,
+    Map<string, ExtensionTabsReport>
+  >();
+  /** When the person last acted on each extension (`profile:id`). */
+  private readonly gestures = new Map<string, number>();
+  /** Tabs whose closing already clears their side panel. */
+  private readonly panelTabs = new WeakSet<WebContents>();
   /** Extension pages the app shows: popup and side panel views. */
   private readonly views = new Map<
     number,
@@ -263,29 +301,33 @@ export class ExtensionsHost {
     this.tabs = new TabRegistry((profileId, event) =>
       this.onTabEvent(profileId, event),
     );
-    this.events = new ExtensionEvents((profileId, extensionId) =>
-      this.startWorker(profileId, extensionId),
+    this.events = new ExtensionEvents(
+      (profileId, extensionId) => this.startWorker(profileId, extensionId),
+      (context) => this.closePortsOf(context.key),
     );
-    this.debuggers = new ExtensionDebuggers({
-      onEvent: (client, tabId, method, params, sessionId) => {
-        const [profileId, extensionId] = client.split(":");
-        if (profileId && extensionId)
-          this.events.dispatch(profileId, extensionId, "debugger.onEvent", [
-            sessionId ? { tabId, sessionId } : { tabId },
-            method,
-            params,
-          ]);
+    this.debuggers = new ExtensionDebuggers(
+      {
+        onEvent: (client, tabId, method, params, sessionId) => {
+          const [profileId, extensionId] = client.split(":");
+          if (profileId && extensionId)
+            this.events.dispatch(profileId, extensionId, "debugger.onEvent", [
+              sessionId ? { tabId, sessionId } : { tabId },
+              method,
+              params,
+            ]);
+        },
+        onDetach: (client, tabId, reason) => {
+          const [profileId, extensionId] = client.split(":");
+          if (profileId && extensionId)
+            this.events.dispatch(profileId, extensionId, "debugger.onDetach", [
+              { tabId },
+              reason,
+            ]);
+        },
+        onChange: (tabId) => this.debuggingChanged(tabId),
       },
-      onDetach: (client, tabId, reason) => {
-        const [profileId, extensionId] = client.split(":");
-        if (profileId && extensionId)
-          this.events.dispatch(profileId, extensionId, "debugger.onDetach", [
-            { tabId },
-            reason,
-          ]);
-      },
-      onChange: (tabId) => this.debuggingChanged(tabId),
-    });
+      (url) => scriptableUrl(url) && !isWebStorePage(url),
+    );
     this.navigation = new WebNavigationEvents((profileId, name, details) => {
       for (const extension of this.loadedIn(profileId)) {
         if (!extension.has("webNavigation")) continue;
@@ -354,7 +396,7 @@ export class ExtensionsHost {
       const { versionId, runningStatus } = details;
       if (runningStatus === "stopped" || runningStatus === "stopping") {
         this.events.workerStopped(versionId);
-        this.closePortsOfWorker(versionId);
+        this.closePortsOf(`worker:${versionId}`);
         return;
       }
       const worker = session.serviceWorkers.getWorkerFromVersionID(versionId);
@@ -394,12 +436,28 @@ export class ExtensionsHost {
   }
 
   releaseProfile(profileId: string): void {
-    for (const extension of this.loadedIn(profileId))
+    // Its extensions leave the session too, so nothing (an alarm, an open
+    // port) wakes a removed profile's workers again.
+    const session = this.sessions.get(profileId);
+    for (const extension of this.loadedIn(profileId)) {
       this.forgetRuntime(extension);
+      if (session?.extensions.getExtension(extension.id)) {
+        this.expectedUnloads.add(key(profileId, extension.id));
+        session.extensions.removeExtension(extension.id);
+      }
+    }
+    if (session?.extensions.getExtension(BRAND_EXTENSION_ID)) {
+      this.expectedUnloads.add(key(profileId, BRAND_EXTENSION_ID));
+      session.extensions.removeExtension(BRAND_EXTENSION_ID);
+    }
     for (const id of [...this.loaded.keys()])
       if (id.startsWith(`${profileId}:`)) this.loaded.delete(id);
     clearTimeout(this.updateTimers.get(profileId));
     this.updateTimers.delete(profileId);
+    clearTimeout(this.retryTimers.get(profileId));
+    this.retryTimers.delete(profileId);
+    clearTimeout(this.actionsTimers.get(profileId));
+    this.actionsTimers.delete(profileId);
     this.sessions.delete(profileId);
     this.brandLoaded.delete(profileId);
     this.registry.releaseProfile(profileId);
@@ -410,6 +468,10 @@ export class ExtensionsHost {
     for (const dispose of this.disposers.splice(0)) dispose();
     for (const timer of this.updateTimers.values()) clearTimeout(timer);
     this.updateTimers.clear();
+    for (const timer of this.retryTimers.values()) clearTimeout(timer);
+    this.retryTimers.clear();
+    for (const timer of this.actionsTimers.values()) clearTimeout(timer);
+    this.actionsTimers.clear();
     for (const entry of this.nativePorts.values()) entry.port.close();
     this.nativePorts.clear();
     for (const pending of this.prompts.values()) {
@@ -499,8 +561,44 @@ export class ExtensionsHost {
     return extension;
   }
 
+  private menusFile(extension: LoadedExtension): string {
+    return path.join(
+      this.registry.dataDir(extension.profileId, extension.id),
+      "context-menus.json",
+    );
+  }
+
+  /** Keep an extension's menu items for its next run. */
+  saveMenus(extension: LoadedExtension): void {
+    const saved: SavedMenus = {
+      version: extension.version,
+      items: this.menus.snapshot(extension.profileId, extension.id),
+    };
+    const file = this.menusFile(extension);
+    try {
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, JSON.stringify(saved), { mode: 0o600 });
+    } catch (cause) {
+      console.warn("[extensions] could not save menu items:", cause);
+    }
+  }
+
+  /** Items the same version made on its last run; an update starts clean. */
+  private restoreMenus(extension: LoadedExtension): void {
+    try {
+      const saved = savedMenusSchema.safeParse(
+        JSON.parse(fs.readFileSync(this.menusFile(extension), "utf-8")),
+      );
+      if (saved.success && saved.data.version === extension.version)
+        this.menus.restore(extension.profileId, extension.id, saved.data.items);
+    } catch {
+      // Nothing saved yet.
+    }
+  }
+
   private initRuntime(extension: LoadedExtension): void {
     const { profileId, id } = extension;
+    this.restoreMenus(extension);
     const action = extension.action;
     this.actions.init(profileId, id, {
       title: action?.title ?? extension.name,
@@ -530,7 +628,11 @@ export class ExtensionsHost {
         this.nativePorts.delete(portId);
       }
     for (const [guestId, panel] of [...this.sidePanels])
-      if (panel.extensionId === id) this.closeSidePanel(guestId);
+      if (
+        panel.extensionId === id &&
+        this.tabs.tabProfile(guestId) === profileId
+      )
+        this.closeSidePanel(guestId);
     this.actionsChanged(profileId);
   }
 
@@ -566,8 +668,32 @@ export class ExtensionsHost {
   private rulesetsPending(extension: LoadedExtension): boolean {
     return (
       allRulesets(extension.manifest).length > 0 &&
-      extension.record.rulesetsAppliedFor !== extension.version
+      extension.record.enabledRulesets === null
     );
+  }
+
+  /** The rulesets an extension's version should run with now. */
+  private wantedRulesets(extension: LoadedExtension): string[] | null {
+    const all = allRulesets(extension.manifest);
+    if (all.length === 0) return null;
+    const wanted =
+      extension.record.enabledRulesets ?? defaultRulesets(extension.manifest);
+    return wanted.filter((id) => all.includes(id));
+  }
+
+  /** The extension changed (or Work restored) which rulesets are on. */
+  noteEnabledRulesets(extension: LoadedExtension, ids: unknown): void {
+    if (!Array.isArray(ids)) return;
+    const all = allRulesets(extension.manifest);
+    const enabled = ids.filter(
+      (id): id is string => typeof id === "string" && all.includes(id),
+    );
+    const updated = this.registry.update(
+      extension.profileId,
+      extension.id,
+      (record) => ({ ...record, enabledRulesets: enabled }),
+    );
+    if (updated) Object.assign(extension.record, updated);
   }
 
   // ---- Extension contexts: boot, calls, listeners ----------------------------------------
@@ -619,6 +745,10 @@ export class ExtensionsHost {
               context: resolved.context,
               tabId: null,
               windowId: null,
+              gesture: this.recentGesture(
+                resolved.extension.profileId,
+                resolved.extension.id,
+              ),
             },
             method,
             args,
@@ -671,30 +801,28 @@ export class ExtensionsHost {
       context,
       tabId: tab?.id ?? null,
       windowId: window?.id ?? null,
+      gesture: false,
     };
+  }
+
+  /** The person just acted on an extension (its worker may now ask). */
+  noteGesture(profileId: string, extensionId: string): void {
+    this.gestures.set(key(profileId, extensionId), Date.now());
+  }
+
+  private recentGesture(profileId: string, extensionId: string): boolean {
+    const at = this.gestures.get(key(profileId, extensionId));
+    return at !== undefined && Date.now() - at < GESTURE_MS;
   }
 
   private boot(extension: LoadedExtension): {
     granted: string[];
-    rulesets: { enable: string[]; disable: string[] } | null;
+    rulesets: string[] | null;
   } {
-    let rulesets: { enable: string[]; disable: string[] } | null = null;
-    if (this.rulesetsPending(extension)) {
-      const enable = defaultRulesets(extension.manifest);
-      rulesets = {
-        enable,
-        disable: allRulesets(extension.manifest).filter(
-          (id) => !enable.includes(id),
-        ),
-      };
-      const updated = this.registry.update(
-        extension.profileId,
-        extension.id,
-        (record) => ({ ...record, rulesetsAppliedFor: extension.version }),
-      );
-      if (updated) Object.assign(extension.record, updated);
-    }
-    return { granted: extension.granted.permissions, rulesets };
+    return {
+      granted: extension.granted.permissions,
+      rulesets: this.wantedRulesets(extension),
+    };
   }
 
   private async call(
@@ -725,21 +853,22 @@ export class ExtensionsHost {
         return;
       this.connectNative(context, portId, name);
     });
+    // Ports are named within the context that opened them, so no other
+    // page or extension can reach (or squat on) one.
     listen(EXTENSION_CHANNELS.nativePost, (event, portId, message) => {
-      const entry =
-        typeof portId === "string" ? this.nativePorts.get(portId) : undefined;
       const context = contextOf(event);
-      if (entry && context && entry.context.key === context.key)
-        entry.port.post(message);
+      if (!context || typeof portId !== "string") return;
+      this.nativePorts.get(portKey(context, portId))?.port.post(message);
     });
     listen(EXTENSION_CHANNELS.nativeDisconnect, (event, portId) => {
-      const entry =
-        typeof portId === "string" ? this.nativePorts.get(portId) : undefined;
       const context = contextOf(event);
-      if (!entry || !context || entry.context.key !== context.key) return;
+      if (!context || typeof portId !== "string") return;
+      const id = portKey(context, portId);
+      const entry = this.nativePorts.get(id);
+      if (!entry) return;
       entry.port.close();
       entry.release();
-      this.nativePorts.delete(portId as string);
+      this.nativePorts.delete(id);
     });
   }
 
@@ -755,7 +884,8 @@ export class ExtensionsHost {
       fail(NATIVE_ERRORS.forbidden);
       return;
     }
-    if (this.nativePorts.has(portId)) return;
+    const id = portKey(context, portId);
+    if (this.nativePorts.has(id)) return;
     const host = resolveNativeHost(
       name,
       extension.id,
@@ -769,20 +899,21 @@ export class ExtensionsHost {
     const port = new NativePort(host, extension.id, {
       message: (message) => context.send("__native.message", [portId, message]),
       close: (error) => {
-        this.nativePorts.delete(portId);
+        this.nativePorts.delete(id);
         release();
         if (context.alive()) fail(error ?? NATIVE_ERRORS.exited);
       },
     });
-    this.nativePorts.set(portId, { port, context, release });
+    this.nativePorts.set(id, { port, context, release });
   }
 
-  private closePortsOfWorker(versionId: number): void {
-    for (const [portId, entry] of [...this.nativePorts])
-      if (entry.context.key === `worker:${versionId}`) {
+  /** A page or worker went away: its native hosts stop. */
+  private closePortsOf(contextKey: string): void {
+    for (const [id, entry] of [...this.nativePorts])
+      if (entry.context.key === contextKey) {
         entry.port.close();
         entry.release();
-        this.nativePorts.delete(portId);
+        this.nativePorts.delete(id);
       }
   }
 
@@ -847,7 +978,11 @@ export class ExtensionsHost {
     cause: string,
     removed: boolean,
   ): void {
-    const url = `https://${(cookie.domain ?? "").replace(/^\./, "")}${cookie.path ?? "/"}`;
+    const url = `${cookie.secure ? "https" : "http"}://${(cookie.domain ?? "").replace(/^\./, "")}${cookie.path ?? "/"}`;
+    // Electron's causes, in Chrome's words.
+    const chromeCause = cause.startsWith("inserted")
+      ? "explicit"
+      : cause.replaceAll("-", "_");
     for (const extension of this.loadedIn(profileId)) {
       if (!extension.has("cookies")) continue;
       if (!this.events.listening(profileId, extension.id, "cookies.onChanged"))
@@ -856,7 +991,7 @@ export class ExtensionsHost {
       this.events.dispatch(profileId, extension.id, "cookies.onChanged", [
         {
           removed,
-          cause,
+          cause: chromeCause,
           cookie: {
             name: cookie.name,
             value: cookie.value,
@@ -911,10 +1046,17 @@ export class ExtensionsHost {
     });
     ipcMain.handle(
       EXTENSION_CHANNELS.call,
-      async (event, method: unknown, args: unknown) => {
+      async (event, method: unknown, args: unknown, meta: unknown) => {
         const caller = this.frameCaller(event, false);
         if (!caller) return { error: "Not an extension page." };
-        return this.call(caller, method, args);
+        // The session preload reads the frame's user activation in its own
+        // world, where the extension's code can't change it.
+        const gesture =
+          meta !== null &&
+          typeof meta === "object" &&
+          "gesture" in meta &&
+          meta.gesture === true;
+        return this.call({ ...caller, gesture }, method, args);
       },
     );
     this.disposers.push(() => ipcMain.removeHandler(EXTENSION_CHANNELS.call));
@@ -931,8 +1073,16 @@ export class ExtensionsHost {
     // The Chrome Web Store page.
     ipcMain.handle(
       EXTENSION_CHANNELS.webstore,
-      (event, method: unknown, args: unknown) =>
-        this.webStoreCall(event, method, Array.isArray(args) ? args : []),
+      (event, method: unknown, args: unknown, meta: unknown) =>
+        this.webStoreCall(
+          event,
+          method,
+          Array.isArray(args) ? args : [],
+          meta !== null &&
+            typeof meta === "object" &&
+            "gesture" in meta &&
+            meta.gesture === true,
+        ),
     );
     this.disposers.push(() =>
       ipcMain.removeHandler(EXTENSION_CHANNELS.webstore),
@@ -1044,11 +1194,26 @@ export class ExtensionsHost {
     this.handle("catamorphic:extensions-tabs-report", (event, input) => {
       const window = BrowserWindow.fromWebContents(event.sender);
       if (!window || this.options.isDock(window)) return;
-      this.tabs.report(
-        window,
-        this.options.profileFor(event.sender),
-        extensionTabsReportSchema.parse(input),
+      const report = extensionTabsReportSchema.parse(input);
+      let reports = this.tabReports.get(window.id);
+      if (!reports) {
+        const windowId = window.id;
+        reports = new Map();
+        this.tabReports.set(windowId, reports);
+        window.once("closed", () => this.tabReports.delete(windowId));
+      }
+      if (!report.visible && report.guestIds.length === 0)
+        reports.delete(report.reporter);
+      else reports.set(report.reporter, report);
+      // The window's tabs: the project in front first, then the others'.
+      const ordered = [...reports.values()].sort(
+        (a, b) => Number(b.visible) - Number(a.visible),
       );
+      this.tabs.report(window, this.options.profileFor(event.sender), {
+        guestIds: ordered.flatMap((entry) => entry.guestIds),
+        activeGuestId:
+          ordered.find((entry) => entry.visible)?.activeGuestId ?? null,
+      });
     });
     this.on("catamorphic:extensions-window-response", (event, input) => {
       const parsed = extensionWindowResponseSchema.safeParse(input);
@@ -1210,10 +1375,23 @@ export class ExtensionsHost {
     this.actionsChanged(profileId);
   }
 
+  /**
+   * Toolbar state changed. An ad blocker sets its badge for each request it
+   * blocks; windows hear once per frame, not once per change.
+   */
   actionsChanged(profileId: string): void {
-    this.sendToProfile(profileId, "catamorphic:extensions-actions-changed", {
+    if (this.actionsTimers.has(profileId)) return;
+    this.actionsTimers.set(
       profileId,
-    });
+      setTimeout(() => {
+        this.actionsTimers.delete(profileId);
+        this.sendToProfile(
+          profileId,
+          "catamorphic:extensions-actions-changed",
+          { profileId },
+        );
+      }, ACTIONS_CHANGED_MS),
+    );
   }
 
   /** A window to ask the person in: the given one, else the profile's last. */
@@ -1415,6 +1593,7 @@ export class ExtensionsHost {
   ): Promise<ExtensionActionResult> {
     const extension = this.extension(profileId, extensionId);
     if (!extension) throw new Error("This extension is not running.");
+    this.noteGesture(profileId, extensionId);
     const tab = guestId === null ? null : this.tabs.tab(guestId);
     if (tab) this.grantActiveTab(extension, tab.id);
     const values = this.actions.get(profileId, extensionId, tab?.id ?? null);
@@ -1439,7 +1618,8 @@ export class ExtensionsHost {
   }
 
   grantActiveTab(extension: LoadedExtension, tabId: number): void {
-    if (!extension.has("activeTab")) return;
+    // A grant already held keeps its one watcher.
+    if (!extension.has("activeTab") || extension.activeTabs.has(tabId)) return;
     extension.activeTabs.add(tabId);
     const tab = this.tabs.tab(tabId);
     if (!tab) return;
@@ -1597,7 +1777,10 @@ export class ExtensionsHost {
       return;
     if (previous) this.closeSidePanel(tabId);
     this.sidePanels.set(tabId, panel);
-    tab.guest.once("destroyed", () => this.sidePanels.delete(tabId));
+    if (!this.panelTabs.has(tab.guest)) {
+      this.panelTabs.add(tab.guest);
+      tab.guest.once("destroyed", () => this.sidePanels.delete(tabId));
+    }
     this.sendSidePanel(tab, panel);
     this.events.dispatch(
       extension.profileId,
@@ -2015,10 +2198,13 @@ export class ExtensionsHost {
             extension.id,
             item.id,
           );
+          this.noteGesture(extension.profileId, extension.id);
           this.grantActiveTab(extension, tab.id);
           const info: Record<string, unknown> = {
-            menuItemId: item.id,
-            ...(item.parentId ? { parentMenuItemId: item.parentId } : {}),
+            menuItemId: item.rawId,
+            ...(item.rawParentId !== null
+              ? { parentMenuItemId: item.rawParentId }
+              : {}),
             pageUrl: target.pageUrl,
             frameId: target.frameId,
             editable: target.editable,
@@ -2120,12 +2306,13 @@ export class ExtensionsHost {
   }
 
   /**
-   * Escape reaching a page while its window shows a popup closes the
-   * popup, as Escape in the popup does. A page can take focus back from a
-   * popup while it loads (all of a window's guests share its focus, where
-   * Chrome's popup is a window of its own).
+   * Escape or a press reaching another page while its window shows a
+   * popup closes the popup, as in Chrome. A page can take focus back from
+   * a popup while it loads (all of a window's guests share its focus,
+   * where Chrome's popup is a window of its own).
    */
-  private closePopupsBeside(guest: WebContents): boolean {
+  closePopupsBeside(guest: WebContents): boolean {
+    if (this.views.get(guest.id)?.kind === "popup") return false;
     let closed = false;
     for (const [id, view] of this.views) {
       if (view.kind !== "popup") continue;
@@ -2161,6 +2348,7 @@ export class ExtensionsHost {
       }
       return;
     }
+    this.noteGesture(profileId, extensionId);
     this.events.dispatch(profileId, extensionId, "commands.onCommand", [
       name,
       this.tabObject(extension, tab),
@@ -2202,9 +2390,7 @@ export class ExtensionsHost {
       if (
         ![...extension.optional.origins, ...extension.required.origins].some(
           (pattern) =>
-            pattern === origin ||
-            pattern === "<all_urls>" ||
-            pattern === "*://*/*",
+            coversAllHosts(pattern) || patternCovers(pattern, origin),
         )
       )
         throw new Error(
@@ -2220,21 +2406,9 @@ export class ExtensionsHost {
     };
     if (missing.permissions.length === 0 && missing.origins.length === 0)
       return true;
-    const warnings = addedWarnings(
-      extension.warnings(),
-      permissionWarnings(extension.manifest, {
-        permissions: [
-          ...extension.required.permissions,
-          ...extension.granted.permissions,
-          ...missing.permissions,
-        ],
-        origins: [
-          ...extension.required.origins,
-          ...extension.granted.origins,
-          ...missing.origins,
-        ],
-      }),
-    );
+    // Only what it doesn't hold yet, and only what carries a warning,
+    // needs the person.
+    const warnings = accessWarnings(missing);
     if (warnings.length > 0) {
       const preferred =
         caller.windowId !== null
@@ -2379,9 +2553,10 @@ export class ExtensionsHost {
     event: IpcMainInvokeEvent,
     method: unknown,
     args: unknown[],
+    gesture: boolean,
   ): Promise<unknown> {
     const frame = event.senderFrame;
-    if (!frame || frame.parent !== null || frame.origin !== storeOrigin())
+    if (!frame || frame.parent !== null || frame.origin !== webStoreOrigin())
       throw new Error("Not the Chrome Web Store.");
     if (
       event.sender.getType() !== "webview" ||
@@ -2393,6 +2568,18 @@ export class ExtensionsHost {
     if (!profileId) throw new Error("Not a browsing session.");
     const host = event.sender.hostWebContents;
     const window = host ? BrowserWindow.fromWebContents(host) : null;
+    // Installing, turning on or off and removing follow a click, as in
+    // Chrome: a script on the page can't start them by itself.
+    if (
+      !gesture &&
+      (method === "beginInstallWithManifest3" ||
+        method === "management.setEnabled" ||
+        method === "management.uninstall")
+    )
+      return {
+        result: "user_gesture_required",
+        error: "This function must be called during a user gesture",
+      };
     // One envelope for the page: a result, and the error Chrome would put
     // in runtime.lastError.
     const value = await this.webStoreMethod(
@@ -2464,7 +2651,7 @@ export class ExtensionsHost {
           return { result: "user_cancelled", error: "User cancelled install" };
         this.approvals.set(key(profileId, id), {
           profileId,
-          warnings,
+          access: accessOf(manifest),
           at: Date.now(),
         });
         return { result: "success" };
@@ -2479,7 +2666,7 @@ export class ExtensionsHost {
             error: "Install was not approved.",
           };
         try {
-          await this.installFromStore(profileId, id, approval.warnings, window);
+          await this.installFromStore(profileId, id, approval.access, window);
           return { result: "success" };
         } catch (cause) {
           return { result: "install_error", error: errorMessage(cause) };
@@ -2537,7 +2724,7 @@ export class ExtensionsHost {
         if (record?.source !== "webstore")
           return { error: "Failed to find extension" };
         // Turning on what waits for new access goes through its review.
-        if (enabled && record.disabledReason === "permissions") {
+        if (enabled && record.pendingUpdate) {
           await this.reviewUpdate(profileId, id, window);
           return undefined;
         }
@@ -2600,7 +2787,7 @@ export class ExtensionsHost {
   async installFromStore(
     profileId: string,
     extensionId: string,
-    approvedWarnings: string[],
+    approved: PermissionSet,
     window: BrowserWindow | null,
   ): Promise<void> {
     const id = key(profileId, extensionId);
@@ -2610,12 +2797,12 @@ export class ExtensionsHost {
       const offer = await this.webStore.latest(extensionId);
       const crx = await this.webStore.download(offer);
       const { dir, manifest } = this.unpack(profileId, crx, offer.version);
-      const warnings = permissionWarnings(manifest);
-      const extra = addedWarnings(approvedWarnings, warnings);
-      if (extra.length > 0) {
+      const access = accessOf(manifest);
+      const extra = accessIncrease(approved, access);
+      if (!isEmptyAccess(extra)) {
         fs.rmSync(dir, { recursive: true, force: true });
         throw new Error(
-          `The extension asks for more than you approved: ${extra.join("; ")}`,
+          `The extension asks for more than you approved: ${accessWarnings(extra).join("; ")}`,
         );
       }
       const now = Date.now();
@@ -2629,9 +2816,9 @@ export class ExtensionsHost {
         pinned: false,
         installedAt: now,
         updatedAt: now,
-        approvedWarnings: warnings,
+        approved: access,
         granted: { permissions: [], origins: [] },
-        rulesetsAppliedFor: null,
+        enabledRulesets: null,
         pendingUpdate: null,
         uninstallUrl: null,
       };
@@ -2742,9 +2929,9 @@ export class ExtensionsHost {
       pinned: existing?.pinned ?? false,
       installedAt: existing?.installedAt ?? now,
       updatedAt: now,
-      approvedWarnings: permissionWarnings(manifest),
+      approved: accessOf(manifest),
       granted: existing?.granted ?? { permissions: [], origins: [] },
-      rulesetsAppliedFor: null,
+      enabledRulesets: null,
       pendingUpdate: null,
       uninstallUrl: null,
     };
@@ -2764,7 +2951,7 @@ export class ExtensionsHost {
       record.source === "unpacked"
         ? this.registry.update(profileId, extensionId, (current) => ({
             ...current,
-            rulesetsAppliedFor: null,
+            enabledRulesets: null,
           }))
         : record;
     if (next) await this.load(profileId, next);
@@ -2779,7 +2966,7 @@ export class ExtensionsHost {
   ): Promise<void> {
     const record = this.registry.get(profileId, extensionId);
     if (!record) throw new Error("No such extension.");
-    if (enabled && record.disabledReason === "permissions")
+    if (enabled && record.pendingUpdate)
       throw new Error("Review the extension's new access first.");
     if (
       record.enabled === enabled &&
@@ -2856,7 +3043,7 @@ export class ExtensionsHost {
       if (contents.isDestroyed() || contents.getType() !== "webview") continue;
       if (this.profileOfSession(contents.session) !== profileId) continue;
       try {
-        if (new URL(contents.getURL()).origin !== storeOrigin()) continue;
+        if (new URL(contents.getURL()).origin !== webStoreOrigin()) continue;
       } catch {
         continue;
       }
@@ -2872,9 +3059,10 @@ export class ExtensionsHost {
       last + UPDATE_INTERVAL_MS - Date.now(),
     );
     const timer = setTimeout(() => {
-      void this.checkUpdates(profileId, false).finally(() =>
-        this.scheduleUpdates(profileId),
-      );
+      void this.checkUpdates(profileId, false).finally(() => {
+        // A profile removed meanwhile checks nothing more.
+        if (this.sessions.has(profileId)) this.scheduleUpdates(profileId);
+      });
     }, due);
     timer.unref?.();
     this.updateTimers.set(profileId, timer);
@@ -2919,55 +3107,102 @@ export class ExtensionsHost {
   ): Promise<void> {
     const record = this.registry.get(profileId, offer.id);
     if (!record || record.pendingUpdate?.version === offer.version) return;
+    // An extension at work (a popup or side panel open, a tab under its
+    // debugger, a native host connected) keeps its version until it is
+    // idle, as Chrome waits; it hears the update is ready.
+    if (record.enabled && this.isBusy(profileId, offer.id)) {
+      this.events.dispatch(profileId, offer.id, "runtime.onUpdateAvailable", [
+        { version: offer.version },
+      ]);
+      this.retryUpdates(profileId);
+      return;
+    }
     const crx = await this.webStore.download(offer);
     const { dir, manifest } = this.unpack(profileId, crx, offer.version);
-    const warnings = permissionWarnings(manifest);
-    const extra = addedWarnings(record.approvedWarnings, warnings);
-    if (extra.length > 0) {
-      // Chrome disables an extension whose update asks for more, until the
-      // person accepts; the running version keeps nothing new.
-      this.unload(profileId, offer.id);
+    const access = accessOf(manifest);
+    const extra = accessIncrease(record.approved, access);
+    if (!isEmptyAccess(extra)) {
+      // Chrome turns off an extension whose update asks for more, until
+      // the person accepts; the running version keeps nothing new. One the
+      // person turned off stays off for their reason.
+      if (record.enabled) this.unload(profileId, offer.id);
       this.registry.update(profileId, offer.id, (current) => ({
         ...current,
         enabled: false,
-        disabledReason: "permissions",
-        pendingUpdate: { version: offer.version, path: dir, warnings: extra },
+        disabledReason: current.enabled
+          ? "permissions"
+          : current.disabledReason,
+        pendingUpdate: {
+          version: offer.version,
+          path: dir,
+          warnings: accessWarnings(extra),
+        },
       }));
       this.pruneVersions(profileId, offer.id, record.path, dir);
       await this.syncBrand(profileId);
       return;
     }
-    await this.swapVersion(
-      profileId,
-      offer.id,
+    await this.swapVersion(profileId, offer.id, {
       dir,
-      String(manifest.version),
-      warnings,
-    );
+      version: String(manifest.version),
+      approved: access,
+      enable: record.enabled,
+    });
   }
 
+  /** Install a version; it runs only when `enable` says so. */
   private async swapVersion(
     profileId: string,
     extensionId: string,
-    dir: string,
-    version: string,
-    warnings: string[],
+    next: {
+      dir: string;
+      version: string;
+      approved: PermissionSet;
+      enable: boolean;
+    },
   ): Promise<void> {
     this.unload(profileId, extensionId);
-    const next = this.registry.update(profileId, extensionId, (current) => ({
+    const record = this.registry.update(profileId, extensionId, (current) => ({
       ...current,
-      path: dir,
-      version,
+      path: next.dir,
+      version: next.version,
       updatedAt: Date.now(),
-      approvedWarnings: warnings,
-      enabled: true,
-      disabledReason: null,
+      approved: next.approved,
+      enabled: next.enable,
+      disabledReason: next.enable ? null : (current.disabledReason ?? "user"),
       pendingUpdate: null,
-      rulesetsAppliedFor: null,
+      enabledRulesets: null,
     }));
-    this.pruneVersions(profileId, extensionId, dir);
-    if (next) await this.load(profileId, next);
+    this.pruneVersions(profileId, extensionId, next.dir);
+    if (record?.enabled) await this.load(profileId, record);
     await this.syncBrand(profileId);
+  }
+
+  /** Whether an extension is in use right now, so an update should wait. */
+  private isBusy(profileId: string, extensionId: string): boolean {
+    for (const view of this.views.values())
+      if (view.profileId === profileId && view.extensionId === extensionId)
+        return true;
+    for (const entry of this.nativePorts.values())
+      if (
+        entry.context.profileId === profileId &&
+        entry.context.extensionId === extensionId
+      )
+        return true;
+    return this.debuggers.allClients().includes(`${profileId}:${extensionId}`);
+  }
+
+  /** Check again soon for an update that waited for its extension. */
+  private retryUpdates(profileId: string): void {
+    if (this.retryTimers.has(profileId)) return;
+    this.retryTimers.set(
+      profileId,
+      setTimeout(() => {
+        this.retryTimers.delete(profileId);
+        if (this.sessions.has(profileId))
+          void this.checkUpdates(profileId, false);
+      }, UPDATE_RETRY_MS),
+    );
   }
 
   /** The person reviews an update that needs more access. */
@@ -3003,13 +3238,12 @@ export class ExtensionsHost {
     );
     if (!accepted) return;
     const manifest = readManifest(pending.path);
-    await this.swapVersion(
-      profileId,
-      extensionId,
-      pending.path,
-      pending.version,
-      permissionWarnings(manifest),
-    );
+    await this.swapVersion(profileId, extensionId, {
+      dir: pending.path,
+      version: pending.version,
+      approved: accessOf(manifest),
+      enable: true,
+    });
     this.changed(profileId);
   }
 
@@ -3047,6 +3281,23 @@ export class ExtensionsHost {
         webviewTag: false,
       },
     });
+    // The title names the site it shows and the extension that opened it;
+    // the page can't set it (Chrome's popup windows show the address).
+    const label = () => {
+      try {
+        const { protocol, host } = new URL(window.webContents.getURL());
+        if (protocol === "http:" || protocol === "https:")
+          return `${host} (${extension.name})`;
+      } catch {
+        // Not loaded yet.
+      }
+      return extension.name;
+    };
+    window.on("page-title-updated", (event) => {
+      event.preventDefault();
+      window.setTitle(label());
+    });
+    window.webContents.on("did-navigate", () => window.setTitle(label()));
     // Links it opens become tabs, as from any popup.
     window.webContents.setWindowOpenHandler(({ url }) => {
       if (/^https?:/i.test(url))

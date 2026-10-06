@@ -147,7 +147,9 @@ export class NativePort {
       windowsHide: true,
     });
     this.child.on("error", () => this.finish(NATIVE_ERRORS.notFound));
-    this.child.on("exit", () => this.finish(NATIVE_ERRORS.exited));
+    // "close" comes after the host's output is read: a host that answers
+    // and exits still delivers its answer.
+    this.child.on("close", () => this.finish(NATIVE_ERRORS.exited));
     this.child.stdout?.on("data", (chunk: Buffer) => {
       let messages: unknown[];
       try {

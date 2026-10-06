@@ -4807,6 +4807,9 @@ export function App({
   // extensions ask the window to do.
   const lastBrowserTabRef = useRef<string | null>(null);
   if (activeBrowserTabId) lastBrowserTabRef.current = activeBrowserTabId;
+  // A window keeps a project mounted for each one opened in it: each
+  // reports its own tabs, and only the one in front names the active tab.
+  const tabsReporter = useRef(crypto.randomUUID()).current;
   const tabsReportTimer = useRef<number | undefined>(undefined);
   const reportExtensionTabs = useCallback(() => {
     if (document.documentElement.dataset.surface === "dock") return;
@@ -4819,17 +4822,40 @@ export function App({
       const last = lastBrowserTabRef.current;
       void desktopApi
         .extensionsTabsReport({
+          reporter: tabsReporter,
+          visible: visibleRef.current,
           guestIds,
           activeGuestId: (last ? guests.get(last) : undefined) ?? null,
         })
         .catch(() => {});
     }, 0);
-  }, []);
+  }, [tabsReporter]);
   const reportExtensionTabsRef = useRef(reportExtensionTabs);
   // biome-ignore lint/correctness/useExhaustiveDependencies: the report reads the latest tabs and active tab through refs
   useEffect(() => {
     reportExtensionTabs();
-  }, [workspace.browsers, activeBrowserTabId, reportExtensionTabs]);
+  }, [
+    workspace.browsers,
+    activeBrowserTabId,
+    runtime.visible,
+    reportExtensionTabs,
+  ]);
+  // A project that closes takes its tabs out of the window's.
+  useEffect(
+    () => () => {
+      window.clearTimeout(tabsReportTimer.current);
+      if (document.documentElement.dataset.surface === "dock") return;
+      void desktopApi
+        .extensionsTabsReport({
+          reporter: tabsReporter,
+          visible: false,
+          guestIds: [],
+          activeGuestId: null,
+        })
+        .catch(() => {});
+    },
+    [tabsReporter],
+  );
   useEffect(() => {
     if (document.documentElement.dataset.surface === "dock") return;
     return desktopApi.onExtensionWindowRequest(({ id, request }) => {
@@ -4839,8 +4865,11 @@ export function App({
         [...browserGuestIdsRef.current].find(
           ([, guest]) => guest === guestId,
         )?.[0];
+      // Only the project in front opens things; the project that holds a
+      // tab answers for it, and the others stay quiet.
       switch (request.kind) {
         case "create-tab": {
+          if (!visibleRef.current) return;
           const localId = openBrowserTabRef.current(request.url, {
             background: !request.active,
           });
@@ -4861,18 +4890,20 @@ export function App({
         }
         case "select-tab": {
           const localId = localIdOf(request.guestId);
-          if (localId) selectTabRef.current(browserTabKey(localId));
-          respond(localId ? {} : null);
+          if (!localId) return;
+          selectTabRef.current(browserTabKey(localId));
+          respond({});
           return;
         }
         case "close-tab": {
           const localId = localIdOf(request.guestId);
-          if (localId)
-            closeTabRef.current(browserTabKey(localId), { force: true });
-          respond(localId ? {} : null);
+          if (!localId) return;
+          closeTabRef.current(browserTabKey(localId), { force: true });
+          respond({});
           return;
         }
         case "open-popup":
+          if (!visibleRef.current) return;
           window.dispatchEvent(
             new CustomEvent<OpenExtensionPopupDetail>(
               OPEN_EXTENSION_POPUP_EVENT,
@@ -4888,6 +4919,7 @@ export function App({
           respond({});
           return;
         case "open-extensions":
+          if (!visibleRef.current) return;
           openTabRef.current({
             kind: "extensions",
             name: "extensions",

@@ -82,7 +82,9 @@ describe("debugger commands", () => {
   it("keep an extension to its tab", () => {
     expect(debuggerCommandRefusal("Runtime.evaluate", {})).toBeNull();
     expect(debuggerCommandRefusal("Input.dispatchMouseEvent", {})).toBeNull();
-    expect(debuggerCommandRefusal("Target.setAutoAttach", {})).toBeNull();
+    expect(
+      debuggerCommandRefusal("Target.setAutoAttach", { flatten: true }),
+    ).toBeNull();
     expect(
       debuggerCommandRefusal("Page.navigate", { url: "https://a.test/" }),
     ).toBeNull();
@@ -155,6 +157,24 @@ describe("commands", () => {
 });
 
 describe("context menus", () => {
+  it("come back from the last run, and a create replaces what came back", () => {
+    const first = new ContextMenuStore();
+    first.create("p", "e", { id: 7, title: "Seven", contexts: ["page"] });
+    first.create("p", "e", { id: "kid", parentId: 7, title: "Kid" });
+    const saved = first.snapshot("p", "e");
+    const next = new ContextMenuStore();
+    next.restore("p", "e", saved);
+    expect(next.item("p", "e", "7")?.rawId).toBe(7);
+    expect(next.item("p", "e", "kid")?.rawParentId).toBe(7);
+    // The extension creates its items again as it starts: no collision.
+    next.create("p", "e", { id: 7, title: "Seven again" });
+    expect(next.item("p", "e", "7")?.title).toBe("Seven again");
+    // Its own duplicates still fail, as in Chrome.
+    expect(() => next.create("p", "e", { id: 7, title: "Twice" })).toThrow(
+      "duplicate",
+    );
+  });
+
   const target = pageMenuTarget({
     pageURL: "https://a.test/",
     frameURL: "https://a.test/",

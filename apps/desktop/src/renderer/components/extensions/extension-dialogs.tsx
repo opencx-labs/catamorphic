@@ -39,7 +39,7 @@ const COPY: Record<
   remove: {
     title: (name) => `Remove “${name}”?`,
     lead: "",
-    empty: "It is removed from this profile with the data it kept.",
+    empty: "This removes it and the data it saved from this profile.",
     accept: "Remove",
     decline: "Cancel",
     danger: true,
@@ -52,9 +52,15 @@ const COPY: Record<
  * more, or a removal it asked for. One centered dialog at a time; closing
  * it declines.
  */
+/** The modal's exit motion (`animate-modal-out`). */
+const MODAL_EXIT_MS = 170;
+
 export function ExtensionPromptHost() {
   const [queue, setQueue] = useState<ExtensionPrompt[]>([]);
   const [shown, setShown] = useState<ExtensionPrompt | null>(null);
+  // Between two prompts the dialog closes and opens again, so the next
+  // question is seen arriving and a second click can't answer it unread.
+  const [between, setBetween] = useState(false);
   const titleId = useId();
   const current = queue[0] ?? null;
 
@@ -88,21 +94,30 @@ export function ExtensionPromptHost() {
 
   // The dialog keeps its subject through the exit motion.
   useEffect(() => {
-    if (current) setShown(current);
-  }, [current]);
+    if (current && !between) setShown(current);
+  }, [current, between]);
+  useEffect(() => {
+    if (!between) return;
+    const timer = window.setTimeout(() => setBetween(false), MODAL_EXIT_MS);
+    return () => window.clearTimeout(timer);
+  }, [between]);
 
-  const answer = (accept: boolean) => {
-    if (!current) return;
-    setQueue((existing) => existing.filter((entry) => entry.id !== current.id));
-    void desktopApi.extensionsPromptAnswer({ id: current.id, accept });
+  /** Answer the prompt on screen, and only that one. */
+  const answer = (id: string, accept: boolean) => {
+    if (!current || current.id !== id || between) return;
+    setQueue((existing) => existing.filter((entry) => entry.id !== id));
+    setBetween(true);
+    void desktopApi.extensionsPromptAnswer({ id, accept });
   };
 
   const prompt = shown;
   const copy = prompt ? COPY[prompt.kind] : null;
   return (
     <Modal
-      open={current !== null}
-      onClose={() => answer(false)}
+      open={current !== null && !between && shown?.id === current.id}
+      onClose={() => {
+        if (shown) answer(shown.id, false);
+      }}
       width={420}
       labelledBy={titleId}
     >
@@ -163,7 +178,7 @@ export function ExtensionPromptHost() {
             <button
               type="button"
               className="button-ghost"
-              onClick={() => answer(false)}
+              onClick={() => answer(prompt.id, false)}
               data-testid="extension-prompt-decline"
             >
               {copy.decline}
@@ -171,7 +186,7 @@ export function ExtensionPromptHost() {
             <button
               type="button"
               className={copy.danger ? "button-danger" : "button-primary"}
-              onClick={() => answer(true)}
+              onClick={() => answer(prompt.id, true)}
               data-testid="extension-prompt-accept"
             >
               {copy.accept}

@@ -66,12 +66,15 @@ export class ExtensionEvents {
   /** Events each extension's worker listened to: why it is woken. */
   private readonly workerEvents = new Map<string, Set<string>>();
   private readonly queued = new Map<string, Queued[]>();
+  private readonly watchedContents = new WeakSet<WebContents>();
 
   constructor(
     private readonly startWorker: (
       profileId: string,
       extensionId: string,
     ) => void,
+    /** A page or worker went away: what it held (native ports) goes too. */
+    private readonly gone: (context: ExtensionContext) => void,
   ) {}
 
   /** A document of an extension booted; it starts with no listeners. */
@@ -100,9 +103,14 @@ export class ExtensionEvents {
         }
       },
     };
+    // A new document in the same frame replaces the old one's context.
+    const previous = this.contexts.get(key);
+    if (previous) this.gone(previous);
     this.contexts.set(key, context);
-    if (!contents.isDestroyed())
+    if (!contents.isDestroyed() && !this.watchedContents.has(contents)) {
+      this.watchedContents.add(contents);
       contents.once("destroyed", () => this.dropContents(contents.id));
+    }
     return context;
   }
 
@@ -149,12 +157,18 @@ export class ExtensionEvents {
   }
 
   workerStopped(versionId: number): void {
-    this.contexts.delete(`worker:${versionId}`);
+    const key = `worker:${versionId}`;
+    const context = this.contexts.get(key);
+    this.contexts.delete(key);
+    if (context) this.gone(context);
   }
 
   private dropContents(contentsId: number): void {
-    for (const [key, context] of this.contexts)
-      if (context.contents?.id === contentsId) this.contexts.delete(key);
+    for (const [key, context] of [...this.contexts])
+      if (context.contents?.id === contentsId) {
+        this.contexts.delete(key);
+        this.gone(context);
+      }
   }
 
   listen(context: ExtensionContext, name: string, on: boolean): void {

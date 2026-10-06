@@ -72,9 +72,9 @@ describe("the registry", () => {
     pinned: false,
     installedAt: 1,
     updatedAt: 1,
-    approvedWarnings: [],
+    approved: { permissions: [], origins: [] },
     granted: { permissions: [], origins: [] },
-    rulesetsAppliedFor: null,
+    enabledRulesets: null,
     pendingUpdate: null,
     uninstallUrl: null,
     ...patch,
@@ -95,6 +95,27 @@ describe("the registry", () => {
     expect(reread.developerMode("p")).toBe(true);
     expect(() => reread.dataDir("p", "../escape")).toThrow();
     expect(reread.dataDir("p", ID)).toBe(path.join(dir, "p", "extensions", ID));
+    // The entry it can't read survives the next save.
+    reread.setDeveloperMode("p", false);
+    expect(JSON.parse(fs.readFileSync(file, "utf8")).extensions).toContainEqual(
+      { id: "broken" },
+    );
+  });
+
+  it("moves a file it can't parse aside instead of overwriting it", () => {
+    const file = path.join(dir, "p", "extensions.json");
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, "{ not json");
+    const registry = new ExtensionRegistry(dir);
+    expect(registry.list("p")).toEqual([]);
+    registry.setDeveloperMode("p", true);
+    const aside = fs
+      .readdirSync(path.dirname(file))
+      .filter((name) => name.startsWith("extensions.json.damaged-"));
+    expect(aside).toHaveLength(1);
+    expect(
+      fs.readFileSync(path.join(path.dirname(file), aside[0] ?? ""), "utf8"),
+    ).toBe("{ not json");
   });
 });
 

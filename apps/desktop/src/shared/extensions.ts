@@ -136,7 +136,14 @@ export interface ExtensionDebugging {
  * Each window's browser tabs as the person sees them, reported by the
  * window: their order, and which one is the window's active tab.
  */
+/**
+ * One project's browser tabs in a window. A window keeps a project mounted
+ * for each one opened in it; their reports together are its tabs, and the
+ * project in front names the active one.
+ */
 export const extensionTabsReportSchema = z.object({
+  reporter: z.string().min(1).max(100),
+  visible: z.boolean(),
   guestIds: z.array(z.number().int().positive()).max(5000),
   activeGuestId: z.number().int().positive().nullable(),
 });

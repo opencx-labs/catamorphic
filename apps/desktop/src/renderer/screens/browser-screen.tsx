@@ -1248,7 +1248,7 @@ export function BrowserScreen({
     >
       {!sidebarToolbar && navigation}
 
-      <div className="relative min-w-0 flex-1">
+      <div data-address-field className="relative min-w-0 flex-1">
         <input
           ref={inputRef}
           value={displayValue}

@@ -285,7 +285,7 @@ function ExtensionCard({
             checked={extension.enabled}
             disabled={busy || Boolean(extension.pendingUpdate)}
             data-testid="extension-card-enabled"
-            aria-label={`Turn ${extension.name} ${extension.enabled ? "off" : "on"}`}
+            aria-label={`${extension.name} on`}
             onChange={(event) =>
               void run(() =>
                 desktopApi.extensionsSetEnabled({
@@ -354,7 +354,7 @@ function ExtensionCard({
         )}
         <button
           type="button"
-          className="button-ghost button-sm"
+          className="button-secondary button-sm"
           data-testid="extension-card-remove"
           onClick={() => void desktopApi.extensionsRemove({ id: extension.id })}
         >
