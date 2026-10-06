@@ -1,4 +1,6 @@
+import type { DB } from "@catamorphic/db";
 import type { SandboxProvider } from "@catamorphic/sandbox";
+import { type Kysely, sql } from "kysely";
 
 /**
  * A chat's live workspace as a person working beside its agent reaches it
@@ -38,3 +40,32 @@ export class SessionWorkspaceUnavailableError extends Error {
 
 export const WORKSPACE_NOT_RUNNING_MESSAGE =
   "This chat's workspace is not running; send it a message to start it.";
+
+/** A person's use of a chat's workspace is recorded at most this often. */
+export const WORKSPACE_USE_INTERVAL_SECONDS = 60;
+
+/**
+ * A person used the chat's workspace (ADR 0208): typed in or read a
+ * terminal, or requested a preview. Idle release counts it as it counts a
+ * turn. Written at most once a minute per chat, so following a terminal's
+ * output costs a statement that changes nothing most of the time.
+ */
+export async function markWorkspaceUsed(input: {
+  db: Kysely<DB>;
+  sessionId: string;
+}): Promise<void> {
+  await input.db
+    .insertInto("session_workspace_use")
+    .values({ session_id: input.sessionId })
+    .onConflict((conflict) =>
+      conflict
+        .column("session_id")
+        .doUpdateSet({ used_at: sql<Date>`now()` })
+        .where(
+          "session_workspace_use.used_at",
+          "<",
+          sql<Date>`now() - make_interval(secs => ${WORKSPACE_USE_INTERVAL_SECONDS})`,
+        ),
+    )
+    .execute();
+}

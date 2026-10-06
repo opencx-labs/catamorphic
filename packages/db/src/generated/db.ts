@@ -943,6 +943,10 @@ export interface SessionTerminals {
   sandbox_id: string;
   session_id: string;
   terminal_key: string;
+}
+
+export interface SessionWorkspaceUse {
+  session_id: string;
   used_at: Generated<Timestamp>;
 }
 
@@ -1492,6 +1496,7 @@ export interface DB {
   session_mailbox_items: SessionMailboxItems;
   session_sync_intents: SessionSyncIntents;
   session_terminals: SessionTerminals;
+  session_workspace_use: SessionWorkspaceUse;
   store_document_versions: StoreDocumentVersions;
   store_documents: StoreDocuments;
   stored_objects: StoredObjects;

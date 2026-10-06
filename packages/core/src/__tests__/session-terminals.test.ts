@@ -1,3 +1,4 @@
+import type { DB } from "@catamorphic/db";
 import type {
   ExecResult,
   ProcessOutput,
@@ -5,6 +6,13 @@ import type {
   SandboxProcessProvider,
   SandboxProvider,
 } from "@catamorphic/sandbox";
+import {
+  DummyDriver,
+  Kysely,
+  PostgresAdapter,
+  PostgresIntrospector,
+  PostgresQueryCompiler,
+} from "kysely";
 import { describe, expect, it } from "vitest";
 import { type Identity, PROJECT_PRINCIPAL_ID } from "../identity.js";
 import { assertSessionWorkspaceAccess } from "../services/agent-session-access.js";
@@ -23,6 +31,16 @@ import {
   terminalSecretsSnippet,
 } from "../services/session-terminal-scripts.js";
 import type { SessionWorkspaceHandle } from "../services/session-workspace.js";
+
+/** A database whose statements go nowhere: these tests read no rows. */
+const db = new Kysely<DB>({
+  dialect: {
+    createAdapter: () => new PostgresAdapter(),
+    createDriver: () => new DummyDriver(),
+    createIntrospector: (kysely) => new PostgresIntrospector(kysely),
+    createQueryCompiler: () => new PostgresQueryCompiler(),
+  },
+});
 
 const projectId = "11111111-1111-4111-8111-111111111111";
 const tenantId = "22222222-2222-4222-8222-222222222222";
@@ -231,6 +249,7 @@ describe("preview requests (ADR 0208)", () => {
   const identity: Identity = { tenantId, externalUserId: "ada" };
   const service = (handle: SessionWorkspaceHandle) =>
     new SessionPreviewsService({
+      db,
       sessions: { personWorkspace: async () => handle },
     });
 

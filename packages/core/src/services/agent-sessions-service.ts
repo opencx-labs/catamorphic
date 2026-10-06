@@ -8004,15 +8004,13 @@ export class AgentSessionsService {
           .whereRef("agent_turns.session_id", "=", "session.id")
           .as("last_turn_at"),
       )
-      // Someone typing in a terminal there keeps it too (ADR 0208).
+      // A person at a terminal or a preview there keeps it too (ADR 0208).
       .select((eb) =>
         eb
-          .selectFrom("session_terminals")
-          .select((terminal) =>
-            terminal.fn.max("session_terminals.used_at").as("at"),
-          )
-          .whereRef("session_terminals.session_id", "=", "session.id")
-          .as("last_terminal_at"),
+          .selectFrom("session_workspace_use")
+          .select("session_workspace_use.used_at")
+          .whereRef("session_workspace_use.session_id", "=", "session.id")
+          .as("last_used_at"),
       )
       .where("session.status", "=", "active")
       .where("allocation.status", "=", "active")
@@ -8065,13 +8063,13 @@ export class AgentSessionsService {
       const lastTurnAt = row.last_turn_at
         ? new Date(row.last_turn_at).getTime()
         : 0;
-      const lastTerminalAt = row.last_terminal_at
-        ? new Date(row.last_terminal_at).getTime()
+      const lastUsedAt = row.last_used_at
+        ? new Date(row.last_used_at).getTime()
         : 0;
       const idleSince = Math.max(
         row.allocated_at.getTime(),
         lastTurnAt,
-        lastTerminalAt,
+        lastUsedAt,
       );
       if (now.getTime() - idleSince < minutes * 60_000) continue;
       // Locks the chat and is refused while it has work; turns then wait
@@ -8099,6 +8097,7 @@ export class AgentSessionsService {
                 allocationId: row.allocation_id,
                 sandboxProviderId: row.sandbox_provider_id,
                 owner: placementOwner(row.external_user_id),
+                idleSince: new Date(now.getTime() - minutes * 60_000),
               }),
           })
         )
@@ -8127,6 +8126,8 @@ export class AgentSessionsService {
     sandboxProviderId: string | null;
     /** The session's owner, whose machine may be open only to them. */
     owner?: string | null;
+    /** Use since this keeps the workspace. */
+    idleSince: Date;
   }): Promise<boolean> {
     const { identity, projectId, sessionId } = input;
     const allocation = await this.executionAllocations.get({
@@ -8134,6 +8135,15 @@ export class AgentSessionsService {
       allocationId: input.allocationId,
     });
     if (allocation?.status !== "active") return false;
+    // A person who opened a terminal or a preview after the sweep looked
+    // keeps it (ADR 0208); they mark their use before they start anything.
+    const used = await this.db
+      .selectFrom("session_workspace_use")
+      .select("used_at")
+      .where("session_id", "=", sessionId)
+      .where("used_at", ">", input.idleSince)
+      .executeTakeFirst();
+    if (used) return false;
     const agent = await this.resolveAgent(input.agentId, projectId).catch(
       () => undefined,
     );
