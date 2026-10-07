@@ -61,7 +61,11 @@ describe("configurable browser workspace", () => {
 
   it("switches the theme and moves existing tabs through Settings without losing their keys", async () => {
     await run("button('Settings').click()");
-    await app.waitFor("!!document.querySelector('select[name=tabPlacement]')");
+    // The New Tab the app opened with closes once Settings shows in its
+    // place; its tab stays in the strip while it animates out.
+    await app.waitFor(
+      "!!document.querySelector('select[name=tabPlacement]') && !document.querySelector('[data-tab-orientation] [data-point-key^=\"palette:\"]')",
+    );
     const before = await run<string[]>(
       "return [...document.querySelectorAll('[data-tab-orientation] [data-point-key]:not([data-sidebar-item-id])')].map(e => e.dataset.pointKey)",
     );

@@ -437,12 +437,19 @@ it("closes an untouched New Tab once another tab is shown, and keeps a typed one
     run<number>(
       `return ${strip}.filter((el) => el.dataset.pointKey.startsWith('palette:')).length`,
     );
+  // A real click on a browser tab, aimed once the strip has settled (a New
+  // Tab joining it moves the others) and only where that tab is hit, never
+  // a neighbour or a close button.
   const showOtherTab = async () => {
     const point = await wait<{ x: number; y: number }>(`
       const tab = ${strip}.find((el) => el.dataset.pointKey.startsWith('browser:') && el.checkVisibility());
       if (!tab) return false;
+      const row = tab.closest('[data-tab-orientation]');
+      if (row.getAnimations({ subtree: true }).some((a) => a.playState === 'running')) return false;
       const r = tab.getBoundingClientRect();
-      return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+      const point = { x: r.left + Math.min(24, r.width / 3), y: r.top + r.height / 2 };
+      const hit = document.elementFromPoint(point.x, point.y);
+      return tab.contains(hit) && !hit.closest('[aria-label^="Close"]') && point;
     `);
     await app.movePointer(point);
     await app.clickPointer(point);
@@ -462,6 +469,10 @@ it("closes an untouched New Tab once another tab is shown, and keeps a typed one
   await shortcut("t");
   await wait(`return ${tabInput}`, "second New Tab focused");
   await app.insertText("notes");
+  await wait(
+    `return document.activeElement?.closest('[data-palette="tab"]') && document.activeElement.value === 'notes'`,
+    "typed into the New Tab",
+  );
   await showOtherTab();
   await new Promise((resolve) => setTimeout(resolve, 400));
   expect(await newTabs()).toBe(1);
