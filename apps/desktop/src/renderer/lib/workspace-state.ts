@@ -215,9 +215,14 @@ export const serializeWorkspace = (ws: Workspace): Workspace => {
     ...chatRef(editor.chatLocalId),
     ...(editor.background ? { background: true } : {}),
   }));
-  const tabs = ws.tabs.filter(
-    (tab) => tab.kind !== "agent-setup" && tab.kind !== "mcpapp",
-  );
+  const tabs = ws.tabs
+    .filter((tab) => tab.kind !== "agent-setup" && tab.kind !== "mcpapp")
+    // A New Tab's input is not restored, so neither is its typed mark.
+    .map((tab) =>
+      tab.kind === "palette"
+        ? { kind: tab.kind, name: tab.name, label: tab.label }
+        : tab,
+    );
   const keys = new Set([
     ...tabs.map(tabKey),
     ...chats
@@ -445,12 +450,41 @@ function materializeSurface(ws: Workspace, key: string): Workspace {
   return ws;
 }
 
+/**
+ * An untyped New Tab is a way to somewhere, not a place: once something else
+ * is shown in its place, it closes, so empty New Tabs do not pile up. One
+ * still on screen (the other side of a split took focus) stays, and so does
+ * one holding typed input.
+ */
+function closeLeftNewTabs(previous: Workspace, updated: Workspace): Workspace {
+  const before = workspaceLayout(previous).viewSlots;
+  const after = workspaceLayout(updated).viewSlots;
+  const left = new Set(
+    updated.tabs
+      .filter(
+        (tab) =>
+          tab.kind === "palette" &&
+          !tab.typed &&
+          before[tabKey(tab)] &&
+          !after[tabKey(tab)],
+      )
+      .map(tabKey),
+  );
+  if (left.size === 0) return updated;
+  return {
+    ...updated,
+    tabs: updated.tabs.filter((tab) => !left.has(tabKey(tab))),
+    tabOrder: updated.tabOrder.filter((key) => !left.has(key)),
+  };
+}
+
 /** All workspace mutations pass this boundary, including resource creation/close. */
 export function reconcileWorkspace(
   previous: Workspace,
-  updated: Workspace,
+  changed: Workspace,
 ): Workspace {
-  if (previous === updated) return previous;
+  if (previous === changed) return previous;
+  const updated = closeLeftNewTabs(previous, changed);
   const keys = orderedTabKeys(updated, { includeCollapsed: true });
   const floatingKey =
     updated.floatingKey &&

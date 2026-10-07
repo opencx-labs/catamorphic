@@ -19,6 +19,12 @@ Opening here can reuse a compatible clean browser/editor. Preserve dirty buffers
 and running sessions. An existing surface retains identity when focused, tiled,
 floated or restored. A collapsed tab group affects the strip, not materialization.
 
+A New Tab (Cmd+T, the palette as a page) is a way to somewhere, not a place. Once
+something else is shown in its place, a New Tab with nothing in its input closes
+(`reconcileWorkspace`); one with typed text or an entered mode, or one still on
+screen as the other pane of a split, stays. Its input is not restored on relaunch,
+so neither is that mark.
+
 The mouse's back and forward buttons move between the places a project's
 workspace was at: the focused tab and the chat or surface floating over it
 (ADR 0188, `lib/surface-history.ts`), selecting tabs as a click would. A
