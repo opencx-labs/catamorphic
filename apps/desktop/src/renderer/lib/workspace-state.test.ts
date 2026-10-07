@@ -154,3 +154,60 @@ it("keeps a browser tab's way back through close, reopen and persistence", () =>
     reopened.browsers.find((browser) => browser.localId === "again"),
   ).toMatchObject({ url: "https://example.com/two", history });
 });
+
+it("closes a New Tab nobody typed into once something else is shown in its place", () => {
+  const ws: Workspace = {
+    ...initial(),
+    tabs: [
+      { kind: "palette", name: "a" },
+      { kind: "history", name: "history" },
+    ],
+    activeTabKey: "palette:a",
+  };
+  // Selecting another tab leaves the empty New Tab behind: it closes.
+  const away = transitionWorkspace(ws, { type: "select", key: "chat:c" });
+  expect(away.tabs.map((tab) => tab.name)).toEqual(["history"]);
+  expect(away.activeTabKey).toBe("chat:c");
+  // Opening something new from it does the same.
+  const opened = reconcileWorkspace(ws, {
+    ...ws,
+    activeTabKey: "history:history",
+  });
+  expect(opened.tabs.map((tab) => tab.name)).toEqual(["history"]);
+  // Its own close afterwards (the palette consuming its tab) is a no-op.
+  expect(
+    transitionWorkspace(opened, { type: "close", key: "palette:a" }).tabs,
+  ).toEqual(opened.tabs);
+});
+
+it("keeps a New Tab with typed input, or one still on screen", () => {
+  const ws: Workspace = {
+    ...initial(),
+    tabs: [
+      { kind: "palette", name: "a", typed: true },
+      { kind: "palette", name: "b" },
+    ],
+    activeTabKey: "palette:a",
+  };
+  const away = transitionWorkspace(ws, { type: "select", key: "chat:c" });
+  expect(away.tabs.map((tab) => tab.name)).toEqual(["a", "b"]);
+  // Beside the chat in a split, the New Tab is still shown when the chat
+  // takes focus; it stays.
+  const split = transitionWorkspace(
+    { ...ws, tabs: [{ kind: "palette", name: "b" }], activeTabKey: "chat:c" },
+    { type: "side", key: "palette:b" },
+  );
+  expect(workspaceLayout(split).viewSlots).toEqual({
+    "chat:c": "left",
+    "palette:b": "right",
+  });
+  const focused = transitionWorkspace(split, { type: "select", key: "chat:c" });
+  expect(workspaceLayout(focused).viewSlots["palette:b"]).toBeTruthy();
+  expect(focused.tabs.map((tab) => tab.name)).toEqual(["b"]);
+  // A New Tab's input is not restored, so neither is its typed mark.
+  expect(serializeWorkspace(ws).tabs[0]).toEqual({
+    kind: "palette",
+    name: "a",
+    label: undefined,
+  });
+});

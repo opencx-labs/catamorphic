@@ -1730,3 +1730,18 @@ that starts it moving, so a section's teardown never competes with the
 slide. The two sides share one toggle wherever it appears (the sidebar's
 header, the chrome, the corner when the header lives in the sidebar), and a
 section in the right sidebar customizes the right sidebar (ADR 0200).
+
+### 2026-10-07: New Tabs that led somewhere close; hovering never moves the list
+
+A day of work left a row of empty New Tabs: each Cmd+T that ended in a click
+elsewhere stayed open. A New Tab is a way to somewhere, so once something else
+is shown in its place it closes, unless something is typed in it (text or an
+entered mode), which it keeps for later, or it is still on screen beside the
+other pane of a split. The rule lives in `reconcileWorkspace`, so every way of
+leaving (a tab click, a sidebar row, a link, opening another New Tab) behaves
+the same.
+
+Hovering the palette's last visible row, which the list clips at its bottom
+edge, scrolled the list under the pointer the first time. A highlighted row is
+kept in view only when the keyboard chose it; a row under the pointer is
+already where the person is looking.

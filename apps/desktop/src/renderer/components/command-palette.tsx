@@ -153,6 +153,7 @@ export function CommandPalette({
   variant,
   open = true,
   onClose,
+  onTypedChange,
   modeRequest,
 }: {
   variant: "overlay" | "tab";
@@ -163,6 +164,11 @@ export function CommandPalette({
   open?: boolean;
   /** Overlay: hide the palette. Tab: close/consume the palette tab. */
   onClose: () => void;
+  /**
+   * Tab only: whether the input holds anything (text, or a mode entered
+   * from it). An untyped New Tab closes once something else is shown.
+   */
+  onTypedChange?: (typed: boolean) => void;
   /** Overlay only: open straight into a mode (agent commands, sidebar search). */
   modeRequest?: PaletteModeRequest | null;
 }) {
@@ -193,6 +199,12 @@ export function CommandPalette({
     label: string;
   } | null>(null);
   const picker = modeId && isChoiceMode(modeId) ? modeId : null;
+  const hasInput = query !== "" || modeId !== null;
+  const onTypedChangeRef = useRef(onTypedChange);
+  onTypedChangeRef.current = onTypedChange;
+  useEffect(() => {
+    if (variant === "tab") onTypedChangeRef.current?.(hasInput);
+  }, [variant, hasInput]);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const sizerRef = useRef<HTMLDivElement>(null);
@@ -685,12 +697,15 @@ export function CommandPalette({
   useLayoutEffect(() => {
     setSelection((current) => settleSelection(current, results));
   }, [results]);
-  // A chosen row stays in view, whether an arrow key moved the highlight
-  // or a re-rank moved the row.
+  // A row the keyboard chose stays in view, whether an arrow key moved the
+  // highlight or a re-rank moved the row. A row the pointer chose is where
+  // the person is already looking: scrolling it into view would move the
+  // list under the pointer (the clipped last row jumped on first hover).
   const chosenId = selection.id;
+  const pointerChoseRef = useRef(false);
   // biome-ignore lint/correctness/useExhaustiveDependencies: selected is the "row moved" signal
   useEffect(() => {
-    if (!chosenId) return;
+    if (!chosenId || pointerChoseRef.current) return;
     // Group labels and notices share the list, so find the row itself.
     sizerRef.current
       ?.querySelector(`[data-item-id="${CSS.escape(chosenId)}"]`)
@@ -778,6 +793,7 @@ export function CommandPalette({
   };
 
   const moveSelection = (delta: number) => {
+    pointerChoseRef.current = false;
     setSelection((current) =>
       moveHighlight(current, resultsRef.current, delta),
     );
@@ -946,8 +962,9 @@ export function CommandPalette({
                     event.preventDefault();
                   }}
                   onMouseMove={(event) => {
-                    if (pointerMoved(event))
-                      setSelection({ index, id: item.id });
+                    if (!pointerMoved(event)) return;
+                    pointerChoseRef.current = true;
+                    setSelection({ index, id: item.id });
                   }}
                   className={`flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-left text-[13px] transition-colors duration-100 ${
                     item.disabled

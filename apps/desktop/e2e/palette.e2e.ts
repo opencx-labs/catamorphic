@@ -405,3 +405,64 @@ it("switches to open tabs from search and the Tabs mode, above bookmarks and his
     server.close();
   }
 });
+
+it("leaves the list where it is when the pointer highlights a clipped row", async () => {
+  await open();
+  const list = `input().closest('[role="dialog"]').querySelector('[role="listbox"]')`;
+  // The last row the list cuts off at its bottom edge, once its motion settled.
+  const target = await wait<{ x: number; y: number; id: string }>(`
+    const box = ${list}.getBoundingClientRect();
+    if (${list}.getAnimations({ subtree: true }).some((a) => a.playState === 'running')) return false;
+    const row = rows().find((row) => { const r = row.getBoundingClientRect(); return r.top < box.bottom && r.bottom > box.bottom; });
+    if (!row || ${list}.scrollTop !== 0) return false;
+    const r = row.getBoundingClientRect();
+    return { x: r.left + r.width / 2, y: box.bottom - 6, id: row.dataset.itemId };
+  `);
+  await app.movePointerThrough([{ x: target.x, y: target.y - 40 }, target]);
+  await wait(
+    `return rows().find((row) => row.dataset.itemId === ${JSON.stringify(target.id)})?.getAttribute('aria-selected') === 'true'`,
+    "the pointer highlights the clipped row",
+  );
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  expect(await run(`return ${list}.scrollTop`)).toBe(0);
+  // The keyboard still keeps the row it chooses in view.
+  await run(`key('ArrowDown'); return true;`);
+  await wait(`return ${list}.scrollTop > 0`, "arrow keys scroll");
+  await close();
+});
+
+it("closes an untouched New Tab once another tab is shown, and keeps a typed one", async () => {
+  const strip = `[...document.querySelectorAll('[data-tab-orientation] [data-point-key]:not([data-sidebar-item-id])')]`;
+  const newTabs = () =>
+    run<number>(
+      `return ${strip}.filter((el) => el.dataset.pointKey.startsWith('palette:')).length`,
+    );
+  const showOtherTab = async () => {
+    const point = await wait<{ x: number; y: number }>(`
+      const tab = ${strip}.find((el) => el.dataset.pointKey.startsWith('browser:') && el.checkVisibility());
+      if (!tab) return false;
+      const r = tab.getBoundingClientRect();
+      return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+    `);
+    await app.movePointer(point);
+    await app.clickPointer(point);
+  };
+  const tabInput = `document.activeElement?.closest('[data-palette="tab"]') && document.activeElement.tagName === 'TEXTAREA'`;
+  expect(await newTabs()).toBe(0);
+  await shortcut("t");
+  await wait(`return ${tabInput}`, "New Tab focused");
+  expect(await newTabs()).toBe(1);
+  await showOtherTab();
+  // The strip lets the closed tab play its exit before it leaves.
+  await wait(
+    `return !document.querySelector('[data-palette="tab"]') && ${strip}.every((el) => !el.dataset.pointKey.startsWith('palette:'))`,
+    "untouched New Tab closed",
+  );
+  // Typed into, it is kept for later.
+  await shortcut("t");
+  await wait(`return ${tabInput}`, "second New Tab focused");
+  await app.insertText("notes");
+  await showOtherTab();
+  await new Promise((resolve) => setTimeout(resolve, 400));
+  expect(await newTabs()).toBe(1);
+});

@@ -1532,6 +1532,26 @@ export function App({
   // Chrome's New Tab analog: a fresh tab whose content is the palette.
   const openPaletteTab = () =>
     openTab({ kind: "palette", name: crypto.randomUUID(), label: "New Tab" });
+  // Untyped, a New Tab closes once something else is shown in its place
+  // (reconcileWorkspace); typing into it keeps it.
+  const markNewTabTyped = (key: string, typed: boolean) =>
+    updateWorkspace((ws) =>
+      ws.tabs.some(
+        (tab) =>
+          tab.kind === "palette" &&
+          tabKey(tab) === key &&
+          Boolean(tab.typed) !== typed,
+      )
+        ? {
+            ...ws,
+            tabs: ws.tabs.map((tab) =>
+              tab.kind === "palette" && tabKey(tab) === key
+                ? { ...tab, typed }
+                : tab,
+            ),
+          }
+        : ws,
+    );
 
   /** Tab bar entries: fixed tabs plus one derived tab per tab-mode chat. */
   const chatTabs = (
@@ -6230,6 +6250,9 @@ export function App({
                             key={tabKey(tab)}
                             variant="tab"
                             onClose={() => closeTab(tabKey(tab))}
+                            onTypedChange={(typed) =>
+                              markNewTabTyped(tabKey(tab), typed)
+                            }
                           />
                         ) : tab.kind === "agent-setup" ? (
                           <AgentWizard

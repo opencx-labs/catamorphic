@@ -96,7 +96,17 @@ export type WorkspaceTab = (
   | { kind: "downloads"; name: string; label?: string }
   | { kind: "extensions"; name: string; label?: string }
   | { kind: "usage"; name: string; label?: string }
-  | { kind: "palette"; name: string; label?: string }
+  | {
+      /** A New Tab: the palette as a page (Cmd+T). */
+      kind: "palette";
+      name: string;
+      label?: string;
+      /**
+       * Something is typed in its input. An untyped New Tab closes once
+       * something else is shown in its place (reconcileWorkspace).
+       */
+      typed?: boolean;
+    }
   | { kind: "agent-setup"; name: string; label?: string }
   | { kind: "terminal"; name: string; label?: string }
   | { kind: "editor"; name: string; label?: string }
