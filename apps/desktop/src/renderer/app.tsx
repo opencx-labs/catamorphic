@@ -45,6 +45,7 @@ import {
   type ActionId,
   BUILTIN_ACTIONS,
   KEYBINDING_ACTIONS,
+  PAGE_FIRST_ACTIONS,
 } from "../shared/actions.js";
 import {
   type HarnessPermissions,
@@ -3717,12 +3718,17 @@ export function App({
   const runTerminalMacroRef = useRef(runTerminalMacro);
   runTerminalMacroRef.current = runTerminalMacro;
 
-  const runBrowserCommand = (command: keyof BrowserCommands) => {
+  /** The page a browser command acts on: the one a key came from, else the one in front. */
+  const commandBrowserId = () => {
     const ws = workspaceRef.current;
     const key = ws.floatingKey ?? ws.activeTabKey;
-    const browserId =
+    return (
       browserShortcutTargetRef.current ??
-      (key?.startsWith("browser:") ? key.slice(8) : undefined);
+      (key?.startsWith("browser:") ? key.slice(8) : undefined)
+    );
+  };
+  const runBrowserCommand = (command: keyof BrowserCommands) => {
+    const browserId = commandBrowserId();
     if (browserId) browserCommandsRef.current.get(browserId)?.[command]();
   };
   const actionHandlers: Record<ActionId, (mode?: CommitMode) => void> = {
@@ -3734,7 +3740,13 @@ export function App({
       openTab({ kind: "settings", name: "settings", label: "Settings" }),
     "search-files": () => focusSearch("search-files", "files"),
     "search-content": () => focusSearch("search-content", "content"),
-    "search-diff": () => focusSearch("search-diff"),
+    // Find in what is in front: a page's find bar, else a diff's search.
+    find: () => {
+      if (commandBrowserId()) runBrowserCommand("find");
+      else focusSearch("find");
+    },
+    "find-next": () => runBrowserCommand("findNext"),
+    "find-previous": () => runBrowserCommand("findPrevious"),
     "search-changes": () => focusSearch("search-changes"),
     "search-settings": settingsSearch,
     "browser-focus-address": () => runBrowserCommand("focusAddress"),
@@ -3856,6 +3868,8 @@ export function App({
         },
       }),
   };
+  const commandBrowserIdRef = useRef(commandBrowserId);
+  commandBrowserIdRef.current = commandBrowserId;
   const actionHandlersRef = useRef(actionHandlers);
   actionHandlersRef.current = actionHandlers;
 
@@ -3887,12 +3901,19 @@ export function App({
               Boolean(
                 document.activeElement?.closest("form[data-pr-comment]"),
               ))) &&
-          (!["search-diff", "search-changes"].includes(candidate) ||
+          (candidate !== "search-changes" ||
             (guestId === undefined &&
               Boolean(
                 findSearchInput(candidate) ||
                   findSidebarSearchButton(candidate),
               ))) &&
+          // Find belongs to a page (a key from it, or one in front) or a
+          // diff's search; elsewhere the key stays with what is focused (an
+          // editor's own find).
+          (!PAGE_FIRST_ACTIONS.has(candidate) ||
+            guestId !== undefined ||
+            commandBrowserIdRef.current() !== undefined ||
+            (candidate === "find" && Boolean(findSearchInput(candidate)))) &&
           (candidate !== "dismiss-floating" ||
             (floatingEscapeEnabledRef.current &&
               ![

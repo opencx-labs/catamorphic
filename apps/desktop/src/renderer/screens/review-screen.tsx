@@ -222,7 +222,7 @@ export function ReviewScreen({
         }
         const content =
           matchesBinding(event, bindings["search-content"]) ||
-          matchesBinding(event, bindings["search-diff"]);
+          matchesBinding(event, bindings.find);
         const filename = matchesBinding(event, bindings["search-files"]);
         if (!content && !filename) return;
         event.preventDefault();

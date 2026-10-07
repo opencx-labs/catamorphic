@@ -117,6 +117,14 @@ by match, row kind and use: commands and surfaces before pages, frequent
 destinations first, and rows picked earlier for a query. The empty palette shows
 starting actions, the focused site's settings, then up to six Frequent rows.
 
+Find (`find`, Cmd+F) acts on what is in front: a web page opens its find bar,
+a diff focuses its own search, and anywhere else the key stays with what has
+focus (an editor's own find). In a page the key reaches the page first, as in
+Chrome: a page with its own find keeps it, and only what the page leaves opens
+the bar (`PAGE_FIRST_ACTIONS`; from an embedded frame Work takes it at once).
+Cmd+G and Cmd+Shift+G step through the matches. The bar closes on Escape with
+the current match selected, and when the tab shows another page.
+
 Default sidebars do not include a project note. Notes are opt-in widgets over
 explicit existing documents, not filler in a new project's right sidebar.
 

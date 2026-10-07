@@ -1745,3 +1745,24 @@ Hovering the palette's last visible row, which the list clips at its bottom
 edge, scrolled the list under the pointer the first time. A highlighted row is
 kept in view only when the keyboard chose it; a row under the pointer is
 already where the person is looking.
+
+### 2026-10-07: Find in page, in the theme's colors; the downloads popover leaves cleanly
+
+Pages had no find: Cmd+F belonged to diffs alone, and main took the key from
+every page whether or not the page wanted it. The action is now Find, and it
+acts on what is in front. A page gets Chrome's find bar at its top right
+(count, previous and next, Escape back to the page with the match selected),
+and the key reaches the page first, so a document editor with its own find
+keeps it. The bar and a password offer share one column there, so neither
+covers the other.
+
+Selected text and find matches in pages took the system highlight and
+Chromium's yellow and orange. Each page now gets the accent through a user
+stylesheet (`::selection`, `::search-text`), the same mix the app selects its
+own text in. A page that styles its own selection keeps it.
+
+The downloads popover vanished on the second click with no exit, and stayed
+open over a page the person had clicked, or after they turned to another
+window. It now leaves with the pop-out every popover plays, closes on any
+press outside it (a page's included), Escape, or the window losing focus, and
+the detached dock keeps the room it lent until the exit has played.

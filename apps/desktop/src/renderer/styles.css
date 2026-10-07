@@ -196,7 +196,8 @@ textarea,
 
 /* Selected text takes the theme's accent, not the OS highlight. Monaco
    and the terminal tint their own selection from the same token; web
-   pages are their own documents and keep theirs. */
+   pages get it injected ahead of their own styles (lib/page-theme.ts),
+   so a page's own selection color wins. */
 ::selection {
   background-color: color-mix(in srgb, var(--color-accent) 30%, transparent);
 }

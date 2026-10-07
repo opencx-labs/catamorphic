@@ -271,6 +271,48 @@ describe("downloads", () => {
     );
   });
 
+  it("the popover leaves with its exit, and closes once the person turns elsewhere", async () => {
+    const popover = `document.querySelector('[data-testid="downloads-popover"]')`;
+    const opened = async (label: string) => {
+      await click('[data-testid="downloads-bubble"]');
+      await app.waitFor(`!!${popover} && !${popover}.inert`, {
+        label: `popover open: ${label}`,
+      });
+    };
+    // Toggled closed, it plays its exit before it goes.
+    await opened("toggle");
+    expect(
+      await app.eval<string>(`(() => {
+        document.querySelector('[data-testid="downloads-bubble"]').click();
+        return new Promise((resolve) => requestAnimationFrame(() => resolve(${popover}?.className ?? '')));
+      })()`),
+    ).toContain("animate-pop-out");
+    await app.waitFor(`!${popover}`, { label: "gone after its exit" });
+    // A press inside the page, which the window never sees itself.
+    await opened("page press");
+    await app.eval(`(() => {
+      const page = ${guest};
+      for (const type of ['mouseDown', 'mouseUp'])
+        page.sendInputEvent({ type, x: 40, y: 40, button: 'left', clickCount: 1 });
+      return true;
+    })()`);
+    await app.waitFor(`!${popover}`, {
+      label: "closed by a press in the page",
+    });
+    // A press elsewhere in the window.
+    await opened("workspace press");
+    await app.eval(
+      `document.querySelector('input[aria-label="Address and search bar"]').dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })); true`,
+    );
+    await app.waitFor(`!${popover}`, {
+      label: "closed by a press in the workspace",
+    });
+    // Another window or app.
+    await opened("window blur");
+    await app.eval(`window.dispatchEvent(new Event('blur')); true`);
+    await app.waitFor(`!${popover}`, { label: "closed as the window blurs" });
+  });
+
   it("the bubble lists the file and leads to the Downloads page", async () => {
     await click('[data-testid="downloads-bubble"]');
     await app.waitFor(

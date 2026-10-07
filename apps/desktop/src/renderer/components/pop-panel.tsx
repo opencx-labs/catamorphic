@@ -1,4 +1,5 @@
 import {
+  type ComponentProps,
   type ReactNode,
   type RefObject,
   useEffect,
@@ -13,12 +14,19 @@ export function PopPanel({
   testId,
   children,
   anchorRef,
-}: {
+  onExited,
+  ...attributes
+}: Omit<
+  ComponentProps<"div">,
+  "className" | "children" | "ref" | "onAnimationEnd"
+> & {
   open: boolean;
   className: string;
   testId?: string;
   children: ReactNode;
   anchorRef?: RefObject<HTMLElement | null>;
+  /** The exit has played and the panel has left the page. */
+  onExited?: () => void;
 }) {
   const [mounted, setMounted] = useState(open);
   const panelRef = useRef<HTMLDivElement>(null);
@@ -60,12 +68,15 @@ export function PopPanel({
   if (!mounted) return null;
   return (
     <div
+      {...attributes}
       ref={panelRef}
       popover={anchorRef ? "manual" : undefined}
       data-testid={testId}
       inert={!open}
       onAnimationEnd={(event) => {
-        if (event.animationName === "pop-out" && !open) setMounted(false);
+        if (event.animationName !== "pop-out" || open) return;
+        setMounted(false);
+        onExited?.();
       }}
       className={`${className} ${open ? "animate-pop-in" : "animate-pop-out"}`}
     >

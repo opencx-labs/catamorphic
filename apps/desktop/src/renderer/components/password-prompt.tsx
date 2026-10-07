@@ -80,8 +80,8 @@ export function PasswordPrompt({
       onAnimationEnd={(event) => {
         if (event.animationName === "pop-out" && !open) onExited();
       }}
-      className={`absolute right-3 top-3 z-30 w-[340px] max-w-[calc(100%-24px)] origin-top-right rounded-lg border border-border bg-bg-overlay shadow-2xl ${
-        open ? "animate-pop-in" : "pointer-events-none animate-pop-out"
+      className={`w-full origin-top-right rounded-lg border border-border bg-bg-overlay shadow-2xl ${
+        open ? "pointer-events-auto animate-pop-in" : "animate-pop-out"
       }`}
     >
       <div className="flex items-start gap-3 px-4 pt-4">
