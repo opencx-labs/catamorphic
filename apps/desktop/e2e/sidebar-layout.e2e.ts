@@ -517,7 +517,11 @@ describe("configurable browser workspace", () => {
       "document.body.innerText.includes('Help me customize my left sidebar')",
     );
     await app.waitFor("!!document.querySelector('[data-pill-kind=\"path\"]')");
-    const text = await app.eval<string>("document.body.innerText");
+    // The message as the person sees it. The fake agent's reply echoes every
+    // attachment it received, so the rest of the page may hold the context.
+    const text = await app.waitFor<string>(
+      "[...document.querySelectorAll('[data-user-message]')].map((el) => el.innerText).find((t) => t.includes('Help me customize my left sidebar'))",
+    );
     // Structured context never appears in the user-visible message.
     expect(text).not.toContain("Current layout:");
     expect(text).not.toContain("module.exports");
