@@ -86,7 +86,12 @@ const pixel = async (point: { x: number; y: number }) => {
     return [...context.getImageData(0, 0, 1, 1).data.slice(0, 3)];
   })()`);
 };
-/** Waits until the point is painted in `expected` (within rounding). */
+/**
+ * Waits until the point is painted in `expected`. Within 24 per channel:
+ * macOS captures carry the display's color conversion (11 off seen), and
+ * what this rules out is far further away (Chromium's yellow and orange,
+ * the system's selection blue, the page's own green).
+ */
 const painted = async (
   point: { x: number; y: number },
   expected: number[],
@@ -97,7 +102,7 @@ const painted = async (
     actual = await pixel(point);
     if (
       actual.every(
-        (channel, index) => Math.abs(channel - (expected[index] ?? -1)) <= 8,
+        (channel, index) => Math.abs(channel - (expected[index] ?? -1)) <= 24,
       )
     )
       return;
