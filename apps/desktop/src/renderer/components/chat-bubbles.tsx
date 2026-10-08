@@ -70,6 +70,12 @@ export interface ChatBubblesProps {
    * pull it back open; the fold re-applies next time such a tab gains focus.
    */
   autoCollapse: boolean;
+  /**
+   * The person's own fold (the arrows), kept across windows and launches
+   * (prefs `dockCollapsed`); only they change it, through `onFoldedChange`.
+   */
+  folded: boolean;
+  onFoldedChange: (folded: boolean) => void;
   /** Reports the effective collapsed state so hosts can clear the bottom. */
   onCollapsedChange?: (collapsed: boolean) => void;
   /** Rendered at the rail's end, outside the chat strip: the downloads bubble. */
@@ -308,6 +314,8 @@ export function ChatBubbles({
   menus,
   activeLocalId,
   autoCollapse,
+  folded,
+  onFoldedChange,
   onCollapsedChange,
   trailing,
   onToggle,
@@ -368,29 +376,20 @@ export function ChatBubbles({
       window.removeEventListener("keydown", onKeyDown);
     };
   }, [dockMenuOpen]);
-  // User override: true = collapsed, false = expanded, null = follow
-  // autoCollapse. Re-arms (back to null) whenever autoCollapse turns on, so
-  // focusing a chat tab folds the strip again even after a manual expand.
-  const [collapseOverride, setCollapseOverride] = useState<boolean | null>(
-    null,
-  );
+  // Opened by hand while a chat tab folds it: until such a tab gains focus
+  // again. Only the person's choice outlasts a tab.
+  const [peeked, setPeeked] = useState(false);
   const prevAutoRef = useRef(autoCollapse);
   if (prevAutoRef.current !== autoCollapse) {
     prevAutoRef.current = autoCollapse;
-    setCollapseOverride(null);
+    if (autoCollapse) setPeeked(false);
   }
-  // A chat opening (Cmd+N, the sidebar, a palette action) releases a manual
-  // collapse: the strip belongs with the open chat, otherwise a closed bubble
-  // would sit beside a visible chat. Auto-collapse behind a tab still applies.
-  const openLocalId = entries.find(
+  // An open chat keeps the strip open beside it (a closed bubble beside a
+  // visible chat reads wrong); minimized again, the person's fold returns.
+  const chatOpen = entries.some(
     (entry) => entry.mode === "partial" && entry.localId === activeLocalId,
-  )?.localId;
-  const prevOpenRef = useRef(openLocalId);
-  if (prevOpenRef.current !== openLocalId) {
-    prevOpenRef.current = openLocalId;
-    if (openLocalId && collapseOverride === true) setCollapseOverride(null);
-  }
-  const collapsed = collapseOverride ?? autoCollapse;
+  );
+  const collapsed = autoCollapse ? !peeked : folded && !chatOpen;
 
   // Tab-mode chats live in the tab bar; only docked/minimized chats get a
   // bubble in the strip. The pill itself always renders so chats never
@@ -551,7 +550,8 @@ export function ChatBubbles({
       type="button"
       {...placementDragHandlers}
       onClick={() => {
-        setCollapseOverride(true);
+        setPeeked(false);
+        onFoldedChange(true);
         onCollapse?.();
       }}
       onContextMenu={openDockMenu}
@@ -666,7 +666,10 @@ export function ChatBubbles({
         <button
           type="button"
           {...dragHandlers}
-          onClick={() => setCollapseOverride(false)}
+          onClick={() => {
+            setPeeked(true);
+            onFoldedChange(false);
+          }}
           onContextMenu={openDockMenu}
           className={`relative grid touch-none cursor-grab active:cursor-grabbing place-items-center overflow-visible rounded-full border border-border bg-bg-overlay text-fg-muted transition-[max-width,opacity,background-color,border-color] duration-250 ease-[cubic-bezier(0.2,0,0,1)] hover:border-border-strong hover:text-fg ${
             collapsed

@@ -42,6 +42,7 @@ const EMPTY: DockSnapshot = {
   multiProject: false,
   side: "right",
   placement: "center",
+  collapsed: false,
 };
 
 /** One presentation vocabulary, mounted in a workspace or in the native dock. */
@@ -522,6 +523,15 @@ export function DockHost({
       actions.current.get(active.entry.localId)?.close?.();
   };
   useEffect(() => desktopApi.onCloseSurface(() => closeFromMenu.current()), []);
+  // The person's fold of the strip, shown at once and kept in prefs, where
+  // every window (and the next launch) reads it from.
+  const saveFolded = (collapsed: boolean) => {
+    const previous = snapshot.collapsed;
+    setSnapshot((state) => ({ ...state, collapsed }));
+    void desktopApi.setPrefs({ dockCollapsed: collapsed }).catch(() => {
+      setSnapshot((state) => ({ ...state, collapsed: previous }));
+    });
+  };
   const saveSide = (side: "left" | "right") => {
     const revision = ++positionRevision.current;
     const previous = snapshot.side;
@@ -918,6 +928,8 @@ export function DockHost({
             // A detached dock is its own window; the main window's tab
             // focus must not fold it and move it between corner and spot.
             autoCollapse={!detachedWindow && Boolean(tabbed)}
+            folded={snapshot.collapsed}
+            onFoldedChange={saveFolded}
             onCollapsedChange={setCollapsed}
             onToggle={toggle}
             onOpenAs={(id, mode) => {

@@ -94,6 +94,11 @@ the resting spot nearest its centre, leaving its own after 40% of the way to
 the next, and slides there, back to where it started included. Persist only
 left/right, never coordinates. Dragging must not trigger expansion; Escape
 cancels and arrow keys select a corner. Settling respects reduced motion.
+Folding the strip (its arrows) is the person's choice, saved with the profile
+(`dockCollapsed`) and shown in every window and the detached dock until they
+open it again from the collapsed bubble. A focused chat tab folds the strip and
+an open chat opens it beside the chat, each only for as long as it lasts; neither
+changes the choice.
 A detached dock stays above other apps and follows macOS desktops. Chat cards
 and bubbles retain their project's theme; the new-chat control follows the
 current project. Files, links and session controls route to their owning project,

@@ -450,8 +450,9 @@ it("centers expanded chats on request and drags the collapsed bubble between bot
   await app.press("ArrowLeft");
   await wait(`return $('[data-dock-host]')?.dataset.dockSide==='left';`);
   await app.reload();
+  // The side, the placement and the person's fold all outlast a reload.
   await wait(
-    `return $('[data-dock-host]')?.dataset.dockSide==='left' && $('[data-dock-host]')?.dataset.dockPlacement==='right';`,
+    `return $('[data-dock-host]')?.dataset.dockSide==='left' && $('[data-dock-host]')?.dataset.dockPlacement==='right' && $('[data-dock-rail]')?.dataset.dockCollapsed==='true';`,
   );
 });
 
@@ -514,4 +515,68 @@ it("lands a dragged strip after a short drag, and slides it back when let go nea
     await run(`const h=$('[data-dock-host]').getBoundingClientRect(), r=$('[data-dock-rail]').getBoundingClientRect();
       return Math.round(Math.abs((r.left+r.right-h.left-h.right)/2));`),
   ).toBeLessThanOrEqual(1);
+});
+
+it("keeps the person's fold of the strip through a chat tab, beside an open chat and across a reload", async () => {
+  const collapsed = (value: boolean) =>
+    wait(
+      `return $('[data-dock-rail]')?.dataset.dockCollapsed === '${value}' && !document.getAnimations().some(a=>a.playState==='running' && a.effect?.getTiming().iterations!==Infinity);`,
+    );
+  const showTab = (key: string) =>
+    run(
+      `$$('[data-tab-orientation] [data-point-key]').find((tab) => tab.dataset.pointKey.startsWith(${JSON.stringify(key)}))?.querySelector('button')?.click();`,
+    );
+  // A page to return to, and a chat in a tab of its own.
+  await run(
+    `[...document.querySelectorAll('button')].find((button) => button.textContent.trim() === 'Settings')?.click();`,
+  );
+  await wait(
+    `return !!$('[data-tab-orientation] [data-point-key^="settings:"]');`,
+  );
+  await run(
+    `window.dispatchEvent(new KeyboardEvent('keydown', {key:'n',metaKey:/Mac/.test(navigator.platform),ctrlKey:!/Mac/.test(navigator.platform),bubbles:true}));`,
+  );
+  await wait(`return !!dock()?.querySelector('[aria-label="Open as tab"]');`);
+  await run(`dock().querySelector('[aria-label="Open as tab"]').click();`);
+  await wait(`return !!$('[data-tab-orientation] [data-point-key^="chat:"]');`);
+  // On the page, the person folds the strip.
+  await showTab("settings:");
+  await run(
+    `const button=$('[aria-label="Expand chat bubbles"]'); if(button && !button.inert) button.click();`,
+  );
+  await collapsed(false);
+  await run(`$('[aria-label="Collapse chat bubbles"]').click();`);
+  await collapsed(true);
+  // The chat tab folds it too; leaving that tab keeps the person's fold.
+  await showTab("chat:");
+  await collapsed(true);
+  await showTab("settings:");
+  await collapsed(true);
+  // A chat opened keeps the strip open beside it; minimized, the fold returns.
+  await run(
+    `window.dispatchEvent(new KeyboardEvent('keydown', {key:'n',metaKey:/Mac/.test(navigator.platform),ctrlKey:!/Mac/.test(navigator.platform),bubbles:true}));`,
+  );
+  await wait(
+    `return dock()?.dataset.floatingChat === 'true' && $('[data-dock-rail]')?.dataset.dockCollapsed === 'false';`,
+  );
+  // A chat with a message minimizes (an empty one would close).
+  await run(`const composer = dock().querySelector('[data-composer-input]');
+    setReactValue(composer, 'hello strip');
+    composer.closest('form').requestSubmit();`);
+  await wait(
+    `return !!dock()?.querySelector('[aria-label="Minimize chat to bubble"]');`,
+  );
+  await run(
+    `dock().querySelector('[aria-label="Minimize chat to bubble"]').click();`,
+  );
+  await wait(`return !$('section[data-floating-chat="true"]');`);
+  await collapsed(true);
+  // Saved: a reload, or any other window of the profile, shows it folded.
+  await app.reload();
+  await collapsed(true);
+  // Opened again by the person, it stays open.
+  await run(`$('[aria-label="Expand chat bubbles"]').click();`);
+  await collapsed(false);
+  await app.reload();
+  await collapsed(false);
 });
