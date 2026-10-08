@@ -229,9 +229,11 @@ describe("project agents", () => {
   it("gates a profile-credentialed project agent behind the consent dialog", async () => {
     await runWait(`return !!visibleDock();`, { label: "chat still open" });
     await openPicker("Switch agent for this chat", "Chat agent");
+    // The chat ran on the built-in harness and Reviewer runs on Claude
+    // Code, so it would start a new chat (ADR 0214); approval comes first.
     await runWait(
       `const row = paletteRows().find((el) => el.textContent.includes('Reviewer'));
-       return !!row && row.textContent.includes('needs approval');`,
+       return !!row && row.textContent.includes('needs approval · starts a new chat');`,
       { label: "Reviewer row marked as needing approval" },
     );
     await runWait(pickOption("Reviewer"), { label: "pick Reviewer" });
@@ -247,17 +249,22 @@ describe("project agents", () => {
     await run(
       `$('[data-testid="project-agent-approve"]').click(); return true;`,
     );
+    // Approved, it gets a new chat of its own; the picker there shows it
+    // approved and current: consent is recorded.
     await runWait(
-      `return $$('[role="log"] div')
-        .some((el) => el.textContent.trim() === 'Switched to Reviewer');`,
-      { timeoutMs: 15_000, label: "approved agent switched in" },
+      `const dock = visibleDock();
+       return !!dock && !dock.querySelector('[role="log"]')?.textContent.includes('Switched to');`,
+      { timeoutMs: 15_000, label: "a new chat for the approved agent" },
     );
-    // Re-opening the picker shows it approved — consent is recorded.
     await openPicker("Switch agent for this chat", "Chat agent");
     await runWait(
       `const row = paletteRows().find((el) => el.textContent.includes('Reviewer'));
-       return !!row && row.textContent.includes('approved');`,
-      { label: "Reviewer row now approved" },
+       return !!row && row.textContent.includes('approved') &&
+         !row.textContent.includes('new chat') && !!row.querySelector('[data-testid="palette-current"]');`,
+      {
+        timeoutMs: 15_000,
+        label: "Reviewer approved and current in the new chat",
+      },
     );
     await run(paletteEscape);
   });

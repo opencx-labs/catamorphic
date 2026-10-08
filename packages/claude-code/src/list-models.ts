@@ -1,4 +1,5 @@
 import { query, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
+import { hostProcessEnv } from "./options.js";
 
 export interface ClaudeCodeModel {
   id: string;
@@ -38,7 +39,7 @@ export async function listClaudeCodeModels(opts?: {
     options: {
       abortController: abort,
       maxTurns: 1,
-      env: { ...processEnv(), ...opts?.env },
+      env: { ...hostProcessEnv(), ...opts?.env },
       pathToClaudeCodeExecutable: opts?.pathToClaudeCodeExecutable,
     },
   });
@@ -56,14 +57,6 @@ export async function listClaudeCodeModels(opts?: {
     release();
     abort.abort();
   }
-}
-
-function processEnv(): Record<string, string> {
-  const env: Record<string, string> = {};
-  for (const [key, value] of Object.entries(process.env)) {
-    if (typeof value === "string") env[key] = value;
-  }
-  return env;
 }
 
 /** The model a Claude Code session in this folder runs when none is pinned. */
@@ -104,7 +97,7 @@ export async function resolveClaudeCodeModel(opts: {
     options: {
       cwd: opts.workingDirectory,
       abortController: abort,
-      env: { ...processEnv(), ...opts.env },
+      env: { ...hostProcessEnv(), ...opts.env },
       pathToClaudeCodeExecutable: opts.pathToClaudeCodeExecutable,
       // The same sources a session reads, so project and local settings
       // pinning a model count.

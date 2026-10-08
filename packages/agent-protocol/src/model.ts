@@ -561,6 +561,11 @@ export interface SessionFields {
   title: string | null;
   icon: string | null;
   agentId: string | null;
+  /**
+   * The harness the conversation runs on: its first turn binds it and it
+   * stays (ADR 0214). Null until then. Each copy binds its own (ADR 0197).
+   */
+  harness: string | null;
   model: string | null;
   modelEffort: AgentEffort | null;
   status: "active" | "closed";

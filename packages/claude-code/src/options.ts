@@ -183,6 +183,30 @@ function processEnv(keys?: readonly string[]): Record<string, string> {
   return env;
 }
 
+/**
+ * The host's environment for a CLI that runs on it, less an inherited
+ * Anthropic API key. The SDK runs the CLI in print mode, where it takes an
+ * ANTHROPIC_API_KEY over the person's sign-in without the approval its
+ * terminal asks for, so a key exported in the shell the host was started
+ * from would bill their chats to the API instead of their plan. A key for
+ * an endpoint the environment routes Claude Code to stays: the sign-in is
+ * not for it. A host that means a key passes it in the attempt's env.
+ */
+export function hostProcessEnv(): Record<string, string> {
+  const env = processEnv();
+  if (routesToAnthropic(env.ANTHROPIC_BASE_URL)) delete env.ANTHROPIC_API_KEY;
+  return env;
+}
+
+function routesToAnthropic(baseUrl: string | undefined): boolean {
+  if (!baseUrl) return true;
+  try {
+    return new URL(baseUrl).hostname === "api.anthropic.com";
+  } catch {
+    return false;
+  }
+}
+
 function mapMcpServer(spec: McpServerSpec): McpServerConfig {
   if (spec.transport === "stdio")
     return {
@@ -288,10 +312,10 @@ export function buildQueryOptions(input: QueryOptionInputs): Options {
   const host = access.kind === "host";
   const env: Record<string, string> = {
     // On the host the CLI inherits the host's environment (its own
-    // sign-in and settings); beside a sandbox's workspace it gets the
-    // process basics and exactly what the attempt lists, so no credential
-    // reaches it but the access below.
-    ...(host ? processEnv() : processEnv(PROCESS_BASICS)),
+    // sign-in and settings) but not a stray API key; beside a sandbox's
+    // workspace it gets the process basics and exactly what the attempt
+    // lists, so no credential reaches it but the access below.
+    ...(host ? hostProcessEnv() : processEnv(PROCESS_BASICS)),
     ...attempt.env,
     ...(options.memory === false
       ? { CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1" }

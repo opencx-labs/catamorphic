@@ -21,6 +21,12 @@ import type {
 } from "../lib/desktop-api.js";
 
 /**
+ * What a picked project agent becomes: the default, the focused chat's
+ * agent, or a new chat's (one its harness cannot take, ADR 0214).
+ */
+export type ProjectAgentTarget = "default" | "session" | "chat";
+
+/**
  * Everything the palette reads from the app: data, the focused context and
  * the actions rows run. Provided once around the app, so the overlay and
  * every palette tab read the same host (ADR 0186).
@@ -64,20 +70,25 @@ export interface PaletteHost {
   focusedChat: {
     /** Its checkout can carry its own harness settings. */
     sessionId: string | null;
+    /** The harness its first turn bound (ADR 0214); null before it starts. */
+    harness: string | null;
     agentId: string | null;
     model: string | null;
     effort: AgentEffort | null;
   } | null;
   onPickDefaultAgent: (agentId: string) => void;
   onPickSessionAgent: (agentId: string) => void;
+  /** A new chat with an agent the focused chat's harness cannot take. */
+  onStartChatWithAgent: (agentId: string) => void;
   /**
    * A project agent was picked. The app runs the consent flow first when
    * the definition isn't approved (or approval went stale), then applies
-   * the same default/session switch the profile-agent handlers do.
+   * the same default, session or new-chat pick the profile-agent handlers
+   * do.
    */
   onPickProjectAgent: (
     agent: ProjectAgentInfo,
-    target: "default" | "session",
+    target: ProjectAgentTarget,
   ) => void;
   /** A configure-picker row was committed: open the agent's modal. */
   onConfigureAgent: (agentId: string) => void;

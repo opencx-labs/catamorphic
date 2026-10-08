@@ -198,6 +198,7 @@ export function sessionFieldsFromRow(row: SessionRow): SessionFields {
     title: row.title,
     icon: row.icon,
     agentId: row.agent_id,
+    harness: row.harness,
     model: row.model,
     modelEffort: EFFORTS.find((effort) => effort === row.model_effort) ?? null,
     status: row.status === "closed" ? "closed" : "active",

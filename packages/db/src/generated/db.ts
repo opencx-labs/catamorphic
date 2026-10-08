@@ -165,6 +165,7 @@ export interface AgentSessions {
   forked_from_session_id: string | null;
   handoff_destination_host_id: string | null;
   handoff_status: Generated<string>;
+  harness: string | null;
   icon: string | null;
   id: Generated<string>;
   mirror_sequence: Generated<Int8>;

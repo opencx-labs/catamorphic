@@ -135,8 +135,34 @@ export function AgentWizard({
   // creating a duplicate.
   const createdRef = useRef<Partial<Record<Flow, string>>>({});
   const waitingRef = useRef<{ agentId: string; flow: Flow } | null>(null);
+  // The flow whose terminal sign-in is under way (its Continue finishes it).
+  const terminalFlowRef = useRef<Flow | null>(null);
   const onDoneRef = useRef(onDone);
   onDoneRef.current = onDone;
+
+  /**
+   * Done with the agent a flow set up (`null`: one made outside the flows,
+   * an API key's). A sign-in creates its agent before it finishes, so other
+   * flows may have left agents on the way: those that never signed in go,
+   * and none stays behind as the default. One whose sign-in landed after
+   * all (in a terminal, with the wizard closed) stays.
+   */
+  const finish = (flow: Flow | null) => {
+    const others = Object.entries(createdRef.current).flatMap(([other, id]) =>
+      other !== flow && id ? [id] : [],
+    );
+    createdRef.current = {};
+    void Promise.all(
+      others.map(async (id) => {
+        const signedIn = await desktopApi
+          .agentLoginStatus(id)
+          .catch(() => true);
+        if (!signedIn) await desktopApi.agentsRemove(id).catch(() => false);
+      }),
+    ).finally(() => onDoneRef.current());
+  };
+  const finishRef = useRef(finish);
+  finishRef.current = finish;
 
   useEffect(() => {
     void desktopApi.agentSetupStatus().then(setStatus);
@@ -168,7 +194,7 @@ export function AgentWizard({
       setWaitingFlow(null);
       setBusy(false);
       setBusyFlow(null);
-      if (ok) onDoneRef.current();
+      if (ok) finishRef.current(waiting.flow);
       else setError("Sign-in did not complete. Try again.");
     });
   }, []);
@@ -263,7 +289,7 @@ export function AgentWizard({
     setBusyFlow(flow);
     try {
       await ensureAgent(flow);
-      onDone();
+      finish(flow);
     } catch (cause) {
       setBusy(false);
       setBusyFlow(null);
@@ -298,7 +324,7 @@ export function AgentWizard({
         // Nothing to start: the harness is already signed in.
         waitingRef.current = null;
         setWaitingFlow(null);
-        onDone();
+        finish(flow);
       }
     } catch (cause) {
       waitingRef.current = null;
@@ -324,6 +350,7 @@ export function AgentWizard({
         setError(result.error);
       } else {
         setCcStarted(true);
+        terminalFlowRef.current = flow;
         if (result.command) setCcCommand(result.command);
         // Main watches the credentials: the wizard finishes by itself the
         // moment the terminal sign-in lands (Continue stays as the manual
@@ -353,7 +380,7 @@ export function AgentWizard({
         connections,
         ...(name.trim() ? { name: name.trim() } : {}),
       });
-      onDone();
+      finish(null);
     } catch (cause) {
       setBusy(false);
       setError(cause instanceof Error ? cause.message : String(cause));
@@ -519,7 +546,7 @@ export function AgentWizard({
                 {ccStarted ? (
                   <button
                     type="button"
-                    onClick={onDone}
+                    onClick={() => finish(terminalFlowRef.current)}
                     className={`mt-4 ${primaryActionClass}`}
                   >
                     Continue
@@ -570,7 +597,7 @@ export function AgentWizard({
                   {ccStarted ? (
                     <button
                       type="button"
-                      onClick={onDone}
+                      onClick={() => finish(terminalFlowRef.current)}
                       className={primaryActionClass}
                     >
                       Continue

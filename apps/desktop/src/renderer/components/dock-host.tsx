@@ -813,6 +813,9 @@ export function DockHost({
                 onSessionCreated={(_id, sessionId) =>
                   invoke(chat, { kind: "session", sessionId })
                 }
+                onSessionAgent={(_id, session) =>
+                  invoke(chat, { kind: "sessionAgent", ...session })
+                }
                 onSignalsChange={(_id, next) => {
                   setSignals((old) =>
                     JSON.stringify(old[entry.localId]) === JSON.stringify(next)
@@ -842,6 +845,7 @@ export function DockHost({
                 }
                 onForkCurrent={() => invoke(chat, { kind: "forkCurrent" })}
                 onArchive={() => invoke(chat, { kind: "archive" })}
+                onEditAgent={() => invoke(chat, { kind: "editAgent" })}
                 onEditModel={() => invoke(chat, { kind: "editModel" })}
                 onEditEffort={() => invoke(chat, { kind: "editEffort" })}
                 onEditPermissionMode={() =>

@@ -2012,6 +2012,10 @@
             "nullable": true,
             "type": "string"
           },
+          "harness": {
+            "nullable": true,
+            "type": "string"
+          },
           "model": {
             "nullable": true,
             "type": "string"
@@ -2104,6 +2108,7 @@
           "title",
           "icon",
           "agentId",
+          "harness",
           "model",
           "modelEffort",
           "status",
@@ -2147,6 +2152,10 @@
                     "type": "string"
                   },
                   "agentId": {
+                    "nullable": true,
+                    "type": "string"
+                  },
+                  "harness": {
                     "nullable": true,
                     "type": "string"
                   },
@@ -4577,6 +4586,10 @@
             "nullable": true,
             "type": "string"
           },
+          "harness": {
+            "nullable": true,
+            "type": "string"
+          },
           "model": {
             "nullable": true,
             "type": "string"
@@ -4670,6 +4683,7 @@
           "title",
           "icon",
           "agentId",
+          "harness",
           "model",
           "modelEffort",
           "status",
@@ -4714,6 +4728,10 @@
                     "type": "string"
                   },
                   "agentId": {
+                    "nullable": true,
+                    "type": "string"
+                  },
+                  "harness": {
                     "nullable": true,
                     "type": "string"
                   },
@@ -18458,6 +18476,10 @@
                       "nullable": true,
                       "type": "string"
                     },
+                    "harness": {
+                      "nullable": true,
+                      "type": "string"
+                    },
                     "model": {
                       "nullable": true,
                       "type": "string"
@@ -18693,6 +18715,7 @@
                     "environment",
                     "allocationId",
                     "agentId",
+                    "harness",
                     "model",
                     "modelEffort",
                     "title",
@@ -19063,6 +19086,10 @@
                             "nullable": true,
                             "type": "string"
                           },
+                          "harness": {
+                            "nullable": true,
+                            "type": "string"
+                          },
                           "model": {
                             "nullable": true,
                             "type": "string"
@@ -19307,6 +19334,7 @@
                           "environment",
                           "allocationId",
                           "agentId",
+                          "harness",
                           "model",
                           "modelEffort",
                           "title",
@@ -19492,6 +19520,10 @@
                       "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                     },
                     "agentId": {
+                      "nullable": true,
+                      "type": "string"
+                    },
+                    "harness": {
                       "nullable": true,
                       "type": "string"
                     },
@@ -19730,6 +19762,7 @@
                     "environment",
                     "allocationId",
                     "agentId",
+                    "harness",
                     "model",
                     "modelEffort",
                     "title",
@@ -19867,6 +19900,23 @@
                         }
                       },
                       "required": ["error", "code"],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "error": {
+                          "type": "string"
+                        },
+                        "code": {
+                          "type": "string",
+                          "enum": ["harness_fixed"]
+                        },
+                        "harness": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["error", "code", "harness"],
                       "additionalProperties": false
                     },
                     {
@@ -20070,6 +20120,10 @@
                       "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                     },
                     "agentId": {
+                      "nullable": true,
+                      "type": "string"
+                    },
+                    "harness": {
                       "nullable": true,
                       "type": "string"
                     },
@@ -20311,6 +20365,7 @@
                     "environment",
                     "allocationId",
                     "agentId",
+                    "harness",
                     "model",
                     "modelEffort",
                     "title",
@@ -20474,6 +20529,10 @@
                       "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                     },
                     "agentId": {
+                      "nullable": true,
+                      "type": "string"
+                    },
+                    "harness": {
                       "nullable": true,
                       "type": "string"
                     },
@@ -20712,6 +20771,7 @@
                     "environment",
                     "allocationId",
                     "agentId",
+                    "harness",
                     "model",
                     "modelEffort",
                     "title",
@@ -21619,6 +21679,10 @@
                       "nullable": true,
                       "type": "string"
                     },
+                    "harness": {
+                      "nullable": true,
+                      "type": "string"
+                    },
                     "model": {
                       "nullable": true,
                       "type": "string"
@@ -21854,6 +21918,7 @@
                     "environment",
                     "allocationId",
                     "agentId",
+                    "harness",
                     "model",
                     "modelEffort",
                     "title",
@@ -22178,6 +22243,10 @@
                           "nullable": true,
                           "type": "string"
                         },
+                        "harness": {
+                          "nullable": true,
+                          "type": "string"
+                        },
                         "model": {
                           "nullable": true,
                           "type": "string"
@@ -22418,6 +22487,7 @@
                         "environment",
                         "allocationId",
                         "agentId",
+                        "harness",
                         "model",
                         "modelEffort",
                         "title",
@@ -22958,6 +23028,10 @@
                       "nullable": true,
                       "type": "string"
                     },
+                    "harness": {
+                      "nullable": true,
+                      "type": "string"
+                    },
                     "model": {
                       "nullable": true,
                       "type": "string"
@@ -23193,6 +23267,7 @@
                     "environment",
                     "allocationId",
                     "agentId",
+                    "harness",
                     "model",
                     "modelEffort",
                     "title",
@@ -23575,6 +23650,10 @@
                           "nullable": true,
                           "type": "string"
                         },
+                        "harness": {
+                          "nullable": true,
+                          "type": "string"
+                        },
                         "model": {
                           "nullable": true,
                           "type": "string"
@@ -23815,6 +23894,7 @@
                         "environment",
                         "allocationId",
                         "agentId",
+                        "harness",
                         "model",
                         "modelEffort",
                         "title",
@@ -24076,6 +24156,10 @@
                             "nullable": true,
                             "type": "string"
                           },
+                          "harness": {
+                            "nullable": true,
+                            "type": "string"
+                          },
                           "model": {
                             "nullable": true,
                             "type": "string"
@@ -24320,6 +24404,7 @@
                           "environment",
                           "allocationId",
                           "agentId",
+                          "harness",
                           "model",
                           "modelEffort",
                           "title",
@@ -24559,6 +24644,10 @@
                             "nullable": true,
                             "type": "string"
                           },
+                          "harness": {
+                            "nullable": true,
+                            "type": "string"
+                          },
                           "model": {
                             "nullable": true,
                             "type": "string"
@@ -24803,6 +24892,7 @@
                           "environment",
                           "allocationId",
                           "agentId",
+                          "harness",
                           "model",
                           "modelEffort",
                           "title",
@@ -25090,6 +25180,10 @@
                       "nullable": true,
                       "type": "string"
                     },
+                    "harness": {
+                      "nullable": true,
+                      "type": "string"
+                    },
                     "model": {
                       "nullable": true,
                       "type": "string"
@@ -25325,6 +25419,7 @@
                     "environment",
                     "allocationId",
                     "agentId",
+                    "harness",
                     "model",
                     "modelEffort",
                     "title",
@@ -25607,6 +25702,10 @@
                       "nullable": true,
                       "type": "string"
                     },
+                    "harness": {
+                      "nullable": true,
+                      "type": "string"
+                    },
                     "model": {
                       "nullable": true,
                       "type": "string"
@@ -25842,6 +25941,7 @@
                     "environment",
                     "allocationId",
                     "agentId",
+                    "harness",
                     "model",
                     "modelEffort",
                     "title",
@@ -26027,6 +26127,10 @@
                       "nullable": true,
                       "type": "string"
                     },
+                    "harness": {
+                      "nullable": true,
+                      "type": "string"
+                    },
                     "model": {
                       "nullable": true,
                       "type": "string"
@@ -26262,6 +26366,7 @@
                     "environment",
                     "allocationId",
                     "agentId",
+                    "harness",
                     "model",
                     "modelEffort",
                     "title",
@@ -26779,6 +26884,10 @@
                             "nullable": true,
                             "type": "string"
                           },
+                          "harness": {
+                            "nullable": true,
+                            "type": "string"
+                          },
                           "model": {
                             "nullable": true,
                             "type": "string"
@@ -27023,6 +27132,7 @@
                           "environment",
                           "allocationId",
                           "agentId",
+                          "harness",
                           "model",
                           "modelEffort",
                           "title",
@@ -27298,6 +27408,10 @@
                         "nullable": true,
                         "type": "string"
                       },
+                      "harness": {
+                        "nullable": true,
+                        "type": "string"
+                      },
                       "model": {
                         "nullable": true,
                         "type": "string"
@@ -27533,6 +27647,7 @@
                       "environment",
                       "allocationId",
                       "agentId",
+                      "harness",
                       "model",
                       "modelEffort",
                       "title",
@@ -30269,6 +30384,10 @@
                         "nullable": true,
                         "type": "string"
                       },
+                      "harness": {
+                        "nullable": true,
+                        "type": "string"
+                      },
                       "model": {
                         "nullable": true,
                         "type": "string"
@@ -30504,6 +30623,7 @@
                       "environment",
                       "allocationId",
                       "agentId",
+                      "harness",
                       "model",
                       "modelEffort",
                       "title",

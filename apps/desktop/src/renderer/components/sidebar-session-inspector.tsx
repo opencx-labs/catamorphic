@@ -14,9 +14,11 @@ import {
   projectAgentAsInfo,
   type SessionCheckoutInfo,
 } from "../lib/desktop-api.js";
+import { useRemoteProject } from "./project-authority-provider.js";
 import { SessionInspectorContent } from "./session-inspector.js";
 
 export type SessionCommand =
+  | "switch-agent"
   | "model"
   | "effort"
   | "permission-mode"
@@ -28,6 +30,7 @@ export function SidebarSessionInspector({
   projectId,
   session,
   agent: profileAgent,
+  agents = [],
   agentName,
   checkout,
   onCommand,
@@ -36,6 +39,8 @@ export function SidebarSessionInspector({
   projectId: string;
   session: AgentSession;
   agent?: AgentInfo;
+  /** The profile's agents: what the session may switch to. */
+  agents?: AgentInfo[];
   agentName: string;
   checkout: SessionCheckoutInfo | null;
   onCommand: (command: SessionCommand) => void;
@@ -44,7 +49,6 @@ export function SidebarSessionInspector({
   const projectAgents = useQuery({
     queryKey: ["desktop-project-agents", projectId],
     queryFn: () => desktopApi.projectAgentsList(projectId),
-    enabled: !profileAgent,
     staleTime: 30_000,
   });
   const agent =
@@ -52,6 +56,19 @@ export function SidebarSessionInspector({
     projectAgents.data?.agents
       .map(projectAgentAsInfo)
       .find((entry) => entry.id === session.agentId);
+  // Another agent to pick for the session (lib/agent-switch: one on another
+  // harness starts a new chat). Committed agents whose definition fails are
+  // listed in the picker, never picked. A connected project's session runs
+  // on the server's agents, not these.
+  const remote = useRemoteProject(projectId);
+  const otherAgents = remote
+    ? 0
+    : [
+        ...agents.map((candidate) => candidate.id),
+        ...(projectAgents.data?.agents
+          .filter((candidate) => !candidate.invalid)
+          .map((candidate) => candidate.id) ?? []),
+      ].filter((id) => id !== session.agentId).length;
   const [moving, setMoving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const eligibility = useQuery({
@@ -114,6 +131,16 @@ export function SidebarSessionInspector({
             session.modelEffort ?? agent?.effort,
             effortModel,
           ) ?? "Default"
+        }
+        onEditAgent={
+          !session.running && otherAgents > 0
+            ? () => onCommand("switch-agent")
+            : undefined
+        }
+        agentDisabledReason={
+          otherAgents > 0 && session.running
+            ? "Agent can be changed after the current turn finishes."
+            : undefined
         }
         onEditModel={
           !session.running && agent ? () => onCommand("model") : undefined
