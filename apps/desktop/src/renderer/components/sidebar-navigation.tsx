@@ -1200,6 +1200,7 @@ function SessionsNav({
                   agent={agentsData?.agents.find(
                     (agent) => agent.id === agentId,
                   )}
+                  agents={agentsData?.agents}
                   agentName={agentName}
                   checkout={checkout ?? null}
                   onCommand={(command) => onCommand(session, command)}

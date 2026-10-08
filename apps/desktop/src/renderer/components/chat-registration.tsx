@@ -119,6 +119,9 @@ export function ChatRegistration(
         case "forkCurrent":
           p.onForkCurrent?.();
           break;
+        case "editAgent":
+          p.onEditAgent?.();
+          break;
         case "editModel":
           p.onEditModel?.();
           break;

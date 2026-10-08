@@ -8,6 +8,7 @@ import {
 } from "../lib/agent-default-model.js";
 import { effectiveEffort, supportedEfforts } from "../lib/agent-effort.js";
 import { agentPermissionView } from "../lib/agent-permissions.js";
+import { agentSwitchNone, switchableAgents } from "../lib/agent-switch.js";
 import {
   type AgentInfo,
   desktopApi,
@@ -17,6 +18,7 @@ import {
 import { SessionInspectorContent } from "./session-inspector.js";
 
 export type SessionCommand =
+  | "switch-agent"
   | "model"
   | "effort"
   | "permission-mode"
@@ -28,6 +30,7 @@ export function SidebarSessionInspector({
   projectId,
   session,
   agent: profileAgent,
+  agents = [],
   agentName,
   checkout,
   onCommand,
@@ -36,6 +39,8 @@ export function SidebarSessionInspector({
   projectId: string;
   session: AgentSession;
   agent?: AgentInfo;
+  /** The profile's agents: what the session may switch to. */
+  agents?: AgentInfo[];
   agentName: string;
   checkout: SessionCheckoutInfo | null;
   onCommand: (command: SessionCommand) => void;
@@ -44,7 +49,6 @@ export function SidebarSessionInspector({
   const projectAgents = useQuery({
     queryKey: ["desktop-project-agents", projectId],
     queryFn: () => desktopApi.projectAgentsList(projectId),
-    enabled: !profileAgent,
     staleTime: 30_000,
   });
   const agent =
@@ -52,6 +56,16 @@ export function SidebarSessionInspector({
     projectAgents.data?.agents
       .map(projectAgentAsInfo)
       .find((entry) => entry.id === session.agentId);
+  // A session has started: it switches within its harness (lib/agent-switch).
+  const roster = [
+    ...agents,
+    ...(projectAgents.data?.agents.map(projectAgentAsInfo) ?? []),
+  ];
+  const switchTargets = switchableAgents({
+    agents: roster,
+    currentId: session.agentId ?? undefined,
+    started: true,
+  });
   const [moving, setMoving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const eligibility = useQuery({
@@ -114,6 +128,20 @@ export function SidebarSessionInspector({
             session.modelEffort ?? agent?.effort,
             effortModel,
           ) ?? "Default"
+        }
+        onEditAgent={
+          !session.running && switchTargets.length > 0
+            ? () => onCommand("switch-agent")
+            : undefined
+        }
+        agentDisabledReason={
+          roster.length < 2
+            ? undefined
+            : session.running
+              ? "Agent can be changed after the current turn finishes."
+              : switchTargets.length === 0 && agent
+                ? agentSwitchNone(agent.harness)
+                : undefined
         }
         onEditModel={
           !session.running && agent ? () => onCommand("model") : undefined

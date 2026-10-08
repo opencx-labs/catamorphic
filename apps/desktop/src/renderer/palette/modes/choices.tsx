@@ -18,6 +18,7 @@ import {
 } from "../../lib/agent-default-model.js";
 import { effectiveEffort, supportedEfforts } from "../../lib/agent-effort.js";
 import { permissionModeChoices } from "../../lib/agent-permissions.js";
+import { canSwitchAgent } from "../../lib/agent-switch.js";
 import { commandScore } from "../../lib/command-score.js";
 import {
   type AgentEffort,
@@ -493,6 +494,15 @@ export function useChoiceModes({
   );
   const choiceItems = useMemo<PaletteItem[]>(() => {
     if (!picker || picker === "model") return [];
+    // A started chat switches only within its harness (lib/agent-switch);
+    // the others stay listed, disabled, saying what they need.
+    const blockedFor = (harness: AgentInfo["harness"]) =>
+      picker === "switch-agent" &&
+      !canSwitchAgent({
+        started: Boolean(focusedChat?.sessionId),
+        current: targetAgent?.harness,
+        next: harness,
+      });
     const build = (): PaletteItem[] => {
       const rows: PaletteItem[] =
         picker === "permission-mode"
@@ -563,20 +573,26 @@ export function useChoiceModes({
                         ? agent.id === defaultAgentId
                         : agent.id ===
                           ((focusedChat?.agentId ?? defaultAgentId) || "");
+                  const blocked = blockedFor(agent.harness)
+                    ? `${agentSourceLabel(agent)} · needs a new chat`
+                    : null;
                   return {
                     id: `pick:agent:${agent.id}`,
                     icon: picker === "configure-agent" ? Settings2 : Bot,
                     label: agent.name,
-                    detail: [
-                      agentSourceLabel(agent),
-                      agentAuthLabel(agent),
-                      permissionModeLabel({
-                        harness: agent.harness,
-                        permissions: agent.harnessPermissions,
-                      }),
-                    ]
-                      .filter(Boolean)
-                      .join(" · "),
+                    detail:
+                      blocked ??
+                      [
+                        agentSourceLabel(agent),
+                        agentAuthLabel(agent),
+                        permissionModeLabel({
+                          harness: agent.harness,
+                          permissions: agent.harnessPermissions,
+                        }),
+                      ]
+                        .filter(Boolean)
+                        .join(" · "),
+                    ...(blocked ? { disabled: true } : {}),
                     keywords: [
                       agent.name,
                       agent.harness,
@@ -607,16 +623,20 @@ export function useChoiceModes({
                         ? agent.id === defaultAgentId
                         : agent.id ===
                           ((focusedChat?.agentId ?? defaultAgentId) || "");
+                  const blocked = blockedFor(projectAgentAsInfo(agent).harness)
+                    ? `${PROJECT_KIND_LABELS[agent.kind] ?? agent.kind} · needs a new chat`
+                    : null;
                   return {
                     id: `pick:agent:${agent.id}`,
                     icon: picker === "configure-agent" ? Settings2 : Bot,
                     label: agent.name,
-                    detail: projectAgentDetail(agent),
+                    detail: blocked ?? projectAgentDetail(agent),
                     keywords: [agent.name, agent.slug, "project", agent.kind],
                     kind: "action" as const,
                     group: "Project agents",
                     ...(isCurrent ? { current: true } : {}),
-                    ...(agent.invalid && picker !== "configure-agent"
+                    ...((agent.invalid && picker !== "configure-agent") ||
+                    blocked
                       ? { disabled: true }
                       : {}),
                     run: () => {

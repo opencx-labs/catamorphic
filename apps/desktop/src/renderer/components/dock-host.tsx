@@ -825,6 +825,7 @@ export function DockHost({
                 }
                 onForkCurrent={() => invoke(chat, { kind: "forkCurrent" })}
                 onArchive={() => invoke(chat, { kind: "archive" })}
+                onEditAgent={() => invoke(chat, { kind: "editAgent" })}
                 onEditModel={() => invoke(chat, { kind: "editModel" })}
                 onEditEffort={() => invoke(chat, { kind: "editEffort" })}
                 onEditPermissionMode={() =>

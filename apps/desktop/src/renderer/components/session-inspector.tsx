@@ -50,9 +50,11 @@ export function SessionInspector({
   effort = "Default",
   permissionMode,
   sandboxing,
+  onEditAgent,
   onEditModel,
   onEditEffort,
   onEditPermissionMode,
+  agentDisabledReason,
   modelDisabledReason,
   effortDisabledReason,
   permissionModeDisabledReason,
@@ -92,9 +94,12 @@ export function SessionInspector({
   permissionMode?: string | null;
   /** What may leave the agent's sandbox (ADR 0182), as a label. */
   sandboxing?: string | null;
+  /** Open the agent picker: any agent before the chat starts, its harness's after. */
+  onEditAgent?: () => void;
   onEditModel?: () => void;
   onEditEffort?: () => void;
   onEditPermissionMode?: () => void;
+  agentDisabledReason?: string;
   modelDisabledReason?: string;
   effortDisabledReason?: string;
   permissionModeDisabledReason?: string;
@@ -156,6 +161,15 @@ export function SessionInspector({
             modelIsDefault={modelIsDefault}
             reportedModel={reportedModel}
             effort={effort}
+            onEditAgent={
+              onEditAgent
+                ? () => {
+                    dismiss();
+                    onEditAgent();
+                  }
+                : undefined
+            }
+            agentDisabledReason={agentDisabledReason}
             onEditModel={
               onEditModel
                 ? () => {
@@ -264,9 +278,11 @@ export function SessionInspectorContent({
   effort = "Default",
   permissionMode,
   sandboxing,
+  onEditAgent,
   onEditModel,
   onEditEffort,
   onEditPermissionMode,
+  agentDisabledReason,
   modelDisabledReason,
   effortDisabledReason,
   permissionModeDisabledReason,
@@ -299,9 +315,12 @@ export function SessionInspectorContent({
   permissionMode?: string | null;
   /** What may leave the agent's sandbox (ADR 0182), as a label. */
   sandboxing?: string | null;
+  /** Open the agent picker: any agent before the chat starts, its harness's after. */
+  onEditAgent?: () => void;
   onEditModel?: () => void;
   onEditEffort?: () => void;
   onEditPermissionMode?: () => void;
+  agentDisabledReason?: string;
   modelDisabledReason?: string;
   effortDisabledReason?: string;
   permissionModeDisabledReason?: string;
@@ -360,7 +379,12 @@ export function SessionInspectorContent({
       </header>
 
       <dl className="grid grid-cols-[6.5rem_1fr] gap-x-3 gap-y-2 py-3 text-[11px]">
-        <InspectorRow label="Agent" value={agentName} />
+        <InspectorRow
+          label="Agent"
+          value={agentName}
+          onEdit={onEditAgent}
+          disabledReason={agentDisabledReason}
+        />
         <InspectorRow
           label="Model"
           value={model}

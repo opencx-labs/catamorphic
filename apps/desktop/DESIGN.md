@@ -1773,3 +1773,22 @@ and values with no meanings, and the descriptions in Settings were vague.
   tells agents to say when no value does what was asked instead of picking
   the nearest one.
 
+### 2026-10-08: A chat picks any agent before it starts, and stays on its harness after
+
+People could not change a chat's agent from its status popup: the Agent row
+was the one row there with no picker, and the palette's "Switch agent for this
+chat" let a started conversation jump to any harness. Core can continue a
+conversation on another harness (ADR 0198), but only from a budgeted summary:
+what was asked and answered, commands without their output, files by name.
+The new agent starts over from notes, with its own tools and permissions.
+
+The Agent row now opens the same picker as the palette command. Before the
+first message a chat is bound to nothing, so every agent is offered. Once the
+conversation has started, it stays on its harness, as T3 Code keeps a started
+thread on its provider: agents on the same harness continue the same native
+thread and stay pickable; the others are listed, disabled, as "Codex · needs a
+new chat". When no agent qualifies, the row says why instead of opening an
+empty choice. The rule is `canSwitchAgent` (lib/agent-switch), shared by the
+popup, the sidebar's session card and the palette. Core keeps the summary
+handoff for forks, moves and other clients.
+

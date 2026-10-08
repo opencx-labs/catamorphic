@@ -200,6 +200,8 @@ export interface ChatDockProps {
   inspectRequestNonce?: number;
   /** Set on forked chats: reveal the parent conversation. */
   onOpenParent?: () => void;
+  /** Open the agent picker for this chat (agents it may switch to). */
+  onEditAgent?: () => void;
   /** Open the harness-backed picker for this session's model override. */
   onEditModel?: () => void;
   /** Open the session reasoning-effort picker. */

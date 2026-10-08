@@ -59,6 +59,7 @@ import {
 } from "../lib/agent-default-model.js";
 import { effectiveEffort, supportedEfforts } from "../lib/agent-effort.js";
 import { agentPermissionView } from "../lib/agent-permissions.js";
+import { agentSwitchNone, switchableAgents } from "../lib/agent-switch.js";
 import {
   appIsMovingFocus,
   moveFocusAsApp,
@@ -440,6 +441,7 @@ function ChatDockContent({
   archived = false,
   inspectRequestNonce,
   onOpenParent,
+  onEditAgent,
   onEditModel,
   onEditEffort,
   onEditPermissionMode,
@@ -927,6 +929,16 @@ function ChatDockContent({
             defaultAgentId ??
             roster.defaultAgentId),
       );
+  // The agents this chat can switch to (lib/agent-switch): any before it
+  // starts, only agents on its harness once it has. A connected project's
+  // chat picks its agent in the chat before it starts.
+  const switchTargets = authority
+    ? []
+    : switchableAgents({
+        agents: roster.agents,
+        currentId: activeAgent?.id,
+        started: Boolean(chat.sessionId),
+      });
   // The agent's permission mode (the harness's own) and sandboxing (Work's),
   // shown apart in the inspector (ADR 0182). Profile agents change here;
   // committed and server definitions change in their files.
@@ -2302,6 +2314,22 @@ function ChatDockContent({
                       activeAgent?.effort,
                     effortModel,
                   ) ?? "Unavailable"
+                }
+                onEditAgent={
+                  chat.isSending ||
+                  chat.session?.running ||
+                  switchTargets.length === 0
+                    ? undefined
+                    : onEditAgent
+                }
+                agentDisabledReason={
+                  authority || roster.agents.length < 2
+                    ? undefined
+                    : chat.isSending || chat.session?.running
+                      ? "Agent can be changed after the current turn finishes."
+                      : switchTargets.length === 0 && activeAgent
+                        ? agentSwitchNone(activeAgent.harness)
+                        : undefined
                 }
                 onEditModel={
                   chat.isSending || chat.session?.running || !activeAgent

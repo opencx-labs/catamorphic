@@ -65,6 +65,7 @@ export type ChatEvent =
       kind:
         | "forkCurrent"
         | "archive"
+        | "editAgent"
         | "editModel"
         | "editEffort"
         | "editPermissionMode";
