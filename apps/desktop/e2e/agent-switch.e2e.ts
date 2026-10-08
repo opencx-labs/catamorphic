@@ -179,6 +179,11 @@ describe("switching a chat's agent", () => {
     expect(after[2]?.detail).toBe("Codex · continues from a summary");
     await pick("Codex Fake");
     await sessionAgent("Codex Fake");
+    // The transcript marks the switch.
+    await wait(
+      `return dock()?.textContent.includes('Switched to Codex Fake');`,
+      "switch notice",
+    );
     await inspector();
     await shownAgent("Codex Fake");
     // The picker follows the chat's harness: now the built-in ones are elsewhere.

@@ -94,7 +94,7 @@ export function SessionInspector({
   permissionMode?: string | null;
   /** What may leave the agent's sandbox (ADR 0182), as a label. */
   sandboxing?: string | null;
-  /** Open the agent picker: any agent before the chat starts, its harness's after. */
+  /** Open the chat's agent picker (lib/agent-switch). */
   onEditAgent?: () => void;
   onEditModel?: () => void;
   onEditEffort?: () => void;
@@ -315,7 +315,7 @@ export function SessionInspectorContent({
   permissionMode?: string | null;
   /** What may leave the agent's sandbox (ADR 0182), as a label. */
   sandboxing?: string | null;
-  /** Open the agent picker: any agent before the chat starts, its harness's after. */
+  /** Open the chat's agent picker (lib/agent-switch). */
   onEditAgent?: () => void;
   onEditModel?: () => void;
   onEditEffort?: () => void;

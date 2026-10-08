@@ -813,6 +813,9 @@ export function DockHost({
                 onSessionCreated={(_id, sessionId) =>
                   invoke(chat, { kind: "session", sessionId })
                 }
+                onSessionAgent={(_id, agentId) =>
+                  invoke(chat, { kind: "sessionAgent", agentId })
+                }
                 onSignalsChange={(_id, next) => {
                   setSignals((old) =>
                     JSON.stringify(old[entry.localId]) === JSON.stringify(next)

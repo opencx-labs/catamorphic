@@ -44,6 +44,7 @@ export type ChatEvent =
   | { kind: "entry"; entry: ChatDockEntry }
   | { kind: "close" | "closing" }
   | { kind: "session"; sessionId: string }
+  | { kind: "sessionAgent"; agentId: string }
   | {
       kind: "signals";
       signals: Required<

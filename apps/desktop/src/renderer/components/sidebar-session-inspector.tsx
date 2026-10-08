@@ -14,6 +14,7 @@ import {
   projectAgentAsInfo,
   type SessionCheckoutInfo,
 } from "../lib/desktop-api.js";
+import { useRemoteProject } from "./project-authority-provider.js";
 import { SessionInspectorContent } from "./session-inspector.js";
 
 export type SessionCommand =
@@ -56,13 +57,17 @@ export function SidebarSessionInspector({
       .map(projectAgentAsInfo)
       .find((entry) => entry.id === session.agentId);
   // Another agent the session can switch to (lib/agent-switch): committed
-  // agents whose definition fails are listed in the picker, never picked.
-  const otherAgents = [
-    ...agents.map((candidate) => candidate.id),
-    ...(projectAgents.data?.agents
-      .filter((candidate) => !candidate.invalid)
-      .map((candidate) => candidate.id) ?? []),
-  ].filter((id) => id !== session.agentId).length;
+  // agents whose definition fails are listed in the picker, never picked. A
+  // connected project's session runs on the server's agents, not these.
+  const remote = useRemoteProject(projectId);
+  const otherAgents = remote
+    ? 0
+    : [
+        ...agents.map((candidate) => candidate.id),
+        ...(projectAgents.data?.agents
+          .filter((candidate) => !candidate.invalid)
+          .map((candidate) => candidate.id) ?? []),
+      ].filter((id) => id !== session.agentId).length;
   const [moving, setMoving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const eligibility = useQuery({

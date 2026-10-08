@@ -92,6 +92,9 @@ export function ChatRegistration(
         case "session":
           p.onSessionCreated(localId, event.sessionId);
           break;
+        case "sessionAgent":
+          p.onSessionAgent?.(localId, event.agentId);
+          break;
         case "signals":
           p.onSignalsChange(localId, event.signals);
           break;

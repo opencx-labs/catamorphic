@@ -2683,6 +2683,24 @@ export function App({
     [updateWorkspace],
   );
 
+  // Only the entry's agent: the chat stays where and how it is shown.
+  const onSessionAgent = useCallback(
+    (localId: string, agentId: string) =>
+      updateWorkspace((ws) =>
+        ws.chats.some(
+          (chat) => chat.localId === localId && chat.agentId !== agentId,
+        )
+          ? {
+              ...ws,
+              chats: ws.chats.map((chat) =>
+                chat.localId === localId ? { ...chat, agentId } : chat,
+              ),
+            }
+          : ws,
+      ),
+    [updateWorkspace],
+  );
+
   // Latest workspace for callbacks that outlive a render.
   const workspaceRef = useRef(workspace);
   workspaceRef.current = workspace;
@@ -6833,6 +6851,7 @@ export function App({
                       chatSendersRef.current.set(entry.localId, send)
                     }
                     onSessionCreated={onSessionCreated}
+                    onSessionAgent={onSessionAgent}
                     onSignalsChange={onSignalsChange}
                   />
                 ))}

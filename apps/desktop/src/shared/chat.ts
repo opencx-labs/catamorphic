@@ -234,6 +234,11 @@ export interface ChatDockProps {
   registerSend?: (send: (message: string) => void) => void;
   onSessionCreated: (localId: string, sessionId: string) => void;
   /**
+   * The agent the chat's session runs on, recorded on its entry so pickers
+   * target it. Never activates the chat or changes how it shows.
+   */
+  onSessionAgent?: (localId: string, agentId: string) => void;
+  /**
    * The chat's live signals changed: the agent started/stopped working,
    * the composer gained/lost an unsent draft, or a question is waiting.
    * Drives every indicator surface (bubbles, tabs, notifications).

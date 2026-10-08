@@ -453,6 +453,7 @@ function ChatDockContent({
   registerMinimize,
   registerSend,
   onSessionCreated,
+  onSessionAgent,
   onSignalsChange,
 }: ChatDockProps) {
   const authority = useRemoteAuthority();
@@ -1358,11 +1359,14 @@ function ChatDockContent({
   // A started chat's entry names the agent its session runs on, so the
   // palette's agent, model and effort pickers target it, even for a chat
   // older than the project's session list (which they read otherwise).
+  // A connected project's agents are the server's, never a local entry's.
+  const onSessionAgentRef = useRef(onSessionAgent);
+  onSessionAgentRef.current = onSessionAgent;
   useEffect(() => {
     const agentId = chat.session?.agentId;
-    if (!agentId || agentId === entryRef.current.agentId) return;
-    onEntryChangeRef.current({ ...entryRef.current, agentId });
-  }, [chat.session?.agentId]);
+    if (authority || !agentId || agentId === entry.agentId) return;
+    onSessionAgentRef.current?.(entry.localId, agentId);
+  }, [authority, chat.session?.agentId, entry.agentId, entry.localId]);
 
   // Palette "Send to agent": the entry arrives with the message attached;
   // fire it once on mount and strip it so remounts don't re-send.
