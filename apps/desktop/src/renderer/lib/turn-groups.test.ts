@@ -7,7 +7,12 @@ import {
   timelineOf,
   turn,
 } from "../components/catamorphic/timeline-fixtures.js";
-import { DEFAULT_WORK_DISPLAY, type TurnRow, turnRows } from "./turn-groups.js";
+import {
+  DEFAULT_WORK_DISPLAY,
+  foldsSteps,
+  type TurnRow,
+  turnRows,
+} from "./turn-groups.js";
 
 const items: Item[] = [
   input("t1", "Go"),
@@ -71,6 +76,24 @@ describe("turnRows", () => {
         }),
       ),
     ).toEqual(["input", "a[c1,n1,c2,n2,c3]"]);
+  });
+
+  it("keeps every note in place while the turn runs with Notes only, folding their steps", () => {
+    const display = { live: "notes", settled: "collapse" } as const;
+    expect(shape(turnRows(group(), { live: true, display }))).toEqual([
+      "input",
+      "n1[c1]",
+      "n2[c2]",
+      "a[c3]",
+    ]);
+    // Once answered, the settled choice decides, as with any live choice.
+    expect(shape(turnRows(group(), { live: false, display }))).toEqual([
+      "input",
+      "a[c1,n1,c2,n2,c3]!",
+    ]);
+    expect(foldsSteps(display)).toBe(true);
+    expect(foldsSteps(DEFAULT_WORK_DISPLAY)).toBe(false);
+    expect(foldsSteps({ live: "latest", settled: "collapse" })).toBe(false);
   });
 
   it("keeps the work since the latest note last, never folded", () => {

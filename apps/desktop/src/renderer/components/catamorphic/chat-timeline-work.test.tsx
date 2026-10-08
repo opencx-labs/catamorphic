@@ -209,6 +209,43 @@ describe("ChatTimeline work display", () => {
     expect(container.querySelectorAll("article")).toHaveLength(2);
   });
 
+  it("keeps the steps folded with Notes only, while the turn runs and after", async () => {
+    const workDisplay = { live: "notes", settled: "collapse" } as const;
+    await render({
+      turns: timelineOf({
+        turns: [turn("t1", 1, { status: "running", completedAt: null })],
+        items: [...settledItems.slice(0, 5), command("c3", "t1")],
+      }),
+      activeTurnId: "t1",
+      workDisplay,
+    });
+    // Every note in place, each one's steps behind a closed line, the
+    // work since the latest note too: a lone step reads "1 step".
+    expect(articles().filter(Boolean)).toEqual([
+      "Looking at the code.",
+      "Found it.\nThe bug is in the parser.",
+    ]);
+    expect(toggles()).toEqual(["false", "false", "false"]);
+    expect(
+      [
+        ...container.querySelectorAll('[data-testid="chat-turn-steps-toggle"]'),
+      ].map((toggle) => toggle.textContent),
+    ).toEqual(["1 step", "1 step", "1 step"]);
+    // Opening one by hand still works.
+    const first = container.querySelector<HTMLButtonElement>(
+      '[data-testid="chat-turn-steps-toggle"]',
+    );
+    await act(async () => first?.click());
+    expect(toggles()).toEqual(["true", "false", "false"]);
+    // Answered, the notes fold into the closed line above the answer.
+    await render({ turns: settled(), workDisplay });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 300));
+    });
+    expect(container.querySelectorAll("article")).toHaveLength(2);
+    expect(toggles()).toEqual(["false"]);
+  });
+
   it("shows a lone step as its own row, with how long it took", async () => {
     const start = Date.parse("2026-10-01T10:00:00.000Z");
     await render({

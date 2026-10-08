@@ -674,6 +674,66 @@ describe("chat flows", () => {
     expect(settled).toEqual({ agent: 1, expanded: "false" });
   });
 
+  it("with Notes only, shows the notes as they come and keeps the steps folded", async () => {
+    await run(
+      `return window.catamorphicDesktop.setPrefs({ chatWorkLive: 'notes' }).then(() => true);`,
+    );
+    try {
+      await run(`pressKey('n', { metaKey: true }); return true;`);
+      await runWait(`return !!visibleDock();`);
+      await run(`
+        const ta = visibleDock().querySelector('[data-composer-input]');
+        setReactValue(ta, 'narrate the fix again');
+        ta.closest('form').requestSubmit();
+        return true;
+      `);
+      // This chat only (earlier tests' chats are still on the page), and
+      // in it this turn: what follows its message.
+      const chat = `[...document.querySelectorAll('section[aria-label]')].find((section) =>
+        [...section.querySelectorAll('[role="log"] article')].some((article) =>
+          article.textContent.includes('narrate the fix again')))`;
+      const thisTurn = `((el) => [...${chat}.querySelectorAll('[role="log"] article')]
+        .find((article) => article.textContent.includes('narrate the fix again'))
+        .compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING)`;
+      // While the tests run: both notes in place, every steps line closed,
+      // the running command's included.
+      const live = await runWait<{
+        toggles: { expanded: string | null; text: string }[];
+      }>(
+        `const section = ${chat};
+         if (!section?.querySelector('[data-live-work] [data-testid="chat-step"][data-running]')) return false;
+         const notes = [...section.querySelectorAll('[role="log"] article .cat-markdown')]
+           .filter((prose) => ${thisTurn}(prose) &&
+             /read the parser|Fixing it, then testing/.test(prose.textContent));
+         if (notes.length !== 2) return false;
+         return {
+           toggles: [...section.querySelectorAll('[data-testid="chat-turn-steps-toggle"]')]
+             .filter((toggle) => !toggle.closest('[inert]') && ${thisTurn}(toggle))
+             .map((toggle) => ({ expanded: toggle.getAttribute('aria-expanded'), text: toggle.textContent })),
+         };`,
+        { timeoutMs: 30_000, label: "notes in place, steps folded" },
+      );
+      expect(live.toggles.length).toBeGreaterThan(0);
+      expect(
+        live.toggles.every((toggle) => toggle.expanded === "false"),
+        JSON.stringify(live.toggles),
+      ).toBe(true);
+      // Answered: the notes fold away under the answer's closed line.
+      await runWait(
+        `const section = ${chat};
+         const prose = [...section.querySelectorAll('[role="log"] article .cat-markdown')]
+           .filter((el) => ${thisTurn}(el) &&
+             /read the parser|Fixing it|handles empty input/.test(el.textContent));
+         return prose.length === 1 && !section.querySelector('[data-live-work]');`,
+        { timeoutMs: 30_000, label: "notes folded under the answer" },
+      );
+    } finally {
+      await run(
+        `return window.catamorphicDesktop.setPrefs({ chatWorkLive: 'all' }).then(() => true);`,
+      );
+    }
+  });
+
   it("shares archive and unread actions between the sidebar and dock", async () => {
     await run(`pressKey('n', { metaKey: true }); return true;`);
     await runWait(`return !!floatingDock();`, { label: "chat dock open" });
