@@ -129,11 +129,12 @@ export interface Workspace {
 
 export const newChatEntry = (
   mode: ChatDockEntry["mode"],
-  opts?: { incognito?: boolean },
+  opts?: { incognito?: boolean; agentId?: string },
 ): ChatDockEntry => ({
   localId: crypto.randomUUID(),
   mode,
   ...(opts?.incognito ? { incognito: true } : {}),
+  ...(opts?.agentId ? { agentId: opts.agentId } : {}),
 });
 
 // A fresh project workspace greets the user with a palette "New Tab" —

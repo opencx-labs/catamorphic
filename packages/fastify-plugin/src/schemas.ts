@@ -1141,6 +1141,8 @@ export const AgentSessionSchema = z.object({
   environment: z.string().nullable(),
   allocationId: z.string().uuid().nullable(),
   agentId: z.string().nullable(),
+  /** The harness its first turn bound; another harness needs a new chat. */
+  harness: z.string().nullable(),
   model: z.string().nullable(),
   modelEffort: AgentEffortSchema.nullable(),
   title: z.string().nullable(),
@@ -1675,6 +1677,7 @@ export const SessionFieldsSchema = describes<SessionFields>()(
       title: z.string().nullable(),
       icon: z.string().nullable(),
       agentId: z.string().nullable(),
+      harness: z.string().nullable(),
       model: z.string().nullable(),
       modelEffort: AgentEffortSchema.nullable(),
       status: z.enum(["active", "closed"]),
@@ -2496,6 +2499,16 @@ export const SessionConflictSchema = z.object({
   error: z.string(),
   code: z.enum(["session_closed", "authority_required", "handoff_pending"]),
   authorityRevision: z.number().int().optional(),
+});
+
+/**
+ * A started chat stays on the harness its first turn bound (ADR 0214): an
+ * agent on another one starts a new chat.
+ */
+export const HarnessFixedSchema = z.object({
+  error: z.string(),
+  code: z.literal("harness_fixed"),
+  harness: z.string(),
 });
 
 /** A 403 may be project scope denial or a structured Environment denial. */

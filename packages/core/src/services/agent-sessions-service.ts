@@ -334,6 +334,11 @@ export interface AgentSession {
   allocationId: string | null;
   /** Host-registry key of the agent this session runs on; null = default. */
   agentId: string | null;
+  /**
+   * The harness its first turn bound (ADR 0214): agents on another harness
+   * cannot take the session over. Null until the conversation starts.
+   */
+  harness: string | null;
   /** Per-session model override; null = the agent harness's configured default. */
   model: string | null;
   /** Per-session reasoning-effort override; null = the agent's default. */
@@ -559,6 +564,35 @@ export class AgentNotConfiguredError extends Error {
     );
     this.name = "AgentNotConfiguredError";
   }
+}
+
+/**
+ * The session's conversation runs on another harness (ADR 0214): an agent on
+ * this one starts a new chat instead.
+ */
+export class AgentHarnessFixedError extends Error {
+  constructor(
+    readonly sessionId: string,
+    readonly harness: string,
+    readonly requested: string,
+  ) {
+    super(
+      `This chat runs on ${harness}. Start a new chat to use an agent on ${requested}.`,
+    );
+    this.name = "AgentHarnessFixedError";
+  }
+}
+
+/** A started chat takes only an agent on its harness (ADR 0214). */
+function assertKeepsHarness(input: {
+  sessionId: string;
+  /** The harness its first turn bound; null before it starts. */
+  bound: string | null;
+  /** The new agent's harness; null when it cannot run yet. */
+  next: string | null;
+}): void {
+  if (input.bound !== null && input.next !== null && input.bound !== input.next)
+    throw new AgentHarnessFixedError(input.sessionId, input.bound, input.next);
 }
 
 /** The session has a turn executing right now; retry after it settles. */
@@ -4017,6 +4051,7 @@ export class AgentSessionsService {
           harness: harnessIdOf(agent),
           agentId: session.agent_id,
           recovery: agent.recovery ?? "continue",
+          ...(agent.unavailable ? { unavailable: agent.unavailable } : {}),
         };
       },
       prepare: (input) => this.prepareAttempt(input),
@@ -6608,9 +6643,9 @@ export class AgentSessionsService {
   /**
    * Re-point a session at another registered agent and/or change its
    * model and reasoning-effort overrides (`null` clears an override back to
-   * the agent's default). Switching agents drops incompatible overrides and the provider anchor; the
-   * next turn re-anchors against the new provider (same working state, but
-   * the new provider starts from its own fresh context).
+   * the agent's default). Switching agents drops the model override. Once
+   * the conversation has started, only an agent on its harness can take it
+   * over (ADR 0214); the next turn resumes the same native thread.
    */
   async update(
     identity: Identity,
@@ -6644,13 +6679,23 @@ export class AgentSessionsService {
       sandbox_id: null;
     }> = {};
     let reallocatedRow: SessionRow | undefined;
+    // The harness the new agent runs on, when the agent changes and can run.
+    let nextHarness: string | null = null;
 
     if (patch.agentId !== undefined && patch.agentId !== session.agent_id) {
       this.assertAgentAccess(identity, projectId, patch.agentId);
       const agent = await this.resolveAgent(patch.agentId, projectId);
       if (!agent) throw new AgentNotConfiguredError(patch.agentId);
-      // The next turn binds the new agent's harness thread (ADR 0198): a
-      // harness it ran on before resumes, told only what it missed.
+      // Another harness would be handed this conversation and keep it in
+      // its own history, out of the person's sight: it is a new chat. An
+      // agent that cannot run yet has no harness to compare; a turn on it
+      // once it can still keeps the chat's (ADR 0214).
+      nextHarness = agent.unavailable ? null : harnessIdOf(agent);
+      assertKeepsHarness({
+        sessionId,
+        bound: session.harness,
+        next: nextHarness,
+      });
       updates.agent_id = patch.agentId;
       updates.model = null;
     }
@@ -6704,6 +6749,19 @@ export class AgentSessionsService {
         .transaction()
         .execute(async (transaction) => {
           await this.lockIdleSession({ sessionId, transaction });
+          // A first turn may have bound the chat since it was read.
+          if (nextHarness !== null)
+            assertKeepsHarness({
+              sessionId,
+              bound: (
+                await transaction
+                  .selectFrom("agent_sessions")
+                  .select("harness")
+                  .where("id", "=", sessionId)
+                  .executeTakeFirstOrThrow()
+              ).harness,
+              next: nextHarness,
+            });
           await this.executionAllocations.release({
             identity,
             allocationId: previousAllocationId,
@@ -6918,15 +6976,14 @@ export class AgentSessionsService {
           });
           if (!copy)
             throw new AgentSessionNotFoundError(input.messageId ?? sessionId);
-          const fork = await trx
+          await trx
             .updateTable("agent_sessions")
             .set({
               icon: session.icon,
               base_commit_sha: session.base_commit_sha,
             })
             .where("id", "=", forkId)
-            .returningAll()
-            .executeTakeFirstOrThrow();
+            .execute();
           // The copied history is not new activity: no workflow fires on it.
           await sql`select set_config('catamorphic.suppress_session_events', 'true', true)`.execute(
             trx,
@@ -6940,6 +6997,18 @@ export class AgentSessionsService {
           await sql`select set_config('catamorphic.suppress_session_events', 'false', true)`.execute(
             trx,
           );
+          // The fork continues the source's conversation, so it is bound to
+          // the source's harness from the start (ADR 0214).
+          if (session.harness !== null)
+            await this.log.append(trx, {
+              sessionId: forkId,
+              events: [
+                {
+                  type: "session.changed",
+                  session: { harness: session.harness },
+                },
+              ],
+            });
           // The fork's first turn forks the source's native thread through
           // the fork point, when the harness can (ADR 0198); otherwise it
           // starts fresh and is handed the copied history.
@@ -6998,7 +7067,12 @@ export class AgentSessionsService {
               : "Forked from another conversation",
             data: { parentSessionId: sessionId },
           });
-          return fork;
+          // As the log made it (its harness, say).
+          return trx
+            .selectFrom("agent_sessions")
+            .selectAll()
+            .where("id", "=", forkId)
+            .executeTakeFirstOrThrow();
         });
         return mapSession(row, false, this.hostId, this.authorityLeaseMs);
       },
@@ -10535,6 +10609,7 @@ function mapSession(
     environment: row.environment_name,
     allocationId: row.allocation_id,
     agentId: row.agent_id,
+    harness: row.harness,
     model: row.model,
     modelEffort: (row.model_effort as AgentEffort | null) ?? null,
     title: row.title,

@@ -96,6 +96,7 @@ describe("PGlite migrations", () => {
       "057_worker_rotation_order.sql",
       "058_machine_teardown_and_rule_failures.sql",
       "059_sealed_receipts.sql",
+      "060_session_harness.sql",
     ]);
 
     const rerun = await migrateToLatest({ db });

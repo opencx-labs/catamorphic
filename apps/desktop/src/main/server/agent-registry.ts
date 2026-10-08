@@ -573,6 +573,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     if (!built) return undefined;
     return {
       id,
+      name: config.name,
       ...built,
       topology: "native",
       sandboxing: config.sandboxing ?? DESKTOP_DEFAULT_SANDBOXING,
@@ -845,6 +846,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     return {
       id,
       harness: { placement: "host", adapter: unavailableAdapter(message) },
+      unavailable: message,
       topology: "native",
       defaults: {},
     };
@@ -888,8 +890,10 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     } satisfies Partial<HostHarness>;
 
     // E2E: same registry mechanics, scripted harness, so renderer flows
-    // (agent lists, switching, effort) exercise the real plumbing. Friendly
-    // errors stay on so tests cover the auth-failure surfacing.
+    // (agent lists, switching, effort) exercise the real plumbing. It
+    // answers to the configured harness's name, so a chat binds the harness
+    // it would in production (ADR 0214). Friendly errors stay on so tests
+    // cover the auth-failure surfacing.
     if (this.deps.e2eFake) {
       const fake = new E2eFakeAdapter({
         settingsContext: (projectId) => this.settingsContext(projectId, config),
@@ -898,7 +902,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
         harness: {
           placement: "host",
           adapter: desktopAdapter({
-            id: fake.id,
+            id: config.harness,
             capabilities: () => fake.capabilities(),
             prepare: async (attempt) => ({ adapter: fake, attempt }),
             errors,

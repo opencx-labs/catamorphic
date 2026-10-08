@@ -6213,6 +6213,7 @@ export interface paths {
                                 /** Format: uuid */
                                 allocationId: string | null;
                                 agentId: string | null;
+                                harness: string | null;
                                 model: string | null;
                                 /** @enum {string|null} */
                                 modelEffort: "low" | "medium" | "high" | "xhigh" | "max" | null;
@@ -6355,6 +6356,7 @@ export interface paths {
                             /** Format: uuid */
                             allocationId: string | null;
                             agentId: string | null;
+                            harness: string | null;
                             model: string | null;
                             /** @enum {string|null} */
                             modelEffort: "low" | "medium" | "high" | "xhigh" | "max" | null;
@@ -6569,6 +6571,7 @@ export interface paths {
                             /** Format: uuid */
                             allocationId: string | null;
                             agentId: string | null;
+                            harness: string | null;
                             model: string | null;
                             /** @enum {string|null} */
                             modelEffort: "low" | "medium" | "high" | "xhigh" | "max" | null;
@@ -6702,6 +6705,7 @@ export interface paths {
                             /** Format: uuid */
                             allocationId: string | null;
                             agentId: string | null;
+                            harness: string | null;
                             model: string | null;
                             /** @enum {string|null} */
                             modelEffort: "low" | "medium" | "high" | "xhigh" | "max" | null;
@@ -6844,6 +6848,7 @@ export interface paths {
                             /** Format: uuid */
                             allocationId: string | null;
                             agentId: string | null;
+                            harness: string | null;
                             model: string | null;
                             /** @enum {string|null} */
                             modelEffort: "low" | "medium" | "high" | "xhigh" | "max" | null;
@@ -6960,6 +6965,11 @@ export interface paths {
                             /** @enum {string} */
                             code: "session_closed" | "authority_required" | "handoff_pending";
                             authorityRevision?: number;
+                        } | {
+                            error: string;
+                            /** @enum {string} */
+                            code: "harness_fixed";
+                            harness: string;
                         } | {
                             error: string;
                         };
@@ -7393,6 +7403,7 @@ export interface paths {
                             /** Format: uuid */
                             allocationId: string | null;
                             agentId: string | null;
+                            harness: string | null;
                             model: string | null;
                             /** @enum {string|null} */
                             modelEffort: "low" | "medium" | "high" | "xhigh" | "max" | null;
@@ -7645,6 +7656,7 @@ export interface paths {
                                 /** Format: uuid */
                                 allocationId: string | null;
                                 agentId: string | null;
+                                harness: string | null;
                                 model: string | null;
                                 /** @enum {string|null} */
                                 modelEffort: "low" | "medium" | "high" | "xhigh" | "max" | null;
@@ -7884,6 +7896,7 @@ export interface paths {
                             /** Format: uuid */
                             allocationId: string | null;
                             agentId: string | null;
+                            harness: string | null;
                             model: string | null;
                             /** @enum {string|null} */
                             modelEffort: "low" | "medium" | "high" | "xhigh" | "max" | null;
@@ -8117,6 +8130,7 @@ export interface paths {
                                 /** Format: uuid */
                                 allocationId: string | null;
                                 agentId: string | null;
+                                harness: string | null;
                                 model: string | null;
                                 /** @enum {string|null} */
                                 modelEffort: "low" | "medium" | "high" | "xhigh" | "max" | null;
@@ -8270,6 +8284,7 @@ export interface paths {
                                 /** Format: uuid */
                                 allocationId: string | null;
                                 agentId: string | null;
+                                harness: string | null;
                                 model: string | null;
                                 /** @enum {string|null} */
                                 modelEffort: "low" | "medium" | "high" | "xhigh" | "max" | null;
@@ -8466,6 +8481,7 @@ export interface paths {
                                 /** Format: uuid */
                                 allocationId: string | null;
                                 agentId: string | null;
+                                harness: string | null;
                                 model: string | null;
                                 /** @enum {string|null} */
                                 modelEffort: "low" | "medium" | "high" | "xhigh" | "max" | null;
@@ -8687,6 +8703,7 @@ export interface paths {
                             /** Format: uuid */
                             allocationId: string | null;
                             agentId: string | null;
+                            harness: string | null;
                             model: string | null;
                             /** @enum {string|null} */
                             modelEffort: "low" | "medium" | "high" | "xhigh" | "max" | null;
@@ -8907,6 +8924,7 @@ export interface paths {
                             /** Format: uuid */
                             allocationId: string | null;
                             agentId: string | null;
+                            harness: string | null;
                             model: string | null;
                             /** @enum {string|null} */
                             modelEffort: "low" | "medium" | "high" | "xhigh" | "max" | null;
@@ -9053,6 +9071,7 @@ export interface paths {
                             /** Format: uuid */
                             allocationId: string | null;
                             agentId: string | null;
+                            harness: string | null;
                             model: string | null;
                             /** @enum {string|null} */
                             modelEffort: "low" | "medium" | "high" | "xhigh" | "max" | null;
@@ -9349,6 +9368,7 @@ export interface paths {
                                 /** Format: uuid */
                                 allocationId: string | null;
                                 agentId: string | null;
+                                harness: string | null;
                                 model: string | null;
                                 /** @enum {string|null} */
                                 modelEffort: "low" | "medium" | "high" | "xhigh" | "max" | null;
@@ -9524,6 +9544,7 @@ export interface paths {
                             /** Format: uuid */
                             allocationId: string | null;
                             agentId: string | null;
+                            harness: string | null;
                             model: string | null;
                             /** @enum {string|null} */
                             modelEffort: "low" | "medium" | "high" | "xhigh" | "max" | null;
@@ -11116,6 +11137,7 @@ export interface paths {
                             /** Format: uuid */
                             allocationId: string | null;
                             agentId: string | null;
+                            harness: string | null;
                             model: string | null;
                             /** @enum {string|null} */
                             modelEffort: "low" | "medium" | "high" | "xhigh" | "max" | null;
@@ -17662,6 +17684,7 @@ export interface components {
             title: string | null;
             icon: string | null;
             agentId: string | null;
+            harness: string | null;
             model: string | null;
             /** @enum {string|null} */
             modelEffort: "low" | "medium" | "high" | "xhigh" | "max" | null;
@@ -17698,6 +17721,7 @@ export interface components {
                 title?: string | null;
                 icon?: string | null;
                 agentId?: string | null;
+                harness?: string | null;
                 model?: string | null;
                 /** @enum {string|null} */
                 modelEffort?: "low" | "medium" | "high" | "xhigh" | "max" | null;
@@ -18325,6 +18349,7 @@ export interface components {
             title: string | null;
             icon: string | null;
             agentId: string | null;
+            harness: string | null;
             model: string | null;
             /** @enum {string|null} */
             modelEffort: "low" | "medium" | "high" | "xhigh" | "max" | null;
@@ -18361,6 +18386,7 @@ export interface components {
                 title?: string | null;
                 icon?: string | null;
                 agentId?: string | null;
+                harness?: string | null;
                 model?: string | null;
                 /** @enum {string|null} */
                 modelEffort?: "low" | "medium" | "high" | "xhigh" | "max" | null;

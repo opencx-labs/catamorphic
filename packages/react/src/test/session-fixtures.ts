@@ -31,6 +31,7 @@ export function sessionFields(
     title: null,
     icon: null,
     agentId: "assistant",
+    harness: null,
     model: null,
     modelEffort: null,
     status: "active",
