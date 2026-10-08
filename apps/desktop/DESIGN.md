@@ -1773,22 +1773,26 @@ and values with no meanings, and the descriptions in Settings were vague.
   tells agents to say when no value does what was asked instead of picking
   the nearest one.
 
-### 2026-10-08: A chat picks any agent before it starts, and stays on its harness after
+### 2026-10-08: A chat's agent is picked from its status popup
 
 People could not change a chat's agent from its status popup: the Agent row
-was the one row there with no picker, and the palette's "Switch agent for this
-chat" let a started conversation jump to any harness. Core can continue a
-conversation on another harness (ADR 0198), but only from a budgeted summary:
-what was asked and answered, commands without their output, files by name.
-The new agent starts over from notes, with its own tools and permissions.
+was the one row there with no picker. It now opens the chat's agent picker,
+the one "Switch agent for this chat" opens, wherever the popup shows (a
+floating or tabbed chat, the detached dock, the sidebar's session card). A
+turn in progress disables it, as it does the Model row.
 
-The Agent row now opens the same picker as the palette command. Before the
-first message a chat is bound to nothing, so every agent is offered. Once the
-conversation has started, it stays on its harness, as T3 Code keeps a started
-thread on its provider: agents on the same harness continue the same native
-thread and stay pickable; the others are listed, disabled, as "Codex · needs a
-new chat". When no agent qualifies, the row says why instead of opening an
-empty choice. The rule is `canSwitchAgent` (lib/agent-switch), shared by the
-popup, the sidebar's session card and the palette. Core keeps the summary
-handoff for forks, moves and other clients.
+Before the first message, any agent simply begins the chat. After, an agent
+on the same harness continues the same native thread, and one on another
+harness picks up from a summary of what it missed (ADR 0198's context
+handoff), which the transcript marks as a switch. This is how T3 Code switches
+a started thread's provider: its adapters all support the handoff, and its
+design keeps a provider thread per provider with a delta summary on return,
+as ours does. So a started chat can still move harness, and the picker says
+which agents would: "Codex · continues from a summary". We considered locking
+a started chat to its harness and chose not to: the handoff is the designed,
+auditable path, and a lock would only send people to a new chat.
+
+The picker also has to know the chat's real agent: the dock now keeps a
+started chat's entry on the agent its session runs on, so the agent, model and
+effort pickers target it even for a chat older than the project's session list.
 

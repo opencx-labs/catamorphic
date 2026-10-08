@@ -140,7 +140,6 @@ import {
   type WorkspaceTab,
   WorkspaceTabBar,
 } from "./components/workspace-tabs.js";
-import { switchableAgents } from "./lib/agent-switch.js";
 import { notePersonInput } from "./lib/app-focus.js";
 import {
   type ChatSessionAction,
@@ -149,7 +148,6 @@ import {
 } from "./lib/chat-session-actions.js";
 import {
   type AgentEffort,
-  type AgentHarness,
   type AgentsData,
   type AppPrefs,
   type ConnectLink,
@@ -157,7 +155,6 @@ import {
   type Profile,
   type ProfilesData,
   type ProjectAgentInfo,
-  projectAgentAsInfo,
   type RemoteProjectStatus,
   type SidebarSectionConfig,
   type WorkspaceConfig,
@@ -3108,16 +3105,11 @@ export function App({
   const [projectAgentNames, setProjectAgentNames] = useState<
     Record<string, string>
   >({});
-  // What each committed agent runs on: a started chat keeps its harness.
-  const [projectAgentHarnesses, setProjectAgentHarnesses] = useState<
-    Record<string, AgentHarness>
-  >({});
   // biome-ignore lint/correctness/useExhaustiveDependencies: agentsData is a deliberate refetch trigger — a defaults edit broadcasts agents-changed
   useEffect(() => {
     if (!projectId) {
       setProjectDefaultSlug(null);
       setProjectAgentNames({});
-      setProjectAgentHarnesses({});
       return;
     }
     let cancelled = false;
@@ -3129,14 +3121,6 @@ export function App({
           setProjectAgentNames(
             Object.fromEntries(
               data.agents.map((agent) => [agent.id, agent.name]),
-            ),
-          );
-          setProjectAgentHarnesses(
-            Object.fromEntries(
-              data.agents.map((agent) => [
-                agent.id,
-                projectAgentAsInfo(agent).harness,
-              ]),
             ),
           );
         }
@@ -5325,20 +5309,13 @@ export function App({
   );
   const paletteTargetAgentId =
     focusedSession?.agentId ?? focusedChat?.agentId ?? effectiveDefaultAgentId;
-  // Any agent before the chat starts; after, only its own harness's.
-  const paletteSwitchableAgentIds = new Set(
-    switchableAgents({
-      agents: [
-        ...(agentsData?.agents ?? []),
-        ...Object.entries(projectAgentHarnesses).map(([id, harness]) => ({
-          id,
-          harness,
-        })),
-      ],
-      currentId: paletteTargetAgentId ?? undefined,
-      started: Boolean(focusedChat?.sessionId),
-    }).map((agent) => agent.id),
-  );
+  const paletteSwitchableAgentIds = new Set([
+    ...(agentsData?.agents.map((agent) => agent.id) ?? []),
+    ...Object.keys(projectAgentNames),
+  ]);
+  if (paletteTargetAgentId) {
+    paletteSwitchableAgentIds.delete(paletteTargetAgentId);
+  }
   const paletteActionAvailability: Partial<Record<ActionId, boolean>> = {
     "reopen-tab": workspace.closedTabs.length > 0,
     "remote-environment": remoteSurfaceStatus !== null,

@@ -8,7 +8,6 @@ import {
 } from "../lib/agent-default-model.js";
 import { effectiveEffort, supportedEfforts } from "../lib/agent-effort.js";
 import { agentPermissionView } from "../lib/agent-permissions.js";
-import { agentSwitchNone, switchableAgents } from "../lib/agent-switch.js";
 import {
   type AgentInfo,
   desktopApi,
@@ -56,16 +55,14 @@ export function SidebarSessionInspector({
     projectAgents.data?.agents
       .map(projectAgentAsInfo)
       .find((entry) => entry.id === session.agentId);
-  // A session has started: it switches within its harness (lib/agent-switch).
-  const roster = [
-    ...agents,
-    ...(projectAgents.data?.agents.map(projectAgentAsInfo) ?? []),
-  ];
-  const switchTargets = switchableAgents({
-    agents: roster,
-    currentId: session.agentId ?? undefined,
-    started: true,
-  });
+  // Another agent the session can switch to (lib/agent-switch): committed
+  // agents whose definition fails are listed in the picker, never picked.
+  const otherAgents = [
+    ...agents.map((candidate) => candidate.id),
+    ...(projectAgents.data?.agents
+      .filter((candidate) => !candidate.invalid)
+      .map((candidate) => candidate.id) ?? []),
+  ].filter((id) => id !== session.agentId).length;
   const [moving, setMoving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const eligibility = useQuery({
@@ -130,18 +127,14 @@ export function SidebarSessionInspector({
           ) ?? "Default"
         }
         onEditAgent={
-          !session.running && switchTargets.length > 0
+          !session.running && otherAgents > 0
             ? () => onCommand("switch-agent")
             : undefined
         }
         agentDisabledReason={
-          roster.length < 2
-            ? undefined
-            : session.running
-              ? "Agent can be changed after the current turn finishes."
-              : switchTargets.length === 0 && agent
-                ? agentSwitchNone(agent.harness)
-                : undefined
+          otherAgents > 0 && session.running
+            ? "Agent can be changed after the current turn finishes."
+            : undefined
         }
         onEditModel={
           !session.running && agent ? () => onCommand("model") : undefined
