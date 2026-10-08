@@ -8,6 +8,9 @@ import { THEME_TOKENS } from "../../shared/theme-tokens.js";
 import { THEME_PRESETS } from "../theme.js";
 import { WORKSPACE_AUTHORING_GUIDE } from "../workspace-authoring.js";
 
+/** Text as one Markdown table cell. */
+const tableCell = (text: string) => text.replaceAll("|", "\\|");
+
 /** Delivered through the host skill tier, including existing user projects. */
 export const DESKTOP_SETTINGS_SKILL = `---
 name: configuring-catamorphic-desktop
@@ -53,21 +56,30 @@ all relevant layers before claiming the effective value changed. Runtime keys in
 prefs.json (sidebar pose, last project, window/session state) are not preferences;
 preserve them, and do not copy them into project overrides.
 
-| Key | Value | Editable scopes | App default |
-|---|---|---|---|
+Each row gives the setting's label in Settings and, where Settings has one, its
+description; option values carry their Settings labels. Tell the person what a
+change does from these words, not from a key's name. When no value does what they
+asked, say so and change nothing unless they choose the closest one.
+
+| Key | In Settings | Value | Editable scopes | App default |
+|---|---|---|---|---|
 ${SETTING_KEYS.map((key) => {
   const definition = SETTINGS[key];
   const value =
     "range" in definition
       ? `number (${definition.range.min} through ${definition.range.max})`
       : "options" in definition
-        ? Object.keys(definition.options)
-            .map((option) => JSON.stringify(option))
+        ? Object.entries(definition.options)
+            .map(([option, label]) => `${JSON.stringify(option)} (${label})`)
             .join(" or ")
         : key === "terminalMacros"
           ? "array of macros (below)"
           : "boolean";
-  return `| ${key} | ${value} | ${definition.scopes.join(", ")} | ${JSON.stringify(normalizePrefs({})[key])} |`;
+  const meaning =
+    "description" in definition
+      ? `${definition.label}: ${definition.description}`
+      : definition.label;
+  return `| ${key} | ${tableCell(meaning)} | ${tableCell(value)} | ${definition.scopes.join(", ")} | ${JSON.stringify(normalizePrefs({})[key])} |`;
 }).join("\n")}
 
 Example: {"tabPlacement":"top","contentFrame":false} chooses regular top tabs
