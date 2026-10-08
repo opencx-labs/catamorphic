@@ -56,9 +56,10 @@ export function SidebarSessionInspector({
     projectAgents.data?.agents
       .map(projectAgentAsInfo)
       .find((entry) => entry.id === session.agentId);
-  // Another agent the session can switch to (lib/agent-switch): committed
-  // agents whose definition fails are listed in the picker, never picked. A
-  // connected project's session runs on the server's agents, not these.
+  // Another agent to pick for the session (lib/agent-switch: one on another
+  // harness starts a new chat). Committed agents whose definition fails are
+  // listed in the picker, never picked. A connected project's session runs
+  // on the server's agents, not these.
   const remote = useRemoteProject(projectId);
   const otherAgents = remote
     ? 0

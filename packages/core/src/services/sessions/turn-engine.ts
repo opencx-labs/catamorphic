@@ -154,6 +154,8 @@ export interface TurnEngineHost {
     harness: string;
     agentId: string | null;
     recovery: "continue" | "stop";
+    /** Why the agent cannot run now: the turn fails with it. */
+    unavailable?: string;
   }>;
   prepare(input: {
     identity: Identity;
@@ -657,10 +659,40 @@ export class TurnEngine {
       identity: ctx.identity,
       session: ctx.session,
     });
+    // The conversation stays on the harness its first turn bound (ADR
+    // 0214). Its agent reaches another only by a change outside the chat
+    // (a project agent's definition, say): the turn fails rather than
+    // hand the conversation to that harness. An agent that cannot run says
+    // why first, and binds nothing. Read now, not with the drive's
+    // session: an earlier attempt of this turn may have bound it.
+    const { harness: bound } = await db
+      .selectFrom("agent_sessions")
+      .select("harness")
+      .where("id", "=", turn.sessionId)
+      .executeTakeFirstOrThrow();
+    const refusal =
+      harness.unavailable ??
+      (bound !== null && bound !== harness.harness
+        ? `This chat runs on ${bound}, and its agent now runs on ${harness.harness}. Start a new chat to use it.`
+        : null);
+    if (refusal !== null) {
+      await this.settle(local, {
+        identity: ctx.identity,
+        session: ctx.session,
+        turn,
+        attempt: { ...attempt, status: "failed", completedAt: now() },
+        status: "failed",
+        error: { message: refusal },
+        outcome: turn.outcome ?? { changedFiles: [] },
+        checkpointAfter: null,
+      });
+      return { kind: "settled" };
+    }
     const binding = await this.bindThread({
       turn,
       attempt,
       harness: harness.harness,
+      bound: bound !== null,
       local,
     });
     turn = binding.turn;
@@ -846,12 +878,15 @@ export class TurnEngine {
    * The native thread this attempt runs on (ADR 0198): the session's
    * thread for this harness, resumed (or restored from stored state); a
    * fork of a source thread for a forked session's first turn; else a fresh
-   * one, told what it missed by a recorded handoff.
+   * one, told what it missed by a recorded handoff. The first binds the
+   * session to the harness (ADR 0214).
    */
   private async bindThread(input: {
     turn: Turn;
     attempt: Attempt;
     harness: string;
+    /** The session is already bound to this harness. */
+    bound: boolean;
     local: LocalTurn;
   }): Promise<{
     binding: ThreadBinding;
@@ -949,6 +984,11 @@ export class TurnEngine {
       { type: "attempt.changed", attempt },
       { type: "turn.changed", turn },
     ];
+    if (!input.bound)
+      events.push({
+        type: "session.changed",
+        session: { harness: input.harness, updatedAt: now },
+      });
     if (handoff)
       events.push({
         type: "item.added",
@@ -985,7 +1025,9 @@ export class TurnEngine {
         : undefined;
       await log.append(trx, {
         sessionId: turn.sessionId,
-        events: existing ? events.slice(0, 3) : events,
+        events: existing
+          ? events.filter((event) => event.type !== "item.added")
+          : events,
       });
     });
     return { binding, turn, attempt, handoff: handoff?.text ?? null };

@@ -796,6 +796,7 @@ async function projectSession(
   if ("title" in fields) set.title = fields.title;
   if ("icon" in fields) set.icon = fields.icon;
   if ("agentId" in fields) set.agent_id = fields.agentId;
+  if ("harness" in fields) set.harness = fields.harness;
   if ("model" in fields) set.model = fields.model;
   if ("modelEffort" in fields) set.model_effort = fields.modelEffort;
   if ("status" in fields) set.status = fields.status;

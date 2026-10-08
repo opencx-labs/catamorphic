@@ -1,6 +1,6 @@
 # 0198 — Agent runners run harnesses beside their workspace
 
-- **Status:** Accepted
+- **Status:** Accepted (amended by [0214](0214-a-chat-runs-on-one-harness.md): a started chat keeps its harness; another harness is a new chat)
 - **Date:** 2026-10-02
 - **Supersedes:** [0067](0067-long-lived-agent-runtimes-and-capability-gateway.md) (runtime contract), the control-loop placement in [0180](0180-harnesses-run-in-the-sandbox-models-through-the-gateway.md), the recovery half of [0095](0095-authoritative-agent-execution.md)
 - **Amends:** [0174](0174-background-processes-as-a-sandbox-capability.md), [0187](0187-remote-executors-ride-out-transient-failures.md), [0190](0190-disposable-control-plane-replicas.md), [0193](0193-no-cross-replica-state-in-replica-memory.md)

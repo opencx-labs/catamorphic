@@ -177,6 +177,7 @@ function snapshotAt(sequence: number, turns: Turn[] = []): SessionSnapshot {
       title: "Desk chat",
       icon: "zap:blue",
       agentId: null,
+      harness: null,
       model: null,
       modelEffort: null,
       status: "active",

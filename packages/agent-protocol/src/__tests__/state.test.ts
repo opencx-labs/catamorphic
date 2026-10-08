@@ -17,6 +17,7 @@ const session: SessionFields = {
   title: null,
   icon: null,
   agentId: null,
+  harness: null,
   model: null,
   modelEffort: null,
   status: "active",

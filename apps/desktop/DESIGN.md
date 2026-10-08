@@ -1789,7 +1789,7 @@ tab folding the strip and an open chat opening it beside the chat are
 temporary and leave the choice alone; opened by hand while a chat tab folds
 it, the strip stays open until such a tab gains focus again.
 
-### 2026-10-08: A chat's agent is picked from its status popup
+### 2026-10-08: A chat's agent is picked from its status popup, and a chat keeps its harness
 
 People could not change a chat's agent from its status popup: the Agent row
 was the one row there with no picker. It now opens the chat's agent picker,
@@ -1797,18 +1797,19 @@ the one "Switch agent for this chat" opens, wherever the popup shows (a
 floating or tabbed chat, the detached dock, the sidebar's session card). A
 turn in progress disables it, as it does the Model row.
 
-Before the first message, any agent simply begins the chat. After, an agent
-on the same harness continues the same native thread, and one on another
-harness picks up from a summary of what it missed (ADR 0198's context
-handoff), which the transcript marks as a switch. This is how T3 Code switches
-a started thread's provider: its adapters all support the handoff, and its
-design keeps a provider thread per provider with a delta summary on return,
-as ours does. So a started chat can still move harness, and the picker says
-which agents would: "Codex · continues from a summary". We considered locking
-a started chat to its harness and chose not to: the handoff is the designed,
-auditable path, and a lock would only send people to a new chat.
+Before the first message, any agent takes the chat. After, only an agent on
+the harness the first turn ran on does, continuing the same native thread;
+an agent on another harness starts a new chat, and its row says so: "Codex ·
+starts a new chat" (ADR 0214). People had switched a Claude chat to Codex and
+back, and found the conversation in the ChatGPT app: the handoff gave Codex a
+summary with their messages verbatim, Codex kept it in `~/.codex`, and the
+chat still said Claude. T3 Code allows that handoff. We chose not to, because
+a chat should be where the person thinks it is. Core enforces it, so no
+client can hand a conversation to another harness by accident.
 
-The picker also has to know the chat's real agent: the dock now keeps a
-started chat's entry on the agent its session runs on, so the agent, model and
-effort pickers target it even for a chat older than the project's session list.
-
+What the chat shows has to be its real agent too. The dock keeps a started
+chat's entry on the agent its session runs on, so the pickers target it even
+for a chat older than the project's session list; an agent no longer in the
+roster reads "Unknown agent", never the default's name. And the setup wizard
+removes the agent of a sign-in left unfinished once another is set up, so a
+ChatGPT sign-in started and abandoned no longer stays as the default.

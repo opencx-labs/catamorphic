@@ -1102,7 +1102,7 @@ function SessionsNav({
         const agentName =
           agentsData?.agents.find((agent) => agent.id === agentId)?.name ??
           (agentId ? projectAgentNames[agentId] : undefined) ??
-          "Default";
+          "Unknown agent";
         const checkoutLabel = checkout
           ? checkout.kind === "external"
             ? "External"

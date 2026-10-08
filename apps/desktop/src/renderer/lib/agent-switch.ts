@@ -1,20 +1,15 @@
-import type { AgentHarness } from "./desktop-api.js";
-
 /**
- * How a chat switched to another agent carries on (ADR 0198). A chat that
- * has not started is bound to nothing: the agent simply begins it. Once it
- * has, an agent on the same harness continues the same native thread, and
- * one on another harness picks up from a summary of what it missed (a
- * context handoff), as T3 Code switches a started thread's provider.
+ * Whether picking an agent for a chat starts a new chat with it instead
+ * (ADR 0214). A chat's first turn binds it to its agent's harness: until
+ * then any agent takes it, and after, only one on that harness does. An
+ * agent on another harness would otherwise be handed the conversation and
+ * keep it in that harness's own history (the ChatGPT app lists Codex's).
  */
-export function switchContinuity(input: {
-  /** The chat has a conversation (a session). */
-  started: boolean;
-  /** The harness the chat runs on, when known. */
-  current: AgentHarness | undefined;
-  next: AgentHarness;
-}): "native" | "summary" {
-  return input.started && input.current && input.current !== input.next
-    ? "summary"
-    : "native";
+export function startsNewChat(input: {
+  /** The harness the chat's first turn bound; null before it starts. */
+  bound: string | null;
+  /** The harness the picked agent runs on. */
+  next: string;
+}): boolean {
+  return input.bound !== null && input.bound !== input.next;
 }

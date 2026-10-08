@@ -1,5 +1,6 @@
 import {
   AccessDeniedError,
+  AgentHarnessFixedError,
   AgentNotConfiguredError,
   EnvironmentPolicyInvalidError,
 } from "@catamorphic/core";
@@ -182,6 +183,36 @@ describe("agent routes", () => {
       expect(response.statusCode).toBe(400);
       expect(response.json()).toEqual({
         error: "Coding agent 'retired-agent' is not configured",
+      });
+      await app.close();
+    });
+
+    it("refuses an agent on another harness for a started chat", async () => {
+      const app = createTestApp({
+        core: {
+          agentSessions: {
+            update: vi.fn(async () => {
+              throw new AgentHarnessFixedError(
+                SESSION_ID,
+                "claude-code",
+                "codex",
+              );
+            }),
+          },
+        } as never,
+      });
+      await app.ready();
+      const response = await app.inject({
+        method: "PATCH",
+        url: `/api/projects/${PROJECT_ID}/agent/sessions/${SESSION_ID}`,
+        payload: { agentId: "codex-agent" },
+      });
+      expect(response.statusCode).toBe(409);
+      expect(response.json()).toEqual({
+        error:
+          "This chat runs on claude-code. Start a new chat to use an agent on codex.",
+        code: "harness_fixed",
+        harness: "claude-code",
       });
       await app.close();
     });

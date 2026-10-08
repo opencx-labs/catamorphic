@@ -2,10 +2,11 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
 
 /**
- * Switching a chat's agent from its status popup, before the chat starts and
- * after. After, an agent on another harness carries on from a summary of the
- * conversation, and its row says so (lib/agent-switch). Two seeded agents
- * share the built-in harness; a third runs on Codex.
+ * Picking a chat's agent from its status popup, before the chat starts and
+ * after (ADR 0214, lib/agent-switch). Before, any agent takes the chat.
+ * After, one on its harness does, and one on another harness starts a new
+ * chat: the conversation is never handed to it. Two seeded agents share the
+ * built-in harness; a third runs on Codex.
  */
 let app: AppHandle;
 
@@ -64,19 +65,20 @@ const inspector = async () => {
   );
 };
 /** The agent picker's rows: name, whether it can be picked, and its detail. */
-const agentRows = () =>
+const agentRows = (ready = "true") =>
   wait<{ name: string; enabled: boolean; detail: string }[]>(
     `const names = ['Fake Agent', 'Other Fake', 'Codex Fake'];
-     const rows = $$('[role="option"]').filter(el => !el.closest('[inert]'));
-     if (!rows.some(row => row.textContent.includes('Codex Fake'))) return false;
-     return rows.flatMap(row => {
+     const options = $$('[role="option"]').filter(el => !el.closest('[inert]'));
+     if (!options.some(row => row.textContent.includes('Codex Fake'))) return false;
+     const rows = options.flatMap(row => {
        const name = names.find(candidate => row.textContent.includes(candidate));
        return name ? [{
          name,
          enabled: row.getAttribute('aria-disabled') !== 'true',
          detail: row.textContent.replace(name, '').replace('current', '').trim(),
        }] : [];
-     });`,
+     });
+     return (${ready}) ? rows : false;`,
     "agent picker rows",
   );
 const pick = (name: string) =>
@@ -101,8 +103,8 @@ const shownAgent = (name: string) =>
     `status shows ${name}`,
   );
 
-describe("switching a chat's agent", () => {
-  it("picks any agent from the status popup, before the chat starts and after", async () => {
+describe("picking a chat's agent", () => {
+  it("takes any agent before the chat starts, after only its harness's, the rest in a new chat", async () => {
     await wait(
       `const button = $$('button').find(el => el.textContent.includes('Create or import project')); if (!button) return false; button.click(); return true;`,
     );
@@ -124,7 +126,7 @@ describe("switching a chat's agent", () => {
     );
     await wait(`return !!dock()?.querySelector('[data-composer-input]');`);
 
-    // Before the first message: every agent, and each simply begins it.
+    // Before the first message: every agent simply takes the chat.
     await inspector();
     await shownAgent("Fake Agent");
     await changeAgent();
@@ -134,7 +136,7 @@ describe("switching a chat's agent", () => {
       ["Other Fake", true],
       ["Codex Fake", true],
     ]);
-    expect(before.some((row) => row.detail.includes("summary"))).toBe(false);
+    expect(before.some((row) => row.detail.includes("new chat"))).toBe(false);
     await pick("Codex Fake");
     await inspector();
     await shownAgent("Codex Fake");
@@ -146,7 +148,7 @@ describe("switching a chat's agent", () => {
       `document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));`,
     );
 
-    // The conversation starts on the built-in harness.
+    // The conversation starts on the built-in harness, which binds it.
     await run(
       `const input = dock().querySelector('[data-composer-input]'); setReactValue(input, 'hello agent'); input.closest('form').requestSubmit();`,
     );
@@ -161,47 +163,68 @@ describe("switching a chat's agent", () => {
       const sessions = await fetch(base).then(r => r.json());
       const { agents } = await window.catamorphicDesktop.agentsList();
       window.__switch = { base, id: sessions.items[0].id, agents };`);
-    const sessionAgent = (name: string) =>
-      wait(
-        `const {base, id, agents} = window.__switch; const session = await fetch(base + '/' + id).then(r => r.json()); return agents.find(agent => agent.id === session.agentId)?.name === ${JSON.stringify(name)};`,
-        `session on ${name}`,
+    const session = (id = "window.__switch.id") =>
+      run<{ agent: string; harness: string | null }>(
+        `const {base, agents} = window.__switch; const session = await fetch(base + '/' + ${id}).then(r => r.json());
+         return { agent: agents.find(agent => agent.id === session.agentId)?.name, harness: session.harness };`,
       );
+    expect(await session()).toEqual({ agent: "Fake Agent", harness: "ai-sdk" });
 
-    // Started: every agent still, the Codex one carrying on from a summary.
+    // Started: the agent on its harness takes it; Codex's row starts a new chat.
     await changeAgent();
-    const after = await agentRows();
+    const after = await agentRows(
+      `rows.some(row => row.name === 'Codex Fake' && row.detail.includes('new chat'))`,
+    );
     expect(after.map((row) => [row.name, row.enabled])).toEqual([
       ["Fake Agent", true],
       ["Other Fake", true],
       ["Codex Fake", true],
     ]);
-    expect(after[1]?.detail).not.toContain("summary");
-    expect(after[2]?.detail).toBe("Codex · continues from a summary");
-    await pick("Codex Fake");
-    await sessionAgent("Codex Fake");
-    // The transcript marks the switch.
+    expect(after[1]?.detail).not.toContain("new chat");
+    expect(after[2]?.detail).toBe("Codex · starts a new chat");
+    await pick("Other Fake");
     await wait(
-      `return dock()?.textContent.includes('Switched to Codex Fake');`,
+      `return dock()?.textContent.includes('Switched to Other Fake');`,
       "switch notice",
+    );
+    expect(await session()).toEqual({ agent: "Other Fake", harness: "ai-sdk" });
+    await inspector();
+    await shownAgent("Other Fake");
+
+    // Core refuses the conversation to another harness, whoever asks.
+    const refused = await run<{ status: number; code: string }>(
+      `const {base, id, agents} = window.__switch;
+       const codex = agents.find(agent => agent.name === 'Codex Fake');
+       const response = await fetch(base + '/' + id, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ agentId: codex.id }) });
+       return { status: response.status, code: (await response.json()).code };`,
+    );
+    expect(refused).toEqual({ status: 409, code: "harness_fixed" });
+
+    // Picking Codex opens a new chat with it; this one stays as it was.
+    await changeAgent();
+    await pick("Codex Fake");
+    await wait(
+      `const current = dock(); return !!current && !current.textContent.includes('You said: hello agent') && !!current.querySelector('[data-composer-input]');`,
+      "new chat",
     );
     await inspector();
     await shownAgent("Codex Fake");
-    // The picker follows the chat's harness: now the built-in ones are elsewhere.
-    await changeAgent();
-    const onCodex = await agentRows();
-    expect(onCodex[1]?.detail).toBe("Anthropic · continues from a summary");
-    await pick("Other Fake");
-    await sessionAgent("Other Fake");
-    await inspector();
-    await shownAgent("Other Fake");
-    // The conversation continues on the switched agent.
     await run(
       `document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
-       const input = dock().querySelector('[data-composer-input]'); setReactValue(input, 'still here'); input.closest('form').requestSubmit();`,
+       const input = dock().querySelector('[data-composer-input]'); setReactValue(input, 'hello codex'); input.closest('form').requestSubmit();`,
     );
     await wait(
-      `return dock()?.textContent.includes('You said: still here');`,
-      "reply after the switch",
+      `return dock()?.textContent.includes('You said: hello codex');`,
+      "reply in the new chat",
     );
+    const codexChat = await run<string>(
+      `const sessions = await fetch(window.__switch.base).then(r => r.json());
+       return sessions.items.find(item => item.id !== window.__switch.id)?.id;`,
+    );
+    expect(await session(JSON.stringify(codexChat))).toEqual({
+      agent: "Codex Fake",
+      harness: "codex",
+    });
+    expect(await session()).toEqual({ agent: "Other Fake", harness: "ai-sdk" });
   });
 });

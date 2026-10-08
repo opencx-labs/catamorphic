@@ -18,7 +18,7 @@ import {
 } from "../../lib/agent-default-model.js";
 import { effectiveEffort, supportedEfforts } from "../../lib/agent-effort.js";
 import { permissionModeChoices } from "../../lib/agent-permissions.js";
-import { switchContinuity } from "../../lib/agent-switch.js";
+import { startsNewChat } from "../../lib/agent-switch.js";
 import { commandScore } from "../../lib/command-score.js";
 import {
   type AgentEffort,
@@ -187,6 +187,7 @@ export function useChoiceModes({
     focusedChat,
     onPickDefaultAgent,
     onPickSessionAgent,
+    onStartChatWithAgent,
     onPickProjectAgent,
     onConfigureAgent,
     defaultAgentOverridden,
@@ -494,15 +495,11 @@ export function useChoiceModes({
   );
   const choiceItems = useMemo<PaletteItem[]>(() => {
     if (!picker || picker === "model") return [];
-    // A started chat switched to another harness carries on from a summary
-    // of the conversation (lib/agent-switch): the row says so.
-    const fromSummary = (harness: AgentInfo["harness"]) =>
+    // A started chat stays on its harness (lib/agent-switch): an agent on
+    // another one starts a new chat, and its row says so.
+    const newChat = (harness: string) =>
       picker === "switch-agent" &&
-      switchContinuity({
-        started: Boolean(focusedChat?.sessionId),
-        current: targetAgent?.harness,
-        next: harness,
-      }) === "summary";
+      startsNewChat({ bound: focusedChat?.harness ?? null, next: harness });
     const build = (): PaletteItem[] => {
       const rows: PaletteItem[] =
         picker === "permission-mode"
@@ -577,8 +574,8 @@ export function useChoiceModes({
                     id: `pick:agent:${agent.id}`,
                     icon: picker === "configure-agent" ? Settings2 : Bot,
                     label: agent.name,
-                    detail: fromSummary(agent.harness)
-                      ? `${agentSourceLabel(agent)} · continues from a summary`
+                    detail: newChat(agent.harness)
+                      ? `${agentSourceLabel(agent)} · starts a new chat`
                       : [
                           agentSourceLabel(agent),
                           agentAuthLabel(agent),
@@ -602,7 +599,9 @@ export function useChoiceModes({
                         ? onPickDefaultAgent(agent.id)
                         : picker === "configure-agent"
                           ? onConfigureAgent(agent.id)
-                          : onPickSessionAgent(agent.id),
+                          : newChat(agent.harness)
+                            ? onStartChatWithAgent(agent.id)
+                            : onPickSessionAgent(agent.id),
                   };
                 }),
                 // The active project's committed agents (ADR 0050), under
@@ -626,8 +625,8 @@ export function useChoiceModes({
                     // Its approval state stays first: it decides the pick.
                     detail:
                       !agent.invalid &&
-                      fromSummary(projectAgentAsInfo(agent).harness)
-                        ? `${projectAgentDetail(agent)} · continues from a summary`
+                      newChat(projectAgentAsInfo(agent).harness)
+                        ? `${projectAgentDetail(agent)} · starts a new chat`
                         : projectAgentDetail(agent),
                     keywords: [agent.name, agent.slug, "project", agent.kind],
                     kind: "action" as const,
@@ -644,7 +643,11 @@ export function useChoiceModes({
                       if (agent.invalid) return;
                       onPickProjectAgent(
                         agent,
-                        picker === "default-agent" ? "default" : "session",
+                        picker === "default-agent"
+                          ? "default"
+                          : newChat(projectAgentAsInfo(agent).harness)
+                            ? "chat"
+                            : "session",
                       );
                     },
                   };
@@ -700,6 +703,7 @@ export function useChoiceModes({
     onPickEffort,
     onPickDefaultAgent,
     onPickSessionAgent,
+    onStartChatWithAgent,
     onPickProjectAgent,
     onConfigureAgent,
     onClearDefaultOverride,

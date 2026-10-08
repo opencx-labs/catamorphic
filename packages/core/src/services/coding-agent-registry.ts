@@ -121,6 +121,12 @@ export interface RegisteredCodingAgent {
    * it interrupted. Default `continue`.
    */
   recovery?: "continue" | "stop";
+  /**
+   * Why the agent cannot run now (a definition to fix, an approval to
+   * give). Its turns fail with this reason, and it binds no chat to a
+   * harness (ADR 0214).
+   */
+  unavailable?: string;
 }
 
 /** The harness id an agent runs on. */

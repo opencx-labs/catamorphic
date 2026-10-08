@@ -934,8 +934,8 @@ function ChatDockContent({
             defaultAgentId ??
             roster.defaultAgentId),
       );
-  // Another agent this chat can switch to, before it starts or after (an
-  // agent on another harness carries on from a summary, lib/agent-switch).
+  // Another agent to pick for this chat: before it starts any, after it
+  // only one on its harness, and the rest start a new chat (lib/agent-switch).
   // A connected project's chat picks its agent in the chat before it starts.
   const otherAgents = authority
     ? 0
@@ -2301,7 +2301,7 @@ function ChatDockContent({
                           agent.id ===
                           (chat.session?.agentId ?? selectedAgentId),
                       )?.name ?? "Project agent")
-                    : (activeAgent?.name ?? "Default agent")
+                    : (activeAgent?.name ?? "Unknown agent")
                 }
                 model={
                   (selectedModel &&
