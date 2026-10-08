@@ -547,6 +547,10 @@ export async function startEmbeddedServer(
     // settle later, once a chat message round-trips.
     onToolAlwaysAllowed: (event) => agentRegistry.rememberToolAllowed(event),
     onAgentTurnSettled: (event) => {
+      // The browser tabs the turn drove go back to the person.
+      void workspaceBridge
+        ?.releaseSession(event.projectId, event.sessionId)
+        .catch(() => {});
       triggers.onAgentTurnSettled(
         event,
         projectRoots.checkpointsEnabled(event.projectId),

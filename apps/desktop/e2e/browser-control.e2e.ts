@@ -385,3 +385,34 @@ it("stops input after release and validates navigation and waits", async () => {
   ).toEqual({ found: false });
   expect(app.getRendererErrors()).toEqual([]);
 });
+it("holds a tab while a turn drives it and hands it back when the turn ends", async () => {
+  const chip = `document.querySelector(${JSON.stringify(`[data-testid="surface-chip"][data-point-key="chip:${key}"]`)})`;
+  const held = (active: boolean) =>
+    `(()=>{const el=${chip};return !!el && el.hasAttribute('data-active')===${active};})()`;
+  // Every tool call above was a turn of its own, and each has ended.
+  await app.waitFor(held(false), { label: "handed back after its turn" });
+  // A turn waiting on the page holds the tab meanwhile.
+  counter++;
+  const prompt = `E2E workspace tool ${JSON.stringify({
+    name: "browser_act",
+    input: {
+      key,
+      action: "wait_for",
+      text: "Never on this page",
+      timeoutMs: 3000,
+    },
+    serial: counter,
+  })}`;
+  await app.eval(
+    `(()=>{${helpers};setReactValue(composer(),${JSON.stringify(prompt)});composer().closest('form').requestSubmit();})()`,
+  );
+  await app.waitFor(held(true), { label: "held while the turn drives it" });
+  await app.waitFor(held(false), {
+    label: "handed back when the turn ends",
+    timeoutMs: 15_000,
+  });
+  // Not a take-over: a later turn drives it again.
+  expect(await tool("browser_act", { key, action: "read" })).not.toHaveProperty(
+    "error",
+  );
+});

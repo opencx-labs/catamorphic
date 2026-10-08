@@ -1789,3 +1789,18 @@ tab folding the strip and an open chat opening it beside the chat are
 temporary and leave the choice alone; opened by hand while a chat tab folds
 it, the strip stays open until such a tab gains focus again.
 
+### 2026-10-08: A browser tab goes back to the person when the agent's turn ends
+
+A tab the agent opened kept its chip spinning after the agent was done: the
+spinner, the page's Take over state and the tab's exemption from sleep all
+follow "agent-controlled", and only the agent's own `surface_control
+release` or the person's take-over ever cleared it. Agents rarely release.
+
+The agent now holds a browser tab from its first action in a turn (opening,
+looking or acting) until that turn settles, and the main-process bridge
+hands every tab the session held back to the person then. That is not a
+take-over: a later turn may drive the tab again, and holding it again shows
+the spinner again. Driving one of the person's own tabs shows the same hold,
+so they always see the agent at work and can take over. A take-over still
+refuses the agent until it reclaims.
+
