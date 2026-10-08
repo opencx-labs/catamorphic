@@ -235,6 +235,12 @@ it("shows concurrent connector requests together and settles each independently"
   await runWait(
     `return !requestCard('First app') && !!requestCard('Second app');`,
   );
+  // Ready at once: answering one request never holds the other.
+  expect(
+    await run(
+      `return requestCard('Second app').querySelector('[data-testid="elicitation-decline"]').disabled;`,
+    ),
+  ).toBe(false);
   await run(
     `requestCard('Second app').querySelector('[data-testid="elicitation-decline"]').click();`,
   );

@@ -728,10 +728,20 @@ function ChatDockContent({
   const otherRequests = chat.requests.filter(
     (request) => request.kind !== "question",
   );
-  const [responding, setResponding] = useState(false);
+  // The requests whose answer is on its way: each card waits on its own,
+  // so answering one leaves the others ready.
+  const [responding, setResponding] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
   const respond = (requestId: string, response: RuntimeRequestResponse) => {
-    setResponding(true);
-    void chat.respond(requestId, response).finally(() => setResponding(false));
+    setResponding((current) => new Set(current).add(requestId));
+    void chat.respond(requestId, response).finally(() =>
+      setResponding((current) => {
+        const next = new Set(current);
+        next.delete(requestId);
+        return next;
+      }),
+    );
   };
   const activity = chat.activity;
 
@@ -2953,7 +2963,7 @@ function ChatDockContent({
                   key={request.id}
                   request={request}
                   viewerId={authority?.externalUserId}
-                  busy={!expanded || responding}
+                  busy={!expanded || responding.has(request.id)}
                   onRespond={(response) => respond(request.id, response)}
                   onOpenUrl={(url) => onLinkClick?.(url, "tab")}
                 />
@@ -2974,7 +2984,7 @@ function ChatDockContent({
                           answers: [QUESTIONS_DISMISSED_MESSAGE],
                         })
                       }
-                      disabled={!expanded || responding}
+                      disabled={!expanded || responding.has(request.id)}
                     />
                   ),
               )}
