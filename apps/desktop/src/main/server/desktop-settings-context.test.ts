@@ -77,6 +77,12 @@ it("identifies the owning profile and primary project paths, with live file erro
   expect(desktopSettingsContext(input).errors?.[0]).toContain("theme.json");
   expect(JSON.stringify(context)).not.toContain(two.id);
   expect(DESKTOP_SETTINGS_SKILL).not.toContain("update_desktop_setting");
+  // Agents read what a setting does and what each value is called, not
+  // just its key and values.
+  expect(DESKTOP_SETTINGS_SKILL).toContain(
+    "| chatWorkLive | While the agent works: Notes are what the agent writes",
+  );
+  expect(DESKTOP_SETTINGS_SKILL).toContain('"notes" (Notes only)');
 });
 it("distinguishes restricted native access from an unavailable host filesystem", () => {
   const { config, one } = fixture();

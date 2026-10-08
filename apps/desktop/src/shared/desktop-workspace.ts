@@ -83,6 +83,8 @@ export interface DockSnapshot {
   multiProject: boolean;
   side: "left" | "right";
   placement: "left" | "center" | "right";
+  /** The person's folded strip (prefs `dockCollapsed`). */
+  collapsed: boolean;
 }
 export interface WorkspaceNavigation {
   projectId: string;

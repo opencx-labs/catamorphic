@@ -12,6 +12,7 @@ import {
   notice,
   reply,
   timelineOf,
+  toolCall,
   turn,
 } from "./timeline-fixtures.js";
 
@@ -207,6 +208,99 @@ describe("ChatTimeline work display", () => {
     });
     expect(container.querySelectorAll(".animate-fold-away")).toHaveLength(0);
     expect(container.querySelectorAll("article")).toHaveLength(2);
+  });
+
+  it("keeps the steps folded with Notes only, while the turn runs and after", async () => {
+    const workDisplay = { live: "notes", settled: "collapse" } as const;
+    await render({
+      turns: timelineOf({
+        turns: [turn("t1", 1, { status: "running", completedAt: null })],
+        items: [...settledItems.slice(0, 5), command("c3", "t1")],
+      }),
+      activeTurnId: "t1",
+      workDisplay,
+    });
+    // Every note in place, each one's steps behind a closed line, the
+    // work since the latest note too: a lone step reads "1 step".
+    expect(articles().filter(Boolean)).toEqual([
+      "Looking at the code.",
+      "Found it.\nThe bug is in the parser.",
+    ]);
+    expect(toggles()).toEqual(["false", "false", "false"]);
+    expect(
+      [
+        ...container.querySelectorAll('[data-testid="chat-turn-steps-toggle"]'),
+      ].map((toggle) => toggle.textContent),
+    ).toEqual(["1 step", "1 step", "1 step"]);
+    // Opening one by hand still works.
+    const first = container.querySelector<HTMLButtonElement>(
+      '[data-testid="chat-turn-steps-toggle"]',
+    );
+    await act(async () => first?.click());
+    expect(toggles()).toEqual(["true", "false", "false"]);
+    // Answered, the notes fold into the closed line above the answer.
+    await render({ turns: settled(), workDisplay });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 300));
+    });
+    expect(container.querySelectorAll("article")).toHaveLength(2);
+    expect(toggles()).toEqual(["false"]);
+  });
+
+  it("applies a changed choice to the messages already on screen", async () => {
+    // The dock passes the same requests object until a request changes,
+    // so only the choice itself can tell a shown message to change.
+    const requests = {};
+    const turns = timelineOf({
+      turns: [turn("t1", 1)],
+      items: [
+        input("t1", "Run it"),
+        command("c1", "t1"),
+        reply("a1", "t1", "Passed."),
+      ],
+    });
+    await render({ turns, requests });
+    expect(toggles()).toEqual([]);
+    await render({
+      turns,
+      requests,
+      workDisplay: { live: "notes", settled: "collapse" },
+    });
+    expect(toggles()).toEqual(["false"]);
+    await render({ turns, requests });
+    expect(toggles()).toEqual([]);
+  });
+
+  it("draws no line over only commands still running in view", async () => {
+    const start = {
+      tool: "run_background_command",
+      input: { command: "bun run dev", description: "Start the dev server" },
+    };
+    await render({
+      turns: timelineOf({
+        turns: [turn("t1", 1)],
+        items: [
+          input("t1", "Start it"),
+          toolCall("b1", "t1", start),
+          reply("a1", "t1", "Started."),
+        ],
+      }),
+      backgroundCommands: [
+        {
+          kind: "command",
+          command: "bun run dev",
+          description: "Start the dev server",
+          status: "running",
+          exitCode: null,
+        },
+      ],
+      workDisplay: { live: "notes", settled: "collapse" },
+    });
+    // The running command shows; there is nothing folded to open.
+    expect(toggles()).toEqual([]);
+    expect(
+      container.querySelectorAll('[data-testid="chat-step"]'),
+    ).toHaveLength(1);
   });
 
   it("shows a lone step as its own row, with how long it took", async () => {
