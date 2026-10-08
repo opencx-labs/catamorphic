@@ -34,6 +34,12 @@ export interface AppPrefs {
   /** Where open chats and their bubble strip sit while expanded. */
   dockPlacement: "left" | "center" | "right";
   /**
+   * The person folded the bubble strip into one bubble (its arrows), and
+   * it stays folded, in every window and across launches, until they open
+   * it again. Runtime state, not a setting.
+   */
+  dockCollapsed: boolean;
+  /**
    * An agent turn is work (notes between tool calls, plus the tool steps)
    * followed by an answer. Two choices cover how the work reads: while the
    * turn runs, and once the answer has landed. "notes" (Notes only) keeps
@@ -94,6 +100,7 @@ export const DEFAULT_PREFS: AppPrefs = {
   dockDetached: false,
   dockSide: "right",
   dockPlacement: "center",
+  dockCollapsed: false,
   chatWorkLive: "all",
   chatWorkSettled: "collapse",
   notificationSounds: true,
@@ -152,6 +159,7 @@ export function normalizePrefs(raw: unknown): AppPrefs {
     dockMultiProject: record.dockMultiProject === true,
     dockDetached: record.dockDetached === true,
     dockSide: record.dockSide === "left" ? "left" : "right",
+    dockCollapsed: record.dockCollapsed === true,
     chatWorkLive:
       record.chatWorkLive === "latest" || record.chatWorkLive === "notes"
         ? record.chatWorkLive

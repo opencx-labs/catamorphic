@@ -33,6 +33,12 @@ describe("PrefsStore", () => {
     expect(normalizePrefs({})).toEqual(DEFAULT_PREFS);
   });
 
+  it("keeps the person's fold of the bubble strip, open unless folded", () => {
+    expect(normalizePrefs({}).dockCollapsed).toBe(false);
+    expect(normalizePrefs({ dockCollapsed: true }).dockCollapsed).toBe(true);
+    expect(normalizePrefs({ dockCollapsed: "yes" }).dockCollapsed).toBe(false);
+  });
+
   it("keeps each choice for how a running turn reads, and only those", () => {
     for (const choice of ["all", "latest", "notes"])
       expect(normalizePrefs({ chatWorkLive: choice }).chatWorkLive).toBe(

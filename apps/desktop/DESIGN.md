@@ -1773,6 +1773,22 @@ and values with no meanings, and the descriptions in Settings were vague.
   tells agents to say when no value does what was asked instead of picking
   the nearest one.
 
+### 2026-10-08: The strip stays folded until the person opens it
+
+A person folded the bubble strip into its corner, and it kept opening again.
+The fold was a component's memory: a reload, a relaunch or another window
+showed the strip open, and leaving a chat tab (which folds the strip on its
+own) wiped the person's fold along with the tab's. Opening a chat also gave
+up the fold for good, so minimizing it again left the strip open.
+
+The fold is now the person's choice, saved with the profile like the strip's
+corner and placement (`dockCollapsed`, delivered in the dock snapshot), so
+every window, the detached dock and the next launch show it. Only the
+person changes it: the arrows fold it, the collapsed bubble opens it. A chat
+tab folding the strip and an open chat opening it beside the chat are
+temporary and leave the choice alone; opened by hand while a chat tab folds
+it, the strip stays open until such a tab gains focus again.
+
 ### 2026-10-08: A chat's agent is picked from its status popup
 
 People could not change a chat's agent from its status popup: the Agent row
