@@ -317,9 +317,10 @@ describeIf("unattended approvals (ADR 0176)", () => {
     const decision = sessions.askApproval({ ...ask, sessionId });
     const pending = await pendingFor(sessionId);
     expect(pending.approvers).toEqual([]);
+    // Five minutes from its creation, to the millisecond.
     expect(
       Date.parse(pending.expiresAt ?? "") - Date.parse(pending.createdAt),
-    ).toBeLessThanOrEqual(5 * 60_000);
+    ).toBe(5 * 60_000);
     expect(
       await db
         .selectFrom("user_notification_events")

@@ -3313,7 +3313,9 @@ export class AgentSessionsService {
         .executeTakeFirst();
       if (!row) return null;
       const turn = turnFromRow(row);
-      const now = new Date().toISOString();
+      // One reading of the clock: the request lives exactly its timeout.
+      const openedAt = Date.now();
+      const now = new Date(openedAt).toISOString();
       const id = randomUUID();
       const itemId = randomUUID();
       const request: RuntimeRequest = {
@@ -3333,7 +3335,7 @@ export class AgentSessionsService {
         approval: input.approval,
         elicitation: null,
         approvers: policy.approvers,
-        expiresAt: new Date(Date.now() + timeoutMs).toISOString(),
+        expiresAt: new Date(openedAt + timeoutMs).toISOString(),
         response: null,
         resolvedBy: null,
         reason: null,
