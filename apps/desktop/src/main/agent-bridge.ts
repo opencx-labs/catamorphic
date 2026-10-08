@@ -40,9 +40,11 @@ import type { AgentTerminals } from "./terminal.js";
  * Control handoff: surfaces an agent spawns are marked agent-controlled;
  * the renderer reports a user "take over", after which agent actions on
  * that surface fail with an explanatory error until the agent reclaims.
- * A browser tab is held by the session that drives it, from its first
- * action in a turn until that turn settles: then it goes back to the
- * person without a take-over, and a later turn may drive it again.
+ * A tab an agent opened is held by the session that drives it, from its
+ * first action in a turn until that turn settles: then it goes back to
+ * the person without a take-over, and a later turn may drive it again.
+ * The person's own tabs are never held: an agent drives one only when
+ * asked, without veiling it.
  */
 
 export interface WorkspaceBridge {
@@ -406,16 +408,29 @@ export function registerAgentBridge(
       );
     }
   };
-  /** Browser tab key → the session whose turn drives it. */
+  /** Browser tabs an agent opened: an agent's own, which it holds. */
+  const agentTabs = new Set<string>();
+  /** Browser tab key → the session whose turn holds it. */
   const held = new Map<string, { projectId: string; sessionId: string }>();
-  /** The session drives this tab until its turn settles, in plain sight. */
+  /** Per session, how many of its turns have settled (see openBrowser). */
+  const settledTurns = new Map<string, number>();
+  /**
+   * The session drives its own tab until its turn settles, in sight. A tab
+   * the person took over stays theirs: input actions refuse there, and a
+   * look leaves it alone.
+   */
   const holdBrowser = async (input: {
     projectId: string;
     sessionId: string;
     key: string;
   }) => {
-    guardControl(input.key);
-    if (held.get(input.key)?.sessionId === input.sessionId) return;
+    if (
+      !input.sessionId ||
+      !agentTabs.has(input.key) ||
+      takenOver.has(input.key) ||
+      held.get(input.key)?.sessionId === input.sessionId
+    )
+      return;
     held.set(input.key, {
       projectId: input.projectId,
       sessionId: input.sessionId,
@@ -622,6 +637,7 @@ export function registerAgentBridge(
     },
 
     async openBrowser(projectId, sessionId, url) {
+      const turns = settledTurns.get(sessionId) ?? 0;
       const result = await rpc<{ key: string } | { error: string }>(
         "openAgentBrowser",
         { projectId, sessionId, url: browserUrl(url) },
@@ -632,8 +648,17 @@ export function registerAgentBridge(
             "Could not open a browser tab (is the workspace open?)",
         );
       }
-      // Opened under the agent's control: held by this turn.
-      held.set(result.key, { projectId, sessionId });
+      // Opened under the agent's control: its own, held by this turn,
+      // unless the turn settled while the page mounted (or there is none).
+      agentTabs.add(result.key);
+      if (sessionId && (settledTurns.get(sessionId) ?? 0) === turns)
+        held.set(result.key, { projectId, sessionId });
+      else
+        await rpc("surfaceControl", {
+          projectId,
+          key: result.key,
+          controlled: false,
+        });
       return result;
     },
 
@@ -753,17 +778,21 @@ export function registerAgentBridge(
     },
 
     async setControl(projectId, sessionId, key, controlled) {
+      const browser = key.startsWith("browser:");
       if (controlled) {
         takenOver.delete(key);
-        if (key.startsWith("browser:")) held.set(key, { projectId, sessionId });
+        if (browser && sessionId) held.set(key, { projectId, sessionId });
       } else {
-        takenOver.add(key);
         held.delete(key);
+        // A released tab goes back as at the end of a turn: the agent may
+        // drive it again. A terminal stays the person's until reclaimed.
+        if (!browser) takenOver.add(key);
       }
       await rpc("surfaceControl", { projectId, key, controlled });
     },
 
     async releaseSession(projectId, sessionId) {
+      settledTurns.set(sessionId, (settledTurns.get(sessionId) ?? 0) + 1);
       const keys = [...held]
         .filter(
           ([, holder]) =>
@@ -781,6 +810,7 @@ export function registerAgentBridge(
     async closeSurface(projectId, key) {
       takenOver.delete(key);
       held.delete(key);
+      agentTabs.delete(key);
       // An agent closing its terminal tab also ends the process behind
       // it — a headless PTY nobody can see must not keep running.
       if (key.startsWith("terminal:")) {
@@ -870,6 +900,8 @@ export function registerAgentBridge(
       pending.clear();
       takenOver.clear();
       held.clear();
+      agentTabs.clear();
+      settledTurns.clear();
       terminalKeys.clear();
     },
   };

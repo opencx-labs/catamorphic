@@ -338,9 +338,7 @@ it("captures model images and points inside a page, follows scrolling and clears
     `(()=>{${helpers};const panel=document.querySelector("section[data-chat-local-id]");return !composer() && panel && getComputedStyle(panel).opacity === "0" && panel.getAnimations().every(a=>a.playState === "finished");})()`,
   );
   await app.screenshot("/tmp/browser-control-point.png");
-  await app.eval(
-    `[...document.querySelectorAll('button')].find(el=>el.textContent==='Go to chat').click()`,
-  );
+  await app.eval(`document.querySelector('[data-chat-bubble] button').click()`);
   await app.waitFor(`(()=>{${helpers};return !!composer();})()`);
   await guest.eval("window.scrollBy(0,80)");
   await guest.waitFor(

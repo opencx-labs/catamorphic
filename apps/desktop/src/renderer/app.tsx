@@ -4445,6 +4445,15 @@ export function App({
             if (guestId) return { key: browserTabKey(localId) };
             await new Promise((resolve) => setTimeout(resolve, 150));
           }
+          // Not the agent's to hold: the tab is the person's.
+          updateWorkspace((current) => ({
+            ...current,
+            browsers: current.browsers.map((browser) =>
+              browser.localId === localId
+                ? { ...browser, agentControlled: false }
+                : browser,
+            ),
+          }));
           return { error: "The page never finished mounting." };
         }
         case "attachAgentTerminal": {

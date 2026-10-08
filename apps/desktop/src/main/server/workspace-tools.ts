@@ -795,7 +795,7 @@ export function buildWorkspaceToolkit(
         );
         return {
           ...result,
-          note: "Tab opened under your control until this turn ends, when it goes back to the person. Take a browser_snapshot to see the page; close it with surface_control if it was only scaffolding.",
+          note: "Tab opened under your control until this turn ends, when it goes back to the person. Take a browser_snapshot to see the page; discover surface_control to close it if it was only scaffolding.",
         };
       },
     },
@@ -1152,7 +1152,7 @@ export function buildWorkspaceToolkit(
     {
       name: "surface_control",
       description:
-        "Manage a browser tab or terminal you control. Browser tabs go back to the user by themselves when your turn ends. 'release' hands a surface to the user before then, or a terminal once you're done with an interactive command (the tab stays open for them); 'reclaim' takes a surface back after the user took over (only when your task still needs it, and if they're actively using it, ask first); 'close' closes the tab entirely (terminals also end their process). Close surfaces that were only scaffolding.",
+        "Manage a browser tab or terminal you control. Browser tabs you opened go back to the user by themselves when your turn ends; 'release' hands one back sooner, and you may drive it again later. 'release' on a terminal hands it over once you're done with an interactive command, until you reclaim it. 'reclaim' takes a surface back after the user took over (only when your task still needs it, and if they're actively using it, ask first); 'close' closes the tab entirely (terminals also end their process). Close surfaces that were only scaffolding.",
       parameters: {
         key: z.string().describe("Surface key, e.g. 'browser:<id>'"),
         action: z.enum(["release", "reclaim", "close"]),
