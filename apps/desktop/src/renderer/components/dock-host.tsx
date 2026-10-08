@@ -145,6 +145,9 @@ export function DockHost({
     void desktopApi.dockSnapshot().then(setSnapshot);
     return desktopApi.onDockSnapshot(setSnapshot);
   }, []);
+  // The strip waits for the real snapshot: drawn from the placeholder, a
+  // folded strip would show open, then slide shut, on every launch.
+  const snapshotLoaded = snapshot !== EMPTY;
   // In the window, the dock rests on the visible workspace's chat region by
   // CSS anchoring (styles.css), so it moves in the same frame as the region
   // (a sidebar settling, a split) without measuring. While the dock floats
@@ -655,6 +658,10 @@ export function DockHost({
       if (!start.moved && Math.abs(delta) < 5) return;
       if (!start.moved) {
         setDragging(true);
+        // Dragging the open strip's arrows is using it open: a fold the
+        // person made earlier (the strip only open beside a chat) gives
+        // way, or minimizing the chat below would fold it mid-drag.
+        if (intent === "placement" && snapshot.collapsed) saveFolded(false);
         // The open chat would sit still while the strip moves, then snap
         // to its new place on release: it collapses as the drag starts,
         // exactly as the collapse button does.
@@ -860,143 +867,146 @@ export function DockHost({
           </ThemeScope>
         );
       })}
-      {isPresentation && (currentProjectId || scoped.length > 0) && (
-        <>
-          {/* A browser page or app frame under the pointer would take its
+      {isPresentation &&
+        snapshotLoaded &&
+        (currentProjectId || scoped.length > 0) && (
+          <>
+            {/* A browser page or app frame under the pointer would take its
               moves despite the pointer capture, stranding the drag short
               of the resting spot it was headed for. The detached window
               moves with the pointer instead. */}
-          {held && !detachedWindow && (
-            <div
-              aria-hidden="true"
-              data-dock-drag-shield
-              className="pointer-events-auto fixed inset-0 z-30 cursor-grabbing"
-            />
-          )}
-          <ChatBubbles
-            attention={Object.fromEntries(
-              scoped.map((chat) => [chat.entry.localId, chat.attention]),
-            )}
-            menus={Object.fromEntries(
-              scoped.map((chat) => [chat.entry.localId, chat.menu]),
-            )}
-            onMenuAction={(id, entry) => {
-              const chat = scoped.find((chat) => chat.entry.localId === id);
-              if (chat) invoke(chat, { kind: "menu", entry });
-            }}
-            dragLeft={dragLeft}
-            // The detached window moves natively with the drag, so resting
-            // spots drawn inside it would travel with the pointer.
-            dragTarget={detachedWindow ? null : dragTarget}
-            detached={snapshot.detached}
-            nativeMenus={detachedWindow}
-            onToggleDetached={() => {
-              void desktopApi.dockDetach(!snapshot.detached);
-            }}
-            placement={snapshot.placement}
-            dragHandlers={dragHandlersFor("side")}
-            placementDragHandlers={dragHandlersFor("placement")}
-            newChatProjectName={
-              snapshot.chats.find((chat) => chat.projectId === currentProjectId)
-                ?.projectName
-            }
-            entries={scoped.map((chat) => chat.entry)}
-            labels={Object.fromEntries(
-              scoped.map((chat) => [
-                chat.entry.localId,
-                `${chat.title} · ${chat.projectName}`,
-              ]),
-            )}
-            icons={Object.fromEntries(
-              scoped.map((chat) => [chat.entry.localId, chat.icon]),
-            )}
-            forks={Object.fromEntries(
-              scoped.map((chat) => [chat.entry.localId, chat.fork]),
-            )}
-            signals={signals}
-            unread={Object.fromEntries(
-              scoped.map((chat) => [chat.entry.localId, chat.unread]),
-            )}
-            themes={Object.fromEntries(
-              scoped.map((chat) => [
-                chat.entry.localId,
-                themeStyle(chat.theme),
-              ]),
-            )}
-            side={snapshot.side}
-            activeLocalId={active?.entry.localId}
-            // A detached dock is its own window; the main window's tab
-            // focus must not fold it and move it between corner and spot.
-            autoCollapse={!detachedWindow && Boolean(tabbed)}
-            folded={snapshot.collapsed}
-            onFoldedChange={saveFolded}
-            onCollapsedChange={setCollapsed}
-            onToggle={toggle}
-            onOpenAs={(id, mode) => {
-              const chat = scoped.find((chat) => chat.entry.localId === id);
-              if (!chat) return;
-              // The side transition promotes the chat to a tab itself and
-              // splits it against the tab that is active now; changing the
-              // entry first would make the chat the active tab and leave
-              // nothing to split against.
-              if (mode === "side") {
-                invoke(chat, { kind: "surface", key: chatTabKey(id), mode });
-                return;
-              }
-              invoke(chat, {
-                kind: "entry",
-                entry: { ...chat.entry, mode: "tab" },
-              });
-            }}
-            onClose={(id) => actions.current.get(id)?.close?.()}
-            trailing={
-              <DownloadsBubble
-                // The bubble ends the strip: at a side of the screen its
-                // popover opens toward the middle.
-                align={
-                  railSpot === "right"
-                    ? "end"
-                    : railSpot === "left"
-                      ? "start"
-                      : "center"
-                }
-                onOpenChange={setDownloadsOpen}
-                onOpenAll={() =>
-                  navigateSurface({
-                    url: "downloads",
-                    title: "Downloads",
-                    mode: "tab",
-                    open: "page",
-                  })
-                }
-                onOpenFile={(record) =>
-                  navigateSurface({
-                    url: fileUrlFor(record.savePath),
-                    title: record.filename,
-                    mode: "tab",
-                    open: "browser",
-                  })
-                }
+            {held && !detachedWindow && (
+              <div
+                aria-hidden="true"
+                data-dock-drag-shield
+                className="pointer-events-auto fixed inset-0 z-30 cursor-grabbing"
               />
-            }
-            onNewChat={() => {
-              void desktopApi.dockNewChat();
-            }}
-            onCollapse={() => {
-              if (active)
-                actions.current.get(active.entry.localId)?.minimize?.();
-            }}
-          />
-          {positionError && (
-            <p
-              role="alert"
-              className="pointer-events-auto absolute bottom-16 right-3 rounded-md border border-danger/30 bg-bg-raised px-3 py-2 text-xs text-danger"
-            >
-              {positionError}
-            </p>
-          )}
-        </>
-      )}
+            )}
+            <ChatBubbles
+              attention={Object.fromEntries(
+                scoped.map((chat) => [chat.entry.localId, chat.attention]),
+              )}
+              menus={Object.fromEntries(
+                scoped.map((chat) => [chat.entry.localId, chat.menu]),
+              )}
+              onMenuAction={(id, entry) => {
+                const chat = scoped.find((chat) => chat.entry.localId === id);
+                if (chat) invoke(chat, { kind: "menu", entry });
+              }}
+              dragLeft={dragLeft}
+              // The detached window moves natively with the drag, so resting
+              // spots drawn inside it would travel with the pointer.
+              dragTarget={detachedWindow ? null : dragTarget}
+              detached={snapshot.detached}
+              nativeMenus={detachedWindow}
+              onToggleDetached={() => {
+                void desktopApi.dockDetach(!snapshot.detached);
+              }}
+              placement={snapshot.placement}
+              dragHandlers={dragHandlersFor("side")}
+              placementDragHandlers={dragHandlersFor("placement")}
+              newChatProjectName={
+                snapshot.chats.find(
+                  (chat) => chat.projectId === currentProjectId,
+                )?.projectName
+              }
+              entries={scoped.map((chat) => chat.entry)}
+              labels={Object.fromEntries(
+                scoped.map((chat) => [
+                  chat.entry.localId,
+                  `${chat.title} · ${chat.projectName}`,
+                ]),
+              )}
+              icons={Object.fromEntries(
+                scoped.map((chat) => [chat.entry.localId, chat.icon]),
+              )}
+              forks={Object.fromEntries(
+                scoped.map((chat) => [chat.entry.localId, chat.fork]),
+              )}
+              signals={signals}
+              unread={Object.fromEntries(
+                scoped.map((chat) => [chat.entry.localId, chat.unread]),
+              )}
+              themes={Object.fromEntries(
+                scoped.map((chat) => [
+                  chat.entry.localId,
+                  themeStyle(chat.theme),
+                ]),
+              )}
+              side={snapshot.side}
+              activeLocalId={active?.entry.localId}
+              // A detached dock is its own window; the main window's tab
+              // focus must not fold it and move it between corner and spot.
+              autoCollapse={!detachedWindow && Boolean(tabbed)}
+              folded={snapshot.collapsed}
+              onFoldedChange={saveFolded}
+              onCollapsedChange={setCollapsed}
+              onToggle={toggle}
+              onOpenAs={(id, mode) => {
+                const chat = scoped.find((chat) => chat.entry.localId === id);
+                if (!chat) return;
+                // The side transition promotes the chat to a tab itself and
+                // splits it against the tab that is active now; changing the
+                // entry first would make the chat the active tab and leave
+                // nothing to split against.
+                if (mode === "side") {
+                  invoke(chat, { kind: "surface", key: chatTabKey(id), mode });
+                  return;
+                }
+                invoke(chat, {
+                  kind: "entry",
+                  entry: { ...chat.entry, mode: "tab" },
+                });
+              }}
+              onClose={(id) => actions.current.get(id)?.close?.()}
+              trailing={
+                <DownloadsBubble
+                  // The bubble ends the strip: at a side of the screen its
+                  // popover opens toward the middle.
+                  align={
+                    railSpot === "right"
+                      ? "end"
+                      : railSpot === "left"
+                        ? "start"
+                        : "center"
+                  }
+                  onOpenChange={setDownloadsOpen}
+                  onOpenAll={() =>
+                    navigateSurface({
+                      url: "downloads",
+                      title: "Downloads",
+                      mode: "tab",
+                      open: "page",
+                    })
+                  }
+                  onOpenFile={(record) =>
+                    navigateSurface({
+                      url: fileUrlFor(record.savePath),
+                      title: record.filename,
+                      mode: "tab",
+                      open: "browser",
+                    })
+                  }
+                />
+              }
+              onNewChat={() => {
+                void desktopApi.dockNewChat();
+              }}
+              onCollapse={() => {
+                if (active)
+                  actions.current.get(active.entry.localId)?.minimize?.();
+              }}
+            />
+            {positionError && (
+              <p
+                role="alert"
+                className="pointer-events-auto absolute bottom-16 right-3 rounded-md border border-danger/30 bg-bg-raised px-3 py-2 text-xs text-danger"
+              >
+                {positionError}
+              </p>
+            )}
+          </>
+        )}
     </div>
   );
 }

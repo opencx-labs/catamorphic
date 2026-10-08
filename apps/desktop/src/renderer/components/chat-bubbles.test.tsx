@@ -205,6 +205,11 @@ describe("ChatBubbles fold", () => {
 
   it("asks to change the fold only from the person's own controls", () => {
     const { container, onFoldedChange, render } = strip({ folded: false });
+    // A chat opening and a chat tab folding it change nothing saved.
+    render({ folded: false, open: true });
+    render({ folded: false, autoCollapse: true });
+    render({ folded: false });
+    expect(onFoldedChange).not.toHaveBeenCalled();
     act(() =>
       container
         .querySelector<HTMLButtonElement>(

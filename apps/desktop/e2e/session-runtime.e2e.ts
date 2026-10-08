@@ -547,10 +547,18 @@ it("keeps the person's fold of the strip through a chat tab, beside an open chat
   await collapsed(false);
   await run(`$('[aria-label="Collapse chat bubbles"]').click();`);
   await collapsed(true);
-  // The chat tab folds it too; leaving that tab keeps the person's fold.
+  // The chat tab folds it too; leaving that tab keeps the person's fold
+  // (it used to open the strip a beat after the page tab took over).
+  const shown = (key: string) =>
+    wait(
+      `return !!$('[data-tab-orientation] [data-point-key^="${key}"] [aria-current="true"]');`,
+    );
   await showTab("chat:");
+  await shown("chat:");
   await collapsed(true);
   await showTab("settings:");
+  await shown("settings:");
+  await new Promise((resolve) => setTimeout(resolve, 600));
   await collapsed(true);
   // A chat opened keeps the strip open beside it; minimized, the fold returns.
   await run(
@@ -574,8 +582,42 @@ it("keeps the person's fold of the strip through a chat tab, beside an open chat
   // Saved: a reload, or any other window of the profile, shows it folded.
   await app.reload();
   await collapsed(true);
-  // Opened again by the person, it stays open.
-  await run(`$('[aria-label="Expand chat bubbles"]').click();`);
+  // Dragging the arrows of the strip shown open beside a chat is using it
+  // open: it lands where it was dropped and stays open, not folded mid-drag.
+  await run(
+    `window.dispatchEvent(new KeyboardEvent('keydown', {key:'n',metaKey:/Mac/.test(navigator.platform),ctrlKey:!/Mac/.test(navigator.platform),bubbles:true}));`,
+  );
+  await wait(
+    `return dock()?.dataset.floatingChat === 'true' && $('[data-dock-rail]')?.dataset.dockCollapsed === 'false' && !document.getAnimations().some(a=>a.playState==='running' && a.effect?.getTiming().iterations!==Infinity);`,
+  );
+  const from = await app.eval<{ x: number; y: number; placement: string }>(
+    `(() => { const b = document.querySelector('[data-dock-arrows]').getBoundingClientRect(); return { x: b.left + b.width / 2, y: b.top + b.height / 2, placement: document.querySelector('[data-dock-host]').dataset.dockPlacement }; })()`,
+  );
+  const to = from.x + (from.placement === "left" ? 400 : -400);
+  const mouse = (type: string, x: number) =>
+    app.cdp("Input.dispatchMouseEvent", {
+      type,
+      x,
+      y: from.y,
+      button: "left",
+      ...(type === "mouseMoved" ? { buttons: 1 } : { clickCount: 1 }),
+    });
+  await mouse("mousePressed", from.x);
+  for (const step of [0.1, 0.4, 0.7, 1]) {
+    await mouse("mouseMoved", from.x + (to - from.x) * step);
+    await new Promise((resolve) => setTimeout(resolve, 120));
+  }
+  await wait(
+    `return $('[data-dock-rail]')?.dataset.dockCollapsed === 'false';`,
+  );
+  await new Promise((resolve) => setTimeout(resolve, 400));
+  expect(
+    await run(`return $('[data-dock-rail]')?.dataset.dockCollapsed;`),
+  ).toBe("false");
+  await mouse("mouseReleased", to);
+  await wait(
+    `return !$('[data-dock-dragging]') && $('[data-dock-host]')?.dataset.dockPlacement !== ${JSON.stringify(from.placement)};`,
+  );
   await collapsed(false);
   await app.reload();
   await collapsed(false);
