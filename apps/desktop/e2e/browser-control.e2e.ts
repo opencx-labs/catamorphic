@@ -338,9 +338,7 @@ it("captures model images and points inside a page, follows scrolling and clears
     `(()=>{${helpers};const panel=document.querySelector("section[data-chat-local-id]");return !composer() && panel && getComputedStyle(panel).opacity === "0" && panel.getAnimations().every(a=>a.playState === "finished");})()`,
   );
   await app.screenshot("/tmp/browser-control-point.png");
-  await app.eval(
-    `[...document.querySelectorAll('button')].find(el=>el.textContent==='Go to chat').click()`,
-  );
+  await app.eval(`document.querySelector('[data-chat-bubble] button').click()`);
   await app.waitFor(`(()=>{${helpers};return !!composer();})()`);
   await guest.eval("window.scrollBy(0,80)");
   await guest.waitFor(
@@ -362,8 +360,16 @@ it("captures model images and points inside a page, follows scrolling and clears
     await guest.eval(`!!document.querySelector('[data-catamorphic-pointer]')`),
   ).toBe(false);
 });
-it("stops input after release and validates navigation and waits", async () => {
+it("stops input after a take-over until reclaimed, and validates navigation and waits", async () => {
+  // A release hands the tab back: the agent may drive it again.
   await tool("surface_control", { key, action: "release" });
+  expect(await tool("browser_act", { key, action: "read" })).not.toHaveProperty(
+    "error",
+  );
+  // The person's take-over stops it until the agent reclaims.
+  await app.eval(
+    `window.catamorphicDesktop.bridgeTakeover(${JSON.stringify(key)})`,
+  );
   expect(
     await tool("browser_act", { key, action: "press", press_key: "Enter" }),
   ).toHaveProperty("error", expect.stringContaining("control"));
@@ -384,4 +390,35 @@ it("stops input after release and validates navigation and waits", async () => {
     }),
   ).toEqual({ found: false });
   expect(app.getRendererErrors()).toEqual([]);
+});
+it("holds a tab while a turn drives it and hands it back when the turn ends", async () => {
+  const chip = `document.querySelector(${JSON.stringify(`[data-testid="surface-chip"][data-point-key="chip:${key}"]`)})`;
+  const held = (active: boolean) =>
+    `(()=>{const el=${chip};return !!el && el.hasAttribute('data-active')===${active};})()`;
+  // Every tool call above was a turn of its own, and each has ended.
+  await app.waitFor(held(false), { label: "handed back after its turn" });
+  // A turn waiting on the page holds the tab meanwhile.
+  counter++;
+  const prompt = `E2E workspace tool ${JSON.stringify({
+    name: "browser_act",
+    input: {
+      key,
+      action: "wait_for",
+      text: "Never on this page",
+      timeoutMs: 3000,
+    },
+    serial: counter,
+  })}`;
+  await app.eval(
+    `(()=>{${helpers};setReactValue(composer(),${JSON.stringify(prompt)});composer().closest('form').requestSubmit();})()`,
+  );
+  await app.waitFor(held(true), { label: "held while the turn drives it" });
+  await app.waitFor(held(false), {
+    label: "handed back when the turn ends",
+    timeoutMs: 15_000,
+  });
+  // Not a take-over: a later turn drives it again.
+  expect(await tool("browser_act", { key, action: "read" })).not.toHaveProperty(
+    "error",
+  );
 });

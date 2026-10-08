@@ -40,6 +40,11 @@ import type { AgentTerminals } from "./terminal.js";
  * Control handoff: surfaces an agent spawns are marked agent-controlled;
  * the renderer reports a user "take over", after which agent actions on
  * that surface fail with an explanatory error until the agent reclaims.
+ * A tab an agent opened is held by the session that drives it, from its
+ * first action in a turn until that turn settles: then it goes back to
+ * the person without a take-over, and a later turn may drive it again.
+ * The person's own tabs are never held: an agent drives one only when
+ * asked, without veiling it.
  */
 
 export interface WorkspaceBridge {
@@ -65,11 +70,13 @@ export interface WorkspaceBridge {
   ): Promise<{ key: string }>;
   browserSnapshot(
     projectId: string,
+    sessionId: string,
     key: string,
     format?: "dom" | "image",
   ): Promise<unknown>;
   browserAct(
     projectId: string,
+    sessionId: string,
     key: string,
     action: BrowserAction,
   ): Promise<unknown>;
@@ -153,9 +160,15 @@ export interface WorkspaceBridge {
   /** Hand a surface back to the user (agent done) or reclaim it. */
   setControl(
     projectId: string,
+    sessionId: string,
     key: string,
     controlled: boolean,
   ): Promise<void>;
+  /**
+   * A session's turn settled: the browser tabs it held go back to the
+   * person. Not a take-over: a later turn may drive them again, visibly.
+   */
+  releaseSession(projectId: string, sessionId: string): Promise<void>;
   closeSurface(projectId: string, key: string): Promise<void>;
   sessionProcessCount(
     projectId: string,
@@ -383,6 +396,7 @@ export function registerAgentBridge(
     "catamorphic:bridge-takeover",
     (_event, payload: { key: string }) => {
       takenOver.add(payload.key);
+      held.delete(payload.key);
     },
   );
   const guardControl = (key: string) => {
@@ -393,6 +407,39 @@ export function registerAgentBridge(
           "task requires it.",
       );
     }
+  };
+  /** Browser tabs an agent opened: an agent's own, which it holds. */
+  const agentTabs = new Set<string>();
+  /** Browser tab key → the session whose turn holds it. */
+  const held = new Map<string, { projectId: string; sessionId: string }>();
+  /** Per session, how many of its turns have settled (see openBrowser). */
+  const settledTurns = new Map<string, number>();
+  /**
+   * The session drives its own tab until its turn settles, in sight. A tab
+   * the person took over stays theirs: input actions refuse there, and a
+   * look leaves it alone.
+   */
+  const holdBrowser = async (input: {
+    projectId: string;
+    sessionId: string;
+    key: string;
+  }) => {
+    if (
+      !input.sessionId ||
+      !agentTabs.has(input.key) ||
+      takenOver.has(input.key) ||
+      held.get(input.key)?.sessionId === input.sessionId
+    )
+      return;
+    held.set(input.key, {
+      projectId: input.projectId,
+      sessionId: input.sessionId,
+    });
+    await rpc("surfaceControl", {
+      projectId: input.projectId,
+      key: input.key,
+      controlled: true,
+    });
   };
 
   // --- browser guests ---
@@ -590,6 +637,7 @@ export function registerAgentBridge(
     },
 
     async openBrowser(projectId, sessionId, url) {
+      const turns = settledTurns.get(sessionId) ?? 0;
       const result = await rpc<{ key: string } | { error: string }>(
         "openAgentBrowser",
         { projectId, sessionId, url: browserUrl(url) },
@@ -600,14 +648,27 @@ export function registerAgentBridge(
             "Could not open a browser tab (is the workspace open?)",
         );
       }
+      // Opened under the agent's control: its own, held by this turn,
+      // unless the turn settled while the page mounted (or there is none).
+      agentTabs.add(result.key);
+      if (sessionId && (settledTurns.get(sessionId) ?? 0) === turns)
+        held.set(result.key, { projectId, sessionId });
+      else
+        await rpc("surfaceControl", {
+          projectId,
+          key: result.key,
+          controlled: false,
+        });
       return result;
     },
 
-    async browserSnapshot(projectId, key, format) {
+    async browserSnapshot(projectId, sessionId, key, format) {
+      await holdBrowser({ projectId, sessionId, key });
       return (await driverFor(projectId, key)).snapshot(format);
     },
 
-    async browserAct(projectId, key, action) {
+    async browserAct(projectId, sessionId, key, action) {
+      await holdBrowser({ projectId, sessionId, key });
       return (await driverFor(projectId, key)).act(action);
     },
 
@@ -716,14 +777,40 @@ export function registerAgentBridge(
       return result ?? { installed: [] };
     },
 
-    async setControl(projectId, key, controlled) {
-      if (controlled) takenOver.delete(key);
-      else takenOver.add(key);
+    async setControl(projectId, sessionId, key, controlled) {
+      const browser = key.startsWith("browser:");
+      if (controlled) {
+        takenOver.delete(key);
+        if (browser && sessionId) held.set(key, { projectId, sessionId });
+      } else {
+        held.delete(key);
+        // A released tab goes back as at the end of a turn: the agent may
+        // drive it again. A terminal stays the person's until reclaimed.
+        if (!browser) takenOver.add(key);
+      }
       await rpc("surfaceControl", { projectId, key, controlled });
+    },
+
+    async releaseSession(projectId, sessionId) {
+      settledTurns.set(sessionId, (settledTurns.get(sessionId) ?? 0) + 1);
+      const keys = [...held]
+        .filter(
+          ([, holder]) =>
+            holder.projectId === projectId && holder.sessionId === sessionId,
+        )
+        .map(([key]) => key);
+      for (const key of keys) held.delete(key);
+      await Promise.all(
+        keys.map((key) =>
+          rpc("surfaceControl", { projectId, key, controlled: false }),
+        ),
+      );
     },
 
     async closeSurface(projectId, key) {
       takenOver.delete(key);
+      held.delete(key);
+      agentTabs.delete(key);
       // An agent closing its terminal tab also ends the process behind
       // it — a headless PTY nobody can see must not keep running.
       if (key.startsWith("terminal:")) {
@@ -812,6 +899,9 @@ export function registerAgentBridge(
       }
       pending.clear();
       takenOver.clear();
+      held.clear();
+      agentTabs.clear();
+      settledTurns.clear();
       terminalKeys.clear();
     },
   };

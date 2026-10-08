@@ -1838,3 +1838,21 @@ for a chat older than the project's session list; an agent no longer in the
 roster reads "Unknown agent", never the default's name. And the setup wizard
 removes the agent of a sign-in left unfinished once another is set up, so a
 ChatGPT sign-in started and abandoned no longer stays as the default.
+
+### 2026-10-08: A browser tab goes back to the person when the agent's turn ends
+
+A tab the agent opened kept its chip spinning after the agent was done, and
+stayed veiled ("Agent owns this page") so the person could not use it
+without taking control: the spinner, the veil and the tab's exemption from
+sleep all follow "agent-controlled", and only the agent's own
+`surface_control release` or the person's take-over ever cleared it.
+Agents rarely release.
+
+The agent now holds a tab it opened from its first action in a turn
+(opening, looking or acting) until that turn settles, and the main-process
+bridge hands every tab the session held back to the person then. That is
+not a take-over: a later turn may drive the tab again, and holding it again
+shows the spinner and the veil again. A take-over still refuses the agent
+until it reclaims. The person's own tabs are never held: an agent drives
+one only when asked, without veiling it, as before.
+

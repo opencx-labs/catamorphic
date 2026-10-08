@@ -795,7 +795,7 @@ export function buildWorkspaceToolkit(
         );
         return {
           ...result,
-          note: "Tab opened under your control. Take a browser_snapshot to see the page; when done, discover surface_control to release or close it.",
+          note: "Tab opened under your control until this turn ends, when it goes back to the person. Take a browser_snapshot to see the page; discover surface_control to close it if it was only scaffolding.",
         };
       },
     },
@@ -810,6 +810,7 @@ export function buildWorkspaceToolkit(
       execute: (input, ctx) =>
         bridge.browserSnapshot(
           ctx.projectId,
+          ctx.sessionId ?? "",
           String(input.key),
           input.format === "image" ? "image" : "dom",
         ),
@@ -868,6 +869,7 @@ export function buildWorkspaceToolkit(
         const action = parseBrowserAction(input);
         return bridge.browserAct(
           ctx.projectId,
+          ctx.sessionId ?? "",
           key,
           action.type === "upload" && ctx.workingDirectory
             ? { ...action, workingDirectory: ctx.workingDirectory }
@@ -1150,7 +1152,7 @@ export function buildWorkspaceToolkit(
     {
       name: "surface_control",
       description:
-        "Manage a browser tab or terminal you control: 'release' hands it to the user once you're done driving it (do this whenever you finish a page or an interactive command; the tab stays open for them); 'reclaim' takes a surface back after the user took over (only when your task still needs it, and if they're actively using it, ask first); 'close' closes the tab entirely (terminals also end their process). Close surfaces that were only scaffolding; release ones the user will want.",
+        "Manage a browser tab or terminal you control. Browser tabs you opened go back to the user by themselves when your turn ends; 'release' hands one back sooner, and you may drive it again later. 'release' on a terminal hands it over once you're done with an interactive command, until you reclaim it. 'reclaim' takes a surface back after the user took over (only when your task still needs it, and if they're actively using it, ask first); 'close' closes the tab entirely (terminals also end their process). Close surfaces that were only scaffolding.",
       parameters: {
         key: z.string().describe("Surface key, e.g. 'browser:<id>'"),
         action: z.enum(["release", "reclaim", "close"]),
@@ -1159,10 +1161,20 @@ export function buildWorkspaceToolkit(
         const key = String(input.key);
         switch (input.action) {
           case "release":
-            await bridge.setControl(ctx.projectId, key, false);
+            await bridge.setControl(
+              ctx.projectId,
+              ctx.sessionId ?? "",
+              key,
+              false,
+            );
             return { ok: true, note: "The user can now use this surface." };
           case "reclaim":
-            await bridge.setControl(ctx.projectId, key, true);
+            await bridge.setControl(
+              ctx.projectId,
+              ctx.sessionId ?? "",
+              key,
+              true,
+            );
             return { ok: true, note: "You are driving this surface again." };
           case "close":
             await bridge.closeSurface(ctx.projectId, key);
@@ -1320,7 +1332,7 @@ function checkoutResult(result: unknown): unknown {
 
 function parseBrowserAction(
   input: Record<string, unknown>,
-): Parameters<WorkspaceBridge["browserAct"]>[2] {
+): Parameters<WorkspaceBridge["browserAct"]>[3] {
   const action = String(input.action);
   const uid = typeof input.uid === "string" ? input.uid : undefined;
   const text = typeof input.text === "string" ? input.text : undefined;
