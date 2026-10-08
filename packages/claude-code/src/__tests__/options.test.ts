@@ -155,6 +155,38 @@ describe("model access", () => {
       delete process.env.WORK_TEST_HOST_VALUE;
     }
   });
+
+  it("keeps an inherited API key from outranking the host's sign-in", () => {
+    const saved = {
+      key: process.env.ANTHROPIC_API_KEY,
+      baseUrl: process.env.ANTHROPIC_BASE_URL,
+    };
+    process.env.ANTHROPIC_API_KEY = "sk-ant-inherited";
+    delete process.env.ANTHROPIC_BASE_URL;
+    try {
+      expect(options(attempt()).env?.ANTHROPIC_API_KEY).toBeUndefined();
+      // The agent's own key is the host's choice.
+      expect(
+        options(attempt({ env: { ANTHROPIC_API_KEY: "sk-ant-agent" } })).env
+          ?.ANTHROPIC_API_KEY,
+      ).toBe("sk-ant-agent");
+      process.env.ANTHROPIC_BASE_URL = "https://api.anthropic.com";
+      expect(options(attempt()).env?.ANTHROPIC_API_KEY).toBeUndefined();
+      // A key for the endpoint the host routes Claude Code to is that
+      // endpoint's, not a stand-in for the sign-in.
+      process.env.ANTHROPIC_BASE_URL = "https://llm-gateway.example.com";
+      expect(options(attempt()).env?.ANTHROPIC_API_KEY).toBe(
+        "sk-ant-inherited",
+      );
+    } finally {
+      for (const [name, value] of [
+        ["ANTHROPIC_API_KEY", saved.key],
+        ["ANTHROPIC_BASE_URL", saved.baseUrl],
+      ] as const)
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+    }
+  });
 });
 
 describe("tools", () => {
