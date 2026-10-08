@@ -360,8 +360,16 @@ it("captures model images and points inside a page, follows scrolling and clears
     await guest.eval(`!!document.querySelector('[data-catamorphic-pointer]')`),
   ).toBe(false);
 });
-it("stops input after release and validates navigation and waits", async () => {
+it("stops input after a take-over until reclaimed, and validates navigation and waits", async () => {
+  // A release hands the tab back: the agent may drive it again.
   await tool("surface_control", { key, action: "release" });
+  expect(await tool("browser_act", { key, action: "read" })).not.toHaveProperty(
+    "error",
+  );
+  // The person's take-over stops it until the agent reclaims.
+  await app.eval(
+    `window.catamorphicDesktop.bridgeTakeover(${JSON.stringify(key)})`,
+  );
   expect(
     await tool("browser_act", { key, action: "press", press_key: "Enter" }),
   ).toHaveProperty("error", expect.stringContaining("control"));
