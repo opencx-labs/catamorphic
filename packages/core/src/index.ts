@@ -95,6 +95,7 @@ export {
 } from "./services/agent-definitions-service.js";
 export {
   AgentDelegationDeniedError,
+  AgentHarnessFixedError,
   AgentNotConfiguredError,
   type AgentSession,
   AgentSessionArchiveConfirmationRequiredError,

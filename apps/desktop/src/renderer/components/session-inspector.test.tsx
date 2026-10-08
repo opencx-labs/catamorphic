@@ -18,6 +18,7 @@ const session: AgentSession = {
   environment: "customer-success",
   allocationId: null,
   agentId: "project:alpha:csm",
+  harness: null,
   model: null,
   modelEffort: null,
   title: "Prepare Acme QBR",

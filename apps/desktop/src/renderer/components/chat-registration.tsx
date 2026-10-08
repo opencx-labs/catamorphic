@@ -92,6 +92,12 @@ export function ChatRegistration(
         case "session":
           p.onSessionCreated(localId, event.sessionId);
           break;
+        case "sessionAgent":
+          p.onSessionAgent?.(localId, {
+            agentId: event.agentId,
+            ...(event.harness ? { harness: event.harness } : {}),
+          });
+          break;
         case "signals":
           p.onSignalsChange(localId, event.signals);
           break;
@@ -118,6 +124,9 @@ export function ChatRegistration(
           break;
         case "forkCurrent":
           p.onForkCurrent?.();
+          break;
+        case "editAgent":
+          p.onEditAgent?.();
           break;
         case "editModel":
           p.onEditModel?.();

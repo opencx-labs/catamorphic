@@ -440,6 +440,7 @@ function ChatDockContent({
   archived = false,
   inspectRequestNonce,
   onOpenParent,
+  onEditAgent,
   onEditModel,
   onEditEffort,
   onEditPermissionMode,
@@ -452,6 +453,7 @@ function ChatDockContent({
   registerMinimize,
   registerSend,
   onSessionCreated,
+  onSessionAgent,
   onSignalsChange,
 }: ChatDockProps) {
   const authority = useRemoteAuthority();
@@ -885,7 +887,9 @@ function ChatDockContent({
   const [roster, setRoster] = useState<{
     agents: AgentInfo[];
     defaultAgentId: string | null;
-  }>({ agents: [], defaultAgentId: null });
+    /** Committed agents whose definition fails: listed, never picked. */
+    invalidIds: string[];
+  }>({ agents: [], defaultAgentId: null, invalidIds: [] });
   // Refetched when the session's agent changes (a switch may involve an
   // agent created after this dock mounted) and on agents-changed
   // broadcasts (a new default agent must reach already-open docks).
@@ -910,6 +914,9 @@ function ChatDockContent({
         setRoster({
           agents: [...data.agents, ...project.agents.map(projectAgentAsInfo)],
           defaultAgentId: data.defaultAgentId,
+          invalidIds: project.agents
+            .filter((agent) => agent.invalid)
+            .map((agent) => agent.id),
         });
       })
       .catch(() => {});
@@ -927,6 +934,15 @@ function ChatDockContent({
             defaultAgentId ??
             roster.defaultAgentId),
       );
+  // Another agent to pick for this chat: before it starts any, after it
+  // only one on its harness, and the rest start a new chat (lib/agent-switch).
+  // A connected project's chat picks its agent in the chat before it starts.
+  const otherAgents = authority
+    ? 0
+    : roster.agents.filter(
+        (agent) =>
+          agent.id !== activeAgent?.id && !roster.invalidIds.includes(agent.id),
+      ).length;
   // The agent's permission mode (the harness's own) and sandboxing (Work's),
   // shown apart in the inspector (ADR 0182). Profile agents change here;
   // committed and server definitions change in their files.
@@ -1339,6 +1355,35 @@ function ChatDockContent({
   onEntryChangeRef.current = onEntryChange;
   const onEscapeToFloatingRef = useRef(onEscapeToFloating);
   onEscapeToFloatingRef.current = onEscapeToFloating;
+
+  // A started chat's entry names the agent its session runs on and the
+  // harness it is bound to, so the palette's pickers target them, even for
+  // a chat older than the project's session list (which they read
+  // otherwise). A connected project's agents are the server's, never a
+  // local entry's.
+  const onSessionAgentRef = useRef(onSessionAgent);
+  onSessionAgentRef.current = onSessionAgent;
+  const boundHarness = chat.session?.harness ?? undefined;
+  useEffect(() => {
+    if (
+      authority ||
+      !sessionAgentId ||
+      (sessionAgentId === entry.agentId &&
+        (!boundHarness || boundHarness === entry.harness))
+    )
+      return;
+    onSessionAgentRef.current?.(entry.localId, {
+      agentId: sessionAgentId,
+      ...(boundHarness ? { harness: boundHarness } : {}),
+    });
+  }, [
+    authority,
+    sessionAgentId,
+    boundHarness,
+    entry.agentId,
+    entry.harness,
+    entry.localId,
+  ]);
 
   // Palette "Send to agent": the entry arrives with the message attached;
   // fire it once on mount and strip it so remounts don't re-send.
@@ -2204,7 +2249,7 @@ function ChatDockContent({
                 awaitingInput={awaitingInput}
                 session={chat.session}
                 fallbackTitle={title}
-                harness={activeAgent?.harness ?? sessionHarness(chat.state)}
+                harness={activeAgent?.harness ?? boundHarness}
                 provider={activeAgent?.provider}
                 environmentControl={
                   authority &&
@@ -2273,7 +2318,7 @@ function ChatDockContent({
                           agent.id ===
                           (chat.session?.agentId ?? selectedAgentId),
                       )?.name ?? "Project agent")
-                    : (activeAgent?.name ?? "Default agent")
+                    : (activeAgent?.name ?? "Unknown agent")
                 }
                 model={
                   (selectedModel &&
@@ -2302,6 +2347,16 @@ function ChatDockContent({
                       activeAgent?.effort,
                     effortModel,
                   ) ?? "Unavailable"
+                }
+                onEditAgent={
+                  chat.isSending || chat.session?.running || otherAgents === 0
+                    ? undefined
+                    : onEditAgent
+                }
+                agentDisabledReason={
+                  otherAgents > 0 && (chat.isSending || chat.session?.running)
+                    ? "Agent can be changed after the current turn finishes."
+                    : undefined
                 }
                 onEditModel={
                   chat.isSending || chat.session?.running || !activeAgent
@@ -3193,15 +3248,6 @@ function lastReplyText(
     }
   }
   return undefined;
-}
-
-/** The harness of the conversation the session last ran on. */
-function sessionHarness(state: SessionState | null): string | undefined {
-  if (!state) return undefined;
-  const threads = Object.values(state.providerThreads).sort((a, b) =>
-    b.updatedAt.localeCompare(a.updatedAt),
-  );
-  return threads[0]?.harness;
 }
 
 /** The latest turn that failed on the agent's sign-in. */

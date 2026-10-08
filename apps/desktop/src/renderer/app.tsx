@@ -231,7 +231,11 @@ import {
   type Workspace,
   workspaceLayout,
 } from "./lib/workspace-state.js";
-import { type PaletteHost, PaletteHostProvider } from "./palette/host.js";
+import {
+  type PaletteHost,
+  PaletteHostProvider,
+  type ProjectAgentTarget,
+} from "./palette/host.js";
 import type { PaletteChoiceMode, PaletteModeRequest } from "./palette/types.js";
 import { AppScreen } from "./screens/app-screen.js";
 import { ArtifactScreen } from "./screens/artifact-screen.js";
@@ -2450,7 +2454,10 @@ export function App({
 
   // Cmd+T and the tab-strip + always open a full chat tab (Chrome muscle
   // memory); the sidebar +, bubble +, and Cmd+N open the floating aside.
-  const addChat = (forceMode?: "tab", opts?: { incognito?: boolean }) => {
+  const addChat = (
+    forceMode?: "tab",
+    opts?: { incognito?: boolean; agentId?: string },
+  ) => {
     if (!requireAgents()) return;
     updateWorkspace((ws) => {
       // Already looking at a fresh chat (no session yet)? Don't stack
@@ -2478,7 +2485,18 @@ export function App({
           ...current,
           [active.localId]: (current[active.localId] ?? 0) + 1,
         }));
-        return ws;
+        // Asked for with an agent, the fresh chat takes it.
+        const agentId = opts?.agentId;
+        return agentId && active.agentId !== agentId
+          ? {
+              ...ws,
+              chats: ws.chats.map((chat) =>
+                chat.localId === active.localId
+                  ? { ...chat, agentId, model: undefined }
+                  : chat,
+              ),
+            }
+          : ws;
       }
       // Floating chats become a full tab anyway when the workspace is
       // empty — with nothing behind it, the chat IS the workspace.
@@ -2681,6 +2699,35 @@ export function App({
           chat.localId === localId ? { ...chat, sessionId } : chat,
         ),
       })),
+    [updateWorkspace],
+  );
+
+  // Only the entry's agent and harness (bound once, never unbound): the
+  // chat stays where and how it is shown.
+  const onSessionAgent = useCallback(
+    (localId: string, session: { agentId: string; harness?: string }) =>
+      updateWorkspace((ws) =>
+        ws.chats.some(
+          (chat) =>
+            chat.localId === localId &&
+            (chat.agentId !== session.agentId ||
+              (session.harness !== undefined &&
+                chat.harness !== session.harness)),
+        )
+          ? {
+              ...ws,
+              chats: ws.chats.map((chat) =>
+                chat.localId === localId
+                  ? {
+                      ...chat,
+                      agentId: session.agentId,
+                      ...(session.harness ? { harness: session.harness } : {}),
+                    }
+                  : chat,
+              ),
+            }
+          : ws,
+      ),
     [updateWorkspace],
   );
 
@@ -3166,7 +3213,26 @@ export function App({
     );
     if (!chat) return;
     if (chat.sessionId) {
-      updateSession.mutate({ sessionId: chat.sessionId, agentId });
+      updateSession.mutate(
+        { sessionId: chat.sessionId, agentId },
+        {
+          // Its first turn bound another harness since the picker read the
+          // chat (ADR 0214): the agent gets the new chat the picker offers
+          // now, beside this one, and the refusal is no error to show.
+          onError: (error) => {
+            const details = error.details;
+            if (
+              typeof details === "object" &&
+              details !== null &&
+              "code" in details &&
+              details.code === "harness_fixed"
+            ) {
+              updateSession.reset();
+              startChatWithAgent(agentId, chat);
+            }
+          },
+        },
+      );
       return;
     }
     // No session yet: remember the choice; lazy creation sends it along.
@@ -3178,6 +3244,23 @@ export function App({
           : candidate,
       ),
     }));
+  };
+
+  /**
+   * A new chat with this agent, where the chat it was picked for is (the
+   * focused one unless named): the agent runs on another harness than that
+   * chat, which keeps its own (ADR 0214, lib/agent-switch).
+   */
+  const startChatWithAgent = (
+    agentId: string,
+    from = workspaceRef.current.chats.find(
+      (candidate) => candidate.localId === workspaceRef.current.activeChatId,
+    ),
+  ) => {
+    addChat(from?.mode === "tab" ? "tab" : undefined, {
+      agentId,
+      incognito: from?.incognito,
+    });
   };
 
   /** Change the focused session's model override, or the default agent config. */
@@ -3209,18 +3292,19 @@ export function App({
   // switch immediately, exactly like profile agents.
   const [consentRequest, setConsentRequest] = useState<{
     agent: ProjectAgentInfo;
-    target: "default" | "session";
+    target: ProjectAgentTarget;
   } | null>(null);
   const applyProjectAgent = (
     agent: ProjectAgentInfo,
-    target: "default" | "session",
+    target: ProjectAgentTarget,
   ) => {
     if (target === "default") pickDefaultAgent(agent.id);
+    else if (target === "chat") startChatWithAgent(agent.id);
     else pickSessionAgent(agent.id);
   };
   const pickProjectAgent = (
     agent: ProjectAgentInfo,
-    target: "default" | "session",
+    target: ProjectAgentTarget,
   ) => {
     if (agent.invalid) return;
     if (agent.consent === "ok" || agent.consent === "not-required") {
@@ -5438,6 +5522,7 @@ export function App({
     focusedChat: focusedChat
       ? {
           sessionId: focusedChat.sessionId ?? null,
+          harness: focusedSession?.harness ?? focusedChat.harness ?? null,
           agentId: focusedSession?.agentId ?? focusedChat.agentId ?? null,
           model:
             (focusedSession ? focusedSession.model : focusedChat.model) ?? null,
@@ -5449,6 +5534,7 @@ export function App({
       : null,
     onPickDefaultAgent: pickDefaultAgent,
     onPickSessionAgent: pickSessionAgent,
+    onStartChatWithAgent: startChatWithAgent,
     onPickProjectAgent: pickProjectAgent,
     onConfigureAgent: openConfigureAgent,
     defaultAgentOverridden: projectOverrideAgentId !== null,
@@ -6778,6 +6864,10 @@ export function App({
                         ? () => openParentChat(entry)
                         : undefined
                     }
+                    onEditAgent={() => {
+                      revealChat(entry.localId);
+                      openPalettePicker("switch-agent");
+                    }}
                     onEditModel={() => {
                       revealChat(entry.localId);
                       openPalettePicker("model");
@@ -6850,6 +6940,7 @@ export function App({
                       chatSendersRef.current.set(entry.localId, send)
                     }
                     onSessionCreated={onSessionCreated}
+                    onSessionAgent={onSessionAgent}
                     onSignalsChange={onSignalsChange}
                   />
                 ))}

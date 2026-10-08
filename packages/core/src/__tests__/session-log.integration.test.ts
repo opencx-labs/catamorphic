@@ -22,7 +22,10 @@ import { pgcrypto } from "@electric-sql/pglite/contrib/pgcrypto";
 import { Kysely, PGliteDialect, sql, WithSchemaPlugin } from "kysely";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { Identity } from "../identity.js";
-import { AgentSessionsService } from "../services/agent-sessions-service.js";
+import {
+  AgentHarnessFixedError,
+  AgentSessionsService,
+} from "../services/agent-sessions-service.js";
 import type { RegisteredCodingAgent } from "../services/coding-agent-registry.js";
 import { ExecutionAllocationsService } from "../services/execution-allocations-service.js";
 import { ExecutionEnvironmentsService } from "../services/execution-environments-service.js";
@@ -166,6 +169,25 @@ describe("session log", () => {
       id: "guarded",
       toolPolicies: { prod: [{ default: "ask" }] },
     };
+    // Cannot run until someone approves it.
+    const blocked: RegisteredCodingAgent = {
+      ...echo,
+      id: "blocked",
+      unavailable: "Approve this agent first.",
+    };
+    // The same echo on another harness.
+    const elsewhere: RegisteredCodingAgent = {
+      ...echo,
+      id: "elsewhere",
+      harness: {
+        placement: "host",
+        adapter: {
+          id: "elsewhere",
+          capabilities: () => inner.capabilities(),
+          start: (attempt, host) => inner.start(attempt, host),
+        },
+      },
+    };
     makeService = () =>
       new AgentSessionsService(db, {
         hostId: "session-log-host",
@@ -178,10 +200,18 @@ describe("session log", () => {
         codingAgents: {
           defaultAgentId: () => "echo",
           get: (id) =>
-            [echo, guarded, stubborn, flaky, forger].find(
+            [echo, guarded, stubborn, flaky, forger, elsewhere, blocked].find(
               (agent) => agent.id === id,
             ),
-          list: () => [echo, guarded, stubborn, flaky, forger],
+          list: () => [
+            echo,
+            guarded,
+            stubborn,
+            flaky,
+            forger,
+            elsewhere,
+            blocked,
+          ],
         },
         nativeAgentCheckout: {
           resolve: async ({ projectId }) => {
@@ -744,6 +774,103 @@ describe("session log", () => {
       .set({ status: "completed", lease_expires_at: null })
       .where("id", "=", turn.id)
       .execute();
+  });
+
+  it("keeps a started chat on its harness: another one is a new chat", async () => {
+    const { projectId, sessionId } = await chat("OneHarness");
+    // Before the first turn, an agent on any harness can take the chat.
+    const unbound = await sessions.update(identity, projectId, sessionId, {
+      agentId: "elsewhere",
+    });
+    expect(unbound.harness).toBeNull();
+    await sessions.update(identity, projectId, sessionId, { agentId: "echo" });
+    await sessions.sendMessage(identity, projectId, sessionId, "hello");
+    const started = await sessions.get(identity, projectId, sessionId);
+    expect(started.snapshot.session.harness).toBe("echo");
+    // Its first turn bound it: another harness is refused, this one is not.
+    await expect(
+      sessions.update(identity, projectId, sessionId, { agentId: "elsewhere" }),
+    ).rejects.toBeInstanceOf(AgentHarnessFixedError);
+    const same = await sessions.update(identity, projectId, sessionId, {
+      agentId: "guarded",
+    });
+    expect(same).toMatchObject({ agentId: "guarded", harness: "echo" });
+    const { reply } = await sessions.sendMessage(
+      identity,
+      projectId,
+      sessionId,
+      "again",
+    );
+    // The same native thread goes on.
+    expect(reply?.kind === "assistant_message" && reply.text).toBe(
+      "Echo: again (turn 2)",
+    );
+    // No turn hands the conversation to another harness.
+    const items = await db
+      .selectFrom("agent_items")
+      .select("kind")
+      .where("session_id", "=", sessionId)
+      .execute();
+    expect(items.map((item) => item.kind)).not.toContain("context_handoff");
+  });
+
+  it("binds a fork to its source's harness from the start", async () => {
+    const { projectId, sessionId } = await chat("ForkHarness");
+    await sessions.sendMessage(identity, projectId, sessionId, "hello");
+    const fork = await sessions.fork(identity, projectId, sessionId, {});
+    expect(fork.harness).toBe("echo");
+    await expect(
+      sessions.update(identity, projectId, fork.id, { agentId: "elsewhere" }),
+    ).rejects.toBeInstanceOf(AgentHarnessFixedError);
+  });
+
+  it("fails a turn whose agent moved to another harness outside the chat", async () => {
+    const { projectId, sessionId } = await chat("MovedHarness");
+    await sessions.sendMessage(identity, projectId, sessionId, "hello");
+    // As when a project agent's definition changes its harness.
+    await db
+      .updateTable("agent_sessions")
+      .set({ agent_id: "elsewhere" })
+      .where("id", "=", sessionId)
+      .execute();
+    const { turn } = await sessions.sendMessage(
+      identity,
+      projectId,
+      sessionId,
+      "still there?",
+    );
+    expect(turn.status).toBe("failed");
+    expect(turn.error?.message).toBe(
+      "This chat runs on echo, and its agent now runs on elsewhere. Start a new chat to use it.",
+    );
+    const threads = await db
+      .selectFrom("agent_provider_threads")
+      .select("harness")
+      .where("session_id", "=", sessionId)
+      .execute();
+    expect(threads.map((thread) => thread.harness)).toEqual(["echo"]);
+  });
+
+  it("fails a turn on an agent that cannot run with its reason, binding nothing", async () => {
+    const { projectId, sessionId } = await chat("Blocked");
+    await sessions.update(identity, projectId, sessionId, {
+      agentId: "blocked",
+    });
+    const { turn } = await sessions.sendMessage(
+      identity,
+      projectId,
+      sessionId,
+      "hello",
+    );
+    expect(turn.status).toBe("failed");
+    expect(turn.error?.message).toBe("Approve this agent first.");
+    const detail = await sessions.get(identity, projectId, sessionId);
+    expect(detail.snapshot.session.harness).toBeNull();
+    // Nothing bound it: any agent can still take the chat.
+    const moved = await sessions.update(identity, projectId, sessionId, {
+      agentId: "elsewhere",
+    });
+    expect(moved.agentId).toBe("elsewhere");
   });
 
   it("streams the gap after a cursor, then live events, in order", async () => {
