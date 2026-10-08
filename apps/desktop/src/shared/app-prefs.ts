@@ -35,10 +35,11 @@ export interface AppPrefs {
   dockPlacement: "left" | "center" | "right";
   /**
    * An agent turn is work (notes between tool calls, plus the tool steps)
-   * followed by an answer. Two independent choices cover how the work
-   * reads: while the turn runs, and once the answer has landed.
+   * followed by an answer. Two choices cover how the work reads: while the
+   * turn runs, and once the answer has landed. "notes" (Notes only) keeps
+   * steps folded in both phases.
    */
-  chatWorkLive: "all" | "latest";
+  chatWorkLive: "all" | "latest" | "notes";
   chatWorkSettled: "keep" | "collapse";
   /** Soft chime when an agent finishes or asks a question. */
   notificationSounds: boolean;
@@ -151,7 +152,10 @@ export function normalizePrefs(raw: unknown): AppPrefs {
     dockMultiProject: record.dockMultiProject === true,
     dockDetached: record.dockDetached === true,
     dockSide: record.dockSide === "left" ? "left" : "right",
-    chatWorkLive: record.chatWorkLive === "latest" ? "latest" : "all",
+    chatWorkLive:
+      record.chatWorkLive === "latest" || record.chatWorkLive === "notes"
+        ? record.chatWorkLive
+        : "all",
     chatWorkSettled: record.chatWorkSettled === "keep" ? "keep" : "collapse",
     dockPlacement:
       record.dockPlacement === "left" || record.dockPlacement === "right"

@@ -55,6 +55,7 @@ import { splitAttachmentMarkers } from "../../lib/composer-serialize";
 import { formatElapsed, useNow } from "../../lib/elapsed";
 import {
   DEFAULT_WORK_DISPLAY,
+  foldsSteps,
   type StepSource,
   type TurnRow,
   turnRows,
@@ -352,6 +353,7 @@ export function ChatTimeline({
     resolveToolIcon,
     onFork,
     focusMessageId,
+    foldSteps: foldsSteps(workDisplay),
   };
   const empty = turns.length === 0 && pending.length === 0 && !activity;
   // One keyed list for the whole conversation, so a message sent from here
@@ -529,6 +531,8 @@ interface RowContext {
   resolveToolIcon?: (toolName: string) => string | undefined;
   onFork?: (itemId: string) => void;
   focusMessageId?: string;
+  /** Steps stay behind their line until opened (see `foldsSteps`). */
+  foldSteps: boolean;
 }
 
 /** The item id an entry reads at, for focus and deep links. */
@@ -1011,7 +1015,7 @@ function RestoreToHere({
 interface AgentMessageProps {
   item?: AssistantMessageItem;
   steps: StepSource[];
-  /** Part of the turn that is still running: its steps stay open. */
+  /** Part of the turn that is still running: its steps read open, unless folded. */
   live?: boolean;
   answer?: boolean;
   openWork?: boolean;
@@ -1068,6 +1072,7 @@ const AgentMessage = memo(function AgentMessage({
       <TurnSteps
         steps={shown}
         live={live}
+        fold={context.foldSteps}
         defaultExpanded={openWork}
         resolveToolIcon={context.resolveToolIcon}
         onFileClick={context.onFileClick}
@@ -1122,6 +1127,7 @@ function sameAgentMessage(
     previous.openWork === next.openWork &&
     previous.context.requests === next.context.requests &&
     previous.context.focusMessageId === next.context.focusMessageId &&
+    previous.context.foldSteps === next.context.foldSteps &&
     previous.steps.length === next.steps.length &&
     previous.steps.every((step, index) => step.item === next.steps[index]?.item)
   );
@@ -2304,12 +2310,15 @@ export function plainLine(line: string): string {
  * line, open while the turn runs so the work reads as it happens, closed
  * once it has answered. Opening or closing it by hand sticks. Each step is
  * a row that itself stays collapsed (payloads are long and technical)
- * until clicked; a lone step is its own row, with no line to open. MCP
- * tool rows show the connector's icon when the host can resolve one.
+ * until clicked; a lone step is its own row, with no line to open. Folded
+ * (`fold`, the person's "Notes only"), the line stays closed until opened,
+ * a lone step's included. MCP tool rows show the connector's icon when the
+ * host can resolve one.
  */
 function TurnSteps({
   steps,
   live = false,
+  fold = false,
   defaultExpanded = false,
   resolveToolIcon,
   onFileClick,
@@ -2317,6 +2326,8 @@ function TurnSteps({
   steps: TurnStep[];
   /** The turn is still running. */
   live?: boolean;
+  /** Keep the steps behind their line until opened. */
+  fold?: boolean;
   defaultExpanded?: boolean;
   resolveToolIcon?: (toolName: string) => string | undefined;
   onFileClick?: (
@@ -2343,12 +2354,11 @@ function TurnSteps({
   useEffect(() => {
     shown.current = true;
   }, []);
-  const expanded = chosen ?? live;
+  const expanded = chosen ?? (live && !fold);
   if (steps.length === 0) return null;
   // A lone step is its own row. It keeps the list's structure, so a second
   // step grows the line to open it in, rather than swapping the row out.
-  const lone = steps.length === 1;
-  const open = lone || expanded;
+  const lone = steps.length === 1 && !fold;
   // A command still running in the background stays in view, outside the
   // fold, until it ends; then it folds in with the rest.
   const running = steps.filter(
@@ -2357,6 +2367,10 @@ function TurnSteps({
       backgroundStates.get(step.background.ref)?.status === "running",
   );
   const folded = steps.filter((step) => !running.includes(step));
+  // No line when it would open onto nothing: a lone step, or only
+  // commands still running in view.
+  const bare = lone || folded.length === 0;
+  const open = bare || expanded;
   return (
     // Steps are chrome around the conversation, not part of its text: a
     // drag across several replies selects the prose and skips these rows.
@@ -2364,9 +2378,9 @@ function TurnSteps({
     <div className="mb-1.5 select-none" data-testid="chat-turn-steps">
       <div
         className={`grid transition-[grid-template-rows,opacity] duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${
-          lone ? "grid-rows-[0fr] opacity-0" : "grid-rows-[1fr] opacity-100"
+          bare ? "grid-rows-[0fr] opacity-0" : "grid-rows-[1fr] opacity-100"
         }`}
-        inert={lone}
+        inert={bare}
       >
         <div className="overflow-hidden">
           <button
@@ -2379,13 +2393,13 @@ function TurnSteps({
             <ChevronRight
               className={`size-3 transition-transform duration-150 ${expanded ? "rotate-90" : ""}`}
             />
-            {`${steps.length} steps`}
+            {`${steps.length} ${steps.length === 1 ? "step" : "steps"}`}
           </button>
         </div>
       </div>
       {running.length > 0 && (
         <div
-          className={`flex flex-col gap-0.5 border-l transition-[border-color,padding,margin] duration-200 ${lone ? "border-transparent pl-0" : "mt-1 border-border pl-2.5"}`}
+          className={`flex flex-col gap-0.5 border-l transition-[border-color,padding,margin] duration-200 ${bare ? "border-transparent pl-0" : "mt-1 border-border pl-2.5"}`}
         >
           {running.map((step) => (
             <StepRow
@@ -2406,7 +2420,7 @@ function TurnSteps({
       >
         <div className="overflow-hidden">
           <div
-            className={`flex flex-col gap-0.5 border-l transition-[border-color,padding,margin] duration-200 ${lone ? "border-transparent pl-0" : "mt-1 border-border pl-2.5"}`}
+            className={`flex flex-col gap-0.5 border-l transition-[border-color,padding,margin] duration-200 ${bare ? "border-transparent pl-0" : "mt-1 border-border pl-2.5"}`}
           >
             {folded.map((step) => (
               <StepRow

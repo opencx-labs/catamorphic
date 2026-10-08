@@ -52,15 +52,19 @@ export const SETTINGS = {
   chatWorkLive: {
     label: "While the agent works",
     description:
-      "The notes an agent writes between its steps, which stay open while it works. Earlier notes fold into the steps line when only the latest is shown.",
+      'Notes are what the agent writes between its steps (tool calls and commands). Steps list open under each note as they run. "Notes only" keeps them folded into a line you can open, a single step too, while the agent works and after. "Latest note and steps" moves earlier notes into the steps of the newest one.',
     scopes: profileScope,
-    valid: oneOf("all", "latest"),
-    options: { all: "Show every note", latest: "Show only the latest note" },
+    valid: oneOf("all", "latest", "notes"),
+    options: {
+      all: "Notes and steps",
+      latest: "Latest note and steps",
+      notes: "Notes only",
+    },
   },
   chatWorkSettled: {
     label: "Once it has answered",
     description:
-      "Folded work stays one click away, in order, under the steps line above the answer.",
+      'Steps fold into a line you can open either way (a single step stays in view unless "Notes only" is on). "Fold notes into steps" moves the notes into that line too.',
     scopes: profileScope,
     valid: oneOf("keep", "collapse"),
     options: { keep: "Keep the notes", collapse: "Fold notes into steps" },

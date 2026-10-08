@@ -1248,7 +1248,8 @@ multiply; the turn already has two phases, so there are two independent
 choices instead (Settings → Workspace → Chat dock):
 
 - **While the agent works** (`chatWorkLive`): every note, or only the
-  latest, each new note replacing the one before.
+  latest, each new note replacing the one before (later also Notes only,
+  see 2026-10-08).
 - **Once it has answered** (`chatWorkSettled`): notes kept in place, or
   folded into steps.
 
@@ -1745,3 +1746,30 @@ Hovering the palette's last visible row, which the list clips at its bottom
 edge, scrolled the list under the pointer the first time. A highlighted row is
 kept in view only when the keyboard chose it; a row under the pointer is
 already where the person is looking.
+
+### 2026-10-08: Notes only, and settings that say what they do
+
+Someone asked their agent, twice, for a chat that shows the agent's notes
+while it works but not its tool calls, then folds the notes once the answer
+lands. Neither attempt could work: a running turn's steps were always open
+(2026-09-29), and both choices only moved notes. Each agent also described
+its change wrongly, one saying the steps would stay folded, the other that
+"latest" showed only the latest step. The settings skill gave agents keys
+and values with no meanings, and the descriptions in Settings were vague.
+
+- **Notes only** is a third choice for "While the agent works", not a new
+  setting: every note in place, each note's steps behind a closed line, a
+  lone step's included ("1 step"), so tool calls show only when opened.
+  Commands still running in the background stay in view. Once answered, the
+  settled choice decides where the notes go, as before; the steps stay
+  folded then too, a lone step's included, so nothing opens as the turn
+  ends. With "Fold notes into steps" that is the requested behaviour.
+  `foldsSteps` (lib/turn-groups) names the rule.
+- **Settings say what shows.** The two choices' descriptions now name
+  notes, steps and when each is open, and the options read "Notes and
+  steps", "Latest note and steps", "Notes only".
+- **Agents read the same words.** The settings skill's table carries each
+  setting's Settings label and description, and each value's label, and
+  tells agents to say when no value does what was asked instead of picking
+  the nearest one.
+
