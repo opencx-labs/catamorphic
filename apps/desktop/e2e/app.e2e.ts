@@ -675,6 +675,9 @@ describe("chat flows", () => {
   });
 
   it("with Notes only, shows the notes as they come and keeps the steps folded", async () => {
+    const before = await run<string>(
+      `return window.catamorphicDesktop.getPrefs().then((prefs) => prefs.chatWorkLive);`,
+    );
     await run(
       `return window.catamorphicDesktop.setPrefs({ chatWorkLive: 'notes' }).then(() => true);`,
     );
@@ -695,41 +698,40 @@ describe("chat flows", () => {
       const thisTurn = `((el) => [...${chat}.querySelectorAll('[role="log"] article')]
         .find((article) => article.textContent.includes('narrate the fix again'))
         .compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING)`;
-      // While the tests run: both notes in place, every steps line closed,
-      // the running command's included.
-      const live = await runWait<{
-        toggles: { expanded: string | null; text: string }[];
-      }>(
+      const toggles = `[...${chat}.querySelectorAll('[data-testid="chat-turn-steps-toggle"]')]
+        .filter((toggle) => !toggle.closest('[inert]') && ${thisTurn}(toggle))`;
+      // While the tests run: both notes in place, and every steps line in
+      // the turn closed, the running command's included. The choice reaches
+      // the window a beat after it is saved, so this holds once it has.
+      await runWait(
         `const section = ${chat};
-         if (!section?.querySelector('[data-live-work] [data-testid="chat-step"][data-running]')) return false;
+         const running = section?.querySelector('[data-live-work] [data-testid="chat-step"][data-running]');
+         if (!running?.textContent.includes('Run the tests')) return false;
          const notes = [...section.querySelectorAll('[role="log"] article .cat-markdown')]
            .filter((prose) => ${thisTurn}(prose) &&
              /read the parser|Fixing it, then testing/.test(prose.textContent));
-         if (notes.length !== 2) return false;
-         return {
-           toggles: [...section.querySelectorAll('[data-testid="chat-turn-steps-toggle"]')]
-             .filter((toggle) => !toggle.closest('[inert]') && ${thisTurn}(toggle))
-             .map((toggle) => ({ expanded: toggle.getAttribute('aria-expanded'), text: toggle.textContent })),
-         };`,
-        { timeoutMs: 30_000, label: "notes in place, steps folded" },
+         const lines = ${toggles};
+         return notes.length === 2 && lines.length >= 2 &&
+           lines.every((toggle) => toggle.getAttribute('aria-expanded') === 'false');`,
+        {
+          timeoutMs: 30_000,
+          label: "notes in place, steps folded while running",
+        },
       );
-      expect(live.toggles.length).toBeGreaterThan(0);
-      expect(
-        live.toggles.every((toggle) => toggle.expanded === "false"),
-        JSON.stringify(live.toggles),
-      ).toBe(true);
       // Answered: the notes fold away under the answer's closed line.
-      await runWait(
+      const settled = await runWait<string[]>(
         `const section = ${chat};
          const prose = [...section.querySelectorAll('[role="log"] article .cat-markdown')]
            .filter((el) => ${thisTurn}(el) &&
              /read the parser|Fixing it|handles empty input/.test(el.textContent));
-         return prose.length === 1 && !section.querySelector('[data-live-work]');`,
+         if (prose.length !== 1 || section.querySelector('[data-live-work]')) return false;
+         return ${toggles}.map((toggle) => toggle.getAttribute('aria-expanded'));`,
         { timeoutMs: 30_000, label: "notes folded under the answer" },
       );
+      expect(settled).toEqual(["false"]);
     } finally {
       await run(
-        `return window.catamorphicDesktop.setPrefs({ chatWorkLive: 'all' }).then(() => true);`,
+        `return window.catamorphicDesktop.setPrefs({ chatWorkLive: ${JSON.stringify(before)} }).then(() => true);`,
       );
     }
   });

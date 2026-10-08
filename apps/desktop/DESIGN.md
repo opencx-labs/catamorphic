@@ -1761,9 +1761,10 @@ and values with no meanings, and the descriptions in Settings were vague.
   setting: every note in place, each note's steps behind a closed line, a
   lone step's included ("1 step"), so tool calls show only when opened.
   Commands still running in the background stay in view. Once answered, the
-  settled choice decides as before; with "Fold notes into steps" that is
-  exactly the requested behaviour. `foldsSteps` (lib/turn-groups) names the
-  rule.
+  settled choice decides where the notes go, as before; the steps stay
+  folded then too, a lone step's included, so nothing opens as the turn
+  ends. With "Fold notes into steps" that is the requested behaviour.
+  `foldsSteps` (lib/turn-groups) names the rule.
 - **Settings say what shows.** The two choices' descriptions now name
   notes, steps and when each is open, and the options read "Notes and
   steps", "Latest note and steps", "Notes only".

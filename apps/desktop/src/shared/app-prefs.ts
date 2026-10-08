@@ -35,8 +35,9 @@ export interface AppPrefs {
   dockPlacement: "left" | "center" | "right";
   /**
    * An agent turn is work (notes between tool calls, plus the tool steps)
-   * followed by an answer. Two independent choices cover how the work
-   * reads: while the turn runs, and once the answer has landed.
+   * followed by an answer. Two choices cover how the work reads: while the
+   * turn runs, and once the answer has landed. "notes" (Notes only) keeps
+   * steps folded in both phases.
    */
   chatWorkLive: "all" | "latest" | "notes";
   chatWorkSettled: "keep" | "collapse";

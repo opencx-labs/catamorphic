@@ -12,6 +12,7 @@ import {
   notice,
   reply,
   timelineOf,
+  toolCall,
   turn,
 } from "./timeline-fixtures.js";
 
@@ -244,6 +245,62 @@ describe("ChatTimeline work display", () => {
     });
     expect(container.querySelectorAll("article")).toHaveLength(2);
     expect(toggles()).toEqual(["false"]);
+  });
+
+  it("applies a changed choice to the messages already on screen", async () => {
+    // The dock passes the same requests object until a request changes,
+    // so only the choice itself can tell a shown message to change.
+    const requests = {};
+    const turns = timelineOf({
+      turns: [turn("t1", 1)],
+      items: [
+        input("t1", "Run it"),
+        command("c1", "t1"),
+        reply("a1", "t1", "Passed."),
+      ],
+    });
+    await render({ turns, requests });
+    expect(toggles()).toEqual([]);
+    await render({
+      turns,
+      requests,
+      workDisplay: { live: "notes", settled: "collapse" },
+    });
+    expect(toggles()).toEqual(["false"]);
+    await render({ turns, requests });
+    expect(toggles()).toEqual([]);
+  });
+
+  it("draws no line over only commands still running in view", async () => {
+    const start = {
+      tool: "run_background_command",
+      input: { command: "bun run dev", description: "Start the dev server" },
+    };
+    await render({
+      turns: timelineOf({
+        turns: [turn("t1", 1)],
+        items: [
+          input("t1", "Start it"),
+          toolCall("b1", "t1", start),
+          reply("a1", "t1", "Started."),
+        ],
+      }),
+      backgroundCommands: [
+        {
+          kind: "command",
+          command: "bun run dev",
+          description: "Start the dev server",
+          status: "running",
+          exitCode: null,
+        },
+      ],
+      workDisplay: { live: "notes", settled: "collapse" },
+    });
+    // The running command shows; there is nothing folded to open.
+    expect(toggles()).toEqual([]);
+    expect(
+      container.querySelectorAll('[data-testid="chat-step"]'),
+    ).toHaveLength(1);
   });
 
   it("shows a lone step as its own row, with how long it took", async () => {

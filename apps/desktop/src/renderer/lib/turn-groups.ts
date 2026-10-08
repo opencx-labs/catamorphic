@@ -8,13 +8,13 @@ import type {
 /**
  * A turn reads as its input, then its work, then its answer (ADR 0197).
  * The agent may write notes along the way: each reply in a turn carries
- * the steps that led to it, and the last one is the answer. Two
- * independent display choices decide how that work reads (see
- * `chatWorkLive` / `chatWorkSettled`):
+ * the steps that led to it, and the last one is the answer. Two display
+ * choices decide how that work reads (see `chatWorkLive` /
+ * `chatWorkSettled`):
  *
  * - while the turn runs: every note with its steps open, only the latest
  *   note (earlier ones folded into its steps), or every note with its
- *   steps folded (`notes`);
+ *   steps folded (`notes`, which keeps steps folded once answered too);
  * - once it has answered: notes kept in place, or folded into the steps.
  *
  * Whatever is not shown in place is folded: it reads, in order, under the

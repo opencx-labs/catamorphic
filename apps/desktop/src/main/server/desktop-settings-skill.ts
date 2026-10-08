@@ -56,10 +56,10 @@ all relevant layers before claiming the effective value changed. Runtime keys in
 prefs.json (sidebar pose, last project, window/session state) are not preferences;
 preserve them, and do not copy them into project overrides.
 
-Each row names the setting as Settings shows it and says what it does; option
-values carry their Settings labels. Tell the person what a change does from these
-words, not from a key's name. When no value does what they asked, say so and
-change nothing unless they choose the closest one.
+Each row gives the setting's label in Settings and, where Settings has one, its
+description; option values carry their Settings labels. Tell the person what a
+change does from these words, not from a key's name. When no value does what they
+asked, say so and change nothing unless they choose the closest one.
 
 | Key | In Settings | Value | Editable scopes | App default |
 |---|---|---|---|---|
