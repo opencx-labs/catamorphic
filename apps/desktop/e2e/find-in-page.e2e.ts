@@ -13,6 +13,19 @@ let app: AppHandle;
 let origin: string;
 const server = http.createServer((request, response) => {
   response.setHeader("Content-Type", "text/html");
+  if (request.url?.startsWith("/frame-find")) {
+    // An editor that types into an embedded frame, as Google Docs does,
+    // with a find of its own there.
+    response.end(`<title>Frame find</title><iframe srcdoc="<input><script>
+      addEventListener('keydown', (event) => {
+        if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'f') {
+          event.preventDefault();
+          parent.document.title = 'Frame find opened';
+        }
+      });
+    </script>"></iframe>`);
+    return;
+  }
   if (request.url?.startsWith("/own-find")) {
     // A document editor with its own find takes the key for itself.
     response.end(`<title>Own find</title><p>apple</p><script>
@@ -222,6 +235,12 @@ describe("find in page", () => {
     await ownStyle("::selection{background-color:rgb(0,160,0)}");
     await painted(plain, green, "the page's own selection color");
     await dropOwnStyle();
+    // From a cascade layer too, as Tailwind's selection utilities are.
+    await ownStyle(
+      "@layer utilities{::selection{background-color:rgb(0,160,0)}}",
+    );
+    await painted(plain, green, "the page's own layered selection color");
+    await dropOwnStyle();
     await inGuest("getSelection().removeAllRanges(); true");
     // Back to the bar, on a match.
     await app.eval(`${findInput}.focus(); true`);
@@ -263,6 +282,28 @@ describe("find in page", () => {
     await pageKey("F", [command]);
     await loaded("Own find opened");
     // Give the bar every chance to open: it must not.
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(
+      await app.eval<boolean>(
+        `!!document.querySelector('[data-testid="find-bar"]')`,
+      ),
+    ).toBe(false);
+  });
+
+  it("a find key pressed inside an embedded frame stays the page's", async () => {
+    await inGuest("location.href = '/frame-find'; true");
+    await loaded("Frame find");
+    await app.eval(`${view}.focus(); true`);
+    await inGuest(
+      "document.querySelector('iframe').contentDocument.querySelector('input').focus(); true",
+    );
+    await app.eval(`(() => {
+      const page = ${view};
+      for (const type of ['keyDown', 'keyUp'])
+        page.sendInputEvent({ type, keyCode: 'F', modifiers: [${JSON.stringify(command)}] });
+      return true;
+    })()`);
+    await loaded("Frame find opened");
     await new Promise((resolve) => setTimeout(resolve, 300));
     expect(
       await app.eval<boolean>(

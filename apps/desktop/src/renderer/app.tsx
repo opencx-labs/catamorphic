@@ -3805,7 +3805,12 @@ export function App({
   /** The page a browser command acts on: the one a key came from, else the one in front. */
   const commandBrowserId = () => {
     const ws = workspaceRef.current;
-    const key = ws.floatingKey ?? ws.activeTabKey;
+    // The browser pane holding focus (its find bar, its page), else the one
+    // in front: a split's other pane may be the active one.
+    const focused = document.activeElement?.closest<HTMLElement>(
+      '[data-surface-key^="browser:"]',
+    )?.dataset.surfaceKey;
+    const key = focused ?? ws.floatingKey ?? ws.activeTabKey;
     return (
       browserShortcutTargetRef.current ??
       (key?.startsWith("browser:") ? key.slice(8) : undefined)

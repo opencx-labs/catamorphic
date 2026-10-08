@@ -365,8 +365,10 @@ export function BrowserScreen({
   }, []);
   const openFind = useCallback(() => {
     if (!webviewRef.current || !guestReadyRef.current) return;
-    // Reopening searches again for the query it kept, as Chrome does.
-    if (!findOpenRef.current) search(findQueryRef.current);
+    // Reopening searches again for the query it kept, as Chrome does; a
+    // first opening has none, and leaves the page's selection alone.
+    if (!findOpenRef.current && findQueryRef.current)
+      search(findQueryRef.current);
     setFindOpen(true);
     setFindFocus((request) => request + 1);
   }, [search]);

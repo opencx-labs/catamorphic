@@ -1331,8 +1331,8 @@ window.addEventListener("keydown", (event) => {
 
 // Find keys reach the page first, as in Chrome: a page with its own find
 // (a document editor) keeps them; otherwise the tab's find bar takes them.
-// Main hands them over at once only from an embedded frame, where this
-// preload does not run.
+// This preload runs in the main frame only: a key pressed inside an
+// embedded frame stays the page's.
 let findKeys: [action: string, binding: string][] = [];
 ipcRenderer.on("catamorphic:find-keys", (_event, keys: unknown) => {
   findKeys =
@@ -1343,18 +1343,24 @@ ipcRenderer.on("catamorphic:find-keys", (_event, keys: unknown) => {
         )
       : [];
 });
-window.addEventListener("keydown", (event) => {
-  const mac = /Mac/.test(navigator.platform);
-  const action = findKeys.find(([, binding]) =>
-    matchesShortcut({ event, binding, mac }),
-  )?.[0];
-  if (!action) return;
-  // Read once every listener has had the key, the page's own included.
-  setTimeout(() => {
-    if (!event.defaultPrevented)
-      ipcRenderer.sendToHost("catamorphic:find-key", action);
-  });
-});
+// Captured, so a page that stops the key's propagation without claiming
+// it (no preventDefault) still leaves it to the find bar, as in Chrome.
+window.addEventListener(
+  "keydown",
+  (event) => {
+    const mac = /Mac/.test(navigator.platform);
+    const action = findKeys.find(([, binding]) =>
+      matchesShortcut({ event, binding, mac }),
+    )?.[0];
+    if (!action) return;
+    // Read once every listener has had the key, the page's own included.
+    setTimeout(() => {
+      if (!event.defaultPrevented)
+        ipcRenderer.sendToHost("catamorphic:find-key", action);
+    });
+  },
+  { capture: true },
+);
 
 // The theme's selection and find-match colors (renderer/lib/page-theme.ts).
 // An author stylesheet: Chromium paints highlights from author styles only

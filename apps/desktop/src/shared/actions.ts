@@ -657,8 +657,9 @@ export const ACTION_LABELS = Object.fromEntries(
 
 /**
  * Actions whose keys a web page sees first, as in Chrome: a page with its
- * own find (a document editor) keeps them. What the page leaves comes to
- * Work through the page's preload (preload/webview.ts).
+ * own find (a document editor) keeps them. What the page's main document
+ * leaves comes to Work through its preload (preload/webview.ts); keys
+ * pressed inside an embedded frame stay the page's.
  */
 export const PAGE_FIRST_ACTIONS: ReadonlySet<ActionId> = new Set([
   "find",

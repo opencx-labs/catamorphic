@@ -74,6 +74,8 @@ function FindFields({
           placeholder="Find in page"
           onChange={(event) => onQueryChange(event.target.value)}
           onKeyDown={(event) => {
+            // Enter confirms a composition (IME) before it steps.
+            if (event.nativeEvent.isComposing) return;
             if (event.key === "Enter") {
               event.preventDefault();
               onStep(event.shiftKey ? "previous" : "next");
@@ -84,15 +86,14 @@ function FindFields({
             }
           }}
         />
-        {query && result && (
-          <output
-            aria-live="polite"
-            data-testid="find-count"
-            className={`shrink-0 text-xs tabular-nums ${none ? "text-danger" : "text-fg-faint"}`}
-          >
-            {result.active}/{result.matches}
-          </output>
-        )}
+        {/* Mounted throughout, so the first count is announced too. */}
+        <output
+          aria-live="polite"
+          data-testid="find-count"
+          className={`shrink-0 text-xs tabular-nums ${none ? "text-danger" : "text-fg-faint"}`}
+        >
+          {query && result ? `${result.active}/${result.matches}` : ""}
+        </output>
       </div>
       <ShortcutHint
         label="Previous match"

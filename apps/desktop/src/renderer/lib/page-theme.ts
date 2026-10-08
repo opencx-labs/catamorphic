@@ -9,16 +9,20 @@ const tint = (color: string, percent: number) =>
  * document: selected text and find-in-page matches take the accent, as
  * the app's own selection does, instead of the system highlight and
  * Chromium's yellow and orange. Injected ahead of the page's own styles
- * (preload/webview.ts), so a page that styles its selection keeps it.
- * Chromium paints its find results through `::search-text`.
+ * (preload/webview.ts) and in a cascade layer of its own, the first and so
+ * the weakest, so a page that styles its selection keeps it, from a layer
+ * (Tailwind's utilities) or not. Chromium paints its find results through
+ * `::search-text`.
  * Theme colors are validated CSS colors (main/theme.ts), so they cannot
  * leave their declaration.
  */
 export function pageThemeCss(theme: ResolvedTheme): string {
   const { accent, "accent-fg": accentFg } = theme.colors;
   return [
-    `::selection { background-color: ${tint(accent, 30)}; }`,
-    `::search-text { background-color: ${tint(accent, 35)}; color: inherit; }`,
-    `::search-text:current { background-color: ${accent}; color: ${accentFg}; }`,
+    "@layer {",
+    `  ::selection { background-color: ${tint(accent, 30)}; }`,
+    `  ::search-text { background-color: ${tint(accent, 35)}; color: inherit; }`,
+    `  ::search-text:current { background-color: ${accent}; color: ${accentFg}; }`,
+    "}",
   ].join("\n");
 }

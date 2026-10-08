@@ -1754,13 +1754,17 @@ every page whether or not the page wanted it. The action is now Find, and it
 acts on what is in front. A page gets Chrome's find bar at its top right
 (count, previous and next, Escape back to the page with the match selected),
 and the key reaches the page first, so a document editor with its own find
-keeps it. The bar and a password offer share one column there, so neither
-covers the other.
+keeps it. Pressed inside an embedded frame (where Google Docs types), the key
+stays the page's. The bar and a password offer share one column there, so
+neither covers the other.
 
 Selected text and find matches in pages took the system highlight and
-Chromium's yellow and orange. Each page now gets the accent through a user
-stylesheet (`::selection`, `::search-text`), the same mix the app selects its
-own text in. A page that styles its own selection keeps it.
+Chromium's yellow and orange. Each page now gets the accent through an author
+stylesheet (`::selection`, `::search-text`; Chromium paints highlights from
+author styles only), the same mix the app selects its own text in. The sheet
+comes first and in a cascade layer of its own, so a page that styles its own
+selection keeps it, layered or not. Matches inside embedded frames keep
+Chromium's colors.
 
 The downloads popover vanished on the second click with no exit, and stayed
 open over a page the person had clicked, or after they turned to another
