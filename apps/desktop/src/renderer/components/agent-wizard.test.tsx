@@ -11,6 +11,7 @@ const api = vi.hoisted(() => ({
   onAgentLoginProgress: vi.fn(),
   agentsCreate: vi.fn(),
   agentLogin: vi.fn(),
+  agentLoginStatus: vi.fn(),
   agentsRemove: vi.fn(),
 }));
 vi.mock("../lib/desktop-api", () => ({ desktopApi: api }));
@@ -31,6 +32,7 @@ beforeEach(() => {
     id: `${input.harness}-agent`,
   }));
   api.agentLogin.mockResolvedValue({ started: true });
+  api.agentLoginStatus.mockResolvedValue(false);
   api.agentsRemove.mockResolvedValue(true);
 });
 afterEach(() => {
@@ -71,6 +73,25 @@ it("removes the agent of a sign-in left unfinished once another is set up", asyn
   // The unfinished one goes, so it stays neither listed nor the default.
   await vi.waitFor(() => expect(onDone).toHaveBeenCalledOnce());
   expect(api.agentsRemove.mock.calls).toEqual([["codex-agent"]]);
+});
+
+it("keeps an agent whose sign-in landed after all", async () => {
+  api.agentLoginStatus.mockImplementation(
+    async (id: string) => id === "codex-agent",
+  );
+  const onDone = vi.fn();
+  await act(async () =>
+    root.render(
+      <AgentWizard variant="tab" onClose={() => {}} onDone={onDone} />,
+    ),
+  );
+  await press('[data-testid="agent-wizard-codex"]');
+  await pressText("Sign in with ChatGPT");
+  await press('[data-testid="agent-wizard-back"]');
+  await press('[data-testid="agent-wizard-claude-code"]');
+  await pressText("Use existing setup");
+  await vi.waitFor(() => expect(onDone).toHaveBeenCalledOnce());
+  expect(api.agentsRemove).not.toHaveBeenCalled();
 });
 
 it("keeps the agent it finished with", async () => {

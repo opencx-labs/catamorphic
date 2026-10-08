@@ -142,17 +142,23 @@ export function AgentWizard({
 
   /**
    * Done with the agent a flow set up (`null`: one made outside the flows,
-   * an API key's). A sign-in creates its agent before it finishes, so the
-   * agents other flows made on the way never signed in: they go, and none
-   * of them stays behind as the default.
+   * an API key's). A sign-in creates its agent before it finishes, so other
+   * flows may have left agents on the way: those that never signed in go,
+   * and none stays behind as the default. One whose sign-in landed after
+   * all (in a terminal, with the wizard closed) stays.
    */
   const finish = (flow: Flow | null) => {
-    const abandoned = Object.entries(createdRef.current).flatMap(
-      ([other, id]) => (other !== flow && id ? [id] : []),
+    const others = Object.entries(createdRef.current).flatMap(([other, id]) =>
+      other !== flow && id ? [id] : [],
     );
     createdRef.current = {};
     void Promise.all(
-      abandoned.map((id) => desktopApi.agentsRemove(id).catch(() => false)),
+      others.map(async (id) => {
+        const signedIn = await desktopApi
+          .agentLoginStatus(id)
+          .catch(() => true);
+        if (!signedIn) await desktopApi.agentsRemove(id).catch(() => false);
+      }),
     ).finally(() => onDoneRef.current());
   };
   const finishRef = useRef(finish);

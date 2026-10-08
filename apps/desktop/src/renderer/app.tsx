@@ -2484,7 +2484,18 @@ export function App({
           ...current,
           [active.localId]: (current[active.localId] ?? 0) + 1,
         }));
-        return ws;
+        // Asked for with an agent, the fresh chat takes it.
+        const agentId = opts?.agentId;
+        return agentId && active.agentId !== agentId
+          ? {
+              ...ws,
+              chats: ws.chats.map((chat) =>
+                chat.localId === active.localId
+                  ? { ...chat, agentId, model: undefined }
+                  : chat,
+              ),
+            }
+          : ws;
       }
       // Floating chats become a full tab anyway when the workspace is
       // empty — with nothing behind it, the chat IS the workspace.
@@ -2690,17 +2701,28 @@ export function App({
     [updateWorkspace],
   );
 
-  // Only the entry's agent: the chat stays where and how it is shown.
+  // Only the entry's agent and harness (bound once, never unbound): the
+  // chat stays where and how it is shown.
   const onSessionAgent = useCallback(
-    (localId: string, agentId: string) =>
+    (localId: string, session: { agentId: string; harness?: string }) =>
       updateWorkspace((ws) =>
         ws.chats.some(
-          (chat) => chat.localId === localId && chat.agentId !== agentId,
+          (chat) =>
+            chat.localId === localId &&
+            (chat.agentId !== session.agentId ||
+              (session.harness !== undefined &&
+                chat.harness !== session.harness)),
         )
           ? {
               ...ws,
               chats: ws.chats.map((chat) =>
-                chat.localId === localId ? { ...chat, agentId } : chat,
+                chat.localId === localId
+                  ? {
+                      ...chat,
+                      agentId: session.agentId,
+                      ...(session.harness ? { harness: session.harness } : {}),
+                    }
+                  : chat,
               ),
             }
           : ws,
@@ -3195,7 +3217,7 @@ export function App({
         {
           // Its first turn bound another harness since the picker read the
           // chat (ADR 0214): the agent gets the new chat the picker offers
-          // now.
+          // now, beside this one, and the refusal is no error to show.
           onError: (error) => {
             const details = error.details;
             if (
@@ -3203,8 +3225,10 @@ export function App({
               details !== null &&
               "code" in details &&
               details.code === "harness_fixed"
-            )
-              startChatWithAgent(agentId);
+            ) {
+              updateSession.reset();
+              startChatWithAgent(agentId, chat);
+            }
           },
         },
       );
@@ -3222,17 +3246,19 @@ export function App({
   };
 
   /**
-   * A new chat with this agent, where the focused one is: the agent runs on
-   * another harness than the focused chat's, which keeps its own (ADR
-   * 0214, lib/agent-switch).
+   * A new chat with this agent, where the chat it was picked for is (the
+   * focused one unless named): the agent runs on another harness than that
+   * chat, which keeps its own (ADR 0214, lib/agent-switch).
    */
-  const startChatWithAgent = (agentId: string) => {
-    const chat = workspaceRef.current.chats.find(
+  const startChatWithAgent = (
+    agentId: string,
+    from = workspaceRef.current.chats.find(
       (candidate) => candidate.localId === workspaceRef.current.activeChatId,
-    );
-    addChat(chat?.mode === "tab" ? "tab" : undefined, {
+    ),
+  ) => {
+    addChat(from?.mode === "tab" ? "tab" : undefined, {
       agentId,
-      incognito: chat?.incognito,
+      incognito: from?.incognito,
     });
   };
 
@@ -5475,7 +5501,7 @@ export function App({
     focusedChat: focusedChat
       ? {
           sessionId: focusedChat.sessionId ?? null,
-          harness: focusedSession?.harness ?? null,
+          harness: focusedSession?.harness ?? focusedChat.harness ?? null,
           agentId: focusedSession?.agentId ?? focusedChat.agentId ?? null,
           model:
             (focusedSession ? focusedSession.model : focusedChat.model) ?? null,

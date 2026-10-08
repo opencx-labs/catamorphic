@@ -1356,17 +1356,34 @@ function ChatDockContent({
   const onEscapeToFloatingRef = useRef(onEscapeToFloating);
   onEscapeToFloatingRef.current = onEscapeToFloating;
 
-  // A started chat's entry names the agent its session runs on, so the
-  // palette's agent, model and effort pickers target it, even for a chat
-  // older than the project's session list (which they read otherwise).
-  // A connected project's agents are the server's, never a local entry's.
+  // A started chat's entry names the agent its session runs on and the
+  // harness it is bound to, so the palette's pickers target them, even for
+  // a chat older than the project's session list (which they read
+  // otherwise). A connected project's agents are the server's, never a
+  // local entry's.
   const onSessionAgentRef = useRef(onSessionAgent);
   onSessionAgentRef.current = onSessionAgent;
+  const boundHarness = chat.session?.harness ?? undefined;
   useEffect(() => {
-    const agentId = chat.session?.agentId;
-    if (authority || !agentId || agentId === entry.agentId) return;
-    onSessionAgentRef.current?.(entry.localId, agentId);
-  }, [authority, chat.session?.agentId, entry.agentId, entry.localId]);
+    if (
+      authority ||
+      !sessionAgentId ||
+      (sessionAgentId === entry.agentId &&
+        (!boundHarness || boundHarness === entry.harness))
+    )
+      return;
+    onSessionAgentRef.current?.(entry.localId, {
+      agentId: sessionAgentId,
+      ...(boundHarness ? { harness: boundHarness } : {}),
+    });
+  }, [
+    authority,
+    sessionAgentId,
+    boundHarness,
+    entry.agentId,
+    entry.harness,
+    entry.localId,
+  ]);
 
   // Palette "Send to agent": the entry arrives with the message attached;
   // fire it once on mount and strip it so remounts don't re-send.
@@ -2232,7 +2249,7 @@ function ChatDockContent({
                 awaitingInput={awaitingInput}
                 session={chat.session}
                 fallbackTitle={title}
-                harness={activeAgent?.harness ?? sessionHarness(chat.state)}
+                harness={activeAgent?.harness ?? boundHarness}
                 provider={activeAgent?.provider}
                 environmentControl={
                   authority &&
@@ -3231,15 +3248,6 @@ function lastReplyText(
     }
   }
   return undefined;
-}
-
-/** The harness of the conversation the session last ran on. */
-function sessionHarness(state: SessionState | null): string | undefined {
-  if (!state) return undefined;
-  const threads = Object.values(state.providerThreads).sort((a, b) =>
-    b.updatedAt.localeCompare(a.updatedAt),
-  );
-  return threads[0]?.harness;
 }
 
 /** The latest turn that failed on the agent's sign-in. */
