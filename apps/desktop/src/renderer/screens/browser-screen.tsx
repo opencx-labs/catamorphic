@@ -9,7 +9,7 @@ import {
   Star,
   X,
 } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   type BrowserHistory,
@@ -28,6 +28,7 @@ import {
   useExtensionSidePanel,
 } from "../components/extensions/extension-side-panel.js";
 import { ExtensionToolbar } from "../components/extensions/extension-toolbar.js";
+import { FindBar, type FindResult } from "../components/find-bar.js";
 import { usePasswordAutofill } from "../components/password-autofill.js";
 import {
   type PasswordDraft,
@@ -50,7 +51,9 @@ import {
   desktopApi,
 } from "../lib/desktop-api.js";
 import { formatBinding, useKeybindings } from "../lib/keybindings.js";
+import { pageThemeCss } from "../lib/page-theme.js";
 import { pointerMoved } from "../lib/pointer-moved.js";
+import { useTheme } from "../lib/theme.js";
 
 /**
  * A browser page inside a workspace tab: address bar (with Chrome-style
@@ -74,6 +77,13 @@ interface WebviewElement extends HTMLElement {
   send: (channel: string, payload: unknown) => void;
   getWebContentsId: () => number;
   getZoomFactor: () => number;
+  findInPage: (
+    text: string,
+    options: { forward?: boolean; findNext?: boolean },
+  ) => number;
+  stopFindInPage: (
+    action: "clearSelection" | "keepSelection" | "activateSelection",
+  ) => void;
 }
 
 export interface BrowserCommands {
@@ -82,6 +92,10 @@ export interface BrowserCommands {
   reloadIgnoringCache: () => void;
   back: () => void;
   forward: () => void;
+  /** Opens the page's find bar, or focuses it when open. */
+  find: () => void;
+  findNext: () => void;
+  findPrevious: () => void;
   /** What keeps the page awake, or null when it may sleep (ADR 0194). */
   sleepBlocker: () => Promise<BrowserSleepBlocker | null>;
 }
@@ -322,6 +336,86 @@ export function BrowserScreen({
   );
   const [passwordEditorOpen, setPasswordEditorOpen] = useState(false);
   const pageAreaRef = useRef<HTMLDivElement | null>(null);
+
+  // Find in page, as Chrome's find bar does it. The query stays with the
+  // tab for the next opening; a count belongs to the latest request only.
+  const [findOpen, setFindOpen] = useState(false);
+  const [findQuery, setFindQuery] = useState("");
+  const [findResult, setFindResult] = useState<FindResult | null>(null);
+  const [findFocus, setFindFocus] = useState(0);
+  const findRequestRef = useRef(0);
+  const findQueryRef = useRef(findQuery);
+  findQueryRef.current = findQuery;
+  const findOpenRef = useRef(findOpen);
+  findOpenRef.current = findOpen;
+  /** A new text starts a new search; a step moves through its matches. */
+  const search = useCallback((text: string, step?: "next" | "previous") => {
+    const view = webviewRef.current;
+    if (!view || !guestReadyRef.current) return;
+    if (!text) {
+      findRequestRef.current = 0;
+      setFindResult(null);
+      view.stopFindInPage("clearSelection");
+      return;
+    }
+    findRequestRef.current = view.findInPage(
+      text,
+      step ? { forward: step === "next", findNext: false } : { findNext: true },
+    );
+  }, []);
+  const openFind = useCallback(() => {
+    if (!webviewRef.current || !guestReadyRef.current) return;
+    // Reopening searches again for the query it kept, as Chrome does; a
+    // first opening has none, and leaves the page's selection alone.
+    if (!findOpenRef.current && findQueryRef.current)
+      search(findQueryRef.current);
+    setFindOpen(true);
+    setFindFocus((request) => request + 1);
+  }, [search]);
+  const stepFind = useCallback(
+    (direction: "next" | "previous") => {
+      if (!findOpenRef.current || !findQueryRef.current) openFind();
+      else search(findQueryRef.current, direction);
+    },
+    [openFind, search],
+  );
+  const closeFind = useCallback(() => {
+    setFindOpen(false);
+    setFindResult(null);
+    findRequestRef.current = 0;
+    const view = webviewRef.current;
+    if (!view || !guestReadyRef.current) return;
+    // The current match stays selected, and the page takes focus back.
+    view.stopFindInPage("keepSelection");
+    view.focus();
+  }, []);
+  const findCommandsRef = useRef({ openFind, stepFind });
+  findCommandsRef.current = { openFind, stepFind };
+  // Find keys reach the page first (see preload/webview.ts), which learns
+  // them as it learns the floating preview's Escape.
+  const findKeys = useMemo(
+    () => ({
+      find: keybindings.find,
+      "find-next": keybindings["find-next"],
+      "find-previous": keybindings["find-previous"],
+    }),
+    [keybindings.find, keybindings["find-next"], keybindings["find-previous"]],
+  );
+  const findKeysRef = useRef(findKeys);
+  findKeysRef.current = findKeys;
+  useEffect(() => {
+    if (guestReadyRef.current)
+      webviewRef.current?.send("catamorphic:find-keys", findKeys);
+  }, [findKeys]);
+  // Selected text and find matches take the theme's accent (lib/page-theme).
+  const theme = useTheme();
+  const pageCss = theme ? pageThemeCss(theme) : "";
+  const pageCssRef = useRef(pageCss);
+  pageCssRef.current = pageCss;
+  useEffect(() => {
+    if (guestReadyRef.current)
+      webviewRef.current?.send("catamorphic:page-theme", pageCss);
+  }, [pageCss]);
   // Bookmarks for this project+profile, so the star reflects real state
   // (Chrome: filled = saved, click again removes) instead of firing a
   // one-way "add" that silently duplicates on every press.
@@ -501,6 +595,9 @@ export function BrowserScreen({
         guestReadyRef.current = false;
         registerGuestRef.current?.(null);
         setGuestId(null);
+        // A find belongs to the guest it searched.
+        setFindOpen(false);
+        setFindResult(null);
         return;
       }
       const listeners = new AbortController();
@@ -566,6 +663,8 @@ export function BrowserScreen({
             previewLinksRef.current,
           );
           view.send("catamorphic:floating-preview", floatingBindingRef.current);
+          view.send("catamorphic:find-keys", findKeysRef.current);
+          view.send("catamorphic:page-theme", pageCssRef.current);
         } catch {
           // Guest gone mid-call; the next dom-ready re-sends.
         }
@@ -606,6 +705,14 @@ export function BrowserScreen({
         }
         if (message.channel === "catamorphic:dismiss-floating") {
           dismissFloatingRef.current?.();
+          return;
+        }
+        if (message.channel === "catamorphic:find-key") {
+          const action = message.args[0];
+          if (action === "find") findCommandsRef.current.openFind();
+          if (action === "find-next") findCommandsRef.current.stepFind("next");
+          if (action === "find-previous")
+            findCommandsRef.current.stepFind("previous");
           return;
         }
         if (message.channel === "catamorphic:browser-swipe") {
@@ -674,8 +781,26 @@ export function BrowserScreen({
         setLoadError(null);
       });
       listen("did-stop-loading", () => setLoading(false));
+      listen("found-in-page", ((event: CustomEvent) => {
+        const { result } = event as unknown as {
+          result: {
+            requestId: number;
+            activeMatchOrdinal: number;
+            matches: number;
+          };
+        };
+        if (result.requestId !== findRequestRef.current) return;
+        setFindResult({
+          active: result.activeMatchOrdinal,
+          matches: result.matches,
+        });
+      }) as EventListener);
       listen("did-navigate", ((event: CustomEvent) => {
         const { url } = event as unknown as { url: string };
+        // Another page ends the find, as in Chrome; the query stays.
+        setFindOpen(false);
+        setFindResult(null);
+        findRequestRef.current = 0;
         setPageUrl(url);
         setInputValue(url);
         // A save offer rides out the sign-in's redirects (a login on
@@ -960,6 +1085,9 @@ export function BrowserScreen({
         const view = webviewRef.current;
         if (view?.canGoForward()) view.goForward();
       },
+      find: openFind,
+      findNext: () => stepFind("next"),
+      findPrevious: () => stepFind("previous"),
       sleepBlocker: async () => {
         const view = webviewRef.current;
         if (!view || !guestReadyRef.current) return null;
@@ -973,7 +1101,7 @@ export function BrowserScreen({
       },
     });
     return () => registerCommandsRef.current?.(null);
-  }, [focusAddress, reload]);
+  }, [focusAddress, reload, openFind, stepFind]);
 
   // A fresh New Tab greets with the address bar focused (Chrome behavior);
   // a page takes focus as its tab comes forward. Both answer what brought
@@ -1493,17 +1621,33 @@ export function BrowserScreen({
             </div>
           )}
           {autofill.overlay}
-          {passwordPrompt && (
-            <PasswordPrompt
-              state={passwordPrompt}
-              open={passwordPromptOpen}
-              onSave={savePasswordOffer}
-              onNever={neverSavePasswords}
-              onDismiss={dismissPasswordPrompt}
-              onUpdate={() => void updateSavedPassword()}
-              onExited={() => setPasswordPrompt(null)}
+          {/* The page's own cards at its top right: the find bar above a
+            password offer, never over it. */}
+          <div className="pointer-events-none absolute right-3 top-3 z-30 flex w-[340px] max-w-[calc(100%-24px)] flex-col items-end gap-2">
+            <FindBar
+              open={findOpen}
+              query={findQuery}
+              result={findResult}
+              focusRequest={findFocus}
+              onQueryChange={(query) => {
+                setFindQuery(query);
+                search(query);
+              }}
+              onStep={stepFind}
+              onClose={closeFind}
             />
-          )}
+            {passwordPrompt && (
+              <PasswordPrompt
+                state={passwordPrompt}
+                open={passwordPromptOpen}
+                onSave={savePasswordOffer}
+                onNever={neverSavePasswords}
+                onDismiss={dismissPasswordPrompt}
+                onUpdate={() => void updateSavedPassword()}
+                onExited={() => setPasswordPrompt(null)}
+              />
+            )}
+          </div>
         </div>
         {sidePanel && (
           <ExtensionSidePanelView panel={sidePanel} partition={partition} />

@@ -5,6 +5,7 @@ import {
   downloadOpensInWork,
   isActiveDownload,
 } from "../../shared/downloads.js";
+import { onPagePress } from "../lib/app-focus.js";
 import { desktopApi } from "../lib/desktop-api.js";
 import {
   describeDownload,
@@ -12,6 +13,7 @@ import {
   downloadProgress,
   useDownloads,
 } from "../lib/downloads.js";
+import { PopPanel } from "./pop-panel.js";
 import { ShortcutHint } from "./shortcut-hint.js";
 
 /**
@@ -57,6 +59,9 @@ export function DownloadsBubble({
 }) {
   const { downloads } = useDownloads();
   const [open, setOpen] = useState(false);
+  // On screen, its exit included: the detached dock keeps the room it lent
+  // until the popover has gone.
+  const [showing, setShowing] = useState(false);
   const [seenAt, setSeenAt] = useState(0);
   const [profileId, setProfileId] = useState<string | null>(null);
   const [dismissedAt, setDismissedAt] = useState(0);
@@ -105,13 +110,18 @@ export function DownloadsBubble({
   // A hidden bubble has no open popover, and the detached dock's window
   // takes back the room it lent.
   useEffect(() => {
-    if (hidden) setOpen(false);
+    if (!hidden) return;
+    setOpen(false);
+    setShowing(false);
   }, [hidden]);
+  useEffect(() => {
+    if (open) setShowing(true);
+  }, [open]);
   const onOpenChangeRef = useRef(onOpenChange);
   onOpenChangeRef.current = onOpenChange;
   useEffect(() => {
-    onOpenChangeRef.current?.(open && !hidden);
-  }, [open, hidden]);
+    onOpenChangeRef.current?.((open || showing) && !hidden);
+  }, [open, showing, hidden]);
   useEffect(() => () => onOpenChangeRef.current?.(false), []);
   const unseen = downloads.some(
     (record) =>
@@ -129,21 +139,33 @@ export function DownloadsBubble({
   );
   const ring = active.length > 0 && total > 0 ? received / total : null;
 
+  // Anything else the person turns to closes it, as Chrome's bubble
+  // closes: a press elsewhere in this window or inside a page (pages see
+  // their own presses), Escape, or another window or app.
   useEffect(() => {
     if (!open) return;
+    const close = () => setOpen(false);
     const onPointerDown = (event: PointerEvent) => {
-      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
+      if (
+        !(event.target instanceof Node) ||
+        !rootRef.current?.contains(event.target)
+      )
+        close();
     };
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setOpen(false);
+      if (event.key === "Escape") close();
     };
     window.addEventListener("pointerdown", onPointerDown, { capture: true });
     window.addEventListener("keydown", onKey, { capture: true });
+    window.addEventListener("blur", close);
+    const stopPagePress = onPagePress(close);
     return () => {
       window.removeEventListener("pointerdown", onPointerDown, {
         capture: true,
       });
       window.removeEventListener("keydown", onKey, { capture: true });
+      window.removeEventListener("blur", close);
+      stopPagePress();
     };
   }, [open]);
 
@@ -263,101 +285,101 @@ export function DownloadsBubble({
           </button>
         )}
       </div>
-      {open && (
-        <div
-          role="dialog"
-          aria-label="Recent downloads"
-          data-testid="downloads-popover"
-          data-align={align}
-          className={`animate-pop-in absolute bottom-12 w-80 rounded-xl border border-border bg-bg-raised p-1.5 shadow-2xl ${
-            align === "start"
-              ? "left-0 origin-bottom-left"
-              : align === "end"
-                ? "right-0 origin-bottom-right"
-                : "left-1/2 -translate-x-1/2"
-          }`}
-        >
-          <ul className="flex flex-col">
-            {recent.map((record) => {
-              const Icon = downloadIcon(record.filename);
-              const progress = downloadProgress(record);
-              const openable =
-                record.state === "completed" &&
-                record.exists &&
-                downloadOpensInWork(record.filename);
-              return (
-                <li key={record.id} className="group flex items-center gap-1">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setOpen(false);
-                      if (openable) onOpenFile(record);
-                      else void desktopApi.downloadsReveal({ id: record.id });
-                    }}
-                    className="flex min-w-0 flex-1 cursor-pointer items-center gap-2.5 rounded-md px-2 py-1.5 text-left transition-colors duration-150 hover:bg-bg-overlay"
-                  >
-                    <Icon className="size-4 shrink-0 text-fg-muted" />
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate text-[12px] text-fg">
-                        {record.filename}
-                      </span>
-                      <span className="block truncate text-[11px] text-fg-faint">
-                        {describeDownload(record)}
-                      </span>
-                      {progress !== null && (
-                        <span className="mt-1 block h-1 w-full overflow-hidden rounded-full bg-bg-inset">
-                          <span
-                            className="block h-full rounded-full bg-accent transition-[width] duration-150"
-                            style={{ width: `${progress * 100}%` }}
-                          />
-                        </span>
-                      )}
+      <PopPanel
+        open={open}
+        onExited={() => setShowing(false)}
+        role="dialog"
+        aria-label="Recent downloads"
+        testId="downloads-popover"
+        data-align={align}
+        className={`absolute bottom-12 w-80 rounded-xl border border-border bg-bg-raised p-1.5 shadow-2xl ${
+          align === "start"
+            ? "left-0 origin-bottom-left"
+            : align === "end"
+              ? "right-0 origin-bottom-right"
+              : "left-1/2 origin-bottom -translate-x-1/2"
+        }`}
+      >
+        <ul className="flex flex-col">
+          {recent.map((record) => {
+            const Icon = downloadIcon(record.filename);
+            const progress = downloadProgress(record);
+            const openable =
+              record.state === "completed" &&
+              record.exists &&
+              downloadOpensInWork(record.filename);
+            return (
+              <li key={record.id} className="group flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setOpen(false);
+                    if (openable) onOpenFile(record);
+                    else void desktopApi.downloadsReveal({ id: record.id });
+                  }}
+                  className="flex min-w-0 flex-1 cursor-pointer items-center gap-2.5 rounded-md px-2 py-1.5 text-left transition-colors duration-150 hover:bg-bg-overlay"
+                >
+                  <Icon className="size-4 shrink-0 text-fg-muted" />
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-[12px] text-fg">
+                      {record.filename}
                     </span>
-                  </button>
-                  {isActiveDownload(record) ? (
-                    <ShortcutHint label="Cancel download">
-                      <button
-                        type="button"
-                        aria-label={`Cancel ${record.filename}`}
-                        onClick={() =>
-                          void desktopApi.downloadsCancel({ id: record.id })
-                        }
-                        className="row-reveal mr-1 grid size-6 shrink-0 place-items-center rounded-md text-fg-muted hover:bg-bg-overlay"
-                      >
-                        <X className="size-3" />
-                      </button>
-                    </ShortcutHint>
-                  ) : (
-                    <ShortcutHint label="Show in Finder">
-                      <button
-                        type="button"
-                        aria-label={`Show ${record.filename} in Finder`}
-                        onClick={() =>
-                          void desktopApi.downloadsReveal({ id: record.id })
-                        }
-                        className="row-reveal mr-1 grid size-6 shrink-0 place-items-center rounded-md text-fg-muted hover:bg-bg-overlay"
-                      >
-                        <FolderOpen className="size-3" />
-                      </button>
-                    </ShortcutHint>
-                  )}
-                </li>
-              );
-            })}
-          </ul>
-          <button
-            type="button"
-            onClick={() => {
-              setOpen(false);
-              onOpenAll();
-            }}
-            data-testid="downloads-show-all"
-            className="mt-1 flex h-8 w-full cursor-pointer items-center justify-center rounded-md border-t border-border text-[12px] text-fg-muted transition-colors duration-150 hover:text-fg"
-          >
-            Show all downloads
-          </button>
-        </div>
-      )}
+                    <span className="block truncate text-[11px] text-fg-faint">
+                      {describeDownload(record)}
+                    </span>
+                    {progress !== null && (
+                      <span className="mt-1 block h-1 w-full overflow-hidden rounded-full bg-bg-inset">
+                        <span
+                          className="block h-full rounded-full bg-accent transition-[width] duration-150"
+                          style={{ width: `${progress * 100}%` }}
+                        />
+                      </span>
+                    )}
+                  </span>
+                </button>
+                {isActiveDownload(record) ? (
+                  <ShortcutHint label="Cancel download">
+                    <button
+                      type="button"
+                      aria-label={`Cancel ${record.filename}`}
+                      onClick={() =>
+                        void desktopApi.downloadsCancel({ id: record.id })
+                      }
+                      className="row-reveal mr-1 grid size-6 shrink-0 place-items-center rounded-md text-fg-muted hover:bg-bg-overlay"
+                    >
+                      <X className="size-3" />
+                    </button>
+                  </ShortcutHint>
+                ) : (
+                  <ShortcutHint label="Show in Finder">
+                    <button
+                      type="button"
+                      aria-label={`Show ${record.filename} in Finder`}
+                      onClick={() =>
+                        void desktopApi.downloadsReveal({ id: record.id })
+                      }
+                      className="row-reveal mr-1 grid size-6 shrink-0 place-items-center rounded-md text-fg-muted hover:bg-bg-overlay"
+                    >
+                      <FolderOpen className="size-3" />
+                    </button>
+                  </ShortcutHint>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+        <button
+          type="button"
+          onClick={() => {
+            setOpen(false);
+            onOpenAll();
+          }}
+          data-testid="downloads-show-all"
+          className="mt-1 flex h-8 w-full cursor-pointer items-center justify-center rounded-md border-t border-border text-[12px] text-fg-muted transition-colors duration-150 hover:text-fg"
+        >
+          Show all downloads
+        </button>
+      </PopPanel>
     </div>
   );
 }

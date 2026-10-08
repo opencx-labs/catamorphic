@@ -20,7 +20,11 @@ import {
   webContents,
 } from "electron";
 import { z } from "zod";
-import { KEYBINDING_ACTIONS, type Keybindings } from "../shared/actions.js";
+import {
+  KEYBINDING_ACTIONS,
+  type Keybindings,
+  PAGE_FIRST_ACTIONS,
+} from "../shared/actions.js";
 import type {
   BookmarkMove,
   BookmarkPlacement,
@@ -1132,6 +1136,10 @@ export function registerBrowserSupport(
         altKey: input.alt,
         shiftKey: input.shift,
       };
+      // Find keys go to the page first, whose preload hands back what the
+      // page leaves (preload/webview.ts). The preload runs only in the
+      // main frame, so from an embedded frame (where Google Docs types)
+      // they stay the page's: Work never takes a frame's own find.
       if (
         !macros.some((macro) =>
           matchesShortcut({
@@ -1143,6 +1151,7 @@ export function registerBrowserSupport(
         !KEYBINDING_ACTIONS.some(
           (action) =>
             action !== "dismiss-floating" &&
+            !PAGE_FIRST_ACTIONS.has(action) &&
             matchesShortcut({
               event: key,
               binding: bindings[action],

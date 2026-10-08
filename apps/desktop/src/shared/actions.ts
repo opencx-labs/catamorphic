@@ -66,12 +66,28 @@ export const BUILTIN_ACTIONS = [
     keywords: ["content", "grep", "search"],
   },
   {
-    id: "search-diff",
-    label: "Find in diff",
-    icon: "Diff",
-    description: "search the visible diff",
+    id: "find",
+    label: "Find",
+    icon: "TextSearch",
+    description: "find text in the web page or diff in front",
     defaultBinding: "Cmd+F",
-    keywords: ["diff", "find"],
+    keywords: ["find", "search", "page", "diff"],
+  },
+  {
+    id: "find-next",
+    label: "Find next",
+    icon: "ChevronDown",
+    description: "go to the next match of the page's find bar",
+    defaultBinding: "Cmd+G",
+    keywords: ["find", "next", "match"],
+  },
+  {
+    id: "find-previous",
+    label: "Find previous",
+    icon: "ChevronUp",
+    description: "go to the previous match of the page's find bar",
+    defaultBinding: "Cmd+Shift+G",
+    keywords: ["find", "previous", "match"],
   },
   {
     id: "search-changes",
@@ -638,3 +654,15 @@ export const KEYBINDING_ACTIONS = Object.keys(
 export const ACTION_LABELS = Object.fromEntries(
   BUILTIN_ACTIONS.map((action) => [action.id, action.label]),
 ) as Record<ActionId, string>;
+
+/**
+ * Actions whose keys a web page sees first, as in Chrome: a page with its
+ * own find (a document editor) keeps them. What the page's main document
+ * leaves comes to Work through its preload (preload/webview.ts); keys
+ * pressed inside an embedded frame stay the page's.
+ */
+export const PAGE_FIRST_ACTIONS: ReadonlySet<ActionId> = new Set([
+  "find",
+  "find-next",
+  "find-previous",
+]);

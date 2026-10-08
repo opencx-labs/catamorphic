@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from "electron";
+import { contextBridge, ipcRenderer, webFrame } from "electron";
 import { matchesShortcut } from "../shared/keybindings.js";
 import {
   classifyPasswordField,
@@ -1327,6 +1327,50 @@ window.addEventListener("keydown", (event) => {
     return;
   event.preventDefault();
   ipcRenderer.sendToHost("catamorphic:dismiss-floating");
+});
+
+// Find keys reach the page first, as in Chrome: a page with its own find
+// (a document editor) keeps them; otherwise the tab's find bar takes them.
+// This preload runs in the main frame only: a key pressed inside an
+// embedded frame stays the page's.
+let findKeys: [action: string, binding: string][] = [];
+ipcRenderer.on("catamorphic:find-keys", (_event, keys: unknown) => {
+  findKeys =
+    keys && typeof keys === "object"
+      ? Object.entries(keys).filter(
+          (entry): entry is [string, string] =>
+            typeof entry[1] === "string" && entry[1] !== "",
+        )
+      : [];
+});
+// Captured, so a page that stops the key's propagation without claiming
+// it (no preventDefault) still leaves it to the find bar, as in Chrome.
+window.addEventListener(
+  "keydown",
+  (event) => {
+    const mac = /Mac/.test(navigator.platform);
+    const action = findKeys.find(([, binding]) =>
+      matchesShortcut({ event, binding, mac }),
+    )?.[0];
+    if (!action) return;
+    // Read once every listener has had the key, the page's own included.
+    setTimeout(() => {
+      if (!event.defaultPrevented)
+        ipcRenderer.sendToHost("catamorphic:find-key", action);
+    });
+  },
+  { capture: true },
+);
+
+// The theme's selection and find-match colors (renderer/lib/page-theme.ts).
+// An author stylesheet: Chromium paints highlights from author styles only
+// (a user sheet shows in getComputedStyle but never paints). Injected
+// sheets come before the page's own, so the page's rules still win.
+let pageThemeKey: string | null = null;
+ipcRenderer.on("catamorphic:page-theme", (_event, css: unknown) => {
+  if (typeof css !== "string") return;
+  if (pageThemeKey) webFrame.removeInsertedCSS(pageThemeKey);
+  pageThemeKey = css ? webFrame.insertCSS(css) : null;
 });
 
 /**
