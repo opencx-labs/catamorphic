@@ -233,6 +233,15 @@ describe("downloads", () => {
         );
         await dock.waitFor(`!${popover}`, { label: "detached popover closed" });
       };
+      // The strip was folded in the window, and that fold is the person's
+      // in every window: the detached dock shows it folded until opened.
+      await dock.waitFor(
+        `document.querySelector('[data-dock-rail]')?.dataset.dockCollapsed === 'true'`,
+        { label: "detached strip keeps the fold" },
+      );
+      await dock.eval(
+        `document.querySelector('[aria-label="Expand chat bubbles"]').click(); true`,
+      );
       await dock.waitFor(
         `!!document.querySelector('[data-testid="downloads-bubble"]') && document.querySelector('[data-dock-rail]')?.dataset.dockCollapsed === 'false'`,
         { label: "detached strip open" },
@@ -264,10 +273,16 @@ describe("downloads", () => {
       dock.close();
       await app.eval(`window.catamorphicDesktop.dockDetach(false)`);
     }
-    // Back in the window, the strip mounts open and settles.
+    // Back in the window, the strip keeps the fold made in the detached
+    // dock; opened again, it settles.
+    await app.waitFor(
+      `document.querySelector('[data-dock-rail]')?.dataset.dockCollapsed === 'true'`,
+      { label: "dock back in the window, folded" },
+    );
+    await click('[aria-label="Expand chat bubbles"]');
     await app.waitFor(
       `document.querySelector('[data-dock-rail]')?.dataset.dockCollapsed === 'false' && !document.querySelector('[data-dock-rail]').getAnimations({ subtree: true }).some((animation) => animation.playState === 'running')`,
-      { label: "dock back in the window" },
+      { label: "dock back in the window, open" },
     );
   });
 

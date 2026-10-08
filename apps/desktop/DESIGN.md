@@ -1248,7 +1248,8 @@ multiply; the turn already has two phases, so there are two independent
 choices instead (Settings → Workspace → Chat dock):
 
 - **While the agent works** (`chatWorkLive`): every note, or only the
-  latest, each new note replacing the one before.
+  latest, each new note replacing the one before (later also Notes only,
+  see 2026-10-08).
 - **Once it has answered** (`chatWorkSettled`): notes kept in place, or
   folded into steps.
 
@@ -1766,3 +1767,46 @@ open over a page the person had clicked, or after they turned to another
 window. It now leaves with the pop-out every popover plays, closes on any
 press outside it (a page's included), Escape, or the window losing focus, and
 the detached dock keeps the room it lent until the exit has played.
+
+### 2026-10-08: Notes only, and settings that say what they do
+
+Someone asked their agent, twice, for a chat that shows the agent's notes
+while it works but not its tool calls, then folds the notes once the answer
+lands. Neither attempt could work: a running turn's steps were always open
+(2026-09-29), and both choices only moved notes. Each agent also described
+its change wrongly, one saying the steps would stay folded, the other that
+"latest" showed only the latest step. The settings skill gave agents keys
+and values with no meanings, and the descriptions in Settings were vague.
+
+- **Notes only** is a third choice for "While the agent works", not a new
+  setting: every note in place, each note's steps behind a closed line, a
+  lone step's included ("1 step"), so tool calls show only when opened.
+  Commands still running in the background stay in view. Once answered, the
+  settled choice decides where the notes go, as before; the steps stay
+  folded then too, a lone step's included, so nothing opens as the turn
+  ends. With "Fold notes into steps" that is the requested behaviour.
+  `foldsSteps` (lib/turn-groups) names the rule.
+- **Settings say what shows.** The two choices' descriptions now name
+  notes, steps and when each is open, and the options read "Notes and
+  steps", "Latest note and steps", "Notes only".
+- **Agents read the same words.** The settings skill's table carries each
+  setting's Settings label and description, and each value's label, and
+  tells agents to say when no value does what was asked instead of picking
+  the nearest one.
+
+### 2026-10-08: The strip stays folded until the person opens it
+
+A person folded the bubble strip into its corner, and it kept opening again.
+The fold was a component's memory: a reload, a relaunch or another window
+showed the strip open, and leaving a chat tab (which folds the strip on its
+own) wiped the person's fold along with the tab's. Opening a chat also gave
+up the fold for good, so minimizing it again left the strip open.
+
+The fold is now the person's choice, saved with the profile like the strip's
+corner and placement (`dockCollapsed`, delivered in the dock snapshot), so
+every window, the detached dock and the next launch show it. Only the
+person changes it: the arrows fold it, the collapsed bubble opens it. A chat
+tab folding the strip and an open chat opening it beside the chat are
+temporary and leave the choice alone; opened by hand while a chat tab folds
+it, the strip stays open until such a tab gains focus again.
+

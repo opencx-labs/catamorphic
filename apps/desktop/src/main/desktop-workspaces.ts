@@ -702,6 +702,7 @@ export class DesktopWorkspaces {
       multiProject: prefs.dockMultiProject,
       side: prefs.dockSide,
       placement: prefs.dockPlacement,
+      collapsed: prefs.dockCollapsed,
     };
   }
 
