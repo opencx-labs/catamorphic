@@ -9,7 +9,8 @@ import { settleSidebarContent } from "./sidebar-transition.js";
 
 /**
  * A sidebar moves the moment it is toggled and the content settles after it
- * (ADR 0200). The panel slides over the content with a transform, so the
+ * (ADR 0200); closing from open, its items move first and the panel follows
+ * 100ms later (lib/sidebar-leave.ts). The panel slides over the content with a transform, so the
  * compositor runs it without layout. Once it has stopped, the content takes
  * or gives back the sidebar's space in a view transition that morphs it
  * from its old layout to its new one (`settleSidebarContent`): the

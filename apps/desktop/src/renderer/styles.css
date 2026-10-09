@@ -1487,40 +1487,21 @@ kbd {
 [data-motion="closed"] > .sidebar-inner {
   visibility: hidden;
 }
-/* Closing, the items leave first and the panel follows a beat later,
-   carrying the threads they leave (lib/sidebar-leave.ts). The items sweep
-   out from the top over 60ms; the last is on its way when the panel
-   starts. */
-[data-motion="closing"] > .sidebar-inner {
+/* Closing from open, the items leave first and the panel follows a beat
+   later, carrying the threads they leave (lib/sidebar-leave.ts animates
+   both). The items sweep out from the top over 60ms; the last is on its
+   way when the panel starts. A close that reverses an opening panel
+   doesn't wait. */
+.tabbed-sidebar[data-items-lead] > .sidebar-inner {
   transition-delay: 100ms;
-}
-[data-sidebar-leaving] {
-  animation: sidebar-item-leave 160ms var(--ease-standard)
-    var(--leave-delay, 0ms) both;
-}
-[data-sidebar="right"] [data-sidebar-leaving] {
-  animation-name: sidebar-item-leave-right;
-}
-/* Text travels its own length (--leave-distance); an icon a step. */
-@keyframes sidebar-item-leave {
-  to {
-    opacity: 0;
-    translate: calc(-1 * var(--leave-distance, 10px)) 0;
-  }
-}
-@keyframes sidebar-item-leave-right {
-  to {
-    opacity: 0;
-    translate: var(--leave-distance, 10px) 0;
-  }
 }
 .sidebar-traces {
   position: absolute;
   inset: 0;
   pointer-events: none;
 }
-/* A line's thread grows from where the text ended in step with the text,
-   so its free end stays at the text's trailing edge. */
+/* A row's thread grows from where the row ended in step with it, so its
+   free end stays on the row's trailing edge. */
 .sidebar-trace {
   position: absolute;
   height: 1.5px;
@@ -1528,16 +1509,9 @@ kbd {
   border-radius: 1px;
   background: color-mix(in srgb, var(--trace-color) 40%, transparent);
   transform-origin: right;
-  animation: sidebar-trace 160ms var(--ease-standard) var(--leave-delay, 0ms)
-    both;
 }
 [data-sidebar="right"] .sidebar-trace {
   transform-origin: left;
-}
-@keyframes sidebar-trace {
-  from {
-    scale: 0 1;
-  }
 }
 [data-sidebar-dividers="on"] [data-sidebar="left"] > .sidebar-inner {
   border-right: 1px solid var(--color-border);

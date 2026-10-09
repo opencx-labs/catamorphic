@@ -27,7 +27,8 @@ main content will land, while the real page lays out behind it.
 ## Decision
 
 **The sidebar moves the moment it is toggled, and the content settles after
-it** (`lib/sidebar-motion.ts`).
+it** (`lib/sidebar-motion.ts`). Closing from open, its items move first and
+the panel follows them 100 ms later (amended 2026-10-09, below).
 
 - The panel slides with a CSS transform: over the content when opening,
   away from it when closing. The compositor runs it without layout, and
@@ -60,14 +61,17 @@ it** (`lib/sidebar-motion.ts`).
   panel is on screen, sliding included, and pause once it has gone; pausing
   never clears what a section shows. Both sides use one toggle in every
   place it appears. (Amended 2026-10-06.)
-- Closing, the items leave first and the panel follows them
-  (`lib/sidebar-leave.ts`). Each item on screen slides toward the edge
-  the sidebar leaves by and fades, in a 60 ms sweep from the top; a label
-  travels its own length and draws a hairline thread behind it, and the
-  icon leading it travels with it. The panel's slide starts 100 ms after
-  the click and carries the threads away. Everything is measured once, at
-  the click, and every frame after is a compositor frame or a repaint of
-  the panel alone. Opening is unchanged. (Amended 2026-10-09.)
+- Closing from open, the items leave first and the panel follows them
+  (`lib/sidebar-leave.ts`). What shows on each row (its icon or image, its
+  label, a description) leaves together toward the edge the sidebar goes
+  to and fades, in a 60 ms sweep from the top; a row with text travels its
+  own length and draws one hairline thread behind it, and the panel's slide
+  starts 100 ms after the click and carries the threads away. Measured
+  once, at the click; the motion is Web Animations, so opening again
+  mid-close plays the items back from where they are, and a close that
+  reverses an opening panel doesn't wait. Nothing runs under reduced
+  motion or in a workspace that isn't showing. Opening is unchanged.
+  (Amended 2026-10-09.)
 
 `lib/layout-transition.ts`, `data-layout-transition` and the per-screen
 width-holding wrappers are removed.
