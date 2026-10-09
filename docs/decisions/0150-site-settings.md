@@ -58,13 +58,12 @@ behind a confirm. The **Sites page** (`kind: "sites"` tab) lists every site
 with a choice, a visit in history, or cookies, customized sites first.
 
 **Screen sharing has its own picker.** A page's `getDisplayMedia` reaches
-Chromium's permission handler first (a `media` request with no media types)
-and the session's display-media handler second. The picker runs at the
+Chromium's permission handler first (a `display-capture` request) and the
+session's display-media handler second. The picker runs at the
 first stage: "Choose what to share", Chrome's three panes (a browser tab
 of this window, an application window, an entire screen), one Share
-button. Audio is not asked: at that stage Chromium has not said whether
-the page wants audio, so a shared tab carries its audio exactly when the
-page asked for it (Chrome's default state). Cancel denies the permission, so the page sees
+button. Audio is not asked: a shared tab carries its audio exactly when
+the page asked for it (Chrome's default state). Cancel denies the permission, so the page sees
 `NotAllowedError` exactly as in Chrome; a pick is stashed for the second
 stage, which hands it over. Tabs are shared by their main frame (audio
 too when requested, with local echo kept on), windows and screens by
@@ -115,8 +114,20 @@ app name token is matched without spaces, as Chromium writes it.
   the picker offers audio for tabs only.
 - Keeping Google's supported-browser gate happy means staying within two
   Chromium majors of Chrome stable: track Electron releases.
-- Electron 43.6 through 44.4.3 throw an uncaught `Invalid guestInstanceId`
-  from a `<webview>`'s `disconnectedCallback` when a loaded guest is
-  removed (electron/electron#53989; fix #54089 merged to 44-x-y). The
-  removal still completes. Until a release carries the fix, the renderer
-  swallows that one error and the e2e harness ignores it (TODO.md).
+  (2026-10-09) Chrome 156 reached stable on macOS on 2026-10-07, and
+  Google's sign-in started refusing Work ("This browser or app may not be
+  secure"). The newest Electron 44 (44.7.0) still carries Chromium 152, so
+  the app moved to Electron 45.0.0-beta.1 (Chromium 156.0.8078.12), pinned
+  exactly; follow the 45 betas to its stable release. A beta, because no
+  stable Electron carries a Chromium within two majors of Chrome 156; the
+  user agent and client hints already read as plain Chrome, so the
+  Chromium version was the whole gap. Electron 45 reports screen capture
+  as `display-capture` instead of a `media` request with no media types;
+  the picker now runs on that permission, and a `media` request is only
+  ever the camera or microphone.
+- Electron 43.6 through 44.4.3 threw an uncaught `Invalid guestInstanceId`
+  from a `<webview>`'s `disconnectedCallback` when a loaded guest was
+  removed (electron/electron#53989, fixed by #54089). The removal still
+  completed. Electron 44.4.4 and 45.0.0-beta.1 carry the fix (backports
+  #54099 and #54096), so the renderer no longer swallows that error and the
+  e2e harness no longer ignores it.

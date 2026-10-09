@@ -1856,3 +1856,20 @@ shows the spinner and the veil again. A take-over still refuses the agent
 until it reclaims. The person's own tabs are never held: an agent drives
 one only when asked, without veiling it, as before.
 
+### 2026-10-09: Google signs you in again, on a beta Electron
+
+Google's sign-in page in a Work tab started answering "Couldn't sign you in:
+This browser or app may not be secure". Work already presents as plain
+Chrome (the user agent and the client-hint brands), so the gap was the
+engine: Chrome 156 reached stable on 2026-10-07, Google admits only the
+newest Chrome majors, and every Electron 44 release, 44.7.0 included, still
+carries Chromium 152. The app moves to Electron 45.0.0-beta.1 (Chromium 156),
+pinned exactly, because no stable Electron is recent enough yet; it follows
+the 45 betas to stable (ADR 0150).
+
+Electron 45 reports a page's screen share as its own `display-capture`
+permission instead of a camera or microphone request with no devices. The
+share picker now opens on that permission, so Meet and other calls still
+get "Choose what to share" first, and Cancel still refuses the way Chrome
+does. The `Invalid guestInstanceId` error Electron threw when a loaded tab
+closed is fixed in this release, so the app stops hiding it.

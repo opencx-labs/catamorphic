@@ -327,7 +327,11 @@ async function doPrepareProfileSession(
     void policy.request(wc, profileId, permission, details).then(
       (granted) => {
         // A page with a camera, microphone or share open stays awake.
-        if (granted && permission === "media") noteCapture(wc);
+        if (
+          granted &&
+          (permission === "media" || permission === "display-capture")
+        )
+          noteCapture(wc);
         callback(granted);
       },
       () => callback(false),
@@ -1368,8 +1372,8 @@ export function registerBrowserSupport(
 
   /**
    * The app's picker for a page's getDisplayMedia. Chromium asks the
-   * permission handler first (a `media` request with no media types) and
-   * the display-media handler second; picking at the first stage lets a
+   * permission handler first (a `display-capture` request) and the
+   * display-media handler second; picking at the first stage lets a
    * cancel deny the permission, which the page sees as NotAllowedError
    * (Chrome's answer), and the second stage hands over the pick.
    */
@@ -1409,12 +1413,7 @@ export function registerBrowserSupport(
         details,
       );
       if (decision.outcome === "block") return false;
-      if (
-        permission === "media" &&
-        permissionKindsFor(permission, details).every(
-          (kind) => kind === "screenShare",
-        )
-      ) {
+      if (permission === "display-capture") {
         const host = guest.hostWebContents;
         if (!host || host.isDestroyed()) return false;
         const streams = await pickShare({ guest, host, profileId, origin });
