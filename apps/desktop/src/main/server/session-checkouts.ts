@@ -21,8 +21,16 @@ export interface SessionCheckoutBinding {
   projectId: string;
   path: string;
   kind: Exclude<SessionCheckoutKind, "primary">;
-  /** A chat's own worktree has none until its first checkout (ADR 0215). */
+  /**
+   * The branch the worktree is on. A chat's own worktree has none until
+   * its first checkout (ADR 0215).
+   */
   branch: string | null;
+  /**
+   * The branch Work made for the chat's own worktree, the only one its
+   * bring or discard ever deletes (ADR 0215); null for any other.
+   */
+  ownBranch?: string | null;
 }
 
 export interface SessionCheckoutDescription {
@@ -156,6 +164,7 @@ async function headState(
     ["CHERRY_PICK_HEAD", "a cherry-pick"],
     ["REVERT_HEAD", "a revert"],
     ["BISECT_LOG", "a bisect"],
+    ["sequencer", "a cherry-pick or revert"],
   ];
   const underway = await Promise.all(
     operations.map(async ([file, operation]) =>
@@ -307,6 +316,8 @@ export class SessionCheckouts {
       );
       CREATE INDEX IF NOT EXISTS session_checkouts_project_idx
         ON desktop.session_checkouts(project_id);
+      ALTER TABLE desktop.session_checkouts
+        ADD COLUMN IF NOT EXISTS own_branch text;
     `);
   }
 
@@ -355,7 +366,9 @@ export class SessionCheckouts {
         ? await this.withAssignmentLock({
             projectId: input.projectId,
             operation: () => this.describe(input),
-          })
+            // A repository Git cannot read (ownership, a dangling .git)
+            // still works as a plain folder.
+          }).catch(() => this.describe(input))
         : await this.describe(input);
     if (input.workspace && current.kind === "primary") {
       const created = await this.createManaged({
@@ -619,6 +632,7 @@ export class SessionCheckouts {
           path: await canonicalPath(worktreePath),
           kind: "managed",
           branch: registered.branch,
+          ownBranch: existing?.ownBranch ?? null,
         };
         await this.save(binding);
         return binding;
@@ -673,6 +687,7 @@ export class SessionCheckouts {
           path: await canonicalPath(worktreePath),
           kind: "managed",
           branch,
+          ownBranch: kept ? (existing?.ownBranch ?? null) : branch,
         };
         await input.ensureAvailable?.(binding.path);
         await this.save(binding);
@@ -789,9 +804,10 @@ export class SessionCheckouts {
    * Bring a chat's own worktree back into the project folder (ADR 0215):
    * its changes since it left the folder's history, merged three ways with
    * the folder's commit, written there as uncommitted changes. Refused,
-   * changing nothing, on a conflict or when the folder's own uncommitted
-   * changes touch the same files. Then the chat works in the project
-   * folder, and its worktree and branch are gone.
+   * leaving the project folder as it was, on a conflict or when the
+   * folder's own uncommitted changes touch the same files (the worktree's
+   * changes are recorded on its branch by then). Then the chat works in
+   * the project folder, and its worktree and own branch are gone.
    */
   async bringToProjectFolder(input: {
     projectId: string;
@@ -833,8 +849,21 @@ export class SessionCheckouts {
         ? await this.applyToProjectFolder({ root, branch })
         : [];
       if (present) await this.removeCheckout(root, binding.path);
-      if (branch)
-        await git(root, ["branch", "-D", branch]).catch(() => undefined);
+      // Only the branch Work made goes, and only when everything on it
+      // was brought: a branch the chat switched to stays.
+      const own = binding.ownBranch;
+      if (
+        own &&
+        branch &&
+        (own === branch ||
+          (await gitSucceeds(root, [
+            "merge-base",
+            "--is-ancestor",
+            `refs/heads/${own}`,
+            `refs/heads/${branch}`,
+          ])))
+      )
+        await git(root, ["branch", "-D", own]).catch(() => undefined);
       await this.deleteBinding(input.sessionId);
       return brought;
     });
@@ -848,9 +877,9 @@ export class SessionCheckouts {
   }
 
   /**
-   * Discard a chat's own worktree and its branch (ADR 0215); the chat
-   * works in the project folder from its next turn. A branch the chat
-   * switched the worktree to stays.
+   * Discard a chat's own worktree and the branch Work made for it (ADR
+   * 0215); the chat works in the project folder from its next turn. A
+   * branch the chat switched the worktree to stays.
    */
   async discard(input: {
     projectId: string;
@@ -864,8 +893,8 @@ export class SessionCheckouts {
         await this.assertSameRepository(root, own.path);
         await this.removeCheckout(root, own.path);
       }
-      if (own.branch)
-        await git(root, ["branch", "-D", own.branch]).catch(() => undefined);
+      if (own.ownBranch)
+        await git(root, ["branch", "-D", own.ownBranch]).catch(() => undefined);
       await this.deleteBinding(input.sessionId);
       return own;
     });
@@ -914,13 +943,6 @@ export class SessionCheckouts {
       );
       await withRepositoryMutationLock(commonDir, async () => {
         for (const worktree of managed) {
-          const orphan = !(
-            await this.pglite.query(
-              "SELECT 1 FROM desktop.session_checkouts WHERE path = $1",
-              [worktree.path],
-            )
-          ).rows.length;
-          if (!orphan || !(await exists(worktree.path))) continue;
           const loose: SessionCheckoutBinding = {
             sessionId: "",
             projectId: project.name,
@@ -928,14 +950,19 @@ export class SessionCheckouts {
             kind: "managed",
             branch: worktree.branch,
           };
-          if (await this.keeps({ root, binding: loose })) continue;
-          const head = await headState(worktree.path).catch(() => null);
-          if (!head?.branch || head.busy) continue;
-          await this.recordChanges({
-            workingDirectory: worktree.path,
-            message: "Put away after the chat left it",
-          }).catch(() => undefined);
-          await this.removeCheckout(root, worktree.path);
+          // One worktree that cannot be read leaves the rest to sweep.
+          const removable = await (async () => {
+            if (!(await exists(worktree.path))) return false;
+            if (await this.keeps({ root, binding: loose })) return false;
+            const head = await headState(worktree.path);
+            if (!head.branch || head.busy) return false;
+            await this.recordChanges({
+              workingDirectory: worktree.path,
+              message: "Put away after the chat left it",
+            });
+            return true;
+          })().catch(() => false);
+          if (removable) await this.removeCheckout(root, worktree.path);
         }
       });
     }
@@ -1202,10 +1229,15 @@ export class SessionCheckouts {
     const target = await canonicalPath(input.path).catch(() =>
       path.resolve(input.path),
     );
-    const others = await this.pglite.query<{ path: string }>(
-      "SELECT path FROM desktop.session_checkouts WHERE session_id <> $1",
-      [input.sessionId || "00000000-0000-0000-0000-000000000000"],
-    );
+    // Without a session, every binding is another chat's.
+    const others = input.sessionId
+      ? await this.pglite.query<{ path: string }>(
+          "SELECT path FROM desktop.session_checkouts WHERE session_id <> $1",
+          [input.sessionId],
+        )
+      : await this.pglite.query<{ path: string }>(
+          "SELECT path FROM desktop.session_checkouts",
+        );
     for (const other of others.rows) {
       const candidate = await canonicalPath(other.path).catch(() =>
         path.resolve(other.path),
@@ -1227,7 +1259,7 @@ export class SessionCheckouts {
       .then(parseWorktreePorcelain)
       .catch(() => []);
     if (registered.some((worktree) => path.resolve(worktree.path) === target))
-      await git(root, ["worktree", "remove", "--force", worktreePath]).catch(
+      await git(root, ["worktree", "remove", "--force", target]).catch(
         () => undefined,
       );
   }
@@ -1304,6 +1336,10 @@ export class SessionCheckouts {
       );
     if (merged.code !== 0 || !tree) {
       console.warn(`[desktop] merge-tree failed: ${merged.stderr.trim()}`);
+      if (/unknown option|usage: git merge-tree/.test(merged.stderr))
+        throw new Error(
+          "Bringing changes back needs Git 2.38 or newer. Update Git, then try again.",
+        );
       throw new Error(
         "Git could not combine these changes with the project folder.",
       );
@@ -1425,8 +1461,9 @@ export class SessionCheckouts {
       path: string;
       kind: "managed" | "external";
       branch: string | null;
+      own_branch: string | null;
     }>(
-      `SELECT session_id, project_id, path, kind, branch
+      `SELECT session_id, project_id, path, kind, branch, own_branch
        FROM desktop.session_checkouts
        WHERE session_id = $1 AND project_id = $2`,
       [input.sessionId, input.projectId],
@@ -1439,6 +1476,7 @@ export class SessionCheckouts {
           path: row.path,
           kind: row.kind,
           branch: row.branch,
+          ownBranch: row.own_branch,
         }
       : null;
   }
@@ -1446,19 +1484,21 @@ export class SessionCheckouts {
   private async save(binding: SessionCheckoutBinding): Promise<void> {
     await this.pglite.query(
       `INSERT INTO desktop.session_checkouts
-        (session_id, project_id, path, kind, branch)
-       VALUES ($1, $2, $3, $4, $5)
+        (session_id, project_id, path, kind, branch, own_branch)
+       VALUES ($1, $2, $3, $4, $5, $6)
        ON CONFLICT (session_id) DO UPDATE SET
          project_id = EXCLUDED.project_id,
          path = EXCLUDED.path,
          kind = EXCLUDED.kind,
-         branch = EXCLUDED.branch`,
+         branch = EXCLUDED.branch,
+         own_branch = EXCLUDED.own_branch`,
       [
         binding.sessionId,
         binding.projectId,
         binding.path,
         binding.kind,
         binding.branch,
+        binding.ownBranch ?? null,
       ],
     );
   }

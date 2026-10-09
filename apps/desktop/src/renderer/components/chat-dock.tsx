@@ -496,8 +496,12 @@ function ChatDockContent({
         compatibleEnvironments[0]?.name,
     );
   }, [compatibleEnvironments, environmentQuery.data, selectedEnvironment]);
-  /** The first message is recording the worktree chosen before it (ADR 0215). */
+  /**
+   * The first message is recording the worktree chosen before it (ADR
+   * 0215), or recording it failed and the next send tries again.
+   */
   const [recordingWorktree, setRecordingWorktree] = useState(false);
+  const [worktreeUnrecorded, setWorktreeUnrecorded] = useState(false);
   const chat = useAgentChat(projectId, {
     sessionId: entry.sessionId,
     agentId: selectedAgentId,
@@ -522,7 +526,9 @@ function ChatDockContent({
       setRecordingWorktree(true);
       try {
         await desktopApi.sessionUseOwnWorktree({ projectId, sessionId });
+        setWorktreeUnrecorded(false);
       } catch (cause) {
+        setWorktreeUnrecorded(true);
         throw new Error(ipcErrorText(cause));
       } finally {
         setRecordingWorktree(false);
@@ -588,7 +594,8 @@ function ChatDockContent({
   // folder. Until the first message records a worktree chosen before it,
   // the choice is what the chat shows.
   const worktreeDraft =
-    Boolean(entry.worktree) && (!activeSessionId || recordingWorktree);
+    Boolean(entry.worktree) &&
+    (!activeSessionId || recordingWorktree || worktreeUnrecorded);
   const checkout = useSessionCheckout(projectId, activeSessionId, {
     enabled: !authority && !recordingWorktree,
   }).data;

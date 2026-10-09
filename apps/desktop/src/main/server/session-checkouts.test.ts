@@ -1009,6 +1009,87 @@ describe("SessionCheckouts", () => {
       );
     });
 
+    it("deletes only the branch Work made, never one the chat switched to", async () => {
+      await git(rootPath, ["branch", "feature-x"]);
+      await checkouts.plan({ projectId, sessionId });
+      const { path: worktree } = await agentCheckout();
+      await fs.writeFile(path.join(worktree, "own.md"), "own\n");
+      await checkouts.checkpoint({
+        projectId,
+        sessionId,
+        workingDirectory: worktree,
+        message: "Turn",
+      });
+      await git(worktree, ["switch", "-q", "feature-x"]);
+      await fs.writeFile(path.join(worktree, "feature.md"), "x\n");
+      await checkouts.putAway({ projectId, sessionId });
+      await checkouts.discard({ projectId, sessionId });
+      expect(await git(rootPath, ["show", "feature-x:feature.md"])).toBe("x\n");
+      await expect(
+        git(rootPath, ["show-ref", "--verify", "refs/heads/work/22222222"]),
+      ).rejects.toThrow();
+    });
+
+    it("keeps its own branch when bringing a branch that does not hold it", async () => {
+      await git(rootPath, ["branch", "elsewhere"]);
+      await checkouts.plan({ projectId, sessionId });
+      const { path: worktree } = await agentCheckout();
+      await fs.writeFile(path.join(worktree, "own.md"), "own\n");
+      await checkouts.checkpoint({
+        projectId,
+        sessionId,
+        workingDirectory: worktree,
+        message: "Turn",
+      });
+      await git(worktree, ["switch", "-q", "elsewhere"]);
+      await fs.writeFile(path.join(worktree, "elsewhere.md"), "e\n");
+      await checkouts.bringToProjectFolder({ projectId, sessionId });
+      expect(
+        await fs.readFile(path.join(rootPath, "elsewhere.md"), "utf8"),
+      ).toBe("e\n");
+      expect(await git(rootPath, ["show", "work/22222222:own.md"])).toBe(
+        "own\n",
+      );
+      expect(await git(rootPath, ["show", "elsewhere:elsewhere.md"])).toBe(
+        "e\n",
+      );
+    });
+
+    it("never sweeps a worktree whose changes Git could not record", async () => {
+      const left = await checkouts.createManaged({ projectId, sessionId });
+      await fs.writeFile(path.join(left.path, "unsaved.md"), "keep me\n");
+      await checkouts.returnPrimary({ projectId, sessionId });
+      const gitDir = (
+        await git(left.path, ["rev-parse", "--absolute-git-dir"])
+      ).trim();
+      await fs.writeFile(path.join(gitDir, "index.lock"), "");
+      await checkouts.sweep({ resting: async () => true });
+      expect(
+        await fs.readFile(path.join(left.path, "unsaved.md"), "utf8"),
+      ).toBe("keep me\n");
+    });
+
+    it("lets a chat work in a folder whose Git it cannot read", async () => {
+      const broken = path.join(tmpDir, "broken");
+      await fs.mkdir(broken);
+      await fs.writeFile(
+        path.join(broken, ".git"),
+        "gitdir: /nowhere/at/all\n",
+      );
+      const plain = new SessionCheckouts({
+        pglite,
+        worktreesDirectory: path.join(tmpDir, "worktrees"),
+        projectRoot: () => broken,
+      });
+      expect(
+        await plain.resolveForAgent({
+          projectId,
+          sessionId,
+          requiresIsolation: async () => false,
+        }),
+      ).toEqual({ path: broken, owned: false });
+    });
+
     it("tells the agent where it works every turn", async () => {
       expect(await checkouts.notice({ projectId, sessionId })).toBeNull();
       await checkouts.plan({ projectId, sessionId });
