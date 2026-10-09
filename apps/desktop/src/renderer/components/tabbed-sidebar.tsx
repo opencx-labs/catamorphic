@@ -18,6 +18,7 @@ import type {
 import { matchesSidebarSurface } from "../../shared/sidebar.js";
 import { lucideIcon } from "../lib/lucide-icon.js";
 import { motionMs } from "../lib/motion.js";
+import { leaveSidebar, type SidebarLeave } from "../lib/sidebar-leave.js";
 import { type SidebarMotion, useSidebarMotion } from "../lib/sidebar-motion.js";
 import { Collapsible } from "./collapsible.js";
 import { ShortcutHint } from "./shortcut-hint.js";
@@ -109,6 +110,45 @@ export function TabbedSidebar({
   useLayoutEffect(() => {
     onMotionChange?.({ phase: motion.phase, docked: motion.docked });
   }, [motion.phase, motion.docked, onMotionChange]);
+  // Closing from open, the items leave before the panel does (and the
+  // panel waits for them: data-items-lead). Opening again mid-close plays
+  // them back from where they are; once closed they are put back at once.
+  const [shownPhase, setShownPhase] = useState(motion.phase);
+  const [itemsLead, setItemsLead] = useState(false);
+  if (motion.phase !== shownPhase) {
+    setShownPhase(motion.phase);
+    // Not an overlay's reveal: a peek is dismissed often, and at once.
+    setItemsLead(
+      motion.phase === "closing" && shownPhase === "open" && !overlay,
+    );
+  }
+  const leave = useRef<SidebarLeave | undefined>(undefined);
+  useLayoutEffect(() => {
+    const current = leave.current;
+    if (motion.phase === "closed") {
+      current?.cancel();
+      leave.current = undefined;
+    } else if (motion.phase !== "closing") {
+      current?.leaving(false);
+    } else if (current) {
+      current.leaving(true);
+    } else if (itemsLead && panel.current) {
+      leave.current = leaveSidebar({
+        panel: panel.current,
+        side,
+        onReturned: () => {
+          leave.current = undefined;
+        },
+      });
+    }
+  }, [motion.phase, itemsLead, side]);
+  useEffect(
+    () => () => {
+      leave.current?.cancel();
+      leave.current = undefined;
+    },
+    [],
+  );
   const [content, setContent] = useState<
     ReadonlyMap<string, SidebarContentState>
   >(new Map());
@@ -200,6 +240,7 @@ export function TabbedSidebar({
       }}
       data-sidebar={side}
       data-motion={motion.phase}
+      data-items-lead={itemsLead || undefined}
       data-docked={motion.docked}
       data-settled={motion.settled}
       data-tab-motion={tabMotion}

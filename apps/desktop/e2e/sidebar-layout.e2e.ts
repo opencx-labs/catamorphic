@@ -143,6 +143,87 @@ describe("configurable browser workspace", () => {
     ).toBe("false");
   });
 
+  it("lets its items leave before it does, and brings them back when it opens mid-close", async () => {
+    const aside = "document.querySelector('aside[data-sidebar=left]')";
+    // The leave runs on Web Animations; the panel's slide is a transition.
+    const leaving = `(element) => element.getAnimations({ subtree: true }).filter((animation) => animation.id === 'sidebar-leave')`;
+    const read = () =>
+      app.eval<{
+        row: string | undefined;
+        rate: number | undefined;
+        threads: number;
+        delay: number | undefined;
+      }>(`(() => {
+        const aside = ${aside};
+        const slide = aside.querySelector('.sidebar-inner').getAnimations()
+          .find((animation) => animation.transitionProperty === 'transform');
+        const row = [...aside.querySelectorAll('[data-sidebar-item-id]')]
+          .find((row) => (${leaving})(row).length > 0);
+        return {
+          row: row?.dataset.sidebarItemId,
+          rate: row && (${leaving})(row)[0].playbackRate,
+          threads: aside.querySelectorAll('.sidebar-traces > .sidebar-trace').length,
+          delay: slide?.effect.getTiming().delay,
+        };
+      })()`);
+    // Anything in the rows drawn less than opaque, as styled at rest.
+    const dimmed = () =>
+      app.eval<string[]>(
+        `[...${aside}.querySelectorAll('[data-tree-primary], [data-tree-primary] *')].filter((element) => element.checkVisibility() && getComputedStyle(element).opacity !== '1').map((element) => element.outerHTML.slice(0, 80) + ' ' + getComputedStyle(element).opacity)`,
+      );
+    const before = await dimmed();
+    // Slowed, so the close can be read while it runs.
+    await app.cdp("Animation.enable");
+    await app.cdp("Animation.setPlaybackRate", { playbackRate: 0.1 });
+    try {
+      await run("$('button[aria-label=\"Collapse sidebar\"]').click()");
+      await app.waitFor(
+        `${aside}.dataset.motion === 'closing' && (${leaving})(${aside}).length > 0`,
+        { label: "items leaving" },
+      );
+      const closing = await read();
+      expect(closing.row).toBeTruthy();
+      expect(closing.rate).toBe(1);
+      expect(closing.threads).toBeGreaterThan(0);
+      // The panel follows the items a beat later.
+      expect(closing.delay).toBe(100);
+      // Opened mid-close (the toggle rides away with the panel, so by its
+      // shortcut), the items come back from where they are: that the leave
+      // plays back is pinned in tabbed-sidebar-leave.test.tsx; here, that
+      // everything ends where it was.
+      await app.eval(`window.dispatchEvent(new KeyboardEvent('keydown', {
+        key: 'b', bubbles: true, cancelable: true,
+        ...(/Mac/.test(navigator.platform) ? { metaKey: true } : { ctrlKey: true }),
+      })); true`);
+    } finally {
+      await app.cdp("Animation.setPlaybackRate", { playbackRate: 1 });
+    }
+    await app.waitFor(
+      `${aside}.dataset.motion === 'open' && ${aside}.dataset.settled === 'true' && (${leaving})(${aside}).length === 0`,
+      { label: "items back" },
+    );
+    expect(await app.eval(`!!${aside}.querySelector('.sidebar-traces')`)).toBe(
+      false,
+    );
+    expect(await dimmed()).toEqual(before);
+    // Closed all the way, nothing is left behind once it has gone.
+    await run("$('button[aria-label=\"Collapse sidebar\"]').click()");
+    await app.waitFor(
+      `${aside}.dataset.motion === 'closed' && ${aside}.dataset.settled === 'true'`,
+    );
+    expect(
+      await app.eval(
+        `(${leaving})(${aside}).length + ${aside}.querySelectorAll('.sidebar-traces').length`,
+      ),
+    ).toBe(0);
+    await run("$('button[aria-label=\"Expand sidebar\"]').click()");
+    await app.waitFor(
+      `${aside}.dataset.motion === 'open' && ${aside}.dataset.settled === 'true'`,
+    );
+    // Every item shows as it did before the close.
+    expect(await dimmed()).toEqual(before);
+  });
+
   it("draws one keyboard-led ring: none after right-click and Escape, the accent at once on Tab", async () => {
     // The row may still be sliding into its expanded folder.
     const point = await app.waitFor<{ x: number; y: number }>(

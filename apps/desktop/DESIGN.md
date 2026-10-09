@@ -308,9 +308,10 @@ the animation is wrong, not the test.
 Framed content previews transition the workspace margins and corner radius over
 200 ms with the standard easing. Reduced motion applies the frame immediately.
 
-A sidebar slides with a 200 ms transform the moment it is toggled, and the
-content beside it settles after it stops: a 200 ms view-transition morph
-from its old layout to its new one (ADR 0200). The content resizes once per
+A sidebar slides with a 200 ms transform the moment it is toggled (closing
+from open, 100 ms after its items start to leave), and the
+content beside it settles after it stops: a 300 ms linear view-transition
+fade in place from its old layout to its new one (ADR 0200). The content resizes once per
 toggle, never while anything moves. New motion beside a page, terminal,
 editor or app frame moves over it rather than animating its size.
 
@@ -327,11 +328,12 @@ editor or app frame moves over it rather than animating its size.
 | `profile-veil-in` / `profile-veil-out` (in-place profile switch) | 200ms | each other (exact mirror) |
 | `question-in` (ask_user panel) | 260ms | — |
 | `pane-in-left` / `pane-in-right` (keyboard tab cycling) | 200ms | — (content-changed signal on a persistent wrapper; no exit to pair) |
-| `content-out` / `content-in` (content settling beside a still sidebar, view transition) | 200ms | each other (the old snapshot leaves as the new one arrives) |
-| `dock-float` / `dock-rail` groups (a floating chat and the bubble strip gliding while the content settles, view transition) | 200ms | the content's settle; a chat tab (`dock-tab`) uses `content-out` / `content-in` |
+| `content-fade-out` / `content-fade-in` (content settling beside a still sidebar, view transition: the old snapshot fades where it was, the new one fades in) | 300ms, linear (a sanctioned exception) | each other (the old snapshot leaves as the new one arrives) |
+| `dock-float` / `dock-rail` groups (a floating chat and the bubble strip gliding while the content settles, view transition) | 200ms | within the content's 300ms fade; a chat tab (`dock-tab`) fades in place with `content-fade-out` / `content-fade-in` from its own place |
 | `bubble-ask` (agent question arrival) | 280ms | — (one-shot nudge on a persistent bubble; no exit to pair) |
 | `input-recall-{up,down}-{a,b}` (composer ↑/↓ history) | 150ms | — (transform-only directional content signal; paired names replay rapid same-direction recalls without a classless frame) |
 | `activity-leave` / `activity-arrive` (agent activity line swap) | 150ms / 200ms | — (one beat of the working pulse carries a content swap on a persistent line: the old text dims up and away, the new rises in, then `animate-pulse` resumes) |
+| sidebar leave (Web Animations in `lib/sidebar-leave.ts`: a closing sidebar's rows leave, each drawing a thread behind it; the panel's slide waits 100ms for them) | 160ms | its own reverse when the sidebar opens mid-close; opening shows the items in place as before (a sanctioned exception) |
 | `title-change` (rename flash) | 1200ms | **sanctioned exception** — the
   one decorative-adjacent signal (see design log 2026-07-31); allowlisted in
   the test's `DURATION_EXCEPTIONS` |
@@ -344,6 +346,13 @@ editor or app frame moves over it rather than animating its size.
 - `veil-touch` (760ms): a press on a held surface shows the veil, which
   gives where it was touched and clears; shorter, the wobble reads as a
   flicker.
+- `content-fade-out` / `content-fade-in` (rule 1): linear, over 300ms. A
+  cross-fade in place moves nothing, and the standard curve does most of
+  an opacity change in its first quarter, so a fade on it reads as a snap.
+- Sidebar close (rule 4): closing from open runs 100ms longer than opening,
+  since the items leave before the panel slides; the slide itself is 200ms
+  both ways. Not an `.animate-*` class, so the test allowlist doesn't
+  carry it.
 
 New exceptions require adding to both this list and the test allowlist —
 that friction is intentional.
@@ -1911,6 +1920,53 @@ frame whether a text field has the caret before going back or forward.
 
 A browser tab's hold is the turn's, not the chat's: a settle that arrives
 after the chat's next turn started no longer lets that turn's page go.
+
+### 2026-10-09: A closing sidebar's items leave first
+
+The sidebar slid away as one sheet. Closing now reads as the items leaving
+and the sidebar following them: what shows on each row (its icon or image,
+its label, a description) leaves together toward the edge the sidebar goes
+to and fades, in a quick sweep from the top, and the panel starts 100ms
+after the click. A row with text travels exactly its own length and draws a
+hairline in its text's color behind it, so the line grows from where the
+row ended and its free end stays on the row's trailing edge: the row pulls
+a thread out of its place and never crosses it. The threads are what the
+items leave behind, and the panel carries them away.
+
+Two takes lost. Soft bars the size of each label (a skeleton left behind)
+read as loading, and over text that was still fading they looked smudged.
+A hairline across the middle of each label read as strikethrough, as if
+the items had been crossed off. Hidden hover actions must leave nothing,
+so only what is drawn and opaque leaves (`checkVisibility`).
+
+The review of the first version moved the motion to Web Animations: CSS
+animations removed on reopen snapped every item back in a frame, and the
+shorthand stopped a row's own spinner. Now opening mid-close plays the
+items back from where they are, and a close that reverses an opening panel
+doesn't wait for items. Pieces of a row are clustered (close together on
+one line), so a favicon travels with its label and one thread spans the
+row; in the right sidebar the thread trails the icon instead of crossing
+it. Everything is measured once on the click, only for what is on screen;
+nothing runs under reduced motion or in a project's workspace that isn't
+showing. Opening is unchanged.
+
+The content beside the sidebar used to settle by morphing: its box grew
+or shrank into place while its snapshots travelled with the main column.
+The growing box showed the app's background around it for a moment, which
+read as a glitch. It now fades in place: the old layout fades out exactly
+where it was as the new one fades in, and nothing moves or stretches. The
+page probe that told a centred column from a left-aligned one is gone with
+the motion it served. The fade is linear over 300ms: on the standard curve,
+which does most of its change in the first quarter, a 200ms fade read as a
+snap.
+
+A review found three things the fade needed. A custom fade drops the
+browser's plus-lighter blend, so the pair dimmed toward the sidebar's
+colour midway; the snapshots now blend plus-lighter. A chat tab in the
+right half of a split moves by part of what the content does, so it gets
+its own offset rather than the content's. And a compact window's
+hover-revealed sidebar closes without the items' lead: a peek is dismissed
+often, and should go at once.
 
 ### 2026-10-09: A chat's own worktree is the person's choice, and comes back from the popup
 
