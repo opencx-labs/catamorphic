@@ -9,6 +9,14 @@
   grant tab permissions. Native messaging with the Claude and ChatGPT
   desktop apps is checked by hand on macOS only. MV2 extensions load
   unpacked only while Electron runs MV2.
+- **Electron 45: stable pin and async `safeStorage`.** Work pins
+  45.0.0-beta.1 for Chromium 156 (Google's sign-in gate, ADR 0150); move to
+  45.0.0 stable when it ships. Electron 45 deprecates the synchronous
+  `safeStorage.encryptString` and `decryptString` in favor of the async
+  pair. They still work; the call sites are `agent-bindings-store.ts`,
+  `agents-store.ts`, `browser-vault.ts`, `connections-store.ts`,
+  `credential-vault.ts`, `remote-projects-store.ts` and
+  `runner-key-store.ts` in `apps/desktop/src/main`.
 - **Full-stack Claude Code e2e via a fake CLI.** The ask_user flow now has
   three pins: harness unit tests (mocked query), the harness↔core seam
   integration test (`packages/claude-code/src/__tests__/

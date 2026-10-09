@@ -248,7 +248,9 @@ let extensionsHost: ExtensionsHost | null = null;
  */
 function chromeBrands(ua: string): { brands: string; fullVersionList: string } {
   const major = /Chrome\/(\d+)/.exec(ua)?.[1] ?? "150";
-  const full = /Chrome\/([\d.]+)/.exec(ua)?.[1] ?? `${major}.0.0.0`;
+  // The UA names only the major version, as Chrome's reduced UA does; the
+  // full version list names the engine's real one.
+  const full = process.versions.chrome ?? `${major}.0.0.0`;
   return {
     brands: `"Google Chrome";v="${major}", "Chromium";v="${major}", "Not;A=Brand";v="8"`,
     fullVersionList: `"Google Chrome";v="${full}", "Chromium";v="${full}", "Not;A=Brand";v="8.0.0.0"`,
