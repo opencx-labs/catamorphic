@@ -72,11 +72,12 @@ describe("chatFolderView (ADR 0215)", () => {
     });
     expect(view.value).toBe("work/abc");
     expect(view.tag).toBeUndefined();
-    expect(view.lines).toEqual([
-      "/data/worktrees/p/s/project",
-      "3 changed files",
+    expect(view.lines).toEqual(["3 changed files"]);
+    expect(actions(view)).toEqual([
+      "Bring to project folder",
+      "Open folder",
+      "Discard",
     ]);
-    expect(actions(view)).toEqual(["Bring to project folder", "Discard"]);
   });
 
   it("moves a worktree with nothing to bring straight back", () => {
@@ -93,8 +94,8 @@ describe("chatFolderView (ADR 0215)", () => {
     });
     expect(view).toMatchObject({ tag: "put away" });
     expect(view.lines).toEqual([
-      "Checked out again with the next message.",
       "No changes yet",
+      "Checked out again with the next message.",
     ]);
     expect(view.actions).toEqual([
       { id: "bring", label: "Use project folder" },

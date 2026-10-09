@@ -15,6 +15,7 @@ export type ChatFolderAction =
   | "own-worktree"
   | "project-folder"
   | "bring"
+  | "open"
   | "discard";
 
 export interface ChatFolderView {
@@ -117,12 +118,15 @@ export function chatFolderView(input: {
       draft: false,
     };
   const changed = detail.changedFiles;
+  // The folder lives in Work's own storage: opened, not spelled out.
+  const open = detail.present
+    ? [{ id: "open" as const, label: "Open folder" }]
+    : [];
   return {
     kind: "managed",
     value: detail.branch,
     ...(detail.present ? {} : { tag: "put away" }),
     lines: [
-      detail.present ? detail.path : "Checked out again with the next message.",
       ...(changed === null
         ? []
         : [
@@ -130,25 +134,20 @@ export function chatFolderView(input: {
               ? "No changes yet"
               : `${changed} changed ${changed === 1 ? "file" : "files"}`,
           ]),
+      ...(detail.present ? [] : ["Checked out again with the next message."]),
     ],
     // With nothing to bring, moving back is simply using the folder.
     actions:
       changed === 0
-        ? [{ id: "bring", label: "Use project folder" }]
+        ? [{ id: "bring", label: "Use project folder" }, ...open]
         : [
             { id: "bring", label: "Bring to project folder" },
+            ...open,
             { id: "discard", label: "Discard", danger: true },
           ],
     draft: false,
   };
 }
-
-const PENDING_LABELS: Record<ChatFolderAction, string> = {
-  "own-worktree": "Choosing…",
-  "project-folder": "Changing…",
-  bring: "Bringing…",
-  discard: "Discarding…",
-};
 
 /** What one action does, and what the row says once it is done. */
 async function perform(
@@ -210,7 +209,7 @@ export function ChatFolder({
   const keepRef = useRef<HTMLButtonElement>(null);
   const statusRef = useRef<HTMLParagraphElement>(null);
   // Focus follows the row as it changes under the keyboard.
-  const focusAfter = useRef<"keep" | "discard" | "status" | null>(null);
+  const focusAfter = useRef<"keep" | "discard" | "next" | null>(null);
   useEffect(() => {
     const target = focusAfter.current;
     focusAfter.current = null;
@@ -219,7 +218,13 @@ export function ChatFolder({
       rowRef.current
         ?.querySelector<HTMLButtonElement>('[data-folder-action="discard"]')
         ?.focus();
-    else if (target === "status") statusRef.current?.focus();
+    // After an action, the row's next choice; the result is announced.
+    else if (target === "next")
+      (
+        rowRef.current?.querySelector<HTMLButtonElement>(
+          "[data-folder-action]",
+        ) ?? statusRef.current
+      )?.focus();
   });
   const view = chatFolderView({
     started: Boolean(sessionId),
@@ -256,7 +261,7 @@ export function ChatFolder({
     setError(outcome.error);
     setConfirmDiscard(false);
     setPending(null);
-    focusAfter.current = "status";
+    focusAfter.current = "next";
   };
   const choose = (action: ChatFolderAction) => {
     if (view.draft) {
@@ -267,6 +272,14 @@ export function ChatFolder({
     if (action === "discard") {
       setConfirmDiscard(true);
       focusAfter.current = "keep";
+      return;
+    }
+    if (action === "open") {
+      const folder = checkout.data?.path;
+      if (folder)
+        void desktopApi
+          .revealFolder(folder)
+          .catch((cause: unknown) => setError(ipcErrorText(cause)));
       return;
     }
     void run(action, sessionId);
@@ -281,9 +294,9 @@ export function ChatFolder({
         data-testid="chat-folder"
         data-folder-kind={view.kind}
       >
-        <span className="flex min-w-0 items-baseline gap-1.5">
+        <span className="flex min-w-0 flex-wrap items-baseline gap-x-1.5">
           <span
-            className={`min-w-0 truncate ${view.kind === "pending" ? "text-fg-faint" : ""}`}
+            className={`min-w-0 break-all ${view.kind === "pending" ? "text-fg-faint" : ""}`}
           >
             {view.value}
           </span>
@@ -308,7 +321,6 @@ export function ChatFolder({
               <PendingButton
                 type="button"
                 pending={pending === "discard"}
-                pendingLabel={PENDING_LABELS.discard}
                 disabled={Boolean(disabledReason)}
                 data-disabled-reason={disabledReason}
                 className="cursor-pointer text-danger hover:underline disabled:cursor-default disabled:no-underline disabled:opacity-50"
@@ -343,7 +355,6 @@ export function ChatFolder({
                 type="button"
                 data-folder-action={action.id}
                 pending={pending === action.id}
-                pendingLabel={PENDING_LABELS[action.id]}
                 disabled={
                   Boolean(disabledReason) ||
                   (pending !== null && pending !== action.id)
