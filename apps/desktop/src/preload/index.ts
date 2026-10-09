@@ -1392,8 +1392,11 @@ const api = {
       ipcRenderer.send("catamorphic:git-overview-unsubscribe", id);
     };
   },
-  sessionCheckouts: (projectId: string): Promise<unknown> =>
-    invoke("catamorphic:session-checkouts", projectId),
+  sessionCheckouts: (
+    projectId: string,
+    options?: { titles?: boolean },
+  ): Promise<unknown> =>
+    invoke("catamorphic:session-checkouts", projectId, options),
   sessionUseProjectFolder: (input: { projectId: string; sessionId: string }) =>
     invoke("catamorphic:session-use-project-folder", input),
   sessionCheckout: (input: { projectId: string; sessionId: string }) =>

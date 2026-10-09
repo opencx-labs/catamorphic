@@ -11,8 +11,8 @@ import {
 /**
  * Set up a chat's own worktree on this computer (ADR 0208, 0215), the way
  * a new sandbox workspace is set up: the Environment's `setup`, then the
- * person's own, each run by bash with `-e` under the person's login shell
- * (their PATH and tools) in the worktree. What last succeeded is recorded
+ * person's own, each run by bash with `-e` in the worktree, with the PATH
+ * of the person's login shell. What last succeeded is recorded
  * in `stateDirectory`, the worktree's own Git directory, so it goes with
  * the worktree and a worktree checked out again sets up again. Output is
  * appended to `work-setup.log` there.
@@ -26,7 +26,6 @@ export async function runNativeWorkspaceSetup(input: {
   timeoutMinutes: number;
   signal: AbortSignal;
   onRun(): Promise<void>;
-  shell?: string;
 }): Promise<{ outcome: WorkspaceSetupOutcome; logPath: string }> {
   const logPath = path.join(input.stateDirectory, "work-setup.log");
   const recordPath = path.join(input.stateDirectory, "work-setup.json");
@@ -84,7 +83,6 @@ export async function runNativeWorkspaceSetup(input: {
         logFd: log.fd,
         timeoutMs: Math.max(0, deadline - Date.now()),
         signal: input.signal,
-        shell: input.shell,
       });
       if (ran === "aborted") return { outcome: { status: "aborted" }, logPath };
       if (ran.exitCode !== 0 || ran.timedOut) {
@@ -126,15 +124,12 @@ function runPart(input: {
   logFd: number;
   timeoutMs: number;
   signal: AbortSignal;
-  shell?: string;
 }): Promise<{ exitCode: number | null; timedOut: boolean } | "aborted"> {
   if (input.signal.aborted) return Promise.resolve("aborted");
-  const shell =
-    input.shell ??
-    process.env.SHELL ??
-    (process.platform === "darwin" ? "/bin/zsh" : "/bin/sh");
   return new Promise((resolve) => {
-    const child = spawn(shell, ["-lc", 'exec bash -e "$0"', input.script], {
+    // The process already has the person's login PATH (adoptLoginShellPath),
+    // so bash runs the part directly, whatever their own shell is.
+    const child = spawn("bash", ["-e", input.script], {
       cwd: input.workingDirectory,
       env: process.env,
       detached: true,

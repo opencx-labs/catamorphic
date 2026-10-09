@@ -16,6 +16,7 @@ import {
   type GitWorktree,
   type SessionCheckoutInfo,
 } from "../lib/desktop-api.js";
+import { sessionLabel } from "../lib/session-label.js";
 import { useAppPreferences } from "../lib/use-app-preferences.js";
 import type { PaletteItem } from "../palette/types.js";
 import { Collapsible } from "./collapsible.js";
@@ -126,7 +127,7 @@ export function GitNav({
     if (!visible) return;
     let active = true;
     void desktopApi
-      .sessionCheckouts(projectId)
+      .sessionCheckouts(projectId, { titles: true })
       .then((items) => {
         if (active) setOwners(items);
       })
@@ -444,7 +445,12 @@ function WorktreeSection({
                     onOpenDiff({ kind: "chat", name: chat.sessionId }, mode)
                   }
                 >
-                  {chat.title || "Untitled chat"}
+                  {chat.createdAt
+                    ? sessionLabel({
+                        title: chat.title ?? null,
+                        createdAt: chat.createdAt,
+                      })
+                    : "Chat"}
                 </OpenResourceButton>
               ))}
             </div>

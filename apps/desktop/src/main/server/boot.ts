@@ -250,6 +250,13 @@ export async function startEmbeddedServer(
     pglite,
     worktreesDirectory: path.join(paths.root, "worktrees"),
     projectRoot: (projectId) => projectRoots.getSync(projectId),
+    // Read once the server is up: only the person's actions and resting
+    // chats ask (ADR 0215).
+    sessionRunning: async ({ projectId, sessionId }) =>
+      (await catamorphic.core.agentSessions
+        ?.get(desktopIdentity, projectId, sessionId)
+        .then((session) => session.running)
+        .catch(() => false)) ?? false,
   });
   await sessionCheckouts.init();
   const workspaceStates = new WorkspaceStateStore(pglite);
@@ -645,6 +652,30 @@ export async function startEmbeddedServer(
       }
     },
   });
+  // Chats archived while a turn could not stop, and worktrees an agent
+  // left, are put away once the server is up (ADR 0215).
+  void sessionCheckouts
+    .sweep({
+      resting: async ({ projectId, sessionId }) => {
+        const session = await catamorphic.core.agentSessions?.get(
+          desktopIdentity,
+          projectId,
+          sessionId,
+        );
+        return Boolean(
+          session &&
+            !session.running &&
+            (session.archivedAt !== null || session.status === "closed"),
+        );
+      },
+    })
+    .catch((error) =>
+      console.warn(
+        `[desktop] putting away resting worktrees failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      ),
+    );
   syncWorkflowConnections = (profileId?: string) => {
     // OAuth discovery, registration, token exchange, and tool probing can
     // each update the profile store. Serialize their projections so two

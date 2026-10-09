@@ -21,41 +21,54 @@ they cannot opt out of and worktrees that pile up.
 **The project folder stays the default; the person can choose a worktree.**
 "New chat in a worktree" in the palette, or "Use own worktree" in a chat's
 status popup between turns, gives the chat its own worktree. Agents keep
-their tools and coordination strategies (0063).
+their tools and coordination strategies (0063). A chat that adopts another
+chat's own worktree only uses it: it is that chat's assigned worktree, and
+nothing below removes a worktree another chat is bound to.
 
 **A chat's own worktree exists only while the chat needs it.** Choosing one
-records it; the chat's next turn creates it, at the project folder's
-current commit, on branch `work/<session>`, in host storage under a folder
-named after the project. Uncommitted changes in the project folder stay
-there. Each turn checkpoints the worktree to its branch (0104). Archiving or
-closing the chat records anything left and removes the folder, keeping the
-branch; the next turn checks the branch out again. A worktree holding
-personal files (`.work/personal/`) is kept, because Git cannot record them.
+records it before the chat's first message is sent; the next turn creates
+it, at the project folder's current commit, on branch `work/<session>`, in
+host storage under a folder named after the project. Uncommitted changes in
+the project folder stay there. Each turn checkpoints the worktree to the
+branch it is on (0104). Archiving or closing the chat records anything left
+and removes the folder, keeping the branch; the next turn checks it out
+again, and turns wait for a removal under way. The folder stays when
+removing it could lose work: a turn runs in the chat, it holds personal
+files (`.work/personal/`, which Git cannot record), or Git is mid-merge,
+mid-rebase or off a branch there. When the desktop starts it puts away what
+a chat archived mid-turn, or an agent that returned to the project folder,
+left behind.
 
 **A new checkout is set up before the turn.** Ignored files that match the
 project's `.worktreeinclude` (gitignore syntax, the file Codex and Claude
 Code read) are copied from the project folder, never overwriting and never
 following symlinks. Then the chat's Environment `setup`, and the person's
-own (0208), run in the worktree with their login shell, the same way they
-run in a new sandbox workspace: the chat shows "Setting up the workspace",
-a failure is told to the agent with the end of the log, and the turn goes
-on. What last succeeded is recorded in the worktree's own Git directory, so
-a recreated worktree sets up again. The project folder never runs setup.
+own (0208), run in the worktree with bash and the person's login PATH, as
+in a new sandbox workspace: the chat shows "Setting up the workspace", a
+failure is told to the agent with the end of the log, and the turn goes on.
+This applies to every worktree a chat owns, including those agents create.
+Unlike a sandbox, the commands run with the person's own environment, not
+the Environment's secrets or gateway variables. What last succeeded is
+recorded in the worktree's own Git directory, so a recreated worktree sets
+up again. The project folder never runs setup.
 
 **The popup brings the work back.** Between turns, the chat's status popup
 shows where it works and offers:
 
 - *Bring to project folder*: the chat's changes since its branch left the
   project folder's history are merged three ways with the folder's current
-  commit and written there as uncommitted changes. It is refused, changing
-  nothing, when the merge conflicts or the folder's own uncommitted changes
-  touch the same files. Then the chat continues in the project folder, and
-  its worktree and branch are removed.
-- *Discard worktree*: after a confirmation, the worktree and branch are
-  removed and the chat continues in the project folder.
+  commit and written there as uncommitted changes, byte for byte through Git
+  plumbing whatever the person's diff settings. It is refused, changing
+  nothing, when the merge conflicts, the folder's own uncommitted changes
+  touch the same files, a submodule moved, or the worktree holds personal
+  files or is mid-operation. Then the chat continues in the project folder,
+  and its worktree and branch are removed.
+- *Discard worktree*: after a confirmation, the worktree and the chat's
+  branch are removed and the chat continues in the project folder.
 
 The agent is told, every turn, which folder it works in and how its changes
-reach the project folder, and once when the person moved it.
+reach the project folder, and once when the person moved it. Work's own
+checkpoint commits skip the project's commit hooks and signing.
 
 Considered: starting from a fresh `origin/<default>` like Claude Code
 (bringing changes back into the folder works best from the folder's own
@@ -71,7 +84,8 @@ is set up).
 Parallel engineering chats start from the palette and need no Git from the
 person. Worktrees no longer accumulate: archived chats hold only a branch.
 Ignored files other than `.worktreeinclude` matches and setup output do not
-survive putting a worktree away. An Environment `setup` written for a Linux
-sandbox now also runs on the person's machine when a native chat gets its
-own worktree. A fork of a chat in a worktree still starts in the project
+survive putting a worktree away. Choosing a worktree runs the project's
+committed `setup` on the person's machine without asking, as an agent
+installing dependencies would; a `setup` written for a Linux sandbox now
+also runs there. A fork of a chat in a worktree still starts in the project
 folder.

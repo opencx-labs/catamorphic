@@ -74,6 +74,7 @@ import {
   readEditorSelection,
   selectionFromClipboard,
 } from "../lib/editor-selection";
+import { ipcErrorText } from "../lib/remote-workspace.js";
 import { skillsForAgent, useProjectSkillCatalog } from "../lib/skills";
 import {
   matchSlashEntries,
@@ -495,6 +496,8 @@ function ChatDockContent({
         compatibleEnvironments[0]?.name,
     );
   }, [compatibleEnvironments, environmentQuery.data, selectedEnvironment]);
+  /** The first message is recording the worktree chosen before it (ADR 0215). */
+  const [recordingWorktree, setRecordingWorktree] = useState(false);
   const chat = useAgentChat(projectId, {
     sessionId: entry.sessionId,
     agentId: selectedAgentId,
@@ -515,8 +518,15 @@ function ChatDockContent({
       onSessionCreated(entry.localId, sessionId);
       // Chosen before the first message (ADR 0215): recorded before that
       // message is sent, so its turn checks out the chat's own worktree.
-      if (entry.worktree)
+      if (!entry.worktree) return;
+      setRecordingWorktree(true);
+      try {
         await desktopApi.sessionUseOwnWorktree({ projectId, sessionId });
+      } catch (cause) {
+        throw new Error(ipcErrorText(cause));
+      } finally {
+        setRecordingWorktree(false);
+      }
     },
   });
   const acknowledgeAttention = useAcknowledgeAgentSessionAttention(projectId);
@@ -574,13 +584,15 @@ function ChatDockContent({
     wasSendingRef.current = chat.isSending;
   }, [chat.isSending]);
   const activeSessionId = chat.sessionId ?? entry.sessionId;
-  // Where the chat works (ADR 0215): its own worktree, or the project folder.
+  // Where the chat works (ADR 0215): its own worktree, or the project
+  // folder. Until the first message records a worktree chosen before it,
+  // the choice is what the chat shows.
+  const worktreeDraft =
+    Boolean(entry.worktree) && (!activeSessionId || recordingWorktree);
   const checkout = useSessionCheckout(projectId, activeSessionId, {
-    enabled: !authority,
+    enabled: !authority && !recordingWorktree,
   }).data;
-  const inWorktree = activeSessionId
-    ? checkout?.kind === "managed"
-    : Boolean(entry.worktree);
+  const inWorktree = worktreeDraft || checkout?.kind === "managed";
   const backgroundCommands = useBackgroundCommands(activeSessionId);
   const [moveState, setMoveState] = useState<{
     canMove: boolean;
@@ -2411,7 +2423,7 @@ function ChatDockContent({
                       projectId={projectId}
                       sessionId={activeSessionId}
                       busy={Boolean(chat.isSending || chat.session?.running)}
-                      draftWorktree={Boolean(entry.worktree)}
+                      draftWorktree={worktreeDraft}
                       onDraftWorktreeChange={(worktree) =>
                         onEntryChange({
                           ...entry,

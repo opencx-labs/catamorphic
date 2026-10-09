@@ -192,6 +192,7 @@ import {
   visitSurface,
 } from "./lib/surface-history.js";
 import { useTabSleep } from "./lib/tab-sleep.js";
+import { useWorktreesAvailable } from "./lib/use-session-checkout.js";
 import { useSidebarReveal } from "./lib/use-sidebar-reveal.js";
 import {
   fileNameFromPath,
@@ -911,7 +912,7 @@ export function App({
   // incognito sessions for this project's members.
   const [incognitoAllowed, setIncognitoAllowed] = useState(false);
   // A Git project with a commit can give a chat its own worktree (ADR 0215).
-  const [worktreesAvailable, setWorktreesAvailable] = useState(false);
+  const worktreesAvailable = useWorktreesAvailable(projectId).data ?? false;
   const [startingActions, setStartingActions] = useState<
     Array<{ label: string; prompt: string; agentId?: string }>
   >([]);
@@ -922,45 +923,21 @@ export function App({
     }
     setStartingActions([]);
     setIncognitoAllowed(false);
-    setWorktreesAvailable(false);
     let cancelled = false;
     void Promise.allSettled([
       desktopApi.projectAllowIncognito(projectId),
       desktopApi.projectStartingActions(projectId),
-      desktopApi.projectWorktreesAvailable(projectId),
-    ]).then(([allowed, actions, worktrees]) => {
+    ]).then(([allowed, actions]) => {
       if (cancelled) return;
       setIncognitoAllowed(
         allowed.status === "fulfilled" ? allowed.value : false,
       );
       setStartingActions(actions.status === "fulfilled" ? actions.value : []);
-      setWorktreesAvailable(
-        worktrees.status === "fulfilled" ? worktrees.value : false,
-      );
     });
     return () => {
       cancelled = true;
     };
   }, [projectId]);
-  // A first commit, or a folder made a repository, makes worktrees possible.
-  useEffect(() => {
-    if (!projectId) return;
-    let live = true;
-    const off = desktopApi.onGitChanged((event) => {
-      if (event.projectId !== projectId) return;
-      void desktopApi
-        .projectWorktreesAvailable(projectId)
-        .then((available) => {
-          if (live) setWorktreesAvailable(available);
-        })
-        .catch(() => undefined);
-    });
-    return () => {
-      live = false;
-      off();
-    };
-  }, [projectId]);
-
   /**
    * Switching profile follows the workspace's occupancy: an empty
    * workspace (no tabs, no browsers, no chats) switches this window in
@@ -2738,10 +2715,7 @@ export function App({
       updateWorkspace((ws) => ({
         ...ws,
         chats: ws.chats.map((chat) =>
-          chat.localId === localId
-            ? // The session's checkout now says where it works (ADR 0215).
-              { ...chat, sessionId, worktree: undefined }
-            : chat,
+          chat.localId === localId ? { ...chat, sessionId } : chat,
         ),
       })),
     [updateWorkspace],
@@ -3920,7 +3894,9 @@ export function App({
     // Policy-gated (ADR 0062): hidden from the palette when the project
     // committed allowIncognito: false; the handler double-checks.
     "new-worktree-chat": () => {
-      if (worktreesAvailable) addChat(undefined, { worktree: true });
+      // Connected projects' chats run on their server (ADR 0098).
+      if (worktreesAvailable && remoteSurfaceStatus === null)
+        addChat(undefined, { worktree: true });
     },
     "new-incognito-chat": () => {
       if (incognitoAllowed) addChat(undefined, { incognito: true });

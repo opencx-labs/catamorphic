@@ -5962,13 +5962,12 @@ export class AgentSessionsService {
       ...(input.environment ? { environment: input.environment.command } : {}),
       ...(personal ? { personal } : {}),
     };
-    let logPath =
-      runner.kind === "sandbox"
-        ? `${sessionDirectory(runner.provider)}/setup.log`
-        : "";
-    const outcome:
-      | WorkspaceSetupOutcome
-      | { status: "unavailable"; reason: string } = await withSpan(
+    const unavailable = (error: unknown) => ({
+      // The turn goes on without it, as after a failed command (ADR 0208).
+      status: "unavailable" as const,
+      reason: error instanceof Error ? error.message : String(error),
+    });
+    const { outcome, logPath } = await withSpan(
       {
         tracer,
         name: "agent.session.workspace.setup",
@@ -5978,36 +5977,44 @@ export class AgentSessionsService {
           "catamorphic.agent.turn.id": input.turn.id,
         },
       },
-      async () => {
-        if (runner.kind === "sandbox")
-          return runWorkspaceSetup({
-            provider: runner.provider,
-            sandboxId: runner.sandboxProviderId,
-            projectDir: this.projectDir(runner.provider),
-            ...commands,
-            personalAllowed,
-            timeoutMinutes,
-            signal: input.signal,
-            onRun,
-          });
-        const ran = await runner.setup({
-          projectId: input.projectId,
-          sessionId: session.id,
-          workingDirectory: runner.workingDirectory,
+      async (): Promise<{
+        outcome:
+          | WorkspaceSetupOutcome
+          | { status: "unavailable"; reason: string };
+        logPath: string;
+      }> => {
+        if (runner.kind === "native")
+          return runner
+            .setup({
+              projectId: input.projectId,
+              sessionId: session.id,
+              workingDirectory: runner.workingDirectory,
+              ...commands,
+              personalAllowed,
+              timeoutMinutes,
+              signal: input.signal,
+              onRun,
+            })
+            .catch((error: unknown) => ({
+              outcome: unavailable(error),
+              logPath: "",
+            }));
+        const logPath = `${sessionDirectory(runner.provider)}/setup.log`;
+        return runWorkspaceSetup({
+          provider: runner.provider,
+          sandboxId: runner.sandboxProviderId,
+          projectDir: this.projectDir(runner.provider),
           ...commands,
           personalAllowed,
           timeoutMinutes,
           signal: input.signal,
           onRun,
-        });
-        logPath = ran.logPath;
-        return ran.outcome;
+        }).then(
+          (outcome) => ({ outcome, logPath }),
+          (error: unknown) => ({ outcome: unavailable(error), logPath }),
+        );
       },
-    ).catch((error: unknown) => ({
-      // The turn goes on without it, as after a failed command (ADR 0208).
-      status: "unavailable" as const,
-      reason: error instanceof Error ? error.message : String(error),
-    }));
+    );
     if (shown)
       await this.showPreparing({
         sessionId: session.id,
@@ -8789,10 +8796,6 @@ export class AgentSessionsService {
     }
   }
 
-  /**
-   * What a closed chat still holds outside its row: its connection grants, and on hosts that keep session workspaces, the
-   * `sessions/<id>` branch and `session-<id>` copy. Safe to repeat.
-   */
   /** A resting chat gives back its native checkout (ADR 0215). */
   private async releaseNativeCheckout(input: {
     projectId: string;
@@ -8808,6 +8811,12 @@ export class AgentSessionsService {
       );
   }
 
+  /**
+   * What a closed chat still holds outside its row: its connection grants,
+   * its native checkout (ADR 0215), and on hosts that keep session
+   * workspaces, the `sessions/<id>` branch and `session-<id>` copy. Safe
+   * to repeat.
+   */
   private async releaseClosedResources(input: {
     identity: Identity;
     projectId: string;

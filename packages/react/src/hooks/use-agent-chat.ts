@@ -49,8 +49,9 @@ export interface UseAgentChatOptions {
   sessionId?: string;
   /**
    * Called when the hook lazily creates a session on first send, before
-   * that message is sent: the send waits for it and fails with its error,
-   * so a host can settle what the session's first turn depends on.
+   * anything is sent to it: sends wait for it and fail with its error, so a
+   * host can settle what the session's first turn depends on. After a
+   * failure it is called again before the next send.
    */
   onSessionCreated?: (sessionId: string) => void | Promise<void>;
   /**
@@ -257,6 +258,10 @@ export function useAgentChat(
     token: object;
     promise: Promise<string | null>;
   } | null>(null);
+  /** A session this hook created whose `onSessionCreated` has not succeeded. */
+  const unsettledRef = useRef<{ token: object; sessionId: string } | null>(
+    null,
+  );
   const heldRef = useRef<string | null>(null);
 
   // A pending message leaves once the session shows its item.
@@ -274,44 +279,72 @@ export function useAgentChat(
       );
   }, [state, pending, scope.token, updatePending]);
 
+  /**
+   * The host settles a session this hook created before anything is sent
+   * to it: every send waits for that, and one after a failure runs it again.
+   */
+  const settle = (token: object, sessionId: string) => {
+    unsettledRef.current = { token, sessionId };
+    const promise = Promise.resolve(
+      optionsRef.current.onSessionCreated?.(sessionId),
+    )
+      .then(() => {
+        if (unsettledRef.current?.sessionId === sessionId)
+          unsettledRef.current = null;
+        return scopeRef.current.token === token ? sessionId : null;
+      })
+      .finally(() => {
+        if (creationRef.current?.promise === promise)
+          creationRef.current = null;
+      });
+    creationRef.current = { token, promise };
+    return promise;
+  };
+
   const ensureSessionId = async (token: object): Promise<string | null> => {
     if (!projectId) return null;
     const current = scopeRef.current;
     if (current.token !== token) return null;
-    if (current.sessionId) return current.sessionId;
-    if (creationRef.current?.token !== token) {
-      const promise = createSession
-        .mutateAsync({
-          ...(optionsRef.current.agentId
-            ? { agentId: optionsRef.current.agentId }
-            : {}),
-          ...(optionsRef.current.model
-            ? { model: optionsRef.current.model }
-            : {}),
-          ...(optionsRef.current.effort
-            ? { effort: optionsRef.current.effort }
-            : {}),
-          ...(optionsRef.current.environment
-            ? { environment: optionsRef.current.environment }
-            : {}),
-          ...(optionsRef.current.source
-            ? { source: optionsRef.current.source }
-            : {}),
-        })
-        .then(async (created) => {
-          if (scopeRef.current.token !== token) return null;
-          const next = { ...scopeRef.current, sessionId: created.id };
-          scopeRef.current = next;
-          setScope(next);
-          await optionsRef.current.onSessionCreated?.(created.id);
-          return created.id;
-        })
-        .finally(() => {
-          if (creationRef.current?.token === token) creationRef.current = null;
-        });
-      creationRef.current = { token, promise };
+    if (creationRef.current?.token === token)
+      return creationRef.current.promise;
+    if (current.sessionId) {
+      const unsettled = unsettledRef.current;
+      return unsettled?.token === token &&
+        unsettled.sessionId === current.sessionId
+        ? settle(token, current.sessionId)
+        : current.sessionId;
     }
-    return creationRef.current.promise;
+    const promise = createSession
+      .mutateAsync({
+        ...(optionsRef.current.agentId
+          ? { agentId: optionsRef.current.agentId }
+          : {}),
+        ...(optionsRef.current.model
+          ? { model: optionsRef.current.model }
+          : {}),
+        ...(optionsRef.current.effort
+          ? { effort: optionsRef.current.effort }
+          : {}),
+        ...(optionsRef.current.environment
+          ? { environment: optionsRef.current.environment }
+          : {}),
+        ...(optionsRef.current.source
+          ? { source: optionsRef.current.source }
+          : {}),
+      })
+      .then((created) => {
+        if (scopeRef.current.token !== token) return null;
+        const next = { ...scopeRef.current, sessionId: created.id };
+        scopeRef.current = next;
+        setScope(next);
+        return settle(token, created.id);
+      })
+      .finally(() => {
+        if (creationRef.current?.promise === promise)
+          creationRef.current = null;
+      });
+    creationRef.current = { token, promise };
+    return promise;
   };
 
   // Without a live stream, a command's effect shows on the next snapshot.
@@ -570,6 +603,7 @@ export function useAgentChat(
       if (inFlight > 0) return;
       blockedRef.current = null;
       creationRef.current = null;
+      unsettledRef.current = null;
       heldRef.current = null;
       const next = {
         projectId,

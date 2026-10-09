@@ -128,8 +128,9 @@ export interface SessionCheckoutInfo {
   branch: string | null;
   /** The folder exists now; a chat's own worktree comes and goes (ADR 0215). */
   present?: boolean;
-  /** The chat's title, when it has one. */
+  /** The chat's title and start, when asked for (`titles`). */
   title?: string | null;
+  createdAt?: string;
 }
 
 /** Where one chat works, for its status popup (ADR 0215). */
@@ -140,6 +141,8 @@ export interface SessionCheckoutDetail {
   present: boolean;
   projectFolder: string;
   worktreesAvailable: boolean;
+  /** False when an assigned folder is gone or no longer this repository. */
+  available: boolean;
   /** Files the chat's own worktree changed; null for other checkouts. */
   changedFiles: number | null;
 }
@@ -1899,7 +1902,10 @@ export interface CatamorphicDesktopApi {
     input: GitOverviewSubscription,
     listener: (snapshot: GitOverview) => void,
   ) => () => void;
-  sessionCheckouts: (projectId: string) => Promise<SessionCheckoutInfo[]>;
+  sessionCheckouts: (
+    projectId: string,
+    options?: { titles?: boolean },
+  ) => Promise<SessionCheckoutInfo[]>;
   sessionUseProjectFolder: (input: {
     projectId: string;
     sessionId: string;

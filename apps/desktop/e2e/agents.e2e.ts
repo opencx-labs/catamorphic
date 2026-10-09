@@ -1312,14 +1312,24 @@ describe("agents and profiles", () => {
     );
     await app.press("Enter");
     await runWait(
-      `const inspector = $('[data-testid="session-inspector-content"]');
-       return inspector?.textContent.includes('Checkout') &&
-         inspector.textContent.includes('work/');`,
+      `const folder = $('[data-testid="session-inspector-content"] [data-testid="chat-folder"]');
+       return folder?.dataset.folderKind === 'managed' &&
+         folder.textContent.includes('work/');`,
       { label: "active chat isolated checkout in session status" },
     );
   });
 
   it("gives a chat its own worktree from the palette and brings its changes back from the popup", async () => {
+    // The previous test leaves its chat's status popup open.
+    if (
+      await run<boolean>(
+        `return !!$('[data-testid="session-inspector-content"]');`,
+      )
+    )
+      await app.press("Escape");
+    await runWait(`return !$('[data-testid="session-inspector-content"]');`, {
+      label: "earlier status popup closed",
+    });
     await ensurePalette();
     await resetPalette();
     await run(
@@ -1392,7 +1402,7 @@ describe("agents and profiles", () => {
 
     await run(`
       const ta = visibleDock().querySelector('[data-composer-input]');
-      setReactValue(ta, 'terminal: cat chat-made.txt && pwd');
+      setReactValue(ta, 'terminal: cat chat-made.txt && rm chat-made.txt && pwd');
       ta.closest('form').requestSubmit();
       return true;
     `);

@@ -3158,21 +3158,27 @@ export function registerIpcHandlers(
 
   ipcMain.handle(
     "catamorphic:session-checkouts",
-    async (_event, projectId: string) => {
+    async (_event, projectId: string, options?: { titles?: boolean }) => {
       const server = state.current;
       if (!server) return [];
       const assigned = await server.sessionCheckouts.assigned(projectId);
-      // Named as people know them, wherever a checkout lists its chats.
+      if (!options?.titles) return assigned;
+      // Named as people know them where a checkout lists its chats: only
+      // checkouts on disk are listed there.
       return Promise.all(
-        assigned.map(async (checkout) => ({
-          ...checkout,
-          title:
-            (
-              await server.catamorphic.core.agentSessions
-                ?.get(identity, projectId, checkout.sessionId)
-                .catch(() => null)
-            )?.title ?? null,
-        })),
+        assigned.map(async (checkout) => {
+          if (!checkout.present) return checkout;
+          const session = await server.catamorphic.core.agentSessions
+            ?.get(identity, projectId, checkout.sessionId)
+            .catch(() => null);
+          return session
+            ? {
+                ...checkout,
+                title: session.title,
+                createdAt: session.createdAt,
+              }
+            : checkout;
+        }),
       );
     },
   );

@@ -93,7 +93,9 @@ export interface ChatDockEntry {
   incognito?: boolean;
   /**
    * Chosen before the chat's first message: that message gives it its own
-   * worktree (ADR 0215). Once the session exists, its checkout says.
+   * worktree (ADR 0215), recorded before anything is sent, and again before
+   * a resend if recording failed. Once the session exists, its checkout is
+   * what the chat shows.
    */
   worktree?: boolean;
   /**

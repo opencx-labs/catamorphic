@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { desktopApi } from "./desktop-api.js";
 
 export const sessionCheckoutKey = (projectId: string, sessionId: string) =>
@@ -7,6 +7,27 @@ export const sessionCheckoutKey = (projectId: string, sessionId: string) =>
 
 export const worktreesAvailableKey = (projectId: string) =>
   ["desktop", "worktrees-available", projectId] as const;
+
+/** Refresh one query whenever the project's Git state moves. */
+function useRefreshOnGitChange(
+  projectId: string,
+  queryKey: readonly string[],
+  enabled: boolean,
+) {
+  const client = useQueryClient();
+  const keyRef = useRef(queryKey);
+  keyRef.current = queryKey;
+  useEffect(() => {
+    if (!enabled) return;
+    return desktopApi.onGitChanged((event) => {
+      if (event.projectId !== projectId) return;
+      void client.invalidateQueries({
+        queryKey: keyRef.current,
+        exact: true,
+      });
+    });
+  }, [client, enabled, projectId]);
+}
 
 /**
  * Where one chat works (ADR 0215), shared by its status popup, the popup's
@@ -18,19 +39,11 @@ export function useSessionCheckout(
   sessionId: string | undefined,
   options: { enabled?: boolean } = {},
 ) {
-  const client = useQueryClient();
   const enabled = (options.enabled ?? true) && Boolean(sessionId);
-  useEffect(() => {
-    if (!enabled) return;
-    return desktopApi.onGitChanged((event) => {
-      if (event.projectId !== projectId) return;
-      void client.invalidateQueries({
-        queryKey: ["desktop", "session-checkout", projectId],
-      });
-    });
-  }, [client, enabled, projectId]);
+  const queryKey = sessionCheckoutKey(projectId, sessionId ?? "");
+  useRefreshOnGitChange(projectId, queryKey, enabled);
   return useQuery({
-    queryKey: sessionCheckoutKey(projectId, sessionId ?? ""),
+    queryKey,
     queryFn: () =>
       desktopApi.sessionCheckout({ projectId, sessionId: sessionId ?? "" }),
     enabled,
@@ -38,15 +51,21 @@ export function useSessionCheckout(
   });
 }
 
-/** The project can start a worktree: a Git repository with a commit. */
+/**
+ * The project can start a worktree: a Git repository with a commit. A
+ * first commit, or a folder made a repository, changes it.
+ */
 export function useWorktreesAvailable(
-  projectId: string,
+  projectId: string | undefined,
   options: { enabled?: boolean } = {},
 ) {
+  const enabled = (options.enabled ?? true) && Boolean(projectId);
+  const queryKey = worktreesAvailableKey(projectId ?? "");
+  useRefreshOnGitChange(projectId ?? "", queryKey, enabled);
   return useQuery({
-    queryKey: worktreesAvailableKey(projectId),
-    queryFn: () => desktopApi.projectWorktreesAvailable(projectId),
-    enabled: options.enabled ?? true,
+    queryKey,
+    queryFn: () => desktopApi.projectWorktreesAvailable(projectId ?? ""),
+    enabled,
     staleTime: 30_000,
   });
 }

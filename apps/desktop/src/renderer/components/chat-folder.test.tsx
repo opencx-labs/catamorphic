@@ -11,6 +11,7 @@ const detail = (
   path: "/work/project",
   branch: null,
   present: true,
+  available: true,
   projectFolder: "/work/project",
   worktreesAvailable: true,
   changedFiles: null,
@@ -125,12 +126,56 @@ describe("chatFolderView (ADR 0215)", () => {
       worktreesAvailable: true,
     });
     expect(view).toMatchObject({
-      value: "External worktree",
+      value: "Assigned worktree",
       tag: "feature",
       lines: ["/elsewhere"],
     });
     expect(view.actions).toEqual([
       { id: "project-folder", label: "Use project folder" },
     ]);
+  });
+
+  it("offers the project folder when an assigned folder is gone", () => {
+    const view = chatFolderView({
+      started: true,
+      detail: detail({
+        kind: "external",
+        path: "/gone",
+        present: false,
+        available: false,
+      }),
+      draftWorktree: false,
+      worktreesAvailable: true,
+    });
+    expect(view).toMatchObject({ tag: "unavailable", draft: false });
+    expect(view.lines[1]).toContain("gone");
+    expect(view.actions).toEqual([
+      { id: "project-folder", label: "Use project folder" },
+    ]);
+  });
+
+  it("keeps showing the choice while the first message records it", () => {
+    const view = chatFolderView({
+      started: true,
+      detail: detail({ kind: "primary" }),
+      draftWorktree: true,
+      worktreesAvailable: true,
+    });
+    expect(view).toMatchObject({
+      kind: "managed",
+      tag: "with the first message",
+      draft: true,
+    });
+  });
+
+  it("claims no folder while it is still checking", () => {
+    const view = chatFolderView({
+      started: true,
+      detail: undefined,
+      draftWorktree: false,
+      worktreesAvailable: true,
+    });
+    expect(view).toMatchObject({ kind: "pending", actions: [] });
+    expect(view.value).not.toBe("Project folder");
   });
 });
