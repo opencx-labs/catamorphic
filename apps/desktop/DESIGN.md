@@ -332,6 +332,7 @@ editor or app frame moves over it rather than animating its size.
 | `bubble-ask` (agent question arrival) | 280ms | — (one-shot nudge on a persistent bubble; no exit to pair) |
 | `input-recall-{up,down}-{a,b}` (composer ↑/↓ history) | 150ms | — (transform-only directional content signal; paired names replay rapid same-direction recalls without a classless frame) |
 | `activity-leave` / `activity-arrive` (agent activity line swap) | 150ms / 200ms | — (one beat of the working pulse carries a content swap on a persistent line: the old text dims up and away, the new rises in, then `animate-pulse` resumes) |
+| `sidebar-item-leave` / `sidebar-trace` (a closing sidebar's items leave, each label drawing a thread behind it; the panel's slide waits 100ms for them) | 160ms | — (a one-way exit; opening shows the items in place as before) |
 | `title-change` (rename flash) | 1200ms | **sanctioned exception** — the
   one decorative-adjacent signal (see design log 2026-07-31); allowlisted in
   the test's `DURATION_EXCEPTIONS` |
@@ -1856,3 +1857,25 @@ shows the spinner and the veil again. A take-over still refuses the agent
 until it reclaims. The person's own tabs are never held: an agent drives
 one only when asked, without veiling it, as before.
 
+### 2026-10-09: A closing sidebar's items leave first
+
+The sidebar slid away as one sheet. Closing now reads as the items leaving
+and the sidebar following them: every item on screen slides toward the edge
+the sidebar goes to and fades, in a quick sweep from the top, and the panel
+starts 100ms after the click. Each label travels exactly its own length and
+draws a hairline in its own color behind it, so the line grows from where
+the text ended and its free end stays on the text's trailing edge: the text
+pulls a thread out of its place and never crosses it. The threads are what
+the items leave behind, and the panel carries them away. An icon leading a
+label goes with it, so a row leaves as one.
+
+Two takes lost. Soft bars the size of each label (a skeleton left behind)
+read as loading, and over text that was still fading they looked smudged.
+A hairline across the middle of each label read as strikethrough, as if
+the items had been crossed off. Hidden hover actions must leave nothing,
+so only what is drawn and opaque leaves (`checkVisibility`).
+
+Everything is measured once on the click (text extents by Range, only for
+what is on screen), then CSS animates `translate`, `opacity` and the
+threads' `scale`. Opening is unchanged: the panel slides in with its items
+in place.

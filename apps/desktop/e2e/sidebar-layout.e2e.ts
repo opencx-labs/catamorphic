@@ -143,6 +143,62 @@ describe("configurable browser workspace", () => {
     ).toBe("false");
   });
 
+  it("lets its items leave before it does, leaving traces it carries away", async () => {
+    const aside = "document.querySelector('aside[data-sidebar=left]')";
+    let row: string | undefined;
+    // Slowed, so the close can be read while it runs.
+    await app.cdp("Animation.enable");
+    await app.cdp("Animation.setPlaybackRate", { playbackRate: 0.1 });
+    try {
+      await run("$('button[aria-label=\"Collapse sidebar\"]').click()");
+      await app.waitFor(
+        `${aside}.dataset.motion === 'closing' && !!${aside}.querySelector('[data-sidebar-leaving]')`,
+        { label: "items leaving" },
+      );
+      const closing = await app.eval<{
+        row: string | undefined;
+        traces: number;
+        delay: number | undefined;
+      }>(`(() => {
+        const aside = ${aside};
+        const slide = aside.querySelector('.sidebar-inner').getAnimations()
+          .find((animation) => animation.transitionProperty === 'transform');
+        const row = [...aside.querySelectorAll('[data-sidebar-item-id]')]
+          .find((row) => row.querySelector('[data-sidebar-leaving]'));
+        return {
+          row: row?.dataset.sidebarItemId,
+          traces: aside.querySelectorAll('.sidebar-traces > .sidebar-trace').length,
+          delay: slide?.effect.getTiming().delay,
+        };
+      })()`);
+      row = closing.row;
+      expect(row).toBeTruthy();
+      expect(closing.traces).toBeGreaterThan(0);
+      // The panel follows the items a beat later.
+      expect(closing.delay).toBe(100);
+    } finally {
+      await app.cdp("Animation.setPlaybackRate", { playbackRate: 1 });
+    }
+    await app.waitFor(
+      `${aside}.dataset.motion === 'closed' && ${aside}.dataset.settled === 'true'`,
+    );
+    expect(
+      await app.eval(
+        `!!${aside}.querySelector('[data-sidebar-leaving], .sidebar-traces')`,
+      ),
+    ).toBe(false);
+    await run("$('button[aria-label=\"Expand sidebar\"]').click()");
+    await app.waitFor(
+      `${aside}.dataset.motion === 'open' && ${aside}.dataset.settled === 'true'`,
+    );
+    // Opening shows every item where it was.
+    expect(
+      await app.eval(
+        `(() => { const row = ${aside}.querySelector('[data-sidebar-item-id=' + CSS.escape(${JSON.stringify(row)}) + ']'); return { animating: row.getAnimations({ subtree: true }).length, faded: [...row.querySelectorAll('[data-tree-primary], [data-tree-primary] *')].filter((element) => getComputedStyle(element).opacity !== '1').length }; })()`,
+      ),
+    ).toEqual({ animating: 0, faded: 0 });
+  });
+
   it("draws one keyboard-led ring: none after right-click and Escape, the accent at once on Tab", async () => {
     // The row may still be sliding into its expanded folder.
     const point = await app.waitFor<{ x: number; y: number }>(

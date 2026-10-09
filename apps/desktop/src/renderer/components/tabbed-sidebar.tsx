@@ -18,6 +18,7 @@ import type {
 import { matchesSidebarSurface } from "../../shared/sidebar.js";
 import { lucideIcon } from "../lib/lucide-icon.js";
 import { motionMs } from "../lib/motion.js";
+import { leaveSidebar } from "../lib/sidebar-leave.js";
 import { type SidebarMotion, useSidebarMotion } from "../lib/sidebar-motion.js";
 import { Collapsible } from "./collapsible.js";
 import { ShortcutHint } from "./shortcut-hint.js";
@@ -109,6 +110,12 @@ export function TabbedSidebar({
   useLayoutEffect(() => {
     onMotionChange?.({ phase: motion.phase, docked: motion.docked });
   }, [motion.phase, motion.docked, onMotionChange]);
+  // Closing, the items leave before the panel does; anything else (closed,
+  // or opening again) puts them back.
+  useLayoutEffect(() => {
+    if (motion.phase !== "closing" || !panel.current) return;
+    return leaveSidebar(panel.current);
+  }, [motion.phase]);
   const [content, setContent] = useState<
     ReadonlyMap<string, SidebarContentState>
   >(new Map());

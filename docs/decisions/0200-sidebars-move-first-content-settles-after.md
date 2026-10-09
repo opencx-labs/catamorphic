@@ -60,6 +60,14 @@ it** (`lib/sidebar-motion.ts`).
   panel is on screen, sliding included, and pause once it has gone; pausing
   never clears what a section shows. Both sides use one toggle in every
   place it appears. (Amended 2026-10-06.)
+- Closing, the items leave first and the panel follows them
+  (`lib/sidebar-leave.ts`). Each item on screen slides toward the edge
+  the sidebar leaves by and fades, in a 60 ms sweep from the top; a label
+  travels its own length and draws a hairline thread behind it, and the
+  icon leading it travels with it. The panel's slide starts 100 ms after
+  the click and carries the threads away. Everything is measured once, at
+  the click, and every frame after is a compositor frame or a repaint of
+  the panel alone. Opening is unchanged. (Amended 2026-10-09.)
 
 `lib/layout-transition.ts`, `data-layout-transition` and the per-screen
 width-holding wrappers are removed.
@@ -86,7 +94,8 @@ Alternatives considered:
   or the morph on a heavy GitHub page, a terminal or app content.
 - A toggle lasts longer overall: 200 ms of slide, a hold while the content
   lays out (about 50 ms, up to 150 ms on the heaviest pages), and 200 ms of
-  morph. The content visibly follows the sidebar.
+  morph. The content visibly follows the sidebar. Closing adds 100 ms
+  while the items leave ahead of the panel.
 - Edge content the main column does not carry (a right-aligned button on a
   left-aligned page) cross-fades between its two places instead of moving.
 - Closing leaves the sidebar's background showing where it was until the
