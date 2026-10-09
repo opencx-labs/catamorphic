@@ -1654,10 +1654,7 @@ kbd {
 ::view-transition-old(sidebar-left),
 ::view-transition-new(sidebar-left),
 ::view-transition-old(sidebar-right),
-::view-transition-new(sidebar-right),
-::view-transition-group(workspace-content),
-::view-transition-old(workspace-content),
-::view-transition-new(workspace-content) {
+::view-transition-new(sidebar-right) {
   animation-duration: 200ms;
   animation-timing-function: var(--ease-standard);
 }
@@ -1677,7 +1674,16 @@ kbd {
    (lib/sidebar-transition.ts) cross-fades in place: its box takes its new
    place at once, the old snapshot stays where the content was
    (--content-from-x/-y) and fades out as the new one fades in. Neither is
-   scaled or moved, so nothing on screen slides or stretches. */
+   scaled or moved, so nothing on screen slides or stretches. Linear over
+   300ms (a sanctioned exception, DESIGN.md): the standard curve does most
+   of a fade in its first quarter, which reads as a snap. */
+::view-transition-old(workspace-content),
+::view-transition-new(workspace-content),
+::view-transition-old(*.dock-tab),
+::view-transition-new(*.dock-tab) {
+  animation-duration: 300ms;
+  animation-timing-function: linear;
+}
 ::view-transition-group(workspace-content) {
   animation: none;
 }

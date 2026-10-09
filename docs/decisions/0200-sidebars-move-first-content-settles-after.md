@@ -38,7 +38,8 @@ the panel follows them 100 ms later (amended 2026-10-09, below).
   view transition (`lib/sidebar-transition.ts`). Chromium snapshots the
   content (pages included) on the GPU; the real content lays out once
   behind the snapshots; then the old snapshot fades out exactly where the
-  content was as the new one fades in at its new size, over 200 ms.
+  content was as the new one fades in at its new size, linearly over
+  300 ms (on the standard curve a fade reads as a snap).
   Nothing moves or scales, so text never stretches. (Amended 2026-10-09:
   the snapshots used to travel with the content's box and its main
   column, and the box growing into place showed the app's background
@@ -97,7 +98,7 @@ Alternatives considered:
   moving frame is a compositor frame: no frame over 20 ms during the slide
   or the fade on a heavy GitHub page, a terminal or app content.
 - A toggle lasts longer overall: 200 ms of slide, a hold while the content
-  lays out (about 50 ms, up to 150 ms on the heaviest pages), and 200 ms of
+  lays out (about 50 ms, up to 150 ms on the heaviest pages), and 300 ms of
   fade. The content visibly follows the sidebar. Closing adds 100 ms
   while the items leave ahead of the panel.
 - Content that moves within the box (a centered column) cross-fades
