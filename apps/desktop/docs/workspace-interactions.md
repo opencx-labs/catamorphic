@@ -126,9 +126,22 @@ Find (`find`, Cmd+F) acts on what is in front: a web page opens its find bar,
 a diff focuses its own search, and anywhere else the key stays with what has
 focus (an editor's own find). In a page the key reaches the page first, as in
 Chrome: a page with its own find keeps it, and only what the page leaves opens
-the bar (`PAGE_FIRST_ACTIONS`; from an embedded frame Work takes it at once).
-Cmd+G and Cmd+Shift+G step through the matches. The bar closes on Escape with
-the current match selected, and when the tab shows another page.
+the bar (`PAGE_FIRST_ACTIONS`; a find key pressed inside an embedded frame
+stays the page's). Cmd+G and Cmd+Shift+G step through the matches. The bar
+closes on Escape with the current match selected, and when the tab shows
+another page.
+
+Back and forward (`browser-back`, `browser-forward`, Cmd+Left and Cmd+Right)
+reach a page first the same way. A text field keeps a caret key for its caret,
+whatever the key is bound to (`fieldKeepsKey`): an arrow, Home or End with the
+modifiers the platform's text system moves by (none, Option or Cmd on macOS;
+none or Ctrl elsewhere; each also with Shift). So in the address bar, the chat
+composer, an editor or a page's input, Cmd+Left and Cmd+Right move to the
+line's start or end, while a binding such as Cmd+Option+Left still runs there.
+Inside an embedded frame, which has no preload, main asks the focused frame:
+back and forward go unless the key is a caret key and the frame's focus is (or
+may be) a text field. A frame's own claim on the key is not seen there, unlike
+the page's main document. Elsewhere they go back and forward.
 
 Default sidebars do not include a project note. Notes are opt-in widgets over
 explicit existing documents, not filler in a new project's right sidebar.

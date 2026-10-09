@@ -173,7 +173,8 @@ export function siteHost(origin: string): string {
 /**
  * Which site permission an Electron permission request is about. `media`
  * covers camera and microphone at once, so one request can map to two
- * kinds; unknown permissions map to none (and are denied).
+ * kinds; a screen, window or tab share is `display-capture`. Unknown
+ * permissions map to none (and are denied).
  */
 export function permissionKindsFor(
   permission: string,
@@ -187,9 +188,7 @@ export function permissionKindsFor(
       const types = details?.mediaTypes ?? [];
       if (types.includes("audio")) kinds.push("microphone");
       if (types.includes("video")) kinds.push("camera");
-      // getDisplayMedia arrives as a media request with no declared
-      // types; the picker is its prompt, so it is the screen-share kind.
-      return kinds.length > 0 ? kinds : ["screenShare"];
+      return kinds;
     }
     case "mediaKeySystem":
       // DRM playback (Widevine). No user-facing switch, always fine.

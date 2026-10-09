@@ -4259,6 +4259,7 @@ export class AgentSessionsService {
     const result = await tool.execute(args, {
       projectId: input.session.project_id,
       sessionId: input.session.id,
+      turnId: input.turn.id,
       workingDirectory: this.workingDirectories.get(input.turn.id) ?? "",
       caller: {
         tenantId: input.identity.tenantId,

@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import type {
   CanUseTool,
   McpSdkServerConfigWithInstance,
@@ -183,19 +186,173 @@ function processEnv(keys?: readonly string[]): Record<string, string> {
   return env;
 }
 
+/** Credentials the CLI takes over the person's sign-in, unasked. */
+const INHERITED_CREDENTIALS = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"];
+
 /**
  * The host's environment for a CLI that runs on it, less an inherited
- * Anthropic API key. The SDK runs the CLI in print mode, where it takes an
- * ANTHROPIC_API_KEY over the person's sign-in without the approval its
- * terminal asks for, so a key exported in the shell the host was started
- * from would bill their chats to the API instead of their plan. A key for
- * an endpoint the environment routes Claude Code to stays: the sign-in is
- * not for it. A host that means a key passes it in the attempt's env.
+ * Anthropic credential. The SDK runs the CLI in print mode, where it takes
+ * an ANTHROPIC_API_KEY (or ANTHROPIC_AUTH_TOKEN) over the person's sign-in
+ * without the approval its terminal asks for, so one exported in the shell
+ * the host was started from would bill their chats to the API instead of
+ * their plan. One for an endpoint Claude Code is routed to (a gateway, set
+ * in the host's or the attempt's env or in Claude's settings) stays: the
+ * sign-in is not for it. A host that means a key passes it in `env`. The
+ * CLI hands its environment to what it runs (Bash commands, hooks, MCP
+ * servers), so those do not see the dropped credential either.
  */
-export function hostProcessEnv(): Record<string, string> {
+export function hostProcessEnv(
+  input: {
+    /** What the host adds over its environment (the attempt's env). */
+    env?: Record<string, string>;
+    /** Where the CLI runs: its project settings may route it elsewhere. */
+    workingDirectory?: string;
+  } = {},
+): Record<string, string> {
   const env = processEnv();
-  if (routesToAnthropic(env.ANTHROPIC_BASE_URL)) delete env.ANTHROPIC_API_KEY;
+  const routed = { ...env, ...input.env };
+  if (
+    routesToAnthropic(
+      claudeBaseUrl({ env: routed, workingDirectory: input.workingDirectory }),
+    )
+  )
+    for (const name of INHERITED_CREDENTIALS) delete env[name];
   return env;
+}
+
+/**
+ * Where the CLI sends model calls: the `env` of its settings (managed over
+ * local over project over user, as the CLI applies them) over its own
+ * environment. Local settings are the repository's: from a worktree, the
+ * main checkout's, where the git-ignored file lives.
+ */
+function claudeBaseUrl(input: {
+  env: Record<string, string>;
+  workingDirectory?: string;
+}): string | undefined {
+  const userDirectory =
+    input.env.CLAUDE_CONFIG_DIR ?? path.join(os.homedir(), ".claude");
+  const directory = input.workingDirectory;
+  const root = directory ? repositoryRoot(directory) : undefined;
+  const settingsFiles = [
+    ...managedSettingsFiles(),
+    ...(root ? [path.join(root, ".claude", "settings.local.json")] : []),
+    ...(directory
+      ? [
+          path.join(directory, ".claude", "settings.local.json"),
+          path.join(directory, ".claude", "settings.json"),
+        ]
+      : []),
+    path.join(userDirectory, "settings.json"),
+  ];
+  for (const file of settingsFiles) {
+    const baseUrl = settingsEnv(file).ANTHROPIC_BASE_URL;
+    if (typeof baseUrl === "string" && baseUrl) return baseUrl;
+  }
+  return input.env.ANTHROPIC_BASE_URL;
+}
+
+/**
+ * The administrator's settings files, strongest first: the drop-ins in
+ * `managed-settings.d` (later names win) over `managed-settings.json`.
+ * Policy the CLI reads from elsewhere (an MDM profile, the Windows
+ * registry, server-managed settings) is not seen here.
+ */
+function managedSettingsFiles(): string[] {
+  const directory =
+    process.platform === "darwin"
+      ? "/Library/Application Support/ClaudeCode"
+      : process.platform === "win32"
+        ? "C:\\Program Files\\ClaudeCode"
+        : "/etc/claude-code";
+  const dropIns = path.join(directory, "managed-settings.d");
+  let names: string[] = [];
+  try {
+    // As the CLI takes them: JSON files (or links to them), no dotfiles.
+    names = fs
+      .readdirSync(dropIns, { withFileTypes: true })
+      .filter(
+        (entry) =>
+          (entry.isFile() || entry.isSymbolicLink()) &&
+          entry.name.endsWith(".json") &&
+          !entry.name.startsWith("."),
+      )
+      .map((entry) => entry.name)
+      .sort()
+      .reverse();
+  } catch {
+    // No drop-ins.
+  }
+  return [
+    ...names.map((name) => path.join(dropIns, name)),
+    path.join(directory, "managed-settings.json"),
+  ];
+}
+
+/**
+ * Where the CLI looks for a directory's local settings, close to how it
+ * decides: the repository's root, and for a linked worktree its main
+ * checkout (whose `.git` names a git directory under the main one's
+ * `worktrees`). Like the CLI, none on Windows or for a repository at the
+ * home directory; unlike it, the root's owner is not checked.
+ */
+function repositoryRoot(directory: string): string | undefined {
+  if (process.platform === "win32") return undefined;
+  for (
+    let current = path.resolve(directory);
+    ;
+    current = path.dirname(current)
+  ) {
+    const dotGit = path.join(current, ".git");
+    let found: fs.Stats | undefined;
+    try {
+      found = fs.statSync(dotGit);
+    } catch {
+      // Not here: look further up.
+    }
+    if (found) {
+      const root = found.isDirectory() ? current : mainCheckout(current);
+      return root === path.resolve(os.homedir()) ? undefined : root;
+    }
+    if (path.dirname(current) === current) return undefined;
+  }
+}
+
+/**
+ * The main checkout of a linked worktree whose `.git` file is at
+ * `directory`; the directory itself for another `.git` file (a submodule,
+ * a separate git directory), which has no `commondir`.
+ */
+function mainCheckout(directory: string): string {
+  try {
+    const gitDirectory = /^gitdir:\s*(.+)$/m
+      .exec(fs.readFileSync(path.join(directory, ".git"), "utf8"))?.[1]
+      ?.trim();
+    if (!gitDirectory) return directory;
+    const linked = path.resolve(directory, gitDirectory);
+    const common = path.resolve(
+      linked,
+      fs.readFileSync(path.join(linked, "commondir"), "utf8").trim(),
+    );
+    // A bare repository holds its worktrees' settings itself.
+    return path.basename(common) === ".git" ? path.dirname(common) : common;
+  } catch {
+    return directory;
+  }
+}
+
+/** A Claude settings file's `env` block; empty when there is none. */
+function settingsEnv(file: string): Record<string, unknown> {
+  try {
+    const settings: unknown = JSON.parse(fs.readFileSync(file, "utf8"));
+    if (typeof settings !== "object" || settings === null) return {};
+    const env: unknown = Reflect.get(settings, "env");
+    return typeof env === "object" && env !== null
+      ? Object.fromEntries(Object.entries(env))
+      : {};
+  } catch {
+    return {};
+  }
 }
 
 function routesToAnthropic(baseUrl: string | undefined): boolean {
@@ -315,7 +472,12 @@ export function buildQueryOptions(input: QueryOptionInputs): Options {
     // sign-in and settings) but not a stray API key; beside a sandbox's
     // workspace it gets the process basics and exactly what the attempt
     // lists, so no credential reaches it but the access below.
-    ...(host ? hostProcessEnv() : processEnv(PROCESS_BASICS)),
+    ...(host
+      ? hostProcessEnv({
+          env: attempt.env,
+          workingDirectory: attempt.workingDirectory,
+        })
+      : processEnv(PROCESS_BASICS)),
     ...attempt.env,
     ...(options.memory === false
       ? { CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1" }

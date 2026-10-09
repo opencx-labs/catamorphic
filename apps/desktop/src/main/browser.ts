@@ -36,6 +36,7 @@ import {
   wakeFromSource,
 } from "../shared/browser-history.js";
 import { browserImportRequestSchema } from "../shared/browser-import.js";
+import { chromeBrandHeaders } from "../shared/chrome-brands.js";
 import {
   type HistoryProject,
   historyProjectSchema,
@@ -70,6 +71,7 @@ import {
   sitePermissionStateSchema,
 } from "../shared/site-settings.js";
 import type { TerminalMacro } from "../shared/terminal-macros.js";
+import { isCaretKey, TEXT_FIELD_PROBE } from "../shared/text-field.js";
 import { HistoryStore } from "./browser-history.js";
 import {
   importBrowserCookies,
@@ -241,18 +243,15 @@ let downloadHook:
 let extensionsHost: ExtensionsHost | null = null;
 
 /**
- * Chrome's client-hint brand list, derived from the session UA. Google's
- * supported-browser gate reads these; Electron would otherwise advertise
- * only "Chromium". The UA string itself is already Chrome-clean app-wide
- * (see `app.userAgentFallback` in main/index.ts).
+ * Chrome's client-hint brand lists for the engine's version, as Chrome
+ * builds them (shared/chrome-brands.ts). Google's supported-browser gate
+ * reads these; Electron would otherwise advertise only "Chromium". The UA
+ * string itself is already Chrome-clean app-wide (see
+ * `app.userAgentFallback` in main/index.ts), and names only the major
+ * version; the full version list names the engine's real one.
  */
-function chromeBrands(ua: string): { brands: string; fullVersionList: string } {
-  const major = /Chrome\/(\d+)/.exec(ua)?.[1] ?? "150";
-  const full = /Chrome\/([\d.]+)/.exec(ua)?.[1] ?? `${major}.0.0.0`;
-  return {
-    brands: `"Google Chrome";v="${major}", "Chromium";v="${major}", "Not;A=Brand";v="8"`,
-    fullVersionList: `"Google Chrome";v="${full}", "Chromium";v="${full}", "Not;A=Brand";v="8.0.0.0"`,
-  };
+function chromeBrands(): { brands: string; fullVersionList: string } {
+  return chromeBrandHeaders({ fullVersion: process.versions.chrome });
 }
 
 const BRAND_HEADER_REQUESTS: Electron.WebRequestFilter = {
@@ -275,7 +274,7 @@ function setBrandHeaderListener(ses: Session, on: boolean): void {
     ses.webRequest.onBeforeSendHeaders(null);
     return;
   }
-  const { brands, fullVersionList } = chromeBrands(ses.getUserAgent());
+  const { brands, fullVersionList } = chromeBrands();
   // Header layer: Chromium sends Sec-CH-UA built from its own brand list,
   // which no setUserAgent call covers. Only documents and page requests
   // (fetch, XHR) are rewritten, where a site reads the brand. A listener
@@ -327,7 +326,11 @@ async function doPrepareProfileSession(
     void policy.request(wc, profileId, permission, details).then(
       (granted) => {
         // A page with a camera, microphone or share open stays awake.
-        if (granted && permission === "media") noteCapture(wc);
+        if (
+          granted &&
+          (permission === "media" || permission === "display-capture")
+        )
+          noteCapture(wc);
         callback(granted);
       },
       () => callback(false),
@@ -522,7 +525,7 @@ export function registerBrowserSupport(
     profileFor: (sender) => windows.profileFor(sender),
     windowsFor: (profileId) => windows.windowsFor(profileId),
     isDock,
-    brands: (ses) => chromeBrands(ses.getUserAgent()),
+    brands: chromeBrands,
     setBrandListener: setBrandHeaderListener,
     keybindings: keybindingsOf,
     pickFolder: async (sender) => {
@@ -1136,16 +1139,54 @@ export function registerBrowserSupport(
         altKey: input.alt,
         shiftKey: input.shift,
       };
-      // Find keys go to the page first, whose preload hands back what the
-      // page leaves (preload/webview.ts). The preload runs only in the
-      // main frame, so from an embedded frame (where Google Docs types)
-      // they stay the page's: Work never takes a frame's own find.
+      // Page-first keys (find, back, forward) go to the page first, whose
+      // preload hands back what the page and its text fields leave
+      // (preload/webview.ts). The preload runs only in the main frame, so
+      // from an embedded frame (where Google Docs types) find stays the
+      // page's, and back and forward go unless the key moves a caret and
+      // the frame's focus may be a text field: Work never takes a frame's
+      // caret, and a probe that cannot tell keeps the key. Unlike the main
+      // frame, a frame's own claim on the key (preventDefault) is not seen.
+      const frame = contents.focusedFrame;
+      const mac = process.platform === "darwin";
+      const direction =
+        frame && frame.parent !== null
+          ? (["back", "forward"] as const).find((candidate) =>
+              matchesShortcut({
+                event: key,
+                binding: bindings[`browser-${candidate}`],
+                mac,
+              }),
+            )
+          : undefined;
+      if (frame && direction) {
+        const navigate = () => {
+          if (host.isDestroyed()) return;
+          host.send("catamorphic:browser-navigate", {
+            webContentsId: contents.id,
+            direction,
+          });
+        };
+        if (!isCaretKey({ event: key, mac })) {
+          navigate();
+          return;
+        }
+        frame
+          .executeJavaScript(TEXT_FIELD_PROBE)
+          .then((field: unknown) => {
+            if (field === false) navigate();
+          })
+          .catch(() => {
+            // The frame went away with its key.
+          });
+        return;
+      }
       if (
         !macros.some((macro) =>
           matchesShortcut({
             event: key,
             binding: macro.shortcut,
-            mac: process.platform === "darwin",
+            mac,
           }),
         ) &&
         !KEYBINDING_ACTIONS.some(
@@ -1155,7 +1196,7 @@ export function registerBrowserSupport(
             matchesShortcut({
               event: key,
               binding: bindings[action],
-              mac: process.platform === "darwin",
+              mac,
             }),
         )
       )
@@ -1368,8 +1409,8 @@ export function registerBrowserSupport(
 
   /**
    * The app's picker for a page's getDisplayMedia. Chromium asks the
-   * permission handler first (a `media` request with no media types) and
-   * the display-media handler second; picking at the first stage lets a
+   * permission handler first (a `display-capture` request) and the
+   * display-media handler second; picking at the first stage lets a
    * cancel deny the permission, which the page sees as NotAllowedError
    * (Chrome's answer), and the second stage hands over the pick.
    */
@@ -1409,12 +1450,7 @@ export function registerBrowserSupport(
         details,
       );
       if (decision.outcome === "block") return false;
-      if (
-        permission === "media" &&
-        permissionKindsFor(permission, details).every(
-          (kind) => kind === "screenShare",
-        )
-      ) {
+      if (permission === "display-capture") {
         const host = guest.hostWebContents;
         if (!host || host.isDestroyed()) return false;
         const streams = await pickShare({ guest, host, profileId, origin });

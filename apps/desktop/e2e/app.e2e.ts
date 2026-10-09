@@ -221,6 +221,10 @@ describe("browser tabs", () => {
     `);
     await showsTab("Second E2E Page", "second browser history entry");
 
+    // With nothing focused in Work's window, no text field keeps Cmd+Left
+    // and Cmd+Right for its caret (text-field-keys.e2e.ts): the address
+    // bar would.
+    await run(`document.activeElement?.blur(); return true;`);
     await run(`pressKey('ArrowLeft', { metaKey: true }); return true;`);
     await showsTab("E2E Page", "browser history moved back");
     await run(`pressKey('ArrowRight', { metaKey: true }); return true;`);
