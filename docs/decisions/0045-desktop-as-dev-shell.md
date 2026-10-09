@@ -2,6 +2,8 @@
 
 > Local-checkout import, checkpoint, and publication behavior is refined by [ADR 0104](0104-local-checkouts-and-explicit-file-sharing.md).
 
+> Setting up a chat's own worktree (`.worktreeinclude`, Environment setup) is refined by [ADR 0215](0215-a-chats-own-worktree.md).
+
 
 - **Status:** Accepted
 - **Date:** 2026-08-13

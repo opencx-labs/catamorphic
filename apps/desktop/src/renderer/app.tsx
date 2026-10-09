@@ -193,6 +193,7 @@ import {
   visitSurface,
 } from "./lib/surface-history.js";
 import { useTabSleep } from "./lib/tab-sleep.js";
+import { useWorktreesAvailable } from "./lib/use-session-checkout.js";
 import { useSidebarReveal } from "./lib/use-sidebar-reveal.js";
 import {
   fileNameFromPath,
@@ -942,6 +943,8 @@ export function App({
   // Project policy (ADR 0062): the committed manifest may disable
   // incognito sessions for this project's members.
   const [incognitoAllowed, setIncognitoAllowed] = useState(false);
+  // A Git project with a commit can give a chat its own worktree (ADR 0215).
+  const worktreesAvailable = useWorktreesAvailable(projectId).data ?? false;
   const [startingActions, setStartingActions] = useState<
     Array<{ label: string; prompt: string; agentId?: string }>
   >([]);
@@ -967,7 +970,6 @@ export function App({
       cancelled = true;
     };
   }, [projectId]);
-
   /**
    * Switching profile follows the workspace's occupancy: an empty
    * workspace (no tabs, no browsers, no chats) switches this window in
@@ -2488,7 +2490,7 @@ export function App({
   // memory); the sidebar +, bubble +, and Cmd+N open the floating aside.
   const addChat = (
     forceMode?: "tab",
-    opts?: { incognito?: boolean; agentId?: string },
+    opts?: { incognito?: boolean; worktree?: boolean; agentId?: string },
   ) => {
     if (!requireAgents()) return;
     updateWorkspace((ws) => {
@@ -2511,8 +2513,25 @@ export function App({
         !activeSignals?.draft &&
         !activeSignals?.awaitingInput &&
         // A fresh plain chat doesn't satisfy "new INCOGNITO chat".
-        Boolean(active.incognito) === Boolean(opts?.incognito)
+        Boolean(active.incognito) === Boolean(opts?.incognito) &&
+        // Nor does a fresh worktree chat a plain one; the reverse takes one.
+        (!active.worktree || opts?.worktree)
       ) {
+        // Asked for a worktree, the fresh chat takes one (ADR 0215).
+        if (opts?.worktree && !active.worktree) {
+          setSelectionPulls((current) => ({
+            ...current,
+            [active.localId]: (current[active.localId] ?? 0) + 1,
+          }));
+          return {
+            ...ws,
+            chats: ws.chats.map((chat) =>
+              chat.localId === active.localId
+                ? { ...chat, worktree: true }
+                : chat,
+            ),
+          };
+        }
         setSelectionPulls((current) => ({
           ...current,
           [active.localId]: (current[active.localId] ?? 0) + 1,
@@ -3906,6 +3925,11 @@ export function App({
     },
     // Policy-gated (ADR 0062): hidden from the palette when the project
     // committed allowIncognito: false; the handler double-checks.
+    "new-worktree-chat": () => {
+      // Connected projects' chats run on their server (ADR 0098).
+      if (worktreesAvailable && remoteSurfaceStatus === null)
+        addChat(undefined, { worktree: true });
+    },
     "new-incognito-chat": () => {
       if (incognitoAllowed) addChat(undefined, { incognito: true });
     },
@@ -5479,6 +5503,9 @@ export function App({
   }
   const paletteActionAvailability: Partial<Record<ActionId, boolean>> = {
     "reopen-tab": workspace.closedTabs.length > 0,
+    // A Git project on this computer (ADR 0215); connected projects' chats
+    // run on their server.
+    "new-worktree-chat": worktreesAvailable && remoteSurfaceStatus === null,
     "remote-environment": remoteSurfaceStatus !== null,
     "toggle-chat-minimized": paletteTargetChat !== undefined,
     "chat-to-tab":

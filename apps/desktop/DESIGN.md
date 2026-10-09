@@ -1967,3 +1967,31 @@ right half of a split moves by part of what the content does, so it gets
 its own offset rather than the content's. And a compact window's
 hover-revealed sidebar closes without the items' lead: a peek is dismissed
 often, and should go at once.
+
+### 2026-10-09: A chat's own worktree is the person's choice, and comes back from the popup
+
+Only agents could give a chat its own worktree, and nothing about it was
+finished: no ignored files or dependencies, no cleanup, and no way back
+except a pull request. On this machine no Work profile had ever made one,
+while the repository held dozens of Claude Code worktrees.
+
+"New chat in a worktree" in the palette, or "Use own worktree" in the
+status popup's Folder row, now chooses one; the chat's next message checks
+it out at the project folder's last commit, copies the ignored files
+`.worktreeinclude` lists and runs the Environment's setup (ADR 0215). The
+Folder row is where the chat says where it works: "Project folder", its
+branch with the folder and how many files it changed, "put away" while the
+chat is archived, or an assigned worktree. Between turns the row offers
+what fits: bring the changes to the project folder (written there
+uncommitted, refused with nothing changed when they would collide with the
+person's own), discard after a confirmation, or use the project folder
+again. The popup's trigger carries a branch mark while the chat works, or
+will work, in its own worktree, so a tabbed chat with its header folded
+still shows it. The sidebar's session card shows the same row, and the
+Changes section names a worktree's chats by title instead of an id.
+
+Archiving a chat puts its worktree away: everything is recorded on its
+branch and the folder goes, so worktrees no longer pile up; the next
+message checks it out again. The default stays the project folder, because
+most projects are not code and the main complaint about Claude Code's
+worktrees is that people cannot opt out.

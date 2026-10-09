@@ -12,8 +12,8 @@ import {
   type AgentInfo,
   desktopApi,
   projectAgentAsInfo,
-  type SessionCheckoutInfo,
 } from "../lib/desktop-api.js";
+import { ChatFolder } from "./chat-folder.js";
 import { useRemoteProject } from "./project-authority-provider.js";
 import { SessionInspectorContent } from "./session-inspector.js";
 
@@ -32,7 +32,6 @@ export function SidebarSessionInspector({
   agent: profileAgent,
   agents = [],
   agentName,
-  checkout,
   onCommand,
   onArchive,
 }: {
@@ -42,7 +41,6 @@ export function SidebarSessionInspector({
   /** The profile's agents: what the session may switch to. */
   agents?: AgentInfo[];
   agentName: string;
-  checkout: SessionCheckoutInfo | null;
   onCommand: (command: SessionCommand) => void;
   onArchive: () => void;
 }) {
@@ -117,7 +115,15 @@ export function SidebarSessionInspector({
         session={session}
         fallbackTitle="Chat"
         agentName={agentName}
-        checkout={checkout}
+        folder={
+          remote ? undefined : (
+            <ChatFolder
+              projectId={projectId}
+              sessionId={session.id}
+              busy={session.running}
+            />
+          )
+        }
         incognito={privacy.data ?? false}
         model={
           pinnedModel

@@ -92,6 +92,13 @@ export interface ChatDockEntry {
   /** Local-only session (ADR 0062): never mirrored to a linked remote. */
   incognito?: boolean;
   /**
+   * Chosen before the chat's first message: that message gives it its own
+   * worktree (ADR 0215), recorded before anything is sent, and again before
+   * a resend if recording failed. Once the session exists, its checkout is
+   * what the chat shows.
+   */
+  worktree?: boolean;
+  /**
    * The chat this one was forked from, when the parent is (or was) open
    * in this workspace — puts the fork on the parent's surfaces rail.
    */

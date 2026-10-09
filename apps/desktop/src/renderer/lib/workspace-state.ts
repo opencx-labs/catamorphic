@@ -129,11 +129,12 @@ export interface Workspace {
 
 export const newChatEntry = (
   mode: ChatDockEntry["mode"],
-  opts?: { incognito?: boolean; agentId?: string },
+  opts?: { incognito?: boolean; worktree?: boolean; agentId?: string },
 ): ChatDockEntry => ({
   localId: crypto.randomUUID(),
   mode,
   ...(opts?.incognito ? { incognito: true } : {}),
+  ...(opts?.worktree ? { worktree: true } : {}),
   ...(opts?.agentId ? { agentId: opts.agentId } : {}),
 });
 

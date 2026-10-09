@@ -1202,7 +1202,6 @@ function SessionsNav({
                   )}
                   agents={agentsData?.agents}
                   agentName={agentName}
-                  checkout={checkout ?? null}
                   onCommand={(command) => onCommand(session, command)}
                   onArchive={() => onSessionAction(session.id, "archive")}
                 />

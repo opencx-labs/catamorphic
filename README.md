@@ -206,6 +206,13 @@ state, checkpoint commits, and rollback; Catamorphic does not pretend those
 changes belong to one agent. (ADR
 [0063](docs/decisions/0063-agent-checkout-coordination.md))
 
+People choose too: the desktop's "New chat in a worktree", or the chat's
+status popup, gives a chat its own worktree at the project folder's last
+commit. Its first turn copies the ignored files `.worktreeinclude` lists and
+runs the Environment's `setup`; archiving the chat puts the folder away on
+its branch, and the popup brings its changes back into the project folder
+or discards them. (ADR [0215](docs/decisions/0215-a-chats-own-worktree.md))
+
 **Project agent definitions**: an agent can be a work product. Committed
 `.work/agents/<slug>.json` files (plus an optional `.work/agents/<slug>.md` persona)
 version with the project and appear in every collaborator's picker. A
@@ -262,8 +269,9 @@ Import a real monorepo and use the desktop as your daily driver. The
 Claude Code harness runs at full fidelity: the SDK's own preset system
 prompt, and the repo's CLAUDE.md, `.claude/` skills, agents, commands, and
 settings load exactly as in the CLI. Worktrees are first-class: discovered,
-listed, diffed, and assignable by agents when concurrent work needs
-isolation. Checkout management is harness-neutral, so Claude Code, Codex,
+listed, diffed, assignable by agents when concurrent work needs isolation,
+and a chat's own worktree is a palette command away, set up before its first
+turn and brought back from the chat's status popup. Checkout management is harness-neutral, so Claude Code, Codex,
 and the built-in agent follow the same policy. Diff tabs render in Monaco;
 the sidebar has Changes and Pull Requests sections; PR review opens per-file
 diffs through the CodeHost seam. Terminals are real PTYs with shell

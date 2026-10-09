@@ -863,6 +863,13 @@ export {
   WorkflowsService,
 } from "./services/workflows-service.js";
 export {
+  parseSetupRecord,
+  planWorkspaceSetup,
+  SETUP_LOG_TAIL_LINES,
+  type SetupRecord,
+  type WorkspaceSetupOutcome,
+} from "./services/workspace-setup.js";
+export {
   checkWebhookToken,
   matchWebhookHandshake,
   verifyWebhookRequest,

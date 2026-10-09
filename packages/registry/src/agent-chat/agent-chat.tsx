@@ -23,7 +23,11 @@ export interface AgentChatProps {
    * Pair with `onSessionCreated` to track lazily created sessions.
    */
   sessionId?: string;
-  onSessionCreated?: (sessionId: string) => void;
+  /**
+   * A lazily created session, before anything is sent to it: sends wait
+   * for a returned promise and fail with its error.
+   */
+  onSessionCreated?: (sessionId: string) => void | Promise<void>;
   /**
    * `dock` (default) renders the collapsible bottom-docked bar. `full` fills
    * the parent and keeps the conversation always visible, for hosts where

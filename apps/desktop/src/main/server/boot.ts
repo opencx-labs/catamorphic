@@ -250,6 +250,13 @@ export async function startEmbeddedServer(
     pglite,
     worktreesDirectory: path.join(paths.root, "worktrees"),
     projectRoot: (projectId) => projectRoots.getSync(projectId),
+    // Read once the server is up: only the person's actions and resting
+    // chats ask (ADR 0215).
+    sessionRunning: async ({ projectId, sessionId }) =>
+      (await catamorphic.core.agentSessions
+        ?.get(desktopIdentity, projectId, sessionId)
+        .then((session) => session.running)
+        .catch(() => false)) ?? false,
   });
   await sessionCheckouts.init();
   const workspaceStates = new WorkspaceStateStore(pglite);
@@ -418,6 +425,9 @@ export async function startEmbeddedServer(
       userSkillInfos(profileConfig.userSkillsDir(profileId)),
     sessionPeers: (projectId, sessionId) =>
       sessionPeersResolver?.(projectId, sessionId) ?? Promise.resolve([]),
+    // Where the chat works, when it is not the project folder (ADR 0215).
+    checkoutNotice: (projectId, sessionId) =>
+      sessionCheckouts.notice({ projectId, sessionId }),
   });
   if (e2eFakeAgent) {
     const agents = profileConfig.forDefaultProfile().agents;
@@ -500,6 +510,13 @@ export async function startEmbeddedServer(
       // only a checkout the chat owns, or one nothing else changed, moves.
       head: (input) => sessionCheckouts.head(input),
       restore: (input) => sessionCheckouts.restore(input),
+      // A chat's own worktree is set up like a new workspace and put away
+      // with the chat (ADR 0215).
+      setup: (input) => sessionCheckouts.setup(input),
+      release: async (input) => {
+        await sessionCheckouts.putAway(input);
+        broadcastGitChanged(input.projectId);
+      },
     },
     appBundleStore: new FsBundleStore(paths.appBundles),
     pushNotifications: createPushTransport({ dataDir: paths.root }),
@@ -579,12 +596,7 @@ export async function startEmbeddedServer(
       // The turn checkpoint just moved git state; a sidebar waiting on
       // its 15s poll would show stale rows (and stale rows diff against
       // a HEAD that already contains them — two identical panes).
-      for (const window of BrowserWindow.getAllWindows()) {
-        if (window.isDestroyed()) continue;
-        window.webContents.send("catamorphic:git-changed", {
-          projectId: event.projectId,
-        });
-      }
+      broadcastGitChanged(event.projectId);
     },
   });
   const triggers = new DesktopTriggers(catamorphic);
@@ -644,6 +656,30 @@ export async function startEmbeddedServer(
       }
     },
   });
+  // Chats archived while a turn could not stop, and worktrees an agent
+  // left, are put away once the server is up (ADR 0215).
+  void sessionCheckouts
+    .sweep({
+      resting: async ({ projectId, sessionId }) => {
+        const session = await catamorphic.core.agentSessions?.get(
+          desktopIdentity,
+          projectId,
+          sessionId,
+        );
+        return Boolean(
+          session &&
+            !session.running &&
+            (session.archivedAt !== null || session.status === "closed"),
+        );
+      },
+    })
+    .catch((error) =>
+      console.warn(
+        `[desktop] putting away resting worktrees failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      ),
+    );
   syncWorkflowConnections = (profileId?: string) => {
     // OAuth discovery, registration, token exchange, and tool probing can
     // each update the profile store. Serialize their projections so two
@@ -1378,4 +1414,12 @@ function loadOrCreateHostId(file: string): string {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, `${hostId}\n`, { mode: 0o600 });
   return hostId;
+}
+
+/** Tell every window a project's files moved under it. */
+function broadcastGitChanged(projectId: string): void {
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (window.isDestroyed()) continue;
+    window.webContents.send("catamorphic:git-changed", { projectId });
+  }
 }
