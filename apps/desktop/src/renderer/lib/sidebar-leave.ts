@@ -9,6 +9,8 @@ const SWEEP_MS = 60;
 const STEP_PX = 10;
 /** Pieces of a row closer than this leave together. */
 const GAP_PX = 16;
+/** Names the leave's animations among a row's own. */
+export const LEAVE_ID = "sidebar-leave";
 /** Boxes that leave whole and draw no thread: icons, images, controls. */
 const BOXES =
   "svg, img, picture, canvas, video, iframe, input, textarea, select";
@@ -138,6 +140,7 @@ export function leaveSidebar({
       ),
       easing: EASE_STANDARD,
       fill: "both",
+      id: LEAVE_ID,
     };
     for (const piece of group)
       animations.push(

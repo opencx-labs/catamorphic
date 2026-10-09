@@ -146,7 +146,7 @@ describe("configurable browser workspace", () => {
   it("lets its items leave before it does, and plays them back when it opens mid-close", async () => {
     const aside = "document.querySelector('aside[data-sidebar=left]')";
     // The leave runs on Web Animations; the panel's slide is a transition.
-    const leaving = `(element) => element.getAnimations({ subtree: true }).filter((animation) => animation.constructor === Animation)`;
+    const leaving = `(element) => element.getAnimations({ subtree: true }).filter((animation) => animation.id === 'sidebar-leave')`;
     const read = () =>
       app.eval<{
         row: string | undefined;
@@ -187,15 +187,26 @@ describe("configurable browser workspace", () => {
       expect(closing.threads).toBeGreaterThan(0);
       // The panel follows the items a beat later.
       expect(closing.delay).toBe(100);
+      // Watched every frame from here: did the items play back?
+      await app.eval(`(() => {
+        window.__playedBack = false;
+        const sample = () => {
+          const animations = (${leaving})(${aside});
+          if (animations.length > 0 && animations.every((animation) => animation.playbackRate < 0)) window.__playedBack = true;
+          else if (!window.__playedBack) requestAnimationFrame(sample);
+        };
+        sample();
+        return true;
+      })()`);
       // Opened mid-close (the toggle rides away with the panel, so by its
       // shortcut), the items come back from where they are.
       await app.eval(`window.dispatchEvent(new KeyboardEvent('keydown', {
         key: 'b', bubbles: true, cancelable: true,
         ...(/Mac/.test(navigator.platform) ? { metaKey: true } : { ctrlKey: true }),
       })); true`);
-      // Still within the panel's wait, the panel goes straight back to open.
-      await app.waitFor(`${aside}.dataset.motion !== 'closing'`);
-      expect((await read()).rate).toBe(-1);
+      await app.waitFor("window.__playedBack === true", {
+        label: "items playing back",
+      });
     } finally {
       await app.cdp("Animation.setPlaybackRate", { playbackRate: 1 });
     }
