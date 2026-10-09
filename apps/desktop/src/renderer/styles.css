@@ -1477,7 +1477,8 @@ kbd {
 }
 
 /* Bare icon tabs. Both sidebars share the same quiet chrome and motion: the
-   panel slides with a transform the moment it is toggled, and the aside
+   panel slides with a transform (closing from open, once its items have
+   started to leave), and the aside
    holds the sidebar's place beside the content (its width, once docked),
    which changes only once the panel is still (lib/sidebar-motion.ts). */
 .tabbed-sidebar {
@@ -1672,34 +1673,35 @@ kbd {
 }
 /* The content taking or giving back a still sidebar's space
    (lib/sidebar-transition.ts) cross-fades in place: its box takes its new
-   place at once, the old snapshot stays where the content was
-   (--content-from-x/-y) and fades out as the new one fades in. Neither is
-   scaled or moved, so nothing on screen slides or stretches. Linear over
+   place at once, the old snapshot stays where the content was (a rule the
+   transition writes) and fades out as the new one fades in. Neither is
+   scaled or moved, so nothing in the content slides or stretches. A chat
+   tab over the content does the same from its own place. Linear over
    300ms (a sanctioned exception, DESIGN.md): the standard curve does most
-   of a fade in its first quarter, which reads as a snap. */
+   of a fade in its first quarter, which reads as a snap. The pair blends
+   plus-lighter, as a browser cross-fade does, so the content never dims
+   toward what is behind it midway (a custom animation drops that). */
+::view-transition-group(workspace-content),
+::view-transition-group(*.dock-tab) {
+  animation: none;
+}
 ::view-transition-old(workspace-content),
 ::view-transition-new(workspace-content),
 ::view-transition-old(*.dock-tab),
 ::view-transition-new(*.dock-tab) {
-  animation-duration: 300ms;
-  animation-timing-function: linear;
-}
-::view-transition-group(workspace-content) {
-  animation: none;
-}
-::view-transition-image-pair(workspace-content) {
-  overflow: clip;
-}
-::view-transition-old(workspace-content),
-::view-transition-new(workspace-content) {
   inline-size: auto;
   block-size: auto;
+  mix-blend-mode: plus-lighter;
+  animation-duration: 300ms;
+  animation-timing-function: linear;
+  animation-fill-mode: both;
 }
-::view-transition-old(workspace-content) {
-  translate: var(--content-from-x, 0) var(--content-from-y, 0);
+::view-transition-old(workspace-content),
+::view-transition-old(*.dock-tab) {
   animation-name: content-fade-out;
 }
-::view-transition-new(workspace-content) {
+::view-transition-new(workspace-content),
+::view-transition-new(*.dock-tab) {
   animation-name: content-fade-in;
 }
 @keyframes content-fade-out {
@@ -1959,9 +1961,10 @@ html[data-surface="dock"] #root {
 /* Chats live in the dock, outside the content, so the content's snapshot
    would cover them for the whole settle. While it settles they get layers
    of their own: a floating chat and the bubble strip glide from where they
-   were to where they land, and a chat tab settles exactly as the content
-   does. Names are per element (match-element) because several chats can
-   be on screen while one leaves. */
+   were to where they land, and a chat tab fades as the content does (the
+   transition names it, lib/sidebar-transition.ts). Names are per element
+   (match-element) because several chats can be on screen while one
+   leaves. */
 :root[data-content-settling]
   [data-dock-host]:not([data-dock-native])
   [data-floating-chat] {
@@ -1974,21 +1977,12 @@ html[data-surface="dock"] #root {
   view-transition-name: match-element;
   view-transition-class: dock-rail;
 }
-:root[data-content-settling]
-  [data-dock-host]:not([data-dock-native])
-  [data-chat-tab] {
-  view-transition-name: match-element;
-  view-transition-class: dock-tab;
-}
 ::view-transition-group(*.dock-float),
 ::view-transition-group(*.dock-rail),
-::view-transition-group(*.dock-tab),
 ::view-transition-old(*.dock-float),
 ::view-transition-new(*.dock-float),
 ::view-transition-old(*.dock-rail),
-::view-transition-new(*.dock-rail),
-::view-transition-old(*.dock-tab),
-::view-transition-new(*.dock-tab) {
+::view-transition-new(*.dock-rail) {
   animation-duration: 200ms;
   animation-timing-function: var(--ease-standard);
 }
@@ -2007,26 +2001,6 @@ html[data-surface="dock"] #root {
   inset-inline: 0;
   margin-inline: auto;
 }
-/* A chat tab is the content there: it cross-fades in place too. */
-::view-transition-group(*.dock-tab) {
-  animation: none;
-}
-::view-transition-image-pair(*.dock-tab) {
-  overflow: clip;
-}
-::view-transition-old(*.dock-tab),
-::view-transition-new(*.dock-tab) {
-  inline-size: auto;
-  block-size: auto;
-}
-::view-transition-old(*.dock-tab) {
-  translate: var(--content-from-x, 0) var(--content-from-y, 0);
-  animation-name: content-fade-out;
-}
-::view-transition-new(*.dock-tab) {
-  animation-name: content-fade-in;
-}
-
 /* Browser setup actions keep their footprint when they become status rows. */
 .browser-setup-action {
   display: inline-flex;

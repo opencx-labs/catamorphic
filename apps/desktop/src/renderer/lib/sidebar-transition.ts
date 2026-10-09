@@ -2,7 +2,7 @@ import { flushSync } from "react-dom";
 import { prefersReducedMotion } from "./motion.js";
 
 let pending: ViewTransition | undefined;
-let settling: { transition: ViewTransition; content: HTMLElement } | undefined;
+let settling: { transition: ViewTransition; cleanup: () => void } | undefined;
 
 function animate(): boolean {
   return (
@@ -25,15 +25,20 @@ export function transitionSidebarUpdate(update: () => void) {
   });
 }
 
+/** Chat tabs over the content: each is the content where it shows. */
+const CHAT_TABS = "[data-dock-host]:not([data-dock-native]) [data-chat-tab]";
+
 /**
  * The content beside a still sidebar takes or gives back its space with a
  * cross-fade in place: the content (a web page in its own process, a
  * terminal, the editor) lays out at its new size once, behind snapshots;
  * the old one stays exactly where the content was and fades out as the new
- * one fades in. Nothing on screen slides or stretches, and the snapshots
- * are GPU textures, so nothing waits on another process while they fade
- * (ADR 0200, amended 2026-10-09: the box growing into place showed the
- * app's background around it, which read as a glitch).
+ * one fades in. Nothing in the content slides or stretches, and the
+ * snapshots are GPU textures, so nothing waits on another process while
+ * they fade (ADR 0200, amended 2026-10-09: the box growing into place
+ * showed the app's background around it, which read as a glitch). A chat
+ * tab over the content fades the same way, from its own place; floating
+ * chats and the bubble strip glide (styles.css).
  *
  * `update` always runs, animated or not; without a transition when
  * `wanted` no longer holds (the sidebar moved again). Only the visible
@@ -61,40 +66,58 @@ export function settleSidebarContent({
     update();
     return;
   }
-  const before = content.getBoundingClientRect();
   pending?.skipTransition();
   if (settling) {
     settling.transition.skipTransition();
-    settling.content.style.viewTransitionName = "";
+    settling.cleanup();
   }
   const root = document.documentElement;
-  // Named for this transition only; config reloads leave the content be.
-  // The chats over it take layers of their own (styles.css).
-  content.style.viewTransitionName = "workspace-content";
+  // Named for this transition only; config reloads leave them be.
+  const layers = [
+    { name: "workspace-content", element: content },
+    ...[...document.querySelectorAll<HTMLElement>(CHAT_TABS)].map(
+      (element, index) => ({ name: `chat-tab-${index}`, element }),
+    ),
+  ];
+  for (const { name, element } of layers) {
+    element.style.viewTransitionName = name;
+    if (element !== content)
+      element.style.setProperty("view-transition-class", "dock-tab");
+  }
+  // Floating chats and the bubble strip take layers of their own meanwhile.
   root.dataset.contentSettling = "";
+  const placement = document.createElement("style");
+  const cleanup = () => {
+    for (const { element } of layers) {
+      element.style.viewTransitionName = "";
+      element.style.removeProperty("view-transition-class");
+    }
+    placement.remove();
+    delete root.dataset.contentSettling;
+  };
   const transition = document.startViewTransition(() => {
+    // Measured as the snapshots caught it: a skipped settle's update has
+    // run by now.
+    const before = layers.map(({ element }) => element.getBoundingClientRect());
     flushSync(update);
-    // The old snapshot stays where the content was (styles.css).
-    const after = content.getBoundingClientRect();
-    root.style.setProperty(
-      "--content-from-x",
-      `${Math.round(before.left - after.left)}px`,
-    );
-    root.style.setProperty(
-      "--content-from-y",
-      `${Math.round(before.top - after.top)}px`,
-    );
+    // Each old snapshot stays where its layer was.
+    placement.textContent = layers
+      .map(({ name, element }, index) => {
+        const was = before[index];
+        const now = element.getBoundingClientRect();
+        if (!was) return "";
+        return `::view-transition-old(${name}) { translate: ${Math.round(was.left - now.left)}px ${Math.round(was.top - now.top)}px; }`;
+      })
+      .join("\n");
+    document.head.append(placement);
   });
-  settling = { transition, content };
+  settling = { transition, cleanup };
   void transition.ready.catch(() => {
     /* A skipped transition still applied its update. */
   });
   void transition.finished.finally(() => {
     if (settling?.transition !== transition) return;
     settling = undefined;
-    content.style.viewTransitionName = "";
-    delete root.dataset.contentSettling;
-    root.style.removeProperty("--content-from-x");
-    root.style.removeProperty("--content-from-y");
+    cleanup();
   });
 }

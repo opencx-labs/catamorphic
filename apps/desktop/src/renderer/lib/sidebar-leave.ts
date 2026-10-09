@@ -13,7 +13,7 @@ const GAP_PX = 16;
 export const LEAVE_ID = "sidebar-leave";
 /** Boxes that leave whole and draw no thread: icons, images, controls. */
 const BOXES =
-  "svg, img, picture, canvas, video, iframe, input, textarea, select";
+  "svg, img, picture, canvas, video, iframe, input, textarea, select, progress, meter";
 
 /** Something on screen that leaves: a run of text, or a box. */
 interface Piece {
@@ -124,20 +124,37 @@ export function leaveSidebar({
   const traces = document.createElement("div");
   traces.className = "sidebar-traces";
   traces.setAttribute("aria-hidden", "true");
-  const animations: Animation[] = [];
   const toward = side === "left" ? -1 : 1;
-  for (const group of clusters([...pieces.values()])) {
+  // Everything is read before anything animates, so the click costs one
+  // style pass, not one per row.
+  const plans = clusters([...pieces.values()]).map((group) => {
     const rects = group.flatMap((piece) => piece.lines);
     const left = Math.min(...rects.map((rect) => rect.left));
     const right = Math.max(...rects.map((rect) => rect.right));
     const top = Math.min(...rects.map((rect) => rect.top));
-    const texts = group.filter((piece) => piece.text);
-    const distance = texts.length > 0 ? right - left : STEP_PX;
-    const timing: KeyframeAnimationOptions = {
-      duration: motionMs(LEAVE_MS),
+    const [main] = group.filter((piece) => piece.text);
+    const [first] = main?.lines ?? [];
+    return {
+      group,
+      distance: main ? right - left : STEP_PX,
       delay: Math.round(
         Math.max(0, Math.min(1, (top - box.top) / box.height)) * SWEEP_MS,
       ),
+      // A wrapped paragraph leaves a thread per line; a row, one across it.
+      threads:
+        !main || !first
+          ? []
+          : group.length === 1
+            ? main.lines
+            : [new DOMRect(left, first.top, right - left, first.height)],
+      color: main ? getComputedStyle(main.element).color : "",
+    };
+  });
+  const animations: Animation[] = [];
+  for (const { group, distance, delay, threads, color } of plans) {
+    const timing: KeyframeAnimationOptions = {
+      duration: motionMs(LEAVE_MS),
+      delay,
       easing: EASE_STANDARD,
       fill: "both",
       id: LEAVE_ID,
@@ -149,15 +166,6 @@ export function leaveSidebar({
           timing,
         ),
       );
-    // A wrapped paragraph leaves a thread per line; a row, one across it.
-    const [main] = texts;
-    const [first] = main?.lines ?? [];
-    if (!main || !first) continue;
-    const threads =
-      group.length === 1
-        ? main.lines
-        : [new DOMRect(left, first.top, right - left, first.height)];
-    const color = getComputedStyle(main.element).color;
     for (const line of threads) {
       const thread = document.createElement("div");
       thread.className = "sidebar-trace";

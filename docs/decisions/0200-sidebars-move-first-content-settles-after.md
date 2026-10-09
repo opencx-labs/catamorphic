@@ -44,8 +44,9 @@ the panel follows them 100 ms later (amended 2026-10-09, below).
   the snapshots used to travel with the content's box and its main
   column, and the box growing into place showed the app's background
   around it, which read as a glitch.) A chat tab, which is the content
-  where it shows, fades the same way; a floating chat and the bubble strip
-  glide to their new places.
+  where it shows, fades the same way from its own place; a floating chat
+  and the bubble strip glide to their new places. The snapshots blend
+  plus-lighter, as a browser cross-fade does, so nothing dims midway.
 - Any page resize waits for the page to repaint, so that wait falls in a
   short hold between the slide and the fade, while nothing moves.
 - An overlay sidebar (the compact window's reveal) only slides; the content
@@ -71,7 +72,8 @@ the panel follows them 100 ms later (amended 2026-10-09, below).
   once, at the click; the motion is Web Animations, so opening again
   mid-close plays the items back from where they are, and a close that
   reverses an opening panel doesn't wait. Nothing runs under reduced
-  motion or in a workspace that isn't showing. Opening is unchanged.
+  motion, in a workspace that isn't showing, or when an overlay sidebar's
+  reveal closes (a peek goes at once). Opening is unchanged.
   (Amended 2026-10-09.)
 
 `lib/layout-transition.ts`, `data-layout-transition` and the per-screen

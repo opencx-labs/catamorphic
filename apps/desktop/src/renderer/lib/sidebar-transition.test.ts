@@ -26,8 +26,11 @@ describe("settleSidebarContent", () => {
     y: 0,
     toJSON: () => ({}),
   });
-  const from = (axis: "x" | "y") =>
-    document.documentElement.style.getPropertyValue(`--content-from-${axis}`);
+  /** Where the transition puts each old snapshot. */
+  const placed = () =>
+    [...document.head.querySelectorAll("style")]
+      .map((style) => style.textContent ?? "")
+      .join("\n");
 
   beforeEach(() => {
     document.body.innerHTML = `<div data-workspace-visible="true"><div><aside></aside><main class="workspace-surface"></main></div></div>`;
@@ -62,9 +65,8 @@ describe("settleSidebarContent", () => {
 
   afterEach(() => {
     Reflect.deleteProperty(document, "startViewTransition");
-    document.documentElement.style.removeProperty("--content-from-x");
-    document.documentElement.style.removeProperty("--content-from-y");
     document.body.innerHTML = "";
+    for (const style of document.head.querySelectorAll("style")) style.remove();
   });
 
   const update = vi.fn(() => {
@@ -80,12 +82,36 @@ describe("settleSidebarContent", () => {
     // The chats over the content take layers of their own meanwhile.
     expect(transitions[0]?.settlingAtStart).toBe(true);
     // The box moved 200px right; the old snapshot is drawn 200px back.
-    expect(from("x")).toBe("-200px");
-    expect(from("y")).toBe("0px");
+    expect(placed()).toContain(
+      "::view-transition-old(workspace-content) { translate: -200px 0px; }",
+    );
     transitions[0]?.finish();
     await vi.waitFor(() => expect(content.style.viewTransitionName).toBe(""));
-    expect(from("x")).toBe("");
+    expect(placed()).toBe("");
     expect("contentSettling" in document.documentElement.dataset).toBe(false);
+  });
+
+  it("keeps a chat tab's old snapshot where that chat was, not where the content was", async () => {
+    const host = document.createElement("div");
+    host.dataset.dockHost = "";
+    const tab = host.appendChild(document.createElement("section"));
+    tab.dataset.chatTab = "";
+    document.body.append(host);
+    // The right half of a split: it moves by half of what the content does.
+    Reflect.set(tab, "getBoundingClientRect", () =>
+      resized ? rect(600, 400) : rect(500, 500),
+    );
+    settleSidebarContent({ sidebar, wanted: () => true, update });
+    expect(tab.style.viewTransitionName).toBe("chat-tab-0");
+    expect(tab.style.getPropertyValue("view-transition-class")).toBe(
+      "dock-tab",
+    );
+    expect(placed()).toContain(
+      "::view-transition-old(chat-tab-0) { translate: -100px 0px; }",
+    );
+    transitions[0]?.finish();
+    await vi.waitFor(() => expect(tab.style.viewTransitionName).toBe(""));
+    expect(tab.style.getPropertyValue("view-transition-class")).toBe("");
   });
 
   it("applies at once in a workspace that is not showing", () => {

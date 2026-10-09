@@ -117,7 +117,10 @@ export function TabbedSidebar({
   const [itemsLead, setItemsLead] = useState(false);
   if (motion.phase !== shownPhase) {
     setShownPhase(motion.phase);
-    setItemsLead(motion.phase === "closing" && shownPhase === "open");
+    // Not an overlay's reveal: a peek is dismissed often, and at once.
+    setItemsLead(
+      motion.phase === "closing" && shownPhase === "open" && !overlay,
+    );
   }
   const leave = useRef<SidebarLeave | undefined>(undefined);
   useLayoutEffect(() => {
@@ -139,7 +142,13 @@ export function TabbedSidebar({
       });
     }
   }, [motion.phase, itemsLead, side]);
-  useEffect(() => () => leave.current?.cancel(), []);
+  useEffect(
+    () => () => {
+      leave.current?.cancel();
+      leave.current = undefined;
+    },
+    [],
+  );
   const [content, setContent] = useState<
     ReadonlyMap<string, SidebarContentState>
   >(new Map());

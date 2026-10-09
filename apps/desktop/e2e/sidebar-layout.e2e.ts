@@ -143,7 +143,7 @@ describe("configurable browser workspace", () => {
     ).toBe("false");
   });
 
-  it("lets its items leave before it does, and plays them back when it opens mid-close", async () => {
+  it("lets its items leave before it does, and brings them back when it opens mid-close", async () => {
     const aside = "document.querySelector('aside[data-sidebar=left]')";
     // The leave runs on Web Animations; the panel's slide is a transition.
     const leaving = `(element) => element.getAnimations({ subtree: true }).filter((animation) => animation.id === 'sidebar-leave')`;
@@ -187,26 +187,14 @@ describe("configurable browser workspace", () => {
       expect(closing.threads).toBeGreaterThan(0);
       // The panel follows the items a beat later.
       expect(closing.delay).toBe(100);
-      // Watched every frame from here: did the items play back?
-      await app.eval(`(() => {
-        window.__playedBack = false;
-        const sample = () => {
-          const animations = (${leaving})(${aside});
-          if (animations.length > 0 && animations.every((animation) => animation.playbackRate < 0)) window.__playedBack = true;
-          else if (!window.__playedBack) requestAnimationFrame(sample);
-        };
-        sample();
-        return true;
-      })()`);
       // Opened mid-close (the toggle rides away with the panel, so by its
-      // shortcut), the items come back from where they are.
+      // shortcut), the items come back from where they are: that the leave
+      // plays back is pinned in tabbed-sidebar-leave.test.tsx; here, that
+      // everything ends where it was.
       await app.eval(`window.dispatchEvent(new KeyboardEvent('keydown', {
         key: 'b', bubbles: true, cancelable: true,
         ...(/Mac/.test(navigator.platform) ? { metaKey: true } : { ctrlKey: true }),
       })); true`);
-      await app.waitFor("window.__playedBack === true", {
-        label: "items playing back",
-      });
     } finally {
       await app.cdp("Animation.setPlaybackRate", { playbackRate: 1 });
     }
@@ -217,6 +205,7 @@ describe("configurable browser workspace", () => {
     expect(await app.eval(`!!${aside}.querySelector('.sidebar-traces')`)).toBe(
       false,
     );
+    expect(await dimmed()).toEqual(before);
     // Closed all the way, nothing is left behind once it has gone.
     await run("$('button[aria-label=\"Collapse sidebar\"]').click()");
     await app.waitFor(
