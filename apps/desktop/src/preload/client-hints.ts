@@ -1,4 +1,5 @@
 import { contextBridge } from "electron";
+import { chromeBrandLists, type UaBrand } from "../shared/chrome-brands.js";
 
 /**
  * `navigator.userAgentData.brands` is the JS-visible twin of the Sec-CH-UA
@@ -9,71 +10,61 @@ import { contextBridge } from "electron";
  * an extension page's or an extension service worker's) — the preload's
  * isolated world isn't what their scripts read.
  */
-interface UaBrand {
-  brand: string;
-  version: string;
-}
-
 interface UaData {
   brands: UaBrand[];
   getHighEntropyValues: (
     hints: string[],
   ) => Promise<{ brands?: UaBrand[]; fullVersionList?: UaBrand[] }>;
+  toJSON: () => { brands: UaBrand[] };
 }
 
 export function alignClientHintBrands(): void {
   // executeInMainWorld runs in the page's world (where site scripts look);
   // the preload's isolated world is invisible to them. The function body
-  // can't close over preload scope, and reads the version there: a service
-  // worker's preload realm has no navigator.
+  // can't close over preload scope, so the lists arrive as its arguments,
+  // built from the engine's version exactly as main builds the headers.
+  const lists = chromeBrandLists({ fullVersion: process.versions.chrome });
   contextBridge.executeInMainWorld({
-    func: () => {
-      const version = /Chrome\/(\d+)/.exec(navigator.userAgent)?.[1];
+    func: (brands: UaBrand[], fullVersionList: UaBrand[]) => {
       const data = (navigator as Navigator & { userAgentData?: UaData })
         .userAgentData;
-      if (!version || !data) return;
-      const brands = [
-        { brand: "Google Chrome", version },
-        { brand: "Chromium", version },
-        { brand: "Not;A=Brand", version: "8" },
-      ];
-      const copy = () => brands.map((brand) => ({ ...brand }));
+      if (!data) return;
+      const copy = (list: UaBrand[]) => list.map((brand) => ({ ...brand }));
       // Patch the prototype, not the instance: `navigator.userAgentData`
       // yields a fresh object per access, so an own-property override is
       // discarded on the next read.
       const proto = Object.getPrototypeOf(data) as object;
       Object.defineProperty(proto, "brands", {
-        get: copy,
+        get: () => copy(brands),
         configurable: true,
+      });
+      // JSON.stringify(navigator.userAgentData) reads Chromium's own list
+      // through toJSON, which would contradict `brands`.
+      const toJSON = data.toJSON;
+      Object.defineProperty(proto, "toJSON", {
+        value: function (this: UaData) {
+          return { ...toJSON.call(this), brands: copy(brands) };
+        },
+        configurable: true,
+        writable: true,
       });
       const getHighEntropyValues = data.getHighEntropyValues;
       Object.defineProperty(proto, "getHighEntropyValues", {
         value: function (this: UaData, hints: string[]) {
-          return getHighEntropyValues.call(this, hints).then((values) => {
-            if (!values.fullVersionList) {
-              return { ...values, brands: copy() };
-            }
-            // Real Chrome lists Google Chrome at the *Chrome* version;
-            // mapping the placeholder brand's version onto it (8.0.0.0)
-            // is precisely the tell a checker looks for.
-            const chromium = values.fullVersionList.find(
-              (entry) => entry.brand === "Chromium",
-            );
-            const fullVersion = chromium?.version ?? version;
-            return {
-              ...values,
-              brands: copy(),
-              fullVersionList: [
-                { brand: "Google Chrome", version: fullVersion },
-                { brand: "Chromium", version: fullVersion },
-                { brand: "Not;A=Brand", version: "8.0.0.0" },
-              ],
-            };
-          });
+          return getHighEntropyValues.call(this, hints).then((values) =>
+            values.fullVersionList
+              ? {
+                  ...values,
+                  brands: copy(brands),
+                  fullVersionList: copy(fullVersionList),
+                }
+              : { ...values, brands: copy(brands) },
+          );
         },
         configurable: true,
         writable: true,
       });
     },
+    args: [lists.brands, lists.fullVersionList],
   });
 }

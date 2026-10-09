@@ -1859,13 +1859,22 @@ one only when asked, without veiling it, as before.
 ### 2026-10-09: Google signs you in again, on a beta Electron
 
 Google's sign-in page in a Work tab started answering "Couldn't sign you in:
-This browser or app may not be secure". Work already presents as plain
-Chrome (the user agent and the client-hint brands), so the gap was the
-engine: Chrome 156 reached stable on 2026-10-07, Google admits only the
+This browser or app may not be secure". Work already presented as Chrome
+(the user agent and the client-hint brands a page reads), so the gap was
+the engine: Chrome 156 reached stable on 2026-10-07, Google admits only the
 newest Chrome majors, and every Electron 44 release, 44.7.0 included, still
 carries Chromium 152. The app moves to Electron 45.0.0-beta.1 (Chromium 156),
 pinned exactly, because no stable Electron is recent enough yet; it follows
 the 45 betas to stable (ADR 0150).
+
+The identity now matches Chrome 156 more closely too. The user agent is
+Chrome's reduced one, `Chrome/156.0.0.0`; the full version reaches a site
+only through the client hints that ask for it. The brand list is built the
+way Chromium builds Chrome's, so its placeholder brand and order follow the
+major version (`"Not:A-Brand";v="8"` first for 156) instead of a fixed
+string from an older Chrome, and `JSON.stringify(navigator.userAgentData)`
+agrees with `brands`. Page loads still carry no client-hint headers, which
+Electron does not send (TODO.md).
 
 Electron 45 reports a page's screen share as its own `display-capture`
 permission instead of a camera or microphone request with no devices. The

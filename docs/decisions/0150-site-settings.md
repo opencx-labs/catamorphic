@@ -82,6 +82,15 @@ minimum and the async clipboard API. The user agent also carried a
 dangling prerelease tail (`-alpha.8`) because only the numeric part of the
 app's version token was stripped; whole tokens are stripped now, and the
 app name token is matched without spaces, as Chromium writes it.
+(2026-10-09) The user agent is Chrome's reduced one: it names only the
+major version (`Chrome/156.0.0.0`), and the full version reaches a site
+only through the client hints that ask for it
+(`Sec-CH-UA-Full-Version-List`, `getHighEntropyValues`), taken from the
+engine. The brand lists are built
+the way Chromium builds Chrome's (`shared/chrome-brands.ts`): the major
+version picks the placeholder brand and the order, so Chrome 156 is
+`"Not:A-Brand";v="8", "Chromium";v="156", "Google Chrome";v="156"` in the
+header, `navigator.userAgentData.brands` and its `toJSON()` alike.
 
 ## Consequences
 
@@ -120,11 +129,15 @@ app name token is matched without spaces, as Chromium writes it.
   the app moved to Electron 45.0.0-beta.1 (Chromium 156.0.8078.12), pinned
   exactly; follow the 45 betas to its stable release. A beta, because no
   stable Electron carries a Chromium within two majors of Chrome 156; the
-  user agent and client hints already read as plain Chrome, so the
-  Chromium version was the whole gap. Electron 45 reports screen capture
-  as `display-capture` instead of a `media` request with no media types;
-  the picker now runs on that permission, and a `media` request is only
-  ever the camera or microphone.
+  user agent and the JavaScript client hints already read as Chrome, so
+  the Chromium version was the gap Google's sign-in hit. The headers are
+  not a full match: Electron sends no client hints with a page load, and
+  scripts and images carry Chromium's own brands; only fetch and XHR
+  requests carry Google Chrome (documents and frames too in a profile
+  whose extensions filter requests); TODO.md tracks it. Electron 45
+  reports screen capture as `display-capture` instead of a `media` request
+  with no media types; the picker now runs on that permission, and a
+  `media` request is only ever the camera or microphone.
 - Electron 43.6 through 44.4.3 threw an uncaught `Invalid guestInstanceId`
   from a `<webview>`'s `disconnectedCallback` when a loaded guest was
   removed (electron/electron#53989, fixed by #54089). The removal still

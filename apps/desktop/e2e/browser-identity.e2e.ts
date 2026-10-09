@@ -80,14 +80,18 @@ describe("a page's view of the browser", () => {
     const page = await inGuest<{
       userAgent: string;
       brands: string[];
+      json: string[];
       fullVersions: { brand: string; version: string }[];
     }>(`(async () => ({
       userAgent: navigator.userAgent,
       brands: navigator.userAgentData.brands.map((entry) => entry.brand + '/' + entry.version),
+      json: JSON.parse(JSON.stringify(navigator.userAgentData)).brands.map((entry) => entry.brand + '/' + entry.version),
       fullVersions: (await navigator.userAgentData.getHighEntropyValues(['fullVersionList'])).fullVersionList,
     }))()`);
     expect(page.userAgent).toBe(request?.userAgent);
     expect(page.brands).toContain(`Google Chrome/${major}`);
+    // Serialized, it says the same (toJSON reads Chromium's own list).
+    expect(page.json).toEqual(page.brands);
     const full = page.fullVersions.find(
       (entry) => entry.brand === "Google Chrome",
     )?.version;

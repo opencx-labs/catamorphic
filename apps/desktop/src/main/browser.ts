@@ -36,6 +36,7 @@ import {
   wakeFromSource,
 } from "../shared/browser-history.js";
 import { browserImportRequestSchema } from "../shared/browser-import.js";
+import { chromeBrandHeaders } from "../shared/chrome-brands.js";
 import {
   type HistoryProject,
   historyProjectSchema,
@@ -241,20 +242,15 @@ let downloadHook:
 let extensionsHost: ExtensionsHost | null = null;
 
 /**
- * Chrome's client-hint brand list, derived from the session UA. Google's
- * supported-browser gate reads these; Electron would otherwise advertise
- * only "Chromium". The UA string itself is already Chrome-clean app-wide
- * (see `app.userAgentFallback` in main/index.ts).
+ * Chrome's client-hint brand lists for the engine's version, as Chrome
+ * builds them (shared/chrome-brands.ts). Google's supported-browser gate
+ * reads these; Electron would otherwise advertise only "Chromium". The UA
+ * string itself is already Chrome-clean app-wide (see
+ * `app.userAgentFallback` in main/index.ts), and names only the major
+ * version; the full version list names the engine's real one.
  */
-function chromeBrands(ua: string): { brands: string; fullVersionList: string } {
-  const major = /Chrome\/(\d+)/.exec(ua)?.[1] ?? "150";
-  // The UA names only the major version, as Chrome's reduced UA does; the
-  // full version list names the engine's real one.
-  const full = process.versions.chrome ?? `${major}.0.0.0`;
-  return {
-    brands: `"Google Chrome";v="${major}", "Chromium";v="${major}", "Not;A=Brand";v="8"`,
-    fullVersionList: `"Google Chrome";v="${full}", "Chromium";v="${full}", "Not;A=Brand";v="8.0.0.0"`,
-  };
+function chromeBrands(): { brands: string; fullVersionList: string } {
+  return chromeBrandHeaders({ fullVersion: process.versions.chrome });
 }
 
 const BRAND_HEADER_REQUESTS: Electron.WebRequestFilter = {
@@ -277,7 +273,7 @@ function setBrandHeaderListener(ses: Session, on: boolean): void {
     ses.webRequest.onBeforeSendHeaders(null);
     return;
   }
-  const { brands, fullVersionList } = chromeBrands(ses.getUserAgent());
+  const { brands, fullVersionList } = chromeBrands();
   // Header layer: Chromium sends Sec-CH-UA built from its own brand list,
   // which no setUserAgent call covers. Only documents and page requests
   // (fetch, XHR) are rewritten, where a site reads the brand. A listener
@@ -528,7 +524,7 @@ export function registerBrowserSupport(
     profileFor: (sender) => windows.profileFor(sender),
     windowsFor: (profileId) => windows.windowsFor(profileId),
     isDock,
-    brands: (ses) => chromeBrands(ses.getUserAgent()),
+    brands: chromeBrands,
     setBrandListener: setBrandHeaderListener,
     keybindings: keybindingsOf,
     pickFolder: async (sender) => {
