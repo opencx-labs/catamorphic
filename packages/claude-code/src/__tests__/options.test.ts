@@ -267,6 +267,10 @@ describe("model access", () => {
       const worktree = path.join(root, "chat");
       fs.mkdirSync(path.join(worktree, "src"), { recursive: true });
       fs.writeFileSync(path.join(worktree, ".git"), `gitdir: ${linked}\n`);
+      fs.writeFileSync(
+        path.join(linked, "gitdir"),
+        `${path.join(worktree, ".git")}\n`,
+      );
       expect(
         env(attempt({ workingDirectory: path.join(worktree, "src") })),
       ).not.toHaveProperty("ANTHROPIC_API_KEY");
@@ -278,6 +282,39 @@ describe("model access", () => {
       expect(
         env(attempt({ workingDirectory: path.join(worktree, "src") }))
           .ANTHROPIC_API_KEY,
+      ).toBe("sk-ant-inherited");
+      // A submodule's `.git` names no worktree: its local settings are its
+      // own, not the superproject's.
+      const submodule = path.join(main, "vendor", "lib");
+      fs.mkdirSync(path.join(main, ".git", "modules", "lib"), {
+        recursive: true,
+      });
+      fs.mkdirSync(submodule, { recursive: true });
+      fs.writeFileSync(
+        path.join(submodule, ".git"),
+        "gitdir: ../../.git/modules/lib\n",
+      );
+      expect(env(attempt({ workingDirectory: submodule }))).not.toHaveProperty(
+        "ANTHROPIC_API_KEY",
+      );
+      // A bare repository's worktree reads them from the repository.
+      const bare = path.join(root, "bare.git");
+      const bareLinked = path.join(bare, "worktrees", "chat");
+      fs.mkdirSync(bareLinked, { recursive: true });
+      fs.writeFileSync(path.join(bareLinked, "commondir"), "../..\n");
+      const bareWorktree = path.join(root, "bare-chat");
+      fs.mkdirSync(bareWorktree);
+      fs.writeFileSync(
+        path.join(bareWorktree, ".git"),
+        `gitdir: ${bareLinked}\n`,
+      );
+      fs.mkdirSync(path.join(bare, ".claude"));
+      fs.writeFileSync(
+        path.join(bare, ".claude", "settings.local.json"),
+        JSON.stringify({ env: gateway }),
+      );
+      expect(
+        env(attempt({ workingDirectory: bareWorktree })).ANTHROPIC_API_KEY,
       ).toBe("sk-ant-inherited");
     } finally {
       for (const [name, value] of saved)

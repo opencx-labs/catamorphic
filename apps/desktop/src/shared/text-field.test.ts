@@ -40,12 +40,43 @@ it("looks into a shadow root for the field that has focus", () => {
   );
 });
 
+const press = (
+  key: string,
+  modifiers: { metaKey?: boolean; ctrlKey?: boolean; altKey?: boolean } = {},
+) => ({
+  key,
+  metaKey: modifiers.metaKey ?? false,
+  ctrlKey: modifiers.ctrlKey ?? false,
+  altKey: modifiers.altKey ?? false,
+});
+
 it("keeps the caret keys for a field, whatever they are bound to", () => {
   const field = element("INPUT");
-  expect(fieldKeepsKey({ key: "ArrowLeft", focused: field })).toBe(true);
-  expect(fieldKeepsKey({ key: "End", focused: field })).toBe(true);
-  expect(fieldKeepsKey({ key: "[", focused: field })).toBe(false);
-  expect(fieldKeepsKey({ key: "ArrowLeft", focused: element("BODY") })).toBe(
+  const keeps = (event: ReturnType<typeof press>, mac: boolean) =>
+    fieldKeepsKey({ event, focused: field, mac });
+  expect(keeps(press("ArrowLeft", { metaKey: true }), true)).toBe(true);
+  expect(keeps(press("ArrowLeft", { altKey: true }), true)).toBe(true);
+  expect(keeps(press("End"), true)).toBe(true);
+  expect(keeps(press("ArrowLeft", { ctrlKey: true }), false)).toBe(true);
+  expect(keeps(press("Home"), false)).toBe(true);
+  expect(keeps(press("[", { metaKey: true }), true)).toBe(false);
+  expect(
+    fieldKeepsKey({
+      event: press("ArrowLeft", { metaKey: true }),
+      focused: element("BODY"),
+      mac: true,
+    }),
+  ).toBe(false);
+});
+
+it("leaves a caret key with modifiers no caret moves by to its binding", () => {
+  const field = element("INPUT");
+  const keeps = (event: ReturnType<typeof press>, mac: boolean) =>
+    fieldKeepsKey({ event, focused: field, mac });
+  expect(keeps(press("ArrowLeft", { metaKey: true, altKey: true }), true)).toBe(
     false,
   );
+  expect(keeps(press("ArrowLeft", { ctrlKey: true }), true)).toBe(false);
+  expect(keeps(press("ArrowLeft", { altKey: true }), false)).toBe(false);
+  expect(keeps(press("ArrowLeft", { metaKey: true }), false)).toBe(false);
 });

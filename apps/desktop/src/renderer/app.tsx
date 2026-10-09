@@ -4039,7 +4039,11 @@ export function App({
           // the line's start and end), whatever they are bound to.
           !(
             guestId === undefined &&
-            fieldKeepsKey({ key: event.key, focused: document.activeElement })
+            fieldKeepsKey({
+              event,
+              focused: document.activeElement,
+              mac: /Mac/.test(navigator.platform),
+            })
           ) &&
           (candidate !== "dismiss-floating" ||
             (floatingEscapeEnabledRef.current &&

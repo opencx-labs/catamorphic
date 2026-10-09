@@ -1357,8 +1357,7 @@ window.addEventListener(
       matchesShortcut({ event, binding, mac }),
     )?.[0];
     if (!action) return;
-    if (fieldKeepsKey({ key: event.key, focused: document.activeElement }))
-      return;
+    if (fieldKeepsKey({ event, focused: document.activeElement, mac })) return;
     // Read once every listener has had the key, the page's own included.
     setTimeout(() => {
       if (!event.defaultPrevented)

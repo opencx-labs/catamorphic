@@ -10,7 +10,7 @@ const TEXT_INPUT_TYPES = new Set([
   "number",
 ]);
 
-/** Keys that move a caret (with any modifier: by word, to the line's ends). */
+/** Keys that move a caret (by word, to the line's ends, with modifiers). */
 const CARET_KEYS = new Set([
   "ArrowLeft",
   "ArrowRight",
@@ -61,14 +61,40 @@ export const TEXT_FIELD_PROBE = `(() => {
   return element.isContentEditable === true;
 })()`;
 
+/** The key and modifiers of a press (a KeyboardEvent or main's input). */
+interface CaretEvent {
+  key: string;
+  metaKey: boolean;
+  ctrlKey: boolean;
+  altKey: boolean;
+}
+
 /**
- * Whether the focused text field keeps a key for its caret, whatever the
+ * Whether a press moves a text field's caret: a caret key with the
+ * modifiers the platform's text system moves by (none, Option or Cmd on
+ * macOS; none or Ctrl elsewhere; each also with Shift, which selects).
+ * Cmd+Option+Left moves no caret, so a binding on it is no caret key.
+ */
+export function isCaretKey(input: {
+  event: CaretEvent;
+  mac: boolean;
+}): boolean {
+  const { event } = input;
+  if (!CARET_KEYS.has(event.key)) return false;
+  return input.mac
+    ? !event.ctrlKey && !(event.metaKey && event.altKey)
+    : !event.metaKey && !event.altKey;
+}
+
+/**
+ * Whether the focused text field keeps a press for its caret, whatever the
  * key is bound to: Cmd+Left and Cmd+Right move to the line's start and end
  * there (as everywhere on macOS), not back and forward.
  */
 export function fieldKeepsKey(input: {
-  key: string;
+  event: CaretEvent;
   focused: FocusedElement | null | undefined;
+  mac: boolean;
 }): boolean {
-  return CARET_KEYS.has(input.key) && isTextField(input.focused);
+  return isCaretKey(input) && isTextField(input.focused);
 }

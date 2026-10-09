@@ -552,6 +552,7 @@ export async function startEmbeddedServer(
         ?.releaseTurn(event.projectId, {
           sessionId: event.sessionId,
           ...(event.turnId ? { turnId: event.turnId } : {}),
+          ...(event.retrying ? { retrying: true } : {}),
         })
         .catch(() => {});
       triggers.onAgentTurnSettled(

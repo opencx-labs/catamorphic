@@ -255,6 +255,8 @@ function claudeBaseUrl(input: {
 /**
  * The administrator's settings files, strongest first: the drop-ins in
  * `managed-settings.d` (later names win) over `managed-settings.json`.
+ * Policy the CLI reads from elsewhere (an MDM profile, the Windows
+ * registry, server-managed settings) is not seen here.
  */
 function managedSettingsFiles(): string[] {
   const directory =
@@ -263,48 +265,79 @@ function managedSettingsFiles(): string[] {
       : process.platform === "win32"
         ? "C:\\Program Files\\ClaudeCode"
         : "/etc/claude-code";
-  let dropIns: string[] = [];
+  const dropIns = path.join(directory, "managed-settings.d");
+  let names: string[] = [];
   try {
-    dropIns = fs
-      .readdirSync(path.join(directory, "managed-settings.d"))
-      .filter((name) => name.endsWith(".json"))
+    // As the CLI takes them: JSON files (or links to them), no dotfiles.
+    names = fs
+      .readdirSync(dropIns, { withFileTypes: true })
+      .filter(
+        (entry) =>
+          (entry.isFile() || entry.isSymbolicLink()) &&
+          entry.name.endsWith(".json") &&
+          !entry.name.startsWith("."),
+      )
+      .map((entry) => entry.name)
       .sort()
-      .reverse()
-      .map((name) => path.join(directory, "managed-settings.d", name));
+      .reverse();
   } catch {
     // No drop-ins.
   }
-  return [...dropIns, path.join(directory, "managed-settings.json")];
+  return [
+    ...names.map((name) => path.join(dropIns, name)),
+    path.join(directory, "managed-settings.json"),
+  ];
 }
 
 /**
- * The repository a directory belongs to, as the CLI finds it: the main
- * checkout for a linked worktree (whose `.git` is a file naming its git
- * directory under the main one's `.git/worktrees`).
+ * Where the CLI looks for a directory's local settings, close to how it
+ * decides: the repository's root, and for a linked worktree its main
+ * checkout (whose `.git` names a git directory under the main one's
+ * `worktrees`). Like the CLI, none on Windows or for a repository at the
+ * home directory; unlike it, the root's owner is not checked.
  */
 function repositoryRoot(directory: string): string | undefined {
+  if (process.platform === "win32") return undefined;
   for (
     let current = path.resolve(directory);
     ;
     current = path.dirname(current)
   ) {
     const dotGit = path.join(current, ".git");
+    let found: fs.Stats | undefined;
     try {
-      if (fs.statSync(dotGit).isDirectory()) return current;
-      const gitDirectory = /^gitdir:\s*(.+)$/m
-        .exec(fs.readFileSync(dotGit, "utf8"))?.[1]
-        ?.trim();
-      if (!gitDirectory) return current;
-      const linked = path.resolve(current, gitDirectory);
-      const common = path.resolve(
-        linked,
-        fs.readFileSync(path.join(linked, "commondir"), "utf8").trim(),
-      );
-      return path.dirname(common);
+      found = fs.statSync(dotGit);
     } catch {
-      // Not here (or an unreadable link): look further up.
+      // Not here: look further up.
+    }
+    if (found) {
+      const root = found.isDirectory() ? current : mainCheckout(current);
+      return root === path.resolve(os.homedir()) ? undefined : root;
     }
     if (path.dirname(current) === current) return undefined;
+  }
+}
+
+/**
+ * The main checkout of a linked worktree whose `.git` file is at
+ * `directory`; the directory itself for another `.git` file (a submodule,
+ * a separate git directory), which has no `commondir`.
+ */
+function mainCheckout(directory: string): string {
+  try {
+    const gitDirectory = /^gitdir:\s*(.+)$/m
+      .exec(fs.readFileSync(path.join(directory, ".git"), "utf8"))?.[1]
+      ?.trim();
+    if (!gitDirectory) return directory;
+    const linked = path.resolve(directory, gitDirectory);
+    const common = path.resolve(
+      linked,
+      fs.readFileSync(path.join(linked, "commondir"), "utf8").trim(),
+    );
+    // A bare repository holds its worktrees' settings itself.
+    return path.basename(common) === ".git" ? path.dirname(common) : common;
+  } catch {
+    return directory;
   }
 }
 

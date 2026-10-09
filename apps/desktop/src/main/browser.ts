@@ -70,7 +70,7 @@ import {
   sitePermissionStateSchema,
 } from "../shared/site-settings.js";
 import type { TerminalMacro } from "../shared/terminal-macros.js";
-import { TEXT_FIELD_PROBE } from "../shared/text-field.js";
+import { isCaretKey, TEXT_FIELD_PROBE } from "../shared/text-field.js";
 import { HistoryStore } from "./browser-history.js";
 import {
   importBrowserCookies,
@@ -1141,12 +1141,14 @@ export function registerBrowserSupport(
       // preload hands back what the page and its text fields leave
       // (preload/webview.ts). The preload runs only in the main frame, so
       // from an embedded frame (where Google Docs types) find stays the
-      // page's, and back and forward go once the frame's focus proves not
-      // to be a text field: Work never takes a frame's caret.
+      // page's, and back and forward go unless the key moves a caret and
+      // the frame's focus may be a text field: Work never takes a frame's
+      // caret, and a probe that cannot tell keeps the key. Unlike the main
+      // frame, a frame's own claim on the key (preventDefault) is not seen.
       const frame = contents.focusedFrame;
       const mac = process.platform === "darwin";
       const direction =
-        frame && frame !== contents.mainFrame
+        frame && frame.parent !== null
           ? (["back", "forward"] as const).find((candidate) =>
               matchesShortcut({
                 event: key,
@@ -1156,14 +1158,21 @@ export function registerBrowserSupport(
             )
           : undefined;
       if (frame && direction) {
+        const navigate = () => {
+          if (host.isDestroyed()) return;
+          host.send("catamorphic:browser-navigate", {
+            webContentsId: contents.id,
+            direction,
+          });
+        };
+        if (!isCaretKey({ event: key, mac })) {
+          navigate();
+          return;
+        }
         frame
           .executeJavaScript(TEXT_FIELD_PROBE)
           .then((field: unknown) => {
-            if (field === true || host.isDestroyed()) return;
-            host.send("catamorphic:browser-navigate", {
-              webContentsId: contents.id,
-              direction,
-            });
+            if (field === false) navigate();
           })
           .catch(() => {
             // The frame went away with its key.

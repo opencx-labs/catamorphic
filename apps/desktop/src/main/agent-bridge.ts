@@ -176,9 +176,13 @@ export interface WorkspaceBridge {
   /**
    * A turn settled: the browser tabs it held go back to the person. Not a
    * take-over: a later turn may drive them again, visibly. A hold the
-   * chat's next turn already made stays.
+   * chat's next turn already made stays. `retrying` marks a transient
+   * failure: the same turn runs again, and may hold its pages again.
    */
-  releaseTurn(projectId: string, holder: TurnHolder): Promise<void>;
+  releaseTurn(
+    projectId: string,
+    settled: TurnHolder & { retrying?: boolean },
+  ): Promise<void>;
   closeSurface(projectId: string, key: string): Promise<void>;
   sessionProcessCount(
     projectId: string,
@@ -423,9 +427,9 @@ export function registerAgentBridge(
   /** Browser tab key → the turn that holds it. */
   const held = new Map<string, TurnHolder & { projectId: string }>();
   /**
-   * Turns that settled, latest last, and per session how many settled
-   * (for a holder without a turn id): openBrowser's page may mount after
-   * its turn ended.
+   * Turns that settled for good (not to run again after a transient
+   * failure), latest last, and per session how many settled (for a holder
+   * without a turn id): openBrowser's page may mount after its turn ended.
    */
   const settledTurnIds = new Set<string>();
   const settledTurns = new Map<string, number>();
@@ -811,9 +815,10 @@ export function registerAgentBridge(
       await rpc("surfaceControl", { projectId, key, controlled });
     },
 
-    async releaseTurn(projectId, { sessionId, turnId }) {
+    async releaseTurn(projectId, { sessionId, turnId, retrying }) {
       settledTurns.set(sessionId, (settledTurns.get(sessionId) ?? 0) + 1);
-      if (turnId) {
+      // A retry runs under the same turn id: a page it opens is its own.
+      if (turnId && !retrying) {
         settledTurnIds.add(turnId);
         // Only a page still mounting asks, so the recent turns are enough.
         if (settledTurnIds.size > 256)
