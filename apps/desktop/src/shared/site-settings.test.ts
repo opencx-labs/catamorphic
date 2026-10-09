@@ -19,10 +19,11 @@ describe("site permission vocabulary", () => {
     expect(
       permissionKindsFor("media", { mediaTypes: ["audio", "video"] }),
     ).toEqual(["microphone", "camera"]);
-    expect(permissionKindsFor("media")).toEqual(["screenShare"]);
-    expect(permissionKindsFor("media", { mediaTypes: [] })).toEqual([
-      "screenShare",
-    ]);
+    // Screen sharing is display-capture, never a media request.
+    expect(permissionKindsFor("media", { mediaTypes: [] })).toEqual([]);
+    expect(
+      permissionKindsFor("display-capture", { mediaTypes: ["video", "audio"] }),
+    ).toEqual(["screenShare"]);
     expect(permissionKindsFor("midiSysex")).toEqual(["midi"]);
     expect(permissionKindsFor("openExternal")).toEqual(["externalApps"]);
     expect(permissionKindsFor("hid")).toEqual([]);
