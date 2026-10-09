@@ -178,6 +178,31 @@ it("gives a chat tab group one eyebrow across all its tabs", async () => {
   expect(eyebrow.connected).toBe(true);
 });
 
+it("wears the group's accent only while it holds the tab in front", async () => {
+  const accented = () =>
+    app.eval<boolean[]>(
+      `[...document.querySelectorAll('[data-tab-group-eyebrow]')].map((mark) => mark.classList.contains('bg-accent/50'))`,
+    );
+  expect((await accented()).every(Boolean)).toBe(true);
+  // Another tab in front: the group left behind goes quiet.
+  await app.eval(
+    `window.dispatchEvent(new KeyboardEvent('keydown',{key:'t',metaKey:/Mac/.test(navigator.platform),ctrlKey:!/Mac/.test(navigator.platform),bubbles:true,cancelable:true}))`,
+  );
+  await app.waitFor(
+    `(() => { const marks = [...document.querySelectorAll('[data-tab-group-eyebrow]')]; return marks.length > 1 && marks.every((mark) => !mark.classList.contains('bg-accent/50')); })()`,
+    { label: "eyebrow quiet behind another tab" },
+  );
+  // Back in the group, it wears the accent again.
+  await app.eval(`document.querySelector('${chatTab} button').click()`);
+  await app.waitFor(
+    `(() => { const marks = [...document.querySelectorAll('[data-tab-group-eyebrow]')]; return marks.length > 1 && marks.every((mark) => mark.classList.contains('bg-accent/50')); })()`,
+    { label: "eyebrow accented in front" },
+  );
+  await app.eval(
+    `[...document.querySelectorAll('[data-point-key] button[aria-label^="Close "]')].find((button) => button.getAttribute('aria-label') === 'Close New Tab')?.click(); true`,
+  );
+});
+
 it("opens floating previews from a collapsed chat tab group", async () => {
   await clickButton("Collapse grouped tabs");
   await app.waitFor(

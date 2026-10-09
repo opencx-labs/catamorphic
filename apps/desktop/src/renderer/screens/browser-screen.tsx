@@ -391,22 +391,30 @@ export function BrowserScreen({
   }, []);
   const findCommandsRef = useRef({ openFind, stepFind });
   findCommandsRef.current = { openFind, stepFind };
-  // Find keys reach the page first (see preload/webview.ts), which learns
-  // them as it learns the floating preview's Escape.
-  const findKeys = useMemo(
+  // Find, back and forward reach the page first (see preload/webview.ts),
+  // which asks for them as each document starts.
+  const pageKeys = useMemo(
     () => ({
       find: keybindings.find,
       "find-next": keybindings["find-next"],
       "find-previous": keybindings["find-previous"],
+      "browser-back": keybindings["browser-back"],
+      "browser-forward": keybindings["browser-forward"],
     }),
-    [keybindings.find, keybindings["find-next"], keybindings["find-previous"]],
+    [
+      keybindings.find,
+      keybindings["find-next"],
+      keybindings["find-previous"],
+      keybindings["browser-back"],
+      keybindings["browser-forward"],
+    ],
   );
-  const findKeysRef = useRef(findKeys);
-  findKeysRef.current = findKeys;
+  const pageKeysRef = useRef(pageKeys);
+  pageKeysRef.current = pageKeys;
   useEffect(() => {
     if (guestReadyRef.current)
-      webviewRef.current?.send("catamorphic:find-keys", findKeys);
-  }, [findKeys]);
+      webviewRef.current?.send("catamorphic:page-keys", pageKeys);
+  }, [pageKeys]);
   // Selected text and find matches take the theme's accent (lib/page-theme).
   const theme = useTheme();
   const pageCss = theme ? pageThemeCss(theme) : "";
@@ -663,7 +671,7 @@ export function BrowserScreen({
             previewLinksRef.current,
           );
           view.send("catamorphic:floating-preview", floatingBindingRef.current);
-          view.send("catamorphic:find-keys", findKeysRef.current);
+          view.send("catamorphic:page-keys", pageKeysRef.current);
           view.send("catamorphic:page-theme", pageCssRef.current);
         } catch {
           // Guest gone mid-call; the next dom-ready re-sends.
@@ -707,12 +715,23 @@ export function BrowserScreen({
           dismissFloatingRef.current?.();
           return;
         }
-        if (message.channel === "catamorphic:find-key") {
+        if (message.channel === "catamorphic:page-keys-wanted") {
+          try {
+            view.send("catamorphic:page-keys", pageKeysRef.current);
+          } catch {
+            // Guest gone mid-call; its dom-ready re-sends.
+          }
+          return;
+        }
+        if (message.channel === "catamorphic:page-key") {
           const action = message.args[0];
           if (action === "find") findCommandsRef.current.openFind();
           if (action === "find-next") findCommandsRef.current.stepFind("next");
           if (action === "find-previous")
             findCommandsRef.current.stepFind("previous");
+          if (action === "browser-back" && view.canGoBack()) view.goBack();
+          if (action === "browser-forward" && view.canGoForward())
+            view.goForward();
           return;
         }
         if (message.channel === "catamorphic:browser-swipe") {

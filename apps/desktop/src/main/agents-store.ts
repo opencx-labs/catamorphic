@@ -53,7 +53,10 @@ export type AgentSkillsSetting =
  * How an agent authenticates:
  *  - `local`  — the machine's existing CLI setup (~/.claude, ~/.codex): the
  *    SDK is spawned with no credential overrides, so whatever `claude
- *    login` / `codex login` established just works. The default for CLI
+ *    login` / `codex login` established just works. An Anthropic key or
+ *    token merely inherited from the shell Work started from never
+ *    outranks that sign-in (unless Claude is routed to a gateway), so a
+ *    chat and the commands it runs do not see it. The default for CLI
  *    harnesses.
  *  - `account` — a per-agent isolated login (private CLAUDE_CONFIG_DIR /
  *    CODEX_HOME, or OpenRouter's browser PKCE) for second accounts.

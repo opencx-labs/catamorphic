@@ -18,7 +18,7 @@ export interface ClaudeCodeModel {
  * asks for the catalog over the control channel, then aborts.
  */
 export async function listClaudeCodeModels(opts?: {
-  /** Merged over process.env (e.g. CLAUDE_CONFIG_DIR, ANTHROPIC_API_KEY). */
+  /** Over the host's environment (see hostProcessEnv), e.g. CLAUDE_CONFIG_DIR. */
   env?: Record<string, string>;
   /** Host-provided CLI path, including an on-demand desktop component. */
   pathToClaudeCodeExecutable?: string;
@@ -39,7 +39,7 @@ export async function listClaudeCodeModels(opts?: {
     options: {
       abortController: abort,
       maxTurns: 1,
-      env: { ...hostProcessEnv(), ...opts?.env },
+      env: { ...hostProcessEnv({ env: opts?.env }), ...opts?.env },
       pathToClaudeCodeExecutable: opts?.pathToClaudeCodeExecutable,
     },
   });
@@ -78,7 +78,7 @@ export interface ClaudeCodeDefaultModel {
  */
 export async function resolveClaudeCodeModel(opts: {
   workingDirectory: string;
-  /** Merged over process.env (e.g. CLAUDE_CONFIG_DIR, ANTHROPIC_API_KEY). */
+  /** Over the host's environment (see hostProcessEnv), e.g. CLAUDE_CONFIG_DIR. */
   env?: Record<string, string>;
   /** Host-provided CLI path, including an on-demand desktop component. */
   pathToClaudeCodeExecutable?: string;
@@ -97,7 +97,13 @@ export async function resolveClaudeCodeModel(opts: {
     options: {
       cwd: opts.workingDirectory,
       abortController: abort,
-      env: { ...hostProcessEnv(), ...opts.env },
+      env: {
+        ...hostProcessEnv({
+          env: opts.env,
+          workingDirectory: opts.workingDirectory,
+        }),
+        ...opts.env,
+      },
       pathToClaudeCodeExecutable: opts.pathToClaudeCodeExecutable,
       // The same sources a session reads, so project and local settings
       // pinning a model count.
