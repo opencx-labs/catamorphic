@@ -126,6 +126,22 @@ export interface SessionCheckoutInfo {
   path?: string;
   kind: "managed" | "external";
   branch: string | null;
+  /** The folder exists now; a chat's own worktree comes and goes (ADR 0215). */
+  present?: boolean;
+  /** The chat's title, when it has one. */
+  title?: string | null;
+}
+
+/** Where one chat works, for its status popup (ADR 0215). */
+export interface SessionCheckoutDetail {
+  kind: "primary" | "managed" | "external";
+  path: string;
+  branch: string | null;
+  present: boolean;
+  projectFolder: string;
+  worktreesAvailable: boolean;
+  /** Files the chat's own worktree changed; null for other checkouts. */
+  changedFiles: number | null;
 }
 
 export type AgentHarness = "ai-sdk" | "claude-code" | "codex";
@@ -1885,6 +1901,23 @@ export interface CatamorphicDesktopApi {
   ) => () => void;
   sessionCheckouts: (projectId: string) => Promise<SessionCheckoutInfo[]>;
   sessionUseProjectFolder: (input: {
+    projectId: string;
+    sessionId: string;
+  }) => Promise<void>;
+  sessionCheckout: (input: {
+    projectId: string;
+    sessionId: string;
+  }) => Promise<SessionCheckoutDetail>;
+  projectWorktreesAvailable: (projectId: string) => Promise<boolean>;
+  sessionUseOwnWorktree: (input: {
+    projectId: string;
+    sessionId: string;
+  }) => Promise<void>;
+  sessionBringToProjectFolder: (input: {
+    projectId: string;
+    sessionId: string;
+  }) => Promise<{ files: string[] }>;
+  sessionDiscardWorktree: (input: {
     projectId: string;
     sessionId: string;
   }) => Promise<void>;

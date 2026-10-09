@@ -418,6 +418,9 @@ export async function startEmbeddedServer(
       userSkillInfos(profileConfig.userSkillsDir(profileId)),
     sessionPeers: (projectId, sessionId) =>
       sessionPeersResolver?.(projectId, sessionId) ?? Promise.resolve([]),
+    // Where the chat works, when it is not the project folder (ADR 0215).
+    checkoutNotice: (projectId, sessionId) =>
+      sessionCheckouts.notice({ projectId, sessionId }),
   });
   if (e2eFakeAgent) {
     const agents = profileConfig.forDefaultProfile().agents;
@@ -500,6 +503,13 @@ export async function startEmbeddedServer(
       // only a checkout the chat owns, or one nothing else changed, moves.
       head: (input) => sessionCheckouts.head(input),
       restore: (input) => sessionCheckouts.restore(input),
+      // A chat's own worktree is set up like a new workspace and put away
+      // with the chat (ADR 0215).
+      setup: (input) => sessionCheckouts.setup(input),
+      release: async (input) => {
+        await sessionCheckouts.putAway(input);
+        broadcastGitChanged(input.projectId);
+      },
     },
     appBundleStore: new FsBundleStore(paths.appBundles),
     pushNotifications: createPushTransport({ dataDir: paths.root }),
@@ -575,12 +585,7 @@ export async function startEmbeddedServer(
       // The turn checkpoint just moved git state; a sidebar waiting on
       // its 15s poll would show stale rows (and stale rows diff against
       // a HEAD that already contains them — two identical panes).
-      for (const window of BrowserWindow.getAllWindows()) {
-        if (window.isDestroyed()) continue;
-        window.webContents.send("catamorphic:git-changed", {
-          projectId: event.projectId,
-        });
-      }
+      broadcastGitChanged(event.projectId);
     },
   });
   const triggers = new DesktopTriggers(catamorphic);
@@ -1374,4 +1379,12 @@ function loadOrCreateHostId(file: string): string {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, `${hostId}\n`, { mode: 0o600 });
   return hostId;
+}
+
+/** Tell every window a project's files moved under it. */
+function broadcastGitChanged(projectId: string): void {
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (window.isDestroyed()) continue;
+    window.webContents.send("catamorphic:git-changed", { projectId });
+  }
 }

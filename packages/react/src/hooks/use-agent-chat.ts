@@ -47,8 +47,12 @@ export interface UseAgentChatOptions {
    * {@link UseAgentChatOptions.onSessionCreated}.
    */
   sessionId?: string;
-  /** Called when the hook lazily creates a session on first send. */
-  onSessionCreated?: (sessionId: string) => void;
+  /**
+   * Called when the hook lazily creates a session on first send, before
+   * that message is sent: the send waits for it and fails with its error,
+   * so a host can settle what the session's first turn depends on.
+   */
+  onSessionCreated?: (sessionId: string) => void | Promise<void>;
   /**
    * Host-registry key of the agent for lazily created sessions. Read at
    * send time, so hosts can change it up until the first message.
@@ -294,12 +298,12 @@ export function useAgentChat(
             ? { source: optionsRef.current.source }
             : {}),
         })
-        .then((created) => {
+        .then(async (created) => {
           if (scopeRef.current.token !== token) return null;
           const next = { ...scopeRef.current, sessionId: created.id };
           scopeRef.current = next;
           setScope(next);
-          optionsRef.current.onSessionCreated?.(created.id);
+          await optionsRef.current.onSessionCreated?.(created.id);
           return created.id;
         })
         .finally(() => {

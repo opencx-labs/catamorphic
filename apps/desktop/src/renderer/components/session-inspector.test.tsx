@@ -83,7 +83,6 @@ describe("SessionInspectorContent", () => {
           effort="high"
           onEditModel={onEditModel}
           onEditEffort={onEditEffort}
-          checkout={null}
           incognito={false}
           onFork={onFork}
           onArchive={onArchive}
@@ -128,7 +127,6 @@ describe("SessionInspectorContent", () => {
           permissionMode="Bypass permissions"
           sandboxing="Contained"
           onEditPermissionMode={onEditPermissionMode}
-          checkout={null}
           incognito={false}
         />,
       );
@@ -154,7 +152,6 @@ describe("SessionInspectorContent", () => {
           agentName="Reviewer"
           permissionMode="Plan"
           permissionModeDisabledReason="Set in the project's agent definition in .work/agents."
-          checkout={null}
           incognito={false}
         />,
       );

@@ -539,6 +539,25 @@ export const BUILTIN_ACTIONS = [
     ],
   },
   {
+    id: "new-worktree-chat",
+    label: "New chat in a worktree",
+    icon: "GitBranch",
+    description:
+      "open a floating chat that works in its own Git worktree, started from the project folder's last commit, so parallel work never collides; bring its changes back from the chat's status popup",
+    defaultBinding: null,
+    keywords: [
+      "worktree",
+      "branch",
+      "parallel",
+      "isolated",
+      "isolation",
+      "git",
+      "chat",
+      "separate",
+      "copy",
+    ],
+  },
+  {
     id: "new-incognito-chat",
     label: "New incognito chat",
     icon: "Ghost",

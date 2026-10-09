@@ -1396,6 +1396,18 @@ const api = {
     invoke("catamorphic:session-checkouts", projectId),
   sessionUseProjectFolder: (input: { projectId: string; sessionId: string }) =>
     invoke("catamorphic:session-use-project-folder", input),
+  sessionCheckout: (input: { projectId: string; sessionId: string }) =>
+    invoke("catamorphic:session-checkout", input),
+  projectWorktreesAvailable: (projectId: string) =>
+    invoke("catamorphic:project-worktrees-available", projectId),
+  sessionUseOwnWorktree: (input: { projectId: string; sessionId: string }) =>
+    invoke("catamorphic:session-use-own-worktree", input),
+  sessionBringToProjectFolder: (input: {
+    projectId: string;
+    sessionId: string;
+  }) => invoke("catamorphic:session-bring-to-project-folder", input),
+  sessionDiscardWorktree: (input: { projectId: string; sessionId: string }) =>
+    invoke("catamorphic:session-discard-worktree", input),
   gitUntrackedDirectory: (input: {
     projectId: string;
     worktreePath: string;

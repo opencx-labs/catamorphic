@@ -329,9 +329,7 @@ export function GitNav({
             key={`${projectId}:${tree.path}`}
             tree={tree}
             flat={flat}
-            sessionIds={owners
-              .filter((owner) => owner.path === tree.path)
-              .map((owner) => owner.sessionId)}
+            chats={owners.filter((owner) => owner.path === tree.path)}
             projectId={projectId}
             onOpenDiff={onOpenDiff}
           />
@@ -347,14 +345,15 @@ const GROUPS: Array<{ mode: GitDiffMode; label: string }> = [
   { mode: "untracked", label: "Untracked" },
 ];
 function WorktreeSection({
-  sessionIds,
+  chats,
   flat,
   tree,
   projectId,
   onOpenDiff,
 }: {
   tree: GitWorktree;
-  sessionIds: string[];
+  /** The chats working in this checkout. */
+  chats: SessionCheckoutInfo[];
   flat: boolean;
   projectId: string;
   onOpenDiff: (tab: WorkspaceTab, mode?: OpenMode) => void;
@@ -435,17 +434,17 @@ function WorktreeSection({
           >
             {tree.path.split("/").at(-1) ?? tree.path}
           </p>
-          {sessionIds.length > 0 && (
+          {chats.length > 0 && (
             <div className="flex flex-wrap gap-1 px-2 py-1">
-              {sessionIds.map((id) => (
+              {chats.map((chat) => (
                 <OpenResourceButton
-                  key={id}
-                  className="rounded bg-bg-overlay px-1.5 py-0.5 text-[10px] text-fg-muted"
+                  key={chat.sessionId}
+                  className="max-w-full truncate rounded bg-bg-overlay px-1.5 py-0.5 text-[10px] text-fg-muted"
                   onOpen={(mode) =>
-                    onOpenDiff({ kind: "chat", name: id }, mode)
+                    onOpenDiff({ kind: "chat", name: chat.sessionId }, mode)
                   }
                 >
-                  Chat {id.slice(0, 6)}
+                  {chat.title || "Untitled chat"}
                 </OpenResourceButton>
               ))}
             </div>

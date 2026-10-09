@@ -570,6 +570,70 @@ describe("useAgentChat commands", () => {
     });
   });
 
+  it("sends the first message only once the host settled the new session", async () => {
+    const events: string[] = [];
+    server.use(
+      http.post(apiUrl(`/api/projects/${PROJECT_ID}/agent/sessions`), () =>
+        HttpResponse.json(sessionDetail(snapshot()), { status: 201 }),
+      ),
+      http.post(apiUrl(`${BASE}/commands`), async ({ request }) => {
+        const body = (await request.json()) as Record<string, unknown>;
+        events.push("send");
+        return HttpResponse.json({
+          commandId: body.commandId,
+          status: "accepted",
+          sequence: 2,
+          result: { itemId: "m1" },
+          error: null,
+        });
+      }),
+    );
+    serveSession(snapshot());
+    const { result } = renderHookWithProviders(() =>
+      useAgentChat(PROJECT_ID, {
+        onSessionCreated: async () => {
+          events.push("created");
+          await new Promise((resolve) => setTimeout(resolve, 20));
+          events.push("settled");
+        },
+      }),
+    );
+    await act(async () => {
+      await result.current.send("Start");
+    });
+    expect(events).toEqual(["created", "settled", "send"]);
+  });
+
+  it("fails the first message with the host's error, keeping the session", async () => {
+    let sent = 0;
+    server.use(
+      http.post(apiUrl(`/api/projects/${PROJECT_ID}/agent/sessions`), () =>
+        HttpResponse.json(sessionDetail(snapshot()), { status: 201 }),
+      ),
+      http.post(apiUrl(`${BASE}/commands`), () => {
+        sent++;
+        return HttpResponse.json({ error: "unexpected" }, { status: 500 });
+      }),
+    );
+    serveSession(snapshot());
+    const { result } = renderHookWithProviders(() =>
+      useAgentChat(PROJECT_ID, {
+        onSessionCreated: async () => {
+          throw new Error("No worktree for you");
+        },
+      }),
+    );
+    await act(async () => {
+      await result.current.send("Start");
+    });
+    expect(sent).toBe(0);
+    expect(result.current.sessionId).toBe(SESSION_ID);
+    expect(result.current.pending[0]).toMatchObject({
+      text: "Start",
+      status: "failed",
+    });
+  });
+
   it("keeps a failed send with its command id for resending", async () => {
     serveSession(settledSnapshot());
     const ids: unknown[] = [];
