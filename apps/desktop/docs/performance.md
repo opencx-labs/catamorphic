@@ -60,15 +60,15 @@ showing, a width-animated Cmd+B toggle ran 4–7 frames of 40–55 ms (a
 terminal: 6 of 53–67 ms) while the renderer's main thread was nearly idle.
 
 Sidebars therefore move first and the content settles after them
-(`lib/sidebar-motion.ts`, ADR 0200). The panel slides with a transform the
-moment it is toggled, over the content when opening and away from it when
-closing; the compositor runs it without layout. Once it is still, the
-content takes or gives back the space in a view transition
-(`lib/sidebar-transition.ts`): GPU snapshots of its old and new layout
-travel and cross-fade while the real content lays out once behind them. A
-page cannot resize without the window waiting for it to repaint (40–300 ms
-by page), so that wait falls in the short hold between the slide and the
-morph, while nothing moves. Do not animate the size of anything beside a
+(`lib/sidebar-motion.ts`, ADR 0200). The panel slides with a transform
+over the content when opening and away from it when closing (closing from
+open, 100 ms after its items start to leave, `lib/sidebar-leave.ts`); the
+compositor runs it without layout. Once it is still, the content takes or
+gives back the space in a view transition (`lib/sidebar-transition.ts`):
+GPU snapshots of its old and new layout cross-fade in place while the real
+content lays out once behind them. A page cannot resize without the window
+waiting for it to repaint (40–300 ms by page), so that wait falls in the
+short hold between the slide and the fade, while nothing moves. Do not animate the size of anything beside a
 page, terminal, editor or app frame. The one remaining size animation is
 the content frame's padding preview in Settings, which resizes a page shown
 beside Settings for its 200 ms.

@@ -9,12 +9,14 @@ import { settleSidebarContent } from "./sidebar-transition.js";
 
 /**
  * A sidebar moves the moment it is toggled and the content settles after it
- * (ADR 0200). The panel slides over the content with a transform, so the
- * compositor runs it without layout. Once it has stopped, the content takes
- * or gives back the sidebar's space in a view transition that morphs it
- * from its old layout to its new one (`settleSidebarContent`): the
- * content (a web page in its own process, a terminal, the editor) lays out
- * at its new size once, behind snapshots, and never while anything moves.
+ * (ADR 0200); closing from open, its items move first and the panel
+ * follows 100ms later (lib/sidebar-leave.ts). The panel slides over the
+ * content with a transform, so the compositor runs it without layout. Once
+ * it has stopped, the content takes or gives back the sidebar's space in a
+ * view transition that fades it in place from its old layout to its new one
+ * (`settleSidebarContent`): the content (a web page in its own process, a
+ * terminal, the editor) lays out at its new size once, behind snapshots,
+ * and never while anything moves.
  *
  * `phase` is where the panel is:
  * - `closed`: off screen and invisible.
@@ -54,7 +56,7 @@ export function useSidebarMotion({
 } {
   const [phase, setPhase] = useState<SidebarPhase>(open ? "open" : "closed");
   const [docked, setDocked] = useState(open && dock);
-  const [morphing, setMorphing] = useState(false);
+  const [settling, setSettling] = useState(false);
   const atRest = phase === "open" || phase === "closed";
   // Where the content belongs once the panel is still.
   const place = phase === "open" && dock;
@@ -104,21 +106,21 @@ export function useSidebarMotion({
     };
   }, [phase, panel]);
 
-  // One morph at a time. It reads where the content belongs when it applies
+  // One settle at a time. It reads where the content belongs when it applies
   // and leaves the content alone if the panel has started moving again;
   // another follows once the panel is still.
   useEffect(() => {
-    if (!atRest || morphing || docked === place) return;
-    setMorphing(true);
+    if (!atRest || settling || docked === place) return;
+    setSettling(true);
     settleSidebarContent({
       sidebar: panel.current?.parentElement ?? null,
       wanted: () => latest.current.atRest,
       update: () => {
         if (latest.current.atRest) setDocked(latest.current.place);
-        setMorphing(false);
+        setSettling(false);
       },
     });
-  }, [atRest, morphing, docked, place, panel]);
+  }, [atRest, settling, docked, place, panel]);
 
   return { phase, docked, settled: atRest && docked === place };
 }
