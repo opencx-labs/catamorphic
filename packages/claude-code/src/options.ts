@@ -221,8 +221,10 @@ export function hostProcessEnv(
 }
 
 /**
- * Where the CLI sends model calls: the `env` of its settings (local over
- * project over user, as the CLI applies them) over its own environment.
+ * Where the CLI sends model calls: the `env` of its settings (managed over
+ * local over project over user, as the CLI applies them) over its own
+ * environment. Local settings are the repository's: from a worktree, the
+ * main checkout's, where the git-ignored file lives.
  */
 function claudeBaseUrl(input: {
   env: Record<string, string>;
@@ -230,11 +232,15 @@ function claudeBaseUrl(input: {
 }): string | undefined {
   const userDirectory =
     input.env.CLAUDE_CONFIG_DIR ?? path.join(os.homedir(), ".claude");
+  const directory = input.workingDirectory;
+  const root = directory ? repositoryRoot(directory) : undefined;
   const settingsFiles = [
-    ...(input.workingDirectory
+    ...managedSettingsFiles(),
+    ...(root ? [path.join(root, ".claude", "settings.local.json")] : []),
+    ...(directory
       ? [
-          path.join(input.workingDirectory, ".claude", "settings.local.json"),
-          path.join(input.workingDirectory, ".claude", "settings.json"),
+          path.join(directory, ".claude", "settings.local.json"),
+          path.join(directory, ".claude", "settings.json"),
         ]
       : []),
     path.join(userDirectory, "settings.json"),
@@ -244,6 +250,62 @@ function claudeBaseUrl(input: {
     if (typeof baseUrl === "string" && baseUrl) return baseUrl;
   }
   return input.env.ANTHROPIC_BASE_URL;
+}
+
+/**
+ * The administrator's settings files, strongest first: the drop-ins in
+ * `managed-settings.d` (later names win) over `managed-settings.json`.
+ */
+function managedSettingsFiles(): string[] {
+  const directory =
+    process.platform === "darwin"
+      ? "/Library/Application Support/ClaudeCode"
+      : process.platform === "win32"
+        ? "C:\\Program Files\\ClaudeCode"
+        : "/etc/claude-code";
+  let dropIns: string[] = [];
+  try {
+    dropIns = fs
+      .readdirSync(path.join(directory, "managed-settings.d"))
+      .filter((name) => name.endsWith(".json"))
+      .sort()
+      .reverse()
+      .map((name) => path.join(directory, "managed-settings.d", name));
+  } catch {
+    // No drop-ins.
+  }
+  return [...dropIns, path.join(directory, "managed-settings.json")];
+}
+
+/**
+ * The repository a directory belongs to, as the CLI finds it: the main
+ * checkout for a linked worktree (whose `.git` is a file naming its git
+ * directory under the main one's `.git/worktrees`).
+ */
+function repositoryRoot(directory: string): string | undefined {
+  for (
+    let current = path.resolve(directory);
+    ;
+    current = path.dirname(current)
+  ) {
+    const dotGit = path.join(current, ".git");
+    try {
+      if (fs.statSync(dotGit).isDirectory()) return current;
+      const gitDirectory = /^gitdir:\s*(.+)$/m
+        .exec(fs.readFileSync(dotGit, "utf8"))?.[1]
+        ?.trim();
+      if (!gitDirectory) return current;
+      const linked = path.resolve(current, gitDirectory);
+      const common = path.resolve(
+        linked,
+        fs.readFileSync(path.join(linked, "commondir"), "utf8").trim(),
+      );
+      return path.dirname(common);
+    } catch {
+      // Not here (or an unreadable link): look further up.
+    }
+    if (path.dirname(current) === current) return undefined;
+  }
 }
 
 /** A Claude settings file's `env` block; empty when there is none. */

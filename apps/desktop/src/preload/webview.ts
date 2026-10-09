@@ -1,5 +1,4 @@
 import { contextBridge, ipcRenderer, webFrame } from "electron";
-import { type ActionId, TEXT_FIELD_ACTIONS } from "../shared/actions.js";
 import { matchesShortcut } from "../shared/keybindings.js";
 import {
   classifyPasswordField,
@@ -16,7 +15,7 @@ import {
   type PasskeyMediation,
   type PasskeyRequestKind,
 } from "../shared/passkeys.js";
-import { isTextField } from "../shared/text-field.js";
+import { fieldKeepsKey } from "../shared/text-field.js";
 
 /**
  * Guest preload for browser-tab webviews. Runs inside untrusted pages with
@@ -1334,8 +1333,9 @@ window.addEventListener("keydown", (event) => {
 // Page-first keys (find, back and forward) reach the page first, as in
 // Chrome: a page with its own find (a document editor) keeps them, and a
 // text field keeps Cmd+Left and Cmd+Right for its caret; otherwise the tab
-// takes them. This preload runs in the main frame only: a key pressed
-// inside an embedded frame stays the page's.
+// takes them. This preload runs in the main frame only; main asks an
+// embedded frame about back and forward (main/browser.ts). The document
+// asks for the keys as it starts, so they work while it loads.
 let pageKeys: [action: string, binding: string][] = [];
 ipcRenderer.on("catamorphic:page-keys", (_event, keys: unknown) => {
   pageKeys =
@@ -1346,6 +1346,7 @@ ipcRenderer.on("catamorphic:page-keys", (_event, keys: unknown) => {
         )
       : [];
 });
+ipcRenderer.sendToHost("catamorphic:page-keys-wanted");
 // Captured, so a page that stops the key's propagation without claiming
 // it (no preventDefault) still leaves it to the tab, as in Chrome.
 window.addEventListener(
@@ -1356,10 +1357,7 @@ window.addEventListener(
       matchesShortcut({ event, binding, mac }),
     )?.[0];
     if (!action) return;
-    if (
-      TEXT_FIELD_ACTIONS.has(action as ActionId) &&
-      isTextField(document.activeElement)
-    )
+    if (fieldKeepsKey({ key: event.key, focused: document.activeElement }))
       return;
     // Read once every listener has had the key, the page's own included.
     setTimeout(() => {

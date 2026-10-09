@@ -657,25 +657,15 @@ export const ACTION_LABELS = Object.fromEntries(
 
 /**
  * Actions whose keys a web page sees first, as in Chrome: a page with its
- * own find (a document editor) keeps them, and a text field keeps the
- * history keys (TEXT_FIELD_ACTIONS). What the page's main document leaves
- * comes to Work through its preload (preload/webview.ts); keys pressed
- * inside an embedded frame stay the page's.
+ * own find (a document editor) keeps them, and a text field keeps its
+ * caret keys (fieldKeepsKey). What the page's main document leaves comes
+ * to Work through its preload (preload/webview.ts); main asks an embedded
+ * frame about back and forward (main/browser.ts).
  */
 export const PAGE_FIRST_ACTIONS: ReadonlySet<ActionId> = new Set([
   "find",
   "find-next",
   "find-previous",
-  "browser-back",
-  "browser-forward",
-]);
-
-/**
- * Actions a text field keeps, in a page or in Work itself: their keys
- * (Cmd+Left and Cmd+Right) move the caret to the line's start or end
- * there, as everywhere on macOS, and go back or forward elsewhere.
- */
-export const TEXT_FIELD_ACTIONS: ReadonlySet<ActionId> = new Set([
   "browser-back",
   "browser-forward",
 ]);

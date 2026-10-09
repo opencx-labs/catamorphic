@@ -335,11 +335,15 @@ editor or app frame moves over it rather than animating its size.
 | `title-change` (rename flash) | 1200ms | **sanctioned exception** — the
   one decorative-adjacent signal (see design log 2026-07-31); allowlisted in
   the test's `DURATION_EXCEPTIONS` |
+| `veil-touch` (a press on an agent-held surface) | 760ms | **sanctioned exception**: one-shot answer to a refused press; the sheet appears, gives, and clears (design log 2026-10-09) |
 
 ### Sanctioned exceptions
 
 - `animate-spin` / `animate-pulse`: indeterminate progress may loop.
 - `title-change` (1200ms): a deliberate noticed-but-calm rename signal.
+- `veil-touch` (760ms): a press on a held surface shows the veil, which
+  gives where it was touched and clears; shorter, the wobble reads as a
+  flicker.
 
 New exceptions require adding to both this list and the test allowlist —
 that friction is intentional.
@@ -1862,17 +1866,21 @@ Someone who missed the "Agent owns this page" pill pressed the page and
 nothing happened. The veil is invisible until then: a press shows it for a
 moment, a sheet of translucent plastic in the accent, a little stronger and
 giving way where it was touched, then clearing. The page still gets nothing.
+At 760ms it is a sanctioned exception to the motion contract; with reduced
+motion it collapses like everything else.
 
 A chat's tab group kept its accent eyebrow and fold chevron after the person
-moved to another tab, so a group opened beside a chat (a chip Cmd+Shift+
-clicked) looked in focus long after it was. The group now wears the accent
+moved to another tab, so a group opened beside a chat (a chip opened with
+Cmd+Shift+Click) looked in focus long after it was. The group now wears the accent
 only while it holds the tab in front or its split companion; behind, its
 eyebrow and chevrons go quiet.
 
 Cmd+Left and Cmd+Right went back and forward even with the caret in the
 composer or the address bar, so they never moved to the line's start or end.
-A text field now keeps them, in Work and in pages, which see these keys first
-like Cmd+F; elsewhere they still go back and forward.
+A text field now keeps its caret keys, whatever they are bound to, in Work and
+in pages, which see back and forward first like Cmd+F; elsewhere they still go
+back and forward. An embedded frame has no preload, so main asks the focused
+frame whether a text field has the caret before going back or forward.
 
 A browser tab's hold is the turn's, not the chat's: a settle that arrives
 after the chat's next turn started no longer lets that turn's page go.

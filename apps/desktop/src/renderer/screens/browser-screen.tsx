@@ -391,8 +391,8 @@ export function BrowserScreen({
   }, []);
   const findCommandsRef = useRef({ openFind, stepFind });
   findCommandsRef.current = { openFind, stepFind };
-  // Find keys reach the page first (see preload/webview.ts), which learns
-  // them as it learns the floating preview's Escape.
+  // Find, back and forward reach the page first (see preload/webview.ts),
+  // which asks for them as each document starts.
   const pageKeys = useMemo(
     () => ({
       find: keybindings.find,
@@ -713,6 +713,14 @@ export function BrowserScreen({
         }
         if (message.channel === "catamorphic:dismiss-floating") {
           dismissFloatingRef.current?.();
+          return;
+        }
+        if (message.channel === "catamorphic:page-keys-wanted") {
+          try {
+            view.send("catamorphic:page-keys", pageKeysRef.current);
+          } catch {
+            // Guest gone mid-call; its dom-ready re-sends.
+          }
           return;
         }
         if (message.channel === "catamorphic:page-key") {

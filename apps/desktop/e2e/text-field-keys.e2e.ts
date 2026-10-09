@@ -5,16 +5,30 @@ import { type AppHandle, launchApp } from "./harness.js";
 /**
  * Cmd+Left and Cmd+Right go back and forward in a browser tab, but a text
  * field keeps them for its caret (the line's start and end), as on macOS
- * everywhere: Work's own fields (the address bar, the chat composer) and a
- * page's. Outside a field they still go back and forward.
+ * everywhere: Work's own fields (the address bar, the chat composer), a
+ * page's, and an embedded frame's. Outside a field they still go back and
+ * forward, from a frame and from a page that is still loading.
  */
 let app: AppHandle;
 let origin: string;
 const server = http.createServer((request, response) => {
   response.setHeader("Content-Type", "text/html");
+  if (request.url === "/frame") {
+    response.end(
+      `<input id="inner" value="inside"><button id="plain">plain</button>`,
+    );
+    return;
+  }
+  if (request.url === "/slow") {
+    // The document arrives, and stays loading (no dom-ready) for a while.
+    response.write("<title>Slow</title><h1>Slow</h1>");
+    const finish = setTimeout(() => response.end(), 20_000);
+    request.on("close", () => clearTimeout(finish));
+    return;
+  }
   const page = request.url?.startsWith("/second") ? "Second" : "First";
   response.end(
-    `<title>${page}</title><h1>${page}</h1><input id="field" value="hello world"><a id="next" href="/second">next</a>`,
+    `<title>${page}</title><h1>${page}</h1><input id="field" value="hello world"><a id="next" href="/second">next</a><a id="slow" href="/slow">slow</a><iframe src="/frame"></iframe>`,
   );
 });
 
@@ -144,10 +158,13 @@ describe("Cmd+Left and Cmd+Right", () => {
       "(() => { const field = document.getElementById('field'); field.focus(); field.setSelectionRange(11, 11); return true; })()",
     );
     await pageKey("Left");
-    await app.waitFor(
-      `${view}.executeJavaScript("document.getElementById('field').selectionStart < 11")`,
-      { label: "the caret moved left" },
-    );
+    // A synthetic key skips macOS's text system, which moves a real caret
+    // to the line's start; elsewhere the engine moves it by a word.
+    if (!mac)
+      await app.waitFor(
+        `${view}.executeJavaScript("document.getElementById('field').selectionStart < 11")`,
+        { label: "the caret moved left" },
+      );
     await settle();
     expect(await app.eval<string>(`${view}.getTitle()`)).toBe("Second");
     // Out of the field, the page goes back.
@@ -155,6 +172,34 @@ describe("Cmd+Left and Cmd+Right", () => {
     await pageKey("Left");
     await loaded("First");
     await pageKey("Right");
+    await loaded("Second");
+  });
+
+  it("stay in an embedded frame's field, and go back from the frame itself", async () => {
+    const focusInFrame = (id: string) =>
+      inGuest(
+        `(() => { const frame = document.querySelector('iframe'); frame.contentWindow.focus(); frame.contentDocument.getElementById('${id}').focus(); return true; })()`,
+      );
+    await focusInFrame("inner");
+    await pageKey("Left");
+    await settle();
+    expect(await app.eval<string>(`${view}.getTitle()`)).toBe("Second");
+    await focusInFrame("plain");
+    await pageKey("Left");
+    await loaded("First");
+    await pageKey("Right");
+    await loaded("Second");
+  });
+
+  it("go back from a page that is still loading", async () => {
+    await inGuest(
+      "(() => { document.getElementById('slow').click(); return true; })()",
+    );
+    await app.waitFor(
+      `(() => { const page = ${view}; try { return page.getTitle() === 'Slow' && page.isLoading(); } catch { return false; } })()`,
+      { label: "slow page loading" },
+    );
+    await pageKey("Left");
     await loaded("Second");
   });
 });

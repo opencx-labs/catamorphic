@@ -257,6 +257,28 @@ describe("model access", () => {
       expect(env(attempt({ workingDirectory: project }))).not.toHaveProperty(
         "ANTHROPIC_API_KEY",
       );
+      // A worktree reads local settings from its main checkout, where the
+      // git-ignored file lives.
+      fs.rmSync(path.join(root, "user"), { recursive: true });
+      const main = path.join(root, "main");
+      const linked = path.join(main, ".git", "worktrees", "chat");
+      fs.mkdirSync(linked, { recursive: true });
+      fs.writeFileSync(path.join(linked, "commondir"), "../..\n");
+      const worktree = path.join(root, "chat");
+      fs.mkdirSync(path.join(worktree, "src"), { recursive: true });
+      fs.writeFileSync(path.join(worktree, ".git"), `gitdir: ${linked}\n`);
+      expect(
+        env(attempt({ workingDirectory: path.join(worktree, "src") })),
+      ).not.toHaveProperty("ANTHROPIC_API_KEY");
+      fs.mkdirSync(path.join(main, ".claude"));
+      fs.writeFileSync(
+        path.join(main, ".claude", "settings.local.json"),
+        JSON.stringify({ env: gateway }),
+      );
+      expect(
+        env(attempt({ workingDirectory: path.join(worktree, "src") }))
+          .ANTHROPIC_API_KEY,
+      ).toBe("sk-ant-inherited");
     } finally {
       for (const [name, value] of saved)
         if (value === undefined) delete process.env[name];

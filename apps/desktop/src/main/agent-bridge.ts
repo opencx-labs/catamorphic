@@ -422,7 +422,12 @@ export function registerAgentBridge(
   const agentTabs = new Set<string>();
   /** Browser tab key → the turn that holds it. */
   const held = new Map<string, TurnHolder & { projectId: string }>();
-  /** Per session, how many of its turns have settled (see openBrowser). */
+  /**
+   * Turns that settled, latest last, and per session how many settled
+   * (for a holder without a turn id): openBrowser's page may mount after
+   * its turn ended.
+   */
+  const settledTurnIds = new Set<string>();
   const settledTurns = new Map<string, number>();
   /**
    * The turn drives its agent's own tab until it settles, in sight. A tab
@@ -646,8 +651,12 @@ export function registerAgentBridge(
     },
 
     async openBrowser(projectId, holder, url) {
-      const { sessionId } = holder;
+      const { sessionId, turnId } = holder;
       const turns = settledTurns.get(sessionId) ?? 0;
+      const settled = () =>
+        turnId
+          ? settledTurnIds.has(turnId)
+          : (settledTurns.get(sessionId) ?? 0) !== turns;
       const result = await rpc<{ key: string } | { error: string }>(
         "openAgentBrowser",
         { projectId, sessionId, url: browserUrl(url) },
@@ -661,7 +670,7 @@ export function registerAgentBridge(
       // Opened under the agent's control: its own, held by this turn,
       // unless the turn settled while the page mounted (or there is none).
       agentTabs.add(result.key);
-      if (sessionId && (settledTurns.get(sessionId) ?? 0) === turns)
+      if (sessionId && !settled())
         held.set(result.key, { projectId, ...holder });
       else
         await rpc("surfaceControl", {
@@ -804,6 +813,12 @@ export function registerAgentBridge(
 
     async releaseTurn(projectId, { sessionId, turnId }) {
       settledTurns.set(sessionId, (settledTurns.get(sessionId) ?? 0) + 1);
+      if (turnId) {
+        settledTurnIds.add(turnId);
+        // Only a page still mounting asks, so the recent turns are enough.
+        if (settledTurnIds.size > 256)
+          settledTurnIds.delete(settledTurnIds.values().next().value ?? "");
+      }
       // Only this turn's holds: the chat's next turn may already hold a tab
       // again by the time this settle arrives.
       const keys = [...held]
@@ -917,6 +932,7 @@ export function registerAgentBridge(
       held.clear();
       agentTabs.clear();
       settledTurns.clear();
+      settledTurnIds.clear();
       terminalKeys.clear();
     },
   };

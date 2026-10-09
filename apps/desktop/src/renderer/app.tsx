@@ -46,7 +46,6 @@ import {
   BUILTIN_ACTIONS,
   KEYBINDING_ACTIONS,
   PAGE_FIRST_ACTIONS,
-  TEXT_FIELD_ACTIONS,
 } from "../shared/actions.js";
 import {
   type HarnessPermissions,
@@ -78,7 +77,7 @@ import {
   resolveProjectFileLocation,
 } from "../shared/surface-link.js";
 import type { TerminalMacro } from "../shared/terminal-macros.js";
-import { isTextField } from "../shared/text-field.js";
+import { fieldKeepsKey } from "../shared/text-field.js";
 import {
   sidebarSections,
   visibleWorkspaceConfig,
@@ -332,9 +331,6 @@ function AgentControlOverlay({
   const [phase, setPhase] = useState<"in" | "out" | "gone">(
     active ? "in" : "gone",
   );
-  useEffect(() => {
-    setPhase((prev) => (active ? "in" : prev === "in" ? "out" : prev));
-  }, [active]);
   // The latest press on the blocked surface, where it landed: the veil
   // shows for a moment from there (animate-veil-touch).
   const [touch, setTouch] = useState<{
@@ -342,6 +338,10 @@ function AgentControlOverlay({
     x: number;
     y: number;
   } | null>(null);
+  useEffect(() => {
+    setPhase((prev) => (active ? "in" : prev === "in" ? "out" : prev));
+    if (!active) setTouch(null);
+  }, [active]);
   if (phase === "gone") return null;
   const exiting = phase === "out";
   const anim = exiting ? "animate-fade-out" : "animate-fade-in";
@@ -4035,11 +4035,11 @@ export function App({
             guestId !== undefined ||
             commandBrowserIdRef.current() !== undefined ||
             (candidate === "find" && Boolean(findSearchInput(candidate)))) &&
-          // A text field keeps Cmd+Left and Cmd+Right for its caret.
+          // A text field keeps its caret keys (Cmd+Left and Cmd+Right go to
+          // the line's start and end), whatever they are bound to.
           !(
-            TEXT_FIELD_ACTIONS.has(candidate) &&
             guestId === undefined &&
-            isTextField(document.activeElement)
+            fieldKeepsKey({ key: event.key, focused: document.activeElement })
           ) &&
           (candidate !== "dismiss-floating" ||
             (floatingEscapeEnabledRef.current &&

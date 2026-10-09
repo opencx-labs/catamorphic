@@ -70,6 +70,7 @@ import {
   sitePermissionStateSchema,
 } from "../shared/site-settings.js";
 import type { TerminalMacro } from "../shared/terminal-macros.js";
+import { TEXT_FIELD_PROBE } from "../shared/text-field.js";
 import { HistoryStore } from "./browser-history.js";
 import {
   importBrowserCookies,
@@ -1139,14 +1140,42 @@ export function registerBrowserSupport(
       // Page-first keys (find, back, forward) go to the page first, whose
       // preload hands back what the page and its text fields leave
       // (preload/webview.ts). The preload runs only in the main frame, so
-      // from an embedded frame (where Google Docs types) they stay the
-      // page's: Work never takes a frame's own find or caret.
+      // from an embedded frame (where Google Docs types) find stays the
+      // page's, and back and forward go once the frame's focus proves not
+      // to be a text field: Work never takes a frame's caret.
+      const frame = contents.focusedFrame;
+      const mac = process.platform === "darwin";
+      const direction =
+        frame && frame !== contents.mainFrame
+          ? (["back", "forward"] as const).find((candidate) =>
+              matchesShortcut({
+                event: key,
+                binding: bindings[`browser-${candidate}`],
+                mac,
+              }),
+            )
+          : undefined;
+      if (frame && direction) {
+        frame
+          .executeJavaScript(TEXT_FIELD_PROBE)
+          .then((field: unknown) => {
+            if (field === true || host.isDestroyed()) return;
+            host.send("catamorphic:browser-navigate", {
+              webContentsId: contents.id,
+              direction,
+            });
+          })
+          .catch(() => {
+            // The frame went away with its key.
+          });
+        return;
+      }
       if (
         !macros.some((macro) =>
           matchesShortcut({
             event: key,
             binding: macro.shortcut,
-            mac: process.platform === "darwin",
+            mac,
           }),
         ) &&
         !KEYBINDING_ACTIONS.some(
@@ -1156,7 +1185,7 @@ export function registerBrowserSupport(
             matchesShortcut({
               event: key,
               binding: bindings[action],
-              mac: process.platform === "darwin",
+              mac,
             }),
         )
       )

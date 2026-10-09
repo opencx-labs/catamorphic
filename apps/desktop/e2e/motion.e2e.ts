@@ -29,6 +29,7 @@ const MAX_MS = 300;
 const LOOP_ALLOWLIST = new Set(["animate-spin", "animate-pulse"]);
 const DURATION_EXCEPTIONS: Record<string, number> = {
   "animate-title-change": 1200,
+  "animate-veil-touch": 760,
 };
 
 let app: AppHandle;

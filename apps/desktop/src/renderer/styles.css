@@ -687,20 +687,6 @@ kbd {
   animation: veil-touch 760ms cubic-bezier(0.2, 0, 0, 1) forwards;
 }
 
-@media (prefers-reduced-motion: reduce) {
-  @keyframes veil-touch {
-    0% {
-      opacity: 0;
-    }
-    20% {
-      opacity: 1;
-    }
-    100% {
-      opacity: 0;
-    }
-  }
-}
-
 /* Content crossfade when modal sections swap (paired with a height tween) */
 @keyframes fade-in {
   from {
