@@ -310,8 +310,8 @@ Framed content previews transition the workspace margins and corner radius over
 
 A sidebar slides with a 200 ms transform the moment it is toggled (closing
 from open, 100 ms after its items start to leave), and the
-content beside it settles after it stops: a 200 ms view-transition morph
-from its old layout to its new one (ADR 0200). The content resizes once per
+content beside it settles after it stops: a 200 ms view-transition fade
+in place from its old layout to its new one (ADR 0200). The content resizes once per
 toggle, never while anything moves. New motion beside a page, terminal,
 editor or app frame moves over it rather than animating its size.
 
@@ -328,8 +328,8 @@ editor or app frame moves over it rather than animating its size.
 | `profile-veil-in` / `profile-veil-out` (in-place profile switch) | 200ms | each other (exact mirror) |
 | `question-in` (ask_user panel) | 260ms | — |
 | `pane-in-left` / `pane-in-right` (keyboard tab cycling) | 200ms | — (content-changed signal on a persistent wrapper; no exit to pair) |
-| `content-out` / `content-in` (content settling beside a still sidebar, view transition) | 200ms | each other (the old snapshot leaves as the new one arrives) |
-| `dock-float` / `dock-rail` groups (a floating chat and the bubble strip gliding while the content settles, view transition) | 200ms | the content's settle; a chat tab (`dock-tab`) uses `content-out` / `content-in` |
+| `content-fade-out` / `content-fade-in` (content settling beside a still sidebar, view transition: the old snapshot fades where it was, the new one fades in) | 200ms | each other (the old snapshot leaves as the new one arrives) |
+| `dock-float` / `dock-rail` groups (a floating chat and the bubble strip gliding while the content settles, view transition) | 200ms | the content's settle; a chat tab (`dock-tab`) fades in place with `content-fade-out` / `content-fade-in` |
 | `bubble-ask` (agent question arrival) | 280ms | — (one-shot nudge on a persistent bubble; no exit to pair) |
 | `input-recall-{up,down}-{a,b}` (composer ↑/↓ history) | 150ms | — (transform-only directional content signal; paired names replay rapid same-direction recalls without a classless frame) |
 | `activity-leave` / `activity-arrive` (agent activity line swap) | 150ms / 200ms | — (one beat of the working pulse carries a content swap on a persistent line: the old text dims up and away, the new rises in, then `animate-pulse` resumes) |
@@ -1946,3 +1946,11 @@ row; in the right sidebar the thread trails the icon instead of crossing
 it. Everything is measured once on the click, only for what is on screen;
 nothing runs under reduced motion or in a project's workspace that isn't
 showing. Opening is unchanged.
+
+The content beside the sidebar used to settle by morphing: its box grew
+or shrank into place while its snapshots travelled with the main column.
+The growing box showed the app's background around it for a moment, which
+read as a glitch. It now fades in place: the old layout fades out exactly
+where it was as the new one fades in, and nothing moves or stretches. The
+page probe that told a centred column from a left-aligned one is gone with
+the motion it served.

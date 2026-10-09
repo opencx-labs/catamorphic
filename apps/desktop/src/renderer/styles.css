@@ -1674,11 +1674,13 @@ kbd {
   pointer-events: none;
 }
 /* The content taking or giving back a still sidebar's space
-   (lib/sidebar-transition.ts): its box moves from where it was to where it
-   lands, under the sidebar; inside it, the old and new snapshots travel by
-   --content-shift (how far its main column moves within the box) so that
-   column goes straight to its new place while they cross-fade. Neither is
-   scaled, so text never stretches. */
+   (lib/sidebar-transition.ts) cross-fades in place: its box takes its new
+   place at once, the old snapshot stays where the content was
+   (--content-from-x/-y) and fades out as the new one fades in. Neither is
+   scaled or moved, so nothing on screen slides or stretches. */
+::view-transition-group(workspace-content) {
+  animation: none;
+}
 ::view-transition-image-pair(workspace-content) {
   overflow: clip;
 }
@@ -1688,20 +1690,19 @@ kbd {
   block-size: auto;
 }
 ::view-transition-old(workspace-content) {
-  animation-name: content-out;
+  translate: var(--content-from-x, 0) var(--content-from-y, 0);
+  animation-name: content-fade-out;
 }
 ::view-transition-new(workspace-content) {
-  animation-name: content-in;
+  animation-name: content-fade-in;
 }
-@keyframes content-out {
+@keyframes content-fade-out {
   to {
-    translate: var(--content-shift, 0) 0;
     opacity: 0;
   }
 }
-@keyframes content-in {
+@keyframes content-fade-in {
   from {
-    translate: calc(-1 * var(--content-shift, 0px)) 0;
     opacity: 0;
   }
 }
@@ -2000,6 +2001,10 @@ html[data-surface="dock"] #root {
   inset-inline: 0;
   margin-inline: auto;
 }
+/* A chat tab is the content there: it cross-fades in place too. */
+::view-transition-group(*.dock-tab) {
+  animation: none;
+}
 ::view-transition-image-pair(*.dock-tab) {
   overflow: clip;
 }
@@ -2009,10 +2014,11 @@ html[data-surface="dock"] #root {
   block-size: auto;
 }
 ::view-transition-old(*.dock-tab) {
-  animation-name: content-out;
+  translate: var(--content-from-x, 0) var(--content-from-y, 0);
+  animation-name: content-fade-out;
 }
 ::view-transition-new(*.dock-tab) {
-  animation-name: content-in;
+  animation-name: content-fade-in;
 }
 
 /* Browser setup actions keep their footprint when they become status rows. */
