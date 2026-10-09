@@ -1,13 +1,13 @@
 import { stat } from "node:fs/promises";
 import path from "node:path";
-import type { ExtraTool } from "@catamorphic/sandbox";
+import type { ExtraTool, ExtraToolContext } from "@catamorphic/sandbox";
 import { z } from "zod";
 import {
   CHAT_ICON_COLOR_IDS,
   CHAT_ICON_NAMES,
 } from "../../shared/chat-icons.js";
 import { parseSurfaceLink } from "../../shared/surface-link.js";
-import type { WorkspaceBridge } from "../agent-bridge.js";
+import type { TurnHolder, WorkspaceBridge } from "../agent-bridge.js";
 
 /**
  * The agent's workspace toolset: discovery (what tabs, chats, and sidebar
@@ -790,7 +790,7 @@ export function buildWorkspaceToolkit(
       execute: async (input, ctx) => {
         const result = await bridge.openBrowser(
           ctx.projectId,
-          ctx.sessionId ?? "",
+          turnHolder(ctx),
           String(input.url),
         );
         return {
@@ -810,7 +810,7 @@ export function buildWorkspaceToolkit(
       execute: (input, ctx) =>
         bridge.browserSnapshot(
           ctx.projectId,
-          ctx.sessionId ?? "",
+          turnHolder(ctx),
           String(input.key),
           input.format === "image" ? "image" : "dom",
         ),
@@ -869,7 +869,7 @@ export function buildWorkspaceToolkit(
         const action = parseBrowserAction(input);
         return bridge.browserAct(
           ctx.projectId,
-          ctx.sessionId ?? "",
+          turnHolder(ctx),
           key,
           action.type === "upload" && ctx.workingDirectory
             ? { ...action, workingDirectory: ctx.workingDirectory }
@@ -1161,20 +1161,10 @@ export function buildWorkspaceToolkit(
         const key = String(input.key);
         switch (input.action) {
           case "release":
-            await bridge.setControl(
-              ctx.projectId,
-              ctx.sessionId ?? "",
-              key,
-              false,
-            );
+            await bridge.setControl(ctx.projectId, turnHolder(ctx), key, false);
             return { ok: true, note: "The user can now use this surface." };
           case "reclaim":
-            await bridge.setControl(
-              ctx.projectId,
-              ctx.sessionId ?? "",
-              key,
-              true,
-            );
+            await bridge.setControl(ctx.projectId, turnHolder(ctx), key, true);
             return { ok: true, note: "You are driving this surface again." };
           case "close":
             await bridge.closeSurface(ctx.projectId, key);
@@ -1409,4 +1399,12 @@ function parseBrowserAction(
     default:
       throw new Error(`Unknown browser action: ${action}`);
   }
+}
+
+/** The turn a browser tool call holds its tab for (agent-bridge). */
+function turnHolder(ctx: ExtraToolContext): TurnHolder {
+  return {
+    sessionId: ctx.sessionId ?? "",
+    ...(ctx.turnId ? { turnId: ctx.turnId } : {}),
+  };
 }

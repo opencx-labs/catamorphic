@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import type { AttemptStart } from "@catamorphic/agent-protocol/runner";
 import { describe, expect, it } from "vitest";
 import { classifyClaudeError } from "../errors.js";
@@ -160,7 +163,11 @@ describe("model access", () => {
     const saved = {
       key: process.env.ANTHROPIC_API_KEY,
       baseUrl: process.env.ANTHROPIC_BASE_URL,
+      configDir: process.env.CLAUDE_CONFIG_DIR,
     };
+    // No Claude settings of this machine's own route the CLI.
+    const configDir = fs.mkdtempSync(path.join(os.tmpdir(), "claude-user-"));
+    process.env.CLAUDE_CONFIG_DIR = configDir;
     process.env.ANTHROPIC_API_KEY = "sk-ant-inherited";
     delete process.env.ANTHROPIC_BASE_URL;
     try {
@@ -182,9 +189,138 @@ describe("model access", () => {
       for (const [name, value] of [
         ["ANTHROPIC_API_KEY", saved.key],
         ["ANTHROPIC_BASE_URL", saved.baseUrl],
+        ["CLAUDE_CONFIG_DIR", saved.configDir],
       ] as const)
         if (value === undefined) delete process.env[name];
         else process.env[name] = value;
+      fs.rmSync(configDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps a credential for the gateway the CLI is routed to, wherever the route is set", () => {
+    const names = [
+      "ANTHROPIC_API_KEY",
+      "ANTHROPIC_AUTH_TOKEN",
+      "ANTHROPIC_BASE_URL",
+      "CLAUDE_CONFIG_DIR",
+    ] as const;
+    const saved = names.map((name) => [name, process.env[name]] as const);
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "claude-route-"));
+    const settings = (directory: string, env: Record<string, string>) => {
+      fs.mkdirSync(directory, { recursive: true });
+      fs.writeFileSync(
+        path.join(directory, "settings.json"),
+        JSON.stringify({ env }),
+      );
+    };
+    const gateway = { ANTHROPIC_BASE_URL: "https://llm-gateway.example.com" };
+    const env = (start: AttemptStart) => options(start).env ?? {};
+    try {
+      for (const name of names) delete process.env[name];
+      process.env.ANTHROPIC_API_KEY = "sk-ant-inherited";
+      process.env.ANTHROPIC_AUTH_TOKEN = "token-inherited";
+      process.env.CLAUDE_CONFIG_DIR = path.join(root, "user");
+      const project = path.join(root, "project");
+      fs.mkdirSync(project);
+      // Routed nowhere but Anthropic: neither credential outranks the sign-in.
+      expect(env(attempt({ workingDirectory: project }))).not.toHaveProperty(
+        "ANTHROPIC_API_KEY",
+      );
+      expect(env(attempt({ workingDirectory: project }))).not.toHaveProperty(
+        "ANTHROPIC_AUTH_TOKEN",
+      );
+      // Routed by the attempt's env.
+      expect(
+        env(attempt({ workingDirectory: project, env: gateway }))
+          .ANTHROPIC_API_KEY,
+      ).toBe("sk-ant-inherited");
+      // Routed by the project's Claude settings.
+      settings(path.join(project, ".claude"), gateway);
+      expect(env(attempt({ workingDirectory: project }))).toMatchObject({
+        ANTHROPIC_API_KEY: "sk-ant-inherited",
+        ANTHROPIC_AUTH_TOKEN: "token-inherited",
+      });
+      fs.rmSync(path.join(project, ".claude"), { recursive: true });
+      // Routed by the user's Claude settings, in CLAUDE_CONFIG_DIR.
+      settings(path.join(root, "user"), gateway);
+      expect(
+        env(attempt({ workingDirectory: project })).ANTHROPIC_API_KEY,
+      ).toBe("sk-ant-inherited");
+      // Local settings back on Anthropic win over a user-level gateway.
+      fs.mkdirSync(path.join(project, ".claude"));
+      fs.writeFileSync(
+        path.join(project, ".claude", "settings.local.json"),
+        JSON.stringify({
+          env: { ANTHROPIC_BASE_URL: "https://api.anthropic.com" },
+        }),
+      );
+      expect(env(attempt({ workingDirectory: project }))).not.toHaveProperty(
+        "ANTHROPIC_API_KEY",
+      );
+      // A worktree reads local settings from its main checkout, where the
+      // git-ignored file lives.
+      fs.rmSync(path.join(root, "user"), { recursive: true });
+      const main = path.join(root, "main");
+      const linked = path.join(main, ".git", "worktrees", "chat");
+      fs.mkdirSync(linked, { recursive: true });
+      fs.writeFileSync(path.join(linked, "commondir"), "../..\n");
+      const worktree = path.join(root, "chat");
+      fs.mkdirSync(path.join(worktree, "src"), { recursive: true });
+      fs.writeFileSync(path.join(worktree, ".git"), `gitdir: ${linked}\n`);
+      fs.writeFileSync(
+        path.join(linked, "gitdir"),
+        `${path.join(worktree, ".git")}\n`,
+      );
+      expect(
+        env(attempt({ workingDirectory: path.join(worktree, "src") })),
+      ).not.toHaveProperty("ANTHROPIC_API_KEY");
+      fs.mkdirSync(path.join(main, ".claude"));
+      fs.writeFileSync(
+        path.join(main, ".claude", "settings.local.json"),
+        JSON.stringify({ env: gateway }),
+      );
+      expect(
+        env(attempt({ workingDirectory: path.join(worktree, "src") }))
+          .ANTHROPIC_API_KEY,
+      ).toBe("sk-ant-inherited");
+      // A submodule's `.git` names no worktree: its local settings are its
+      // own, not the superproject's.
+      const submodule = path.join(main, "vendor", "lib");
+      fs.mkdirSync(path.join(main, ".git", "modules", "lib"), {
+        recursive: true,
+      });
+      fs.mkdirSync(submodule, { recursive: true });
+      fs.writeFileSync(
+        path.join(submodule, ".git"),
+        "gitdir: ../../.git/modules/lib\n",
+      );
+      expect(env(attempt({ workingDirectory: submodule }))).not.toHaveProperty(
+        "ANTHROPIC_API_KEY",
+      );
+      // A bare repository's worktree reads them from the repository.
+      const bare = path.join(root, "bare.git");
+      const bareLinked = path.join(bare, "worktrees", "chat");
+      fs.mkdirSync(bareLinked, { recursive: true });
+      fs.writeFileSync(path.join(bareLinked, "commondir"), "../..\n");
+      const bareWorktree = path.join(root, "bare-chat");
+      fs.mkdirSync(bareWorktree);
+      fs.writeFileSync(
+        path.join(bareWorktree, ".git"),
+        `gitdir: ${bareLinked}\n`,
+      );
+      fs.mkdirSync(path.join(bare, ".claude"));
+      fs.writeFileSync(
+        path.join(bare, ".claude", "settings.local.json"),
+        JSON.stringify({ env: gateway }),
+      );
+      expect(
+        env(attempt({ workingDirectory: bareWorktree })).ANTHROPIC_API_KEY,
+      ).toBe("sk-ant-inherited");
+    } finally {
+      for (const [name, value] of saved)
+        if (value === undefined) delete process.env[name];
+        else process.env[name] = value;
+      fs.rmSync(root, { recursive: true, force: true });
     }
   });
 });

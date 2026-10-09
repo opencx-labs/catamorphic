@@ -655,6 +655,38 @@ kbd {
   }
 }
 
+/* A press on a surface the agent holds shows its veil for a moment: a sheet
+   of tinted plastic, invisible until touched, that gives a little from
+   where it was pressed and clears. */
+@keyframes veil-touch {
+  0% {
+    opacity: 0;
+    transform: scale(1);
+  }
+  14% {
+    opacity: 1;
+    transform: scale(0.988);
+  }
+  32% {
+    transform: scale(1.006);
+  }
+  50% {
+    transform: scale(0.997);
+  }
+  68% {
+    opacity: 1;
+    transform: scale(1.001);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1);
+  }
+}
+
+.animate-veil-touch {
+  animation: veil-touch 760ms cubic-bezier(0.2, 0, 0, 1) forwards;
+}
+
 /* Content crossfade when modal sections swap (paired with a height tween) */
 @keyframes fade-in {
   from {

@@ -593,6 +593,16 @@ function TabStrip({
   }, [exitingKeys]);
 
   if (rendered.length === 0 && !onNew) return null;
+  // Groups holding the tab in front or its split companion.
+  const activeGroups = new Set(
+    rendered.flatMap(({ tab, exiting }) =>
+      !exiting &&
+      tab.groupId &&
+      (tabKey(tab) === activeKey || tabKey(tab) === secondaryKey)
+        ? [tab.groupId]
+        : [],
+    ),
+  );
   return (
     // biome-ignore lint/a11y/noStaticElementInteractions: drag-and-drop target for tab reordering; tabs themselves are buttons
     <div
@@ -616,6 +626,12 @@ function TabStrip({
       {rendered.map(({ tab, exiting }, index) => {
         const key = tabKey(tab);
         const active = !exiting && key === activeKey;
+        // A group wears the accent while it holds the tab in front (or its
+        // split companion); left behind, its eyebrow and chevrons go quiet,
+        // so it never reads as the one in focus.
+        const groupActive = Boolean(
+          tab.groupId && activeGroups.has(tab.groupId),
+        );
         const secondary = !exiting && key === secondaryKey;
         const highlighted = !exiting && key === highlightKey;
         const Icon = TAB_ICONS[tab.kind];
@@ -723,7 +739,9 @@ function TabStrip({
               className={`group relative flex h-8 shrink-0 items-center border px-1 text-xs transition-[margin,border-radius,color,background-color,border-color] duration-150 ${vertical ? "min-w-0 rounded-lg" : "rounded-lg"} ${
                 mergeRight ? "rounded-r-none border-r-0 " : ""
               }${mergeLeft ? "-ml-1 rounded-l-none border-l-0 " : ""}${
-                tab.groupId && vertical ? "border-l-2 border-l-accent/40 " : ""
+                tab.groupId && vertical
+                  ? `border-l-2 ${groupActive ? "border-l-accent/40" : "border-l-border-strong"} `
+                  : ""
               }${dragKey === key ? "opacity-50 " : ""}${
                 dropBeforeKey === key
                   ? vertical
@@ -759,7 +777,7 @@ function TabStrip({
                 <span
                   aria-hidden="true"
                   data-tab-group-eyebrow={eyebrow.starts ? "start" : "rest"}
-                  className={`pointer-events-none absolute -top-[4px] h-0.5 bg-accent/50 ${
+                  className={`pointer-events-none absolute -top-[4px] h-0.5 transition-colors duration-150 ${groupActive ? "bg-accent/50" : "bg-border-strong"} ${
                     eyebrow.starts
                       ? "left-1.5 rounded-l-full"
                       : mergeLeft
@@ -860,7 +878,7 @@ function TabStrip({
                     onClick={() =>
                       onToggleGroup(parentGroup.parentKey.slice("chat:".length))
                     }
-                    className="flex h-5 cursor-pointer items-center gap-0.5 rounded px-1 text-[10px] text-accent/80 transition-colors duration-150 hover:bg-bg-overlay hover:text-accent"
+                    className={`flex h-5 cursor-pointer items-center gap-0.5 rounded px-1 text-[10px] transition-colors duration-150 hover:bg-bg-overlay hover:text-accent ${groupActive ? "text-accent/80" : "text-fg-faint"}`}
                     aria-label={`Expand ${parentGroup.memberKeys.length} grouped tabs`}
                   >
                     <ChevronsRight className="size-3" />
@@ -885,7 +903,7 @@ function TabStrip({
                     onClick={() =>
                       onToggleGroup(closesGroup.parentKey.slice("chat:".length))
                     }
-                    className="grid size-6 shrink-0 cursor-pointer place-items-center rounded text-accent/70 transition-colors duration-150 hover:bg-bg-overlay hover:text-accent"
+                    className={`grid size-6 shrink-0 cursor-pointer place-items-center rounded transition-colors duration-150 hover:bg-bg-overlay hover:text-accent ${groupActive ? "text-accent/70" : "text-fg-faint"}`}
                     aria-label="Collapse grouped tabs"
                   >
                     <ChevronsLeft className="size-3.5" />
