@@ -1856,3 +1856,24 @@ shows the spinner and the veil again. A take-over still refuses the agent
 until it reclaims. The person's own tabs are never held: an agent drives
 one only when asked, without veiling it, as before.
 
+### 2026-10-09: A held page answers a press; the caret keeps Cmd+Left
+
+Someone who missed the "Agent owns this page" pill pressed the page and
+nothing happened. The veil is invisible until then: a press shows it for a
+moment, a sheet of translucent plastic in the accent, a little stronger and
+giving way where it was touched, then clearing. The page still gets nothing.
+
+A chat's tab group kept its accent eyebrow and fold chevron after the person
+moved to another tab, so a group opened beside a chat (a chip Cmd+Shift+
+clicked) looked in focus long after it was. The group now wears the accent
+only while it holds the tab in front or its split companion; behind, its
+eyebrow and chevrons go quiet.
+
+Cmd+Left and Cmd+Right went back and forward even with the caret in the
+composer or the address bar, so they never moved to the line's start or end.
+A text field now keeps them, in Work and in pages, which see these keys first
+like Cmd+F; elsewhere they still go back and forward.
+
+A browser tab's hold is the turn's, not the chat's: a settle that arrives
+after the chat's next turn started no longer lets that turn's page go.
+

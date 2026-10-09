@@ -46,6 +46,7 @@ import {
   BUILTIN_ACTIONS,
   KEYBINDING_ACTIONS,
   PAGE_FIRST_ACTIONS,
+  TEXT_FIELD_ACTIONS,
 } from "../shared/actions.js";
 import {
   type HarnessPermissions,
@@ -77,6 +78,7 @@ import {
   resolveProjectFileLocation,
 } from "../shared/surface-link.js";
 import type { TerminalMacro } from "../shared/terminal-macros.js";
+import { isTextField } from "../shared/text-field.js";
 import {
   sidebarSections,
   visibleWorkspaceConfig,
@@ -308,7 +310,9 @@ const truncateLabel = (value: string): string =>
  * surface stays fully visible — watch the agent work live) until the
  * user takes control. A hairline accent ring marks the surface as
  * agent-held; the pill names the owner and offers the two moves that
- * make sense — jump to the owning chat, or take the keys.
+ * make sense — jump to the owning chat, or take the keys. A press on the
+ * blocked surface (someone who missed the pill) shows the veil itself for
+ * a moment, a tinted sheet that gives where it was touched.
  *
  * Stays mounted after `active` flips false to play fade-out (the mirror
  * of its fade-in enter) before disappearing, per the motion contract.
@@ -331,6 +335,13 @@ function AgentControlOverlay({
   useEffect(() => {
     setPhase((prev) => (active ? "in" : prev === "in" ? "out" : prev));
   }, [active]);
+  // The latest press on the blocked surface, where it landed: the veil
+  // shows for a moment from there (animate-veil-touch).
+  const [touch, setTouch] = useState<{
+    id: number;
+    x: number;
+    y: number;
+  } | null>(null);
   if (phase === "gone") return null;
   const exiting = phase === "out";
   const anim = exiting ? "animate-fade-out" : "animate-fade-in";
@@ -357,12 +368,33 @@ function AgentControlOverlay({
         <div
           className="pointer-events-auto absolute inset-0"
           aria-hidden
+          onPointerDown={(event) => {
+            const box = event.currentTarget.getBoundingClientRect();
+            setTouch((previous) => ({
+              id: (previous?.id ?? 0) + 1,
+              x: event.clientX - box.left,
+              y: event.clientY - box.top,
+            }));
+          }}
           onWheel={(event) => {
             const canvas = event.currentTarget
               .closest("[data-surface-pane]")
               ?.querySelector("canvas");
             canvas?.dispatchEvent(new WheelEvent("wheel", event.nativeEvent));
           }}
+        />
+      )}
+      {touch && !exiting && (
+        // Keyed by the press, so every press plays it again.
+        <div
+          key={touch.id}
+          aria-hidden
+          className="pointer-events-none absolute inset-0 animate-veil-touch bg-accent/10 ring-1 ring-inset ring-accent/30 backdrop-blur-[1.5px]"
+          style={{
+            transformOrigin: `${touch.x}px ${touch.y}px`,
+            backgroundImage: `radial-gradient(circle at ${touch.x}px ${touch.y}px, color-mix(in srgb, var(--color-accent) 22%, transparent), transparent 70%)`,
+          }}
+          onAnimationEnd={() => setTouch(null)}
         />
       )}
       <div
@@ -4003,6 +4035,12 @@ export function App({
             guestId !== undefined ||
             commandBrowserIdRef.current() !== undefined ||
             (candidate === "find" && Boolean(findSearchInput(candidate)))) &&
+          // A text field keeps Cmd+Left and Cmd+Right for its caret.
+          !(
+            TEXT_FIELD_ACTIONS.has(candidate) &&
+            guestId === undefined &&
+            isTextField(document.activeElement)
+          ) &&
           (candidate !== "dismiss-floating" ||
             (floatingEscapeEnabledRef.current &&
               ![

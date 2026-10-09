@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import type {
   CanUseTool,
   McpSdkServerConfigWithInstance,
@@ -183,19 +186,78 @@ function processEnv(keys?: readonly string[]): Record<string, string> {
   return env;
 }
 
+/** Credentials the CLI takes over the person's sign-in, unasked. */
+const INHERITED_CREDENTIALS = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"];
+
 /**
  * The host's environment for a CLI that runs on it, less an inherited
- * Anthropic API key. The SDK runs the CLI in print mode, where it takes an
- * ANTHROPIC_API_KEY over the person's sign-in without the approval its
- * terminal asks for, so a key exported in the shell the host was started
- * from would bill their chats to the API instead of their plan. A key for
- * an endpoint the environment routes Claude Code to stays: the sign-in is
- * not for it. A host that means a key passes it in the attempt's env.
+ * Anthropic credential. The SDK runs the CLI in print mode, where it takes
+ * an ANTHROPIC_API_KEY (or ANTHROPIC_AUTH_TOKEN) over the person's sign-in
+ * without the approval its terminal asks for, so one exported in the shell
+ * the host was started from would bill their chats to the API instead of
+ * their plan. One for an endpoint Claude Code is routed to (a gateway, set
+ * in the host's or the attempt's env or in Claude's settings) stays: the
+ * sign-in is not for it. A host that means a key passes it in `env`. The
+ * CLI hands its environment to what it runs (Bash commands, hooks, MCP
+ * servers), so those do not see the dropped credential either.
  */
-export function hostProcessEnv(): Record<string, string> {
+export function hostProcessEnv(
+  input: {
+    /** What the host adds over its environment (the attempt's env). */
+    env?: Record<string, string>;
+    /** Where the CLI runs: its project settings may route it elsewhere. */
+    workingDirectory?: string;
+  } = {},
+): Record<string, string> {
   const env = processEnv();
-  if (routesToAnthropic(env.ANTHROPIC_BASE_URL)) delete env.ANTHROPIC_API_KEY;
+  const routed = { ...env, ...input.env };
+  if (
+    routesToAnthropic(
+      claudeBaseUrl({ env: routed, workingDirectory: input.workingDirectory }),
+    )
+  )
+    for (const name of INHERITED_CREDENTIALS) delete env[name];
   return env;
+}
+
+/**
+ * Where the CLI sends model calls: the `env` of its settings (local over
+ * project over user, as the CLI applies them) over its own environment.
+ */
+function claudeBaseUrl(input: {
+  env: Record<string, string>;
+  workingDirectory?: string;
+}): string | undefined {
+  const userDirectory =
+    input.env.CLAUDE_CONFIG_DIR ?? path.join(os.homedir(), ".claude");
+  const settingsFiles = [
+    ...(input.workingDirectory
+      ? [
+          path.join(input.workingDirectory, ".claude", "settings.local.json"),
+          path.join(input.workingDirectory, ".claude", "settings.json"),
+        ]
+      : []),
+    path.join(userDirectory, "settings.json"),
+  ];
+  for (const file of settingsFiles) {
+    const baseUrl = settingsEnv(file).ANTHROPIC_BASE_URL;
+    if (typeof baseUrl === "string" && baseUrl) return baseUrl;
+  }
+  return input.env.ANTHROPIC_BASE_URL;
+}
+
+/** A Claude settings file's `env` block; empty when there is none. */
+function settingsEnv(file: string): Record<string, unknown> {
+  try {
+    const settings: unknown = JSON.parse(fs.readFileSync(file, "utf8"));
+    if (typeof settings !== "object" || settings === null) return {};
+    const env: unknown = Reflect.get(settings, "env");
+    return typeof env === "object" && env !== null
+      ? Object.fromEntries(Object.entries(env))
+      : {};
+  } catch {
+    return {};
+  }
 }
 
 function routesToAnthropic(baseUrl: string | undefined): boolean {
@@ -315,7 +377,12 @@ export function buildQueryOptions(input: QueryOptionInputs): Options {
     // sign-in and settings) but not a stray API key; beside a sandbox's
     // workspace it gets the process basics and exactly what the attempt
     // lists, so no credential reaches it but the access below.
-    ...(host ? hostProcessEnv() : processEnv(PROCESS_BASICS)),
+    ...(host
+      ? hostProcessEnv({
+          env: attempt.env,
+          workingDirectory: attempt.workingDirectory,
+        })
+      : processEnv(PROCESS_BASICS)),
     ...attempt.env,
     ...(options.memory === false
       ? { CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1" }

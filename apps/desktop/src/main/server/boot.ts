@@ -549,7 +549,10 @@ export async function startEmbeddedServer(
     onAgentTurnSettled: (event) => {
       // The browser tabs the turn drove go back to the person.
       void workspaceBridge
-        ?.releaseSession(event.projectId, event.sessionId)
+        ?.releaseTurn(event.projectId, {
+          sessionId: event.sessionId,
+          ...(event.turnId ? { turnId: event.turnId } : {}),
+        })
         .catch(() => {});
       triggers.onAgentTurnSettled(
         event,

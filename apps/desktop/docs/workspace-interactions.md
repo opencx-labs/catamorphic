@@ -126,9 +126,15 @@ Find (`find`, Cmd+F) acts on what is in front: a web page opens its find bar,
 a diff focuses its own search, and anywhere else the key stays with what has
 focus (an editor's own find). In a page the key reaches the page first, as in
 Chrome: a page with its own find keeps it, and only what the page leaves opens
-the bar (`PAGE_FIRST_ACTIONS`; from an embedded frame Work takes it at once).
-Cmd+G and Cmd+Shift+G step through the matches. The bar closes on Escape with
-the current match selected, and when the tab shows another page.
+the bar (`PAGE_FIRST_ACTIONS`; a key pressed inside an embedded frame stays
+the page's). Cmd+G and Cmd+Shift+G step through the matches. The bar closes on
+Escape with the current match selected, and when the tab shows another page.
+
+Back and forward (`browser-back`, `browser-forward`, Cmd+Left and Cmd+Right)
+reach a page first the same way, and a text field keeps them for its caret:
+in the address bar, the chat composer, an editor or a page's input they move
+to the line's start or end (`TEXT_FIELD_ACTIONS`). Elsewhere they go back and
+forward.
 
 Default sidebars do not include a project note. Notes are opt-in widgets over
 explicit existing documents, not filler in a new project's right sidebar.

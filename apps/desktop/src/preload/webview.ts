@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer, webFrame } from "electron";
+import { type ActionId, TEXT_FIELD_ACTIONS } from "../shared/actions.js";
 import { matchesShortcut } from "../shared/keybindings.js";
 import {
   classifyPasswordField,
@@ -15,6 +16,7 @@ import {
   type PasskeyMediation,
   type PasskeyRequestKind,
 } from "../shared/passkeys.js";
+import { isTextField } from "../shared/text-field.js";
 
 /**
  * Guest preload for browser-tab webviews. Runs inside untrusted pages with
@@ -1329,13 +1331,14 @@ window.addEventListener("keydown", (event) => {
   ipcRenderer.sendToHost("catamorphic:dismiss-floating");
 });
 
-// Find keys reach the page first, as in Chrome: a page with its own find
-// (a document editor) keeps them; otherwise the tab's find bar takes them.
-// This preload runs in the main frame only: a key pressed inside an
-// embedded frame stays the page's.
-let findKeys: [action: string, binding: string][] = [];
-ipcRenderer.on("catamorphic:find-keys", (_event, keys: unknown) => {
-  findKeys =
+// Page-first keys (find, back and forward) reach the page first, as in
+// Chrome: a page with its own find (a document editor) keeps them, and a
+// text field keeps Cmd+Left and Cmd+Right for its caret; otherwise the tab
+// takes them. This preload runs in the main frame only: a key pressed
+// inside an embedded frame stays the page's.
+let pageKeys: [action: string, binding: string][] = [];
+ipcRenderer.on("catamorphic:page-keys", (_event, keys: unknown) => {
+  pageKeys =
     keys && typeof keys === "object"
       ? Object.entries(keys).filter(
           (entry): entry is [string, string] =>
@@ -1344,19 +1347,24 @@ ipcRenderer.on("catamorphic:find-keys", (_event, keys: unknown) => {
       : [];
 });
 // Captured, so a page that stops the key's propagation without claiming
-// it (no preventDefault) still leaves it to the find bar, as in Chrome.
+// it (no preventDefault) still leaves it to the tab, as in Chrome.
 window.addEventListener(
   "keydown",
   (event) => {
     const mac = /Mac/.test(navigator.platform);
-    const action = findKeys.find(([, binding]) =>
+    const action = pageKeys.find(([, binding]) =>
       matchesShortcut({ event, binding, mac }),
     )?.[0];
     if (!action) return;
+    if (
+      TEXT_FIELD_ACTIONS.has(action as ActionId) &&
+      isTextField(document.activeElement)
+    )
+      return;
     // Read once every listener has had the key, the page's own included.
     setTimeout(() => {
       if (!event.defaultPrevented)
-        ipcRenderer.sendToHost("catamorphic:find-key", action);
+        ipcRenderer.sendToHost("catamorphic:page-key", action);
     });
   },
   { capture: true },

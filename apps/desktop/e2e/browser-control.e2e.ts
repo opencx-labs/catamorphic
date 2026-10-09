@@ -422,3 +422,53 @@ it("holds a tab while a turn drives it and hands it back when the turn ends", as
     "error",
   );
 });
+it("shows the veil where a held page is pressed, and keeps the press from the page", async () => {
+  await tool("open_surface", { target: key });
+  const chip = `document.querySelector(${JSON.stringify(`[data-testid="surface-chip"][data-point-key="chip:${key}"]`)})`;
+  const clicks = () =>
+    guest.eval<number>(
+      "events.filter((event) => event.type === 'click').length",
+    );
+  const before = await clicks();
+  counter++;
+  const prompt = `E2E workspace tool ${JSON.stringify({
+    name: "browser_act",
+    input: { key, action: "wait_for", text: "Never here", timeoutMs: 4000 },
+    serial: counter,
+  })}`;
+  await app.eval(
+    `(()=>{${helpers};setReactValue(composer(),${JSON.stringify(prompt)});composer().closest('form').requestSubmit();})()`,
+  );
+  await app.waitFor(
+    `(()=>{const el=${chip};return !!el && el.hasAttribute('data-active');})()`,
+    { label: "held" },
+  );
+  // A point on the veiled page itself, clear of the floating chat.
+  const point = await app.eval<{ x: number; y: number }>(`(() => {
+    const pane = document.querySelector(${JSON.stringify(`[data-surface-key="${key}"]`)});
+    const box = pane.getBoundingClientRect();
+    for (const fx of [0.03, 0.97, 0.5])
+      for (const fy of [0.3, 0.5, 0.7]) {
+        const x = box.left + box.width * fx;
+        const y = box.top + box.height * fy;
+        if (document.elementFromPoint(x, y)?.closest('[data-surface-key]') === pane)
+          return { x, y };
+      }
+    return null;
+  })()`);
+  await app.cdp("Input.dispatchMouseEvent", { type: "mouseMoved", ...point });
+  for (const type of ["mousePressed", "mouseReleased"])
+    await app.cdp("Input.dispatchMouseEvent", {
+      type,
+      ...point,
+      button: "left",
+      clickCount: 1,
+    });
+  await app.waitFor(`!!document.querySelector('.animate-veil-touch')`, {
+    label: "veil shown where pressed",
+  });
+  await app.waitFor(`!document.querySelector('.animate-veil-touch')`, {
+    label: "veil clears",
+  });
+  expect(await clicks()).toBe(before);
+});
