@@ -932,14 +932,20 @@ export async function startEmbeddedServer(
         return child;
       },
       follow: async ({ follower, followed, title, on }) => {
-        if (on)
-          await sessionNotes.follow({
-            follower,
-            followed,
-            title,
-            reportsResults: true,
-          });
-        else sessionNotes.unfollow(followed.sessionId);
+        if (!on) {
+          sessionNotes.unfollow(followed.sessionId);
+          return;
+        }
+        // A session the assistant started reports its own result.
+        const detail = await catamorphic.core.agentSessions
+          ?.get(desktopIdentity, followed.projectId, followed.sessionId)
+          .catch(() => null);
+        await sessionNotes.follow({
+          follower,
+          followed,
+          title,
+          reportsResults: detail?.parentSessionId !== follower.sessionId,
+        });
       },
       hidden: (sessionId) => incognitoSessions?.has(sessionId) ?? false,
     }),

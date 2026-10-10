@@ -683,9 +683,9 @@ export function registerVoiceSupport(deps: {
   }, NEWS_POLL_MS);
   newsTimer.unref();
 
-  // The audio page outlives no workspace: with the last window closed or
-  // put away (a workspace window hides on close), voice stops instead of
-  // listening behind the person's back.
+  // The audio page outlives no workspace: closing the last window stops
+  // voice, though a workspace window only hides on close. Hiding Work or
+  // minimizing it keeps voice going, hands-free.
   const onWindowCreated = (_event: unknown, window: BrowserWindow) => {
     const stopUnlessShown = () => {
       const shown = BrowserWindow.getAllWindows().some(
@@ -697,7 +697,7 @@ export function registerVoiceSupport(deps: {
       );
       if (!shown && active && window !== active.audioWindow) void stop();
     };
-    window.on("hide", stopUnlessShown);
+    window.on("close", stopUnlessShown);
     window.once("closed", stopUnlessShown);
   };
   app.on("browser-window-created", onWindowCreated);

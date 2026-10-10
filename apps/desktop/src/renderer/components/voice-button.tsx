@@ -120,9 +120,16 @@ export function useProfileAgents(enabled = true): AgentInfo[] {
     const unsubscribe = desktopApi.onAgentsChanged((data) =>
       setAgents(data.agents),
     );
+    // Another profile in this window: its agents.
+    const refetch = () =>
+      void desktopApi.agentsList().then((data) => {
+        if (mounted) setAgents(data.agents);
+      });
+    window.addEventListener("catamorphic:profile-refetch", refetch);
     return () => {
       mounted = false;
       unsubscribe();
+      window.removeEventListener("catamorphic:profile-refetch", refetch);
     };
   }, [enabled]);
   return agents;

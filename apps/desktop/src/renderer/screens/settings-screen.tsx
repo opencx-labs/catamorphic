@@ -1054,7 +1054,7 @@ function VoiceSection({
       <SettingRow
         id="voiceprint"
         label="Only listen to me"
-        control={prefs.voiceprint !== null}
+        control={false}
         description={
           prefs.voiceprint
             ? "Voice knows your voice and ignores other people's."
