@@ -128,7 +128,8 @@ const SPACE = { key: " ", code: "Space", windowsVirtualKeyCode: 32 };
 
 /** Presses an action's default keys (Cmd is Ctrl off a Mac). */
 async function shortcut(action: "toggle-voice") {
-  const modifiers = action === "toggle-voice" ? 2 + 8 : 0;
+  const cmd = process.platform === "darwin" ? 4 : 2;
+  const modifiers = action === "toggle-voice" ? cmd + 8 : 0;
   for (const type of ["keyDown", "keyUp"])
     await app.cdp("Input.dispatchKeyEvent", { type, modifiers, ...SPACE });
 }
