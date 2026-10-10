@@ -82,7 +82,7 @@ const BUSY_POLL_MS = 250;
 const IDLE_POLL_MS = 1_000;
 
 /**
- * One listening stretch of a chat (ADR 0215). What the person says
+ * One listening stretch of a chat (ADR 0216). What the person says
  * becomes the chat's next message; every reply the chat settles from then
  * on is spoken, including replies it gives later on its own, when a
  * session it started delivers its result. A reply is spoken once it is

@@ -153,7 +153,7 @@ subagents. The five tools cost about 4.7 KB of schemas; the eager budget is
 13.5 KB. Discovery now ranks by matched words with name matches counting double,
 `requestId` is optional, and invalid input returns the capability's schema.
 
-## The assistant and voice (ADR 0215)
+## The assistant and voice (ADR 0216)
 
 The dock's assistant runs on `work-assistant:<agent id>` (Work's built-in
 assistant: the person's default agent with no persona, at its harness's

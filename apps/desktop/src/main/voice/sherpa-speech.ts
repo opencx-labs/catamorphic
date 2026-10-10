@@ -13,7 +13,7 @@ import {
 } from "./engine.js";
 
 /**
- * The speech models (ADR 0215), all on sherpa-onnx and the CPU: Silero
+ * The speech models (ADR 0216), all on sherpa-onnx and the CPU: Silero
  * voice activity, Parakeet TDT 0.6B recognition, a WeSpeaker voice print
  * on speech DPDFNet removed the noise from, and Kokoro v1.0 speech.
  * Kokoro speaks a text in one call that runs the model once per sentence,

@@ -1,5 +1,5 @@
 /**
- * Voice (ADR 0215): speech runs on this machine, and the conversation is
+ * Voice (ADR 0216): speech runs on this machine, and the conversation is
  * an ordinary chat, the assistant's from the dock or any chat from its
  * composer. These types are shared by the main process (which owns the
  * conversation), the speech worker (a utility process running the speech
@@ -26,7 +26,7 @@ export interface VoiceSessionRef {
 }
 
 /**
- * The voices agents can speak in: Kokoro's own (ADR 0215), the best
+ * The voices agents can speak in: Kokoro's own (ADR 0216), the best
  * graded of its American English voices. `speaker` is the voice's index
  * in the model's voice file.
  */
@@ -67,7 +67,7 @@ export function voiceIdOf(value: unknown): VoiceId {
 }
 
 /**
- * What voice talks to (ADR 0215): the assistant, from the dock's
+ * What voice talks to (ADR 0216): the assistant, from the dock's
  * microphone, or a chat, from its composer's, to that chat's own agent.
  */
 export type VoiceTarget =
@@ -244,7 +244,7 @@ export interface VoicePortMessage {
 }
 
 /**
- * The assistant (ADR 0215): the agent the dock's microphone talks to, in
+ * The assistant (ADR 0216): the agent the dock's microphone talks to, in
  * the profile's assistant chat. One of the person's own agents with the
  * assistant's tools over their chats: Work's built-in assistant on their
  * default agent's harness and login, with no instructions of its own and

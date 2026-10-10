@@ -210,7 +210,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
 
   /** Workspace tools shared by every harness that can mount them. */
   readonly workspaceToolkit: WorkspaceToolkit | undefined;
-  /** The assistant's tools over the person's chats (ADR 0215). */
+  /** The assistant's tools over the person's chats (ADR 0216). */
   private assistantTools: ExtraTool[] = [];
   private talking: (sessionId: string) => boolean = () => false;
   private readonly harnessComponents: HarnessComponentStore;
@@ -572,7 +572,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     const projectRef = parseProjectAgentId(id);
     if (projectRef)
       return this.getProjectAgent(id, projectRef.projectId, projectRef.slug);
-    // The assistant (ADR 0215) is one of the person's agents with the
+    // The assistant (ADR 0216) is one of the person's agents with the
     // assistant's tools and delegation routes: as configured, or as Work's
     // built-in assistant, with no instructions of its own and the
     // harness's default model.
@@ -897,7 +897,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     profileId: string;
     /** The model key, resolved at each attempt (a project secret). */
     apiKey?: () => Promise<string>;
-    /** The assistant (ADR 0215): its tools over the person's chats. */
+    /** The assistant (ADR 0216): its tools over the person's chats. */
     assistant?: boolean;
   }): BuiltAgent | undefined {
     const errors = this.errorLabels(config);
@@ -1288,7 +1288,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
 
   /**
    * Late-bound: whether the person is talking with a chat by voice, which
-   * puts voice's note in its turns (ADR 0215).
+   * puts voice's note in its turns (ADR 0216).
    */
   setVoiceTalking(talking: (sessionId: string) => boolean): void {
     this.talking = talking;

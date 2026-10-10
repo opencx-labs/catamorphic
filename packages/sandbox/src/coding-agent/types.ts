@@ -184,6 +184,8 @@ export interface ExtraToolContext {
   projectId: string;
   /** The chat session the tool's turn belongs to. */
   sessionId?: string;
+  /** The turn the tool runs in, when the host knows it. */
+  turnId?: string;
   /** Checkout or sandbox directory selected by the host for this turn. */
   workingDirectory?: string;
   /** Who the session serves. */

@@ -512,7 +512,7 @@ export function useChoiceModes({
       picker === "switch-agent" &&
       startsNewChat({ bound: focusedChat?.harness ?? null, next: harness });
     const build = (): PaletteItem[] => {
-      // The assistant (ADR 0215): Work's built-in one, or one of the
+      // The assistant (ADR 0216): Work's built-in one, or one of the
       // person's agents as they set it up, or a new agent.
       if (picker === "assistant") {
         const chosen = agents.some((agent) => agent.id === voiceAssistant);

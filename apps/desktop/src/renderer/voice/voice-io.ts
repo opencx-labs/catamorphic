@@ -9,7 +9,7 @@ import captureWorklet from "./capture-worklet.ts?worker&url";
 import { LEVEL_FRAME_MS, speechLevels } from "./speech-levels.js";
 
 /**
- * The audio page (ADR 0215): a hidden window that is the voice agent's
+ * The audio page (ADR 0216): a hidden window that is the voice agent's
  * microphone and speakers, and nothing else. Its port goes to the speech
  * worker; this page only moves samples. The microphone keeps Chromium's
  * echo cancellation on, which cancels everything Work plays on the output

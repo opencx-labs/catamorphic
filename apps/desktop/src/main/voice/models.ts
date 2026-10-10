@@ -71,7 +71,7 @@ const KOKORO: VoiceModelArtifact = {
  * DPDFNet to clean the microphone, Silero VAD and Parakeet TDT 0.6B v2
  * (int8, English) to listen, a WeSpeaker embedding for the person's voice
  * print, Kokoro v1.0 to speak: all on sherpa-onnx in the speech worker
- * (ADR 0215). About 870 MB, downloaded the first time voice starts.
+ * (ADR 0216). About 870 MB, downloaded the first time voice starts.
  */
 const VOICE_MODEL_ARTIFACTS: readonly VoiceModelArtifact[] = [
   DPDFNET,

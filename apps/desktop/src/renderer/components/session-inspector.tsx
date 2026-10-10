@@ -11,8 +11,7 @@ import {
   LoaderCircle,
   Server,
 } from "lucide-react";
-import { type ReactNode, useState } from "react";
-import type { SessionCheckoutInfo } from "../lib/desktop-api.js";
+import type { ReactNode } from "react";
 import { ChatGlyph } from "./chat-icon.js";
 import { HarnessIcon } from "./harness-icon.js";
 import { ResourceInspector } from "./resource-inspector.js";
@@ -38,8 +37,8 @@ export function SessionInspector({
   provider,
   environmentControl,
   onManageConnections,
-  checkout,
-  onUseProjectFolder,
+  folder,
+  worktree = false,
   incognito,
   openRequest,
   onInspect,
@@ -76,8 +75,10 @@ export function SessionInspector({
   provider?: string;
   environmentControl?: ReactNode;
   onManageConnections?: () => void;
-  checkout: SessionCheckoutInfo | null;
-  onUseProjectFolder?: () => Promise<void>;
+  /** The Folder row (ChatFolder), where the chat works (ADR 0215). */
+  folder?: ReactNode;
+  /** The chat works, or will, in its own worktree: the trigger says so. */
+  worktree?: boolean;
   incognito: boolean;
   openRequest?: number;
   onInspect?: () => void;
@@ -153,8 +154,7 @@ export function SessionInspector({
                   }
                 : undefined
             }
-            checkout={checkout}
-            onUseProjectFolder={onUseProjectFolder}
+            folder={folder}
             incognito={incognito}
             moving={moving}
             model={model}
@@ -224,7 +224,7 @@ export function SessionInspector({
         <button
           {...triggerProps}
           type="button"
-          aria-label={`Session status: ${agentName}, ${state}, from ${source}`}
+          aria-label={`Session status: ${agentName}, ${state}, from ${source}${worktree ? ", in its own worktree" : ""}`}
           className="flex h-7 max-w-56 cursor-pointer items-center gap-1.5 rounded-md px-2 text-[11px] font-medium text-fg-muted transition-colors hover:bg-bg-overlay hover:text-fg"
           data-testid="session-inspector-trigger"
         >
@@ -253,6 +253,13 @@ export function SessionInspector({
             className="size-3.5"
           />
           <span className="truncate">{agentName}</span>
+          {worktree ? (
+            <GitBranch
+              className="size-3 shrink-0 text-fg-faint"
+              aria-hidden="true"
+              data-testid="session-inspector-worktree"
+            />
+          ) : null}
           <span className="shrink-0 rounded bg-bg-inset px-1.5 py-0.5 text-[9px] font-medium text-fg-faint">
             {source}
           </span>
@@ -268,8 +275,7 @@ export function SessionInspectorContent({
   agentName,
   environmentControl,
   onManageConnections,
-  checkout,
-  onUseProjectFolder,
+  folder,
   incognito,
   moving = false,
   model = "Agent default",
@@ -299,8 +305,8 @@ export function SessionInspectorContent({
   agentName: string;
   environmentControl?: ReactNode;
   onManageConnections?: () => void;
-  checkout: SessionCheckoutInfo | null;
-  onUseProjectFolder?: () => Promise<void>;
+  /** The Folder row (ChatFolder), where the chat works (ADR 0215). */
+  folder?: ReactNode;
   incognito: boolean;
   moving?: boolean;
   model?: string;
@@ -332,8 +338,6 @@ export function SessionInspectorContent({
   archived?: boolean;
   onOpenParent?: () => void;
 }) {
-  const [changingFolder, setChangingFolder] = useState(false);
-  const [folderError, setFolderError] = useState<string | null>(null);
   const state = archived
     ? "Archived"
     : !session
@@ -353,11 +357,6 @@ export function SessionInspectorContent({
       ? SOURCE_LABELS[session.source]
       : "Desktop";
   const title = session?.title ?? fallbackTitle;
-  const checkoutLabel = checkout
-    ? checkout.kind === "external"
-      ? "External checkout"
-      : (checkout.branch ?? "Worktree")
-    : null;
   return (
     <div data-testid="session-inspector-content">
       <header className="flex items-start gap-2.5 border-b border-border pb-3">
@@ -438,46 +437,7 @@ export function SessionInspectorContent({
             </dd>
           </>
         )}
-        {checkoutLabel && checkout ? (
-          <>
-            <InspectorRow label="Checkout" value={checkoutLabel} />
-            <dt className="text-fg-faint">Folder</dt>
-            <dd className="min-w-0 break-all text-fg-muted">
-              {checkout.path}
-              {onUseProjectFolder && (
-                <div className="mt-2 space-y-1">
-                  <button
-                    type="button"
-                    disabled={changingFolder || session?.running}
-                    className="cursor-pointer text-accent hover:underline disabled:cursor-default disabled:opacity-50"
-                    onClick={async () => {
-                      setChangingFolder(true);
-                      setFolderError(null);
-                      try {
-                        await onUseProjectFolder();
-                      } catch (error) {
-                        setFolderError(
-                          error instanceof Error
-                            ? error.message
-                            : "Could not change the working folder",
-                        );
-                      } finally {
-                        setChangingFolder(false);
-                      }
-                    }}
-                  >
-                    {changingFolder ? "Changing folder…" : "Use project folder"}
-                  </button>
-                  <p className="break-normal text-fg-faint">
-                    Future work uses the project folder. Existing files stay
-                    here.
-                  </p>
-                  {folderError && <p role="alert">{folderError}</p>}
-                </div>
-              )}
-            </dd>
-          </>
-        ) : null}
+        {folder}
         {incognito ? <InspectorRow label="Privacy" value="Incognito" /> : null}
         {session?.handoffStatus === "pending" ? (
           <InspectorRow label="Sync" value="Moving between hosts" />

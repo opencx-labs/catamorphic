@@ -241,6 +241,7 @@ describe("SessionCheckouts", () => {
         kind: "managed",
         path: created.path,
         branch: created.branch,
+        present: true,
       },
     ]);
 
@@ -508,15 +509,21 @@ describe("SessionCheckouts", () => {
     );
   });
 
-  it("requires explicit recovery when a bound worktree disappears", async () => {
-    const created = await checkouts.createManaged({ projectId, sessionId });
-    await fs.rm(created.path, { recursive: true, force: true });
+  it("requires explicit recovery when an assigned worktree disappears", async () => {
+    const external = path.join(tmpDir, "assigned");
+    await git(rootPath, ["worktree", "add", "-q", "-b", "assigned", external]);
+    await checkouts.adopt({ projectId, sessionId, path: external });
+    await fs.rm(external, { recursive: true, force: true });
     await expect(checkouts.resolve({ projectId, sessionId })).rejects.toThrow(
       "The assigned worktree",
     );
-    await expect(checkouts.resolve({ projectId, sessionId })).rejects.toThrow(
-      "The assigned worktree",
-    );
+    await expect(
+      checkouts.resolveForAgent({
+        projectId,
+        sessionId,
+        requiresIsolation: async () => false,
+      }),
+    ).rejects.toThrow("The assigned worktree");
     await checkouts.returnPrimary({ projectId, sessionId });
     expect(await checkouts.resolve({ projectId, sessionId })).toBe(rootPath);
     expect(await checkouts.describe({ projectId, sessionId })).toMatchObject({
@@ -615,6 +622,536 @@ describe("SessionCheckouts", () => {
     ).toContain("changed since the chat's last turn");
     expect(await checkouts.restore(restore)).toBe("restored");
     expect(await fs.readdir(rootPath)).not.toContain("notes.md");
+  });
+
+  describe("a chat's own worktree (ADR 0215)", () => {
+    const agentCheckout = () =>
+      checkouts.resolveForAgent({
+        projectId,
+        sessionId,
+        requiresIsolation: async () => false,
+      });
+    const commit = (cwd: string, message: string) =>
+      git(cwd, [
+        "-c",
+        "user.name=Test",
+        "-c",
+        "user.email=test@example.com",
+        "commit",
+        "-qam",
+        message,
+      ]);
+
+    it("is chosen first and checked out by the chat's next turn, named after the project", async () => {
+      const planned = await checkouts.plan({ projectId, sessionId });
+      expect(planned).toMatchObject({
+        kind: "managed",
+        branch: null,
+        present: false,
+      });
+      await expect(fs.access(planned.path)).rejects.toThrow();
+      expect(path.basename(planned.path)).toBe("project");
+      expect(await checkouts.detail({ projectId, sessionId })).toMatchObject({
+        kind: "managed",
+        changedFiles: 0,
+        present: false,
+      });
+
+      const checkout = await agentCheckout();
+      expect(checkout.owned).toBe(true);
+      expect(checkout.path).toBe(await fs.realpath(planned.path));
+      expect(
+        (await git(checkout.path, ["branch", "--show-current"])).trim(),
+      ).toBe("work/22222222");
+      expect((await git(checkout.path, ["rev-parse", "HEAD"])).trim()).toBe(
+        (await git(rootPath, ["rev-parse", "HEAD"])).trim(),
+      );
+    });
+
+    it("copies only the ignored files .worktreeinclude lists, never a symlink", async () => {
+      await fs.writeFile(
+        path.join(rootPath, ".gitignore"),
+        ".env\n.env.local\nnode_modules/\nlinked.env\n",
+      );
+      await fs.writeFile(
+        path.join(rootPath, ".worktreeinclude"),
+        "*.env\n.env*\n",
+      );
+      await git(rootPath, ["add", ".gitignore", ".worktreeinclude"]);
+      await commit(rootPath, "Ignore");
+      await fs.writeFile(path.join(rootPath, ".env"), "SECRET=1\n");
+      await fs.writeFile(path.join(rootPath, ".env.local"), "LOCAL=1\n");
+      await fs.writeFile(path.join(rootPath, "untracked.env"), "not ignored\n");
+      await fs.mkdir(path.join(rootPath, "node_modules"));
+      await fs.writeFile(path.join(rootPath, "node_modules", "big.js"), "x");
+      await fs.symlink(
+        path.join(rootPath, ".env"),
+        path.join(rootPath, "linked.env"),
+      );
+
+      await checkouts.plan({ projectId, sessionId });
+      const { path: worktree } = await agentCheckout();
+      expect(await fs.readFile(path.join(worktree, ".env"), "utf8")).toBe(
+        "SECRET=1\n",
+      );
+      expect(await fs.readFile(path.join(worktree, ".env.local"), "utf8")).toBe(
+        "LOCAL=1\n",
+      );
+      await expect(
+        fs.access(path.join(worktree, "untracked.env")),
+      ).rejects.toThrow();
+      await expect(
+        fs.access(path.join(worktree, "node_modules")),
+      ).rejects.toThrow();
+      await expect(
+        fs.lstat(path.join(worktree, "linked.env")),
+      ).rejects.toThrow();
+    });
+
+    it("is put away with its work recorded and checked out again from its branch", async () => {
+      await checkouts.plan({ projectId, sessionId });
+      const first = await agentCheckout();
+      await fs.writeFile(path.join(first.path, "draft.md"), "unrecorded\n");
+
+      await checkouts.putAway({ projectId, sessionId });
+      await expect(fs.access(first.path)).rejects.toThrow();
+      expect(await checkouts.describe({ projectId, sessionId })).toMatchObject({
+        kind: "managed",
+        branch: "work/22222222",
+        present: false,
+      });
+      expect(await git(rootPath, ["show", "work/22222222:draft.md"])).toBe(
+        "unrecorded\n",
+      );
+      expect(await checkouts.detail({ projectId, sessionId })).toMatchObject({
+        changedFiles: 1,
+      });
+
+      const again = await agentCheckout();
+      expect(again.path).toBe(first.path);
+      expect(await fs.readFile(path.join(again.path, "draft.md"), "utf8")).toBe(
+        "unrecorded\n",
+      );
+    });
+
+    it("stays when it holds personal files Git cannot record", async () => {
+      await checkouts.plan({ projectId, sessionId });
+      const { path: worktree } = await agentCheckout();
+      const personal = path.join(worktree, ".work", "personal", "notes.md");
+      await fs.mkdir(path.dirname(personal), { recursive: true });
+      await fs.writeFile(personal, "mine\n");
+      await checkouts.putAway({ projectId, sessionId });
+      expect(await fs.readFile(personal, "utf8")).toBe("mine\n");
+    });
+
+    it("brings its changes into the project folder, uncommitted, and goes", async () => {
+      await checkouts.plan({ projectId, sessionId });
+      const { path: worktree } = await agentCheckout();
+      await fs.writeFile(path.join(worktree, "README.md"), "hello world\n");
+      await fs.writeFile(path.join(worktree, "new.txt"), "new\n");
+      await checkouts.checkpoint({
+        projectId,
+        sessionId,
+        workingDirectory: worktree,
+        message: "Turn",
+      });
+      await fs.writeFile(path.join(worktree, "later.txt"), "after the turn\n");
+      // The folder moved on meanwhile, elsewhere.
+      await fs.writeFile(path.join(rootPath, "other.txt"), "other\n");
+      await git(rootPath, ["add", "other.txt"]);
+      await commit(rootPath, "Elsewhere");
+      const head = (await git(rootPath, ["rev-parse", "HEAD"])).trim();
+      expect(await checkouts.detail({ projectId, sessionId })).toMatchObject({
+        changedFiles: 3,
+      });
+
+      const brought = await checkouts.bringToProjectFolder({
+        projectId,
+        sessionId,
+      });
+      expect([...brought.files].sort()).toEqual([
+        "README.md",
+        "later.txt",
+        "new.txt",
+      ]);
+      expect(await fs.readFile(path.join(rootPath, "README.md"), "utf8")).toBe(
+        "hello world\n",
+      );
+      expect(await fs.readFile(path.join(rootPath, "later.txt"), "utf8")).toBe(
+        "after the turn\n",
+      );
+      expect((await git(rootPath, ["rev-parse", "HEAD"])).trim()).toBe(head);
+      expect(await git(rootPath, ["diff", "--cached", "--name-only"])).toBe("");
+      await expect(fs.access(worktree)).rejects.toThrow();
+      await expect(
+        git(rootPath, ["show-ref", "--verify", "refs/heads/work/22222222"]),
+      ).rejects.toThrow();
+      expect(await checkouts.describe({ projectId, sessionId })).toMatchObject({
+        kind: "primary",
+      });
+      const notice = await checkouts.notice({ projectId, sessionId });
+      expect(notice).toContain("brought this chat's changes");
+      expect(await checkouts.notice({ projectId, sessionId })).toBeNull();
+    });
+
+    it("changes nothing when the project folder's own changes touch the same files", async () => {
+      await checkouts.plan({ projectId, sessionId });
+      const { path: worktree } = await agentCheckout();
+      await fs.writeFile(path.join(worktree, "README.md"), "from the chat\n");
+      await fs.writeFile(path.join(rootPath, "README.md"), "from the person\n");
+
+      await expect(
+        checkouts.bringToProjectFolder({ projectId, sessionId }),
+      ).rejects.toThrow("uncommitted changes to README.md");
+      expect(await fs.readFile(path.join(rootPath, "README.md"), "utf8")).toBe(
+        "from the person\n",
+      );
+      expect(await checkouts.describe({ projectId, sessionId })).toMatchObject({
+        kind: "managed",
+        present: true,
+      });
+    });
+
+    it("changes nothing when its changes conflict with the folder's newer commits", async () => {
+      await checkouts.plan({ projectId, sessionId });
+      const { path: worktree } = await agentCheckout();
+      await fs.writeFile(path.join(worktree, "README.md"), "from the chat\n");
+      await fs.writeFile(path.join(rootPath, "README.md"), "committed\n");
+      await commit(rootPath, "Person");
+
+      await expect(
+        checkouts.bringToProjectFolder({ projectId, sessionId }),
+      ).rejects.toThrow("conflict with the project folder's latest commits");
+      expect(await git(rootPath, ["status", "--porcelain"])).toBe("");
+      expect(await checkouts.describe({ projectId, sessionId })).toMatchObject({
+        kind: "managed",
+      });
+    });
+
+    it("is discarded with its branch, and the chat works in the folder again", async () => {
+      await checkouts.plan({ projectId, sessionId });
+      const { path: worktree } = await agentCheckout();
+      await fs.writeFile(path.join(worktree, "scratch.txt"), "drop me\n");
+      await checkouts.discard({ projectId, sessionId });
+      await expect(fs.access(worktree)).rejects.toThrow();
+      await expect(
+        git(rootPath, ["show-ref", "--verify", "refs/heads/work/22222222"]),
+      ).rejects.toThrow();
+      await expect(
+        fs.access(path.join(rootPath, "scratch.txt")),
+      ).rejects.toThrow();
+      expect((await agentCheckout()).path).toBe(rootPath);
+      expect(await checkouts.notice({ projectId, sessionId })).toContain(
+        "discarded",
+      );
+    });
+
+    it("brings bytes exactly, whatever the person's diff settings", async () => {
+      await git(rootPath, ["config", "diff.noprefix", "true"]);
+      await fs.writeFile(
+        path.join(rootPath, ".gitattributes"),
+        "*.bin diff=hex\n",
+      );
+      await git(rootPath, ["config", "diff.hex.textconv", "od -c"]);
+      await checkouts.plan({ projectId, sessionId });
+      const { path: worktree } = await agentCheckout();
+      const latin1 = Buffer.from([0x63, 0x61, 0x66, 0xe9, 0x0a]);
+      const binary = Buffer.from([0, 1, 2, 255, 254, 0, 10]);
+      await fs.mkdir(path.join(worktree, "src"));
+      await fs.writeFile(path.join(worktree, "src", "menu.txt"), latin1);
+      await fs.writeFile(path.join(worktree, "src", "blob.bin"), binary);
+      await checkouts.bringToProjectFolder({ projectId, sessionId });
+      expect(await fs.readFile(path.join(rootPath, "src", "menu.txt"))).toEqual(
+        latin1,
+      );
+      expect(await fs.readFile(path.join(rootPath, "src", "blob.bin"))).toEqual(
+        binary,
+      );
+    });
+
+    it("keeps a worktree Git is mid-operation in, and will not bring it", async () => {
+      await checkouts.plan({ projectId, sessionId });
+      const { path: worktree } = await agentCheckout();
+      await fs.writeFile(path.join(worktree, "notes.md"), "a\n");
+      await checkouts.checkpoint({
+        projectId,
+        sessionId,
+        workingDirectory: worktree,
+        message: "Turn",
+      });
+      await git(worktree, ["checkout", "-q", "--detach"]);
+      await fs.writeFile(path.join(worktree, "detached.md"), "b\n");
+      await checkouts.putAway({ projectId, sessionId });
+      expect(
+        await fs.readFile(path.join(worktree, "detached.md"), "utf8"),
+      ).toBe("b\n");
+      await expect(
+        checkouts.bringToProjectFolder({ projectId, sessionId }),
+      ).rejects.toThrow("not on a branch");
+      await expect(
+        fs.access(path.join(rootPath, "notes.md")),
+      ).rejects.toThrow();
+    });
+
+    it("follows the branch the chat switched its worktree to", async () => {
+      await checkouts.plan({ projectId, sessionId });
+      const { path: worktree } = await agentCheckout();
+      await git(worktree, ["switch", "-q", "-c", "feature"]);
+      await fs.writeFile(path.join(worktree, "feature.md"), "f\n");
+      await checkouts.putAway({ projectId, sessionId });
+      expect(await git(rootPath, ["show", "feature:feature.md"])).toBe("f\n");
+      expect(await checkouts.describe({ projectId, sessionId })).toMatchObject({
+        branch: "feature",
+        present: false,
+      });
+      const again = await agentCheckout();
+      expect(
+        await fs.readFile(path.join(again.path, "feature.md"), "utf8"),
+      ).toBe("f\n");
+    });
+
+    it("never removes a worktree another chat uses", async () => {
+      await checkouts.plan({ projectId, sessionId });
+      const { path: worktree } = await agentCheckout();
+      const other = await checkouts.adopt({
+        projectId,
+        sessionId: secondSessionId,
+        path: worktree,
+      });
+      expect(other.kind).toBe("external");
+      await checkouts.putAway({ projectId, sessionId });
+      await expect(fs.access(worktree)).resolves.toBeUndefined();
+      await expect(checkouts.discard({ projectId, sessionId })).rejects.toThrow(
+        "Another chat works in this worktree",
+      );
+      await expect(fs.access(worktree)).resolves.toBeUndefined();
+    });
+
+    it("will not bring a worktree holding personal files", async () => {
+      await checkouts.plan({ projectId, sessionId });
+      const { path: worktree } = await agentCheckout();
+      const personal = path.join(worktree, ".work", "personal", "notes.md");
+      await fs.mkdir(path.dirname(personal), { recursive: true });
+      await fs.writeFile(personal, "mine\n");
+      await expect(
+        checkouts.bringToProjectFolder({ projectId, sessionId }),
+      ).rejects.toThrow("personal files");
+      expect(await fs.readFile(personal, "utf8")).toBe("mine\n");
+    });
+
+    it("leaves the folder alone while a turn runs in the chat", async () => {
+      let running = true;
+      const guarded = new SessionCheckouts({
+        pglite,
+        worktreesDirectory: path.join(tmpDir, "worktrees"),
+        projectRoot: (id) => (id === projectId ? rootPath : undefined),
+        sessionRunning: async () => running,
+      });
+      await guarded.plan({ projectId, sessionId });
+      const { path: worktree } = await guarded.resolveForAgent({
+        projectId,
+        sessionId,
+        requiresIsolation: async () => false,
+      });
+      await guarded.putAway({ projectId, sessionId });
+      await expect(fs.access(worktree)).resolves.toBeUndefined();
+      await expect(
+        guarded.bringToProjectFolder({ projectId, sessionId }),
+      ).rejects.toThrow("after the current turn finishes");
+      await expect(guarded.discard({ projectId, sessionId })).rejects.toThrow(
+        "after the current turn finishes",
+      );
+      running = false;
+      await guarded.putAway({ projectId, sessionId });
+      await expect(fs.access(worktree)).rejects.toThrow();
+    });
+
+    it("reports an assigned folder that is gone instead of failing", async () => {
+      const external = path.join(tmpDir, "assigned");
+      await git(rootPath, [
+        "worktree",
+        "add",
+        "-q",
+        "-b",
+        "assigned",
+        external,
+      ]);
+      await checkouts.adopt({ projectId, sessionId, path: external });
+      await fs.rm(external, { recursive: true, force: true });
+      expect(await checkouts.detail({ projectId, sessionId })).toMatchObject({
+        kind: "external",
+        available: false,
+        present: false,
+      });
+    });
+
+    it("puts away resting chats' worktrees and worktrees agents left when the host starts", async () => {
+      await checkouts.plan({ projectId, sessionId });
+      const resting = await agentCheckout();
+      await fs.writeFile(path.join(resting.path, "kept.md"), "k\n");
+      const left = await checkouts.createManaged({
+        projectId,
+        sessionId: secondSessionId,
+      });
+      await fs.writeFile(path.join(left.path, "left.md"), "l\n");
+      await checkouts.returnPrimary({ projectId, sessionId: secondSessionId });
+
+      await checkouts.sweep({
+        resting: async ({ sessionId: id }) => id === sessionId,
+      });
+      await expect(fs.access(resting.path)).rejects.toThrow();
+      await expect(fs.access(left.path)).rejects.toThrow();
+      expect(await git(rootPath, ["show", "work/22222222:kept.md"])).toBe(
+        "k\n",
+      );
+      expect(await git(rootPath, [`show`, `${left.branch}:left.md`])).toBe(
+        "l\n",
+      );
+    });
+
+    it("deletes only the branch Work made, never one the chat switched to", async () => {
+      await git(rootPath, ["branch", "feature-x"]);
+      await checkouts.plan({ projectId, sessionId });
+      const { path: worktree } = await agentCheckout();
+      await fs.writeFile(path.join(worktree, "own.md"), "own\n");
+      await checkouts.checkpoint({
+        projectId,
+        sessionId,
+        workingDirectory: worktree,
+        message: "Turn",
+      });
+      await git(worktree, ["switch", "-q", "feature-x"]);
+      await fs.writeFile(path.join(worktree, "feature.md"), "x\n");
+      await checkouts.putAway({ projectId, sessionId });
+      await checkouts.discard({ projectId, sessionId });
+      expect(await git(rootPath, ["show", "feature-x:feature.md"])).toBe("x\n");
+      await expect(
+        git(rootPath, ["show-ref", "--verify", "refs/heads/work/22222222"]),
+      ).rejects.toThrow();
+    });
+
+    it("keeps its own branch when bringing a branch that does not hold it", async () => {
+      await git(rootPath, ["branch", "elsewhere"]);
+      await checkouts.plan({ projectId, sessionId });
+      const { path: worktree } = await agentCheckout();
+      await fs.writeFile(path.join(worktree, "own.md"), "own\n");
+      await checkouts.checkpoint({
+        projectId,
+        sessionId,
+        workingDirectory: worktree,
+        message: "Turn",
+      });
+      await git(worktree, ["switch", "-q", "elsewhere"]);
+      await fs.writeFile(path.join(worktree, "elsewhere.md"), "e\n");
+      await checkouts.bringToProjectFolder({ projectId, sessionId });
+      expect(
+        await fs.readFile(path.join(rootPath, "elsewhere.md"), "utf8"),
+      ).toBe("e\n");
+      expect(await git(rootPath, ["show", "work/22222222:own.md"])).toBe(
+        "own\n",
+      );
+      expect(await git(rootPath, ["show", "elsewhere:elsewhere.md"])).toBe(
+        "e\n",
+      );
+    });
+
+    it("never sweeps a worktree whose changes Git could not record", async () => {
+      const left = await checkouts.createManaged({ projectId, sessionId });
+      await fs.writeFile(path.join(left.path, "unsaved.md"), "keep me\n");
+      await checkouts.returnPrimary({ projectId, sessionId });
+      const gitDir = (
+        await git(left.path, ["rev-parse", "--absolute-git-dir"])
+      ).trim();
+      await fs.writeFile(path.join(gitDir, "index.lock"), "");
+      await checkouts.sweep({ resting: async () => true });
+      expect(
+        await fs.readFile(path.join(left.path, "unsaved.md"), "utf8"),
+      ).toBe("keep me\n");
+    });
+
+    it("lets a chat work in a folder whose Git it cannot read", async () => {
+      const broken = path.join(tmpDir, "broken");
+      await fs.mkdir(broken);
+      await fs.writeFile(
+        path.join(broken, ".git"),
+        "gitdir: /nowhere/at/all\n",
+      );
+      const plain = new SessionCheckouts({
+        pglite,
+        worktreesDirectory: path.join(tmpDir, "worktrees"),
+        projectRoot: () => broken,
+      });
+      expect(
+        await plain.resolveForAgent({
+          projectId,
+          sessionId,
+          requiresIsolation: async () => false,
+        }),
+      ).toEqual({ path: broken, owned: false });
+    });
+
+    it("tells the agent where it works every turn", async () => {
+      expect(await checkouts.notice({ projectId, sessionId })).toBeNull();
+      await checkouts.plan({ projectId, sessionId });
+      const { path: worktree } = await agentCheckout();
+      const notice = await checkouts.notice({ projectId, sessionId });
+      expect(notice).toContain(worktree);
+      expect(notice).toContain(rootPath);
+      expect(await checkouts.notice({ projectId, sessionId })).toBe(notice);
+    });
+
+    it("cannot be chosen before the project has a commit", async () => {
+      const empty = path.join(tmpDir, "empty");
+      await fs.mkdir(empty);
+      await git(empty, ["init", "-b", "main"]);
+      const fresh = new SessionCheckouts({
+        pglite,
+        worktreesDirectory: path.join(tmpDir, "worktrees"),
+        projectRoot: () => empty,
+      });
+      expect(await fresh.worktreesAvailable(projectId)).toBe(false);
+      await expect(fresh.plan({ projectId, sessionId })).rejects.toThrow(
+        "starts from a commit",
+      );
+    });
+
+    it("sets up once per checkout, again after it is put away", async () => {
+      await checkouts.plan({ projectId, sessionId });
+      const { path: worktree } = await agentCheckout();
+      const setup = (environment: string) =>
+        checkouts.setup({
+          projectId,
+          sessionId,
+          workingDirectory: worktree,
+          environment,
+          personalAllowed: false,
+          timeoutMinutes: 1,
+          signal: new AbortController().signal,
+          onRun: async () => {},
+        });
+      const command = "echo ran >> ../setup-runs.txt";
+      expect((await setup(command)).outcome).toEqual({ status: "succeeded" });
+      expect((await setup(command)).outcome).toEqual({ status: "current" });
+      const failed = await setup("echo broken && exit 3");
+      expect(failed.outcome).toMatchObject({
+        status: "failed",
+        exitCode: 3,
+        parts: ["environment"],
+      });
+      expect(
+        failed.outcome.status === "failed" && failed.outcome.log,
+      ).toContain("broken");
+      await checkouts.putAway({ projectId, sessionId });
+      const again = await agentCheckout();
+      expect(again.path).toBe(worktree);
+      expect((await setup(command)).outcome).toEqual({ status: "succeeded" });
+      expect(
+        await fs.readFile(
+          path.join(path.dirname(worktree), "setup-runs.txt"),
+          "utf8",
+        ),
+      ).toBe("ran\nran\n");
+    });
   });
 });
 

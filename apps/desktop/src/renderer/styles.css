@@ -655,6 +655,38 @@ kbd {
   }
 }
 
+/* A press on a surface the agent holds shows its veil for a moment: a sheet
+   of tinted plastic, invisible until touched, that gives a little from
+   where it was pressed and clears. */
+@keyframes veil-touch {
+  0% {
+    opacity: 0;
+    transform: scale(1);
+  }
+  14% {
+    opacity: 1;
+    transform: scale(0.988);
+  }
+  32% {
+    transform: scale(1.006);
+  }
+  50% {
+    transform: scale(0.997);
+  }
+  68% {
+    opacity: 1;
+    transform: scale(1.001);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1);
+  }
+}
+
+.animate-veil-touch {
+  animation: veil-touch 760ms cubic-bezier(0.2, 0, 0, 1) forwards;
+}
+
 /* Content crossfade when modal sections swap (paired with a height tween) */
 @keyframes fade-in {
   from {
@@ -1445,7 +1477,8 @@ kbd {
 }
 
 /* Bare icon tabs. Both sidebars share the same quiet chrome and motion: the
-   panel slides with a transform the moment it is toggled, and the aside
+   panel slides with a transform (closing from open, once its items have
+   started to leave), and the aside
    holds the sidebar's place beside the content (its width, once docked),
    which changes only once the panel is still (lib/sidebar-motion.ts). */
 .tabbed-sidebar {
@@ -1486,6 +1519,32 @@ kbd {
 /* Hidden, not only off screen: an overlay's shadow would reach in. */
 [data-motion="closed"] > .sidebar-inner {
   visibility: hidden;
+}
+/* Closing from open, the items leave first and the panel follows a beat
+   later, carrying the threads they leave (lib/sidebar-leave.ts animates
+   both). The items sweep out from the top over 60ms; the last is on its
+   way when the panel starts. A close that reverses an opening panel
+   doesn't wait. */
+.tabbed-sidebar[data-items-lead] > .sidebar-inner {
+  transition-delay: 100ms;
+}
+.sidebar-traces {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+/* A row's thread grows from where the row ended in step with it, so its
+   free end stays on the row's trailing edge. */
+.sidebar-trace {
+  position: absolute;
+  height: 1.5px;
+  margin-top: -0.75px;
+  border-radius: 1px;
+  background: color-mix(in srgb, var(--trace-color) 40%, transparent);
+  transform-origin: right;
+}
+[data-sidebar="right"] .sidebar-trace {
+  transform-origin: left;
 }
 [data-sidebar-dividers="on"] [data-sidebar="left"] > .sidebar-inner {
   border-right: 1px solid var(--color-border);
@@ -1596,10 +1655,7 @@ kbd {
 ::view-transition-old(sidebar-left),
 ::view-transition-new(sidebar-left),
 ::view-transition-old(sidebar-right),
-::view-transition-new(sidebar-right),
-::view-transition-group(workspace-content),
-::view-transition-old(workspace-content),
-::view-transition-new(workspace-content) {
+::view-transition-new(sidebar-right) {
   animation-duration: 200ms;
   animation-timing-function: var(--ease-standard);
 }
@@ -1616,34 +1672,45 @@ kbd {
   pointer-events: none;
 }
 /* The content taking or giving back a still sidebar's space
-   (lib/sidebar-transition.ts): its box moves from where it was to where it
-   lands, under the sidebar; inside it, the old and new snapshots travel by
-   --content-shift (how far its main column moves within the box) so that
-   column goes straight to its new place while they cross-fade. Neither is
-   scaled, so text never stretches. */
-::view-transition-image-pair(workspace-content) {
-  overflow: clip;
+   (lib/sidebar-transition.ts) cross-fades in place: its box takes its new
+   place at once, the old snapshot stays where the content was (a rule the
+   transition writes) and fades out as the new one fades in. Neither is
+   scaled or moved, so nothing in the content slides or stretches. A chat
+   tab over the content does the same from its own place. Linear over
+   300ms (a sanctioned exception, DESIGN.md): the standard curve does most
+   of a fade in its first quarter, which reads as a snap. The pair blends
+   plus-lighter, as a browser cross-fade does, so the content never dims
+   toward what is behind it midway (a custom animation drops that). */
+::view-transition-group(workspace-content),
+::view-transition-group(*.dock-tab) {
+  animation: none;
 }
 ::view-transition-old(workspace-content),
-::view-transition-new(workspace-content) {
+::view-transition-new(workspace-content),
+::view-transition-old(*.dock-tab),
+::view-transition-new(*.dock-tab) {
   inline-size: auto;
   block-size: auto;
+  mix-blend-mode: plus-lighter;
+  animation-duration: 300ms;
+  animation-timing-function: linear;
+  animation-fill-mode: both;
 }
-::view-transition-old(workspace-content) {
-  animation-name: content-out;
+::view-transition-old(workspace-content),
+::view-transition-old(*.dock-tab) {
+  animation-name: content-fade-out;
 }
-::view-transition-new(workspace-content) {
-  animation-name: content-in;
+::view-transition-new(workspace-content),
+::view-transition-new(*.dock-tab) {
+  animation-name: content-fade-in;
 }
-@keyframes content-out {
+@keyframes content-fade-out {
   to {
-    translate: var(--content-shift, 0) 0;
     opacity: 0;
   }
 }
-@keyframes content-in {
+@keyframes content-fade-in {
   from {
-    translate: calc(-1 * var(--content-shift, 0px)) 0;
     opacity: 0;
   }
 }
@@ -1894,9 +1961,10 @@ html[data-surface="dock"] #root {
 /* Chats live in the dock, outside the content, so the content's snapshot
    would cover them for the whole settle. While it settles they get layers
    of their own: a floating chat and the bubble strip glide from where they
-   were to where they land, and a chat tab settles exactly as the content
-   does. Names are per element (match-element) because several chats can
-   be on screen while one leaves. */
+   were to where they land, and a chat tab fades as the content does (the
+   transition names it, lib/sidebar-transition.ts). Names are per element
+   (match-element) because several chats can be on screen while one
+   leaves. */
 :root[data-content-settling]
   [data-dock-host]:not([data-dock-native])
   [data-floating-chat] {
@@ -1909,21 +1977,12 @@ html[data-surface="dock"] #root {
   view-transition-name: match-element;
   view-transition-class: dock-rail;
 }
-:root[data-content-settling]
-  [data-dock-host]:not([data-dock-native])
-  [data-chat-tab] {
-  view-transition-name: match-element;
-  view-transition-class: dock-tab;
-}
 ::view-transition-group(*.dock-float),
 ::view-transition-group(*.dock-rail),
-::view-transition-group(*.dock-tab),
 ::view-transition-old(*.dock-float),
 ::view-transition-new(*.dock-float),
 ::view-transition-old(*.dock-rail),
-::view-transition-new(*.dock-rail),
-::view-transition-old(*.dock-tab),
-::view-transition-new(*.dock-tab) {
+::view-transition-new(*.dock-rail) {
   animation-duration: 200ms;
   animation-timing-function: var(--ease-standard);
 }
@@ -1942,21 +2001,6 @@ html[data-surface="dock"] #root {
   inset-inline: 0;
   margin-inline: auto;
 }
-::view-transition-image-pair(*.dock-tab) {
-  overflow: clip;
-}
-::view-transition-old(*.dock-tab),
-::view-transition-new(*.dock-tab) {
-  inline-size: auto;
-  block-size: auto;
-}
-::view-transition-old(*.dock-tab) {
-  animation-name: content-out;
-}
-::view-transition-new(*.dock-tab) {
-  animation-name: content-in;
-}
-
 /* Browser setup actions keep their footprint when they become status rows. */
 .browser-setup-action {
   display: inline-flex;
@@ -1994,7 +2038,7 @@ html[data-surface="dock"] #root {
   }
 }
 
-/* A microphone (ADR 0215), the dock's or a composer's. One fixed control
+/* A microphone (ADR 0216), the dock's or a composer's. One fixed control
    whose state is its data attributes: every layer is always present and only fades, scales
    or turns, so a change of state never moves anything around it. */
 .voice-button {

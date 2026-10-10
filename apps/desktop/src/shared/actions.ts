@@ -539,6 +539,25 @@ export const BUILTIN_ACTIONS = [
     ],
   },
   {
+    id: "new-worktree-chat",
+    label: "New chat in a worktree",
+    icon: "GitBranch",
+    description:
+      "open a floating chat that works in its own Git worktree, started from the project folder's last commit, so parallel work never collides; bring its changes back from the chat's status popup",
+    defaultBinding: null,
+    keywords: [
+      "worktree",
+      "branch",
+      "parallel",
+      "isolated",
+      "isolation",
+      "git",
+      "chat",
+      "separate",
+      "copy",
+    ],
+  },
+  {
     id: "new-incognito-chat",
     label: "New incognito chat",
     icon: "Ghost",
@@ -686,12 +705,15 @@ export const ACTION_LABELS = Object.fromEntries(
 
 /**
  * Actions whose keys a web page sees first, as in Chrome: a page with its
- * own find (a document editor) keeps them. What the page's main document
- * leaves comes to Work through its preload (preload/webview.ts); keys
- * pressed inside an embedded frame stay the page's.
+ * own find (a document editor) keeps them, and a text field keeps its
+ * caret keys (fieldKeepsKey). What the page's main document leaves comes
+ * to Work through its preload (preload/webview.ts); main asks an embedded
+ * frame about back and forward (main/browser.ts).
  */
 export const PAGE_FIRST_ACTIONS: ReadonlySet<ActionId> = new Set([
   "find",
   "find-next",
   "find-previous",
+  "browser-back",
+  "browser-forward",
 ]);

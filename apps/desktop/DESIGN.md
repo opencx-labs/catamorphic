@@ -308,9 +308,10 @@ the animation is wrong, not the test.
 Framed content previews transition the workspace margins and corner radius over
 200 ms with the standard easing. Reduced motion applies the frame immediately.
 
-A sidebar slides with a 200 ms transform the moment it is toggled, and the
-content beside it settles after it stops: a 200 ms view-transition morph
-from its old layout to its new one (ADR 0200). The content resizes once per
+A sidebar slides with a 200 ms transform the moment it is toggled (closing
+from open, 100 ms after its items start to leave), and the
+content beside it settles after it stops: a 300 ms linear view-transition
+fade in place from its old layout to its new one (ADR 0200). The content resizes once per
 toggle, never while anything moves. New motion beside a page, terminal,
 editor or app frame moves over it rather than animating its size.
 
@@ -327,19 +328,31 @@ editor or app frame moves over it rather than animating its size.
 | `profile-veil-in` / `profile-veil-out` (in-place profile switch) | 200ms | each other (exact mirror) |
 | `question-in` (ask_user panel) | 260ms | — |
 | `pane-in-left` / `pane-in-right` (keyboard tab cycling) | 200ms | — (content-changed signal on a persistent wrapper; no exit to pair) |
-| `content-out` / `content-in` (content settling beside a still sidebar, view transition) | 200ms | each other (the old snapshot leaves as the new one arrives) |
-| `dock-float` / `dock-rail` groups (a floating chat and the bubble strip gliding while the content settles, view transition) | 200ms | the content's settle; a chat tab (`dock-tab`) uses `content-out` / `content-in` |
+| `content-fade-out` / `content-fade-in` (content settling beside a still sidebar, view transition: the old snapshot fades where it was, the new one fades in) | 300ms, linear (a sanctioned exception) | each other (the old snapshot leaves as the new one arrives) |
+| `dock-float` / `dock-rail` groups (a floating chat and the bubble strip gliding while the content settles, view transition) | 200ms | within the content's 300ms fade; a chat tab (`dock-tab`) fades in place with `content-fade-out` / `content-fade-in` from its own place |
 | `bubble-ask` (agent question arrival) | 280ms | — (one-shot nudge on a persistent bubble; no exit to pair) |
 | `input-recall-{up,down}-{a,b}` (composer ↑/↓ history) | 150ms | — (transform-only directional content signal; paired names replay rapid same-direction recalls without a classless frame) |
 | `activity-leave` / `activity-arrive` (agent activity line swap) | 150ms / 200ms | — (one beat of the working pulse carries a content swap on a persistent line: the old text dims up and away, the new rises in, then `animate-pulse` resumes) |
+| sidebar leave (Web Animations in `lib/sidebar-leave.ts`: a closing sidebar's rows leave, each drawing a thread behind it; the panel's slide waits 100ms for them) | 160ms | its own reverse when the sidebar opens mid-close; opening shows the items in place as before (a sanctioned exception) |
 | `title-change` (rename flash) | 1200ms | **sanctioned exception** — the
   one decorative-adjacent signal (see design log 2026-07-31); allowlisted in
   the test's `DURATION_EXCEPTIONS` |
+| `veil-touch` (a press on an agent-held surface) | 760ms | **sanctioned exception**: one-shot answer to a refused press; the sheet appears, gives, and clears (design log 2026-10-09) |
 
 ### Sanctioned exceptions
 
 - `animate-spin` / `animate-pulse`: indeterminate progress may loop.
 - `title-change` (1200ms): a deliberate noticed-but-calm rename signal.
+- `veil-touch` (760ms): a press on a held surface shows the veil, which
+  gives where it was touched and clears; shorter, the wobble reads as a
+  flicker.
+- `content-fade-out` / `content-fade-in` (rule 1): linear, over 300ms. A
+  cross-fade in place moves nothing, and the standard curve does most of
+  an opacity change in its first quarter, so a fade on it reads as a snap.
+- Sidebar close (rule 4): closing from open runs 100ms longer than opening,
+  since the items leave before the panel slides; the slide itself is 200ms
+  both ways. Not an `.animate-*` class, so the test allowlist doesn't
+  carry it.
 
 New exceptions require adding to both this list and the test allowlist —
 that friction is intentional.
@@ -1693,7 +1706,7 @@ let go to send), keeps it in the dock or not, or resets the chat, which
 closes it so the next click starts a new one. ⌘⇧Space turns voice on and
 off. Out of the dock, the microphone shrinks away in place and comes back
 while voice is on; the arrows' menu always offers it back.
-See ADR 0215.
+See ADR 0216.
 
 ### 2026-10-10: An assistant, and voice in every chat
 
@@ -1711,7 +1724,7 @@ speaks in its own voice, set in its settings, else the default one. The
 assistant follows the sessions it hands work to, and hears their notes as
 they work, a few at a time, to pass on in its own words; the transcript
 shows one quiet line for each. Settings, menus and the palette all write
-the same profile prefs, and a live voice follows them. See ADR 0215.
+the same profile prefs, and a live voice follows them. See ADR 0216.
 
 ### 2026-10-04: Passkeys live in Work
 
@@ -1906,3 +1919,129 @@ shows the spinner and the veil again. A take-over still refuses the agent
 until it reclaims. The person's own tabs are never held: an agent drives
 one only when asked, without veiling it, as before.
 
+### 2026-10-09: Google signs you in again, on a beta Electron
+
+Google's sign-in page in a Work tab started answering "Couldn't sign you in:
+This browser or app may not be secure". Work already presented as Chrome
+(the user agent and the client-hint brands a page reads), so the gap was
+the engine: Chrome 156 reached stable on 2026-10-07, Google admits only the
+newest Chrome majors, and every Electron 44 release, 44.7.0 included, still
+carries Chromium 152. The app moves to Electron 45.0.0-beta.1 (Chromium 156),
+pinned exactly, because no stable Electron is recent enough yet; it follows
+the 45 betas to stable (ADR 0150).
+
+The identity now matches Chrome 156 more closely too. The user agent is
+Chrome's reduced one, `Chrome/156.0.0.0`; the full version reaches a site
+only through the client hints that ask for it. The brand list is built the
+way Chromium builds Chrome's, so its placeholder brand and order follow the
+major version (`"Not:A-Brand";v="8"` first for 156) instead of a fixed
+string from an older Chrome, and `JSON.stringify(navigator.userAgentData)`
+agrees with `brands`. Page loads still carry no client-hint headers, which
+Electron does not send (TODO.md).
+
+Electron 45 reports a page's screen share as its own `display-capture`
+permission instead of a camera or microphone request with no devices. The
+share picker now opens on that permission, so Meet and other calls still
+get "Choose what to share" first, and Cancel still refuses the way Chrome
+does. The `Invalid guestInstanceId` error Electron threw when a loaded tab
+closed is fixed in this release, so the app stops hiding it.
+
+### 2026-10-09: A held page answers a press; the caret keeps Cmd+Left
+
+Someone who missed the "Agent owns this page" pill pressed the page and
+nothing happened. The veil is invisible until then: a press shows it for a
+moment, a sheet of translucent plastic in the accent, a little stronger and
+giving way where it was touched, then clearing. The page still gets nothing.
+At 760ms it is a sanctioned exception to the motion contract; with reduced
+motion it collapses like everything else.
+
+A chat's tab group kept its accent eyebrow and fold chevron after the person
+moved to another tab, so a group opened beside a chat (a chip opened with
+Cmd+Shift+Click) looked in focus long after it was. The group now wears the accent
+only while it holds the tab in front or its split companion; behind, its
+eyebrow and chevrons go quiet.
+
+Cmd+Left and Cmd+Right went back and forward even with the caret in the
+composer or the address bar, so they never moved to the line's start or end.
+A text field now keeps its caret keys, whatever they are bound to, in Work and
+in pages, which see back and forward first like Cmd+F; elsewhere they still go
+back and forward. An embedded frame has no preload, so main asks the focused
+frame whether a text field has the caret before going back or forward.
+
+A browser tab's hold is the turn's, not the chat's: a settle that arrives
+after the chat's next turn started no longer lets that turn's page go.
+
+### 2026-10-09: A closing sidebar's items leave first
+
+The sidebar slid away as one sheet. Closing now reads as the items leaving
+and the sidebar following them: what shows on each row (its icon or image,
+its label, a description) leaves together toward the edge the sidebar goes
+to and fades, in a quick sweep from the top, and the panel starts 100ms
+after the click. A row with text travels exactly its own length and draws a
+hairline in its text's color behind it, so the line grows from where the
+row ended and its free end stays on the row's trailing edge: the row pulls
+a thread out of its place and never crosses it. The threads are what the
+items leave behind, and the panel carries them away.
+
+Two takes lost. Soft bars the size of each label (a skeleton left behind)
+read as loading, and over text that was still fading they looked smudged.
+A hairline across the middle of each label read as strikethrough, as if
+the items had been crossed off. Hidden hover actions must leave nothing,
+so only what is drawn and opaque leaves (`checkVisibility`).
+
+The review of the first version moved the motion to Web Animations: CSS
+animations removed on reopen snapped every item back in a frame, and the
+shorthand stopped a row's own spinner. Now opening mid-close plays the
+items back from where they are, and a close that reverses an opening panel
+doesn't wait for items. Pieces of a row are clustered (close together on
+one line), so a favicon travels with its label and one thread spans the
+row; in the right sidebar the thread trails the icon instead of crossing
+it. Everything is measured once on the click, only for what is on screen;
+nothing runs under reduced motion or in a project's workspace that isn't
+showing. Opening is unchanged.
+
+The content beside the sidebar used to settle by morphing: its box grew
+or shrank into place while its snapshots travelled with the main column.
+The growing box showed the app's background around it for a moment, which
+read as a glitch. It now fades in place: the old layout fades out exactly
+where it was as the new one fades in, and nothing moves or stretches. The
+page probe that told a centred column from a left-aligned one is gone with
+the motion it served. The fade is linear over 300ms: on the standard curve,
+which does most of its change in the first quarter, a 200ms fade read as a
+snap.
+
+A review found three things the fade needed. A custom fade drops the
+browser's plus-lighter blend, so the pair dimmed toward the sidebar's
+colour midway; the snapshots now blend plus-lighter. A chat tab in the
+right half of a split moves by part of what the content does, so it gets
+its own offset rather than the content's. And a compact window's
+hover-revealed sidebar closes without the items' lead: a peek is dismissed
+often, and should go at once.
+
+### 2026-10-09: A chat's own worktree is the person's choice, and comes back from the popup
+
+Only agents could give a chat its own worktree, and nothing about it was
+finished: no ignored files or dependencies, no cleanup, and no way back
+except a pull request. On this machine no Work profile had ever made one,
+while the repository held dozens of Claude Code worktrees.
+
+"New chat in a worktree" in the palette, or "Use own worktree" in the
+status popup's Folder row, now chooses one; the chat's next message checks
+it out at the project folder's last commit, copies the ignored files
+`.worktreeinclude` lists and runs the Environment's setup (ADR 0215). The
+Folder row is where the chat says where it works: "Project folder", its
+branch with the folder and how many files it changed, "put away" while the
+chat is archived, or an assigned worktree. Between turns the row offers
+what fits: bring the changes to the project folder (written there
+uncommitted, refused with nothing changed when they would collide with the
+person's own), discard after a confirmation, or use the project folder
+again. The popup's trigger carries a branch mark while the chat works, or
+will work, in its own worktree, so a tabbed chat with its header folded
+still shows it. The sidebar's session card shows the same row, and the
+Changes section names a worktree's chats by title instead of an id.
+
+Archiving a chat puts its worktree away: everything is recorded on its
+branch and the folder goes, so worktrees no longer pile up; the next
+message checks it out again. The default stays the project folder, because
+most projects are not code and the main complaint about Claude Code's
+worktrees is that people cannot opt out.

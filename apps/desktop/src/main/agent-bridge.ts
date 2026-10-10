@@ -47,6 +47,15 @@ import type { AgentTerminals } from "./terminal.js";
  * asked, without veiling it.
  */
 
+/**
+ * The turn a browser tab is held for: its chat, and the turn itself when
+ * the host knows it (a hold without one goes at the chat's next settle).
+ */
+export interface TurnHolder {
+  sessionId: string;
+  turnId?: string;
+}
+
 export interface WorkspaceBridge {
   /** Tabs, chats, and sidebar items of the project's open workspace. */
   overview(projectId: string): Promise<unknown>;
@@ -65,18 +74,18 @@ export interface WorkspaceBridge {
   screenshotWindow(projectId: string): Promise<unknown>;
   openBrowser(
     projectId: string,
-    sessionId: string,
+    holder: TurnHolder,
     url: string,
   ): Promise<{ key: string }>;
   browserSnapshot(
     projectId: string,
-    sessionId: string,
+    holder: TurnHolder,
     key: string,
     format?: "dom" | "image",
   ): Promise<unknown>;
   browserAct(
     projectId: string,
-    sessionId: string,
+    holder: TurnHolder,
     key: string,
     action: BrowserAction,
   ): Promise<unknown>;
@@ -160,15 +169,20 @@ export interface WorkspaceBridge {
   /** Hand a surface back to the user (agent done) or reclaim it. */
   setControl(
     projectId: string,
-    sessionId: string,
+    holder: TurnHolder,
     key: string,
     controlled: boolean,
   ): Promise<void>;
   /**
-   * A session's turn settled: the browser tabs it held go back to the
-   * person. Not a take-over: a later turn may drive them again, visibly.
+   * A turn settled: the browser tabs it held go back to the person. Not a
+   * take-over: a later turn may drive them again, visibly. A hold the
+   * chat's next turn already made stays. `retrying` marks a transient
+   * failure: the same turn runs again, and may hold its pages again.
    */
-  releaseSession(projectId: string, sessionId: string): Promise<void>;
+  releaseTurn(
+    projectId: string,
+    settled: TurnHolder & { retrying?: boolean },
+  ): Promise<void>;
   closeSurface(projectId: string, key: string): Promise<void>;
   sessionProcessCount(
     projectId: string,
@@ -410,31 +424,35 @@ export function registerAgentBridge(
   };
   /** Browser tabs an agent opened: an agent's own, which it holds. */
   const agentTabs = new Set<string>();
-  /** Browser tab key → the session whose turn holds it. */
-  const held = new Map<string, { projectId: string; sessionId: string }>();
-  /** Per session, how many of its turns have settled (see openBrowser). */
+  /** Browser tab key → the turn that holds it. */
+  const held = new Map<string, TurnHolder & { projectId: string }>();
+  /**
+   * Turns that settled for good (not to run again after a transient
+   * failure), latest last, and per session how many settled (for a holder
+   * without a turn id): openBrowser's page may mount after its turn ended.
+   */
+  const settledTurnIds = new Set<string>();
   const settledTurns = new Map<string, number>();
   /**
-   * The session drives its own tab until its turn settles, in sight. A tab
+   * The turn drives its agent's own tab until it settles, in sight. A tab
    * the person took over stays theirs: input actions refuse there, and a
    * look leaves it alone.
    */
   const holdBrowser = async (input: {
     projectId: string;
-    sessionId: string;
+    holder: TurnHolder;
     key: string;
   }) => {
+    const current = held.get(input.key);
     if (
-      !input.sessionId ||
+      !input.holder.sessionId ||
       !agentTabs.has(input.key) ||
       takenOver.has(input.key) ||
-      held.get(input.key)?.sessionId === input.sessionId
+      (current?.sessionId === input.holder.sessionId &&
+        current.turnId === input.holder.turnId)
     )
       return;
-    held.set(input.key, {
-      projectId: input.projectId,
-      sessionId: input.sessionId,
-    });
+    held.set(input.key, { projectId: input.projectId, ...input.holder });
     await rpc("surfaceControl", {
       projectId: input.projectId,
       key: input.key,
@@ -636,8 +654,13 @@ export function registerAgentBridge(
       });
     },
 
-    async openBrowser(projectId, sessionId, url) {
+    async openBrowser(projectId, holder, url) {
+      const { sessionId, turnId } = holder;
       const turns = settledTurns.get(sessionId) ?? 0;
+      const settled = () =>
+        turnId
+          ? settledTurnIds.has(turnId)
+          : (settledTurns.get(sessionId) ?? 0) !== turns;
       const result = await rpc<{ key: string } | { error: string }>(
         "openAgentBrowser",
         { projectId, sessionId, url: browserUrl(url) },
@@ -651,8 +674,8 @@ export function registerAgentBridge(
       // Opened under the agent's control: its own, held by this turn,
       // unless the turn settled while the page mounted (or there is none).
       agentTabs.add(result.key);
-      if (sessionId && (settledTurns.get(sessionId) ?? 0) === turns)
-        held.set(result.key, { projectId, sessionId });
+      if (sessionId && !settled())
+        held.set(result.key, { projectId, ...holder });
       else
         await rpc("surfaceControl", {
           projectId,
@@ -662,13 +685,13 @@ export function registerAgentBridge(
       return result;
     },
 
-    async browserSnapshot(projectId, sessionId, key, format) {
-      await holdBrowser({ projectId, sessionId, key });
+    async browserSnapshot(projectId, holder, key, format) {
+      await holdBrowser({ projectId, holder, key });
       return (await driverFor(projectId, key)).snapshot(format);
     },
 
-    async browserAct(projectId, sessionId, key, action) {
-      await holdBrowser({ projectId, sessionId, key });
+    async browserAct(projectId, holder, key, action) {
+      await holdBrowser({ projectId, holder, key });
       return (await driverFor(projectId, key)).act(action);
     },
 
@@ -777,11 +800,12 @@ export function registerAgentBridge(
       return result ?? { installed: [] };
     },
 
-    async setControl(projectId, sessionId, key, controlled) {
+    async setControl(projectId, holder, key, controlled) {
       const browser = key.startsWith("browser:");
       if (controlled) {
         takenOver.delete(key);
-        if (browser && sessionId) held.set(key, { projectId, sessionId });
+        if (browser && holder.sessionId)
+          held.set(key, { projectId, ...holder });
       } else {
         held.delete(key);
         // A released tab goes back as at the end of a turn: the agent may
@@ -791,12 +815,23 @@ export function registerAgentBridge(
       await rpc("surfaceControl", { projectId, key, controlled });
     },
 
-    async releaseSession(projectId, sessionId) {
+    async releaseTurn(projectId, { sessionId, turnId, retrying }) {
       settledTurns.set(sessionId, (settledTurns.get(sessionId) ?? 0) + 1);
+      // A retry runs under the same turn id: a page it opens is its own.
+      if (turnId && !retrying) {
+        settledTurnIds.add(turnId);
+        // Only a page still mounting asks, so the recent turns are enough.
+        if (settledTurnIds.size > 256)
+          settledTurnIds.delete(settledTurnIds.values().next().value ?? "");
+      }
+      // Only this turn's holds: the chat's next turn may already hold a tab
+      // again by the time this settle arrives.
       const keys = [...held]
         .filter(
           ([, holder]) =>
-            holder.projectId === projectId && holder.sessionId === sessionId,
+            holder.projectId === projectId &&
+            holder.sessionId === sessionId &&
+            (!turnId || !holder.turnId || holder.turnId === turnId),
         )
         .map(([key]) => key);
       for (const key of keys) held.delete(key);
@@ -902,6 +937,7 @@ export function registerAgentBridge(
       held.clear();
       agentTabs.clear();
       settledTurns.clear();
+      settledTurnIds.clear();
       terminalKeys.clear();
     },
   };

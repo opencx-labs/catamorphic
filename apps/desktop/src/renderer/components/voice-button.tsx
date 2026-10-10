@@ -267,7 +267,7 @@ const RING_RADIUS = 17;
 const RING_LENGTH = 2 * Math.PI * RING_RADIUS;
 
 /**
- * A microphone (ADR 0215): the dock's talks to the assistant, a composer's
+ * A microphone (ADR 0216): the dock's talks to the assistant, a composer's
  * to its chat's agent. A click starts voice there (making the assistant's
  * chat the first time, or a new chat's session); an arc turns around it
  * until it is really listening, then it lights up. Another click stops
@@ -423,7 +423,7 @@ export function VoiceButton({
       setting: true,
       ...(pushToTalkKeys ? { detail: pushToTalkKeys } : {}),
     },
-    // Background voices (ADR 0215): once voice knows the person's voice,
+    // Background voices (ADR 0216): once voice knows the person's voice,
     // anyone else is ignored.
     {
       label: prefs.voiceprint ? "Relearn my voice" : "Learn my voice",

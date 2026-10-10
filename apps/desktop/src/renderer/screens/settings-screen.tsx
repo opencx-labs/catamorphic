@@ -86,7 +86,7 @@ export function SettingsScreen({
   /** Opens the palette's settings scope: the one search surface (ADR 0123). */
   onSearch: () => void;
   onAddAgent: () => void;
-  /** The agent wizard, whose agent becomes the assistant (ADR 0215). */
+  /** The agent wizard, whose agent becomes the assistant (ADR 0216). */
   onCreateAssistant: () => void;
   /** Open the configure-agent modal (ADR 0056) for one roster agent. */
   onConfigureAgent: (agentId: string) => void;
@@ -893,7 +893,7 @@ function SettingRow({
 const CREATE_ASSISTANT = "create";
 
 /**
- * Voice (ADR 0215): the assistant the dock's microphone talks to, how
+ * Voice (ADR 0216): the assistant the dock's microphone talks to, how
  * agents sound, and how voice listens. All of it is the profile's prefs; a
  * live voice follows changes at once.
  */

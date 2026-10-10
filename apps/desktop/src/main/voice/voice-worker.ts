@@ -8,7 +8,7 @@ import { VoiceEngine } from "./engine.js";
 import { fakeSpeech } from "./fake-speech.js";
 
 /**
- * The speech worker (ADR 0215), an Electron utility process: the models
+ * The speech worker (ADR 0216), an Electron utility process: the models
  * take a gigabyte and their inference whole CPU cores, so they stay out of
  * the main process. The audio page's port brings microphone frames and
  * takes speech back directly; the main process sees only conversation

@@ -1187,7 +1187,7 @@ export function registerIpcHandlers(
   // Code's own catalog, Codex app-server `model/list`, provider /v1/models).
   ipcMain.handle("catamorphic:agent-models", async (event, id: string) => {
     try {
-      // An assistant lists its agent's models (ADR 0215).
+      // An assistant lists its agent's models (ADR 0216).
       let agent: ModelCatalogAgent | undefined = storesFor(event).agents.get(
         rosterAgentId(id),
       );
@@ -3161,12 +3161,66 @@ export function registerIpcHandlers(
 
   ipcMain.handle(
     "catamorphic:session-checkouts",
-    async (_event, projectId: string) =>
-      (await state.current?.sessionCheckouts.assigned(projectId)) ?? [],
+    async (_event, projectId: string, options?: { titles?: boolean }) => {
+      const server = state.current;
+      if (!server) return [];
+      const assigned = await server.sessionCheckouts.assigned(projectId);
+      if (!options?.titles) return assigned;
+      // Named as people know them where a checkout lists its chats: only
+      // checkouts on disk are listed there.
+      return Promise.all(
+        assigned.map(async (checkout) => {
+          if (!checkout.present) return checkout;
+          const session = await server.catamorphic.core.agentSessions
+            ?.get(identity, projectId, checkout.sessionId)
+            .catch(() => null);
+          return session
+            ? {
+                ...checkout,
+                title: session.title,
+                createdAt: session.createdAt,
+              }
+            : checkout;
+        }),
+      );
+    },
   );
+
+  /** The server, once the chat is this window's and runs no turn. */
+  const idleChatServer = async (
+    event: Electron.IpcMainInvokeEvent,
+    input: { projectId: string; sessionId: string },
+  ) => {
+    const server = state.current;
+    if (!server) throw new Error("Server is not running");
+    if (
+      profiles.profileForProject(input.projectId).id !==
+      windows.profileFor(event.sender)
+    )
+      throw new Error("Project belongs to another profile");
+    const session = await server.catamorphic.core.agentSessions?.get(
+      identity,
+      input.projectId,
+      input.sessionId,
+    );
+    if (!session) throw new Error("Chat is unavailable");
+    if (session.running)
+      throw new Error("Change the folder after the current turn finishes.");
+    return server;
+  };
 
   ipcMain.handle(
     "catamorphic:session-use-project-folder",
+    async (event, input: { projectId: string; sessionId: string }) => {
+      const server = await idleChatServer(event, input);
+      await server.returnSessionToProjectFolder(input);
+      notifyGitChanged(input.projectId);
+    },
+  );
+
+  // A chat's own worktree from its status popup (ADR 0215).
+  ipcMain.handle(
+    "catamorphic:session-checkout",
     async (event, input: { projectId: string; sessionId: string }) => {
       const server = state.current;
       if (!server) throw new Error("Server is not running");
@@ -3175,15 +3229,38 @@ export function registerIpcHandlers(
         windows.profileFor(event.sender)
       )
         throw new Error("Project belongs to another profile");
-      const session = await server.catamorphic.core.agentSessions?.get(
-        identity,
-        input.projectId,
-        input.sessionId,
-      );
-      if (!session) throw new Error("Chat is unavailable");
-      if (session.running)
-        throw new Error("Stop the current turn before changing its folder");
-      await server.returnSessionToProjectFolder(input);
+      return server.sessionCheckouts.detail(input);
+    },
+  );
+  ipcMain.handle(
+    "catamorphic:project-worktrees-available",
+    async (_event, projectId: string) =>
+      (await state.current?.sessionCheckouts.worktreesAvailable(projectId)) ??
+      false,
+  );
+  ipcMain.handle(
+    "catamorphic:session-use-own-worktree",
+    async (event, input: { projectId: string; sessionId: string }) => {
+      // A chat its first message is creating runs no turn yet.
+      const server = await idleChatServer(event, input);
+      await server.sessionCheckouts.plan(input);
+      notifyGitChanged(input.projectId);
+    },
+  );
+  ipcMain.handle(
+    "catamorphic:session-bring-to-project-folder",
+    async (event, input: { projectId: string; sessionId: string }) => {
+      const server = await idleChatServer(event, input);
+      const result = await server.sessionCheckouts.bringToProjectFolder(input);
+      notifyGitChanged(input.projectId);
+      return result;
+    },
+  );
+  ipcMain.handle(
+    "catamorphic:session-discard-worktree",
+    async (event, input: { projectId: string; sessionId: string }) => {
+      const server = await idleChatServer(event, input);
+      await server.sessionCheckouts.discard(input);
       notifyGitChanged(input.projectId);
     },
   );

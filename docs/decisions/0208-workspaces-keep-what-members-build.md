@@ -4,6 +4,8 @@
 - **Date:** 2026-10-06
 - **Refines:** 0173, 0176, 0184
 
+> Setup also runs in a desktop chat's own worktree: [ADR 0215](0215-a-chats-own-worktree.md).
+
 ## Context
 
 Each chat gets its own sandbox, released after it idles (ADR 0173). An image

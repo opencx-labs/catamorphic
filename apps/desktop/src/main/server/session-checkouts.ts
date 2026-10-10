@@ -1,7 +1,8 @@
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
+import type { WorkspaceSetupOutcome } from "@catamorphic/core";
 import { ensurePersonalFilesExcluded, hasLocalGit } from "@catamorphic/git";
 import {
   AGENT_COMMIT_AUTHOR,
@@ -9,6 +10,7 @@ import {
   PROJECT_PERSONAL_DIR,
 } from "@catamorphic/workflow/project-layout";
 import type { PGlite } from "@electric-sql/pglite";
+import { runNativeWorkspaceSetup } from "./native-workspace-setup.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -19,13 +21,42 @@ export interface SessionCheckoutBinding {
   projectId: string;
   path: string;
   kind: Exclude<SessionCheckoutKind, "primary">;
+  /**
+   * The branch the worktree is on. A chat's own worktree has none until
+   * its first checkout (ADR 0215).
+   */
   branch: string | null;
+  /**
+   * The branch Work made for the chat's own worktree, the only one its
+   * bring or discard ever deletes (ADR 0215); null for any other.
+   */
+  ownBranch?: string | null;
 }
 
 export interface SessionCheckoutDescription {
   path: string;
   kind: SessionCheckoutKind;
   branch: string | null;
+  /**
+   * The folder exists now. A chat's own worktree is absent before its
+   * first turn and while the chat is put away; its next turn checks it
+   * out (ADR 0215).
+   */
+  present: boolean;
+}
+
+/** What the chat's status popup shows about where the chat works. */
+export interface SessionCheckoutDetail extends SessionCheckoutDescription {
+  /** False when an assigned folder is gone or no longer this repository. */
+  available: boolean;
+  projectFolder: string;
+  /** The project is a Git repository with a commit to start a worktree at. */
+  worktreesAvailable: boolean;
+  /**
+   * Files a chat's own worktree changed since it left the project folder's
+   * history, recorded or not; null for other checkouts.
+   */
+  changedFiles: number | null;
 }
 
 export interface RepositoryWorktree {
@@ -42,14 +73,25 @@ interface SessionCheckoutsOptions {
   pglite: PGlite;
   worktreesDirectory: string;
   projectRoot: (projectId: string) => string | undefined;
+  /**
+   * Whether a turn runs in the chat now. A chat's own worktree is put away,
+   * brought back or discarded only while it does not (ADR 0215).
+   */
+  sessionRunning?: (input: {
+    projectId: string;
+    sessionId: string;
+  }) => Promise<boolean>;
 }
+
+/** Ignored files a new worktree copies from the project folder (ADR 0215). */
+export const WORKTREE_INCLUDE_FILE = ".worktreeinclude";
 
 const repositoryMutationLocks = new Map<string, Promise<void>>();
 
 async function git(cwd: string, args: string[]): Promise<string> {
   return (
     await execFileAsync("git", ["-C", cwd, ...args], {
-      maxBuffer: 16 * 1024 * 1024,
+      maxBuffer: 64 * 1024 * 1024,
     })
   ).stdout;
 }
@@ -63,6 +105,86 @@ async function gitSucceeds(cwd: string, args: string[]): Promise<boolean> {
   }
 }
 
+/** Git's output as bytes: a patch must reach `git apply` unchanged. */
+async function gitBytes(cwd: string, args: string[]): Promise<Buffer> {
+  return (
+    await execFileAsync("git", ["-C", cwd, ...args], {
+      encoding: "buffer",
+      maxBuffer: 256 * 1024 * 1024,
+    })
+  ).stdout;
+}
+
+/** Run git for its exit code too, feeding `input` on stdin. */
+function gitRun(
+  cwd: string,
+  args: string[],
+  input?: string | Buffer,
+): Promise<{ code: number | null; stdout: string; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    const child = spawn("git", ["-C", cwd, ...args], {
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    const stdout: Buffer[] = [];
+    const stderr: Buffer[] = [];
+    child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
+    child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
+    // Git may stop reading before the input ends; its exit says why.
+    child.stdin.on("error", () => undefined);
+    child.on("error", reject);
+    child.on("close", (code) =>
+      resolve({
+        code,
+        stdout: Buffer.concat(stdout).toString("utf8"),
+        stderr: Buffer.concat(stderr).toString("utf8"),
+      }),
+    );
+    child.stdin.end(input ?? "");
+  });
+}
+
+/**
+ * The branch a worktree has checked out, and what Git is in the middle of
+ * there, if anything: work there is safe to record only on a branch, with
+ * no merge, rebase, cherry-pick, revert or bisect under way.
+ */
+async function headState(
+  worktree: string,
+): Promise<{ branch: string | null; busy: string | null }> {
+  const ref = await git(worktree, ["symbolic-ref", "-q", "HEAD"]).catch(
+    () => "",
+  );
+  const gitDir = (
+    await git(worktree, ["rev-parse", "--absolute-git-dir"])
+  ).trim();
+  const operations: Array<[string, string]> = [
+    ["rebase-merge", "a rebase"],
+    ["rebase-apply", "a rebase"],
+    ["MERGE_HEAD", "a merge"],
+    ["CHERRY_PICK_HEAD", "a cherry-pick"],
+    ["REVERT_HEAD", "a revert"],
+    ["BISECT_LOG", "a bisect"],
+    ["sequencer", "a cherry-pick or revert"],
+  ];
+  const underway = await Promise.all(
+    operations.map(async ([file, operation]) =>
+      (await exists(path.join(gitDir, file))) ? operation : null,
+    ),
+  );
+  const busy = underway.find((operation) => operation !== null) ?? null;
+  return {
+    branch: ref.trim().replace(/^refs\/heads\//, "") || null,
+    busy,
+  };
+}
+
+async function exists(filePath: string): Promise<boolean> {
+  return fs.access(filePath).then(
+    () => true,
+    () => false,
+  );
+}
+
 async function canonicalCommonDir(cwd: string): Promise<string> {
   const raw = (await git(cwd, ["rev-parse", "--git-common-dir"])).trim();
   return fs.realpath(path.isAbsolute(raw) ? raw : path.resolve(cwd, raw));
@@ -70,6 +192,49 @@ async function canonicalCommonDir(cwd: string): Promise<string> {
 
 async function canonicalPath(filePath: string): Promise<string> {
   return fs.realpath(path.resolve(filePath));
+}
+
+/**
+ * A path as Git reports it, whether or not it exists: symlinked parents
+ * (macOS's /var) resolved as far as they go.
+ */
+async function comparablePath(filePath: string): Promise<string> {
+  const resolved = path.resolve(filePath);
+  const real = await fs.realpath(resolved).catch(() => null);
+  if (real) return real;
+  const parent = path.dirname(resolved);
+  return parent === resolved
+    ? resolved
+    : path.join(await comparablePath(parent), path.basename(resolved));
+}
+
+function nulSeparated(output: string): string[] {
+  return output.split("\0").filter(Boolean);
+}
+
+/** Paths `git status --porcelain=v1 -z` reports, both sides of a rename. */
+function statusPaths(output: string): string[] {
+  const fields = output.split("\0");
+  const paths: string[] = [];
+  for (let index = 0; index < fields.length; index++) {
+    const field = fields[index];
+    if (!field || field.length < 4) continue;
+    paths.push(field.slice(3));
+    // A rename or copy names its source in the next field.
+    if (/[RC]/.test(field.slice(0, 2))) {
+      const source = fields[index + 1];
+      if (source) paths.push(source);
+      index++;
+    }
+  }
+  return paths;
+}
+
+async function holdsFiles(directory: string): Promise<boolean> {
+  const entries = await fs
+    .readdir(directory, { recursive: true, withFileTypes: true })
+    .catch(() => []);
+  return entries.some((entry) => !entry.isDirectory());
 }
 
 async function withRepositoryMutationLock<T>(
@@ -117,17 +282,25 @@ export function parseWorktreePorcelain(output: string): RepositoryWorktree[] {
 
 /**
  * Desktop-local session checkout assignments. A missing assignment always
- * means the project's primary folder; creation is an explicit agent action.
+ * means the project's primary folder. A chat's own (managed) worktree is
+ * chosen by the person or created by an agent; its folder exists only
+ * while the chat needs it (ADR 0215).
  */
 export class SessionCheckouts {
   private readonly pglite: PGlite;
   private readonly worktreesDirectory: string;
   private readonly projectRoot: SessionCheckoutsOptions["projectRoot"];
+  private readonly sessionRunning: NonNullable<
+    SessionCheckoutsOptions["sessionRunning"]
+  >;
+  /** What the next turn tells the agent once, after the person moved it. */
+  private readonly notices = new Map<string, string>();
 
   constructor(options: SessionCheckoutsOptions) {
     this.pglite = options.pglite;
     this.worktreesDirectory = options.worktreesDirectory;
     this.projectRoot = options.projectRoot;
+    this.sessionRunning = options.sessionRunning ?? (async () => false);
   }
 
   async init(): Promise<void> {
@@ -143,6 +316,8 @@ export class SessionCheckouts {
       );
       CREATE INDEX IF NOT EXISTS session_checkouts_project_idx
         ON desktop.session_checkouts(project_id);
+      ALTER TABLE desktop.session_checkouts
+        ADD COLUMN IF NOT EXISTS own_branch text;
     `);
   }
 
@@ -154,6 +329,9 @@ export class SessionCheckouts {
     if (!root) return undefined;
     const binding = await this.binding(input);
     if (!binding) return root;
+    // The chat's own worktree comes back with its next turn.
+    if (binding.kind === "managed" && !(await exists(binding.path)))
+      return binding.path;
     try {
       await this.assertSameRepository(root, binding.path);
       return await canonicalPath(binding.path);
@@ -168,8 +346,10 @@ export class SessionCheckouts {
    * The folder a native agent works in, and whether it is the chat's own.
    * A chat at a ref of the project's remote, or asked to move to one (ADR
    * 0178), always works in its own worktree, started at that commit from the
-   * host's mirror. Only a managed worktree is the chat's own: base moves
-   * never touch the project folder or a worktree the person assigned.
+   * host's mirror. A chat's own worktree that is not checked out now is
+   * checked out again (ADR 0215). Only a managed worktree is the chat's own:
+   * base moves never touch the project folder or a worktree the person
+   * assigned.
    */
   async resolveForAgent(input: {
     projectId: string;
@@ -178,7 +358,18 @@ export class SessionCheckouts {
     /** Whether the isolation policy keeps this chat out of `checkoutPath`. */
     requiresIsolation(checkoutPath: string): Promise<boolean>;
   }): Promise<{ path: string; owned: boolean }> {
-    const current = await this.describe(input);
+    // A put-away, bring or discard under way finishes first (ADR 0215); a
+    // folder without Git has none.
+    const root = this.projectRoot(input.projectId);
+    const current =
+      root && (await hasLocalGit({ path: root }))
+        ? await this.withAssignmentLock({
+            projectId: input.projectId,
+            operation: () => this.describe(input),
+            // A repository Git cannot read (ownership, a dangling .git)
+            // still works as a plain folder.
+          }).catch(() => this.describe(input))
+        : await this.describe(input);
     if (input.workspace && current.kind === "primary") {
       const created = await this.createManaged({
         projectId: input.projectId,
@@ -188,6 +379,13 @@ export class SessionCheckouts {
           ref: input.workspace.pin,
           commit: input.workspace.commit,
         },
+      });
+      return { path: created.path, owned: true };
+    }
+    if (current.kind === "managed" && !current.present) {
+      const created = await this.createManaged({
+        projectId: input.projectId,
+        sessionId: input.sessionId,
       });
       return { path: created.path, owned: true };
     }
@@ -222,8 +420,64 @@ export class SessionCheckouts {
       throw new Error(`Project '${input.projectId}' has no folder`);
     const binding = await this.binding(input);
     return binding
-      ? { path: resolved, kind: binding.kind, branch: binding.branch }
-      : { path: resolved, kind: "primary", branch: null };
+      ? {
+          path: resolved,
+          kind: binding.kind,
+          branch: binding.branch,
+          present: await exists(resolved),
+        }
+      : { path: resolved, kind: "primary", branch: null, present: true };
+  }
+
+  /**
+   * Where a chat works, for its status popup (ADR 0215). An assigned
+   * folder that is gone, or no longer this repository, is reported, not
+   * thrown, so the popup can offer the project folder.
+   */
+  async detail(input: {
+    projectId: string;
+    sessionId: string;
+  }): Promise<SessionCheckoutDetail> {
+    const root = this.requireRoot(input.projectId);
+    const worktreesAvailable = await this.worktreesAvailable(input.projectId);
+    const description = await this.describe(input).catch(() => null);
+    if (!description) {
+      const binding = await this.binding(input);
+      return {
+        path: binding?.path ?? root,
+        kind: binding?.kind ?? "primary",
+        branch: binding?.branch ?? null,
+        present: false,
+        available: false,
+        projectFolder: root,
+        worktreesAvailable,
+        changedFiles: null,
+      };
+    }
+    let changedFiles: number | null = null;
+    if (description.kind === "managed" && description.branch) {
+      changedFiles = await this.changedFiles({
+        root,
+        branch: description.branch,
+        worktree: description.present ? description.path : null,
+      }).catch(() => null);
+    } else if (description.kind === "managed") {
+      changedFiles = 0;
+    }
+    return {
+      ...description,
+      available: true,
+      projectFolder: root,
+      worktreesAvailable,
+      changedFiles,
+    };
+  }
+
+  /** The project can start a worktree: a Git repository with a commit. */
+  async worktreesAvailable(projectId: string): Promise<boolean> {
+    const root = this.projectRoot(projectId);
+    if (!root || !(await hasLocalGit({ path: root }))) return false;
+    return gitSucceeds(root, ["rev-parse", "--verify", "--quiet", "HEAD"]);
   }
 
   async list(projectId: string): Promise<ClassifiedRepositoryWorktree[]> {
@@ -259,6 +513,7 @@ export class SessionCheckouts {
       path: string;
       kind: "managed" | "external";
       branch: string | null;
+      present: boolean;
     }>
   > {
     const result = await this.pglite.query<{
@@ -273,12 +528,15 @@ export class SessionCheckouts {
        ORDER BY created_at`,
       [projectId],
     );
-    return result.rows.map((row) => ({
-      sessionId: row.session_id,
-      path: row.path,
-      kind: row.kind,
-      branch: row.branch,
-    }));
+    return Promise.all(
+      result.rows.map(async (row) => ({
+        sessionId: row.session_id,
+        path: row.path,
+        kind: row.kind,
+        branch: row.branch,
+        present: await exists(row.path),
+      })),
+    );
   }
 
   async isOccupied(input: {
@@ -304,6 +562,38 @@ export class SessionCheckouts {
     return false;
   }
 
+  /**
+   * Choose the chat's own worktree (ADR 0215). Nothing is checked out yet:
+   * the chat's next turn creates it at the project folder's commit.
+   */
+  async plan(input: {
+    projectId: string;
+    sessionId: string;
+  }): Promise<SessionCheckoutDescription> {
+    const root = this.requireRoot(input.projectId);
+    if (!(await this.worktreesAvailable(input.projectId)))
+      throw new Error(
+        "A worktree starts from a commit, and this project folder has none in Git yet.",
+      );
+    const commonDir = await canonicalCommonDir(root);
+    await withRepositoryMutationLock(commonDir, async () => {
+      if (await this.binding(input)) return;
+      await this.save({
+        sessionId: input.sessionId,
+        projectId: input.projectId,
+        path: this.managedPath(root, input),
+        kind: "managed",
+        branch: null,
+      });
+    });
+    return this.describe(input);
+  }
+
+  /**
+   * The chat's own worktree, checked out now: reused, checked out again
+   * from its branch, or created at the project folder's commit (or at
+   * `start`). A new checkout copies the project's listed ignored files.
+   */
   async createManaged(input: {
     projectId: string;
     sessionId: string;
@@ -319,22 +609,16 @@ export class SessionCheckouts {
     const commonDir = await canonicalCommonDir(root);
     return withRepositoryMutationLock(commonDir, async () => {
       const existing = await this.binding(input);
-      if (existing) {
+      if (existing?.kind === "external") {
         await this.assertSameRepository(root, existing.path);
         await input.ensureAvailable?.(existing.path);
         return existing;
       }
-      const worktreesRoot = path.join(this.worktreesDirectory, input.projectId);
-      const worktreePath = path.join(worktreesRoot, input.sessionId);
-      await fs.mkdir(worktreesRoot, { recursive: true });
-      const pathExists = await fs.access(worktreePath).then(
-        () => true,
-        () => false,
-      );
-      if (pathExists) {
+      const worktreePath = existing?.path ?? this.managedPath(root, input);
+      if (await exists(worktreePath)) {
+        const target = await comparablePath(worktreePath);
         const registered = (await this.list(input.projectId)).find(
-          (candidate) =>
-            path.resolve(candidate.path) === path.resolve(worktreePath),
+          (candidate) => path.resolve(candidate.path) === target,
         );
         if (registered?.kind !== "managed")
           throw new Error(
@@ -348,16 +632,32 @@ export class SessionCheckouts {
           path: await canonicalPath(worktreePath),
           kind: "managed",
           branch: registered.branch,
+          ownBranch: existing?.ownBranch ?? null,
         };
         await this.save(binding);
         return binding;
       }
 
-      const prefix = input.sessionId.replace(/[^A-Za-z0-9]/g, "").slice(0, 8);
-      const branch = await this.availableBranch(
-        root,
-        `${MANAGED_BRANCH_PREFIX}${prefix || "session"}`,
-      );
+      await fs.mkdir(path.dirname(worktreePath), { recursive: true });
+      // A folder removed by hand leaves its registration behind; only that
+      // one goes, never the person's worktrees on a disk not mounted now.
+      await this.unregister(root, worktreePath);
+      const kept =
+        existing?.branch &&
+        (await gitSucceeds(root, [
+          "show-ref",
+          "--verify",
+          "--quiet",
+          `refs/heads/${existing.branch}`,
+        ]))
+          ? existing.branch
+          : null;
+      const branch =
+        kept ??
+        (await this.availableBranch(
+          root,
+          existing?.branch ?? `${MANAGED_BRANCH_PREFIX}${sessionPrefix(input)}`,
+        ));
       try {
         if (input.start)
           await git(root, [
@@ -367,26 +667,36 @@ export class SessionCheckouts {
             input.start.repository,
             input.start.ref,
           ]);
-        await git(root, [
-          "worktree",
-          "add",
-          "-b",
-          branch,
-          worktreePath,
-          ...(input.start ? [input.start.commit] : []),
-        ]);
+        await git(
+          root,
+          kept
+            ? ["worktree", "add", worktreePath, kept]
+            : [
+                "worktree",
+                "add",
+                "-b",
+                branch,
+                worktreePath,
+                ...(input.start ? [input.start.commit] : []),
+              ],
+        );
+        await copyIncludedFiles({ root, worktree: worktreePath });
         const binding: SessionCheckoutBinding = {
           sessionId: input.sessionId,
           projectId: input.projectId,
           path: await canonicalPath(worktreePath),
           kind: "managed",
           branch,
+          ownBranch: kept ? (existing?.ownBranch ?? null) : branch,
         };
         await input.ensureAvailable?.(binding.path);
         await this.save(binding);
         return binding;
       } catch (cause) {
-        await this.cleanupManagedCreation(root, worktreePath, branch);
+        await this.removeCheckout(root, worktreePath);
+        // A branch made here goes with it; one the chat already had stays.
+        if (!kept)
+          await git(root, ["branch", "-D", branch]).catch(() => undefined);
         throw cause;
       }
     });
@@ -410,13 +720,23 @@ export class SessionCheckouts {
     if (!worktree) {
       throw new Error("The path is not a registered worktree for this project");
     }
+    // Another chat's own worktree stays that chat's: this one only uses it,
+    // so its lifecycle never removes it (ADR 0215).
+    const kind =
+      worktree.kind === "managed" &&
+      !(await this.sharedWithAnother({
+        sessionId: input.sessionId,
+        path: adoptedPath,
+      }))
+        ? "managed"
+        : "external";
     const status = await git(adoptedPath, [
       "status",
       "--porcelain=v1",
       "-z",
       "--untracked-files=all",
     ]);
-    if (status && worktree.kind !== "managed") {
+    if (status && kind !== "managed") {
       throw new Error(
         "The external worktree has uncommitted changes. Commit or clean them before assigning it to an agent session.",
       );
@@ -425,7 +745,7 @@ export class SessionCheckouts {
       sessionId: input.sessionId,
       projectId: input.projectId,
       path: adoptedPath,
-      kind: worktree.kind === "managed" ? "managed" : "external",
+      kind,
       branch: worktree.branch,
     };
     await this.save(binding);
@@ -438,7 +758,7 @@ export class SessionCheckouts {
   }): Promise<SessionCheckoutDescription> {
     const root = this.requireRoot(input.projectId);
     await this.deleteBinding(input.sessionId);
-    return { path: root, kind: "primary", branch: null };
+    return { path: root, kind: "primary", branch: null, present: true };
   }
 
   async withAssignmentLock<T>(input: {
@@ -450,6 +770,255 @@ export class SessionCheckouts {
     return withRepositoryMutationLock(commonDir, input.operation);
   }
 
+  /**
+   * Put a resting chat's own worktree away (ADR 0215): record what is in it
+   * on its branch and remove the folder. The branch keeps the work; the
+   * chat's next turn checks it out again. The folder stays when that would
+   * lose anything: a turn runs there, another chat uses it, it holds
+   * personal files Git cannot record, or Git is mid-operation or off a
+   * branch there.
+   */
+  async putAway(input: {
+    projectId: string;
+    sessionId: string;
+  }): Promise<void> {
+    const root = this.projectRoot(input.projectId);
+    if (!root || !(await hasLocalGit({ path: root }))) return;
+    const commonDir = await canonicalCommonDir(root);
+    await withRepositoryMutationLock(commonDir, async () => {
+      const binding = await this.binding(input);
+      if (binding?.kind !== "managed" || !(await exists(binding.path))) return;
+      if (await this.sessionRunning(input)) return;
+      if (await this.keeps({ root, binding })) return;
+      const branch = await this.currentBranch(binding);
+      if (!branch) return;
+      await this.recordChanges({
+        workingDirectory: binding.path,
+        message: "Put away with the chat",
+      });
+      await this.removeCheckout(root, binding.path);
+    });
+  }
+
+  /**
+   * Bring a chat's own worktree back into the project folder (ADR 0215):
+   * its changes since it left the folder's history, merged three ways with
+   * the folder's commit, written there as uncommitted changes. Refused,
+   * leaving the project folder as it was, on a conflict or when the
+   * folder's own uncommitted changes touch the same files (the worktree's
+   * changes are recorded on its branch by then). Then the chat works in
+   * the project folder, and its worktree and own branch are gone.
+   */
+  async bringToProjectFolder(input: {
+    projectId: string;
+    sessionId: string;
+  }): Promise<{ files: string[] }> {
+    const root = this.requireRoot(input.projectId);
+    const commonDir = await canonicalCommonDir(root);
+    const files = await withRepositoryMutationLock(commonDir, async () => {
+      const binding = await this.ownBinding(input);
+      const present = await exists(binding.path);
+      if (present && (await this.keeps({ root, binding })))
+        throw new Error(
+          "This worktree holds personal files Git cannot record. Move them out of its .work/personal folder first.",
+        );
+      const branch = present
+        ? await this.currentBranch(binding)
+        : binding.branch;
+      if (present && !branch)
+        throw new Error(
+          "Git is in the middle of an operation in this worktree, or it is not on a branch. Ask the chat to finish it first.",
+        );
+      if (present)
+        await this.recordChanges({
+          workingDirectory: binding.path,
+          message: "Bring changes to the project folder",
+        }).catch((cause: unknown) => {
+          // Our own refusals read well; Git's command lines do not.
+          if (
+            cause instanceof Error &&
+            !cause.message.startsWith("Command failed")
+          )
+            throw cause;
+          console.warn("[desktop] recording a worktree failed", cause);
+          throw new Error(
+            "Git could not record this worktree's changes, so nothing moved.",
+          );
+        });
+      const brought = branch
+        ? await this.applyToProjectFolder({ root, branch })
+        : [];
+      if (present) await this.removeCheckout(root, binding.path);
+      // Only the branch Work made goes, and only when everything on it
+      // was brought: a branch the chat switched to stays.
+      const own = binding.ownBranch;
+      if (
+        own &&
+        branch &&
+        (own === branch ||
+          (await gitSucceeds(root, [
+            "merge-base",
+            "--is-ancestor",
+            `refs/heads/${own}`,
+            `refs/heads/${branch}`,
+          ])))
+      )
+        await git(root, ["branch", "-D", own]).catch(() => undefined);
+      await this.deleteBinding(input.sessionId);
+      return brought;
+    });
+    this.notices.set(
+      input.sessionId,
+      files.length > 0
+        ? `The person brought this chat's changes from its own worktree into the project folder (${root}) as uncommitted changes to ${files.length} ${files.length === 1 ? "file" : "files"}. The worktree is gone: you now work in the project folder.`
+        : `The person moved this chat from its own worktree to the project folder (${root}); it had no changes to bring. You now work in the project folder.`,
+    );
+    return { files };
+  }
+
+  /**
+   * Discard a chat's own worktree and the branch Work made for it (ADR
+   * 0215); the chat works in the project folder from its next turn. A
+   * branch the chat switched the worktree to stays.
+   */
+  async discard(input: {
+    projectId: string;
+    sessionId: string;
+  }): Promise<void> {
+    const root = this.requireRoot(input.projectId);
+    const commonDir = await canonicalCommonDir(root);
+    const binding = await withRepositoryMutationLock(commonDir, async () => {
+      const own = await this.ownBinding(input);
+      if (await exists(own.path)) {
+        await this.assertSameRepository(root, own.path);
+        await this.removeCheckout(root, own.path);
+      }
+      if (own.ownBranch)
+        await git(root, ["branch", "-D", own.ownBranch]).catch(() => undefined);
+      await this.deleteBinding(input.sessionId);
+      return own;
+    });
+    if (binding.branch)
+      this.notices.set(
+        input.sessionId,
+        `The person discarded this chat's own worktree and its changes. You now work in the project folder (${root}); nothing from the worktree is there.`,
+      );
+  }
+
+  /**
+   * Put away chats' own worktrees that outlived their chat's rest (ADR
+   * 0215): a chat archived while its turn could not stop, or a worktree
+   * an agent left when it returned to the project folder. Run when the
+   * host starts, before any turn.
+   */
+  async sweep(input: {
+    resting(input: { projectId: string; sessionId: string }): Promise<boolean>;
+  }): Promise<void> {
+    const bound = await this.pglite.query<{
+      session_id: string;
+      project_id: string;
+      path: string;
+    }>(
+      `SELECT session_id, project_id, path FROM desktop.session_checkouts
+       WHERE kind = 'managed'`,
+    );
+    for (const row of bound.rows) {
+      const ids = { projectId: row.project_id, sessionId: row.session_id };
+      if (!(await exists(row.path))) continue;
+      if (await input.resting(ids).catch(() => false))
+        await this.putAway(ids).catch(() => undefined);
+    }
+    const projects = await fs
+      .readdir(this.worktreesDirectory, { withFileTypes: true })
+      .catch(() => []);
+    for (const project of projects) {
+      const root = project.isDirectory()
+        ? this.projectRoot(project.name)
+        : undefined;
+      if (!root || !(await hasLocalGit({ path: root }))) continue;
+      const commonDir = await canonicalCommonDir(root).catch(() => null);
+      if (!commonDir) continue;
+      const managed = (await this.list(project.name).catch(() => [])).filter(
+        (worktree) => worktree.kind === "managed",
+      );
+      await withRepositoryMutationLock(commonDir, async () => {
+        for (const worktree of managed) {
+          const loose: SessionCheckoutBinding = {
+            sessionId: "",
+            projectId: project.name,
+            path: worktree.path,
+            kind: "managed",
+            branch: worktree.branch,
+          };
+          // One worktree that cannot be read leaves the rest to sweep.
+          const removable = await (async () => {
+            if (!(await exists(worktree.path))) return false;
+            if (await this.keeps({ root, binding: loose })) return false;
+            const head = await headState(worktree.path);
+            if (!head.branch || head.busy) return false;
+            await this.recordChanges({
+              workingDirectory: worktree.path,
+              message: "Put away after the chat left it",
+            });
+            return true;
+          })().catch(() => false);
+          if (removable) await this.removeCheckout(root, worktree.path);
+        }
+      });
+    }
+  }
+
+  /**
+   * Run the Environment's and the person's setup in a chat's own worktree
+   * (ADR 0208, 0215), recorded in the worktree's own Git directory so a
+   * worktree checked out again sets up again.
+   */
+  async setup(input: {
+    projectId: string;
+    sessionId: string;
+    workingDirectory: string;
+    environment?: string;
+    personal?: string;
+    personalAllowed: boolean;
+    timeoutMinutes: number;
+    signal: AbortSignal;
+    onRun(): Promise<void>;
+  }): Promise<{ outcome: WorkspaceSetupOutcome; logPath: string }> {
+    const root = this.requireRoot(input.projectId);
+    await this.assertSameRepository(root, input.workingDirectory);
+    const stateDirectory = (
+      await git(input.workingDirectory, ["rev-parse", "--absolute-git-dir"])
+    ).trim();
+    return runNativeWorkspaceSetup({ ...input, stateDirectory });
+  }
+
+  /**
+   * What the agent is told this turn about where it works: every turn in
+   * a worktree, and once after the person moved the chat.
+   */
+  async notice(input: {
+    projectId: string;
+    sessionId: string;
+  }): Promise<string | null> {
+    const lines: string[] = [];
+    const once = this.notices.get(input.sessionId);
+    if (once) {
+      this.notices.delete(input.sessionId);
+      lines.push(once);
+    }
+    const root = this.projectRoot(input.projectId);
+    const binding = root ? await this.binding(input) : null;
+    if (root && binding?.kind === "managed")
+      lines.push(
+        `This chat works in its own Git worktree at ${binding.path}${binding.branch ? ` (branch ${binding.branch})` : ""}, not in the project folder (${root}). Its changes reach the project folder only when the person brings them there from the chat's status popup, or through a pull request.`,
+      );
+    else if (root && binding?.kind === "external")
+      lines.push(
+        `This chat works in the Git worktree at ${binding.path}${binding.branch ? ` (branch ${binding.branch})` : ""}, not in the project folder (${root}).`,
+      );
+    return lines.length > 0 ? lines.join("\n") : null;
+  }
+
   /** Checkpoint an isolated checkout and return a named ref safe to push. */
   async preparePullRequest(input: {
     projectId: string;
@@ -459,6 +1028,11 @@ export class SessionCheckouts {
     const description = await this.describe(input);
     if (description.kind === "primary") {
       throw new Error("The session is not using an isolated worktree");
+    }
+    if (description.kind === "managed" && !description.present) {
+      throw new Error(
+        "This chat's worktree is put away; send it a message to check it out again first.",
+      );
     }
     if (description.kind === "managed") {
       await this.checkpoint({ ...input, workingDirectory: description.path });
@@ -473,10 +1047,9 @@ export class SessionCheckouts {
       await git(description.path, ["branch", "--show-current"])
     ).trim();
     if (!branch) {
-      const prefix = input.sessionId.replace(/[^A-Za-z0-9]/g, "").slice(0, 8);
       branch = await this.availableBranch(
         this.requireRoot(input.projectId),
-        `${MANAGED_BRANCH_PREFIX}${prefix || "session"}-review`,
+        `${MANAGED_BRANCH_PREFIX}${sessionPrefix(input)}-review`,
       );
       await git(description.path, ["switch", "-c", branch]);
     }
@@ -496,37 +1069,9 @@ export class SessionCheckouts {
     const root = this.requireRoot(input.projectId);
     await this.assertSameRepository(root, input.workingDirectory);
     const commonDir = await canonicalCommonDir(input.workingDirectory);
-    return withRepositoryMutationLock(commonDir, async () => {
-      await ensurePersonalFilesExcluded({ repoPath: input.workingDirectory });
-      const personalFiles = await git(input.workingDirectory, [
-        "ls-files",
-        "--",
-        PROJECT_PERSONAL_DIR,
-      ]);
-      if (personalFiles.trim()) {
-        throw new Error(
-          "Personal files are tracked. Remove them from the git index before checkpointing or sharing this project.",
-        );
-      }
-      const status = await git(input.workingDirectory, [
-        "status",
-        "--porcelain=v1",
-        "-z",
-        "--untracked-files=all",
-      ]);
-      if (!status) return null;
-      await git(input.workingDirectory, ["add", "-A"]);
-      await git(input.workingDirectory, [
-        "-c",
-        `user.name=${AGENT_COMMIT_AUTHOR.name}`,
-        "-c",
-        `user.email=${AGENT_COMMIT_AUTHOR.email}`,
-        "commit",
-        "-m",
-        input.message,
-      ]);
-      return (await git(input.workingDirectory, ["rev-parse", "HEAD"])).trim();
-    });
+    return withRepositoryMutationLock(commonDir, () =>
+      this.recordChanges(input),
+    );
   }
 
   /** The checkout's current commit, which a rollback of the next turn restores. */
@@ -611,6 +1156,288 @@ export class SessionCheckouts {
     return root;
   }
 
+  /**
+   * Where a chat's own worktree lives: a folder of its own in host
+   * storage, named after the project so editors and terminals show the
+   * project's name.
+   */
+  private managedPath(
+    root: string,
+    input: { projectId: string; sessionId: string },
+  ): string {
+    return path.join(
+      this.worktreesDirectory,
+      input.projectId,
+      input.sessionId,
+      path.basename(path.resolve(root)) || "project",
+    );
+  }
+
+  /**
+   * The chat's own worktree, to bring back or discard: refused while a
+   * turn runs in the chat or another chat works there. The caller holds
+   * the repository lock.
+   */
+  private async ownBinding(input: {
+    projectId: string;
+    sessionId: string;
+  }): Promise<SessionCheckoutBinding> {
+    const binding = await this.binding(input);
+    if (binding?.kind !== "managed")
+      throw new Error("This chat does not work in its own worktree.");
+    if (await this.sessionRunning(input))
+      throw new Error("Change the folder after the current turn finishes.");
+    if (await this.sharedWithAnother(binding))
+      throw new Error(
+        "Another chat works in this worktree too, so it stays as it is.",
+      );
+    return binding;
+  }
+
+  /** A worktree that must stay: another chat uses it, or it holds personal files. */
+  private async keeps(input: {
+    root: string;
+    binding: SessionCheckoutBinding;
+  }): Promise<boolean> {
+    await this.assertSameRepository(input.root, input.binding.path);
+    return (
+      (await this.sharedWithAnother(input.binding)) ||
+      (await holdsFiles(path.join(input.binding.path, PROJECT_PERSONAL_DIR)))
+    );
+  }
+
+  /**
+   * The branch the chat's worktree is on, recorded as the chat's branch;
+   * null while Git is mid-operation there or off a branch, when recording
+   * its work could leave it unreachable.
+   */
+  private async currentBranch(
+    binding: SessionCheckoutBinding,
+  ): Promise<string | null> {
+    const head = await headState(binding.path);
+    if (!head.branch || head.busy) return null;
+    if (head.branch !== binding.branch)
+      await this.save({ ...binding, branch: head.branch });
+    return head.branch;
+  }
+
+  /** Another chat is bound to the same folder. */
+  private async sharedWithAnother(input: {
+    sessionId: string;
+    path: string;
+  }): Promise<boolean> {
+    const target = await canonicalPath(input.path).catch(() =>
+      path.resolve(input.path),
+    );
+    // Without a session, every binding is another chat's.
+    const others = input.sessionId
+      ? await this.pglite.query<{ path: string }>(
+          "SELECT path FROM desktop.session_checkouts WHERE session_id <> $1",
+          [input.sessionId],
+        )
+      : await this.pglite.query<{ path: string }>(
+          "SELECT path FROM desktop.session_checkouts",
+        );
+    for (const other of others.rows) {
+      const candidate = await canonicalPath(other.path).catch(() =>
+        path.resolve(other.path),
+      );
+      if (candidate === target) return true;
+    }
+    return false;
+  }
+
+  /** Drop the registration of one worktree folder, present or not. */
+  private async unregister(root: string, worktreePath: string): Promise<void> {
+    const target = await comparablePath(worktreePath);
+    const registered = await git(root, [
+      "worktree",
+      "list",
+      "--porcelain",
+      "-z",
+    ])
+      .then(parseWorktreePorcelain)
+      .catch(() => []);
+    if (registered.some((worktree) => path.resolve(worktree.path) === target))
+      await git(root, ["worktree", "remove", "--force", target]).catch(
+        () => undefined,
+      );
+  }
+
+  /** Commit everything in a checkout; the caller holds the repository lock. */
+  private async recordChanges(input: {
+    workingDirectory: string;
+    message: string;
+  }): Promise<string | null> {
+    await ensurePersonalFilesExcluded({ repoPath: input.workingDirectory });
+    const personalFiles = await git(input.workingDirectory, [
+      "ls-files",
+      "--",
+      PROJECT_PERSONAL_DIR,
+    ]);
+    if (personalFiles.trim()) {
+      throw new Error(
+        "Personal files are tracked. Remove them from the git index before checkpointing or sharing this project.",
+      );
+    }
+    const status = await git(input.workingDirectory, [
+      "status",
+      "--porcelain=v1",
+      "-z",
+      "--untracked-files=all",
+    ]);
+    if (!status) return null;
+    await git(input.workingDirectory, ["add", "-A"]);
+    // Work's own record of the checkout: the project's commit hooks and
+    // signing are for the person's commits, and must not stall every chat.
+    await git(input.workingDirectory, [
+      "-c",
+      `user.name=${AGENT_COMMIT_AUTHOR.name}`,
+      "-c",
+      `user.email=${AGENT_COMMIT_AUTHOR.email}`,
+      "-c",
+      "commit.gpgsign=false",
+      "commit",
+      "--no-verify",
+      "-m",
+      input.message,
+    ]);
+    return (await git(input.workingDirectory, ["rev-parse", "HEAD"])).trim();
+  }
+
+  /**
+   * Write `branch`'s changes since it left the project folder's history
+   * into the project folder as uncommitted changes, or throw changing
+   * nothing. Plumbing all the way, bytes untouched: the person's diff
+   * settings (prefixes, text conversion, external tools) never shape the
+   * patch. The caller holds the repository lock.
+   */
+  private async applyToProjectFolder(input: {
+    root: string;
+    branch: string;
+  }): Promise<string[]> {
+    const { root } = input;
+    const ref = `refs/heads/${input.branch}`;
+    const head = (
+      await git(root, ["rev-parse", "--verify", "HEAD^{commit}"])
+    ).trim();
+    const merged = await gitRun(root, [
+      "merge-tree",
+      "--write-tree",
+      "--name-only",
+      "--no-messages",
+      head,
+      ref,
+    ]);
+    const [tree, ...conflicted] = merged.stdout.split("\n").filter(Boolean);
+    if (merged.code === 1)
+      throw new Error(
+        `These changes conflict with the project folder's latest commits (${conflicted.slice(0, 5).join(", ")}). Ask the chat to merge the project folder's branch into its worktree first.`,
+      );
+    if (merged.code !== 0 || !tree) {
+      console.warn(`[desktop] merge-tree failed: ${merged.stderr.trim()}`);
+      if (/unknown option|usage: git merge-tree/.test(merged.stderr))
+        throw new Error(
+          "Bringing changes back needs Git 2.38 or newer. Update Git, then try again.",
+        );
+      throw new Error(
+        "Git could not combine these changes with the project folder.",
+      );
+    }
+    // `:old new oldsha newsha status` then the path, per changed file.
+    const raw = nulSeparated(
+      await git(root, ["diff-tree", "-r", "-z", "--no-renames", head, tree]),
+    );
+    const files: string[] = [];
+    for (let index = 0; index + 1 < raw.length; index += 2) {
+      const [oldMode, newMode] = (raw[index] ?? "").slice(1).split(" ");
+      if (oldMode === "160000" || newMode === "160000")
+        throw new Error(
+          "These changes move a submodule, which the project folder cannot take as uncommitted changes. Share them with a pull request instead.",
+        );
+      files.push(raw[index + 1] ?? "");
+    }
+    if (files.length === 0) return [];
+    const dirty = new Set(
+      statusPaths(
+        await git(root, [
+          "status",
+          "--porcelain=v1",
+          "-z",
+          "--untracked-files=all",
+        ]),
+      ),
+    );
+    const overlap = files.filter((file) => dirty.has(file));
+    if (overlap.length > 0)
+      throw new Error(
+        `The project folder has its own uncommitted changes to ${overlap.slice(0, 5).join(", ")}${overlap.length > 5 ? ` and ${overlap.length - 5} more` : ""}. Commit or move them aside, then bring these changes again.`,
+      );
+    const patch = await gitBytes(root, [
+      "diff-tree",
+      "-p",
+      "--binary",
+      "--full-index",
+      "--no-renames",
+      head,
+      tree,
+    ]);
+    const applied = await gitRun(
+      root,
+      ["apply", "--whitespace=nowarn", "-"],
+      patch,
+    );
+    if (applied.code !== 0) {
+      console.warn(`[desktop] git apply failed: ${applied.stderr.trim()}`);
+      throw new Error(
+        "The project folder could not take these changes, so nothing there changed. Ask the chat to merge the project folder's branch into its worktree, then bring them again.",
+      );
+    }
+    return files;
+  }
+
+  /**
+   * Files a chat's own worktree changed since it left the project folder's
+   * history: committed on its branch, and, while checked out, not yet.
+   */
+  private async changedFiles(input: {
+    root: string;
+    branch: string;
+    worktree: string | null;
+  }): Promise<number> {
+    const ref = `refs/heads/${input.branch}`;
+    const base = (await git(input.root, ["merge-base", "HEAD", ref])).trim();
+    if (!input.worktree)
+      return nulSeparated(
+        await git(input.root, [
+          "diff-tree",
+          "-r",
+          "--name-only",
+          "-z",
+          "--no-renames",
+          base,
+          ref,
+        ]),
+      ).length;
+    const [tracked, untracked] = await Promise.all([
+      git(input.worktree, ["diff", "--name-only", "-z", "--no-renames", base]),
+      git(input.worktree, ["ls-files", "--others", "--exclude-standard", "-z"]),
+    ]);
+    return new Set([...nulSeparated(tracked), ...nulSeparated(untracked)]).size;
+  }
+
+  /** Remove a managed checkout's folder and registration; the branch stays. */
+  private async removeCheckout(
+    root: string,
+    worktreePath: string,
+  ): Promise<void> {
+    await this.unregister(root, worktreePath);
+    await fs.rm(worktreePath, { recursive: true, force: true });
+    // The chat's own folder in host storage holds only its worktree, so it
+    // goes too once empty.
+    await fs.rmdir(path.dirname(worktreePath)).catch(() => undefined);
+  }
+
   private async assertSameRepository(
     root: string,
     candidate: string,
@@ -634,8 +1461,9 @@ export class SessionCheckouts {
       path: string;
       kind: "managed" | "external";
       branch: string | null;
+      own_branch: string | null;
     }>(
-      `SELECT session_id, project_id, path, kind, branch
+      `SELECT session_id, project_id, path, kind, branch, own_branch
        FROM desktop.session_checkouts
        WHERE session_id = $1 AND project_id = $2`,
       [input.sessionId, input.projectId],
@@ -648,6 +1476,7 @@ export class SessionCheckouts {
           path: row.path,
           kind: row.kind,
           branch: row.branch,
+          ownBranch: row.own_branch,
         }
       : null;
   }
@@ -655,19 +1484,21 @@ export class SessionCheckouts {
   private async save(binding: SessionCheckoutBinding): Promise<void> {
     await this.pglite.query(
       `INSERT INTO desktop.session_checkouts
-        (session_id, project_id, path, kind, branch)
-       VALUES ($1, $2, $3, $4, $5)
+        (session_id, project_id, path, kind, branch, own_branch)
+       VALUES ($1, $2, $3, $4, $5, $6)
        ON CONFLICT (session_id) DO UPDATE SET
          project_id = EXCLUDED.project_id,
          path = EXCLUDED.path,
          kind = EXCLUDED.kind,
-         branch = EXCLUDED.branch`,
+         branch = EXCLUDED.branch,
+         own_branch = EXCLUDED.own_branch`,
       [
         binding.sessionId,
         binding.projectId,
         binding.path,
         binding.kind,
         binding.branch,
+        binding.ownBranch ?? null,
       ],
     );
   }
@@ -677,34 +1508,6 @@ export class SessionCheckouts {
       "DELETE FROM desktop.session_checkouts WHERE session_id = $1",
       [sessionId],
     );
-  }
-
-  private async cleanupManagedCreation(
-    root: string,
-    worktreePath: string,
-    branch: string,
-  ): Promise<void> {
-    const registered = await git(root, [
-      "worktree",
-      "list",
-      "--porcelain",
-      "-z",
-    ])
-      .then(parseWorktreePorcelain)
-      .catch(() => []);
-    const exactRegistration = registered.some(
-      (worktree) => path.resolve(worktree.path) === path.resolve(worktreePath),
-    );
-    if (exactRegistration) {
-      await git(root, ["worktree", "remove", "--force", worktreePath]).catch(
-        () => undefined,
-      );
-    }
-    await fs.rm(worktreePath, { recursive: true, force: true });
-    await git(root, ["worktree", "prune", "--expire", "now"]).catch(
-      () => undefined,
-    );
-    await git(root, ["branch", "-D", branch]).catch(() => undefined);
   }
 
   private async availableBranch(root: string, base: string): Promise<string> {
@@ -723,4 +1526,51 @@ export class SessionCheckouts {
       branch = `${base}-${suffix}`;
     }
   }
+}
+
+function sessionPrefix(input: { sessionId: string }): string {
+  return input.sessionId.replace(/[^A-Za-z0-9]/g, "").slice(0, 8) || "session";
+}
+
+/**
+ * Copy the project folder's ignored files that `.worktreeinclude` lists
+ * (gitignore syntax) into a new worktree (ADR 0215): never a symlink, never
+ * over a file the worktree has.
+ */
+export async function copyIncludedFiles(input: {
+  root: string;
+  worktree: string;
+}): Promise<string[]> {
+  const includeFile = path.join(input.root, WORKTREE_INCLUDE_FILE);
+  if (!(await exists(includeFile))) return [];
+  const listed = nulSeparated(
+    await git(input.root, [
+      "ls-files",
+      "--others",
+      "--ignored",
+      "-z",
+      `--exclude-from=${includeFile}`,
+    ]),
+  );
+  if (listed.length === 0) return [];
+  // Only what the project ignores: anything else the worktree already has.
+  const ignored = await gitRun(
+    input.root,
+    ["check-ignore", "-z", "--stdin"],
+    `${listed.join("\0")}\0`,
+  );
+  const copied: string[] = [];
+  for (const relative of nulSeparated(ignored.stdout)) {
+    const source = path.join(input.root, relative);
+    const target = path.join(input.worktree, relative);
+    const stat = await fs.lstat(source).catch(() => null);
+    if (!stat?.isFile()) continue;
+    if (await exists(target)) continue;
+    await fs.mkdir(path.dirname(target), { recursive: true });
+    await fs
+      .copyFile(source, target, fs.constants.COPYFILE_EXCL)
+      .then(() => copied.push(relative))
+      .catch(() => undefined);
+  }
+  return copied;
 }

@@ -3,7 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
 
 /**
- * Voice (ADR 0215), end to end with scripted speech: the audio page
+ * Voice (ADR 0216), end to end with scripted speech: the audio page
  * captures the (fake) microphone and streams it to the speech worker,
  * which "hears" one utterance per start. The dock's microphone talks to
  * the assistant, a real session on Work's built-in assistant over the fake

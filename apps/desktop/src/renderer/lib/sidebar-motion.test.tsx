@@ -5,11 +5,11 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useSidebarMotion } from "./sidebar-motion.js";
 
-/** Content morphs wait here until a test lets them apply. */
-const morphs: Array<() => void> = [];
+/** Content settles wait here until a test lets them apply. */
+const settles: Array<() => void> = [];
 vi.mock("./sidebar-transition.js", () => ({
   settleSidebarContent: ({ update }: { update: () => void }) => {
-    morphs.push(update);
+    settles.push(update);
   },
 }));
 
@@ -85,16 +85,16 @@ describe("useSidebarMotion", () => {
   const settled = () =>
     container.querySelector<HTMLElement>("[data-phase]")?.dataset.settled ===
     "true";
-  const applyMorph = () => {
-    const morph = morphs.shift();
-    if (!morph) throw new Error("no morph is waiting");
-    act(morph);
+  const applySettle = () => {
+    const settle = settles.shift();
+    if (!settle) throw new Error("no settle is waiting");
+    act(settle);
   };
 
   beforeEach(() => {
     Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", true);
     slides = [];
-    morphs.length = 0;
+    settles.length = 0;
     runsSlides = true;
     vi.stubGlobal("CSSTransition", FakeTransition);
     container = document.createElement("div");
@@ -115,7 +115,7 @@ describe("useSidebarMotion", () => {
     root = createRoot(container);
     render(false);
     expect(state()).toEqual({ phase: "closed", docked: false });
-    expect(morphs).toHaveLength(0);
+    expect(settles).toHaveLength(0);
   });
 
   it("slides in over the content, then the content makes room", async () => {
@@ -124,12 +124,12 @@ describe("useSidebarMotion", () => {
     // Moving at once; the content keeps its place while it moves.
     expect(state()).toEqual({ phase: "opening", docked: false });
     expect(settled()).toBe(false);
-    expect(morphs).toHaveLength(0);
+    expect(settles).toHaveLength(0);
     await finishSlide();
     expect(state()).toEqual({ phase: "open", docked: false });
     expect(settled()).toBe(false);
-    expect(morphs).toHaveLength(1);
-    applyMorph();
+    expect(settles).toHaveLength(1);
+    applySettle();
     expect(state()).toEqual({ phase: "open", docked: true });
     expect(settled()).toBe(true);
   });
@@ -138,10 +138,10 @@ describe("useSidebarMotion", () => {
     render(true);
     render(false);
     expect(state()).toEqual({ phase: "closing", docked: true });
-    expect(morphs).toHaveLength(0);
+    expect(settles).toHaveLength(0);
     await finishSlide();
     expect(state()).toEqual({ phase: "closed", docked: true });
-    applyMorph();
+    applySettle();
     expect(state()).toEqual({ phase: "closed", docked: false });
   });
 
@@ -150,7 +150,7 @@ describe("useSidebarMotion", () => {
     render(false, false);
     expect(state()).toEqual({ phase: "closing", docked: true });
     await finishSlide();
-    applyMorph();
+    applySettle();
     expect(state()).toEqual({ phase: "closed", docked: false });
   });
 
@@ -162,13 +162,13 @@ describe("useSidebarMotion", () => {
     render(false, false);
     await finishSlide();
     expect(state()).toEqual({ phase: "closed", docked: false });
-    expect(morphs).toHaveLength(0);
+    expect(settles).toHaveLength(0);
   });
 
   it("makes room when an open overlay becomes a docked sidebar", () => {
     render(true, false);
     render(true, true);
-    applyMorph();
+    applySettle();
     expect(state()).toEqual({ phase: "open", docked: true });
   });
 
@@ -180,27 +180,27 @@ describe("useSidebarMotion", () => {
     render(true);
     expect(state().phase).toBe("opening");
     await finishSlide();
-    applyMorph();
+    applySettle();
     expect(state()).toEqual({ phase: "open", docked: true });
     // Reopened while sliding away: the content never left.
     render(false);
     render(true);
     await finishSlide();
     expect(state()).toEqual({ phase: "open", docked: true });
-    expect(morphs).toHaveLength(0);
+    expect(settles).toHaveLength(0);
   });
 
-  it("leaves the content alone if the panel moves again before the morph", async () => {
+  it("leaves the content alone if the panel moves again before the settle", async () => {
     render(false);
     render(true);
     await finishSlide();
-    expect(morphs).toHaveLength(1);
+    expect(settles).toHaveLength(1);
     render(false);
-    applyMorph();
+    applySettle();
     expect(state()).toEqual({ phase: "closing", docked: false });
     await finishSlide();
     expect(state()).toEqual({ phase: "closed", docked: false });
-    expect(morphs).toHaveLength(0);
+    expect(settles).toHaveLength(0);
   });
 
   it("ends a slide cancelled with nothing replacing it", async () => {
@@ -219,10 +219,10 @@ describe("useSidebarMotion", () => {
     render(false);
     render(true);
     expect(state().phase).toBe("open");
-    applyMorph();
+    applySettle();
     render(false);
     expect(state().phase).toBe("closed");
-    applyMorph();
+    applySettle();
     expect(state()).toEqual({ phase: "closed", docked: false });
     expect(settled()).toBe(true);
   });

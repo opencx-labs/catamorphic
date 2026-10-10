@@ -1312,10 +1312,110 @@ describe("agents and profiles", () => {
     );
     await app.press("Enter");
     await runWait(
-      `const inspector = $('[data-testid="session-inspector-content"]');
-       return inspector?.textContent.includes('Checkout') &&
-         inspector.textContent.includes('work/');`,
+      `const folder = $('[data-testid="session-inspector-content"] [data-testid="chat-folder"]');
+       return folder?.dataset.folderKind === 'managed' &&
+         folder.textContent.includes('work/');`,
       { label: "active chat isolated checkout in session status" },
+    );
+  });
+
+  it("gives a chat its own worktree from the palette and brings its changes back from the popup", async () => {
+    // The previous test leaves its chat's status popup open.
+    if (
+      await run<boolean>(
+        `return !!$('[data-testid="session-inspector-content"]');`,
+      )
+    )
+      await app.press("Escape");
+    await runWait(`return !$('[data-testid="session-inspector-content"]');`, {
+      label: "earlier status popup closed",
+    });
+    await ensurePalette();
+    await resetPalette();
+    await run(
+      `setReactValue(paletteInput(), 'New chat in a worktree'); return true;`,
+    );
+    await runWait(pickOption("New chat in a worktree"), {
+      label: "new worktree chat action",
+    });
+    await runWait(
+      `return !!visibleDock()?.querySelector('[data-testid="session-inspector-worktree"]');`,
+      { label: "worktree chat shows its branch mark" },
+    );
+    const openFolder = async (label: string, expression: string) => {
+      await run(
+        `visibleDock().querySelector('[data-testid="session-inspector-trigger"]').focus(); return true;`,
+      );
+      await app.press("Enter");
+      await runWait(
+        `const folder = $('[data-testid="session-inspector-content"] [data-testid="chat-folder"]');
+         return !!folder && (${expression});`,
+        { timeoutMs: 30_000, label },
+      );
+    };
+    const closeFolder = async () => {
+      await app.press("Escape");
+      await runWait(`return !$('[data-testid="session-inspector-content"]');`, {
+        label: "status popup closed",
+      });
+    };
+    await openFolder(
+      "a new chat's worktree comes with its first message",
+      `folder.dataset.folderKind === 'managed' &&
+       folder.textContent.includes('with the first message')`,
+    );
+    await closeFolder();
+
+    await run(`
+      const ta = visibleDock().querySelector('[data-composer-input]');
+      setReactValue(ta, 'terminal: printf "from the chat\\\\n" > chat-made.txt && pwd');
+      ta.closest('form').requestSubmit();
+      return true;
+    `);
+    await runWait(
+      `return [...visibleDock().querySelectorAll('[role="log"] article')].some((el) =>
+         el.textContent.includes('terminal result:') &&
+         el.textContent.includes('/worktrees/'));`,
+      { timeoutMs: 30_000, label: "first turn ran in the chat's own worktree" },
+    );
+
+    await openFolder(
+      "the popup names the worktree and its change",
+      `folder.textContent.includes('work/') &&
+       folder.textContent.includes('1 changed file') &&
+       !!folder.querySelector('[data-folder-action="bring"]:not([disabled])')`,
+    );
+    await run(
+      `$('[data-testid="chat-folder"] [data-folder-action="bring"]').click(); return true;`,
+    );
+    await runWait(
+      `const folder = $('[data-testid="session-inspector-content"] [data-testid="chat-folder"]');
+       return !!folder && folder.dataset.folderKind === 'primary' &&
+         folder.textContent.includes('Brought 1 changed file to the project folder.');`,
+      { timeoutMs: 30_000, label: "changes brought to the project folder" },
+    );
+    await closeFolder();
+    await runWait(
+      `return !visibleDock()?.querySelector('[data-testid="session-inspector-worktree"]');`,
+      { label: "branch mark gone once back in the project folder" },
+    );
+
+    await run(`
+      const ta = visibleDock().querySelector('[data-composer-input]');
+      setReactValue(ta, 'terminal: cat chat-made.txt && rm chat-made.txt && pwd');
+      ta.closest('form').requestSubmit();
+      return true;
+    `);
+    await runWait(
+      `const results = [...visibleDock().querySelectorAll('[role="log"] article')]
+         .filter((el) => el.textContent.includes('terminal result:'));
+       const last = results.at(-1)?.textContent ?? '';
+       return results.length >= 2 && last.includes('from the chat') &&
+         !last.includes('/worktrees/');`,
+      {
+        timeoutMs: 30_000,
+        label: "the next turn works in the project folder with the change",
+      },
     );
   });
 

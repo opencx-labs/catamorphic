@@ -159,9 +159,16 @@ not bring the changes along.
 Follow the supplied coordination strategy. Git facts use native commands.
 Discover create_worktree or use_worktree to change this session's assignment;
 use_worktree with path: null returns to the primary checkout. A shell cd does not
-reassign the session. Copy only task-needed ignored settings into a new worktree,
-never a credentialed environment file wholesale. Shared checkouts share commits
-and rollback. Activity publication is optional when it adds useful peer context.
+reassign the session. The person can also give a chat its own worktree, and
+bring its changes back into the project folder, from the chat's status popup;
+the turn context says where you work. A chat's own worktree starts at the
+project folder's last commit, copies the ignored files .worktreeinclude lists,
+and runs the Environment's setup before your turn; copy any other ignored
+setting a task needs yourself, never a credentialed environment file wholesale.
+Each turn records the worktree on its branch; archiving the chat puts the folder
+away and the next turn checks it out again, so keep nothing there that Git
+ignores and the task cannot recreate. Shared checkouts share commits and
+rollback. Activity publication is optional when it adds useful peer context.
 
 ## Apps, workflows, sharing and connections
 

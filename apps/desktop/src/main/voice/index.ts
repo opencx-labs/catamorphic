@@ -107,7 +107,7 @@ interface ActiveVoice {
 }
 
 /**
- * Voice's main-process side (ADR 0215). One voice is live at a time, for
+ * Voice's main-process side (ADR 0216). One voice is live at a time, for
  * one profile: it owns the speech worker and the hidden audio window (the
  * microphone and speakers), and talks to one chat at a time, the
  * assistant's from the dock or any chat from its composer, moving between

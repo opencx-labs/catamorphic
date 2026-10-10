@@ -6,7 +6,7 @@ import { voiceModelPaths } from "../src/main/voice/models.js";
 import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
 
 /**
- * Voice on the real speech models (ADR 0215): the app's own
+ * Voice on the real speech models (ADR 0216): the app's own
  * voice records a spoken request, the synthetic microphone plays it, and the app must
  * hear it with Silero and Parakeet, send it to the assistant, and speak
  * the answer with Kokoro. Opt-in: set CATAMORPHIC_VOICE_MODELS_DIR to an

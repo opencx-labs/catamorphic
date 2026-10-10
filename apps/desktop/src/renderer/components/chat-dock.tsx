@@ -69,13 +69,13 @@ import {
   type AgentInfo,
   desktopApi,
   projectAgentAsInfo,
-  type SessionCheckoutInfo,
 } from "../lib/desktop-api";
 import { focusMovedByPerson, pointerLeft } from "../lib/dock-attention.js";
 import {
   readEditorSelection,
   selectionFromClipboard,
 } from "../lib/editor-selection";
+import { ipcErrorText } from "../lib/remote-workspace.js";
 import { skillsForAgent, useProjectSkillCatalog } from "../lib/skills";
 import {
   matchSlashEntries,
@@ -86,6 +86,7 @@ import {
 import { TAB_DRAG_TYPE, type TabDragPayload } from "../lib/tab-drag";
 import { classifyPastedText, selectionName, textPill } from "../lib/text-pills";
 import { useBackgroundCommands } from "../lib/use-background-commands";
+import { useSessionCheckout } from "../lib/use-session-checkout.js";
 import { useWorkDisplay } from "../lib/use-work-display.js";
 import type { ChatMode } from "../lib/workspace-types.js";
 import { ActivityText } from "./activity-text";
@@ -94,6 +95,7 @@ import { AuthenticationRequiredCard } from "./authentication-required-card.js";
 import { ApprovalCard } from "./catamorphic/approval-card.js";
 import { ChatTimeline, stepToolName } from "./catamorphic/chat-timeline";
 import { TodoProgress } from "./catamorphic/todo-progress.js";
+import { ChatFolder } from "./chat-folder.js";
 import { SurfacesRail } from "./chat-surface-rail.js";
 import { FilePreviewProjectContext } from "./file-preview";
 import { renderResponseLink } from "./response-link";
@@ -496,6 +498,12 @@ function ChatDockContent({
         compatibleEnvironments[0]?.name,
     );
   }, [compatibleEnvironments, environmentQuery.data, selectedEnvironment]);
+  /**
+   * The first message is recording the worktree chosen before it (ADR
+   * 0215), or recording it failed and the next send tries again.
+   */
+  const [recordingWorktree, setRecordingWorktree] = useState(false);
+  const [worktreeUnrecorded, setWorktreeUnrecorded] = useState(false);
   const chat = useAgentChat(projectId, {
     sessionId: entry.sessionId,
     agentId: selectedAgentId,
@@ -506,7 +514,7 @@ function ChatDockContent({
     // Only a chat on screen streams; minimized ones poll while they work,
     // so a window of chats never runs out of connections.
     live: entry.mode === "partial" || (entry.mode === "tab" && tabActive),
-    onSessionCreated: (sessionId) => {
+    onSessionCreated: async (sessionId) => {
       // Desktop-local privacy flag (ADR 0062): recorded the moment the
       // lazy session gets its id, well before the first turn can settle
       // (and thus before the mirror could ever consider pushing it).
@@ -514,6 +522,19 @@ function ChatDockContent({
         void desktopApi.sessionSetIncognito(sessionId, true);
       }
       onSessionCreated(entry.localId, sessionId);
+      // Chosen before the first message (ADR 0215): recorded before that
+      // message is sent, so its turn checks out the chat's own worktree.
+      if (!entry.worktree) return;
+      setRecordingWorktree(true);
+      try {
+        await desktopApi.sessionUseOwnWorktree({ projectId, sessionId });
+        setWorktreeUnrecorded(false);
+      } catch (cause) {
+        setWorktreeUnrecorded(true);
+        throw new Error(ipcErrorText(cause));
+      } finally {
+        setRecordingWorktree(false);
+      }
     },
   });
   const acknowledgeAttention = useAcknowledgeAgentSessionAttention(projectId);
@@ -570,8 +591,17 @@ function ChatDockContent({
     }
     wasSendingRef.current = chat.isSending;
   }, [chat.isSending]);
-  const [checkout, setCheckout] = useState<SessionCheckoutInfo | null>(null);
   const activeSessionId = chat.sessionId ?? entry.sessionId;
+  // Where the chat works (ADR 0215): its own worktree, or the project
+  // folder. Until the first message records a worktree chosen before it,
+  // the choice is what the chat shows.
+  const worktreeDraft =
+    Boolean(entry.worktree) &&
+    (!activeSessionId || recordingWorktree || worktreeUnrecorded);
+  const checkout = useSessionCheckout(projectId, activeSessionId, {
+    enabled: !authority && !recordingWorktree,
+  }).data;
+  const inWorktree = worktreeDraft || checkout?.kind === "managed";
   const backgroundCommands = useBackgroundCommands(activeSessionId);
   const [moveState, setMoveState] = useState<{
     canMove: boolean;
@@ -629,25 +659,6 @@ function ChatDockContent({
       cancelled = true;
     };
   }, [activeSessionId, authority, chat.isSending, projectId, moveCheckNonce]);
-  useEffect(() => {
-    const load = () => {
-      if (authority || !entry.sessionId) {
-        setCheckout(null);
-        return;
-      }
-      void desktopApi.sessionCheckouts(projectId).then((checkouts) => {
-        setCheckout(
-          checkouts.find(
-            (candidate) => candidate.sessionId === entry.sessionId,
-          ) ?? null,
-        );
-      });
-    };
-    load();
-    return desktopApi.onGitChanged((event) => {
-      if (event.projectId === projectId) load();
-    });
-  }, [authority, entry.sessionId, projectId]);
   // The composer's DOM is the source of truth (see ComposerInput); these
   // mirror what it says so the rest of the dock can react — the prose
   // (slash menu, recall gate, emptiness) and how many pills are live.
@@ -2417,17 +2428,22 @@ function ChatDockContent({
                       ? "This model does not offer a reasoning setting."
                       : undefined
                 }
-                checkout={checkout}
-                onUseProjectFolder={
-                  checkout && activeSessionId && !authority
-                    ? async () => {
-                        await desktopApi.sessionUseProjectFolder({
-                          projectId,
-                          sessionId: activeSessionId,
-                        });
-                        setCheckout(null);
+                worktree={!authority && inWorktree}
+                folder={
+                  authority ? undefined : (
+                    <ChatFolder
+                      projectId={projectId}
+                      sessionId={activeSessionId}
+                      busy={Boolean(chat.isSending || chat.session?.running)}
+                      draftWorktree={worktreeDraft}
+                      onDraftWorktreeChange={(worktree) =>
+                        onEntryChange({
+                          ...entry,
+                          worktree: worktree || undefined,
+                        })
                       }
-                    : undefined
+                    />
+                  )
                 }
                 incognito={isIncognito}
                 openRequest={(inspectRequestNonce ?? 0) + localInspectorNonce}
@@ -3165,7 +3181,7 @@ function ChatDockContent({
                 {/* Context ring (ADR 0057): quiet until a harness reports
                   occupancy and window size; danger red past 90%. */}
                 <ContextMeter turns={chat.timeline} />
-                {/* Voice in this chat (ADR 0215): talk to its agent, then
+                {/* Voice in this chat (ADR 0216): talk to its agent, then
                   carry on typing. Company chats live on the server. */}
                 {!authority && (
                   <VoiceButton

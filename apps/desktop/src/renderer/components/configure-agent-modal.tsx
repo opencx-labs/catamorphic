@@ -320,7 +320,7 @@ function ProfileAgentBody({
   >([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // The agent's voice (ADR 0215) is a profile pref: "" is the default
+  // The agent's voice (ADR 0216) is a profile pref: "" is the default
   // voice, null untouched.
   const { prefs } = useAppPreferences();
   const [voice, setVoice] = useState<VoiceId | "" | null>(null);

@@ -820,6 +820,28 @@ export interface NativeAgentCheckout {
     expectedHead: string | null;
     owned: boolean;
   }): Promise<"restored" | string>;
+  /**
+   * Set up a checkout the chat owns before its turn (ADR 0208, 0215): the
+   * Environment's `setup`, then the owner's own when `personalAllowed`, in
+   * `workingDirectory`, unless this checkout already ran these commands.
+   * `onRun` is called just before commands run, so the chat can show it.
+   */
+  setup?(input: {
+    projectId: string;
+    sessionId: string;
+    workingDirectory: string;
+    environment?: string;
+    personal?: string;
+    personalAllowed: boolean;
+    timeoutMinutes: number;
+    signal: AbortSignal;
+    onRun(): Promise<void>;
+  }): Promise<{ outcome: WorkspaceSetupOutcome; logPath: string }>;
+  /**
+   * Give back the checkout of a chat that was archived or closed and runs
+   * no turn (ADR 0215); its next turn resolves it again.
+   */
+  release?(input: { projectId: string; sessionId: string }): Promise<void>;
 }
 
 interface AgentSessionsDeps {
@@ -4237,6 +4259,7 @@ export class AgentSessionsService {
     const result = await tool.execute(args, {
       projectId: input.session.project_id,
       sessionId: input.session.id,
+      turnId: input.turn.id,
       workingDirectory: this.workingDirectories.get(input.turn.id) ?? "",
       caller: {
         tenantId: input.identity.tenantId,
@@ -4376,6 +4399,9 @@ export class AgentSessionsService {
 
     let modelAccess: AttemptStart["modelAccess"] = { kind: "host" };
     let secrets: Record<string, string> = {};
+    const nativeSetup = this.nativeAgentCheckout?.setup?.bind(
+      this.nativeAgentCheckout,
+    );
     if (workspace.sandboxProviderId && runtime.provider) {
       const models = await this.prepareSandboxGit({
         identity,
@@ -4459,8 +4485,11 @@ export class AgentSessionsService {
         projectId,
         session,
         turn,
-        provider: runtime.provider,
-        sandboxProviderId: workspace.sandboxProviderId,
+        runner: {
+          kind: "sandbox",
+          provider: runtime.provider,
+          sandboxProviderId: workspace.sandboxProviderId,
+        },
         environment: runtime.setup,
         personalAllowed: runtime.personalCredentials === true && ownerAuthored,
         signal: input.signal,
@@ -4479,6 +4508,23 @@ export class AgentSessionsService {
           sandboxProviderId: workspace.sandboxProviderId,
           renewOnly: true,
         });
+    } else if (workspace.checkout?.owned && nativeSetup) {
+      // A native chat's own worktree is a new workspace too (ADR 0215).
+      const setup = await this.prepareWorkspaceSetup({
+        identity,
+        projectId,
+        session,
+        turn,
+        runner: {
+          kind: "native",
+          setup: nativeSetup,
+          workingDirectory: workspace.workingDirectory,
+        },
+        environment: runtime.setup,
+        personalAllowed: runtime.personalCredentials === true && ownerAuthored,
+        signal: input.signal,
+      });
+      if (setup) notes.push(setup);
     }
 
     const workingDirectory = workspace.workingDirectory;
@@ -5859,26 +5905,35 @@ export class AgentSessionsService {
   }
 
   /**
-   * Set up a sandbox turn's workspace (ADR 0208), after its secrets and
-   * personal files are in place: the Environment's `setup`, then the
-   * owner's own where their personal files may go, run in the project
-   * folder when this workspace has not run them yet. The chat shows the
-   * setup while it runs. Returns a note for the agent when it failed; it
-   * runs again before the next turn.
+   * Set up a turn's workspace (ADR 0208): a sandbox, after its secrets and
+   * personal files are in place, or a native checkout the chat owns (ADR
+   * 0215). The Environment's `setup`, then the owner's own where their
+   * personal files may go, run in the project folder when this workspace
+   * has not run them yet. The chat shows the setup while it runs. Returns
+   * a note for the agent when it failed; it runs again before the next turn.
    */
   private async prepareWorkspaceSetup(input: {
     identity: Identity;
     projectId: string;
     session: SessionRow;
     turn: Turn;
-    provider: SandboxProvider;
-    sandboxProviderId: string;
+    runner:
+      | {
+          kind: "sandbox";
+          provider: SandboxProvider;
+          sandboxProviderId: string;
+        }
+      | {
+          kind: "native";
+          setup: NonNullable<NativeAgentCheckout["setup"]>;
+          workingDirectory: string;
+        };
     environment?: { command: string; timeoutMinutes: number };
     /** The placement may hold the owner's credentials and the owner wrote the turn. */
     personalAllowed: boolean;
     signal: AbortSignal;
   }): Promise<string | undefined> {
-    const { session, provider } = input;
+    const { session, runner } = input;
     const owner = session.external_user_id;
     const personalAllowed =
       input.personalAllowed &&
@@ -5895,9 +5950,25 @@ export class AgentSessionsService {
     const timeoutMinutes =
       input.environment?.timeoutMinutes ?? DEFAULT_SETUP_TIMEOUT_MINUTES;
     let shown = false;
-    const outcome:
-      | WorkspaceSetupOutcome
-      | { status: "unavailable"; reason: string } = await withSpan(
+    const onRun = async () => {
+      if (shown) return;
+      shown = true;
+      await this.showPreparing({
+        sessionId: session.id,
+        turnId: input.turn.id,
+        activity: "Setting up the workspace",
+      });
+    };
+    const commands = {
+      ...(input.environment ? { environment: input.environment.command } : {}),
+      ...(personal ? { personal } : {}),
+    };
+    const unavailable = (error: unknown) => ({
+      // The turn goes on without it, as after a failed command (ADR 0208).
+      status: "unavailable" as const,
+      reason: error instanceof Error ? error.message : String(error),
+    });
+    const { outcome, logPath } = await withSpan(
       {
         tracer,
         name: "agent.session.workspace.setup",
@@ -5907,33 +5978,44 @@ export class AgentSessionsService {
           "catamorphic.agent.turn.id": input.turn.id,
         },
       },
-      () =>
-        runWorkspaceSetup({
-          provider,
-          sandboxId: input.sandboxProviderId,
-          projectDir: this.projectDir(provider),
-          ...(input.environment
-            ? { environment: input.environment.command }
-            : {}),
-          ...(personal ? { personal } : {}),
+      async (): Promise<{
+        outcome:
+          | WorkspaceSetupOutcome
+          | { status: "unavailable"; reason: string };
+        logPath: string;
+      }> => {
+        if (runner.kind === "native")
+          return runner
+            .setup({
+              projectId: input.projectId,
+              sessionId: session.id,
+              workingDirectory: runner.workingDirectory,
+              ...commands,
+              personalAllowed,
+              timeoutMinutes,
+              signal: input.signal,
+              onRun,
+            })
+            .catch((error: unknown) => ({
+              outcome: unavailable(error),
+              logPath: "",
+            }));
+        const logPath = `${sessionDirectory(runner.provider)}/setup.log`;
+        return runWorkspaceSetup({
+          provider: runner.provider,
+          sandboxId: runner.sandboxProviderId,
+          projectDir: this.projectDir(runner.provider),
+          ...commands,
           personalAllowed,
           timeoutMinutes,
           signal: input.signal,
-          onRun: async () => {
-            if (shown) return;
-            shown = true;
-            await this.showPreparing({
-              sessionId: session.id,
-              turnId: input.turn.id,
-              activity: "Setting up the workspace",
-            });
-          },
-        }),
-    ).catch((error: unknown) => ({
-      // The turn goes on without it, as after a failed command (ADR 0208).
-      status: "unavailable" as const,
-      reason: error instanceof Error ? error.message : String(error),
-    }));
+          onRun,
+        }).then(
+          (outcome) => ({ outcome, logPath }),
+          (error: unknown) => ({ outcome: unavailable(error), logPath }),
+        );
+      },
+    );
     if (shown)
       await this.showPreparing({
         sessionId: session.id,
@@ -5945,11 +6027,7 @@ export class AgentSessionsService {
         ? undefined
         : workspaceSetupUnavailableNote({ reason: outcome.reason });
     if (outcome.status !== "failed") return undefined;
-    return workspaceSetupFailedNote({
-      outcome,
-      timeoutMinutes,
-      logPath: `${sessionDirectory(provider)}/setup.log`,
-    });
+    return workspaceSetupFailedNote({ outcome, timeoutMinutes, logPath });
   }
 
   /** What a preparing turn shows its chat, while it is still preparing. */
@@ -8719,9 +8797,26 @@ export class AgentSessionsService {
     }
   }
 
+  /** A resting chat gives back its native checkout (ADR 0215). */
+  private async releaseNativeCheckout(input: {
+    projectId: string;
+    sessionId: string;
+  }): Promise<void> {
+    await this.nativeAgentCheckout
+      ?.release?.(input)
+      .catch((error: unknown) =>
+        console.warn(
+          `[catamorphic] Could not put away the checkout of session ${input.sessionId}`,
+          error,
+        ),
+      );
+  }
+
   /**
-   * What a closed chat still holds outside its row: its connection grants, and on hosts that keep session workspaces, the
-   * `sessions/<id>` branch and `session-<id>` copy. Safe to repeat.
+   * What a closed chat still holds outside its row: its connection grants,
+   * its native checkout (ADR 0215), and on hosts that keep session
+   * workspaces, the `sessions/<id>` branch and `session-<id>` copy. Safe
+   * to repeat.
    */
   private async releaseClosedResources(input: {
     identity: Identity;
@@ -8744,6 +8839,10 @@ export class AgentSessionsService {
         sessionId: session.id,
       })
       .catch(() => {});
+    await this.releaseNativeCheckout({
+      projectId: input.projectId,
+      sessionId: session.id,
+    });
     if (this.usesSessionCopy(session))
       await this.projectManager
         .deleteSession({
@@ -8961,6 +9060,7 @@ export class AgentSessionsService {
           ?.revokeAllocation({ allocationId: row.allocation_id })
           .catch(() => {});
       }
+      await this.releaseNativeCheckout({ projectId, sessionId: row.id });
     }
     if (
       sourceDelegation &&
@@ -9470,6 +9570,9 @@ export class AgentSessionsService {
       return {
         bindingId: allocation.bindingId,
         environmentName: allocation.environmentName,
+        // A checkout the chat owns sets up like a new workspace (ADR 0215).
+        ...(admitted.setup ? { setup: admitted.setup } : {}),
+        personalCredentials: admitted.personalCredentials,
       };
     }
     const provider = this.workspaceProvider(

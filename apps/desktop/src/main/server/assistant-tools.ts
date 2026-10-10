@@ -5,7 +5,7 @@ import { z } from "zod";
 import { voiceChatOf } from "../voice/conversation.js";
 
 /**
- * What the assistant's session tools reach (ADR 0215): every chat of the
+ * What the assistant's session tools reach (ADR 0216): every chat of the
  * person's profile, in every one of its projects, as the person.
  */
 export interface AssistantAccess {
@@ -51,7 +51,7 @@ const READ_MESSAGES = 20;
 const READ_MESSAGE_CHARS = 1_500;
 
 /**
- * What a session the assistant starts reads first (ADR 0215): where the
+ * What a session the assistant starts reads first (ADR 0216): where the
  * request came from, and how to reach the person while they are away from
  * the screen.
  */

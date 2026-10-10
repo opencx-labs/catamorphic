@@ -1,4 +1,4 @@
-// The microphone tap of the audio page (ADR 0215). Runs in the
+// The microphone tap of the audio page (ADR 0216). Runs in the
 // AudioWorkletGlobalScope, whose globals TypeScript's DOM library lacks.
 declare const sampleRate: number;
 declare class AudioWorkletProcessor {

@@ -8,7 +8,7 @@ import {
 import { matchesShortcut, parseBinding } from "../../shared/keybindings.js";
 
 /**
- * Push to talk's keys (ADR 0215), read in `before-input-event` of every
+ * Push to talk's keys (ADR 0216), read in `before-input-event` of every
  * window and web page, so holding them talks wherever focus is. They are
  * never cancelled there: Chromium would then drop the key's release too.
  * The window's shortcuts and a page's preload swallow them instead, only

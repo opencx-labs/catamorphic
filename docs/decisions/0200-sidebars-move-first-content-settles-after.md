@@ -27,7 +27,8 @@ main content will land, while the real page lays out behind it.
 ## Decision
 
 **The sidebar moves the moment it is toggled, and the content settles after
-it** (`lib/sidebar-motion.ts`).
+it** (`lib/sidebar-motion.ts`). Closing from open, its items move first and
+the panel follows them 100 ms later (amended 2026-10-09, below).
 
 - The panel slides with a CSS transform: over the content when opening,
   away from it when closing. The compositor runs it without layout, and
@@ -36,30 +37,44 @@ it** (`lib/sidebar-motion.ts`).
 - Once the panel is still, the content takes or gives back the space in a
   view transition (`lib/sidebar-transition.ts`). Chromium snapshots the
   content (pages included) on the GPU; the real content lays out once
-  behind the snapshots; the old and new snapshots then move with the
-  content's box and cross-fade over 200 ms. Inside the box they travel by
-  how far the content's main column moves: measured for our own content,
-  and for a page read just before the content resizes (a column centered
-  between margins moves by half the change; anything else keeps its left
-  edge, since a page cannot report its new layout while the transition holds
-  rendering). A page that cannot answer within 100 ms counts as centered.
-  Snapshots are not scaled, so text never stretches.
+  behind the snapshots; then the old snapshot fades out exactly where the
+  content was as the new one fades in at its new size, linearly over
+  300 ms (on the standard curve a fade reads as a snap).
+  Nothing moves or scales, so text never stretches. (Amended 2026-10-09:
+  the snapshots used to travel with the content's box and its main
+  column, and the box growing into place showed the app's background
+  around it, which read as a glitch.) A chat tab, which is the content
+  where it shows, fades the same way from its own place; a floating chat
+  and the bubble strip glide to their new places. The snapshots blend
+  plus-lighter, as a browser cross-fade does, so nothing dims midway.
 - Any page resize waits for the page to repaint, so that wait falls in a
-  short hold between the slide and the morph, while nothing moves.
+  short hold between the slide and the fade, while nothing moves.
 - An overlay sidebar (the compact window's reveal) only slides; the content
   never moves.
 - The phase follows the panel's own transform transition
   (`getAnimations`), so an interrupted toggle reverses from where it is and
-  a cancelled slide ends at once. One morph runs at a time; it always
+  a cancelled slide ends at once. One settle runs at a time; it always
   applies, without a transition if the panel has started moving again, and
   then leaves the content alone. The sidebar's toggles and the room the
   chrome makes for it follow the motion, not the setting. Only the visible
-  workspace's sidebars morph or carry view transition names, which must be
+  workspace's sidebars fade or carry view transition names, which must be
   unique across the window.
 - What slides is what was shown. A sidebar's sections stay live while the
   panel is on screen, sliding included, and pause once it has gone; pausing
   never clears what a section shows. Both sides use one toggle in every
   place it appears. (Amended 2026-10-06.)
+- Closing from open, the items leave first and the panel follows them
+  (`lib/sidebar-leave.ts`). What shows on each row (its icon or image, its
+  label, a description) leaves together toward the edge the sidebar goes
+  to and fades, in a 60 ms sweep from the top; a row with text travels its
+  own length and draws one hairline thread behind it, and the panel's slide
+  starts 100 ms after the click and carries the threads away. Measured
+  once, at the click; the motion is Web Animations, so opening again
+  mid-close plays the items back from where they are, and a close that
+  reverses an opening panel doesn't wait. Nothing runs under reduced
+  motion, in a workspace that isn't showing, or when an overlay sidebar's
+  reveal closes (a peek goes at once). Opening is unchanged.
+  (Amended 2026-10-09.)
 
 `lib/layout-transition.ts`, `data-layout-transition` and the per-screen
 width-holding wrappers are removed.
@@ -83,12 +98,13 @@ Alternatives considered:
 
 - Both directions respond within a frame or two of the click, and every
   moving frame is a compositor frame: no frame over 20 ms during the slide
-  or the morph on a heavy GitHub page, a terminal or app content.
+  or the fade on a heavy GitHub page, a terminal or app content.
 - A toggle lasts longer overall: 200 ms of slide, a hold while the content
-  lays out (about 50 ms, up to 150 ms on the heaviest pages), and 200 ms of
-  morph. The content visibly follows the sidebar.
-- Edge content the main column does not carry (a right-aligned button on a
-  left-aligned page) cross-fades between its two places instead of moving.
+  lays out (about 50 ms, up to 150 ms on the heaviest pages), and 300 ms of
+  fade. The content visibly follows the sidebar. Closing adds 100 ms
+  while the items leave ahead of the panel.
+- Content that moves within the box (a centered column) cross-fades
+  between its two places instead of travelling.
 - Closing leaves the sidebar's background showing where it was until the
   content takes the space.
 - The content frame's padding preview in Settings still animates the

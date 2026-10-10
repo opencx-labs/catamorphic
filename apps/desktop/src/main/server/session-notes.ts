@@ -49,7 +49,7 @@ interface Follow {
 }
 
 /**
- * Sessions following others' progress (ADR 0215). What a followed session
+ * Sessions following others' progress (ADR 0216). What a followed session
  * writes along the way reaches the follower a few notes at a time as one
  * system message, which its agent can pass on in its own words; the
  * person sees one quiet line. A note is an assistant message more work

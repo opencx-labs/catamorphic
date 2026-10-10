@@ -81,7 +81,7 @@ export interface ChatBubblesProps {
   /** Rendered beside the chat strip, inside the arrows: the downloads bubble. */
   trailing?: ReactNode;
   /**
-   * The voice microphone (ADR 0215): shown collapsed or not, right inside
+   * The voice microphone (ADR 0216): shown collapsed or not, right inside
    * the arrows so they stay the outermost control.
    */
   voice?: ReactNode;

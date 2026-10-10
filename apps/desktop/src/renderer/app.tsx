@@ -77,6 +77,7 @@ import {
   resolveProjectFileLocation,
 } from "../shared/surface-link.js";
 import type { TerminalMacro } from "../shared/terminal-macros.js";
+import { fieldKeepsKey } from "../shared/text-field.js";
 import { rosterAgentId } from "../shared/voice.js";
 import {
   sidebarSections,
@@ -193,6 +194,7 @@ import {
   visitSurface,
 } from "./lib/surface-history.js";
 import { useTabSleep } from "./lib/tab-sleep.js";
+import { useWorktreesAvailable } from "./lib/use-session-checkout.js";
 import { useSidebarReveal } from "./lib/use-sidebar-reveal.js";
 import {
   fileNameFromPath,
@@ -309,7 +311,9 @@ const truncateLabel = (value: string): string =>
  * surface stays fully visible — watch the agent work live) until the
  * user takes control. A hairline accent ring marks the surface as
  * agent-held; the pill names the owner and offers the two moves that
- * make sense — jump to the owning chat, or take the keys.
+ * make sense — jump to the owning chat, or take the keys. A press on the
+ * blocked surface (someone who missed the pill) shows the veil itself for
+ * a moment, a tinted sheet that gives where it was touched.
  *
  * Stays mounted after `active` flips false to play fade-out (the mirror
  * of its fade-in enter) before disappearing, per the motion contract.
@@ -329,8 +333,16 @@ function AgentControlOverlay({
   const [phase, setPhase] = useState<"in" | "out" | "gone">(
     active ? "in" : "gone",
   );
+  // The latest press on the blocked surface, where it landed: the veil
+  // shows for a moment from there (animate-veil-touch).
+  const [touch, setTouch] = useState<{
+    id: number;
+    x: number;
+    y: number;
+  } | null>(null);
   useEffect(() => {
     setPhase((prev) => (active ? "in" : prev === "in" ? "out" : prev));
+    if (!active) setTouch(null);
   }, [active]);
   if (phase === "gone") return null;
   const exiting = phase === "out";
@@ -358,12 +370,33 @@ function AgentControlOverlay({
         <div
           className="pointer-events-auto absolute inset-0"
           aria-hidden
+          onPointerDown={(event) => {
+            const box = event.currentTarget.getBoundingClientRect();
+            setTouch((previous) => ({
+              id: (previous?.id ?? 0) + 1,
+              x: event.clientX - box.left,
+              y: event.clientY - box.top,
+            }));
+          }}
           onWheel={(event) => {
             const canvas = event.currentTarget
               .closest("[data-surface-pane]")
               ?.querySelector("canvas");
             canvas?.dispatchEvent(new WheelEvent("wheel", event.nativeEvent));
           }}
+        />
+      )}
+      {touch && !exiting && (
+        // Keyed by the press, so every press plays it again.
+        <div
+          key={touch.id}
+          aria-hidden
+          className="pointer-events-none absolute inset-0 animate-veil-touch bg-accent/10 ring-1 ring-inset ring-accent/30 backdrop-blur-[1.5px]"
+          style={{
+            transformOrigin: `${touch.x}px ${touch.y}px`,
+            backgroundImage: `radial-gradient(circle at ${touch.x}px ${touch.y}px, color-mix(in srgb, var(--color-accent) 22%, transparent), transparent 70%)`,
+          }}
+          onAnimationEnd={() => setTouch(null)}
         />
       )}
       <div
@@ -724,7 +757,7 @@ export function App({
   // auto-opened tab on agent-less profiles, the modal that gates starting
   // a chat with no agents, Settings' "Add agent", and the palette command.
   const [wizardModalOpen, setWizardModalOpen] = useState(false);
-  // The modal was opened to add the assistant (ADR 0215): the agent it
+  // The modal was opened to add the assistant (ADR 0216): the agent it
   // sets up becomes the assistant.
   const wizardForAssistantRef = useRef(false);
   const createAssistant = () => {
@@ -918,6 +951,8 @@ export function App({
   // Project policy (ADR 0062): the committed manifest may disable
   // incognito sessions for this project's members.
   const [incognitoAllowed, setIncognitoAllowed] = useState(false);
+  // A Git project with a commit can give a chat its own worktree (ADR 0215).
+  const worktreesAvailable = useWorktreesAvailable(projectId).data ?? false;
   const [startingActions, setStartingActions] = useState<
     Array<{ label: string; prompt: string; agentId?: string }>
   >([]);
@@ -943,7 +978,6 @@ export function App({
       cancelled = true;
     };
   }, [projectId]);
-
   /**
    * Switching profile follows the workspace's occupancy: an empty
    * workspace (no tabs, no browsers, no chats) switches this window in
@@ -1799,7 +1833,7 @@ export function App({
   ): Promise<string> => {
     const intent =
       opts.mode ?? (opts.side ? "side" : opts.newTab ? "tab" : "replace");
-    // A chat in any project, such as the assistant's (ADR 0215).
+    // A chat in any project, such as the assistant's (ADR 0216).
     if (parseChatBookmarkUrl(value)) {
       await openUrl(value, intent === "replace" ? "tab" : intent);
       return value;
@@ -2478,7 +2512,7 @@ export function App({
   // memory); the sidebar +, bubble +, and Cmd+N open the floating aside.
   const addChat = (
     forceMode?: "tab",
-    opts?: { incognito?: boolean; agentId?: string },
+    opts?: { incognito?: boolean; worktree?: boolean; agentId?: string },
   ) => {
     if (!requireAgents()) return;
     updateWorkspace((ws) => {
@@ -2501,8 +2535,25 @@ export function App({
         !activeSignals?.draft &&
         !activeSignals?.awaitingInput &&
         // A fresh plain chat doesn't satisfy "new INCOGNITO chat".
-        Boolean(active.incognito) === Boolean(opts?.incognito)
+        Boolean(active.incognito) === Boolean(opts?.incognito) &&
+        // Nor does a fresh worktree chat a plain one; the reverse takes one.
+        (!active.worktree || opts?.worktree)
       ) {
+        // Asked for a worktree, the fresh chat takes one (ADR 0215).
+        if (opts?.worktree && !active.worktree) {
+          setSelectionPulls((current) => ({
+            ...current,
+            [active.localId]: (current[active.localId] ?? 0) + 1,
+          }));
+          return {
+            ...ws,
+            chats: ws.chats.map((chat) =>
+              chat.localId === active.localId
+                ? { ...chat, worktree: true }
+                : chat,
+            ),
+          };
+        }
         setSelectionPulls((current) => ({
           ...current,
           [active.localId]: (current[active.localId] ?? 0) + 1,
@@ -3896,6 +3947,11 @@ export function App({
     },
     // Policy-gated (ADR 0062): hidden from the palette when the project
     // committed allowIncognito: false; the handler double-checks.
+    "new-worktree-chat": () => {
+      // Connected projects' chats run on their server (ADR 0098).
+      if (worktreesAvailable && remoteSurfaceStatus === null)
+        addChat(undefined, { worktree: true });
+    },
     "new-incognito-chat": () => {
       if (incognitoAllowed) addChat(undefined, { incognito: true });
     },
@@ -4042,6 +4098,16 @@ export function App({
             commandBrowserIdRef.current() !== undefined ||
             (candidate === "find" && Boolean(findSearchInput(candidate)))) &&
           (candidate !== "push-to-talk" || pushToTalkRef.current) &&
+          // A text field keeps its caret keys (Cmd+Left and Cmd+Right go to
+          // the line's start and end), whatever they are bound to.
+          !(
+            guestId === undefined &&
+            fieldKeepsKey({
+              event,
+              focused: document.activeElement,
+              mac: /Mac/.test(navigator.platform),
+            })
+          ) &&
           (candidate !== "dismiss-floating" ||
             (floatingEscapeEnabledRef.current &&
               ![
@@ -5476,6 +5542,9 @@ export function App({
   }
   const paletteActionAvailability: Partial<Record<ActionId, boolean>> = {
     "reopen-tab": workspace.closedTabs.length > 0,
+    // A Git project on this computer (ADR 0215); connected projects' chats
+    // run on their server.
+    "new-worktree-chat": worktreesAvailable && remoteSurfaceStatus === null,
     "remote-environment": remoteSurfaceStatus !== null,
     "toggle-chat-minimized": paletteTargetChat !== undefined,
     "chat-to-tab":

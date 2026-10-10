@@ -744,7 +744,7 @@ async function* fakeScript(turn: FakeTurn): AsyncGenerator<FakeStep> {
     return;
   }
 
-  // What voice tells agents (ADR 0215): any chat hears that the person
+  // What voice tells agents (ADR 0216): any chat hears that the person
   // talks by voice while they do, and the assistant who it is.
   if (prompt.includes("how am i talking to you")) {
     yield {
@@ -769,7 +769,7 @@ async function* fakeScript(turn: FakeTurn): AsyncGenerator<FakeStep> {
     return;
   }
 
-  // The assistant's surface (ADR 0215): the tools it is served.
+  // The assistant's surface (ADR 0216): the tools it is served.
   if (prompt.includes("which tools can you use")) {
     yield {
       type: "text",

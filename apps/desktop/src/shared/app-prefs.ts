@@ -100,12 +100,12 @@ export interface AppPrefs {
    */
   appAccessApprovals: string[];
   /**
-   * The assistant's chat (ADR 0215): where the dock's microphone sends what
+   * The assistant's chat (ADR 0216): where the dock's microphone sends what
    * it hears, until a reset (or another assistant) closes it and the next
    * start makes another.
    */
   assistantSession: VoiceSessionRef | null;
-  /** The last assistant reply spoken to the person (ADR 0215). */
+  /** The last assistant reply spoken to the person (ADR 0216). */
   assistantHeardThrough: string | null;
   /**
    * The agent the assistant is: one of the person's own; null is Work's
@@ -118,7 +118,7 @@ export interface AppPrefs {
   agentVoices: Record<string, VoiceId>;
   /** The microphone voice listens with; null follows the system's. */
   voiceMicrophone: string | null;
-  /** The person's voice print: voice ignores everyone else (ADR 0215). */
+  /** The person's voice print: voice ignores everyone else (ADR 0216). */
   voiceprint: number[] | null;
   /** The microphone in the dock; voice still works by its shortcut. */
   voiceInDock: boolean;

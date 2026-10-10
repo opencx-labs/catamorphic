@@ -1,7 +1,7 @@
 import type { TurnContextFragment } from "@catamorphic/sandbox";
 
 /**
- * What voice tells agents (ADR 0215). Information an agent can use, never
+ * What voice tells agents (ADR 0216). Information an agent can use, never
  * rules: the person's own instructions for an agent lead, and these only
  * say what is going on. The voice note rides each turn while the person
  * talks by voice, in any chat; the assistant's note is its host

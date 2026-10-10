@@ -92,7 +92,7 @@ export interface PaletteHost {
   ) => void;
   /** A configure-picker row was committed: open the agent's modal. */
   onConfigureAgent: (agentId: string) => void;
-  /** The agent the assistant is (ADR 0215); null is the built-in one. */
+  /** The agent the assistant is (ADR 0216); null is the built-in one. */
   voiceAssistant: string | null;
   /** The agent wizard, whose agent becomes the assistant. */
   onCreateAssistant: () => void;

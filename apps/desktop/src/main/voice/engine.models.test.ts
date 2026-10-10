@@ -9,7 +9,7 @@ import { voiceModelPaths } from "./models.js";
 import { loadSherpaSpeech } from "./sherpa-speech.js";
 
 /**
- * The real models (ADR 0215): every voice says a whole reply, and the
+ * The real models (ADR 0216): every voice says a whole reply, and the
  * recognizer hears all of it; turn-taking holds with no echo cancellation
  * at all, the agent's voice fed straight back into the microphone. Opt-in:
  * set CATAMORPHIC_VOICE_MODELS_DIR to installed models.

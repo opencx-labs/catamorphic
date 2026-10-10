@@ -9,12 +9,31 @@
   grant tab permissions. Native messaging with the Claude and ChatGPT
   desktop apps is checked by hand on macOS only. MV2 extensions load
   unpacked only while Electron runs MV2.
-- **Electron 44.4.4 (or later): drop the `Invalid guestInstanceId` guards.**
-  Electron 43.6–44.4.3 throw from a `<webview>`'s `disconnectedCallback`
-  when a loaded guest is removed (electron/electron#53989, fix #54089
-  merged to 44-x-y on 2026-09-18). Until a release carries it, the
-  renderer swallows that one uncaught error (`main.tsx`) and the e2e
-  harness ignores it (`e2e/harness.ts`). Remove both with the bump.
+- **Electron 45: stable pin and async `safeStorage`.** Work pins
+  45.0.0-beta.1 for Chromium 156 (Google's sign-in gate, ADR 0150); move to
+  45.0.0 stable when it ships. Electron 45 deprecates the synchronous
+  `safeStorage.isEncryptionAvailable`, `encryptString` and `decryptString`
+  (each logs a deprecation warning once), and Electron 46 removes them, so
+  the move to `isAsyncEncryptionAvailable`, `encryptStringAsync` and
+  `decryptStringAsync` comes before the next major. The callers read
+  synchronously today, so it is an async migration, not a rename:
+  `agent-bindings-store.ts`, `agents-store.ts`, `connections-store.ts`,
+  `credential-vault.ts`, `remote-projects-store.ts` and
+  `runner-key-store.ts` in `apps/desktop/src/main`, plus
+  `browser-vault.ts`, which only calls `isEncryptionAvailable`. Data
+  written by `encryptString` decrypts with `decryptStringAsync`.
+- **Client hints on page loads (ADR 0150).** Electron sends no client-hint
+  headers with a page load, and the webRequest rewrite in `main/browser.ts`
+  only replaces headers already there, so documents carry no Sec-CH-UA
+  (Chrome always sends it over https) and scripts and images keep
+  Chromium's own brands. Add the low-entropy hints to https documents and
+  frames.
+- **Legacy `chromeMediaSource` screen capture (ADR 0150).** `getUserMedia`
+  with `chromeMediaSource: 'desktop'` arrives as `display-capture` and opens
+  the share picker, but the stream follows the page's constraints, not the
+  pick, and the pick lingers in `pendingShares` (`main/browser.ts`). Refuse
+  those constraints from web content as Chrome does, and drop a guest's
+  pending share when it navigates or closes.
 - **Full-stack Claude Code e2e via a fake CLI.** The ask_user flow now has
   three pins: harness unit tests (mocked query), the harness↔core seam
   integration test (`packages/claude-code/src/__tests__/
