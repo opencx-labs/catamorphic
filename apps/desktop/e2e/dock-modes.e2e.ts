@@ -1,5 +1,4 @@
 import http from "node:http";
-import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
 
@@ -93,57 +92,19 @@ const hoverChip = async (selector: string) => {
   `,
     { label: "surface chip ready for native hover" },
   );
-  // TEMPORARY diagnostics (PR #215): what closes the popover on macOS CI.
-  await run(`
-    window.__hoverDiag = [];
-    const note = (text) => window.__hoverDiag.push(Math.round(performance.now()) + ' ' + text);
-    const describe = (target) => target instanceof Element
-      ? target.tagName + (target.id ? '#' + target.id : '') + '.' + String(target.className).slice(0, 50) + ' [' + (target.getAttribute('aria-label') ?? target.getAttribute('data-testid') ?? '') + ']'
-      : String(target);
-    let moves = 0;
-    window.addEventListener('pointermove', (event) => { if (moves++ < 3) note('pointermove ' + event.clientX + ',' + event.clientY + ' ' + describe(event.target)); }, true);
-    window.addEventListener('mouseover', (event) => note('mouseover ' + describe(event.target)), true);
-    for (const type of ['mousedown', 'pointerdown', 'keydown', 'blur', 'focusout', 'focusin', 'visibilitychange'])
-      window.addEventListener(type, (event) => note(type + ' ' + describe(event.target) + (event.key ? ' key=' + event.key : '')), true);
-    window.__hoverObserver?.disconnect();
-    window.__hoverObserver = new MutationObserver(() => {
-      if (!frontDock()?.querySelector(${JSON.stringify(selector)})) {
-        note('target gone; hasFocus=' + document.hasFocus() + ' active=' + describe(document.activeElement));
-        window.__hoverObserver.disconnect();
-      }
-    });
-    window.__hoverObserver.observe(document.body, { subtree: true, childList: true, attributes: true });
-    note('armed at ' + ${JSON.stringify(JSON.stringify(point))});
-    return true;
-  `);
   await app.movePointer(point);
-  try {
-    await runWait(
-      `return frontDock()?.querySelector(${JSON.stringify(selector)})?.matches(':hover');`,
-      {
-        label: "native pointer reached the surface chip",
-      },
-    );
-  } catch (error) {
-    await app.screenshot(
-      path.join(
-        process.env.CATAMORPHIC_E2E_ARTIFACTS_DIR ?? "/tmp",
-        "hover-failure.png",
-      ),
-    );
-    const diag = await run<string>(`
-      const at = document.elementFromPoint(${point.x}, ${point.y});
-      const state = {
-        log: window.__hoverDiag,
-        hasFocus: document.hasFocus(),
-        active: document.activeElement?.outerHTML.slice(0, 160),
-        atPoint: at?.outerHTML.slice(0, 200),
-        hovered: [...document.querySelectorAll(':hover')].map((el) => el.tagName + '.' + String(el.className).slice(0, 30)).slice(-4),
-        targetStill: !!frontDock()?.querySelector(${JSON.stringify(selector)}),
-      };
-      return window.catamorphicDesktop.devWindow('get').then((windows) => JSON.stringify({ ...state, windows }));
-    `);
-    throw new Error(`${(error as Error).message}\nHOVER-DIAG ${diag}`);
+  const hovered = `return frontDock()?.querySelector(${JSON.stringify(selector)})?.matches(':hover');`;
+  // On macOS CI a single synthetic warp is sometimes never seen as hover;
+  // a person's pointer keeps moving. Arrive once more before deciding.
+  const seen = await runWait<boolean>(hovered, {
+    timeoutMs: 2_000,
+    label: "native pointer reached the surface chip",
+  }).catch(() => false);
+  if (!seen) {
+    await app.movePointerThrough([{ x: point.x + 2, y: point.y }, point]);
+    await runWait(hovered, {
+      label: "native pointer reached the surface chip",
+    });
   }
 };
 
