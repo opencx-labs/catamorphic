@@ -32,6 +32,7 @@ const UTTERANCES = [
 ];
 /** The assistant's own tools over the person's chats. */
 const ASSISTANT_SESSION_TOOLS = [
+  "answer_question",
   "follow_session",
   "list_sessions",
   "message_session",
@@ -478,6 +479,60 @@ describe("voice", () => {
        return detail.snapshot.items.filter((item) => item.kind === 'user_message' && item.author.code === 'session_notes').length;`,
     );
     expect(notes).toBe(1);
+    await runWait(`return !(await session(${JSON.stringify(ref)})).running;`, {
+      timeoutMs: 30_000,
+      label: "the assistant done with the session's result",
+    });
+  }, 120_000);
+
+  it("hears a session's question at once, and answers it for the person", async () => {
+    const { assistantSession: ref } = await run<{ assistantSession: Ref }>(
+      `return api.getPrefs();`,
+    );
+    // A question folded into a turn already running there is the
+    // harness's to read; this one should start a turn of its own.
+    await runWait(`return !(await session(${JSON.stringify(ref)})).running;`, {
+      timeoutMs: 30_000,
+      label: "the assistant idle",
+    });
+    await run(
+      `await sendText(${JSON.stringify(ref)}, 'start a session that asks me to choose a layout'); return true;`,
+    );
+    // The question reaches the assistant as soon as it is asked...
+    const asked = await runWait<string>(
+      `const detail = await session(${JSON.stringify(ref)});
+       return detail.snapshot.items.find((item) =>
+         item.kind === 'user_message' && item.metadata?.notice === 'Layout: a question')?.text;`,
+      {
+        timeoutMs: 30_000,
+        label: "the session's question in the assistant's chat",
+      },
+    );
+    expect(asked).toContain(
+      "Which layout should I use? (one of: Wide, Narrow; or their own words)",
+    );
+    // ...which says so, out loud when voice is on. (Core's own "needs
+    // user input" for a delegated session may join the same turn.)
+    await runWait(
+      `const detail = await session(${JSON.stringify(ref)});
+       return detail.messages.some((m) => m.role === 'assistant' && m.content.startsWith('The layout session wants to know: wide or narrow?'));`,
+      { timeoutMs: 30_000, label: "the assistant passing the question on" },
+    );
+    // The person answers the assistant, and the session that asked has it.
+    await run(
+      `await sendText(${JSON.stringify(ref)}, 'the answer is wide'); return true;`,
+    );
+    const layout = await runWait<Ref>(
+      `const children = await session(${JSON.stringify(ref)}, '/subsessions');
+       const child = children.find((c) => c.session.title === 'Layout');
+       return child && { projectId: ${JSON.stringify(ref.projectId)}, sessionId: child.session.id };`,
+      { label: "the session that asked" },
+    );
+    await runWait(
+      `const detail = await session(${JSON.stringify(layout)});
+       return detail.messages.some((m) => m.role === 'assistant' && m.content === 'Using the Wide layout.');`,
+      { timeoutMs: 30_000, label: "the answer reached the session that asked" },
+    );
   }, 120_000);
 
   it("news while voice is off shows on the microphone, and starting says it first", async () => {

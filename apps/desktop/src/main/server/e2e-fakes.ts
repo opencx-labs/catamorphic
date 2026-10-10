@@ -826,6 +826,11 @@ async function* fakeScript(turn: FakeTurn): AsyncGenerator<FakeStep> {
       "Started. I'll pass on what it finds.",
     ],
     [
+      "start a session that asks me to choose a layout",
+      { request: "Choose a layout with the person", title: "Layout" },
+      "Started. It will ask you which layout.",
+    ],
+    [
       "start a session that asks me something",
       { request: "Ask the person which pages to keep", title: "Docs pages" },
       "Started. It may have a question for you.",
@@ -856,6 +861,55 @@ async function* fakeScript(turn: FakeTurn): AsyncGenerator<FakeStep> {
       delivery_mode: "queue",
     });
     yield { type: "text", content: "I asked which pages to keep." };
+    return;
+  }
+
+  // A session the assistant started, asking the person natively.
+  if (prompt.includes("choose a layout with the person")) {
+    // Asks once the assistant's own turn is over, so the question starts
+    // a turn of its own there.
+    await turn.pause(3_000);
+    const response = await turn.request({
+      kind: "question",
+      blocking: true,
+      title: "Question",
+      origin: { kind: "tool", id: "ask_user", displayName: "Ask User" },
+      questions: [
+        {
+          question: "Which layout should I use?",
+          header: "Layout",
+          multiSelect: false,
+          options: [
+            { label: "Wide", description: "Room to breathe." },
+            { label: "Narrow", description: "Easy to scan." },
+          ],
+        },
+      ],
+    });
+    yield {
+      type: "text",
+      content: `Using the ${response.kind === "question" ? response.answers.join(", ") : "default"} layout.`,
+    };
+    return;
+  }
+
+  // The assistant hearing that question, and the person's answer back.
+  if (prompt.includes("layout asks the person")) {
+    yield {
+      type: "text",
+      content: "The layout session wants to know: wide or narrow?",
+    };
+    return;
+  }
+  if (prompt.includes("the answer is wide")) {
+    const chats = listedChats.parse(await turn.tool("list_sessions", {}));
+    const layout = chats.find((chat) => chat.title === "Layout");
+    if (!layout) throw new Error("No layout session to answer");
+    await turn.tool("answer_question", {
+      session_id: layout.session_id,
+      answers: ["Wide"],
+    });
+    yield { type: "text", content: "Told it: wide." };
     return;
   }
 

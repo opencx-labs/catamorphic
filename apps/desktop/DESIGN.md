@@ -2024,7 +2024,10 @@ makes the new agent the assistant. It looks things up and reads files
 itself, saying a few words first, and hands bigger work to sessions so it
 stays free to talk. It follows those sessions and hears their notes as they
 work, a few at a time, to pass on in its own words; the transcript shows one
-quiet line for each. Its chat reads every project, so it lives in a project
+quiet line for each. When one of them asks the person something, the
+assistant hears it at once and says so, and the person can answer it
+right there ("the wide one"); the assistant passes the answer on.
+Approvals stay in the chat that asks. Its chat reads every project, so it lives in a project
 on this computer and never goes to a server. News that arrives while voice
 is off shows as a dot on the dock's microphone, and the next start says it
 first.

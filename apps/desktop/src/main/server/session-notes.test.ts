@@ -176,6 +176,114 @@ describe("following a session's notes", () => {
     expect(notes.followerOf(FOLLOWED.sessionId)).toBeUndefined();
   });
 
+  it("passes on a question at once, after the notes before it", async () => {
+    const session = harness();
+    await session.notes.follow({
+      follower: FOLLOWER,
+      followed: FOLLOWED,
+      title: "Layout",
+      reportsResults: false,
+    });
+    const question = {
+      id: "q1",
+      sessionId: FOLLOWED.sessionId,
+      turnId: "t1",
+      attemptId: null,
+      itemId: null,
+      kind: "question" as const,
+      status: "pending" as const,
+      answerable: true,
+      blocking: true,
+      title: "Question",
+      description: null,
+      origin: { kind: "tool" as const, id: "ask_user" },
+      questions: [
+        {
+          question: "Which layout should I use?",
+          header: "Layout",
+          multiSelect: false,
+          options: [
+            { label: "Wide", description: "" },
+            { label: "Narrow", description: "" },
+          ],
+        },
+      ],
+      approval: null,
+      elicitation: null,
+      approvers: [],
+      expiresAt: null,
+      response: null,
+      resolvedBy: null,
+      reason: null,
+      createdAt: "2026-10-10T10:00:00.000Z",
+      resolvedAt: null,
+    };
+    session.emit(
+      { type: "item.added", item: reply("m1", "t1", "Sketching both.") },
+      { type: "item.added", item: toolCall("c1", "t1") },
+      { type: "request.changed", request: question },
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    expect(session.delivered).toEqual([
+      {
+        content: `Layout, while it works:\n- Sketching both.\n\nLayout asks the person:\n- Which layout should I use? (one of: Wide, Narrow; or their own words)\n\nIt waits for the answer. answer_question passes on what the person says (session ${FOLLOWED.sessionId}, request q1); they can also answer in that chat.`,
+        notice: "Layout: a question",
+      },
+    ]);
+    // Answered, it is not news again.
+    session.emit({
+      type: "request.changed",
+      request: { ...question, status: "resolved" },
+    });
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(session.delivered).toHaveLength(1);
+  });
+
+  it("says an approval waits, and leaves it to the person", async () => {
+    const session = harness();
+    await session.notes.follow({
+      follower: FOLLOWER,
+      followed: FOLLOWED,
+      title: "Build",
+      reportsResults: true,
+    });
+    session.emit({
+      type: "request.changed",
+      request: {
+        id: "a1",
+        sessionId: FOLLOWED.sessionId,
+        turnId: "t1",
+        attemptId: null,
+        itemId: null,
+        kind: "approval",
+        status: "pending",
+        answerable: true,
+        blocking: true,
+        title: "Bash",
+        description: null,
+        origin: { kind: "tool", id: "Bash" },
+        questions: null,
+        approval: { action: "Run rm -rf build" },
+        elicitation: null,
+        approvers: [],
+        expiresAt: null,
+        response: null,
+        resolvedBy: null,
+        reason: null,
+        createdAt: "2026-10-10T10:00:00.000Z",
+        resolvedAt: null,
+      },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(session.delivered).toEqual([
+      {
+        content:
+          "Build waits for the person's approval: Run rm -rf build. Approvals are theirs to give, in that chat.",
+        notice: "Build: waiting for approval",
+      },
+    ]);
+  });
+
   it("waits between messages, and stops when unfollowed", async () => {
     const session = harness();
     await session.notes.follow({

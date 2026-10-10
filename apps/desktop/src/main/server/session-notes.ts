@@ -1,5 +1,6 @@
 import {
   isSettledTurnStatus,
+  type RuntimeRequest,
   type SessionStreamMessage,
 } from "@catamorphic/agent-protocol";
 
@@ -49,6 +50,8 @@ interface Follow {
   latest: { id: string; text: string } | undefined;
   /** Notes already seen, by item id. */
   seen: Set<string>;
+  /** Questions and approvals already passed on, by request id. */
+  asked: Set<string>;
   timer: ReturnType<typeof setTimeout> | undefined;
   lastDelivered: number;
 }
@@ -61,7 +64,9 @@ interface Follow {
  * follows in the same turn. A turn's last message is its result: a
  * session the follower delegated delivers it itself, so its turn's end
  * drops what has not been passed on; any other followed session's end
- * passes on what is left and the result at once.
+ * passes on what is left and the result at once. A question or approval
+ * the followed session waits on reaches the follower at once too: the
+ * person may hear about it only through the follower.
  */
 export class SessionNotes {
   private readonly follows = new Map<string, Follow>();
@@ -93,6 +98,7 @@ export class SessionNotes {
       pending: [],
       latest: undefined,
       seen: new Set(),
+      asked: new Set(),
       timer: undefined,
       lastDelivered: 0,
     };
@@ -145,6 +151,14 @@ export class SessionNotes {
         else follow.pending = [];
         continue;
       }
+      if (event.type === "request.changed") {
+        const { request } = event;
+        if (request.status === "pending" && !follow.asked.has(request.id)) {
+          follow.asked.add(request.id);
+          void this.ask(follow, request);
+        }
+        continue;
+      }
       if (event.type !== "item.added" && event.type !== "item.changed")
         continue;
       const { item } = event;
@@ -182,6 +196,32 @@ export class SessionNotes {
     follow.timer.unref?.();
   }
 
+  /**
+   * Passes on what the followed session asks the person, at once, after
+   * the notes written before it.
+   */
+  private async ask(follow: Follow, request: RuntimeRequest): Promise<void> {
+    clearTimeout(follow.timer);
+    follow.timer = undefined;
+    const notes = follow.pending.splice(0);
+    follow.lastDelivered = Date.now();
+    const before = notes.length
+      ? `${follow.title}, while it works:\n${notes.map((note) => `- ${note.text}`).join("\n")}\n\n`
+      : "";
+    const asked = askedOf(follow, request);
+    await this.access
+      .deliver(follow.follower, {
+        content: `${before}${asked.content}`,
+        notice: asked.notice,
+        idempotencyKey: `request:${request.id}`,
+      })
+      .catch((cause: unknown) => {
+        console.warn("[notes] passing a question on failed:", cause);
+        if (this.follows.get(follow.followed.sessionId) === follow)
+          this.unfollow(follow.followed.sessionId);
+      });
+  }
+
   /** Passes on the pending notes, and a finished turn's result if given. */
   private async pass(
     follow: Follow,
@@ -211,4 +251,34 @@ export class SessionNotes {
           this.unfollow(follow.followed.sessionId);
       });
   }
+}
+
+/** What a followed session asks the person, as its follower reads it. */
+function askedOf(
+  follow: Pick<Follow, "title" | "followed">,
+  request: RuntimeRequest,
+): { content: string; notice: string } {
+  const { title } = follow;
+  if (request.kind === "question") {
+    const questions = (request.questions ?? []).map((question) => {
+      const options = question.options.map((option) => option.label);
+      return `- ${question.question}${options.length ? ` (${question.multiSelect ? "any of" : "one of"}: ${options.join(", ")}; or their own words)` : ""}`;
+    });
+    return {
+      content: `${title} asks the person:\n${questions.join("\n") || `- ${request.title}`}\n\n${request.blocking ? "It waits for the answer." : "It carries on meanwhile."} answer_question passes on what the person says (session ${follow.followed.sessionId}, request ${request.id}); they can also answer in that chat.`,
+      notice: `${title}: a question`,
+    };
+  }
+  if (request.kind === "approval") {
+    const action = request.approval?.action ?? request.title;
+    const details = request.approval?.details;
+    return {
+      content: `${title} waits for the person's approval: ${action}${details ? ` (${details})` : ""}. Approvals are theirs to give, in that chat.`,
+      notice: `${title}: waiting for approval`,
+    };
+  }
+  return {
+    content: `${title} needs the person to fill in a form${request.elicitation ? ` from ${request.elicitation.server}: ${request.elicitation.message}` : ""}. They answer it in that chat.`,
+    notice: `${title}: needs an answer`,
+  };
 }

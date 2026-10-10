@@ -1,4 +1,7 @@
-import type { SessionMessageAuthor } from "@catamorphic/agent-protocol";
+import type {
+  RuntimeRequest,
+  SessionMessageAuthor,
+} from "@catamorphic/agent-protocol";
 import type { AgentSession, AgentSessionDetail } from "@catamorphic/core";
 import type { ExtraTool, ExtraToolContext } from "@catamorphic/sandbox";
 import { z } from "zod";
@@ -25,6 +28,12 @@ export interface AssistantAccess {
     },
   ): Promise<unknown>;
   interrupt(projectId: string, sessionId: string): Promise<void>;
+  /** Answers a question a chat waits on, as the person. */
+  answer(
+    projectId: string,
+    sessionId: string,
+    input: { requestId: string; answers: string[] },
+  ): Promise<void>;
   /** The agents a session in this project can run on: the person's and the project's. */
   agents(projectId: string): Promise<{ id: string; name: string }[]>;
   /**
@@ -49,6 +58,26 @@ export interface AssistantAccess {
    * they started, are never listed or touched.
    */
   hidden(sessionId: string): boolean;
+}
+
+/** What a chat waits on the person for, as the assistant reads it. */
+function waitingOf(request: RuntimeRequest) {
+  return {
+    request_id: request.id,
+    kind: request.kind,
+    blocking: request.blocking,
+    ...(request.kind === "question"
+      ? {
+          questions: (request.questions ?? []).map((question) => ({
+            question: question.question,
+            multi_select: question.multiSelect,
+            options: question.options.map((option) => option.label),
+          })),
+        }
+      : request.kind === "approval"
+        ? { approval: request.approval?.action ?? request.title }
+        : { form: request.elicitation?.message ?? request.title }),
+  };
 }
 
 const LIST_LIMIT = 25;
@@ -282,6 +311,9 @@ export function assistantTools(access: AssistantAccess): ExtraTool[] {
           title: detail.title ?? "Untitled chat",
           project: projectName,
           running: detail.running,
+          waiting_on_person: detail.snapshot.requests
+            .filter((request) => request.status === "pending")
+            .map(waitingOf),
           messages: voiceChatOf(detail.snapshot)
             .messages.filter((message) => !message.writing)
             .slice(-READ_MESSAGES)
@@ -290,6 +322,58 @@ export function assistantTools(access: AssistantAccess): ExtraTool[] {
               content: message.text.slice(0, READ_MESSAGE_CHARS),
             })),
         };
+      },
+    },
+    {
+      name: "answer_question",
+      description:
+        "Answer a question a chat waits on, with what the person told you: an option it offered or their own words, one answer per question, in order. Approvals and forms stay theirs to answer in that chat.",
+      parameters: {
+        session_id: z.string().min(1).describe("The chat that asks"),
+        request_id: z
+          .string()
+          .min(1)
+          .optional()
+          .describe("Which question, when the chat waits on more than one"),
+        answers: z
+          .array(z.string().min(1))
+          .min(1)
+          .describe(
+            "One per question; several picked options join with commas",
+          ),
+      },
+      execute: async (input, context) => {
+        const sessionId = String(input.session_id);
+        const { projectId, detail } = await locate(context, sessionId);
+        const waiting = detail.snapshot.requests.filter(
+          (request) =>
+            request.kind === "question" && request.status === "pending",
+        );
+        const request =
+          typeof input.request_id === "string"
+            ? waiting.find((candidate) => candidate.id === input.request_id)
+            : waiting.length === 1
+              ? waiting[0]
+              : undefined;
+        if (!request)
+          throw new Error(
+            waiting.length > 1
+              ? `That chat waits on ${waiting.length} questions: name the request_id.`
+              : "That chat is not waiting on that question; it may have been answered.",
+          );
+        const answers = Array.isArray(input.answers)
+          ? input.answers.map(String)
+          : [];
+        const count = request.questions?.length ?? 1;
+        if (answers.length !== count)
+          throw new Error(
+            `It asks ${count} question${count === 1 ? "" : "s"}: give one answer for each, in order.`,
+          );
+        await access.answer(projectId, sessionId, {
+          requestId: request.id,
+          answers,
+        });
+        return "Answered.";
       },
     },
     {

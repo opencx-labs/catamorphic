@@ -163,7 +163,8 @@ tools (`main/server/assistant-tools.ts`) take the place of the
 project-only session tools (`spawn_subsession`, `wait_for_subsessions`,
 `interrupt_subsession`, `list_project_sessions`, `read_project_session`,
 `send_project_session_message`): `start_session`, plus `list_sessions`,
-`read_session`, `message_session`, `follow_session` and `stop_session`,
+`read_session`, `message_session`, `follow_session`, `answer_question` and
+`stop_session`,
 which reach the person's chats in every project of the profile, the ones
 they started included, and never incognito ones. Its delegation routes
 target the base agent (`work`) and any agent the person names (`named`).
@@ -179,7 +180,10 @@ its title. The assistant follows the sessions it starts, and others with
 `follow_session`: their notes (messages with more work after them in the
 turn) reach it as one system message a few at a time, shown as one quiet
 line, and a followed chat's result when its turn ends
-(`main/server/session-notes.ts`). The assistant's chat is kept local like an
+(`main/server/session-notes.ts`). A question or approval a followed chat
+waits on reaches it at once; `answer_question` answers a question with what
+the person said, as the person, while approvals stay theirs to give in that
+chat. `read_session` lists what a chat waits on. The assistant's chat is kept local like an
 incognito chat, so it is never mirrored and no other chat reads it; its
 playbook leaves out subsessions and the project-only chat tools, which it
 neither has nor discovers. It messages a chat the person

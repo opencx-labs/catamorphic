@@ -882,6 +882,26 @@ export async function startEmbeddedServer(
           projectId,
           sessionId,
         ),
+      // As the person: the assistant passes on what they told it.
+      answer: async (projectId, sessionId, { requestId, answers }) => {
+        const service = catamorphic.core.agentSessions;
+        if (!service) throw new Error("Agent sessions are not configured");
+        const receipt = await service.command(
+          desktopIdentity,
+          projectId,
+          sessionId,
+          {
+            type: "respond",
+            commandId: randomUUID(),
+            requestId,
+            response: { kind: "question", answers },
+          },
+        );
+        if (receipt.status === "rejected")
+          throw new Error(
+            receipt.error?.message ?? "The chat did not take the answer.",
+          );
+      },
       agents: async (projectId) => {
         const own = profileConfig
           .forProfile(profiles.profileForProject(projectId).id)

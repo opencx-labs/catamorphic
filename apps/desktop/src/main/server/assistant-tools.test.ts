@@ -24,8 +24,11 @@ function chat(id: string, fields: Partial<AgentSession> = {}): AgentSession {
 function harness(
   projects: Record<string, AgentSession[]>,
   hidden = new Set<string>(),
+  /** What each chat waits on the person for, by session id. */
+  waiting: Record<string, unknown[]> = {},
 ) {
   const delivered: unknown[] = [];
+  const answered: unknown[] = [];
   const interrupted: string[] = [];
   const started: unknown[] = [];
   const followed: unknown[] = [];
@@ -44,7 +47,7 @@ function harness(
       if (!found) throw new Error("not found");
       return {
         ...found,
-        snapshot: { items: [], turns: [], requests: [] },
+        snapshot: { items: [], turns: [], requests: waiting[found.id] ?? [] },
       } as unknown as AgentSessionDetail;
     },
     deliver: async (projectId, sessionId, input) => {
@@ -52,6 +55,9 @@ function harness(
     },
     interrupt: async (projectId, sessionId) => {
       interrupted.push(`${projectId}/${sessionId}`);
+    },
+    answer: async (projectId, sessionId, input) => {
+      answered.push({ projectId, sessionId, ...input });
     },
     agents: async (projectId) => [
       { id: "agent", name: "Claude" },
@@ -74,7 +80,7 @@ function harness(
     if (!tool) throw new Error(`no ${name}`);
     return tool.execute(input, context);
   };
-  return { call, delivered, interrupted, started, followed };
+  return { call, delivered, interrupted, started, followed, answered };
 }
 
 describe("the assistant's session tools", () => {
@@ -216,6 +222,94 @@ describe("the assistant's session tools", () => {
         on: true,
       },
       expect.objectContaining({ on: false }),
+    ]);
+  });
+
+  it("answers a chat's question with what the person said", async () => {
+    const question = {
+      id: "q1",
+      kind: "question",
+      status: "pending",
+      blocking: true,
+      title: "Question",
+      questions: [
+        {
+          question: "Which layout should I use?",
+          header: "Layout",
+          multiSelect: false,
+          options: [
+            { label: "Wide", description: "" },
+            { label: "Narrow", description: "" },
+          ],
+        },
+      ],
+    };
+    const approval = {
+      id: "a1",
+      kind: "approval",
+      status: "pending",
+      blocking: true,
+      title: "Run a command",
+      approval: { action: "Run rm -rf build" },
+    };
+    const assistant = harness(
+      { p2: [chat("layout", { title: "Layout", attentionRequired: true })] },
+      new Set(),
+      { layout: [question, approval] },
+    );
+    // What it waits on shows when the chat is read.
+    const read = (await assistant.call("read_session", {
+      session_id: "layout",
+    })) as { waiting_on_person: unknown[] };
+    expect(read.waiting_on_person).toEqual([
+      {
+        request_id: "q1",
+        kind: "question",
+        blocking: true,
+        questions: [
+          {
+            question: "Which layout should I use?",
+            multi_select: false,
+            options: ["Wide", "Narrow"],
+          },
+        ],
+      },
+      {
+        request_id: "a1",
+        kind: "approval",
+        blocking: true,
+        approval: "Run rm -rf build",
+      },
+    ]);
+    // The one question it waits on takes one answer; approvals are not its.
+    await expect(
+      assistant.call("answer_question", {
+        session_id: "layout",
+        answers: ["Wide", "Narrow"],
+      }),
+    ).rejects.toThrow(
+      "It asks 1 question: give one answer for each, in order.",
+    );
+    await expect(
+      assistant.call("answer_question", {
+        session_id: "layout",
+        request_id: "a1",
+        answers: ["yes"],
+      }),
+    ).rejects.toThrow(/not waiting on that question/);
+    expect(
+      await assistant.call("answer_question", {
+        session_id: "layout",
+        answers: ["Wide"],
+      }),
+    ).toBe("Answered.");
+    expect(assistant.answered).toEqual([
+      {
+        projectId: "p2",
+        sessionId: "layout",
+        requestId: "q1",
+        answers: ["Wide"],
+      },
     ]);
   });
 

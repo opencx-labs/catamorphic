@@ -142,11 +142,12 @@ eight; a web lookup speaks at about four and answers at about nine. The
 built-in assistant answers at its harness default's pace; an agent on a
 faster model makes a quicker assistant.
 
-**Bigger work goes to sessions.** Six tools of the assistant's
+**Bigger work goes to sessions.** Seven tools of the assistant's
 (`main/server/assistant-tools.ts`) take the place of Work's project-only
 session tools (`spawn_subsession` and its kin): `start_session` hands work
 to a child session, and `list_sessions`, `read_session`, `message_session`,
-`follow_session` and `stop_session` reach the person's chats in every
+`follow_session`, `answer_question` and `stop_session` reach the person's
+chats in every
 project of the profile, the ones it started and the ones the person
 started, never touching incognito chats. A child runs on the base agent
 (the `work` delegation route), or on an agent the person names, one of
@@ -164,7 +165,14 @@ sessions it starts, and any chat it is asked to with `follow_session`
 session writes with more work after it in the same turn is a note. A
 turn's last message is its result: a session the assistant started
 delivers it through delegation, and any other chat it follows passes it
-on, with what notes are left, as soon as its turn ends. Notes
+on, with what notes are left, as soon as its turn ends. A question or an
+approval a followed session waits on reaches the assistant at once, with
+the question, its options and how to answer: the person may hear of it
+only from the assistant, by voice. The person can answer through the
+assistant ("tell it the wide one"): `answer_question` answers the waiting
+question as the person, with an offered option or their own words.
+Approvals and forms stay the person's to give in that chat, so no agent
+grants another agent's permissions. Notes
 written close together go as one system message, at most one per session
 every fifteen seconds, which reaches the assistant's next turn as a steer;
 it passes them on in its own words or keeps them to itself. The transcript
