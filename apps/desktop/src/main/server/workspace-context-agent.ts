@@ -85,13 +85,20 @@ export function workspaceInstructions({
   hasTools,
   strategy,
   skillsNote,
+  assistant = false,
 }: {
   /** Whether this harness also carries the workspace toolset. */
   hasTools: boolean;
   strategy: AgentCoordinationStrategy;
   skillsNote?: string;
+  /** The assistant (ADR 0216) reaches chats with tools of its own. */
+  assistant?: boolean;
 }): string {
-  return [workPlaybook({ hasTools }), coordinationNote(strategy), skillsNote]
+  return [
+    workPlaybook({ hasTools, assistant }),
+    coordinationNote(strategy),
+    skillsNote,
+  ]
     .filter(Boolean)
     .join("\n\n");
 }
@@ -199,11 +206,24 @@ export async function workspaceTurnContext({
  * The stable Work section of every desktop agent's system prompt. Kept
  * short: procedures live in the desktop-workspace skill.
  */
-export function workPlaybook({ hasTools }: { hasTools: boolean }): string {
+export function workPlaybook({
+  hasTools,
+  assistant = false,
+}: {
+  hasTools: boolean;
+  /**
+   * The assistant (ADR 0216) has its own session tools in place of
+   * subsessions and Work's project-only chat tools; its instructions say so.
+   */
+  assistant?: boolean;
+}): string {
+  const chats = assistant
+    ? "Type into terminals, build apps and connect services through discover_capabilities"
+    : "Subsessions are your subagents: use spawn_subsession wherever a skill or habit calls for a subagent or Task tool. Type into terminals, reach other chats, build apps and connect services through discover_capabilities";
   const tools = hasTools
     ? `
 
-Use your own file and shell tools for ordinary work; Bun is on PATH. Start anything long-running (dev servers, slow builds or test runs) with run_background_command and keep working: it outlives this turn and wakes this chat when it finishes, so never wait with sleep; wait on anything else (a file, a deploy, a review) with watch_command. Describe commands plainly: the person sees it. Look before asking: read_tab reads a page, a terminal, another chat, an editor selection, or window (a screenshot of Work). Drive Work's browser (the person's signed-in tabs) with open_browser, browser_snapshot and browser_act; browser tools from elsewhere (a Chrome extension, an MCP server) see a different browser. Subsessions are your subagents: use spawn_subsession wherever a skill or habit calls for a subagent or Task tool. Type into terminals, reach other chats, build apps and connect services through discover_capabilities; the desktop-workspace skill explains these.
+Use your own file and shell tools for ordinary work; Bun is on PATH. Start anything long-running (dev servers, slow builds or test runs) with run_background_command and keep working: it outlives this turn and wakes this chat when it finishes, so never wait with sleep; wait on anything else (a file, a deploy, a review) with watch_command. Describe commands plainly: the person sees it. Look before asking: read_tab reads a page, a terminal, another chat, an editor selection, or window (a screenshot of Work). Drive Work's browser (the person's signed-in tabs) with open_browser, browser_snapshot and browser_act; browser tools from elsewhere (a Chrome extension, an MCP server) see a different browser. ${chats}; the desktop-workspace skill explains these.
 
 Show results instead of describing where they are: link them in Markdown as [Title](app:<name>), [Title](workflow:<exportName>), [Title](file:<path>) or a web URL, and open the one that matters with open_surface. Use update_todo_list to show progress on multi-step work.`
     : "";

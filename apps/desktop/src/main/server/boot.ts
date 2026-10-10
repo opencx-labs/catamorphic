@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import {
   type ConnectionProvider,
+  formatProjectAgentId,
   projectDataDirectory,
   startEventDispatcher,
   startProjectEventMonitorWorker,
@@ -64,6 +65,11 @@ import {
   syncProfileMcpWorkflowConnections,
 } from "../workflow-mcp-connections.js";
 import { DesktopAgentRegistry } from "./agent-registry.js";
+import {
+  ASSISTANT_NAMED_ROUTE,
+  ASSISTANT_WORK_ROUTE,
+} from "./assistant-agent.js";
+import { assistantTools } from "./assistant-tools.js";
 import { componentRegistryCapability } from "./component-registry.js";
 import { validateDatabaseFiles } from "./database-files.js";
 import { desktopCapabilitySource } from "./desktop-capabilities.js";
@@ -80,6 +86,7 @@ import type { DataPaths } from "./paths.js";
 import { ProjectRootsStore } from "./project-roots.js";
 import { REMOTE_ENVIRONMENT_SKILL } from "./remote-environment-skill.js";
 import { SessionCheckouts } from "./session-checkouts.js";
+import { SessionNotes } from "./session-notes.js";
 import { syncReport } from "./sync-report.js";
 import {
   DESKTOP_MCP_TOOL_KINDS,
@@ -747,8 +754,25 @@ export async function startEmbeddedServer(
         projectId,
         sessionId,
       )) ?? [];
+    // A private chat stays out of reach, except to the sessions it started:
+    // the assistant's sessions report back to its chat (ADR 0216).
+    const ancestors = new Set<string>();
+    let parent = (
+      await catamorphic.core.agentSessions
+        ?.get(desktopIdentity, projectId, sessionId)
+        .catch(() => null)
+    )?.parentSessionId;
+    while (parent && !ancestors.has(parent) && ancestors.size < 16) {
+      ancestors.add(parent);
+      parent = (
+        await catamorphic.core.agentSessions
+          ?.get(desktopIdentity, projectId, parent)
+          .catch(() => null)
+      )?.parentSessionId;
+    }
     const visible = peers.filter(
-      (peer) => !(incognitoSessions?.has(peer.id) ?? false),
+      (peer) =>
+        !(incognitoSessions?.has(peer.id) ?? false) || ancestors.has(peer.id),
     );
     return Promise.all(
       visible.map(async (peer) => {
@@ -777,6 +801,175 @@ export async function startEmbeddedServer(
       messages: messages.map(({ role, content }) => ({ role, content })),
     };
   };
+  // Sessions following others' notes (ADR 0216): the assistant hears the
+  // sessions it starts, and chats it is asked to follow, as they work.
+  const sessionNotes = new SessionNotes({
+    sequence: async ({ projectId, sessionId }) => {
+      const service = catamorphic.core.agentSessions;
+      if (!service) throw new Error("Agent sessions are not configured");
+      return (await service.get(desktopIdentity, projectId, sessionId)).snapshot
+        .sequence;
+    },
+    subscribe: async ({ projectId, sessionId }, input) => {
+      const service = catamorphic.core.agentSessions;
+      if (!service) throw new Error("Agent sessions are not configured");
+      return service.subscribe(desktopIdentity, projectId, sessionId, input);
+    },
+    deliver: async (follower, { content, notice, idempotencyKey }) =>
+      catamorphic.core.agentSessions?.deliver(
+        desktopIdentity,
+        follower.projectId,
+        follower.sessionId,
+        {
+          content,
+          author: { kind: "system", code: "session_notes" },
+          mode: "steer",
+          idempotencyKey,
+          metadata: { notice },
+        },
+      ),
+  });
+  // The assistant manages the person's chats in every project of the
+  // profile, as the person (ADR 0216).
+  agentRegistry.setAssistantTools(
+    assistantTools({
+      projects: async (projectId) => {
+        const owned = profiles.profileForProject(projectId).projectIds;
+        const projects = await Promise.all(
+          owned.map((id) =>
+            catamorphic.core.projects
+              .get(desktopIdentity, id)
+              .then((project) => ({ id, name: project.name }))
+              .catch(() => null),
+          ),
+        );
+        return projects.filter((project) => project !== null);
+      },
+      list: async (projectId) =>
+        (
+          await catamorphic.core.agentSessions?.list(
+            desktopIdentity,
+            projectId,
+            { limit: 50 },
+          )
+        )?.items ?? [],
+      get: async (projectId, sessionId) => {
+        const service = catamorphic.core.agentSessions;
+        if (!service) throw new Error("Agent sessions are not configured");
+        return service.get(desktopIdentity, projectId, sessionId);
+      },
+      // The assistant's chat may live in another project: its causation
+      // comes from there.
+      deliver: async (projectId, sessionId, { authorProjectId, ...input }) => {
+        const service = catamorphic.core.agentSessions;
+        if (!service) throw new Error("Agent sessions are not configured");
+        const causation =
+          input.author.kind === "agent"
+            ? await service.causalContext({
+                identity: desktopIdentity,
+                projectId: authorProjectId,
+                sessionId: input.author.sessionId,
+              })
+            : [];
+        return service.deliver(desktopIdentity, projectId, sessionId, {
+          ...input,
+          metadata: { causation },
+        });
+      },
+      interrupt: async (projectId, sessionId) =>
+        catamorphic.core.agentSessions?.interrupt(
+          desktopIdentity,
+          projectId,
+          sessionId,
+        ),
+      // As the person: the assistant passes on what they told it.
+      answer: async (projectId, sessionId, { requestId, answers }) => {
+        const service = catamorphic.core.agentSessions;
+        if (!service) throw new Error("Agent sessions are not configured");
+        const receipt = await service.command(
+          desktopIdentity,
+          projectId,
+          sessionId,
+          {
+            type: "respond",
+            commandId: randomUUID(),
+            requestId,
+            response: { kind: "question", answers },
+          },
+        );
+        if (receipt.status === "rejected")
+          throw new Error(
+            receipt.error?.message ?? "The chat did not take the answer.",
+          );
+      },
+      agents: async (projectId) => {
+        const own = profileConfig
+          .forProfile(profiles.profileForProject(projectId).id)
+          .agents.list()
+          .map((agent) => ({ id: agent.id, name: agent.name }));
+        const committed = await catamorphic.core.agentDefinitions
+          .list(desktopIdentity, projectId)
+          .catch(() => []);
+        return [
+          ...own,
+          ...committed.flatMap((entry) =>
+            entry.definition
+              ? [
+                  {
+                    id: formatProjectAgentId(projectId, entry.slug),
+                    name: entry.definition.name,
+                  },
+                ]
+              : [],
+          ),
+        ];
+      },
+      start: async (projectId, assistantSessionId, { agentId, ...input }) => {
+        const service = catamorphic.core.agentSessions;
+        if (!service) throw new Error("Agent sessions are not configured");
+        const child = await service.createSubsession(
+          desktopIdentity,
+          projectId,
+          assistantSessionId,
+          {
+            ...input,
+            ...(agentId
+              ? { routeId: ASSISTANT_NAMED_ROUTE, agentId }
+              : { routeId: ASSISTANT_WORK_ROUTE }),
+          },
+        );
+        // The child already runs: missing its notes is no reason to fail.
+        await sessionNotes
+          .follow({
+            follower: { projectId, sessionId: assistantSessionId },
+            followed: { projectId, sessionId: child.session.id },
+            title: input.title,
+            reportsResults: false,
+          })
+          .catch((cause: unknown) =>
+            console.warn("[assistant] following a session failed:", cause),
+          );
+        return child;
+      },
+      follow: async ({ follower, followed, title, on }) => {
+        if (!on) {
+          sessionNotes.unfollow(followed.sessionId);
+          return;
+        }
+        // A session the assistant started reports its own result.
+        const detail = await catamorphic.core.agentSessions
+          ?.get(desktopIdentity, followed.projectId, followed.sessionId)
+          .catch(() => null);
+        await sessionNotes.follow({
+          follower,
+          followed,
+          title,
+          reportsResults: detail?.parentSessionId !== follower.sessionId,
+        });
+      },
+      hidden: (sessionId) => incognitoSessions?.has(sessionId) ?? false,
+    }),
+  );
   agentRegistry.workspaceToolkit?.setSessionCoordinationBridge({
     list: (projectId, sessionId) =>
       sessionPeersResolver?.(projectId, sessionId) ?? Promise.resolve([]),
@@ -1346,6 +1539,7 @@ export async function startEmbeddedServer(
       clearInterval(sessionMailboxTimer);
       clearInterval(sessionMirrorTimer);
       clearInterval(scheduleTimer);
+      sessionNotes.dispose();
       await shutdownDesktopServices({
         steps: [
           { name: "schedules", dispose: () => scheduleTick?.catch(() => {}) },

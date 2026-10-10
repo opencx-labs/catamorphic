@@ -93,3 +93,16 @@ export function dockLanding<Spot extends DockSpot>(input: {
   }
   return landing;
 }
+
+/** An entry of the detached dock's native context menu (ADR 0121). */
+export interface DockMenuEntry {
+  label: string;
+  action: string;
+  danger?: boolean;
+  /** The entry in force: the pick among several, or a setting that is on. */
+  checked?: boolean;
+  /** A quieter note after the label. */
+  detail?: string;
+  /** A nested menu; the entry itself picks nothing. */
+  submenu?: readonly DockMenuEntry[];
+}

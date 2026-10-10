@@ -207,7 +207,8 @@ it("keeps an unsent draft when detached and reattached, and supports either edge
     `document.querySelector('[aria-label="Collapse chat bubbles"]').click()`,
   );
   await dock.waitFor(
-    `innerWidth <= 112 && document.querySelector('[data-dock-rail]')?.dataset.dockCollapsed === 'true'`,
+    // The collapsed bubble with the microphone and downloads beside it.
+    `innerWidth <= 154 && document.querySelector('[data-dock-rail]')?.dataset.dockCollapsed === 'true'`,
   );
   // Native movement uses the same two resting corners, even with centered expansion.
   await dock.eval(`(async () => {

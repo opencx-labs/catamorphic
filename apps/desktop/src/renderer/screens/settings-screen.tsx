@@ -40,12 +40,17 @@ import {
   isValidFontStack,
 } from "../../shared/theme-fonts.js";
 import { TOKEN_LABELS } from "../../shared/theme-tokens.js";
+import { VOICES, voiceIdOf } from "../../shared/voice.js";
 import { BrowserImport } from "../components/browser-import.js";
 import { Collapsible } from "../components/collapsible.js";
 import { DefaultBrowserButton } from "../components/default-browser.js";
 import { Modal } from "../components/modal.js";
 import { PendingButton } from "../components/pending-button.js";
 import { ShortcutHint } from "../components/shortcut-hint.js";
+import {
+  useMicrophones,
+  useProfileAgents,
+} from "../components/voice-button.js";
 import {
   type AgentHarness,
   type AgentsData,
@@ -72,6 +77,7 @@ export function SettingsScreen({
   destination,
   onSearch,
   onAddAgent,
+  onCreateAssistant,
   onConfigureAgent,
   onManageConnectors,
 }: {
@@ -80,6 +86,8 @@ export function SettingsScreen({
   /** Opens the palette's settings scope: the one search surface (ADR 0123). */
   onSearch: () => void;
   onAddAgent: () => void;
+  /** The agent wizard, whose agent becomes the assistant (ADR 0216). */
+  onCreateAssistant: () => void;
   /** Open the configure-agent modal (ADR 0056) for one roster agent. */
   onConfigureAgent: (agentId: string) => void;
   onManageConnectors: () => void;
@@ -286,6 +294,13 @@ export function SettingsScreen({
       label: "Notifications",
       keywords: "sound chime desktop alerts",
       content: <NotificationsSection />,
+    },
+    {
+      id: "voice",
+      label: "Voice",
+      keywords:
+        "assistant microphone speech talk listen push to talk dock composer voices",
+      content: <VoiceSection onCreateAssistant={onCreateAssistant} />,
     },
     {
       id: "import",
@@ -838,6 +853,226 @@ function NotificationsSection() {
       keys={["notificationSounds", "desktopNotifications"]}
       title="Agent activity"
     />
+  );
+}
+
+/** One labelled setting in a card: its words on the left, its control. */
+function SettingRow({
+  id,
+  label,
+  description,
+  stacked = false,
+  control = true,
+  children,
+}: {
+  id: string;
+  label: string;
+  description: string;
+  /** A wide control (a select) wraps under the words on narrow screens. */
+  stacked?: boolean;
+  /** Whether a control with the setting's id follows (a label needs one). */
+  control?: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <div
+      className={`-mx-2 flex justify-between rounded-lg p-2 ${stacked ? "flex-col items-stretch gap-2 @xl/settings:flex-row @xl/settings:items-center @xl/settings:gap-4" : "items-center gap-4"}`}
+      data-setting-id={id}
+    >
+      <div className="min-w-0">
+        {control ? (
+          <label htmlFor={`setting-${id}`} className="text-sm">
+            {label}
+          </label>
+        ) : (
+          <p className="text-sm">{label}</p>
+        )}
+        <p className="mt-1 text-xs text-fg-muted">{description}</p>
+      </div>
+      <div className="flex min-w-0 max-w-full shrink-0 items-center gap-3">
+        {children}
+      </div>
+    </div>
+  );
+}
+
+/** The assistant picker's last option: not an agent (agent ids are UUIDs). */
+const CREATE_ASSISTANT = "create";
+
+/**
+ * Voice (ADR 0216): the assistant the dock's microphone talks to, how
+ * agents sound, and how voice listens. All of it is the profile's prefs; a
+ * live voice follows changes at once.
+ */
+function VoiceSection({
+  onCreateAssistant,
+}: {
+  onCreateAssistant: () => void;
+}) {
+  const { prefs, update, error } = useAppPreferences();
+  const agents = useProfileAgents();
+  const microphones = useMicrophones();
+  const bindings = useKeybindings();
+  const holdKeys = formatBinding(bindings["push-to-talk"]);
+  const assistant =
+    agents.find((agent) => agent.id === prefs.voiceAssistant)?.id ?? "";
+  return (
+    <section className="settings-card flex flex-col gap-1">
+      {error && (
+        <p role="alert" className="text-xs text-danger">
+          {error}
+        </p>
+      )}
+      <SettingRow
+        id="voiceAssistant"
+        label="Assistant"
+        description="Who the dock's microphone talks to. The built-in assistant runs on your default agent at its default model; an agent of yours runs as you set it up. Either one can hand work to your other agents."
+        stacked
+      >
+        <select
+          id="setting-voiceAssistant"
+          value={assistant}
+          className="field h-8 min-w-0 max-w-full rounded-md px-2 text-sm"
+          onChange={(event) => {
+            const value = event.target.value;
+            if (value === CREATE_ASSISTANT) onCreateAssistant();
+            else void update({ voiceAssistant: value || null });
+          }}
+        >
+          <option value="">Built-in assistant</option>
+          {agents.map((agent) => (
+            <option key={agent.id} value={agent.id}>
+              {agent.name}
+            </option>
+          ))}
+          <option value={CREATE_ASSISTANT}>Create agent…</option>
+        </select>
+      </SettingRow>
+      <SettingRow
+        id="voiceId"
+        label="Default voice"
+        description="Agents speak in this voice unless you give one its own, in the agent's settings."
+        stacked
+      >
+        <select
+          id="setting-voiceId"
+          value={prefs.voiceId}
+          className="field h-8 min-w-0 max-w-full rounded-md px-2 text-sm"
+          onChange={(event) =>
+            void update({ voiceId: voiceIdOf(event.target.value) })
+          }
+        >
+          {VOICES.map((voice) => (
+            <option key={voice.id} value={voice.id}>
+              {voice.name} ({voice.description})
+            </option>
+          ))}
+        </select>
+      </SettingRow>
+      <SettingRow
+        id="voiceMicrophone"
+        label="Microphone"
+        description="What voice listens with."
+        stacked
+      >
+        <select
+          id="setting-voiceMicrophone"
+          value={prefs.voiceMicrophone ?? ""}
+          className="field h-8 min-w-0 max-w-full rounded-md px-2 text-sm"
+          onChange={(event) =>
+            void update({ voiceMicrophone: event.target.value || null })
+          }
+        >
+          <option value="">System default</option>
+          {microphones.map((microphone) => (
+            <option key={microphone.id} value={microphone.id}>
+              {microphone.label}
+            </option>
+          ))}
+          {prefs.voiceMicrophone !== null &&
+            !microphones.some(
+              (microphone) => microphone.id === prefs.voiceMicrophone,
+            ) && (
+              <option value={prefs.voiceMicrophone}>
+                Chosen microphone (not connected)
+              </option>
+            )}
+        </select>
+      </SettingRow>
+      <SettingRow
+        id="voicePushToTalk"
+        label="Push to talk"
+        description={
+          holdKeys
+            ? `Voice listens only while you hold ${holdKeys}, wherever you are in Work.`
+            : "Voice listens only while you hold the push-to-talk keys."
+        }
+      >
+        <input
+          id="setting-voicePushToTalk"
+          type="checkbox"
+          role="switch"
+          aria-checked={prefs.voicePushToTalk}
+          checked={prefs.voicePushToTalk}
+          onChange={(event) =>
+            void update({ voicePushToTalk: event.target.checked })
+          }
+        />
+      </SettingRow>
+      <SettingRow
+        id="voiceInDock"
+        label="Show voice in dock"
+        description="The assistant's microphone. Its shortcut works either way."
+      >
+        <input
+          id="setting-voiceInDock"
+          type="checkbox"
+          role="switch"
+          aria-checked={prefs.voiceInDock}
+          checked={prefs.voiceInDock}
+          onChange={(event) =>
+            void update({ voiceInDock: event.target.checked })
+          }
+        />
+      </SettingRow>
+      <SettingRow
+        id="voiceInChats"
+        label="Show voice in chats"
+        description="A microphone in each chat's composer, to talk with that chat's agent and carry on typing after."
+      >
+        <input
+          id="setting-voiceInChats"
+          type="checkbox"
+          role="switch"
+          aria-checked={prefs.voiceInChats}
+          checked={prefs.voiceInChats}
+          onChange={(event) =>
+            void update({ voiceInChats: event.target.checked })
+          }
+        />
+      </SettingRow>
+      <SettingRow
+        id="voiceprint"
+        label="Only listen to me"
+        control={false}
+        description={
+          prefs.voiceprint
+            ? "Voice knows your voice and ignores other people's."
+            : "Learn your voice from a microphone's menu, and voice ignores other people's."
+        }
+      >
+        {prefs.voiceprint && (
+          <button
+            id="setting-voiceprint"
+            type="button"
+            className="btn rounded-md px-3 py-1.5 text-xs"
+            onClick={() => void update({ voiceprint: null })}
+          >
+            Forget my voice
+          </button>
+        )}
+      </SettingRow>
+    </section>
   );
 }
 

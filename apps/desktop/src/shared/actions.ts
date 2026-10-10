@@ -575,6 +575,35 @@ export const BUILTIN_ACTIONS = [
     ],
   },
   {
+    id: "toggle-voice",
+    label: "Talk to Work",
+    icon: "Mic",
+    description:
+      "turn voice on or off: your assistant listens through the dock's microphone and talks back",
+    defaultBinding: "Cmd+Shift+Space",
+    keywords: ["voice", "microphone", "mic", "talk", "speak", "listen"],
+  },
+  {
+    id: "change-assistant",
+    label: "Change assistant…",
+    icon: "Mic",
+    description:
+      "pick who the dock's microphone talks to: Work's built-in assistant or one of your agents",
+    defaultBinding: null,
+    keywords: ["assistant", "voice", "dock", "agent", "orchestrator", "talk"],
+  },
+  {
+    id: "push-to-talk",
+    label: "Push to talk",
+    icon: "Mic",
+    description:
+      "hold to talk to Work when voice is set to push to talk; it hears you when you let go",
+    defaultBinding: "Alt+Space",
+    keywords: ["voice", "microphone", "talk", "hold"],
+    // Held, not pressed: the palette cannot hold a key.
+    hiddenInPalette: true,
+  },
+  {
     id: "continue-on-mobile",
     label: "Continue on mobile",
     icon: "Smartphone",

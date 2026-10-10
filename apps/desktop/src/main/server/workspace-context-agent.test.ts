@@ -286,6 +286,14 @@ describe("Work playbook", () => {
       expect(playbook).not.toContain(jargon);
   });
 
+  it("leaves the assistant's replaced chat tools out of its playbook", () => {
+    const playbook = workPlaybook({ hasTools: true, assistant: true });
+    expect(playbook).not.toContain("spawn_subsession");
+    expect(playbook).not.toContain("reach other chats");
+    expect(playbook).toContain("discover_capabilities");
+    expect(workPlaybook({ hasTools: true })).toContain("spawn_subsession");
+  });
+
   it("joins the playbook, the sharing rule and the skills section", () => {
     const instructions = workspaceInstructions({
       hasTools: false,

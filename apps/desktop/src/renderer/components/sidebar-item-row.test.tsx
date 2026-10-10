@@ -186,8 +186,9 @@ describe("SidebarItemRow menu motion", () => {
 
     const menu = document.querySelector('[role="menu"]');
     if (!(menu instanceof HTMLElement)) throw new Error("menu did not open");
-    const panel = menu.firstElementChild;
-    if (!(panel instanceof HTMLElement)) throw new Error("menu panel missing");
+    // The menu itself animates; the list inside it scrolls, so the slide
+    // never shows a scrollbar.
+    const panel = menu;
     const buttons = [...menu.querySelectorAll<HTMLButtonElement>("button")];
     expect(panel.classList).toContain("animate-pop-in");
     expect(document.activeElement).toBe(buttons[0]);
@@ -221,7 +222,7 @@ describe("SidebarItemRow menu motion", () => {
         new MouseEvent("contextmenu", { bubbles: true, clientX: 200 }),
       );
     });
-    const panel = document.querySelector('[role="menu"]')?.firstElementChild;
+    const panel = document.querySelector('[role="menu"]');
     if (!(panel instanceof HTMLElement)) throw new Error("menu did not open");
 
     // A chat timeline following its output scrolls somewhere else.
@@ -251,9 +252,9 @@ describe("SidebarItemRow menu motion", () => {
 
     act(() => archive.click());
     expect(onAction).not.toHaveBeenCalled();
-    expect(
-      document.querySelector('[role="menu"]')?.firstElementChild?.classList,
-    ).toContain("animate-pop-out");
+    expect(document.querySelector('[role="menu"]')?.classList).toContain(
+      "animate-pop-out",
+    );
 
     act(() => vi.advanceTimersByTime(180));
     expect(onAction).toHaveBeenCalledWith({

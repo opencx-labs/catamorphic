@@ -25,20 +25,26 @@ export function useAppPreferences() {
       setLoaded(true);
       setError(null);
     });
-    void desktopApi
-      .getPrefs()
-      .then((next) => {
-        if (!active) return;
-        if (request === revision.current) setPrefs(normalizePrefs(next));
-        setLoaded(true);
-      })
-      .catch(() => {
-        if (active)
-          setError("Could not load preferences. Reopen this view to retry.");
-      });
+    const load = (request: number) =>
+      void desktopApi
+        .getPrefs()
+        .then((next) => {
+          if (!active) return;
+          if (request === revision.current) setPrefs(normalizePrefs(next));
+          setLoaded(true);
+        })
+        .catch(() => {
+          if (active)
+            setError("Could not load preferences. Reopen this view to retry.");
+        });
+    load(request);
+    // Another profile in this window: its preferences.
+    const reload = () => load(++revision.current);
+    window.addEventListener("catamorphic:profile-refetch", reload);
     return () => {
       active = false;
       unsubscribe();
+      window.removeEventListener("catamorphic:profile-refetch", reload);
     };
   }, []);
   const update = async (patch: Partial<AppPrefs>) => {

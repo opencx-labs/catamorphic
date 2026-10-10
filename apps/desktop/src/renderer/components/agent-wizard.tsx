@@ -78,7 +78,8 @@ export function AgentWizard({
   variant: "tab" | "modal";
   open?: boolean;
   onClose: () => void;
-  onDone: () => void;
+  /** The agent set up, when one flow finished with one. */
+  onDone: (agentId: string | null) => void;
   /** True while the user is inside a flow (a detail step, or a sign-in in
    * flight). The host must not close the wizard from under them then —
    * a sign-in creates its agent before it finishes. */
@@ -142,12 +143,13 @@ export function AgentWizard({
 
   /**
    * Done with the agent a flow set up (`null`: one made outside the flows,
-   * an API key's). A sign-in creates its agent before it finishes, so other
+   * an API key's, which comes as `created`). A sign-in creates its agent before it finishes, so other
    * flows may have left agents on the way: those that never signed in go,
    * and none stays behind as the default. One whose sign-in landed after
    * all (in a terminal, with the wizard closed) stays.
    */
-  const finish = (flow: Flow | null) => {
+  const finish = (flow: Flow | null, created: string | null = null) => {
+    const kept = flow ? (createdRef.current[flow] ?? null) : created;
     const others = Object.entries(createdRef.current).flatMap(([other, id]) =>
       other !== flow && id ? [id] : [],
     );
@@ -159,7 +161,7 @@ export function AgentWizard({
           .catch(() => true);
         if (!signedIn) await desktopApi.agentsRemove(id).catch(() => false);
       }),
-    ).finally(() => onDoneRef.current());
+    ).finally(() => onDoneRef.current(kept));
   };
   const finishRef = useRef(finish);
   finishRef.current = finish;
@@ -372,7 +374,7 @@ export function AgentWizard({
     setError(null);
     setBusy(true);
     try {
-      await desktopApi.agentsCreate({
+      const agent = await desktopApi.agentsCreate({
         harness: "ai-sdk",
         provider,
         auth: "api-key",
@@ -380,7 +382,7 @@ export function AgentWizard({
         connections,
         ...(name.trim() ? { name: name.trim() } : {}),
       });
-      finish(null);
+      finish(null, agent.id);
     } catch (cause) {
       setBusy(false);
       setError(cause instanceof Error ? cause.message : String(cause));

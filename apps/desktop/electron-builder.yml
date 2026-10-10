@@ -40,13 +40,15 @@ publish:
   publishAutoUpdate: true
 # Packages that load assets or native code from disk at runtime must escape
 # the asar archive: pglite (wasm), microsandbox (NAPI addon + platform
-# binaries), catamorphic db migrations (.sql read via fs), and the runtime
-# dist files the stdio provider uploads into sandboxes.
+# binaries), sherpa-onnx (NAPI speech addon + onnxruntime libraries),
+# catamorphic db migrations (.sql read via fs), and the runtime dist files
+# the stdio provider uploads into sandboxes.
 asarUnpack:
   - "**/node_modules/@electric-sql/pglite/**"
   - "**/node_modules/@lydell/node-pty*/**"
   - "**/node_modules/microsandbox/**"
   - "**/node_modules/@superradcompany/**"
+  - "**/node_modules/sherpa-onnx-*/**"
   - "**/node_modules/@catamorphic/db/migrations/**"
   - "**/node_modules/@catamorphic/runtime/dist/**"
 mac:
@@ -64,7 +66,7 @@ mac:
   notarize: true
   extendInfo:
     NSLocalNetworkUsageDescription: Work uses your local network so your phone can continue this workspace.
-    NSMicrophoneUsageDescription: Work uses your microphone when a site you allow asks for it, such as a video call.
+    NSMicrophoneUsageDescription: Work uses your microphone when you talk to it, and when a site you allow asks for it, such as a video call.
     NSCameraUsageDescription: Work uses your camera when a site you allow asks for it, such as a video call.
   target:
     - target: dmg

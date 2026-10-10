@@ -342,6 +342,9 @@ editor or app frame moves over it rather than animating its size.
 ### Sanctioned exceptions
 
 - `animate-spin` / `animate-pulse`: indeterminate progress may loop.
+- `voice-spin` (900ms) and `voice-ripple` (1200ms) on a microphone: live
+  states that last as long as they are true, the speech models loading and
+  the person being heard; still under reduced motion.
 - `title-change` (1200ms): a deliberate noticed-but-calm rename signal.
 - `veil-touch` (760ms): a press on a held surface shows the veil, which
   gives where it was touched and clears; shorter, the wobble reads as a
@@ -1995,3 +1998,47 @@ branch and the folder goes, so worktrees no longer pile up; the next
 message checks it out again. The default stays the project folder, because
 most projects are not code and the main complaint about Claude Code's
 worktrees is that people cannot opt out.
+
+### 2026-10-10: Talk to Work, and to any chat
+
+A microphone sits in the dock next to the collapse arrows, on their inner
+side, and the same microphone sits in every chat's composer beside Send. The
+dock's talks with the assistant; a composer's with that chat's own agent,
+which carries on in text when voice goes off. A click starts listening: a
+ring turns until it really listens, then it lights. The first time, it
+downloads its speech models (the ring fills). Listening and speaking run on
+the Mac: Kokoro speaks each reply once it is finished, a sentence at a time
+as each is made, in each agent's own voice (Heart, Bella, Michael or Fenrir,
+set in its settings, else the default one). It stops when the person talks
+over it in their own words, or says "stop". The microphone pulses while it
+hears; then a wave passes over five dots while the agent works, until its
+first sentence is heard, when they become bars following its voice, a bar
+per band of speech. Clicking another microphone moves voice there without
+reloading anything.
+
+The dock's agent has a name: the assistant. It is Work's built-in assistant
+by default, the person's default agent at its harness's default model, or
+any of their agents as they set it up, picked in Settings › Voice, the
+microphone's menu or the palette; "Create agent…" runs the usual wizard and
+makes the new agent the assistant. It looks things up and reads files
+itself, saying a few words first, and hands bigger work to sessions so it
+stays free to talk. It follows those sessions and hears their notes as they
+work, a few at a time, to pass on in its own words; the transcript shows one
+quiet line for each. When one of them asks the person something, the
+assistant hears it at once and says so, and the person can answer it
+right there ("the wide one"); the assistant passes the answer on.
+Approvals stay in the chat that asks. Its chat reads every project, so it lives in a project
+on this computer and never goes to a server. News that arrives while voice
+is off shows as a dot on the dock's microphone, and the next start says it
+first.
+
+What voice tells an agent is information, not rules: that the person is
+talking by voice and hears each message as it finishes. A person who wants
+an agent to talk a certain way says so in that agent's own instructions.
+Settings, menus and the palette all write the same profile prefs, and a
+live voice follows them. The microphone's menu also learns the person's
+voice so everyone else (a television, a colleague, the agent's own voice)
+is ignored, switches push to talk (hold ⌥Space), and keeps the microphone in
+the dock and in chats or not. ⌘⇧Space turns voice on and off. Out of the
+dock, the microphone shrinks away in place and comes back while the
+assistant talks; the arrows' menu always offers it back. See ADR 0216.

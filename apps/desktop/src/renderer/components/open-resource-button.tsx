@@ -2,7 +2,6 @@ import {
   type ButtonHTMLAttributes,
   type ReactNode,
   type Ref,
-  useEffect,
   useRef,
   useState,
 } from "react";
@@ -12,33 +11,14 @@ import {
   openModeFromEvent,
 } from "../../shared/open-mode.js";
 import { parseSurfaceLink } from "../../shared/surface-link.js";
-import { MenuPortal } from "./sidebar-item-row.js";
+import { MenuPortal, useMenuDismiss } from "./sidebar-item-row.js";
 
 function useResourceMenu() {
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const [open, setOpen] = useState(false);
   const pending = useRef<OpenMode | undefined>(undefined);
   const choose = useRef<(mode: OpenMode) => void>(() => {});
-  useEffect(() => {
-    if (!open) return;
-    const close = (event: Event) => {
-      if (
-        event.target instanceof Element &&
-        event.target.closest("[data-sidebar-menu]")
-      )
-        return;
-      setOpen(false);
-    };
-    const onEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setOpen(false);
-    };
-    window.addEventListener("pointerdown", close);
-    window.addEventListener("keydown", onEscape);
-    return () => {
-      window.removeEventListener("pointerdown", close);
-      window.removeEventListener("keydown", onEscape);
-    };
-  }, [open]);
+  useMenuDismiss({ open, close: () => setOpen(false) });
   return {
     show(position: { x: number; y: number }, onOpen: (mode: OpenMode) => void) {
       pending.current = undefined;

@@ -25,6 +25,11 @@ export default defineConfig({
             import.meta.dirname,
             "src/main/sidebar-source-worker.ts",
           ),
+          // The speech worker, an Electron utility process (ADR 0216).
+          "voice-worker": path.resolve(
+            import.meta.dirname,
+            "src/main/voice/voice-worker.ts",
+          ),
         },
       },
     },
@@ -53,6 +58,15 @@ export default defineConfig({
   },
   renderer: {
     plugins: [react(), tailwindcss()],
+    build: {
+      rollupOptions: {
+        input: {
+          index: path.resolve(import.meta.dirname, "src/renderer/index.html"),
+          // The voice agent's hidden audio page (ADR 0216).
+          voice: path.resolve(import.meta.dirname, "src/renderer/voice.html"),
+        },
+      },
+    },
     resolve: {
       alias: [
         {

@@ -51,6 +51,7 @@ import type {
   McpAppRef,
 } from "../../shared/chat.js";
 import { modifiersForMode } from "../../shared/open-mode.js";
+import { rosterAgentId } from "../../shared/voice.js";
 import {
   defaultModelLabel,
   modelId,
@@ -125,6 +126,7 @@ import {
 import { RemoteMessageConnectionGuard } from "./remote-message-connection-guard.js";
 import { SessionInspector } from "./session-inspector.js";
 import { ShortcutHint } from "./shortcut-hint";
+import { VoiceButton } from "./voice-button.js";
 
 const EMPTY_CHAT_PROMPTS = [
   { empty: "Ready when you are.", composer: "Give me the first move…" },
@@ -950,10 +952,13 @@ function ChatDockContent({
     : roster.agents.find(
         (agent) =>
           agent.id ===
-          (chat.session?.agentId ??
-            entry.agentId ??
-            defaultAgentId ??
-            roster.defaultAgentId),
+          rosterAgentId(
+            chat.session?.agentId ??
+              entry.agentId ??
+              defaultAgentId ??
+              roster.defaultAgentId ??
+              "",
+          ),
       );
   // Another agent to pick for this chat: before it starts any, after it
   // only one on its harness, and the rest start a new chat (lib/agent-switch).
@@ -2669,7 +2674,9 @@ function ChatDockContent({
               onReauth={reauth?.run}
               reauthLabel={reauth?.label}
               resolveAgentName={(agentId) =>
-                roster.agents.find((agent) => agent.id === agentId)?.name
+                roster.agents.find(
+                  (agent) => agent.id === rosterAgentId(agentId),
+                )?.name
               }
               error={
                 chat.connectionLost
@@ -3174,6 +3181,20 @@ function ChatDockContent({
                 {/* Context ring (ADR 0057): quiet until a harness reports
                   occupancy and window size; danger red past 90%. */}
                 <ContextMeter turns={chat.timeline} />
+                {/* Voice in this chat (ADR 0216): talk to its agent, then
+                  carry on typing. Company chats live on the server. */}
+                {!authority && (
+                  <VoiceButton
+                    projectId={projectId}
+                    nativeMenus={nativeWindow}
+                    chat={{
+                      sessionId: chat.sessionId,
+                      agentId: chat.session?.agentId ?? selectedAgentId ?? null,
+                      agentName: activeAgent?.name ?? null,
+                      ensureSession: chat.ensureSession,
+                    }}
+                  />
+                )}
                 {/* Nothing to send while the agent works: the button stops
                   the running turn instead. */}
                 {chat.isWorking &&

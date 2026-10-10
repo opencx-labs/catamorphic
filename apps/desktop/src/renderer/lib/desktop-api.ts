@@ -36,6 +36,7 @@ import type {
 } from "../../shared/desktop-workspace.js";
 import type {
   DockDrag,
+  DockMenuEntry,
   DockRegion,
   DockSize,
 } from "../../shared/dock-position.js";
@@ -113,6 +114,7 @@ import type { TerminalAppearanceResult } from "../../shared/terminal-appearance.
 import type { ThemeFonts } from "../../shared/theme-fonts.js";
 import type { DesktopUpdateState } from "../../shared/update.js";
 import type { UsageSummary } from "../../shared/usage.js";
+import type { VoiceLevels, VoiceStatus } from "../../shared/voice.js";
 
 export type { AppPrefs, DesktopUpdateState, UsageSummary };
 
@@ -1211,9 +1213,7 @@ export interface CatamorphicDesktopApi {
   /** Session-only; the `dockDetached` preference stays the launch default. */
   dockDetach: (detached: boolean) => Promise<void>;
   /** Native context menu for the detached dock window; resolves the action. */
-  dockMenu: (
-    entries: Array<{ label: string; action: string; danger?: boolean }>,
-  ) => Promise<string | null>;
+  dockMenu: (entries: readonly DockMenuEntry[]) => Promise<string | null>;
   /** The workspace window reports where its chat region sits; null clears. */
   dockRegion: (region: DockRegion | null) => Promise<void>;
   onDockSnapshot: (listener: (snapshot: DockSnapshot) => void) => () => void;
@@ -1966,6 +1966,29 @@ export interface CatamorphicDesktopApi {
   workspaceConfigReset: () => Promise<void>;
   /** Change signal only — refetch with the active project to resolve. */
   onWorkspaceConfigChanged: (listener: () => void) => () => void;
+  /**
+   * Voice as this window's profile sees it (ADR 0216). Its settings are
+   * prefs (`voice*`, `agentVoices`): a live voice follows them.
+   */
+  voiceStatus: () => Promise<VoiceStatus>;
+  /**
+   * Talk to a chat (`sessionId`) or to the assistant from the project; the
+   * microphone that is on turns voice off, another moves voice to it.
+   */
+  voiceToggle: (input: {
+    projectId?: string;
+    sessionId?: string;
+  }) => Promise<void>;
+  /** Close the assistant's chat; the next start makes a new one. */
+  voiceReset: () => Promise<void>;
+  /** Learn the person's voice now, starting voice when it is off. */
+  voiceLearn: (input: {
+    projectId?: string;
+    sessionId?: string;
+  }) => Promise<void>;
+  onVoiceStatus: (listener: (status: VoiceStatus) => void) => () => void;
+  /** How each sentence voice says sounds, as it is scheduled. */
+  onVoiceLevels: (listener: (levels: VoiceLevels) => void) => () => void;
 }
 
 declare global {
@@ -2003,4 +2026,8 @@ export const desktopApi: CatamorphicDesktopApi = {
   onWorkspaceConfigChanged: shareEvent((publish) =>
     nativeApi.onWorkspaceConfigChanged(() => publish(undefined)),
   ),
+  onVoiceStatus: shareEvent((publish) => nativeApi.onVoiceStatus(publish)),
+  onVoiceLevels: shareEvent((publish) => nativeApi.onVoiceLevels(publish)),
+  // Every chat's microphone and settings view reads prefs.
+  onPrefsChanged: shareEvent((publish) => nativeApi.onPrefsChanged(publish)),
 };

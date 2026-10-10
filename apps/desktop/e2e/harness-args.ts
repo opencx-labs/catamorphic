@@ -4,11 +4,14 @@ export function electronLaunchArgs({
   platform,
   useMockKeychain = false,
   sandboxedRenderers = false,
+  fakeAudioCapture,
 }: {
   cdpPort: number;
   ci: string | undefined;
   platform: NodeJS.Platform;
   useMockKeychain?: boolean;
+  /** A WAV the synthetic microphone plays once instead of its beeps. */
+  fakeAudioCapture?: string;
   /** Run every renderer as Electron's sandboxed renderer (see below). */
   sandboxedRenderers?: boolean;
 }): string[] {
@@ -18,6 +21,9 @@ export function electronLaunchArgs({
     // Pages get a synthetic camera and microphone; the permission prompt
     // stays real (the fake-UI switch would skip it).
     "--use-fake-device-for-media-stream",
+    ...(fakeAudioCapture
+      ? [`--use-file-for-fake-audio-capture=${fakeAudioCapture}%noloop`]
+      : []),
     ...(platform === "darwin" && useMockKeychain
       ? ["--use-mock-keychain"]
       : []),

@@ -20,6 +20,22 @@ describe("electronLaunchArgs", () => {
       }),
     ).not.toContain("--use-mock-keychain");
   });
+  it("plays a recording into the synthetic microphone once", () => {
+    expect(
+      electronLaunchArgs({
+        cdpPort: 9342,
+        ci: undefined,
+        platform: "linux",
+        fakeAudioCapture: "/tmp/request.wav",
+      }),
+    ).toEqual([
+      ".",
+      "--remote-debugging-port=9342",
+      "--use-fake-device-for-media-stream",
+      "--use-file-for-fake-audio-capture=/tmp/request.wav%noloop",
+    ]);
+  });
+
   it("disables Chromium's SUID sandbox only on Linux CI runners", () => {
     expect(
       electronLaunchArgs({ cdpPort: 9342, ci: "true", platform: "linux" }),

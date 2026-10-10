@@ -1330,6 +1330,31 @@ window.addEventListener("keydown", (event) => {
   ipcRenderer.sendToHost("catamorphic:dismiss-floating");
 });
 
+// Push to talk's keys, while voice is set to it (voice, ADR 0216): the
+// main process hears them go down and up; the page never gets them, so a
+// held Option+Space types nothing. They come with the page keys below.
+let pushToTalkKeys = "";
+ipcRenderer.on("catamorphic:push-to-talk-keys", (_event, keys: unknown) => {
+  pushToTalkKeys = typeof keys === "string" ? keys : "";
+});
+window.addEventListener(
+  "keydown",
+  (event) => {
+    if (
+      !pushToTalkKeys ||
+      !matchesShortcut({
+        event,
+        binding: pushToTalkKeys,
+        mac: /Mac/.test(navigator.platform),
+      })
+    )
+      return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+  },
+  { capture: true },
+);
+
 // Page-first keys (find, back and forward) reach the page first, as in
 // Chrome: a page with its own find (a document editor) keeps them, and a
 // text field keeps Cmd+Left and Cmd+Right for its caret; otherwise the tab

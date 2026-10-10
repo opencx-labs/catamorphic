@@ -92,6 +92,10 @@ export interface PaletteHost {
   ) => void;
   /** A configure-picker row was committed: open the agent's modal. */
   onConfigureAgent: (agentId: string) => void;
+  /** The agent the assistant is (ADR 0216); null is the built-in one. */
+  voiceAssistant: string | null;
+  /** The agent wizard, whose agent becomes the assistant. */
+  onCreateAssistant: () => void;
   /** This user's per-project default override is set (ADR 0056). */
   defaultAgentOverridden?: boolean;
   /** Clear that override, falling back to the project/global layers. */

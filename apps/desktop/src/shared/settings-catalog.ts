@@ -17,6 +17,7 @@ export interface SettingsEntry {
     | "macros"
     | "shortcuts"
     | "notifications"
+    | "voice"
     | "import";
   keywords: string[];
 }
@@ -120,6 +121,48 @@ export const SETTINGS_CATALOG: readonly SettingsEntry[] = [
       "default agent",
       "permissions",
     ],
+  },
+  {
+    id: "voiceAssistant",
+    label: "Assistant",
+    category: "voice",
+    keywords: ["assistant", "dock", "voice", "agent", "orchestrator", "talk"],
+  },
+  {
+    id: "voiceId",
+    label: "Default voice",
+    category: "voice",
+    keywords: ["voice", "speech", "speak", "read aloud", "tts", "sound"],
+  },
+  {
+    id: "voiceMicrophone",
+    label: "Microphone",
+    category: "voice",
+    keywords: ["microphone", "mic", "input", "audio", "device"],
+  },
+  {
+    id: "voicePushToTalk",
+    label: "Push to talk",
+    category: "voice",
+    keywords: ["push to talk", "hold", "keys", "listen", "walkie"],
+  },
+  {
+    id: "voiceInDock",
+    label: "Show voice in dock",
+    category: "voice",
+    keywords: ["microphone", "dock", "hide", "show", "bubble"],
+  },
+  {
+    id: "voiceInChats",
+    label: "Show voice in chats",
+    category: "voice",
+    keywords: ["microphone", "composer", "chat", "hide", "show"],
+  },
+  {
+    id: "voiceprint",
+    label: "Only listen to me",
+    category: "voice",
+    keywords: ["voice print", "learn my voice", "other people", "background"],
   },
   {
     id: "github-cli",

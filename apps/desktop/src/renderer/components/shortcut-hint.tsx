@@ -47,6 +47,9 @@ export function ShortcutHint({
   const tooltipRef = useRef<HTMLSpanElement>(null);
   const [themeTokens, setThemeTokens] = useState<CSSProperties>({});
   const timerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  // The frame that flips a mounted hint visible; hiding cancels it too, or a
+  // hint shown by focus reappears over the menu a right-click just opened.
+  const frameRef = useRef(0);
   const [position, setPosition] = useState<{ x: number; y: number } | null>(
     null,
   );
@@ -54,7 +57,13 @@ export function ShortcutHint({
   // transition ends, not when the pointer leaves.
   const [visible, setVisible] = useState(false);
 
-  useEffect(() => () => clearTimeout(timerRef.current), []);
+  useEffect(
+    () => () => {
+      clearTimeout(timerRef.current);
+      cancelAnimationFrame(frameRef.current);
+    },
+    [],
+  );
 
   useLayoutEffect(() => {
     const tooltip = tooltipRef.current;
@@ -99,7 +108,7 @@ export function ShortcutHint({
         y: side === "bottom" ? rect.bottom + 7 : rect.top - 7,
       });
       // Mount hidden, then flip visible next frame so the transition runs.
-      requestAnimationFrame(() => setVisible(true));
+      frameRef.current = requestAnimationFrame(() => setVisible(true));
     }, delay);
   };
 
@@ -112,11 +121,12 @@ export function ShortcutHint({
       x: rect.x + rect.width / 2,
       y: side === "bottom" ? rect.bottom + 7 : rect.top - 7,
     });
-    requestAnimationFrame(() => setVisible(true));
+    frameRef.current = requestAnimationFrame(() => setVisible(true));
   };
 
   const hide = () => {
     clearTimeout(timerRef.current);
+    cancelAnimationFrame(frameRef.current);
     setVisible(false);
   };
 
@@ -162,7 +172,15 @@ export function ShortcutHint({
       className={`inline-flex ${className}`}
       onMouseEnter={show}
       onMouseLeave={hide}
-      onFocusCapture={showFromFocus}
+      // Keyboard focus only: a click or right-click also focuses the
+      // control, and a hint shown then would cover the menu it opened.
+      onFocusCapture={(event) => {
+        if (
+          event.target instanceof Element &&
+          event.target.matches(":focus-visible")
+        )
+          showFromFocus();
+      }}
       onBlurCapture={hide}
       onKeyDownCapture={(event) => {
         if (event.key === "Escape") hide();

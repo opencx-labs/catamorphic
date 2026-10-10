@@ -100,6 +100,7 @@
     "rehype-raw": "^7.0.0",
     "rehype-sanitize": "^6.0.0",
     "remark-gfm": "^4.0.1",
+    "sherpa-onnx-node": "1.13.8",
     "shiki": "^4.4.3",
     "tar": "^7.5.22",
     "tldts": "^7.4.10",

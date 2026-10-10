@@ -54,6 +54,7 @@ import { formatBinding, useKeybindings } from "../lib/keybindings.js";
 import { pageThemeCss } from "../lib/page-theme.js";
 import { pointerMoved } from "../lib/pointer-moved.js";
 import { useTheme } from "../lib/theme.js";
+import { useAppPreferences } from "../lib/use-app-preferences.js";
 
 /**
  * A browser page inside a workspace tab: address bar (with Chrome-style
@@ -415,6 +416,17 @@ export function BrowserScreen({
     if (guestReadyRef.current)
       webviewRef.current?.send("catamorphic:page-keys", pageKeys);
   }, [pageKeys]);
+  // Push to talk's keys, while voice is set to it: the page swallows them,
+  // and the main process hears them go down and up (voice).
+  const pushToTalk = useAppPreferences().prefs.voicePushToTalk
+    ? keybindings["push-to-talk"]
+    : "";
+  const pushToTalkRef = useRef(pushToTalk);
+  pushToTalkRef.current = pushToTalk;
+  useEffect(() => {
+    if (guestReadyRef.current)
+      webviewRef.current?.send("catamorphic:push-to-talk-keys", pushToTalk);
+  }, [pushToTalk]);
   // Selected text and find matches take the theme's accent (lib/page-theme).
   const theme = useTheme();
   const pageCss = theme ? pageThemeCss(theme) : "";
@@ -672,6 +684,7 @@ export function BrowserScreen({
           );
           view.send("catamorphic:floating-preview", floatingBindingRef.current);
           view.send("catamorphic:page-keys", pageKeysRef.current);
+          view.send("catamorphic:push-to-talk-keys", pushToTalkRef.current);
           view.send("catamorphic:page-theme", pageCssRef.current);
         } catch {
           // Guest gone mid-call; the next dom-ready re-sends.
@@ -718,6 +731,7 @@ export function BrowserScreen({
         if (message.channel === "catamorphic:page-keys-wanted") {
           try {
             view.send("catamorphic:page-keys", pageKeysRef.current);
+            view.send("catamorphic:push-to-talk-keys", pushToTalkRef.current);
           } catch {
             // Guest gone mid-call; its dom-ready re-sends.
           }

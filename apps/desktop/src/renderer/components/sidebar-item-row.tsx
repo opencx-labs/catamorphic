@@ -38,8 +38,14 @@ export interface ContextMenuEntry {
   icon?: string;
   url?: string;
   disabledReason?: string;
-  /** The entry currently in force, in a menu that picks one of several. */
+  /** The entry in force: the pick among several, or a setting that is on. */
   checked?: boolean;
+  /** A setting the entry turns on and off, not one pick among several. */
+  setting?: boolean;
+  /** A quieter note after the label, such as a voice's description. */
+  detail?: string;
+  /** Opens a nested menu; the entry itself picks nothing. */
+  submenu?: readonly this[];
 }
 
 export function SidebarIcon({ name }: { name?: string }) {
@@ -272,52 +278,14 @@ export function SidebarItemRow<
     }, SIDEBAR_PREVIEW_DELAY_MS);
   };
 
-  useEffect(() => {
-    if (!open) return;
-    const dismiss = (event: Event) => {
-      // Clicks inside the portal menu handle themselves.
-      if (
-        event.target instanceof Element &&
-        event.target.closest("[data-sidebar-menu]")
-      ) {
-        return;
-      }
-      if (
-        event.target instanceof Node &&
-        buttonRef.current?.contains(event.target)
-      ) {
-        return;
-      }
-      // Only a scroll that moves the row detaches the fixed-position menu
-      // from it. A chat following its own output elsewhere must not close
-      // a menu the person just opened.
-      if (
-        event.type === "scroll" &&
-        !(
-          event.target instanceof Node &&
-          buttonRef.current &&
-          event.target.contains(buttonRef.current)
-        )
-      ) {
-        return;
-      }
-      setOpen(false);
-    };
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        setOpen(false);
-      }
-    };
-    window.addEventListener("pointerdown", dismiss);
-    window.addEventListener("keydown", onKeyDown);
-    window.addEventListener("scroll", dismiss, true);
-    return () => {
-      window.removeEventListener("pointerdown", dismiss);
-      window.removeEventListener("keydown", onKeyDown);
-      window.removeEventListener("scroll", dismiss, true);
-    };
-  }, [open]);
+  // Only a scroll that moves the row detaches the fixed-position menu
+  // from it; its own button opens and closes it.
+  useMenuDismiss({
+    open,
+    close: () => setOpen(false),
+    anchor: buttonRef,
+    pressesInAnchor: "ignore",
+  });
 
   useEffect(() => () => clearTimeout(previewTimerRef.current), []);
 
@@ -643,6 +611,69 @@ export function SidebarItemRow<
  * same lesson ShortcutHint learned (DOM checks pass while pixels clip).
  * Shared with other sidebar rows and dock bubbles that need the same menu.
  */
+/**
+ * Closes a context menu when the person leaves it: a press outside it,
+ * Escape, or focus leaving the window's page, which is what a press in a
+ * web page does: the window never sees presses inside a page. With an
+ * anchor, a scroll that moves the anchor closes it too, since the menu is
+ * fixed where it opened; other scrolls (a chat following its output) do
+ * not.
+ */
+export function useMenuDismiss({
+  open,
+  close,
+  anchor,
+  pressesInAnchor = "close",
+}: {
+  open: boolean;
+  close: () => void;
+  anchor?: RefObject<Element | null>;
+  /** "ignore" when the anchor opens and closes the menu itself. */
+  pressesInAnchor?: "close" | "ignore";
+}): void {
+  const closeRef = useRef(close);
+  closeRef.current = close;
+  useEffect(() => {
+    if (!open) return;
+    const leave = () => closeRef.current();
+    const press = (event: Event) => {
+      const target = event.target;
+      if (target instanceof Element && target.closest("[data-sidebar-menu]"))
+        return;
+      if (
+        pressesInAnchor === "ignore" &&
+        target instanceof Node &&
+        anchor?.current?.contains(target)
+      )
+        return;
+      leave();
+    };
+    const scroll = (event: Event) => {
+      if (
+        event.target instanceof Node &&
+        anchor?.current &&
+        event.target.contains(anchor.current)
+      )
+        leave();
+    };
+    const key = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      leave();
+    };
+    window.addEventListener("pointerdown", press);
+    window.addEventListener("keydown", key);
+    window.addEventListener("blur", leave);
+    if (anchor) window.addEventListener("scroll", scroll, true);
+    return () => {
+      window.removeEventListener("pointerdown", press);
+      window.removeEventListener("keydown", key);
+      window.removeEventListener("blur", leave);
+      window.removeEventListener("scroll", scroll, true);
+    };
+  }, [open, anchor, pressesInAnchor]);
+}
+
 export function MenuPortal<TMenuEntry extends ContextMenuEntry>({
   open,
   position,
@@ -659,20 +690,33 @@ export function MenuPortal<TMenuEntry extends ContextMenuEntry>({
   onExited: () => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
+  const subRef = useRef<HTMLDivElement>(null);
   const frozenEntriesRef = useRef(entries);
   const [adjusted, setAdjusted] = useState(position);
+  // The open nested menu: its entry, and the row it opened from.
+  const [sub, setSub] = useState<{
+    entry: TMenuEntry;
+    anchor: HTMLButtonElement;
+  } | null>(null);
+  const [subAt, setSubAt] = useState<{ x: number; y: number } | null>(null);
   if (open) frozenEntriesRef.current = entries;
   const visibleEntries = open ? entries : frozenEntriesRef.current;
+  const subEntry = sub
+    ? (visibleEntries.find((entry) => entry.action === sub.entry.action) ??
+      sub.entry)
+    : null;
 
   useEffect(() => {
     if (open) {
       menuButtons(ref)[0]?.focus();
       return;
     }
+    setSub(null);
     const activeElement = document.activeElement;
     if (
       activeElement instanceof HTMLElement &&
-      ref.current?.contains(activeElement)
+      (ref.current?.contains(activeElement) ||
+        subRef.current?.contains(activeElement))
     ) {
       activeElement.blur();
     }
@@ -706,76 +750,198 @@ export function MenuPortal<TMenuEntry extends ContextMenuEntry>({
     if (next.x !== adjusted.x || next.y !== adjusted.y) setAdjusted(next);
   }, [position, adjusted.x, adjusted.y]);
 
-  return createPortal(
-    <div
-      ref={ref}
-      data-sidebar-menu
-      role="menu"
-      onKeyDown={(event) => {
-        if (event.key === "Escape" && onDismiss) {
-          event.preventDefault();
-          event.stopPropagation();
-          onDismiss();
-          return;
-        }
-        const buttons = menuButtons(ref);
-        const activeElement = document.activeElement;
-        const current =
-          activeElement instanceof HTMLButtonElement
-            ? buttons.indexOf(activeElement)
-            : -1;
-        const moveTo = (index: number) => {
-          event.preventDefault();
-          buttons[index]?.focus();
-        };
-        if (event.key === "ArrowDown") {
-          moveTo((current + 1) % buttons.length);
-        } else if (event.key === "ArrowUp") {
-          moveTo((current - 1 + buttons.length) % buttons.length);
-        } else if (event.key === "Home") {
-          moveTo(0);
-        } else if (event.key === "End") {
-          moveTo(buttons.length - 1);
-        }
-      }}
-      style={{ left: adjusted.x, top: adjusted.y }}
-      className={`fixed z-[140] max-h-[calc(100dvh-16px)] min-w-44 max-w-[calc(100vw-16px)] overflow-y-auto ${open ? "" : "pointer-events-none"}`}
-    >
-      <div
-        onAnimationEnd={(event) => {
-          if (event.animationName === "pop-out" && !open) onExited();
-        }}
-        className={`w-full origin-top-right rounded-lg border border-border bg-bg-overlay p-1 shadow-2xl ${
-          open ? "animate-pop-in" : "animate-pop-out"
-        }`}
-      >
-        {visibleEntries.map((entry) => (
-          <button
-            key={`${entry.action}:${entry.label}`}
-            type="button"
-            {...(entry.checked === undefined
+  // A nested menu opens beside its row, on whichever side has room,
+  // with its first row level with the one it opened from.
+  useLayoutEffect(() => {
+    const panel = subRef.current?.getBoundingClientRect();
+    if (!sub || !panel) {
+      setSubAt(null);
+      return;
+    }
+    const row = sub.anchor.getBoundingClientRect();
+    const parent = ref.current?.getBoundingClientRect() ?? row;
+    const right = parent.right + 2;
+    const x =
+      right + panel.width <= window.innerWidth - 8
+        ? right
+        : Math.max(8, parent.left - panel.width - 2);
+    const y = Math.max(
+      8,
+      Math.min(row.top - 5, window.innerHeight - panel.height - 8),
+    );
+    setSubAt((at) => (at && at.x === x && at.y === y ? at : { x, y }));
+  }, [sub]);
+
+  const openSub = (
+    entry: TMenuEntry,
+    anchor: HTMLButtonElement,
+    focus: boolean,
+  ) => {
+    setSub((current) =>
+      current?.entry.action === entry.action ? current : { entry, anchor },
+    );
+    if (focus) requestAnimationFrame(() => menuButtons(subRef)[0]?.focus());
+  };
+  const closeSub = (refocus: boolean) => {
+    const anchor = sub?.anchor;
+    setSub(null);
+    if (refocus) anchor?.focus();
+  };
+
+  const navigate = (
+    event: React.KeyboardEvent<HTMLDivElement>,
+    panel: RefObject<HTMLDivElement | null>,
+  ) => {
+    const buttons = menuButtons(panel);
+    const activeElement = document.activeElement;
+    const current =
+      activeElement instanceof HTMLButtonElement
+        ? buttons.indexOf(activeElement)
+        : -1;
+    const moveTo = (index: number) => {
+      event.preventDefault();
+      buttons[index]?.focus();
+    };
+    if (event.key === "ArrowDown") {
+      moveTo((current + 1) % buttons.length);
+    } else if (event.key === "ArrowUp") {
+      moveTo((current - 1 + buttons.length) % buttons.length);
+    } else if (event.key === "Home") {
+      moveTo(0);
+    } else if (event.key === "End") {
+      moveTo(buttons.length - 1);
+    }
+  };
+
+  const items = (list: readonly TMenuEntry[], nested: boolean) =>
+    list.map((entry) => {
+      const parent = Boolean(entry.submenu?.length);
+      // By action: a menu rebuilt while open (a live state changed) keeps
+      // its open row and shows the submenu's current entries.
+      const expanded = parent && sub?.entry.action === entry.action;
+      return (
+        <button
+          key={`${entry.action}:${entry.label}`}
+          type="button"
+          {...(parent
+            ? {
+                role: "menuitem",
+                "aria-haspopup": "menu" as const,
+                "aria-expanded": expanded,
+              }
+            : entry.checked === undefined
               ? { role: "menuitem" }
-              : { role: "menuitemradio", "aria-checked": entry.checked })}
-            tabIndex={open ? 0 : -1}
-            disabled={Boolean(entry.disabledReason)}
-            data-disabled-reason={entry.disabledReason}
-            onClick={() => onPick(entry)}
-            className={`flex h-7 w-full cursor-pointer items-center gap-2 rounded-md px-2 text-left text-[13px] transition-colors duration-150 ${
-              entry.danger
-                ? "text-danger hover:bg-danger/10"
+              : {
+                  role: entry.setting ? "menuitemcheckbox" : "menuitemradio",
+                  "aria-checked": entry.checked,
+                })}
+          tabIndex={open ? 0 : -1}
+          disabled={Boolean(entry.disabledReason)}
+          data-disabled-reason={entry.disabledReason}
+          data-submenu={parent || undefined}
+          onMouseEnter={(event) => {
+            if (nested) return;
+            if (parent) openSub(entry, event.currentTarget, false);
+            else if (sub) closeSub(false);
+          }}
+          onKeyDown={(event) => {
+            if (!parent || nested) return;
+            if (event.key === "ArrowRight" || event.key === "Enter") {
+              event.preventDefault();
+              openSub(entry, event.currentTarget, true);
+            }
+          }}
+          onClick={(event) => {
+            if (parent) openSub(entry, event.currentTarget, true);
+            else onPick(entry);
+          }}
+          className={`flex h-7 w-full cursor-pointer items-center gap-2 rounded-md px-2 text-left text-[13px] transition-colors duration-150 ${
+            entry.danger
+              ? "text-danger hover:bg-danger/10"
+              : expanded
+                ? "bg-bg-raised text-fg"
                 : entry.checked
                   ? "text-fg hover:bg-bg-raised"
                   : "text-fg-muted hover:bg-bg-raised hover:text-fg"
-            }`}
-          >
-            <span className="min-w-0 flex-1 truncate">{entry.label}</span>
-            {entry.checked && (
-              <icons.Check className="size-3.5 shrink-0" aria-hidden="true" />
+          }`}
+        >
+          <span className="min-w-0 flex-1 truncate">
+            {entry.label}
+            {entry.detail && (
+              <span className="ms-2 text-fg-faint">{entry.detail}</span>
             )}
-          </button>
-        ))}
+          </span>
+          {entry.checked && (
+            <icons.Check className="size-3.5 shrink-0" aria-hidden="true" />
+          )}
+          {parent && (
+            <ChevronRight
+              className="size-3.5 shrink-0 text-fg-faint"
+              aria-hidden="true"
+            />
+          )}
+        </button>
+      );
+    });
+
+  // The panel animates on an element that does not scroll: a slide
+  // inside a scroller would flash its scrollbar for the length of it.
+  const panelClass = (shown: boolean) =>
+    `fixed z-[140] min-w-44 max-w-[calc(100vw-16px)] ${
+      shown ? "animate-pop-in" : "pointer-events-none animate-pop-out"
+    }`;
+  const listClass =
+    "max-h-[calc(100dvh-16px)] overflow-y-auto overscroll-contain rounded-lg border border-border bg-bg-overlay p-1 shadow-2xl";
+
+  return createPortal(
+    <>
+      <div
+        ref={ref}
+        data-sidebar-menu
+        role="menu"
+        onKeyDown={(event) => {
+          if (event.key === "Escape" && onDismiss) {
+            event.preventDefault();
+            event.stopPropagation();
+            onDismiss();
+            return;
+          }
+          navigate(event, ref);
+        }}
+        onAnimationEnd={(event) => {
+          if (event.animationName === "pop-out" && !open) onExited();
+        }}
+        style={{ left: adjusted.x, top: adjusted.y }}
+        className={`${panelClass(open)} origin-top-right`}
+      >
+        <div className={listClass}>{items(visibleEntries, false)}</div>
       </div>
-    </div>,
+      {subEntry?.submenu && (
+        <div
+          ref={subRef}
+          data-sidebar-menu
+          role="menu"
+          aria-label={subEntry.label}
+          onKeyDown={(event) => {
+            if (event.key === "ArrowLeft" || event.key === "Escape") {
+              event.preventDefault();
+              event.stopPropagation();
+              closeSub(true);
+              return;
+            }
+            navigate(event, subRef);
+          }}
+          style={
+            subAt
+              ? { left: subAt.x, top: subAt.y }
+              : { left: 0, top: 0, visibility: "hidden" }
+          }
+          className={`${panelClass(open)} origin-top-left`}
+        >
+          <div className={listClass}>{items(subEntry.submenu, true)}</div>
+        </div>
+      )}
+    </>,
     document.body,
   );
 }
@@ -785,7 +951,7 @@ function menuButtons(
 ): HTMLButtonElement[] {
   return [
     ...(ref.current?.querySelectorAll<HTMLButtonElement>(
-      "[role=menuitem]:not(:disabled), [role=menuitemradio]:not(:disabled)",
+      "[role=menuitem]:not(:disabled), [role=menuitemradio]:not(:disabled), [role=menuitemcheckbox]:not(:disabled)",
     ) ?? []),
   ];
 }

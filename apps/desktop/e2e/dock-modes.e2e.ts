@@ -93,12 +93,19 @@ const hoverChip = async (selector: string) => {
     { label: "surface chip ready for native hover" },
   );
   await app.movePointer(point);
-  await runWait(
-    `return frontDock()?.querySelector(${JSON.stringify(selector)})?.matches(':hover');`,
-    {
+  const hovered = `return frontDock()?.querySelector(${JSON.stringify(selector)})?.matches(':hover');`;
+  // On macOS CI a single synthetic warp is sometimes never seen as hover;
+  // a person's pointer keeps moving. Arrive once more before deciding.
+  const seen = await runWait<boolean>(hovered, {
+    timeoutMs: 2_000,
+    label: "native pointer reached the surface chip",
+  }).catch(() => false);
+  if (!seen) {
+    await app.movePointerThrough([{ x: point.x + 2, y: point.y }, point]);
+    await runWait(hovered, {
       label: "native pointer reached the surface chip",
-    },
-  );
+    });
+  }
 };
 
 describe("dock modes", () => {
