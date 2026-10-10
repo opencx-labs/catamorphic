@@ -511,12 +511,18 @@ describe("voice", () => {
     expect(asked).toContain(
       "Which layout should I use? (one of: Wide, Narrow; or their own words)",
     );
-    // ...which says so, out loud when voice is on. (Core's own "needs
-    // user input" for a delegated session may join the same turn.)
+    // ...which answers in a turn, spoken when voice is on. Core's own "needs
+    // user input" for a delegated session may arrive first and start that
+    // turn, with the question joining it, so any reply after it counts.
     await runWait(
       `const detail = await session(${JSON.stringify(ref)});
-       return detail.messages.some((m) => m.role === 'assistant' && m.content.startsWith('The layout session wants to know: wide or narrow?'));`,
-      { timeoutMs: 30_000, label: "the assistant passing the question on" },
+       const asked = detail.snapshot.items.find((item) => item.metadata?.notice === 'Layout: a question');
+       return !detail.running && detail.snapshot.items.some((item) =>
+         item.kind === 'assistant_message' && item.position > asked.position);`,
+      {
+        timeoutMs: 30_000,
+        label: "the assistant answering after the question",
+      },
     );
     // The person answers the assistant, and the session that asked has it.
     await run(
