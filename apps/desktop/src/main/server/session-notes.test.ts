@@ -56,6 +56,7 @@ describe("following a session's notes", () => {
       follower: FOLLOWER,
       followed: FOLLOWED,
       title: "Build",
+      reportsResults: false,
     });
     session.emit(
       { type: "item.added", item: reply("m1", "t1", "Reading the config.") },
@@ -79,6 +80,7 @@ describe("following a session's notes", () => {
       follower: FOLLOWER,
       followed: FOLLOWED,
       title: "Build",
+      reportsResults: false,
     });
     session.emit(
       { type: "item.added", item: reply("m1", "t1", "All fixed.") },
@@ -88,12 +90,99 @@ describe("following a session's notes", () => {
     expect(session.delivered).toEqual([]);
   });
 
+  it("tells a follower how a chat it did not start turned out", async () => {
+    const session = harness();
+    await session.notes.follow({
+      follower: FOLLOWER,
+      followed: FOLLOWED,
+      title: "Build",
+      reportsResults: true,
+    });
+    // A message still being written is no note until it is finished.
+    const writing = reply("m1", "t1", "Running the tests.", {
+      status: "in_progress",
+    });
+    session.emit(
+      { type: "item.added", item: writing },
+      { type: "item.changed", item: { ...writing, status: "completed" } },
+      { type: "item.added", item: toolCall("c1", "t1") },
+      { type: "item.added", item: reply("m2", "t1", "All green.") },
+      { type: "turn.changed", turn: turn("t1", 1, { status: "completed" }) },
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    expect(session.delivered).toEqual([
+      {
+        content:
+          "Build finished. Along the way:\n- Running the tests.\n\nIts answer:\nAll green.",
+        notice: "Build: finished",
+      },
+    ]);
+  });
+
+  it("follows no more once the follower takes no messages", async () => {
+    const stopped: string[] = [];
+    const notes = new SessionNotes({
+      sequence: async () => 0,
+      subscribe: async (_ref, input) => {
+        input.send({
+          type: "events",
+          events: [
+            { type: "item.added", item: reply("m1", "t1", "Done.") } as const,
+            {
+              type: "turn.changed",
+              turn: turn("t1", 1, { status: "completed" }),
+            } as const,
+          ].map((event, index) => ({
+            sessionId: FOLLOWED.sessionId,
+            sequence: index + 1,
+            at: "2026-10-10T10:00:00.000Z",
+            commandId: null,
+            event,
+          })),
+        });
+        return () => stopped.push("stopped");
+      },
+      deliver: async () => {
+        throw new Error("closed");
+      },
+    });
+    await notes.follow({
+      follower: FOLLOWER,
+      followed: FOLLOWED,
+      title: "Build",
+      reportsResults: true,
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(notes.followerOf(FOLLOWED.sessionId)).toBeUndefined();
+    expect(stopped).toEqual(["stopped"]);
+  });
+
+  it("leaves nothing behind when following fails", async () => {
+    const notes = new SessionNotes({
+      sequence: async () => {
+        throw new Error("gone");
+      },
+      subscribe: async () => () => {},
+      deliver: async () => null,
+    });
+    await expect(
+      notes.follow({
+        follower: FOLLOWER,
+        followed: FOLLOWED,
+        title: "Build",
+        reportsResults: true,
+      }),
+    ).rejects.toThrow("gone");
+    expect(notes.followerOf(FOLLOWED.sessionId)).toBeUndefined();
+  });
+
   it("waits between messages, and stops when unfollowed", async () => {
     const session = harness();
     await session.notes.follow({
       follower: FOLLOWER,
       followed: FOLLOWED,
       title: "Build",
+      reportsResults: false,
     });
     session.emit(
       { type: "item.added", item: reply("m1", "t1", "First.") },

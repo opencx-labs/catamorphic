@@ -20,6 +20,8 @@ export interface AssistantAccess {
       content: string;
       mode: "queue" | "interrupt";
       author: SessionMessageAuthor;
+      /** The project of the author's chat, which may be another one. */
+      authorProjectId: string;
     },
   ): Promise<unknown>;
   interrupt(projectId: string, sessionId: string): Promise<void>;
@@ -42,7 +44,10 @@ export interface AssistantAccess {
     title: string;
     on: boolean;
   }): Promise<void>;
-  /** Chats the person keeps private (incognito): never listed or touched. */
+  /**
+   * Chats the person keeps private (incognito). They, and the sessions
+   * they started, are never listed or touched.
+   */
   hidden(sessionId: string): boolean;
 }
 
@@ -66,7 +71,7 @@ ${input.request}
 
 The relay is short and may be slightly off. For what the person actually said, read the assistant's chat, session ${input.assistantSessionId} in this project, with read_project_session.
 
-The person may be away from the screen, talking by voice. To tell them something that matters, or to ask what only they can answer, send it to the assistant's chat with send_project_session_message (session_id ${input.assistantSessionId}, delivery_mode queue), starting with "${input.title}:" and in a sentence or two of plain words. Their answer comes back here; keep going on whatever does not depend on it.
+The person may be away from the screen, talking by voice. To tell them something that matters, or to ask what only they can answer, send it to the assistant's chat with send_project_session_message (session_id ${input.assistantSessionId}, delivery_mode queue), starting with "${input.title}:". It may be read aloud to them, where a sentence or two of plain words comes across best. Their answer comes back here; keep going on whatever does not depend on it.
 
 Your final reply goes back to the assistant, which passes it on to the person: a sentence or two up front that sum it up are what it will use.`;
 }
@@ -99,6 +104,31 @@ function namedAgent(
  * it starts reports back to it, along the way and when it is done.
  */
 export function assistantTools(access: AssistantAccess): ExtraTool[] {
+  /**
+   * Whether a session is private: an incognito chat, or one started under
+   * one, however deep. The assistant's own sessions are its to see.
+   */
+  const isPrivate = async (
+    context: ExtraToolContext,
+    projectId: string,
+    session: Pick<AgentSession, "id" | "parentSessionId">,
+    known: ReadonlyMap<
+      string,
+      Pick<AgentSession, "id" | "parentSessionId">
+    > = new Map(),
+  ): Promise<boolean> => {
+    let current: Pick<AgentSession, "id" | "parentSessionId"> | null = session;
+    for (let depth = 0; current && depth < 16; depth++) {
+      if (current.id === context.sessionId) return false;
+      if (access.hidden(current.id)) return true;
+      const parentId: string | null = current.parentSessionId;
+      if (!parentId) return false;
+      current =
+        known.get(parentId) ??
+        (await access.get(projectId, parentId).catch(() => null));
+    }
+    return false;
+  };
   const locate = async (
     context: ExtraToolContext,
     sessionId: string,
@@ -107,12 +137,14 @@ export function assistantTools(access: AssistantAccess): ExtraTool[] {
     projectName: string;
     detail: AgentSessionDetail;
   }> => {
-    if (sessionId === context.sessionId || access.hidden(sessionId))
+    if (sessionId === context.sessionId)
       throw new Error("That chat is not available.");
     for (const project of await access.projects(context.projectId)) {
       const detail = await access.get(project.id, sessionId).catch(() => null);
-      if (detail)
-        return { projectId: project.id, projectName: project.name, detail };
+      if (!detail) continue;
+      if (await isPrivate(context, project.id, detail))
+        throw new Error("That chat is not available.");
+      return { projectId: project.id, projectName: project.name, detail };
     }
     throw new Error("No chat with that id. List the sessions to find it.");
   };
@@ -191,14 +223,20 @@ export function assistantTools(access: AssistantAccess): ExtraTool[] {
         );
         const sessions = (
           await Promise.all(
-            projects.map(async (project) =>
-              (
-                await access.list(project.id)
-              ).map((session) => ({
-                session,
-                project: project.name,
-              })),
-            ),
+            projects.map(async (project) => {
+              const all = await access.list(project.id);
+              const known = new Map(
+                all.map((session) => [session.id, session]),
+              );
+              const visible = await Promise.all(
+                all.map(async (session) =>
+                  (await isPrivate(context, project.id, session, known))
+                    ? []
+                    : [{ session, project: project.name }],
+                ),
+              );
+              return visible.flat();
+            }),
           )
         )
           .flat()
@@ -206,8 +244,7 @@ export function assistantTools(access: AssistantAccess): ExtraTool[] {
             ({ session }) =>
               session.id !== context.sessionId &&
               session.status === "active" &&
-              session.visibility !== "archived" &&
-              !access.hidden(session.id),
+              session.visibility !== "archived",
           )
           .sort(
             (a, b) =>
@@ -270,6 +307,7 @@ export function assistantTools(access: AssistantAccess): ExtraTool[] {
           content: String(input.message),
           mode: input.delivery_mode === "interrupt" ? "interrupt" : "queue",
           author: await author(context),
+          authorProjectId: context.projectId,
         });
         return "Sent.";
       },
@@ -277,7 +315,7 @@ export function assistantTools(access: AssistantAccess): ExtraTool[] {
     {
       name: "follow_session",
       description:
-        "Hear a chat's notes as it works, the way you hear the sessions you start, or stop hearing them. For when the person wants to be kept posted on one of their chats.",
+        "Hear a chat's notes as it works, the way you hear the sessions you start, and its answer when each turn ends; or stop hearing them. For when the person wants to be kept posted on one of their chats.",
       parameters: {
         session_id: z.string().min(1).describe("From list_sessions"),
         follow: z.boolean().default(true).describe("False stops following"),

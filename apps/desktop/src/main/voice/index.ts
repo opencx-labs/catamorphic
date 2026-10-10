@@ -26,9 +26,11 @@ import {
   type VoiceWorkerCommand,
   type VoiceWorkerEvent,
 } from "../../shared/voice.js";
+import type { IncognitoSessionsStore } from "../incognito-sessions.js";
 import type { WindowProfileRegistry } from "../index.js";
 import type { ServerState } from "../ipc.js";
 import type { ProfileConfigManager } from "../profile-config.js";
+import type { ProfilesStore } from "../profiles.js";
 import { DESKTOP_TENANT_ID, DESKTOP_USER_ID } from "../server/boot.js";
 import {
   unheardReplies,
@@ -104,6 +106,8 @@ interface ActiveVoice {
   busy: boolean;
   live: LiveStatus;
   applied: Applied;
+  /** Microphone moves, one at a time: each opens a new audio page. */
+  moving: Promise<void>;
 }
 
 /**
@@ -119,9 +123,12 @@ interface ActiveVoice {
 export function registerVoiceSupport(deps: {
   state: ServerState;
   profileConfig: ProfileConfigManager;
+  profiles: ProfilesStore;
   windows: WindowProfileRegistry;
+  /** Chats kept on this computer (ADR 0062), the assistant's among them. */
+  incognito: IncognitoSessionsStore;
 }): { dispose: () => Promise<void> } {
-  const { state, profileConfig, windows } = deps;
+  const { state, profileConfig, profiles, windows, incognito } = deps;
   const models = new VoiceModelStore({
     rootDir:
       process.env.CATAMORPHIC_VOICE_MODELS_DIR ??
@@ -232,13 +239,42 @@ export function registerVoiceSupport(deps: {
     const chosen = prefs(profileId).load().voiceAssistant;
     if (chosen && profileConfig.forProfile(profileId).agents.get(chosen))
       return { agentId: chosen, builtIn: false };
-    const registry = state.current?.agentRegistry;
-    const projectDefault = registry?.defaultAgentId(projectId);
+    const projectDefault =
+      state.current?.agentRegistry.defaultAgentId(projectId);
     const base =
       projectDefault && !parseProjectAgentId(projectDefault)
         ? projectDefault
-        : registry?.defaultAgentId();
+        : profileConfig.forProfile(profileId).agents.defaultAgentId();
     return base ? { agentId: base, builtIn: true } : null;
+  };
+
+  /** Whether a project's chats live on a Work server (ADR 0055). */
+  const linked = (profileId: string, projectId: string) =>
+    profileConfig.forProfile(profileId).remoteProjects.inspect(projectId) !==
+    null;
+
+  /**
+   * Where the assistant's chat lives: a project of the profile on this
+   * computer, the dock's when it is one. It reads every project, so it
+   * never lives where chats go to a server.
+   */
+  const assistantHome = (profileId: string, projectId: string): string => {
+    const profile = profiles.get(profileId);
+    const home = [
+      projectId,
+      profile?.defaultProjectId,
+      ...(profile?.projectIds ?? []),
+    ].find(
+      (id): id is string =>
+        !!id &&
+        (profile?.projectIds.includes(id) ?? false) &&
+        !linked(profileId, id),
+    );
+    if (!home)
+      throw new Error(
+        "The assistant needs a project on this computer. Create one to talk to Work.",
+      );
+    return home;
   };
 
   /**
@@ -250,24 +286,28 @@ export function registerVoiceSupport(deps: {
     profileId: string,
     projectId: string,
   ): Promise<VoiceSessionRef> => {
-    const assistant = assistantFor(profileId, projectId);
+    const home = assistantHome(profileId, projectId);
+    const assistant = assistantFor(profileId, home);
     if (!assistant)
       throw new Error("Add an agent in Settings to talk to Work.");
     const agentId = assistantAgentId(assistant);
     const stored = prefs(profileId).load().assistantSession;
-    if (stored) {
+    if (stored && !linked(profileId, stored.projectId)) {
       const existing = await agentSessions()
         .get(identity, stored.projectId, stored.sessionId)
         .catch(() => null);
       if (existing?.status === "active" && existing.agentId === agentId)
         return stored;
     }
-    const session = await agentSessions().create(identity, projectId, {
+    const session = await agentSessions().create(identity, home, {
       agentId,
       title: "Assistant",
       source: "desktop",
     });
-    const ref = { projectId, sessionId: session.id };
+    // It stays on this computer and out of other chats' reach, as an
+    // incognito chat does, should its project ever join a server.
+    incognito.set(session.id, true);
+    const ref = { projectId: home, sessionId: session.id };
     prefs(profileId).save({
       assistantSession: ref,
       assistantHeardThrough: null,
@@ -364,20 +404,29 @@ export function registerVoiceSupport(deps: {
     await follow(voice, prefs(profileId).load());
   };
 
-  /** The audio page moves to another microphone: the worker takes its port. */
-  const moveMicrophone = async (
-    voice: ActiveVoice,
-    microphone: string | null,
-  ) => {
-    const previous = voice.audioWindow;
-    if (!previous) return;
-    const next = await openAudioWindow(voice.worker, microphone);
-    if (active !== voice || voice.audioWindow !== previous) {
-      next.destroy();
-      return;
-    }
-    voice.audioWindow = next;
-    if (!previous.isDestroyed()) previous.destroy();
+  /**
+   * The audio page moves to another microphone: the worker takes the new
+   * page's port. One move at a time, so the worker's port is always the
+   * live page's.
+   */
+  const moveMicrophone = (voice: ActiveVoice, microphone: string | null) => {
+    voice.moving = voice.moving
+      .then(async () => {
+        const previous = voice.audioWindow;
+        if (active !== voice || !previous) return;
+        const next = await openAudioWindow(voice.worker, microphone);
+        if (active !== voice) {
+          next.destroy();
+          return;
+        }
+        voice.audioWindow = next;
+        if (!previous.isDestroyed()) previous.destroy();
+      })
+      .catch((cause: unknown) => {
+        if (active === voice)
+          void stop(cause instanceof Error ? cause.message : String(cause));
+      });
+    return voice.moving;
   };
 
   /** A live voice follows the profile's choices as they change. */
@@ -493,6 +542,7 @@ export function registerVoiceSupport(deps: {
         learning: false,
       },
       applied: appliedOf(prefs(profileId).load(), null),
+      moving: Promise.resolve(),
     };
     active = voice;
     publish();
@@ -562,7 +612,8 @@ export function registerVoiceSupport(deps: {
     voice.conversation?.stop();
     voice.conversation = null;
     voice.busy = false;
-    update(voice);
+    // The microphone clicked lights at once; a failure is its to show.
+    update(voice, { target: targetOf(request) });
     try {
       const resolved = await resolve(voice.profileId, request);
       if (active !== voice) return;
@@ -599,7 +650,10 @@ export function registerVoiceSupport(deps: {
             .catch(() => null)
         : null;
       // A chat of an assistant since replaced has no news for this one.
-      const assistant = ref ? assistantFor(profileId, ref.projectId) : null;
+      const assistant =
+        ref && detail?.status === "active"
+          ? assistantFor(profileId, ref.projectId)
+          : null;
       const unheard =
         detail?.status === "active" &&
         !!assistant &&
@@ -629,33 +683,46 @@ export function registerVoiceSupport(deps: {
   }, NEWS_POLL_MS);
   newsTimer.unref();
 
-  // The audio page outlives no workspace: with the last window gone, voice
-  // stops instead of keeping the app alive behind a hidden window.
+  // The audio page outlives no workspace: with the last window closed or
+  // put away (a workspace window hides on close), voice stops instead of
+  // listening behind the person's back.
   const onWindowCreated = (_event: unknown, window: BrowserWindow) => {
-    window.once("closed", () => {
-      const others = BrowserWindow.getAllWindows().filter(
+    const stopUnlessShown = () => {
+      const shown = BrowserWindow.getAllWindows().some(
         (candidate) =>
-          !candidate.isDestroyed() && candidate !== active?.audioWindow,
+          !candidate.isDestroyed() &&
+          candidate !== active?.audioWindow &&
+          candidate !== window &&
+          candidate.isVisible(),
       );
-      if (others.length === 0) void stop();
-    });
+      if (!shown && active && window !== active.audioWindow) void stop();
+    };
+    window.on("hide", stopUnlessShown);
+    window.once("closed", stopUnlessShown);
   };
   app.on("browser-window-created", onWindowCreated);
 
-  /** A request from a microphone: a chat's, or the dock's for the assistant. */
-  const requestOf = (input: {
-    projectId?: string;
-    sessionId?: string;
-  }): VoiceRequest | null =>
-    !input?.projectId
-      ? null
-      : input.sessionId
-        ? {
-            kind: "chat",
-            projectId: input.projectId,
-            sessionId: input.sessionId,
-          }
-        : { kind: "assistant", projectId: input.projectId };
+  /**
+   * A request from a microphone: a chat's, or the dock's for the
+   * assistant. The assistant's own chat, from its composer, is the
+   * assistant.
+   */
+  const requestOf = (
+    profileId: string,
+    input: { projectId?: string; sessionId?: string },
+  ): VoiceRequest | null => {
+    if (!input?.projectId) return null;
+    if (
+      !input.sessionId ||
+      input.sessionId === prefs(profileId).load().assistantSession?.sessionId
+    )
+      return { kind: "assistant", projectId: input.projectId };
+    return {
+      kind: "chat",
+      projectId: input.projectId,
+      sessionId: input.sessionId,
+    };
+  };
 
   ipcMain.handle("catamorphic:voice-get-status", (event) =>
     statusFor(windows.profileFor(event.sender)),
@@ -667,7 +734,7 @@ export function registerVoiceSupport(deps: {
     "catamorphic:voice-toggle",
     async (event, input: { projectId?: string; sessionId?: string }) => {
       const profileId = windows.profileFor(event.sender);
-      const request = requestOf(input);
+      const request = requestOf(profileId, input);
       if (!request) {
         errors.set(profileId, {
           message: "Open a project to talk to Work.",
@@ -702,7 +769,7 @@ export function registerVoiceSupport(deps: {
         return;
       }
       if (voice?.profileId === profileId) return;
-      const request = requestOf(input);
+      const request = requestOf(profileId, input);
       if (!request) {
         errors.set(profileId, {
           message: "Open a project to talk to Work.",
@@ -853,12 +920,17 @@ async function openAudioWindow(
       backgroundThrottling: false,
     },
   });
-  if (process.env.ELECTRON_RENDERER_URL)
-    await window.loadURL(`${process.env.ELECTRON_RENDERER_URL}/voice.html`);
-  else
-    await window.loadFile(
-      path.join(import.meta.dirname, "../renderer/voice.html"),
-    );
+  try {
+    if (process.env.ELECTRON_RENDERER_URL)
+      await window.loadURL(`${process.env.ELECTRON_RENDERER_URL}/voice.html`);
+    else
+      await window.loadFile(
+        path.join(import.meta.dirname, "../renderer/voice.html"),
+      );
+  } catch (cause) {
+    window.destroy();
+    throw cause;
+  }
   const { port1, port2 } = new MessageChannelMain();
   worker.postMessage({ type: "audio" } satisfies VoiceWorkerCommand, [port1]);
   window.webContents.postMessage(VOICE_PORT_MESSAGE, microphone, [port2]);

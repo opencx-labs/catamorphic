@@ -37,6 +37,11 @@ interface Follow {
   follower: SessionRef;
   followed: SessionRef;
   title: string;
+  /**
+   * The followed session's turns end with a result the follower would not
+   * otherwise hear: it is not the follower's own delegated session.
+   */
+  reportsResults: boolean;
   stop: () => void;
   /** Notes not yet passed on, in order. */
   pending: { id: string; text: string }[];
@@ -53,8 +58,10 @@ interface Follow {
  * writes along the way reaches the follower a few notes at a time as one
  * system message, which its agent can pass on in its own words; the
  * person sees one quiet line. A note is an assistant message more work
- * follows in the same turn: a turn's last message is its result, which
- * delegation delivers, so a turn's end drops what has not been passed on.
+ * follows in the same turn. A turn's last message is its result: a
+ * session the follower delegated delivers it itself, so its turn's end
+ * drops what has not been passed on; any other followed session's end
+ * passes on what is left and the result at once.
  */
 export class SessionNotes {
   private readonly follows = new Map<string, Follow>();
@@ -70,6 +77,8 @@ export class SessionNotes {
     follower: SessionRef;
     followed: SessionRef;
     title: string;
+    /** False for a session the follower started: delegation reports it. */
+    reportsResults: boolean;
   }): Promise<void> {
     const key = input.followed.sessionId;
     if (key === input.follower.sessionId) return;
@@ -88,19 +97,24 @@ export class SessionNotes {
       lastDelivered: 0,
     };
     this.follows.set(key, follow);
-    const after = await this.access.sequence(input.followed);
-    const stop = await this.access.subscribe(input.followed, {
-      after,
-      send: (message) => {
-        this.receive(follow, message);
-        return true;
-      },
-      onClose: () => {
-        if (this.follows.get(key) === follow) this.unfollow(key);
-      },
-    });
-    if (this.follows.get(key) === follow) follow.stop = stop;
-    else stop();
+    try {
+      const after = await this.access.sequence(input.followed);
+      const stop = await this.access.subscribe(input.followed, {
+        after,
+        send: (message) => {
+          this.receive(follow, message);
+          return true;
+        },
+        onClose: () => {
+          if (this.follows.get(key) === follow) this.unfollow(key);
+        },
+      });
+      if (this.follows.get(key) === follow) follow.stop = stop;
+      else stop();
+    } catch (cause) {
+      if (this.follows.get(key) === follow) this.follows.delete(key);
+      throw cause;
+    }
   }
 
   unfollow(followedSessionId: string): void {
@@ -122,10 +136,13 @@ export class SessionNotes {
         event.type === "turn.changed" &&
         isSettledTurnStatus(event.turn.status)
       ) {
-        follow.pending = [];
-        follow.latest = undefined;
+        const result = follow.latest;
         clearTimeout(follow.timer);
         follow.timer = undefined;
+        follow.latest = undefined;
+        if (follow.reportsResults && (result || follow.pending.length > 0))
+          void this.pass(follow, result);
+        else follow.pending = [];
         continue;
       }
       if (event.type !== "item.added" && event.type !== "item.changed")
@@ -165,19 +182,33 @@ export class SessionNotes {
     follow.timer.unref?.();
   }
 
-  private async pass(follow: Follow): Promise<void> {
+  /** Passes on the pending notes, and a finished turn's result if given. */
+  private async pass(
+    follow: Follow,
+    result?: { id: string; text: string },
+  ): Promise<void> {
     const notes = follow.pending.splice(0);
-    const last = notes.at(-1);
+    const last = result ?? notes.at(-1);
     if (!last) return;
     follow.lastDelivered = Date.now();
+    const lines = notes.map((note) => `- ${note.text}`).join("\n");
+    const content = result
+      ? `${follow.title} finished${lines ? `. Along the way:\n${lines}\n\nIts answer:` : ":"}\n${result.text}`
+      : `${follow.title}, while it works:\n${lines}`;
+    const notice = result
+      ? `${follow.title}: finished`
+      : `${follow.title}: ${notes.length === 1 ? "an update" : `${notes.length} updates`}`;
     await this.access
       .deliver(follow.follower, {
-        content: `${follow.title}, while it works:\n${notes.map((note) => `- ${note.text}`).join("\n")}`,
-        notice: `${follow.title}: ${notes.length === 1 ? "an update" : `${notes.length} updates`}`,
+        content,
+        notice,
         idempotencyKey: `notes:${follow.followed.sessionId}:${last.id}`,
       })
-      .catch((cause: unknown) =>
-        console.warn("[notes] passing notes on failed:", cause),
-      );
+      .catch((cause: unknown) => {
+        // A follower that can take no message (closed, gone) follows no more.
+        console.warn("[notes] passing notes on failed:", cause);
+        if (this.follows.get(follow.followed.sessionId) === follow)
+          this.unfollow(follow.followed.sessionId);
+      });
   }
 }

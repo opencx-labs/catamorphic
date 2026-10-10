@@ -684,7 +684,13 @@ app.whenReady().then(async () => {
     },
     (window) => desktopWorkspaces?.isDock(window) ?? false,
   );
-  voiceSupport = registerVoiceSupport({ state, profileConfig, windows });
+  voiceSupport = registerVoiceSupport({
+    state,
+    profileConfig,
+    profiles: profilesStore,
+    windows,
+    incognito: incognitoSessions,
+  });
   terminalSupport = registerTerminalSupport(state, async (projectId) => ({
     ...((await state.current?.agentRegistry.nativeToolchainEnvironment()) ??
       {}),

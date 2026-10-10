@@ -754,8 +754,25 @@ export async function startEmbeddedServer(
         projectId,
         sessionId,
       )) ?? [];
+    // A private chat stays out of reach, except to the sessions it started:
+    // the assistant's sessions report back to its chat (ADR 0216).
+    const ancestors = new Set<string>();
+    let parent = (
+      await catamorphic.core.agentSessions
+        ?.get(desktopIdentity, projectId, sessionId)
+        .catch(() => null)
+    )?.parentSessionId;
+    while (parent && !ancestors.has(parent) && ancestors.size < 16) {
+      ancestors.add(parent);
+      parent = (
+        await catamorphic.core.agentSessions
+          ?.get(desktopIdentity, projectId, parent)
+          .catch(() => null)
+      )?.parentSessionId;
+    }
     const visible = peers.filter(
-      (peer) => !(incognitoSessions?.has(peer.id) ?? false),
+      (peer) =>
+        !(incognitoSessions?.has(peer.id) ?? false) || ancestors.has(peer.id),
     );
     return Promise.all(
       visible.map(async (peer) => {
@@ -841,13 +858,24 @@ export async function startEmbeddedServer(
         if (!service) throw new Error("Agent sessions are not configured");
         return service.get(desktopIdentity, projectId, sessionId);
       },
-      deliver: async (projectId, sessionId, input) =>
-        catamorphic.core.agentSessions?.deliver(
-          desktopIdentity,
-          projectId,
-          sessionId,
-          input,
-        ),
+      // The assistant's chat may live in another project: its causation
+      // comes from there.
+      deliver: async (projectId, sessionId, { authorProjectId, ...input }) => {
+        const service = catamorphic.core.agentSessions;
+        if (!service) throw new Error("Agent sessions are not configured");
+        const causation =
+          input.author.kind === "agent"
+            ? await service.causalContext({
+                identity: desktopIdentity,
+                projectId: authorProjectId,
+                sessionId: input.author.sessionId,
+              })
+            : [];
+        return service.deliver(desktopIdentity, projectId, sessionId, {
+          ...input,
+          metadata: { causation },
+        });
+      },
       interrupt: async (projectId, sessionId) =>
         catamorphic.core.agentSessions?.interrupt(
           desktopIdentity,
@@ -890,15 +918,27 @@ export async function startEmbeddedServer(
               : { routeId: ASSISTANT_WORK_ROUTE }),
           },
         );
-        await sessionNotes.follow({
-          follower: { projectId, sessionId: assistantSessionId },
-          followed: { projectId, sessionId: child.session.id },
-          title: input.title,
-        });
+        // The child already runs: missing its notes is no reason to fail.
+        await sessionNotes
+          .follow({
+            follower: { projectId, sessionId: assistantSessionId },
+            followed: { projectId, sessionId: child.session.id },
+            title: input.title,
+            reportsResults: false,
+          })
+          .catch((cause: unknown) =>
+            console.warn("[assistant] following a session failed:", cause),
+          );
         return child;
       },
       follow: async ({ follower, followed, title, on }) => {
-        if (on) await sessionNotes.follow({ follower, followed, title });
+        if (on)
+          await sessionNotes.follow({
+            follower,
+            followed,
+            title,
+            reportsResults: true,
+          });
         else sessionNotes.unfollow(followed.sessionId);
       },
       hidden: (sessionId) => incognitoSessions?.has(sessionId) ?? false,

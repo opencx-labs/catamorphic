@@ -55,7 +55,11 @@ import { projectDefaultAgentSlug } from "../project-manifest.js";
 import { shellBinShimDir } from "../shell-integration.js";
 import { ASSISTANT_INSTRUCTIONS, VOICE_CONTEXT } from "../voice/guidance.js";
 import { DesktopAgentMcp } from "./agent-mcp-policy.js";
-import { assistantDelegation, assistantHostTools } from "./assistant-agent.js";
+import {
+  assistantDelegation,
+  assistantHostTools,
+  withoutReplacedTools,
+} from "./assistant-agent.js";
 import { buildAiSdkAdapter } from "./coding-agent.js";
 import { desktopSettingsContext } from "./desktop-settings-context.js";
 import { E2eFakeAdapter } from "./e2e-fakes.js";
@@ -575,13 +579,18 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     // The assistant (ADR 0216) is one of the person's agents with the
     // assistant's tools and delegation routes: as configured, or as Work's
     // built-in assistant, with no instructions of its own and the
-    // harness's default model.
+    // harness's default model: Claude Code's and Codex's own, while the
+    // built-in agent, which has none, keeps the model it names.
     const assistant = parseAssistantAgentId(id);
     const found = this.findConfig(assistant?.agentId ?? id);
     if (!found) return undefined;
     const { profileId } = found;
     const config = assistant?.builtIn
-      ? { ...found.config, model: "", instructions: undefined }
+      ? {
+          ...found.config,
+          model: found.config.harness === "ai-sdk" ? found.config.model : "",
+          instructions: undefined,
+        }
       : found.config;
     const built = this.build({ config, profileId, assistant: !!assistant });
     if (!built) return undefined;
@@ -1150,6 +1159,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
       hasTools,
       strategy,
       skillsNote: this.skillsNote(config, profileId, hasTools),
+      assistant,
     });
     return {
       instructions: assistant
@@ -1299,9 +1309,12 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     const found = this.configFor(id);
     if (!found || !this.get(id)) return undefined;
     const { config, profileId } = found;
+    const tools = this.workspaceTools(config, "native", true) ?? [];
     return {
       revision: JSON.stringify([id, config.sandboxing, profileId, "native"]),
-      tools: this.workspaceTools(config, "native", true) ?? [],
+      // The assistant discovers neither Work's project-only chat tools nor
+      // subsessions: its own session tools take their place (ADR 0216).
+      tools: parseAssistantAgentId(id) ? withoutReplacedTools(tools) : tools,
       readOnly: config.sandboxing === "contained",
       profileId,
       mcp: this.mcp.live({ config, profileId }),

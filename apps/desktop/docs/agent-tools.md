@@ -178,7 +178,11 @@ by sending it a message with `send_project_session_message`, starting with
 its title. The assistant follows the sessions it starts, and others with
 `follow_session`: their notes (messages with more work after them in the
 turn) reach it as one system message a few at a time, shown as one quiet
-line (`main/server/session-notes.ts`). It messages a chat the person
+line, and a followed chat's result when its turn ends
+(`main/server/session-notes.ts`). The assistant's chat is kept local like an
+incognito chat, so it is never mirrored and no other chat reads it; its
+playbook leaves out subsessions and the project-only chat tools, which it
+neither has nor discovers. It messages a chat the person
 created, and relays a session's question and the answer
 (`e2e/voice-agent.e2e.ts`).
 

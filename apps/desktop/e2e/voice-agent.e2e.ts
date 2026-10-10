@@ -84,6 +84,14 @@ const helpers = `
         }));
     return body;
   };
+  /** Types a message into a chat, as its composer would send it. */
+  const sendText = async (ref, text) => {
+    const { url } = await api.getServerState();
+    await fetch(url + '/api/projects/' + ref.projectId + '/agent/sessions/' + ref.sessionId + '/commands', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ type: 'send', commandId: crypto.randomUUID(), text }),
+    });
+  };
   ${setReactValueJs}
 `;
 
@@ -388,13 +396,28 @@ describe("voice", () => {
       ]),
     );
     expect(tools).not.toContain("spawn_subsession");
-    expect(tools).not.toContain("list_project_sessions");
     expect(second.sessionId).not.toBe(first.sessionId);
     expect(second.projectId).toBe(first.projectId);
     await run(`mic().click(); return true;`);
     await runWait(`return mic().dataset.phase === 'off';`, {
       label: "microphone off again",
     });
+    // Nor does it discover Work's project-only chat tools.
+    await run(
+      `await sendText(${JSON.stringify(second)}, 'which session capabilities can you find'); return true;`,
+    );
+    const found = await runWait<string>(
+      `const detail = await session(${JSON.stringify(second)});
+       return detail.messages.find((m) => m.role === 'assistant' && m.content.startsWith('Capabilities:'))?.content;`,
+      { timeoutMs: 30_000, label: "what the assistant can discover" },
+    );
+    for (const replaced of [
+      "list_project_sessions",
+      "read_project_session",
+      "send_project_session_message",
+      "interrupt_subsession",
+    ])
+      expect(found).not.toContain(replaced);
   }, 120_000);
 
   it("manages the person's own chats, not only the ones it started", async () => {
@@ -420,6 +443,40 @@ describe("voice", () => {
     await runWait(`return mic().dataset.phase === 'off';`, {
       label: "microphone off at the end",
     });
+  }, 120_000);
+
+  it("hears a session's notes as it works, as one quiet line", async () => {
+    const { assistantSession: ref } = await run<{ assistantSession: Ref }>(
+      `return api.getPrefs();`,
+    );
+    await run(
+      `await sendText(${JSON.stringify(ref)}, 'start a session that reports as it goes'); return true;`,
+    );
+    const note = await runWait<{ text: string; notice: unknown }>(
+      `const detail = await session(${JSON.stringify(ref)});
+       const item = detail.snapshot.items.find((item) =>
+         item.kind === 'user_message' && item.author.kind === 'system' && item.author.code === 'session_notes');
+       return item && { text: item.text, notice: item.metadata.notice };`,
+      {
+        timeoutMs: 30_000,
+        label: "the session's notes in the assistant's chat",
+      },
+    );
+    expect(note).toEqual({
+      text: "Report, while it works:\n- Reading the docs folder.",
+      notice: "Report: an update",
+    });
+    // Its result comes the usual way, and the notes never repeat it.
+    await runWait(
+      `const detail = await session(${JSON.stringify(ref)});
+       return detail.snapshot.items.some((item) => item.kind === 'user_message' && item.text.includes('Two pages are stale.'));`,
+      { timeoutMs: 30_000, label: "the session's result delivered" },
+    );
+    const notes = await run<number>(
+      `const detail = await session(${JSON.stringify(ref)});
+       return detail.snapshot.items.filter((item) => item.kind === 'user_message' && item.author.code === 'session_notes').length;`,
+    );
+    expect(notes).toBe(1);
   }, 120_000);
 
   it("news while voice is off shows on the microphone, and starting says it first", async () => {

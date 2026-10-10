@@ -90,8 +90,8 @@ its kin interrupt the turn instead of becoming a message. There is no
 check while the person is still talking over it: transcribing the
 overlap is the one step that could stop the agent on its own echo.
 
-**Voice talks with ordinary chats.** One voice is live per profile, and
-it talks with one chat at a time. Every chat's composer has a microphone
+**Voice talks with ordinary chats.** One voice is live at a time, and it
+talks with one chat at a time. Every chat's composer has a microphone
 beside Send: talking there continues that chat's session with its own
 agent, on any harness, and turning voice off carries the conversation on
 in text. The dock's microphone talks with the assistant (below). Clicking
@@ -111,19 +111,23 @@ under way, and turning voice off carries on in text. It reaches every
 harness the same way (Claude Code's and Codex's turn context, the
 built-in agent's system message) and never shows in the transcript. It
 says what is going on and leaves how to speak to the agent, so the
-person's own instructions for an agent (its persona leads the system
-prompt) can shape how it talks. Every assistant text segment is its own
+person's own instructions for an agent (its persona comes before all of
+Work's guidance) can shape how it talks. Every assistant text segment is its own
 message, so the words an agent says before its tool calls are spoken
 while it works.
 
 **The assistant** is the agent behind the dock: the person comes to it to
 get things done across their projects and to keep up with them. It is one
 of the person's agents with the assistant's tools and a short description
-of them (`ASSISTANT_INSTRUCTIONS`), in a chat of its own kept in the
-dock's project (`prefs.assistantSession`). By default it is Work's built-in
-assistant, `work-assistant:<agent id>`: the person's default agent, its
-harness, login and tools, with no instructions of its own and the
-harness's default model. The person can make any of their agents the
+of them (`ASSISTANT_INSTRUCTIONS`), in a chat of its own
+(`prefs.assistantSession`). That chat reads every project, so it lives in a
+project on this computer, the dock's unless that one's chats go to a Work
+server, and it is kept local as an incognito chat is (ADR 0062): never
+mirrored, out of other chats' reach. Its composer's microphone is the
+assistant too. By default it is Work's built-in assistant,
+`work-assistant:<agent id>`: the person's default agent, its harness, login
+and tools, with no instructions of its own and the harness's default model
+(the built-in agent, which has none, keeps the model it names). The person can make any of their agents the
 assistant instead (`prefs.voiceAssistant`), `assistant:<agent id>`, which
 runs exactly as they configured it, persona and model included, with the
 assistant's tools added: in Settings › Voice, the dock microphone's menu,
@@ -151,14 +155,16 @@ look at this PR". `start_session` wraps the request in a brief
 (`assistantTaskBrief`): the relay may be partial, the assistant's chat is
 there to read what was actually said, and the person is reachable through
 it with `send_project_session_message`, starting with the session's title.
-Results come back on their own (ADR 0133's delegation delivery), which
+Results come back on their own (ADR 0090's delegation delivery), which
 wakes the assistant to answer. When to hand off is the model's judgment.
 
 **Notes from the sessions it follows.** The assistant follows the
 sessions it starts, and any chat it is asked to with `follow_session`
 (`main/server/session-notes.ts`): an assistant message the followed
-session writes with more work after it in the same turn is a note (a
-turn's last message is its result, which delegation delivers). Notes
+session writes with more work after it in the same turn is a note. A
+turn's last message is its result: a session the assistant started
+delivers it through delegation, and any other chat it follows passes it
+on, with what notes are left, as soon as its turn ends. Notes
 written close together go as one system message, at most one per session
 every fifteen seconds, which reaches the assistant's next turn as a steer;
 it passes them on in its own words or keeps them to itself. The transcript

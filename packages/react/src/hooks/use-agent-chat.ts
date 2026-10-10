@@ -175,7 +175,8 @@ export interface UseAgentChatResult {
   /**
    * The session's id, creating the session first when the chat has none
    * yet: for a chat that starts somewhere other than a message, such as
-   * by voice. Null without a project, or once the chat moved on.
+   * by voice. Null without a project, or once the chat moved on. Rejects
+   * when creating the session fails.
    */
   ensureSession: () => Promise<string | null>;
   startNewSession: () => void;

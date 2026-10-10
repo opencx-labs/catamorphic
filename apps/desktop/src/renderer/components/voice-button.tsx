@@ -1,5 +1,11 @@
 import { Mic } from "lucide-react";
-import { type MouseEvent, useEffect, useRef, useState } from "react";
+import {
+  type MouseEvent,
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import type { AppPrefs } from "../../shared/app-prefs.js";
 import {
   agentVoice,
@@ -23,44 +29,59 @@ import {
   useMenuDismiss,
 } from "./sidebar-item-row.js";
 
-/** The microphones this machine has, kept current as devices come and go. */
-export function useMicrophones(): { id: string; label: string }[] {
-  const [microphones, setMicrophones] = useState<
-    { id: string; label: string }[]
-  >([]);
-  useEffect(() => {
-    const devices = navigator.mediaDevices;
-    if (!devices) return;
-    let mounted = true;
-    const read = () =>
-      void devices
-        .enumerateDevices()
-        .then((all) => {
-          if (!mounted) return;
-          // "default" and "communications" are Chromium's aliases of real
-          // devices; the menu's first entry already follows the system.
-          const inputs = all.filter(
+type Microphone = { id: string; label: string };
+
+/**
+ * The microphones this machine has, read once for every microphone and
+ * kept current as devices come and go, while anything shows them.
+ */
+const microphoneList = (() => {
+  let list: Microphone[] = [];
+  const listeners = new Set<() => void>();
+  let stop: (() => void) | undefined;
+  const read = () =>
+    void navigator.mediaDevices
+      ?.enumerateDevices()
+      .then((all) => {
+        // "default" and "communications" are Chromium's aliases of real
+        // devices; the menu's first entry already follows the system.
+        list = all
+          .filter(
             (device) =>
               device.kind === "audioinput" &&
               device.deviceId !== "default" &&
               device.deviceId !== "communications",
-          );
-          setMicrophones(
-            inputs.map((device, index) => ({
-              id: device.deviceId,
-              label: device.label || `Microphone ${index + 1}`,
-            })),
-          );
-        })
-        .catch(() => {});
-    read();
-    devices.addEventListener("devicechange", read);
-    return () => {
-      mounted = false;
-      devices.removeEventListener("devicechange", read);
-    };
-  }, []);
-  return microphones;
+          )
+          .map((device, index) => ({
+            id: device.deviceId,
+            label: device.label || `Microphone ${index + 1}`,
+          }));
+        for (const listener of listeners) listener();
+      })
+      .catch(() => {});
+  return {
+    subscribe(listener: () => void) {
+      listeners.add(listener);
+      const devices = navigator.mediaDevices;
+      if (!stop && devices) {
+        read();
+        devices.addEventListener("devicechange", read);
+        stop = () => devices.removeEventListener("devicechange", read);
+      }
+      return () => {
+        listeners.delete(listener);
+        if (listeners.size === 0) {
+          stop?.();
+          stop = undefined;
+        }
+      };
+    },
+    get: () => list,
+  };
+})();
+
+export function useMicrophones(): Microphone[] {
+  return useSyncExternalStore(microphoneList.subscribe, microphoneList.get);
 }
 
 /** Voice's state for this window's profile, kept live. */
@@ -72,9 +93,16 @@ export function useVoiceStatus(): VoiceStatus {
       if (mounted) setStatus(value);
     });
     const unsubscribe = desktopApi.onVoiceStatus(setStatus);
+    // Another profile in this window: its voice, not the last one's.
+    const refetch = () =>
+      void desktopApi.voiceStatus().then((value) => {
+        if (mounted) setStatus(value);
+      });
+    window.addEventListener("catamorphic:profile-refetch", refetch);
     return () => {
       mounted = false;
       unsubscribe();
+      window.removeEventListener("catamorphic:profile-refetch", refetch);
     };
   }, []);
   return status;
@@ -135,6 +163,7 @@ export function voicePatch(
 function hint({
   status,
   phase,
+  error,
   starting,
   pushToTalk,
   pushToTalkKeys,
@@ -143,6 +172,8 @@ function hint({
   status: VoiceStatus;
   /** This microphone's phase: off while voice talks elsewhere. */
   phase: VoiceStatus["phase"];
+  /** Why voice stopped here, when it stopped on this microphone. */
+  error: string | null;
   starting: boolean;
   pushToTalk: boolean;
   pushToTalkKeys: string;
@@ -150,7 +181,7 @@ function hint({
   name: string;
 }): string {
   if (starting) return "Starting voice";
-  if (phase === "off") return status.error ?? `Talk to ${name}`;
+  if (phase === "off") return error ?? `Talk to ${name}`;
   if (status.learning) return "Learning your voice. Keep talking";
   const holdKeys = pushToTalk && pushToTalkKeys;
   switch (phase) {
@@ -310,13 +341,17 @@ export function VoiceButton({
   // Voice talks to one chat at a time: this microphone shows it only while
   // that is its own. An error with no target is the dock's to show.
   const target = status.target;
-  const mine = chat
-    ? target?.kind === "chat" && target.sessionId === chat.sessionId
-    : target === null || target.kind === "assistant";
+  // The assistant's own chat, from its composer, talks to the assistant.
+  const assistantChat =
+    !!chat?.sessionId && chat.sessionId === prefs.assistantSession?.sessionId;
+  const mine =
+    chat && !assistantChat
+      ? target?.kind === "chat" && target.sessionId === chat.sessionId
+      : target?.kind === "assistant" || (!chat && target === null);
   const phase = mine ? status.phase : "off";
   const error = mine && phase === "off" ? status.error : null;
-  // A click shows "starting" at once; the main process confirms a moment
-  // later. Voice on here, or an error, settles it.
+  // A click shows "starting" at once, until the main process has answered:
+  // by then the status says where voice is.
   const [starting, setStarting] = useState(false);
   useEffect(() => {
     if (phase !== "off" || error) setStarting(false);
@@ -340,9 +375,10 @@ export function VoiceButton({
   const assistant = chosenAssistant(prefs, agents);
   const voiceKey = chat ? voiceKeyOf(chat.agentId) : (assistant?.id ?? null);
   const voice = agentVoice(prefs, voiceKey);
-  const name = chat
-    ? (chat.agentName ?? "this agent")
-    : (assistant?.name ?? "Work");
+  const name =
+    chat && !assistantChat
+      ? (chat.agentName ?? "this agent")
+      : (assistant?.name ?? "Work");
   const microphones = useMicrophones();
   // A chosen microphone that is unplugged shows until it comes back;
   // listening falls back to the system's meanwhile.
@@ -468,6 +504,18 @@ export function VoiceButton({
     const sessionId = chat.sessionId ?? (await chat.ensureSession());
     return sessionId ? { projectId, sessionId } : null;
   };
+  /** Voice here: started, moved, stopped or learning, then settled. */
+  const send = (
+    call: (input: { projectId?: string; sessionId?: string }) => Promise<void>,
+  ) => {
+    if (!on) setStarting(true);
+    void request()
+      .then((input) => (input ? call(input) : undefined))
+      .catch((cause: unknown) =>
+        console.warn("[voice] the microphone's request failed:", cause),
+      )
+      .finally(() => setStarting(false));
+  };
   const pick = (action: string | null) => {
     if (!action) return;
     if (action === "open" && session) onOpenChat?.(session);
@@ -477,13 +525,7 @@ export function VoiceButton({
       void update({
         voiceAssistant: action.slice("assistant:".length) || null,
       });
-    if (action === "learn") {
-      if (!on) setStarting(true);
-      void request().then((input) => {
-        if (input) void desktopApi.voiceLearn(input);
-        else setStarting(false);
-      });
-    }
+    if (action === "learn") send(desktopApi.voiceLearn);
     if (action === "forget") void update({ voiceprint: null });
     if (action === "push-to-talk")
       void update({ voicePushToTalk: !prefs.voicePushToTalk });
@@ -499,13 +541,7 @@ export function VoiceButton({
         voiceMicrophone: action.slice("microphone:".length) || null,
       });
   };
-  const toggle = () => {
-    if (!on) setStarting(true);
-    void request().then((input) => {
-      if (input) void desktopApi.voiceToggle(input);
-      else setStarting(false);
-    });
-  };
+  const toggle = () => send(desktopApi.voiceToggle);
   const openMenu = (event: MouseEvent<HTMLButtonElement>) => {
     event.preventDefault();
     if (nativeMenus) {
@@ -519,23 +555,31 @@ export function VoiceButton({
   };
   useMenuDismiss({ open: menuOpen, close: () => setMenuOpen(false) });
   // Out of chats, a composer shows its microphone only while voice talks
-  // to its chat.
-  if (chat && (!loaded || (!prefs.voiceInChats && !on))) return null;
+  // to its chat; a menu it had open goes with it.
+  const hidden = !!chat && (!loaded || (!prefs.voiceInChats && !on));
+  useEffect(() => {
+    if (!hidden) return;
+    setMenuOpen(false);
+    setMenuAt(null);
+  }, [hidden]);
+  if (hidden) return null;
   // From the person heard to the agent heard: working, then speaking.
   const answering = phase === "thinking" || phase === "speaking";
   const badge =
     on || starting ? null : error ? "error" : pending ? "news" : null;
+  const description = hint({
+    status,
+    phase,
+    error,
+    starting,
+    pushToTalk: prefs.voicePushToTalk,
+    pushToTalkKeys,
+    name,
+  });
   return (
     <>
       <ShortcutHint
-        label={hint({
-          status,
-          phase,
-          starting,
-          pushToTalk: prefs.voicePushToTalk,
-          pushToTalkKeys,
-          name,
-        })}
+        label={description}
         shortcut={toggleKeys || undefined}
         side="top"
       >
@@ -544,6 +588,7 @@ export function VoiceButton({
           onClick={toggle}
           onContextMenu={openMenu}
           aria-label={pending ? "Voice, news waiting" : "Voice"}
+          aria-description={description}
           aria-pressed={on}
           aria-busy={loading}
           data-testid={chat ? "chat-voice-button" : "voice-button"}

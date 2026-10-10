@@ -41,10 +41,17 @@ const REPLACED = new Set([
   "send_project_session_message",
 ]);
 
+/** Workspace tools without the session tools the assistant replaces. */
+export function withoutReplacedTools<T extends { name: string }>(
+  tools: readonly T[],
+): T[] {
+  return tools.filter((tool) => !REPLACED.has(tool.name));
+}
+
 /** The base agent's tools, with the assistant's session tools. */
 export function assistantHostTools(
   workspace: readonly ExtraTool[],
   sessions: readonly ExtraTool[],
 ): ExtraTool[] {
-  return [...workspace.filter((tool) => !REPLACED.has(tool.name)), ...sessions];
+  return [...withoutReplacedTools(workspace), ...sessions];
 }

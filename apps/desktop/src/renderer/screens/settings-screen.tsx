@@ -862,6 +862,7 @@ function SettingRow({
   label,
   description,
   stacked = false,
+  control = true,
   children,
 }: {
   id: string;
@@ -869,6 +870,8 @@ function SettingRow({
   description: string;
   /** A wide control (a select) wraps under the words on narrow screens. */
   stacked?: boolean;
+  /** Whether a control with the setting's id follows (a label needs one). */
+  control?: boolean;
   children: ReactNode;
 }) {
   return (
@@ -877,9 +880,13 @@ function SettingRow({
       data-setting-id={id}
     >
       <div className="min-w-0">
-        <label htmlFor={`setting-${id}`} className="text-sm">
-          {label}
-        </label>
+        {control ? (
+          <label htmlFor={`setting-${id}`} className="text-sm">
+            {label}
+          </label>
+        ) : (
+          <p className="text-sm">{label}</p>
+        )}
         <p className="mt-1 text-xs text-fg-muted">{description}</p>
       </div>
       <div className="flex min-w-0 max-w-full shrink-0 items-center gap-3">
@@ -902,7 +909,7 @@ function VoiceSection({
 }: {
   onCreateAssistant: () => void;
 }) {
-  const { prefs, update } = useAppPreferences();
+  const { prefs, update, error } = useAppPreferences();
   const agents = useProfileAgents();
   const microphones = useMicrophones();
   const bindings = useKeybindings();
@@ -911,6 +918,11 @@ function VoiceSection({
     agents.find((agent) => agent.id === prefs.voiceAssistant)?.id ?? "";
   return (
     <section className="settings-card flex flex-col gap-1">
+      {error && (
+        <p role="alert" className="text-xs text-danger">
+          {error}
+        </p>
+      )}
       <SettingRow
         id="voiceAssistant"
         label="Assistant"
@@ -1042,6 +1054,7 @@ function VoiceSection({
       <SettingRow
         id="voiceprint"
         label="Only listen to me"
+        control={prefs.voiceprint !== null}
         description={
           prefs.voiceprint
             ? "Voice knows your voice and ignores other people's."

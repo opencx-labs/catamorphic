@@ -86,6 +86,8 @@ describe("the assistant's session tools", () => {
           chat("closed", { status: "closed" }),
           chat("archived", { visibility: "archived" }),
           chat("private"),
+          chat("private-child", { parentSessionId: "private" }),
+          chat("private-grandchild", { parentSessionId: "private-child" }),
           chat("mine-started", { parentSessionId: ASSISTANT }),
         ],
         p2: [
@@ -93,7 +95,9 @@ describe("the assistant's session tools", () => {
           chat("working", { running: true }),
         ],
       },
-      new Set(["private"]),
+      // The assistant's own chat stays on this computer too; what it
+      // started is still its to see.
+      new Set(["private", ASSISTANT]),
     );
     const listed = (await assistant.call("list_sessions")) as {
       session_id: string;
@@ -137,6 +141,7 @@ describe("the assistant's session tools", () => {
           sessionId: ASSISTANT,
           agentId: "assistant:agent",
         },
+        authorProjectId: "p1",
       },
     ]);
     expect(await assistant.call("stop_session", { session_id: "build" })).toBe(
@@ -214,10 +219,24 @@ describe("the assistant's session tools", () => {
     ]);
   });
 
-  it("never touches a private chat or itself", async () => {
-    const assistant = harness({ p1: [chat("private")] }, new Set(["private"]));
+  it("never touches a private chat, what it started, or itself", async () => {
+    const assistant = harness(
+      {
+        p1: [
+          chat("private"),
+          chat("private-child", { parentSessionId: "private" }),
+        ],
+      },
+      new Set(["private"]),
+    );
     await expect(
       assistant.call("read_session", { session_id: "private" }),
+    ).rejects.toThrow(/not available/);
+    await expect(
+      assistant.call("message_session", {
+        session_id: "private-child",
+        message: "hello",
+      }),
     ).rejects.toThrow(/not available/);
     await expect(
       assistant.call("stop_session", { session_id: ASSISTANT }),

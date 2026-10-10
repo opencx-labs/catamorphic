@@ -701,6 +701,10 @@ export function MenuPortal<TMenuEntry extends ContextMenuEntry>({
   const [subAt, setSubAt] = useState<{ x: number; y: number } | null>(null);
   if (open) frozenEntriesRef.current = entries;
   const visibleEntries = open ? entries : frozenEntriesRef.current;
+  const subEntry = sub
+    ? (visibleEntries.find((entry) => entry.action === sub.entry.action) ??
+      sub.entry)
+    : null;
 
   useEffect(() => {
     if (open) {
@@ -774,7 +778,7 @@ export function MenuPortal<TMenuEntry extends ContextMenuEntry>({
     focus: boolean,
   ) => {
     setSub((current) =>
-      current?.entry === entry ? current : { entry, anchor },
+      current?.entry.action === entry.action ? current : { entry, anchor },
     );
     if (focus) requestAnimationFrame(() => menuButtons(subRef)[0]?.focus());
   };
@@ -812,7 +816,9 @@ export function MenuPortal<TMenuEntry extends ContextMenuEntry>({
   const items = (list: readonly TMenuEntry[], nested: boolean) =>
     list.map((entry) => {
       const parent = Boolean(entry.submenu?.length);
-      const expanded = parent && sub?.entry === entry;
+      // By action: a menu rebuilt while open (a live state changed) keeps
+      // its open row and shows the submenu's current entries.
+      const expanded = parent && sub?.entry.action === entry.action;
       return (
         <button
           key={`${entry.action}:${entry.label}`}
@@ -910,12 +916,12 @@ export function MenuPortal<TMenuEntry extends ContextMenuEntry>({
       >
         <div className={listClass}>{items(visibleEntries, false)}</div>
       </div>
-      {sub?.entry.submenu && (
+      {subEntry?.submenu && (
         <div
           ref={subRef}
           data-sidebar-menu
           role="menu"
-          aria-label={sub.entry.label}
+          aria-label={subEntry.label}
           onKeyDown={(event) => {
             if (event.key === "ArrowLeft" || event.key === "Escape") {
               event.preventDefault();
@@ -932,7 +938,7 @@ export function MenuPortal<TMenuEntry extends ContextMenuEntry>({
           }
           className={`${panelClass(open)} origin-top-left`}
         >
-          <div className={listClass}>{items(sub.entry.submenu, true)}</div>
+          <div className={listClass}>{items(subEntry.submenu, true)}</div>
         </div>
       )}
     </>,

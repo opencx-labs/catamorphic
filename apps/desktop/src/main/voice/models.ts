@@ -130,6 +130,8 @@ interface VoiceModelProgress {
  */
 export class VoiceModelStore {
   private pending: Promise<VoiceModelPaths> | null = null;
+  /** Who hears the install's progress: the latest to ask for the models. */
+  private onProgress: (progress: VoiceModelProgress) => void = () => {};
 
   constructor(
     private readonly options: {
@@ -147,7 +149,12 @@ export class VoiceModelStore {
   ensure(
     onProgress: (progress: VoiceModelProgress) => void = () => {},
   ): Promise<VoiceModelPaths> {
-    this.pending ??= this.install(onProgress).finally(() => {
+    // Voice turned off and on mid-download waits on the same install, and
+    // shows its progress from here on.
+    this.onProgress = onProgress;
+    this.pending ??= this.install((progress) =>
+      this.onProgress(progress),
+    ).finally(() => {
       this.pending = null;
     });
     return this.pending;

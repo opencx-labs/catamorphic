@@ -756,15 +756,29 @@ async function* fakeScript(turn: FakeTurn): AsyncGenerator<FakeStep> {
     return;
   }
   if (prompt.includes("who are you")) {
-    // The e2e gives one agent these instructions of its own.
-    const persona = turn.systemPrompt.includes("You are Juniper.")
-      ? ", Juniper"
-      : "";
+    // The e2e gives one agent these instructions of its own; they lead,
+    // before Work's guidance for the assistant.
+    const persona = turn.systemPrompt.indexOf("You are Juniper.");
+    const assistant = turn.systemPrompt.indexOf(
+      "the person's assistant in Work",
+    );
+    const name = persona >= 0 && (assistant < 0 || persona < assistant);
     yield {
       type: "text",
-      content: turn.systemPrompt.includes("the person's assistant in Work")
-        ? `Your assistant${persona}.`
-        : `An agent${persona}.`,
+      content:
+        assistant >= 0
+          ? `Your assistant${name ? ", Juniper" : ""}.`
+          : `An agent${name ? ", Juniper" : ""}.`,
+    };
+    return;
+  }
+
+  // What the assistant can discover (ADR 0216): no project-only chat tools.
+  if (prompt.includes("which session capabilities can you find")) {
+    const page = await turn.discover("project session subsession");
+    yield {
+      type: "text",
+      content: `Capabilities: ${page.items.map((item) => item.name).join(", ")}`,
     };
     return;
   }
@@ -807,6 +821,11 @@ async function* fakeScript(turn: FakeTurn): AsyncGenerator<FakeStep> {
       "It's started. I'll tell you when it's done.",
     ],
     [
+      "start a session that reports as it goes",
+      { request: "Report as you go", title: "Report" },
+      "Started. I'll pass on what it finds.",
+    ],
+    [
       "start a session that asks me something",
       { request: "Ask the person which pages to keep", title: "Docs pages" },
       "Started. It may have a question for you.",
@@ -830,13 +849,23 @@ async function* fakeScript(turn: FakeTurn): AsyncGenerator<FakeStep> {
     )?.[1];
     if (!assistantChat) throw new Error("The brief names no assistant chat");
     // Asks a while in, after the person has turned voice off.
-    await turn.pause(5_000);
+    await turn.pause(8_000);
     await turn.tool("send_project_session_message", {
       session_id: assistantChat,
       message: "Docs pages: Which pages should I keep?",
       delivery_mode: "queue",
     });
     yield { type: "text", content: "I asked which pages to keep." };
+    return;
+  }
+
+  // A session the assistant started, writing notes as it works.
+  if (prompt.includes("report as you go")) {
+    yield { type: "text", content: "Reading the docs folder." };
+    yield { type: "tool_call", toolName: "Read", toolInput: { path: "docs" } };
+    // Long enough for the note to reach the assistant before the end.
+    await turn.pause(5_000);
+    yield { type: "text", content: "Two pages are stale." };
     return;
   }
 
