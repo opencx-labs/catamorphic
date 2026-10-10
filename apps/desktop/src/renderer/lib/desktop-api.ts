@@ -2028,4 +2028,6 @@ export const desktopApi: CatamorphicDesktopApi = {
   ),
   onVoiceStatus: shareEvent((publish) => nativeApi.onVoiceStatus(publish)),
   onVoiceLevels: shareEvent((publish) => nativeApi.onVoiceLevels(publish)),
+  // Every chat's microphone and settings view reads prefs.
+  onPrefsChanged: shareEvent((publish) => nativeApi.onPrefsChanged(publish)),
 };
