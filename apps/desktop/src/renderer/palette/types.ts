@@ -129,7 +129,8 @@ export type PaletteChoiceMode =
   | "configure-agent"
   | "effort"
   | "permission-mode"
-  | "model";
+  | "model"
+  | "assistant";
 
 /** Built-in modes by id, plus the choice modes. */
 export type PaletteModeId = BuiltinPaletteMode | PaletteChoiceMode;

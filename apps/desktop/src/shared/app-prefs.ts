@@ -2,6 +2,12 @@ import {
   normalizeTerminalMacros,
   type TerminalMacro,
 } from "./terminal-macros.js";
+import {
+  DEFAULT_VOICE,
+  type VoiceId,
+  type VoiceSessionRef,
+  voiceIdOf,
+} from "./voice.js";
 
 export const CODE_THEMES = [
   "github",
@@ -93,6 +99,33 @@ export interface AppPrefs {
    * declaration needs no new answer because it gains no access.
    */
   appAccessApprovals: string[];
+  /**
+   * The assistant's chat (ADR 0215): where the dock's microphone sends what
+   * it hears, until a reset (or another assistant) closes it and the next
+   * start makes another.
+   */
+  assistantSession: VoiceSessionRef | null;
+  /** The last assistant reply spoken to the person (ADR 0215). */
+  assistantHeardThrough: string | null;
+  /**
+   * The agent the assistant is: one of the person's own; null is Work's
+   * built-in assistant, on their default agent.
+   */
+  voiceAssistant: string | null;
+  /** The voice agents speak in, unless they have their own. */
+  voiceId: VoiceId;
+  /** Agents' own voices, by agent id. */
+  agentVoices: Record<string, VoiceId>;
+  /** The microphone voice listens with; null follows the system's. */
+  voiceMicrophone: string | null;
+  /** The person's voice print: voice ignores everyone else (ADR 0215). */
+  voiceprint: number[] | null;
+  /** The microphone in the dock; voice still works by its shortcut. */
+  voiceInDock: boolean;
+  /** A microphone in every chat's composer, to talk to that chat's agent. */
+  voiceInChats: boolean;
+  /** Voice listens only while the push-to-talk keys are held. */
+  voicePushToTalk: boolean;
 }
 
 export const DEFAULT_PREFS: AppPrefs = {
@@ -130,6 +163,16 @@ export const DEFAULT_PREFS: AppPrefs = {
   rightSidebarOpen: false,
   unreadSessionIds: [],
   appAccessApprovals: [],
+  assistantSession: null,
+  assistantHeardThrough: null,
+  voiceAssistant: null,
+  agentVoices: {},
+  voiceId: DEFAULT_VOICE,
+  voiceMicrophone: null,
+  voiceprint: null,
+  voiceInDock: true,
+  voiceInChats: true,
+  voicePushToTalk: false,
 };
 
 function dimension(value: unknown, fallback: number, max: number): number {
@@ -139,6 +182,26 @@ function dimension(value: unknown, fallback: number, max: number): number {
     value <= max
     ? value
     : fallback;
+}
+
+function agentVoicesOf(value: unknown): Record<string, VoiceId> {
+  if (!value || typeof value !== "object") return {};
+  return Object.fromEntries(
+    Object.entries(value).flatMap(([agentId, voice]) =>
+      typeof voice === "string" && voiceIdOf(voice) === voice
+        ? [[agentId, voice]]
+        : [],
+    ),
+  );
+}
+
+function voiceSessionRef(value: unknown): VoiceSessionRef | null {
+  if (typeof value !== "object" || value === null) return null;
+  const projectId: unknown = Reflect.get(value, "projectId");
+  const sessionId: unknown = Reflect.get(value, "sessionId");
+  return typeof projectId === "string" && typeof sessionId === "string"
+    ? { projectId, sessionId }
+    : null;
 }
 
 function stringList(value: unknown): string[] {
@@ -229,5 +292,29 @@ export function normalizePrefs(raw: unknown): AppPrefs {
       : {}),
     unreadSessionIds: stringList(record.unreadSessionIds),
     appAccessApprovals: stringList(record.appAccessApprovals),
+    assistantSession: voiceSessionRef(record.assistantSession),
+    assistantHeardThrough:
+      typeof record.assistantHeardThrough === "string"
+        ? record.assistantHeardThrough
+        : null,
+    voiceAssistant:
+      typeof record.voiceAssistant === "string" && record.voiceAssistant
+        ? record.voiceAssistant
+        : null,
+    voiceId: voiceIdOf(record.voiceId),
+    agentVoices: agentVoicesOf(record.agentVoices),
+    voiceprint:
+      Array.isArray(record.voiceprint) &&
+      record.voiceprint.length > 0 &&
+      record.voiceprint.every((value) => typeof value === "number")
+        ? record.voiceprint
+        : null,
+    voiceMicrophone:
+      typeof record.voiceMicrophone === "string" && record.voiceMicrophone
+        ? record.voiceMicrophone
+        : null,
+    voiceInDock: record.voiceInDock !== false,
+    voiceInChats: record.voiceInChats !== false,
+    voicePushToTalk: record.voicePushToTalk === true,
   };
 }

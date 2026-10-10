@@ -47,6 +47,7 @@ import type { ProfileConnection } from "../shared/profile-connections.js";
 import { writesProgram } from "../shared/project-experience.js";
 import type { SettingsPatch, SettingsScope } from "../shared/settings.js";
 import type { UsageSummary, UsageWindowDays } from "../shared/usage.js";
+import { rosterAgentId } from "../shared/voice.js";
 import type { BindingAuth } from "./agent-bindings-store.js";
 import {
   type AgentsStore,
@@ -1186,8 +1187,10 @@ export function registerIpcHandlers(
   // Code's own catalog, Codex app-server `model/list`, provider /v1/models).
   ipcMain.handle("catamorphic:agent-models", async (event, id: string) => {
     try {
-      let agent: ModelCatalogAgent | undefined =
-        storesFor(event).agents.get(id);
+      // An assistant lists its agent's models (ADR 0215).
+      let agent: ModelCatalogAgent | undefined = storesFor(event).agents.get(
+        rosterAgentId(id),
+      );
       const ref = parseProjectAgentId(id);
       if (!agent && ref && state.current) {
         const entries =

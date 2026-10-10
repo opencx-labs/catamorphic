@@ -167,6 +167,12 @@ export interface UseAgentChatResult {
   rollback: (turnId: string) => Promise<boolean>;
   /** Resume the blocked first message after the member authorizes access. */
   resumeAfterAuthentication: () => void;
+  /**
+   * The session's id, creating the session first when the chat has none
+   * yet: for a chat that starts somewhere other than a message, such as
+   * by voice. Null without a project, or once the chat moved on.
+   */
+  ensureSession: () => Promise<string | null>;
   startNewSession: () => void;
 }
 
@@ -562,6 +568,7 @@ export function useAgentChat(
       if (blocked && blocked.token === scopeRef.current.token)
         void deliver(blocked.send);
     },
+    ensureSession: () => ensureSessionId(scopeRef.current.token),
     startNewSession: () => {
       if (inFlight > 0) return;
       blockedRef.current = null;

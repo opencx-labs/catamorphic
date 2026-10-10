@@ -168,6 +168,9 @@ async function main(): Promise<void> {
       // Another invocation can replace the cache tag after this build finishes.
       // Run this invocation's immutable image, never whatever the tag names later.
       const imageId = (await readFile(imageFile, "utf8")).trim();
+      // Opt-in: installed speech models for the real-model voice suite
+      // (ADR 0215), mounted read-only so the image never carries them.
+      const voiceModels = process.env.CATAMORPHIC_VOICE_MODELS_DIR;
       await run("docker", [
         "run",
         "--rm",
@@ -177,6 +180,14 @@ async function main(): Promise<void> {
         "--shm-size=1g",
         "--mount",
         `type=bind,source=${artifacts},target=/artifacts`,
+        ...(voiceModels
+          ? [
+              "--mount",
+              `type=bind,source=${path.resolve(voiceModels)},target=/voice-models,readonly`,
+              "--env",
+              "CATAMORPHIC_VOICE_MODELS_DIR=/voice-models",
+            ]
+          : []),
         imageId,
         ...args,
       ]);

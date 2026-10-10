@@ -57,6 +57,7 @@ import {
   type DesktopUpdaterService,
   registerDesktopUpdater,
 } from "./updater.js";
+import { registerVoiceSupport } from "./voice/index.js";
 import { WindowStateStore } from "./window-state.js";
 import { desktopProfileMcpProvider } from "./workflow-mcp-connections.js";
 
@@ -679,6 +680,7 @@ app.whenReady().then(async () => {
     },
     (window) => desktopWorkspaces?.isDock(window) ?? false,
   );
+  voiceSupport = registerVoiceSupport({ state, profileConfig, windows });
   terminalSupport = registerTerminalSupport(state, async (projectId) => ({
     ...((await state.current?.agentRegistry.nativeToolchainEnvironment()) ??
       {}),
@@ -802,6 +804,7 @@ app.whenReady().then(async () => {
 let disposeProfileResources: (() => Promise<void>) | undefined;
 let browserSupport: ReturnType<typeof registerBrowserSupport> | null = null;
 let terminalSupport: ReturnType<typeof registerTerminalSupport> | null = null;
+let voiceSupport: ReturnType<typeof registerVoiceSupport> | null = null;
 let agentBridge: ReturnType<typeof registerAgentBridge> | null = null;
 let desktopUpdater: DesktopUpdaterService | null = null;
 
@@ -814,6 +817,7 @@ registerDesktopShutdown({
         { name: "profile settings", dispose: () => profileConfig.dispose() },
         { name: "browser", dispose: () => browserSupport?.dispose() },
         { name: "terminals", dispose: () => terminalSupport?.dispose() },
+        { name: "voice", dispose: () => voiceSupport?.dispose() },
         { name: "agent bridge", dispose: () => agentBridge?.dispose() },
         { name: "updater", dispose: () => desktopUpdater?.dispose() },
         {

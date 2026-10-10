@@ -6,6 +6,7 @@ import {
   useState,
   useSyncExternalStore,
 } from "react";
+import { chatBookmarkUrl } from "../../shared/bookmark-target.js";
 import type { ChatSignals } from "../../shared/chat.js";
 import type {
   ChatEvent,
@@ -25,11 +26,13 @@ import {
   themeStyle,
   useProjectTheme,
 } from "../lib/theme.js";
+import { useAppPreferences } from "../lib/use-app-preferences.js";
 import { chatTabKey } from "../lib/workspace-state.js";
 import { ChatBubbles } from "./chat-bubbles.js";
 import { ChatDock } from "./chat-dock.js";
 import { DockDialogs } from "./dock-dialogs.js";
 import { DownloadsBubble } from "./downloads-bubble.js";
+import { useVoiceStatus, VoiceButton } from "./voice-button.js";
 
 /** How this window lets clicks through, as the main process decided. */
 const DOCK_CLICKS = parseDockClicks(
@@ -111,6 +114,8 @@ export function DockHost({
   );
   const showing = useRef(new Set<string>());
   const currentProjectId = activeProjectId ?? snapshot.activeProjectId;
+  const voiceStatus = useVoiceStatus();
+  const { prefs: voicePrefs, update: updatePrefs } = useAppPreferences();
   // The downloads bubble opens things in the workspace: through the
   // workspaces service when this is the detached dock window, straight
   // to this window's app otherwise (it needs no project for that).
@@ -118,7 +123,8 @@ export function DockHost({
     url: string;
     title: string;
     mode: "replace" | "tab" | "side" | "floating";
-    open: "page" | "browser";
+    /** Absent: a linked surface, such as a chat. */
+    open?: "page" | "browser";
   }) => {
     const nonce = crypto.randomUUID();
     if (detachedWindow && currentProjectId) {
@@ -244,11 +250,12 @@ export function DockHost({
       chat.tabActive,
   );
   const expanded = isPresentation && active && active.entry.mode === "partial";
+  // The trailing microphone and downloads buttons sit beside the strip.
   const railWidth = collapsed
-    ? 100
+    ? 142
     : Math.min(
         780,
-        scoped.filter((chat) => chat.entry.mode !== "tab").length * 42 + 132,
+        scoped.filter((chat) => chat.entry.mode !== "tab").length * 42 + 174,
       );
   // Transparent headroom above the strip gives hints room to open above a
   // bubble instead of being clamped onto it.
@@ -963,6 +970,38 @@ export function DockHost({
                 });
               }}
               onClose={(id) => actions.current.get(id)?.close?.()}
+              // Kept out of the dock, the assistant's microphone still
+              // shows while voice talks to it, started by its shortcut.
+              voiceShown={
+                voicePrefs.voiceInDock ||
+                (voiceStatus.phase !== "off" &&
+                  voiceStatus.target?.kind === "assistant")
+              }
+              voiceInDock={voicePrefs.voiceInDock}
+              onVoiceInDockChange={(inDock) =>
+                void updatePrefs({ voiceInDock: inDock })
+              }
+              voice={
+                <VoiceButton
+                  projectId={currentProjectId}
+                  nativeMenus={detachedWindow}
+                  onOpenChat={(session) =>
+                    navigateSurface({
+                      url: chatBookmarkUrl(session),
+                      title: "Assistant",
+                      mode: "floating",
+                    })
+                  }
+                  onCreateAssistant={() =>
+                    navigateSurface({
+                      url: "new-assistant",
+                      title: "New agent",
+                      mode: "floating",
+                      open: "page",
+                    })
+                  }
+                />
+              }
               trailing={
                 <DownloadsBubble
                   // The bubble ends the strip: at a side of the screen its

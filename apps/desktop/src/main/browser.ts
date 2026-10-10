@@ -1151,6 +1151,8 @@ export function registerBrowserSupport(
         !KEYBINDING_ACTIONS.some(
           (action) =>
             action !== "dismiss-floating" &&
+            // Voice reads its held keys in every page itself.
+            action !== "push-to-talk" &&
             !PAGE_FIRST_ACTIONS.has(action) &&
             matchesShortcut({
               event: key,

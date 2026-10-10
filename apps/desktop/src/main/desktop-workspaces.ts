@@ -4,6 +4,7 @@ import {
   BrowserWindow,
   ipcMain,
   Menu,
+  type MenuItemConstructorOptions,
   screen,
   type WebContents,
 } from "electron";
@@ -18,6 +19,7 @@ import type {
 } from "../shared/desktop-workspace.js";
 import {
   type DockDrag,
+  type DockMenuEntry,
   type DockRegion,
   type DockSize,
   dockLanding,
@@ -118,23 +120,29 @@ export class DesktopWorkspaces {
     // the picked action.
     ipcMain.handle(
       "catamorphic:dock-menu",
-      (
-        event,
-        entries: Array<{ label: string; action: string; danger?: boolean }>,
-      ) => {
+      (event, entries: readonly DockMenuEntry[]) => {
         const profileId = options.windows.profileFor(event.sender);
         const window = this.floating.get(profileId);
         if (!window || window.webContents !== event.sender) return null;
         return new Promise<string | null>((resolve) => {
           let picked: string | null = null;
-          Menu.buildFromTemplate(
-            entries.map((entry) => ({
-              label: entry.label,
+          const template = (
+            list: readonly DockMenuEntry[],
+          ): MenuItemConstructorOptions[] =>
+            list.map((entry) => ({
+              label: entry.detail
+                ? `${entry.label}  ${entry.detail}`
+                : entry.label,
+              ...(entry.submenu
+                ? { submenu: template(entry.submenu) }
+                : entry.checked === undefined
+                  ? {}
+                  : { type: "checkbox" as const, checked: entry.checked }),
               click: () => {
                 picked = entry.action;
               },
-            })),
-          ).popup({
+            }));
+          Menu.buildFromTemplate(template(entries)).popup({
             // At the cursor: window-relative coordinates land off target on
             // the transparent strip, and a right-click puts the cursor here.
             window,

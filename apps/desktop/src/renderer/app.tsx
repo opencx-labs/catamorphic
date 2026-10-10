@@ -77,6 +77,7 @@ import {
   resolveProjectFileLocation,
 } from "../shared/surface-link.js";
 import type { TerminalMacro } from "../shared/terminal-macros.js";
+import { rosterAgentId } from "../shared/voice.js";
 import {
   sidebarSections,
   visibleWorkspaceConfig,
@@ -723,6 +724,13 @@ export function App({
   // auto-opened tab on agent-less profiles, the modal that gates starting
   // a chat with no agents, Settings' "Add agent", and the palette command.
   const [wizardModalOpen, setWizardModalOpen] = useState(false);
+  // The modal was opened to add the assistant (ADR 0215): the agent it
+  // sets up becomes the assistant.
+  const wizardForAssistantRef = useRef(false);
+  const createAssistant = () => {
+    wizardForAssistantRef.current = true;
+    setWizardModalOpen(true);
+  };
   // Either wizard surface (tab or modal) reports being mid-flow.
   const wizardEngagedRef = useRef(false);
   const setWizardEngaged = useCallback((engaged: boolean) => {
@@ -1407,6 +1415,9 @@ export function App({
     );
   };
   const floatingEscapeEnabledRef = useRef(false);
+  // Push to talk's keys are the window's only while voice is set to it.
+  const pushToTalkRef = useRef(false);
+  pushToTalkRef.current = prefs?.voicePushToTalk ?? false;
   floatingEscapeEnabledRef.current = Boolean(
     workspace.floatingKey &&
       !paletteOpen &&
@@ -1586,9 +1597,12 @@ export function App({
               agentsData?.agents.find(
                 (agent) =>
                   agent.id ===
-                  (sessionsById.get(chat.sessionId ?? "")?.agentId ??
-                    chat.agentId ??
-                    agentsData?.defaultAgentId),
+                  rosterAgentId(
+                    sessionsById.get(chat.sessionId ?? "")?.agentId ??
+                      chat.agentId ??
+                      agentsData?.defaultAgentId ??
+                      "",
+                  ),
               )?.name,
               forks[chat.localId] ? "fork of another chat" : undefined,
             ]
@@ -1785,6 +1799,11 @@ export function App({
   ): Promise<string> => {
     const intent =
       opts.mode ?? (opts.side ? "side" : opts.newTab ? "tab" : "replace");
+    // A chat in any project, such as the assistant's (ADR 0215).
+    if (parseChatBookmarkUrl(value)) {
+      await openUrl(value, intent === "replace" ? "tab" : intent);
+      return value;
+    }
     if (value.startsWith("session:") && projectIdRef.current) {
       await openUrl(
         chatBookmarkUrl({
@@ -2028,6 +2047,7 @@ export function App({
           { kind: "history", name: "history", label: "History" },
           navigation.mode,
         );
+      else if (navigation.url === "new-assistant") createAssistantRef.current();
       return;
     }
     if (navigation.open === "browser") {
@@ -2051,6 +2071,8 @@ export function App({
         ),
       );
   };
+  const createAssistantRef = useRef(createAssistant);
+  createAssistantRef.current = createAssistant;
   const consumeSurfaceRef = useRef(consumeSurface);
   consumeSurfaceRef.current = consumeSurface;
   const consumedNavigation = useRef<string | undefined>(undefined);
@@ -3911,6 +3933,7 @@ export function App({
     "close-tab": closeActiveSurface,
     "setup-agent": () => setWizardModalOpen(true),
     "default-agent": () => openPalettePicker("default-agent"),
+    "change-assistant": () => openPalettePicker("assistant"),
     "session-status": () => {
       const chat = actionChat(workspaceRef.current);
       if (!chat) return;
@@ -3946,6 +3969,21 @@ export function App({
       const chat = actionChat(workspaceRef.current);
       if (chat?.sessionId) askChatPreview(chat.sessionId);
     },
+    // Off wherever voice is on; else on, talking to the assistant.
+    "toggle-voice": () =>
+      void desktopApi
+        .voiceStatus()
+        .then((status) =>
+          desktopApi.voiceToggle(
+            status.phase !== "off" && status.target?.kind === "chat"
+              ? status.target
+              : projectId
+                ? { projectId }
+                : {},
+          ),
+        ),
+    // Held: the main process reads it before any page sees it (voice).
+    "push-to-talk": () => {},
     "continue-on-mobile": () =>
       setMobilePairing({
         open: true,
@@ -4003,6 +4041,7 @@ export function App({
             guestId !== undefined ||
             commandBrowserIdRef.current() !== undefined ||
             (candidate === "find" && Boolean(findSearchInput(candidate)))) &&
+          (candidate !== "push-to-talk" || pushToTalkRef.current) &&
           (candidate !== "dismiss-floating" ||
             (floatingEscapeEnabledRef.current &&
               ![
@@ -5551,6 +5590,8 @@ export function App({
     onStartChatWithAgent: startChatWithAgent,
     onPickProjectAgent: pickProjectAgent,
     onConfigureAgent: openConfigureAgent,
+    voiceAssistant: prefs?.voiceAssistant ?? null,
+    onCreateAssistant: createAssistant,
     defaultAgentOverridden: projectOverrideAgentId !== null,
     onClearDefaultOverride: () => {
       if (projectId) {
@@ -6322,6 +6363,7 @@ export function App({
                             projectId={projectId}
                             onSearch={settingsSearch}
                             onAddAgent={() => setWizardModalOpen(true)}
+                            onCreateAssistant={createAssistant}
                             onConfigureAgent={openConfigureAgent}
                             onManageConnectors={() =>
                               setConnectorsModalOpen(true)
@@ -6964,6 +7006,7 @@ export function App({
                 destination={activeTab.destination}
                 onSearch={settingsSearch}
                 onAddAgent={() => setWizardModalOpen(true)}
+                onCreateAssistant={createAssistant}
                 onConfigureAgent={openConfigureAgent}
                 onManageConnectors={() => setConnectorsModalOpen(true)}
               />
@@ -7119,8 +7162,14 @@ export function App({
             onClose={() => {
               setWizardModalOpen(false);
               setSidebarCustomization(null);
+              wizardForAssistantRef.current = false;
             }}
-            onDone={() => setWizardModalOpen(false)}
+            onDone={(agentId) => {
+              setWizardModalOpen(false);
+              if (wizardForAssistantRef.current && agentId)
+                void desktopApi.setPrefs({ voiceAssistant: agentId });
+              wizardForAssistantRef.current = false;
+            }}
             onEngagedChange={setWizardEngaged}
           />
 

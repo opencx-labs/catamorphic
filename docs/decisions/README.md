@@ -227,3 +227,4 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0212](0212-http-apis-reach-code-in-sandboxes-through-the-gateway.md) | HTTP APIs reach code in sandboxes through the gateway | Accepted (refines 0162, 0175, 0206) |
 | [0213](0213-codex-signs-in-on-a-members-own-machine.md) | Codex signs in on a member's own machine; Claude subscriptions stay on their computer | Accepted (amends 0199) |
 | [0214](0214-a-chat-runs-on-one-harness.md) | A chat runs on one harness | Accepted (amends 0198) |
+| [0215](0215-voice-local-speech-in-any-chat-and-the-assistant.md) | Voice: local speech, in any chat, and the assistant | Proposed (experimental) |

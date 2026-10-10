@@ -282,6 +282,10 @@ type FakeStep =
 interface FakeTurn {
   message: string;
   attachments: AgentAttachment[];
+  /** The host's instructions, after the harness's own (ADR 0049). */
+  systemPrompt: string;
+  /** This turn's context fragments, rendered (ADR 0152). */
+  context: string;
   projectId: string;
   sessionId: string;
   workingDirectory: string;
@@ -290,6 +294,8 @@ interface FakeTurn {
   interrupted(): boolean;
   /** Waits, ending early when the turn is interrupted. */
   pause(ms: number): Promise<void>;
+  /** The names of the tools the host serves this turn. */
+  hostTools: string[];
   /** A workspace tool, served as a host tool or a discovered capability. */
   tool(name: string, input: Record<string, unknown>): Promise<unknown>;
   /** A host tool's result as the harness receives it, images included. */
@@ -382,12 +388,15 @@ export class E2eFakeAdapter implements HarnessAdapter {
         message:
           (attempt.input?.text ?? "").split(HANDOFF_SEPARATOR).at(-1) ?? "",
         attachments: attempt.input?.attachments ?? [],
+        systemPrompt: attempt.systemPrompt,
+        context: attempt.context,
         projectId: attempt.projectId,
         sessionId: attempt.sessionId,
         workingDirectory: attempt.workingDirectory,
         askedQuestion: lastAskedQuestion(saved),
         interrupted: () => interrupted,
         pause,
+        hostTools: attempt.hostTools.map((tool) => tool.name),
         tool: (name, input) =>
           attempt.hostTools.some((tool) => tool.name === name)
             ? host.callTool({ name, input: toJson(input) }).then(toolValue)
@@ -732,6 +741,122 @@ async function* fakeScript(turn: FakeTurn): AsyncGenerator<FakeStep> {
           }`,
         };
     }
+    return;
+  }
+
+  // What voice tells agents (ADR 0215): any chat hears that the person
+  // talks by voice while they do, and the assistant who it is.
+  if (prompt.includes("how am i talking to you")) {
+    yield {
+      type: "text",
+      content: turn.context.includes("talking with you by voice")
+        ? "By voice."
+        : "By text.",
+    };
+    return;
+  }
+  if (prompt.includes("who are you")) {
+    // The e2e gives one agent these instructions of its own.
+    const persona = turn.systemPrompt.includes("You are Juniper.")
+      ? ", Juniper"
+      : "";
+    yield {
+      type: "text",
+      content: turn.systemPrompt.includes("the person's assistant in Work")
+        ? `Your assistant${persona}.`
+        : `An agent${persona}.`,
+    };
+    return;
+  }
+
+  // The assistant's surface (ADR 0215): the tools it is served.
+  if (prompt.includes("which tools can you use")) {
+    yield {
+      type: "text",
+      content: `Tools: ${[...turn.hostTools].sort().join(", ")}`,
+    };
+    return;
+  }
+
+  // The assistant managing the person's own chats.
+  const listedChats = z.array(
+    z.object({
+      session_id: z.string(),
+      title: z.string(),
+      started_by_you: z.boolean(),
+    }),
+  );
+  if (prompt.includes("tell my other chat to")) {
+    const chats = listedChats.parse(await turn.tool("list_sessions", {}));
+    const target = chats.find((chat) => !chat.started_by_you);
+    if (!target) throw new Error("No chat of the person's to message");
+    await turn.tool("message_session", {
+      session_id: target.session_id,
+      message: turn.message.slice(prompt.indexOf("tell my other chat to") + 22),
+      delivery_mode: "queue",
+    });
+    yield { type: "text", content: `Told ${target.title}.` };
+    return;
+  }
+
+  // The assistant handing work to sessions of its own.
+  const delegations: [string, { request: string; title: string }, string][] = [
+    [
+      "start a session to tidy the docs",
+      { request: "Tidy the docs", title: "Tidy the docs" },
+      "It's started. I'll tell you when it's done.",
+    ],
+    [
+      "start a session that asks me something",
+      { request: "Ask the person which pages to keep", title: "Docs pages" },
+      "Started. It may have a question for you.",
+    ],
+  ];
+  const delegation = delegations.find(([said]) => prompt.includes(said));
+  if (delegation) {
+    const [, input, reply] = delegation;
+    yield { type: "text", content: "Starting a session for that." };
+    yield { type: "tool_call", toolName: "start_session", toolInput: input };
+    await turn.tool("start_session", input);
+    yield { type: "text", content: reply };
+    return;
+  }
+
+  // A session the assistant started, asking the person
+  // something through the assistant chat its brief names.
+  if (prompt.includes("ask the person which pages to keep")) {
+    const assistantChat = /session_id (\S+), delivery_mode queue/.exec(
+      turn.message,
+    )?.[1];
+    if (!assistantChat) throw new Error("The brief names no assistant chat");
+    // Asks a while in, after the person has turned voice off.
+    await turn.pause(5_000);
+    await turn.tool("send_project_session_message", {
+      session_id: assistantChat,
+      message: "Docs pages: Which pages should I keep?",
+      delivery_mode: "queue",
+    });
+    yield { type: "text", content: "I asked which pages to keep." };
+    return;
+  }
+
+  // The assistant passing a session's question on, and the answer back.
+  if (prompt.includes("docs pages: which pages should i keep")) {
+    yield {
+      type: "text",
+      content: "The docs session wants to know which pages to keep.",
+    };
+    return;
+  }
+  if (prompt.includes("keep the new ones")) {
+    const chats = listedChats.parse(await turn.tool("list_sessions", {}));
+    const docs = chats.find((chat) => chat.title === "Docs pages");
+    if (!docs) throw new Error("No docs session to answer");
+    await turn.tool("message_session", {
+      session_id: docs.session_id,
+      message: "Keep the new ones.",
+    });
+    yield { type: "text", content: "I passed that on." };
     return;
   }
 

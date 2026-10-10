@@ -1329,6 +1329,31 @@ window.addEventListener("keydown", (event) => {
   ipcRenderer.sendToHost("catamorphic:dismiss-floating");
 });
 
+// Push to talk's keys, while voice is set to it (voice, ADR 0215): the
+// main process hears them go down and up; the page never gets them, so a
+// held Option+Space types nothing.
+let pushToTalkKeys = "";
+ipcRenderer.on("catamorphic:push-to-talk-keys", (_event, keys: unknown) => {
+  pushToTalkKeys = typeof keys === "string" ? keys : "";
+});
+window.addEventListener(
+  "keydown",
+  (event) => {
+    if (
+      !pushToTalkKeys ||
+      !matchesShortcut({
+        event,
+        binding: pushToTalkKeys,
+        mac: /Mac/.test(navigator.platform),
+      })
+    )
+      return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+  },
+  { capture: true },
+);
+
 // Find keys reach the page first, as in Chrome: a page with its own find
 // (a document editor) keeps them; otherwise the tab's find bar takes them.
 // This preload runs in the main frame only: a key pressed inside an

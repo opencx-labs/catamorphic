@@ -12,6 +12,7 @@ import {
   SANDBOXING_OPTIONS,
   sandboxingLabel,
 } from "../../shared/agent-permissions.js";
+import { VOICES, type VoiceId, voiceIdOf } from "../../shared/voice.js";
 import {
   type AgentAuthMode,
   type AgentConnectionsSetting,
@@ -31,6 +32,7 @@ import {
   type Sandboxing,
   type UpdateAgentInput,
 } from "../lib/desktop-api.js";
+import { useAppPreferences } from "../lib/use-app-preferences.js";
 import {
   PermissionModeFields,
   SettingSelect,
@@ -318,6 +320,11 @@ function ProfileAgentBody({
   >([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // The agent's voice (ADR 0215) is a profile pref: "" is the default
+  // voice, null untouched.
+  const { prefs } = useAppPreferences();
+  const [voice, setVoice] = useState<VoiceId | "" | null>(null);
+  const shownVoice = voice ?? prefs.agentVoices[agent.id] ?? "";
 
   useEffect(() => {
     void desktopApi
@@ -370,6 +377,12 @@ function ProfileAgentBody({
       if (clearKey) patch.apiKey = null;
       else if (apiKey.trim()) patch.apiKey = apiKey.trim();
       await desktopApi.agentsUpdate(agent.id, patch);
+      if (voice !== null) {
+        const { [agent.id]: _previous, ...others } = prefs.agentVoices;
+        await desktopApi.setPrefs({
+          agentVoices: voice ? { ...others, [agent.id]: voice } : others,
+        });
+      }
       onClose();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
@@ -502,6 +515,33 @@ function ProfileAgentBody({
                       Codex tops out at extra high; max runs there.
                     </span>
                   )}
+              </label>
+
+              <label className="flex flex-col gap-1 text-xs text-fg-muted">
+                Voice
+                <select
+                  value={shownVoice}
+                  onChange={(event) =>
+                    setVoice(
+                      event.target.value ? voiceIdOf(event.target.value) : "",
+                    )
+                  }
+                  className="field h-8 px-2 text-[13px] text-fg"
+                  data-testid="agent-voice"
+                >
+                  <option value="">
+                    Default voice (
+                    {VOICES.find((each) => each.id === prefs.voiceId)?.name})
+                  </option>
+                  {VOICES.map((each) => (
+                    <option key={each.id} value={each.id}>
+                      {each.name} ({each.description})
+                    </option>
+                  ))}
+                </select>
+                <span className="text-fg-faint">
+                  How it sounds when you talk with it by voice.
+                </span>
               </label>
 
               <PermissionModeFields

@@ -153,3 +153,36 @@ subagents. The five tools cost about 4.7 KB of schemas; the eager budget is
 13.5 KB. Discovery now ranks by matched words with name matches counting double,
 `requestId` is optional, and invalid input returns the capability's schema.
 
+## The assistant and voice (ADR 0215)
+
+The dock's assistant runs on `work-assistant:<agent id>` (Work's built-in
+assistant: the person's default agent with no persona, at its harness's
+default model) or `assistant:<agent id>` (an agent the person chose, as
+configured), each with its base agent's full surface above. Six direct
+tools (`main/server/assistant-tools.ts`) take the place of the
+project-only session tools (`spawn_subsession`, `wait_for_subsessions`,
+`interrupt_subsession`, `list_project_sessions`, `read_project_session`,
+`send_project_session_message`): `start_session`, plus `list_sessions`,
+`read_session`, `message_session`, `follow_session` and `stop_session`,
+which reach the person's chats in every project of the profile, the ones
+they started included, and never incognito ones. Its delegation routes
+target the base agent (`work`) and any agent the person names (`named`).
+Its host instructions describe the tools (`ASSISTANT_INSTRUCTIONS` in
+`main/voice/guidance.ts`).
+
+`start_session` takes the person's request in a sentence or two, and an
+agent's name when they give one, and wraps the request in a brief
+(`assistantTaskBrief`): the session reads the assistant's chat with
+`read_project_session` for what was actually said, and reaches the person
+by sending it a message with `send_project_session_message`, starting with
+its title. The assistant follows the sessions it starts, and others with
+`follow_session`: their notes (messages with more work after them in the
+turn) reach it as one system message a few at a time, shown as one quiet
+line (`main/server/session-notes.ts`). It messages a chat the person
+created, and relays a session's question and the answer
+(`e2e/voice-agent.e2e.ts`).
+
+Any chat the person talks with by voice gets one context fragment per turn
+(`VOICE_CONTEXT`, source `voice`): that they talk by voice, that messages
+are read aloud as they finish, and that voice can end. It is information,
+never rules, so the agent's own instructions decide how it talks.

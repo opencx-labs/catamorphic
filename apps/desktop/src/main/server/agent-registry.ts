@@ -26,7 +26,7 @@ import {
   projectAgentId,
   validateAgentDefinition,
 } from "@catamorphic/core";
-import { PROJECT_TOOLS_SERVER_KEY } from "@catamorphic/sandbox";
+import { type ExtraTool, PROJECT_TOOLS_SERVER_KEY } from "@catamorphic/sandbox";
 import { PROJECT_AGENTS_DIR } from "@catamorphic/workflow/project-layout";
 import type { AgentCommandsResult } from "../../shared/agent-commands.js";
 import type { AgentDefaultModelResult } from "../../shared/agent-default-model.js";
@@ -34,6 +34,7 @@ import {
   DESKTOP_DEFAULT_SANDBOXING,
   effectiveHarnessPermissions,
 } from "../../shared/agent-permissions.js";
+import { parseAssistantAgentId } from "../../shared/voice.js";
 import type { WorkspaceBridge } from "../agent-bridge.js";
 import type { AgentConfig } from "../agents-store.js";
 import { readableAttachments } from "../composer-files.js";
@@ -52,7 +53,9 @@ import type { ProfileConfigManager } from "../profile-config.js";
 import type { ProfilesStore } from "../profiles.js";
 import { projectDefaultAgentSlug } from "../project-manifest.js";
 import { shellBinShimDir } from "../shell-integration.js";
+import { ASSISTANT_INSTRUCTIONS, VOICE_CONTEXT } from "../voice/guidance.js";
 import { DesktopAgentMcp } from "./agent-mcp-policy.js";
+import { assistantDelegation, assistantHostTools } from "./assistant-agent.js";
 import { buildAiSdkAdapter } from "./coding-agent.js";
 import { desktopSettingsContext } from "./desktop-settings-context.js";
 import { E2eFakeAdapter } from "./e2e-fakes.js";
@@ -207,6 +210,9 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
 
   /** Workspace tools shared by every harness that can mount them. */
   readonly workspaceToolkit: WorkspaceToolkit | undefined;
+  /** The assistant's tools over the person's chats (ADR 0215). */
+  private assistantTools: ExtraTool[] = [];
+  private talking: (sessionId: string) => boolean = () => false;
   private readonly harnessComponents: HarnessComponentStore;
   private readonly mcp: DesktopAgentMcp;
 
@@ -566,11 +572,22 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     const projectRef = parseProjectAgentId(id);
     if (projectRef)
       return this.getProjectAgent(id, projectRef.projectId, projectRef.slug);
-    const found = this.findConfig(id);
+    // The assistant (ADR 0215) is one of the person's agents with the
+    // assistant's tools and delegation routes: as configured, or as Work's
+    // built-in assistant, with no instructions of its own and the
+    // harness's default model.
+    const assistant = parseAssistantAgentId(id);
+    const found = this.findConfig(assistant?.agentId ?? id);
     if (!found) return undefined;
-    const { config, profileId } = found;
-    const built = this.build({ config, profileId });
+    const { profileId } = found;
+    const config = assistant?.builtIn
+      ? { ...found.config, model: "", instructions: undefined }
+      : found.config;
+    const built = this.build({ config, profileId, assistant: !!assistant });
     if (!built) return undefined;
+    const delegation = assistant
+      ? assistantDelegation(assistant.agentId)
+      : config.delegation;
     return {
       id,
       name: config.name,
@@ -581,7 +598,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
       // The agent's own instructions lead, exactly like a project agent's
       // persona file; the host's playbook follows them.
       ...(config.instructions ? { systemPrompt: config.instructions } : {}),
-      ...(config.delegation ? { delegation: config.delegation } : {}),
+      ...(delegation ? { delegation } : {}),
     };
   }
 
@@ -874,19 +891,25 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     config,
     profileId,
     apiKey,
+    assistant = false,
   }: {
     config: AgentConfig;
     profileId: string;
     /** The model key, resolved at each attempt (a project secret). */
     apiKey?: () => Promise<string>;
+    /** The assistant (ADR 0215): its tools over the person's chats. */
+    assistant?: boolean;
   }): BuiltAgent | undefined {
     const errors = this.errorLabels(config);
     const live = () => this.mcp.live({ config, profileId });
+    const workspace = this.workspaceTools(config, "native") ?? [];
     const served = {
-      hostTools: this.workspaceTools(config, "native") ?? [],
+      hostTools: assistant
+        ? assistantHostTools(workspace, this.assistantTools)
+        : workspace,
       toolPolicies: () => live().policies,
       toolAnnotations: () => live().annotations,
-      ...this.workspaceHooks({ config, profileId }),
+      ...this.workspaceHooks({ config, profileId, assistant }),
     } satisfies Partial<HostHarness>;
 
     // E2E: same registry mechanics, scripted harness, so renderer flows
@@ -1113,23 +1136,31 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
   private workspaceHooks({
     config,
     profileId,
+    assistant = false,
   }: {
     config: AgentConfig;
     profileId: string;
+    assistant?: boolean;
   }): Pick<HostHarness, "context" | "instructions"> {
     const bridge = this.deps.workspaceBridge;
     if (!bridge) return {};
     const hasTools = this.workspaceToolkit !== undefined;
     const strategy = config.coordination ?? "shared-first";
+    const instructions = workspaceInstructions({
+      hasTools,
+      strategy,
+      skillsNote: this.skillsNote(config, profileId, hasTools),
+    });
     return {
-      instructions: workspaceInstructions({
-        hasTools,
-        strategy,
-        skillsNote: this.skillsNote(config, profileId, hasTools),
-      }),
-      context: async (turn: AgentTurnContext) =>
-        turn.sessionId
-          ? workspaceTurnContext({
+      instructions: assistant
+        ? `${instructions}\n\n${ASSISTANT_INSTRUCTIONS}`
+        : instructions,
+      context: async (turn: AgentTurnContext) => [
+        ...(turn.sessionId && this.talking(turn.sessionId)
+          ? [VOICE_CONTEXT]
+          : []),
+        ...(turn.sessionId
+          ? await workspaceTurnContext({
               bridge,
               projectId: turn.projectId,
               sessionId: turn.sessionId,
@@ -1157,7 +1188,8 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
                 };
               },
             })
-          : [],
+          : []),
+      ],
     };
   }
 
@@ -1249,6 +1281,19 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     );
   }
 
+  /** Late-bound: the assistant's tools over the person's chats. */
+  setAssistantTools(tools: ExtraTool[]): void {
+    this.assistantTools = tools;
+  }
+
+  /**
+   * Late-bound: whether the person is talking with a chat by voice, which
+   * puts voice's note in its turns (ADR 0215).
+   */
+  setVoiceTalking(talking: (sessionId: string) => boolean): void {
+    this.talking = talking;
+  }
+
   /** Live policy/configuration, shared by direct and discovered projections. */
   capabilitySurface(id: string) {
     const found = this.configFor(id);
@@ -1286,7 +1331,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
   private configFor(
     id: string,
   ): { config: AgentConfig; profileId: string } | undefined {
-    const profile = this.findConfig(id);
+    const profile = this.findConfig(parseAssistantAgentId(id)?.agentId ?? id);
     if (profile) return profile;
     const project = parseProjectAgentId(id);
     if (!project) return undefined;

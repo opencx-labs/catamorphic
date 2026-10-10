@@ -49,6 +49,7 @@ checkout selection are runtime state, separate from presentation preferences.
 | Workspace (`workspace.js`: sidebars, palette modes) | Built-in, profile, shared project, personal project; whole document |
 | Theme | Profile, shared project, personal project; sparse selection, token and font overrides |
 | Default agent | Profile, shared project, personal project |
+| Voice (`voiceAssistant`, `voiceId`, `agentVoices`, `voiceMicrophone`, `voicePushToTalk`, `voiceInDock`, `voiceInChats`) | Profile only, in `prefs.json`; a live voice follows edits from anywhere (ADR 0215) |
 | Runtime state | Explicit owner, not inherited appearance configuration |
 
 Do not apply generic object merging to workspace documents or themes. Credentials,

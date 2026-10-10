@@ -41,6 +41,7 @@ import type {
 } from "../shared/desktop-workspace.js";
 import type {
   DockDrag,
+  DockMenuEntry,
   DockRegion,
   DockSize,
 } from "../shared/dock-position.js";
@@ -57,6 +58,12 @@ import type { PrCommentInput, PrDecisionInput } from "../shared/pr-details.js";
 import type { SettingsScope } from "../shared/settings.js";
 import type { SidebarSourceRequest } from "../shared/sidebar-source.js";
 import type { DesktopUpdateState } from "../shared/update.js";
+import {
+  VOICE_PORT_MESSAGE,
+  type VoiceLevels,
+  type VoicePortMessage,
+  type VoiceStatus,
+} from "../shared/voice.js";
 
 export interface ServerInfo {
   url: string | null;
@@ -128,9 +135,8 @@ const api = {
   ): Promise<boolean> => invoke("catamorphic:dock-shape", rects),
   dockDetach: (detached: boolean): Promise<void> =>
     invoke("catamorphic:dock-detach", detached),
-  dockMenu: (
-    entries: Array<{ label: string; action: string; danger?: boolean }>,
-  ): Promise<string | null> => invoke("catamorphic:dock-menu", entries),
+  dockMenu: (entries: readonly DockMenuEntry[]): Promise<string | null> =>
+    invoke("catamorphic:dock-menu", entries),
   dockRegion: (region: DockRegion | null): Promise<void> =>
     invoke("catamorphic:dock-region", region),
   onDockSnapshot: (
@@ -1441,6 +1447,32 @@ const api = {
     return () =>
       ipcRenderer.removeListener("catamorphic:sidebar-source-changed", handler);
   },
+  // --- voice (ADR 0215); its settings are prefs ---
+  voiceStatus: (): Promise<VoiceStatus> =>
+    invoke("catamorphic:voice-get-status"),
+  voiceToggle: (input: {
+    projectId?: string;
+    sessionId?: string;
+  }): Promise<void> => invoke("catamorphic:voice-toggle", input),
+  voiceReset: (): Promise<void> => invoke("catamorphic:voice-reset"),
+  voiceLearn: (input: {
+    projectId?: string;
+    sessionId?: string;
+  }): Promise<void> => invoke("catamorphic:voice-learn", input),
+  onVoiceStatus: (listener: (status: VoiceStatus) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, value: VoiceStatus) =>
+      listener(value);
+    ipcRenderer.on("catamorphic:voice-status", handler);
+    return () =>
+      ipcRenderer.removeListener("catamorphic:voice-status", handler);
+  },
+  onVoiceLevels: (listener: (levels: VoiceLevels) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, value: VoiceLevels) =>
+      listener(value);
+    ipcRenderer.on("catamorphic:voice-levels", handler);
+    return () =>
+      ipcRenderer.removeListener("catamorphic:voice-levels", handler);
+  },
   // --- workspace config (sidebars, palette modes) ---
   workspaceConfigGet: (projectId?: string): Promise<unknown> =>
     invoke("catamorphic:workspace-config-get", projectId),
@@ -1466,3 +1498,18 @@ const api = {
 export type CatamorphicDesktopApi = typeof api;
 
 contextBridge.exposeInMainWorld("catamorphicDesktop", api);
+
+// The audio page's port to the speech worker (ADR 0215). A MessagePort
+// cannot cross the context bridge as a value, but it can be transferred
+// into the page with a window message to itself ("*": a file:// page's
+// origin is opaque and cannot be named as a target).
+ipcRenderer.on(VOICE_PORT_MESSAGE, (event, microphone: unknown) => {
+  window.postMessage(
+    {
+      type: VOICE_PORT_MESSAGE,
+      microphone: typeof microphone === "string" ? microphone : null,
+    } satisfies VoicePortMessage,
+    "*",
+    event.ports,
+  );
+});

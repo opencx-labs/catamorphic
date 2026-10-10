@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import {
   type ConnectionProvider,
+  formatProjectAgentId,
   projectDataDirectory,
   startEventDispatcher,
   startProjectEventMonitorWorker,
@@ -64,6 +65,11 @@ import {
   syncProfileMcpWorkflowConnections,
 } from "../workflow-mcp-connections.js";
 import { DesktopAgentRegistry } from "./agent-registry.js";
+import {
+  ASSISTANT_NAMED_ROUTE,
+  ASSISTANT_WORK_ROUTE,
+} from "./assistant-agent.js";
+import { assistantTools } from "./assistant-tools.js";
 import { componentRegistryCapability } from "./component-registry.js";
 import { validateDatabaseFiles } from "./database-files.js";
 import { desktopCapabilitySource } from "./desktop-capabilities.js";
@@ -80,6 +86,7 @@ import type { DataPaths } from "./paths.js";
 import { ProjectRootsStore } from "./project-roots.js";
 import { REMOTE_ENVIRONMENT_SKILL } from "./remote-environment-skill.js";
 import { SessionCheckouts } from "./session-checkouts.js";
+import { SessionNotes } from "./session-notes.js";
 import { syncReport } from "./sync-report.js";
 import {
   DESKTOP_MCP_TOOL_KINDS,
@@ -737,6 +744,126 @@ export async function startEmbeddedServer(
       messages: messages.map(({ role, content }) => ({ role, content })),
     };
   };
+  // Sessions following others' notes (ADR 0215): the assistant hears the
+  // sessions it starts, and chats it is asked to follow, as they work.
+  const sessionNotes = new SessionNotes({
+    sequence: async ({ projectId, sessionId }) => {
+      const service = catamorphic.core.agentSessions;
+      if (!service) throw new Error("Agent sessions are not configured");
+      return (await service.get(desktopIdentity, projectId, sessionId)).snapshot
+        .sequence;
+    },
+    subscribe: async ({ projectId, sessionId }, input) => {
+      const service = catamorphic.core.agentSessions;
+      if (!service) throw new Error("Agent sessions are not configured");
+      return service.subscribe(desktopIdentity, projectId, sessionId, input);
+    },
+    deliver: async (follower, { content, notice, idempotencyKey }) =>
+      catamorphic.core.agentSessions?.deliver(
+        desktopIdentity,
+        follower.projectId,
+        follower.sessionId,
+        {
+          content,
+          author: { kind: "system", code: "session_notes" },
+          mode: "steer",
+          idempotencyKey,
+          metadata: { notice },
+        },
+      ),
+  });
+  // The assistant manages the person's chats in every project of the
+  // profile, as the person (ADR 0215).
+  agentRegistry.setAssistantTools(
+    assistantTools({
+      projects: async (projectId) => {
+        const owned = profiles.profileForProject(projectId).projectIds;
+        const projects = await Promise.all(
+          owned.map((id) =>
+            catamorphic.core.projects
+              .get(desktopIdentity, id)
+              .then((project) => ({ id, name: project.name }))
+              .catch(() => null),
+          ),
+        );
+        return projects.filter((project) => project !== null);
+      },
+      list: async (projectId) =>
+        (
+          await catamorphic.core.agentSessions?.list(
+            desktopIdentity,
+            projectId,
+            { limit: 50 },
+          )
+        )?.items ?? [],
+      get: async (projectId, sessionId) => {
+        const service = catamorphic.core.agentSessions;
+        if (!service) throw new Error("Agent sessions are not configured");
+        return service.get(desktopIdentity, projectId, sessionId);
+      },
+      deliver: async (projectId, sessionId, input) =>
+        catamorphic.core.agentSessions?.deliver(
+          desktopIdentity,
+          projectId,
+          sessionId,
+          input,
+        ),
+      interrupt: async (projectId, sessionId) =>
+        catamorphic.core.agentSessions?.interrupt(
+          desktopIdentity,
+          projectId,
+          sessionId,
+        ),
+      agents: async (projectId) => {
+        const own = profileConfig
+          .forProfile(profiles.profileForProject(projectId).id)
+          .agents.list()
+          .map((agent) => ({ id: agent.id, name: agent.name }));
+        const committed = await catamorphic.core.agentDefinitions
+          .list(desktopIdentity, projectId)
+          .catch(() => []);
+        return [
+          ...own,
+          ...committed.flatMap((entry) =>
+            entry.definition
+              ? [
+                  {
+                    id: formatProjectAgentId(projectId, entry.slug),
+                    name: entry.definition.name,
+                  },
+                ]
+              : [],
+          ),
+        ];
+      },
+      start: async (projectId, assistantSessionId, { agentId, ...input }) => {
+        const service = catamorphic.core.agentSessions;
+        if (!service) throw new Error("Agent sessions are not configured");
+        const child = await service.createSubsession(
+          desktopIdentity,
+          projectId,
+          assistantSessionId,
+          {
+            ...input,
+            ...(agentId
+              ? { routeId: ASSISTANT_NAMED_ROUTE, agentId }
+              : { routeId: ASSISTANT_WORK_ROUTE }),
+          },
+        );
+        await sessionNotes.follow({
+          follower: { projectId, sessionId: assistantSessionId },
+          followed: { projectId, sessionId: child.session.id },
+          title: input.title,
+        });
+        return child;
+      },
+      follow: async ({ follower, followed, title, on }) => {
+        if (on) await sessionNotes.follow({ follower, followed, title });
+        else sessionNotes.unfollow(followed.sessionId);
+      },
+      hidden: (sessionId) => incognitoSessions?.has(sessionId) ?? false,
+    }),
+  );
   agentRegistry.workspaceToolkit?.setSessionCoordinationBridge({
     list: (projectId, sessionId) =>
       sessionPeersResolver?.(projectId, sessionId) ?? Promise.resolve([]),
@@ -1306,6 +1433,7 @@ export async function startEmbeddedServer(
       clearInterval(sessionMailboxTimer);
       clearInterval(sessionMirrorTimer);
       clearInterval(scheduleTimer);
+      sessionNotes.dispose();
       await shutdownDesktopServices({
         steps: [
           { name: "schedules", dispose: () => scheduleTick?.catch(() => {}) },

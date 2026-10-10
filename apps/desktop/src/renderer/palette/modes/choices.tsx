@@ -3,6 +3,8 @@ import {
   Cpu,
   Gauge,
   type LucideIcon,
+  Mic,
+  Plus,
   Settings2,
   Settings as SettingsIcon,
   ShieldCheck,
@@ -70,6 +72,12 @@ const CHOICE_CHIPS: Record<
     placeholder: "Type or pick a model…",
     description: "Change the model the agent runs on",
   },
+  assistant: {
+    chip: "Assistant",
+    icon: Mic,
+    placeholder: "Pick who the dock's microphone talks to…",
+    description: "Change the assistant",
+  },
 };
 
 export const isChoiceMode = (id: string): id is PaletteChoiceMode =>
@@ -83,6 +91,7 @@ export const PICKER_ACTIONS: Partial<Record<ActionId, PaletteChoiceMode>> = {
   "change-effort": "effort",
   "change-permission-mode": "permission-mode",
   "switch-model": "model",
+  "change-assistant": "assistant",
 };
 
 const HARNESS_LABELS: Record<AgentInfo["harness"], string> = {
@@ -196,6 +205,8 @@ export function useChoiceModes({
     onPickModel,
     onPickHarnessPermissions,
     actionAvailability,
+    voiceAssistant,
+    onCreateAssistant,
   } = usePaletteHost();
   // OpenRouter catalog for the model picker, fetched when first needed
   // (main caches it for an hour).
@@ -501,6 +512,42 @@ export function useChoiceModes({
       picker === "switch-agent" &&
       startsNewChat({ bound: focusedChat?.harness ?? null, next: harness });
     const build = (): PaletteItem[] => {
+      // The assistant (ADR 0215): Work's built-in one, or one of the
+      // person's agents as they set it up, or a new agent.
+      if (picker === "assistant") {
+        const chosen = agents.some((agent) => agent.id === voiceAssistant);
+        return [
+          {
+            id: "pick:assistant:built-in",
+            icon: Mic,
+            label: "Built-in assistant",
+            detail: "Work's assistant, on your default agent",
+            keywords: ["built-in", "work", "default"],
+            kind: "action" as const,
+            ...(chosen ? {} : { current: true }),
+            run: () => void desktopApi.setPrefs({ voiceAssistant: null }),
+          },
+          ...agents.map((agent) => ({
+            id: `pick:assistant:${agent.id}`,
+            icon: Bot,
+            label: agent.name,
+            detail: agentSourceLabel(agent),
+            keywords: [agent.name, agent.harness, agent.provider ?? ""],
+            kind: "action" as const,
+            ...(agent.id === voiceAssistant ? { current: true } : {}),
+            run: () => void desktopApi.setPrefs({ voiceAssistant: agent.id }),
+          })),
+          {
+            id: "pick:assistant:create",
+            icon: Plus,
+            label: "Create agent…",
+            detail: "Set up a new agent as the assistant",
+            keywords: ["new", "add", "create", "agent"],
+            kind: "action" as const,
+            run: () => onCreateAssistant(),
+          },
+        ];
+      }
       const rows: PaletteItem[] =
         picker === "permission-mode"
           ? permissionModeChoices(targetAgent).map((choice) => ({
@@ -708,6 +755,8 @@ export function useChoiceModes({
     onConfigureAgent,
     onClearDefaultOverride,
     onOpenTab,
+    voiceAssistant,
+    onCreateAssistant,
   ]);
 
   const modes = useMemo<PaletteMode[]>(() => {
@@ -758,13 +807,19 @@ export function useChoiceModes({
         },
         typed("change-permission-mode", "permission-mode"),
       ),
-      ...(["default-agent", "switch-agent", "configure-agent"] as const).map(
-        (id) =>
-          choice(id, {
-            kind: "list",
-            items: picker === id ? choiceItems : [],
-            zero: id === "configure-agent" ? "given" : "pin-current",
-          }),
+      ...(
+        [
+          "default-agent",
+          "switch-agent",
+          "configure-agent",
+          "assistant",
+        ] as const
+      ).map((id) =>
+        choice(id, {
+          kind: "list",
+          items: picker === id ? choiceItems : [],
+          zero: id === "configure-agent" ? "given" : "pin-current",
+        }),
       ),
     ];
   }, [

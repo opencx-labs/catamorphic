@@ -1993,3 +1993,161 @@ html[data-surface="dock"] #root {
     transition: none;
   }
 }
+
+/* A microphone (ADR 0215), the dock's or a composer's. One fixed control
+   whose state is its data attributes: every layer is always present and only fades, scales
+   or turns, so a change of state never moves anything around it. */
+.voice-button {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: 9999px;
+  border: 1px solid var(--color-border);
+  background-color: transparent;
+  color: var(--color-fg-muted);
+  cursor: pointer;
+  transition:
+    background-color 220ms var(--ease-standard),
+    border-color 220ms var(--ease-standard),
+    color 220ms var(--ease-standard),
+    box-shadow 220ms var(--ease-standard),
+    scale 120ms var(--ease-standard);
+}
+/* A composer's microphone: the same control, the size of Send beside it. */
+.voice-button[data-place="composer"] {
+  flex-shrink: 0;
+  width: 2rem;
+  height: 2rem;
+}
+.voice-button:hover {
+  border-color: var(--color-border-strong);
+  color: var(--color-fg);
+}
+.voice-button:active {
+  scale: 0.95;
+}
+.voice-button[data-loading] {
+  border-color: color-mix(in srgb, var(--color-accent) 30%, transparent);
+  color: var(--color-accent);
+}
+.voice-button[data-lit] {
+  border-color: var(--color-accent);
+  background-color: var(--color-accent);
+  color: var(--color-accent-fg);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--color-accent) 22%, transparent);
+}
+/* Not listening yet: an arc turns around the rim until it is. */
+.voice-button .voice-ring {
+  position: absolute;
+  inset: -1px;
+  width: calc(100% + 2px);
+  height: calc(100% + 2px);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 180ms var(--ease-standard);
+}
+.voice-button[data-loading] .voice-ring {
+  opacity: 1;
+}
+.voice-button[data-loading]:not([data-progress]) .voice-ring {
+  animation: voice-spin 900ms linear infinite;
+}
+@keyframes voice-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+/* Hearing: a soft wave spreads from the button. */
+.voice-button .voice-ripple {
+  position: absolute;
+  inset: -1px;
+  border-radius: 9999px;
+  background-color: var(--color-accent);
+  opacity: 0;
+  pointer-events: none;
+}
+.voice-button[data-phase="hearing"] .voice-ripple {
+  animation: voice-ripple 1200ms cubic-bezier(0.2, 0, 0, 1) infinite;
+}
+@keyframes voice-ripple {
+  from {
+    transform: scale(1);
+    opacity: 0.35;
+  }
+  to {
+    transform: scale(1.6);
+    opacity: 0;
+  }
+}
+.voice-button .voice-icon {
+  position: absolute;
+  width: 1rem;
+  height: 1rem;
+  transition:
+    opacity 160ms var(--ease-standard),
+    transform 160ms var(--ease-standard);
+}
+.voice-button .voice-icon[data-shown="false"] {
+  opacity: 0;
+  transform: scale(0.75);
+}
+/*
+ * Working, then speaking: dots a wave passes over until the agent is
+ * heard, then a bar per band of its voice.
+ */
+.voice-button .voice-bars {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  width: 1.25rem;
+}
+.voice-button .voice-bars > span {
+  width: 2px;
+  height: calc(2px + var(--level, 0) * 14px);
+  border-radius: 9999px;
+  background-color: currentColor;
+}
+/* News waiting (accent) or a failed start (red), on the corner. */
+.voice-button .voice-badge {
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  width: 0.625rem;
+  height: 0.625rem;
+  border-radius: 9999px;
+  border: 2px solid var(--color-bg-raised);
+  background-color: var(--color-accent);
+  transform: scale(0);
+  transition: transform 200ms var(--ease-standard);
+}
+.voice-button .voice-badge[data-kind="error"] {
+  background-color: var(--color-danger);
+}
+.voice-button .voice-badge[data-shown="true"] {
+  transform: scale(1);
+}
+@media (prefers-reduced-motion: reduce) {
+  .voice-button,
+  .voice-button .voice-ring,
+  .voice-button .voice-icon,
+  .voice-button .voice-badge {
+    transition: none;
+  }
+  .voice-button[data-loading]:not([data-progress]) .voice-ring,
+  .voice-button[data-phase="hearing"] .voice-ripple {
+    animation: none;
+  }
+  /* Still dots while it works, still bars while it speaks. */
+  .voice-button[data-phase="speaking"] .voice-bars > span {
+    --level: 0.35;
+  }
+  .voice-button[data-phase="speaking"] .voice-bars > span:nth-child(2n) {
+    --level: 0.65;
+  }
+  .voice-button[data-phase="speaking"] .voice-bars > span:nth-child(3) {
+    --level: 0.9;
+  }
+}
