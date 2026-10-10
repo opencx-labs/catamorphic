@@ -92,13 +92,47 @@ const hoverChip = async (selector: string) => {
   `,
     { label: "surface chip ready for native hover" },
   );
+  // TEMPORARY diagnostics (PR #215): what closes the popover on macOS CI.
+  await run(`
+    window.__hoverDiag = [];
+    const note = (text) => window.__hoverDiag.push(Math.round(performance.now()) + ' ' + text);
+    const describe = (target) => target instanceof Element
+      ? target.tagName + (target.id ? '#' + target.id : '') + '.' + String(target.className).slice(0, 50) + ' [' + (target.getAttribute('aria-label') ?? target.getAttribute('data-testid') ?? '') + ']'
+      : String(target);
+    for (const type of ['mousedown', 'pointerdown', 'keydown', 'blur', 'focusout', 'focusin', 'visibilitychange'])
+      window.addEventListener(type, (event) => note(type + ' ' + describe(event.target) + (event.key ? ' key=' + event.key : '')), true);
+    window.__hoverObserver?.disconnect();
+    window.__hoverObserver = new MutationObserver(() => {
+      if (!frontDock()?.querySelector(${JSON.stringify(selector)})) {
+        note('target gone; hasFocus=' + document.hasFocus() + ' active=' + describe(document.activeElement));
+        window.__hoverObserver.disconnect();
+      }
+    });
+    window.__hoverObserver.observe(document.body, { subtree: true, childList: true, attributes: true });
+    note('armed at ' + ${JSON.stringify(JSON.stringify(point))});
+    return true;
+  `);
   await app.movePointer(point);
-  await runWait(
-    `return frontDock()?.querySelector(${JSON.stringify(selector)})?.matches(':hover');`,
-    {
-      label: "native pointer reached the surface chip",
-    },
-  );
+  try {
+    await runWait(
+      `return frontDock()?.querySelector(${JSON.stringify(selector)})?.matches(':hover');`,
+      {
+        label: "native pointer reached the surface chip",
+      },
+    );
+  } catch (error) {
+    const diag = await run<string>(`
+      const at = document.elementFromPoint(${point.x}, ${point.y});
+      return JSON.stringify({
+        log: window.__hoverDiag,
+        hasFocus: document.hasFocus(),
+        active: document.activeElement?.outerHTML.slice(0, 160),
+        atPoint: at?.outerHTML.slice(0, 200),
+        hovered: [...document.querySelectorAll(':hover')].map((el) => el.tagName + '.' + String(el.className).slice(0, 30)).slice(-4),
+      });
+    `);
+    throw new Error(`${(error as Error).message}\nHOVER-DIAG ${diag}`);
+  }
 };
 
 describe("dock modes", () => {
