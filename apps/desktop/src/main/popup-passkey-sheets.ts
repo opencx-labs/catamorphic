@@ -82,13 +82,16 @@ export class PopupPasskeySheets {
     // The sheet page has nowhere to go: it never navigates or opens.
     view.webContents.on("will-navigate", (event) => event.preventDefault());
     view.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+    // The app's own page as the sheet surface, as the detached dock is: a
+    // page of its own would re-chunk the workspace's bundle.
     if (process.env.ELECTRON_RENDERER_URL)
       void view.webContents.loadURL(
-        `${process.env.ELECTRON_RENDERER_URL}/passkey-sheet.html`,
+        `${process.env.ELECTRON_RENDERER_URL}?surface=passkey`,
       );
     else
       void view.webContents.loadFile(
-        path.join(import.meta.dirname, "../renderer/passkey-sheet.html"),
+        path.join(import.meta.dirname, "../renderer/index.html"),
+        { query: { surface: "passkey" } },
       );
     const fit = () => {
       if (window.isDestroyed()) return;

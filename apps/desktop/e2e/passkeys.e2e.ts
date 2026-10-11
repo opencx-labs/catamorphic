@@ -407,7 +407,7 @@ describe("passkeys", () => {
       expect(found.client.passkeyPlatformAuthenticator).toBe(true);
 
       await popup.eval("signIn(); true");
-      const popupSheet = await app.connectToFrame("passkey-sheet.html");
+      const popupSheet = await app.connectToFrame("surface=passkey");
       frames.push(popupSheet);
       const inSheet = `document.querySelector('[data-testid="passkey-sheet"]')`;
       await popupSheet.waitFor(`${inSheet}?.dataset.armed === 'true'`, {

@@ -1,3 +1,4 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { StrictMode, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
@@ -7,6 +8,7 @@ import { createRoot } from "react-dom/client";
 
 import { CatamorphicAppProvider } from "./components/catamorphic/catamorphic-provider.js";
 import { DockHost } from "./components/dock-host.js";
+import { PasskeyHost } from "./components/passkey-sheet.js";
 import { desktopApi, type ServerInfo } from "./lib/desktop-api.js";
 import { installFocusModality } from "./lib/focus-modality.js";
 import { KeybindingsProvider } from "./lib/keybindings.js";
@@ -16,11 +18,17 @@ import { WorkspaceRoot } from "./workspace-root.js";
 import "./styles.css";
 import "./lib/dev-performance.js";
 
-const detachedWindow =
-  new URLSearchParams(location.search).get("surface") === "dock";
+const surface = new URLSearchParams(location.search).get("surface");
+const detachedWindow = surface === "dock";
+// The passkey sheet alone, over a browsing window that is not a tab (a
+// tab's sign-in popup, ADR 0220): a transparent view main lays over the
+// window's page, showing the same sheet the workspace shows over a tab.
+const passkeySheet = surface === "passkey";
 document.documentElement.dataset.surface = detachedWindow
   ? "dock"
-  : "workspace";
+  : passkeySheet
+    ? "passkey"
+    : "workspace";
 installFocusModality();
 
 function Root() {
@@ -59,7 +67,13 @@ createRoot(document.getElementById("root") as HTMLElement).render(
   <StrictMode>
     {/* Outside Root: the theme must cover the pre-server "Starting…" state. */}
     <ThemeProvider>
-      <Root />
+      {passkeySheet ? (
+        <QueryClientProvider client={new QueryClient()}>
+          <PasskeyHost />
+        </QueryClientProvider>
+      ) : (
+        <Root />
+      )}
     </ThemeProvider>
   </StrictMode>,
 );

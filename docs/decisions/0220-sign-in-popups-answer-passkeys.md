@@ -38,9 +38,12 @@ window reports conditional mediation unavailable and its autofill requests
 wait quietly until the page gives them up.
 
 **The window shows its own sheet.** Main lays a transparent view over the
-window's page that loads the sheet alone (`passkey-sheet.html`, the same
-`PasskeyHost`), so the sheet dims and sits over the page that asked, as it
-does over a tab. The view is made on the window's first request and loads
+window's page that loads the app's page as the sheet surface
+(`index.html?surface=passkey`, the same `PasskeyHost`, as the detached dock
+is `?surface=dock`), so the sheet dims and sits over the page that asked,
+as it does over a tab. A page of its own was tried first: a second renderer
+entry re-chunked the workspace's bundle and changed when its modules ran,
+which broke page input on macOS. The view is made on the window's first request and loads
 while the vault opens; it comes over the page only once the request is
 ready to show, and leaves when nothing waits there. The page takes focus
 back only if the sheet held it. A sheet that starts listening after its
