@@ -31,15 +31,29 @@ export function PasskeyHost({
 }) {
   const [requests, setRequests] = useState<PasskeyRequest[]>([]);
   useEffect(() => {
+    let live = true;
+    const add = (shown: PasskeyRequest[]) =>
+      setRequests((queue) => [
+        ...queue,
+        ...shown.filter((request) =>
+          queue.every((entry) => entry.id !== request.id),
+        ),
+      ]);
     const stopRequests = desktopApi.onPasskeyRequest((request) =>
-      setRequests((queue) => [...queue, request]),
+      add([request]),
     );
     const stopSettled = desktopApi.onPasskeySettled(({ ids }) =>
       setRequests((queue) =>
         queue.filter((request) => !ids.includes(request.id)),
       ),
     );
+    // A request sent before this listened (the sheet over a sign-in popup
+    // loads with its first one) is still waiting in main.
+    void desktopApi.passkeyRequests().then((shown) => {
+      if (live) add(shown);
+    });
     return () => {
+      live = false;
       stopRequests();
       stopSettled();
     };

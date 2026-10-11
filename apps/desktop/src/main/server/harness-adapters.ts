@@ -26,8 +26,10 @@ export interface AgentErrorLabels {
  * A desktop agent's harness (ADR 0198): an adapter whose attempt needs
  * readying first, on the host, before the harness starts. The integrity
  * pinned executable may still be downloading, or a project secret still
- * resolving, so `prepare` may take a while; the attempt is running
- * meanwhile and can be interrupted. Failed turns carry friendly errors.
+ * resolving, so `prepare` may take a while; it says what it waits for on
+ * the turn's activity line through `report`. The attempt is running
+ * meanwhile, and an interrupt ends it at once. Failed turns carry friendly
+ * errors; a failure to get ready is this machine's, said as it is.
  *
  * The id and capabilities are the inner adapter's, stated up front: the
  * runner reports them before the attempt starts.
@@ -40,7 +42,10 @@ export function desktopAdapter({
 }: {
   id: string;
   capabilities: () => HarnessCapabilities;
-  prepare: (attempt: AttemptStart) => Promise<PreparedAttempt>;
+  prepare: (
+    attempt: AttemptStart,
+    report: (activity: string) => void,
+  ) => Promise<PreparedAttempt>;
   errors?: AgentErrorLabels;
 }): HarnessAdapter {
   return {
@@ -49,26 +54,37 @@ export function desktopAdapter({
     start: (attempt, host, local) => {
       const friendly = errors ? friendlyHost({ host, errors }) : host;
       let inner: AttemptControl | undefined;
-      let interrupted = false;
-      const ready = prepare(attempt).then((prepared) => {
-        if (interrupted) {
-          friendly.emit({ type: "turn.completed", status: "interrupted" });
-          return undefined;
-        }
+      let readied = false;
+      // Stopped while still getting ready: the turn ends now, and whatever
+      // `prepare` waits for (a shared download) goes on for the next one.
+      let stopped = false;
+      let endEarly = () => {};
+      const ended = new Promise<void>((resolve) => {
+        endEarly = resolve;
+      });
+      const ready = prepare(attempt, (activity) => {
+        if (!stopped) host.emit({ type: "status", text: activity });
+      }).then((prepared) => {
+        readied = true;
+        if (stopped) return undefined;
         inner = prepared.adapter.start(prepared.attempt, friendly, local);
         return inner;
       });
-      const finished = ready
-        .then((control) => control?.finished)
-        .catch((error: unknown) => {
-          friendly.emit({
-            type: "turn.completed",
-            status: "failed",
-            error: {
-              message: error instanceof Error ? error.message : String(error),
-            },
-          });
-        });
+      const finished = Promise.race([
+        ready
+          .then((control) => control?.finished)
+          .catch((error: unknown) => {
+            if (stopped) return;
+            (readied ? friendly : host).emit({
+              type: "turn.completed",
+              status: "failed",
+              error: {
+                message: error instanceof Error ? error.message : String(error),
+              },
+            });
+          }),
+        ended,
+      ]);
       return {
         steer: async (input) => {
           const control = await ready.catch(() => undefined);
@@ -76,7 +92,11 @@ export function desktopAdapter({
         },
         interrupt: (reason) => {
           if (inner) inner.interrupt(reason);
-          else interrupted = true;
+          else if (!stopped) {
+            stopped = true;
+            host.emit({ type: "turn.completed", status: "interrupted" });
+            endEarly();
+          }
         },
         finished,
       };

@@ -45,6 +45,7 @@ import {
   HarnessComponentStore,
   type HarnessDownloadProgress,
   type HarnessExecutable,
+  harnessDownloadLine,
   harnessPathEnvironment,
 } from "../harness-components.js";
 import type { InstalledClaudeCodeFinder } from "../installed-claude-code.js";
@@ -1019,11 +1020,12 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
             adapter: desktopAdapter({
               id: claudeCode.id,
               capabilities: () => CLAUDE_CODE_CAPABILITIES,
-              prepare: (attempt) =>
+              prepare: (attempt, report) =>
                 this.nativeAttempt({
                   harness: "claude-code",
                   adapter: claudeCode,
                   attempt,
+                  report,
                   keyEnv: apiKey
                     ? async () => ({ ANTHROPIC_API_KEY: await apiKey() })
                     : undefined,
@@ -1069,11 +1071,12 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
             adapter: desktopAdapter({
               id: codex.id,
               capabilities: () => CODEX_CAPABILITIES,
-              prepare: (attempt) =>
+              prepare: (attempt, report) =>
                 this.nativeAttempt({
                   harness: "codex",
                   adapter: codex,
                   attempt,
+                  report,
                   keyEnv: apiKey
                     ? async () => ({ CODEX_API_KEY: await apiKey() })
                     : undefined,
@@ -1111,17 +1114,31 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
   /**
    * A native harness's attempt on this machine: the integrity-pinned
    * executable (downloaded on first use), Bun and the shell shims on PATH,
-   * and a key resolved for this attempt when the agent has one.
+   * and a key resolved for this attempt when the agent has one. A first
+   * use downloads a few hundred megabytes, which the turn's activity line
+   * counts out instead of sitting on "Working".
    */
   private async nativeAttempt(input: {
     harness: DownloadableHarness;
     adapter: HarnessAdapter;
     attempt: AttemptStart;
+    report: (activity: string) => void;
     keyEnv?: () => Promise<Record<string, string>>;
   }): Promise<{ adapter: HarnessAdapter; attempt: AttemptStart }> {
+    const downloads = new Map<string, HarnessDownloadProgress>();
+    let reported = "";
+    const stopWatching = this.harnessComponents.onProgress((progress) => {
+      if (progress.harness !== input.harness && progress.harness !== "bun")
+        return;
+      downloads.set(progress.harness, progress);
+      const line = harnessDownloadLine([...downloads.values()]);
+      if (line === reported) return;
+      reported = line;
+      input.report(line);
+    });
     const { component, environment } = await this.ensureNativeComponents(
       input.harness,
-    );
+    ).finally(stopWatching);
     const key = input.keyEnv ? await input.keyEnv() : {};
     const options: JsonObject = {
       ...input.attempt.options,

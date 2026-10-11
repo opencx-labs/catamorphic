@@ -55,6 +55,24 @@ function stringField(record: JsonObject, key: string): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
+/** The activity line while the CLI waits to retry a failed API request. */
+export function apiRetryLine(retry: {
+  attempt: number;
+  max_retries: number;
+  error_status: number | null;
+  error: SDKAssistantMessageError;
+}): string {
+  const problem =
+    retry.error_status === null
+      ? "Can't reach the Claude API"
+      : retry.error === "rate_limit"
+        ? "The Claude API rate limit was reached"
+        : retry.error === "overloaded"
+          ? "The Claude API is overloaded"
+          : `The Claude API returned an error (${retry.error_status})`;
+  return `${problem}. Trying again, attempt ${retry.attempt} of ${retry.max_retries}`;
+}
+
 /** A tool_result's text (a string or text blocks), bounded to its tail. */
 export function toolResultText(content: unknown): string | undefined {
   const text =
@@ -583,6 +601,10 @@ export class ClaudeTranscript {
           level: "warn",
           message: `Claude API retry ${message.attempt}/${message.max_retries}: ${String(message.error)}`,
         });
+        // The CLI backs off for minutes before it gives up; the activity
+        // line says so instead of sitting on "Working".
+        this.heading = undefined;
+        this.emit({ type: "status", text: apiRetryLine(message) });
         return;
       case "task_notification": {
         const record = message.tool_use_id

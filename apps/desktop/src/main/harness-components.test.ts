@@ -8,6 +8,7 @@ import {
   CLAUDE_CODE_MIN_VERSION,
   type HarnessArtifact,
   HarnessComponentStore,
+  harnessDownloadLine,
 } from "./harness-components.js";
 
 const temporaryRoots: string[] = [];
@@ -149,6 +150,42 @@ describe("HarnessComponentStore", () => {
     expect(ticks).toHaveLength(settled);
   });
 
+  // A dropped connection never errors by itself: the turn waiting on it
+  // used to say "Working" for as long as the app stayed open.
+  it("gives up on a download that stops receiving, and the next attempt starts over", async () => {
+    const fixture = await componentFixture();
+    const archive = await fs.readFile(fixture.archive);
+    let attempts = 0;
+    const store = new HarnessComponentStore({
+      rootDir: fixture.installRoot,
+      artifacts: { codex: fixture.artifact },
+      fetchImpl: async (_url, init) => {
+        attempts += 1;
+        if (attempts > 1) return new Response(archive);
+        const signal = init?.signal;
+        // Half the archive, then silence until the request is aborted.
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(archive.subarray(0, archive.byteLength / 2));
+              signal?.addEventListener("abort", () =>
+                controller.error(signal.reason),
+              );
+            },
+          }),
+        );
+      },
+      preferInstalled: false,
+      stallTimeoutMs: 50,
+    });
+
+    await expect(store.ensure("codex")).rejects.toThrow(
+      /^Fake Codex needs a one-time component download\. The download received nothing for \d+ seconds\. Check your internet connection/,
+    );
+    expect((await store.ensure("codex")).source).toBe("downloaded");
+    expect(attempts).toBe(2);
+  });
+
   it("rejects an archive that does not match the shipped integrity pin", async () => {
     const fixture = await componentFixture();
     const fetchImpl: typeof fetch = async () =>
@@ -193,6 +230,37 @@ describe("HarnessComponentStore", () => {
     const bun = await store.ensure("bun");
     expect(bun.executablePath).toContain(`${path.sep}bun${path.sep}`);
     expect(bun.pathEntries).toHaveLength(1);
+  });
+});
+
+describe("harnessDownloadLine", () => {
+  const progress = (
+    displayName: string,
+    receivedBytes: number,
+    totalBytes: number,
+  ) => ({
+    harness: "claude-code" as const,
+    displayName,
+    receivedBytes,
+    totalBytes,
+  });
+
+  it("counts every first-use download a turn waits for", () => {
+    expect(
+      harnessDownloadLine([progress("Claude Code", 110_000_000, 221_000_000)]),
+    ).toBe("Downloading Claude Code (first use only): 49% of 221 MB");
+    expect(
+      harnessDownloadLine([
+        progress("Claude Code", 221_000_000, 221_000_000),
+        progress("Bun", 30_000_000, 60_000_000),
+      ]),
+    ).toBe("Downloading Claude Code and Bun (first use only): 89% of 281 MB");
+  });
+
+  it("counts megabytes when the registry gives no size", () => {
+    expect(harnessDownloadLine([progress("Bun", 12_400_000, 0)])).toBe(
+      "Downloading Bun (first use only): 12 MB",
+    );
   });
 });
 

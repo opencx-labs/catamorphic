@@ -9,6 +9,7 @@ import {
   type ExtensionHostBridge,
   installExtensionApis,
 } from "./extension-api.js";
+import { installPasskeys } from "./passkeys.js";
 import { installWebStoreApis, type WebStoreBridge } from "./webstore-api.js";
 
 /**
@@ -16,6 +17,8 @@ import { installWebStoreApis, type WebStoreBridge } from "./webstore-api.js";
  * worker of a profile's browsing session (ADR 0203). It must stay one
  * self-contained file: sandboxed renderers cannot load chunks.
  *  - Every page and worker presents Chrome's client-hint brands.
+ *  - A web page's top frame, in a tab or in a sign-in popup it opened,
+ *    answers passkey requests from the profile's vault (passkeys.ts).
  *  - An extension's service worker or page gets Work's `chrome.*` APIs
  *    (extension-api.ts) before its own code runs; a popup closes on Escape
  *    or when focus leaves it.
@@ -174,7 +177,9 @@ if (process.type === "service-worker") {
   if (location.protocol === "chrome-extension:") {
     attempt(installForExtension);
     if (window.top === window) attempt(watchPopupMode);
-  } else if (location.origin === webStoreOrigin() && window.top === window) {
-    attempt(installForWebStore);
+  } else {
+    if (window.top === window) attempt(installPasskeys);
+    if (location.origin === webStoreOrigin() && window.top === window)
+      attempt(installForWebStore);
   }
 }

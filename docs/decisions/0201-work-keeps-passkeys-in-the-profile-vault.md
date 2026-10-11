@@ -1,6 +1,6 @@
 # 0201 — Work keeps passkeys in the profile's vault
 
-- **Status:** Accepted
+- **Status:** Accepted (amended by [0220](0220-sign-in-popups-answer-passkeys.md): a tab's sign-in popups answer passkeys too, in a sheet of their own)
 - **Date:** 2026-10-04
 - **Amends:** 0185 (passkey requests stay answerable), 0151 (browser password manager)
 

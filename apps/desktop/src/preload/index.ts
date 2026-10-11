@@ -963,6 +963,8 @@ const api = {
     return () =>
       ipcRenderer.removeListener("catamorphic:passkey-settled", handler);
   },
+  passkeyRequests: (): Promise<unknown[]> =>
+    invoke("catamorphic:passkey-requests"),
   passkeyCancel: (input: { id: string }): Promise<boolean> =>
     invoke("catamorphic:passkey-cancel", input),
   passkeyUse: (input: { id: string; passkeyId: string }): Promise<unknown> =>
