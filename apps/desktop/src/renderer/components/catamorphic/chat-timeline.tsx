@@ -542,8 +542,10 @@ export function ChatTimeline({
           ready={Boolean(
             focusMessageId &&
               turns.some((group) =>
-                group.entries.some(
-                  (entry) => entryId(entry) === focusMessageId,
+                group.entries.some((entry) =>
+                  entry.kind === "notifications"
+                    ? entry.items.some((item) => item.id === focusMessageId)
+                    : entryId(entry) === focusMessageId,
                 ),
               ),
           )}

@@ -11,9 +11,9 @@ the person, another agent, a workflow, a watcher, or `system` with a code.
 Consumers that meant "the person" treated them all alike. A background
 command that kept printing a matching error stacked one queued turn per
 wake, each shown in the queue as the person's editable bubble with the text
-written for the model. Agents' and workflows' words named untitled chats,
-filled the composer on undo, were labelled `Person:` in handoffs and `user`
-in transcripts; `ask_agent` was recorded as the person outright. Inputs
+written for the model. A background command's report named an untitled
+chat; others' words filled the composer on undo, were labelled `Person:` in
+handoffs and `user` in transcripts; `ask_agent` was recorded as the person outright. Inputs
 delivered `message_only` never reached the model at all, though senders
 relied on the agent reading them next turn. The model got a
 `[Catamorphic … not written by the user]` prefix.
@@ -49,11 +49,13 @@ task's fields. Envelope tags inside delivered text are made inert.
 **Delivery.** A task notification reaches the turn while it works (a native
 steer at the harness's next boundary); while the turn waits on the person or
 finalizes, or when nothing runs, it waits in the one turn queued for
-notifications, which later ones join instead of queueing turns of their own.
+notifications, which later ones join instead of queueing turns of their own
+when they are as much the owner's as its input (ADR 0199).
 A `message_only` input waits, `in_progress`, for the next turn, which reads
 it before its own input; a turn on its owner's sign-in takes only the
 owner's (ADR 0199). Inbound messages keep the sender's dispatch. A
-background command reports a matching line once, however often it repeats.
+background command reports a whole matching line once in five minutes,
+however often it repeats.
 
 **What people see.** Inbound messages and notifications are rows like a
 turn's steps: an icon for the sender or task, its status, one line, a
@@ -61,8 +63,14 @@ chevron to the full message or the detail, and a link to the source. A
 notification that reached a working turn is one of its steps; one that
 started or waited for a turn heads it; repeats from one task fold into one
 row. Queued, they are one quiet line that can be withdrawn or run now, never
-edited. Only the person's messages name a chat, offer "Restore to here", or
-come back with the up arrow.
+edited. The person's words, or the first words someone else sent a chat
+nobody has written in (a workflow's request), name an untitled chat;
+notifications never do. Only the person's messages offer "Restore to here"
+or come back with the up arrow. A turn takes in what was delivered to read
+by making it its own, so a retry or a handoff carries it too; another
+member's words that only reach a chat on its owner's machine (ADR 0199) are
+for people alone. Text quoted in a handoff can never start a line of its
+own.
 
 Considered: one non-person kind with a typed origin (Claude Code's shape),
 which leaves kind-specific fields in a union; keeping one input kind and

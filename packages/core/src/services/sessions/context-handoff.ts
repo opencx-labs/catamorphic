@@ -129,21 +129,19 @@ function renderTurn(ordinal: number, items: readonly Item[]): string {
   for (const item of items) {
     switch (item.kind) {
       case "user_message":
-        lines.push(`Person: ${truncate(item.text, LINE_MAX)}`);
+        lines.push(`Person: ${quoted(item.text, LINE_MAX)}`);
         break;
       case "inbound_message":
-        lines.push(
-          `${senderLabel(item.from)}: ${truncate(item.text, LINE_MAX)}`,
-        );
+        lines.push(`${senderLabel(item.from)}: ${quoted(item.text, LINE_MAX)}`);
         break;
       case "task_notification":
         lines.push(
-          `Notification (${item.task.type} ${item.task.id}): ${truncate(item.summary, 400)}`,
+          `Notification (${item.task.type} ${item.task.id}): ${quoted(item.summary, 400)}`,
         );
         break;
       case "assistant_message":
         if (item.status === "completed" && item.text.trim())
-          lines.push(`Agent: ${truncate(item.text, LINE_MAX)}`);
+          lines.push(`Agent: ${quoted(item.text, LINE_MAX)}`);
         break;
       case "command":
         lines.push(
@@ -173,6 +171,14 @@ function senderLabel(from: InboundSender): string {
     case "workflow":
       return `Workflow ${from.workflowName}`;
   }
+}
+
+/**
+ * Someone's words in the handoff, their later lines indented: text inside
+ * a message can never start a line of its own ("Person: …").
+ */
+function quoted(value: string, max: number): string {
+  return truncate(value, max).replace(/\n/g, "\n  ");
 }
 
 function truncate(value: string, max: number): string {

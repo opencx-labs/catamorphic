@@ -174,10 +174,24 @@ export function sessionTimeline(state: SessionState): TimelineTurn[] {
   for (const turn of turns) {
     flushOthersBefore(turn.startedAt ?? turn.createdAt);
     const items = turnItems.get(turn.id) ?? [];
-    // The input leads its turn wherever it was queued in the transcript.
+    // The input leads its turn wherever it was queued in the transcript;
+    // what the turn read from before it (delivered to read) comes first.
     const input = items.find((item) => item.id === turn.inputItemId);
+    const read = input
+      ? items.filter(
+          (item) =>
+            item !== input &&
+            isInputItem(item) &&
+            item.dispatch === "message_only" &&
+            item.position < input.position,
+        )
+      : [];
     const ordered = input
-      ? [input, ...items.filter((item) => item !== input)]
+      ? [
+          ...read,
+          input,
+          ...items.filter((item) => item !== input && !read.includes(item)),
+        ]
       : items;
     out.push({ key: turn.id, turn, entries: entriesOf(ordered, context) });
   }

@@ -99,7 +99,8 @@ dev servers, file watchers, long builds and test runs, anything you would otherw
 wait on. Each runs in its own terminal, shown as a chip on your chat that the person
 can open to watch. It survives the turn, and this chat receives a message when it
 finishes. Add wake_on_output (a regular expression) to also hear about a line, such
-as a server's "ready" or an "error". Keep working meanwhile. Never loop on sleep.
+as a server's "ready" or an "error"; the same line printed again within a few
+minutes is not news. Keep working meanwhile. Never loop on sleep.
 read_background_output returns new output since your last read; wait_seconds
 blocks for news when you have nothing else to do, and wait_for waits for a
 matching line, such as a server's "ready". stop_background_command ends it.

@@ -74,7 +74,8 @@ const COMMANDS = [
 function lastLine(text: string): string | undefined {
   const lines = text.trim().split("\n");
   if (/^<\/(workflow|agent)-message>$/.test(lines.at(-1) ?? "")) lines.pop();
-  return lines.at(-1);
+  while (lines.length > 0 && !lines.at(-1)?.trim()) lines.pop();
+  return lines.at(-1)?.trim();
 }
 
 function isWorkspaceCommand(request: string): boolean {

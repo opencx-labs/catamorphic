@@ -566,10 +566,11 @@ The queue keeps the person's messages as editable dashed bubbles. Anything
 else that waits is one dashed line on the left, "Up next", with the task or
 sender and "and 2 more" when news joined it, withdrawn or run now but never
 edited. A background command no longer wakes the chat every fifteen seconds
-with the same error: a line it already reported is not news. Session
+with the same error: a line it reported in the last few minutes is not
+news. Session
 actions (a workflow archiving or completing the chat) are notices naming
-who acted. Restore to here, the up-arrow recall and the chat's first name
-come only from the person's own messages.
+who acted. Restore to here and the up-arrow recall come only from the
+person's own messages, and a notification never names a chat.
 
 ### 2026-10-06: Codex signs in on your own machines
 

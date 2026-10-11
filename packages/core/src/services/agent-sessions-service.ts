@@ -27,6 +27,7 @@ import {
   type SessionMessageAuthor,
   type SessionSnapshot,
   type SessionStreamMessage,
+  sessionInputSchema,
   type Turn,
   type TurnError,
 } from "@catamorphic/agent-protocol";
@@ -2040,8 +2041,9 @@ export class AgentSessionsService {
    * A task notification steers only into a turn still working and otherwise
    * joins the one turn waiting for notifications, so they never stack up.
    * A `message_only` input waits, `in_progress`, for the next turn to take
-   * it in. Idempotent by `idempotencyKey`. The session row must be locked by
-   * the caller.
+   * it in, unless it is only for people to read (`forAgent: false`).
+   * Idempotent by `idempotencyKey`. The session row must be locked by the
+   * caller.
    */
   private async deliverIn(
     trx: Transaction<DB>,
@@ -2055,6 +2057,11 @@ export class AgentSessionsService {
       commandId?: string;
       /** Pre-allocated item id (a mailbox delivery keeps its id across hosts). */
       itemId?: string;
+      /**
+       * False for words only people read: another member's message to a
+       * chat on its owner's own machine (ADR 0199) never reaches its agent.
+       */
+      forAgent?: boolean;
     },
   ): Promise<SessionDeliveryReceipt> {
     const { input, session } = delivery;
@@ -2108,11 +2115,14 @@ export class AgentSessionsService {
           return runner !== null && runner !== undefined && !runner.ownerOnly;
         }));
     // A person's message while the turn waits on a question joins that
-    // turn (ADR 0195): the question stays open as a non-blocking one and
-    // its answer arrives later; a permission request is withdrawn.
+    // turn (ADR 0195), as does their own assistant's asking for them: the
+    // question stays open as a non-blocking one and its answer arrives
+    // later; a permission request is withdrawn.
     const replyToWaiting =
       joinable &&
-      input.kind === "user_message" &&
+      (input.kind === "user_message" ||
+        (input.kind === "inbound_message" &&
+          input.from.kind === "assistant")) &&
       delivery.dispatch === "queue" &&
       active?.status === "waiting" &&
       delivery.metadata?.questionRequestId === undefined;
@@ -2129,9 +2139,22 @@ export class AgentSessionsService {
       : delivery.dispatch === "steer" && !steerable
         ? "queue"
         : delivery.dispatch;
-    const waiting =
+    // A notification joins the turn waiting for notifications only when
+    // both are as much the owner's: one runs on their sign-in or files
+    // (ADR 0199), the other may not.
+    const waitingTurn =
       input.kind === "task_notification" && dispatch === "queue"
         ? await waitingNotificationTurn(trx, sessionId)
+        : null;
+    const waiting =
+      waitingTurn &&
+      (await this.alikeForOwner(trx, {
+        session,
+        input,
+        metadata: delivery.metadata ?? null,
+        turn: waitingTurn,
+      }))
+        ? waitingTurn
         : null;
     const now = new Date().toISOString();
     const itemId = delivery.itemId ?? randomUUID();
@@ -2209,7 +2232,10 @@ export class AgentSessionsService {
       parentItemId: null,
       position: 0,
       // Delivered without a turn: unread until the next turn takes it in.
-      status: dispatch === "message_only" ? "in_progress" : "completed",
+      status:
+        dispatch === "message_only" && delivery.forAgent !== false
+          ? "in_progress"
+          : "completed",
       nativeRef: null,
       createdAt: now,
       updatedAt: now,
@@ -2425,14 +2451,17 @@ export class AgentSessionsService {
       metadata?: JsonObject;
     },
   ): Promise<SessionDeliveryReceipt> {
+    // Checked here, so a host's mistake fails its call rather than a
+    // mailbox read on another host later.
+    const notification = sessionInputSchema.parse({
+      kind: "task_notification",
+      task: { ...input.task, title: input.task.title.slice(0, 2_000) },
+      summary: input.summary.trim().slice(0, 2_000),
+      detail: input.detail ?? "",
+      source: input.source ?? null,
+    });
     return this.deliverInput(identity, projectId, sessionId, {
-      input: {
-        kind: "task_notification",
-        task: input.task,
-        summary: input.summary,
-        detail: input.detail ?? "",
-        source: input.source ?? null,
-      },
+      input: notification,
       mode: input.mode ?? "steer",
       idempotencyKey: input.idempotencyKey,
       ...(input.metadata ? { metadata: input.metadata } : {}),
@@ -2596,6 +2625,7 @@ export class AgentSessionsService {
         session: locked,
         input: item.input,
         dispatch: ownerAuthored === true ? item.mode : "message_only",
+        forAgent: ownerAuthored === true,
         itemId: item.messageId,
         idempotencyKey: `mailbox:${item.sourceHostId}:${item.id}`,
         metadata,
@@ -2626,6 +2656,10 @@ export class AgentSessionsService {
   ): Promise<{ reply: Item | null; turn: Turn }> {
     let turnId: string | null;
     if (input.from) {
+      // As a person's send is: closed, moving and remote chats refuse it.
+      this.assertAcceptsInput(
+        await this.requireSession(identity, projectId, sessionId),
+      );
       const receipt = await this.deliver(identity, projectId, sessionId, {
         content: message,
         author: input.from,
@@ -6250,6 +6284,42 @@ export class AgentSessionsService {
           : run.external_user_id === owner;
       }
     }
+  }
+
+  /**
+   * Whether an input is as much the chat's owner's as a waiting turn's own
+   * input, so the two may run as one turn (ADR 0199).
+   */
+  private async alikeForOwner(
+    trx: Transaction<DB>,
+    input: {
+      session: SessionRow;
+      input: SessionInput;
+      metadata: JsonObject | null;
+      turn: Turn;
+    },
+  ): Promise<boolean> {
+    const row = input.turn.inputItemId
+      ? await trx
+          .selectFrom("agent_items")
+          .select("payload")
+          .where("id", "=", input.turn.inputItemId)
+          .executeTakeFirst()
+      : undefined;
+    const waiting = row ? itemFromRow(row) : null;
+    if (!waiting || !isInputItem(waiting)) return false;
+    const owned = (candidate: SessionInput, metadata: JsonObject | null) =>
+      this.authoredByOwner({
+        projectId: input.session.project_id,
+        owner: input.session.external_user_id,
+        input: candidate,
+        metadata,
+        executor: trx,
+      });
+    return (
+      (await owned(input.input, input.metadata)) ===
+      (await owned(waiting, waiting.metadata))
+    );
   }
 
   /**

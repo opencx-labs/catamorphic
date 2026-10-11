@@ -368,6 +368,14 @@ function Chat({
           onLoadOlder={() => void chat.loadOlder()}
           resolveRequest={(requestId) => chat.state?.requests[requestId]}
           resolveAgentName={agentName}
+          // A phone opens chats of this project and runs, never the
+          // desktop's terminals or another project's chats (ADR 0217).
+          sourceHref={(source) =>
+            source.kind === "surface" ||
+            (source.kind === "session" && source.projectId !== undefined)
+              ? null
+              : undefined
+          }
           error={null}
           emptyState="Ask the agent anything about this project."
         />
@@ -583,13 +591,14 @@ function Chat({
                         ) : (
                           // Not the person's words (ADR 0217): who or what
                           // queued it, in one line.
-                          <QueuedInputLine queued={queued} />
+                          <QueuedInputLine
+                            queued={queued}
+                            resolveAgentName={agentName}
+                          />
                         )}
                       </span>
                       <span className="shrink-0 text-[10px] uppercase tracking-wide text-fg-faint">
-                        {queued.item?.kind === "user_message"
-                          ? "queued"
-                          : "up next"}
+                        {queued.turn.status === "held" ? "held" : "queued"}
                       </span>
                       <button
                         type="button"

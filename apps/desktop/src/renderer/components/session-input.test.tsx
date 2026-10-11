@@ -160,3 +160,40 @@ it("folds repeated news from one task into its latest row, linked to the task", 
   );
   expect(rows[0]?.querySelector("a")?.textContent).toBe("Open terminal");
 });
+
+it("opens the folded notification a link points at, by its own id", async () => {
+  await act(async () =>
+    root.render(
+      <TaskNotificationRows
+        items={[
+          notification("n1", "Dev server printed what you were waiting for"),
+          notification("n2", "Dev server finished", "completed"),
+        ]}
+        focusMessageId="n1"
+      />,
+    ),
+  );
+  const row = container.querySelector("[data-message-id=n1]");
+  expect(row?.getAttribute("data-testid")).toBe("chat-task-notification");
+  expect(row?.querySelector("button")?.getAttribute("aria-expanded")).toBe(
+    "true",
+  );
+});
+
+it("reads a line with nothing to open as a line, not a control", async () => {
+  await act(async () =>
+    root.render(
+      <TaskNotificationRows
+        items={[
+          {
+            ...notification("n1", "Deploy is live: done", "completed"),
+            detail: "",
+            source: null,
+          },
+        ]}
+      />,
+    ),
+  );
+  expect(container.querySelector("button")).toBeNull();
+  expect(container.textContent).toContain("Deploy is live: done");
+});

@@ -74,14 +74,16 @@ const helpers = `
     const { url } = await api.getServerState();
     const response = await fetch(url + '/api/projects/' + ref.projectId + '/agent/sessions/' + ref.sessionId + path);
     const body = await response.json();
-    // A chat's transcript is its snapshot's message items (ADR 0197).
+    // A chat's transcript is its snapshot's message items (ADR 0197), and
+    // the task notifications it got (ADR 0217).
+    const roles = { user_message: 'user', assistant_message: 'assistant', task_notification: 'notification' };
     if (body?.snapshot)
       body.messages = [...body.snapshot.items]
-        .filter((item) => item.kind === 'user_message' || item.kind === 'assistant_message')
+        .filter((item) => item.kind in roles)
         .sort((a, b) => a.position - b.position)
         .map((item) => ({
-          role: item.kind === 'user_message' ? 'user' : 'assistant',
-          content: item.text,
+          role: roles[item.kind],
+          content: item.kind === 'task_notification' ? item.summary : item.text,
         }));
     return body;
   };
@@ -278,10 +280,12 @@ describe("voice", () => {
     expect(children.map((child) => child.session.agentId)).toEqual([
       detail.agentId.slice("work-assistant:".length),
     ]);
-    // Its result comes back to the assistant on its own, which answers.
+    // Its result comes back to the assistant on its own, as a task
+    // notification (ADR 0217), which it answers.
     await runWait(
       `const detail = await session(${JSON.stringify(first)});
-       return detail.messages.some((m) => m.role === 'assistant' && m.content.startsWith('You said:'));`,
+       return detail.messages.some((m) => m.role === 'notification' && m.content.endsWith(' finished')) &&
+         detail.messages.some((m) => m.role === 'assistant' && m.content.startsWith('Read it: '));`,
       {
         timeoutMs: 30_000,
         label: "the delegated result answered in the assistant's chat",

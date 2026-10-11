@@ -289,6 +289,27 @@ describe("BackgroundCommands", () => {
     commands.dispose();
   }, 10_000);
 
+  it("matches whole lines only, however the output arrives", async () => {
+    const { fake, commands, wakes } = setup();
+    const started = commands.start({
+      projectId: "p",
+      sessionId: "chat",
+      command: "bun run dev",
+      description: "Start the dev server",
+      wakeOnOutput: "ready on port \\d+$",
+    });
+    await until(() => fake.written.length > 0);
+    await started;
+    fake.print("t1", "ready on po");
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    fake.print("t1", "rt 3000\n");
+    await until(() => wakes.length > 0);
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    expect(wakes).toHaveLength(1);
+    expect(wakes[0]?.detail).toContain("ready on port 3000");
+    commands.dispose();
+  }, 10_000);
+
   it("never wakes about output the agent is already reading", async () => {
     const { fake, commands, wakes } = setup();
     const started = commands.start({

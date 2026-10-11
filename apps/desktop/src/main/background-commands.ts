@@ -26,8 +26,11 @@ interface Tracked extends Omit<BackgroundCommandView, "kind" | "key"> {
   wakeOnExit: boolean;
   wakeOnOutput: RegExp | null;
   lastOutputWake: number;
-  /** Matching lines already reported: printed again, they wake nobody. */
-  reported: Set<string>;
+  /**
+   * Matching lines already reported, and when: printed again within a few
+   * minutes (an error in a loop), they wake nobody.
+   */
+  reported: Map<string, number>;
   /** Reads in progress: the agent is watching, so nothing needs waking. */
   reading: number;
 }
@@ -87,6 +90,8 @@ const WAKE_OUTPUT_TAIL = 3_000;
 const OUTPUT_WAKE_INTERVAL_MS = 15_000;
 /** How many reported matching lines a command remembers. */
 const REPORTED_LINES = 500;
+/** How long a reported line stays old news. */
+const REPORTED_FOR_MS = 5 * 60_000;
 /** How long start waits so quick failures come back in the same call. */
 const START_SETTLE_MS = 3_000;
 /** The longest read_background_output blocks. */
@@ -168,7 +173,7 @@ export class BackgroundCommands {
       wakeOnExit: input.wakeOnExit !== false,
       wakeOnOutput,
       lastOutputWake: 0,
-      reported: new Set(),
+      reported: new Map(),
       reading: 0,
     };
     this.commands.set(id, tracked);
@@ -267,6 +272,7 @@ export class BackgroundCommands {
       const output = this.takeOutput(tracked);
       terminals.kill(tracked.id);
       tracked.status = "stopped";
+      tracked.reported.clear();
       tracked.endedAt = Date.now();
       this.changed();
       return { status: tracked.status, output };
@@ -336,6 +342,7 @@ export class BackgroundCommands {
     if (!terminals.isRunning(tracked.id) && shellExit === undefined) {
       // The person closed its terminal (or the chat was archived).
       tracked.status = "stopped";
+      tracked.reported.clear();
       tracked.endedAt = Date.now();
       this.changed();
       if (opts.wake)
@@ -344,6 +351,8 @@ export class BackgroundCommands {
           status: "stopped",
           summary: `${tracked.description} was stopped`,
           detail: `Its terminal was closed.\nCommand: ${tracked.command}`,
+          // Its terminal is gone: there is nothing to open.
+          surfaceKey: null,
         });
       return;
     }
@@ -370,6 +379,7 @@ export class BackgroundCommands {
     }
     if (!finished) return;
     tracked.status = "finished";
+    tracked.reported.clear();
     tracked.exitCode = exitCode;
     tracked.endedAt = Date.now();
     this.changed();
@@ -401,6 +411,7 @@ export class BackgroundCommands {
       status: TaskNotificationStatus;
       summary: string;
       detail: string;
+      surfaceKey?: string | null;
     },
   ): void {
     // An archived chat no longer takes messages; its command ended with it.
@@ -415,7 +426,8 @@ export class BackgroundCommands {
       },
       summary: message.summary,
       detail: message.detail,
-      surfaceKey: tracked.key,
+      surfaceKey:
+        message.surfaceKey === undefined ? tracked.key : message.surfaceKey,
       idempotencyKey: `background:${tracked.id}:${message.key}`,
     }).catch(() => {});
   }
@@ -429,12 +441,22 @@ export class BackgroundCommands {
       (this.deps.outputWakeMs ?? OUTPUT_WAKE_INTERVAL_MS)
     )
       return;
-    const text = this.deps.modelOutput(
-      terminals.readFrom(tracked.id, tracked.scanOffset, RAW_READ_CAP),
+    // The read ends where the output does. Whole lines only: a line still
+    // being printed is matched once it ends, never as a fragment.
+    const raw = terminals.readFrom(
+      tracked.id,
+      tracked.scanOffset,
+      RAW_READ_CAP,
     );
-    tracked.scanOffset = end;
-    // A line the agent already heard about (an error printed in a loop) is
+    const cut = raw.lastIndexOf("\n");
+    if (cut < 0) return;
+    tracked.scanOffset = end - (raw.length - cut - 1);
+    const text = this.deps.modelOutput(raw.slice(0, cut + 1));
+    // A line the agent heard about lately (an error printed in a loop) is
     // not news: only lines it has not seen wake the chat.
+    const now = Date.now();
+    for (const [line, at] of tracked.reported)
+      if (now - at > REPORTED_FOR_MS) tracked.reported.delete(line);
     const lines = [
       ...new Set(
         text
@@ -446,12 +468,12 @@ export class BackgroundCommands {
     if (lines.length === 0) return;
     for (const line of lines.slice(-REPORTED_LINES)) {
       if (tracked.reported.size >= REPORTED_LINES) {
-        const [oldest] = tracked.reported;
+        const [oldest] = tracked.reported.keys();
         if (oldest !== undefined) tracked.reported.delete(oldest);
       }
-      tracked.reported.add(line.trim());
+      tracked.reported.set(line.trim(), now);
     }
-    tracked.lastOutputWake = Date.now();
+    tracked.lastOutputWake = now;
     this.wake(tracked, {
       key: `output:${end}`,
       status: "update",

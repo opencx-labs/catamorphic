@@ -329,7 +329,11 @@ export function ChatTimeline({
       <FocusMessage
         messageId={focusMessageId}
         ready={timeline.some((turn) =>
-          turn.entries.some((entry) => entryId(entry) === focusMessageId),
+          turn.entries.some((entry) =>
+            entry.kind === "notifications"
+              ? entry.items.some((item) => item.id === focusMessageId)
+              : entryId(entry) === focusMessageId,
+          ),
         )}
       />
       <ScrollToLatest />
@@ -397,17 +401,15 @@ function TurnView({
     >
       {entry.entries.map((item, index) => {
         const id = entryId(item);
+        // Inbound rows and notifications carry their own ids and outline.
+        const own = item.kind === "inbound" || item.kind === "notifications";
         return (
           <div
             key={id ?? `steps:${index}`}
-            data-message-id={id}
-            tabIndex={id ? -1 : undefined}
+            data-message-id={own ? undefined : id}
+            tabIndex={!own && id ? -1 : undefined}
             className={
-              // Inbound rows and notifications outline themselves.
-              id &&
-              id === context.focusMessageId &&
-              item.kind !== "inbound" &&
-              item.kind !== "notifications"
+              !own && id && id === context.focusMessageId
                 ? "rounded-md outline outline-1 outline-accent/50"
                 : "contents"
             }

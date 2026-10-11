@@ -11,24 +11,32 @@ ALTER TABLE agent_items ADD CONSTRAINT agent_items_kind_check CHECK (kind IN (
     'subagent', 'notice', 'context_handoff'));
 
 -- A watcher's delivery named the watcher; it was a workflow's.
-CREATE FUNCTION pg_temp.inbound_sender(author jsonb) RETURNS jsonb LANGUAGE sql AS $$
+CREATE OR REPLACE FUNCTION pg_temp.inbound_sender(author jsonb) RETURNS jsonb LANGUAGE sql AS $$
   SELECT CASE author->>'kind'
     WHEN 'watcher' THEN jsonb_build_object('kind', 'workflow',
       'runId', COALESCE(author->>'runId', ''), 'workflowName', author->>'watcherId')
     ELSE author END
 $$;
 
+-- One line for people: the notice, else the text's first line.
+CREATE OR REPLACE FUNCTION pg_temp.summary_of(notice text, body text) RETURNS text LANGUAGE sql AS $$
+  SELECT COALESCE(NULLIF(btrim(notice), ''),
+    NULLIF(left(btrim(split_part(btrim(COALESCE(body, '')), E'\n', 1)), 200), ''),
+    'Notification')
+$$;
+
 -- What Work wrote as a system message, as the task it reported on.
-CREATE FUNCTION pg_temp.notified_task(code text, idempotency_key text, notice text, body text)
+CREATE OR REPLACE FUNCTION pg_temp.notified_task(code text, idempotency_key text, notice text, body text)
 RETURNS jsonb LANGUAGE sql AS $$
   SELECT jsonb_build_object(
     'type', CASE code
       WHEN 'session_notes' THEN 'followed_session'
       WHEN 'subsession_interrupted' THEN 'subsession'
       WHEN 'subsession_archived' THEN 'subsession'
-      ELSE code END,
-    'id', COALESCE(NULLIF(split_part(COALESCE(idempotency_key, ''), ':', 2), ''), code),
-    'title', COALESCE(notice, left(split_part(body, E'\n', 1), 200)),
+      ELSE COALESCE(NULLIF(code, ''), 'system_message') END,
+    'id', COALESCE(NULLIF(split_part(COALESCE(idempotency_key, ''), ':', 2), ''),
+      NULLIF(code, ''), 'system_message'),
+    'title', pg_temp.summary_of(notice, body),
     'status', CASE
       WHEN code IN ('subsession_interrupted', 'subsession_archived') THEN 'stopped'
       WHEN notice ~* '(failed|expired|stopped)' THEN 'failed'
@@ -66,10 +74,10 @@ SET kind = 'task_notification',
         'kind', 'task_notification',
         'task', pg_temp.notified_task(payload->'author'->>'code', idempotency_key,
           payload->'metadata'->>'notice', payload->>'text'),
-        'summary', COALESCE(payload->'metadata'->>'notice', left(split_part(payload->>'text', E'\n', 1), 200)),
+        'summary', pg_temp.summary_of(payload->'metadata'->>'notice', payload->>'text'),
         'detail', payload->>'text',
         'source', NULL),
-    text = COALESCE(payload->'metadata'->>'notice', left(split_part(payload->>'text', E'\n', 1), 200))
+    text = pg_temp.summary_of(payload->'metadata'->>'notice', payload->>'text')
 WHERE kind = 'user_message' AND author_kind = 'system';
 
 -- Mailbox deliveries carry the input they become.
@@ -79,7 +87,7 @@ UPDATE session_mailbox_items SET input = CASE
     'author', author_payload, 'text', content, 'attachments', '[]'::jsonb)
   WHEN author_kind = 'system' THEN jsonb_build_object('kind', 'task_notification',
     'task', pg_temp.notified_task(author_payload->>'code', idempotency_key, metadata->>'notice', content),
-    'summary', COALESCE(metadata->>'notice', left(split_part(content, E'\n', 1), 200)),
+    'summary', pg_temp.summary_of(metadata->>'notice', content),
     'detail', content, 'source', NULL)
   ELSE jsonb_build_object('kind', 'inbound_message',
     'from', pg_temp.inbound_sender(author_payload), 'text', content, 'attachments', '[]'::jsonb)
@@ -174,5 +182,9 @@ BEGIN
     'actor', actor, 'causation', COALESCE(causation, '[]'), 'detail', detail));
   RETURN NEW;
 END $$;
+
+DROP FUNCTION pg_temp.inbound_sender(jsonb);
+DROP FUNCTION pg_temp.notified_task(text, text, text, text);
+DROP FUNCTION pg_temp.summary_of(text, text);
 
 SELECT set_config('catamorphic.suppress_session_events', 'false', true);

@@ -188,7 +188,15 @@ export class SessionMailboxesService {
       .orderBy("session_mailbox_items.created_at", "asc")
       .limit(input.limit ?? 100)
       .execute();
-    return rows.map(mapMailboxItem);
+    // A delivery this host cannot read waits; it never holds up the rest.
+    return rows.flatMap((row) => {
+      const item = mapMailboxItem(row);
+      if (!item)
+        console.warn(
+          `[catamorphic] Mailbox item ${row.id} carries no input this host can read`,
+        );
+      return item ? [item] : [];
+    });
   }
 
   async acknowledge(
@@ -217,7 +225,10 @@ export class SessionMailboxesService {
   }
 }
 
-function mapMailboxItem(row: MailboxRow): SessionMailboxItem {
+function mapMailboxItem(row: MailboxRow): SessionMailboxItem | null {
+  const input = sessionInputSchema.safeParse(row.input);
+  const mode = dispatchModeSchema.safeParse(row.delivery_mode);
+  if (!input.success || !mode.success) return null;
   return {
     id: row.id,
     projectId: row.project_id,
@@ -226,8 +237,8 @@ function mapMailboxItem(row: MailboxRow): SessionMailboxItem {
     destinationHostId: row.destination_host_id,
     authorityRevision: Number(row.authority_revision),
     messageId: row.item_id,
-    input: sessionInputSchema.parse(row.input),
-    mode: dispatchModeSchema.parse(row.delivery_mode),
+    input: input.data,
+    mode: mode.data,
     idempotencyKey: row.idempotency_key,
     metadata: row.metadata as JsonObject | null,
     createdAt: row.created_at.toISOString(),

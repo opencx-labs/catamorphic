@@ -1,12 +1,13 @@
 "use client";
 
-import type {
-  InboundMessageItem,
-  InboundSender,
-  InputSource,
-  NoticeItem,
-  QueuedMessage,
-  TaskNotificationItem,
+import {
+  type InboundMessageItem,
+  type InboundSender,
+  type InputSource,
+  messageWithAttachmentNames,
+  type NoticeItem,
+  type QueuedMessage,
+  type TaskNotificationItem,
 } from "@catamorphic/react";
 import {
   Bell,
@@ -32,8 +33,11 @@ export interface InputLinkModifiers {
 
 type OpenLink = (url: string, modifiers: InputLinkModifiers) => void;
 
-/** A host's own address for a source (a chat in another project, say). */
-export type SourceHref = (source: InputSource) => string | undefined;
+/**
+ * A host's own address for a source (a chat in another project, say):
+ * undefined keeps the default, null hides a link the host cannot open.
+ */
+export type SourceHref = (source: InputSource) => string | null | undefined;
 
 /**
  * Where a person opens what an input came from (ADR 0217): a chat, a
@@ -50,9 +54,16 @@ export function defaultSourceHref(source: InputSource): string {
   }
 }
 
-/** A source's address: the host's own when it has one, else the default. */
-export function hrefOf(source: InputSource, sourceHref?: SourceHref): string {
-  return sourceHref?.(source) ?? defaultSourceHref(source);
+/**
+ * A source's address: the host's own when it has one, else the default;
+ * null when the host cannot open it.
+ */
+export function hrefOf(
+  source: InputSource,
+  sourceHref?: SourceHref,
+): string | null {
+  const own = sourceHref?.(source);
+  return own === undefined ? defaultSourceHref(source) : own;
 }
 
 /** The words on a source's link. */
@@ -199,7 +210,11 @@ export function TaskNotificationRows({
           items={group}
           onOpen={onOpen}
           sourceHref={sourceHref}
-          focused={group.some((item) => item.id === focusMessageId)}
+          focusMessageId={
+            group.some((item) => item.id === focusMessageId)
+              ? focusMessageId
+              : undefined
+          }
         />
       ))}
     </div>
@@ -210,17 +225,18 @@ function TaskNotificationRow({
   items,
   onOpen,
   sourceHref,
-  focused,
+  focusMessageId,
 }: {
   items: readonly TaskNotificationItem[];
   onOpen?: OpenLink;
   sourceHref?: SourceHref;
-  focused: boolean;
+  /** One of the folded notifications a deep link points at. */
+  focusMessageId: string | undefined;
 }) {
   const latest = items.at(-1);
   if (!latest) return null;
   const Icon = taskIcon(latest.task.type);
-  const detail =
+  const detail = capped(
     items.length === 1
       ? latest.detail.trim()
       : items
@@ -229,12 +245,13 @@ function TaskNotificationRow({
               .filter(Boolean)
               .join("\n"),
           )
-          .join("\n\n");
-  const href = latest.source ? hrefOf(latest.source, sourceHref) : undefined;
+          .join("\n\n"),
+  );
+  const href = latest.source ? hrefOf(latest.source, sourceHref) : null;
   return (
     <InputRow
-      messageId={latest.id}
-      focused={focused}
+      messageId={focusMessageId ?? latest.id}
+      focused={focusMessageId !== undefined}
       testId="chat-task-notification"
       data={{
         "data-task-type": latest.task.type,
@@ -245,6 +262,7 @@ function TaskNotificationRow({
       }
       label={latest.summary}
       meta={items.length > 1 ? `${items.length} times` : undefined}
+      attention={items.some((item) => item.attention === "required")}
       unread={items.some((item) => item.status === "in_progress")}
       detail={
         detail ? (
@@ -289,21 +307,23 @@ export function InboundMessageRow({
   const Icon = SENDER_ICONS[item.from.kind];
   const provenance = record(item.metadata.provenance);
   const source = senderSource(item.from);
-  const firstLine = item.text.trim().split("\n", 1)[0] ?? "";
+  // Attachments read by name, where they were placed in the words.
+  const text = messageWithAttachmentNames(item.text, item.attachments);
+  const firstLine = text.trim().split("\n", 1)[0] ?? "";
   const links: { href: string; label: string }[] = [];
-  const own = source ? hrefOf(source, sourceHref) : undefined;
+  const own = source ? hrefOf(source, sourceHref) : null;
   if (own && source) links.push({ href: own, label: sourceLabel(source) });
   if (item.from.kind === "workflow")
     links.push({
       href: `workflow:${encodeURIComponent(item.from.workflowName)}`,
       label: "Open workflow",
     });
-  const originating = string(provenance?.sessionId);
-  if (originating && item.from.kind !== "agent")
-    links.push({
-      href: `session:${encodeURIComponent(originating)}`,
-      label: "Originating chat",
-    });
+  const originatingId = string(provenance?.sessionId);
+  const originating =
+    originatingId && item.from.kind !== "agent"
+      ? hrefOf({ kind: "session", sessionId: originatingId }, sourceHref)
+      : null;
+  if (originating) links.push({ href: originating, label: "Originating chat" });
   const scheduledFor = string(provenance?.scheduledFor);
   const firedAt = string(provenance?.firedAt);
   const late =
@@ -324,7 +344,7 @@ export function InboundMessageRow({
       detail={
         <div className="flex flex-col gap-1.5">
           <div className="select-text whitespace-pre-wrap break-words text-xs leading-5 text-fg">
-            {renderContent ? renderContent(item) : item.text}
+            {renderContent ? renderContent(item) : capped(text)}
           </div>
           {scheduledFor && (
             <div className="text-[11px] text-fg-faint">
@@ -390,6 +410,9 @@ export function QueuedInputLine({
   );
 }
 
+const ROW =
+  "flex w-full min-w-0 items-center gap-1.5 rounded px-1 py-0.5 text-left text-xs text-fg-muted";
+
 /** A row like a turn's step that opens to its detail and its links. */
 function InputRow({
   messageId,
@@ -429,6 +452,37 @@ function InputRow({
   useEffect(() => {
     if (focused) setOpen(true);
   }, [focused]);
+  const header = (
+    <>
+      {icon}
+      <span
+        className={`truncate font-medium text-fg-muted ${preview ? "max-w-[45%] shrink-0" : "min-w-0 flex-1"}`}
+      >
+        {label}
+      </span>
+      {preview && (
+        <span className="min-w-0 flex-1 truncate text-fg-faint">{preview}</span>
+      )}
+      {attention && (
+        <span className="shrink-0 text-[11px] font-medium text-accent">
+          Attention requested
+        </span>
+      )}
+      {unread && (
+        <span className="shrink-0 text-[11px] text-fg-faint">
+          For the next turn
+        </span>
+      )}
+      {meta && (
+        <span className="shrink-0 text-[11px] text-fg-faint">{meta}</span>
+      )}
+      {expandable && (
+        <ChevronRight
+          className={`size-3 shrink-0 text-fg-faint transition-transform duration-150 ${open ? "rotate-90" : ""}`}
+        />
+      )}
+    </>
+  );
   return (
     <div
       data-testid={testId}
@@ -437,45 +491,19 @@ function InputRow({
       className={`rounded-md ${focused ? "outline outline-1 outline-accent/50" : ""}`}
       {...data}
     >
-      <button
-        type="button"
-        onClick={expandable ? () => setOpen((value) => !value) : undefined}
-        className={`flex w-full min-w-0 items-center gap-1.5 rounded px-1 py-0.5 text-left text-xs text-fg-muted ${
-          expandable
-            ? "cursor-pointer transition-colors duration-100 hover:bg-bg-inset hover:text-fg"
-            : "cursor-default"
-        }`}
-        aria-expanded={expandable ? open : undefined}
-      >
-        {icon}
-        <span className="shrink-0 truncate font-medium text-fg-muted">
-          {label}
-        </span>
-        {preview && (
-          <span className="min-w-0 flex-1 truncate text-fg-faint">
-            {preview}
-          </span>
-        )}
-        {!preview && <span className="flex-1" />}
-        {attention && (
-          <span className="shrink-0 text-[11px] font-medium text-accent">
-            Attention requested
-          </span>
-        )}
-        {unread && (
-          <span className="shrink-0 text-[11px] text-fg-faint">
-            For the next turn
-          </span>
-        )}
-        {meta && (
-          <span className="shrink-0 text-[11px] text-fg-faint">{meta}</span>
-        )}
-        {expandable && (
-          <ChevronRight
-            className={`size-3 shrink-0 text-fg-faint transition-transform duration-150 ${open ? "rotate-90" : ""}`}
-          />
-        )}
-      </button>
+      {expandable ? (
+        <button
+          type="button"
+          onClick={() => setOpen((value) => !value)}
+          className={`${ROW} cursor-pointer transition-colors duration-100 hover:bg-bg-inset hover:text-fg`}
+          aria-expanded={open}
+        >
+          {header}
+        </button>
+      ) : (
+        // Nothing to open: a line, not a control.
+        <div className={ROW}>{header}</div>
+      )}
       {/* Grid-rows tween like a step's: the detail opens and closes in place. */}
       {expandable && (
         <div
@@ -518,6 +546,13 @@ function InputRow({
       )}
     </div>
   );
+}
+
+/** The most of a payload a row opens to; the agent read it whole. */
+const DETAIL_MAX = 8_000;
+
+function capped(text: string): string {
+  return text.length > DETAIL_MAX ? `${text.slice(0, DETAIL_MAX)}\n…` : text;
 }
 
 function timeOf(iso: string): string {

@@ -896,7 +896,7 @@ export function buildWorkspaceToolkit(
           .string()
           .optional()
           .describe(
-            "A regular expression; wake this chat when an output line matches (at most every 15 seconds)",
+            "A regular expression; wake this chat when an output line matches (at most every 15 seconds; a line already reported wakes it again only after 5 minutes, so use read_background_output with wait_for to wait for one again)",
           ),
       },
       execute: (input, ctx) => {

@@ -143,7 +143,7 @@ function QueuedInput({
     >
       <span className="min-w-0 flex-1">{queued.line}</span>
       <span className="shrink-0 text-[10px] uppercase tracking-wider text-fg-faint">
-        {queued.held ? "Held" : "Up next"}
+        {queued.held ? "Held" : "Queued"}
       </span>
       <span className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity duration-150 group-hover/queued:opacity-100 group-focus-within/queued:opacity-100">
         {onRemove && (

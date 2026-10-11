@@ -818,11 +818,17 @@ export class TurnEngine {
         events: [
           { type: "attempt.changed", attempt },
           { type: "turn.changed", turn: running },
-          // Read: the agent takes them in with this turn.
+          // Read with this turn, and its own from now on: a retry or a
+          // handoff of the turn carries them too.
           ...riders.map(
             (item): SessionEvent => ({
               type: "item.changed",
-              item: { ...item, status: "completed", updatedAt: now() },
+              item: {
+                ...item,
+                turnId: turn.id,
+                status: "completed",
+                updatedAt: now(),
+              },
             }),
           ),
         ],
@@ -851,6 +857,7 @@ export class TurnEngine {
       .where("kind", "in", [...INPUT_ITEM_KINDS])
       .where("dispatch", "=", "message_only")
       .where("status", "=", "in_progress")
+      .where("turn_id", "is", null)
       .orderBy("position")
       .limit(50)
       .execute();
@@ -912,8 +919,9 @@ export class TurnEngine {
       input.reason === "steer_restart"
         ? others.filter((item) => !taken.has(item.id))
         : [];
-    // Inputs that joined the turn while it waited are part of its prompt;
-    // ones steered into a running attempt reached it on their own.
+    // Inputs that joined the turn while it waited (and, on a retry, what
+    // its first attempt read) are part of its prompt; ones steered into a
+    // running attempt reached it on their own.
     const joined =
       input.reason === "steer_restart"
         ? []
@@ -923,7 +931,9 @@ export class TurnEngine {
       input.inputItem && isInputItem(input.inputItem) ? input.inputItem : null;
     const inputs = [...input.riders, ...(base ? [base] : []), ...joined];
     const attachments: AgentAttachment[] = (
-      input.reason === "steer_restart" ? steeredItems : inputs
+      input.reason === "steer_restart" && steerTexts.length > 0
+        ? steeredItems
+        : inputs
     ).flatMap((item) =>
       item.kind === "task_notification" ? [] : item.attachments,
     );
@@ -937,7 +947,10 @@ export class TurnEngine {
             ...joined.map((item) => this.deps.inputText(item)),
           ].join("\n\n");
     const full = input.handoff ? `${input.handoff}\n\n---\n\n${body}` : body;
-    const carried = input.reason === "steer_restart" ? steeredItems : joined;
+    const carried =
+      input.reason === "steer_restart"
+        ? steeredItems
+        : [...input.riders, ...joined];
     return {
       input: {
         itemId: input.inputItem?.id ?? derivedId(input.attempt.id, "input"),
@@ -2492,9 +2505,28 @@ export class TurnEngine {
     let ordinal = Number(last?.ordinal ?? turn.ordinal);
     const events: SessionEvent[] = [];
     // Task notifications go on together, in the turn already waiting for
-    // them or the first one queued here (ADR 0217).
-    let notifications = (await waitingNotificationTurn(trx, turn.sessionId))
-      ?.id;
+    // them or the first one queued here (ADR 0217), when they are as much
+    // the owner's as that turn's input (ADR 0199).
+    const session = await trx
+      .selectFrom("agent_sessions")
+      .selectAll()
+      .where("id", "=", turn.sessionId)
+      .executeTakeFirstOrThrow();
+    const ownersOf = async (item: InputItem) =>
+      this.deps.host.authoredByOwner({ session, item });
+    const waiting = await waitingNotificationTurn(trx, turn.sessionId);
+    const waitingInput = waiting?.inputItemId
+      ? await trx
+          .selectFrom("agent_items")
+          .select("payload")
+          .where("id", "=", waiting.inputItemId)
+          .executeTakeFirst()
+          .then((row) => (row ? itemFromRow(row) : null))
+      : null;
+    let notifications =
+      waiting && waitingInput && isInputItem(waitingInput)
+        ? { id: waiting.id, owned: await ownersOf(waitingInput) }
+        : undefined;
     for (const itemId of pending) {
       const row = await trx
         .selectFrom("agent_items")
@@ -2503,12 +2535,16 @@ export class TurnEngine {
         .executeTakeFirst();
       if (!row) continue;
       const item = itemFromRow(row);
-      if (item.kind === "task_notification" && notifications) {
+      if (
+        item.kind === "task_notification" &&
+        notifications &&
+        notifications.owned === (await ownersOf(item))
+      ) {
         events.push({
           type: "item.changed",
           item: {
             ...item,
-            turnId: notifications,
+            turnId: notifications.id,
             dispatch: "queue",
             updatedAt: now,
           },
@@ -2540,7 +2576,8 @@ export class TurnEngine {
         completedAt: null,
         updatedAt: now,
       };
-      if (item.kind === "task_notification") notifications = next.id;
+      if (item.kind === "task_notification")
+        notifications = { id: next.id, owned: await ownersOf(item) };
       events.push(
         { type: "turn.changed", turn: next },
         {

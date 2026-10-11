@@ -23,9 +23,9 @@ export function modelInputText(item: InputItem): string {
 }
 
 const ENVELOPE_TAGS =
-  /<(\/?)(task-notification|agent-message|workflow-message)\b/gi;
+  /<(\/?)(task-notification|agent-message|workflow-message|task-type|task-id|task-title|status|summary|detail)\b/gi;
 
-/** Envelope tags inside delivered text, made inert. */
+/** Envelope tags and their fields inside delivered text, made inert. */
 function inert(text: string): string {
   return text.replace(ENVELOPE_TAGS, "&lt;$1$2");
 }

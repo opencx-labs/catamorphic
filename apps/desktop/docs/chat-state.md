@@ -43,8 +43,9 @@ Timelines render both through the shared `session-input` rows, whose
 expanded details end in a link to the source; hosts map sources they own
 (a chat in another project) with `sourceHref` and fall back to the default
 `session:`, `run:` and surface keys. Queues edit only `user_message` turns.
-Never key behavior meant for the person (titles, undo, recall, edits) on
-anything but `user_message`.
+Never key behavior meant for the person (undo, recall, edits) on anything
+but `user_message`; a chat's provisional title comes from a person's or an
+inbound message, never a notification.
 
 ## Composer and resource integration
 

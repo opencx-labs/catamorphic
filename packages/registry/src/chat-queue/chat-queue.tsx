@@ -153,7 +153,7 @@ function QueuedInput({
         )}
       </span>
       <span className="shrink-0 text-[10px] uppercase tracking-wider text-fg-faint">
-        Up next
+        {queued.turn.status === "held" ? "Held" : "Queued"}
       </span>
       <span className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity duration-150 group-hover/queued:opacity-100 group-focus-within/queued:opacity-100">
         {onCancel && (

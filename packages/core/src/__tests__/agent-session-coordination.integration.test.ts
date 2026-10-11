@@ -2567,13 +2567,15 @@ describe("agent session coordination", () => {
     expect(text.indexOf("deploy freeze")).toBeLessThan(
       text.indexOf("What should I know?"),
     );
-    // Older than the snapshot's turns now: read it where it is kept.
+    // Read with that turn, and its own from now on: a retry or a handoff
+    // of the turn carries it too.
     const read = await db
       .selectFrom("agent_items")
-      .select("status")
+      .select(["status", "turn_id"])
       .where("id", "=", delivered.messageId)
       .executeTakeFirstOrThrow();
     expect(read.status).toBe("completed");
+    expect(read.turn_id).toBe((await turnsOf(session.id, project.id))[0]?.id);
     // Read once: the turn after it does not get it again.
     const again = await sessions.sendMessage(
       identity,
@@ -2829,6 +2831,33 @@ describe("agent session coordination", () => {
           item.kind === "user_message" && "ownerAuthored" in item.metadata,
       ),
     ).toBe(false);
+    // Someone else's words are for people to read: the owner's turn, on
+    // their own machine, never takes them in (ADR 0199).
+    expect(
+      await db
+        .selectFrom("agent_items")
+        .select(["dispatch", "status"])
+        .where("id", "=", other.messageId)
+        .executeTakeFirstOrThrow(),
+    ).toEqual({ dispatch: "message_only", status: "completed" });
+    await vi.waitFor(
+      async () =>
+        expect(
+          (await turnsOf(session.id, project.id)).find(
+            (turn) => turn.id === own.turnId,
+          )?.status,
+        ).toBe("completed"),
+      { timeout: 10_000 },
+    );
+    const reply = (await snapshot(session.id, project.id)).items.find(
+      (item) => item.kind === "assistant_message" && item.turnId === own.turnId,
+    );
+    expect(reply?.kind === "assistant_message" && reply.text).toContain(
+      "From the owner",
+    );
+    expect(reply?.kind === "assistant_message" && reply.text).not.toContain(
+      "From someone else",
+    );
   });
 
   it("a retried interrupt action never interrupts a later turn", async () => {

@@ -385,8 +385,9 @@ export class E2eFakeAdapter implements HarnessAdapter {
       const turn: FakeTurn = {
         // The person's words: a context handoff before them (what the
         // agent missed) never decides what the script does.
-        message:
+        message: withoutEarlierDeliveries(
           (attempt.input?.text ?? "").split(HANDOFF_SEPARATOR).at(-1) ?? "",
+        ),
         attachments: attempt.input?.attachments ?? [],
         systemPrompt: attempt.systemPrompt,
         context: attempt.context,
@@ -694,6 +695,18 @@ function elicitationAction(
 
 /** What separates a context handoff from the input it precedes (core's turn engine). */
 const HANDOFF_SEPARATOR = "\n\n---\n\n";
+
+/**
+ * The turn's own input, without what was delivered to read before it
+ * (ADR 0217): those arrive first, each in its envelope, and the script
+ * answers what the turn was started with.
+ */
+function withoutEarlierDeliveries(text: string): string {
+  return text.replace(
+    /^(?:[^\n]*\n<(task-notification|agent-message|workflow-message)\b[\s\S]*?<\/\1>\n\n)+/,
+    "",
+  );
+}
 
 async function* fakeScript(turn: FakeTurn): AsyncGenerator<FakeStep> {
   const message = turn.message;
@@ -1981,11 +1994,10 @@ export const catalog = defineWorkflow(({ defineBoundary }) => ({
   // Work's news about a task the agent started (ADR 0217): read, and said.
   const summary = /<summary>([^<]*)<\/summary>/.exec(message)?.[1];
   if (summary && message.includes("<task-notification>")) {
-    const detail = /<detail>\n([\s\S]*?)\n<\/detail>/.exec(message)?.[1] ?? "";
-    const last = detail.trim().split("\n").filter(Boolean).at(-1);
+    const detail = /<detail>\n([\s\S]*?)\n<\/detail>/.exec(message)?.[1];
     yield {
       type: "text",
-      content: `Read it: ${summary}.${last ? ` Last line: ${last}` : ""}`,
+      content: `Read it: ${summary}.${detail ? `\n\n${detail.trim()}` : ""}`,
     };
     return;
   }
