@@ -5,7 +5,7 @@ import { assertIsolatedDesktopTestHost } from "../../../scripts/desktop-test-env
 
 /**
  * Move through several points in one gesture, as a hand crossing an edge
- * does: on Linux one xdotool run emits the moves back to back, so the app
+ * does: one xdotool or helper run emits the moves back to back, so the app
  * sees the last move inside a window just before the pointer leaves it
  * (separate runs leave process-spawn gaps a loaded host stretches).
  */
@@ -13,8 +13,19 @@ export async function moveNativePointerThrough(
   points: readonly { x: number; y: number }[],
 ) {
   assertIsolatedDesktopTestHost();
+  const coordinates = points.flatMap((point) => [
+    String(Math.round(point.x)),
+    String(Math.round(point.y)),
+  ]);
   if (process.platform !== "linux") {
-    for (const point of points) await moveNativePointer(point);
+    await promisify(execFile)(
+      "python3",
+      [
+        path.join(import.meta.dirname, "native-pointer-macos.py"),
+        ...coordinates,
+      ],
+      { timeout: 10_000 },
+    );
     return;
   }
   const args = points.flatMap((point) => [
