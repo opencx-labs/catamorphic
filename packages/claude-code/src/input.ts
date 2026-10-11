@@ -45,7 +45,8 @@ export async function renderPrompt(input: {
  * CLI's consumption reports map back to item ids. Each attempt names it
  * anew: a retry resends the turn's input on the same native thread, and
  * the CLI ends a uuid its transcript already answered (an API error is an
- * answer) without running it. The thread then holds the message twice.
+ * answer) without running it. The retry's fresh uuid adds a second copy of
+ * the message to the thread, after the first one's answer.
  */
 export function inputUuid(input: {
   attemptId: string;

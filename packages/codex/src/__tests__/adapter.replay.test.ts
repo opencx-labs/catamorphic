@@ -318,12 +318,20 @@ describe("Codex adapter, replayed from the pinned app-server", () => {
     const transcript = {
       ...recorded,
       entries: recorded.entries.map((entry) =>
-        "expect_outbound" in entry && "result" in entry.expect_outbound
+        "expect_outbound" in entry &&
+        "result" in entry.expect_outbound &&
+        entry.expect_outbound.id === 0
           ? {
               expect_outbound: {
                 ...entry.expect_outbound,
                 result: {
-                  answers: { theme: { answers: [`user_note: ${reason}`] } },
+                  answers: {
+                    theme: {
+                      answers: [
+                        `user_note: The question was closed without an answer: ${reason}`,
+                      ],
+                    },
+                  },
                 },
               },
             }

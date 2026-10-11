@@ -1003,13 +1003,16 @@ class CodexAttempt {
           return [
             String(question.id ?? index),
             {
-              // Unanswered (the person wrote in the chat instead): Codex's
-              // own free-text form says why, as other harnesses hear it.
+              // Closed without an answer (the person wrote in the chat, or
+              // the turn stopped): Codex's own free-text form says why
+              // once, as other harnesses hear it.
               answers:
                 answer !== undefined
                   ? [answer]
-                  : closed
-                    ? [`user_note: ${closed}`]
+                  : closed && index === 0
+                    ? [
+                        `user_note: The question was closed without an answer: ${closed}`,
+                      ]
                     : [],
             },
           ];

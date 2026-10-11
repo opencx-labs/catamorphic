@@ -356,7 +356,7 @@ class ClaudeAttempt {
         uuid === this.ownInputUuid &&
         !this.ownInputStarted &&
         !this.resultSeen &&
-        (state === "completed" || state === "cancelled")
+        (state === "completed" || state === "cancelled" || state === "refused")
       )
         this.settleWithoutResult(
           new Error(

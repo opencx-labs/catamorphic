@@ -157,7 +157,7 @@ it("an MCP elicitation becomes an elicitation request (authored from the SDK's t
   });
 });
 
-it.each(["completed", "cancelled"])(
+it.each(["completed", "cancelled", "refused"])(
   "an input the CLI ends (%s) without running fails the turn instead of waiting for a result",
   async (state) => {
     const places = await directories();
