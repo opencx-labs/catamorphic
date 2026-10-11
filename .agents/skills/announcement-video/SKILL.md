@@ -34,7 +34,7 @@ Defaults when the brief is silent (say which you used):
 | Sound | Silent |
 | Look | Default Work Dark theme, the real window filling the frame |
 | Captions | None burned in; a WebVTT track describing what happens |
-| Export | H.264 MP4, yuv420p, fast start, no audio; size and rate follow the capture (Work film: 1920x1200 at 60 fps from a 1280x800 window) |
+| Export | H.264 MP4, yuv420p, fast start, no audio; size and rate follow the capture (Work film: a 1280x800 layout at 60 fps, captured at 2560x1600 on a Retina display or 1680x1050 on a 1x one) |
 | Deliverables | Editable source, a local preview, the MP4, a poster, the VTT |
 
 Explicit user instructions override these. Decide ordinary choices yourself and
@@ -47,8 +47,9 @@ storyboard request, deliver that and mark capture, render and checks as pending.
   before writing any claim. Check that the feature exists in the build you film.
 - Film the real app with a prepared, non-sensitive demo project. When the film
   shows an agent answering or building, send the real messages and capture the
-  real result. An unsent draft, a test-harness echo or an injected transcript is
-  not a demo. A simulated response needs an explicitly illustrative brief and a
+  real result. Before any real agent turn, make sure the agent cannot reach the
+  person's own accounts (connectors, mail, CRM); a demo prompt can act on them.
+  An unsent draft, a test-harness echo or an injected transcript is not a demo. A simulated response needs an explicitly illustrative brief and a
   clear label.
 - Rehearse the whole take once with the same data, agents and build services
   before recording. Failures only a full run reveals cost a take each; see the

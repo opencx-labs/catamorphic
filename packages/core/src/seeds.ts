@@ -382,7 +382,7 @@ All project capabilities live under \`.work/\`: its own Bun workspace, apps, wor
 
 Use \`.work/app-data/<app-or-workflow>/\` for project-owned mutable data. Create \`.work/.gitignore\` on first use with \`/app-data/\`, \`node_modules/\`, and \`dist/\`; preserve existing ignore choices. Users may deliberately track ordinary data by changing these rules. Work does not manage database exports or replication. Desktop-wide credentials, chats, profiles and caches stay in host-managed storage.
 
-Workflow execution uses an immutable source snapshot. For persistent local data, use \`process.env.WORK_APP_DATA_DIR\` and a subdirectory for your capability. The local host supplies this location when supported; fail clearly if it is absent rather than silently saving durable data into a temporary deployment. Cloud execution does not automatically sync local app data. Frontend apps call workflows for database/filesystem access.
+Workflow execution uses an immutable source snapshot of \`.work/\` (without \`.work/app-data/\`): project files outside \`.work/\` are not in it, so read them through \`context.documents\`. For persistent local data, use \`process.env.WORK_APP_DATA_DIR\` and a subdirectory for your capability. The local host supplies this location when supported; fail clearly if it is absent rather than silently saving durable data into a temporary deployment. Cloud execution does not automatically sync local app data. Frontend apps call workflows for database/filesystem access.
 
 ## App settings versus project content
 
@@ -811,11 +811,23 @@ Never pass secrets to app code, return one from an app-callable workflow, or
 include one in an output. An app that needs a third-party API calls a
 workflow that holds the credential.
 
+## App-callable workflows run as the app
+
+A workflow the app calls runs as the person using the app, confined to what
+the app holds: the app itself, and that person's chats when it declares them
+(below). Nothing else carries over, so it holds no document grant even when the
+person can read the project: \`context.documents\` read and history are
+refused, and list and search come back empty. Project files outside \`.work/\`
+are not in its snapshot either. Give the workflow what the app shows: data in a
+module under \`.work/workflows/\`, state under \`WORK_APP_DATA_DIR\`, or a
+third-party API the workflow calls. A test run you start yourself runs as you
+and can read documents, so it passing does not show the app works.
+
 ## Reading the viewer's chats
 
-Apps reach chat sessions the same way they reach everything: through a
-workflow. Three lines make it work, and the person sees exactly what the
-app asked for.
+Apps reach chat sessions through a workflow, and only when the app declares
+it. Three lines make it work, and the person sees exactly what the app asked
+for.
 
 1. Declare it in the app's \`package.json\`. The declaration is frozen into
    every built version, so a version built without it never reads chats:
@@ -1208,7 +1220,8 @@ workflows, apps; read at the shared main) and the **project store**
 generated decks; versioned per write, stamped with who wrote it). What you
 can see is exactly what the caller's grants cover: search never returns a
 document the caller may not read. Everything below is scope-filtered at the
-source, so use it freely.
+source, so use it freely. A workflow an app calls runs as the app, which holds
+no document grant: read is refused there and list and search come back empty.
 
 ## Start with the primitives (usually enough)
 

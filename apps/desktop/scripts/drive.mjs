@@ -15,6 +15,7 @@
 //   drag <selector> <dx> <dy>  - drag an element by an offset
 //   window <maximize|unmaximize|minimize|restore> - window state (dev IPC)
 //   window setSize <w> <h>     - resize the window
+//   window zoom <factor>       - page zoom (1.3125 lays a 1680x1050 window out at 1280x800)
 //
 // Default test viewport: run `window maximize` before screenshotting.
 // Screenshots are in device pixels; divide by devicePixelRatio for CSS
@@ -245,7 +246,7 @@ switch (cmd) {
     const [action, w, h] = args;
     const result = await evalJs(
       `window.catamorphicDesktop.devWindow(${JSON.stringify(action)}${
-        w ? `, ${Number(w)}, ${Number(h)}` : ""
+        w ? `, ${[w, h].filter(Boolean).map(Number).join(", ")}` : ""
       })`,
     );
     console.log(JSON.stringify(result));
