@@ -1,4 +1,8 @@
-import type { ContextHandoffStrategy, Item } from "@catamorphic/agent-protocol";
+import type {
+  ContextHandoffStrategy,
+  InboundSender,
+  Item,
+} from "@catamorphic/agent-protocol";
 import type { DB } from "@catamorphic/db";
 import type { Kysely, Transaction } from "kysely";
 import { itemFromRow } from "./session-rows.js";
@@ -51,6 +55,8 @@ export async function buildContextHandoff(input: {
     )
     .where("kind", "in", [
       "user_message",
+      "inbound_message",
+      "task_notification",
       "assistant_message",
       "command",
       "file_change",
@@ -123,11 +129,19 @@ function renderTurn(ordinal: number, items: readonly Item[]): string {
   for (const item of items) {
     switch (item.kind) {
       case "user_message":
-        lines.push(`Person: ${truncate(item.text, LINE_MAX)}`);
+        lines.push(`Person: ${quoted(item.text, LINE_MAX)}`);
+        break;
+      case "inbound_message":
+        lines.push(`${senderLabel(item.from)}: ${quoted(item.text, LINE_MAX)}`);
+        break;
+      case "task_notification":
+        lines.push(
+          `Notification (${item.task.type} ${item.task.id}): ${quoted(item.summary, 400)}`,
+        );
         break;
       case "assistant_message":
         if (item.status === "completed" && item.text.trim())
-          lines.push(`Agent: ${truncate(item.text, LINE_MAX)}`);
+          lines.push(`Agent: ${quoted(item.text, LINE_MAX)}`);
         break;
       case "command":
         lines.push(
@@ -145,6 +159,26 @@ function renderTurn(ordinal: number, items: readonly Item[]): string {
     }
   }
   return [`Turn ${ordinal}`, ...lines].join("\n");
+}
+
+/** Who sent an inbound message, as the handoff names them. */
+function senderLabel(from: InboundSender): string {
+  switch (from.kind) {
+    case "agent":
+      return `Agent in session ${from.sessionId}`;
+    case "assistant":
+      return "The person's assistant";
+    case "workflow":
+      return `Workflow ${from.workflowName}`;
+  }
+}
+
+/**
+ * Someone's words in the handoff, their later lines indented: text inside
+ * a message can never start a line of its own ("Person: …").
+ */
+function quoted(value: string, max: number): string {
+  return truncate(value, max).replace(/\n/g, "\n  ");
 }
 
 function truncate(value: string, max: number): string {

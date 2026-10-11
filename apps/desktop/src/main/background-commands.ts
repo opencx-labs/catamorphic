@@ -1,3 +1,7 @@
+import type {
+  NotifiedTask,
+  TaskNotificationStatus,
+} from "@catamorphic/agent-protocol";
 import type { BackgroundCommandView } from "../shared/background-commands.js";
 import type { AgentTerminals } from "./terminal.js";
 
@@ -22,6 +26,11 @@ interface Tracked extends Omit<BackgroundCommandView, "kind" | "key"> {
   wakeOnExit: boolean;
   wakeOnOutput: RegExp | null;
   lastOutputWake: number;
+  /**
+   * Matching lines already reported, and when: printed again within a few
+   * minutes (an error in a loop), they wake nobody.
+   */
+  reported: Map<string, number>;
   /** Reads in progress: the agent is watching, so nothing needs waking. */
   reading: number;
 }
@@ -54,28 +63,35 @@ export interface BackgroundCommandsDeps {
   encode(command: string): string;
   changed(commands: BackgroundCommandView[]): void;
   pollMs?: number;
+  /** How often output matches may wake a chat, per command. */
+  outputWakeMs?: number;
 }
 
-/** Wakes a chat with a message about one of its commands. */
+/**
+ * Tells a chat's agent about one of its commands: a task notification
+ * (ADR 0217) that reaches its turn while it works, or wakes it.
+ */
 export type BackgroundNotifier = (input: {
   projectId: string;
   sessionId: string;
-  /** What the agent reads. */
-  content: string;
-  /** What the person sees in the chat, in plain words. */
-  notice: string;
+  task: NotifiedTask;
+  /** One line for the person, and the head of what the agent reads. */
+  summary: string;
+  /** What the agent reads after the summary: output, what changed. */
+  detail: string;
+  /** The terminal tab the person opens from the notification, if any. */
+  surfaceKey: string | null;
   idempotencyKey: string;
-  /**
-   * `message_only` records the news without starting a turn: the agent
-   * heard about this command moments ago and will read it next turn.
-   */
-  mode?: "queue" | "message_only";
 }) => Promise<void>;
 
 /** The model reads at most this much in one wake message. */
 const WAKE_OUTPUT_TAIL = 3_000;
 /** Output matches wake the chat at most this often per command. */
 const OUTPUT_WAKE_INTERVAL_MS = 15_000;
+/** How many reported matching lines a command remembers. */
+const REPORTED_LINES = 500;
+/** How long a reported line stays old news. */
+const REPORTED_FOR_MS = 5 * 60_000;
 /** How long start waits so quick failures come back in the same call. */
 const START_SETTLE_MS = 3_000;
 /** The longest read_background_output blocks. */
@@ -157,6 +173,7 @@ export class BackgroundCommands {
       wakeOnExit: input.wakeOnExit !== false,
       wakeOnOutput,
       lastOutputWake: 0,
+      reported: new Map(),
       reading: 0,
     };
     this.commands.set(id, tracked);
@@ -255,6 +272,7 @@ export class BackgroundCommands {
       const output = this.takeOutput(tracked);
       terminals.kill(tracked.id);
       tracked.status = "stopped";
+      tracked.reported.clear();
       tracked.endedAt = Date.now();
       this.changed();
       return { status: tracked.status, output };
@@ -324,13 +342,17 @@ export class BackgroundCommands {
     if (!terminals.isRunning(tracked.id) && shellExit === undefined) {
       // The person closed its terminal (or the chat was archived).
       tracked.status = "stopped";
+      tracked.reported.clear();
       tracked.endedAt = Date.now();
       this.changed();
       if (opts.wake)
         this.wake(tracked, {
           key: "closed",
-          notice: `${tracked.description} was stopped`,
-          content: `Background command ${tracked.id} (${tracked.description}) was stopped: its terminal was closed.`,
+          status: "stopped",
+          summary: `${tracked.description} was stopped`,
+          detail: `Its terminal was closed.\nCommand: ${tracked.command}`,
+          // Its terminal is gone: there is nothing to open.
+          surfaceKey: null,
         });
       return;
     }
@@ -357,6 +379,7 @@ export class BackgroundCommands {
     }
     if (!finished) return;
     tracked.status = "finished";
+    tracked.reported.clear();
     tracked.exitCode = exitCode;
     tracked.endedAt = Date.now();
     this.changed();
@@ -366,22 +389,14 @@ export class BackgroundCommands {
           terminals.readFrom(tracked.id, tracked.startOffset, RAW_READ_CAP),
         )
         .slice(-WAKE_OUTPUT_TAIL);
-      const outcome =
-        exitCode === null
-          ? "finished"
-          : exitCode === 0
-            ? "finished successfully"
-            : `failed with exit code ${exitCode}`;
+      const failed = exitCode !== null && exitCode !== 0;
       this.wake(tracked, {
         key: "exit",
-        // Just woken by its output: the end is news, not a new errand.
-        quiet: Date.now() - tracked.lastOutputWake < OUTPUT_WAKE_INTERVAL_MS,
-        notice:
-          exitCode && exitCode !== 0
-            ? `${tracked.description} failed (exit ${exitCode})`
-            : `${tracked.description} finished`,
-        content: [
-          `Background command ${tracked.id} (${tracked.description}) ${outcome}.`,
+        status: failed ? "failed" : "completed",
+        summary: failed
+          ? `${tracked.description} failed (exit ${exitCode})`
+          : `${tracked.description} finished`,
+        detail: [
           `Command: ${tracked.command}`,
           tail ? `Last output:\n${tail}` : "It printed nothing.",
         ].join("\n"),
@@ -391,16 +406,29 @@ export class BackgroundCommands {
 
   private wake(
     tracked: Tracked,
-    message: { key: string; notice: string; content: string; quiet?: boolean },
+    message: {
+      key: string;
+      status: TaskNotificationStatus;
+      summary: string;
+      detail: string;
+      surfaceKey?: string | null;
+    },
   ): void {
     // An archived chat no longer takes messages; its command ended with it.
     this.notify?.({
       projectId: tracked.projectId,
       sessionId: tracked.sessionId,
+      task: {
+        type: "background_command",
+        id: tracked.id,
+        title: tracked.description,
+        status: message.status,
+      },
+      summary: message.summary,
+      detail: message.detail,
+      surfaceKey:
+        message.surfaceKey === undefined ? tracked.key : message.surfaceKey,
       idempotencyKey: `background:${tracked.id}:${message.key}`,
-      notice: message.notice,
-      content: message.content,
-      ...(message.quiet ? { mode: "message_only" as const } : {}),
     }).catch(() => {});
   }
 
@@ -408,21 +436,50 @@ export class BackgroundCommands {
     const { terminals } = this.deps;
     const end = terminals.bufferLength(tracked.id) ?? 0;
     if (end <= tracked.scanOffset || !tracked.wakeOnOutput) return;
-    if (Date.now() - tracked.lastOutputWake < OUTPUT_WAKE_INTERVAL_MS) return;
-    const text = this.deps.modelOutput(
-      terminals.readFrom(tracked.id, tracked.scanOffset, RAW_READ_CAP),
+    if (
+      Date.now() - tracked.lastOutputWake <
+      (this.deps.outputWakeMs ?? OUTPUT_WAKE_INTERVAL_MS)
+    )
+      return;
+    // The read ends where the output does. Whole lines only: a line still
+    // being printed is matched once it ends, never as a fragment.
+    const raw = terminals.readFrom(
+      tracked.id,
+      tracked.scanOffset,
+      RAW_READ_CAP,
     );
-    tracked.scanOffset = end;
-    const lines = text
-      .split("\n")
-      .filter((line) => tracked.wakeOnOutput?.test(line));
+    const cut = raw.lastIndexOf("\n");
+    if (cut < 0) return;
+    tracked.scanOffset = end - (raw.length - cut - 1);
+    const text = this.deps.modelOutput(raw.slice(0, cut + 1));
+    // A line the agent heard about lately (an error printed in a loop) is
+    // not news: only lines it has not seen wake the chat.
+    const now = Date.now();
+    for (const [line, at] of tracked.reported)
+      if (now - at > REPORTED_FOR_MS) tracked.reported.delete(line);
+    const lines = [
+      ...new Set(
+        text
+          .split("\n")
+          .filter((line) => tracked.wakeOnOutput?.test(line))
+          .filter((line) => !tracked.reported.has(line.trim())),
+      ),
+    ];
     if (lines.length === 0) return;
-    tracked.lastOutputWake = Date.now();
+    for (const line of lines.slice(-REPORTED_LINES)) {
+      if (tracked.reported.size >= REPORTED_LINES) {
+        const [oldest] = tracked.reported.keys();
+        if (oldest !== undefined) tracked.reported.delete(oldest);
+      }
+      tracked.reported.set(line.trim(), now);
+    }
+    tracked.lastOutputWake = now;
     this.wake(tracked, {
       key: `output:${end}`,
-      notice: `${tracked.description} printed what you were waiting for`,
-      content: [
-        `Background command ${tracked.id} (${tracked.description}) printed output matching /${tracked.wakeOnOutput.source}/. It is still running.`,
+      status: "update",
+      summary: `${tracked.description} printed what you were waiting for`,
+      detail: [
+        `It printed lines matching /${tracked.wakeOnOutput.source}/ and is still running.`,
         `Matching lines:\n${lines.slice(-20).join("\n")}`,
       ].join("\n"),
     });

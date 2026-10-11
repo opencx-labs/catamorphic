@@ -5,7 +5,9 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChatTimeline, plainLine } from "./chat-timeline.js";
 import {
+  inbound,
   input,
+  notification,
   reply,
   timelineOf,
   toolCall,
@@ -55,6 +57,8 @@ describe("ChatTimeline queue editing", () => {
             {
               turn: turn("queued-1", 2, { status: "queued", attemptCount: 0 }),
               item: input("queued-1", "wrong words"),
+
+              joined: [],
             },
           ]}
           onHoldQueued={(id) => {
@@ -188,10 +192,14 @@ describe("ChatTimeline queue editing", () => {
             {
               turn: turn("held-1", 2, { status: "held", attemptCount: 0 }),
               item: input("held-1", "being edited elsewhere"),
+
+              joined: [],
             },
             {
               turn: turn("queued-2", 3, { status: "queued", attemptCount: 0 }),
               item: input("queued-2", "after it"),
+
+              joined: [],
             },
           ]}
         />,
@@ -271,5 +279,158 @@ describe("note step labels", () => {
     expect(plainLine("An _emphasised_ word and snake_case_name stay")).toBe(
       "An emphasised word and snake_case_name stay",
     );
+  });
+});
+
+describe("ChatTimeline inputs that are not the person's (ADR 0217)", () => {
+  let container: HTMLDivElement;
+  let root: Root;
+
+  beforeEach(() => {
+    Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", true);
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) =>
+      window.setTimeout(() => callback(performance.now()), 0),
+    );
+    vi.stubGlobal("cancelAnimationFrame", (handle: number) =>
+      window.clearTimeout(handle),
+    );
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+    container = document.createElement("div");
+    document.body.append(container);
+    root = createRoot(container);
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    container.remove();
+    vi.unstubAllGlobals();
+    Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", false);
+  });
+
+  it("reads them as rows, never as the person's bubble, each opening to its source", async () => {
+    const opened: string[] = [];
+    const notified = notification(
+      "n1",
+      "t1",
+      "Start the worker failed (exit 1)",
+      {
+        task: {
+          type: "background_command",
+          id: "cmd-1",
+          title: "Start the worker",
+          status: "failed",
+        },
+      },
+    );
+    const turns = timelineOf({
+      turns: [
+        turn("t1", 1, { inputItemId: "n1" }),
+        turn("t2", 2, { inputItemId: "m1" }),
+      ],
+      items: [
+        notified,
+        reply("r1", "t1", "The worker needs a Node runtime."),
+        inbound("m1", "t2", "Review PR #12\nIt touches billing."),
+        reply("r2", "t2", "Reviewed."),
+      ],
+    });
+    await act(async () => {
+      root.render(
+        <ChatTimeline
+          turns={turns}
+          onLinkClick={(url) => {
+            opened.push(url);
+          }}
+        />,
+      );
+    });
+    expect(container.querySelector("[data-user-message]")).toBeNull();
+    const row = container.querySelector("[data-testid=chat-task-notification]");
+    expect(row?.getAttribute("data-task-status")).toBe("failed");
+    expect(row?.textContent).toContain("Start the worker failed (exit 1)");
+    await act(async () => row?.querySelector("button")?.click());
+    await act(async () => row?.querySelector("a")?.click());
+    expect(opened).toEqual(["terminal:worker"]);
+    const message = container.querySelector(
+      "[data-testid=chat-inbound-message]",
+    );
+    expect(message?.getAttribute("data-sender-kind")).toBe("workflow");
+    expect(message?.textContent).toContain("Pr review");
+    expect(message?.textContent).toContain("Review PR #12");
+  });
+
+  it("folds a notification that reached the working turn into its steps", async () => {
+    const turns = timelineOf({
+      turns: [turn("t1", 1)],
+      items: [
+        input("t1", "Start the worker and fix what breaks"),
+        toolCall("c1", "t1"),
+        notification(
+          "n1",
+          "t1",
+          "Start the worker printed what you were waiting for",
+          {
+            dispatch: "steer",
+          },
+        ),
+        reply("r1", "t1", "Fixed the debugger flag."),
+      ],
+    });
+    await act(async () => {
+      root.render(<ChatTimeline turns={turns} />);
+    });
+    expect(
+      container.querySelector("[data-testid=chat-task-notification]"),
+    ).toBeNull();
+    const step = container.querySelector('[data-step-kind="notification"]');
+    expect(step?.textContent).toContain(
+      "Start the worker printed what you were waiting for",
+    );
+  });
+
+  it("queues them as one line that cannot be edited", async () => {
+    await act(async () => {
+      root.render(
+        <ChatTimeline
+          turns={[]}
+          activity="Working"
+          queue={[
+            {
+              turn: turn("q1", 2, {
+                status: "queued",
+                attemptCount: 0,
+                inputItemId: "n1",
+              }),
+              item: notification(
+                "n1",
+                "q1",
+                "Start the worker printed what you were waiting for",
+              ),
+              joined: [notification("n2", "q1", "Start the worker finished")],
+            },
+          ]}
+          onEditQueued={() => true}
+          onCancelQueued={() => true}
+        />,
+      );
+    });
+    const queued = container.querySelector("[data-testid=chat-queued-input]");
+    expect(queued?.textContent).toContain(
+      "Start the worker printed what you were waiting for",
+    );
+    expect(queued?.textContent).toContain("and 1 more");
+    expect(
+      container.querySelector('[aria-label="Edit queued message"]'),
+    ).toBeNull();
+    expect(
+      container.querySelector('[aria-label="Remove from queue"]'),
+    ).not.toBeNull();
   });
 });

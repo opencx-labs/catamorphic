@@ -2,6 +2,7 @@ import {
   isSettledTurnStatus,
   type RuntimeRequest,
   type SessionStreamMessage,
+  type TaskNotificationStatus,
 } from "@catamorphic/agent-protocol";
 
 interface SessionRef {
@@ -21,10 +22,19 @@ export interface SessionNotesAccess {
       onClose: (reason: "slow" | "ended") => void;
     },
   ): Promise<() => void>;
-  /** A system message for the follower's agent, shown as one quiet line. */
+  /**
+   * A task notification for the follower's agent about the chat it
+   * follows (ADR 0217): one line for the person, the notes for the agent.
+   */
   deliver(
     follower: SessionRef,
-    input: { content: string; notice: string; idempotencyKey: string },
+    input: {
+      followed: SessionRef & { title: string };
+      status: TaskNotificationStatus;
+      summary: string;
+      detail: string;
+      idempotencyKey: string;
+    },
   ): Promise<unknown>;
 }
 
@@ -59,8 +69,8 @@ interface Follow {
 /**
  * Sessions following others' progress (ADR 0216). What a followed session
  * writes along the way reaches the follower a few notes at a time as one
- * system message, which its agent can pass on in its own words; the
- * person sees one quiet line. A note is an assistant message more work
+ * task notification (ADR 0217), which its agent can pass on in its own
+ * words; the person sees one row that opens to the notes. A note is an assistant message more work
  * follows in the same turn. A turn's last message is its result: a
  * session the follower delegated delivers it itself, so its turn's end
  * drops what has not been passed on; any other followed session's end
@@ -211,8 +221,10 @@ export class SessionNotes {
     const asked = askedOf(follow, request);
     await this.access
       .deliver(follow.follower, {
-        content: `${before}${asked.content}`,
-        notice: asked.notice,
+        followed: { ...follow.followed, title: follow.title },
+        status: "needs_input",
+        summary: asked.notice,
+        detail: `${before}${asked.content}`,
         idempotencyKey: `request:${request.id}`,
       })
       .catch((cause: unknown) => {
@@ -240,8 +252,10 @@ export class SessionNotes {
       : `${follow.title}: ${notes.length === 1 ? "an update" : `${notes.length} updates`}`;
     await this.access
       .deliver(follow.follower, {
-        content,
-        notice,
+        followed: { ...follow.followed, title: follow.title },
+        status: result ? "completed" : "update",
+        summary: notice,
+        detail: content,
         idempotencyKey: `notes:${follow.followed.sessionId}:${last.id}`,
       })
       .catch((cause: unknown) => {

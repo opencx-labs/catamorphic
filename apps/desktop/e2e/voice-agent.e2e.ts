@@ -74,14 +74,17 @@ const helpers = `
     const { url } = await api.getServerState();
     const response = await fetch(url + '/api/projects/' + ref.projectId + '/agent/sessions/' + ref.sessionId + path);
     const body = await response.json();
-    // A chat's transcript is its snapshot's message items (ADR 0197).
+    // A chat's transcript is its snapshot's message items (ADR 0197): the
+    // person's, others' (the assistant's among them) and the task
+    // notifications it got (ADR 0217).
+    const roles = { user_message: 'user', inbound_message: 'inbound', assistant_message: 'assistant', task_notification: 'notification' };
     if (body?.snapshot)
       body.messages = [...body.snapshot.items]
-        .filter((item) => item.kind === 'user_message' || item.kind === 'assistant_message')
+        .filter((item) => item.kind in roles)
         .sort((a, b) => a.position - b.position)
         .map((item) => ({
-          role: item.kind === 'user_message' ? 'user' : 'assistant',
-          content: item.text,
+          role: roles[item.kind],
+          content: item.kind === 'task_notification' ? item.summary : item.text,
         }));
     return body;
   };
@@ -278,10 +281,12 @@ describe("voice", () => {
     expect(children.map((child) => child.session.agentId)).toEqual([
       detail.agentId.slice("work-assistant:".length),
     ]);
-    // Its result comes back to the assistant on its own, which answers.
+    // Its result comes back to the assistant on its own, as a task
+    // notification (ADR 0217), which it answers.
     await runWait(
       `const detail = await session(${JSON.stringify(first)});
-       return detail.messages.some((m) => m.role === 'assistant' && m.content.startsWith('You said:'));`,
+       return detail.messages.some((m) => m.role === 'notification' && m.content.endsWith(' finished')) &&
+         detail.messages.some((m) => m.role === 'assistant' && m.content.startsWith('Read it: '));`,
       {
         timeoutMs: 30_000,
         label: "the delegated result answered in the assistant's chat",
@@ -438,7 +443,7 @@ describe("voice", () => {
     await talk(UTTERANCES[2] ?? "", "Told Release notes.");
     await runWait(
       `const detail = await session(${JSON.stringify(mine)});
-       return detail.messages?.some((m) => m.role === 'user' && m.content === 'add a changelog entry');`,
+       return detail.messages?.some((m) => m.role === 'inbound' && m.content === 'add a changelog entry');`,
       { label: "the person's own chat got the assistant's message" },
     );
     await run(`mic().click(); return true;`);
@@ -447,7 +452,7 @@ describe("voice", () => {
     });
   }, 120_000);
 
-  it("hears a session's notes as it works, as one quiet line", async () => {
+  it("hears a session's notes as it works, as one task notification", async () => {
     const { assistantSession: ref } = await run<{ assistantSession: Ref }>(
       `return api.getPrefs();`,
     );
@@ -457,8 +462,8 @@ describe("voice", () => {
     const note = await runWait<{ text: string; notice: unknown }>(
       `const detail = await session(${JSON.stringify(ref)});
        const item = detail.snapshot.items.find((item) =>
-         item.kind === 'user_message' && item.author.kind === 'system' && item.author.code === 'session_notes');
-       return item && { text: item.text, notice: item.metadata.notice };`,
+         item.kind === 'task_notification' && item.task.type === 'followed_session');
+       return item && { text: item.detail, notice: item.summary };`,
       {
         timeoutMs: 30_000,
         label: "the session's notes in the assistant's chat",
@@ -471,12 +476,12 @@ describe("voice", () => {
     // Its result comes the usual way, and the notes never repeat it.
     await runWait(
       `const detail = await session(${JSON.stringify(ref)});
-       return detail.snapshot.items.some((item) => item.kind === 'user_message' && item.text.includes('Two pages are stale.'));`,
+       return detail.snapshot.items.some((item) => item.kind === 'task_notification' && item.detail.includes('Two pages are stale.'));`,
       { timeoutMs: 30_000, label: "the session's result delivered" },
     );
     const notes = await run<number>(
       `const detail = await session(${JSON.stringify(ref)});
-       return detail.snapshot.items.filter((item) => item.kind === 'user_message' && item.author.code === 'session_notes').length;`,
+       return detail.snapshot.items.filter((item) => item.kind === 'task_notification' && item.task.type === 'followed_session').length;`,
     );
     expect(notes).toBe(1);
     await runWait(`return !(await session(${JSON.stringify(ref)})).running;`, {
@@ -502,7 +507,7 @@ describe("voice", () => {
     const asked = await runWait<string>(
       `const detail = await session(${JSON.stringify(ref)});
        return detail.snapshot.items.find((item) =>
-         item.kind === 'user_message' && item.metadata?.notice === 'Layout: a question')?.text;`,
+         item.kind === 'task_notification' && item.summary === 'Layout: a question')?.detail;`,
       {
         timeoutMs: 30_000,
         label: "the session's question in the assistant's chat",
@@ -516,7 +521,7 @@ describe("voice", () => {
     // turn, with the question joining it, so any reply after it counts.
     await runWait(
       `const detail = await session(${JSON.stringify(ref)});
-       const asked = detail.snapshot.items.find((item) => item.metadata?.notice === 'Layout: a question');
+       const asked = detail.snapshot.items.find((item) => item.kind === 'task_notification' && item.summary === 'Layout: a question');
        return !detail.running && detail.snapshot.items.some((item) =>
          item.kind === 'assistant_message' && item.position > asked.position);`,
       {
@@ -585,7 +590,7 @@ describe("voice", () => {
     );
     await runWait(
       `const detail = await session(${JSON.stringify(docs)});
-       return detail.messages?.some((m) => m.role === 'user' && m.content === 'Keep the new ones.');`,
+       return detail.messages?.some((m) => m.role === 'inbound' && m.content === 'Keep the new ones.');`,
       { timeoutMs: 30_000, label: "the answer passed back to it" },
     );
     await run(`mic().click(); return true;`);

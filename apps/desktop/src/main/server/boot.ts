@@ -631,19 +631,22 @@ export async function startEmbeddedServer(
     tenantId: DESKTOP_TENANT_ID,
     externalUserId: DESKTOP_USER_ID,
   };
-  // A finished background command wakes its chat (ADR 0155): a system
-  // message the agent reads, with a plain notice for the person.
+  // A background command or a watch tells its chat's agent how it went
+  // (ADR 0155): a task notification (ADR 0217) that reaches the agent's
+  // turn while it works, or wakes it, and opens to its terminal.
   workspaceBridge?.setBackgroundNotifier(async (input) => {
-    await catamorphic.core.agentSessions?.deliver(
+    await catamorphic.core.agentSessions?.notify(
       desktopIdentity,
       input.projectId,
       input.sessionId,
       {
-        content: input.content,
-        author: { kind: "system", code: "background_command" },
-        mode: input.mode ?? "queue",
+        task: input.task,
+        summary: input.summary,
+        detail: input.detail,
+        source: input.surfaceKey
+          ? { kind: "surface", key: input.surfaceKey }
+          : null,
         idempotencyKey: input.idempotencyKey,
-        metadata: { notice: input.notice },
       },
     );
   });
@@ -815,17 +818,28 @@ export async function startEmbeddedServer(
       if (!service) throw new Error("Agent sessions are not configured");
       return service.subscribe(desktopIdentity, projectId, sessionId, input);
     },
-    deliver: async (follower, { content, notice, idempotencyKey }) =>
-      catamorphic.core.agentSessions?.deliver(
+    deliver: async (follower, input) =>
+      catamorphic.core.agentSessions?.notify(
         desktopIdentity,
         follower.projectId,
         follower.sessionId,
         {
-          content,
-          author: { kind: "system", code: "session_notes" },
-          mode: "steer",
-          idempotencyKey,
-          metadata: { notice },
+          task: {
+            type: "followed_session",
+            id: input.followed.sessionId,
+            title: input.followed.title,
+            status: input.status,
+          },
+          summary: input.summary,
+          detail: input.detail,
+          source: {
+            kind: "session",
+            sessionId: input.followed.sessionId,
+            ...(input.followed.projectId === follower.projectId
+              ? {}
+              : { projectId: input.followed.projectId }),
+          },
+          idempotencyKey: input.idempotencyKey,
         },
       ),
   });
@@ -873,6 +887,11 @@ export async function startEmbeddedServer(
             : [];
         return service.deliver(desktopIdentity, projectId, sessionId, {
           ...input,
+          // Named with its project, so the chat it came from opens.
+          author:
+            input.author.kind === "agent" && authorProjectId !== projectId
+              ? { ...input.author, projectId: authorProjectId }
+              : input.author,
           metadata: { causation },
         });
       },

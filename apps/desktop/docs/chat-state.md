@@ -30,6 +30,23 @@ the held message.
 Retrying a failed execution is distinct from retrying delivery. Do not reconstruct
 execution from a pending fetch or optimistic transcript entries.
 
+## Who wrote an input
+
+Only a person's message is a `user_message` (ADR 0217). Another agent's,
+the person's assistant's and a workflow's words are `inbound_message` items
+with a `from`; Work's reports on tasks an agent started (background
+commands, watches, subsessions, followed chats) are `task_notification`
+items with the task, a `summary`, the `detail` the agent read and a `source`.
+`sessionTimeline` gives them `inbound` and `notifications` entries; a
+notification steered into a working turn is one of its steps instead.
+Timelines render both through the shared `session-input` rows, whose
+expanded details end in a link to the source; hosts map sources they own
+(a chat in another project) with `sourceHref` and fall back to the default
+`session:`, `run:` and surface keys. Queues edit only `user_message` turns.
+Never key behavior meant for the person (undo, recall, edits) on anything
+but `user_message`; a chat's provisional title comes from a person's or an
+inbound message, never a notification.
+
 ## Composer and resource integration
 
 Every paste/drop/picker operation yields a visible attachment or actionable error.

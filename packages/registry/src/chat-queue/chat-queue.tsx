@@ -24,17 +24,21 @@ const QUEUE_COLLAPSE_THRESHOLD = 2;
 
 /** The text a queued message was sent with, without attachment markers. */
 function editableText(queued: QueuedMessage): string {
-  return (queued.item?.text ?? "").split(ATTACHMENT_MARKER).join("");
+  return queued.item?.kind === "user_message"
+    ? queued.item.text.split(ATTACHMENT_MARKER).join("")
+    : "";
 }
 
 /**
- * The session's turn queue (ADR 0197), rendered at the end of the chat as
- * ghost bubbles: dashed, right-aligned, each editable (which holds the
- * turn so it does not start under the cursor), cancellable, or promotable
- * ("send now" stops the running turn and runs this one). Long queues
- * collapse behind a "N queued" toggle. Callbacks take the turn id: wire
- * them to `useAgentChat`'s `editQueued`, `cancelQueued`, `sendQueuedNow`
- * and `holdQueued`.
+ * The session's turn queue (ADR 0197), rendered at the end of the chat.
+ * The person's own messages are ghost bubbles: dashed, right-aligned, each
+ * editable (which holds the turn so it does not start under the cursor),
+ * cancellable, or promotable ("send now" stops the running turn and runs
+ * this one). What another agent, a workflow or Work queued (ADR 0217) is
+ * one quiet line on the left, withdrawn or run now but never edited;
+ * `renderInput` draws it. Long queues collapse behind a "N queued" toggle.
+ * Callbacks take the turn id: wire them to `useAgentChat`'s `editQueued`,
+ * `cancelQueued`, `sendQueuedNow` and `holdQueued`.
  */
 export function ChatQueue({
   queue,
@@ -44,6 +48,7 @@ export function ChatQueue({
   onHold,
   renderContent,
   renderAttachments,
+  renderInput,
   Hint = DefaultHint,
 }: {
   queue: QueuedMessage[];
@@ -53,6 +58,8 @@ export function ChatQueue({
   onHold?: (turnId: string | null) => ActionResult;
   renderContent?: (queued: QueuedMessage) => ReactNode;
   renderAttachments?: (queued: QueuedMessage) => ReactNode;
+  /** One line for a waiting turn that is not the person's own message. */
+  renderInput?: (queued: QueuedMessage) => ReactNode;
   Hint?: ComponentType<{ label: string; children: ReactNode }>;
 }) {
   const [expanded, setExpanded] = useState(false);
@@ -61,19 +68,30 @@ export function ChatQueue({
   const hidden = queue.length - visible.length;
   return (
     <div className="flex flex-col items-end gap-1.5" data-testid="chat-queue">
-      {visible.map((queued) => (
-        <QueuedBubble
-          key={queued.turn.id}
-          queued={queued}
-          onEdit={onEdit}
-          onCancel={onCancel}
-          onSendNow={onSendNow}
-          onHold={onHold}
-          renderContent={renderContent}
-          renderAttachments={renderAttachments}
-          Hint={Hint}
-        />
-      ))}
+      {visible.map((queued) =>
+        queued.item?.kind === "user_message" ? (
+          <QueuedBubble
+            key={queued.turn.id}
+            queued={queued}
+            onEdit={onEdit}
+            onCancel={onCancel}
+            onSendNow={onSendNow}
+            onHold={onHold}
+            renderContent={renderContent}
+            renderAttachments={renderAttachments}
+            Hint={Hint}
+          />
+        ) : (
+          <QueuedInput
+            key={queued.turn.id}
+            queued={queued}
+            onCancel={onCancel}
+            onSendNow={onSendNow}
+            renderInput={renderInput}
+            Hint={Hint}
+          />
+        ),
+      )}
       {queue.length > QUEUE_COLLAPSE_THRESHOLD && (
         <button
           type="button"
@@ -88,6 +106,85 @@ export function ChatQueue({
           />
         </button>
       )}
+    </div>
+  );
+}
+
+/** A waiting turn someone other than the person queued: one quiet line. */
+function QueuedInput({
+  queued,
+  onCancel,
+  onSendNow,
+  renderInput,
+  Hint = DefaultHint,
+}: {
+  queued: QueuedMessage;
+  onCancel?: (turnId: string) => ActionResult;
+  onSendNow?: (turnId: string) => ActionResult;
+  renderInput?: (queued: QueuedMessage) => ReactNode;
+  Hint?: ComponentType<{ label: string; children: ReactNode }>;
+}) {
+  const turnId = queued.turn.id;
+  const [busy, setBusy] = useState(false);
+  const act = async (action?: (turnId: string) => ActionResult) => {
+    if (!action || busy) return;
+    setBusy(true);
+    try {
+      await action(turnId);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div
+      className="group/queued flex min-w-0 max-w-[85%] items-center gap-2 self-start rounded-lg border border-dashed border-border px-2 py-1 text-xs text-fg-muted"
+      data-testid="chat-queued-input"
+      data-turn-id={turnId}
+    >
+      <span className="min-w-0 flex-1">
+        {renderInput ? (
+          renderInput(queued)
+        ) : (
+          <span className="block truncate">
+            {queued.item?.kind === "task_notification"
+              ? queued.item.summary
+              : (queued.item?.text ?? "Carry on where it stopped")}
+          </span>
+        )}
+      </span>
+      <span className="shrink-0 text-[10px] uppercase tracking-wider text-fg-faint">
+        {queued.turn.status === "held" ? "Held" : "Queued"}
+      </span>
+      <span className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity duration-150 group-hover/queued:opacity-100 group-focus-within/queued:opacity-100">
+        {onCancel && (
+          <Hint label="Remove from queue">
+            <button
+              type="button"
+              onClick={() => void act(onCancel)}
+              disabled={busy}
+              className="grid size-5 cursor-pointer place-items-center rounded text-fg-faint hover:text-danger"
+              aria-label="Remove from queue"
+              data-testid="chat-queued-delete"
+            >
+              <Trash2 className="size-3" />
+            </button>
+          </Hint>
+        )}
+        {onSendNow && (
+          <Hint label="Run now (stops the agent)">
+            <button
+              type="button"
+              onClick={() => void act(onSendNow)}
+              disabled={busy}
+              className="grid size-5 cursor-pointer place-items-center rounded text-fg-faint hover:text-accent"
+              aria-label="Run now"
+              data-testid="chat-queued-send-now"
+            >
+              <Zap className="size-3" />
+            </button>
+          </Hint>
+        )}
+      </span>
     </div>
   );
 }
@@ -113,7 +210,8 @@ function QueuedBubble({
 }) {
   const turnId = queued.turn.id;
   const text = editableText(queued);
-  const attachments = queued.item?.attachments ?? [];
+  const attachments =
+    queued.item?.kind === "user_message" ? queued.item.attachments : [];
   const savingRef = useRef(false);
   const [saving, setSaving] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -259,7 +357,7 @@ function QueuedBubble({
             {renderContent
               ? renderContent(queued)
               : messageWithAttachmentNames(
-                  queued.item?.text ?? "",
+                  queued.item?.kind === "user_message" ? queued.item.text : "",
                   attachments,
                 )}
           </div>

@@ -486,7 +486,7 @@ describe("Slack from project code (#117)", () => {
       .selectFrom("agent_items")
       .select("text")
       .where("session_id", "=", chat?.id ?? "")
-      .where("kind", "=", "user_message")
+      .where("kind", "=", "inbound_message")
       .execute();
     expect(delivered).toHaveLength(2);
     // Nothing more arrives later.

@@ -1,5 +1,8 @@
 import { randomUUID } from "node:crypto";
-import type { SessionMessageAuthor } from "@catamorphic/agent-protocol";
+import {
+  messageInput,
+  type SessionMessageAuthor,
+} from "@catamorphic/agent-protocol";
 import type { DB, Json, JsonObject } from "@catamorphic/db";
 import { getTracer, withSpan } from "@catamorphic/otel";
 import { type Kysely, sql } from "kysely";
@@ -325,8 +328,10 @@ export class SessionActionsService {
                 hostId: session.authorityHostId,
                 revision: session.authorityRevision,
               },
-              author: input.author,
-              content: actionLabel(input.operation),
+              input: messageInput({
+                author: input.author,
+                text: actionLabel(input.operation),
+              }),
               mode: "message_only",
               idempotencyKey: `action:${action.id}`,
               metadata: {
@@ -511,13 +516,13 @@ export class SessionActionsService {
                 })
                 .where("id", "=", args.sessionId)
                 .execute();
-            await this.sessions.deliverWithin(trx, {
+            await this.sessions.recordActionWithin(trx, {
               sessionId: args.sessionId,
-              content,
-              author: input.author,
-              mode: "message_only",
-              idempotencyKey: sourceActionId,
-              metadata: {
+              actionId: action.id,
+              status: "completed",
+              actor: input.author,
+              text: content,
+              data: {
                 sessionAction: {
                   id: action.id,
                   operation: input.operation,
@@ -561,13 +566,13 @@ export class SessionActionsService {
               .returning("id")
               .executeTakeFirst();
             if (!failed) return;
-            await this.sessions.deliverWithin(trx, {
+            await this.sessions.recordActionWithin(trx, {
               sessionId: args.sessionId,
-              content: `${actionLabel(input.operation)} failed: ${message}`,
-              author: input.author,
-              mode: "message_only",
-              idempotencyKey: `action:${action.id}:failure`,
-              metadata: {
+              actionId: action.id,
+              status: "failed",
+              actor: input.author,
+              text: `${actionLabel(input.operation)} failed: ${message}`,
+              data: {
                 sessionAction: {
                   id: action.id,
                   operation: input.operation,

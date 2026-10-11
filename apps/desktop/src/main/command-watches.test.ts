@@ -11,7 +11,12 @@ function harness(options: { saved?: CommandWatch[] } = {}) {
   const results: CheckResult[] = [];
   const runs: string[] = [];
   let saved: CommandWatch[] = options.saved ?? [];
-  const woken: Array<{ content: string; notice: string; key: string }> = [];
+  const woken: Array<{
+    content: string;
+    notice: string;
+    key: string;
+    task: { type: string; id: string; status: string };
+  }> = [];
   let failWake = false;
   const watches = new CommandWatches({
     run: async ({ command }) => {
@@ -27,9 +32,10 @@ function harness(options: { saved?: CommandWatch[] } = {}) {
   void watches.setNotifier(async (input) => {
     if (failWake) throw new Error("archived");
     woken.push({
-      content: input.content,
-      notice: input.notice,
+      content: input.detail,
+      notice: input.summary,
       key: input.idempotencyKey,
+      task: input.task,
     });
   });
   return {
@@ -97,6 +103,10 @@ describe("CommandWatches", () => {
     expect(h.woken[0]?.content).toContain("succeeded on check 3");
     expect(h.woken[0]?.content).toContain("healthy");
     expect(h.woken[0]?.notice).toBe("Deploy is live: done");
+    expect(h.woken[0]?.task).toMatchObject({
+      type: "command_watch",
+      status: "completed",
+    });
     expect(h.saved()).toEqual([]);
 
     await vi.advanceTimersByTimeAsync(60_000);
@@ -160,6 +170,7 @@ describe("CommandWatches", () => {
     expect(h.woken).toHaveLength(1);
     expect(h.woken[0]?.content).toContain("expired after 3 checks");
     expect(h.woken[0]?.notice).toBe("Stopped watching: Deploy is live");
+    expect(h.woken[0]?.task.status).toBe("stopped");
     expect(h.saved()).toEqual([]);
   });
 

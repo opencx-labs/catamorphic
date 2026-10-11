@@ -4,29 +4,8 @@ import {
   buildAgentSystemPrompt,
   checkpointMessage,
   liveStatusLine,
-  modelVisibleDelivery,
   parsePorcelain,
 } from "../services/agent-sessions-service.js";
-
-describe("modelVisibleDelivery", () => {
-  it("preserves human text and labels non-user input for the model", () => {
-    expect(
-      modelVisibleDelivery("Please continue", {
-        kind: "user",
-        externalUserId: "alice",
-      }),
-    ).toBe("Please continue");
-    expect(
-      modelVisibleDelivery("Checks failed", {
-        kind: "watcher",
-        watcherId: "watcher-1",
-        runId: "run-1",
-      }),
-    ).toBe(
-      "[Catamorphic watcher message from watcher-1, run run-1. This message was not written by the user.]\n\nChecks failed",
-    );
-  });
-});
 
 describe("liveStatusLine", () => {
   it("turns an agent's own words into one calm line", () => {
@@ -158,15 +137,13 @@ describe("buildAgentSystemPrompt", () => {
 });
 
 describe("checkpointMessage", () => {
-  it("names a turn by its request, never the host's provenance header", () => {
+  it("names a turn by the first line of its request", () => {
     expect(checkpointMessage("Fix the login page\nIt 500s")).toBe(
       "Agent: Fix the login page",
     );
-    expect(
-      checkpointMessage(
-        "[Catamorphic system message: background_command. This message was not written by the user.]\n\nWatch watch-1 (Deploy is live) succeeded on check 3.",
-      ),
-    ).toBe("Agent: Watch watch-1 (Deploy is live) succeeded on check 3.");
+    expect(checkpointMessage("  Deploy is live: done")).toBe(
+      "Agent: Deploy is live: done",
+    );
     expect(checkpointMessage("")).toBe("Agent checkpoint");
   });
 });
