@@ -9,8 +9,8 @@ import type {
  * A turn reads as its input, then its work, then its answer (ADR 0197).
  * The agent may write notes along the way: each reply in a turn carries
  * the steps that led to it, and the last one is the answer. Two display
- * choices decide how that work reads (see `chatWorkLive` /
- * `chatWorkSettled`):
+ * choices, the host's to offer (`ChatTimeline`'s `workDisplay`), decide how
+ * that work reads:
  *
  * - while the turn runs: every note with its steps open, only the latest
  *   note (earlier ones folded into its steps), or every note with its

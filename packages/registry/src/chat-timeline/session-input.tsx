@@ -524,7 +524,7 @@ function InputRow({
                     <a
                       key={link.href}
                       href={link.href}
-                      className="rounded text-accent underline-offset-2 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+                      className="rounded text-accent underline-offset-2 hover:underline"
                       onClick={(event) => {
                         if (!onOpen) return;
                         event.preventDefault();

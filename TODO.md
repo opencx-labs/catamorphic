@@ -84,12 +84,6 @@
   directory, add/modify/delete badges, click-through to the editor diff.
   The data is already persisted per assistant message
   (`metadata.changedFiles`, with `path` + `kind`).
-- **Port chat-timeline enhancements to the registry copy.** The desktop's
-  `chat-timeline.tsx` gained the collapsed per-turn step log (tool calls /
-  commands / file edits with expandable payloads and MCP connector icons),
-  dropped the touched-files chips, and gates the jump-to-previous arrow on
-  scrollability. `packages/registry/src/chat-timeline` is the installable
-  source of truth and still has the old behavior.
 - **ACP harness.** Project agent definitions (ADR 0050) accept
   `kind: "acp"` today but resolve it to a fail-fast "not built yet"
   entry. Build the real ACP client harness: a `HarnessAdapter` (ADR 0198)
@@ -226,9 +220,7 @@
   vocabulary (parser in pwa+desktop, builders in server+pairing), and
   the CDP e2e client (desktop and pwa harnesses); (d) drive the pwa e2e
   against `buildStockServer` with the fake agent instead of the
-  hand-written `scripts/dev-server.mjs` wire fake; (e) memoize the pwa
-  chat timeline (React.memo rows, useMemo turn steps) - it re-parses
-  every message's tool payloads on each 500ms poll; (f) desktop-side
+  hand-written `scripts/dev-server.mjs` wire fake; (f) desktop-side
   composer lock on a forked session (the PWA locks; the desktop only
   shows the marker row).
 - **Remote machines for agents (t3-code-inspired).** t3 runs agents on

@@ -7,18 +7,13 @@ import type {
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import {
-  InboundMessageRow,
-  TaskNotificationRows,
-} from "./catamorphic/session-input.js";
+import { InboundMessageRow, TaskNotificationRows } from "./session-input.js";
 
 let container: HTMLDivElement;
 let root: Root;
 
 beforeEach(() => {
-  (
-    globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
-  ).IS_REACT_ACT_ENVIRONMENT = true;
+  Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", true);
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);

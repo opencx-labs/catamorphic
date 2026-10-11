@@ -78,7 +78,14 @@ describe("design lint", () => {
   });
   it("native title tooltips only shrink", () => {
     // Debt: DESIGN.md wants ShortcutHint everywhere. Lower when you convert one.
-    expect(count(/\stitle=\{|\stitle="/g).length).toBeLessThanOrEqual(66);
+    // Registry mirrors under components/catamorphic fall back to the native
+    // title only when a host gives no hint; the desktop passes ShortcutHint.
+    const titles = sources()
+      .filter(({ file }) => !file.startsWith("components/catamorphic/"))
+      .flatMap(({ file, text }) =>
+        [...text.matchAll(/\stitle=\{|\stitle="/g)].map(() => file),
+      );
+    expect(titles.length).toBeLessThanOrEqual(66);
   });
   it("focus rings come from the ring tokens, never a private recipe", () => {
     // One ring (DESIGN.md "Focus rings"): the global :focus-visible rule or

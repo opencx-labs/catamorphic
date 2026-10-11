@@ -230,5 +230,6 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0215](0215-a-chats-own-worktree.md) | A chat's own worktree: chosen by the person, set up, put away, brought back | Accepted (refines 0045, 0063, 0208) |
 | [0216](0216-voice-local-speech-in-any-chat-and-the-assistant.md) | Voice: local speech, in any chat, and the assistant | Proposed (experimental; session notes are task notifications by 0217) |
 | [0217](0217-only-people-write-user-messages.md) | Only people write user messages: inbound messages and task notifications | Accepted (amends 0074, 0155, 0197, 0216; delivery fields typed by 0219) |
+| [0218](0218-one-chat-timeline.md) | One chat timeline: the registry, installed as copies | Accepted |
 | [0219](0219-typed-deliveries.md) | Deliveries are typed: no free-form input metadata, mailbox inputs or actions | Accepted (amends 0090, 0199, 0217) |
 | [0220](0220-sign-in-popups-answer-passkeys.md) | Sign-in popups answer passkeys in a sheet of their own | Accepted (amends 0201, 0185) |

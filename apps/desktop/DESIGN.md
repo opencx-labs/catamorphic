@@ -332,7 +332,7 @@ editor or app frame moves over it rather than animating its size.
 | `dock-float` / `dock-rail` groups (a floating chat and the bubble strip gliding while the content settles, view transition) | 200ms | within the content's 300ms fade; a chat tab (`dock-tab`) fades in place with `content-fade-out` / `content-fade-in` from its own place |
 | `bubble-ask` (agent question arrival) | 280ms | — (one-shot nudge on a persistent bubble; no exit to pair) |
 | `input-recall-{up,down}-{a,b}` (composer ↑/↓ history) | 150ms | — (transform-only directional content signal; paired names replay rapid same-direction recalls without a classless frame) |
-| `activity-leave` / `activity-arrive` (agent activity line swap) | 150ms / 200ms | — (one beat of the working pulse carries a content swap on a persistent line: the old text dims up and away, the new rises in, then `animate-pulse` resumes) |
+| `cat-activity-leave` / `cat-activity-arrive` (agent activity line swap; shared from `@catamorphic/ui/styles.css` with `cat-fade-in`, `cat-fold-away` and `cat-step-in`) | 150ms / 200ms | — (one beat of the working pulse carries a content swap on a persistent line: the old text dims up and away, the new rises in, then `animate-pulse` resumes) |
 | sidebar leave (Web Animations in `lib/sidebar-leave.ts`: a closing sidebar's rows leave, each drawing a thread behind it; the panel's slide waits 100ms for them) | 160ms | its own reverse when the sidebar opens mid-close; opening shows the items in place as before (a sanctioned exception) |
 | `title-change` (rename flash) | 1200ms | **sanctioned exception** — the
   one decorative-adjacent signal (see design log 2026-07-31); allowlisted in
@@ -544,6 +544,22 @@ the historical log explains how it arrived here.
 - [Performance](docs/performance.md): idle lifecycle checks and sustained measurement.
 
 ## Design log
+### 2026-10-11: One chat timeline, the same on the desktop and the phone
+
+The chat the desktop shows is now the registry's chat timeline, installed as
+a copy that differs only in its imports (ADR 0218). The phone and any
+embedder read a conversation the way the desktop does: notes fold into the
+answer's steps once a turn settles, each step says how long it ran, Restore
+to here sits on the person's message, a retrying turn counts down with Stop,
+a failed send stays where it was with "Send again", and copy and fork sit
+beside every settled reply (always shown on a touch screen, where nothing
+hovers). What is the desktop's own arrives through the timeline's slots:
+attachments read as the composer's pills with their previews, controls name
+themselves through ShortcutHint, and PageUp jumps to the previous message.
+The steps also gained what the registry had: a failed step says "Failed", a
+failed command its exit code, a rename both of its names, and links in a
+folded note open like links in a reply.
+
 ### 2026-10-11: What the person did not write reads as a row, not a bubble
 
 A chat's bubbles on the right are the person's words, and only theirs (ADR
@@ -736,7 +752,7 @@ turn now reads while it runs:
   files it left changed.
 - **Nothing snaps.** Showing every note made settling the biggest jump in
   the chat: the notes left all at once. Notes that fold now stay for one
-  fold-away animation (`animate-fold-away`), keyed by the note, because a
+  fold-away animation (`cat-fold-away`), keyed by the note, because a
   settle can land over two renders. A lone step keeps the list's
   structure, so a second step grows the line to open it in. The clock,
   step times, the quiet hint and the interruption summary fade in. The
@@ -1306,7 +1322,7 @@ free. A folded note is not a new kind of thing: it is a row of the same
 steps disclosure tool calls already use, in true order (a note follows its
 own steps), expandable to its Markdown, still addressable by message id.
 Nothing is dropped, only moved one click away. The grouping is a pure
-function (`lib/turn-groups.ts`); a failed turn's error card and the note
+function (`turnRows`, the registry chat timeline's `turn-rows.ts`); a failed turn's error card and the note
 before it always stay in place.
 
 Steps are chrome around the conversation, not part of its text: the steps
@@ -1833,7 +1849,7 @@ and values with no meanings, and the descriptions in Settings were vague.
   settled choice decides where the notes go, as before; the steps stay
   folded then too, a lone step's included, so nothing opens as the turn
   ends. With "Fold notes into steps" that is the requested behaviour.
-  `foldsSteps` (lib/turn-groups) names the rule.
+  `foldsSteps` (the registry chat timeline's `turn-rows.ts`) names the rule.
 - **Settings say what shows.** The two choices' descriptions now name
   notes, steps and when each is open, and the options read "Notes and
   steps", "Latest note and steps", "Notes only".

@@ -701,57 +701,6 @@ kbd {
   animation: fade-in 200ms cubic-bezier(0.2, 0, 0, 1);
 }
 
-/* A chat note folding into its answer's steps as the turn settles: its row
-   closes up and fades while the steps take it in. The negative margin
-   cancels the timeline's 0.75rem gap, so nothing snaps when it unmounts. */
-@keyframes fold-away {
-  from {
-    grid-template-rows: 1fr;
-    opacity: 1;
-    margin-top: 0;
-  }
-  to {
-    grid-template-rows: 0fr;
-    opacity: 0;
-    margin-top: -0.75rem;
-  }
-}
-
-.animate-fold-away {
-  display: grid;
-  animation: fold-away 220ms cubic-bezier(0.2, 0, 0, 1) forwards;
-}
-
-.animate-fold-away > * {
-  min-height: 0;
-  overflow: hidden;
-}
-
-/* The mirror of fold-away for a step joining a running turn's list: the
-   row opens its own height while it fades in, so the list grows at its
-   end instead of jumping. The class is dropped once it has played, so a
-   settled row never clips its focus ring. */
-@keyframes step-in {
-  from {
-    grid-template-rows: 0fr;
-    opacity: 0;
-  }
-  to {
-    grid-template-rows: 1fr;
-    opacity: 1;
-  }
-}
-
-.animate-step-in {
-  display: grid;
-  animation: step-in 200ms cubic-bezier(0.2, 0, 0, 1);
-}
-
-.animate-step-in > * {
-  min-height: 0;
-  overflow: hidden;
-}
-
 /* Mirror of fade-in for surfaces that must tween out before unmounting
    (e.g. the agent-control overlay). Holds the final frame so the element
    can be removed on animationend without a flash. */
@@ -1258,33 +1207,6 @@ kbd {
 
 .animate-title-change {
   animation: title-change 1200ms cubic-bezier(0.2, 0, 0, 1);
-}
-
-/* Agent activity changed: one beat of the working pulse carries the swap.
-   The old line dims away upward, the new one rises in, then the breathing
-   (animate-pulse) resumes. See ActivityText. */
-@keyframes activity-leave {
-  to {
-    opacity: 0;
-    translate: 0 -3px;
-    filter: blur(1.5px);
-  }
-}
-
-@keyframes activity-arrive {
-  from {
-    opacity: 0;
-    translate: 0 3px;
-    filter: blur(1.5px);
-  }
-}
-
-.animate-activity-leave {
-  animation: activity-leave 150ms cubic-bezier(0.2, 0, 0, 1) forwards;
-}
-
-.animate-activity-arrive {
-  animation: activity-arrive 200ms cubic-bezier(0.2, 0, 0, 1);
 }
 
 /* Agent pointer: the agent directing the user's attention at an element

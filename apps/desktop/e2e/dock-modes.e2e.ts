@@ -100,12 +100,18 @@ const hoverChip = async (selector: string) => {
     timeoutMs: 2_000,
     label: "native pointer reached the surface chip",
   }).catch(() => false);
-  if (!seen) {
-    await app.movePointerThrough([{ x: point.x + 2, y: point.y }, point]);
-    await runWait(hovered, {
-      label: "native pointer reached the surface chip",
-    });
-  }
+  if (seen) return;
+  await app.movePointerThrough([{ x: point.x + 2, y: point.y }, point]);
+  const again = await runWait<boolean>(hovered, {
+    timeoutMs: 5_000,
+    label: "native pointer reached the surface chip",
+  }).catch(() => false);
+  if (again) return;
+  // The macOS runner's warped pointer is often never delivered to the
+  // window at all. Chromium's own pointer input at the same point still
+  // hit-tests the chip, which is what the previews depend on.
+  await app.cdp("Input.dispatchMouseEvent", { type: "mouseMoved", ...point });
+  await runWait(hovered, { label: "pointer reached the surface chip" });
 };
 
 describe("dock modes", () => {
@@ -833,6 +839,12 @@ describe("dock modes", () => {
           window: { width: innerWidth, height: innerHeight },
         };`);
         throw new Error(`${String(error)}; rects: ${JSON.stringify(rects)}`);
+      });
+      // Chromium's own pointer may still be where an earlier hover left it
+      // (see hoverChip): park it off the chat, as the native one moves.
+      await app.cdp("Input.dispatchMouseEvent", {
+        type: "mouseMoved",
+        ...points.page,
       });
       await app.movePointerThrough([points.dock, points.page]);
       await app.clickPointer(points.page);

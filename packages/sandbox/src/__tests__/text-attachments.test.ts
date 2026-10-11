@@ -7,6 +7,7 @@ import {
   messageWithAttachmentNames,
   renderTextAttachments,
   renderUserMessage,
+  splitAttachmentMarkers,
 } from "../coding-agent/text-attachments.js";
 import type { AgentAttachment } from "../coding-agent/types.js";
 
@@ -205,5 +206,22 @@ describe("text attachments", () => {
       "fix [notes.txt] now",
     );
     expect(messageWithAttachmentNames("plain", [])).toBe("plain");
+  });
+});
+
+describe("splitAttachmentMarkers", () => {
+  it("interleaves runs and numbered slots", () => {
+    expect(
+      splitAttachmentMarkers(`a ${ATTACHMENT_MARKER}${ATTACHMENT_MARKER} b`),
+    ).toEqual([
+      { type: "text", text: "a " },
+      { type: "pill", index: 0 },
+      { type: "pill", index: 1 },
+      { type: "text", text: " b" },
+    ]);
+    expect(splitAttachmentMarkers("plain")).toEqual([
+      { type: "text", text: "plain" },
+    ]);
+    expect(splitAttachmentMarkers("")).toEqual([]);
   });
 });
