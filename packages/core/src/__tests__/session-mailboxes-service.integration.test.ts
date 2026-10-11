@@ -58,18 +58,25 @@ describe("session mailboxes", () => {
   it("queues idempotently for the exact session authority", async () => {
     const input = {
       destination: { hostId: "desktop-host", revision: 3 },
-      input: {
-        kind: "inbound_message" as const,
-        from: {
-          kind: "workflow" as const,
-          runId: crypto.randomUUID(),
-          workflowName: "prChecks",
+      delivery: {
+        kind: "input" as const,
+        input: {
+          kind: "inbound_message" as const,
+          from: {
+            kind: "workflow" as const,
+            runId: crypto.randomUUID(),
+            workflowName: "prChecks",
+          },
+          text: "PR checks passed",
+          attachments: [],
         },
-        text: "PR checks passed",
-        attachments: [],
+        mode: "queue" as const,
+        attention: true,
+        deliveredBy: "member",
+        ownerAuthored: false,
       },
-      mode: "queue" as const,
       idempotencyKey: "github:delivery-1",
+      causation: ["enablement-1"],
     };
     const first = await mailboxes.enqueue(
       identity,
@@ -93,11 +100,16 @@ describe("session mailboxes", () => {
       expect.objectContaining({
         messageId: first.messageId,
         authorityRevision: 3,
+        kind: "input",
         input: expect.objectContaining({
           kind: "inbound_message",
           text: "PR checks passed",
         }),
         mode: "queue",
+        attention: true,
+        deliveredBy: "member",
+        ownerAuthored: false,
+        causation: ["enablement-1"],
       }),
     ]);
   });
@@ -106,15 +118,13 @@ describe("session mailboxes", () => {
     await expect(
       mailboxes.enqueue(identity, projectId, sessionId, {
         destination: { hostId: "desktop-host", revision: 2 },
-        input: notification("stale"),
-        mode: "message_only",
+        delivery: notification("stale"),
       }),
     ).rejects.toBeInstanceOf(SessionAuthorityMismatchError);
 
     const receipt = await mailboxes.enqueue(identity, projectId, sessionId, {
       destination: { hostId: "desktop-host", revision: 3 },
-      input: notification("current"),
-      mode: "message_only",
+      delivery: notification("current"),
     });
     const item = await db
       .selectFrom("session_mailbox_items")
@@ -132,17 +142,25 @@ describe("session mailboxes", () => {
   });
 });
 
+/** A notification delivered to read, as another host forwards it. */
 function notification(summary: string) {
   return {
-    kind: "task_notification" as const,
-    task: {
-      type: "test",
-      id: "task-1",
-      title: "Test task",
-      status: "update" as const,
+    kind: "input" as const,
+    input: {
+      kind: "task_notification" as const,
+      task: {
+        type: "test",
+        id: "task-1",
+        title: "Test task",
+        status: "update" as const,
+      },
+      summary,
+      detail: "",
+      source: null,
     },
-    summary,
-    detail: "",
-    source: null,
+    mode: "message_only" as const,
+    attention: false,
+    deliveredBy: "member",
+    ownerAuthored: true,
   };
 }

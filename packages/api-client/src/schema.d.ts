@@ -10478,7 +10478,7 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
-                            items: {
+                            items: ({
                                 /** Format: uuid */
                                 id: string;
                                 /** Format: uuid */
@@ -10490,19 +10490,72 @@ export interface paths {
                                 authorityRevision: number;
                                 /** Format: uuid */
                                 messageId: string;
+                                idempotencyKey: string | null;
+                                causation: string[];
+                                /** Format: date-time */
+                                createdAt: string;
+                                /** @enum {string} */
+                                kind: "input";
                                 input: components["schemas"]["SessionInput"];
                                 /**
                                  * @description queue: a new turn after the active one; steer: join the active turn; interrupt: stop the active turn and run this next; message_only: record it without starting a turn
                                  * @enum {string}
                                  */
                                 mode: "queue" | "steer" | "interrupt" | "message_only";
+                                attention: boolean;
+                                deliveredBy: string | null;
+                                ownerAuthored: boolean;
+                            } | {
+                                /** Format: uuid */
+                                id: string;
+                                /** Format: uuid */
+                                projectId: string;
+                                /** Format: uuid */
+                                sessionId: string;
+                                sourceHostId: string;
+                                destinationHostId: string;
+                                authorityRevision: number;
+                                /** Format: uuid */
+                                messageId: string;
                                 idempotencyKey: string | null;
-                                metadata: {
-                                    [key: string]: unknown;
-                                } | null;
+                                causation: string[];
                                 /** Format: date-time */
                                 createdAt: string;
-                            }[];
+                                /** @enum {string} */
+                                kind: "action";
+                                action: {
+                                    operation: string;
+                                    args: components["schemas"]["JsonValue"];
+                                    actor: {
+                                        /** @enum {string} */
+                                        kind: "user";
+                                        externalUserId: string;
+                                    } | ({
+                                        /** @enum {string} */
+                                        kind: "agent";
+                                        sessionId: string;
+                                        agentId: string | null;
+                                        projectId?: string;
+                                    } | {
+                                        /** @enum {string} */
+                                        kind: "assistant";
+                                        externalUserId: string;
+                                    } | {
+                                        /** @enum {string} */
+                                        kind: "workflow";
+                                        runId: string;
+                                        workflowName: string;
+                                        displayName?: string;
+                                        enablementId?: string;
+                                        watcher?: {
+                                            id: string;
+                                            sessionId: string;
+                                        };
+                                        scheduledFor?: string;
+                                        firedAt?: string;
+                                    });
+                                };
+                            })[];
                         };
                     };
                 };
@@ -17157,6 +17210,13 @@ export interface components {
             runId: string;
             workflowName: string;
             displayName?: string;
+            enablementId?: string;
+            watcher?: {
+                id: string;
+                sessionId: string;
+            };
+            scheduledFor?: string;
+            firedAt?: string;
         };
         InputSourceInput: {
             /** @enum {string} */
@@ -17220,6 +17280,19 @@ export interface components {
                     filePath?: string;
                 };
             })[];
+            answer?: {
+                requestId: string;
+                questions: {
+                    question: string;
+                    header: string;
+                    multiSelect: boolean;
+                    options: {
+                        label: string;
+                        description: string;
+                    }[];
+                }[];
+                answers: string[];
+            };
         } | {
             /** @enum {string} */
             kind: "inbound_message";
@@ -17239,6 +17312,13 @@ export interface components {
                 runId: string;
                 workflowName: string;
                 displayName?: string;
+                enablementId?: string;
+                watcher?: {
+                    id: string;
+                    sessionId: string;
+                };
+                scheduledFor?: string;
+                firedAt?: string;
             };
             text: string;
             attachments: ({
@@ -17279,6 +17359,10 @@ export interface components {
                     filePath?: string;
                 };
             })[];
+            alert?: {
+                title?: string;
+                body?: string;
+            };
         } | {
             /** @enum {string} */
             kind: "task_notification";
@@ -17419,9 +17503,8 @@ export interface components {
             /** @enum {string|null} */
             attention: "required" | null;
             idempotencyKey: string | null;
-            metadata: {
-                [key: string]: components["schemas"]["JsonValueInput"];
-            };
+            deliveredBy: string | null;
+            causation: string[];
             /** @enum {string} */
             kind: "user_message";
             author: {
@@ -17468,6 +17551,19 @@ export interface components {
                     filePath?: string;
                 };
             })[];
+            answer?: {
+                requestId: string;
+                questions: {
+                    question: string;
+                    header: string;
+                    multiSelect: boolean;
+                    options: {
+                        label: string;
+                        description: string;
+                    }[];
+                }[];
+                answers: string[];
+            };
         } | {
             id: string;
             sessionId: string;
@@ -17494,9 +17590,8 @@ export interface components {
             /** @enum {string|null} */
             attention: "required" | null;
             idempotencyKey: string | null;
-            metadata: {
-                [key: string]: components["schemas"]["JsonValueInput"];
-            };
+            deliveredBy: string | null;
+            causation: string[];
             /** @enum {string} */
             kind: "inbound_message";
             from: components["schemas"]["InboundSenderInput"];
@@ -17539,6 +17634,10 @@ export interface components {
                     filePath?: string;
                 };
             })[];
+            alert?: {
+                title?: string;
+                body?: string;
+            };
         } | {
             id: string;
             sessionId: string;
@@ -17565,9 +17664,8 @@ export interface components {
             /** @enum {string|null} */
             attention: "required" | null;
             idempotencyKey: string | null;
-            metadata: {
-                [key: string]: components["schemas"]["JsonValueInput"];
-            };
+            deliveredBy: string | null;
+            causation: string[];
             /** @enum {string} */
             kind: "task_notification";
             task: {
@@ -18080,6 +18178,13 @@ export interface components {
             runId: string;
             workflowName: string;
             displayName?: string;
+            enablementId?: string;
+            watcher?: {
+                id: string;
+                sessionId: string;
+            };
+            scheduledFor?: string;
+            firedAt?: string;
         };
         InputSource: {
             /** @enum {string} */
@@ -18143,6 +18248,19 @@ export interface components {
                     filePath?: string;
                 };
             })[];
+            answer?: {
+                requestId: string;
+                questions: {
+                    question: string;
+                    header: string;
+                    multiSelect: boolean;
+                    options: {
+                        label: string;
+                        description: string;
+                    }[];
+                }[];
+                answers: string[];
+            };
         } | {
             /** @enum {string} */
             kind: "inbound_message";
@@ -18162,6 +18280,13 @@ export interface components {
                 runId: string;
                 workflowName: string;
                 displayName?: string;
+                enablementId?: string;
+                watcher?: {
+                    id: string;
+                    sessionId: string;
+                };
+                scheduledFor?: string;
+                firedAt?: string;
             };
             text: string;
             attachments: ({
@@ -18202,6 +18327,10 @@ export interface components {
                     filePath?: string;
                 };
             })[];
+            alert?: {
+                title?: string;
+                body?: string;
+            };
         } | {
             /** @enum {string} */
             kind: "task_notification";
@@ -18342,9 +18471,8 @@ export interface components {
             /** @enum {string|null} */
             attention: "required" | null;
             idempotencyKey: string | null;
-            metadata: {
-                [key: string]: components["schemas"]["JsonValue"];
-            };
+            deliveredBy: string | null;
+            causation: string[];
             /** @enum {string} */
             kind: "user_message";
             author: {
@@ -18391,6 +18519,19 @@ export interface components {
                     filePath?: string;
                 };
             })[];
+            answer?: {
+                requestId: string;
+                questions: {
+                    question: string;
+                    header: string;
+                    multiSelect: boolean;
+                    options: {
+                        label: string;
+                        description: string;
+                    }[];
+                }[];
+                answers: string[];
+            };
         } | {
             id: string;
             sessionId: string;
@@ -18417,9 +18558,8 @@ export interface components {
             /** @enum {string|null} */
             attention: "required" | null;
             idempotencyKey: string | null;
-            metadata: {
-                [key: string]: components["schemas"]["JsonValue"];
-            };
+            deliveredBy: string | null;
+            causation: string[];
             /** @enum {string} */
             kind: "inbound_message";
             from: components["schemas"]["InboundSender"];
@@ -18462,6 +18602,10 @@ export interface components {
                     filePath?: string;
                 };
             })[];
+            alert?: {
+                title?: string;
+                body?: string;
+            };
         } | {
             id: string;
             sessionId: string;
@@ -18488,9 +18632,8 @@ export interface components {
             /** @enum {string|null} */
             attention: "required" | null;
             idempotencyKey: string | null;
-            metadata: {
-                [key: string]: components["schemas"]["JsonValue"];
-            };
+            deliveredBy: string | null;
+            causation: string[];
             /** @enum {string} */
             kind: "task_notification";
             task: {

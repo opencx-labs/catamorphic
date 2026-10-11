@@ -1,8 +1,12 @@
-import type { InputItem } from "@catamorphic/agent-protocol";
+import type {
+  DeliveryFields,
+  InputItem,
+  ItemCommon,
+} from "@catamorphic/agent-protocol";
 import { describe, expect, it } from "vitest";
 import { modelInputText } from "../services/sessions/input-text.js";
 
-const common = {
+const common: ItemCommon & DeliveryFields = {
   id: "item-1",
   sessionId: "session-1",
   turnId: null,
@@ -18,8 +22,9 @@ const common = {
   dispatch: "queue",
   attention: null,
   idempotencyKey: null,
-  metadata: {},
-} as const;
+  deliveredBy: null,
+  causation: [],
+};
 
 describe("modelInputText", () => {
   it("passes the person's words through as they are", () => {

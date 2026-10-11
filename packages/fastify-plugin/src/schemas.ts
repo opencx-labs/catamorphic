@@ -14,6 +14,7 @@ import {
   jsonValueSchema,
   type NativeRef,
   type ProviderThread,
+  questionAnswerSchema,
   type RuntimeRequest,
   type RuntimeRequestResponse,
   type SessionCommand,
@@ -27,6 +28,7 @@ import {
   sessionCommandSchema,
   sessionInputSchema,
   sessionMessageAuthorSchema,
+  settledAlertSchema,
   type Turn,
   type TurnError,
   type TurnOutcome,
@@ -37,6 +39,7 @@ import { APP_ICON_NAMES } from "@catamorphic/app";
 import {
   RoleDefinitionSchema as CoreRoleDefinitionSchema,
   PROJECT_PERMISSION_PATTERN,
+  type SessionMailboxItem,
 } from "@catamorphic/core";
 import {
   CLAUDE_CODE_PERMISSION_MODES,
@@ -1496,7 +1499,8 @@ const deliveryFields = {
   dispatch: DispatchModeSchema,
   attention: z.literal("required").nullable(),
   idempotencyKey: z.string().nullable(),
-  metadata: JsonObjectSchema,
+  deliveredBy: z.string().nullable(),
+  causation: z.array(z.string()),
 };
 
 export const ItemSchema = describes<Item>()(
@@ -1512,6 +1516,7 @@ export const ItemSchema = describes<Item>()(
         }),
         text: z.string(),
         attachments: z.array(attachmentSchema),
+        answer: questionAnswerSchema.optional(),
       }),
       z.object({
         ...itemCommon,
@@ -1520,6 +1525,7 @@ export const ItemSchema = describes<Item>()(
         from: InboundSenderSchema,
         text: z.string(),
         attachments: z.array(attachmentSchema),
+        alert: settledAlertSchema.optional(),
       }),
       z.object({
         ...itemCommon,
@@ -1941,7 +1947,7 @@ export const ForkAgentSessionSchema = z.object({
   messageId: z.string().min(1).max(200).optional(),
 });
 
-export const SessionMailboxItemSchema = z.object({
+const mailboxCommon = {
   id: z.string().uuid(),
   projectId: z.string().uuid(),
   sessionId: z.string().uuid(),
@@ -1950,12 +1956,34 @@ export const SessionMailboxItemSchema = z.object({
   authorityRevision: z.number().int().positive(),
   /** The item the delivery becomes on the destination (ADR 0197). */
   messageId: z.string().uuid(),
-  input: SessionInputSchema,
-  mode: DispatchModeSchema,
   idempotencyKey: z.string().nullable(),
-  metadata: z.record(z.string(), z.unknown()).nullable(),
+  causation: z.array(z.string()),
   createdAt: z.string().datetime(),
-});
+};
+
+/** What crosses to a session's authority (ADR 0219): an input, or an action. */
+export const SessionMailboxItemSchema = describes<SessionMailboxItem>()(
+  z.discriminatedUnion("kind", [
+    z.object({
+      ...mailboxCommon,
+      kind: z.literal("input"),
+      input: SessionInputSchema,
+      mode: DispatchModeSchema,
+      attention: z.boolean(),
+      deliveredBy: z.string().nullable(),
+      ownerAuthored: z.boolean(),
+    }),
+    z.object({
+      ...mailboxCommon,
+      kind: z.literal("action"),
+      action: z.object({
+        operation: z.string(),
+        args: JsonValueSchema,
+        actor: SessionMessageAuthorSchema,
+      }),
+    }),
+  ]),
+);
 
 export const SessionMailboxListQuerySchema = z.object({
   destinationHostId: z.string().min(1).max(255),

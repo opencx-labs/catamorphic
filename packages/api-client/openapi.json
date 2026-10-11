@@ -113,6 +113,27 @@
               },
               "displayName": {
                 "type": "string"
+              },
+              "enablementId": {
+                "type": "string"
+              },
+              "watcher": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "sessionId": {
+                    "type": "string"
+                  }
+                },
+                "required": ["id", "sessionId"]
+              },
+              "scheduledFor": {
+                "type": "string"
+              },
+              "firedAt": {
+                "type": "string"
               }
             },
             "required": ["kind", "runId", "workflowName"]
@@ -325,6 +346,59 @@
                     }
                   ]
                 }
+              },
+              "answer": {
+                "type": "object",
+                "properties": {
+                  "requestId": {
+                    "type": "string"
+                  },
+                  "questions": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "question": {
+                          "type": "string"
+                        },
+                        "header": {
+                          "type": "string"
+                        },
+                        "multiSelect": {
+                          "type": "boolean"
+                        },
+                        "options": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "label": {
+                                "type": "string"
+                              },
+                              "description": {
+                                "type": "string"
+                              }
+                            },
+                            "required": ["label", "description"]
+                          }
+                        }
+                      },
+                      "required": [
+                        "question",
+                        "header",
+                        "multiSelect",
+                        "options"
+                      ]
+                    }
+                  },
+                  "answers": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "required": ["requestId", "questions", "answers"]
               }
             },
             "required": ["kind", "author", "text", "attachments"]
@@ -385,6 +459,27 @@
                         "type": "string"
                       },
                       "displayName": {
+                        "type": "string"
+                      },
+                      "enablementId": {
+                        "type": "string"
+                      },
+                      "watcher": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "sessionId": {
+                            "type": "string"
+                          }
+                        },
+                        "required": ["id", "sessionId"]
+                      },
+                      "scheduledFor": {
+                        "type": "string"
+                      },
+                      "firedAt": {
                         "type": "string"
                       }
                     },
@@ -526,6 +621,17 @@
                       "required": ["kind", "name", "text", "source"]
                     }
                   ]
+                }
+              },
+              "alert": {
+                "type": "object",
+                "properties": {
+                  "title": {
+                    "type": "string"
+                  },
+                  "body": {
+                    "type": "string"
+                  }
                 }
               }
             },
@@ -1025,10 +1131,14 @@
                 "nullable": true,
                 "type": "string"
               },
-              "metadata": {
-                "type": "object",
-                "additionalProperties": {
-                  "$ref": "#/components/schemas/JsonValueInput"
+              "deliveredBy": {
+                "nullable": true,
+                "type": "string"
+              },
+              "causation": {
+                "type": "array",
+                "items": {
+                  "type": "string"
                 }
               },
               "kind": {
@@ -1183,6 +1293,59 @@
                     }
                   ]
                 }
+              },
+              "answer": {
+                "type": "object",
+                "properties": {
+                  "requestId": {
+                    "type": "string"
+                  },
+                  "questions": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "question": {
+                          "type": "string"
+                        },
+                        "header": {
+                          "type": "string"
+                        },
+                        "multiSelect": {
+                          "type": "boolean"
+                        },
+                        "options": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "label": {
+                                "type": "string"
+                              },
+                              "description": {
+                                "type": "string"
+                              }
+                            },
+                            "required": ["label", "description"]
+                          }
+                        }
+                      },
+                      "required": [
+                        "question",
+                        "header",
+                        "multiSelect",
+                        "options"
+                      ]
+                    }
+                  },
+                  "answers": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "required": ["requestId", "questions", "answers"]
               }
             },
             "required": [
@@ -1201,7 +1364,8 @@
               "dispatch",
               "attention",
               "idempotencyKey",
-              "metadata",
+              "deliveredBy",
+              "causation",
               "kind",
               "author",
               "text",
@@ -1280,10 +1444,14 @@
                 "nullable": true,
                 "type": "string"
               },
-              "metadata": {
-                "type": "object",
-                "additionalProperties": {
-                  "$ref": "#/components/schemas/JsonValueInput"
+              "deliveredBy": {
+                "nullable": true,
+                "type": "string"
+              },
+              "causation": {
+                "type": "array",
+                "items": {
+                  "type": "string"
                 }
               },
               "kind": {
@@ -1428,6 +1596,17 @@
                     }
                   ]
                 }
+              },
+              "alert": {
+                "type": "object",
+                "properties": {
+                  "title": {
+                    "type": "string"
+                  },
+                  "body": {
+                    "type": "string"
+                  }
+                }
               }
             },
             "required": [
@@ -1446,7 +1625,8 @@
               "dispatch",
               "attention",
               "idempotencyKey",
-              "metadata",
+              "deliveredBy",
+              "causation",
               "kind",
               "from",
               "text",
@@ -1525,10 +1705,14 @@
                 "nullable": true,
                 "type": "string"
               },
-              "metadata": {
-                "type": "object",
-                "additionalProperties": {
-                  "$ref": "#/components/schemas/JsonValueInput"
+              "deliveredBy": {
+                "nullable": true,
+                "type": "string"
+              },
+              "causation": {
+                "type": "array",
+                "items": {
+                  "type": "string"
                 }
               },
               "kind": {
@@ -1591,7 +1775,8 @@
               "dispatch",
               "attention",
               "idempotencyKey",
-              "metadata",
+              "deliveredBy",
+              "causation",
               "kind",
               "task",
               "summary",
@@ -3520,6 +3705,28 @@
               },
               "displayName": {
                 "type": "string"
+              },
+              "enablementId": {
+                "type": "string"
+              },
+              "watcher": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "sessionId": {
+                    "type": "string"
+                  }
+                },
+                "required": ["id", "sessionId"],
+                "additionalProperties": false
+              },
+              "scheduledFor": {
+                "type": "string"
+              },
+              "firedAt": {
+                "type": "string"
               }
             },
             "required": ["kind", "runId", "workflowName"],
@@ -3744,6 +3951,62 @@
                     }
                   ]
                 }
+              },
+              "answer": {
+                "type": "object",
+                "properties": {
+                  "requestId": {
+                    "type": "string"
+                  },
+                  "questions": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "question": {
+                          "type": "string"
+                        },
+                        "header": {
+                          "type": "string"
+                        },
+                        "multiSelect": {
+                          "type": "boolean"
+                        },
+                        "options": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "label": {
+                                "type": "string"
+                              },
+                              "description": {
+                                "type": "string"
+                              }
+                            },
+                            "required": ["label", "description"],
+                            "additionalProperties": false
+                          }
+                        }
+                      },
+                      "required": [
+                        "question",
+                        "header",
+                        "multiSelect",
+                        "options"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "answers": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "required": ["requestId", "questions", "answers"],
+                "additionalProperties": false
               }
             },
             "required": ["kind", "author", "text", "attachments"],
@@ -3807,6 +4070,28 @@
                         "type": "string"
                       },
                       "displayName": {
+                        "type": "string"
+                      },
+                      "enablementId": {
+                        "type": "string"
+                      },
+                      "watcher": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "sessionId": {
+                            "type": "string"
+                          }
+                        },
+                        "required": ["id", "sessionId"],
+                        "additionalProperties": false
+                      },
+                      "scheduledFor": {
+                        "type": "string"
+                      },
+                      "firedAt": {
                         "type": "string"
                       }
                     },
@@ -3957,6 +4242,18 @@
                     }
                   ]
                 }
+              },
+              "alert": {
+                "type": "object",
+                "properties": {
+                  "title": {
+                    "type": "string"
+                  },
+                  "body": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": false
               }
             },
             "required": ["kind", "from", "text", "attachments"],
@@ -4473,10 +4770,14 @@
                 "nullable": true,
                 "type": "string"
               },
-              "metadata": {
-                "type": "object",
-                "additionalProperties": {
-                  "$ref": "#/components/schemas/JsonValue"
+              "deliveredBy": {
+                "nullable": true,
+                "type": "string"
+              },
+              "causation": {
+                "type": "array",
+                "items": {
+                  "type": "string"
                 }
               },
               "kind": {
@@ -4639,6 +4940,62 @@
                     }
                   ]
                 }
+              },
+              "answer": {
+                "type": "object",
+                "properties": {
+                  "requestId": {
+                    "type": "string"
+                  },
+                  "questions": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "question": {
+                          "type": "string"
+                        },
+                        "header": {
+                          "type": "string"
+                        },
+                        "multiSelect": {
+                          "type": "boolean"
+                        },
+                        "options": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "label": {
+                                "type": "string"
+                              },
+                              "description": {
+                                "type": "string"
+                              }
+                            },
+                            "required": ["label", "description"],
+                            "additionalProperties": false
+                          }
+                        }
+                      },
+                      "required": [
+                        "question",
+                        "header",
+                        "multiSelect",
+                        "options"
+                      ],
+                      "additionalProperties": false
+                    }
+                  },
+                  "answers": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "required": ["requestId", "questions", "answers"],
+                "additionalProperties": false
               }
             },
             "required": [
@@ -4657,7 +5014,8 @@
               "dispatch",
               "attention",
               "idempotencyKey",
-              "metadata",
+              "deliveredBy",
+              "causation",
               "kind",
               "author",
               "text",
@@ -4738,10 +5096,14 @@
                 "nullable": true,
                 "type": "string"
               },
-              "metadata": {
-                "type": "object",
-                "additionalProperties": {
-                  "$ref": "#/components/schemas/JsonValue"
+              "deliveredBy": {
+                "nullable": true,
+                "type": "string"
+              },
+              "causation": {
+                "type": "array",
+                "items": {
+                  "type": "string"
                 }
               },
               "kind": {
@@ -4893,6 +5255,18 @@
                     }
                   ]
                 }
+              },
+              "alert": {
+                "type": "object",
+                "properties": {
+                  "title": {
+                    "type": "string"
+                  },
+                  "body": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": false
               }
             },
             "required": [
@@ -4911,7 +5285,8 @@
               "dispatch",
               "attention",
               "idempotencyKey",
-              "metadata",
+              "deliveredBy",
+              "causation",
               "kind",
               "from",
               "text",
@@ -4992,10 +5367,14 @@
                 "nullable": true,
                 "type": "string"
               },
-              "metadata": {
-                "type": "object",
-                "additionalProperties": {
-                  "$ref": "#/components/schemas/JsonValue"
+              "deliveredBy": {
+                "nullable": true,
+                "type": "string"
+              },
+              "causation": {
+                "type": "array",
+                "items": {
+                  "type": "string"
                 }
               },
               "kind": {
@@ -5059,7 +5438,8 @@
               "dispatch",
               "attention",
               "idempotencyKey",
-              "metadata",
+              "deliveredBy",
+              "causation",
               "kind",
               "task",
               "summary",
@@ -31082,83 +31462,300 @@
                     "items": {
                       "type": "array",
                       "items": {
-                        "type": "object",
-                        "properties": {
-                          "id": {
-                            "type": "string",
-                            "format": "uuid",
-                            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-                          },
-                          "projectId": {
-                            "type": "string",
-                            "format": "uuid",
-                            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-                          },
-                          "sessionId": {
-                            "type": "string",
-                            "format": "uuid",
-                            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-                          },
-                          "sourceHostId": {
-                            "type": "string"
-                          },
-                          "destinationHostId": {
-                            "type": "string"
-                          },
-                          "authorityRevision": {
-                            "type": "integer",
-                            "minimum": 0,
-                            "exclusiveMinimum": true,
-                            "maximum": 9007199254740991
-                          },
-                          "messageId": {
-                            "type": "string",
-                            "format": "uuid",
-                            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-                          },
-                          "input": {
-                            "$ref": "#/components/schemas/SessionInput"
-                          },
-                          "mode": {
-                            "type": "string",
-                            "enum": [
-                              "queue",
-                              "steer",
-                              "interrupt",
-                              "message_only"
-                            ],
-                            "description": "queue: a new turn after the active one; steer: join the active turn; interrupt: stop the active turn and run this next; message_only: record it without starting a turn"
-                          },
-                          "idempotencyKey": {
-                            "nullable": true,
-                            "type": "string"
-                          },
-                          "metadata": {
-                            "nullable": true,
+                        "oneOf": [
+                          {
                             "type": "object",
-                            "additionalProperties": {}
+                            "properties": {
+                              "id": {
+                                "type": "string",
+                                "format": "uuid",
+                                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                              },
+                              "projectId": {
+                                "type": "string",
+                                "format": "uuid",
+                                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                              },
+                              "sessionId": {
+                                "type": "string",
+                                "format": "uuid",
+                                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                              },
+                              "sourceHostId": {
+                                "type": "string"
+                              },
+                              "destinationHostId": {
+                                "type": "string"
+                              },
+                              "authorityRevision": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "exclusiveMinimum": true,
+                                "maximum": 9007199254740991
+                              },
+                              "messageId": {
+                                "type": "string",
+                                "format": "uuid",
+                                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                              },
+                              "idempotencyKey": {
+                                "nullable": true,
+                                "type": "string"
+                              },
+                              "causation": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string"
+                                }
+                              },
+                              "createdAt": {
+                                "type": "string",
+                                "format": "date-time",
+                                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                              },
+                              "kind": {
+                                "type": "string",
+                                "enum": ["input"]
+                              },
+                              "input": {
+                                "$ref": "#/components/schemas/SessionInput"
+                              },
+                              "mode": {
+                                "type": "string",
+                                "enum": [
+                                  "queue",
+                                  "steer",
+                                  "interrupt",
+                                  "message_only"
+                                ],
+                                "description": "queue: a new turn after the active one; steer: join the active turn; interrupt: stop the active turn and run this next; message_only: record it without starting a turn"
+                              },
+                              "attention": {
+                                "type": "boolean"
+                              },
+                              "deliveredBy": {
+                                "nullable": true,
+                                "type": "string"
+                              },
+                              "ownerAuthored": {
+                                "type": "boolean"
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "projectId",
+                              "sessionId",
+                              "sourceHostId",
+                              "destinationHostId",
+                              "authorityRevision",
+                              "messageId",
+                              "idempotencyKey",
+                              "causation",
+                              "createdAt",
+                              "kind",
+                              "input",
+                              "mode",
+                              "attention",
+                              "deliveredBy",
+                              "ownerAuthored"
+                            ],
+                            "additionalProperties": false
                           },
-                          "createdAt": {
-                            "type": "string",
-                            "format": "date-time",
-                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                          {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string",
+                                "format": "uuid",
+                                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                              },
+                              "projectId": {
+                                "type": "string",
+                                "format": "uuid",
+                                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                              },
+                              "sessionId": {
+                                "type": "string",
+                                "format": "uuid",
+                                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                              },
+                              "sourceHostId": {
+                                "type": "string"
+                              },
+                              "destinationHostId": {
+                                "type": "string"
+                              },
+                              "authorityRevision": {
+                                "type": "integer",
+                                "minimum": 0,
+                                "exclusiveMinimum": true,
+                                "maximum": 9007199254740991
+                              },
+                              "messageId": {
+                                "type": "string",
+                                "format": "uuid",
+                                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                              },
+                              "idempotencyKey": {
+                                "nullable": true,
+                                "type": "string"
+                              },
+                              "causation": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string"
+                                }
+                              },
+                              "createdAt": {
+                                "type": "string",
+                                "format": "date-time",
+                                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$"
+                              },
+                              "kind": {
+                                "type": "string",
+                                "enum": ["action"]
+                              },
+                              "action": {
+                                "type": "object",
+                                "properties": {
+                                  "operation": {
+                                    "type": "string"
+                                  },
+                                  "args": {
+                                    "$ref": "#/components/schemas/JsonValue"
+                                  },
+                                  "actor": {
+                                    "anyOf": [
+                                      {
+                                        "type": "object",
+                                        "properties": {
+                                          "kind": {
+                                            "type": "string",
+                                            "enum": ["user"]
+                                          },
+                                          "externalUserId": {
+                                            "type": "string"
+                                          }
+                                        },
+                                        "required": ["kind", "externalUserId"],
+                                        "additionalProperties": false
+                                      },
+                                      {
+                                        "anyOf": [
+                                          {
+                                            "type": "object",
+                                            "properties": {
+                                              "kind": {
+                                                "type": "string",
+                                                "enum": ["agent"]
+                                              },
+                                              "sessionId": {
+                                                "type": "string"
+                                              },
+                                              "agentId": {
+                                                "nullable": true,
+                                                "type": "string"
+                                              },
+                                              "projectId": {
+                                                "type": "string"
+                                              }
+                                            },
+                                            "required": [
+                                              "kind",
+                                              "sessionId",
+                                              "agentId"
+                                            ],
+                                            "additionalProperties": false
+                                          },
+                                          {
+                                            "type": "object",
+                                            "properties": {
+                                              "kind": {
+                                                "type": "string",
+                                                "enum": ["assistant"]
+                                              },
+                                              "externalUserId": {
+                                                "type": "string"
+                                              }
+                                            },
+                                            "required": [
+                                              "kind",
+                                              "externalUserId"
+                                            ],
+                                            "additionalProperties": false
+                                          },
+                                          {
+                                            "type": "object",
+                                            "properties": {
+                                              "kind": {
+                                                "type": "string",
+                                                "enum": ["workflow"]
+                                              },
+                                              "runId": {
+                                                "type": "string"
+                                              },
+                                              "workflowName": {
+                                                "type": "string"
+                                              },
+                                              "displayName": {
+                                                "type": "string"
+                                              },
+                                              "enablementId": {
+                                                "type": "string"
+                                              },
+                                              "watcher": {
+                                                "type": "object",
+                                                "properties": {
+                                                  "id": {
+                                                    "type": "string"
+                                                  },
+                                                  "sessionId": {
+                                                    "type": "string"
+                                                  }
+                                                },
+                                                "required": ["id", "sessionId"],
+                                                "additionalProperties": false
+                                              },
+                                              "scheduledFor": {
+                                                "type": "string"
+                                              },
+                                              "firedAt": {
+                                                "type": "string"
+                                              }
+                                            },
+                                            "required": [
+                                              "kind",
+                                              "runId",
+                                              "workflowName"
+                                            ],
+                                            "additionalProperties": false
+                                          }
+                                        ]
+                                      }
+                                    ]
+                                  }
+                                },
+                                "required": ["operation", "args", "actor"],
+                                "additionalProperties": false
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "projectId",
+                              "sessionId",
+                              "sourceHostId",
+                              "destinationHostId",
+                              "authorityRevision",
+                              "messageId",
+                              "idempotencyKey",
+                              "causation",
+                              "createdAt",
+                              "kind",
+                              "action"
+                            ],
+                            "additionalProperties": false
                           }
-                        },
-                        "required": [
-                          "id",
-                          "projectId",
-                          "sessionId",
-                          "sourceHostId",
-                          "destinationHostId",
-                          "authorityRevision",
-                          "messageId",
-                          "input",
-                          "mode",
-                          "idempotencyKey",
-                          "metadata",
-                          "createdAt"
-                        ],
-                        "additionalProperties": false
+                        ]
                       }
                     }
                   },

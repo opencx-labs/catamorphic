@@ -892,7 +892,7 @@ export async function startEmbeddedServer(
             input.author.kind === "agent" && authorProjectId !== projectId
               ? { ...input.author, projectId: authorProjectId }
               : input.author,
-          metadata: { causation },
+          causation,
         });
       },
       interrupt: async (projectId, sessionId) =>

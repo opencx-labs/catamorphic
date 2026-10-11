@@ -40,6 +40,10 @@ export const inboundSenderSchema = z.union([
     runId: z.string(),
     workflowName: z.string(),
     displayName: z.string().optional(),
+    enablementId: z.string().optional(),
+    watcher: z.object({ id: z.string(), sessionId: z.string() }).optional(),
+    scheduledFor: z.string().optional(),
+    firedAt: z.string().optional(),
   }),
 ]);
 
@@ -113,6 +117,28 @@ export const taskNotificationStatusSchema = z.enum([
   "stopped",
 ]);
 
+/** {@link QuestionAnswer} as a schema. */
+export const questionAnswerSchema = z.object({
+  requestId: z.string(),
+  questions: z.array(
+    z.object({
+      question: z.string(),
+      header: z.string(),
+      multiSelect: z.boolean(),
+      options: z.array(
+        z.object({ label: z.string(), description: z.string() }),
+      ),
+    }),
+  ),
+  answers: z.array(z.string()),
+});
+
+/** {@link SettledAlert} as a schema. */
+export const settledAlertSchema = z.object({
+  title: z.string().optional(),
+  body: z.string().optional(),
+});
+
 /** {@link SessionInput} as a schema: what a delivery carries between hosts. */
 export const sessionInputSchema = z.discriminatedUnion("kind", [
   z.object({
@@ -120,12 +146,14 @@ export const sessionInputSchema = z.discriminatedUnion("kind", [
     author: sessionUserSchema,
     text: z.string(),
     attachments: z.array(attachmentSchema),
+    answer: questionAnswerSchema.optional(),
   }),
   z.object({
     kind: z.literal("inbound_message"),
     from: inboundSenderSchema,
     text: z.string(),
     attachments: z.array(attachmentSchema),
+    alert: settledAlertSchema.optional(),
   }),
   z.object({
     kind: z.literal("task_notification"),

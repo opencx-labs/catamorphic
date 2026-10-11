@@ -152,19 +152,17 @@ describe("sessionTimeline", () => {
           userMessage("t1:input", 1, "t1", "Start"),
           requestItem("x", 2, "t1", "q1"),
           userMessage("ans", 4, "t1", "Which layout?\n\nUser answer:\nList", {
-            metadata: {
-              questionRequestId: "q1",
-              question: {
-                questions: [
-                  {
-                    question: "Which layout?",
-                    header: "Layout",
-                    multiSelect: false,
-                    options: [],
-                  },
-                ],
-                answers: [QUESTIONS_DISMISSED_MESSAGE],
-              },
+            answer: {
+              requestId: "q1",
+              questions: [
+                {
+                  question: "Which layout?",
+                  header: "Layout",
+                  multiSelect: false,
+                  options: [],
+                },
+              ],
+              answers: [QUESTIONS_DISMISSED_MESSAGE],
             },
           }),
         ],

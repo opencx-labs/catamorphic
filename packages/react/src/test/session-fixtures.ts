@@ -125,7 +125,8 @@ export function userMessage(
     dispatch: "queue",
     attention: null,
     idempotencyKey: null,
-    metadata: {},
+    deliveredBy: null,
+    causation: [],
     ...overrides,
   };
 }

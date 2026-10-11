@@ -110,7 +110,7 @@ turn, attachments included, and the question stays open as "Answer when ready"
 row: free text goes through the composer, whose placeholder says so while a
 question is open. The waiting status sits in the panel header. Answers render in
 history as the questions and what was picked: from the resolved request, or a
-later answer message's `question` metadata. Agents close questions a reply settled with `close_questions`.
+later answer message's `answer`. Agents close questions a reply settled with `close_questions`.
 
 Attachment preparation shows on the composer's attach button. Never add a row
 above the composer for transient state: it moves the dock and any open question.

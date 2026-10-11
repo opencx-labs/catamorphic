@@ -1,14 +1,14 @@
 import { randomUUID } from "node:crypto";
-import {
-  messageInput,
-  type SessionMessageAuthor,
-} from "@catamorphic/agent-protocol";
-import type { DB, Json, JsonObject } from "@catamorphic/db";
+import type { SessionMessageAuthor } from "@catamorphic/agent-protocol";
+import type { DB, Json } from "@catamorphic/db";
 import { getTracer, withSpan } from "@catamorphic/otel";
 import { type Kysely, sql } from "kysely";
 import { z } from "zod";
 import type { Identity } from "../identity.js";
-import type { AgentSessionsService } from "./agent-sessions-service.js";
+import {
+  type AgentSessionsService,
+  protocolJson,
+} from "./agent-sessions-service.js";
 import { AccessDeniedError } from "./artifact-scope.js";
 import {
   ChatAudienceSchema,
@@ -117,7 +117,6 @@ export class SessionActionsService {
     args: unknown;
     author: SessionMessageAuthor;
     causation?: string[];
-    provenance?: JsonObject;
   }): Promise<Json> {
     return withSpan(
       {
@@ -275,7 +274,6 @@ export class SessionActionsService {
             actor: json({
               ...input.author,
               causation: input.causation ?? [],
-              provenance: input.provenance ?? {},
             }),
             input: json(parsed),
             idempotency_key: key,
@@ -328,20 +326,16 @@ export class SessionActionsService {
                 hostId: session.authorityHostId,
                 revision: session.authorityRevision,
               },
-              input: messageInput({
-                author: input.author,
-                text: actionLabel(input.operation),
-              }),
-              mode: "message_only",
-              idempotencyKey: `action:${action.id}`,
-              metadata: {
-                sessionAction: {
+              delivery: {
+                kind: "action",
+                action: {
                   operation: input.operation,
-                  args: json(args),
-                  causation: input.causation ?? [],
-                  provenance: input.provenance ?? {},
+                  args: protocolJson(args),
+                  actor: input.author,
                 },
               },
+              idempotencyKey: `action:${action.id}`,
+              causation: input.causation ?? [],
             },
           );
           return json({ delivery: "queued", ...receipt });
@@ -530,7 +524,6 @@ export class SessionActionsService {
                   result: json(result),
                 },
                 causation: input.causation ?? [],
-                provenance: input.provenance ?? {},
               },
             });
             await trx
@@ -579,7 +572,6 @@ export class SessionActionsService {
                   status: "failed",
                 },
                 causation: input.causation ?? [],
-                provenance: input.provenance ?? {},
               },
             });
           });

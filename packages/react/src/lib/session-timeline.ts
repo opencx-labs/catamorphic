@@ -223,9 +223,7 @@ export function sessionQueue(state: SessionState): QueuedMessage[] {
 
 /** The request id an answer message answers, when it is one. */
 function answerRequestId(item: Item): string | undefined {
-  if (item.kind !== "user_message") return undefined;
-  const id = item.metadata.questionRequestId;
-  return typeof id === "string" ? id : undefined;
+  return item.kind === "user_message" ? item.answer?.requestId : undefined;
 }
 
 function entriesOf(
@@ -316,35 +314,12 @@ function answerFromRequest(
 }
 
 function answerFromMessage(item: UserMessageItem): TimelineEntry | undefined {
-  const question = item.metadata.question;
-  if (!question || typeof question !== "object" || Array.isArray(question))
-    return undefined;
-  const { questions, answers } = question;
-  if (!Array.isArray(questions) || !Array.isArray(answers)) return undefined;
+  if (!item.answer) return undefined;
   return answerEntry({
     id: item.id,
-    questions: questions.flatMap((raw) => {
-      const parsed = questionFrom(raw);
-      return parsed ? [parsed] : [];
-    }),
-    answers: answers.filter(
-      (answer): answer is string => typeof answer === "string",
-    ),
+    questions: item.answer.questions,
+    answers: item.answer.answers,
   });
-}
-
-function questionFrom(raw: unknown): AgentQuestion | undefined {
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
-  const question = "question" in raw ? raw.question : undefined;
-  if (typeof question !== "string") return undefined;
-  const header = "header" in raw ? raw.header : undefined;
-  const multiSelect = "multiSelect" in raw ? raw.multiSelect : undefined;
-  return {
-    question,
-    header: typeof header === "string" ? header : "",
-    multiSelect: multiSelect === true,
-    options: [],
-  };
 }
 
 function answerEntry(input: {

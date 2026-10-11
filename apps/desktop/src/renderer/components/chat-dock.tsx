@@ -843,7 +843,7 @@ function ChatDockContent({
       (item) =>
         item.kind === "user_message" &&
         item.text !== QUESTIONS_DISMISSED_MESSAGE &&
-        !("questionRequestId" in item.metadata) &&
+        !item.answer &&
         item.text.trim() !== "",
     )
     .map((item) =>
