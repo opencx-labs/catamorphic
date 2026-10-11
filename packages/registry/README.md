@@ -90,9 +90,11 @@ action callbacks may change every render.
 
 Import `@catamorphic/ui/styles.css` from the host's Tailwind entry: it holds
 `.cat-markdown` and the timeline's `cat-*` motion classes. Hosts provide the
-global `:focus-visible` ring; the timeline draws no ring of its own.
+global `:focus-visible` ring; the timeline draws no focus ring of its own,
+only the outline that marks a deep-linked message.
 
-Copies in this repository differ from these sources only in import specifiers.
+Copies in this repository differ from these sources only in import specifiers,
+except the few listed in `KNOWN_DRIFT` with a reason and the copy reviewed.
 After changing an item, run `bun scripts/registry-copies.ts --sync desktop` and
 `--sync pwa`; `bun scripts/registry-copies.ts` (part of `bun run test:scripts`)
 fails on any other difference. `bun run --cwd packages/registry test` runs the

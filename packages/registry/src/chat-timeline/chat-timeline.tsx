@@ -473,9 +473,18 @@ export function ChatTimeline(props: ChatTimelineProps) {
     timeline.some((group) =>
       group.entries.some((entry) => entry.kind === "input"),
     );
-  const backgroundStates = backgroundCommands?.length
-    ? assignBackgroundCommands(timeline, backgroundCommands)
-    : NO_BACKGROUND;
+  const backgroundStates = useMemo(
+    () =>
+      backgroundCommands?.length
+        ? assignBackgroundCommands(timeline, backgroundCommands)
+        : NO_BACKGROUND,
+    [timeline, backgroundCommands],
+  );
+  // Links re-render with their message, unless the host's handlers change.
+  const links = useMemo(
+    () => ({ onLinkClick, renderLink }),
+    [onLinkClick, renderLink],
+  );
   const folding = useFoldingNotes(views);
   // The message about to start reads in the conversation, still withdrawable.
   const starting = timeline.find(
@@ -567,7 +576,7 @@ export function ChatTimeline(props: ChatTimelineProps) {
   return (
     <HostContext.Provider value={host}>
       <ActionsContext.Provider value={actions}>
-        <LinkContext.Provider value={{ onLinkClick, renderLink }}>
+        <LinkContext.Provider value={links}>
           <BackgroundStates.Provider value={backgroundStates}>
             <StickToBottom
               className={`relative overflow-hidden ${className}`}

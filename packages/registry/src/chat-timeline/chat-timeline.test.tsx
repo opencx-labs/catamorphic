@@ -93,6 +93,79 @@ describe("ChatTimeline queue editing", () => {
     expect(holds).toEqual(["queued-1"]);
   });
 
+  it("keeps each attachment where it sits through an edit, and an unchanged edit edits nothing", async () => {
+    const marker = "\uFFFC";
+    const attachment = (name: string) => ({
+      kind: "text" as const,
+      name,
+      text: name,
+      source: { type: "paste" as const },
+    });
+    const edits: string[] = [];
+    const holds: Array<string | null> = [];
+    await act(async () => {
+      root.render(
+        <ChatTimeline
+          timeline={[]}
+          activity="Working"
+          queue={[
+            {
+              turn: turn("queued-2", 2, { status: "queued", attemptCount: 0 }),
+              item: input("queued-2", `${marker} compare with ${marker}`, {
+                attachments: [attachment("a.ts"), attachment("b.ts")],
+              }),
+              joined: [],
+            },
+          ]}
+          onEditQueued={(_turnId, text) => {
+            edits.push(text);
+            return true;
+          }}
+          onHoldQueued={(id) => {
+            holds.push(id);
+          }}
+        />,
+      );
+    });
+    const openEditor = async () => {
+      await act(async () =>
+        container
+          .querySelector<HTMLButtonElement>(
+            '[aria-label="Edit queued message"]',
+          )
+          ?.click(),
+      );
+      return container.querySelector<HTMLTextAreaElement>(
+        '[data-testid="chat-queued-edit"]',
+      );
+    };
+    const press = (editor: HTMLTextAreaElement | null) =>
+      act(async () => {
+        editor?.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
+        );
+      });
+    // The draft names each attachment where it sits.
+    const editor = await openEditor();
+    expect(editor?.value).toBe("[a.ts] compare with [b.ts]");
+    // Saved unchanged, it only lets the turn go.
+    await press(editor);
+    expect(edits).toEqual([]);
+    expect(holds).toEqual(["queued-2", null]);
+    // Edited, each attachment keeps its place in the words.
+    const again = await openEditor();
+    await act(async () => {
+      const setValue = Object.getOwnPropertyDescriptor(
+        HTMLTextAreaElement.prototype,
+        "value",
+      )?.set;
+      setValue?.call(again, "[a.ts] differs from [b.ts] here");
+      again?.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await press(again);
+    expect(edits).toEqual([`${marker} differs from ${marker} here`]);
+  });
+
   it("renders desktop todo tools as readable progress instead of JSON", async () => {
     await act(async () => {
       root.render(

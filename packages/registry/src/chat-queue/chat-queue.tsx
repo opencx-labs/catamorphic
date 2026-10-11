@@ -1,5 +1,6 @@
 "use client";
 import {
+  type AgentAttachment,
   ATTACHMENT_MARKER,
   messageWithAttachmentNames,
   type QueuedMessage,
@@ -42,11 +43,31 @@ export function TitleHint({ label, shortcut, children }: HintProps) {
 /** How many queued messages stay visible while collapsed. */
 const QUEUE_COLLAPSE_THRESHOLD = 2;
 
-/** The text a queued message was sent with, without attachment markers. */
+/** A queued message's draft: its words, each attachment named where it sits. */
 function editableText(queued: QueuedMessage): string {
   return queued.item?.kind === "user_message"
-    ? queued.item.text.split(ATTACHMENT_MARKER).join("")
+    ? messageWithAttachmentNames(queued.item.text, queued.item.attachments)
     : "";
+}
+
+/**
+ * A draft's attachment names back as the attachments, in order, so each
+ * stays where the person left it; a name they removed comes back at the end.
+ */
+function withAttachmentMarkers(
+  draft: string,
+  attachments: readonly AgentAttachment[],
+): string {
+  let text = draft;
+  let from = 0;
+  for (const attachment of attachments) {
+    const name = `[${attachment.name}]`;
+    const at = text.indexOf(name, from);
+    if (at === -1) continue;
+    text = text.slice(0, at) + ATTACHMENT_MARKER + text.slice(at + name.length);
+    from = at + ATTACHMENT_MARKER.length;
+  }
+  return text;
 }
 
 /**
@@ -176,7 +197,7 @@ function QueuedInput({
       <span className="shrink-0 text-[10px] uppercase tracking-wider text-fg-faint">
         {queued.turn.status === "held" ? "Held" : "Queued"}
       </span>
-      <span className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity duration-150 group-hover/queued:opacity-100 group-focus-within/queued:opacity-100">
+      <span className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity duration-150 group-hover/queued:opacity-100 group-focus-within/queued:opacity-100 pointer-coarse:opacity-100">
         {onCancel && (
           <Hint label="Remove from queue">
             <button
@@ -300,9 +321,11 @@ function QueuedBubble({
     setEditing(true);
   };
   const commitEdit = async () => {
-    const content = draft.trim();
+    const content = withAttachmentMarkers(draft.trim(), attachments);
+    const sent =
+      queued.item?.kind === "user_message" ? queued.item.text.trim() : "";
     const saved = await attempt(() =>
-      content && content !== text ? onEdit?.(turnId, content) : onHold?.(null),
+      content && content !== sent ? onEdit?.(turnId, content) : onHold?.(null),
     );
     if (saved) {
       setEditing(false);
@@ -384,7 +407,7 @@ function QueuedBubble({
           </div>
         )}
         {renderAttachments?.(queued)}
-        {/* The draft holds the words alone; what was attached stays. */}
+        {/* The draft names each attachment where it sits; all of them stay. */}
         {editing && attachments.length > 0 && (
           <p className="mt-1 text-xs">
             {attachments.length === 1
@@ -399,7 +422,7 @@ function QueuedBubble({
         )}
         <div className="mt-1 flex items-center justify-end gap-0.5 text-[10px] uppercase tracking-wider text-fg-faint">
           {queued.turn.status === "held" && !editing ? "Held" : "Queued"}
-          <span className="ml-1 flex items-center gap-0.5 opacity-0 transition-opacity duration-150 group-hover/queued:opacity-100 group-focus-within/queued:opacity-100">
+          <span className="ml-1 flex items-center gap-0.5 opacity-0 transition-opacity duration-150 group-hover/queued:opacity-100 group-focus-within/queued:opacity-100 pointer-coarse:opacity-100">
             {!editing && onEdit && (
               <Hint label="Edit before it sends">
                 <button

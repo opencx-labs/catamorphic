@@ -10,6 +10,8 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   checkRegistryCopies,
+  copyHash,
+  type KnownDrift,
   normalize,
   packageName,
   type RegistryHost,
@@ -44,6 +46,15 @@ describe("comparing a copy", () => {
     );
   });
 
+  it("keeps what is not an import specifier, and the order of imports run for their effect", () => {
+    expect(normalize(`const worker = new URL("./w.js");`)).not.toBe(
+      normalize(`const worker = new URL("./w");`),
+    );
+    expect(normalize(`import "./b.css";\nimport "./a.css";`)).not.toBe(
+      normalize(`import "./a.css";\nimport "./b.css";`),
+    );
+  });
+
   it("names packages without their subpaths or versions", () => {
     expect(packageName("@pierre/diffs@^1.4.1")).toBe("@pierre/diffs");
     expect(packageName("@shikijs/langs/yaml")).toBe("@shikijs/langs");
@@ -68,6 +79,7 @@ describe("checking installed copies", () => {
     name: string,
     files: Record<string, string>,
     dependencies: string[] = [],
+    types: Record<string, string> = {},
   ) => {
     write(
       `packages/registry/src/${name}/registry-item.json`,
@@ -76,13 +88,14 @@ describe("checking installed copies", () => {
         dependencies,
         files: Object.keys(files).map((file) => ({
           path: `components/catamorphic/${file}`,
+          type: types[file] ?? "registry:component",
         })),
       }),
     );
     for (const [file, content] of Object.entries(files))
       write(`packages/registry/src/${name}/${file}`, content);
   };
-  const check = (knownDrift: Record<string, string> = {}) =>
+  const check = (knownDrift: Record<string, KnownDrift> = {}) =>
     checkRegistryCopies({ root, hosts: [host], knownDrift }).map(
       (problem) => `${problem.kind} ${problem.host}/${problem.file}`,
     );
@@ -123,25 +136,44 @@ describe("checking installed copies", () => {
     expect(check()).toEqual([]);
   });
 
-  it("fails a copy that drifted, unless it is known, and a known one that came back", () => {
+  it("fails a copy that drifted, unless it is known as it is, and a known one that came back", () => {
     setup();
     syncRegistryCopies({ root, host, item: "queue", knownDrift: {} });
-    write("app/components/queue.tsx", `export const queue = 2;\n`);
+    const ours = `export const queue = 2;\n`;
+    write("app/components/queue.tsx", ours);
+    const known = {
+      "app/queue.tsx": { reason: "Ours.", copy: copyHash(ours) },
+    };
     expect(check()).toEqual(["drift app/queue.tsx"]);
-    expect(check({ "app/queue.tsx": "Ours." })).toEqual([]);
+    expect(check(known)).toEqual([]);
+    // Drifting further than reviewed fails again.
+    write("app/components/queue.tsx", `export const queue = 3;\n`);
+    expect(check(known)).toEqual(["drift app/queue.tsx"]);
+    write("app/components/queue.tsx", ours);
     // Sync leaves known drift alone unless the item is named.
-    syncRegistryCopies({
-      root,
-      host,
-      knownDrift: { "app/queue.tsx": "Ours." },
-    });
-    expect(check({ "app/queue.tsx": "Ours." })).toEqual([]);
+    syncRegistryCopies({ root, host, knownDrift: known });
+    expect(check(known)).toEqual([]);
     syncRegistryCopies({ root, host, item: "queue", knownDrift: {} });
-    expect(check({ "app/queue.tsx": "Ours." })).toEqual([
-      "stale-exception app/queue.tsx",
-    ]);
-    expect(check({ "app/gone.tsx": "Removed." })).toEqual([
-      "stale-exception app/gone.tsx",
+    expect(check(known)).toEqual(["stale-exception app/queue.tsx"]);
+    expect(
+      check({ "app/gone.tsx": { reason: "Removed.", copy: "000000000000" } }),
+    ).toEqual(["stale-exception app/gone.tsx"]);
+  });
+
+  it("fails an item whose files would not install together, or whose source uses an undeclared package", () => {
+    setup();
+    item(
+      "rows",
+      {
+        "rows.tsx": `import { rowsOf } from "./rows-of.js";\nimport { cn } from "@catamorphic/ui";\nexport const rows = [rowsOf, cn];\n`,
+        "rows-of.ts": `export const rowsOf = 1;\n`,
+      },
+      [],
+      { "rows-of.ts": "registry:lib" },
+    );
+    expect(check()).toEqual([
+      "manifest registry/rows-of.ts",
+      "import registry/rows.tsx",
     ]);
   });
 
@@ -179,6 +211,7 @@ describe("checking installed copies", () => {
     expect(problems).toEqual([
       "imports ../pill: an installed copy reaches only its own directory",
       "imports left-pad, which the queue item does not declare",
+      "imports @catamorphic/react, which the queue item does not declare",
     ]);
   });
 });

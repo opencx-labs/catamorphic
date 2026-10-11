@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   existsSync,
   mkdirSync,
@@ -17,8 +18,10 @@ import { rewriteCrossItemImports } from "../packages/registry/scripts/imports.js
  * in a directory of their own, the way any shadcn consumer would. The
  * registry is the one implementation: an installed copy may differ from it
  * only in import specifiers. This finds every other difference, a
- * partly installed item, and an installed copy that reaches outside its
- * item (a host module, an undeclared package).
+ * partly installed item, an installed copy that reaches outside its item
+ * (a host module, an undeclared package), and an item whose files would
+ * not install beside each other or whose sources use a package it does
+ * not declare.
  *
  *   bun scripts/registry-copies.ts                      report drift
  *   bun scripts/registry-copies.ts --sync <host> [item] rewrite a host's copies from the registry
@@ -48,31 +51,55 @@ export const HOSTS: readonly RegistryHost[] = [
   },
 ];
 
+/** An installed copy allowed to differ, and the copy it was reviewed as. */
+export interface KnownDrift {
+  reason: string;
+  /** {@link copyHash} of the reviewed copy: drifting further fails again. */
+  copy: string;
+}
+
 /**
  * Installed copies that differ from the registry, `<host>/<file>`, each
  * with its reason. A ratchet: an entry whose copy matches again fails the
- * check until it is removed, so the list only shrinks.
+ * check until it is removed, so the list only shrinks; a copy that drifts
+ * further than reviewed fails until its hash is updated.
  */
-export const KNOWN_DRIFT: Readonly<Record<string, string>> = {
-  "desktop/catamorphic-provider.tsx":
-    "Passes the host's baseUrl through to the provider; not upstream yet.",
-  "desktop/todo-progress.tsx":
-    "An opaque popover surface where the registry's is translucent.",
+export const KNOWN_DRIFT: Readonly<Record<string, KnownDrift>> = {
+  "desktop/catamorphic-provider.tsx": {
+    reason:
+      "Passes the host's baseUrl through to the provider; not upstream yet.",
+    copy: "3b18154b1b56",
+  },
+  "desktop/todo-progress.tsx": {
+    reason: "An opaque popover surface where the registry's is translucent.",
+    copy: "1851d12b25cd",
+  },
 };
 
 export interface RegistryItemFiles {
   name: string;
   /** File names as they install, flat in a host's directory. */
   files: string[];
+  /** Files a consumer would install elsewhere (not a component, no target). */
+  elsewhere: Array<{ file: string; type: string }>;
   /** The npm packages the item declares, without versions. */
   dependencies: string[];
 }
 
 export interface CopyProblem {
+  /** The host whose copy it is, or `registry` for the item itself. */
   host: string;
   file: string;
-  kind: "drift" | "stale-exception" | "partial" | "import";
+  kind: "drift" | "stale-exception" | "partial" | "import" | "manifest";
   detail: string;
+}
+
+/** A short fingerprint of a copy as compared: see {@link normalize}. */
+export function copyHash(source: string): string {
+  return createHash("sha256")
+    .update(normalize(source))
+    .digest("hex")
+    .slice(0, 12);
 }
 
 /** Every registry item with its files and declared packages. */
@@ -91,11 +118,18 @@ export function registryItems(root: string): RegistryItemFiles[] {
           "utf8",
         ),
       );
+      const files = listOf(manifest, "files");
       return {
         name: entry.name,
-        files: listOf(manifest, "files").map((file) =>
-          path.basename(stringField(file, "path")),
-        ),
+        files: files.map((file) => path.basename(stringField(file, "path"))),
+        elsewhere: files.flatMap((file) => {
+          const type = stringField(file, "type");
+          return type &&
+            type !== "registry:component" &&
+            !stringField(file, "target")
+            ? [{ file: path.basename(stringField(file, "path")), type }]
+            : [];
+        }),
         dependencies: listOf(manifest, "dependencies")
           .filter((name): name is string => typeof name === "string")
           .map(packageName),
@@ -111,31 +145,34 @@ export function registryItems(root: string): RegistryItemFiles[] {
  * join an import's lines and sort it among the others differently.
  */
 export function normalize(source: string): string {
-  const lines = rewriteCrossItemImports(source)
-    .replaceAll(/(["'])(\.\.?\/[^"'\n]+)\.js\1/g, "$1$2$1")
+  const lines = withoutJsSpecifiers(rewriteCrossItemImports(source))
     .replaceAll(
       /^(?:import|export)\b[^;]*?\bfrom\s+["'][^"']+["'];/gm,
       (statement) =>
         statement.replaceAll(/\s+/g, " ").replaceAll(/,\s*\}/g, " }"),
     )
     .split("\n");
-  const imports = lines
-    .filter((line) => /^import\b.*;$/.test(line))
-    .sort((a, b) => a.localeCompare(b));
+  // A bare `import "x";` runs for its effect: its order is kept.
+  const sortable = (line: string) => /^import\b(?!\s*["']).*;$/.test(line);
+  const imports = lines.filter(sortable).sort((a, b) => a.localeCompare(b));
   let next = 0;
   return lines
-    .map((line) =>
-      /^import\b.*;$/.test(line) ? (imports[next++] ?? "") : line,
-    )
+    .map((line) => (sortable(line) ? (imports[next++] ?? "") : line))
     .join("\n");
+}
+
+/** Relative import and export specifiers without their `.js`. */
+function withoutJsSpecifiers(source: string): string {
+  return source.replaceAll(
+    /(\bfrom\s+|\bimport\s*\(?\s*)(["'])(\.\.?\/[^"'\n]+)\.js\2/g,
+    "$1$2$3$2",
+  );
 }
 
 /** A registry source as a host installs it. */
 export function installedSource(source: string, host: RegistryHost): string {
   const flat = rewriteCrossItemImports(source, host.extension);
-  return host.extension === ".js"
-    ? flat
-    : flat.replaceAll(/(["'])(\.\.?\/[^"'\n]+)\.js\1/g, "$1$2$1");
+  return host.extension === ".js" ? flat : withoutJsSpecifiers(flat);
 }
 
 /** The module specifiers a source imports or re-exports. */
@@ -164,7 +201,6 @@ export function disallowedImport(
   item: RegistryItemFiles,
   installedDir: string,
 ): string | undefined {
-  if (specifier.startsWith("@catamorphic/")) return undefined;
   if (specifier.startsWith("./")) {
     const base = path.join(installedDir, specifier.replace(/\.js$/, ""));
     const found = ["", ".ts", ".tsx", ".js", ".css"].some((extension) =>
@@ -189,11 +225,36 @@ export function checkRegistryCopies({
 }: {
   root?: string;
   hosts?: readonly RegistryHost[];
-  knownDrift?: Readonly<Record<string, string>>;
+  knownDrift?: Readonly<Record<string, KnownDrift>>;
 } = {}): CopyProblem[] {
   const problems: CopyProblem[] = [];
   const items = registryItems(root);
   const exceptions = new Set(Object.keys(knownDrift));
+  // The items themselves: what a consumer installs, and what they import.
+  for (const item of items) {
+    for (const { file, type } of item.elsewhere)
+      problems.push({
+        host: "registry",
+        file,
+        kind: "manifest",
+        detail: `${item.name} lists it as ${type}: it would not install beside the item's other files`,
+      });
+    for (const file of item.files) {
+      const sourcePath = path.join(root, REGISTRY_SOURCE, item.name, file);
+      if (!existsSync(sourcePath)) continue;
+      for (const specifier of importsOf(readFileSync(sourcePath, "utf8"))) {
+        if (specifier.startsWith(".")) continue;
+        const name = packageName(specifier);
+        if (PEERS.has(name) || item.dependencies.includes(name)) continue;
+        problems.push({
+          host: "registry",
+          file,
+          kind: "import",
+          detail: `imports ${specifier}, which the ${item.name} item does not declare`,
+        });
+      }
+    }
+  }
   for (const host of hosts) {
     const installedDir = path.join(root, host.dir);
     for (const item of items) {
@@ -217,12 +278,20 @@ export function checkRegistryCopies({
           "utf8",
         );
         const same = normalize(installed) === normalize(source);
-        if (!same && !exceptions.has(key))
+        const known = knownDrift[key];
+        if (!same && !known)
           problems.push({
             host: host.name,
             file,
             kind: "drift",
             detail: `differs from ${REGISTRY_SOURCE}/${item.name}/${file} beyond its imports`,
+          });
+        if (!same && known && known.copy !== copyHash(installed))
+          problems.push({
+            host: host.name,
+            file,
+            kind: "drift",
+            detail: `drifted further than KNOWN_DRIFT records: review it, then set its copy to ${copyHash(installed)}`,
           });
         if (same && exceptions.has(key))
           problems.push({
@@ -271,7 +340,7 @@ export function syncRegistryCopies({
   root?: string;
   host: RegistryHost;
   item?: string;
-  knownDrift?: Readonly<Record<string, string>>;
+  knownDrift?: Readonly<Record<string, KnownDrift>>;
 }): string[] {
   const installedDir = path.join(root, host.dir);
   const items = registryItems(root).filter((item) =>

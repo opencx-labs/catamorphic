@@ -97,7 +97,10 @@ import { AuthenticationRequiredCard } from "./authentication-required-card.js";
 import { ActivityText } from "./catamorphic/activity-text.js";
 import { ApprovalCard } from "./catamorphic/approval-card.js";
 import { stepToolName } from "./catamorphic/chat-steps.js";
-import { ChatTimeline } from "./catamorphic/chat-timeline";
+import {
+  ChatTimeline,
+  type ChatTimelineProps,
+} from "./catamorphic/chat-timeline";
 import { TodoProgress } from "./catamorphic/todo-progress.js";
 import { ChatFolder } from "./chat-folder.js";
 import { SurfacesRail } from "./chat-surface-rail.js";
@@ -170,6 +173,8 @@ const MAX_TOTAL_MEDIA_BYTES = 48 * 1024 * 1024;
 
 /** Server-side attachment cap, mirrored so the composer can refuse early. */
 const MAX_ATTACHMENTS = 32;
+/** One empty list, so what depends on the surfaces settles. */
+const NO_SURFACES: ChatSurface[] = [];
 
 /** A workspace tab dropped on the chat becomes a tab pill. */
 function tabPillFromDrag(
@@ -439,7 +444,7 @@ function ChatDockContent({
   nativeWindow = false,
   defaultAgentId,
   paletteTargeted,
-  surfaces = [],
+  surfaces = NO_SURFACES,
   onOpenSurface,
   onRemoveSurface,
   onOpenMcpApp,
@@ -962,6 +967,12 @@ function ChatDockContent({
     (agentId: string) =>
       roster.agents.find((agent) => agent.id === rosterAgentId(agentId))?.name,
     [roster.agents],
+  );
+  // Response links preview what the chat has on its surfaces.
+  const renderLink = useCallback(
+    (props: Parameters<NonNullable<ChatTimelineProps["renderLink"]>>[0]) =>
+      renderResponseLink({ ...props, surfaces }),
+    [surfaces],
   );
   // A chat in another project (the assistant's) opens by its bookmark
   // address; the rest by the timeline's own links.
@@ -2708,7 +2719,7 @@ function ChatDockContent({
               }
               emptyState={emptyPrompt.empty}
               onLinkClick={onLinkClick}
-              renderLink={(props) => renderResponseLink({ ...props, surfaces })}
+              renderLink={renderLink}
               onFileClick={onFileClick}
               resolveToolIcon={resolveToolIcon}
               onFork={entry.sessionId ? onFork : undefined}

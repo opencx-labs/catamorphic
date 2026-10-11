@@ -220,9 +220,7 @@
   vocabulary (parser in pwa+desktop, builders in server+pairing), and
   the CDP e2e client (desktop and pwa harnesses); (d) drive the pwa e2e
   against `buildStockServer` with the fake agent instead of the
-  hand-written `scripts/dev-server.mjs` wire fake; (e) memoize the pwa
-  chat timeline (React.memo rows, useMemo turn steps) - it re-parses
-  every message's tool payloads on each 500ms poll; (f) desktop-side
+  hand-written `scripts/dev-server.mjs` wire fake; (f) desktop-side
   composer lock on a forked session (the PWA locks; the desktop only
   shows the marker row).
 - **Remote machines for agents (t3-code-inspired).** t3 runs agents on

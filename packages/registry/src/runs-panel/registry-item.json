@@ -3,7 +3,7 @@
   "name": "runs-panel",
   "type": "registry:component",
   "description": "Unified Workflow Runs with capability-driven controls, selectable Batch processing scopes, Items, and input submission.",
-  "dependencies": ["@catamorphic/react"],
+  "dependencies": ["@catamorphic/react", "@catamorphic/ui"],
   "registryDependencies": ["@catamorphic/catamorphic-provider"],
   "files": [
     {

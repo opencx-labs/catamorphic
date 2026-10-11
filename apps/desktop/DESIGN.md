@@ -752,7 +752,7 @@ turn now reads while it runs:
   files it left changed.
 - **Nothing snaps.** Showing every note made settling the biggest jump in
   the chat: the notes left all at once. Notes that fold now stay for one
-  fold-away animation (`animate-fold-away`), keyed by the note, because a
+  fold-away animation (`cat-fold-away`), keyed by the note, because a
   settle can land over two renders. A lone step keeps the list's
   structure, so a second step grows the line to open it in. The clock,
   step times, the quiet hint and the interruption summary fade in. The
@@ -1322,7 +1322,7 @@ free. A folded note is not a new kind of thing: it is a row of the same
 steps disclosure tool calls already use, in true order (a note follows its
 own steps), expandable to its Markdown, still addressable by message id.
 Nothing is dropped, only moved one click away. The grouping is a pure
-function (`lib/turn-groups.ts`); a failed turn's error card and the note
+function (`turnRows`, the registry chat timeline's `turn-rows.ts`); a failed turn's error card and the note
 before it always stay in place.
 
 Steps are chrome around the conversation, not part of its text: the steps
@@ -1849,7 +1849,7 @@ and values with no meanings, and the descriptions in Settings were vague.
   settled choice decides where the notes go, as before; the steps stay
   folded then too, a lone step's included, so nothing opens as the turn
   ends. With "Fold notes into steps" that is the requested behaviour.
-  `foldsSteps` (lib/turn-groups) names the rule.
+  `foldsSteps` (the registry chat timeline's `turn-rows.ts`) names the rule.
 - **Settings say what shows.** The two choices' descriptions now name
   notes, steps and when each is open, and the options read "Notes and
   steps", "Latest note and steps", "Notes only".
