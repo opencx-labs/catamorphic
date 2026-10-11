@@ -69,11 +69,23 @@ export async function readSnapshot(input: {
         .map(turnFromRow)
         .sort((a, b) => a.ordinal - b.ordinal);
       // Items from the earliest recent turn's first item on, plus inputs of
-      // queued turns (and notices) wherever they are.
+      // queued turns (and notices) wherever they are. When that turn is the
+      // session's first, nothing is older: what came before it (a message
+      // delivered to read, a notice) is part of the snapshot.
       const earliest = turns[0];
-      const from = earliest
-        ? await firstPosition(trx, input.sessionId, earliest.id)
-        : null;
+      const earlierTurn = earliest
+        ? await trx
+            .selectFrom("agent_turns")
+            .select("id")
+            .where("session_id", "=", input.sessionId)
+            .where("ordinal", "<", earliest.ordinal)
+            .limit(1)
+            .executeTakeFirst()
+        : undefined;
+      const from =
+        earliest && earlierTurn
+          ? await firstPosition(trx, input.sessionId, earliest.id)
+          : null;
       const itemRows = await trx
         .selectFrom("agent_items")
         .select("payload")

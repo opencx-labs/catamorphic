@@ -303,7 +303,7 @@ interface FakeTurn {
     name: string,
     input: Record<string, unknown>,
   ): Promise<HostToolResult>;
-  /** The next message the person sends into this turn. */
+  /** The next message sent into this turn, or one that arrived unasked. */
   nextSteer(): Promise<{ text: string; attachments: AgentAttachment[] }>;
   discover(query: string): Promise<{ items: Array<{ name: string }> }>;
   /** Discovers the capability by name, then invokes it. */
@@ -359,9 +359,12 @@ export class E2eFakeAdapter implements HarnessAdapter {
   start(attempt: AttemptStart, host: AttemptHost): AttemptControl {
     let interrupted = false;
     const wakers = new Set<() => void>();
-    /** Messages sent into the turn that no step took, echoed at its end. */
-    const steered: string[] = [];
     type Steer = { text: string; attachments: AgentAttachment[] };
+    /**
+     * Messages sent into the turn that no step was waiting for: the next
+     * step that asks takes them first, the rest are echoed at its end.
+     */
+    const steered: Steer[] = [];
     const steerWaiters: Array<(input: Steer) => void> = [];
     const pause = (ms: number) =>
       new Promise<void>((resolve) => {
@@ -404,10 +407,14 @@ export class E2eFakeAdapter implements HarnessAdapter {
             : turn.capability(`workspace.${name}`, input),
         toolResult: (name, input) =>
           host.callTool({ name, input: toJson(input) }),
-        nextSteer: () =>
-          new Promise<Steer>((resolve) => {
-            steerWaiters.push(resolve);
-          }),
+        nextSteer: () => {
+          const waiting = steered.shift();
+          return waiting
+            ? Promise.resolve(waiting)
+            : new Promise<Steer>((resolve) => {
+                steerWaiters.push(resolve);
+              });
+        },
         discover: async (query) =>
           z.object({ items: z.array(z.object({ name: z.string() })) }).parse(
             await host
@@ -451,8 +458,8 @@ export class E2eFakeAdapter implements HarnessAdapter {
         }
         transcript.apply(step);
       }
-      for (const text of steered)
-        transcript.apply({ type: "text", content: `Steered: ${text}` });
+      for (const steer of steered)
+        transcript.apply({ type: "text", content: `Steered: ${steer.text}` });
       transcript.close();
       await host.nativeState.append({
         entries: [{ askedQuestion: turn.askedQuestion }],
@@ -476,7 +483,7 @@ export class E2eFakeAdapter implements HarnessAdapter {
       steer: async (input) => {
         const waiter = steerWaiters.shift();
         if (waiter) waiter(input);
-        else steered.push(input.text);
+        else steered.push(input);
         host.emit({ type: "input.consumed", itemIds: [input.itemId] });
         return true;
       },
