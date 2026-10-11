@@ -840,6 +840,12 @@ describe("dock modes", () => {
         };`);
         throw new Error(`${String(error)}; rects: ${JSON.stringify(rects)}`);
       });
+      // Chromium's own pointer may still be where an earlier hover left it
+      // (see hoverChip): park it off the chat, as the native one moves.
+      await app.cdp("Input.dispatchMouseEvent", {
+        type: "mouseMoved",
+        ...points.page,
+      });
       await app.movePointerThrough([points.dock, points.page]);
       await app.clickPointer(points.page);
       await runWait(
