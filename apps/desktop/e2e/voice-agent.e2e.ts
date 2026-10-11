@@ -74,9 +74,10 @@ const helpers = `
     const { url } = await api.getServerState();
     const response = await fetch(url + '/api/projects/' + ref.projectId + '/agent/sessions/' + ref.sessionId + path);
     const body = await response.json();
-    // A chat's transcript is its snapshot's message items (ADR 0197), and
-    // the task notifications it got (ADR 0217).
-    const roles = { user_message: 'user', assistant_message: 'assistant', task_notification: 'notification' };
+    // A chat's transcript is its snapshot's message items (ADR 0197): the
+    // person's, others' (the assistant's among them) and the task
+    // notifications it got (ADR 0217).
+    const roles = { user_message: 'user', inbound_message: 'inbound', assistant_message: 'assistant', task_notification: 'notification' };
     if (body?.snapshot)
       body.messages = [...body.snapshot.items]
         .filter((item) => item.kind in roles)
@@ -442,7 +443,7 @@ describe("voice", () => {
     await talk(UTTERANCES[2] ?? "", "Told Release notes.");
     await runWait(
       `const detail = await session(${JSON.stringify(mine)});
-       return detail.messages?.some((m) => m.role === 'user' && m.content === 'add a changelog entry');`,
+       return detail.messages?.some((m) => m.role === 'inbound' && m.content === 'add a changelog entry');`,
       { label: "the person's own chat got the assistant's message" },
     );
     await run(`mic().click(); return true;`);
@@ -589,7 +590,7 @@ describe("voice", () => {
     );
     await runWait(
       `const detail = await session(${JSON.stringify(docs)});
-       return detail.messages?.some((m) => m.role === 'user' && m.content === 'Keep the new ones.');`,
+       return detail.messages?.some((m) => m.role === 'inbound' && m.content === 'Keep the new ones.');`,
       { timeoutMs: 30_000, label: "the answer passed back to it" },
     );
     await run(`mic().click(); return true;`);
