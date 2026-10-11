@@ -63,6 +63,574 @@
         ],
         "nullable": true
       },
+      "InboundSenderInput": {
+        "anyOf": [
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": ["agent"]
+              },
+              "sessionId": {
+                "type": "string"
+              },
+              "agentId": {
+                "nullable": true,
+                "type": "string"
+              },
+              "projectId": {
+                "type": "string"
+              }
+            },
+            "required": ["kind", "sessionId", "agentId"]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": ["assistant"]
+              },
+              "externalUserId": {
+                "type": "string"
+              }
+            },
+            "required": ["kind", "externalUserId"]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": ["workflow"]
+              },
+              "runId": {
+                "type": "string"
+              },
+              "workflowName": {
+                "type": "string"
+              },
+              "displayName": {
+                "type": "string"
+              }
+            },
+            "required": ["kind", "runId", "workflowName"]
+          }
+        ]
+      },
+      "InputSourceInput": {
+        "anyOf": [
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": ["session"]
+              },
+              "sessionId": {
+                "type": "string"
+              },
+              "projectId": {
+                "type": "string"
+              }
+            },
+            "required": ["kind", "sessionId"]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": ["workflow_run"]
+              },
+              "runId": {
+                "type": "string"
+              },
+              "workflowName": {
+                "type": "string"
+              }
+            },
+            "required": ["kind", "runId", "workflowName"]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": ["surface"]
+              },
+              "key": {
+                "type": "string"
+              }
+            },
+            "required": ["kind", "key"]
+          }
+        ]
+      },
+      "SessionInputInput": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": ["user_message"]
+              },
+              "author": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": ["user"]
+                  },
+                  "externalUserId": {
+                    "type": "string"
+                  }
+                },
+                "required": ["kind", "externalUserId"]
+              },
+              "text": {
+                "type": "string"
+              },
+              "attachments": {
+                "type": "array",
+                "items": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": ["image", "document"]
+                        },
+                        "name": {
+                          "type": "string",
+                          "maxLength": 500
+                        },
+                        "mediaType": {
+                          "type": "string",
+                          "maxLength": 200
+                        },
+                        "dataBase64": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["kind", "name", "mediaType", "dataBase64"]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": ["text"]
+                        },
+                        "name": {
+                          "type": "string",
+                          "maxLength": 500
+                        },
+                        "text": {
+                          "type": "string"
+                        },
+                        "source": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "type": {
+                                  "type": "string",
+                                  "enum": ["paste"]
+                                }
+                              },
+                              "required": ["type"]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "type": {
+                                  "type": "string",
+                                  "enum": ["selection"]
+                                },
+                                "filePath": {
+                                  "type": "string"
+                                },
+                                "startLine": {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                },
+                                "endLine": {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                }
+                              },
+                              "required": ["type", "filePath"]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "type": {
+                                  "type": "string",
+                                  "enum": ["url"]
+                                },
+                                "url": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": ["type", "url"]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "type": {
+                                  "type": "string",
+                                  "enum": ["path"]
+                                },
+                                "path": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": ["type", "path"]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "type": {
+                                  "type": "string",
+                                  "enum": ["tab"]
+                                },
+                                "key": {
+                                  "type": "string"
+                                },
+                                "kind": {
+                                  "type": "string"
+                                },
+                                "title": {
+                                  "type": "string"
+                                },
+                                "url": {
+                                  "type": "string"
+                                },
+                                "filePath": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": ["type", "key", "kind", "title"]
+                            }
+                          ]
+                        }
+                      },
+                      "required": ["kind", "name", "text", "source"]
+                    }
+                  ]
+                }
+              }
+            },
+            "required": ["kind", "author", "text", "attachments"]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": ["inbound_message"]
+              },
+              "from": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "enum": ["agent"]
+                      },
+                      "sessionId": {
+                        "type": "string"
+                      },
+                      "agentId": {
+                        "nullable": true,
+                        "type": "string"
+                      },
+                      "projectId": {
+                        "type": "string"
+                      }
+                    },
+                    "required": ["kind", "sessionId", "agentId"]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "enum": ["assistant"]
+                      },
+                      "externalUserId": {
+                        "type": "string"
+                      }
+                    },
+                    "required": ["kind", "externalUserId"]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "enum": ["workflow"]
+                      },
+                      "runId": {
+                        "type": "string"
+                      },
+                      "workflowName": {
+                        "type": "string"
+                      },
+                      "displayName": {
+                        "type": "string"
+                      }
+                    },
+                    "required": ["kind", "runId", "workflowName"]
+                  }
+                ]
+              },
+              "text": {
+                "type": "string"
+              },
+              "attachments": {
+                "type": "array",
+                "items": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": ["image", "document"]
+                        },
+                        "name": {
+                          "type": "string",
+                          "maxLength": 500
+                        },
+                        "mediaType": {
+                          "type": "string",
+                          "maxLength": 200
+                        },
+                        "dataBase64": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["kind", "name", "mediaType", "dataBase64"]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": ["text"]
+                        },
+                        "name": {
+                          "type": "string",
+                          "maxLength": 500
+                        },
+                        "text": {
+                          "type": "string"
+                        },
+                        "source": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "type": {
+                                  "type": "string",
+                                  "enum": ["paste"]
+                                }
+                              },
+                              "required": ["type"]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "type": {
+                                  "type": "string",
+                                  "enum": ["selection"]
+                                },
+                                "filePath": {
+                                  "type": "string"
+                                },
+                                "startLine": {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                },
+                                "endLine": {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                }
+                              },
+                              "required": ["type", "filePath"]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "type": {
+                                  "type": "string",
+                                  "enum": ["url"]
+                                },
+                                "url": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": ["type", "url"]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "type": {
+                                  "type": "string",
+                                  "enum": ["path"]
+                                },
+                                "path": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": ["type", "path"]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "type": {
+                                  "type": "string",
+                                  "enum": ["tab"]
+                                },
+                                "key": {
+                                  "type": "string"
+                                },
+                                "kind": {
+                                  "type": "string"
+                                },
+                                "title": {
+                                  "type": "string"
+                                },
+                                "url": {
+                                  "type": "string"
+                                },
+                                "filePath": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": ["type", "key", "kind", "title"]
+                            }
+                          ]
+                        }
+                      },
+                      "required": ["kind", "name", "text", "source"]
+                    }
+                  ]
+                }
+              }
+            },
+            "required": ["kind", "from", "text", "attachments"]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": ["task_notification"]
+              },
+              "task": {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 100
+                  },
+                  "id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 500
+                  },
+                  "title": {
+                    "type": "string",
+                    "maxLength": 2000
+                  },
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "completed",
+                      "failed",
+                      "update",
+                      "needs_input",
+                      "stopped"
+                    ]
+                  }
+                },
+                "required": ["type", "id", "title", "status"]
+              },
+              "summary": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2000
+              },
+              "detail": {
+                "type": "string"
+              },
+              "source": {
+                "nullable": true,
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "enum": ["session"]
+                      },
+                      "sessionId": {
+                        "type": "string"
+                      },
+                      "projectId": {
+                        "type": "string"
+                      }
+                    },
+                    "required": ["kind", "sessionId"]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "enum": ["workflow_run"]
+                      },
+                      "runId": {
+                        "type": "string"
+                      },
+                      "workflowName": {
+                        "type": "string"
+                      }
+                    },
+                    "required": ["kind", "runId", "workflowName"]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "enum": ["surface"]
+                      },
+                      "key": {
+                        "type": "string"
+                      }
+                    },
+                    "required": ["kind", "key"]
+                  }
+                ]
+              }
+            },
+            "required": ["kind", "task", "summary", "detail", "source"]
+          }
+        ]
+      },
       "TurnInput": {
         "type": "object",
         "properties": {
@@ -443,91 +1011,42 @@
                 "nullable": true,
                 "type": "string"
               },
+              "dispatch": {
+                "type": "string",
+                "enum": ["queue", "steer", "interrupt", "message_only"],
+                "description": "queue: a new turn after the active one; steer: join the active turn; interrupt: stop the active turn and run this next; message_only: record it without starting a turn"
+              },
+              "attention": {
+                "nullable": true,
+                "type": "string",
+                "enum": ["required"]
+              },
+              "idempotencyKey": {
+                "nullable": true,
+                "type": "string"
+              },
+              "metadata": {
+                "type": "object",
+                "additionalProperties": {
+                  "$ref": "#/components/schemas/JsonValueInput"
+                }
+              },
               "kind": {
                 "type": "string",
                 "enum": ["user_message"]
               },
               "author": {
-                "anyOf": [
-                  {
-                    "type": "object",
-                    "properties": {
-                      "kind": {
-                        "type": "string",
-                        "enum": ["user"]
-                      },
-                      "externalUserId": {
-                        "type": "string"
-                      }
-                    },
-                    "required": ["kind", "externalUserId"]
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": ["user"]
                   },
-                  {
-                    "type": "object",
-                    "properties": {
-                      "kind": {
-                        "type": "string",
-                        "enum": ["agent"]
-                      },
-                      "sessionId": {
-                        "type": "string"
-                      },
-                      "agentId": {
-                        "nullable": true,
-                        "type": "string"
-                      }
-                    },
-                    "required": ["kind", "sessionId", "agentId"]
-                  },
-                  {
-                    "type": "object",
-                    "properties": {
-                      "kind": {
-                        "type": "string",
-                        "enum": ["workflow"]
-                      },
-                      "runId": {
-                        "type": "string"
-                      },
-                      "workflowName": {
-                        "type": "string"
-                      },
-                      "displayName": {
-                        "type": "string"
-                      }
-                    },
-                    "required": ["kind", "runId", "workflowName"]
-                  },
-                  {
-                    "type": "object",
-                    "properties": {
-                      "kind": {
-                        "type": "string",
-                        "enum": ["watcher"]
-                      },
-                      "watcherId": {
-                        "type": "string"
-                      },
-                      "runId": {
-                        "type": "string"
-                      }
-                    },
-                    "required": ["kind", "watcherId"]
-                  },
-                  {
-                    "type": "object",
-                    "properties": {
-                      "kind": {
-                        "type": "string",
-                        "enum": ["system"]
-                      },
-                      "code": {
-                        "type": "string"
-                      }
-                    },
-                    "required": ["kind", "code"]
+                  "externalUserId": {
+                    "type": "string"
                   }
-                ]
+                },
+                "required": ["kind", "externalUserId"]
               },
               "text": {
                 "type": "string"
@@ -664,6 +1183,88 @@
                     }
                   ]
                 }
+              }
+            },
+            "required": [
+              "id",
+              "sessionId",
+              "turnId",
+              "attemptId",
+              "parentItemId",
+              "position",
+              "status",
+              "nativeRef",
+              "createdAt",
+              "updatedAt",
+              "startedAt",
+              "endedAt",
+              "dispatch",
+              "attention",
+              "idempotencyKey",
+              "metadata",
+              "kind",
+              "author",
+              "text",
+              "attachments"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "sessionId": {
+                "type": "string"
+              },
+              "turnId": {
+                "nullable": true,
+                "type": "string"
+              },
+              "attemptId": {
+                "nullable": true,
+                "type": "string"
+              },
+              "parentItemId": {
+                "nullable": true,
+                "type": "string"
+              },
+              "position": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "status": {
+                "type": "string",
+                "enum": ["in_progress", "completed", "failed", "cancelled"]
+              },
+              "nativeRef": {
+                "nullable": true,
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "strength": {
+                    "type": "string",
+                    "enum": ["strong", "weak", "none"]
+                  }
+                },
+                "required": ["id", "strength"]
+              },
+              "createdAt": {
+                "type": "string"
+              },
+              "updatedAt": {
+                "type": "string"
+              },
+              "startedAt": {
+                "nullable": true,
+                "type": "string"
+              },
+              "endedAt": {
+                "nullable": true,
+                "type": "string"
               },
               "dispatch": {
                 "type": "string",
@@ -684,6 +1285,149 @@
                 "additionalProperties": {
                   "$ref": "#/components/schemas/JsonValueInput"
                 }
+              },
+              "kind": {
+                "type": "string",
+                "enum": ["inbound_message"]
+              },
+              "from": {
+                "$ref": "#/components/schemas/InboundSenderInput"
+              },
+              "text": {
+                "type": "string"
+              },
+              "attachments": {
+                "type": "array",
+                "items": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": ["image", "document"]
+                        },
+                        "name": {
+                          "type": "string",
+                          "maxLength": 500
+                        },
+                        "mediaType": {
+                          "type": "string",
+                          "maxLength": 200
+                        },
+                        "dataBase64": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["kind", "name", "mediaType", "dataBase64"]
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": ["text"]
+                        },
+                        "name": {
+                          "type": "string",
+                          "maxLength": 500
+                        },
+                        "text": {
+                          "type": "string"
+                        },
+                        "source": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "type": {
+                                  "type": "string",
+                                  "enum": ["paste"]
+                                }
+                              },
+                              "required": ["type"]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "type": {
+                                  "type": "string",
+                                  "enum": ["selection"]
+                                },
+                                "filePath": {
+                                  "type": "string"
+                                },
+                                "startLine": {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                },
+                                "endLine": {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                }
+                              },
+                              "required": ["type", "filePath"]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "type": {
+                                  "type": "string",
+                                  "enum": ["url"]
+                                },
+                                "url": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": ["type", "url"]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "type": {
+                                  "type": "string",
+                                  "enum": ["path"]
+                                },
+                                "path": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": ["type", "path"]
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "type": {
+                                  "type": "string",
+                                  "enum": ["tab"]
+                                },
+                                "key": {
+                                  "type": "string"
+                                },
+                                "kind": {
+                                  "type": "string"
+                                },
+                                "title": {
+                                  "type": "string"
+                                },
+                                "url": {
+                                  "type": "string"
+                                },
+                                "filePath": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": ["type", "key", "kind", "title"]
+                            }
+                          ]
+                        }
+                      },
+                      "required": ["kind", "name", "text", "source"]
+                    }
+                  ]
+                }
               }
             },
             "required": [
@@ -699,14 +1443,160 @@
               "updatedAt",
               "startedAt",
               "endedAt",
-              "kind",
-              "author",
-              "text",
-              "attachments",
               "dispatch",
               "attention",
               "idempotencyKey",
-              "metadata"
+              "metadata",
+              "kind",
+              "from",
+              "text",
+              "attachments"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "sessionId": {
+                "type": "string"
+              },
+              "turnId": {
+                "nullable": true,
+                "type": "string"
+              },
+              "attemptId": {
+                "nullable": true,
+                "type": "string"
+              },
+              "parentItemId": {
+                "nullable": true,
+                "type": "string"
+              },
+              "position": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "status": {
+                "type": "string",
+                "enum": ["in_progress", "completed", "failed", "cancelled"]
+              },
+              "nativeRef": {
+                "nullable": true,
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "strength": {
+                    "type": "string",
+                    "enum": ["strong", "weak", "none"]
+                  }
+                },
+                "required": ["id", "strength"]
+              },
+              "createdAt": {
+                "type": "string"
+              },
+              "updatedAt": {
+                "type": "string"
+              },
+              "startedAt": {
+                "nullable": true,
+                "type": "string"
+              },
+              "endedAt": {
+                "nullable": true,
+                "type": "string"
+              },
+              "dispatch": {
+                "type": "string",
+                "enum": ["queue", "steer", "interrupt", "message_only"],
+                "description": "queue: a new turn after the active one; steer: join the active turn; interrupt: stop the active turn and run this next; message_only: record it without starting a turn"
+              },
+              "attention": {
+                "nullable": true,
+                "type": "string",
+                "enum": ["required"]
+              },
+              "idempotencyKey": {
+                "nullable": true,
+                "type": "string"
+              },
+              "metadata": {
+                "type": "object",
+                "additionalProperties": {
+                  "$ref": "#/components/schemas/JsonValueInput"
+                }
+              },
+              "kind": {
+                "type": "string",
+                "enum": ["task_notification"]
+              },
+              "task": {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string"
+                  },
+                  "id": {
+                    "type": "string"
+                  },
+                  "title": {
+                    "type": "string"
+                  },
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "completed",
+                      "failed",
+                      "update",
+                      "needs_input",
+                      "stopped"
+                    ]
+                  }
+                },
+                "required": ["type", "id", "title", "status"]
+              },
+              "summary": {
+                "type": "string"
+              },
+              "detail": {
+                "type": "string"
+              },
+              "source": {
+                "nullable": true,
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/InputSourceInput"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "sessionId",
+              "turnId",
+              "attemptId",
+              "parentItemId",
+              "position",
+              "status",
+              "nativeRef",
+              "createdAt",
+              "updatedAt",
+              "startedAt",
+              "endedAt",
+              "dispatch",
+              "attention",
+              "idempotencyKey",
+              "metadata",
+              "kind",
+              "task",
+              "summary",
+              "detail",
+              "source"
             ]
           },
           {
@@ -2578,6 +3468,605 @@
         ],
         "nullable": true
       },
+      "InboundSender": {
+        "anyOf": [
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": ["agent"]
+              },
+              "sessionId": {
+                "type": "string"
+              },
+              "agentId": {
+                "nullable": true,
+                "type": "string"
+              },
+              "projectId": {
+                "type": "string"
+              }
+            },
+            "required": ["kind", "sessionId", "agentId"],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": ["assistant"]
+              },
+              "externalUserId": {
+                "type": "string"
+              }
+            },
+            "required": ["kind", "externalUserId"],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": ["workflow"]
+              },
+              "runId": {
+                "type": "string"
+              },
+              "workflowName": {
+                "type": "string"
+              },
+              "displayName": {
+                "type": "string"
+              }
+            },
+            "required": ["kind", "runId", "workflowName"],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "InputSource": {
+        "anyOf": [
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": ["session"]
+              },
+              "sessionId": {
+                "type": "string"
+              },
+              "projectId": {
+                "type": "string"
+              }
+            },
+            "required": ["kind", "sessionId"],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": ["workflow_run"]
+              },
+              "runId": {
+                "type": "string"
+              },
+              "workflowName": {
+                "type": "string"
+              }
+            },
+            "required": ["kind", "runId", "workflowName"],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": ["surface"]
+              },
+              "key": {
+                "type": "string"
+              }
+            },
+            "required": ["kind", "key"],
+            "additionalProperties": false
+          }
+        ]
+      },
+      "SessionInput": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": ["user_message"]
+              },
+              "author": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": ["user"]
+                  },
+                  "externalUserId": {
+                    "type": "string"
+                  }
+                },
+                "required": ["kind", "externalUserId"],
+                "additionalProperties": false
+              },
+              "text": {
+                "type": "string"
+              },
+              "attachments": {
+                "type": "array",
+                "items": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": ["image", "document"]
+                        },
+                        "name": {
+                          "type": "string",
+                          "maxLength": 500
+                        },
+                        "mediaType": {
+                          "type": "string",
+                          "maxLength": 200
+                        },
+                        "dataBase64": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["kind", "name", "mediaType", "dataBase64"],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": ["text"]
+                        },
+                        "name": {
+                          "type": "string",
+                          "maxLength": 500
+                        },
+                        "text": {
+                          "type": "string"
+                        },
+                        "source": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "type": {
+                                  "type": "string",
+                                  "enum": ["paste"]
+                                }
+                              },
+                              "required": ["type"],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "type": {
+                                  "type": "string",
+                                  "enum": ["selection"]
+                                },
+                                "filePath": {
+                                  "type": "string"
+                                },
+                                "startLine": {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                },
+                                "endLine": {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                }
+                              },
+                              "required": ["type", "filePath"],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "type": {
+                                  "type": "string",
+                                  "enum": ["url"]
+                                },
+                                "url": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": ["type", "url"],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "type": {
+                                  "type": "string",
+                                  "enum": ["path"]
+                                },
+                                "path": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": ["type", "path"],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "type": {
+                                  "type": "string",
+                                  "enum": ["tab"]
+                                },
+                                "key": {
+                                  "type": "string"
+                                },
+                                "kind": {
+                                  "type": "string"
+                                },
+                                "title": {
+                                  "type": "string"
+                                },
+                                "url": {
+                                  "type": "string"
+                                },
+                                "filePath": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": ["type", "key", "kind", "title"],
+                              "additionalProperties": false
+                            }
+                          ]
+                        }
+                      },
+                      "required": ["kind", "name", "text", "source"],
+                      "additionalProperties": false
+                    }
+                  ]
+                }
+              }
+            },
+            "required": ["kind", "author", "text", "attachments"],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": ["inbound_message"]
+              },
+              "from": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "enum": ["agent"]
+                      },
+                      "sessionId": {
+                        "type": "string"
+                      },
+                      "agentId": {
+                        "nullable": true,
+                        "type": "string"
+                      },
+                      "projectId": {
+                        "type": "string"
+                      }
+                    },
+                    "required": ["kind", "sessionId", "agentId"],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "enum": ["assistant"]
+                      },
+                      "externalUserId": {
+                        "type": "string"
+                      }
+                    },
+                    "required": ["kind", "externalUserId"],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "enum": ["workflow"]
+                      },
+                      "runId": {
+                        "type": "string"
+                      },
+                      "workflowName": {
+                        "type": "string"
+                      },
+                      "displayName": {
+                        "type": "string"
+                      }
+                    },
+                    "required": ["kind", "runId", "workflowName"],
+                    "additionalProperties": false
+                  }
+                ]
+              },
+              "text": {
+                "type": "string"
+              },
+              "attachments": {
+                "type": "array",
+                "items": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": ["image", "document"]
+                        },
+                        "name": {
+                          "type": "string",
+                          "maxLength": 500
+                        },
+                        "mediaType": {
+                          "type": "string",
+                          "maxLength": 200
+                        },
+                        "dataBase64": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["kind", "name", "mediaType", "dataBase64"],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": ["text"]
+                        },
+                        "name": {
+                          "type": "string",
+                          "maxLength": 500
+                        },
+                        "text": {
+                          "type": "string"
+                        },
+                        "source": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "type": {
+                                  "type": "string",
+                                  "enum": ["paste"]
+                                }
+                              },
+                              "required": ["type"],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "type": {
+                                  "type": "string",
+                                  "enum": ["selection"]
+                                },
+                                "filePath": {
+                                  "type": "string"
+                                },
+                                "startLine": {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                },
+                                "endLine": {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                }
+                              },
+                              "required": ["type", "filePath"],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "type": {
+                                  "type": "string",
+                                  "enum": ["url"]
+                                },
+                                "url": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": ["type", "url"],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "type": {
+                                  "type": "string",
+                                  "enum": ["path"]
+                                },
+                                "path": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": ["type", "path"],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "type": {
+                                  "type": "string",
+                                  "enum": ["tab"]
+                                },
+                                "key": {
+                                  "type": "string"
+                                },
+                                "kind": {
+                                  "type": "string"
+                                },
+                                "title": {
+                                  "type": "string"
+                                },
+                                "url": {
+                                  "type": "string"
+                                },
+                                "filePath": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": ["type", "key", "kind", "title"],
+                              "additionalProperties": false
+                            }
+                          ]
+                        }
+                      },
+                      "required": ["kind", "name", "text", "source"],
+                      "additionalProperties": false
+                    }
+                  ]
+                }
+              }
+            },
+            "required": ["kind", "from", "text", "attachments"],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": ["task_notification"]
+              },
+              "task": {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 100
+                  },
+                  "id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 500
+                  },
+                  "title": {
+                    "type": "string",
+                    "maxLength": 2000
+                  },
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "completed",
+                      "failed",
+                      "update",
+                      "needs_input",
+                      "stopped"
+                    ]
+                  }
+                },
+                "required": ["type", "id", "title", "status"],
+                "additionalProperties": false
+              },
+              "summary": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2000
+              },
+              "detail": {
+                "type": "string"
+              },
+              "source": {
+                "nullable": true,
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "enum": ["session"]
+                      },
+                      "sessionId": {
+                        "type": "string"
+                      },
+                      "projectId": {
+                        "type": "string"
+                      }
+                    },
+                    "required": ["kind", "sessionId"],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "enum": ["workflow_run"]
+                      },
+                      "runId": {
+                        "type": "string"
+                      },
+                      "workflowName": {
+                        "type": "string"
+                      }
+                    },
+                    "required": ["kind", "runId", "workflowName"],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "kind": {
+                        "type": "string",
+                        "enum": ["surface"]
+                      },
+                      "key": {
+                        "type": "string"
+                      }
+                    },
+                    "required": ["kind", "key"],
+                    "additionalProperties": false
+                  }
+                ]
+              }
+            },
+            "required": ["kind", "task", "summary", "detail", "source"],
+            "additionalProperties": false
+          }
+        ]
+      },
       "Turn": {
         "type": "object",
         "properties": {
@@ -2970,96 +4459,43 @@
                 "nullable": true,
                 "type": "string"
               },
+              "dispatch": {
+                "type": "string",
+                "enum": ["queue", "steer", "interrupt", "message_only"],
+                "description": "queue: a new turn after the active one; steer: join the active turn; interrupt: stop the active turn and run this next; message_only: record it without starting a turn"
+              },
+              "attention": {
+                "nullable": true,
+                "type": "string",
+                "enum": ["required"]
+              },
+              "idempotencyKey": {
+                "nullable": true,
+                "type": "string"
+              },
+              "metadata": {
+                "type": "object",
+                "additionalProperties": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              },
               "kind": {
                 "type": "string",
                 "enum": ["user_message"]
               },
               "author": {
-                "anyOf": [
-                  {
-                    "type": "object",
-                    "properties": {
-                      "kind": {
-                        "type": "string",
-                        "enum": ["user"]
-                      },
-                      "externalUserId": {
-                        "type": "string"
-                      }
-                    },
-                    "required": ["kind", "externalUserId"],
-                    "additionalProperties": false
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": ["user"]
                   },
-                  {
-                    "type": "object",
-                    "properties": {
-                      "kind": {
-                        "type": "string",
-                        "enum": ["agent"]
-                      },
-                      "sessionId": {
-                        "type": "string"
-                      },
-                      "agentId": {
-                        "nullable": true,
-                        "type": "string"
-                      }
-                    },
-                    "required": ["kind", "sessionId", "agentId"],
-                    "additionalProperties": false
-                  },
-                  {
-                    "type": "object",
-                    "properties": {
-                      "kind": {
-                        "type": "string",
-                        "enum": ["workflow"]
-                      },
-                      "runId": {
-                        "type": "string"
-                      },
-                      "workflowName": {
-                        "type": "string"
-                      },
-                      "displayName": {
-                        "type": "string"
-                      }
-                    },
-                    "required": ["kind", "runId", "workflowName"],
-                    "additionalProperties": false
-                  },
-                  {
-                    "type": "object",
-                    "properties": {
-                      "kind": {
-                        "type": "string",
-                        "enum": ["watcher"]
-                      },
-                      "watcherId": {
-                        "type": "string"
-                      },
-                      "runId": {
-                        "type": "string"
-                      }
-                    },
-                    "required": ["kind", "watcherId"],
-                    "additionalProperties": false
-                  },
-                  {
-                    "type": "object",
-                    "properties": {
-                      "kind": {
-                        "type": "string",
-                        "enum": ["system"]
-                      },
-                      "code": {
-                        "type": "string"
-                      }
-                    },
-                    "required": ["kind", "code"],
-                    "additionalProperties": false
+                  "externalUserId": {
+                    "type": "string"
                   }
-                ]
+                },
+                "required": ["kind", "externalUserId"],
+                "additionalProperties": false
               },
               "text": {
                 "type": "string"
@@ -3203,6 +4639,90 @@
                     }
                   ]
                 }
+              }
+            },
+            "required": [
+              "id",
+              "sessionId",
+              "turnId",
+              "attemptId",
+              "parentItemId",
+              "position",
+              "status",
+              "nativeRef",
+              "createdAt",
+              "updatedAt",
+              "startedAt",
+              "endedAt",
+              "dispatch",
+              "attention",
+              "idempotencyKey",
+              "metadata",
+              "kind",
+              "author",
+              "text",
+              "attachments"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "sessionId": {
+                "type": "string"
+              },
+              "turnId": {
+                "nullable": true,
+                "type": "string"
+              },
+              "attemptId": {
+                "nullable": true,
+                "type": "string"
+              },
+              "parentItemId": {
+                "nullable": true,
+                "type": "string"
+              },
+              "position": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "status": {
+                "type": "string",
+                "enum": ["in_progress", "completed", "failed", "cancelled"]
+              },
+              "nativeRef": {
+                "nullable": true,
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "strength": {
+                    "type": "string",
+                    "enum": ["strong", "weak", "none"]
+                  }
+                },
+                "required": ["id", "strength"],
+                "additionalProperties": false
+              },
+              "createdAt": {
+                "type": "string"
+              },
+              "updatedAt": {
+                "type": "string"
+              },
+              "startedAt": {
+                "nullable": true,
+                "type": "string"
+              },
+              "endedAt": {
+                "nullable": true,
+                "type": "string"
               },
               "dispatch": {
                 "type": "string",
@@ -3223,6 +4743,156 @@
                 "additionalProperties": {
                   "$ref": "#/components/schemas/JsonValue"
                 }
+              },
+              "kind": {
+                "type": "string",
+                "enum": ["inbound_message"]
+              },
+              "from": {
+                "$ref": "#/components/schemas/InboundSender"
+              },
+              "text": {
+                "type": "string"
+              },
+              "attachments": {
+                "type": "array",
+                "items": {
+                  "anyOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": ["image", "document"]
+                        },
+                        "name": {
+                          "type": "string",
+                          "maxLength": 500
+                        },
+                        "mediaType": {
+                          "type": "string",
+                          "maxLength": 200
+                        },
+                        "dataBase64": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["kind", "name", "mediaType", "dataBase64"],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "kind": {
+                          "type": "string",
+                          "enum": ["text"]
+                        },
+                        "name": {
+                          "type": "string",
+                          "maxLength": 500
+                        },
+                        "text": {
+                          "type": "string"
+                        },
+                        "source": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "type": {
+                                  "type": "string",
+                                  "enum": ["paste"]
+                                }
+                              },
+                              "required": ["type"],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "type": {
+                                  "type": "string",
+                                  "enum": ["selection"]
+                                },
+                                "filePath": {
+                                  "type": "string"
+                                },
+                                "startLine": {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                },
+                                "endLine": {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                }
+                              },
+                              "required": ["type", "filePath"],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "type": {
+                                  "type": "string",
+                                  "enum": ["url"]
+                                },
+                                "url": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": ["type", "url"],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "type": {
+                                  "type": "string",
+                                  "enum": ["path"]
+                                },
+                                "path": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": ["type", "path"],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "object",
+                              "properties": {
+                                "type": {
+                                  "type": "string",
+                                  "enum": ["tab"]
+                                },
+                                "key": {
+                                  "type": "string"
+                                },
+                                "kind": {
+                                  "type": "string"
+                                },
+                                "title": {
+                                  "type": "string"
+                                },
+                                "url": {
+                                  "type": "string"
+                                },
+                                "filePath": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": ["type", "key", "kind", "title"],
+                              "additionalProperties": false
+                            }
+                          ]
+                        }
+                      },
+                      "required": ["kind", "name", "text", "source"],
+                      "additionalProperties": false
+                    }
+                  ]
+                }
               }
             },
             "required": [
@@ -3238,14 +4908,163 @@
               "updatedAt",
               "startedAt",
               "endedAt",
-              "kind",
-              "author",
-              "text",
-              "attachments",
               "dispatch",
               "attention",
               "idempotencyKey",
-              "metadata"
+              "metadata",
+              "kind",
+              "from",
+              "text",
+              "attachments"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "sessionId": {
+                "type": "string"
+              },
+              "turnId": {
+                "nullable": true,
+                "type": "string"
+              },
+              "attemptId": {
+                "nullable": true,
+                "type": "string"
+              },
+              "parentItemId": {
+                "nullable": true,
+                "type": "string"
+              },
+              "position": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "status": {
+                "type": "string",
+                "enum": ["in_progress", "completed", "failed", "cancelled"]
+              },
+              "nativeRef": {
+                "nullable": true,
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "strength": {
+                    "type": "string",
+                    "enum": ["strong", "weak", "none"]
+                  }
+                },
+                "required": ["id", "strength"],
+                "additionalProperties": false
+              },
+              "createdAt": {
+                "type": "string"
+              },
+              "updatedAt": {
+                "type": "string"
+              },
+              "startedAt": {
+                "nullable": true,
+                "type": "string"
+              },
+              "endedAt": {
+                "nullable": true,
+                "type": "string"
+              },
+              "dispatch": {
+                "type": "string",
+                "enum": ["queue", "steer", "interrupt", "message_only"],
+                "description": "queue: a new turn after the active one; steer: join the active turn; interrupt: stop the active turn and run this next; message_only: record it without starting a turn"
+              },
+              "attention": {
+                "nullable": true,
+                "type": "string",
+                "enum": ["required"]
+              },
+              "idempotencyKey": {
+                "nullable": true,
+                "type": "string"
+              },
+              "metadata": {
+                "type": "object",
+                "additionalProperties": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              },
+              "kind": {
+                "type": "string",
+                "enum": ["task_notification"]
+              },
+              "task": {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string"
+                  },
+                  "id": {
+                    "type": "string"
+                  },
+                  "title": {
+                    "type": "string"
+                  },
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "completed",
+                      "failed",
+                      "update",
+                      "needs_input",
+                      "stopped"
+                    ]
+                  }
+                },
+                "required": ["type", "id", "title", "status"],
+                "additionalProperties": false
+              },
+              "summary": {
+                "type": "string"
+              },
+              "detail": {
+                "type": "string"
+              },
+              "source": {
+                "nullable": true,
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/InputSource"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "sessionId",
+              "turnId",
+              "attemptId",
+              "parentItemId",
+              "position",
+              "status",
+              "nativeRef",
+              "createdAt",
+              "updatedAt",
+              "startedAt",
+              "endedAt",
+              "dispatch",
+              "attention",
+              "idempotencyKey",
+              "metadata",
+              "kind",
+              "task",
+              "summary",
+              "detail",
+              "source"
             ],
             "additionalProperties": false
           },
@@ -29297,95 +31116,8 @@
                             "format": "uuid",
                             "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                           },
-                          "content": {
-                            "type": "string"
-                          },
-                          "author": {
-                            "anyOf": [
-                              {
-                                "type": "object",
-                                "properties": {
-                                  "kind": {
-                                    "type": "string",
-                                    "enum": ["user"]
-                                  },
-                                  "externalUserId": {
-                                    "type": "string"
-                                  }
-                                },
-                                "required": ["kind", "externalUserId"],
-                                "additionalProperties": false
-                              },
-                              {
-                                "type": "object",
-                                "properties": {
-                                  "kind": {
-                                    "type": "string",
-                                    "enum": ["agent"]
-                                  },
-                                  "sessionId": {
-                                    "type": "string"
-                                  },
-                                  "agentId": {
-                                    "nullable": true,
-                                    "type": "string"
-                                  }
-                                },
-                                "required": ["kind", "sessionId", "agentId"],
-                                "additionalProperties": false
-                              },
-                              {
-                                "type": "object",
-                                "properties": {
-                                  "kind": {
-                                    "type": "string",
-                                    "enum": ["workflow"]
-                                  },
-                                  "runId": {
-                                    "type": "string"
-                                  },
-                                  "workflowName": {
-                                    "type": "string"
-                                  },
-                                  "displayName": {
-                                    "type": "string"
-                                  }
-                                },
-                                "required": ["kind", "runId", "workflowName"],
-                                "additionalProperties": false
-                              },
-                              {
-                                "type": "object",
-                                "properties": {
-                                  "kind": {
-                                    "type": "string",
-                                    "enum": ["watcher"]
-                                  },
-                                  "watcherId": {
-                                    "type": "string"
-                                  },
-                                  "runId": {
-                                    "type": "string"
-                                  }
-                                },
-                                "required": ["kind", "watcherId"],
-                                "additionalProperties": false
-                              },
-                              {
-                                "type": "object",
-                                "properties": {
-                                  "kind": {
-                                    "type": "string",
-                                    "enum": ["system"]
-                                  },
-                                  "code": {
-                                    "type": "string"
-                                  }
-                                },
-                                "required": ["kind", "code"],
-                                "additionalProperties": false
-                              }
-                            ]
+                          "input": {
+                            "$ref": "#/components/schemas/SessionInput"
                           },
                           "mode": {
                             "type": "string",
@@ -29420,8 +31152,7 @@
                           "destinationHostId",
                           "authorityRevision",
                           "messageId",
-                          "content",
-                          "author",
+                          "input",
                           "mode",
                           "idempotencyKey",
                           "metadata",

@@ -447,7 +447,7 @@ describe("voice", () => {
     });
   }, 120_000);
 
-  it("hears a session's notes as it works, as one quiet line", async () => {
+  it("hears a session's notes as it works, as one task notification", async () => {
     const { assistantSession: ref } = await run<{ assistantSession: Ref }>(
       `return api.getPrefs();`,
     );
@@ -457,8 +457,8 @@ describe("voice", () => {
     const note = await runWait<{ text: string; notice: unknown }>(
       `const detail = await session(${JSON.stringify(ref)});
        const item = detail.snapshot.items.find((item) =>
-         item.kind === 'user_message' && item.author.kind === 'system' && item.author.code === 'session_notes');
-       return item && { text: item.text, notice: item.metadata.notice };`,
+         item.kind === 'task_notification' && item.task.type === 'followed_session');
+       return item && { text: item.detail, notice: item.summary };`,
       {
         timeoutMs: 30_000,
         label: "the session's notes in the assistant's chat",
@@ -471,12 +471,12 @@ describe("voice", () => {
     // Its result comes the usual way, and the notes never repeat it.
     await runWait(
       `const detail = await session(${JSON.stringify(ref)});
-       return detail.snapshot.items.some((item) => item.kind === 'user_message' && item.text.includes('Two pages are stale.'));`,
+       return detail.snapshot.items.some((item) => item.kind === 'task_notification' && item.detail.includes('Two pages are stale.'));`,
       { timeoutMs: 30_000, label: "the session's result delivered" },
     );
     const notes = await run<number>(
       `const detail = await session(${JSON.stringify(ref)});
-       return detail.snapshot.items.filter((item) => item.kind === 'user_message' && item.author.code === 'session_notes').length;`,
+       return detail.snapshot.items.filter((item) => item.kind === 'task_notification' && item.task.type === 'followed_session').length;`,
     );
     expect(notes).toBe(1);
     await runWait(`return !(await session(${JSON.stringify(ref)})).running;`, {
@@ -502,7 +502,7 @@ describe("voice", () => {
     const asked = await runWait<string>(
       `const detail = await session(${JSON.stringify(ref)});
        return detail.snapshot.items.find((item) =>
-         item.kind === 'user_message' && item.metadata?.notice === 'Layout: a question')?.text;`,
+         item.kind === 'task_notification' && item.summary === 'Layout: a question')?.detail;`,
       {
         timeoutMs: 30_000,
         label: "the session's question in the assistant's chat",
@@ -516,7 +516,7 @@ describe("voice", () => {
     // turn, with the question joining it, so any reply after it counts.
     await runWait(
       `const detail = await session(${JSON.stringify(ref)});
-       const asked = detail.snapshot.items.find((item) => item.metadata?.notice === 'Layout: a question');
+       const asked = detail.snapshot.items.find((item) => item.kind === 'task_notification' && item.summary === 'Layout: a question');
        return !detail.running && detail.snapshot.items.some((item) =>
          item.kind === 'assistant_message' && item.position > asked.position);`,
       {

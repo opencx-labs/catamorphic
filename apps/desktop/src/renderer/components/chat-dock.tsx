@@ -45,6 +45,7 @@ import {
   useState,
 } from "react";
 import type { AgentCommandsResult } from "../../shared/agent-commands.js";
+import { chatBookmarkUrl } from "../../shared/bookmark-target.js";
 import type {
   ChatDockProps,
   ChatSurface,
@@ -841,7 +842,6 @@ function ChatDockContent({
     .filter(
       (item) =>
         item.kind === "user_message" &&
-        item.author.kind === "user" &&
         item.text !== QUESTIONS_DISMISSED_MESSAGE &&
         !("questionRequestId" in item.metadata) &&
         item.text.trim() !== "",
@@ -2677,6 +2677,18 @@ function ChatDockContent({
                 roster.agents.find(
                   (agent) => agent.id === rosterAgentId(agentId),
                 )?.name
+              }
+              // A chat in another project (the assistant's) opens by its
+              // bookmark address; the rest by the timeline's own links.
+              sourceHref={(source) =>
+                source.kind === "session" &&
+                source.projectId &&
+                source.projectId !== projectId
+                  ? chatBookmarkUrl({
+                      projectId: source.projectId,
+                      sessionId: source.sessionId,
+                    })
+                  : undefined
               }
               error={
                 chat.connectionLost

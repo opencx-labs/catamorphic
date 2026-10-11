@@ -10490,32 +10490,7 @@ export interface paths {
                                 authorityRevision: number;
                                 /** Format: uuid */
                                 messageId: string;
-                                content: string;
-                                author: {
-                                    /** @enum {string} */
-                                    kind: "user";
-                                    externalUserId: string;
-                                } | {
-                                    /** @enum {string} */
-                                    kind: "agent";
-                                    sessionId: string;
-                                    agentId: string | null;
-                                } | {
-                                    /** @enum {string} */
-                                    kind: "workflow";
-                                    runId: string;
-                                    workflowName: string;
-                                    displayName?: string;
-                                } | {
-                                    /** @enum {string} */
-                                    kind: "watcher";
-                                    watcherId: string;
-                                    runId?: string;
-                                } | {
-                                    /** @enum {string} */
-                                    kind: "system";
-                                    code: string;
-                                };
+                                input: components["schemas"]["SessionInput"];
                                 /**
                                  * @description queue: a new turn after the active one; steer: join the active turn; interrupt: stop the active turn and run this next; message_only: record it without starting a turn
                                  * @enum {string}
@@ -17166,6 +17141,172 @@ export interface components {
         ProtocolJsonValueInput: (string | number | boolean | components["schemas"]["ProtocolJsonValueInput"][] | {
             [key: string]: components["schemas"]["ProtocolJsonValueInput"];
         }) | null;
+        InboundSenderInput: {
+            /** @enum {string} */
+            kind: "agent";
+            sessionId: string;
+            agentId: string | null;
+            projectId?: string;
+        } | {
+            /** @enum {string} */
+            kind: "assistant";
+            externalUserId: string;
+        } | {
+            /** @enum {string} */
+            kind: "workflow";
+            runId: string;
+            workflowName: string;
+            displayName?: string;
+        };
+        InputSourceInput: {
+            /** @enum {string} */
+            kind: "session";
+            sessionId: string;
+            projectId?: string;
+        } | {
+            /** @enum {string} */
+            kind: "workflow_run";
+            runId: string;
+            workflowName: string;
+        } | {
+            /** @enum {string} */
+            kind: "surface";
+            key: string;
+        };
+        SessionInputInput: {
+            /** @enum {string} */
+            kind: "user_message";
+            author: {
+                /** @enum {string} */
+                kind: "user";
+                externalUserId: string;
+            };
+            text: string;
+            attachments: ({
+                /** @enum {string} */
+                kind: "image" | "document";
+                name: string;
+                mediaType: string;
+                dataBase64: string;
+            } | {
+                /** @enum {string} */
+                kind: "text";
+                name: string;
+                text: string;
+                source: {
+                    /** @enum {string} */
+                    type: "paste";
+                } | {
+                    /** @enum {string} */
+                    type: "selection";
+                    filePath: string;
+                    startLine?: number;
+                    endLine?: number;
+                } | {
+                    /** @enum {string} */
+                    type: "url";
+                    url: string;
+                } | {
+                    /** @enum {string} */
+                    type: "path";
+                    path: string;
+                } | {
+                    /** @enum {string} */
+                    type: "tab";
+                    key: string;
+                    kind: string;
+                    title: string;
+                    url?: string;
+                    filePath?: string;
+                };
+            })[];
+        } | {
+            /** @enum {string} */
+            kind: "inbound_message";
+            from: {
+                /** @enum {string} */
+                kind: "agent";
+                sessionId: string;
+                agentId: string | null;
+                projectId?: string;
+            } | {
+                /** @enum {string} */
+                kind: "assistant";
+                externalUserId: string;
+            } | {
+                /** @enum {string} */
+                kind: "workflow";
+                runId: string;
+                workflowName: string;
+                displayName?: string;
+            };
+            text: string;
+            attachments: ({
+                /** @enum {string} */
+                kind: "image" | "document";
+                name: string;
+                mediaType: string;
+                dataBase64: string;
+            } | {
+                /** @enum {string} */
+                kind: "text";
+                name: string;
+                text: string;
+                source: {
+                    /** @enum {string} */
+                    type: "paste";
+                } | {
+                    /** @enum {string} */
+                    type: "selection";
+                    filePath: string;
+                    startLine?: number;
+                    endLine?: number;
+                } | {
+                    /** @enum {string} */
+                    type: "url";
+                    url: string;
+                } | {
+                    /** @enum {string} */
+                    type: "path";
+                    path: string;
+                } | {
+                    /** @enum {string} */
+                    type: "tab";
+                    key: string;
+                    kind: string;
+                    title: string;
+                    url?: string;
+                    filePath?: string;
+                };
+            })[];
+        } | {
+            /** @enum {string} */
+            kind: "task_notification";
+            task: {
+                type: string;
+                id: string;
+                title: string;
+                /** @enum {string} */
+                status: "completed" | "failed" | "update" | "needs_input" | "stopped";
+            };
+            summary: string;
+            detail: string;
+            source: ({
+                /** @enum {string} */
+                kind: "session";
+                sessionId: string;
+                projectId?: string;
+            } | {
+                /** @enum {string} */
+                kind: "workflow_run";
+                runId: string;
+                workflowName: string;
+            } | {
+                /** @enum {string} */
+                kind: "surface";
+                key: string;
+            }) | null;
+        };
         TurnInput: {
             id: string;
             sessionId: string;
@@ -17270,32 +17411,23 @@ export interface components {
             updatedAt: string;
             startedAt: string | null;
             endedAt: string | null;
+            /**
+             * @description queue: a new turn after the active one; steer: join the active turn; interrupt: stop the active turn and run this next; message_only: record it without starting a turn
+             * @enum {string}
+             */
+            dispatch: "queue" | "steer" | "interrupt" | "message_only";
+            /** @enum {string|null} */
+            attention: "required" | null;
+            idempotencyKey: string | null;
+            metadata: {
+                [key: string]: components["schemas"]["JsonValueInput"];
+            };
             /** @enum {string} */
             kind: "user_message";
             author: {
                 /** @enum {string} */
                 kind: "user";
                 externalUserId: string;
-            } | {
-                /** @enum {string} */
-                kind: "agent";
-                sessionId: string;
-                agentId: string | null;
-            } | {
-                /** @enum {string} */
-                kind: "workflow";
-                runId: string;
-                workflowName: string;
-                displayName?: string;
-            } | {
-                /** @enum {string} */
-                kind: "watcher";
-                watcherId: string;
-                runId?: string;
-            } | {
-                /** @enum {string} */
-                kind: "system";
-                code: string;
             };
             text: string;
             attachments: ({
@@ -17336,6 +17468,24 @@ export interface components {
                     filePath?: string;
                 };
             })[];
+        } | {
+            id: string;
+            sessionId: string;
+            turnId: string | null;
+            attemptId: string | null;
+            parentItemId: string | null;
+            position: number;
+            /** @enum {string} */
+            status: "in_progress" | "completed" | "failed" | "cancelled";
+            nativeRef: {
+                id: string;
+                /** @enum {string} */
+                strength: "strong" | "weak" | "none";
+            } | null;
+            createdAt: string;
+            updatedAt: string;
+            startedAt: string | null;
+            endedAt: string | null;
             /**
              * @description queue: a new turn after the active one; steer: join the active turn; interrupt: stop the active turn and run this next; message_only: record it without starting a turn
              * @enum {string}
@@ -17347,6 +17497,89 @@ export interface components {
             metadata: {
                 [key: string]: components["schemas"]["JsonValueInput"];
             };
+            /** @enum {string} */
+            kind: "inbound_message";
+            from: components["schemas"]["InboundSenderInput"];
+            text: string;
+            attachments: ({
+                /** @enum {string} */
+                kind: "image" | "document";
+                name: string;
+                mediaType: string;
+                dataBase64: string;
+            } | {
+                /** @enum {string} */
+                kind: "text";
+                name: string;
+                text: string;
+                source: {
+                    /** @enum {string} */
+                    type: "paste";
+                } | {
+                    /** @enum {string} */
+                    type: "selection";
+                    filePath: string;
+                    startLine?: number;
+                    endLine?: number;
+                } | {
+                    /** @enum {string} */
+                    type: "url";
+                    url: string;
+                } | {
+                    /** @enum {string} */
+                    type: "path";
+                    path: string;
+                } | {
+                    /** @enum {string} */
+                    type: "tab";
+                    key: string;
+                    kind: string;
+                    title: string;
+                    url?: string;
+                    filePath?: string;
+                };
+            })[];
+        } | {
+            id: string;
+            sessionId: string;
+            turnId: string | null;
+            attemptId: string | null;
+            parentItemId: string | null;
+            position: number;
+            /** @enum {string} */
+            status: "in_progress" | "completed" | "failed" | "cancelled";
+            nativeRef: {
+                id: string;
+                /** @enum {string} */
+                strength: "strong" | "weak" | "none";
+            } | null;
+            createdAt: string;
+            updatedAt: string;
+            startedAt: string | null;
+            endedAt: string | null;
+            /**
+             * @description queue: a new turn after the active one; steer: join the active turn; interrupt: stop the active turn and run this next; message_only: record it without starting a turn
+             * @enum {string}
+             */
+            dispatch: "queue" | "steer" | "interrupt" | "message_only";
+            /** @enum {string|null} */
+            attention: "required" | null;
+            idempotencyKey: string | null;
+            metadata: {
+                [key: string]: components["schemas"]["JsonValueInput"];
+            };
+            /** @enum {string} */
+            kind: "task_notification";
+            task: {
+                type: string;
+                id: string;
+                title: string;
+                /** @enum {string} */
+                status: "completed" | "failed" | "update" | "needs_input" | "stopped";
+            };
+            summary: string;
+            detail: string;
+            source: components["schemas"]["InputSourceInput"] | null;
         } | {
             id: string;
             sessionId: string;
@@ -17831,6 +18064,172 @@ export interface components {
         ProtocolJsonValue: (string | number | boolean | components["schemas"]["ProtocolJsonValue"][] | {
             [key: string]: components["schemas"]["ProtocolJsonValue"];
         }) | null;
+        InboundSender: {
+            /** @enum {string} */
+            kind: "agent";
+            sessionId: string;
+            agentId: string | null;
+            projectId?: string;
+        } | {
+            /** @enum {string} */
+            kind: "assistant";
+            externalUserId: string;
+        } | {
+            /** @enum {string} */
+            kind: "workflow";
+            runId: string;
+            workflowName: string;
+            displayName?: string;
+        };
+        InputSource: {
+            /** @enum {string} */
+            kind: "session";
+            sessionId: string;
+            projectId?: string;
+        } | {
+            /** @enum {string} */
+            kind: "workflow_run";
+            runId: string;
+            workflowName: string;
+        } | {
+            /** @enum {string} */
+            kind: "surface";
+            key: string;
+        };
+        SessionInput: {
+            /** @enum {string} */
+            kind: "user_message";
+            author: {
+                /** @enum {string} */
+                kind: "user";
+                externalUserId: string;
+            };
+            text: string;
+            attachments: ({
+                /** @enum {string} */
+                kind: "image" | "document";
+                name: string;
+                mediaType: string;
+                dataBase64: string;
+            } | {
+                /** @enum {string} */
+                kind: "text";
+                name: string;
+                text: string;
+                source: {
+                    /** @enum {string} */
+                    type: "paste";
+                } | {
+                    /** @enum {string} */
+                    type: "selection";
+                    filePath: string;
+                    startLine?: number;
+                    endLine?: number;
+                } | {
+                    /** @enum {string} */
+                    type: "url";
+                    url: string;
+                } | {
+                    /** @enum {string} */
+                    type: "path";
+                    path: string;
+                } | {
+                    /** @enum {string} */
+                    type: "tab";
+                    key: string;
+                    kind: string;
+                    title: string;
+                    url?: string;
+                    filePath?: string;
+                };
+            })[];
+        } | {
+            /** @enum {string} */
+            kind: "inbound_message";
+            from: {
+                /** @enum {string} */
+                kind: "agent";
+                sessionId: string;
+                agentId: string | null;
+                projectId?: string;
+            } | {
+                /** @enum {string} */
+                kind: "assistant";
+                externalUserId: string;
+            } | {
+                /** @enum {string} */
+                kind: "workflow";
+                runId: string;
+                workflowName: string;
+                displayName?: string;
+            };
+            text: string;
+            attachments: ({
+                /** @enum {string} */
+                kind: "image" | "document";
+                name: string;
+                mediaType: string;
+                dataBase64: string;
+            } | {
+                /** @enum {string} */
+                kind: "text";
+                name: string;
+                text: string;
+                source: {
+                    /** @enum {string} */
+                    type: "paste";
+                } | {
+                    /** @enum {string} */
+                    type: "selection";
+                    filePath: string;
+                    startLine?: number;
+                    endLine?: number;
+                } | {
+                    /** @enum {string} */
+                    type: "url";
+                    url: string;
+                } | {
+                    /** @enum {string} */
+                    type: "path";
+                    path: string;
+                } | {
+                    /** @enum {string} */
+                    type: "tab";
+                    key: string;
+                    kind: string;
+                    title: string;
+                    url?: string;
+                    filePath?: string;
+                };
+            })[];
+        } | {
+            /** @enum {string} */
+            kind: "task_notification";
+            task: {
+                type: string;
+                id: string;
+                title: string;
+                /** @enum {string} */
+                status: "completed" | "failed" | "update" | "needs_input" | "stopped";
+            };
+            summary: string;
+            detail: string;
+            source: ({
+                /** @enum {string} */
+                kind: "session";
+                sessionId: string;
+                projectId?: string;
+            } | {
+                /** @enum {string} */
+                kind: "workflow_run";
+                runId: string;
+                workflowName: string;
+            } | {
+                /** @enum {string} */
+                kind: "surface";
+                key: string;
+            }) | null;
+        };
         Turn: {
             id: string;
             sessionId: string;
@@ -17935,32 +18334,23 @@ export interface components {
             updatedAt: string;
             startedAt: string | null;
             endedAt: string | null;
+            /**
+             * @description queue: a new turn after the active one; steer: join the active turn; interrupt: stop the active turn and run this next; message_only: record it without starting a turn
+             * @enum {string}
+             */
+            dispatch: "queue" | "steer" | "interrupt" | "message_only";
+            /** @enum {string|null} */
+            attention: "required" | null;
+            idempotencyKey: string | null;
+            metadata: {
+                [key: string]: components["schemas"]["JsonValue"];
+            };
             /** @enum {string} */
             kind: "user_message";
             author: {
                 /** @enum {string} */
                 kind: "user";
                 externalUserId: string;
-            } | {
-                /** @enum {string} */
-                kind: "agent";
-                sessionId: string;
-                agentId: string | null;
-            } | {
-                /** @enum {string} */
-                kind: "workflow";
-                runId: string;
-                workflowName: string;
-                displayName?: string;
-            } | {
-                /** @enum {string} */
-                kind: "watcher";
-                watcherId: string;
-                runId?: string;
-            } | {
-                /** @enum {string} */
-                kind: "system";
-                code: string;
             };
             text: string;
             attachments: ({
@@ -18001,6 +18391,24 @@ export interface components {
                     filePath?: string;
                 };
             })[];
+        } | {
+            id: string;
+            sessionId: string;
+            turnId: string | null;
+            attemptId: string | null;
+            parentItemId: string | null;
+            position: number;
+            /** @enum {string} */
+            status: "in_progress" | "completed" | "failed" | "cancelled";
+            nativeRef: {
+                id: string;
+                /** @enum {string} */
+                strength: "strong" | "weak" | "none";
+            } | null;
+            createdAt: string;
+            updatedAt: string;
+            startedAt: string | null;
+            endedAt: string | null;
             /**
              * @description queue: a new turn after the active one; steer: join the active turn; interrupt: stop the active turn and run this next; message_only: record it without starting a turn
              * @enum {string}
@@ -18012,6 +18420,89 @@ export interface components {
             metadata: {
                 [key: string]: components["schemas"]["JsonValue"];
             };
+            /** @enum {string} */
+            kind: "inbound_message";
+            from: components["schemas"]["InboundSender"];
+            text: string;
+            attachments: ({
+                /** @enum {string} */
+                kind: "image" | "document";
+                name: string;
+                mediaType: string;
+                dataBase64: string;
+            } | {
+                /** @enum {string} */
+                kind: "text";
+                name: string;
+                text: string;
+                source: {
+                    /** @enum {string} */
+                    type: "paste";
+                } | {
+                    /** @enum {string} */
+                    type: "selection";
+                    filePath: string;
+                    startLine?: number;
+                    endLine?: number;
+                } | {
+                    /** @enum {string} */
+                    type: "url";
+                    url: string;
+                } | {
+                    /** @enum {string} */
+                    type: "path";
+                    path: string;
+                } | {
+                    /** @enum {string} */
+                    type: "tab";
+                    key: string;
+                    kind: string;
+                    title: string;
+                    url?: string;
+                    filePath?: string;
+                };
+            })[];
+        } | {
+            id: string;
+            sessionId: string;
+            turnId: string | null;
+            attemptId: string | null;
+            parentItemId: string | null;
+            position: number;
+            /** @enum {string} */
+            status: "in_progress" | "completed" | "failed" | "cancelled";
+            nativeRef: {
+                id: string;
+                /** @enum {string} */
+                strength: "strong" | "weak" | "none";
+            } | null;
+            createdAt: string;
+            updatedAt: string;
+            startedAt: string | null;
+            endedAt: string | null;
+            /**
+             * @description queue: a new turn after the active one; steer: join the active turn; interrupt: stop the active turn and run this next; message_only: record it without starting a turn
+             * @enum {string}
+             */
+            dispatch: "queue" | "steer" | "interrupt" | "message_only";
+            /** @enum {string|null} */
+            attention: "required" | null;
+            idempotencyKey: string | null;
+            metadata: {
+                [key: string]: components["schemas"]["JsonValue"];
+            };
+            /** @enum {string} */
+            kind: "task_notification";
+            task: {
+                type: string;
+                id: string;
+                title: string;
+                /** @enum {string} */
+                status: "completed" | "failed" | "update" | "needs_input" | "stopped";
+            };
+            summary: string;
+            detail: string;
+            source: components["schemas"]["InputSource"] | null;
         } | {
             id: string;
             sessionId: string;

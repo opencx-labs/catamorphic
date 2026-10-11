@@ -1,6 +1,6 @@
 # 0155 — Native shells, host background commands, and the agent's live status
 
-- **Status:** Accepted; refined by 0174 (sandbox background processes)
+- **Status:** Accepted; refined by 0174 (sandbox background processes); wakes are task notifications by [0217](0217-only-people-write-user-messages.md)
 - **Date:** 2026-09-23
 - **Refines:** 0069, 0074, 0101, 0133
 

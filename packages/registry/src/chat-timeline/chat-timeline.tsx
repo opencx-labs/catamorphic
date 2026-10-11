@@ -19,6 +19,7 @@ import {
 } from "@catamorphic/react";
 import {
   ArrowDown,
+  Bell,
   Bot,
   Brain,
   Check,
@@ -27,9 +28,9 @@ import {
   GitFork,
   ListChecks,
   LoaderCircle,
+  type LucideIcon,
   MessageCircleQuestion,
   Pencil,
-  Radio,
   RotateCcw,
   SquareTerminal,
   Undo2,
@@ -47,7 +48,17 @@ import Markdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { StickToBottom, useStickToBottomContext } from "use-stick-to-bottom";
 import { ChatQueue } from "../chat-queue/chat-queue.js";
-import { SessionAttribution } from "./session-attribution.js";
+import {
+  hrefOf,
+  InboundMessageRow,
+  noticeText,
+  QueuedInputLine,
+  type SourceHref,
+  sourceLabel,
+  TaskNotificationRows,
+  taskIcon,
+  taskTone,
+} from "./session-input.js";
 
 const REMARK_PLUGINS = [remarkGfm];
 
@@ -125,8 +136,13 @@ export interface ChatTimelineProps {
   onLoadOlder?: () => void;
   /** A request a `request` step points at, to label it. */
   resolveRequest?: (requestId: string) => RuntimeRequest | undefined;
-  /** An agent's display name, for agent-change notices. */
+  /** An agent's display name, for agent-change notices and senders. */
   resolveAgentName?: (agentId: string) => string | undefined;
+  /**
+   * The host's address for where an input came from (a chat in another
+   * project, a terminal). Defaults to `session:`, `run:` and surface keys.
+   */
+  sourceHref?: SourceHref;
   /**
    * Render a person's message body. Defaults to the text with attachment
    * names inline; hosts with attachment pills render their own.
@@ -193,6 +209,7 @@ export function ChatTimeline({
   onLoadOlder,
   resolveRequest,
   resolveAgentName,
+  sourceHref,
   renderUserContent,
   error,
   emptyState = "Ask the agent to build or change your project.",
@@ -223,6 +240,7 @@ export function ChatTimeline({
     resolveToolIcon,
     resolveRequest,
     resolveAgentName,
+    sourceHref,
     renderUserContent,
     onRetry,
     onInterrupt,
@@ -294,6 +312,12 @@ export function ChatTimeline({
             onCancel={onCancelQueued}
             onSendNow={onSendQueuedNow}
             onHold={onHoldQueued}
+            renderInput={(queued) => (
+              <QueuedInputLine
+                queued={queued}
+                resolveAgentName={resolveAgentName}
+              />
+            )}
           />
         )}
         {error && (
@@ -332,6 +356,7 @@ interface TurnContext
   > {
   /** A turn runs now: undo waits until it settles (the server refuses it). */
   working: boolean;
+  sourceHref?: SourceHref;
 }
 
 function entryId(entry: TimelineEntry): string | undefined {
@@ -340,6 +365,8 @@ function entryId(entry: TimelineEntry): string | undefined {
       return entry.id;
     case "steps":
       return undefined;
+    case "notifications":
+      return entry.items[0]?.id;
     default:
       return entry.item.id;
   }
@@ -376,7 +403,11 @@ function TurnView({
             data-message-id={id}
             tabIndex={id ? -1 : undefined}
             className={
-              id && id === context.focusMessageId
+              // Inbound rows and notifications outline themselves.
+              id &&
+              id === context.focusMessageId &&
+              item.kind !== "inbound" &&
+              item.kind !== "notifications"
                 ? "rounded-md outline outline-1 outline-accent/50"
                 : "contents"
             }
@@ -578,6 +609,25 @@ function Entry({
   switch (entry.kind) {
     case "input":
       return <InputMessage item={entry.item} context={context} />;
+    case "inbound":
+      return (
+        <InboundMessageRow
+          item={entry.item}
+          onOpen={context.onLinkClick}
+          resolveAgentName={context.resolveAgentName}
+          sourceHref={context.sourceHref}
+          focused={entry.item.id === context.focusMessageId}
+        />
+      );
+    case "notifications":
+      return (
+        <TaskNotificationRows
+          items={entry.items}
+          onOpen={context.onLinkClick}
+          sourceHref={context.sourceHref}
+          focusMessageId={context.focusMessageId}
+        />
+      );
     case "reply":
       return (
         <article className="mr-auto max-w-[85%] text-sm">
@@ -671,32 +721,11 @@ function InputMessage({
   context: TurnContext;
 }) {
   const entered = useEntered();
-  // Host notices (a background command finished) read as one quiet line;
-  // the agent gets the full message and answers below it.
-  const notice =
-    typeof item.metadata.notice === "string" ? item.metadata.notice : undefined;
-  if (item.author.kind === "system" && notice)
-    return (
-      <div
-        className="flex items-center justify-center gap-1.5 text-center text-xs text-fg-faint"
-        data-testid="chat-notice"
-      >
-        <Radio className="size-3 shrink-0" />
-        <span className="truncate">{notice}</span>
-      </div>
-    );
-  const person = item.author.kind === "user";
   return (
     <article
-      className={`max-w-[85%] text-sm ${ENTER} ${enterPose(entered)} ${person ? USER_BUBBLE : "mr-auto"}`}
+      className={`max-w-[85%] text-sm ${ENTER} ${enterPose(entered)} ${USER_BUBBLE}`}
       data-testid="chat-user-message"
     >
-      <SessionAttribution
-        author={item.author}
-        metadata={item.metadata}
-        attention={item.attention}
-        onOpen={context.onLinkClick}
-      />
       <div className="whitespace-pre-wrap break-words leading-6">
         {context.renderUserContent
           ? context.renderUserContent(item)
@@ -833,7 +862,9 @@ function NoticeLine({
   return (
     <div data-notice-code={item.code} className="contents">
       <Divider testId="chat-session-notice">
-        {agentName ? `Switched to ${agentName}` : item.text}
+        {agentName
+          ? `Switched to ${agentName}`
+          : noticeText(item, context.resolveAgentName)}
       </Divider>
     </div>
   );
@@ -1075,9 +1106,14 @@ interface TurnStep {
     | "subagent"
     | "reasoning"
     | "plan"
-    | "request";
+    | "request"
+    | "notification";
   /** Row header: the technical detail lives here, not on the live line. */
   label: string;
+  /** Its own glyph and color (a task notification's), instead of the kind's. */
+  icon?: { Icon: LucideIcon; className: string };
+  /** Where the expanded detail links to: a notification's task. */
+  link?: { href: string; label: string };
   /** Monospace label (commands, paths, unrecognized tool names). */
   mono?: boolean;
   /** Tool name for the icon lookup (`server/tool` for MCP). */
@@ -1099,6 +1135,7 @@ const STEP_ICONS = {
   reasoning: Brain,
   plan: ListChecks,
   request: MessageCircleQuestion,
+  notification: Bell,
 } as const;
 
 /**
@@ -1443,8 +1480,9 @@ function requestStepLabel(request: RuntimeRequest | undefined): string {
 /** A turn's work items as rows of its steps disclosure. */
 function turnSteps(
   items: readonly WorkItem[],
-  resolveRequest: ChatTimelineProps["resolveRequest"],
+  context: Pick<TurnContext, "resolveRequest" | "sourceHref">,
 ): TurnStep[] {
+  const { resolveRequest } = context;
   const steps: TurnStep[] = [];
   for (const item of items) {
     const base = {
@@ -1557,6 +1595,28 @@ function turnSteps(
           detail: stepDetailText(item.result),
         });
         break;
+      // News about a task the agent started that reached it while it
+      // worked (ADR 0217): part of the work, like a tool's result.
+      case "task_notification": {
+        const href = item.source
+          ? hrefOf(item.source, context.sourceHref)
+          : undefined;
+        steps.push({
+          ...base,
+          kind: "notification",
+          label: item.summary,
+          icon: {
+            Icon: taskIcon(item.task.type),
+            className: taskTone(item.task.status),
+          },
+          detail: stepDetailText(item.detail),
+          detailMono: true,
+          ...(href && item.source
+            ? { link: { href, label: sourceLabel(item.source) } }
+            : {}),
+        });
+        break;
+      }
     }
   }
   return steps;
@@ -1579,7 +1639,7 @@ function TurnSteps({
   context: TurnContext;
 }) {
   const [expanded, setExpanded] = useState(false);
-  const steps = turnSteps(items, context.resolveRequest);
+  const steps = turnSteps(items, context);
   if (steps.length === 0) return null;
   const starts = items.flatMap((item) =>
     item.startedAt ? [Date.parse(item.startedAt)] : [],
@@ -1619,6 +1679,7 @@ function TurnSteps({
               <StepRow
                 key={step.id}
                 step={step}
+                onOpen={context.onLinkClick}
                 iconUrl={
                   step.toolName
                     ? context.resolveToolIcon?.(step.toolName)
@@ -1633,10 +1694,18 @@ function TurnSteps({
   );
 }
 
-function StepRow({ step, iconUrl }: { step: TurnStep; iconUrl?: string }) {
+function StepRow({
+  step,
+  iconUrl,
+  onOpen,
+}: {
+  step: TurnStep;
+  iconUrl?: string;
+  onOpen?: ChatTimelineProps["onLinkClick"];
+}) {
   const [open, setOpen] = useState(false);
-  const Icon = STEP_ICONS[step.kind];
-  const expandable = Boolean(step.detail);
+  const Icon = step.icon?.Icon ?? STEP_ICONS[step.kind];
+  const expandable = Boolean(step.detail || step.link);
   return (
     <div data-testid="chat-step" data-step-status={step.status}>
       <button
@@ -1654,7 +1723,9 @@ function StepRow({ step, iconUrl }: { step: TurnStep; iconUrl?: string }) {
         ) : iconUrl ? (
           <img src={iconUrl} alt="" className="size-3.5 shrink-0 rounded-sm" />
         ) : (
-          <Icon className="size-3.5 shrink-0 text-fg-faint" />
+          <Icon
+            className={`size-3.5 shrink-0 ${step.icon?.className ?? "text-fg-faint"}`}
+          />
         )}
         <span
           className={`min-w-0 flex-1 truncate ${step.mono ? "font-mono" : ""}`}
@@ -1677,19 +1748,40 @@ function StepRow({ step, iconUrl }: { step: TurnStep; iconUrl?: string }) {
       </button>
       {/* Same grid-rows tween as the step list: payloads animate open and
           closed instead of popping in and out. */}
-      {step.detail && (
+      {expandable && (
         <div
           className={`grid transition-[grid-template-rows] duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${
             open ? "grid-rows-[1fr]" : "grid-rows-[0fr]"
           }`}
         >
-          <div className="overflow-hidden">
-            <pre
-              className={`mb-1 ml-6 mt-0.5 max-h-56 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border bg-bg-inset p-2 text-[11px] leading-4 text-fg-muted ${step.detailMono ? "font-mono" : "font-sans"}`}
-              data-testid="chat-step-detail"
-            >
-              {step.detail}
-            </pre>
+          <div className="overflow-hidden" inert={!open}>
+            {step.detail && (
+              <pre
+                className={`mb-1 ml-6 mt-0.5 max-h-56 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border bg-bg-inset p-2 text-[11px] leading-4 text-fg-muted ${step.detailMono ? "font-mono" : "font-sans"}`}
+                data-testid="chat-step-detail"
+              >
+                {step.detail}
+              </pre>
+            )}
+            {step.link && (
+              <a
+                href={step.link.href}
+                className="mb-1 ml-6 inline-block rounded text-[11px] text-accent underline-offset-2 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+                data-testid="chat-step-source"
+                onClick={(event) => {
+                  if (!onOpen || !step.link) return;
+                  event.preventDefault();
+                  onOpen(step.link.href, {
+                    metaKey: event.metaKey,
+                    ctrlKey: event.ctrlKey,
+                    altKey: event.altKey,
+                    shiftKey: event.shiftKey,
+                  });
+                }}
+              >
+                {step.link.label}
+              </a>
+            )}
           </div>
         </div>
       )}

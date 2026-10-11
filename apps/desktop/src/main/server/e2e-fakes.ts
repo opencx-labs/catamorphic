@@ -1550,6 +1550,43 @@ export const catalog = defineWorkflow(({ defineBoundary }) => ({
     return;
   }
 
+  // "monitor: <cmd>" → a background command that wakes the chat on what it
+  // prints, while this turn keeps working: its news reaches the turn as it
+  // works, once per line it has not reported (ADR 0217).
+  const monitorRun = /^monitor:\s*(.+)$/s.exec(message.trim());
+  if (monitorRun?.[1]) {
+    const command = monitorRun[1];
+    const description = "Start the worker";
+    yield { type: "title", content: "Monitor exercise" };
+    yield {
+      type: "tool_call",
+      toolName: "run_background_command",
+      toolInput: { command, description },
+      description,
+    };
+    await turn.tool("run_background_command", {
+      command,
+      description,
+      wake_on_output: "Error|ready",
+      wake_on_exit: true,
+    });
+    yield { type: "text", content: "Watching the worker while I work." };
+    const news = await Promise.race([
+      turn.nextSteer(),
+      turn.pause(30_000).then(() => undefined),
+    ]);
+    yield {
+      type: "text",
+      content: news?.text.includes("<task-notification>")
+        ? "The worker printed an error. Looking into it."
+        : "Nothing from the worker yet.",
+    };
+    // Still working while the error repeats: nothing more wakes this turn.
+    await turn.pause(6_000);
+    yield { type: "text", content: "Done with the worker for now." };
+    return;
+  }
+
   // "terminal: <cmd>" → the REAL run_background_command tool, then a
   // blocking read until it ends: e2e's path through the bridge with the
   // deterministic agent (chips, spinners, output). "background: <cmd>"
@@ -1941,6 +1978,17 @@ export const catalog = defineWorkflow(({ defineBoundary }) => ({
     return;
   }
 
+  // Work's news about a task the agent started (ADR 0217): read, and said.
+  const summary = /<summary>([^<]*)<\/summary>/.exec(message)?.[1];
+  if (summary && message.includes("<task-notification>")) {
+    const detail = /<detail>\n([\s\S]*?)\n<\/detail>/.exec(message)?.[1] ?? "";
+    const last = detail.trim().split("\n").filter(Boolean).at(-1);
+    yield {
+      type: "text",
+      content: `Read it: ${summary}.${last ? ` Last line: ${last}` : ""}`,
+    };
+    return;
+  }
   yield { type: "title", content: "Quick chat" };
   yield { type: "text", content: `You said: ${message}` };
 }

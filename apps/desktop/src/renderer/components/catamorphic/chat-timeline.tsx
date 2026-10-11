@@ -18,6 +18,7 @@ import {
 import {
   ArrowDown,
   ArrowUp,
+  Bell,
   Bot,
   Brain,
   Check,
@@ -27,6 +28,7 @@ import {
   KeyRound,
   ListChecks,
   LoaderCircle,
+  type LucideIcon,
   MessageCircleQuestionMark,
   MessageSquareText,
   Pencil,
@@ -65,7 +67,17 @@ import { ActivityText } from "../activity-text";
 import { ContextPill } from "../context-pill";
 import { ShortcutHint } from "../shortcut-hint";
 import { ChatQueue } from "./chat-queue.js";
-import { SessionAttribution } from "./session-attribution.js";
+import {
+  hrefOf,
+  InboundMessageRow,
+  noticeText,
+  QueuedInputLine,
+  type SourceHref,
+  sourceLabel,
+  TaskNotificationRows,
+  taskIcon,
+  taskTone,
+} from "./session-input.js";
 
 export type { AgentQuestion, AgentQuestionOption } from "@catamorphic/react";
 
@@ -226,8 +238,13 @@ export interface ChatTimelineProps {
    * max-width column while the scrollbar hugs the container edge.
    */
   contentClassName?: string;
-  /** Names an agent id (agent-change notices); falls back to the notice text. */
+  /** Names an agent id (agent-change notices, senders). */
   resolveAgentName?: (agentId: string) => string | undefined;
+  /**
+   * The host's address for where an input came from (ADR 0217): a chat in
+   * another project, a terminal. Defaults to `session:`, `run:` and keys.
+   */
+  sourceHref?: SourceHref;
   /** Host-owned previews for sanitized Markdown links. */
   renderLink?: (props: {
     href: string;
@@ -304,6 +321,7 @@ export function ChatTimeline({
   className = "",
   contentClassName = "",
   resolveAgentName,
+  sourceHref,
   onLinkClick,
   renderLink,
   onFileClick,
@@ -325,21 +343,36 @@ export function ChatTimeline({
   const hasUserMessages =
     pending.length > 0 ||
     turns.some((group) =>
-      group.entries.some(
-        (entry) => entry.kind === "input" && isPersonsMessage(entry.item),
-      ),
+      group.entries.some((entry) => entry.kind === "input"),
     );
   const backgroundStates = assignBackgroundCommands(
     views,
     backgroundCommands ?? [],
   );
   const folding = useFoldingNotes(views);
-  const queued = (queue ?? []).map((entry) => ({
-    id: entry.turn.id,
-    content: entry.item?.text ?? "",
-    attachments: entry.item?.attachments ?? [],
-    held: entry.turn.status === "held",
-  }));
+  // The person's own messages wait as editable bubbles; anything else
+  // that waits (ADR 0217) is one line naming who or what queued it.
+  const queued = (queue ?? []).map((entry) =>
+    entry.item?.kind === "user_message"
+      ? {
+          id: entry.turn.id,
+          content: entry.item.text,
+          attachments: entry.item.attachments,
+          held: entry.turn.status === "held",
+        }
+      : {
+          id: entry.turn.id,
+          content: "",
+          attachments: [],
+          held: entry.turn.status === "held",
+          line: (
+            <QueuedInputLine
+              queued={entry}
+              resolveAgentName={resolveAgentName}
+            />
+          ),
+        },
+  );
   // The message about to start reads in the conversation, still withdrawable.
   const starting = turns.find(
     (group) => group.turn && waitsToRun(group.turn),
@@ -347,6 +380,7 @@ export function ChatTimeline({
   const context: RowContext = {
     requests: requests ?? {},
     resolveAgentName,
+    sourceHref,
     onLinkClick,
     renderLink,
     onFileClick,
@@ -525,6 +559,7 @@ export function ChatTimeline({
 interface RowContext {
   requests: Readonly<Record<string, RuntimeRequest>>;
   resolveAgentName?: (agentId: string) => string | undefined;
+  sourceHref?: SourceHref;
   onLinkClick?: ChatTimelineProps["onLinkClick"];
   renderLink?: ChatTimelineProps["renderLink"];
   onFileClick?: ChatTimelineProps["onFileClick"];
@@ -542,6 +577,8 @@ function entryId(entry: TimelineEntry): string {
       return entry.id;
     case "steps":
       return entry.steps[0]?.id ?? "";
+    case "notifications":
+      return entry.items[0]?.id ?? "";
     default:
       return entry.item.id;
   }
@@ -578,10 +615,6 @@ function userKey(item: UserMessageItem): string {
 /** The command a person's message was sent with, from its idempotency key. */
 function sentWith(item: UserMessageItem): string | undefined {
   return item.idempotencyKey?.match(/^user:[^:]*:(.+)$/)?.[1];
-}
-
-function isPersonsMessage(item: UserMessageItem): boolean {
-  return item.author.kind === "user";
 }
 
 /** "Load earlier messages": pages older history in at the top. */
@@ -679,6 +712,25 @@ function TurnRowView({
   switch (entry.kind) {
     case "input":
       return <UserMessage item={entry.item} context={context} />;
+    case "inbound":
+      return (
+        <InboundMessageRow
+          item={entry.item}
+          onOpen={context.onLinkClick}
+          resolveAgentName={context.resolveAgentName}
+          sourceHref={context.sourceHref}
+          focused={entry.item.id === context.focusMessageId}
+        />
+      );
+    case "notifications":
+      return (
+        <TaskNotificationRows
+          items={entry.items}
+          onOpen={context.onLinkClick}
+          sourceHref={context.sourceHref}
+          focusMessageId={context.focusMessageId}
+        />
+      );
     case "answer":
       return <AnswerCard entry={entry} />;
     case "notice":
@@ -830,9 +882,8 @@ function useEntered(already = false): string {
 }
 
 /**
- * A message into the session: the person's own (right), or one an agent,
- * a workflow or a watcher delivered (left, with where it came from). A
- * host notice (a background command finished) reads as one quiet line.
+ * The person's own message (right). What an agent, a workflow or Work
+ * delivered is not this: it reads as a row of its own (ADR 0217).
  */
 const UserMessage = memo(
   function UserMessage({
@@ -854,48 +905,20 @@ const UserMessage = memo(
     onDismiss?: (commandId: string) => void;
   }) {
     const enterClasses = useEntered();
-    const notice =
-      typeof item?.metadata.notice === "string"
-        ? item.metadata.notice
-        : undefined;
-    if (item?.author.kind === "system" && notice)
-      return (
-        <div
-          className="flex items-center justify-center gap-1.5 text-center text-xs text-fg-faint"
-          data-testid="chat-notice"
-          data-message-id={item.id}
-        >
-          <Radio className="size-3 shrink-0" />
-          <span className="truncate">{notice}</span>
-        </div>
-      );
     const text = item?.text ?? pending?.text ?? "";
     const attachments = item?.attachments ?? pending?.attachments ?? [];
-    const own = item ? isPersonsMessage(item) : true;
     const failed = pending?.status === "failed";
     const strip = attachments.slice(inlineMarkerCount(text, attachments));
     return (
       <article
         data-message-id={item?.id}
         tabIndex={-1}
-        data-user-message={own || undefined}
+        data-user-message
         data-pending-message={pending?.status}
-        className={`group/msg relative max-w-[85%] text-sm ${enterClasses} ${
-          failed
-            ? "ml-auto rounded-xl rounded-br-sm border border-danger/40 bg-danger/5 px-3 py-2"
-            : own
-              ? "ml-auto rounded-xl rounded-br-sm border border-info/30 bg-info/10 px-3 py-2"
-              : "mr-auto rounded-xl rounded-bl-sm border border-border bg-bg-raised px-3 py-2"
+        className={`group/msg relative ml-auto max-w-[85%] rounded-xl rounded-br-sm border px-3 py-2 text-sm ${enterClasses} ${
+          failed ? "border-danger/40 bg-danger/5" : "border-info/30 bg-info/10"
         } ${item && item.id === context.focusMessageId ? "outline outline-1 outline-accent/50" : ""}`}
       >
-        {item && (
-          <SessionAttribution
-            author={item.author}
-            metadata={item.metadata}
-            attention={item.attention}
-            onOpen={context.onLinkClick}
-          />
-        )}
         {strip.length > 0 && <AttachmentStrip attachments={strip} />}
         <div className="whitespace-pre-wrap break-words leading-6">
           <InlineMessage content={text} attachments={attachments} />
@@ -1032,7 +1055,7 @@ const AgentMessage = memo(function AgentMessage({
 }: AgentMessageProps) {
   const enterClasses = useEntered();
   const [bornLive] = useState(() => !item || item.status === "in_progress");
-  const built = turnStepsOf(steps, context.requests);
+  const built = turnStepsOf(steps, context);
   const shown = live && !item ? markRunning(built) : built;
   const text = item?.text ?? "";
   const writing = item?.status === "in_progress";
@@ -1076,6 +1099,7 @@ const AgentMessage = memo(function AgentMessage({
         defaultExpanded={openWork}
         resolveToolIcon={context.resolveToolIcon}
         onFileClick={context.onFileClick}
+        onLinkClick={context.onLinkClick}
       />
       {text.trim() && (
         <div
@@ -1188,7 +1212,7 @@ function NoticeLine({
       ? typeof agentId === "string"
         ? `Switched to ${context.resolveAgentName?.(agentId) ?? "another agent"}`
         : "Agent changed"
-      : item.text;
+      : noticeText(item, context.resolveAgentName);
   return (
     <div
       className="flex items-center gap-3 py-1 text-[11px] text-fg-faint"
@@ -1456,7 +1480,12 @@ interface TurnStep {
     | "note"
     | "reasoning"
     | "plan"
-    | "request";
+    | "request"
+    | "notification";
+  /** Its own glyph and color (a task notification's), instead of the kind's. */
+  icon?: { Icon: LucideIcon; className: string };
+  /** Where its expanded detail links to: a notification's task. */
+  link?: { href: string; label: string };
   /** A folded note's message id, so focus and deep links still find it. */
   messageId?: string;
   /** Notes expand to rendered Markdown instead of a preformatted payload. */
@@ -1500,6 +1529,7 @@ const STEP_ICONS = {
   reasoning: Brain,
   plan: ListChecks,
   request: MessageCircleQuestionMark,
+  notification: Bell,
 } as const;
 
 /**
@@ -1922,7 +1952,7 @@ const firstLineOf = (text: string): string =>
  */
 function turnStepsOf(
   sources: StepSource[],
-  requests: Readonly<Record<string, RuntimeRequest>>,
+  context: Pick<RowContext, "requests" | "sourceHref">,
 ): TurnStep[] {
   const nested = new Map<string, WorkItem[]>();
   for (const source of sources) {
@@ -1939,7 +1969,8 @@ function turnStepsOf(
     }
     if (source.item.parentItemId) continue;
     const step = stepOf(source.item, {
-      requests,
+      requests: context.requests,
+      sourceHref: context.sourceHref,
       nested: nested.get(source.item.id) ?? [],
     });
     if (step) steps.push(step);
@@ -1951,6 +1982,7 @@ function stepOf(
   item: WorkItem,
   context: {
     requests: Readonly<Record<string, RuntimeRequest>>;
+    sourceHref?: SourceHref;
     nested: WorkItem[];
   },
 ): TurnStep | undefined {
@@ -2075,6 +2107,28 @@ function stepOf(
       };
     case "request":
       return requestStep(item.id, context.requests[item.requestId], timing);
+    // News about a task the agent started that reached it while it worked
+    // (ADR 0217): part of the work, like a tool's result.
+    case "task_notification": {
+      const href = item.source
+        ? hrefOf(item.source, context.sourceHref)
+        : undefined;
+      return {
+        key,
+        finished: true,
+        kind: "notification",
+        label: item.summary,
+        icon: {
+          Icon: taskIcon(item.task.type),
+          className: taskTone(item.task.status),
+        },
+        detail: stepDetailText(item.detail || undefined),
+        detailMono: true,
+        ...(href && item.source
+          ? { link: { href, label: sourceLabel(item.source) } }
+          : {}),
+      };
+    }
   }
 }
 
@@ -2322,6 +2376,7 @@ function TurnSteps({
   defaultExpanded = false,
   resolveToolIcon,
   onFileClick,
+  onLinkClick,
 }: {
   steps: TurnStep[];
   /** The turn is still running. */
@@ -2339,6 +2394,8 @@ function TurnSteps({
       altKey: boolean;
     },
   ) => void;
+  /** A step's source link (a notification's task) was clicked. */
+  onLinkClick?: ChatTimelineProps["onLinkClick"];
 }) {
   const [chosen, setChosen] = useState<boolean>();
   const backgroundStates = useContext(BackgroundStates);
@@ -2407,6 +2464,7 @@ function TurnSteps({
               step={step}
               enter={shown.current}
               onFileClick={onFileClick}
+              onLinkClick={onLinkClick}
             />
           ))}
         </div>
@@ -2431,6 +2489,7 @@ function TurnSteps({
                   step.toolName ? resolveToolIcon?.(step.toolName) : undefined
                 }
                 onFileClick={onFileClick}
+                onLinkClick={onLinkClick}
               />
             ))}
           </div>
@@ -2445,6 +2504,7 @@ function StepRow({
   enter = false,
   iconUrl,
   onFileClick,
+  onLinkClick,
 }: {
   step: TurnStep;
   /** Joined a list already on screen: plays its entrance once. */
@@ -2459,6 +2519,7 @@ function StepRow({
       altKey: boolean;
     },
   ) => void;
+  onLinkClick?: ChatTimelineProps["onLinkClick"];
 }) {
   const [open, setOpen] = useState(false);
   // Read once: a row that was already there never gains the entrance.
@@ -2469,8 +2530,8 @@ function StepRow({
     : undefined;
   const pulsing = background?.status === "running" || step.running === true;
   const note = step.kind === "note";
-  const Icon = STEP_ICONS[step.kind];
-  const expandable = Boolean(step.detail);
+  const Icon = step.icon?.Icon ?? STEP_ICONS[step.kind];
+  const expandable = Boolean(step.detail || step.link);
   // Edited-file rows click through to the file in an editor surface.
   const opensFile = Boolean(step.filePath && onFileClick);
   const interactive = expandable || opensFile;
@@ -2521,7 +2582,7 @@ function StepRow({
             />
           ) : (
             <Icon
-              className={`size-3.5 shrink-0 transition-colors duration-200 ${pulsing ? "animate-pulse text-accent" : "text-fg-faint"}`}
+              className={`size-3.5 shrink-0 transition-colors duration-200 ${pulsing ? "animate-pulse text-accent" : (step.icon?.className ?? "text-fg-faint")}`}
             />
           )}
           {step.background ? (
@@ -2550,14 +2611,14 @@ function StepRow({
         </button>
         {/* Same grid-rows tween as the step list: payloads animate open and
           closed instead of popping in and out. */}
-        {step.detail && (
+        {expandable && (
           <div
             className={`grid transition-[grid-template-rows] duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${
               open ? "grid-rows-[1fr]" : "grid-rows-[0fr]"
             }`}
           >
             <div className="overflow-hidden" inert={!open}>
-              {step.markdown ? (
+              {!step.detail ? null : step.markdown ? (
                 <div
                   className="cat-markdown mb-1 ml-6 mt-0.5 min-w-0 select-text break-words text-xs leading-5 text-fg-muted"
                   data-testid="chat-step-detail"
@@ -2573,6 +2634,25 @@ function StepRow({
                 >
                   {step.detail}
                 </pre>
+              )}
+              {step.link && (
+                <a
+                  href={step.link.href}
+                  className="mb-1 ml-6 inline-block rounded text-[11px] text-accent underline-offset-2 hover:underline"
+                  data-testid="chat-step-source"
+                  onClick={(event) => {
+                    if (!onLinkClick || !step.link) return;
+                    event.preventDefault();
+                    onLinkClick(step.link.href, {
+                      metaKey: event.metaKey,
+                      ctrlKey: event.ctrlKey,
+                      altKey: event.altKey,
+                      shiftKey: event.shiftKey,
+                    });
+                  }}
+                >
+                  {step.link.label}
+                </a>
               )}
             </div>
           </div>

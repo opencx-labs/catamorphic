@@ -44,13 +44,21 @@ it("authors a temporary one-shot, wakes once, stops and links its retained sourc
   await wait(
     "return document.body.textContent.includes('Scheduled follow-up received.') && document.body.textContent.includes('Stopped a watcher');",
   );
+  // The workflow's delivery is its own row (ADR 0217), never the person's
+  // bubble; the session action it took is a notice naming the workflow.
   expect(
     await run(
-      "return document.querySelectorAll('[data-testid=session-attribution] a[href^=\"run:\"]').length;",
+      "return [...document.querySelectorAll('[data-testid=chat-inbound-message][data-sender-kind=workflow]')].filter(el => el.textContent.includes('Scheduled follow-up received.') && !!el.querySelector('a[href^=\"run:\"]')).length;",
     ),
-  ).toBe(2);
+  ).toBe(1);
   await run(
-    "document.querySelector('[data-testid=session-attribution] a[href^=\"run:\"]').click();",
+    "const row = [...document.querySelectorAll('[data-testid=chat-inbound-message]')].find(el => el.textContent.includes('Scheduled follow-up received.')); row.querySelector('button').click();",
+  );
+  await wait(
+    "return [...document.querySelectorAll('[data-testid=chat-inbound-message] button[aria-expanded=true]')].length > 0;",
+  );
+  await run(
+    "[...document.querySelectorAll('[data-testid=chat-inbound-message]')].find(el => el.textContent.includes('Scheduled follow-up received.')).querySelector('a[href^=\"run:\"]').click();",
   );
   await wait(
     "return $('[aria-label^=\"Run of \"]')?.getAttribute('aria-label').toLowerCase() === 'run of sessionwake' && document.body.textContent.includes('Run history');",
@@ -90,7 +98,7 @@ it("remains quiet on ordinary turn completion and reacts to explicit work comple
     "return [...document.querySelectorAll('[data-testid=chat-watchers]')].some(el=>el.textContent.includes('sessionmonitor') && el.textContent.includes('stopped'));",
   );
   const delivered = await run<number>(
-    "return [...document.querySelectorAll('[data-testid=session-attribution]')].filter(el=>el.parentElement.textContent.includes('Work completion observed.')).length;",
+    "return [...document.querySelectorAll('[data-testid=chat-inbound-message]')].filter(el=>el.textContent.includes('Work completion observed.')).length;",
   );
   expect(delivered).toBe(1);
   await send("reopen");
@@ -163,7 +171,7 @@ it("delivers an attention reminder without a model turn and shows late schedule 
   );
   expect(
     await run(
-      "return [...document.querySelectorAll('[data-testid=session-attribution]')].some(el => el.textContent.includes('Attention requested') && el.textContent.includes('View run'));",
+      "return [...document.querySelectorAll('[data-testid=chat-inbound-message]')].some(el => el.textContent.includes('Attention requested') && el.querySelector('a[href^=\"run:\"]')?.textContent === 'Open run');",
     ),
   ).toBe(true);
 });

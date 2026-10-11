@@ -17,6 +17,7 @@ import { ArrowUp, Bot, GitFork, ListPlus, Square, X, Zap } from "lucide-react";
 import { type FormEvent, useEffect, useRef, useState } from "react";
 import { AgentQuestionPanel } from "../components/catamorphic/agent-question-panel.js";
 import { ChatTimeline } from "../components/catamorphic/chat-timeline.js";
+import { QueuedInputLine } from "../components/catamorphic/session-input.js";
 import { ToolPermissionCard } from "../components/catamorphic/tool-permission-card.js";
 import { ChatGlyph } from "../components/chat-glyph.js";
 import { ConnectionTrouble } from "../components/connection-trouble.js";
@@ -574,13 +575,21 @@ function Chat({
                       data-testid="chat-queued-message"
                     >
                       <span className="min-w-0 flex-1 truncate">
-                        {messageWithAttachmentNames(
-                          queued.item?.text ?? "",
-                          queued.item?.attachments,
+                        {queued.item?.kind === "user_message" ? (
+                          messageWithAttachmentNames(
+                            queued.item.text,
+                            queued.item.attachments,
+                          )
+                        ) : (
+                          // Not the person's words (ADR 0217): who or what
+                          // queued it, in one line.
+                          <QueuedInputLine queued={queued} />
                         )}
                       </span>
                       <span className="shrink-0 text-[10px] uppercase tracking-wide text-fg-faint">
-                        queued
+                        {queued.item?.kind === "user_message"
+                          ? "queued"
+                          : "up next"}
                       </span>
                       <button
                         type="button"

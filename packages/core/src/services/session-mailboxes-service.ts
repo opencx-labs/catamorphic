@@ -2,8 +2,8 @@ import { randomUUID } from "node:crypto";
 import {
   type DispatchMode,
   dispatchModeSchema,
-  type SessionMessageAuthor,
-  sessionMessageAuthorSchema,
+  type SessionInput,
+  sessionInputSchema,
 } from "@catamorphic/agent-protocol";
 import type { DB, JsonObject } from "@catamorphic/db";
 import { getTracer, withSpan } from "@catamorphic/otel";
@@ -28,8 +28,8 @@ export interface SessionMailboxItem {
   destinationHostId: string;
   authorityRevision: number;
   messageId: string;
-  content: string;
-  author: SessionMessageAuthor;
+  /** What the delivery becomes in the session (ADR 0217). */
+  input: SessionInput;
   mode: DispatchMode;
   idempotencyKey: string | null;
   metadata: JsonObject | null;
@@ -67,8 +67,7 @@ export class SessionMailboxesService {
     sessionId: string,
     input: {
       destination: SessionAuthority;
-      content: string;
-      author: SessionMessageAuthor;
+      input: SessionInput;
       mode: DispatchMode;
       idempotencyKey?: string;
       metadata?: JsonObject;
@@ -117,9 +116,7 @@ export class SessionMailboxesService {
             destination_host_id: input.destination.hostId,
             authority_revision: input.destination.revision,
             item_id: itemId,
-            content: input.content,
-            author_kind: input.author.kind,
-            author_payload: JSON.parse(JSON.stringify(input.author)),
+            input: JSON.parse(JSON.stringify(input.input)),
             delivery_mode: input.mode,
             idempotency_key: input.idempotencyKey ?? null,
             metadata: input.metadata ?? null,
@@ -229,8 +226,7 @@ function mapMailboxItem(row: MailboxRow): SessionMailboxItem {
     destinationHostId: row.destination_host_id,
     authorityRevision: Number(row.authority_revision),
     messageId: row.item_id,
-    content: row.content,
-    author: sessionMessageAuthorSchema.parse(row.author_payload),
+    input: sessionInputSchema.parse(row.input),
     mode: dispatchModeSchema.parse(row.delivery_mode),
     idempotencyKey: row.idempotency_key,
     metadata: row.metadata as JsonObject | null,

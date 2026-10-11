@@ -15,7 +15,7 @@ import type {
   TurnStatus,
 } from "@catamorphic/agent-protocol";
 import type { DB, Json } from "@catamorphic/db";
-import type { Selectable } from "kysely";
+import type { Kysely, Selectable, Transaction } from "kysely";
 
 /**
  * Projection rows to protocol entities (ADR 0197). The projections are
@@ -216,4 +216,27 @@ export function sessionFieldsFromRow(row: SessionRow): SessionFields {
     handoffStatus: row.handoff_status === "pending" ? "pending" : "none",
     updatedAt: row.updated_at.toISOString(),
   };
+}
+
+/**
+ * The turn waiting to take in task notifications (ADR 0217): queued, never
+ * started, and started by one. A later notification joins it instead of
+ * queueing a turn of its own, so the agent reads them together.
+ */
+export async function waitingNotificationTurn(
+  executor: Kysely<DB> | Transaction<DB>,
+  sessionId: string,
+): Promise<Turn | null> {
+  const row = await executor
+    .selectFrom("agent_turns as turn")
+    .innerJoin("agent_items as item", "item.id", "turn.input_item_id")
+    .selectAll("turn")
+    .where("turn.session_id", "=", sessionId)
+    .where("turn.status", "=", "queued")
+    .where("turn.attempt_count", "=", 0)
+    .where("item.kind", "=", "task_notification")
+    .orderBy("turn.ordinal")
+    .limit(1)
+    .executeTakeFirst();
+  return row ? turnFromRow(row) : null;
 }

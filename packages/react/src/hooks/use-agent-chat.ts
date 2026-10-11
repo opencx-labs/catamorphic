@@ -553,8 +553,9 @@ export function useAgentChat(
       ),
     editQueued: async (turnId, text) => {
       const queued = queue.find((entry) => entry.turn.id === turnId);
-      if (!queued) return false;
-      const attachmentCount = queued.item?.attachments.length ?? 0;
+      // Only the person's own words are edited (ADR 0217).
+      if (queued?.item?.kind !== "user_message") return false;
+      const attachmentCount = queued.item.attachments.length;
       if (heldRef.current === turnId) heldRef.current = null;
       const receipt = await run({
         type: "edit_queued",

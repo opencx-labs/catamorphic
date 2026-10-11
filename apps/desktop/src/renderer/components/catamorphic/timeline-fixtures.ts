@@ -5,9 +5,11 @@
 import { sessionStateFromSnapshot } from "@catamorphic/agent-protocol";
 import {
   type AssistantMessageItem,
+  type InboundMessageItem,
   type Item,
   type RuntimeRequest,
   sessionTimeline,
+  type TaskNotificationItem,
   type TimelineTurn,
   type Turn,
   type UserMessageItem,
@@ -81,6 +83,54 @@ export function input(
     author: { kind: "user", externalUserId: "me" },
     text,
     attachments: [],
+    dispatch: "queue",
+    attention: null,
+    idempotencyKey: null,
+    metadata: {},
+    ...overrides,
+  };
+}
+
+/** Words another agent or a workflow sent (ADR 0217). */
+export function inbound(
+  id: string,
+  turnId: string | null,
+  text: string,
+  overrides: Partial<InboundMessageItem> = {},
+): InboundMessageItem {
+  return {
+    ...common(id, turnId),
+    kind: "inbound_message",
+    from: { kind: "workflow", runId: "run-1", workflowName: "prReview" },
+    text,
+    attachments: [],
+    dispatch: "queue",
+    attention: null,
+    idempotencyKey: null,
+    metadata: {},
+    ...overrides,
+  };
+}
+
+/** Work's notification about a task the agent started (ADR 0217). */
+export function notification(
+  id: string,
+  turnId: string | null,
+  summary: string,
+  overrides: Partial<TaskNotificationItem> = {},
+): TaskNotificationItem {
+  return {
+    ...common(id, turnId),
+    kind: "task_notification",
+    task: {
+      type: "background_command",
+      id: "cmd-1",
+      title: "Start the worker",
+      status: "update",
+    },
+    summary,
+    detail: `Matching lines:\n${summary}`,
+    source: { kind: "surface", key: "terminal:worker" },
     dispatch: "queue",
     attention: null,
     idempotencyKey: null,

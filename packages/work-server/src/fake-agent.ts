@@ -35,8 +35,8 @@ interface FakeSandbox {
  * - `background-start`, `background-list`, `background-stop <id>`
  * - `ask <question>`: asks the person and answers with their answer
  *
- * Workflow deliveries arrive under a provenance header: the last line is
- * the command.
+ * Workflow and agent deliveries arrive in an envelope (ADR 0217): the
+ * last line of the words inside it is the command.
  */
 export function createFakeAgentAdapter(): HarnessAdapter {
   const echo = new EchoAdapter();
@@ -44,7 +44,7 @@ export function createFakeAgentAdapter(): HarnessAdapter {
     id: echo.id,
     capabilities: () => echo.capabilities(),
     start: (attempt, host, local) => {
-      const request = (attempt.input?.text ?? "").trim().split("\n").at(-1);
+      const request = lastLine(attempt.input?.text ?? "");
       if (!request || !isWorkspaceCommand(request))
         return echo.start(attempt, host);
       return startWorkspaceCommand({
@@ -69,6 +69,13 @@ const COMMANDS = [
   "background-list",
   "background-stop",
 ];
+
+/** The last line of the words given, inside an envelope when there is one. */
+function lastLine(text: string): string | undefined {
+  const lines = text.trim().split("\n");
+  if (/^<\/(workflow|agent)-message>$/.test(lines.at(-1) ?? "")) lines.pop();
+  return lines.at(-1);
+}
 
 function isWorkspaceCommand(request: string): boolean {
   return COMMANDS.includes(request.split(" ")[0] ?? "");

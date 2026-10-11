@@ -99,15 +99,19 @@ class CoordinationAdapter implements HarnessAdapter {
 
   start(attempt: AttemptStart, host: AttemptHost): AttemptControl {
     const text = attempt.input?.text ?? "";
-    const scripted = [
-      "Reconnect durable turn",
-      "Run command with progress",
-      "Truncated stream",
-      "Permanent delegated failure",
-      "Recover delegated work",
-      "Prepare the Globex renewal deck",
-      "Switch checkout and edit",
-    ].some((marker) => text.includes(marker));
+    // A task notification names its task (a subsession's title): it reads
+    // as news, never as the scripted request it reports on.
+    const scripted =
+      !text.includes("<task-notification>") &&
+      [
+        "Reconnect durable turn",
+        "Run command with progress",
+        "Truncated stream",
+        "Permanent delegated failure",
+        "Recover delegated work",
+        "Prepare the Globex renewal deck",
+        "Switch checkout and edit",
+      ].some((marker) => text.includes(marker));
     const questions = text.includes("questions:") ? this.questions : undefined;
     if (!scripted && !questions) return this.echo.start(attempt, host);
     let interrupted = false;
@@ -1008,8 +1012,15 @@ describe("agent session coordination", () => {
               destinationHostId: "coordination-test-host",
               authorityRevision: session.authorityRevision,
               messageId: mailboxItemId,
-              content,
-              author: { kind: "user", externalUserId: identity.externalUserId },
+              input: {
+                kind: "user_message",
+                author: {
+                  kind: "user",
+                  externalUserId: identity.externalUserId,
+                },
+                text: content,
+                attachments: [],
+              },
               mode: "interrupt",
               idempotencyKey: key,
               metadata: { ownerAuthored: true },
@@ -1211,9 +1222,9 @@ describe("agent session coordination", () => {
         expect(
           items.some(
             (item) =>
-              item.kind === "user_message" &&
-              item.author.kind === "agent" &&
-              item.author.sessionId === delegated.session.id,
+              item.kind === "task_notification" &&
+              item.task.type === "subsession" &&
+              item.task.id === delegated.session.id,
           ),
         ).toBe(true);
       },
@@ -1310,9 +1321,9 @@ describe("agent session coordination", () => {
       expect(
         (await snapshot(parent.id, project.id)).items.filter(
           (item) =>
-            item.kind === "user_message" &&
-            item.author.kind === "agent" &&
-            item.author.sessionId === children[0],
+            item.kind === "task_notification" &&
+            item.task.type === "subsession" &&
+            item.task.id === children[0],
         ),
       ).toHaveLength(1);
     } finally {
@@ -1375,9 +1386,9 @@ describe("agent session coordination", () => {
         const items = (await snapshot(parent.id, project.id)).items;
         const result = items.find(
           (item) =>
-            item.kind === "user_message" &&
-            item.author.kind === "agent" &&
-            item.author.sessionId === child,
+            item.kind === "task_notification" &&
+            item.task.type === "subsession" &&
+            item.task.id === child,
         );
         expect(turns[1]?.inputItemId).toBe(result?.id);
       },
@@ -1641,7 +1652,7 @@ describe("agent session coordination", () => {
     });
     const parent = await sessions.create(identity, project.id);
     const delivery = vi
-      .spyOn(sessions, "deliver")
+      .spyOn(sessions, "notify")
       .mockRejectedValue(new Error("fetch failed: ECONNRESET"));
     let worker: ReturnType<AgentSessionsService["startWorker"]> | undefined;
     try {
@@ -1679,9 +1690,9 @@ describe("agent session coordination", () => {
           expect(
             items.filter(
               (item) =>
-                item.kind === "user_message" &&
-                item.author.kind === "agent" &&
-                item.author.sessionId === child.session.id,
+                item.kind === "task_notification" &&
+                item.task.type === "subsession" &&
+                item.task.id === child.session.id,
             ),
           ).toHaveLength(1);
         },
@@ -1842,8 +1853,10 @@ describe("agent session coordination", () => {
         expect(
           transcript.some(
             (message) =>
-              message.content ===
-              `Subsession ${notifyChild.session.id} was archived by the user.`,
+              message.role === "notification" &&
+              message.content.startsWith(
+                `${notifyChild.session.title ?? "Subsession"} was archived`,
+              ),
           ),
         ).toBe(true);
         expect(
@@ -2166,7 +2179,11 @@ describe("agent session coordination", () => {
     });
     const byId = await sessions.deliver(identity, project.id, chat.sessionId, {
       content: "Still firing",
-      author: { kind: "system", code: "test" },
+      author: {
+        kind: "workflow",
+        runId: randomUUID(),
+        workflowName: "pageOnCall",
+      },
       mode: "queue",
     });
     await vi.waitFor(
@@ -2219,9 +2236,10 @@ describe("agent session coordination", () => {
     expect(
       (await snapshot(session.id, project.id)).items.find(
         (item) =>
-          item.kind === "user_message" && item.text === "A durable observation",
+          item.kind === "inbound_message" &&
+          item.text === "A durable observation",
       ),
-    ).toMatchObject({ author });
+    ).toMatchObject({ from: author, status: "in_progress" });
     const events = await exportEvents(session.id);
     expect(
       events.filter((event) => event.kind === "session.message-received"),
@@ -2274,7 +2292,11 @@ describe("agent session coordination", () => {
     const session = await sessions.create(identity, project.id);
     const reminder = (idempotencyKey: string) =>
       sessions.deliver(identity, project.id, session.id, {
-        author: { kind: "system", code: "reminder" },
+        author: {
+          kind: "workflow",
+          runId: randomUUID(),
+          workflowName: "reminders",
+        },
         mode: "message_only",
         attention: "required",
         content: "Submit application",
@@ -2333,7 +2355,11 @@ describe("agent session coordination", () => {
       const session = await sessions.create(identity, project.id);
       const input = {
         sessionId: session.id,
-        author: { kind: "system" as const, code: "test" },
+        author: {
+          kind: "workflow" as const,
+          runId: randomUUID(),
+          workflowName: "reminders",
+        },
         content: "Rollback reminder",
         mode,
         idempotencyKey: "rollback",
@@ -2370,6 +2396,226 @@ describe("agent session coordination", () => {
       ).toBe(1);
     },
   );
+
+  // -------------------------------------------------------------------------
+  // Inputs that are not the person's (ADR 0217)
+
+  it("takes task notifications into the working turn, and otherwise into one waiting turn", async () => {
+    const project = await projects.create(identity, {
+      name: "Task notifications",
+    });
+    const session = await sessions.create(identity, project.id);
+    const notify = (key: string, summary: string) =>
+      sessions.notify(identity, project.id, session.id, {
+        task: {
+          type: "background_command",
+          id: "build",
+          title: "Build",
+          status: "update",
+        },
+        summary,
+        detail: `Output: ${key}`,
+        source: { kind: "surface", key: "terminal:build" },
+        idempotencyKey: `test:${key}`,
+      });
+    let working: () => void = () => {};
+    const isWorking = new Promise<void>((resolve) => {
+      working = resolve;
+    });
+    provider.questions = async ({ host, steered, say }) => {
+      working();
+      // Working: the notification reaches this turn as it goes.
+      await vi.waitFor(() => expect(steered).toHaveLength(1), {
+        timeout: 10_000,
+      });
+      expect(steered[0]).toContain("<task-notification>");
+      expect(steered[0]).toContain("Build printed what you were waiting for");
+      // Waiting on the person: what arrives now waits for a turn.
+      await host.request("pick", {
+        kind: "question",
+        blocking: true,
+        title: "Pick",
+        origin: { kind: "tool", id: "ask_user", displayName: "Ask User" },
+        questions: [
+          {
+            question: "Ship it?",
+            header: "Ship",
+            multiSelect: false,
+            options: [],
+          },
+        ],
+      });
+      say("Shipped");
+    };
+    try {
+      const first = sessions.sendMessage(
+        identity,
+        project.id,
+        session.id,
+        "questions: build and ask",
+      );
+      await isWorking;
+      await vi.waitFor(
+        async () =>
+          expect((await turnsOf(session.id, project.id))[0]?.status).toBe(
+            "running",
+          ),
+        { timeout: 10_000 },
+      );
+      const steered = await notify(
+        "first",
+        "Build printed what you were waiting for",
+      );
+      const request = await vi.waitFor(
+        async () => {
+          const [pending] = pendingRequests(
+            sessionStateFromSnapshot(await snapshot(session.id, project.id)),
+          );
+          expect(pending?.blocking).toBe(true);
+          return pending;
+        },
+        { timeout: 10_000 },
+      );
+      const waiting = await notify("second", "Build printed more");
+      const joined = await notify("third", "Build finished");
+      const turns = await turnsOf(session.id, project.id);
+      expect(steered).toMatchObject({ mode: "steer", turnId: turns[0]?.id });
+      expect(waiting.mode).toBe("queue");
+      expect(waiting.turnId).not.toBe(turns[0]?.id);
+      // One waiting turn takes them all: no turn per notification.
+      expect(joined.turnId).toBe(waiting.turnId);
+      expect(turns).toHaveLength(2);
+      await sessions.command(identity, project.id, session.id, {
+        type: "respond",
+        commandId: randomUUID(),
+        requestId: request?.id ?? "",
+        response: { kind: "question", answers: ["Yes"] },
+      });
+      await first;
+      await vi.waitFor(
+        async () =>
+          expect(
+            (await turnsOf(session.id, project.id)).map((turn) => turn.status),
+          ).toEqual(["completed", "completed"]),
+        { timeout: 10_000 },
+      );
+      const items = (await snapshot(session.id, project.id)).items;
+      const answer = [...items]
+        .reverse()
+        .find(
+          (item) =>
+            item.kind === "assistant_message" && item.turnId === waiting.turnId,
+        );
+      // The waiting turn read both, enveloped, in the order they came.
+      const text = answer?.kind === "assistant_message" ? answer.text : "";
+      expect(text).toContain("Build printed more");
+      expect(text).toContain("Build finished");
+      expect(text.indexOf("Build printed more")).toBeLessThan(
+        text.indexOf("Build finished"),
+      );
+      expect(
+        items.filter((item) => item.kind === "task_notification"),
+      ).toHaveLength(3);
+      expect(items.some((item) => item.kind === "user_message")).toBe(true);
+      expect(
+        items.filter(
+          (item) => item.kind === "user_message" && item.text.includes("Build"),
+        ),
+      ).toEqual([]);
+    } finally {
+      provider.questions = undefined;
+    }
+  });
+
+  it("gives the next turn what was delivered without waking the agent", async () => {
+    const project = await projects.create(identity, {
+      name: "Delivered to read",
+    });
+    const session = await sessions.create(identity, project.id);
+    const delivered = await sessions.deliver(identity, project.id, session.id, {
+      content: "The deploy freeze starts Friday.",
+      author: {
+        kind: "workflow",
+        runId: randomUUID(),
+        workflowName: "releaseCalendar",
+      },
+      mode: "message_only",
+      idempotencyKey: "freeze",
+    });
+    expect(delivered).toMatchObject({ mode: "message_only", turnId: null });
+    const unread = (await snapshot(session.id, project.id)).items.find(
+      (item) => item.id === delivered.messageId,
+    );
+    expect(unread).toMatchObject({
+      kind: "inbound_message",
+      status: "in_progress",
+    });
+    // Nothing woke the agent, and nothing named the chat.
+    expect(await turnsOf(session.id, project.id)).toEqual([]);
+    expect((await sessions.get(identity, project.id, session.id)).title).toBe(
+      null,
+    );
+    const { reply } = await sessions.sendMessage(
+      identity,
+      project.id,
+      session.id,
+      "What should I know?",
+    );
+    const text = reply?.kind === "assistant_message" ? reply.text : "";
+    expect(text).toContain('<workflow-message workflow="releaseCalendar"');
+    expect(text).toContain("The deploy freeze starts Friday.");
+    expect(text.indexOf("deploy freeze")).toBeLessThan(
+      text.indexOf("What should I know?"),
+    );
+    // Older than the snapshot's turns now: read it where it is kept.
+    const read = await db
+      .selectFrom("agent_items")
+      .select("status")
+      .where("id", "=", delivered.messageId)
+      .executeTakeFirstOrThrow();
+    expect(read.status).toBe("completed");
+    // Read once: the turn after it does not get it again.
+    const again = await sessions.sendMessage(
+      identity,
+      project.id,
+      session.id,
+      "Anything else?",
+    );
+    expect(
+      again.reply?.kind === "assistant_message" && again.reply.text,
+    ).not.toContain("deploy freeze");
+  });
+
+  it("names a chat by what it was asked, never by a notification", async () => {
+    const project = await projects.create(identity, { name: "Chat names" });
+    const notified = await sessions.create(identity, project.id);
+    await sessions.notify(identity, project.id, notified.id, {
+      task: {
+        type: "command_watch",
+        id: "deploy",
+        title: "Deploy is live",
+        status: "completed",
+      },
+      summary: "Deploy is live: done",
+      idempotencyKey: "deploy-done",
+    });
+    expect(
+      (await sessions.get(identity, project.id, notified.id)).title,
+    ).toBeNull();
+    const asked = await sessions.create(identity, project.id);
+    await sessions.deliver(identity, project.id, asked.id, {
+      content: "Review pull request #12",
+      author: {
+        kind: "workflow",
+        runId: randomUUID(),
+        workflowName: "prReview",
+      },
+      mode: "queue",
+    });
+    expect((await sessions.get(identity, project.id, asked.id)).title).toBe(
+      "Review pull request #12",
+    );
+  });
 
   // -------------------------------------------------------------------------
   // Session actions (ADR 0179)
@@ -2463,11 +2709,13 @@ describe("agent session coordination", () => {
     });
     const detail = await sessions.get(identity, project.id, session.id);
     expect(detail.visibility).toBe("archived");
+    // Recorded for people as notices naming who acted, never as messages.
     expect(
       detail.snapshot.items.filter(
         (item) =>
-          item.kind === "user_message" &&
-          item.metadata.sessionAction !== undefined,
+          item.kind === "notice" &&
+          item.code === "session_action" &&
+          item.data.actor !== undefined,
       ),
     ).toHaveLength(2);
     await actions.execute({
@@ -2548,8 +2796,12 @@ describe("agent session coordination", () => {
       ...base,
       id: randomUUID(),
       messageId: randomUUID(),
-      content: "From someone else",
-      author: { kind: "user", externalUserId: "someone-else" },
+      input: {
+        kind: "user_message",
+        author: { kind: "user", externalUserId: "someone-else" },
+        text: "From someone else",
+        attachments: [],
+      },
       mode: "queue",
       metadata: { ownerAuthored: false, deliveredBy: "someone-else" },
     });
@@ -2558,8 +2810,12 @@ describe("agent session coordination", () => {
       ...base,
       id: randomUUID(),
       messageId: randomUUID(),
-      content: "From the owner",
-      author: { kind: "user", externalUserId: identity.externalUserId },
+      input: {
+        kind: "user_message",
+        author: { kind: "user", externalUserId: identity.externalUserId },
+        text: "From the owner",
+        attachments: [],
+      },
       mode: "queue",
       metadata: { ownerAuthored: true },
     });
