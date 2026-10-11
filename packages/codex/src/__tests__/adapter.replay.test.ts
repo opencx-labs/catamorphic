@@ -309,6 +309,40 @@ describe("Codex adapter, replayed from the pinned app-server", () => {
     expect(completionOf(run)?.status).toBe("completed");
   });
 
+  it("tells Codex why its question went unanswered when the person writes in the chat instead", async () => {
+    const reason =
+      "The user wrote in the chat before answering. Their message follows.";
+    const recorded = await loadCodexFixture("user-question");
+    // The recording's reply, as Codex hears a question the person did not
+    // answer: its own free-text form, saying why.
+    const transcript = {
+      ...recorded,
+      entries: recorded.entries.map((entry) =>
+        "expect_outbound" in entry && "result" in entry.expect_outbound
+          ? {
+              expect_outbound: {
+                ...entry.expect_outbound,
+                result: {
+                  answers: { theme: { answers: [`user_note: ${reason}`] } },
+                },
+              },
+            }
+          : entry,
+      ),
+    };
+    const run = await replay("user-question", {
+      transcript,
+      scripts: {
+        0: {
+          onEvent: (event, act) => {
+            if (event.type === "request.opened") act.release(event.key, reason);
+          },
+        },
+      },
+    });
+    expect(completionOf(run)?.status).toBe("completed");
+  });
+
   it("steers a running turn natively and reports the input as consumed", async () => {
     const run = await replay("steer-mid-turn");
     const events = eventsOf(run);

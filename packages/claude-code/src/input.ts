@@ -44,7 +44,8 @@ export async function renderPrompt(input: {
  * replayed transcript names the same uuids it was recorded with, and the
  * CLI's consumption reports map back to item ids. Each attempt names it
  * anew: a retry resends the turn's input on the same native thread, and
- * the CLI ends a uuid its transcript already holds without running it.
+ * the CLI ends a uuid its transcript already answered (an API error is an
+ * answer) without running it. The thread then holds the message twice.
  */
 export function inputUuid(input: {
   attemptId: string;

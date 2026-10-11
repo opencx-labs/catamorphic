@@ -995,14 +995,14 @@ const retrySameInput: ClaudeScenario = {
   name: "retry-same-input",
   description:
     "A retry resends the failed turn's own input on its native thread, and it runs.",
+  // Sent once, the provider is overloaded; sent again, it answers.
   model: (request) => {
-    if (request.index === 0)
+    const sends = sent(request).split("Plan the launch").length - 1;
+    if (sends === 1)
       return {
         error: { status: 529, type: "overloaded_error", message: "Overloaded" },
       };
-    return lastUser(request).includes("Plan the launch")
-      ? text("Planned after the retry.")
-      : unexpected(request);
+    return sends > 1 ? text("Planned after the retry.") : unexpected(request);
   },
   attempts: [
     {
@@ -1049,6 +1049,17 @@ const retrySameInput: ClaudeScenario = {
       second?.attempt.input?.itemId,
       first?.attempt.input?.itemId,
       "the same input item",
+    );
+    assert.equal(
+      second?.thread?.id,
+      first?.thread?.id,
+      "the same native thread",
+    );
+    assert.ok(
+      second?.calls.some(
+        (call) => call.kind === "native_state.load" && !call.thread,
+      ),
+      "the stored transcript was loaded",
     );
     assert.equal(reply(second), "Planned after the retry.");
   },

@@ -209,9 +209,11 @@ class ClaudeAttempt {
   /** Steered inputs not yet taken into the turn, by SDK uuid. */
   private readonly pendingSteers = new Map<string, string>();
   /** The SDK uuid of this attempt's own input, once sent. */
-  private inputUuid?: string;
+  private ownInputUuid?: string;
   /** The CLI started running this attempt's own input. */
-  private inputStarted = false;
+  private ownInputStarted = false;
+  /** The CLI finished a native turn of this attempt. */
+  private resultSeen = false;
   private handle?: ClaudeQueryHandle;
   private threadEmitted = false;
   private interruptRequested = false;
@@ -272,7 +274,7 @@ class ClaudeAttempt {
         stateDirectory: this.attempt.stateDirectory,
       });
       const message = this.userMessage({ itemId: input.itemId, text: prompt });
-      this.inputUuid = message.uuid;
+      this.ownInputUuid = message.uuid;
       this.inputs.push(message);
       options = this.options();
     } catch (error) {
@@ -344,19 +346,22 @@ class ClaudeAttempt {
       const state = Reflect.get(message, "state");
       if (typeof uuid !== "string") return;
       if (state === "started") {
-        if (uuid === this.inputUuid) this.inputStarted = true;
+        if (uuid === this.ownInputUuid) this.ownInputStarted = true;
         this.consume([uuid]);
         return;
       }
-      // The CLI ended this attempt's own input without running it: no turn
-      // and no result will follow, though the CLI stays up for more input.
+      // The CLI ended this attempt's own input before running anything: no
+      // turn and no result will follow, though it stays up for more input.
       if (
-        uuid === this.inputUuid &&
-        !this.inputStarted &&
+        uuid === this.ownInputUuid &&
+        !this.ownInputStarted &&
+        !this.resultSeen &&
         (state === "completed" || state === "cancelled")
       )
         this.settleWithoutResult(
-          new Error("Claude Code ended the message without running it."),
+          new Error(
+            "Claude Code ended the message without running it. Retry to send it again.",
+          ),
         );
       return;
     }
@@ -364,6 +369,7 @@ class ClaudeAttempt {
       this.transcript.handle(message);
       return;
     }
+    this.resultSeen = true;
     this.consume([
       ...(message.user_message_uuids ?? []),
       ...(message.user_message_uuid ? [message.user_message_uuid] : []),
