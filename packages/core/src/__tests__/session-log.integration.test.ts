@@ -1274,9 +1274,7 @@ describe("session log", () => {
           (item) =>
             item.kind === "user_message" && item.text.includes("User answer:"),
         );
-        expect(
-          answer?.kind === "user_message" && answer.metadata.question,
-        ).toEqual({
+        expect(answer?.kind === "user_message" && answer.answer).toMatchObject({
           questions: question?.questions,
           answers: ["Dark"],
         });

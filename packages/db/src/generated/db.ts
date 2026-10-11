@@ -903,17 +903,20 @@ export interface SessionArtifacts {
 
 export interface SessionMailboxItems {
   acknowledged_at: Timestamp | null;
-  author_kind: string;
-  author_payload: Json;
+  action: Json | null;
+  attention: Generated<boolean>;
   authority_revision: Int8;
-  content: string;
+  causation: Generated<Json>;
   created_at: Generated<Timestamp>;
-  delivery_mode: string;
+  delivered_by: string | null;
+  delivery_mode: string | null;
   destination_host_id: string;
   id: Generated<string>;
   idempotency_key: string | null;
+  input: Json | null;
   item_id: Generated<string>;
-  metadata: Json | null;
+  kind: string;
+  owner_authored: Generated<boolean>;
   project_id: string;
   session_id: string;
   source_host_id: string;

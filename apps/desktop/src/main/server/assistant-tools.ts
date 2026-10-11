@@ -379,7 +379,7 @@ export function assistantTools(access: AssistantAccess): ExtraTool[] {
     {
       name: "message_session",
       description:
-        "Send a chat a message on the person's behalf, queued as its next turn; interrupt only when it must change course right now.",
+        "Send a chat a message for the person, queued as its next turn; interrupt only when it must change course right now. Its agent reads it as your message, not the person's: approvals and answers that need the person stay theirs to give in that chat.",
       parameters: {
         session_id: z.string().min(1).describe("From list_sessions"),
         message: z.string().min(1),

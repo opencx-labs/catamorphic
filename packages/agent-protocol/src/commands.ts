@@ -21,26 +21,36 @@ export const jsonValueSchema: z.ZodType<
   ]),
 );
 
-/** Who wrote an input; {@link SessionMessageAuthor} as a schema. */
-export const sessionMessageAuthorSchema = z.union([
-  z.object({ kind: z.literal("user"), externalUserId: z.string() }),
+const sessionUserSchema = z.object({
+  kind: z.literal("user"),
+  externalUserId: z.string(),
+});
+
+/** {@link InboundSender} as a schema. */
+export const inboundSenderSchema = z.union([
   z.object({
     kind: z.literal("agent"),
     sessionId: z.string(),
     agentId: z.string().nullable(),
+    projectId: z.string().optional(),
   }),
+  z.object({ kind: z.literal("assistant"), externalUserId: z.string() }),
   z.object({
     kind: z.literal("workflow"),
     runId: z.string(),
     workflowName: z.string(),
     displayName: z.string().optional(),
+    enablementId: z.string().optional(),
+    watcher: z.object({ id: z.string(), sessionId: z.string() }).optional(),
+    scheduledFor: z.string().optional(),
+    firedAt: z.string().optional(),
   }),
-  z.object({
-    kind: z.literal("watcher"),
-    watcherId: z.string(),
-    runId: z.string().optional(),
-  }),
-  z.object({ kind: z.literal("system"), code: z.string() }),
+]);
+
+/** Who wrote an input; {@link SessionMessageAuthor} as a schema. */
+export const sessionMessageAuthorSchema = z.union([
+  sessionUserSchema,
+  inboundSenderSchema,
 ]);
 
 export const dispatchModeSchema = z.enum([
@@ -82,6 +92,79 @@ export const attachmentSchema = z.union([
     name: z.string().max(500),
     text: z.string(),
     source: textSource,
+  }),
+]);
+
+export const inputSourceSchema = z.union([
+  z.object({
+    kind: z.literal("session"),
+    sessionId: z.string(),
+    projectId: z.string().optional(),
+  }),
+  z.object({
+    kind: z.literal("workflow_run"),
+    runId: z.string(),
+    workflowName: z.string(),
+  }),
+  z.object({ kind: z.literal("surface"), key: z.string() }),
+]);
+
+export const taskNotificationStatusSchema = z.enum([
+  "completed",
+  "failed",
+  "update",
+  "needs_input",
+  "stopped",
+]);
+
+/** {@link AgentQuestion} as a schema. */
+export const agentQuestionSchema = z.object({
+  question: z.string(),
+  header: z.string(),
+  multiSelect: z.boolean(),
+  options: z.array(z.object({ label: z.string(), description: z.string() })),
+});
+
+/** {@link QuestionAnswer} as a schema. */
+export const questionAnswerSchema = z.object({
+  requestId: z.string(),
+  questions: z.array(agentQuestionSchema),
+  answers: z.array(z.string()),
+});
+
+/** {@link SettledAlert} as a schema. */
+export const settledAlertSchema = z.object({
+  title: z.string().optional(),
+  body: z.string().optional(),
+});
+
+/** {@link SessionInput} as a schema: what a delivery carries between hosts. */
+export const sessionInputSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("user_message"),
+    author: sessionUserSchema,
+    text: z.string(),
+    attachments: z.array(attachmentSchema),
+    answer: questionAnswerSchema.optional(),
+  }),
+  z.object({
+    kind: z.literal("inbound_message"),
+    from: inboundSenderSchema,
+    text: z.string(),
+    attachments: z.array(attachmentSchema),
+    alert: settledAlertSchema.optional(),
+  }),
+  z.object({
+    kind: z.literal("task_notification"),
+    task: z.object({
+      type: z.string().min(1).max(100),
+      id: z.string().min(1).max(500),
+      title: z.string().max(2_000),
+      status: taskNotificationStatusSchema,
+    }),
+    summary: z.string().min(1).max(2_000),
+    detail: z.string(),
+    source: inputSourceSchema.nullable(),
   }),
 ]);
 

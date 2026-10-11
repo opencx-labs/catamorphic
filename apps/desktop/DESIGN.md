@@ -544,6 +544,34 @@ the historical log explains how it arrived here.
 - [Performance](docs/performance.md): idle lifecycle checks and sustained measurement.
 
 ## Design log
+### 2026-10-11: What the person did not write reads as a row, not a bubble
+
+A chat's bubbles on the right are the person's words, and only theirs (ADR
+0217). What another agent, the person's assistant or a workflow sent reads
+as a row like a turn's steps: the sender's icon (an agent, the assistant, a
+workflow), its name, and the message's first line, with a chevron that opens
+the whole message, when it was scheduled, and links to where it came from
+(the sending chat, the run, the workflow). Work's news about a task the
+agent started reads the same way: the task's icon (a terminal for a
+background command, an eye for a watch, the agent for a subsession), colored
+by how it stands (green done, red failed, amber waiting on the person,
+accent for news while it runs), one line in plain words, the output or
+result one click away, and "Open terminal" or "Open chat" at its end. News
+that reached the agent while it worked folds into that turn's steps like a
+tool's result; news that started a turn heads it; the same task's news in a
+row folds into its latest line with a count ("3 times"). A row delivered
+without waking the agent says "For the next turn" until the agent reads it.
+
+The queue keeps the person's messages as editable dashed bubbles. Anything
+else that waits is one dashed line on the left, "Up next", with the task or
+sender and "and 2 more" when news joined it, withdrawn or run now but never
+edited. A background command no longer wakes the chat every fifteen seconds
+with the same error: a line it reported in the last few minutes is not
+news. Session
+actions (a workflow archiving or completing the chat) are notices naming
+who acted. Restore to here and the up-arrow recall come only from the
+person's own messages, and a notification never names a chat.
+
 ### 2026-10-06: Codex signs in on your own machines
 
 Remote environment's Sign-ins section now says plainly where each harness
@@ -2042,6 +2070,23 @@ is ignored, switches push to talk (hold ⌥Space), and keeps the microphone in
 the dock and in chats or not. ⌘⇧Space turns voice on and off. Out of the
 dock, the microphone shrinks away in place and comes back while the
 assistant talks; the arrows' menu always offers it back. See ADR 0216.
+
+### 2026-10-11: An open document shows the agent's change
+
+Asked to take care of the open to-dos in a plan, an agent added a meal table
+and ticked both items, and the plan open in front of the person stayed as it
+was until they switched away and back. The editor read the file once and
+refreshed only on window focus, which never comes while the person is in
+the window. An editor tab now reads the file again whenever the project's
+files change under it, which a settled agent turn announces, unless the
+tab holds an unsaved draft: the draft keeps the content it started from, so
+saving it still reports the conflict.
+
+Loading that change then marked the file Unsaved: the rich editor reported
+its own rewrite of the new markdown (table padding, list markers) as an
+edit. Loading content is no longer an edit. Workflow names in the sidebar
+also lost a trailing "|" that agents leave when they write
+`@displayname Name | @description …` on one line above a workflow.
 
 ### 2026-10-11: A first chat says what it waits for; sign-in popups take passkeys
 

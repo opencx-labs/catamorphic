@@ -12,6 +12,7 @@ const FOLLOWED = { projectId: "p", sessionId: "build" };
 
 function harness() {
   const delivered: { content: string; notice: string }[] = [];
+  const statuses: string[] = [];
   let send: ((events: SessionEvent[]) => void) | undefined;
   let stopped = 0;
   let sequence = 0;
@@ -35,12 +36,17 @@ function harness() {
       };
     },
     deliver: async (_follower, input) => {
-      delivered.push({ content: input.content, notice: input.notice });
+      // A task notification (ADR 0217): the notes for the agent, one line
+      // for the person, about the chat it follows.
+      expect(input.followed).toMatchObject({ ...FOLLOWED });
+      statuses.push(input.status);
+      delivered.push({ content: input.detail, notice: input.summary });
     },
   });
   return {
     notes,
     delivered,
+    statuses,
     stopped: () => stopped,
     emit: (...events: SessionEvent[]) => send?.(events),
   };
@@ -117,6 +123,7 @@ describe("following a session's notes", () => {
         notice: "Build: finished",
       },
     ]);
+    expect(session.statuses).toEqual(["completed"]);
   });
 
   it("follows no more once the follower takes no messages", async () => {

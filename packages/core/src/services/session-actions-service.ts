@@ -1,11 +1,14 @@
 import { randomUUID } from "node:crypto";
 import type { SessionMessageAuthor } from "@catamorphic/agent-protocol";
-import type { DB, Json, JsonObject } from "@catamorphic/db";
+import type { DB, Json } from "@catamorphic/db";
 import { getTracer, withSpan } from "@catamorphic/otel";
 import { type Kysely, sql } from "kysely";
 import { z } from "zod";
 import type { Identity } from "../identity.js";
-import type { AgentSessionsService } from "./agent-sessions-service.js";
+import {
+  type AgentSessionsService,
+  protocolJson,
+} from "./agent-sessions-service.js";
 import { AccessDeniedError } from "./artifact-scope.js";
 import {
   ChatAudienceSchema,
@@ -114,7 +117,6 @@ export class SessionActionsService {
     args: unknown;
     author: SessionMessageAuthor;
     causation?: string[];
-    provenance?: JsonObject;
   }): Promise<Json> {
     return withSpan(
       {
@@ -248,7 +250,10 @@ export class SessionActionsService {
           args.sessionId,
           "change",
         );
-        const key = JSON.stringify([input.author, args.idempotencyKey]);
+        const key = JSON.stringify([
+          actorIdentity(input.author),
+          args.idempotencyKey,
+        ]);
         const accepted = await this.db
           .insertInto("session_actions")
           .values({
@@ -272,7 +277,6 @@ export class SessionActionsService {
             actor: json({
               ...input.author,
               causation: input.causation ?? [],
-              provenance: input.provenance ?? {},
             }),
             input: json(parsed),
             idempotency_key: key,
@@ -325,18 +329,16 @@ export class SessionActionsService {
                 hostId: session.authorityHostId,
                 revision: session.authorityRevision,
               },
-              author: input.author,
-              content: actionLabel(input.operation),
-              mode: "message_only",
-              idempotencyKey: `action:${action.id}`,
-              metadata: {
-                sessionAction: {
+              delivery: {
+                kind: "action",
+                action: {
                   operation: input.operation,
-                  args: json(args),
-                  causation: input.causation ?? [],
-                  provenance: input.provenance ?? {},
+                  args: protocolJson(args),
+                  actor: input.author,
                 },
               },
+              idempotencyKey: `action:${action.id}`,
+              causation: input.causation ?? [],
             },
           );
           return json({ delivery: "queued", ...receipt });
@@ -511,13 +513,13 @@ export class SessionActionsService {
                 })
                 .where("id", "=", args.sessionId)
                 .execute();
-            await this.sessions.deliverWithin(trx, {
+            await this.sessions.recordActionWithin(trx, {
               sessionId: args.sessionId,
-              content,
-              author: input.author,
-              mode: "message_only",
-              idempotencyKey: sourceActionId,
-              metadata: {
+              actionId: action.id,
+              status: "completed",
+              actor: input.author,
+              text: content,
+              data: {
                 sessionAction: {
                   id: action.id,
                   operation: input.operation,
@@ -525,7 +527,6 @@ export class SessionActionsService {
                   result: json(result),
                 },
                 causation: input.causation ?? [],
-                provenance: input.provenance ?? {},
               },
             });
             await trx
@@ -561,20 +562,19 @@ export class SessionActionsService {
               .returning("id")
               .executeTakeFirst();
             if (!failed) return;
-            await this.sessions.deliverWithin(trx, {
+            await this.sessions.recordActionWithin(trx, {
               sessionId: args.sessionId,
-              content: `${actionLabel(input.operation)} failed: ${message}`,
-              author: input.author,
-              mode: "message_only",
-              idempotencyKey: `action:${action.id}:failure`,
-              metadata: {
+              actionId: action.id,
+              status: "failed",
+              actor: input.author,
+              text: `${actionLabel(input.operation)} failed: ${message}`,
+              data: {
                 sessionAction: {
                   id: action.id,
                   operation: input.operation,
                   status: "failed",
                 },
                 causation: input.causation ?? [],
-                provenance: input.provenance ?? {},
               },
             });
           });
@@ -604,6 +604,20 @@ function actionLabel(operation: SessionActionOperation): string {
     stopWatcher: "Stopped a watcher",
   }[operation];
 }
+/**
+ * Who acted, without a workflow run's circumstances (its enablement,
+ * watcher and schedule): a retried action keys as it did before.
+ */
+function actorIdentity(author: SessionMessageAuthor): SessionMessageAuthor {
+  if (author.kind !== "workflow") return author;
+  return {
+    kind: "workflow",
+    runId: author.runId,
+    workflowName: author.workflowName,
+    ...(author.displayName ? { displayName: author.displayName } : {}),
+  };
+}
+
 function json(value: unknown): Json {
   return JSON.parse(JSON.stringify(value ?? null));
 }

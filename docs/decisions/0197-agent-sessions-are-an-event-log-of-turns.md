@@ -1,6 +1,6 @@
 # 0197 — Agent sessions are an event log of turns
 
-- **Status:** Accepted
+- **Status:** Accepted (input item kinds and notification dispatch by [0217](0217-only-people-write-user-messages.md))
 - **Date:** 2026-10-02
 - **Supersedes:** [0061](0061-session-mirroring.md) (mirror transport), the
   event and command half of [0095](0095-authoritative-agent-execution.md)

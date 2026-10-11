@@ -1690,6 +1690,7 @@ export function registerIpcHandlers(
           | "minimize"
           | "restore"
           | "setSize"
+          | "zoom"
           | "get",
         width?: number,
         height?: number,
@@ -1698,6 +1699,10 @@ export function registerIpcHandlers(
         if (!window) return null;
         if (action === "get") {
           // Read-only: geometry as the OS reports it (window-state tests).
+        } else if (action === "zoom") {
+          // Films on a 1x display: a 1680x1050 window zoomed by 1.3125 lays
+          // out at 1280x800 and renders, and screencasts, at 1680x1050.
+          event.sender.setZoomFactor(width ?? 1);
         } else if (action === "setSize") {
           if (width && height) {
             if (window.isMaximized()) window.unmaximize();

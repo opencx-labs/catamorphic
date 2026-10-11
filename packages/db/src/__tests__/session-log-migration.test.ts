@@ -111,7 +111,8 @@ describe("migration 045", () => {
       ["file_change", "completed", ""],
       ["assistant_message", "completed", "Fixed it"],
       ["user_message", "completed", "For the record"],
-      ["user_message", "completed", "Grace joined"],
+      // A line Work wrote reads as a notice since 061 (ADR 0217).
+      ["notice", "completed", "Grace joined"],
       ["user_message", "completed", "Now the docs"],
       ["assistant_message", "failed", "Started on the docs"],
       ["user_message", "completed", "Then the tests"],

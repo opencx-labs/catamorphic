@@ -272,23 +272,22 @@ function newTurn(session, inputItemId, dispatch) {
   };
 }
 
-function userMessage({ text, attachments, dispatch, commandId, metadata }) {
+function userMessage({ text, attachments, dispatch, commandId, answer }) {
   return {
     author: { kind: "user", externalUserId: "member" },
     text,
     attachments: attachments ?? [],
+    ...(answer ? { answer } : {}),
     dispatch,
     attention: null,
     idempotencyKey: commandId ? `command:${commandId}` : null,
-    metadata: metadata ?? {},
+    deliveredBy: "member",
+    causation: [],
   };
 }
 
 /** Queue a turn for `text` and start the queue. */
-function enqueue(
-  session,
-  { text, attachments, dispatch, commandId, metadata },
-) {
+function enqueue(session, { text, attachments, dispatch, commandId, answer }) {
   const itemId = randomUUID();
   const turn = newTurn(
     session,
@@ -308,7 +307,7 @@ function enqueue(
         attachments,
         dispatch,
         commandId,
-        metadata,
+        answer,
       }),
     },
     commandId,
@@ -744,9 +743,10 @@ function command(session, body) {
               : `Answered: ${answers.join("; ")}`,
           dispatch: "queue",
           commandId: id,
-          metadata: {
-            questionRequestId: request.id,
-            question: { questions: request.questions, answers },
+          answer: {
+            requestId: request.id,
+            questions: request.questions,
+            answers,
           },
         });
       }

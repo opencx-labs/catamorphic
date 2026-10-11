@@ -1,3 +1,5 @@
+import os from "node:os";
+import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
 
@@ -1674,11 +1676,13 @@ describe("subagents and background watchers", () => {
          '[data-testid="surface-chip"][data-kind="terminal"][data-active]');`,
       { label: "its terminal chip spins" },
     );
-    // When it finishes, the chat gets a quiet notice and the agent answers.
+    // When it finishes, the chat gets a task notification row (ADR 0217),
+    // never a message bubble, and the agent answers.
     await runWait(
-      `const notice = floatingDock()?.querySelector('[data-testid="chat-notice"]');
-       return !!notice && notice.textContent.includes('Run it in the background finished');`,
-      { timeoutMs: 30_000, label: "finish notice in the chat" },
+      `const row = floatingDock()?.querySelector('[data-testid="chat-task-notification"]');
+       return !!row && row.textContent.includes('Run it in the background finished') &&
+         row.dataset.taskStatus === 'completed' && !row.closest('article');`,
+      { timeoutMs: 30_000, label: "finish notification in the chat" },
     );
     await runWait(
       `return timelineMessages().some((m) => m.text.includes('bg-done'));`,
@@ -1692,6 +1696,105 @@ describe("subagents and background watchers", () => {
          [...floatingDock().querySelectorAll('[data-testid="chat-background-status"]')]
            .some((el) => el.textContent === 'Ran command in background');`,
       { label: "the step says it ran" },
+    );
+  });
+});
+
+describe("news from a background command (ADR 0217)", () => {
+  it("reaches the working turn as a step, once per line it has not reported, and never as the person's message", async () => {
+    // Quiet past the command's start (its first output is news for the
+    // turn, not its start), then one error printed again and again, and an
+    // end well after the turn's. The command's own text never matches:
+    // \105 is the error's "E".
+    const command = [
+      "sleep 5; for i in 1 2 3 4 5 6 7 8; do",
+      "printf 'reason: \\105rror: Inspector method Debugger.enable is not supported\\n';",
+      "sleep 1; done; sleep 15",
+    ].join(" ");
+    await run(
+      `const input = floatingDock().querySelector('[data-composer-input]');
+       setReactValue(input, ${JSON.stringify(`monitor: ${command}`)});
+       input.closest('form').requestSubmit();`,
+    );
+    // The first error reaches the turn while it works: a step of its work
+    // with the task's icon, never a queued bubble with the model's text.
+    await runWait(
+      `const step = floatingDock()?.querySelector('[data-testid="chat-step"][data-step-kind="notification"]');
+       return !!step && step.textContent.includes('Start the worker printed what you were waiting for');`,
+      { timeoutMs: 30_000, label: "news reaches the working turn as a step" },
+    );
+    expect(
+      await run(
+        `return floatingDock().querySelectorAll('[data-testid="chat-queued-message"]').length;`,
+      ),
+    ).toBe(0);
+    // The error keeps printing while the turn works: it is not news again.
+    await runWait(
+      `return timelineMessages().some((m) => m.text.includes('Done with the worker for now.'));`,
+      { timeoutMs: 30_000, label: "the turn finished working" },
+    );
+    // Its turn's steps open, and the step opens to the output it carried
+    // and a link to its terminal.
+    await run(
+      `const step = floatingDock().querySelector('[data-step-kind="notification"]');
+       const steps = step.closest('[data-testid="chat-turn-steps"]');
+       const toggle = steps.querySelector('[data-testid="chat-turn-steps-toggle"]');
+       if (toggle?.getAttribute('aria-expanded') === 'false') toggle.click();
+       step.querySelector('button').click();`,
+    );
+    await runWait(
+      `const step = floatingDock()?.querySelector('[data-step-kind="notification"]');
+       return step?.querySelector('button')?.getAttribute('aria-expanded') === 'true' &&
+         step.querySelector('[data-testid="chat-step-detail"]')?.textContent.includes('Debugger.enable') &&
+         step.querySelector('[data-testid="chat-step-source"]')?.textContent === 'Open terminal';`,
+      { label: "the step opens to its output and terminal" },
+    );
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    await app.screenshot(
+      path.join(
+        process.env.CATAMORPHIC_E2E_ARTIFACTS_DIR ?? os.tmpdir(),
+        "task-notification-step.png",
+      ),
+    );
+    // What it printed next, and its end, arrive after the turn: a row of
+    // their own, never the person's bubble.
+    await runWait(
+      `return [...floatingDock().querySelectorAll('[data-testid="chat-task-notification"]')]
+         .some((row) => row.textContent.includes('Start the worker finished'));`,
+      { timeoutMs: 45_000, label: "the command's end reads as a row" },
+    );
+    const news = await run<{ steps: number; rows: number; bubbles: number }>(
+      `const all = [...floatingDock().querySelectorAll('[data-step-kind="notification"], [data-testid="chat-task-notification"]')];
+       return {
+         steps: floatingDock().querySelectorAll('[data-step-kind="notification"]').length,
+         rows: floatingDock().querySelectorAll('[data-testid="chat-task-notification"]').length,
+         bubbles: [...floatingDock().querySelectorAll('[data-user-message]')]
+           .filter((el) => /task-notification|printed what you were waiting for|finished/i.test(el.textContent)).length,
+         all: all.length,
+       };`,
+    );
+    expect(news.bubbles).toBe(0);
+    // The repeating error woke the chat once, for all eight prints.
+    expect(news.steps).toBe(1);
+    // The row opens to what the agent read, and to its terminal.
+    await run(
+      `[...floatingDock().querySelectorAll('[data-testid="chat-task-notification"]')]
+         .find((row) => row.textContent.includes('Start the worker finished'))
+         .querySelector('button').click();`,
+    );
+    await runWait(
+      `const row = [...floatingDock().querySelectorAll('[data-testid="chat-task-notification"]')]
+         .find((row) => row.textContent.includes('Start the worker finished'));
+       return row?.querySelector('button')?.getAttribute('aria-expanded') === 'true' &&
+         row.querySelector('a')?.textContent === 'Open terminal';`,
+      { label: "the row opens to its terminal" },
+    );
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    await app.screenshot(
+      path.join(
+        process.env.CATAMORPHIC_E2E_ARTIFACTS_DIR ?? os.tmpdir(),
+        "task-notification-rows.png",
+      ),
     );
   });
 });

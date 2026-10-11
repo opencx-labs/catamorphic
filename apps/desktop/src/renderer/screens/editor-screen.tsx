@@ -123,6 +123,19 @@ export function EditorScreen({
   const draftsRef = useRef(drafts);
   draftsRef.current = drafts;
 
+  // An agent's turn that changed the open file shows here once it settles.
+  // A draft keeps the content it started from, so saving it still reports
+  // the conflict.
+  useEffect(
+    () =>
+      desktopApi.onGitChanged((event) => {
+        if (event.projectId !== projectId || !filePath) return;
+        if (draftsRef.current[filePath] !== undefined) return;
+        void fileQuery.refetch();
+      }),
+    [projectId, filePath, fileQuery.refetch],
+  );
+
   // Report only real transitions through a ref: the parent recreates the
   // callback each render, and a naive effect on it would loop forever.
   const onDirtyChangeRef = useRef(onDirtyChange);

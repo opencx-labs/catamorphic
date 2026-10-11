@@ -827,7 +827,7 @@ describe.skipIf(!databaseUrl)("reviewing pull requests (#118)", () => {
       .selectFrom("agent_items")
       .select("text")
       .where("session_id", "=", sessionId)
-      .where("kind", "=", "user_message")
+      .where("kind", "=", "inbound_message")
       .orderBy("position", "desc")
       .executeTakeFirstOrThrow();
     expect(delivered2.text).toContain(

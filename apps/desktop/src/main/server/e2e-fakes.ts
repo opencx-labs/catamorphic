@@ -303,8 +303,16 @@ interface FakeTurn {
     name: string,
     input: Record<string, unknown>,
   ): Promise<HostToolResult>;
-  /** The next message the person sends into this turn. */
+  /** The next message sent into this turn, or one that arrived unasked. */
   nextSteer(): Promise<{ text: string; attachments: AgentAttachment[] }>;
+  /**
+   * The next message within `ms`, else nothing: a message that comes later
+   * is echoed at the turn's end rather than taken by a step that stopped
+   * waiting.
+   */
+  steerWithin(
+    ms: number,
+  ): Promise<{ text: string; attachments: AgentAttachment[] } | undefined>;
   discover(query: string): Promise<{ items: Array<{ name: string }> }>;
   /** Discovers the capability by name, then invokes it. */
   capability(name: string, input: Record<string, unknown>): Promise<unknown>;
@@ -359,9 +367,13 @@ export class E2eFakeAdapter implements HarnessAdapter {
   start(attempt: AttemptStart, host: AttemptHost): AttemptControl {
     let interrupted = false;
     const wakers = new Set<() => void>();
-    /** Messages sent into the turn that no step took, echoed at its end. */
-    const steered: string[] = [];
     type Steer = { text: string; attachments: AgentAttachment[] };
+    /**
+     * Messages sent into the turn that no step was waiting for: the next
+     * step that asks takes them first; any still here when the turn ends
+     * are echoed at its end.
+     */
+    const steered: Steer[] = [];
     const steerWaiters: Array<(input: Steer) => void> = [];
     const pause = (ms: number) =>
       new Promise<void>((resolve) => {
@@ -385,8 +397,9 @@ export class E2eFakeAdapter implements HarnessAdapter {
       const turn: FakeTurn = {
         // The person's words: a context handoff before them (what the
         // agent missed) never decides what the script does.
-        message:
+        message: withoutEarlierDeliveries(
           (attempt.input?.text ?? "").split(HANDOFF_SEPARATOR).at(-1) ?? "",
+        ),
         attachments: attempt.input?.attachments ?? [],
         systemPrompt: attempt.systemPrompt,
         context: attempt.context,
@@ -403,10 +416,33 @@ export class E2eFakeAdapter implements HarnessAdapter {
             : turn.capability(`workspace.${name}`, input),
         toolResult: (name, input) =>
           host.callTool({ name, input: toJson(input) }),
-        nextSteer: () =>
-          new Promise<Steer>((resolve) => {
+        nextSteer: () => {
+          const waiting = steered.shift();
+          return waiting
+            ? Promise.resolve(waiting)
+            : new Promise<Steer>((resolve) => {
+                steerWaiters.push(resolve);
+              });
+        },
+        steerWithin: async (ms) => {
+          const waiting = steered.shift();
+          if (waiting) return waiting;
+          const waiter: { resolve?: (input: Steer) => void } = {};
+          const steer = new Promise<Steer>((resolve) => {
+            waiter.resolve = resolve;
             steerWaiters.push(resolve);
-          }),
+          });
+          const news = await Promise.race([
+            steer,
+            pause(ms).then(() => undefined),
+          ]);
+          // Given up on: its claim goes, so a later message is echoed.
+          if (!news && waiter.resolve) {
+            const at = steerWaiters.indexOf(waiter.resolve);
+            if (at >= 0) steerWaiters.splice(at, 1);
+          }
+          return news;
+        },
         discover: async (query) =>
           z.object({ items: z.array(z.object({ name: z.string() })) }).parse(
             await host
@@ -450,8 +486,8 @@ export class E2eFakeAdapter implements HarnessAdapter {
         }
         transcript.apply(step);
       }
-      for (const text of steered)
-        transcript.apply({ type: "text", content: `Steered: ${text}` });
+      for (const steer of steered)
+        transcript.apply({ type: "text", content: `Steered: ${steer.text}` });
       transcript.close();
       await host.nativeState.append({
         entries: [{ askedQuestion: turn.askedQuestion }],
@@ -475,7 +511,7 @@ export class E2eFakeAdapter implements HarnessAdapter {
       steer: async (input) => {
         const waiter = steerWaiters.shift();
         if (waiter) waiter(input);
-        else steered.push(input.text);
+        else steered.push(input);
         host.emit({ type: "input.consumed", itemIds: [input.itemId] });
         return true;
       },
@@ -694,6 +730,18 @@ function elicitationAction(
 
 /** What separates a context handoff from the input it precedes (core's turn engine). */
 const HANDOFF_SEPARATOR = "\n\n---\n\n";
+
+/**
+ * The turn's own input, without what was delivered to read before it
+ * (ADR 0217): those arrive first, each in its envelope, and the script
+ * answers what the turn was started with.
+ */
+function withoutEarlierDeliveries(text: string): string {
+  return text.replace(
+    /^(?:[^\n]*\n<(task-notification|agent-message|workflow-message)\b[\s\S]*?<\/\1>\n\n)+/,
+    "",
+  );
+}
 
 async function* fakeScript(turn: FakeTurn): AsyncGenerator<FakeStep> {
   const message = turn.message;
@@ -1550,6 +1598,40 @@ export const catalog = defineWorkflow(({ defineBoundary }) => ({
     return;
   }
 
+  // "monitor: <cmd>" → a background command that wakes the chat on what it
+  // prints, while this turn keeps working: its news reaches the turn as it
+  // works, once per line it has not reported (ADR 0217).
+  const monitorRun = /^monitor:\s*(.+)$/s.exec(message.trim());
+  if (monitorRun?.[1]) {
+    const command = monitorRun[1];
+    const description = "Start the worker";
+    yield { type: "title", content: "Monitor exercise" };
+    yield {
+      type: "tool_call",
+      toolName: "run_background_command",
+      toolInput: { command, description },
+      description,
+    };
+    await turn.tool("run_background_command", {
+      command,
+      description,
+      wake_on_output: "Error|ready",
+      wake_on_exit: true,
+    });
+    yield { type: "text", content: "Watching the worker while I work." };
+    const news = await turn.steerWithin(30_000);
+    yield {
+      type: "text",
+      content: news?.text.includes("<task-notification>")
+        ? "The worker printed an error. Looking into it."
+        : "Nothing from the worker yet.",
+    };
+    // Still working while the error repeats: nothing more wakes this turn.
+    await turn.pause(6_000);
+    yield { type: "text", content: "Done with the worker for now." };
+    return;
+  }
+
   // "terminal: <cmd>" → the REAL run_background_command tool, then a
   // blocking read until it ends: e2e's path through the bridge with the
   // deterministic agent (chips, spinners, output). "background: <cmd>"
@@ -1941,6 +2023,16 @@ export const catalog = defineWorkflow(({ defineBoundary }) => ({
     return;
   }
 
+  // Work's news about a task the agent started (ADR 0217): read, and said.
+  const summary = /<summary>([^<]*)<\/summary>/.exec(message)?.[1];
+  if (summary && message.includes("<task-notification>")) {
+    const detail = /<detail>\n([\s\S]*?)\n<\/detail>/.exec(message)?.[1];
+    yield {
+      type: "text",
+      content: `Read it: ${summary}.${detail ? `\n\n${detail.trim()}` : ""}`,
+    };
+    return;
+  }
   yield { type: "title", content: "Quick chat" };
   yield { type: "text", content: `You said: ${message}` };
 }
@@ -1964,7 +2056,7 @@ function sessionWorkflowFixture({
       : scenario === "failure"
         ? 'throw new Error("Controlled monitor failure");'
         : ["reminder", "longreminder", "overdue"].includes(scenario)
-          ? `return context.host["catamorphic.sessions"].deliver({ sessionId: ${JSON.stringify(sessionId)}, content: "Reminder: submit the application.", mode: "message_only", attention: "required", idempotencyKey: "reminder" });`
+          ? `return context.host["catamorphic.sessions"].deliver({ sessionId: ${JSON.stringify(sessionId)}, content: "Reminder: submit the application.", mode: "message_only", attention: "required", idempotencyKey: ${JSON.stringify(scenario)} });`
           : scenario === "monitor"
             ? `return context.host["catamorphic.sessions"].deliver({ mode: "message_only", attention: "required", sessionId: ${JSON.stringify(sessionId)}, content: "Work completion observed.", idempotencyKey: "completion-observed" });`
             : `return context.host["catamorphic.sessions"].deliver({ sessionId: ${JSON.stringify(sessionId)}, content: "Scheduled follow-up received.", mode: "queue", idempotencyKey: "scheduled-wake" });`;

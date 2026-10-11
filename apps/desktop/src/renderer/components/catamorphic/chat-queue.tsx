@@ -19,16 +19,22 @@ export interface QueuedChatMessage {
   attachments: AgentAttachment[];
   /** Held for editing (here or on another device): later messages wait. */
   held?: boolean;
+  /**
+   * Not the person's own words (ADR 0217): one line naming who or what
+   * queued it. Withdrawn or run now, never edited.
+   */
+  line?: ReactNode;
 }
 
 /** How many queued messages stay visible while collapsed. */
 const QUEUE_COLLAPSE_THRESHOLD = 2;
 
 /**
- * The outgoing queue, rendered at the end of the chat as ghost bubbles:
- * dashed, right-aligned, each editable (which pauses its dispatch),
- * deletable, or promotable ("send now" interrupts the running turn). Long
- * queues collapse behind a "N queued" toggle.
+ * The outgoing queue, rendered at the end of the chat. The person's own
+ * messages are ghost bubbles: dashed, right-aligned, each editable (which
+ * pauses its dispatch), deletable, or promotable ("send now" interrupts the
+ * running turn). What an agent, a workflow or Work queued is one quiet
+ * line on the left. Long queues collapse behind a "N queued" toggle.
  */
 export function ChatQueue({
   queue,
@@ -62,19 +68,29 @@ export function ChatQueue({
   const hidden = queue.length - visible.length;
   return (
     <div className="flex flex-col items-end gap-1.5" data-testid="chat-queue">
-      {visible.map((queued) => (
-        <QueuedBubble
-          key={queued.id}
-          queued={queued}
-          onUpdate={onUpdate}
-          onRemove={onRemove}
-          onSendNow={onSendNow}
-          onHold={onHold}
-          renderContent={renderContent}
-          renderAttachments={renderAttachments}
-          Hint={Hint}
-        />
-      ))}
+      {visible.map((queued) =>
+        queued.line ? (
+          <QueuedInput
+            key={queued.id}
+            queued={queued}
+            onRemove={onRemove}
+            onSendNow={onSendNow}
+            Hint={Hint}
+          />
+        ) : (
+          <QueuedBubble
+            key={queued.id}
+            queued={queued}
+            onUpdate={onUpdate}
+            onRemove={onRemove}
+            onSendNow={onSendNow}
+            onHold={onHold}
+            renderContent={renderContent}
+            renderAttachments={renderAttachments}
+            Hint={Hint}
+          />
+        ),
+      )}
       {queue.length > QUEUE_COLLAPSE_THRESHOLD && (
         <button
           type="button"
@@ -89,6 +105,74 @@ export function ChatQueue({
           />
         </button>
       )}
+    </div>
+  );
+}
+
+/** A waiting turn someone other than the person queued: one quiet line. */
+function QueuedInput({
+  queued,
+  onRemove,
+  onSendNow,
+  Hint = DefaultHint,
+}: {
+  queued: QueuedChatMessage;
+  onRemove?: (id: string) => undefined | boolean | Promise<undefined | boolean>;
+  onSendNow?: (
+    id: string,
+  ) => undefined | boolean | Promise<undefined | boolean>;
+  Hint?: ComponentType<{ label: string; children: ReactNode }>;
+}) {
+  const [busy, setBusy] = useState(false);
+  const act = async (
+    action?: (id: string) => undefined | boolean | Promise<undefined | boolean>,
+  ) => {
+    if (!action || busy) return;
+    setBusy(true);
+    try {
+      await action(queued.id);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div
+      className="group/queued flex min-w-0 max-w-[85%] items-center gap-2 self-start rounded-lg border border-dashed border-border px-2 py-1 text-xs text-fg-muted"
+      data-testid="chat-queued-input"
+      data-turn-id={queued.id}
+    >
+      <span className="min-w-0 flex-1">{queued.line}</span>
+      <span className="shrink-0 text-[10px] uppercase tracking-wider text-fg-faint">
+        {queued.held ? "Held" : "Queued"}
+      </span>
+      <span className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity duration-150 group-hover/queued:opacity-100 group-focus-within/queued:opacity-100">
+        {onRemove && (
+          <Hint label="Remove from queue">
+            <button
+              type="button"
+              onClick={() => void act(onRemove)}
+              disabled={busy}
+              className="grid size-5 cursor-pointer place-items-center rounded text-fg-faint hover:text-danger"
+              aria-label="Remove from queue"
+            >
+              <Trash2 className="size-3" />
+            </button>
+          </Hint>
+        )}
+        {onSendNow && (
+          <Hint label="Run now (stops the agent)">
+            <button
+              type="button"
+              onClick={() => void act(onSendNow)}
+              disabled={busy}
+              className="grid size-5 cursor-pointer place-items-center rounded text-fg-faint hover:text-accent"
+              aria-label="Run now"
+            >
+              <Zap className="size-3" />
+            </button>
+          </Hint>
+        )}
+      </span>
     </div>
   );
 }

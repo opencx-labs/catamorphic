@@ -6,19 +6,29 @@ import {
   type Attempt,
   type CommandReceipt,
   type DispatchMode,
+  INPUT_ITEM_KINDS,
+  type InboundSender,
+  type InputItem,
+  type InputSource,
   type Item,
   isActiveTurnStatus,
+  isInputItem,
   isSettledTurnStatus,
   type JsonValue,
+  messageInput,
   type NativeRef,
+  type NotifiedTask,
   type JsonObject as ProtocolJsonObject,
   type RuntimeRequest,
   type RuntimeRequestResponse,
   type SessionCommand,
   type SessionEvent,
+  type SessionInput,
   type SessionMessageAuthor,
   type SessionSnapshot,
   type SessionStreamMessage,
+  type SettledAlert,
+  sessionInputSchema,
   type Turn,
   type TurnError,
 } from "@catamorphic/agent-protocol";
@@ -203,6 +213,7 @@ import {
   workspaceMoveNote,
   workspaceMoveRefusedNote,
 } from "./session-workspaces.js";
+import { modelInputText } from "./sessions/input-text.js";
 import {
   approvalPolicy,
   expiredApprovalReason,
@@ -235,6 +246,7 @@ import {
   requestFromRow,
   type SessionRow,
   turnFromRow,
+  waitingNotificationTurn,
 } from "./sessions/session-rows.js";
 import {
   type FinalizedTurn,
@@ -264,7 +276,7 @@ export type { SessionMessageAuthor } from "@catamorphic/agent-protocol";
 
 /** How a delivered input was taken: the protocol's dispatch, or `message_only`. */
 export interface SessionDeliveryReceipt {
-  /** The user item the input became. */
+  /** The item the input became. */
   messageId: string;
   turnId: string | null;
   mode: DispatchMode;
@@ -293,7 +305,6 @@ interface AgentExecutionRuntime {
 export interface SessionOperationOrigin {
   author: SessionMessageAuthor;
   causation?: string[];
-  provenance?: JsonObject;
 }
 
 type SessionVisibility = "latent" | "promoted" | "archived";
@@ -679,15 +690,12 @@ export function summarizeSessionTask(message: string): string | null {
 }
 
 /**
- * First line of the turn's request, trimmed into a commit subject. A turn a
- * workflow or the host started drops its provenance header: history reads
- * "Agent: Deploy is live: done", never the model-facing wrapper.
+ * First line of the turn's request, trimmed into a commit subject: the
+ * person's or a sender's words, or a notification's summary, never the
+ * model-facing envelope ("Agent: Deploy is live: done").
  */
-export function checkpointMessage(userMessage: string): string {
-  const request = userMessage
-    .replace(/^\s*\[Catamorphic [^\]\n]*\]\s*/, "")
-    .trimStart();
-  const firstLine = request.split("\n", 1)[0]?.trim() ?? "";
+export function checkpointMessage(request: string): string {
+  const firstLine = request.trimStart().split("\n", 1)[0]?.trim() ?? "";
   const subject =
     firstLine.length > 68 ? `${firstLine.slice(0, 67).trimEnd()}…` : firstLine;
   return subject ? `Agent: ${subject}` : "Agent checkpoint";
@@ -1338,12 +1346,7 @@ export class AgentSessionsService {
       queue: this.queue,
       workerId: this.turnWorkerId,
       host: this.engineHost(),
-      inputText: (item) =>
-        item.kind === "user_message"
-          ? modelVisibleDelivery(item.text, item.author)
-          : item.kind === "notice"
-            ? item.text
-            : "",
+      inputText: modelInputText,
     });
   }
 
@@ -1764,7 +1767,7 @@ export class AgentSessionsService {
         "in",
         rows.map((row) => row.id),
       )
-      .where("kind", "=", "user_message")
+      .where("kind", "in", ["user_message", "inbound_message"])
       .select(["session_id", "text as content", "position"])
       .distinctOn("session_id")
       .orderBy("session_id")
@@ -2031,37 +2034,52 @@ export class AgentSessionsService {
   // Delivering input
 
   /**
-   * Put input into a session inside the caller's transaction (ADR 0197): a
-   * user item and, unless it is `message_only`, a turn. `steer` joins the
-   * active turn (the engine delivers it, natively or by a restart);
-   * `interrupt` jumps the queue and stops the active turn. Idempotent by
-   * `idempotencyKey`. The session row must be locked by the caller.
+   * Put input into a session inside the caller's transaction (ADR 0197): an
+   * item of the input's kind (ADR 0217) and, unless it is `message_only`, a
+   * turn. `steer` joins the active turn (the engine delivers it, natively
+   * or by a restart); `interrupt` jumps the queue and stops the active turn.
+   * A task notification steers only into a turn still working and otherwise
+   * joins the one turn waiting for notifications, so they never stack up.
+   * A `message_only` input waits, `in_progress`, for the next turn to take
+   * it in, unless it is only for people to read (`forAgent: false`).
+   * Idempotent by `idempotencyKey`. The session row must be locked by the
+   * caller.
    */
   private async deliverIn(
     trx: Transaction<DB>,
-    input: {
+    delivery: {
       session: SessionRow;
-      text: string;
-      author: SessionMessageAuthor;
+      input: SessionInput;
       dispatch: DispatchMode;
-      attachments?: AgentAttachment[];
       attention?: "required" | "none";
       idempotencyKey?: string;
-      metadata?: JsonObject;
+      /** The member whose call delivered it (ADR 0199). */
+      deliveredBy: string | null;
+      causation?: string[];
       commandId?: string;
       /** Pre-allocated item id (a mailbox delivery keeps its id across hosts). */
       itemId?: string;
+      /**
+       * False for words only people read: another member's message to a
+       * chat on its owner's own machine (ADR 0199) never reaches its agent.
+       */
+      forAgent?: boolean;
     },
   ): Promise<SessionDeliveryReceipt> {
-    if (!input.text.trim() && !input.attachments?.length)
+    const { input, session } = delivery;
+    if (
+      input.kind === "task_notification"
+        ? !input.summary.trim()
+        : !input.text.trim() && input.attachments.length === 0
+    )
       throw new Error("Session message cannot be empty");
-    const sessionId = input.session.id;
-    if (input.idempotencyKey) {
+    const sessionId = session.id;
+    if (delivery.idempotencyKey) {
       const existing = await trx
         .selectFrom("agent_items")
         .select(["id", "turn_id", "dispatch"])
         .where("session_id", "=", sessionId)
-        .where("idempotency_key", "=", input.idempotencyKey)
+        .where("idempotency_key", "=", delivery.idempotencyKey)
         .executeTakeFirst();
       if (existing)
         return {
@@ -2083,10 +2101,10 @@ export class AgentSessionsService {
     const joinable =
       !active ||
       (await this.authoredByOwner({
-        projectId: input.session.project_id,
-        owner: input.session.external_user_id,
-        author: input.author,
-        metadata: input.metadata ?? null,
+        projectId: session.project_id,
+        owner: session.external_user_id,
+        input,
+        deliveredBy: delivery.deliveredBy,
         executor: trx,
       })) ||
       (await trx
@@ -2099,21 +2117,48 @@ export class AgentSessionsService {
           return runner !== null && runner !== undefined && !runner.ownerOnly;
         }));
     // A person's message while the turn waits on a question joins that
-    // turn (ADR 0195): the question stays open as a non-blocking one and
-    // its answer arrives later; a permission request is withdrawn.
+    // turn (ADR 0195), as does their own assistant's asking for them: the
+    // question stays open as a non-blocking one and its answer arrives
+    // later; a permission request is withdrawn.
     const replyToWaiting =
       joinable &&
-      input.author.kind === "user" &&
-      input.dispatch === "queue" &&
-      active?.status === "waiting" &&
-      input.metadata?.questionRequestId === undefined;
+      ((input.kind === "user_message" && !input.answer) ||
+        (input.kind === "inbound_message" &&
+          input.from.kind === "assistant")) &&
+      delivery.dispatch === "queue" &&
+      active?.status === "waiting";
+    // A notification reaches a turn while it works; once it waits on the
+    // person or its answer is on the way, the next turn takes it in.
+    const steerable =
+      active !== undefined &&
+      joinable &&
+      (input.kind !== "task_notification" ||
+        active.status === "preparing" ||
+        active.status === "running");
     const dispatch: DispatchMode = replyToWaiting
       ? "steer"
-      : input.dispatch === "steer" && (!active || !joinable)
+      : delivery.dispatch === "steer" && !steerable
         ? "queue"
-        : input.dispatch;
+        : delivery.dispatch;
+    // A notification joins the turn waiting for notifications only when
+    // both are as much the owner's: one runs on their sign-in or files
+    // (ADR 0199), the other may not.
+    const waitingTurn =
+      input.kind === "task_notification" && dispatch === "queue"
+        ? await waitingNotificationTurn(trx, sessionId)
+        : null;
+    const waiting =
+      waitingTurn &&
+      (await this.alikeForOwner(trx, {
+        session,
+        input,
+        deliveredBy: delivery.deliveredBy,
+        turn: waitingTurn,
+      }))
+        ? waitingTurn
+        : null;
     const now = new Date().toISOString();
-    const itemId = input.itemId ?? randomUUID();
+    const itemId = delivery.itemId ?? randomUUID();
     const events: SessionEvent[] = [];
     if (replyToWaiting && active)
       events.push(
@@ -2125,6 +2170,8 @@ export class AgentSessionsService {
     let turnId: string | null = null;
     if (dispatch === "steer" && active) {
       turnId = active.id;
+    } else if (waiting) {
+      turnId = waiting.id;
     } else if (dispatch === "queue" || dispatch === "interrupt") {
       const last = await trx
         .selectFrom("agent_turns")
@@ -2173,42 +2220,44 @@ export class AgentSessionsService {
         });
       }
     }
-    const attention =
-      (input.attention ?? input.metadata?.attention) === "required";
-    const metadata: JsonObject = { ...input.metadata };
-    delete metadata.attention;
-    delete metadata.attachments;
-    const item: Item = {
+    const attention = delivery.attention === "required";
+    const item: InputItem = {
       id: itemId,
       sessionId,
       turnId,
       attemptId: null,
       parentItemId: null,
       position: 0,
-      status: "completed",
+      // Delivered without a turn: unread until the next turn takes it in.
+      status:
+        dispatch === "message_only" && delivery.forAgent !== false
+          ? "in_progress"
+          : "completed",
       nativeRef: null,
       createdAt: now,
       updatedAt: now,
       startedAt: now,
       endedAt: now,
-      kind: "user_message",
-      author: input.author,
-      text: input.text,
-      attachments: input.attachments ?? [],
+      ...input,
       dispatch,
       attention: attention ? "required" : null,
-      idempotencyKey: input.idempotencyKey ?? null,
-      metadata: protocolJson(metadata),
+      idempotencyKey: delivery.idempotencyKey ?? null,
+      deliveredBy: delivery.deliveredBy,
+      causation: delivery.causation ?? [],
     };
     // The item comes first: a turn's input is in the log before the turn.
     events.unshift({ type: "item.added", item });
     // An untitled chat goes by what it was first asked to do from the
     // moment it is asked, until its harness names it. Context delivered
-    // without a turn (message_only) names nothing.
-    if (input.session.title === null && dispatch !== "message_only") {
+    // without a turn (message_only) and Work's notifications name nothing.
+    if (
+      session.title === null &&
+      dispatch !== "message_only" &&
+      input.kind !== "task_notification"
+    ) {
       const title = provisionalTitle({
         text: input.text,
-        attachments: input.attachments ?? [],
+        attachments: input.attachments,
       });
       if (title) events.push({ type: "session.changed", session: { title } });
     }
@@ -2216,7 +2265,7 @@ export class AgentSessionsService {
       events.push({
         type: "session.changed",
         session: {
-          attentionRevision: Number(input.session.attention_revision) + 1,
+          attentionRevision: Number(session.attention_revision) + 1,
         },
       });
     if (dispatch === "steer" && active)
@@ -2227,26 +2276,26 @@ export class AgentSessionsService {
         payload: { itemId },
       });
     // The actor and causation of the workflow-facing events (ADR 0090).
-    await sql`select set_config('catamorphic.session_actor', ${JSON.stringify({ ...input.author, causation: input.metadata?.causation ?? [] })}, true)`.execute(
+    await sql`select set_config('catamorphic.session_actor', ${JSON.stringify({ ...inputActor(input), causation: delivery.causation ?? [] })}, true)`.execute(
       trx,
     );
     await this.log.append(trx, {
       sessionId,
       events,
-      ...(input.commandId ? { commandId: input.commandId } : {}),
+      ...(delivery.commandId ? { commandId: delivery.commandId } : {}),
     });
     if (attention) {
       const owner = await trx
         .selectFrom("projects")
         .select("tenant_id")
-        .where("id", "=", input.session.project_id)
+        .where("id", "=", session.project_id)
         .executeTakeFirstOrThrow();
       await trx
         .insertInto("agent_session_views")
         .values({
           session_id: sessionId,
           tenant_id: owner.tenant_id,
-          external_user_id: input.session.external_user_id,
+          external_user_id: session.external_user_id,
           visibility: "promoted",
           previous_visibility: "promoted",
         })
@@ -2263,14 +2312,14 @@ export class AgentSessionsService {
       await new UserNotificationsService(this.db).publish({
         identity: {
           tenantId: owner.tenant_id,
-          externalUserId: input.session.external_user_id,
+          externalUserId: session.external_user_id,
         },
-        projectId: input.session.project_id,
+        projectId: session.project_id,
         sessionId,
         kind: "session_attention",
         title: "A message needs your attention",
-        body: input.text,
-        route: `/?project=${encodeURIComponent(input.session.project_id)}&session=${encodeURIComponent(sessionId)}&message=${encodeURIComponent(itemId)}`,
+        body: input.kind === "task_notification" ? input.summary : input.text,
+        route: `/?project=${encodeURIComponent(session.project_id)}&session=${encodeURIComponent(sessionId)}&message=${encodeURIComponent(itemId)}`,
         collapseKey: `message:${itemId}`,
         transaction: trx,
       });
@@ -2296,44 +2345,11 @@ export class AgentSessionsService {
   }
 
   /**
-   * Deliver attributed input (a workflow, an agent, a watcher, Work
-   * itself). A session whose authority is another host gets it through
+   * Deliver attributed words (ADR 0217): the person's become a user
+   * message; an agent's, an assistant's or a workflow's an inbound
+   * message. A session whose authority is another host gets it through
    * that host's mailbox. Runs a turn unless `mode` is `message_only`.
    */
-  /**
-   * Record an attributed message inside a caller's transaction, so it
-   * commits with the caller's own change (a session action's result). The
-   * caller has already checked access; nothing runs until it commits.
-   */
-  async deliverWithin(
-    trx: Transaction<DB>,
-    input: {
-      sessionId: string;
-      content: string;
-      author: SessionMessageAuthor;
-      mode: DispatchMode;
-      idempotencyKey?: string;
-      metadata?: JsonObject;
-    },
-  ): Promise<SessionDeliveryReceipt> {
-    const session = await trx
-      .selectFrom("agent_sessions")
-      .selectAll()
-      .where("id", "=", input.sessionId)
-      .forUpdate()
-      .executeTakeFirstOrThrow();
-    const receipt = await this.deliverIn(trx, {
-      session,
-      text: input.content,
-      author: input.author,
-      dispatch: input.mode,
-      ...(input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : {}),
-      ...(input.metadata ? { metadata: input.metadata } : {}),
-    });
-    if (receipt.turnId) this.kick(input.sessionId);
-    return receipt;
-  }
-
   async deliver(
     identity: Identity,
     projectId: string,
@@ -2344,7 +2360,10 @@ export class AgentSessionsService {
       mode: DispatchMode;
       attention?: "required" | "none";
       idempotencyKey?: string;
-      metadata?: JsonObject;
+      /** The enablements whose runs led here; an agent's are looked up. */
+      causation?: string[];
+      /** A workflow's ask that the chat's people hear when the turn settles. */
+      alert?: SettledAlert;
       attachments?: AgentAttachment[];
       /** Move the chat's workspace to a ref before its next turn (ADR 0178). */
       workspace?: SessionWorkspaceRequest;
@@ -2357,21 +2376,84 @@ export class AgentSessionsService {
         sessionId,
         input.workspace,
       );
-    const metadata: JsonObject = {
-      ...input.metadata,
-      // Whose call delivered it, whatever author it names: a chat that runs
-      // on its owner's own sign-in answers only their own doing (ADR 0199).
-      deliveredBy: identity.externalUserId,
-      ...(input.author.kind === "agent" && !input.metadata?.causation
-        ? {
-            causation: await this.causalContext({
-              identity,
-              projectId,
-              sessionId: input.author.sessionId,
-            }),
-          }
-        : {}),
-    };
+    const causation =
+      input.causation ??
+      (input.author.kind === "agent"
+        ? await this.causalContext({
+            identity,
+            projectId: input.author.projectId ?? projectId,
+            sessionId: input.author.sessionId,
+          })
+        : []);
+    const message = messageInput({
+      author: input.author,
+      text: input.content,
+      ...(input.attachments ? { attachments: input.attachments } : {}),
+    });
+    return this.deliverInput(identity, projectId, sessionId, {
+      input:
+        message.kind === "inbound_message" && input.alert
+          ? { ...message, alert: input.alert }
+          : message,
+      mode: input.mode,
+      ...(input.attention ? { attention: input.attention } : {}),
+      ...(input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : {}),
+      causation,
+    });
+  }
+
+  /**
+   * Tell a session's agent about a task it started (ADR 0217): a
+   * background command, a watch, a subsession, a chat it follows. The
+   * person sees `summary` as one line; the agent reads it with `detail`.
+   * It reaches the agent's turn while it works; else it wakes the agent,
+   * together with any other notification still waiting. `message_only`
+   * waits for the agent's next turn instead.
+   */
+  async notify(
+    identity: Identity,
+    projectId: string,
+    sessionId: string,
+    input: {
+      task: NotifiedTask;
+      summary: string;
+      detail?: string;
+      source?: InputSource | null;
+      mode?: "steer" | "message_only";
+      idempotencyKey: string;
+    },
+  ): Promise<SessionDeliveryReceipt> {
+    // Checked here, so a host's mistake fails its call rather than a
+    // mailbox read on another host later.
+    const notification = sessionInputSchema.parse({
+      kind: "task_notification",
+      task: { ...input.task, title: input.task.title.slice(0, 2_000) },
+      summary: input.summary.trim().slice(0, 2_000),
+      detail: input.detail ?? "",
+      source: input.source ?? null,
+    });
+    return this.deliverInput(identity, projectId, sessionId, {
+      input: notification,
+      mode: input.mode ?? "steer",
+      idempotencyKey: input.idempotencyKey,
+    });
+  }
+
+  private async deliverInput(
+    identity: Identity,
+    projectId: string,
+    sessionId: string,
+    delivery: {
+      input: SessionInput;
+      mode: DispatchMode;
+      attention?: "required" | "none";
+      idempotencyKey?: string;
+      causation?: string[];
+    },
+  ): Promise<SessionDeliveryReceipt> {
+    // Whose call delivered it, whoever wrote it: a chat that runs on its
+    // owner's own sign-in answers only their own doing (ADR 0199).
+    const deliveredBy = identity.externalUserId;
     const session = await this.requireSession(identity, projectId, sessionId);
     if (session.status !== "active")
       throw new AgentSessionClosedError(sessionId);
@@ -2384,25 +2466,25 @@ export class AgentSessionsService {
           hostId: session.authority_host_id,
           revision: Number(session.authority_revision),
         },
-        content: input.content,
-        author: input.author,
-        mode: input.mode,
-        ...(input.idempotencyKey
-          ? { idempotencyKey: input.idempotencyKey }
-          : {}),
-        // The authority applies the attention when it imports the item,
-        // and runs a turn only for what the owner wrote: it runs on the
-        // owner's own machine and credentials (ADR 0199).
-        metadata: {
-          ...metadata,
-          ...(input.attention ? { attention: input.attention } : {}),
+        // The authority runs a turn only for what the owner wrote: it runs
+        // on the owner's own machine and credentials (ADR 0199).
+        delivery: {
+          kind: "input",
+          input: delivery.input,
+          mode: delivery.mode,
+          attention: delivery.attention === "required",
+          deliveredBy,
           ownerAuthored: await this.authoredByOwner({
             projectId,
             owner: session.external_user_id,
-            author: input.author,
-            metadata,
+            input: delivery.input,
+            deliveredBy,
           }),
         },
+        ...(delivery.idempotencyKey
+          ? { idempotencyKey: delivery.idempotencyKey }
+          : {}),
+        ...(delivery.causation ? { causation: delivery.causation } : {}),
       });
     await this.claimLocalAuthority(session);
     const receipt = await this.db.transaction().execute(async (trx) => {
@@ -2416,15 +2498,14 @@ export class AgentSessionsService {
         throw new AgentSessionClosedError(sessionId);
       return this.deliverIn(trx, {
         session: locked,
-        text: input.content,
-        author: input.author,
-        dispatch: input.mode,
-        ...(input.attachments ? { attachments: input.attachments } : {}),
-        ...(input.attention ? { attention: input.attention } : {}),
-        ...(input.idempotencyKey
-          ? { idempotencyKey: input.idempotencyKey }
+        input: delivery.input,
+        dispatch: delivery.mode,
+        ...(delivery.attention ? { attention: delivery.attention } : {}),
+        ...(delivery.idempotencyKey
+          ? { idempotencyKey: delivery.idempotencyKey }
           : {}),
-        metadata,
+        deliveredBy,
+        ...(delivery.causation ? { causation: delivery.causation } : {}),
       });
     });
     // Work delivered to an archived chat runs; the chat comes back into view.
@@ -2453,37 +2534,25 @@ export class AgentSessionsService {
       item.destinationHostId !== this.hostId
     )
       throw new SessionMirrorDivergedError(item.sessionId);
-    const action = item.metadata?.sessionAction;
-    if (
-      action &&
-      typeof action === "object" &&
-      !Array.isArray(action) &&
-      typeof action.operation === "string" &&
-      this.sessionActionHandler
-    ) {
+    if (item.kind === "action") {
+      const handle = this.sessionActionHandler;
+      if (!handle) throw new Error("Session actions are not configured here");
       const { SESSION_ACTION_SCHEMAS } = await import(
         "./session-actions-service.js"
       );
-      const operation = action.operation;
-      if (!(operation in SESSION_ACTION_SCHEMAS))
+      const named = {
+        operation: item.action.operation,
+        schemas: SESSION_ACTION_SCHEMAS,
+      };
+      if (!isSessionActionOperation(named))
         throw new Error("Unknown session action");
-      await this.sessionActionHandler({
+      await handle({
         identity,
         projectId,
-        author: item.author,
-        operation: operation as keyof typeof SESSION_ACTION_SCHEMAS,
-        args: action.args,
-        provenance:
-          action.provenance &&
-          typeof action.provenance === "object" &&
-          !Array.isArray(action.provenance)
-            ? action.provenance
-            : {},
-        causation: Array.isArray(action.causation)
-          ? action.causation.filter(
-              (id): id is string => typeof id === "string",
-            )
-          : [],
+        author: item.action.actor,
+        operation: named.operation,
+        args: item.action.args,
+        causation: item.causation,
       });
       return {
         messageId: item.messageId,
@@ -2495,7 +2564,6 @@ export class AgentSessionsService {
     // This host runs the chat on its owner's own machine and credentials:
     // only what the owner wrote starts a turn; anything else is delivered
     // to read, attributed, and runs nothing (ADR 0199).
-    const { ownerAuthored, ...metadata } = item.metadata ?? {};
     const receipt = await this.db.transaction().execute(async (trx) => {
       const locked = await trx
         .selectFrom("agent_sessions")
@@ -2505,12 +2573,14 @@ export class AgentSessionsService {
         .executeTakeFirstOrThrow();
       return this.deliverIn(trx, {
         session: locked,
-        text: item.content,
-        author: item.author,
-        dispatch: ownerAuthored === true ? item.mode : "message_only",
+        input: item.input,
+        dispatch: item.ownerAuthored ? item.mode : "message_only",
+        forAgent: item.ownerAuthored,
         itemId: item.messageId,
         idempotencyKey: `mailbox:${item.sourceHostId}:${item.id}`,
-        metadata,
+        ...(item.attention ? { attention: "required" as const } : {}),
+        deliveredBy: item.deliveredBy,
+        causation: item.causation,
       });
     });
     if (receipt.turnId) this.kick(item.sessionId);
@@ -2520,6 +2590,8 @@ export class AgentSessionsService {
   /**
    * Send a message and wait for its turn to settle: the one-shot shape
    * the project MCP's `ask_agent` uses. Returns the turn's final reply.
+   * `from` names who asks when it is not the caller themself (an agent,
+   * or the person's own assistant): it arrives as an inbound message.
    * Throws {@link AgentTurnUnsettledError} when the turn cannot settle now
    * (no machine takes it, it was held or cancelled, its machine stopped).
    */
@@ -2531,19 +2603,37 @@ export class AgentSessionsService {
     input: {
       attachments?: AgentAttachment[];
       dispatch?: "queue" | "interrupt";
+      from?: InboundSender;
     } = {},
   ): Promise<{ reply: Item | null; turn: Turn }> {
-    const receipt = await this.command(identity, projectId, sessionId, {
-      type: "send",
-      commandId: randomUUID(),
-      text: message,
-      ...(input.attachments ? { attachments: input.attachments } : {}),
-      ...(input.dispatch ? { dispatch: input.dispatch } : {}),
-    });
-    if (receipt.status === "rejected")
-      throw new Error(receipt.error?.message ?? "The message was refused");
-    const turnId =
-      typeof receipt.result?.turnId === "string" ? receipt.result.turnId : null;
+    let turnId: string | null;
+    if (input.from) {
+      // As a person's send is: closed, moving and remote chats refuse it.
+      this.assertAcceptsInput(
+        await this.requireSession(identity, projectId, sessionId),
+      );
+      const receipt = await this.deliver(identity, projectId, sessionId, {
+        content: message,
+        author: input.from,
+        mode: input.dispatch ?? "queue",
+        ...(input.attachments ? { attachments: input.attachments } : {}),
+      });
+      turnId = receipt.turnId;
+    } else {
+      const receipt = await this.command(identity, projectId, sessionId, {
+        type: "send",
+        commandId: randomUUID(),
+        text: message,
+        ...(input.attachments ? { attachments: input.attachments } : {}),
+        ...(input.dispatch ? { dispatch: input.dispatch } : {}),
+      });
+      if (receipt.status === "rejected")
+        throw new Error(receipt.error?.message ?? "The message was refused");
+      turnId =
+        typeof receipt.result?.turnId === "string"
+          ? receipt.result.turnId
+          : null;
+    }
     if (!turnId) throw new Error("A send must create a turn");
     let unclaimedSince = Date.now();
     for (;;) {
@@ -2680,18 +2770,19 @@ export class AgentSessionsService {
                 (locked.parent_session_id && active ? "steer" : "queue");
               const delivered = await this.deliverIn(trx, {
                 session: locked,
-                text: command.text,
-                author: {
-                  kind: "user",
-                  externalUserId: identity.externalUserId,
+                input: {
+                  kind: "user_message",
+                  author: {
+                    kind: "user",
+                    externalUserId: identity.externalUserId,
+                  },
+                  text: command.text,
+                  attachments: (command.attachments ?? []) as AgentAttachment[],
                 },
                 dispatch,
-                ...(command.attachments
-                  ? { attachments: command.attachments as AgentAttachment[] }
-                  : {}),
                 idempotencyKey: commandId,
                 commandId,
-                metadata: { deliveredBy: identity.externalUserId },
+                deliveredBy: identity.externalUserId,
               });
               return {
                 itemId: delivered.messageId,
@@ -3061,10 +3152,13 @@ export class AgentSessionsService {
       })
       .where("id", "=", delegation.id)
       .execute();
-    await this.deliver(identity, projectId, delegation.source_session_id, {
-      content: `Subsession ${sessionId} was interrupted because the user took over that conversation.`,
-      author: { kind: "system", code: "subsession_interrupted" },
-      mode: "queue",
+    const title = await this.subsessionTitle(sessionId);
+    await this.notify(identity, projectId, delegation.source_session_id, {
+      task: { type: "subsession", id: sessionId, title, status: "stopped" },
+      summary: `${title} was interrupted`,
+      detail:
+        "Its turn was stopped before it finished, so it will not report a result. Read its chat to see where it stopped; message it to carry on.",
+      source: { kind: "session", sessionId },
       idempotencyKey: `delegation:${delegation.id}:interrupted`,
     }).catch((error) =>
       console.warn(
@@ -3187,10 +3281,11 @@ export class AgentSessionsService {
           .where("id", "=", turn.inputItemId)
           .executeTakeFirst();
         const item = itemRow ? itemFromRow(itemRow) : null;
-        // Words stay their author's: nobody else rewrites them.
+        // Words stay their author's: nobody else rewrites them, and what an
+        // agent, a workflow or Work delivered is not edited at all.
         if (
-          item?.kind === "user_message" &&
-          (item.author.kind !== "user" ||
+          item &&
+          (item.kind !== "user_message" ||
             item.author.externalUserId !== input.identity.externalUserId)
         )
           throw new SessionCommandRejectedError(
@@ -3649,19 +3744,24 @@ export class AgentSessionsService {
       // turn still working, else as a turn of its own.
       await this.deliverIn(trx, {
         session: input.session,
-        text: `${questions}\n\nUser answer:\n${response.answers.join("\n")}`,
-        author: { kind: "user", externalUserId: input.identity.externalUserId },
-        dispatch: turn && isActiveTurnStatus(turn.status) ? "steer" : "queue",
-        idempotencyKey: `question-answer:${request.id}`,
-        metadata: {
-          questionRequestId: request.id,
-          deliveredBy: input.identity.externalUserId,
+        input: {
+          kind: "user_message",
+          author: {
+            kind: "user",
+            externalUserId: input.identity.externalUserId,
+          },
+          text: `${questions}\n\nUser answer:\n${response.answers.join("\n")}`,
+          attachments: [],
           // The batch and the raw answer render the history entry.
-          question: protocolJson({
+          answer: {
+            requestId: request.id,
             questions: request.questions ?? [],
             answers: response.answers,
-          }),
+          },
         },
+        dispatch: turn && isActiveTurnStatus(turn.status) ? "steer" : "queue",
+        idempotencyKey: `question-answer:${request.id}`,
+        deliveredBy: input.identity.externalUserId,
       });
     }
     return { requestId: request.id };
@@ -4079,6 +4179,13 @@ export class AgentSessionsService {
         };
       },
       prepare: (input) => this.prepareAttempt(input),
+      authoredByOwner: ({ session, item }) =>
+        this.authoredByOwner({
+          projectId: session.project_id,
+          owner: session.external_user_id,
+          input: item,
+          deliveredBy: item.deliveredBy,
+        }),
       reattach: (input) => this.reattachRunner(input),
       hostTool: (input) => this.runHostTool(input),
       finalize: (input) => this.finalizeTurn(input),
@@ -4921,10 +5028,12 @@ export class AgentSessionsService {
           .executeTakeFirst()
       : undefined;
     const inputItem = inputRow ? itemFromRow(inputRow) : null;
+    // A workflow's chat alerts its people when the turn it started settles.
     const notification =
-      inputItem?.kind === "user_message" &&
+      inputItem?.kind === "inbound_message" &&
+      inputItem.from.kind === "workflow" &&
       input.completion.status !== "interrupted"
-        ? workflowNotification(inputItem.metadata as JsonObject)
+        ? inputItem.alert
         : undefined;
     return {
       outcome: {
@@ -6065,46 +6174,41 @@ export class AgentSessionsService {
   }
 
   /**
-   * Whether the chat's owner wrote the message a turn answers (ADR 0184),
+   * Whether the chat's owner wrote the input a turn answers (ADR 0184),
    * the condition for their login and files. The owner sent it, or it came
    * from their own doing through a call they made: one of their chats'
-   * agents (a subsession reporting back), a workflow they enabled or ran
-   * for themselves, a watcher of theirs, or Work's notice about their own
-   * subsessions. Another member, an administrator, and the project's
+   * agents (a subsession reporting back), their own assistant, a workflow
+   * they enabled or ran for themselves, or Work's notification about a
+   * task of theirs. Another member, an administrator, and the project's
    * automations never run on the owner's login.
    */
   private async authoredByOwner(input: {
     projectId: string;
     owner: string;
-    author: SessionMessageAuthor;
-    metadata?: JsonObject | null;
+    input: SessionInput;
+    deliveredBy: string | null;
     executor?: Kysely<DB> | Transaction<DB>;
   }): Promise<boolean> {
-    const { author, owner, projectId } = input;
+    const { owner, projectId } = input;
     const db = input.executor ?? this.db;
-    if (author.kind === "user") return author.externalUserId === owner;
-    // Stamped by `deliver` with the identity whose call delivered it.
-    if (input.metadata?.deliveredBy !== owner) return false;
+    if (input.input.kind === "user_message")
+      return input.input.author.externalUserId === owner;
+    if (input.deliveredBy !== owner) return false;
+    if (input.input.kind === "task_notification") return true;
+    const author = input.input.from;
     switch (author.kind) {
-      case "system":
-        return true;
+      case "assistant":
+        return author.externalUserId === owner;
       case "agent": {
+        // The sending chat may be in another project of the owner's (the
+        // assistant's, ADR 0216).
         const source = await db
           .selectFrom("agent_sessions")
           .select("external_user_id")
           .where("id", "=", author.sessionId)
-          .where("project_id", "=", projectId)
+          .where("project_id", "=", author.projectId ?? projectId)
           .executeTakeFirst();
         return source?.external_user_id === owner;
-      }
-      case "watcher": {
-        const watcher = await db
-          .selectFrom("watchers")
-          .select("owner_external_user_id")
-          .where("id", "=", author.watcherId)
-          .where("project_id", "=", projectId)
-          .executeTakeFirst();
-        return watcher?.owner_external_user_id === owner;
       }
       case "workflow": {
         const run = await db
@@ -6129,6 +6233,42 @@ export class AgentSessionsService {
           : run.external_user_id === owner;
       }
     }
+  }
+
+  /**
+   * Whether an input is as much the chat's owner's as a waiting turn's own
+   * input, so the two may run as one turn (ADR 0199).
+   */
+  private async alikeForOwner(
+    trx: Transaction<DB>,
+    input: {
+      session: SessionRow;
+      input: SessionInput;
+      deliveredBy: string | null;
+      turn: Turn;
+    },
+  ): Promise<boolean> {
+    const row = input.turn.inputItemId
+      ? await trx
+          .selectFrom("agent_items")
+          .select("payload")
+          .where("id", "=", input.turn.inputItemId)
+          .executeTakeFirst()
+      : undefined;
+    const waiting = row ? itemFromRow(row) : null;
+    if (!waiting || !isInputItem(waiting)) return false;
+    const owned = (candidate: SessionInput, deliveredBy: string | null) =>
+      this.authoredByOwner({
+        projectId: input.session.project_id,
+        owner: input.session.external_user_id,
+        input: candidate,
+        deliveredBy,
+        executor: trx,
+      });
+    return (
+      (await owned(input.input, input.deliveredBy)) ===
+      (await owned(waiting, waiting.deliveredBy))
+    );
   }
 
   /**
@@ -6161,18 +6301,18 @@ export class AgentSessionsService {
       .select("payload")
       .where("session_id", "=", input.turn.sessionId)
       .where("turn_id", "in", turnIds)
-      .where("kind", "=", "user_message")
+      .where("kind", "in", [...INPUT_ITEM_KINDS])
       .execute();
     if (rows.length === 0) return false;
     for (const row of rows) {
       const item = itemFromRow(row);
       if (
-        item.kind !== "user_message" ||
+        !isInputItem(item) ||
         !(await this.authoredByOwner({
           projectId: input.projectId,
           owner: input.owner,
-          author: item.author,
-          metadata: item.metadata,
+          input: item,
+          deliveredBy: item.deliveredBy,
         }))
       )
         return false;
@@ -6665,6 +6805,44 @@ export class AgentSessionsService {
         },
       }),
     );
+  }
+
+  /** A subsession's name for its parent's notifications. */
+  private async subsessionTitle(sessionId: string): Promise<string> {
+    const row = await this.db
+      .selectFrom("agent_sessions")
+      .select("title")
+      .where("id", "=", sessionId)
+      .executeTakeFirst();
+    return row?.title?.trim() || "Subsession";
+  }
+
+  /**
+   * Record a session action someone took on this chat (an archive, a
+   * completion) as a notice naming who took it, inside the action's own
+   * transaction. People read it in the transcript; the agent does not.
+   */
+  async recordActionWithin(
+    trx: Transaction<DB>,
+    input: {
+      sessionId: string;
+      actionId: string;
+      status: "completed" | "failed";
+      actor: SessionMessageAuthor;
+      text: string;
+      data: JsonObject;
+    },
+  ): Promise<void> {
+    await this.appendNotice(trx, {
+      sessionId: input.sessionId,
+      id: derivedNoticeId(
+        input.sessionId,
+        `action:${input.actionId}:${input.status}`,
+      ),
+      code: "session_action",
+      text: input.text,
+      data: { ...input.data, actor: protocolJson(input.actor) },
+    });
   }
 
   /**
@@ -7351,13 +7529,9 @@ export class AgentSessionsService {
         .executeTakeFirstOrThrow();
       const receipt = await this.deliverIn(transaction, {
         session: childRow,
-        text: task,
-        author: origin.author,
-        metadata: {
-          causation: origin.causation ?? [],
-          provenance: origin.provenance ?? {},
-          deliveredBy: identity.externalUserId,
-        },
+        input: messageInput({ author: origin.author, text: task }),
+        deliveredBy: identity.externalUserId,
+        causation: origin.causation ?? [],
         dispatch: "queue",
         idempotencyKey: `delegation:${delegation.id}:task`,
       });
@@ -7519,11 +7693,7 @@ export class AgentSessionsService {
       .where("turn.status", "in", [...ACTIVE_TURN_STATUSES])
       .executeTakeFirst();
     const item = row ? itemFromRow(row) : null;
-    const chain =
-      item?.kind === "user_message" ? item.metadata.causation : undefined;
-    return Array.isArray(chain)
-      ? chain.filter((id): id is string => typeof id === "string")
-      : [];
+    return item && isInputItem(item) ? item.causation : [];
   }
 
   /** Explicitly claim a mirrored session for this host with a fencing CAS. */
@@ -9066,14 +9236,17 @@ export class AgentSessionsService {
       sourceDelegation &&
       !impact.sessionIds.includes(sourceDelegation.source_session_id)
     ) {
-      await this.deliver(
+      const title = await this.subsessionTitle(sessionId);
+      await this.notify(
         identity,
         projectId,
         sourceDelegation.source_session_id,
         {
-          content: `Subsession ${sessionId} was archived by the user.`,
-          author: { kind: "system", code: "subsession_archived" },
-          mode: "queue",
+          task: { type: "subsession", id: sessionId, title, status: "stopped" },
+          summary: `${title} was archived`,
+          detail:
+            "Its chat was archived: its work stopped, and it will not report a result.",
+          source: { kind: "session", sessionId },
           idempotencyKey: `delegation:${sourceDelegation.id}:archived`,
         },
       );
@@ -10490,27 +10663,23 @@ export class AgentSessionsService {
         input.projectId,
         input.sessionId,
       );
-      await this.deliver(
+      const title = child?.title ?? "Subsession";
+      await this.notify(
         input.identity,
         input.projectId,
         delegation.source_session_id,
         {
-          content: `Subsession ${input.sessionId} needs user input.`,
-          author: {
-            kind: "agent",
-            sessionId: input.sessionId,
-            agentId: null,
+          task: {
+            type: "subsession",
+            id: input.sessionId,
+            title,
+            status: "needs_input",
           },
-          mode: "steer",
+          summary: `${title} needs the person's input`,
+          detail:
+            "It waits on a question or an approval. The person answers it in that chat.",
+          source: { kind: "session", sessionId: input.sessionId },
           idempotencyKey: `delegation:${delegation.id}:awaiting-input`,
-          metadata: {
-            delegation: {
-              id: delegation.id,
-              childSessionId: input.sessionId,
-              status: "awaiting_input",
-              ...(child?.title ? { title: child.title } : {}),
-            },
-          },
         },
       );
       return;
@@ -10523,31 +10692,20 @@ export class AgentSessionsService {
         input.projectId,
         input.sessionId,
       );
-    const result =
-      input.content.trim() || `Subsession ${input.sessionId} ${status}.`;
+    const title = child?.title ?? "Subsession";
     // Like a subagent's: the result joins the parent's turn while it still
     // works (it may be waiting on it), and wakes the parent when it does not.
-    await this.deliver(
+    await this.notify(
       input.identity,
       input.projectId,
       delegation.source_session_id,
       {
-        content: result,
-        author: {
-          kind: "agent",
-          sessionId: input.sessionId,
-          agentId: null,
-        },
-        mode: "steer",
+        task: { type: "subsession", id: input.sessionId, title, status },
+        summary:
+          status === "completed" ? `${title} finished` : `${title} failed`,
+        detail: input.content.trim(),
+        source: { kind: "session", sessionId: input.sessionId },
         idempotencyKey: `delegation:${delegation.id}:result`,
-        metadata: {
-          delegation: {
-            id: delegation.id,
-            childSessionId: input.sessionId,
-            status,
-            ...(child?.title ? { title: child.title } : {}),
-          },
-        },
       },
     );
     await this.db
@@ -10917,25 +11075,12 @@ function resolveDelegationTarget(input: {
   return resolved;
 }
 
-function workflowNotification(
-  metadata: JsonObject | null | undefined,
-): { title?: string; body?: string } | undefined {
-  const value = metadata?.workflowNotification;
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return undefined;
-  }
-  const title =
-    typeof value.title === "string" && value.title.trim()
-      ? value.title.trim()
-      : undefined;
-  const body =
-    typeof value.body === "string" && value.body.trim()
-      ? value.body.trim()
-      : undefined;
-  return {
-    ...(title ? { title } : {}),
-    ...(body ? { body } : {}),
-  };
+/** Whether a forwarded action names one this host runs. */
+function isSessionActionOperation<T extends object>(input: {
+  operation: string;
+  schemas: T;
+}): input is { operation: Extract<keyof T, string>; schemas: T } {
+  return Object.hasOwn(input.schemas, input.operation);
 }
 
 function parseSessionSource(value: string): AgentSessionSource {
@@ -10990,21 +11135,15 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-export function modelVisibleDelivery(
-  content: string,
-  author: SessionMessageAuthor,
-): string {
-  switch (author.kind) {
-    case "user":
-      return content;
-    case "agent":
-      return `[Catamorphic agent message from session ${author.sessionId}${author.agentId ? ` using ${author.agentId}` : ""}. This message was not written by the user.]\n\n${content}`;
-    case "workflow":
-      return `[Catamorphic workflow message from ${author.workflowName}, run ${author.runId}. This message was not written by the user.]\n\n${content}`;
-    case "watcher":
-      return `[Catamorphic watcher message from ${author.watcherId}${author.runId ? `, run ${author.runId}` : ""}. This message was not written by the user.]\n\n${content}`;
-    case "system":
-      return `[Catamorphic system message: ${author.code}. This message was not written by the user.]\n\n${content}`;
+/** Who an input names as the actor of workflow-facing events (ADR 0090). */
+function inputActor(input: SessionInput): Record<string, unknown> {
+  switch (input.kind) {
+    case "user_message":
+      return { ...input.author };
+    case "inbound_message":
+      return { ...input.from };
+    case "task_notification":
+      return { kind: "system", code: input.task.type };
   }
 }
 

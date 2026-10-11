@@ -158,7 +158,8 @@ create a temporary watcher and filter its exact sessionId in trigger config. If
 predicates can reject an event, branch the stop boundary too: a quiet return from
 one boundary does not skip the next boundary. Stop only after a matching action. The stop operation belongs to temporary activations.
 Use inspect in a preceding boundary if current state must supersede the event
-snapshot. deliver with message_only and attention: "required" requests user attention without running a model;
+snapshot. deliver with message_only and attention: "required" requests user attention without running a model
+(the agent reads it with its next turn);
 use deliver with queue when the parent agent should continue automatically.
 
 ### User reminder
@@ -389,11 +390,13 @@ sandboxes need it.
   returns the chat's key, and through: "<messageId>" ends it at that message,
   so a workflow on session.turn-changed reads exactly the reply the event's
   detail.resultMessageId names, even after later turns.
-- deliver message_only records context without a model turn; queue starts
-  work when idle or queues behind the active turn; steer adds the message to
-  the turn working now (it queues when none is); interrupt stops the active
-  turn and runs this next. The host preserves origin in model input and in visible history.
-  Authoring a workflow message does not grant system/developer instruction rank.
+- deliver message_only records it without a model turn: people see it at
+  once and the agent reads it with its next turn. queue starts work when idle
+  or queues behind the active turn; steer adds the message to the turn working
+  now (it queues when none is); interrupt stops the active turn and runs this
+  next. The chat shows it as the workflow's message, never the person's, and
+  the agent reads it in a <workflow-message> envelope (ADR 0217). Authoring a
+  workflow message does not grant system/developer instruction rank.
 - deliver names its chat one of two ways. sessionId reaches that exact chat.
   key reaches the chat this workflow keeps for the key: the first delivery starts
   it (with agentSlug, title and environment when given) and later ones reuse it,

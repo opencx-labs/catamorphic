@@ -137,19 +137,154 @@ export interface AgentTextAttachment {
 
 export type AgentAttachment = AgentMediaAttachment | AgentTextAttachment;
 
-/** Who wrote an input. A person, an agent, a workflow, a watcher, or Work. */
-export type SessionMessageAuthor =
-  | { kind: "user"; externalUserId: string }
-  | { kind: "agent"; sessionId: string; agentId: string | null }
+/** The person who wrote a {@link UserMessageItem}. */
+export interface SessionUser {
+  kind: "user";
+  externalUserId: string;
+}
+
+/**
+ * Who sent a session words that are not the person's (ADR 0217): another
+ * agent's chat, a person's own assistant outside Work (an MCP client of
+ * the project), or a workflow.
+ */
+export type InboundSender =
+  | {
+      kind: "agent";
+      sessionId: string;
+      agentId: string | null;
+      /** The chat's project, when it is not the receiving session's. */
+      projectId?: string;
+    }
+  | { kind: "assistant"; externalUserId: string }
   | {
       kind: "workflow";
       runId: string;
       workflowName: string;
       /** The workflow's `@displayname`, for people; `workflowName` is code. */
       displayName?: string;
+      /** The enablement that ran it, when one did (ADR 0156). */
+      enablementId?: string;
+      /** The temporary watcher it ran as, and the chat it watches for (ADR 0074). */
+      watcher?: { id: string; sessionId: string };
+      /** A scheduled run: when it was due. */
+      scheduledFor?: string;
+      /** When its trigger fired. */
+      firedAt?: string;
+    };
+
+/** Who wrote an input: the person, or an {@link InboundSender}. */
+export type SessionMessageAuthor = SessionUser | InboundSender;
+
+/** How a task an agent started stands, as a {@link TaskNotificationItem} reports it. */
+export type TaskNotificationStatus =
+  /** It finished as hoped. */
+  | "completed"
+  /** It failed, or ended in an error. */
+  | "failed"
+  /** Still going: it printed, changed or said what the agent asked to hear. */
+  | "update"
+  /** It waits on the person: a question, an approval. */
+  | "needs_input"
+  /** It ended before finishing: interrupted, archived, closed, expired. */
+  | "stopped";
+
+/**
+ * Where a person opens what an input came from: a chat, a workflow run, or
+ * a surface of the host's workspace (a background command's terminal).
+ */
+export type InputSource =
+  | {
+      kind: "session";
+      sessionId: string;
+      /** The chat's project, when it is not the receiving session's. */
+      projectId?: string;
     }
-  | { kind: "watcher"; watcherId: string; runId?: string }
-  | { kind: "system"; code: string };
+  | { kind: "workflow_run"; runId: string; workflowName: string }
+  | { kind: "surface"; key: string };
+
+/** A task an agent started that Work runs and reports on. */
+export interface NotifiedTask {
+  /**
+   * What kind of task: `background_command`, `command_watch`, `subsession`,
+   * `followed_session`, or a host's own.
+   */
+  type: string;
+  id: string;
+  /** The task's own name: a command's description, a subagent's title. */
+  title: string;
+  /** How it stands as of this notification. */
+  status: TaskNotificationStatus;
+}
+
+/** A person's answer to an agent's questions (ADR 0195). */
+export interface QuestionAnswer {
+  /** The question request it answers. */
+  requestId: string;
+  questions: AgentQuestion[];
+  /** One per question, as the person picked or wrote it. */
+  answers: string[];
+}
+
+/** What people are told when the turn an input started settles. */
+export interface SettledAlert {
+  title?: string;
+  body?: string;
+}
+
+/**
+ * What a delivery puts into a session (ADR 0217): a person's words, words
+ * someone else sent, or Work's notification about a task the agent
+ * started. Each becomes the item of the same kind.
+ */
+export type SessionInput =
+  | {
+      kind: "user_message";
+      author: SessionUser;
+      text: string;
+      attachments: AgentAttachment[];
+      /** Present when the words answer the agent's questions. */
+      answer?: QuestionAnswer;
+    }
+  | {
+      kind: "inbound_message";
+      from: InboundSender;
+      text: string;
+      attachments: AgentAttachment[];
+      /** A workflow's ask that its chat's people hear when the turn settles. */
+      alert?: SettledAlert;
+    }
+  | {
+      kind: "task_notification";
+      task: NotifiedTask;
+      /** One line for people, and the head of what the agent reads. */
+      summary: string;
+      /** What the agent reads after the summary: output, a result, a change. */
+      detail: string;
+      source: InputSource | null;
+    };
+
+/** The input a sender's words become: the person's, or someone else's. */
+export function messageInput(input: {
+  author: SessionMessageAuthor;
+  text: string;
+  attachments?: AgentAttachment[];
+}): Extract<SessionInput, { kind: "user_message" | "inbound_message" }> {
+  const attachments = input.attachments ?? [];
+  return input.author.kind === "user"
+    ? {
+        kind: "user_message",
+        author: input.author,
+        text: input.text,
+        attachments,
+      }
+    : {
+        kind: "inbound_message",
+        from: input.author,
+        text: input.text,
+        attachments,
+      };
+}
 
 /**
  * How a delivered input runs (ADR 0197): `queue` becomes the next turn,
@@ -327,17 +462,66 @@ export interface ItemCommon {
   endedAt: string | null;
 }
 
-export interface UserMessageItem extends ItemCommon {
-  kind: "user_message";
-  author: SessionMessageAuthor;
-  text: string;
-  attachments: AgentAttachment[];
+/** What every delivered input carries besides its own fields (ADR 0219). */
+export interface DeliveryFields {
   dispatch: DispatchMode;
   /** A delivery that asked the owner to look (ADR 0090). */
   attention: "required" | null;
   idempotencyKey: string | null;
-  /** Provenance and causation of a delivery: data, never instructions. */
-  metadata: JsonObject;
+  /**
+   * The member whose call delivered it, whoever wrote it: a turn on the
+   * chat owner's own sign-in takes in only their own doing (ADR 0199).
+   * Null for what was delivered before Work recorded it.
+   */
+  deliveredBy: string | null;
+  /** The enablements whose runs led to it, oldest first (ADR 0090). */
+  causation: string[];
+}
+
+/**
+ * A person's message. Only people write these (ADR 0217): anything else
+ * that reaches the agent is an {@link InboundMessageItem} or a
+ * {@link TaskNotificationItem}.
+ */
+export interface UserMessageItem
+  extends ItemCommon,
+    DeliveryFields,
+    Extract<SessionInput, { kind: "user_message" }> {}
+
+/**
+ * Words someone other than the person sent this session: another agent, a
+ * person's own assistant, or a workflow. A `message_only` one is
+ * `in_progress` until a turn takes it in.
+ */
+export interface InboundMessageItem
+  extends ItemCommon,
+    DeliveryFields,
+    Extract<SessionInput, { kind: "inbound_message" }> {}
+
+/**
+ * Work's report on a task the agent started: a background command, a
+ * watch, a subsession, a followed chat. A `message_only` one is
+ * `in_progress` until a turn takes it in.
+ */
+export interface TaskNotificationItem
+  extends ItemCommon,
+    DeliveryFields,
+    Extract<SessionInput, { kind: "task_notification" }> {}
+
+/** An item a delivery added: what a turn takes in. */
+export type InputItem =
+  | UserMessageItem
+  | InboundMessageItem
+  | TaskNotificationItem;
+
+export const INPUT_ITEM_KINDS = [
+  "user_message",
+  "inbound_message",
+  "task_notification",
+] as const satisfies readonly InputItem["kind"][];
+
+export function isInputItem(item: Item): item is InputItem {
+  return (INPUT_ITEM_KINDS as readonly string[]).includes(item.kind);
 }
 
 export interface AssistantMessageItem extends ItemCommon {
@@ -435,6 +619,8 @@ export interface ContextHandoffItem extends ItemCommon {
 
 export type Item =
   | UserMessageItem
+  | InboundMessageItem
+  | TaskNotificationItem
   | AssistantMessageItem
   | ReasoningItem
   | ToolCallItem
