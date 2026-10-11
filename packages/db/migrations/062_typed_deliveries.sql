@@ -1,9 +1,9 @@
 -- Deliveries are typed (ADR 0219). An input records who delivered it and
 -- the enablements that led to it; a person's answer carries the questions
 -- it answers; a workflow's message names its run's enablement, watcher and
--- schedule, and the alert it asked for. The free-form metadata is gone.
--- A mailbox row carries an input or a session action, and what its
--- destination acts on is a column.
+-- schedule, and the alert it asked for. The free-form metadata is gone, from
+-- the items and from the events that logged them. A mailbox row carries an
+-- input or a session action, and what its destination acts on is a column.
 SELECT set_config('catamorphic.suppress_session_events', 'true', true);
 
 -- The strings of a JSON array.
@@ -31,17 +31,21 @@ CREATE OR REPLACE FUNCTION pg_temp.workflow_sender(sender jsonb, provenance json
     ELSE sender END
 $$;
 
--- An input with what its metadata said, as fields of its own.
-CREATE OR REPLACE FUNCTION pg_temp.typed_input(input jsonb, metadata jsonb) RETURNS jsonb LANGUAGE sql AS $$
+-- An input with what its metadata said, as fields of its own. An answer
+-- from before answers carried their questions takes them from the request
+-- it answered (`asked`: its questions and answers), when there is one.
+CREATE OR REPLACE FUNCTION pg_temp.typed_input(input jsonb, metadata jsonb, asked jsonb) RETURNS jsonb LANGUAGE sql AS $$
   SELECT CASE input->>'kind'
     WHEN 'user_message' THEN input || CASE
       WHEN pg_temp.text_of(metadata->'questionRequestId') IS NOT NULL
-        AND jsonb_typeof(metadata->'question') = 'object'
       THEN jsonb_build_object('answer', jsonb_build_object(
         'requestId', metadata->>'questionRequestId',
-        'questions', CASE WHEN jsonb_typeof(metadata->'question'->'questions') = 'array'
-          THEN metadata->'question'->'questions' ELSE '[]' END,
-        'answers', pg_temp.strings_of(metadata->'question'->'answers')))
+        'questions', COALESCE(
+          CASE WHEN jsonb_typeof(metadata->'question'->'questions') = 'array'
+            THEN metadata->'question'->'questions' END,
+          CASE WHEN jsonb_typeof(asked->'questions') = 'array' THEN asked->'questions' END,
+          '[]'),
+        'answers', pg_temp.strings_of(COALESCE(metadata->'question'->'answers', asked->'answers'))))
       ELSE '{}' END
     WHEN 'inbound_message' THEN jsonb_set(input, '{from}',
         pg_temp.workflow_sender(input->'from', metadata->'provenance'))
@@ -54,15 +58,39 @@ CREATE OR REPLACE FUNCTION pg_temp.typed_input(input jsonb, metadata jsonb) RETU
     ELSE input END
 $$;
 
-UPDATE agent_items
-SET payload = (pg_temp.typed_input(payload, payload->'metadata') - 'metadata')
+UPDATE agent_items AS item
+SET payload = (pg_temp.typed_input(item.payload, item.payload->'metadata', (
+      SELECT jsonb_build_object('questions', request.payload->'questions',
+        'answers', request.response->'answers')
+      FROM agent_runtime_requests AS request
+      WHERE request.session_id = item.session_id
+        AND request.request_id = item.payload->'metadata'->>'questionRequestId'))
+    - 'metadata')
   || jsonb_build_object(
-    'deliveredBy', to_jsonb(pg_temp.text_of(payload->'metadata'->'deliveredBy')),
-    'causation', pg_temp.strings_of(payload->'metadata'->'causation'))
-WHERE kind IN ('user_message', 'inbound_message', 'task_notification');
+    'deliveredBy', to_jsonb(pg_temp.text_of(item.payload->'metadata'->'deliveredBy')),
+    'causation', pg_temp.strings_of(item.payload->'metadata'->'causation'))
+WHERE item.kind IN ('user_message', 'inbound_message', 'task_notification');
 
 UPDATE agent_items SET author_payload = payload->'from'
 WHERE kind = 'inbound_message' AND author_kind = 'workflow';
+
+-- The log replays as its projections: an input's events carry the item as
+-- it is now (061's kinds included), at the state each event recorded.
+UPDATE agent_session_events AS event
+SET payload = jsonb_set(event.payload, '{item}', item.payload || jsonb_build_object(
+    'turnId', event.payload->'item'->'turnId',
+    'attemptId', event.payload->'item'->'attemptId',
+    'position', event.payload->'item'->'position',
+    'status', event.payload->'item'->'status',
+    'updatedAt', event.payload->'item'->'updatedAt',
+    'startedAt', event.payload->'item'->'startedAt',
+    'endedAt', event.payload->'item'->'endedAt'))
+FROM agent_items AS item
+WHERE event.type IN ('item.added', 'item.changed')
+  AND item.session_id = event.session_id
+  AND item.id::text = event.payload->'item'->>'id'
+  AND (event.payload->'item' ? 'metadata'
+    OR event.payload->'item'->>'kind' IS DISTINCT FROM item.kind);
 
 ALTER TABLE session_mailbox_items
   ADD COLUMN kind text NOT NULL DEFAULT 'input',
@@ -88,7 +116,7 @@ SET kind = 'action',
 WHERE jsonb_typeof(metadata->'sessionAction') = 'object';
 
 UPDATE session_mailbox_items
-SET input = pg_temp.typed_input(input, metadata),
+SET input = pg_temp.typed_input(input, metadata, NULL),
     attention = COALESCE(metadata->>'attention' = 'required', false),
     delivered_by = pg_temp.text_of(metadata->'deliveredBy'),
     owner_authored = COALESCE(metadata->'ownerAuthored' = 'true'::jsonb, false),
@@ -101,7 +129,8 @@ ALTER TABLE session_mailbox_items
   ADD CONSTRAINT chk_session_mailbox_kind CHECK (kind IN ('input', 'action')),
   ADD CONSTRAINT chk_session_mailbox_delivery CHECK (CASE kind
     WHEN 'input' THEN input IS NOT NULL AND delivery_mode IS NOT NULL AND action IS NULL
-    ELSE action IS NOT NULL AND input IS NULL AND delivery_mode IS NULL END),
+    ELSE action IS NOT NULL AND input IS NULL AND delivery_mode IS NULL
+      AND delivered_by IS NULL AND NOT attention AND NOT owner_authored END),
   ADD CONSTRAINT chk_session_mailbox_causation CHECK (jsonb_typeof(causation) = 'array');
 
 -- Workflow-facing session events read an input's causation from its field.
@@ -188,7 +217,7 @@ BEGIN
   RETURN NEW;
 END $$;
 
-DROP FUNCTION pg_temp.typed_input(jsonb, jsonb);
+DROP FUNCTION pg_temp.typed_input(jsonb, jsonb, jsonb);
 DROP FUNCTION pg_temp.workflow_sender(jsonb, jsonb);
 DROP FUNCTION pg_temp.text_of(jsonb);
 DROP FUNCTION pg_temp.strings_of(jsonb);

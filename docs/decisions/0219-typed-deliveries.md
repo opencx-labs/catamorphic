@@ -28,14 +28,15 @@ their message; a workflow's ask to tell people when its turn settles is
 so a workflow sender carries `enablementId`, `watcher` and its schedule
 (`scheduledFor`, `firedAt`); session actions record the same actor.
 
-**Columns for what the database must enforce or query.** Item payloads
+**Columns where the database queries or guards the shape.** Item payloads
 stay the typed projection of the protocol item: no SQL filters items by
 deliverer or causation, and the event trigger reads causation from the
-payload. A mailbox row is a queue between hosts, so what its destination
-acts on is a column: `kind` (`input` or `action`, with the matching payload
-required by a constraint), `attention`, `delivered_by`, `owner_authored`
-(the sending host's finding that the owner wrote it, which decides whether
-the owner's machine runs a turn) and `causation`.
+payload. A mailbox row is a contract between two hosts, so its envelope is
+columns the database constrains: `kind` (`input` or `action`, with exactly
+the matching payload, and an action carrying none of an input's fields),
+`attention`, `delivered_by`, `owner_authored` (the sending host's finding
+that the owner wrote it, which decides whether the owner's machine runs a
+turn) and `causation` (an array).
 
 Considered: one typed `metadata` object keeping the bag's shape, which
 leaves kind-specific fields on every kind; columns for every delivery
@@ -43,7 +44,9 @@ field on items, which duplicates the payload for no query.
 
 ## Consequences
 
-Item, mailbox and HTTP shapes change; migration 062 converts items and
-pending mailbox rows and drops the mailbox `metadata` column. Readers lose
-their hand validation. A new delivery fact is a typed field, a column only
-when SQL must act on it.
+Item, mailbox and HTTP shapes change. Migration 062 converts items, the
+events that logged them (so the log still replays as its projections, 061's
+kinds included) and mailbox rows, and drops the mailbox `metadata` column;
+an old answer without its questions takes them from the request it
+answered. Readers lose their hand validation. A new delivery fact is a typed
+field; it is a column only when SQL must act on it or guard it.

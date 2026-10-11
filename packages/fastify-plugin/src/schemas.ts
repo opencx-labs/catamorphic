@@ -1,6 +1,7 @@
 import {
   type AgentTurnUsage,
   type Attempt,
+  agentQuestionSchema,
   attachmentSchema,
   type CommandReceipt,
   type DispatchMode,
@@ -1663,18 +1664,7 @@ export const RuntimeRequestSchema = describes<RuntimeRequest>()(
         id: z.string(),
         displayName: z.string().optional(),
       }),
-      questions: z
-        .array(
-          z.object({
-            question: z.string(),
-            header: z.string(),
-            multiSelect: z.boolean(),
-            options: z.array(
-              z.object({ label: z.string(), description: z.string() }),
-            ),
-          }),
-        )
-        .nullable(),
+      questions: z.array(agentQuestionSchema).nullable(),
       approval: z
         .object({
           action: z.string(),

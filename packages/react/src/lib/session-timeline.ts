@@ -314,7 +314,8 @@ function answerFromRequest(
 }
 
 function answerFromMessage(item: UserMessageItem): TimelineEntry | undefined {
-  if (!item.answer) return undefined;
+  // An old answer whose questions are gone reads as the words it was.
+  if (!item.answer?.questions.length) return undefined;
   return answerEntry({
     id: item.id,
     questions: item.answer.questions,

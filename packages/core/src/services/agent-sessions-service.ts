@@ -2540,14 +2540,17 @@ export class AgentSessionsService {
       const { SESSION_ACTION_SCHEMAS } = await import(
         "./session-actions-service.js"
       );
-      const { operation } = item.action;
-      if (!isSessionActionOperation(operation, SESSION_ACTION_SCHEMAS))
+      const named = {
+        operation: item.action.operation,
+        schemas: SESSION_ACTION_SCHEMAS,
+      };
+      if (!isSessionActionOperation(named))
         throw new Error("Unknown session action");
       await handle({
         identity,
         projectId,
         author: item.action.actor,
-        operation,
+        operation: named.operation,
         args: item.action.args,
         causation: item.causation,
       });
@@ -11073,11 +11076,11 @@ function resolveDelegationTarget(input: {
 }
 
 /** Whether a forwarded action names one this host runs. */
-function isSessionActionOperation<T extends object>(
-  operation: string,
-  schemas: T,
-): operation is Extract<keyof T, string> {
-  return Object.hasOwn(schemas, operation);
+function isSessionActionOperation<T extends object>(input: {
+  operation: string;
+  schemas: T;
+}): input is { operation: Extract<keyof T, string>; schemas: T } {
+  return Object.hasOwn(input.schemas, input.operation);
 }
 
 function parseSessionSource(value: string): AgentSessionSource {

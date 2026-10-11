@@ -284,7 +284,9 @@ function mapMailboxItem(row: MailboxRow): SessionMailboxItem | null {
     authorityRevision: Number(row.authority_revision),
     messageId: row.item_id,
     idempotencyKey: row.idempotency_key,
-    causation: z.array(z.string()).catch([]).parse(row.causation),
+    causation: Array.isArray(row.causation)
+      ? row.causation.filter((id): id is string => typeof id === "string")
+      : [],
     createdAt: row.created_at.toISOString(),
   };
 }

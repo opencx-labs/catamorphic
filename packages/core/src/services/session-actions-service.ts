@@ -250,7 +250,10 @@ export class SessionActionsService {
           args.sessionId,
           "change",
         );
-        const key = JSON.stringify([input.author, args.idempotencyKey]);
+        const key = JSON.stringify([
+          actorIdentity(input.author),
+          args.idempotencyKey,
+        ]);
         const accepted = await this.db
           .insertInto("session_actions")
           .values({
@@ -601,6 +604,20 @@ function actionLabel(operation: SessionActionOperation): string {
     stopWatcher: "Stopped a watcher",
   }[operation];
 }
+/**
+ * Who acted, without a workflow run's circumstances (its enablement,
+ * watcher and schedule): a retried action keys as it did before.
+ */
+function actorIdentity(author: SessionMessageAuthor): SessionMessageAuthor {
+  if (author.kind !== "workflow") return author;
+  return {
+    kind: "workflow",
+    runId: author.runId,
+    workflowName: author.workflowName,
+    ...(author.displayName ? { displayName: author.displayName } : {}),
+  };
+}
+
 function json(value: unknown): Json {
   return JSON.parse(JSON.stringify(value ?? null));
 }

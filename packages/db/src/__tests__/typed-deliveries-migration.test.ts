@@ -11,8 +11,9 @@ import { migrateToLatest } from "../migrate.js";
  * Who delivered it and the enablements behind it are delivery fields; a
  * person's answer carries its questions; a workflow sender carries its
  * run's enablement, watcher and schedule, and its message the alert it
- * asked for. A mailbox row is an input or a session action, with what its
- * destination acts on as columns.
+ * asked for. The events that logged an input carry it the same way. A
+ * mailbox row is an input or a session action, with what its destination
+ * acts on as columns.
  */
 
 const schema = "typed_deliveries_migration";
@@ -146,6 +147,19 @@ describe("migration 062", () => {
                    },
                  }),
                  input({
+                   id: "44444444-4444-4444-8444-444444444444",
+                   position: 4,
+                   kind: "user_message",
+                   fields: {
+                     author: { kind: "user", externalUserId: "ada" },
+                     text: "Which pages?\n\nUser answer:\nOld",
+                     attachments: [],
+                   },
+                   authorKind: "user",
+                   author: { kind: "user", externalUserId: "ada" },
+                   metadata: { questionRequestId: "request-0" },
+                 }),
+                 input({
                    id: "44444444-4444-4444-8444-444444444443",
                    position: 3,
                    kind: "task_notification",
@@ -165,6 +179,23 @@ describe("migration 062", () => {
                    metadata: {},
                  }),
                ].join(",\n")}`);
+    await run(`INSERT INTO agent_runtime_requests (session_id, request_id, kind, created_at, payload, response, status)
+               VALUES ('${sessionId}', 'request-0', 'question', now(),
+                 ${quote(JSON.stringify({ id: "request-0", kind: "question", questions: [question] }))},
+                 ${quote(JSON.stringify({ kind: "question", answers: ["Old"] }))}, 'resolved')`);
+    // The event that logged the workflow's message, as it was then.
+    const logged = (
+      await run(
+        `SELECT payload FROM agent_items WHERE id = '44444444-4444-4444-8444-444444444442'`,
+      )
+    ).rows as Array<{ payload: Record<string, unknown> }>;
+    await run(`INSERT INTO agent_session_events (session_id, sequence, type, payload)
+               VALUES ('${sessionId}', 1, 'item.added', ${quote(
+                 JSON.stringify({
+                   type: "item.added",
+                   item: { ...logged[0]?.payload, status: "in_progress" },
+                 }),
+               )})`);
     await run(`INSERT INTO session_mailbox_items (project_id, session_id, source_host_id, destination_host_id,
                  authority_revision, input, delivery_mode, idempotency_key, metadata)
                VALUES
@@ -220,6 +251,27 @@ describe("migration 062", () => {
       deliveredBy: null,
       causation: [],
     });
+    // An answer from before answers carried their questions takes them
+    // from the request it answered.
+    expect(items[3]?.payload).toMatchObject({
+      answer: {
+        requestId: "request-0",
+        questions: [question],
+        answers: ["Old"],
+      },
+    });
+    const events = (
+      await run(
+        `SELECT payload FROM agent_session_events WHERE session_id = '${sessionId}'`,
+      )
+    ).rows as Array<{ payload: { item: Record<string, unknown> } }>;
+    expect(events[0]?.payload.item).not.toHaveProperty("metadata");
+    expect(events[0]?.payload.item).toMatchObject({
+      from: sender,
+      deliveredBy: "ada",
+      causation: ["enablement-1"],
+      status: "in_progress",
+    });
 
     const mailbox = (
       await run(
@@ -252,10 +304,16 @@ describe("migration 062", () => {
       causation: ["enablement-3"],
       owner_authored: false,
     });
-    // A row is an input or an action, never both or neither.
+    // A row is an input or an action, never both or neither, and an action
+    // carries nothing only an input means.
     await expect(
       run(
         `UPDATE session_mailbox_items SET input = '{}'::jsonb WHERE kind = 'action'`,
+      ),
+    ).rejects.toThrow(/chk_session_mailbox_delivery/);
+    await expect(
+      run(
+        `UPDATE session_mailbox_items SET owner_authored = true WHERE kind = 'action'`,
       ),
     ).rejects.toThrow(/chk_session_mailbox_delivery/);
   });

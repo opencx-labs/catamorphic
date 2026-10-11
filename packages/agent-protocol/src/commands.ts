@@ -117,19 +117,18 @@ export const taskNotificationStatusSchema = z.enum([
   "stopped",
 ]);
 
+/** {@link AgentQuestion} as a schema. */
+export const agentQuestionSchema = z.object({
+  question: z.string(),
+  header: z.string(),
+  multiSelect: z.boolean(),
+  options: z.array(z.object({ label: z.string(), description: z.string() })),
+});
+
 /** {@link QuestionAnswer} as a schema. */
 export const questionAnswerSchema = z.object({
   requestId: z.string(),
-  questions: z.array(
-    z.object({
-      question: z.string(),
-      header: z.string(),
-      multiSelect: z.boolean(),
-      options: z.array(
-        z.object({ label: z.string(), description: z.string() }),
-      ),
-    }),
-  ),
+  questions: z.array(agentQuestionSchema),
   answers: z.array(z.string()),
 });
 
