@@ -90,7 +90,7 @@ describe("ChatTimeline work display", () => {
       .map((toggle) => toggle.getAttribute("aria-expanded"));
 
   it("reads a settled turn as the question and the answer, the notes under its steps", async () => {
-    await render({ turns: settled() });
+    await render({ timeline: settled() });
     expect(container.querySelectorAll("article")).toHaveLength(2);
     expect(articles().at(-1)).toBe("All fixed.");
     expect(stepKinds()).toEqual([
@@ -112,7 +112,7 @@ describe("ChatTimeline work display", () => {
 
   it("keeps every note in place when asked to", async () => {
     await render({
-      turns: settled(),
+      timeline: settled(),
       workDisplay: { live: "all", settled: "keep" },
     });
     expect(container.querySelectorAll("article")).toHaveLength(4);
@@ -125,14 +125,14 @@ describe("ChatTimeline work display", () => {
       items: settledItems,
     });
     await render({
-      turns: running,
+      timeline: running,
       activeTurnId: "t1",
       workDisplay: { live: "latest", settled: "keep" },
     });
     expect(container.querySelectorAll("article")).toHaveLength(2);
     expect(articles().at(-1)).toBe("All fixed.");
     await render({
-      turns: settled(),
+      timeline: settled(),
       workDisplay: { live: "latest", settled: "keep" },
     });
     expect(container.querySelectorAll("article")).toHaveLength(4);
@@ -156,7 +156,7 @@ describe("ChatTimeline work display", () => {
       }),
     ];
     await render({
-      turns: timelineOf({
+      timeline: timelineOf({
         turns: [turn("t1", 1, { status: "running", completedAt: null })],
         items: liveItems,
       }),
@@ -184,11 +184,15 @@ describe("ChatTimeline work display", () => {
     // The answer arrives after that work: the same node gains its prose.
     const answered: Item[] = [
       ...liveItems.slice(0, 6),
-      { ...(liveItems[6] as Item), status: "completed" },
+      command("p2", "t1", {
+        command: "bun run lint",
+        startedAt: iso(now - 3000),
+        endedAt: iso(now),
+      }),
       reply("a3", "t1", "All fixed."),
     ];
     await render({
-      turns: timelineOf({
+      timeline: timelineOf({
         turns: [turn("t1", 1, { status: "running", completedAt: null })],
         items: answered,
       }),
@@ -199,21 +203,21 @@ describe("ChatTimeline work display", () => {
     // Settled: the work folds under the answer, closed. The notes that were
     // in place close up on the way, then leave.
     await render({
-      turns: timelineOf({ turns: [turn("t1", 1)], items: answered }),
+      timeline: timelineOf({ turns: [turn("t1", 1)], items: answered }),
     });
     expect(toggles()).toEqual(["false"]);
-    expect(container.querySelectorAll(".animate-fold-away")).toHaveLength(2);
+    expect(container.querySelectorAll(".cat-fold-away")).toHaveLength(2);
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 300));
     });
-    expect(container.querySelectorAll(".animate-fold-away")).toHaveLength(0);
+    expect(container.querySelectorAll(".cat-fold-away")).toHaveLength(0);
     expect(container.querySelectorAll("article")).toHaveLength(2);
   });
 
   it("keeps the steps folded with Notes only, while the turn runs and after", async () => {
     const workDisplay = { live: "notes", settled: "collapse" } as const;
     await render({
-      turns: timelineOf({
+      timeline: timelineOf({
         turns: [turn("t1", 1, { status: "running", completedAt: null })],
         items: [...settledItems.slice(0, 5), command("c3", "t1")],
       }),
@@ -239,7 +243,7 @@ describe("ChatTimeline work display", () => {
     await act(async () => first?.click());
     expect(toggles()).toEqual(["true", "false", "false"]);
     // Answered, the notes fold into the closed line above the answer.
-    await render({ turns: settled(), workDisplay });
+    await render({ timeline: settled(), workDisplay });
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 300));
     });
@@ -259,15 +263,15 @@ describe("ChatTimeline work display", () => {
         reply("a1", "t1", "Passed."),
       ],
     });
-    await render({ turns, requests });
+    await render({ timeline: turns, requests });
     expect(toggles()).toEqual([]);
     await render({
-      turns,
+      timeline: turns,
       requests,
       workDisplay: { live: "notes", settled: "collapse" },
     });
     expect(toggles()).toEqual(["false"]);
-    await render({ turns, requests });
+    await render({ timeline: turns, requests });
     expect(toggles()).toEqual([]);
   });
 
@@ -277,7 +281,7 @@ describe("ChatTimeline work display", () => {
       input: { command: "bun run dev", description: "Start the dev server" },
     };
     await render({
-      turns: timelineOf({
+      timeline: timelineOf({
         turns: [turn("t1", 1)],
         items: [
           input("t1", "Start it"),
@@ -306,7 +310,7 @@ describe("ChatTimeline work display", () => {
   it("shows a lone step as its own row, with how long it took", async () => {
     const start = Date.parse("2026-10-01T10:00:00.000Z");
     await render({
-      turns: timelineOf({
+      timeline: timelineOf({
         turns: [turn("t1", 1)],
         items: [
           input("t1", "Run it"),
@@ -329,7 +333,7 @@ describe("ChatTimeline work display", () => {
   it("says what an interruption stopped and what it left changed", async () => {
     const start = Date.parse("2026-10-01T10:01:41.000Z");
     await render({
-      turns: timelineOf({
+      timeline: timelineOf({
         turns: [
           turn("t1", 1, {
             status: "interrupted",
@@ -368,7 +372,7 @@ describe("ChatTimeline work display", () => {
   it("closes a failed turn with its error and Retry for that turn", async () => {
     const retried: string[] = [];
     await render({
-      turns: timelineOf({
+      timeline: timelineOf({
         turns: [
           turn("t1", 1, {
             status: "failed",
@@ -397,7 +401,7 @@ describe("ChatTimeline work display", () => {
   it("offers Restore to here on a settled message, confirming first", async () => {
     const restored: string[] = [];
     await render({
-      turns: settled(),
+      timeline: settled(),
       onRollback: (turnId) => {
         restored.push(turnId);
         return true;
@@ -419,7 +423,7 @@ describe("ChatTimeline work display", () => {
     expect(restored).toEqual(["t1"]);
     // Not while something runs.
     await render({
-      turns: settled(),
+      timeline: settled(),
       activeTurnId: "t2",
       onRollback: () => true,
     });
@@ -427,7 +431,7 @@ describe("ChatTimeline work display", () => {
   });
 
   it("dims undone turns under a divider", async () => {
-    await render({ turns: settled({ status: "rolled_back" }) });
+    await render({ timeline: settled({ status: "rolled_back" }) });
     expect(
       container.querySelector('[data-testid="chat-undone-divider"]'),
     ).not.toBeNull();
@@ -437,13 +441,10 @@ describe("ChatTimeline work display", () => {
 
   it("reads notices as calm dividers, naming a new agent", async () => {
     await render({
-      turns: timelineOf({
+      timeline: timelineOf({
         turns: [],
         items: [
-          {
-            ...notice("n1", "agent_changed", "Agent changed"),
-            data: { agentId: "a" },
-          } as Item,
+          notice("n1", "agent_changed", "Agent changed", { agentId: "a" }),
           notice("n2", "session_fork", 'Forked from "Plan"'),
         ],
       }),
@@ -458,7 +459,7 @@ describe("ChatTimeline work display", () => {
 
   it("keeps a sent message's node when its item takes over", async () => {
     await render({
-      turns: [],
+      timeline: [],
       pending: [
         {
           commandId: "cmd-7",
@@ -472,7 +473,7 @@ describe("ChatTimeline work display", () => {
     const bubble = container.querySelector("[data-pending-message]");
     expect(bubble?.textContent).toContain("Ship it");
     await render({
-      turns: timelineOf({
+      timeline: timelineOf({
         turns: [turn("t1", 1, { status: "running", completedAt: null })],
         items: [input("t1", "Ship it", { idempotencyKey: "user:me:cmd-7" })],
       }),
@@ -486,7 +487,7 @@ describe("ChatTimeline work display", () => {
   it("keeps a failed send with Send again and Dismiss", async () => {
     const resent: string[] = [];
     await render({
-      turns: [],
+      timeline: [],
       pending: [
         {
           commandId: "cmd-1",
@@ -509,7 +510,7 @@ describe("ChatTimeline work display", () => {
 
   it("keeps steps out of text selection and copies the reply's Markdown", async () => {
     await render({
-      turns: settled(),
+      timeline: settled(),
       workDisplay: { live: "all", settled: "keep" },
     });
     const steps = container.querySelector('[data-testid="chat-turn-steps"]');

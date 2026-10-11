@@ -33,32 +33,3 @@ it.each(files)("agent guide links resolve: %s", (file) => {
     expect(text).toMatch(/^---\nname: [a-z0-9-]+\ndescription: /);
   }
 });
-
-it("shared chat registry components match their installed desktop copies", () => {
-  // The desktop's queue and chat take their own shapes; these stay copies.
-  for (const name of ["agent-question-panel", "resource-preview"]) {
-    const source = fs
-      .readFileSync(
-        path.join(root, `packages/registry/src/${name}/${name}.tsx`),
-        "utf8",
-      )
-      .replaceAll("../chat-timeline/chat-timeline.js", "./chat-timeline")
-      .replaceAll(
-        "../agent-question-panel/agent-question-panel.js",
-        "./agent-question-panel",
-      )
-      .replaceAll("../todo-progress/todo-progress.js", "./todo-progress")
-      .replaceAll(
-        "../tool-permission-card/tool-permission-card.js",
-        "./tool-permission-card",
-      );
-    const installed = fs.readFileSync(
-      path.join(
-        root,
-        `apps/desktop/src/renderer/components/catamorphic/${name}.tsx`,
-      ),
-      "utf8",
-    );
-    expect(installed).toBe(source);
-  }
-});

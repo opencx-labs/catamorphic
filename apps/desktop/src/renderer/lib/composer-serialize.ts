@@ -96,26 +96,3 @@ export function serializeComposer<T>(
     text: message.split(ATTACHMENT_MARKER).join(""),
   };
 }
-
-/** Split a sent message into prose runs and pill slots (timeline render). */
-export function splitAttachmentMarkers(
-  message: string,
-): Array<{ type: "text"; text: string } | { type: "pill"; index: number }> {
-  const parts: Array<
-    { type: "text"; text: string } | { type: "pill"; index: number }
-  > = [];
-  let index = 0;
-  let cursor = 0;
-  for (let at = message.indexOf(ATTACHMENT_MARKER); at !== -1; ) {
-    if (at > cursor)
-      parts.push({ type: "text", text: message.slice(cursor, at) });
-    parts.push({ type: "pill", index });
-    index += 1;
-    cursor = at + ATTACHMENT_MARKER.length;
-    at = message.indexOf(ATTACHMENT_MARKER, cursor);
-  }
-  if (cursor < message.length) {
-    parts.push({ type: "text", text: message.slice(cursor) });
-  }
-  return parts;
-}

@@ -1,5 +1,6 @@
 import {
   CatamorphicProvider,
+  type InputSource,
   messageWithAttachmentNames,
   QUESTIONS_DISMISSED_MESSAGE,
   type RuntimeRequestResponse,
@@ -14,7 +15,13 @@ import {
 import type { QueryClient } from "@tanstack/react-query";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowUp, Bot, GitFork, ListPlus, Square, X, Zap } from "lucide-react";
-import { type FormEvent, useEffect, useRef, useState } from "react";
+import {
+  type FormEvent,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import { AgentQuestionPanel } from "../components/catamorphic/agent-question-panel.js";
 import { ChatTimeline } from "../components/catamorphic/chat-timeline.js";
 import { QueuedInputLine } from "../components/catamorphic/session-input.js";
@@ -216,10 +223,14 @@ function Chat({
       setContinuing(false);
     }
   };
-  const agentName = (id: string) =>
-    catalog.data?.items.find(
-      (item) => item.id === id || item.id.endsWith(`:${id}`),
-    )?.name;
+  // Stable while the catalog is: the timeline's rows re-render on a change.
+  const catalogItems = catalog.data?.items;
+  const agentName = useCallback(
+    (id: string) =>
+      catalogItems?.find((item) => item.id === id || item.id.endsWith(`:${id}`))
+        ?.name,
+    [catalogItems],
+  );
 
   // Continued on the linked server (ADR 0062): this copy is history. Lock
   // the composer and point at the live fork.
@@ -366,16 +377,9 @@ function Chat({
           hasOlder={chat.hasOlder}
           isLoadingOlder={chat.isLoadingOlder}
           onLoadOlder={() => void chat.loadOlder()}
-          resolveRequest={(requestId) => chat.state?.requests[requestId]}
+          requests={chat.state?.requests}
           resolveAgentName={agentName}
-          // A phone opens chats of this project and runs, never the
-          // desktop's terminals or another project's chats (ADR 0217).
-          sourceHref={(source) =>
-            source.kind === "surface" ||
-            (source.kind === "session" && source.projectId !== undefined)
-              ? null
-              : undefined
-          }
+          sourceHref={phoneSourceHref}
           error={null}
           emptyState="Ask the agent anything about this project."
         />
@@ -676,6 +680,17 @@ function Chat({
       </div>
     </Screen>
   );
+}
+
+/**
+ * A phone opens chats of this project and runs, never the desktop's
+ * terminals or another project's chats (ADR 0217).
+ */
+function phoneSourceHref(source: InputSource): null | undefined {
+  return source.kind === "surface" ||
+    (source.kind === "session" && source.projectId !== undefined)
+    ? null
+    : undefined;
 }
 
 function hostOf(serverUrl: string): string {

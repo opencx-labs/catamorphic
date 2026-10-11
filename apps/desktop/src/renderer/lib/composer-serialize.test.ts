@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest";
 import {
   PILL_ATTR,
   serializeComposer,
-  splitAttachmentMarkers,
   type WalkableNode,
 } from "./composer-serialize";
 
@@ -102,20 +101,5 @@ describe("serializeComposer", () => {
       attachments: [],
       text: "",
     });
-  });
-});
-
-describe("splitAttachmentMarkers", () => {
-  it("interleaves runs and numbered slots", () => {
-    expect(splitAttachmentMarkers(`a ${M}${M} b`)).toEqual([
-      { type: "text", text: "a " },
-      { type: "pill", index: 0 },
-      { type: "pill", index: 1 },
-      { type: "text", text: " b" },
-    ]);
-    expect(splitAttachmentMarkers("plain")).toEqual([
-      { type: "text", text: "plain" },
-    ]);
-    expect(splitAttachmentMarkers("")).toEqual([]);
   });
 });

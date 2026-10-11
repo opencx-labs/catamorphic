@@ -43,8 +43,12 @@ before changing architecture.
   `apps/desktop/src/renderer/styles.css`; `lib/theme.ts` mirrors the
   desktop's `theme.ts` presets — change them together).
 - `components/catamorphic/*` are copies of `packages/registry` sources
-  (the intended shadcn-style reuse); diff against the registry when
-  updating.
+  (the intended shadcn-style reuse, ADR 0218) that differ only in import
+  specifiers. Change the registry, then run
+  `bun scripts/registry-copies.ts --sync pwa`; `bun run test:scripts` fails
+  on any other difference. Phone behavior enters through the timeline's
+  props (`sourceHref`, `onLinkClick`, `resolveAgentName`), never an edit to
+  the copy. Its unit tests live with the registry.
 - The service worker (`public/sw.js`) serves the offline shell, displays Web
   Push, and opens notification routes. App logic (queues, reconnection,
   polling, resumable state) lives in app code. A Capacitor wrap must be able

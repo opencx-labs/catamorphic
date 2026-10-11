@@ -2,7 +2,7 @@
   "$schema": "https://ui.shadcn.com/schema/registry-item.json",
   "name": "chat-queue",
   "type": "registry:component",
-  "description": "The session's turn queue as ghost bubbles: edit (holds the turn), cancel and send now, keyed by turn id. Feed it from useAgentChat().queue. Optional host content and hints.",
+  "description": "The session's turn queue (ADR 0197): the person's waiting messages as ghost bubbles to edit (which holds the turn), withdraw or send now, and one quiet line for what another agent, a workflow or Work queued (ADR 0217). Keyed by turn id; feed it useAgentChat().queue. chat-timeline renders it under the conversation.",
   "dependencies": ["@catamorphic/react", "lucide-react"],
   "registryDependencies": [],
   "files": [
@@ -10,5 +10,6 @@
       "path": "components/catamorphic/chat-queue.tsx",
       "type": "registry:component"
     }
-  ]
+  ],
+  "docs": "Wire onEdit, onCancel, onSendNow and onHold to useAgentChat's editQueued, cancelQueued, sendQueuedNow and holdQueued; each control shows only when its callback is given, and a callback resolving false keeps the control actionable with an error. renderContent and renderAttachments draw a message's words and its attachments (chat-timeline passes its pills), renderInput draws the line for a turn that is not the person's own words, and Hint ({ label, shortcut?, children }) names the controls on hover (default: the native title). An edit holds the turn until it is saved or abandoned, and the draft is the words without attachment markers: the attachments stay with the message."
 }

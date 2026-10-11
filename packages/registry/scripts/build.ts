@@ -9,6 +9,7 @@
 
 import fs from "node:fs/promises";
 import path from "node:path";
+import { rewriteCrossItemImports } from "./imports.js";
 
 const ROOT = path.resolve(import.meta.dirname, "..");
 const SRC = path.join(ROOT, "src");
@@ -38,18 +39,6 @@ async function readRegistryItem(itemDir: string): Promise<RegistryItem> {
   const manifestPath = path.join(itemDir, "registry-item.json");
   const raw = await fs.readFile(manifestPath, "utf8");
   return JSON.parse(raw) as RegistryItem;
-}
-
-/**
- * Cross-item imports in source live at `../<item>/<file>.js`; installed
- * files all land flat in the same target directory, so rewrite them to
- * sibling imports (`./<file>`).
- */
-function rewriteCrossItemImports(content: string): string {
-  return content.replaceAll(
-    /from "\.\.\/[\w-]+\/([\w-]+)\.js"/g,
-    'from "./$1"',
-  );
 }
 
 async function inlineFiles(
