@@ -2092,13 +2092,14 @@ also lost a trailing "|" that agents leave when they write
 
 A new person's first Claude chat sat on "Working" for six minutes with
 nothing else on screen. Two waits hid behind that word. The first turn on a
-computer without Claude Code downloads it and Bun, about 280 MB, and on a
+computer without Claude Code downloads it and Bun, about 125 MB, and on a
 slow connection that is minutes; and when the Claude API fails, Claude Code
 retries ten times over about three minutes, and Work dropped every one of
-those retries. The activity line now counts the download ("Downloading
-Claude Code and Bun (first use only): 42% of 281 MB") and names each retry
-("The Claude API returned an error (500). Trying again, attempt 4 of 10").
-A download that receives nothing for a minute gives up with a message that
+those retries. The activity line now counts the download by the megabyte
+("Downloading Claude Code and Bun: 63 of 124 MB"), says when it is setting
+them up and starting Claude Code, and names each retry ("The Claude API
+returned an error (500). Trying again, attempt 4 of 10") until the API
+answers. A download that receives nothing for a minute gives up with a message that
 says so, instead of waiting for as long as the app stays open, and Stop ends
 a turn that is still downloading at once; the download carries on for the
 next turn. A failure to get ready is this computer's, so its words are no

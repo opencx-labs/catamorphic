@@ -407,25 +407,25 @@ export function registerBrowserSupport(
       callback(permission !== "openExternal"),
   );
   const permissionBroker = new SitePermissionBroker();
-  // A tab's sign-in popups, by their page: the tab that opened each.
-  const popupOpeners = new WeakMap<WebContents, WebContents>();
-  const openerOf = (popup: WebContents) => {
-    const opener = popupOpeners.get(popup);
-    return opener && !opener.isDestroyed() ? opener : undefined;
-  };
+  // A browsing window that is not a tab (a tab's sign-in popup, a window
+  // an extension opened) belongs to the profile whose session it shows,
+  // whatever became of the tab that opened it.
+  const browsingProfileOf = (contents: WebContents) =>
+    extensionsHost?.profileOfSession(contents.session) ?? undefined;
   const popupSheets = new PopupPasskeySheets({
     attach: (sheet, popup) => {
-      const host = openerOf(popup)?.hostWebContents;
-      if (host) windows.attach(sheet, windows.profileFor(host));
+      const profileId = browsingProfileOf(popup);
+      if (profileId) windows.attach(sheet, profileId);
     },
   });
   const disposePasskeys = registerPasskeys({
     vault,
     profileFor: (host) => windows.profileFor(host),
-    popups: {
-      openerOf,
-      show: (popup) => popupSheets.show(popup),
-      hide: (popup) => popupSheets.hide(popup),
+    windows: {
+      profileOf: browsingProfileOf,
+      sheet: (window) => popupSheets.sheet(window),
+      show: (window) => popupSheets.show(window),
+      hide: (window) => popupSheets.hide(window),
     },
     onVaultChanged: (profileId) => vaultChanged(profileId),
   });
@@ -1107,9 +1107,8 @@ export function registerBrowserSupport(
     });
     // The popup is a plain window, not a guest: anything it opens in turn
     // lands as a workspace tab rather than a window tree. Its passkey
-    // requests show in a sheet over it, from its tab's profile.
+    // requests show in a sheet over it (passkeys.ts).
     contents.on("did-create-window", (popup) => {
-      popupOpeners.set(popup.webContents, contents);
       popup.webContents.setWindowOpenHandler(({ url }) => {
         if (/^https?:/i.test(url)) openAsTab(url);
         return { action: "deny" };

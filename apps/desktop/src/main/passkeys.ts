@@ -23,12 +23,12 @@ import {
 } from "./webauthn.js";
 
 /**
- * Passkey requests from browser tabs and their sign-in popups
- * (shared/passkeys.ts, ADRs 0201 and 0220). The browsing session's
- * preload hands each request here as the page makes it; main checks the
- * relying party against the page's own origin, finds the profile's
- * passkeys for it, and shows modal requests in the window that shows the
- * tab, or in the sheet over the popup. When the person picks a passkey
+ * Passkey requests from browser tabs and the profile's other browsing
+ * windows, such as a tab's sign-in popups (shared/passkeys.ts, ADRs 0201
+ * and 0220). The browsing session's preload hands each request here as
+ * the page makes it; main checks the relying party against the page's own
+ * origin, finds the profile's passkeys for it, and shows modal requests
+ * in the window that shows the tab, or in the sheet over the window. When the person picks a passkey
  * (or saves a new one), Touch ID confirms it and main signs, so private
  * keys never leave this process. Autofill requests wait here until the
  * person picks a passkey under a field. A page that navigates or closes
@@ -91,22 +91,27 @@ const beginInput = z.discriminatedUnion("kind", [
 ]);
 type BeginInput = z.infer<typeof beginInput>;
 
-/** A tab's sign-in popups, which show their own passkey sheet. */
-export interface PasskeyPopups {
-  /** The tab that opened `popup`, when it is one of a tab's popups. */
-  openerOf: (popup: WebContents) => WebContents | undefined;
-  /** The sheet over the popup, in front: the host for its requests. */
-  show: (popup: WebContents) => WebContents | null;
-  /** Nothing waits on the popup's sheet any more. */
-  hide: (popup: WebContents) => void;
+/**
+ * A profile's browsing windows that are not tabs: a tab's sign-in popups,
+ * and windows an extension opens. Each shows its own passkey sheet.
+ */
+export interface PasskeyWindows {
+  /** The profile whose browsing session `window` shows, if it is one. */
+  profileOf: (window: WebContents) => string | undefined;
+  /** The sheet for the window's requests, loading out of sight. */
+  sheet: (window: WebContents) => WebContents | null;
+  /** A request is ready to show: the sheet comes over the window's page. */
+  show: (window: WebContents) => void;
+  /** Nothing waits on the window's sheet any more. */
+  hide: (window: WebContents) => void;
 }
 
 interface Pending {
   id: string;
-  /** The page asking: a tab's guest, or a popup it opened. */
+  /** The page asking: a tab's guest, or a browsing window. */
   guest: WebContents;
-  /** Set for a popup: its requests show in the sheet over it. */
-  popup: boolean;
+  /** A browsing window's request, shown in the sheet over that window. */
+  inWindow: boolean;
   profileId: string;
   origin: string;
   rpId: string;
@@ -124,13 +129,13 @@ interface Pending {
 export function registerPasskeys({
   vault,
   profileFor,
-  popups,
+  windows,
   onVaultChanged,
 }: {
   vault: PasswordVault;
   /** The profile a window belongs to. */
   profileFor: (host: WebContents) => string;
-  popups: PasskeyPopups;
+  windows: PasskeyWindows;
   onVaultChanged: (profileId: string) => void;
 }): () => void {
   const pending = new Map<string, Pending>();
@@ -141,12 +146,12 @@ export function registerPasskeys({
     answer: PasskeyAnswer = { status: "settled" },
   ) => {
     const byHost = new Map<WebContents, string[]>();
-    const popupsSettled = new Set<WebContents>();
+    const windowsSettled = new Set<WebContents>();
     for (const id of ids) {
       const entry = pending.get(id);
       if (!entry) continue;
       pending.delete(id);
-      if (entry.popup && entry.host) popupsSettled.add(entry.guest);
+      if (entry.inWindow && entry.host) windowsSettled.add(entry.guest);
       entry.resolve(answer);
       if (entry.host)
         byHost.set(entry.host, [...(byHost.get(entry.host) ?? []), id]);
@@ -154,14 +159,14 @@ export function registerPasskeys({
     for (const [host, settled] of byHost)
       if (!host.isDestroyed())
         host.send("catamorphic:passkey-settled", { ids: settled });
-    // A popup's sheet leaves once nothing over that popup waits.
-    for (const popup of popupsSettled)
+    // A window's sheet leaves once nothing over that window waits.
+    for (const window of windowsSettled)
       if (
         ![...pending.values()].some(
-          (entry) => entry.guest === popup && entry.host,
+          (entry) => entry.guest === window && entry.host,
         )
       )
-        popups.hide(popup);
+        windows.hide(window);
   };
   const settleGuest = (guestId: number) =>
     settle(
@@ -349,27 +354,25 @@ export function registerPasskeys({
       const guest = event.sender;
       const frame = event.senderFrame;
       const parsed = beginInput.safeParse(raw);
-      // A tab, or a sign-in popup a tab opened: its window is not the
-      // workspace's, so its requests show in a sheet over the popup.
-      const opener =
-        guest.getType() === "window" ? popups.openerOf(guest) : undefined;
+      // A tab, or a browsing window of its own (a tab's sign-in popup):
+      // that window is not the workspace's, so its requests show in a
+      // sheet over it, from its own browsing session's profile.
+      const windowProfile =
+        guest.getType() === "window" ? windows.profileOf(guest) : undefined;
+      // The window showing a tab: whose profile the vault is.
+      const tabHost =
+        guest.getType() === "webview" ? guest.hostWebContents : null;
       // Only the top frame is wrapped. Its origin, not its URL, is the
       // caller: a sandboxed document keeps its URL but has an opaque
       // ("null") origin, and Work never signs for one.
-      if (
-        !parsed.success ||
-        (guest.getType() !== "webview" && !opener) ||
-        !frame ||
-        frame.detached ||
-        frame.parent !== null
-      )
+      if (!parsed.success || !frame || frame.detached || frame.parent !== null)
         return { status: "settled" };
+      const profileId =
+        windowProfile ??
+        (tabHost && !tabHost.isDestroyed() ? profileFor(tabHost) : undefined);
       const input = parsed.data;
       const origin = siteOrigin(frame.origin);
-      // The window showing the tab: whose profile the vault is.
-      const tabHost = (opener ?? guest).hostWebContents;
-      if (!origin || !tabHost || tabHost.isDestroyed())
-        return { status: "settled" };
+      if (!origin || !profileId) return { status: "settled" };
       // A tab without focus cannot raise the sheet over the one in front.
       // Chrome refuses an unfocused document at once; Chromium in a
       // webview would leave it waiting, so Work refuses it the same way.
@@ -409,15 +412,19 @@ export function registerPasskeys({
                 { type: "public-key", alg: -257 },
               ]
           : [];
-      // A popup has no field suggestions to offer autofill in, so its
+      // A window has no field suggestions to offer autofill in, so its
       // autofill requests wait quietly until the page gives them up.
-      const host = !modal ? null : opener ? popups.show(guest) : tabHost;
+      const host = !modal
+        ? null
+        : windowProfile
+          ? windows.sheet(guest)
+          : tabHost;
       if (modal && !host) return { status: "settled" };
       const entry: Pending = {
         id: input.id,
         guest,
-        popup: opener !== undefined,
-        profileId: profileFor(tabHost),
+        inWindow: windowProfile !== undefined,
+        profileId,
         origin,
         rpId,
         input,
@@ -442,10 +449,12 @@ export function registerPasskeys({
         const shown = await describeRequest(entry, input.icon).catch(() =>
           describeRequest(entry, input.icon, "vault-unavailable"),
         );
-        // The page may have given up while the vault opened. A popup's
-        // sheet that is still loading asks for it once it listens.
+        // The page may have given up while the vault opened. A window's
+        // sheet comes over its page only now, with something to show, and
+        // one still loading asks for the request once it listens.
         if (pending.get(entry.id) === entry && host && !host.isDestroyed()) {
           entry.request = shown;
+          if (entry.inWindow) windows.show(guest);
           host.send("catamorphic:passkey-request", shown);
         }
       }
@@ -493,7 +502,7 @@ export function registerPasskeys({
   ipcMain.on("catamorphic:passkey-settle", onSettle);
 
   // The requests a sheet shows, for one that starts listening late: the
-  // sheet over a popup loads with its first request.
+  // sheet over a browsing window loads with its first request.
   ipcMain.handle("catamorphic:passkey-requests", (event): PasskeyRequest[] =>
     [...pending.values()].flatMap((entry) =>
       entry.host === event.sender && entry.request ? [entry.request] : [],
@@ -577,8 +586,10 @@ export function registerPasskeys({
       return entry?.id === requestId ? signIn(entry, passkeyId) : "gone";
     },
   );
-  ipcMain.handle("catamorphic:passkey-capabilities", () => ({
+  // Autofill shows under a tab's fields; a browsing window has none.
+  ipcMain.handle("catamorphic:passkey-capabilities", (event) => ({
     verifies: vault.canVerifyUser(),
+    autofill: event.sender.getType() === "webview",
   }));
 
   return () => {

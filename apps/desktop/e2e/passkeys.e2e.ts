@@ -391,62 +391,79 @@ describe("passkeys", () => {
       `window.open("/signin?popup", "signin", "width=520,height=640"); true`,
     );
     const popup = await app.connectToFrame("/signin?popup");
-    await popup.waitFor(
-      `document.title === 'Sign in' && document.readyState === 'complete' && document.hasFocus()`,
-      { label: "popup page ready and focused" },
-    );
-    await popup.eval("signIn(); true");
-    const popupSheet = await app.connectToFrame("passkey-sheet.html");
-    const inSheet = `document.querySelector('[data-testid="passkey-sheet"]')`;
-    await popupSheet.waitFor(`${inSheet}?.dataset.armed === 'true'`, {
-      label: "sheet in the popup",
-    });
-    expect(await popupSheet.eval<string>(`${inSheet}.textContent`)).toContain(
-      `${new URL(origin).host} wants you to sign in with a passkey`,
-    );
-    // The workspace window shows no sheet for a request it cannot see.
-    expect(await app.eval(`!!${sheet}`)).toBe(false);
-    await popupSheet.eval(
-      `[...document.querySelectorAll('[data-testid="passkey-sheet-choice"]')].find((choice) => choice.textContent.startsWith('ada')).click(); true`,
-    );
-    await popup.waitFor(`document.title === 'get:resolved'`, {
-      label: "popup signed in",
-    });
-    const page = await popup.eval<PageCredential>("window.lastCredential");
-    const result = await verifyAuthenticationResponse({
-      response: page.json,
-      expectedChallenge: await popup.eval<string>("window.lastChallenge"),
-      expectedOrigin: origin,
-      expectedRPID: "localhost",
-      credential: created,
-      requireUserVerification: false,
-    });
-    expect(result.verified).toBe(true);
+    const frames = [popup];
+    try {
+      await popup.waitFor(
+        `document.title === 'Sign in' && document.readyState === 'complete' && document.hasFocus()`,
+        { label: "popup page ready and focused" },
+      );
+      // A popup has no field suggestions, so it offers no passkey autofill.
+      const found = await popup.eval<{
+        conditional: boolean;
+        client: Record<string, boolean>;
+      }>("capabilities()");
+      expect(found.conditional).toBe(false);
+      expect(found.client.conditionalGet).toBe(false);
+      expect(found.client.passkeyPlatformAuthenticator).toBe(true);
 
-    // The sheet leaves the page, which takes focus back. Cancel hands the
-    // popup Chrome's NotAllowedError, so the site offers its other ways in.
-    await popupSheet.waitFor(`!${inSheet}`, { label: "sheet left the popup" });
-    await popup.waitFor("document.hasFocus()", { label: "popup focused" });
-    // A passkey Work does not have, as Google's is for most people.
-    await popup.eval(
-      `signIn({ allowCredentials: [{ type: "public-key", id: new Uint8Array([9]) }] }); true`,
-    );
-    await popupSheet.waitFor(`${inSheet}?.dataset.armed === 'true'`, {
-      label: "second sheet in the popup",
-    });
-    expect(await popupSheet.eval<string>(`${inSheet}.textContent`)).toContain(
-      "Passkeys on your phone or in iCloud Keychain can't be used in Work yet.",
-    );
-    await popupSheet.eval(
-      `document.querySelector('[data-testid="passkey-sheet-cancel"]').click(); true`,
-    );
-    await popup.waitFor(`document.title === 'get:NotAllowedError'`, {
-      label: "popup request cancelled",
-    });
-    expect(popupSheet.getRendererErrors()).toEqual([]);
-    await popup.eval("window.close(); true");
-    popup.close();
-    popupSheet.close();
+      await popup.eval("signIn(); true");
+      const popupSheet = await app.connectToFrame("passkey-sheet.html");
+      frames.push(popupSheet);
+      const inSheet = `document.querySelector('[data-testid="passkey-sheet"]')`;
+      await popupSheet.waitFor(`${inSheet}?.dataset.armed === 'true'`, {
+        label: "sheet in the popup",
+      });
+      expect(await popupSheet.eval<string>(`${inSheet}.textContent`)).toContain(
+        `${new URL(origin).host} wants you to sign in with a passkey`,
+      );
+      // The workspace window shows no sheet for a request it cannot see.
+      expect(await app.eval(`!!${sheet}`)).toBe(false);
+      await popupSheet.eval(
+        `[...document.querySelectorAll('[data-testid="passkey-sheet-choice"]')].find((choice) => choice.textContent.startsWith('ada')).click(); true`,
+      );
+      await popup.waitFor(`document.title === 'get:resolved'`, {
+        label: "popup signed in",
+      });
+      const page = await popup.eval<PageCredential>("window.lastCredential");
+      const result = await verifyAuthenticationResponse({
+        response: page.json,
+        expectedChallenge: await popup.eval<string>("window.lastChallenge"),
+        expectedOrigin: origin,
+        expectedRPID: "localhost",
+        credential: created,
+        requireUserVerification: false,
+      });
+      expect(result.verified).toBe(true);
+
+      // The sheet leaves the page, which takes focus back. Cancel hands
+      // the popup Chrome's NotAllowedError, so the site offers its other
+      // ways in.
+      await popupSheet.waitFor(`!${inSheet}`, {
+        label: "sheet left the popup",
+      });
+      await popup.waitFor("document.hasFocus()", { label: "popup focused" });
+      // A passkey Work does not have, as Google's is for most people.
+      await popup.eval(
+        `signIn({ allowCredentials: [{ type: "public-key", id: new Uint8Array([9]) }] }); true`,
+      );
+      await popupSheet.waitFor(`${inSheet}?.dataset.armed === 'true'`, {
+        label: "second sheet in the popup",
+      });
+      expect(await popupSheet.eval<string>(`${inSheet}.textContent`)).toContain(
+        "Passkeys on your phone or in iCloud Keychain can't be used in Work yet.",
+      );
+      await popupSheet.eval(
+        `document.querySelector('[data-testid="passkey-sheet-cancel"]').click(); true`,
+      );
+      await popup.waitFor(`document.title === 'get:NotAllowedError'`, {
+        label: "popup request cancelled",
+      });
+      expect(popupSheet.getRendererErrors()).toEqual([]);
+    } finally {
+      // A popup left open would hold focus from the tests after this one.
+      await popup.eval("window.close(); true").catch(() => {});
+      for (const frame of frames) frame.close();
+    }
     expect(app.getRendererErrors()).toEqual([]);
   });
 

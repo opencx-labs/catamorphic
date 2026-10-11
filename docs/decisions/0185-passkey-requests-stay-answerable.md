@@ -1,6 +1,6 @@
 # 0185 — Passkey requests in browser tabs stay answerable
 
-- **Status:** Accepted (amended by 0201)
+- **Status:** Accepted (amended by 0201; by [0220](0220-sign-in-popups-answer-passkeys.md): sign-in popups and other browsing windows answer too)
 - **Date:** 2026-09-28
 - **Refines:** 0137 (sign-in recovery)
 

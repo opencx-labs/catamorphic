@@ -82,8 +82,8 @@ describe("desktopAdapter", () => {
       id: "claude-code",
       capabilities: () => NO_CAPABILITIES,
       prepare: async (start, report) => {
-        report("Downloading Claude Code (first use only): 10% of 221 MB");
-        report("Downloading Claude Code (first use only): 60% of 221 MB");
+        report("Downloading Claude Code: 22 of 221 MB");
+        report("Downloading Claude Code: 132 of 221 MB");
         return { adapter: finishingAdapter(started), attempt: start };
       },
       errors,
@@ -93,11 +93,11 @@ describe("desktopAdapter", () => {
     expect(events).toEqual([
       {
         type: "status",
-        text: "Downloading Claude Code (first use only): 10% of 221 MB",
+        text: "Downloading Claude Code: 22 of 221 MB",
       },
       {
         type: "status",
-        text: "Downloading Claude Code (first use only): 60% of 221 MB",
+        text: "Downloading Claude Code: 132 of 221 MB",
       },
       { type: "turn.completed", status: "completed" },
     ]);
@@ -108,12 +108,14 @@ describe("desktopAdapter", () => {
   it("ends a turn stopped while getting ready at once, and never starts it", async () => {
     const started: string[] = [];
     let release = () => {};
+    let progress = (_activity: string) => {};
     const adapter = desktopAdapter({
       id: "claude-code",
       capabilities: () => NO_CAPABILITIES,
       prepare: (start, report) =>
         new Promise((resolve) => {
-          report("Downloading Claude Code (first use only): 1% of 221 MB");
+          report("Downloading Claude Code: 2 of 221 MB");
+          progress = report;
           release = () =>
             resolve({ adapter: finishingAdapter(started), attempt: start });
         }),
@@ -128,9 +130,14 @@ describe("desktopAdapter", () => {
       type: "turn.completed",
       status: "interrupted",
     });
+    // The shared download goes on, and says nothing to the ended turn.
+    progress("Downloading Claude Code: 90 of 221 MB");
     release();
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(started).toEqual([]);
+    expect(
+      events.flatMap((event) => (event.type === "status" ? [event.text] : [])),
+    ).toEqual(["Downloading Claude Code: 2 of 221 MB"]);
     expect(
       events.filter((event) => event.type === "turn.completed"),
     ).toHaveLength(1);

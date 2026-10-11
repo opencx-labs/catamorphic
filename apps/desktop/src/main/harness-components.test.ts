@@ -8,7 +8,9 @@ import {
   CLAUDE_CODE_MIN_VERSION,
   type HarnessArtifact,
   HarnessComponentStore,
+  type HarnessDownloadProgress,
   harnessDownloadLine,
+  watchHarnessDownloads,
 } from "./harness-components.js";
 
 const temporaryRoots: string[] = [];
@@ -245,22 +247,121 @@ describe("harnessDownloadLine", () => {
     totalBytes,
   });
 
-  it("counts every first-use download a turn waits for", () => {
+  it("counts every download a turn waits for, by the megabyte", () => {
     expect(
-      harnessDownloadLine([progress("Claude Code", 110_000_000, 221_000_000)]),
-    ).toBe("Downloading Claude Code (first use only): 49% of 221 MB");
+      harnessDownloadLine([progress("Claude Code", 110_400_000, 221_000_000)]),
+    ).toBe("Downloading Claude Code: 110 of 221 MB");
     expect(
       harnessDownloadLine([
         progress("Claude Code", 221_000_000, 221_000_000),
         progress("Bun", 30_000_000, 60_000_000),
       ]),
-    ).toBe("Downloading Claude Code and Bun (first use only): 89% of 281 MB");
+    ).toBe("Downloading Claude Code and Bun: 251 of 281 MB");
+  });
+
+  it("says when the downloads are in and unpacking", () => {
+    expect(
+      harnessDownloadLine([
+        progress("Claude Code", 221_000_000, 221_000_000),
+        progress("Bun", 60_000_000, 60_000_000),
+      ]),
+    ).toBe("Setting up Claude Code and Bun");
   });
 
   it("counts megabytes when the registry gives no size", () => {
     expect(harnessDownloadLine([progress("Bun", 12_400_000, 0)])).toBe(
-      "Downloading Bun (first use only): 12 MB",
+      "Downloading Bun: 12 MB",
     );
+  });
+});
+
+describe("watchHarnessDownloads", () => {
+  function fakeStore() {
+    const listeners = new Set<(progress: HarnessDownloadProgress) => void>();
+    return {
+      store: {
+        onProgress: (listener: (progress: HarnessDownloadProgress) => void) => {
+          listeners.add(listener);
+          return () => listeners.delete(listener);
+        },
+      },
+      tick: (progress: HarnessDownloadProgress) => {
+        for (const listener of listeners) listener(progress);
+      },
+      listening: () => listeners.size,
+    };
+  }
+  const claude = (receivedBytes: number): HarnessDownloadProgress => ({
+    harness: "claude-code",
+    displayName: "Claude Code",
+    receivedBytes,
+    totalBytes: 100_000_000,
+  });
+  const bun = (receivedBytes: number): HarnessDownloadProgress => ({
+    harness: "bun",
+    displayName: "Bun",
+    receivedBytes,
+    totalBytes: 24_000_000,
+  });
+
+  it("tells the turn its downloads a line a second, then that the harness starts", () => {
+    const { store, tick, listening } = fakeStore();
+    const lines: string[] = [];
+    let clock = 0;
+    const finish = watchHarnessDownloads({
+      store,
+      harness: "claude-code",
+      report: (line) => lines.push(line),
+      now: () => clock,
+    });
+    // Bun ticked first; the harness still leads the line.
+    tick(bun(0));
+    clock = 1_000;
+    tick(claude(10_000_000));
+    clock = 1_400;
+    tick(claude(20_000_000));
+    clock = 2_000;
+    tick(claude(30_000_000));
+    // Another harness's download is not this turn's.
+    tick({ ...claude(5_000_000), harness: "codex", displayName: "Codex" });
+    clock = 2_100;
+    tick(claude(100_000_000));
+    tick(bun(24_000_000));
+    finish(true);
+    expect(lines).toEqual([
+      "Downloading Bun: 0 of 24 MB",
+      "Downloading Claude Code and Bun: 10 of 124 MB",
+      "Downloading Claude Code and Bun: 30 of 124 MB",
+      "Setting up Claude Code and Bun",
+      "Starting Claude Code",
+    ]);
+    expect(listening()).toBe(0);
+  });
+
+  it("says nothing when everything is already here, or when getting ready failed", () => {
+    const quiet = fakeStore();
+    const lines: string[] = [];
+    watchHarnessDownloads({
+      store: quiet.store,
+      harness: "claude-code",
+      report: (line) => lines.push(line),
+    })(true);
+    expect(lines).toEqual([]);
+
+    const failed = fakeStore();
+    const finish = watchHarnessDownloads({
+      store: failed.store,
+      harness: "codex",
+      report: (line) => lines.push(line),
+    });
+    failed.tick({
+      ...claude(1_000_000),
+      harness: "codex",
+      displayName: "Codex",
+    });
+    finish(false);
+    expect(lines).toEqual(["Downloading Codex: 1 of 100 MB"]);
+    expect(failed.listening()).toBe(0);
   });
 });
 

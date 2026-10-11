@@ -73,13 +73,14 @@ export interface HarnessDownloadProgress {
 
 /**
  * A chat's activity line while its turn waits for first-use downloads,
- * all of them at once: "Downloading Claude Code and Bun (first use only):
- * 42% of 281 MB".
+ * all of them at once, by the megabyte so a slow link still moves:
+ * "Downloading Claude Code and Bun: 63 of 124 MB", then "Setting up
+ * Claude Code and Bun" while the archives unpack.
  */
 export function harnessDownloadLine(
   downloads: readonly HarnessDownloadProgress[],
 ): string {
-  const names = downloads.map((download) => download.displayName);
+  const names = downloads.map((download) => download.displayName).join(" and ");
   const received = downloads.reduce(
     (sum, download) => sum + download.receivedBytes,
     0,
@@ -89,12 +90,11 @@ export function harnessDownloadLine(
     (sum, download) => sum + download.totalBytes,
     0,
   );
-  const megabytes = (bytes: number) => Math.round(bytes / 1_000_000);
-  const amount =
-    known && total > 0
-      ? `${Math.min(99, Math.floor((received / total) * 100))}% of ${megabytes(total)} MB`
-      : `${megabytes(received)} MB`;
-  return `Downloading ${names.join(" and ")} (first use only): ${amount}`;
+  if (known && received >= total) return `Setting up ${names}`;
+  const megabytes = (bytes: number) => Math.floor(bytes / 1_000_000);
+  return known
+    ? `Downloading ${names}: ${megabytes(received)} of ${Math.round(total / 1_000_000)} MB`
+    : `Downloading ${names}: ${megabytes(received)} MB`;
 }
 
 interface PlatformRelease {
@@ -259,7 +259,7 @@ export class HarnessComponentStore {
     const artifact = this.artifacts[harness];
     if (!artifact) {
       throw new Error(
-        `${displayName(harness)} is unavailable on ${process.platform}-${process.arch}.`,
+        `${componentDisplayName(harness)} is unavailable on ${process.platform}-${process.arch}.`,
       );
     }
     if (harness === "claude-code") {
@@ -351,12 +351,20 @@ export class HarnessComponentStore {
         (receivedBytes, totalBytes) => {
           alive();
           for (const listener of this.progressListeners) {
-            listener({
-              harness,
-              displayName: artifact.displayName,
-              receivedBytes,
-              totalBytes,
-            });
+            // A watcher's mistake never fails the download others wait on.
+            try {
+              listener({
+                harness,
+                displayName: artifact.displayName,
+                receivedBytes,
+                totalBytes,
+              });
+            } catch (error) {
+              console.warn(
+                "[desktop] Download progress listener failed",
+                error,
+              );
+            }
           }
         },
       );
@@ -570,7 +578,51 @@ async function writeVerifiedArchive(
   }
 }
 
-function displayName(harness: DownloadableComponent): string {
+/**
+ * What a turn waiting on `harness` hears while it gets ready: its first-use
+ * downloads (the harness's and Bun's), a line a second at most, and then
+ * that the harness is starting, which still takes a moment after a first
+ * download. Returns the function that ends the watch.
+ */
+export function watchHarnessDownloads({
+  store,
+  harness,
+  report,
+  now = Date.now,
+}: {
+  store: Pick<HarnessComponentStore, "onProgress">;
+  harness: DownloadableHarness;
+  report: (activity: string) => void;
+  now?: () => number;
+}): (ready: boolean) => void {
+  const downloads = new Map<DownloadableComponent, HarnessDownloadProgress>();
+  let reported = { line: "", at: Number.NEGATIVE_INFINITY };
+  const stop = store.onProgress((progress) => {
+    if (progress.harness !== harness && progress.harness !== "bun") return;
+    downloads.set(progress.harness, progress);
+    // The harness first, then Bun, whichever started first.
+    const line = harnessDownloadLine(
+      [...downloads.values()].sort(
+        (a, b) => Number(a.harness === "bun") - Number(b.harness === "bun"),
+      ),
+    );
+    if (
+      line === reported.line ||
+      (now() - reported.at < 1000 && !line.startsWith("Setting up"))
+    )
+      return;
+    reported = { line, at: now() };
+    report(line);
+  });
+  return (ready) => {
+    stop();
+    if (ready && reported.line)
+      report(`Starting ${componentDisplayName(harness)}`);
+  };
+}
+
+/** What the person calls a harness or component. */
+export function componentDisplayName(harness: DownloadableComponent): string {
   if (harness === "claude-code") return "Claude Code";
   return harness === "codex" ? "Codex" : "Bun";
 }

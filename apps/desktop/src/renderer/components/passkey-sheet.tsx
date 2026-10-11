@@ -49,9 +49,12 @@ export function PasskeyHost({
     );
     // A request sent before this listened (the sheet over a sign-in popup
     // loads with its first one) is still waiting in main.
-    void desktopApi.passkeyRequests().then((shown) => {
-      if (live) add(shown);
-    });
+    void desktopApi
+      .passkeyRequests()
+      .then((shown) => {
+        if (live) add(shown);
+      })
+      .catch(() => {});
     return () => {
       live = false;
       stopRequests();

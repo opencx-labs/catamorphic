@@ -12,12 +12,14 @@ interface Sheet {
 }
 
 /**
- * The passkey sheet over a tab's sign-in popup (ADR 0220). The popup is a
- * window of its own above the workspace window, so the workspace's sheet
- * would sit behind it: the popup gets a transparent view of its own, laid
- * over its page, that loads the sheet alone. The view is made on the
- * popup's first passkey request, kept while the popup lives, and over the
- * page only while a request waits; the page takes focus back after.
+ * The passkey sheet over a browsing window that is not a tab, such as a
+ * tab's sign-in popup (ADR 0220). The popup is a window of its own above
+ * the workspace window, so the workspace's sheet would sit behind it: the
+ * popup gets a transparent view of its own, laid over its page, that loads
+ * the sheet alone. The view is made on the
+ * popup's first passkey request and loads while the vault opens; it is
+ * kept while the popup lives, and over the page only while a request
+ * waits there to be answered. The page takes focus back after.
  */
 export class PopupPasskeySheets {
   private readonly sheets = new Map<number, Sheet>();
@@ -29,17 +31,24 @@ export class PopupPasskeySheets {
     },
   ) {}
 
-  /** The sheet's contents over `popup`, in front and focused. */
-  show(popup: WebContents): WebContents | null {
+  /** The sheet's contents for `popup`, made (and loading) on first use. */
+  sheet(popup: WebContents): WebContents | null {
     const window = BrowserWindow.fromWebContents(popup);
     if (!window || window.isDestroyed()) return null;
-    const sheet = this.sheets.get(popup.id) ?? this.create(popup, window);
+    return (this.sheets.get(popup.id) ?? this.create(popup, window)).view
+      .webContents;
+  }
+
+  /** The sheet comes over the popup's page, in front and focused. */
+  show(popup: WebContents): void {
+    if (popup.isDestroyed()) return;
+    const sheet = this.sheets.get(popup.id);
+    if (!sheet || sheet.window.isDestroyed()) return;
     clearTimeout(sheet.leaving);
     sheet.leaving = undefined;
     sheet.fit();
-    window.contentView.addChildView(sheet.view);
+    sheet.window.contentView.addChildView(sheet.view);
     sheet.view.webContents.focus();
-    return sheet.view.webContents;
   }
 
   /** No request waits over `popup` any more: the sheet leaves its page. */
@@ -48,11 +57,14 @@ export class PopupPasskeySheets {
     if (popup.isDestroyed()) return;
     const sheet = this.sheets.get(popup.id);
     if (!sheet || sheet.leaving) return;
+    // The page takes focus back from its own sheet at once, so it can ask
+    // again, and never from wherever the person went since.
+    if (sheet.window.isFocused() && sheet.view.webContents.isFocused())
+      popup.focus();
     sheet.leaving = setTimeout(() => {
       sheet.leaving = undefined;
-      if (sheet.window.isDestroyed()) return;
-      sheet.window.contentView.removeChildView(sheet.view);
-      if (!popup.isDestroyed()) popup.focus();
+      if (!sheet.window.isDestroyed())
+        sheet.window.contentView.removeChildView(sheet.view);
     }, EXIT_MS);
   }
 

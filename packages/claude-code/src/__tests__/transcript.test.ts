@@ -44,6 +44,55 @@ describe("API retries", () => {
     expect(events.some((event) => event.type === "diagnostic")).toBe(true);
   });
 
+  it("come down once the API answers", () => {
+    const events: HarnessEvent[] = [];
+    const transcript = new ClaudeTranscript(
+      (event) => events.push(event),
+      new Set(),
+    );
+    transcript.handle(retry(1, "overloaded", 529));
+    transcript.handle({
+      type: "stream_event",
+      event: {
+        type: "message_start",
+        message: {
+          id: "message-1",
+          type: "message",
+          role: "assistant",
+          model: "claude",
+          content: [],
+          container: null,
+          context_management: null,
+          diagnostics: null,
+          stop_details: null,
+          stop_reason: null,
+          stop_sequence: null,
+          usage: {
+            cache_creation: null,
+            cache_creation_input_tokens: null,
+            cache_read_input_tokens: null,
+            fallback_credit: null,
+            inference_geo: null,
+            input_tokens: 1,
+            iterations: null,
+            output_tokens: 0,
+            output_tokens_details: null,
+            server_tool_use: null,
+            service_tier: null,
+            speed: null,
+          },
+        },
+      },
+      parent_tool_use_id: null,
+      uuid: "00000000-0000-4000-8000-000000000009",
+      session_id: "session",
+    });
+    expect(events.filter((event) => event.type === "status").at(-1)).toEqual({
+      type: "status",
+      text: "Working",
+    });
+  });
+
   it("names the problem in plain words", () => {
     const line = (
       error: "overloaded" | "rate_limit" | "unknown",

@@ -45,8 +45,8 @@ import {
   HarnessComponentStore,
   type HarnessDownloadProgress,
   type HarnessExecutable,
-  harnessDownloadLine,
   harnessPathEnvironment,
+  watchHarnessDownloads,
 } from "../harness-components.js";
 import type { InstalledClaudeCodeFinder } from "../installed-claude-code.js";
 import { bestFreeModelId, fetchOpenRouterModels } from "../openrouter.js";
@@ -1115,8 +1115,8 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
    * A native harness's attempt on this machine: the integrity-pinned
    * executable (downloaded on first use), Bun and the shell shims on PATH,
    * and a key resolved for this attempt when the agent has one. A first
-   * use downloads a few hundred megabytes, which the turn's activity line
-   * counts out instead of sitting on "Working".
+   * use downloads about 125 MB, which the turn's activity line counts out
+   * instead of sitting on "Working".
    */
   private async nativeAttempt(input: {
     harness: DownloadableHarness;
@@ -1125,20 +1125,23 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     report: (activity: string) => void;
     keyEnv?: () => Promise<Record<string, string>>;
   }): Promise<{ adapter: HarnessAdapter; attempt: AttemptStart }> {
-    const downloads = new Map<string, HarnessDownloadProgress>();
-    let reported = "";
-    const stopWatching = this.harnessComponents.onProgress((progress) => {
-      if (progress.harness !== input.harness && progress.harness !== "bun")
-        return;
-      downloads.set(progress.harness, progress);
-      const line = harnessDownloadLine([...downloads.values()]);
-      if (line === reported) return;
-      reported = line;
-      input.report(line);
+    const finish = watchHarnessDownloads({
+      store: this.harnessComponents,
+      harness: input.harness,
+      report: input.report,
     });
     const { component, environment } = await this.ensureNativeComponents(
       input.harness,
-    ).finally(stopWatching);
+    ).then(
+      (ready) => {
+        finish(true);
+        return ready;
+      },
+      (error: unknown) => {
+        finish(false);
+        throw error;
+      },
+    );
     const key = input.keyEnv ? await input.keyEnv() : {};
     const options: JsonObject = {
       ...input.attempt.options,

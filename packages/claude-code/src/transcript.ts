@@ -186,6 +186,8 @@ export class ClaudeTranscript {
   private plan?: { key: string; done: boolean };
   private heading?: string;
   private thinking = "";
+  /** A retry's line is up; the next response from the API replaces it. */
+  private retrying = false;
   /** The main thread's last assistant message: the turn's native ref. */
   lastAssistantUuid?: string;
   /** Raw usage of the last main-thread assistant message. */
@@ -213,9 +215,13 @@ export class ClaudeTranscript {
   handle(message: SDKMessage): void {
     switch (message.type) {
       case "stream_event":
-        if (message.parent_tool_use_id === null) this.stream(message.event);
+        if (message.parent_tool_use_id === null) {
+          if (message.event.type === "message_start") this.answered();
+          this.stream(message.event);
+        }
         return;
       case "assistant":
+        if (message.parent_tool_use_id === null) this.answered();
         this.assistant(message);
         return;
       case "user":
@@ -338,6 +344,17 @@ export class ClaudeTranscript {
       default:
         return;
     }
+  }
+
+  /**
+   * The API answered after a retry: the retry's line comes down, whatever
+   * the response turns out to be (a tool call's items arrive only with its
+   * message).
+   */
+  private answered(): void {
+    if (!this.retrying) return;
+    this.retrying = false;
+    this.emit({ type: "status", text: "Working" });
   }
 
   /** The agent's own heading for what it is thinking about, as its live line. */
@@ -604,6 +621,7 @@ export class ClaudeTranscript {
         // The CLI backs off for minutes before it gives up; the activity
         // line says so instead of sitting on "Working".
         this.heading = undefined;
+        this.retrying = true;
         this.emit({ type: "status", text: apiRetryLine(message) });
         return;
       case "task_notification": {

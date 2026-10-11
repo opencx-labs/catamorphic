@@ -46,7 +46,7 @@ export function installPasskeys(): void {
     settle: (id: string): void => {
       ipcRenderer.send("catamorphic:passkey-settle", { id });
     },
-    capabilities: (): Promise<{ verifies: boolean }> =>
+    capabilities: (): Promise<{ verifies: boolean; autofill: boolean }> =>
       ipcRenderer.invoke("catamorphic:passkey-capabilities"),
     /** Whether the page has focus, read where the page cannot redefine it. */
     focused: (): boolean => document.hasFocus(),
@@ -82,7 +82,7 @@ export function installPasskeys(): void {
             options: unknown,
           ) => Promise<Answer>;
           settle: (id: string) => void;
-          capabilities: () => Promise<{ verifies: boolean }>;
+          capabilities: () => Promise<{ verifies: boolean; autofill: boolean }>;
           focused: () => boolean;
         }
         type Descriptor = { type?: unknown; id?: unknown };
@@ -463,13 +463,14 @@ export function installPasskeys(): void {
             })
           | undefined;
         if (!Credential) return;
-        const verifies = () =>
-          bridge.capabilities().then(
-            (found) => found.verifies,
-            () => false,
-          );
+        const found = () =>
+          bridge
+            .capabilities()
+            .catch(() => ({ verifies: false, autofill: false }));
+        const verifies = () => found().then((answer) => answer.verifies);
+        // Autofill shows under a tab's fields; a sign-in popup has none.
         Object.defineProperty(Credential, "isConditionalMediationAvailable", {
-          value: () => Promise.resolve(true),
+          value: () => found().then((answer) => answer.autofill),
           configurable: true,
           writable: true,
         });
@@ -482,14 +483,14 @@ export function installPasskeys(): void {
         if (typeof capabilities === "function")
           Object.defineProperty(Credential, "getClientCapabilities", {
             value: () =>
-              Promise.all([capabilities.call(Credential), verifies()]).then(
-                ([found, verified]) => ({
-                  ...found,
+              Promise.all([capabilities.call(Credential), found()]).then(
+                ([native, answer]) => ({
+                  ...native,
                   conditionalCreate: false,
-                  conditionalGet: true,
+                  conditionalGet: answer.autofill,
                   hybridTransport: false,
                   passkeyPlatformAuthenticator: true,
-                  userVerifyingPlatformAuthenticator: verified,
+                  userVerifyingPlatformAuthenticator: answer.verifies,
                 }),
               ),
             configurable: true,

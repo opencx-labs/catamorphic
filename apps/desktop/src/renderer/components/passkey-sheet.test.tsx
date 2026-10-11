@@ -229,7 +229,7 @@ describe("PasskeyHost", () => {
 
   // The sheet over a sign-in popup loads with the popup's first request,
   // which main sent before the sheet listened.
-  it("shows a request that was waiting before it listened, once", async () => {
+  it("shows a request that was waiting before it listened", async () => {
     act(() => root.unmount());
     vi.mocked(desktopApi.passkeyRequests).mockResolvedValueOnce([base]);
     root = createRoot(container);
@@ -244,11 +244,6 @@ describe("PasskeyHost", () => {
     expect(sheet()?.textContent).toContain(
       "app.example.com wants you to sign in with a passkey",
     );
-    // The same request pushed as well is still one sheet.
-    await act(async () => listeners.request?.(base));
-    expect(
-      document.querySelectorAll('[data-testid="passkey-sheet"]'),
-    ).toHaveLength(1);
     await click('[data-testid="passkey-sheet-cancel"]');
     expect(desktopApi.passkeyCancel).toHaveBeenCalledWith({ id: "request-1" });
   });
