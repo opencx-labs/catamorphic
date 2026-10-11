@@ -2024,7 +2024,7 @@ function sessionWorkflowFixture({
       : scenario === "failure"
         ? 'throw new Error("Controlled monitor failure");'
         : ["reminder", "longreminder", "overdue"].includes(scenario)
-          ? `return context.host["catamorphic.sessions"].deliver({ sessionId: ${JSON.stringify(sessionId)}, content: "Reminder: submit the application.", mode: "message_only", attention: "required", idempotencyKey: "reminder" });`
+          ? `return context.host["catamorphic.sessions"].deliver({ sessionId: ${JSON.stringify(sessionId)}, content: "Reminder: submit the application.", mode: "message_only", attention: "required", idempotencyKey: ${JSON.stringify(scenario)} });`
           : scenario === "monitor"
             ? `return context.host["catamorphic.sessions"].deliver({ mode: "message_only", attention: "required", sessionId: ${JSON.stringify(sessionId)}, content: "Work completion observed.", idempotencyKey: "completion-observed" });`
             : `return context.host["catamorphic.sessions"].deliver({ sessionId: ${JSON.stringify(sessionId)}, content: "Scheduled follow-up received.", mode: "queue", idempotencyKey: "scheduled-wake" });`;

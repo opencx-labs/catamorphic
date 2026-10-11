@@ -1703,12 +1703,13 @@ describe("subagents and background watchers", () => {
 describe("news from a background command (ADR 0217)", () => {
   it("reaches the working turn as a step, once per line it has not reported, and never as the person's message", async () => {
     // Quiet past the command's start (its first output is news for the
-    // turn, not its start), then one error printed again and again. The
-    // command's own text never matches: \105 is the error's "E".
+    // turn, not its start), then one error printed again and again, and an
+    // end well after the turn's. The command's own text never matches:
+    // \105 is the error's "E".
     const command = [
       "sleep 5; for i in 1 2 3 4 5 6 7 8; do",
       "printf 'reason: \\105rror: Inspector method Debugger.enable is not supported\\n';",
-      "sleep 1; done; sleep 2",
+      "sleep 1; done; sleep 15",
     ].join(" ");
     await run(
       `const input = floatingDock().querySelector('[data-composer-input]');
