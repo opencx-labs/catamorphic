@@ -94,8 +94,8 @@ const hoverChip = async (selector: string) => {
   );
   await app.movePointer(point);
   const hovered = `return frontDock()?.querySelector(${JSON.stringify(selector)})?.matches(':hover');`;
-  // On macOS CI a single synthetic warp is sometimes never seen as hover;
-  // a person's pointer keeps moving. Arrive once more before deciding.
+  // A person's pointer keeps moving: if hover has not landed, arrive once
+  // more before deciding.
   const seen = await runWait<boolean>(hovered, {
     timeoutMs: 2_000,
     label: "native pointer reached the surface chip",
