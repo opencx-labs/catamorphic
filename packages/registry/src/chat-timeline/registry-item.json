@@ -28,7 +28,7 @@
     },
     {
       "path": "components/catamorphic/turn-rows.ts",
-      "type": "registry:lib"
+      "type": "registry:component"
     },
     {
       "path": "components/catamorphic/session-input.tsx",
