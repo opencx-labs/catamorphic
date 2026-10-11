@@ -1756,38 +1756,39 @@ describe("news from a background command (ADR 0217)", () => {
         "task-notification-step.png",
       ),
     );
-    // What it printed next, and its end, arrive after the turn: a row of
-    // their own, never the person's bubble.
-    await runWait(
-      `return [...floatingDock().querySelectorAll('[data-testid="chat-task-notification"]')]
-         .some((row) => row.textContent.includes('Start the worker finished'));`,
-      { timeoutMs: 45_000, label: "the command's end reads as a row" },
-    );
-    const news = await run<{ steps: number; rows: number; bubbles: number }>(
-      `const all = [...floatingDock().querySelectorAll('[data-step-kind="notification"], [data-testid="chat-task-notification"]')];
-       return {
-         steps: floatingDock().querySelectorAll('[data-step-kind="notification"]').length,
-         rows: floatingDock().querySelectorAll('[data-testid="chat-task-notification"]').length,
+    // Its end is news too: a row of its own once nothing works, or a step
+    // of a turn still working when it lands (a loaded host can stretch the
+    // turn it woke past it). Never the person's bubble.
+    const ended = `[...floatingDock().querySelectorAll('[data-testid="chat-task-notification"], [data-step-kind="notification"]')]
+      .find((el) => el.textContent.includes('Start the worker finished'))`;
+    await runWait(`return !!${ended};`, {
+      timeoutMs: 45_000,
+      label: "the command's end reads as news",
+    });
+    const news = await run<{ printed: number; bubbles: number }>(
+      `return {
+         printed: [...floatingDock().querySelectorAll('[data-step-kind="notification"], [data-testid="chat-task-notification"]')]
+           .filter((el) => el.textContent.includes('printed what you were waiting for')).length,
          bubbles: [...floatingDock().querySelectorAll('[data-user-message]')]
            .filter((el) => /task-notification|printed what you were waiting for|finished/i.test(el.textContent)).length,
-         all: all.length,
        };`,
     );
     expect(news.bubbles).toBe(0);
     // The repeating error woke the chat once, for all eight prints.
-    expect(news.steps).toBe(1);
-    // The row opens to what the agent read, and to its terminal.
+    expect(news.printed).toBe(1);
+    // It opens to what the agent read, and to its terminal.
     await run(
-      `[...floatingDock().querySelectorAll('[data-testid="chat-task-notification"]')]
-         .find((row) => row.textContent.includes('Start the worker finished'))
-         .querySelector('button').click();`,
+      `const end = ${ended};
+       const toggle = end.closest('[data-testid="chat-turn-steps"]')
+         ?.querySelector('[data-testid="chat-turn-steps-toggle"]');
+       if (toggle?.getAttribute('aria-expanded') === 'false') toggle.click();
+       end.querySelector('button').click();`,
     );
     await runWait(
-      `const row = [...floatingDock().querySelectorAll('[data-testid="chat-task-notification"]')]
-         .find((row) => row.textContent.includes('Start the worker finished'));
-       return row?.querySelector('button')?.getAttribute('aria-expanded') === 'true' &&
-         row.querySelector('a')?.textContent === 'Open terminal';`,
-      { label: "the row opens to its terminal" },
+      `const end = ${ended};
+       return end?.querySelector('button')?.getAttribute('aria-expanded') === 'true' &&
+         end.querySelector('[data-testid="chat-step-source"], [data-testid="chat-input-source"] a')?.textContent === 'Open terminal';`,
+      { label: "the end opens to its terminal" },
     );
     await new Promise((resolve) => setTimeout(resolve, 400));
     await app.screenshot(
