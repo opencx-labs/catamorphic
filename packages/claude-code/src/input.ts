@@ -40,14 +40,19 @@ export async function renderPrompt(input: {
 }
 
 /**
- * The SDK message uuid for a Work input item: derived, so a replayed
- * transcript names the same uuids it was recorded with, and the CLI's
- * consumption reports map back to item ids.
+ * The SDK message uuid for a Work input item in one attempt: derived, so a
+ * replayed transcript names the same uuids it was recorded with, and the
+ * CLI's consumption reports map back to item ids. Each attempt names it
+ * anew: a retry resends the turn's input on the same native thread, and
+ * the CLI ends a uuid its transcript already holds without running it.
  */
-export function inputUuid(
-  itemId: string,
-): `${string}-${string}-${string}-${string}-${string}` {
-  const hex = createHash("sha256").update(`input:${itemId}`).digest("hex");
+export function inputUuid(input: {
+  attemptId: string;
+  itemId: string;
+}): `${string}-${string}-${string}-${string}-${string}` {
+  const hex = createHash("sha256")
+    .update(`input:${input.attemptId}:${input.itemId}`)
+    .digest("hex");
   const variant = (
     (Number.parseInt(hex.slice(16, 17), 16) & 0x3) |
     0x8

@@ -978,7 +978,10 @@ class CodexAttempt {
       `question:${String(params.itemId ?? id)}`,
       {
         kind: "question",
-        blocking: params.isBlocking !== false,
+        // Codex waits for this reply whatever its `isBlocking` says: Work
+        // answers a non-blocking question with a message instead, which
+        // would leave the turn waiting forever.
+        blocking: true,
         title: questions[0]?.header || "Question",
         origin: CODEX_ORIGIN,
         questions,

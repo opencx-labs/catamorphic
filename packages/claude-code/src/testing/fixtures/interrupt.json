@@ -60,19 +60,19 @@
       "messages": [
         {
           "type": "replay.input",
-          "uuid": "f9daa608-1827-410b-92ac-20fabd4487ae",
+          "uuid": "5625afbf-f956-4821-b72d-310f0d2692c0",
           "text": "Write a long story"
         },
         {
           "type": "command_lifecycle",
-          "command_uuid": "f9daa608-1827-410b-92ac-20fabd4487ae",
+          "command_uuid": "5625afbf-f956-4821-b72d-310f0d2692c0",
           "state": "queued",
           "uuid": "1d61628e-f4c8-4766-bc93-1fb99f5368a0",
           "session_id": "470e90cc-b905-4c4c-a086-a74be63de883"
         },
         {
           "type": "command_lifecycle",
-          "command_uuid": "f9daa608-1827-410b-92ac-20fabd4487ae",
+          "command_uuid": "5625afbf-f956-4821-b72d-310f0d2692c0",
           "state": "started",
           "uuid": "6746b39a-f0c0-4e00-9aa3-d3aae70f0d89",
           "session_id": "470e90cc-b905-4c4c-a086-a74be63de883"
@@ -246,8 +246,8 @@
           "parent_tool_use_id": null,
           "uuid": "e36e5b23-5b70-4318-87ee-36416e3d8f8b",
           "ttft_ms": 4,
-          "user_message_uuid": "f9daa608-1827-410b-92ac-20fabd4487ae",
-          "user_message_uuids": ["f9daa608-1827-410b-92ac-20fabd4487ae"]
+          "user_message_uuid": "5625afbf-f956-4821-b72d-310f0d2692c0",
+          "user_message_uuids": ["5625afbf-f956-4821-b72d-310f0d2692c0"]
         },
         {
           "type": "stream_event",
@@ -353,7 +353,7 @@
                 "role": "user",
                 "content": "Write a long story"
               },
-              "uuid": "f9daa608-1827-410b-92ac-20fabd4487ae",
+              "uuid": "5625afbf-f956-4821-b72d-310f0d2692c0",
               "timestamp": "2026-10-02T14:13:34.622Z",
               "permissionMode": "acceptEdits",
               "promptSource": "sdk",
@@ -365,7 +365,7 @@
               "gitBranch": "HEAD"
             },
             {
-              "parentUuid": "f9daa608-1827-410b-92ac-20fabd4487ae",
+              "parentUuid": "5625afbf-f956-4821-b72d-310f0d2692c0",
               "isSidechain": false,
               "attachment": {
                 "type": "agent_listing_delta",
@@ -572,16 +572,16 @@
           "errors": [
             "[ede_diagnostic] result_type=user last_content_type=n/a stop_reason=null"
           ],
-          "user_message_uuid": "f9daa608-1827-410b-92ac-20fabd4487ae",
+          "user_message_uuid": "5625afbf-f956-4821-b72d-310f0d2692c0",
           "type": "result",
           "duration_ms": 79,
           "uuid": "c34bc660-fe74-4be1-aaa4-2f34dacfe185",
-          "user_message_uuids": ["f9daa608-1827-410b-92ac-20fabd4487ae"],
+          "user_message_uuids": ["5625afbf-f956-4821-b72d-310f0d2692c0"],
           "queued_turn_count": 0
         },
         {
           "type": "command_lifecycle",
-          "command_uuid": "f9daa608-1827-410b-92ac-20fabd4487ae",
+          "command_uuid": "5625afbf-f956-4821-b72d-310f0d2692c0",
           "state": "cancelled",
           "uuid": "0f68260f-1d53-4be9-92f5-753fffa76cce",
           "session_id": "470e90cc-b905-4c4c-a086-a74be63de883"

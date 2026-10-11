@@ -287,7 +287,9 @@ describe("Codex adapter, replayed from the pinned app-server", () => {
       key: "question:call_1_0",
       request: {
         kind: "question",
-        blocking: false,
+        // Recorded `isBlocking: false`, yet Codex waits for the reply: the
+        // turn waits on the person, and the answer goes back to Codex.
+        blocking: true,
         title: "Theme",
         origin: { kind: "provider", id: "codex", displayName: "Codex" },
         questions: [

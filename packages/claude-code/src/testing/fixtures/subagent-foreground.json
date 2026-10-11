@@ -62,19 +62,19 @@
       "messages": [
         {
           "type": "replay.input",
-          "uuid": "74c8fed8-1667-4e03-89a5-1c5c99cb1915",
+          "uuid": "807ffaf4-d9c5-4c4f-9467-719386415e81",
           "text": "Delegate the listing (subagent-foreground)"
         },
         {
           "type": "command_lifecycle",
-          "command_uuid": "74c8fed8-1667-4e03-89a5-1c5c99cb1915",
+          "command_uuid": "807ffaf4-d9c5-4c4f-9467-719386415e81",
           "state": "queued",
           "uuid": "87b09748-d050-4d81-9ad3-4a8eb58aa0bb",
           "session_id": "c772b442-af46-44ff-a4b6-d882841f3928"
         },
         {
           "type": "command_lifecycle",
-          "command_uuid": "74c8fed8-1667-4e03-89a5-1c5c99cb1915",
+          "command_uuid": "807ffaf4-d9c5-4c4f-9467-719386415e81",
           "state": "started",
           "uuid": "04aca248-9fa6-462e-9965-35a0a46cc0b7",
           "session_id": "c772b442-af46-44ff-a4b6-d882841f3928"
@@ -246,8 +246,8 @@
           "parent_tool_use_id": null,
           "uuid": "c8e35c99-d576-4554-a488-1e142c1a27cf",
           "ttft_ms": 3,
-          "user_message_uuid": "74c8fed8-1667-4e03-89a5-1c5c99cb1915",
-          "user_message_uuids": ["74c8fed8-1667-4e03-89a5-1c5c99cb1915"]
+          "user_message_uuid": "807ffaf4-d9c5-4c4f-9467-719386415e81",
+          "user_message_uuids": ["807ffaf4-d9c5-4c4f-9467-719386415e81"]
         },
         {
           "type": "stream_event",
@@ -474,7 +474,7 @@
                 "role": "user",
                 "content": "Delegate the listing (subagent-foreground)"
               },
-              "uuid": "74c8fed8-1667-4e03-89a5-1c5c99cb1915",
+              "uuid": "807ffaf4-d9c5-4c4f-9467-719386415e81",
               "timestamp": "2026-10-02T14:13:35.997Z",
               "permissionMode": "acceptEdits",
               "promptSource": "sdk",
@@ -486,7 +486,7 @@
               "gitBranch": "HEAD"
             },
             {
-              "parentUuid": "74c8fed8-1667-4e03-89a5-1c5c99cb1915",
+              "parentUuid": "807ffaf4-d9c5-4c4f-9467-719386415e81",
               "isSidechain": false,
               "attachment": {
                 "type": "agent_listing_delta",
@@ -1389,14 +1389,14 @@
           "ttft_stream_ms": 29,
           "time_to_request_ms": 27,
           "first_content_frame_ms": 29,
-          "user_message_uuid": "74c8fed8-1667-4e03-89a5-1c5c99cb1915",
-          "user_message_uuids": ["74c8fed8-1667-4e03-89a5-1c5c99cb1915"],
+          "user_message_uuid": "807ffaf4-d9c5-4c4f-9467-719386415e81",
+          "user_message_uuids": ["807ffaf4-d9c5-4c4f-9467-719386415e81"],
           "request_sent_wall_ms": 1790950416015,
           "queued_turn_count": 0
         },
         {
           "type": "command_lifecycle",
-          "command_uuid": "74c8fed8-1667-4e03-89a5-1c5c99cb1915",
+          "command_uuid": "807ffaf4-d9c5-4c4f-9467-719386415e81",
           "state": "completed",
           "uuid": "4d8db262-aeed-4737-8a9b-dfa837cb9d36",
           "session_id": "c772b442-af46-44ff-a4b6-d882841f3928"

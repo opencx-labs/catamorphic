@@ -208,6 +208,10 @@ class ClaudeAttempt {
   private readonly transcript: ClaudeTranscript;
   /** Steered inputs not yet taken into the turn, by SDK uuid. */
   private readonly pendingSteers = new Map<string, string>();
+  /** The SDK uuid of this attempt's own input, once sent. */
+  private inputUuid?: string;
+  /** The CLI started running this attempt's own input. */
+  private inputStarted = false;
   private handle?: ClaudeQueryHandle;
   private threadEmitted = false;
   private interruptRequested = false;
@@ -267,9 +271,9 @@ class ClaudeAttempt {
         ...input,
         stateDirectory: this.attempt.stateDirectory,
       });
-      this.inputs.push(
-        this.userMessage({ itemId: input.itemId, text: prompt }),
-      );
+      const message = this.userMessage({ itemId: input.itemId, text: prompt });
+      this.inputUuid = message.uuid;
+      this.inputs.push(message);
       options = this.options();
     } catch (error) {
       this.settle({
@@ -337,11 +341,23 @@ class ClaudeAttempt {
     const kind: string = message.type;
     if (kind === "command_lifecycle") {
       const uuid = Reflect.get(message, "command_uuid");
-      if (
-        Reflect.get(message, "state") === "started" &&
-        typeof uuid === "string"
-      )
+      const state = Reflect.get(message, "state");
+      if (typeof uuid !== "string") return;
+      if (state === "started") {
+        if (uuid === this.inputUuid) this.inputStarted = true;
         this.consume([uuid]);
+        return;
+      }
+      // The CLI ended this attempt's own input without running it: no turn
+      // and no result will follow, though the CLI stays up for more input.
+      if (
+        uuid === this.inputUuid &&
+        !this.inputStarted &&
+        (state === "completed" || state === "cancelled")
+      )
+        this.settleWithoutResult(
+          new Error("Claude Code ended the message without running it."),
+        );
       return;
     }
     if (message.type !== "result") {
@@ -471,7 +487,10 @@ class ClaudeAttempt {
       type: "user",
       message: { role: "user", content: input.text },
       parent_tool_use_id: null,
-      uuid: inputUuid(input.itemId),
+      uuid: inputUuid({
+        attemptId: this.attempt.attemptId,
+        itemId: input.itemId,
+      }),
     };
   }
 

@@ -15,7 +15,7 @@ import {
  * the scenarios whose replays matter most also pass live, so a CLI that
  * changed under a pinned SDK shows up here before a fixture goes stale.
  */
-it.each(["simple-reply", "ask-user-question", "steer"])(
+it.each(["simple-reply", "ask-user-question", "steer", "retry-same-input"])(
   "the pinned CLI passes %s live",
   async (name) => {
     const scenario = CLAUDE_SCENARIOS.find((entry) => entry.name === name);
