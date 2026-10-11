@@ -2070,3 +2070,20 @@ is ignored, switches push to talk (hold ⌥Space), and keeps the microphone in
 the dock and in chats or not. ⌘⇧Space turns voice on and off. Out of the
 dock, the microphone shrinks away in place and comes back while the
 assistant talks; the arrows' menu always offers it back. See ADR 0216.
+
+### 2026-10-11: An open document shows the agent's change
+
+Asked to take care of the open to-dos in a plan, an agent added a meal table
+and ticked both items, and the plan open in front of the person stayed as it
+was until they switched away and back. The editor read the file once and
+refreshed only on window focus, which never comes while the person is in
+the window. An editor tab now reads the file again whenever the project's
+files change under it, which a settled agent turn announces, unless the
+tab holds an unsaved draft: the draft keeps the content it started from, so
+saving it still reports the conflict.
+
+Loading that change then marked the file Unsaved: the rich editor reported
+its own rewrite of the new markdown (table padding, list markers) as an
+edit. Loading content is no longer an edit. Workflow names in the sidebar
+also lost a trailing "|" that agents leave when they write
+`@displayname Name | @description …` on one line above a workflow.

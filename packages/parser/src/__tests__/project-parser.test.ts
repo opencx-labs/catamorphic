@@ -313,6 +313,25 @@ async function stepB({ value }: { value: string }) {
       ]),
     );
   });
+  it("reads a workflow's one-line display name and description", () => {
+    const files = {
+      "src/guests.ts": `
+/** @displayname Door guest list | @description Everyone who said yes */
+export const guestList = defineWorkflow(({ defineBoundary }) => ({
+  steps: [
+    defineBoundary({
+      run: async () => ({ guests: [] }),
+    }),
+  ],
+}));
+`,
+    };
+
+    const graph = parseProject(files).workflows[0]!.graph;
+
+    expect(graph.displayName).toBe("Door guest list");
+    expect(graph.description).toBe("Everyone who said yes");
+  });
 });
 
 describe("parseWorkflowFromProject", () => {

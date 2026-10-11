@@ -322,7 +322,12 @@ export function MarkdownEditor({
     lastEmittedRef.current = value;
     frontmatterRef.current = next.frontmatter;
     setFrontmatterState(next.frontmatter);
-    editor.commands.setContent(next.body, { contentType: "markdown" });
+    // Loading new content is not an edit: emitting it would hand the host
+    // the doc's own serialization, which differs from the file, as a draft.
+    editor.commands.setContent(next.body, {
+      contentType: "markdown",
+      emitUpdate: false,
+    });
     baselineRef.current = {
       fullText: value,
       bodyText: next.body,
