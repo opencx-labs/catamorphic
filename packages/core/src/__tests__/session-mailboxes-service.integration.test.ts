@@ -58,8 +58,16 @@ describe("session mailboxes", () => {
   it("queues idempotently for the exact session authority", async () => {
     const input = {
       destination: { hostId: "desktop-host", revision: 3 },
-      content: "PR checks passed",
-      author: { kind: "watcher" as const, watcherId: crypto.randomUUID() },
+      input: {
+        kind: "inbound_message" as const,
+        from: {
+          kind: "workflow" as const,
+          runId: crypto.randomUUID(),
+          workflowName: "prChecks",
+        },
+        text: "PR checks passed",
+        attachments: [],
+      },
       mode: "queue" as const,
       idempotencyKey: "github:delivery-1",
     };
@@ -85,7 +93,10 @@ describe("session mailboxes", () => {
       expect.objectContaining({
         messageId: first.messageId,
         authorityRevision: 3,
-        content: "PR checks passed",
+        input: expect.objectContaining({
+          kind: "inbound_message",
+          text: "PR checks passed",
+        }),
         mode: "queue",
       }),
     ]);
@@ -95,16 +106,14 @@ describe("session mailboxes", () => {
     await expect(
       mailboxes.enqueue(identity, projectId, sessionId, {
         destination: { hostId: "desktop-host", revision: 2 },
-        content: "stale",
-        author: { kind: "system", code: "test" },
+        input: notification("stale"),
         mode: "message_only",
       }),
     ).rejects.toBeInstanceOf(SessionAuthorityMismatchError);
 
     const receipt = await mailboxes.enqueue(identity, projectId, sessionId, {
       destination: { hostId: "desktop-host", revision: 3 },
-      content: "current",
-      author: { kind: "system", code: "test" },
+      input: notification("current"),
       mode: "message_only",
     });
     const item = await db
@@ -122,3 +131,18 @@ describe("session mailboxes", () => {
     ).toEqual([]);
   });
 });
+
+function notification(summary: string) {
+  return {
+    kind: "task_notification" as const,
+    task: {
+      type: "test",
+      id: "task-1",
+      title: "Test task",
+      status: "update" as const,
+    },
+    summary,
+    detail: "",
+    source: null,
+  };
+}

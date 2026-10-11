@@ -1,4 +1,9 @@
-import type { Item, SessionSnapshot, Turn } from "@catamorphic/agent-protocol";
+import type {
+  Item,
+  SessionMessageAuthor,
+  SessionSnapshot,
+  Turn,
+} from "@catamorphic/agent-protocol";
 import type { DB } from "@catamorphic/db";
 import type { Kysely, Transaction } from "kysely";
 import {
@@ -245,14 +250,20 @@ export async function readItemsBefore(input: {
  * notices, in order, without work steps. What session tools, workflows'
  * `history`, and peers read.
  */
+/**
+ * One line of a chat as people read it (ADR 0217): the person's message
+ * (`user`), words another agent, an assistant or a workflow sent
+ * (`inbound`, with its sender), Work's notification about a task the
+ * agent started (`notification`), the agent's reply, or a notice.
+ */
 export interface TranscriptMessage {
   id: string;
-  role: "user" | "assistant" | "system";
+  role: "user" | "inbound" | "notification" | "assistant" | "system";
   content: string;
   turnId: string | null;
   status: Item["status"];
   createdAt: string;
-  author: Extract<Item, { kind: "user_message" }>["author"] | null;
+  author: SessionMessageAuthor | null;
 }
 
 export async function readTranscript(input: {
@@ -276,7 +287,13 @@ export async function readTranscript(input: {
     .selectFrom("agent_items")
     .select("payload")
     .where("session_id", "=", input.sessionId)
-    .where("kind", "in", ["user_message", "assistant_message", "notice"])
+    .where("kind", "in", [
+      "user_message",
+      "inbound_message",
+      "task_notification",
+      "assistant_message",
+      "notice",
+    ])
     .$if(throughPosition !== undefined, (query) =>
       query.where("position", "<=", String(throughPosition ?? 0)),
     )
@@ -287,16 +304,30 @@ export async function readTranscript(input: {
     .reverse()
     .map(itemFromRow)
     .flatMap((item): TranscriptMessage[] => {
-      if (item.kind === "user_message")
+      if (item.kind === "user_message" || item.kind === "inbound_message")
         return [
           {
             id: item.id,
-            role: item.author.kind === "system" ? "system" : "user",
+            role: item.kind === "user_message" ? "user" : "inbound",
             content: item.text,
             turnId: item.turnId,
             status: item.status,
             createdAt: item.createdAt,
-            author: item.author,
+            author: item.kind === "user_message" ? item.author : item.from,
+          },
+        ];
+      if (item.kind === "task_notification")
+        return [
+          {
+            id: item.id,
+            role: "notification",
+            content: item.detail.trim()
+              ? `${item.summary}\n${item.detail}`
+              : item.summary,
+            turnId: item.turnId,
+            status: item.status,
+            createdAt: item.createdAt,
+            author: null,
           },
         ];
       if (item.kind === "assistant_message")

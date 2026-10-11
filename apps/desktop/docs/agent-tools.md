@@ -117,8 +117,9 @@ question, so `read_tab` is eager. Its schema is one string parameter.
 Before them, a long build or dev server either held a turn open or died with
 Claude Code's per-turn process, Codex could only guess at daemonized commands,
 and nothing told an agent when work finished. Every harness now starts such
-work with `run_background_command` and is woken by a system message when it
-ends or prints a watched line. The three schemas cost about 1.3 KB; the eager
+work with `run_background_command` and hears, as a task notification (ADR
+0217), when it ends or prints a watched line it has not reported lately: in
+the turn while it works, else in the one turn that waits for notifications. The three schemas cost about 1.3 KB; the eager
 budget is 7 KB.
 
 ## Command watches (ADR 0156)
@@ -178,8 +179,9 @@ agent's name when they give one, and wraps the request in a brief
 by sending it a message with `send_project_session_message`, starting with
 its title. The assistant follows the sessions it starts, and others with
 `follow_session`: their notes (messages with more work after them in the
-turn) reach it as one system message a few at a time, shown as one quiet
-line, and a followed chat's result when its turn ends
+turn) reach it as one task notification a few at a time, shown as one row
+that opens to the notes and links to that chat, and a followed chat's result
+when its turn ends
 (`main/server/session-notes.ts`). A question or approval a followed chat
 waits on reaches it at once; `answer_question` answers a question with what
 the person said, as the person, while approvals stay theirs to give in that

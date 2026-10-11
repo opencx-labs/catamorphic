@@ -5,7 +5,11 @@ import {
   type CommandReceipt,
   type DispatchMode,
   dispatchModeSchema,
+  type InboundSender,
+  type InputSource,
   type Item,
+  inboundSenderSchema,
+  inputSourceSchema,
   type JsonObject,
   jsonValueSchema,
   type NativeRef,
@@ -15,15 +19,18 @@ import {
   type SessionCommand,
   type SessionEvent,
   type SessionFields,
+  type SessionInput,
   type SessionMessageAuthor,
   type SessionSnapshot,
   type SessionStreamMessage,
   type StoredSessionEvent,
   sessionCommandSchema,
+  sessionInputSchema,
   sessionMessageAuthorSchema,
   type Turn,
   type TurnError,
   type TurnOutcome,
+  taskNotificationStatusSchema,
 } from "@catamorphic/agent-protocol";
 import { RUNNER_PROTOCOL_VERSION } from "@catamorphic/agent-protocol/runner";
 import { APP_ICON_NAMES } from "@catamorphic/app";
@@ -1335,6 +1342,19 @@ export const SessionMessageAuthorSchema = describes<SessionMessageAuthor>()(
   sessionMessageAuthorSchema,
 );
 
+export const InboundSenderSchema = describes<InboundSender>()(
+  inboundSenderSchema.meta({ id: "InboundSender" }),
+);
+
+const InputSourceSchema = describes<InputSource>()(
+  inputSourceSchema.meta({ id: "InputSource" }),
+);
+
+/** What a delivery puts into a session (ADR 0217). */
+export const SessionInputSchema = describes<SessionInput>()(
+  sessionInputSchema.meta({ id: "SessionInput" }),
+);
+
 const JsonObjectSchema = describes<JsonObject>()(
   z.record(z.string(), JsonValueSchema),
 );
@@ -1471,19 +1491,49 @@ const itemCommon = {
   endedAt: z.string().nullable(),
 };
 
+/** What every delivered input carries (ADR 0217). */
+const deliveryFields = {
+  dispatch: DispatchModeSchema,
+  attention: z.literal("required").nullable(),
+  idempotencyKey: z.string().nullable(),
+  metadata: JsonObjectSchema,
+};
+
 export const ItemSchema = describes<Item>()(
   z
     .discriminatedUnion("kind", [
       z.object({
         ...itemCommon,
+        ...deliveryFields,
         kind: z.literal("user_message"),
-        author: SessionMessageAuthorSchema,
+        author: z.object({
+          kind: z.literal("user"),
+          externalUserId: z.string(),
+        }),
         text: z.string(),
         attachments: z.array(attachmentSchema),
-        dispatch: DispatchModeSchema,
-        attention: z.literal("required").nullable(),
-        idempotencyKey: z.string().nullable(),
-        metadata: JsonObjectSchema,
+      }),
+      z.object({
+        ...itemCommon,
+        ...deliveryFields,
+        kind: z.literal("inbound_message"),
+        from: InboundSenderSchema,
+        text: z.string(),
+        attachments: z.array(attachmentSchema),
+      }),
+      z.object({
+        ...itemCommon,
+        ...deliveryFields,
+        kind: z.literal("task_notification"),
+        task: z.object({
+          type: z.string(),
+          id: z.string(),
+          title: z.string(),
+          status: taskNotificationStatusSchema,
+        }),
+        summary: z.string(),
+        detail: z.string(),
+        source: InputSourceSchema.nullable(),
       }),
       z.object({
         ...itemCommon,
@@ -1898,10 +1948,9 @@ export const SessionMailboxItemSchema = z.object({
   sourceHostId: z.string(),
   destinationHostId: z.string(),
   authorityRevision: z.number().int().positive(),
-  /** The user item the delivery becomes on the destination (ADR 0197). */
+  /** The item the delivery becomes on the destination (ADR 0197). */
   messageId: z.string().uuid(),
-  content: z.string(),
-  author: SessionMessageAuthorSchema,
+  input: SessionInputSchema,
   mode: DispatchModeSchema,
   idempotencyKey: z.string().nullable(),
   metadata: z.record(z.string(), z.unknown()).nullable(),

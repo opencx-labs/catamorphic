@@ -544,6 +544,34 @@ the historical log explains how it arrived here.
 - [Performance](docs/performance.md): idle lifecycle checks and sustained measurement.
 
 ## Design log
+### 2026-10-11: What the person did not write reads as a row, not a bubble
+
+A chat's bubbles on the right are the person's words, and only theirs (ADR
+0217). What another agent, the person's assistant or a workflow sent reads
+as a row like a turn's steps: the sender's icon (an agent, the assistant, a
+workflow), its name, and the message's first line, with a chevron that opens
+the whole message, when it was scheduled, and links to where it came from
+(the sending chat, the run, the workflow). Work's news about a task the
+agent started reads the same way: the task's icon (a terminal for a
+background command, an eye for a watch, the agent for a subsession), colored
+by how it stands (green done, red failed, amber waiting on the person,
+accent for news while it runs), one line in plain words, the output or
+result one click away, and "Open terminal" or "Open chat" at its end. News
+that reached the agent while it worked folds into that turn's steps like a
+tool's result; news that started a turn heads it; the same task's news in a
+row folds into its latest line with a count ("3 times"). A row delivered
+without waking the agent says "For the next turn" until the agent reads it.
+
+The queue keeps the person's messages as editable dashed bubbles. Anything
+else that waits is one dashed line on the left, "Up next", with the task or
+sender and "and 2 more" when news joined it, withdrawn or run now but never
+edited. A background command no longer wakes the chat every fifteen seconds
+with the same error: a line it reported in the last few minutes is not
+news. Session
+actions (a workflow archiving or completing the chat) are notices naming
+who acted. Restore to here and the up-arrow recall come only from the
+person's own messages, and a notification never names a chat.
+
 ### 2026-10-06: Codex signs in on your own machines
 
 Remote environment's Sign-ins section now says plainly where each harness

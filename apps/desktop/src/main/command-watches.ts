@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
+import type { TaskNotificationStatus } from "@catamorphic/agent-protocol";
 import type { BackgroundCommandView } from "../shared/background-commands.js";
 import type { BackgroundNotifier } from "./background-commands.js";
 
@@ -278,9 +279,10 @@ export class CommandWatches {
       await this.persist();
       await this.wake(watch, {
         key: "expired",
-        notice: `Stopped watching: ${watch.description}`,
-        content: [
-          `Watch ${watch.id} (${watch.description}) expired after ${watch.checks} check${watch.checks === 1 ? "" : "s"} without ${watch.until === "success" ? "succeeding" : "a change"}.`,
+        status: "stopped",
+        summary: `Stopped watching: ${watch.description}`,
+        detail: [
+          `It expired after ${watch.checks} check${watch.checks === 1 ? "" : "s"} without ${watch.until === "success" ? "succeeding" : "a change"}.`,
           `Command: ${watch.command}`,
           watch.lastOutput
             ? `Last output:\n${tail(watch.lastOutput)}`
@@ -308,9 +310,10 @@ export class CommandWatches {
       await this.persist();
       await this.wake(watch, {
         key: "success",
-        notice: `${watch.description}: done`,
-        content: [
-          `Watch ${watch.id} (${watch.description}) succeeded on check ${watch.checks}. It has stopped.`,
+        status: "completed",
+        summary: `${watch.description}: done`,
+        detail: [
+          `It succeeded on check ${watch.checks} and has stopped.`,
           `Command: ${watch.command}`,
           result.output
             ? `Output:\n${tail(result.output)}`
@@ -327,9 +330,10 @@ export class CommandWatches {
         this.schedule(watch);
         await this.wake(watch, {
           key: `change:${next}:${watch.checks}`,
-          notice: `${watch.description}: changed`,
-          content: [
-            `Watch ${watch.id} (${watch.description}) saw its output change on check ${watch.checks}. It keeps watching; stop it with stop_background_command when you no longer need it.`,
+          status: "update",
+          summary: `${watch.description}: changed`,
+          detail: [
+            `Its output changed on check ${watch.checks}. It keeps watching; stop it with stop_background_command when you no longer need it.`,
             `Command: ${watch.command}`,
             `Before:\n${tail(previous) || "(nothing)"}`,
             `Now${result.exitCode ? ` (exit ${result.exitCode})` : ""}:\n${tail(result.output) || "(nothing)"}`,
@@ -376,15 +380,27 @@ export class CommandWatches {
 
   private async wake(
     watch: CommandWatch,
-    message: { key: string; notice: string; content: string },
+    message: {
+      key: string;
+      status: TaskNotificationStatus;
+      summary: string;
+      detail: string;
+    },
   ): Promise<void> {
     try {
       await this.notify?.({
         projectId: watch.projectId,
         sessionId: watch.sessionId,
+        task: {
+          type: "command_watch",
+          id: watch.id,
+          title: watch.description,
+          status: message.status,
+        },
+        summary: message.summary,
+        detail: message.detail,
+        surfaceKey: null,
         idempotencyKey: `watch:${watch.id}:${message.key}`,
-        notice: message.notice,
-        content: message.content,
       });
     } catch {
       // The chat is gone or archived: nobody is left to tell.

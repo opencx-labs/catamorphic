@@ -557,12 +557,27 @@ export function surfaceTools(
                 : {}),
             })
           ).id;
+        // Never the person's own words (ADR 0217): an agent's in Work, or
+        // the person's own assistant asking through this server.
+        const from = currentSessionId
+          ? {
+              kind: "agent" as const,
+              sessionId: currentSessionId,
+              agentId: (
+                await sessions.get(identity, projectId, currentSessionId)
+              ).agentId,
+            }
+          : {
+              kind: "assistant" as const,
+              externalUserId: identity.externalUserId,
+            };
         try {
           const { reply } = await sessions.sendMessage(
             identity,
             projectId,
             sessionId,
             message,
+            { from },
           );
           return {
             sessionId,

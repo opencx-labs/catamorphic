@@ -3,13 +3,17 @@ import {
   type AssistantMessageItem,
   activeTurn,
   type ContextHandoffItem,
+  type InboundMessageItem,
+  type InputItem,
   type Item,
+  isInputItem,
   type NoticeItem,
   orderedTurns,
   queuedTurns,
   type RequestItem,
   type RuntimeRequest,
   type SessionState,
+  type TaskNotificationItem,
   type Turn,
   type UserMessageItem,
 } from "@catamorphic/agent-protocol";
@@ -20,10 +24,18 @@ import {
  * a turn means the same thing on the desktop, the phone and an embed.
  */
 
-/** An item that is part of a turn's work: what the steps disclosure lists. */
+/**
+ * An item that is part of a turn's work: what the steps disclosure lists.
+ * A task notification that reached the turn while it worked is one; one
+ * that started the turn, or waited for it, is an entry of its own.
+ */
 export type WorkItem = Exclude<
   Item,
-  UserMessageItem | AssistantMessageItem | NoticeItem | ContextHandoffItem
+  | UserMessageItem
+  | InboundMessageItem
+  | AssistantMessageItem
+  | NoticeItem
+  | ContextHandoffItem
 >;
 
 /**
@@ -34,8 +46,15 @@ export const QUESTIONS_DISMISSED_MESSAGE =
   "The user dismissed these questions without answering them. Continue without their input, using your best judgment.";
 
 export type TimelineEntry =
-  /** A message into the session: a turn's input, a steer, a delivery. */
+  /** The person's message: a turn's input, or a steer. */
   | { kind: "input"; item: UserMessageItem }
+  /** Words another agent, an assistant or a workflow sent (ADR 0217). */
+  | { kind: "inbound"; item: InboundMessageItem }
+  /**
+   * Work's notifications about tasks the agent started, in a row: the ones
+   * that started a turn or waited for one, or arrived between turns.
+   */
+  | { kind: "notifications"; items: TaskNotificationItem[] }
   /**
    * Something the agent wrote, with the work that led to it. A turn's
    * last reply is its answer; earlier ones are notes along the way.
@@ -69,10 +88,12 @@ export interface TimelineTurn {
   entries: TimelineEntry[];
 }
 
-/** A turn waiting to run, with the message that will start it. */
+/** A turn waiting to run, with the input that will start it. */
 export interface QueuedMessage {
   turn: Turn;
-  item: UserMessageItem | undefined;
+  item: InputItem | undefined;
+  /** Notifications that joined the waiting turn after its input. */
+  joined: TaskNotificationItem[];
 }
 
 /**
@@ -153,10 +174,24 @@ export function sessionTimeline(state: SessionState): TimelineTurn[] {
   for (const turn of turns) {
     flushOthersBefore(turn.startedAt ?? turn.createdAt);
     const items = turnItems.get(turn.id) ?? [];
-    // The input leads its turn wherever it was queued in the transcript.
+    // The input leads its turn wherever it was queued in the transcript;
+    // what the turn read from before it (delivered to read) comes first.
     const input = items.find((item) => item.id === turn.inputItemId);
+    const read = input
+      ? items.filter(
+          (item) =>
+            item !== input &&
+            isInputItem(item) &&
+            item.dispatch === "message_only" &&
+            item.position < input.position,
+        )
+      : [];
     const ordered = input
-      ? [input, ...items.filter((item) => item !== input)]
+      ? [
+          ...read,
+          input,
+          ...items.filter((item) => item !== input && !read.includes(item)),
+        ]
       : items;
     out.push({ key: turn.id, turn, entries: entriesOf(ordered, context) });
   }
@@ -175,7 +210,13 @@ export function sessionQueue(state: SessionState): QueuedMessage[] {
         : undefined;
       return {
         turn,
-        item: found?.kind === "user_message" ? found : undefined,
+        item: found && isInputItem(found) ? found : undefined,
+        joined: state.items.filter(
+          (item): item is TaskNotificationItem =>
+            item.kind === "task_notification" &&
+            item.turnId === turn.id &&
+            item.id !== turn.inputItemId,
+        ),
       };
     });
 }
@@ -207,6 +248,22 @@ function entriesOf(
         const answered = answerFromMessage(item);
         flushSteps();
         entries.push(answered ?? { kind: "input", item });
+        break;
+      }
+      case "inbound_message":
+        flushSteps();
+        entries.push({ kind: "inbound", item });
+        break;
+      case "task_notification": {
+        // Reached the working turn: part of its work, like a tool's result.
+        if (item.dispatch === "steer") {
+          steps.push(item);
+          break;
+        }
+        flushSteps();
+        const last = entries.at(-1);
+        if (last?.kind === "notifications") last.items.push(item);
+        else entries.push({ kind: "notifications", items: [item] });
         break;
       }
       case "assistant_message":
@@ -329,7 +386,10 @@ export function answerRows(
 /** The text an item was written with, for copy and previews. */
 export function itemText(item: Item): string {
   switch (item.kind) {
+    case "task_notification":
+      return item.summary;
     case "user_message":
+    case "inbound_message":
     case "assistant_message":
     case "reasoning":
     case "notice":

@@ -2,6 +2,7 @@ import {
   ACTIVE_TURN_STATUSES,
   type CommandReceipt,
   type Item,
+  isInputItem,
   type JsonObject,
   SETTLED_TURN_STATUSES,
   type SessionEvent,
@@ -711,7 +712,17 @@ async function projectItem(
   sessionId: string,
   item: Item,
 ): Promise<void> {
-  const user = item.kind === "user_message" ? item : undefined;
+  const input = isInputItem(item) ? item : undefined;
+  const author =
+    item.kind === "user_message"
+      ? item.author
+      : item.kind === "inbound_message"
+        ? item.from
+        : item.kind === "assistant_message"
+          ? { kind: "agent", sessionId: item.sessionId, agentId: item.agentId }
+          : item.kind === "task_notification"
+            ? { kind: "system", code: item.task.type }
+            : undefined;
   const values = {
     turn_id: item.turnId,
     attempt_id: item.attemptId,
@@ -719,25 +730,11 @@ async function projectItem(
     kind: item.kind,
     status: item.status,
     text: itemText(item),
-    author_kind: user
-      ? user.author.kind
-      : item.kind === "assistant_message"
-        ? "agent"
-        : item.kind === "notice"
-          ? "system"
-          : null,
-    author_payload: user
-      ? json(user.author)
-      : item.kind === "assistant_message"
-        ? json({
-            kind: "agent",
-            sessionId: item.sessionId,
-            agentId: item.agentId,
-          })
-        : null,
-    dispatch: user ? user.dispatch : null,
-    attention: user?.attention === "required",
-    idempotency_key: user?.idempotencyKey ?? null,
+    author_kind: author?.kind ?? (item.kind === "notice" ? "system" : null),
+    author_payload: author ? json(author) : null,
+    dispatch: input ? input.dispatch : null,
+    attention: input?.attention === "required",
+    idempotency_key: input?.idempotencyKey ?? null,
     payload: json(item),
     updated_at: new Date(item.updatedAt),
   };
@@ -767,11 +764,14 @@ async function projectItem(
 export function itemText(item: Item): string {
   switch (item.kind) {
     case "user_message":
+    case "inbound_message":
     case "assistant_message":
     case "reasoning":
     case "notice":
     case "context_handoff":
       return item.text;
+    case "task_notification":
+      return item.summary;
     case "command":
       return item.description ?? item.command;
     case "tool_call":
