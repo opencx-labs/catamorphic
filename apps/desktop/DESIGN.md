@@ -2103,3 +2103,30 @@ its own rewrite of the new markdown (table padding, list markers) as an
 edit. Loading content is no longer an edit. Workflow names in the sidebar
 also lost a trailing "|" that agents leave when they write
 `@displayname Name | @description …` on one line above a workflow.
+
+### 2026-10-11: A first chat says what it waits for; sign-in popups take passkeys
+
+A new person's first Claude chat sat on "Working" for six minutes with
+nothing else on screen. Two waits hid behind that word. The first turn on a
+computer without Claude Code downloads it and Bun, about 125 MB, and on a
+slow connection that is minutes; and when the Claude API fails, Claude Code
+retries ten times over about three minutes, and Work dropped every one of
+those retries. The activity line now counts the download by the megabyte
+("Downloading Claude Code and Bun: 63 of 124 MB"), says when it is setting
+them up and starting Claude Code, and names each retry ("The Claude API
+returned an error (500). Trying again, attempt 4 of 10") until the API
+answers. A download that receives nothing for a minute gives up with a message that
+says so, instead of waiting for as long as the app stays open, and Stop ends
+a turn that is still downloading at once; the download carries on for the
+next turn. A failure to get ready is this computer's, so its words are no
+longer rewritten as the provider "having trouble".
+
+Google's "Use your passkey to confirm it's really you" did nothing in the
+sign-in popup claude.ai opens: popups are windows of their own, outside the
+tab's preload, so their passkey requests went to Chromium alone, which
+shows nothing. The browsing session's preload, which every popup runs, now
+carries the passkey bridge, and the popup shows the passkey sheet over its
+own page in a transparent view, because the workspace's sheet would open
+behind it. A saved passkey signs in there; one kept on a phone or in iCloud
+Keychain gets the sheet's explanation and Cancel, and the site offers its
+other ways in. See ADR 0220.

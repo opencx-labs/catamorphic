@@ -263,6 +263,11 @@ export interface WindowProfileRegistry {
   profileFor(sender: WebContents): string;
   windowsFor(profileId: string): BrowserWindow[];
   assign(sender: WebContents, profileId: string): void;
+  /**
+   * A surface of Work's own outside a workspace window (the passkey sheet
+   * over a sign-in popup) reads that profile's settings for its life.
+   */
+  attach(contents: WebContents, profileId: string): void;
   openWindow(profileId: string): void;
 }
 
@@ -292,6 +297,11 @@ const windows: WindowProfileRegistry = {
       ),
     );
     applyMenuForFocusedWindow();
+  },
+  attach(contents, profileId) {
+    const id = contents.id;
+    windowProfiles.set(id, profileId);
+    contents.once("destroyed", () => windowProfiles.delete(id));
   },
   openWindow(profileId) {
     if (desktopWorkspaces?.activateProfile(profileId)) return;

@@ -1860,7 +1860,8 @@ kbd {
   max-width: calc(100vw - 60px);
 }
 
-html[data-surface="dock"] body {
+html[data-surface="dock"] body,
+html[data-surface="passkey"] body {
   background: transparent;
 }
 

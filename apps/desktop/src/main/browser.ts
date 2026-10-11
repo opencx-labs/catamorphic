@@ -111,6 +111,7 @@ import { LoginCapture, type LoginSubmission } from "./login-capture.js";
 import { PaletteUsageStore } from "./palette-usage.js";
 import { registerPasskeys } from "./passkeys.js";
 import { generateStrongPassword } from "./password-generator.js";
+import { PopupPasskeySheets } from "./popup-passkey-sheets.js";
 import type { ProfileConfigManager } from "./profile-config.js";
 import type { ProfilesStore } from "./profiles.js";
 import { registerSidebarSources } from "./sidebar-source-ipc.js";
@@ -406,9 +407,26 @@ export function registerBrowserSupport(
       callback(permission !== "openExternal"),
   );
   const permissionBroker = new SitePermissionBroker();
+  // A browsing window that is not a tab (a tab's sign-in popup, a window
+  // an extension opened) belongs to the profile whose session it shows,
+  // whatever became of the tab that opened it.
+  const browsingProfileOf = (contents: WebContents) =>
+    extensionsHost?.profileOfSession(contents.session) ?? undefined;
+  const popupSheets = new PopupPasskeySheets({
+    attach: (sheet, popup) => {
+      const profileId = browsingProfileOf(popup);
+      if (profileId) windows.attach(sheet, profileId);
+    },
+  });
   const disposePasskeys = registerPasskeys({
     vault,
     profileFor: (host) => windows.profileFor(host),
+    windows: {
+      profileOf: browsingProfileOf,
+      sheet: (window) => popupSheets.sheet(window),
+      show: (window) => popupSheets.show(window),
+      hide: (window) => popupSheets.hide(window),
+    },
     onVaultChanged: (profileId) => vaultChanged(profileId),
   });
   const siteIcons = new SiteIcons();
@@ -1088,7 +1106,8 @@ export function registerBrowserSupport(
       return { action: "deny" };
     });
     // The popup is a plain window, not a guest: anything it opens in turn
-    // lands as a workspace tab rather than a window tree.
+    // lands as a workspace tab rather than a window tree. Its passkey
+    // requests show in a sheet over it (passkeys.ts).
     contents.on("did-create-window", (popup) => {
       popup.webContents.setWindowOpenHandler(({ url }) => {
         if (/^https?:/i.test(url)) openAsTab(url);

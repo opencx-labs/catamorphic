@@ -47,9 +47,10 @@ export default defineConfig({
           // unsandboxed renderer).
           webview: path.resolve(import.meta.dirname, "src/preload/webview.ts"),
           // The browsing sessions' own preload: client-hint brands for
-          // every page and worker, extension APIs and the Chrome Web Store
-          // (ADR 0203). Sandboxed preloads cannot load shared chunks: it
-          // shares no module with the other entries.
+          // every page and worker, passkeys for a page in a tab or its
+          // sign-in popup, extension APIs and the Chrome Web Store (ADR
+          // 0203). Sandboxed preloads cannot load shared chunks: it shares
+          // no module with the other entries.
           session: path.resolve(import.meta.dirname, "src/preload/session.ts"),
         },
         output: { format: "cjs", entryFileNames: "[name].cjs" },

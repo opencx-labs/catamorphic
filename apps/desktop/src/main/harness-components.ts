@@ -58,6 +58,8 @@ interface HarnessComponentStoreOptions {
   preferInstalled?: boolean;
   /** The person's own Claude Code, preferred when new enough (ADR 0196). */
   installedClaudeCode?: Pick<InstalledClaudeCodeFinder, "find" | "update">;
+  /** How long a download may go without a byte before it gives up. */
+  stallTimeoutMs?: number;
 }
 
 /** One tick of a first-use component download, for "Downloading… 42%" UI. */
@@ -67,6 +69,32 @@ export interface HarnessDownloadProgress {
   receivedBytes: number;
   /** 0 when the registry declared no content-length. */
   totalBytes: number;
+}
+
+/**
+ * A chat's activity line while its turn waits for first-use downloads,
+ * all of them at once, by the megabyte so a slow link still moves:
+ * "Downloading Claude Code and Bun: 63 of 124 MB", then "Setting up
+ * Claude Code and Bun" while the archives unpack.
+ */
+export function harnessDownloadLine(
+  downloads: readonly HarnessDownloadProgress[],
+): string {
+  const names = downloads.map((download) => download.displayName).join(" and ");
+  const received = downloads.reduce(
+    (sum, download) => sum + download.receivedBytes,
+    0,
+  );
+  const known = downloads.every((download) => download.totalBytes > 0);
+  const total = downloads.reduce(
+    (sum, download) => sum + download.totalBytes,
+    0,
+  );
+  if (known && received >= total) return `Setting up ${names}`;
+  const megabytes = (bytes: number) => Math.floor(bytes / 1_000_000);
+  return known
+    ? `Downloading ${names}: ${megabytes(received)} of ${Math.round(total / 1_000_000)} MB`
+    : `Downloading ${names}: ${megabytes(received)} MB`;
 }
 
 interface PlatformRelease {
@@ -86,6 +114,11 @@ export const CLAUDE_CODE_MIN_VERSION = "2.1.287";
 const CODEX_VERSION = "0.160.0";
 const BUN_VERSION = "1.3.14";
 const MAX_ARCHIVE_BYTES = 512 * 1024 * 1024;
+/**
+ * A download that receives nothing for this long has stalled: a slow link
+ * still delivers bytes, a dropped one never errors by itself.
+ */
+const STALL_TIMEOUT_MS = 60_000;
 
 const PLATFORM_RELEASES: Record<string, PlatformRelease> = {
   "darwin-arm64": {
@@ -161,6 +194,7 @@ export class HarnessComponentStore {
     InstalledClaudeCodeFinder,
     "find" | "update"
   >;
+  private readonly stallTimeoutMs: number;
   private readonly pending = new Map<
     DownloadableComponent,
     Promise<HarnessExecutable>
@@ -176,6 +210,7 @@ export class HarnessComponentStore {
     this.fetchImpl = options.fetchImpl ?? fetch;
     this.preferInstalled = options.preferInstalled ?? true;
     this.installedClaudeCode = options.installedClaudeCode;
+    this.stallTimeoutMs = options.stallTimeoutMs ?? STALL_TIMEOUT_MS;
   }
 
   /**
@@ -224,7 +259,7 @@ export class HarnessComponentStore {
     const artifact = this.artifacts[harness];
     if (!artifact) {
       throw new Error(
-        `${displayName(harness)} is unavailable on ${process.platform}-${process.arch}.`,
+        `${componentDisplayName(harness)} is unavailable on ${process.platform}-${process.arch}.`,
       );
     }
     if (harness === "claude-code") {
@@ -293,9 +328,18 @@ export class HarnessComponentStore {
     );
     const archive = path.join(stagingDir, "component.tgz");
     const payload = path.join(stagingDir, "payload");
+    // Every byte restarts the clock, from the request until the body ends.
+    const stall = new AbortController();
+    let watchdog: NodeJS.Timeout | undefined;
+    const alive = () => {
+      clearTimeout(watchdog);
+      watchdog = setTimeout(() => stall.abort(), this.stallTimeoutMs);
+    };
     try {
+      alive();
       const response = await this.fetchImpl(artifact.tarballUrl, {
         redirect: "error",
+        signal: stall.signal,
       });
       if (!response.ok || !response.body) {
         throw new Error(`download returned HTTP ${response.status}`);
@@ -305,16 +349,26 @@ export class HarnessComponentStore {
         archive,
         artifact.integrity,
         (receivedBytes, totalBytes) => {
+          alive();
           for (const listener of this.progressListeners) {
-            listener({
-              harness,
-              displayName: artifact.displayName,
-              receivedBytes,
-              totalBytes,
-            });
+            // A watcher's mistake never fails the download others wait on.
+            try {
+              listener({
+                harness,
+                displayName: artifact.displayName,
+                receivedBytes,
+                totalBytes,
+              });
+            } catch (error) {
+              console.warn(
+                "[desktop] Download progress listener failed",
+                error,
+              );
+            }
           }
         },
       );
+      clearTimeout(watchdog);
       await fsPromises.mkdir(payload);
       const { x: extract } = await import("tar");
       await extract({
@@ -342,12 +396,17 @@ export class HarnessComponentStore {
       );
       return executableAt(finalDir, artifact, "downloaded");
     } catch (cause) {
-      const reason = cause instanceof Error ? cause.message : String(cause);
+      const reason = stall.signal.aborted
+        ? `The download received nothing for ${Math.round(this.stallTimeoutMs / 1000)} seconds`
+        : cause instanceof Error
+          ? cause.message
+          : String(cause);
       throw new Error(
         `${artifact.displayName} needs a one-time component download. ${reason}. Check your internet connection and try again.`,
         { cause },
       );
     } finally {
+      clearTimeout(watchdog);
       await fsPromises.rm(stagingDir, { recursive: true, force: true });
     }
   }
@@ -519,7 +578,51 @@ async function writeVerifiedArchive(
   }
 }
 
-function displayName(harness: DownloadableComponent): string {
+/**
+ * What a turn waiting on `harness` hears while it gets ready: its first-use
+ * downloads (the harness's and Bun's), a line a second at most, and then
+ * that the harness is starting, which still takes a moment after a first
+ * download. Returns the function that ends the watch.
+ */
+export function watchHarnessDownloads({
+  store,
+  harness,
+  report,
+  now = Date.now,
+}: {
+  store: Pick<HarnessComponentStore, "onProgress">;
+  harness: DownloadableHarness;
+  report: (activity: string) => void;
+  now?: () => number;
+}): (ready: boolean) => void {
+  const downloads = new Map<DownloadableComponent, HarnessDownloadProgress>();
+  let reported = { line: "", at: Number.NEGATIVE_INFINITY };
+  const stop = store.onProgress((progress) => {
+    if (progress.harness !== harness && progress.harness !== "bun") return;
+    downloads.set(progress.harness, progress);
+    // The harness first, then Bun, whichever started first.
+    const line = harnessDownloadLine(
+      [...downloads.values()].sort(
+        (a, b) => Number(a.harness === "bun") - Number(b.harness === "bun"),
+      ),
+    );
+    if (
+      line === reported.line ||
+      (now() - reported.at < 1000 && !line.startsWith("Setting up"))
+    )
+      return;
+    reported = { line, at: now() };
+    report(line);
+  });
+  return (ready) => {
+    stop();
+    if (ready && reported.line)
+      report(`Starting ${componentDisplayName(harness)}`);
+  };
+}
+
+/** What the person calls a harness or component. */
+export function componentDisplayName(harness: DownloadableComponent): string {
   if (harness === "claude-code") return "Claude Code";
   return harness === "codex" ? "Codex" : "Bun";
 }

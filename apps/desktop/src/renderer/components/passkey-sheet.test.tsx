@@ -23,6 +23,7 @@ vi.mock("../lib/desktop-api.js", () => ({
       listeners.settled = listener;
       return () => undefined;
     }),
+    passkeyRequests: vi.fn().mockResolvedValue([]),
     passkeyCancel: vi.fn().mockResolvedValue(true),
     passkeyUse: vi.fn(),
     passkeySave: vi.fn(),
@@ -224,5 +225,26 @@ describe("PasskeyHost", () => {
       "Work can't open this profile's saved passkeys right now.",
     );
     expect(sheet()?.textContent).toContain("Waiting for a security key.");
+  });
+
+  // The sheet over a sign-in popup loads with the popup's first request,
+  // which main sent before the sheet listened.
+  it("shows a request that was waiting before it listened", async () => {
+    act(() => root.unmount());
+    vi.mocked(desktopApi.passkeyRequests).mockResolvedValueOnce([base]);
+    root = createRoot(container);
+    act(() =>
+      root.render(
+        <QueryClientProvider client={new QueryClient()}>
+          <PasskeyHost />
+        </QueryClientProvider>,
+      ),
+    );
+    await wait(PASSKEY_INPUT_PROTECTION_MS + 20);
+    expect(sheet()?.textContent).toContain(
+      "app.example.com wants you to sign in with a passkey",
+    );
+    await click('[data-testid="passkey-sheet-cancel"]');
+    expect(desktopApi.passkeyCancel).toHaveBeenCalledWith({ id: "request-1" });
   });
 });

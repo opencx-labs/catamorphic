@@ -26,8 +26,10 @@ extension.
 ## Calls and identity
 
 The session preload runs in every frame and service worker of a browsing
-session. It acts only in `chrome-extension://` contexts (and on the store
-page), and installs the APIs before the extension's own code runs. Every
+session. Beyond Chrome's client-hint brands everywhere and passkeys in each
+web page's top frame (ADR 0220), it acts only in `chrome-extension://`
+contexts (and on the store page), and installs the APIs before the
+extension's own code runs. Every
 call goes to main, which names the extension from the IPC sender (the
 frame's origin, or the worker's scope) and checks the permission there.
 Never trust an extension id, tab id or URL an extension passes without

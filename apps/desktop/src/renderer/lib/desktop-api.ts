@@ -1633,6 +1633,8 @@ export interface CatamorphicDesktopApi {
   onPasskeySettled: (
     listener: (payload: { ids: string[] }) => void,
   ) => () => void;
+  /** The requests this window's sheet shows, for a sheet that loads late. */
+  passkeyRequests: () => Promise<PasskeyRequest[]>;
   passkeyCancel: (input: { id: string }) => Promise<boolean>;
   /** Sign in with a saved passkey the sheet offered (Touch ID first). */
   passkeyUse: (input: {
