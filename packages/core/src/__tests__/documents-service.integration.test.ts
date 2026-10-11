@@ -13,7 +13,7 @@ import {
 import { sql } from "kysely";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { CatamorphicCore } from "../core.js";
-import type { Identity } from "../identity.js";
+import { type Identity, narrowIdentity } from "../identity.js";
 import { AccessDeniedError } from "../services/artifact-scope.js";
 import {
   DocumentBlobUnavailableError,
@@ -110,6 +110,24 @@ describe("document paths (pure)", () => {
     expect(
       documentAccessAllowed(csm, p, "store/customers/globex/notes.md", "read"),
     ).toBe(false);
+  });
+
+  it("access: a workflow an app calls reads no documents, even for an admin or a reader", () => {
+    const p = "p1";
+    const app = { kind: "app", projectId: p, name: "offsite" } as const;
+    const reader: Identity = {
+      ...root,
+      scope: [app, { kind: "document", projectId: p, path: "**" }],
+    };
+    for (const identity of [
+      narrowIdentity(root, app),
+      narrowIdentity({ ...root, ...projectAdmin(p) }, app),
+      narrowIdentity(reader, app),
+    ]) {
+      for (const file of ["Plan.md", "docs/a.md", "store/x"]) {
+        expect(documentAccessAllowed(identity, p, file, "read")).toBe(false);
+      }
+    }
   });
 });
 

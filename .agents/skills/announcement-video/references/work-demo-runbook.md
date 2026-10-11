@@ -5,80 +5,80 @@ step exists. The scripts are in [`scripts/work-demo/`](../scripts/work-demo/).
 
 ## Film folder
 
-Copy `scripts/work-demo/` into a film folder outside the repository. The scripts
-write `raw/` frames, `start.json`, `markers.jsonl`, `edit.json` and the renders
-next to themselves, and raw frames run to gigabytes. Each scene is one
-`node film.mjs <scene>` (`viewport`, `prep`, `browser`, `chat1`, `theme`, `chat2`,
-`app`, `pickup`, `reset`), so a failing scene can be rehearsed alone.
+Copy `scripts/work-demo/` (with its `demo/` project: the Lisbon offsite plan,
+team and budget) into a film folder outside the repository. The scripts write
+`raw-<take>/` frames, `markers-<take>.jsonl`, `pointer-<take>.jsonl`,
+`edit.json` and the renders next to themselves. A take at full rate runs to
+several GB at 2560x1600; the agent's waits are kept sparse. Each scene is one
+`node scenes.mjs <scene>` (`seed`, `prep`, `open`, `belem`, `light`,
+`workflow`, `app`, `use`), so a failing scene can be rehearsed alone, and
+`node poke.mjs '<js>'` (or `node poke.mjs <file.js>`) runs a one-off against the
+window with the same helpers. Generated apps run in their own frame target;
+`node frame.mjs '<js>'` evaluates an expression there.
 
-Known script quirks:
-
-- `render.py` needs Pillow (a venv is fine) and `ffmpeg`.
-- `delprobe.mjs` must run from inside the repository, never from the film folder:
-  copy it into `apps/desktop/` (which depends on the desktop's PGlite version),
-  run it, and delete the copy. Outside a project bun installs the newest PGlite.
-- `delprobe.mjs` keeps the five seeded chats of the current demo project by
-  title; edit its `keep` list for a different project.
+`render.py` and `make-edit.py` need Pillow (`python3 -m venv .venv &&
+.venv/bin/pip install pillow`) and `ffmpeg`. Probe scripts that open the
+desktop's PGlite must run from inside `apps/desktop/` (bun installs the newest
+PGlite for a script elsewhere): copy a database directory to the scratchpad
+first and query the copy.
 
 ## Environment, once per session
 
 1. `caffeinate -dims &` so the Mac never sleeps mid-take.
-2. `bun run dev:desktop` from the repository. Export `CDP_PORT` from the `CDP:`
-   line it prints, and note its `Desktop data:` directory.
-3. Start the local registry from `infra/local-registry` with
-   `bunx --bun verdaccio --config config.yaml --listen http://0.0.0.0:4873`.
-   Point the demo project's `.work/bunfig.toml` at the Mac's current LAN
-   address (`ipconfig getifaddr en0`) and commit that file in the demo project.
-4. Sign Claude Code in on the dev desktop (`agentAuthHealth` reports `ok`), set the
-   profile theme to Work Dark, and install the work bookmark set.
+2. `CATAMORPHIC_DEV_INSTANCE=work-film bun run dev:desktop` from the
+   repository: a dedicated profile under `~/.catamorphic/dev/work-film`. Export
+   `CDP_PORT` from the `CDP:` line it prints. `reset.sh` writes the profile
+   theme under `$DESKTOP_DATA` (default
+   `~/.catamorphic/dev/work-film/desktop`); export it for another instance.
+3. Start the local registry: `sh infra/local-registry/publish.sh` (verdaccio on
+   every interface, the user-project packages published). `new-project.sh`
+   writes the Mac's LAN address (`ipconfig getifaddr en0`) into each demo
+   project's `.work/bunfig.toml`.
+4. Choose an agent: "Use your Claude Code setup". Set its instructions in the
+   agent settings (see work-demo.md, The set) and the profile's name.
+5. Sidebar: in the profile's `workspace.js`, `hideEmpty: true` on bookmarks
+   and `itemOverrides` hiding `.work` and `.claude` in Files.
+6. Lock out the person's connectors: `node lockdown.mjs` writes
+   `demo/.claude/settings.json`, denying every claude.ai connector and user MCP
+   server in `~/.claude.json` and turning the user's plugins off. Never commit
+   the generated file. Check it once in a scratch project: ask the agent to run
+   tool search for each connector name and call nothing; every search must come
+   back empty. Run it again when the person connects something new.
 
-## Reset the set
+Framing is part of `prep`, which every take runs: it reads the display's pixel
+ratio and sizes the window for a 1280x800 layout (Retina: a 1280x800 window,
+captured at 2560x1600; 1x: 1680x1050 with `devWindow("zoom", 1.3125)`,
+captured at 1680x1050). Its last line prints `w`, `h` and `dpr`; check them.
 
-1. Stop this worktree's dev runner (Ctrl+C in its terminal). Do not `pkill` by
-   pattern: other worktrees may be running their own.
-2. `DESKTOP_DB=<Desktop data>/data/db PROJECT_ID=<id> bun delprobe.mjs` (from
-   `apps/desktop/`, see above) deletes every chat in the project except the
-   seeded ones and lists app rows. Delete app rows too; no app may be listed yet.
-3. Demo project: `git reset --hard <base>`, then remove
-   `.work/{node_modules,apps,workflows,contracts,scripts,package.json,bun.lock,personal,app-data}`
-   so only `bunfig.toml`, `project.json` and `skills/` remain.
-4. Profile: delete `<Desktop data>/profiles/<profile id>/workspace-projects/<project id>.js`
-   and `settings-projects/<project id>.json` (the agent's layers from the last take).
-5. Start the desktop, export the new `CDP_PORT`, and run `node film.mjs prep`: dock
-   in the window, app approvals cleared, tabs closed, `Launch plan.md` opened from
-   the Files section and the section folded, a stray New Tab closed, the editor
-   focused at its heading, pointer parked.
-6. Run `node close-bubbles.mjs` if the dock shows bubbles from deleted chats.
-7. Screenshot (`node cdp.mjs shot open.png`) and compare with the previous take's
-   opening frame: bookmark order, tabs, caret, no tooltips.
+## Take
 
-## Record
-
-- `./take.sh` sets a 1280x800 viewport, records, and runs `browser`, `chat1`,
-  `theme`, `chat2`, `app`. Two real agent turns and a build take seven to eight
-  minutes. Watch markers arrive in `markers.jsonl`. If `agent working` times out,
-  stop, reset, and fix the cause before another take.
-- Then rename the take: `raw` to `raw-main`, `markers.jsonl` to `markers-main.jsonl`.
-- Warm the app for the pickup: click `[data-testid=app-access-allow]` by JS, wait
-  for the iframe, read its text through the frame target to confirm data renders,
-  then `catamorphicDesktop.setPrefs({ appAccessApprovals: [] })` so the card returns.
-- `./take-pickup.sh` records about 17 seconds: chat to its bubble, consent card,
-  allow, the app, then Cmd+Shift+click on the bubble to open the chat beside it.
-  Rename to `raw-pickup` and `markers-pickup.jsonl`.
-- To re-take only the opening, `./take-browser.sh` records the browser scene into
-  `raw-browser`; add segments with `source='browser'` in `make-edit.py`. The window
-  must match the main take's cut frame exactly (bookmark order, caret, no tooltips).
+1. `./reset.sh lisbon-<n>`: unlinks the last demo project, creates a new one
+   from `demo/`, switches the window to it, adds the "Lisbon guide" bookmark,
+   sets the profile back to dark, seeds three real chats, closes their bubbles,
+   clears the palette history and prepares the opening (only `Plan.md`,
+   pointer parked).
+2. `./take.sh <name>` records and runs `open`, `belem`, `light`, `workflow`,
+   `app`, `use`. The agent takes about a minute for the plan and two to six for
+   the app. `use` stops the take if the app shows an error or never shows
+   Friday.
+3. Look at the result before editing: the guide on Belém and three stops in
+   Friday's plan, the window light, the workflow's graph, the app loaded with
+   the forecast and a stop joined. Read failed app calls from a database copy
+   (`workflow_runs.error`). Retake rather than splice when any of these fails.
 
 ## Edit, render, install
 
-1. `python3 make-edit.py` turns markers into `edit.json`.
-2. `python3 make-vtt.py` writes the WebVTT track from the segment descriptions.
-3. `python3 render.py` renders `work-desktop-film.mp4` (1920x1200, 60 fps, LANCZOS
-   from 1280x800, no captions) and `work-desktop-poster.jpg`.
-   `python3 render.py --stills` writes a review frame every 5 seconds.
-4. Check the cuts: extract frames on both sides of every segment boundary and look
-   at them. Compare a splice point pixel for pixel.
-5. Install in the work.software repository: copy the MP4, VTT and poster into
-   `site/assets/`, set the `?v=` hash on every reference to the first 8 characters
-   of the MP4's md5, run `python3 scripts/check_site.py`. Commit and publish only
-   with the user's authorization.
+1. `.venv/bin/python make-edit.py <take>` writes `edit.json` (segments, the
+   dissolves at the time cuts, a short final hold, the size of the take's
+   frames) and `work-desktop-film.vtt`. It stops on a missing marker; read
+   `markers-<take>.jsonl` to see where the take went wrong.
+2. `.venv/bin/python render.py --stills 1` writes a frame a second to
+   `stills/`; look at both sides of every cut and at the pointer.
+3. `.venv/bin/python render.py` renders `work-desktop-film.mp4` (the take's
+   size, 60 fps, H.264, no audio) and `work-desktop-poster.jpg` (the last
+   frame). Check with `ffprobe` and `ffmpeg -v error -i work-desktop-film.mp4 -f null -`.
+4. `./install-site.sh <website checkout>` copies the three files into
+   `site/assets/`, sets every `?v=` to the first 8 characters of the MP4's md5,
+   sets the video's `width`/`height`, and runs the site checks. Update the
+   website README's "Desktop film" section. Commit and publish only with the
+   person's authorization.
