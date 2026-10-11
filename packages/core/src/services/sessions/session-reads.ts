@@ -70,8 +70,8 @@ export async function readSnapshot(input: {
         .sort((a, b) => a.ordinal - b.ordinal);
       // Items from the earliest recent turn's first item on, plus inputs of
       // queued turns (and notices) wherever they are. When that turn is the
-      // session's first, nothing is older: what came before it (a message
-      // delivered to read, a notice) is part of the snapshot.
+      // session's first (or it has none), what came before it (a message
+      // delivered to read, a notice) is part of the snapshot, up to a page.
       const earliest = turns[0];
       const earlierTurn = earliest
         ? await trx
@@ -82,10 +82,16 @@ export async function readSnapshot(input: {
             .limit(1)
             .executeTakeFirst()
         : undefined;
+      const firstOfEarliest = earliest
+        ? await firstPosition(trx, input.sessionId, earliest.id)
+        : null;
       const from =
         earliest && earlierTurn
-          ? await firstPosition(trx, input.sessionId, earliest.id)
-          : null;
+          ? firstOfEarliest
+          : await leadingPage(trx, {
+              sessionId: input.sessionId,
+              before: firstOfEarliest,
+            });
       const itemRows = await trx
         .selectFrom("agent_items")
         .select("payload")
@@ -174,6 +180,28 @@ async function firstPosition(
   return row?.position === null || row?.position === undefined
     ? null
     : Number(row.position);
+}
+
+/**
+ * Where a page of what came before the session's first turn starts, or
+ * null when all of it fits in one.
+ */
+async function leadingPage(
+  db: Executor,
+  input: { sessionId: string; before: number | null },
+): Promise<number | null> {
+  const row = await db
+    .selectFrom("agent_items")
+    .select("position")
+    .where("session_id", "=", input.sessionId)
+    .$if(input.before !== null, (query) =>
+      query.where("position", "<", String(input.before ?? 0)),
+    )
+    .orderBy("position", "desc")
+    .offset(HISTORY_PAGE_ITEMS - 1)
+    .limit(1)
+    .executeTakeFirst();
+  return row ? Number(row.position) : null;
 }
 
 /**

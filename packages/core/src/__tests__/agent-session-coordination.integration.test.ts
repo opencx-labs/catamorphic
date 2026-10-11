@@ -45,6 +45,7 @@ import {
 import { copySettledHistory } from "../services/sessions/session-copy.js";
 import { SessionLog } from "../services/sessions/session-log.js";
 import {
+  HISTORY_PAGE_ITEMS,
   readFullSnapshot,
   readSnapshot,
 } from "../services/sessions/session-reads.js";
@@ -2350,7 +2351,7 @@ describe("agent session coordination", () => {
   });
 
   it.each(["message_only", "queue", "interrupt"] as const)(
-    "attention commits with its %s delivery, once",
+    "a repeated %s delivery raises attention once",
     async (mode) => {
       const project = await projects.create(identity, {
         name: "Atomic delivery",
@@ -2518,6 +2519,73 @@ describe("agent session coordination", () => {
     } finally {
       provider.questions = undefined;
     }
+  });
+
+  it("keeps what came before a chat's first turn in its snapshot", async () => {
+    const project = await projects.create(identity, {
+      name: "Before the first turn",
+    });
+    const session = await sessions.create(identity, project.id);
+    // A notice with no turn, recorded before the chat ever ran.
+    await sessions.update(identity, project.id, session.id, {
+      model: "another-model",
+    });
+    await sessions.sendMessage(identity, project.id, session.id, "Begin");
+    const after = await snapshot(session.id, project.id);
+    expect(after.olderBefore).toBeNull();
+    expect(
+      after.items.some(
+        (item) => item.kind === "notice" && item.code === "model_changed",
+      ),
+    ).toBe(true);
+  });
+
+  it("pages what came before a chat's first turn once it is more than a page", async () => {
+    const project = await projects.create(identity, {
+      name: "Long before the first turn",
+    });
+    const session = await sessions.create(identity, project.id);
+    // Notes a chat collected before it ever ran, one more than a page.
+    const now = new Date().toISOString();
+    await db
+      .insertInto("agent_items")
+      .values(
+        Array.from({ length: HISTORY_PAGE_ITEMS + 1 }, (_, index) => {
+          const id = randomUUID();
+          const position = index + 1;
+          return {
+            id,
+            session_id: session.id,
+            position: String(position),
+            kind: "notice",
+            status: "completed",
+            text: "Note",
+            payload: {
+              id,
+              sessionId: session.id,
+              turnId: null,
+              attemptId: null,
+              parentItemId: null,
+              position,
+              status: "completed",
+              nativeRef: null,
+              createdAt: now,
+              updatedAt: now,
+              startedAt: null,
+              endedAt: null,
+              kind: "notice",
+              code: "note",
+              text: "Note",
+              data: {},
+            },
+          };
+        }),
+      )
+      .execute();
+    const window = await readSnapshot({ db, sessionId: session.id });
+    expect(window.items).toHaveLength(HISTORY_PAGE_ITEMS);
+    expect(window.items[0]?.position).toBe(2);
+    expect(window.olderBefore).toBe(2);
   });
 
   it("gives the next turn what was delivered without waking the agent", async () => {
