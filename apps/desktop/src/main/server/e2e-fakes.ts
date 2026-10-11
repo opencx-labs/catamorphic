@@ -303,8 +303,16 @@ interface FakeTurn {
     name: string,
     input: Record<string, unknown>,
   ): Promise<HostToolResult>;
-  /** The next message the person sends into this turn. */
+  /** The next message sent into this turn, or one that arrived unasked. */
   nextSteer(): Promise<{ text: string; attachments: AgentAttachment[] }>;
+  /**
+   * The next message within `ms`, else nothing: a message that comes later
+   * is echoed at the turn's end rather than taken by a step that stopped
+   * waiting.
+   */
+  steerWithin(
+    ms: number,
+  ): Promise<{ text: string; attachments: AgentAttachment[] } | undefined>;
   discover(query: string): Promise<{ items: Array<{ name: string }> }>;
   /** Discovers the capability by name, then invokes it. */
   capability(name: string, input: Record<string, unknown>): Promise<unknown>;
@@ -359,9 +367,13 @@ export class E2eFakeAdapter implements HarnessAdapter {
   start(attempt: AttemptStart, host: AttemptHost): AttemptControl {
     let interrupted = false;
     const wakers = new Set<() => void>();
-    /** Messages sent into the turn that no step took, echoed at its end. */
-    const steered: string[] = [];
     type Steer = { text: string; attachments: AgentAttachment[] };
+    /**
+     * Messages sent into the turn that no step was waiting for: the next
+     * step that asks takes them first; any still here when the turn ends
+     * are echoed at its end.
+     */
+    const steered: Steer[] = [];
     const steerWaiters: Array<(input: Steer) => void> = [];
     const pause = (ms: number) =>
       new Promise<void>((resolve) => {
@@ -404,10 +416,33 @@ export class E2eFakeAdapter implements HarnessAdapter {
             : turn.capability(`workspace.${name}`, input),
         toolResult: (name, input) =>
           host.callTool({ name, input: toJson(input) }),
-        nextSteer: () =>
-          new Promise<Steer>((resolve) => {
+        nextSteer: () => {
+          const waiting = steered.shift();
+          return waiting
+            ? Promise.resolve(waiting)
+            : new Promise<Steer>((resolve) => {
+                steerWaiters.push(resolve);
+              });
+        },
+        steerWithin: async (ms) => {
+          const waiting = steered.shift();
+          if (waiting) return waiting;
+          const waiter: { resolve?: (input: Steer) => void } = {};
+          const steer = new Promise<Steer>((resolve) => {
+            waiter.resolve = resolve;
             steerWaiters.push(resolve);
-          }),
+          });
+          const news = await Promise.race([
+            steer,
+            pause(ms).then(() => undefined),
+          ]);
+          // Given up on: its claim goes, so a later message is echoed.
+          if (!news && waiter.resolve) {
+            const at = steerWaiters.indexOf(waiter.resolve);
+            if (at >= 0) steerWaiters.splice(at, 1);
+          }
+          return news;
+        },
         discover: async (query) =>
           z.object({ items: z.array(z.object({ name: z.string() })) }).parse(
             await host
@@ -451,8 +486,8 @@ export class E2eFakeAdapter implements HarnessAdapter {
         }
         transcript.apply(step);
       }
-      for (const text of steered)
-        transcript.apply({ type: "text", content: `Steered: ${text}` });
+      for (const steer of steered)
+        transcript.apply({ type: "text", content: `Steered: ${steer.text}` });
       transcript.close();
       await host.nativeState.append({
         entries: [{ askedQuestion: turn.askedQuestion }],
@@ -476,7 +511,7 @@ export class E2eFakeAdapter implements HarnessAdapter {
       steer: async (input) => {
         const waiter = steerWaiters.shift();
         if (waiter) waiter(input);
-        else steered.push(input.text);
+        else steered.push(input);
         host.emit({ type: "input.consumed", itemIds: [input.itemId] });
         return true;
       },
@@ -1584,10 +1619,7 @@ export const catalog = defineWorkflow(({ defineBoundary }) => ({
       wake_on_exit: true,
     });
     yield { type: "text", content: "Watching the worker while I work." };
-    const news = await Promise.race([
-      turn.nextSteer(),
-      turn.pause(30_000).then(() => undefined),
-    ]);
+    const news = await turn.steerWithin(30_000);
     yield {
       type: "text",
       content: news?.text.includes("<task-notification>")

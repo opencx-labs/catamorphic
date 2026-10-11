@@ -44,7 +44,11 @@ import {
 } from "../services/session-actions-service.js";
 import { copySettledHistory } from "../services/sessions/session-copy.js";
 import { SessionLog } from "../services/sessions/session-log.js";
-import { readFullSnapshot } from "../services/sessions/session-reads.js";
+import {
+  HISTORY_PAGE_ITEMS,
+  readFullSnapshot,
+  readSnapshot,
+} from "../services/sessions/session-reads.js";
 import { sessionLogFixture } from "./session-fixtures.js";
 import { testEnvironmentProvider } from "./test-environment.js";
 
@@ -2347,53 +2351,43 @@ describe("agent session coordination", () => {
   });
 
   it.each(["message_only", "queue", "interrupt"] as const)(
-    "attention is atomic with %s delivery and does not survive a rollback",
+    "a repeated %s delivery raises attention once",
     async (mode) => {
       const project = await projects.create(identity, {
         name: "Atomic delivery",
       });
       const session = await sessions.create(identity, project.id);
-      const input = {
-        sessionId: session.id,
-        author: {
-          kind: "workflow" as const,
-          runId: randomUUID(),
-          workflowName: "reminders",
-        },
-        content: "Rollback reminder",
-        mode,
-        idempotencyKey: "rollback",
-        metadata: { attention: "required" },
-      };
-      await expect(
-        db.transaction().execute(async (trx) => {
-          await sessions.deliverWithin(trx, input);
-          throw new Error("Rollback");
-        }),
-      ).rejects.toThrow("Rollback");
+      const deliver = () =>
+        sessions.deliver(identity, project.id, session.id, {
+          author: {
+            kind: "workflow",
+            runId: randomUUID(),
+            workflowName: "reminders",
+          },
+          content: "Committed reminder",
+          mode,
+          attention: "required",
+          idempotencyKey: "reminder",
+        });
+      const receipt = await deliver();
+      expect(receipt.created).toBe(true);
+      expect(Boolean(receipt.turnId)).toBe(mode !== "message_only");
+      // The same delivery again changes nothing and alerts no one twice.
+      expect(await deliver()).toMatchObject({
+        messageId: receipt.messageId,
+        created: false,
+      });
       expect(
         (await sessions.get(identity, project.id, session.id))
           .attentionRevision,
-      ).toBe(0);
+      ).toBe(1);
       expect(
         await db
           .selectFrom("user_notification_events")
           .select("id")
           .where("session_id", "=", session.id)
           .execute(),
-      ).toHaveLength(0);
-      const receipt = await db.transaction().execute((trx) =>
-        sessions.deliverWithin(trx, {
-          ...input,
-          content: "Committed reminder",
-        }),
-      );
-      expect(receipt.created).toBe(true);
-      expect(Boolean(receipt.turnId)).toBe(mode !== "message_only");
-      expect(
-        (await sessions.get(identity, project.id, session.id))
-          .attentionRevision,
-      ).toBe(1);
+      ).toHaveLength(1);
     },
   );
 
@@ -2527,6 +2521,73 @@ describe("agent session coordination", () => {
     }
   });
 
+  it("keeps what came before a chat's first turn in its snapshot", async () => {
+    const project = await projects.create(identity, {
+      name: "Before the first turn",
+    });
+    const session = await sessions.create(identity, project.id);
+    // A notice with no turn, recorded before the chat ever ran.
+    await sessions.update(identity, project.id, session.id, {
+      model: "another-model",
+    });
+    await sessions.sendMessage(identity, project.id, session.id, "Begin");
+    const after = await snapshot(session.id, project.id);
+    expect(after.olderBefore).toBeNull();
+    expect(
+      after.items.some(
+        (item) => item.kind === "notice" && item.code === "model_changed",
+      ),
+    ).toBe(true);
+  });
+
+  it("pages what came before a chat's first turn once it is more than a page", async () => {
+    const project = await projects.create(identity, {
+      name: "Long before the first turn",
+    });
+    const session = await sessions.create(identity, project.id);
+    // Notes a chat collected before it ever ran, one more than a page.
+    const now = new Date().toISOString();
+    await db
+      .insertInto("agent_items")
+      .values(
+        Array.from({ length: HISTORY_PAGE_ITEMS + 1 }, (_, index) => {
+          const id = randomUUID();
+          const position = index + 1;
+          return {
+            id,
+            session_id: session.id,
+            position: String(position),
+            kind: "notice",
+            status: "completed",
+            text: "Note",
+            payload: {
+              id,
+              sessionId: session.id,
+              turnId: null,
+              attemptId: null,
+              parentItemId: null,
+              position,
+              status: "completed",
+              nativeRef: null,
+              createdAt: now,
+              updatedAt: now,
+              startedAt: null,
+              endedAt: null,
+              kind: "notice",
+              code: "note",
+              text: "Note",
+              data: {},
+            },
+          };
+        }),
+      )
+      .execute();
+    const window = await readSnapshot({ db, sessionId: session.id });
+    expect(window.items).toHaveLength(HISTORY_PAGE_ITEMS);
+    expect(window.items[0]?.position).toBe(2);
+    expect(window.olderBefore).toBe(2);
+  });
+
   it("gives the next turn what was delivered without waking the agent", async () => {
     const project = await projects.create(identity, {
       name: "Delivered to read",
@@ -2576,6 +2637,12 @@ describe("agent session coordination", () => {
       .executeTakeFirstOrThrow();
     expect(read.status).toBe("completed");
     expect(read.turn_id).toBe((await turnsOf(session.id, project.id))[0]?.id);
+    // Nothing is older than the chat's first turn, so nothing pages out.
+    const after = await snapshot(session.id, project.id);
+    expect(after.olderBefore).toBeNull();
+    expect(
+      after.items.find((item) => item.id === delivered.messageId)?.status,
+    ).toBe("completed");
     // Read once: the turn after it does not get it again.
     const again = await sessions.sendMessage(
       identity,
@@ -2586,6 +2653,12 @@ describe("agent session coordination", () => {
     expect(
       again.reply?.kind === "assistant_message" && again.reply.text,
     ).not.toContain("deploy freeze");
+    // Behind a later turn it pages like any older history.
+    const window = await readSnapshot({ db, sessionId: session.id, turns: 1 });
+    expect(window.olderBefore).not.toBeNull();
+    expect(window.items.some((item) => item.id === delivered.messageId)).toBe(
+      false,
+    );
   });
 
   it("names a chat by what it was asked, never by a notification", async () => {

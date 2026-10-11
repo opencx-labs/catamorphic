@@ -2347,39 +2347,6 @@ export class AgentSessionsService {
   }
 
   /**
-   * Record an attributed message inside a caller's transaction, so it
-   * commits with the caller's own change (a session action's result). The
-   * caller has already checked access; nothing runs until it commits.
-   */
-  async deliverWithin(
-    trx: Transaction<DB>,
-    input: {
-      sessionId: string;
-      content: string;
-      author: SessionMessageAuthor;
-      mode: DispatchMode;
-      idempotencyKey?: string;
-      metadata?: JsonObject;
-    },
-  ): Promise<SessionDeliveryReceipt> {
-    const session = await trx
-      .selectFrom("agent_sessions")
-      .selectAll()
-      .where("id", "=", input.sessionId)
-      .forUpdate()
-      .executeTakeFirstOrThrow();
-    const receipt = await this.deliverIn(trx, {
-      session,
-      input: messageInput({ author: input.author, text: input.content }),
-      dispatch: input.mode,
-      ...(input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : {}),
-      ...(input.metadata ? { metadata: input.metadata } : {}),
-    });
-    if (receipt.turnId) this.kick(input.sessionId);
-    return receipt;
-  }
-
-  /**
    * Deliver attributed words (ADR 0217): the person's become a user
    * message; an agent's, an assistant's or a workflow's an inbound
    * message. A session whose authority is another host gets it through
