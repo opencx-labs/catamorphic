@@ -84,12 +84,6 @@
   directory, add/modify/delete badges, click-through to the editor diff.
   The data is already persisted per assistant message
   (`metadata.changedFiles`, with `path` + `kind`).
-- **Port chat-timeline enhancements to the registry copy.** The desktop's
-  `chat-timeline.tsx` gained the collapsed per-turn step log (tool calls /
-  commands / file edits with expandable payloads and MCP connector icons),
-  dropped the touched-files chips, and gates the jump-to-previous arrow on
-  scrollability. `packages/registry/src/chat-timeline` is the installable
-  source of truth and still has the old behavior.
 - **ACP harness.** Project agent definitions (ADR 0050) accept
   `kind: "acp"` today but resolve it to a fail-fast "not built yet"
   entry. Build the real ACP client harness: a `HarnessAdapter` (ADR 0198)

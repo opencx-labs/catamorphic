@@ -1,6 +1,8 @@
 import {
+  type AgentAttachment,
   type AgentChatAttachment,
   type AgentTextAttachment,
+  type InputSource,
   type Item,
   messageWithAttachmentNames,
   QUESTIONS_DISMISSED_MESSAGE,
@@ -90,14 +92,16 @@ import { useBackgroundCommands } from "../lib/use-background-commands";
 import { useSessionCheckout } from "../lib/use-session-checkout.js";
 import { useWorkDisplay } from "../lib/use-work-display.js";
 import type { ChatMode } from "../lib/workspace-types.js";
-import { ActivityText } from "./activity-text";
 import { AgentQuestionPanel } from "./agent-question-panel";
 import { AuthenticationRequiredCard } from "./authentication-required-card.js";
+import { ActivityText } from "./catamorphic/activity-text.js";
 import { ApprovalCard } from "./catamorphic/approval-card.js";
-import { ChatTimeline, stepToolName } from "./catamorphic/chat-timeline";
+import { stepToolName } from "./catamorphic/chat-steps.js";
+import { ChatTimeline } from "./catamorphic/chat-timeline";
 import { TodoProgress } from "./catamorphic/todo-progress.js";
 import { ChatFolder } from "./chat-folder.js";
 import { SurfacesRail } from "./chat-surface-rail.js";
+import { ContextPill } from "./context-pill";
 import { FilePreviewProjectContext } from "./file-preview";
 import { renderResponseLink } from "./response-link";
 import { SlashMenu } from "./slash-menu";
@@ -270,6 +274,11 @@ function filesFrom(data: DataTransfer | null): File[] {
 const APP_SOURCE_PATTERN = new RegExp(
   `(?:^|/)${PROJECT_APPS_DIR.replaceAll(".", "\\.")}/([a-z0-9][a-z0-9-]*)/`,
 );
+
+/** A sent attachment reads as the composer's pill, with its preview. */
+function sentPill(attachment: AgentAttachment) {
+  return <ContextPill view={attachment} animateIn={false} testId="sent-pill" />;
+}
 
 /** Project-app name from a file path under .work/apps/<name>/, if any. */
 const appNameFromPath = (filePath: string | undefined): string | undefined =>
@@ -947,6 +956,27 @@ function ChatDockContent({
       cancelled = true;
     };
   }, [sessionAgentId, projectId, rosterNonce]);
+  // The timeline's rows are memoized: what they render through stays
+  // stable until what it reads changes.
+  const resolveAgentName = useCallback(
+    (agentId: string) =>
+      roster.agents.find((agent) => agent.id === rosterAgentId(agentId))?.name,
+    [roster.agents],
+  );
+  // A chat in another project (the assistant's) opens by its bookmark
+  // address; the rest by the timeline's own links.
+  const sourceHref = useCallback(
+    (source: InputSource) =>
+      source.kind === "session" &&
+      source.projectId &&
+      source.projectId !== projectId
+        ? chatBookmarkUrl({
+            projectId: source.projectId,
+            sessionId: source.sessionId,
+          })
+        : undefined,
+    [projectId],
+  );
   const activeAgent = authority
     ? undefined
     : roster.agents.find(
@@ -2643,19 +2673,12 @@ function ChatDockContent({
                   ? "mx-auto w-full max-w-4xl pt-12"
                   : "mx-auto w-full max-w-3xl"
               }
-              turns={chat.timeline}
+              timeline={chat.timeline}
               requests={chat.state?.requests}
               pending={chat.pending}
               activeTurnId={activeTurnId}
               activity={
                 chat.connectionLost || awaitingInput ? undefined : activity
-              }
-              activityStartedAt={chat.activeTurn?.startedAt}
-              activityUpdatedAt={
-                chat.activeTurn?.status === "running" &&
-                !chat.activeTurn.cancellationRequested
-                  ? (chat.activeTurn.activityAt ?? chat.activeTurn.startedAt)
-                  : undefined
               }
               workDisplay={workDisplay}
               queue={chat.queue}
@@ -2664,32 +2687,20 @@ function ChatDockContent({
               onSendQueuedNow={chat.sendQueuedNow}
               onHoldQueued={chat.holdQueued}
               onRetry={(turnId) => void chat.retry(turnId)}
-              onStopRetrying={(turnId) => void chat.interrupt(turnId)}
+              onInterrupt={(turnId) => void chat.interrupt(turnId)}
               onRollback={rollback}
               onResendFailed={(commandId) => void chat.resendFailed(commandId)}
               onDismissFailed={chat.dismissFailed}
               hasOlder={chat.hasOlder}
-              loadingOlder={chat.isLoadingOlder}
+              isLoadingOlder={chat.isLoadingOlder}
               onLoadOlder={() => void chat.loadOlder()}
               onReauth={reauth?.run}
               reauthLabel={reauth?.label}
-              resolveAgentName={(agentId) =>
-                roster.agents.find(
-                  (agent) => agent.id === rosterAgentId(agentId),
-                )?.name
-              }
-              // A chat in another project (the assistant's) opens by its
-              // bookmark address; the rest by the timeline's own links.
-              sourceHref={(source) =>
-                source.kind === "session" &&
-                source.projectId &&
-                source.projectId !== projectId
-                  ? chatBookmarkUrl({
-                      projectId: source.projectId,
-                      sessionId: source.sessionId,
-                    })
-                  : undefined
-              }
+              resolveAgentName={resolveAgentName}
+              sourceHref={sourceHref}
+              renderAttachment={sentPill}
+              Hint={ShortcutHint}
+              jumpShortcut="⇞"
               error={
                 chat.connectionLost
                   ? "Connection lost. Reconnecting to check your agent's progress. It may still be running."

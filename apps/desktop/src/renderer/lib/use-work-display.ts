@@ -1,6 +1,9 @@
 import { useEffect, useState } from "react";
+import {
+  DEFAULT_WORK_DISPLAY,
+  type WorkDisplay,
+} from "../components/catamorphic/turn-rows.js";
 import { desktopApi } from "./desktop-api.js";
-import { DEFAULT_WORK_DISPLAY, type WorkDisplay } from "./turn-groups.js";
 
 /** The profile's choice for how a turn's work reads, kept live. */
 export function useWorkDisplay(): WorkDisplay {

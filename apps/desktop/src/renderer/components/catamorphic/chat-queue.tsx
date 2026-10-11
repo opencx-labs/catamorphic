@@ -1,5 +1,9 @@
 "use client";
-import type { AgentAttachment } from "@catamorphic/react";
+import {
+  ATTACHMENT_MARKER,
+  messageWithAttachmentNames,
+  type QueuedMessage,
+} from "@catamorphic/react";
 import { ChevronUp, Pencil, Trash2, Zap } from "lucide-react";
 import {
   type ComponentType,
@@ -9,58 +13,75 @@ import {
   useState,
 } from "react";
 
-function DefaultHint({ children }: { label: string; children: ReactNode }) {
-  return <>{children}</>;
+/** What a host action resolves to: false keeps the control actionable. */
+type ActionResult = undefined | boolean | Promise<undefined | boolean>;
+
+/** A control's name, and its keyboard shortcut when it has one. */
+export interface HintProps {
+  label: string;
+  /** Display form of the shortcut, e.g. "⌘B". */
+  shortcut?: string;
+  children: ReactNode;
 }
-/** A message waiting in the session's queue: its turn id, text and pills. */
-export interface QueuedChatMessage {
-  id: string;
-  content: string;
-  attachments: AgentAttachment[];
-  /** Held for editing (here or on another device): later messages wait. */
-  held?: boolean;
-  /**
-   * Not the person's own words (ADR 0217): one line naming who or what
-   * queued it. Withdrawn or run now, never edited.
-   */
-  line?: ReactNode;
+
+/** How a host names its controls on hover: a tooltip of its own. */
+export type HintComponent = ComponentType<HintProps>;
+
+/** The default hint: the browser's own tooltip. */
+export function TitleHint({ label, shortcut, children }: HintProps) {
+  return (
+    <span
+      className="contents"
+      title={shortcut ? `${label} (${shortcut})` : label}
+    >
+      {children}
+    </span>
+  );
 }
 
 /** How many queued messages stay visible while collapsed. */
 const QUEUE_COLLAPSE_THRESHOLD = 2;
 
+/** The text a queued message was sent with, without attachment markers. */
+function editableText(queued: QueuedMessage): string {
+  return queued.item?.kind === "user_message"
+    ? queued.item.text.split(ATTACHMENT_MARKER).join("")
+    : "";
+}
+
 /**
- * The outgoing queue, rendered at the end of the chat. The person's own
- * messages are ghost bubbles: dashed, right-aligned, each editable (which
- * pauses its dispatch), deletable, or promotable ("send now" interrupts the
- * running turn). What an agent, a workflow or Work queued is one quiet
- * line on the left. Long queues collapse behind a "N queued" toggle.
+ * The session's turn queue (ADR 0197), rendered at the end of the chat.
+ * The person's own messages are ghost bubbles: dashed, right-aligned, each
+ * editable (which holds the turn so it does not start under the cursor),
+ * cancellable, or promotable ("send now" stops the running turn and runs
+ * this one). What another agent, a workflow or Work queued (ADR 0217) is
+ * one quiet line on the left, withdrawn or run now but never edited;
+ * `renderInput` draws it. Long queues collapse behind a "N queued" toggle.
+ * Callbacks take the turn id: wire them to `useAgentChat`'s `editQueued`,
+ * `cancelQueued`, `sendQueuedNow` and `holdQueued`.
  */
 export function ChatQueue({
   queue,
-  onUpdate,
-  onRemove,
+  onEdit,
+  onCancel,
   onSendNow,
   onHold,
   renderContent,
   renderAttachments,
-  Hint = DefaultHint,
+  renderInput,
+  Hint = TitleHint,
 }: {
-  queue: QueuedChatMessage[];
-  onUpdate?: (
-    id: string,
-    content: string,
-  ) => undefined | boolean | Promise<undefined | boolean>;
-  onRemove?: (id: string) => undefined | boolean | Promise<undefined | boolean>;
-  onSendNow?: (
-    id: string,
-  ) => undefined | boolean | Promise<undefined | boolean>;
-  onHold?: (
-    id: string | null,
-  ) => undefined | boolean | Promise<undefined | boolean>;
-  renderContent?: (turn: QueuedChatMessage) => ReactNode;
-  renderAttachments?: (turn: QueuedChatMessage) => ReactNode;
-  Hint?: ComponentType<{ label: string; children: ReactNode }>;
+  queue: QueuedMessage[];
+  onEdit?: (turnId: string, text: string) => ActionResult;
+  onCancel?: (turnId: string) => ActionResult;
+  onSendNow?: (turnId: string) => ActionResult;
+  onHold?: (turnId: string | null) => ActionResult;
+  renderContent?: (queued: QueuedMessage) => ReactNode;
+  renderAttachments?: (queued: QueuedMessage) => ReactNode;
+  /** One line for a waiting turn that is not the person's own message. */
+  renderInput?: (queued: QueuedMessage) => ReactNode;
+  /** Names each control on hover; defaults to the browser's tooltip. */
+  Hint?: HintComponent;
 }) {
   const [expanded, setExpanded] = useState(false);
   const collapsed = !expanded && queue.length > QUEUE_COLLAPSE_THRESHOLD;
@@ -69,24 +90,25 @@ export function ChatQueue({
   return (
     <div className="flex flex-col items-end gap-1.5" data-testid="chat-queue">
       {visible.map((queued) =>
-        queued.line ? (
-          <QueuedInput
-            key={queued.id}
-            queued={queued}
-            onRemove={onRemove}
-            onSendNow={onSendNow}
-            Hint={Hint}
-          />
-        ) : (
+        queued.item?.kind === "user_message" ? (
           <QueuedBubble
-            key={queued.id}
+            key={queued.turn.id}
             queued={queued}
-            onUpdate={onUpdate}
-            onRemove={onRemove}
+            onEdit={onEdit}
+            onCancel={onCancel}
             onSendNow={onSendNow}
             onHold={onHold}
             renderContent={renderContent}
             renderAttachments={renderAttachments}
+            Hint={Hint}
+          />
+        ) : (
+          <QueuedInput
+            key={queued.turn.id}
+            queued={queued}
+            onCancel={onCancel}
+            onSendNow={onSendNow}
+            renderInput={renderInput}
             Hint={Hint}
           />
         ),
@@ -112,25 +134,24 @@ export function ChatQueue({
 /** A waiting turn someone other than the person queued: one quiet line. */
 function QueuedInput({
   queued,
-  onRemove,
+  onCancel,
   onSendNow,
-  Hint = DefaultHint,
+  renderInput,
+  Hint,
 }: {
-  queued: QueuedChatMessage;
-  onRemove?: (id: string) => undefined | boolean | Promise<undefined | boolean>;
-  onSendNow?: (
-    id: string,
-  ) => undefined | boolean | Promise<undefined | boolean>;
-  Hint?: ComponentType<{ label: string; children: ReactNode }>;
+  queued: QueuedMessage;
+  onCancel?: (turnId: string) => ActionResult;
+  onSendNow?: (turnId: string) => ActionResult;
+  renderInput?: (queued: QueuedMessage) => ReactNode;
+  Hint: HintComponent;
 }) {
+  const turnId = queued.turn.id;
   const [busy, setBusy] = useState(false);
-  const act = async (
-    action?: (id: string) => undefined | boolean | Promise<undefined | boolean>,
-  ) => {
+  const act = async (action?: (turnId: string) => ActionResult) => {
     if (!action || busy) return;
     setBusy(true);
     try {
-      await action(queued.id);
+      await action(turnId);
     } finally {
       setBusy(false);
     }
@@ -139,21 +160,32 @@ function QueuedInput({
     <div
       className="group/queued flex min-w-0 max-w-[85%] items-center gap-2 self-start rounded-lg border border-dashed border-border px-2 py-1 text-xs text-fg-muted"
       data-testid="chat-queued-input"
-      data-turn-id={queued.id}
+      data-turn-id={turnId}
     >
-      <span className="min-w-0 flex-1">{queued.line}</span>
+      <span className="min-w-0 flex-1">
+        {renderInput ? (
+          renderInput(queued)
+        ) : (
+          <span className="block truncate">
+            {queued.item?.kind === "task_notification"
+              ? queued.item.summary
+              : (queued.item?.text ?? "Carry on where it stopped")}
+          </span>
+        )}
+      </span>
       <span className="shrink-0 text-[10px] uppercase tracking-wider text-fg-faint">
-        {queued.held ? "Held" : "Queued"}
+        {queued.turn.status === "held" ? "Held" : "Queued"}
       </span>
       <span className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity duration-150 group-hover/queued:opacity-100 group-focus-within/queued:opacity-100">
-        {onRemove && (
+        {onCancel && (
           <Hint label="Remove from queue">
             <button
               type="button"
-              onClick={() => void act(onRemove)}
+              onClick={() => void act(onCancel)}
               disabled={busy}
               className="grid size-5 cursor-pointer place-items-center rounded text-fg-faint hover:text-danger"
               aria-label="Remove from queue"
+              data-testid="chat-queued-delete"
             >
               <Trash2 className="size-3" />
             </button>
@@ -167,6 +199,7 @@ function QueuedInput({
               disabled={busy}
               className="grid size-5 cursor-pointer place-items-center rounded text-fg-faint hover:text-accent"
               aria-label="Run now"
+              data-testid="chat-queued-send-now"
             >
               <Zap className="size-3" />
             </button>
@@ -179,35 +212,32 @@ function QueuedInput({
 
 function QueuedBubble({
   queued,
-  onUpdate,
-  onRemove,
+  onEdit,
+  onCancel,
   onSendNow,
   onHold,
   renderContent,
   renderAttachments,
-  Hint = DefaultHint,
+  Hint,
 }: {
-  queued: QueuedChatMessage;
-  onUpdate?: (
-    id: string,
-    content: string,
-  ) => undefined | boolean | Promise<undefined | boolean>;
-  onRemove?: (id: string) => undefined | boolean | Promise<undefined | boolean>;
-  onSendNow?: (
-    id: string,
-  ) => undefined | boolean | Promise<undefined | boolean>;
-  onHold?: (
-    id: string | null,
-  ) => undefined | boolean | Promise<undefined | boolean>;
-  renderContent?: (turn: QueuedChatMessage) => ReactNode;
-  renderAttachments?: (turn: QueuedChatMessage) => ReactNode;
-  Hint?: ComponentType<{ label: string; children: ReactNode }>;
+  queued: QueuedMessage;
+  onEdit?: (turnId: string, text: string) => ActionResult;
+  onCancel?: (turnId: string) => ActionResult;
+  onSendNow?: (turnId: string) => ActionResult;
+  onHold?: (turnId: string | null) => ActionResult;
+  renderContent?: (queued: QueuedMessage) => ReactNode;
+  renderAttachments?: (queued: QueuedMessage) => ReactNode;
+  Hint: HintComponent;
 }) {
+  const turnId = queued.turn.id;
+  const text = editableText(queued);
+  const attachments =
+    queued.item?.kind === "user_message" ? queued.item.attachments : [];
   const savingRef = useRef(false);
   const [saving, setSaving] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(queued.content);
+  const [draft, setDraft] = useState(text);
   const [entered, setEntered] = useState(false);
   const [leaving, setLeaving] = useState(false);
   const removeTimer = useRef<ReturnType<typeof setTimeout> | undefined>(
@@ -215,7 +245,7 @@ function QueuedBubble({
   );
   const editRef = useRef<HTMLTextAreaElement>(null);
   // Refs, not deps: the callbacks are re-created every host render, and an
-  // effect keyed on them would run its cleanup constantly — releasing the
+  // effect keyed on them would run its cleanup constantly, releasing the
   // hold the moment it was taken.
   const onHoldRef = useRef(onHold);
   onHoldRef.current = onHold;
@@ -230,7 +260,7 @@ function QueuedBubble({
     if (editing && !saving) editRef.current?.focus();
   }, [editing, saving]);
   // True unmount only: if this bubble disappears mid-edit, never leave the
-  // queue paused — but don't touch holds owned by other bubbles.
+  // turn held, but don't touch holds owned by other bubbles.
   useEffect(() => {
     mountedRef.current = true;
     return () => {
@@ -240,9 +270,7 @@ function QueuedBubble({
     };
   }, []);
 
-  const attempt = async (
-    action: () => undefined | boolean | Promise<undefined | boolean>,
-  ) => {
+  const attempt = async (action: () => ActionResult) => {
     if (savingRef.current) return false;
     savingRef.current = true;
     setSaving(true);
@@ -263,20 +291,18 @@ function QueuedBubble({
   const beginEdit = async () => {
     if (savingRef.current) return;
     editingRef.current = true;
-    if (!(await attempt(() => onHold?.(queued.id)))) {
+    if (!(await attempt(() => onHold?.(turnId)))) {
       editingRef.current = false;
       return;
     }
     if (!mountedRef.current) return;
-    setDraft(queued.content);
+    setDraft(text);
     setEditing(true);
   };
   const commitEdit = async () => {
     const content = draft.trim();
     const saved = await attempt(() =>
-      content && content !== queued.content
-        ? onUpdate?.(queued.id, content)
-        : onHold?.(null),
+      content && content !== text ? onEdit?.(turnId, content) : onHold?.(null),
     );
     if (saved) {
       setEditing(false);
@@ -285,15 +311,15 @@ function QueuedBubble({
   };
   const cancelEdit = async () => {
     if (!(await attempt(() => onHold?.(null)))) return;
-    setDraft(queued.content);
+    setDraft(text);
     setEditing(false);
     editingRef.current = false;
   };
   const remove = () => {
-    // Animate out, then actually delete.
+    // Animate out, then actually withdraw it.
     setLeaving(true);
     removeTimer.current = setTimeout(() => {
-      void attempt(() => onRemove?.(queued.id)).then((removed) => {
+      void attempt(() => onCancel?.(turnId)).then((removed) => {
         if (removed) {
           editingRef.current = false;
           setEditing(false);
@@ -309,6 +335,7 @@ function QueuedBubble({
     <div
       className={`group/queued relative max-w-[85%] motion-safe:transition-[opacity,translate,scale] motion-safe:duration-200 motion-safe:ease-[cubic-bezier(0.2,0,0,1)] ${shown ? "translate-y-0 scale-100 opacity-100" : "translate-y-1 scale-[0.98] opacity-0"}`}
       data-testid="chat-queued-message"
+      data-turn-id={turnId}
     >
       <div className="rounded-xl rounded-br-sm border border-dashed border-info/40 bg-info/5 px-3 py-2 text-sm text-fg-muted">
         {editing ? (
@@ -321,13 +348,13 @@ function QueuedBubble({
             onBlur={(event) => {
               // Chromium can briefly drop focus to nowhere while the
               // timeline settles a streamed turn. That is not a user commit:
-              // keep the edit and queue hold intact. A real focus target,
+              // keep the edit and the hold intact. A real focus target,
               // Enter, or Escape still completes the edit normally.
               if (event.relatedTarget === null) {
                 requestAnimationFrame(() => editRef.current?.focus());
                 return;
               }
-              commitEdit();
+              void commitEdit();
             }}
             onKeyDown={(event) => {
               if (
@@ -336,7 +363,7 @@ function QueuedBubble({
                 !event.nativeEvent.isComposing
               ) {
                 event.preventDefault();
-                commitEdit();
+                void commitEdit();
               }
               if (event.key === "Escape") {
                 event.stopPropagation();
@@ -348,25 +375,32 @@ function QueuedBubble({
           />
         ) : (
           <div className="whitespace-pre-wrap break-words leading-6">
-            {renderContent ? renderContent(queued) : queued.content}
+            {renderContent
+              ? renderContent(queued)
+              : messageWithAttachmentNames(
+                  queued.item?.kind === "user_message" ? queued.item.text : "",
+                  attachments,
+                )}
           </div>
         )}
-        {renderAttachments
-          ? renderAttachments(queued)
-          : queued.attachments.length > 0 && (
-              <p className="mt-1 text-xs">
-                {queued.attachments.length} attachment(s)
-              </p>
-            )}
+        {renderAttachments?.(queued)}
+        {/* The draft holds the words alone; what was attached stays. */}
+        {editing && attachments.length > 0 && (
+          <p className="mt-1 text-xs">
+            {attachments.length === 1
+              ? "1 attachment stays with it"
+              : `${attachments.length} attachments stay with it`}
+          </p>
+        )}
         {actionError && (
           <p role="alert" className="mt-1 text-xs text-danger">
             {actionError}
           </p>
         )}
         <div className="mt-1 flex items-center justify-end gap-0.5 text-[10px] uppercase tracking-wider text-fg-faint">
-          {queued.held && !editing ? "Held" : "Queued"}
+          {queued.turn.status === "held" && !editing ? "Held" : "Queued"}
           <span className="ml-1 flex items-center gap-0.5 opacity-0 transition-opacity duration-150 group-hover/queued:opacity-100 group-focus-within/queued:opacity-100">
-            {!editing && (
+            {!editing && onEdit && (
               <Hint label="Edit before it sends">
                 <button
                   type="button"
@@ -374,35 +408,40 @@ function QueuedBubble({
                   disabled={saving}
                   className="grid size-5 cursor-pointer place-items-center rounded text-fg-faint hover:text-fg"
                   aria-label="Edit queued message"
+                  data-testid="chat-queued-edit-button"
                 >
                   <Pencil className="size-3" />
                 </button>
               </Hint>
             )}
-            <Hint label="Delete from queue">
-              <button
-                type="button"
-                onClick={remove}
-                disabled={saving || leaving}
-                className="grid size-5 cursor-pointer place-items-center rounded text-fg-faint hover:text-danger"
-                aria-label="Delete queued message"
-                data-testid="chat-queued-delete"
-              >
-                <Trash2 className="size-3" />
-              </button>
-            </Hint>
-            <Hint label="Send now (interrupts the agent)">
-              <button
-                type="button"
-                onClick={() => void attempt(() => onSendNow?.(queued.id))}
-                disabled={saving}
-                className="grid size-5 cursor-pointer place-items-center rounded text-fg-faint hover:text-accent"
-                aria-label="Send queued message now"
-                data-testid="chat-queued-send-now"
-              >
-                <Zap className="size-3" />
-              </button>
-            </Hint>
+            {onCancel && (
+              <Hint label="Delete from queue">
+                <button
+                  type="button"
+                  onClick={remove}
+                  disabled={saving || leaving}
+                  className="grid size-5 cursor-pointer place-items-center rounded text-fg-faint hover:text-danger"
+                  aria-label="Delete queued message"
+                  data-testid="chat-queued-delete"
+                >
+                  <Trash2 className="size-3" />
+                </button>
+              </Hint>
+            )}
+            {onSendNow && (
+              <Hint label="Send now (stops the agent)">
+                <button
+                  type="button"
+                  onClick={() => void attempt(() => onSendNow(turnId))}
+                  disabled={saving}
+                  className="grid size-5 cursor-pointer place-items-center rounded text-fg-faint hover:text-accent"
+                  aria-label="Send queued message now"
+                  data-testid="chat-queued-send-now"
+                >
+                  <Zap className="size-3" />
+                </button>
+              </Hint>
+            )}
           </span>
         </div>
       </div>

@@ -128,11 +128,11 @@ interface AnimationRule {
   iterationCount: string;
 }
 
-/** All `.animate-*` single-class rules in the loaded stylesheets. */
+/** All `.animate-*` and shared `.cat-*` single-class rules in the loaded stylesheets. */
 const collectAnimationRules = () =>
   run<AnimationRule[]>(`
     return allStyleRules()
-      .filter((rule) => rule.selectorText && /^\\.animate-[a-z0-9-]+$/.test(rule.selectorText))
+      .filter((rule) => rule.selectorText && /^\\.(?:animate|cat)-[a-z0-9-]+$/.test(rule.selectorText))
       .filter((rule) => rule.style && rule.style.animationName && rule.style.animationName !== 'none')
       .map((rule) => ({
         selector: rule.selectorText.slice(1),

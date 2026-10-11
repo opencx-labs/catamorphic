@@ -209,7 +209,7 @@ export function AgentChat({
           hasOlder={chat.hasOlder}
           isLoadingOlder={chat.isLoadingOlder}
           onLoadOlder={() => void chat.loadOlder()}
-          resolveRequest={(requestId) => chat.state?.requests[requestId]}
+          requests={chat.state?.requests}
           resolveAgentName={resolveAgentName}
           error={
             chat.connectionLost

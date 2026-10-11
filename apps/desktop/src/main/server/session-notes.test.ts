@@ -1,11 +1,86 @@
-import type { SessionEvent } from "@catamorphic/agent-protocol";
+import type {
+  AssistantMessageItem,
+  Item,
+  SessionEvent,
+  Turn,
+} from "@catamorphic/agent-protocol";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  reply,
-  toolCall,
-  turn,
-} from "../../renderer/components/catamorphic/timeline-fixtures.js";
 import { SessionNotes } from "./session-notes.js";
+
+const AT = "2026-10-10T10:00:00.000Z";
+
+function common(id: string, turnId: string) {
+  return {
+    id,
+    sessionId: "s",
+    turnId,
+    attemptId: null,
+    parentItemId: null,
+    position: 1,
+    status: "completed" as const,
+    nativeRef: null,
+    createdAt: AT,
+    updatedAt: AT,
+    startedAt: AT,
+    endedAt: AT,
+  };
+}
+
+function turn(id: string, ordinal: number, overrides: Partial<Turn>): Turn {
+  return {
+    id,
+    sessionId: "s",
+    ordinal,
+    status: "running",
+    inputItemId: `${id}:input`,
+    dispatch: "queue",
+    priority: 0,
+    activity: null,
+    activityAt: null,
+    attemptCount: 1,
+    activeAttemptId: null,
+    providerThreadId: null,
+    retryAt: null,
+    cancellationRequested: false,
+    error: null,
+    outcome: null,
+    checkpoint: { before: null, after: null },
+    continuationOf: null,
+    createdAt: AT,
+    startedAt: AT,
+    completedAt: null,
+    updatedAt: AT,
+    ...overrides,
+  };
+}
+
+function reply(
+  id: string,
+  turnId: string,
+  text: string,
+  overrides: Partial<AssistantMessageItem> = {},
+): AssistantMessageItem {
+  return {
+    ...common(id, turnId),
+    kind: "assistant_message",
+    text,
+    agentId: null,
+    ...overrides,
+  };
+}
+
+function toolCall(id: string, turnId: string): Item {
+  return {
+    ...common(id, turnId),
+    kind: "tool_call",
+    tool: "Read",
+    server: null,
+    description: null,
+    input: {},
+    result: null,
+    error: null,
+  };
+}
 
 const FOLLOWER = { projectId: "p", sessionId: "assistant" };
 const FOLLOWED = { projectId: "p", sessionId: "build" };

@@ -16,9 +16,29 @@ import {
 /** What a host action resolves to: false keeps the control actionable. */
 type ActionResult = undefined | boolean | Promise<undefined | boolean>;
 
-function DefaultHint({ children }: { label: string; children: ReactNode }) {
-  return <>{children}</>;
+/** A control's name, and its keyboard shortcut when it has one. */
+export interface HintProps {
+  label: string;
+  /** Display form of the shortcut, e.g. "⌘B". */
+  shortcut?: string;
+  children: ReactNode;
 }
+
+/** How a host names its controls on hover: a tooltip of its own. */
+export type HintComponent = ComponentType<HintProps>;
+
+/** The default hint: the browser's own tooltip. */
+export function TitleHint({ label, shortcut, children }: HintProps) {
+  return (
+    <span
+      className="contents"
+      title={shortcut ? `${label} (${shortcut})` : label}
+    >
+      {children}
+    </span>
+  );
+}
+
 /** How many queued messages stay visible while collapsed. */
 const QUEUE_COLLAPSE_THRESHOLD = 2;
 
@@ -49,7 +69,7 @@ export function ChatQueue({
   renderContent,
   renderAttachments,
   renderInput,
-  Hint = DefaultHint,
+  Hint = TitleHint,
 }: {
   queue: QueuedMessage[];
   onEdit?: (turnId: string, text: string) => ActionResult;
@@ -60,7 +80,8 @@ export function ChatQueue({
   renderAttachments?: (queued: QueuedMessage) => ReactNode;
   /** One line for a waiting turn that is not the person's own message. */
   renderInput?: (queued: QueuedMessage) => ReactNode;
-  Hint?: ComponentType<{ label: string; children: ReactNode }>;
+  /** Names each control on hover; defaults to the browser's tooltip. */
+  Hint?: HintComponent;
 }) {
   const [expanded, setExpanded] = useState(false);
   const collapsed = !expanded && queue.length > QUEUE_COLLAPSE_THRESHOLD;
@@ -116,13 +137,13 @@ function QueuedInput({
   onCancel,
   onSendNow,
   renderInput,
-  Hint = DefaultHint,
+  Hint,
 }: {
   queued: QueuedMessage;
   onCancel?: (turnId: string) => ActionResult;
   onSendNow?: (turnId: string) => ActionResult;
   renderInput?: (queued: QueuedMessage) => ReactNode;
-  Hint?: ComponentType<{ label: string; children: ReactNode }>;
+  Hint: HintComponent;
 }) {
   const turnId = queued.turn.id;
   const [busy, setBusy] = useState(false);
@@ -197,7 +218,7 @@ function QueuedBubble({
   onHold,
   renderContent,
   renderAttachments,
-  Hint = DefaultHint,
+  Hint,
 }: {
   queued: QueuedMessage;
   onEdit?: (turnId: string, text: string) => ActionResult;
@@ -206,7 +227,7 @@ function QueuedBubble({
   onHold?: (turnId: string | null) => ActionResult;
   renderContent?: (queued: QueuedMessage) => ReactNode;
   renderAttachments?: (queued: QueuedMessage) => ReactNode;
-  Hint?: ComponentType<{ label: string; children: ReactNode }>;
+  Hint: HintComponent;
 }) {
   const turnId = queued.turn.id;
   const text = editableText(queued);
@@ -362,16 +383,15 @@ function QueuedBubble({
                 )}
           </div>
         )}
-        {renderAttachments
-          ? renderAttachments(queued)
-          : editing &&
-            attachments.length > 0 && (
-              <p className="mt-1 text-xs">
-                {attachments.length === 1
-                  ? "1 attachment stays with it"
-                  : `${attachments.length} attachments stay with it`}
-              </p>
-            )}
+        {renderAttachments?.(queued)}
+        {/* The draft holds the words alone; what was attached stays. */}
+        {editing && attachments.length > 0 && (
+          <p className="mt-1 text-xs">
+            {attachments.length === 1
+              ? "1 attachment stays with it"
+              : `${attachments.length} attachments stay with it`}
+          </p>
+        )}
         {actionError && (
           <p role="alert" className="mt-1 text-xs text-danger">
             {actionError}

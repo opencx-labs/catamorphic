@@ -1,3 +1,4 @@
+import type { AgentAttachment } from "@catamorphic/react";
 import {
   ClipboardType,
   FileCode,
@@ -13,7 +14,6 @@ import {
 import { type MouseEvent as ReactMouseEvent, useEffect, useRef } from "react";
 import { type OpenMode, openModeFromEvent } from "../../shared/open-mode.js";
 import { textStats } from "../lib/text-pills";
-import type { ChatAttachmentView } from "./catamorphic/chat-timeline";
 import { ResourcePreviewContent } from "./catamorphic/resource-preview";
 import { FilePreview } from "./file-preview";
 import { ResourceInspector } from "./resource-inspector";
@@ -36,7 +36,7 @@ import { WebPreview } from "./web-preview";
 export const PILL_SURFACE =
   "rounded-md bg-accent/15 text-[12px] font-medium text-accent";
 
-export type PillView = ChatAttachmentView;
+export type PillView = AgentAttachment;
 type MediaView = Extract<PillView, { mediaType: string }>;
 type TextView = Extract<PillView, { kind: "text" }>;
 

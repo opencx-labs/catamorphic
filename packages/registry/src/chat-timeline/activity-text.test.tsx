@@ -2,7 +2,7 @@
 
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ActivityText } from "./activity-text.js";
 
 Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", true);
@@ -49,14 +49,14 @@ describe("ActivityText", () => {
     const { render, line, finish } = mount("Waiting for agent");
     render("Reading files");
     expect(line().dataset.phase).toBe("leaving");
-    expect(line().className).toContain("animate-activity-leave");
+    expect(line().className).toContain("cat-activity-leave");
     // The old text stays until it has left.
     expect(line().textContent).toBe("Waiting for agent");
-    finish("activity-leave");
+    finish("catamorphic-activity-leave");
     expect(line().dataset.phase).toBe("arriving");
-    expect(line().className).toContain("animate-activity-arrive");
+    expect(line().className).toContain("cat-activity-arrive");
     expect(line().textContent).toBe("Reading files");
-    finish("activity-arrive");
+    finish("catamorphic-activity-arrive");
     expect(line().dataset.phase).toBe("breathing");
     expect(line().className).toContain("animate-pulse");
   });
@@ -66,21 +66,21 @@ describe("ActivityText", () => {
     render("Reading files");
     render("Running tests");
     render("Writing");
-    finish("activity-leave");
+    finish("catamorphic-activity-leave");
     expect(line().textContent).toBe("Writing");
-    finish("activity-arrive");
+    finish("catamorphic-activity-arrive");
     expect(line().dataset.phase).toBe("breathing");
   });
 
   it("starts another beat when the text changed while arriving", () => {
     const { render, line, finish } = mount("Waiting for agent");
     render("Reading files");
-    finish("activity-leave");
+    finish("catamorphic-activity-leave");
     render("Running tests");
     expect(line().textContent).toBe("Reading files");
-    finish("activity-arrive");
+    finish("catamorphic-activity-arrive");
     expect(line().dataset.phase).toBe("leaving");
-    finish("activity-leave");
+    finish("catamorphic-activity-leave");
     expect(line().textContent).toBe("Running tests");
   });
 
@@ -89,5 +89,22 @@ describe("ActivityText", () => {
     render("Reading files");
     finish("pulse");
     expect(line().dataset.phase).toBe("leaving");
+  });
+
+  it("moves on without the keyframes rather than freezing", () => {
+    vi.useFakeTimers();
+    try {
+      const { render, line } = mount("Waiting for agent");
+      render("Reading files");
+      expect(line().dataset.phase).toBe("leaving");
+      // No animationend ever arrives: a host without the stylesheet.
+      act(() => vi.advanceTimersByTime(400));
+      expect(line().textContent).toBe("Reading files");
+      expect(line().dataset.phase).toBe("arriving");
+      act(() => vi.advanceTimersByTime(450));
+      expect(line().dataset.phase).toBe("breathing");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

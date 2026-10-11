@@ -3,7 +3,8 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ChatTimeline, plainLine } from "./chat-timeline.js";
+import { plainLine } from "./chat-steps.js";
+import { ChatTimeline } from "./chat-timeline.js";
 import {
   inbound,
   input,
@@ -51,16 +52,16 @@ describe("ChatTimeline queue editing", () => {
     await act(async () => {
       root.render(
         <ChatTimeline
-          turns={[]}
+          timeline={[]}
           activity="Working"
           queue={[
             {
               turn: turn("queued-1", 2, { status: "queued", attemptCount: 0 }),
               item: input("queued-1", "wrong words"),
-
               joined: [],
             },
           ]}
+          onEditQueued={() => true}
           onHoldQueued={(id) => {
             holds.push(id);
           }}
@@ -96,7 +97,7 @@ describe("ChatTimeline queue editing", () => {
     await act(async () => {
       root.render(
         <ChatTimeline
-          turns={timelineOf({
+          timeline={timelineOf({
             turns: [turn("t1", 1)],
             items: [
               input("t1", "Plan it"),
@@ -151,7 +152,7 @@ describe("ChatTimeline queue editing", () => {
     const render = (revision: number) =>
       root.render(
         <ChatTimeline
-          turns={timelineOf({
+          timeline={timelineOf({
             turns: [turn("t1", 1)],
             items: [
               input("t1", "Where is it?"),
@@ -187,18 +188,16 @@ describe("ChatTimeline queue editing", () => {
     await act(async () => {
       root.render(
         <ChatTimeline
-          turns={[]}
+          timeline={[]}
           queue={[
             {
               turn: turn("held-1", 2, { status: "held", attemptCount: 0 }),
               item: input("held-1", "being edited elsewhere"),
-
               joined: [],
             },
             {
               turn: turn("queued-2", 3, { status: "queued", attemptCount: 0 }),
               item: input("queued-2", "after it"),
-
               joined: [],
             },
           ]}
@@ -217,7 +216,7 @@ describe("ChatTimeline queue editing", () => {
     await act(async () => {
       root.render(
         <ChatTimeline
-          turns={timelineOf({
+          timeline={timelineOf({
             turns: [
               turn("t1", 1, {
                 status: "queued",
@@ -227,13 +226,13 @@ describe("ChatTimeline queue editing", () => {
             ],
             items: [input("t1", "first")],
           })}
-          onStopRetrying={stopped}
+          onInterrupt={stopped}
         />,
       );
     });
     await act(async () =>
       container
-        .querySelector<HTMLButtonElement>('[data-testid="stop-retrying"]')
+        .querySelector<HTMLButtonElement>('[data-testid="chat-stop-retrying"]')
         ?.click(),
     );
     expect(stopped).toHaveBeenCalledWith("t1");
@@ -244,7 +243,7 @@ describe("ChatTimeline queue editing", () => {
     await act(async () => {
       root.render(
         <ChatTimeline
-          turns={timelineOf({
+          timeline={timelineOf({
             turns: [turn("t1", 1, { status: "queued", attemptCount: 0 })],
             items: [input("t1", "go")],
           })}
@@ -344,7 +343,7 @@ describe("ChatTimeline inputs that are not the person's (ADR 0217)", () => {
     await act(async () => {
       root.render(
         <ChatTimeline
-          turns={turns}
+          timeline={turns}
           onLinkClick={(url) => {
             opened.push(url);
           }}
@@ -384,7 +383,7 @@ describe("ChatTimeline inputs that are not the person's (ADR 0217)", () => {
       ],
     });
     await act(async () => {
-      root.render(<ChatTimeline turns={turns} />);
+      root.render(<ChatTimeline timeline={turns} />);
     });
     expect(
       container.querySelector("[data-testid=chat-task-notification]"),
@@ -399,7 +398,7 @@ describe("ChatTimeline inputs that are not the person's (ADR 0217)", () => {
     await act(async () => {
       root.render(
         <ChatTimeline
-          turns={[]}
+          timeline={[]}
           activity="Working"
           queue={[
             {

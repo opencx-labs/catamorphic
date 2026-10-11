@@ -82,11 +82,29 @@ preview UI after URL sanitization; desktop filesystem access stays in desktop.
 
 ## Registry maintenance
 
-Edit `packages/registry/src` first, then update installed consumers by adapting only
-imports and deliberate host integration. The desktop copy lives in
-`src/renderer/components/catamorphic`. Registry build emits the installable JSON;
-source edits alone do not update that output. Build the React package first because
-consumers resolve its declarations and implementation from `dist`.
+The registry is the one implementation of the chat timeline, its steps, queue
+and input rows (ADR 0218). Edit `packages/registry/src` first, then rewrite the
+installed copies with `bun scripts/registry-copies.ts --sync desktop` (and
+`--sync pwa`). The desktop copy lives in `src/renderer/components/catamorphic`.
+A copy differs from the registry only in import specifiers;
+`bun scripts/registry-copies.ts` (and `bun run test:scripts`) fails on any other
+difference, a partly installed item, or a copy that imports a desktop module.
+Pre-existing differences are listed in its `KNOWN_DRIFT` with a reason, and
+that list only shrinks.
+
+Desktop behavior enters through the timeline's host surface, never an edit to
+the copy: `renderAttachment` (the `ContextPill` with its previews), `Hint`
+(`ShortcutHint`, with `jumpShortcut` for PageUp), `renderLink` and `onLinkClick`,
+`sourceHref`, `resolveToolIcon`, `onReauth`, `backgroundCommands` and
+`workDisplay`. Rows are memoized: keep render-affecting slots stable
+(`useCallback` or module-level functions); action callbacks may change every
+render. The timeline's motion classes (`cat-fade-in`, `cat-fold-away`,
+`cat-step-in`, `cat-activity-*`) live in `@catamorphic/ui/styles.css`, which the
+renderer stylesheet imports.
+
+Registry build emits the installable JSON; source edits alone do not update that
+output. Build the React package first because consumers resolve its declarations
+and implementation from `dist`.
 
 `packages/registry/src/examples/embedding.tsx` is a typechecked host example.
 Use hook tests for concurrency and scope changes, and native Electron tests for

@@ -191,23 +191,34 @@ export function toolCall(
   };
 }
 
-export function fileChange(id: string, turnId: string, path: string): Item {
+export function fileChange(
+  id: string,
+  turnId: string,
+  path: string,
+  overrides: Partial<Extract<WorkItem, { kind: "file_change" }>> = {},
+): Item {
   return {
     ...common(id, turnId),
     kind: "file_change",
     path,
     change: "modified",
     previousPath: null,
+    ...overrides,
   };
 }
 
-export function notice(id: string, code: string, text: string): Item {
+export function notice(
+  id: string,
+  code: string,
+  text: string,
+  data: Extract<Item, { kind: "notice" }>["data"] = {},
+): Item {
   return {
     ...common(id, null),
     kind: "notice",
     code,
     text,
-    data: {},
+    data,
   };
 }
 

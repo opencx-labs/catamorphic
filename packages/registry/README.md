@@ -69,6 +69,36 @@ JavaScript, TypeScript, JSX, TSX, JSON, CSS, HTML, Python, SQL, YAML and Bash ar
 bundled; other languages retain diff and search behavior as plain text. The desktop
 installs the same files under its `components/catamorphic` directory.
 
+## Chat timeline
+
+`chat-timeline` (with `chat-queue`) is the conversation every Catamorphic chat
+renders: the desktop and the PWA install it as copies (ADR 0218). It is five
+files that install together: `chat-timeline.tsx`, `chat-steps.tsx` (the step
+model and rows), `activity-text.tsx`, `turn-rows.ts` (how a turn folds into
+rows, and the `WorkDisplay` choice) and `session-input.tsx`. Feed it from
+`useAgentChat`: `timeline`, `pending`, `queue`, `requests`
+(`chat.state?.requests`), `activity` and the actions you support; each control
+shows only when its callback is given.
+
+Host-specific pieces enter through props: `renderAttachment(attachment, place)`
+for sent attachments (default: a pill with an icon and the name), `Hint`
+(`{ label, shortcut?, children }`, default: the native title), `renderLink` and
+`onLinkClick`, `sourceHref`, `resolveToolIcon`, `onFileClick`, `onReauth`,
+`backgroundCommands`, `workDisplay` and `registerJumpToPreviousUserMessage`
+with `jumpShortcut`. Rows are memoized: keep render-affecting slots stable;
+action callbacks may change every render.
+
+Import `@catamorphic/ui/styles.css` from the host's Tailwind entry: it holds
+`.cat-markdown` and the timeline's `cat-*` motion classes. Hosts provide the
+global `:focus-visible` ring; the timeline draws no ring of its own.
+
+Copies in this repository differ from these sources only in import specifiers.
+After changing an item, run `bun scripts/registry-copies.ts --sync desktop` and
+`--sync pwa`; `bun scripts/registry-copies.ts` (part of `bun run test:scripts`)
+fails on any other difference. `bun run --cwd packages/registry test` runs the
+items' unit tests, including a DOM contract test for the selectors the desktop
+and PWA end-to-end suites read.
+
 ## Other items
 
 The catalog also includes provider/project setup, file and git views, runs,

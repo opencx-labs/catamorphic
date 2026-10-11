@@ -94,6 +94,32 @@ export function inlineAttachmentReferences<T extends NamedAttachment>(
   });
 }
 
+/**
+ * A sent message as prose runs and attachment slots, in order: the
+ * timeline draws each slot as its attachment's pill.
+ */
+export function splitAttachmentMarkers(
+  message: string,
+): Array<{ type: "text"; text: string } | { type: "pill"; index: number }> {
+  const parts: Array<
+    { type: "text"; text: string } | { type: "pill"; index: number }
+  > = [];
+  let index = 0;
+  let cursor = 0;
+  for (let at = message.indexOf(ATTACHMENT_MARKER); at !== -1; ) {
+    if (at > cursor)
+      parts.push({ type: "text", text: message.slice(cursor, at) });
+    parts.push({ type: "pill", index });
+    index += 1;
+    cursor = at + ATTACHMENT_MARKER.length;
+    at = message.indexOf(ATTACHMENT_MARKER, cursor);
+  }
+  if (cursor < message.length) {
+    parts.push({ type: "text", text: message.slice(cursor) });
+  }
+  return parts;
+}
+
 /** Message text with markers replaced by `[name]` — for titles and labels. */
 export function messageWithAttachmentNames(
   message: string,

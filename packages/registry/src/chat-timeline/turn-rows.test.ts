@@ -6,13 +6,13 @@ import {
   reply,
   timelineOf,
   turn,
-} from "../components/catamorphic/timeline-fixtures.js";
+} from "./timeline-fixtures.js";
 import {
   DEFAULT_WORK_DISPLAY,
   foldsSteps,
   type TurnRow,
   turnRows,
-} from "./turn-groups.js";
+} from "./turn-rows.js";
 
 const items: Item[] = [
   input("t1", "Go"),
