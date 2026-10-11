@@ -86,7 +86,8 @@ export function input(
     dispatch: "queue",
     attention: null,
     idempotencyKey: null,
-    metadata: {},
+    deliveredBy: null,
+    causation: [],
     ...overrides,
   };
 }
@@ -107,7 +108,8 @@ export function inbound(
     dispatch: "queue",
     attention: null,
     idempotencyKey: null,
-    metadata: {},
+    deliveredBy: null,
+    causation: [],
     ...overrides,
   };
 }
@@ -134,7 +136,8 @@ export function notification(
     dispatch: "queue",
     attention: null,
     idempotencyKey: null,
-    metadata: {},
+    deliveredBy: null,
+    causation: [],
     ...overrides,
   };
 }

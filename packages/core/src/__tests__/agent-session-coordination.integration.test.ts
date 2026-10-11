@@ -1016,6 +1016,7 @@ describe("agent session coordination", () => {
               destinationHostId: "coordination-test-host",
               authorityRevision: session.authorityRevision,
               messageId: mailboxItemId,
+              kind: "input",
               input: {
                 kind: "user_message",
                 author: {
@@ -1026,8 +1027,11 @@ describe("agent session coordination", () => {
                 attachments: [],
               },
               mode: "interrupt",
+              attention: false,
+              deliveredBy: identity.externalUserId,
+              ownerAuthored: true,
               idempotencyKey: key,
-              metadata: { ownerAuthored: true },
+              causation: [],
               createdAt: new Date().toISOString(),
             });
       const interruptsBefore = provider.interrupts;
@@ -1928,7 +1932,7 @@ describe("agent session coordination", () => {
           author: { kind: "workflow", runId, workflowName: "gmail-summary" },
           mode: "queue",
           idempotencyKey: `workflow:${runId}:${chatKey}`,
-          metadata: { workflowNotification: input.notification ?? {} },
+          alert: input.notification ?? {},
         },
       );
       return { ...receipt, ...chat };
@@ -2233,7 +2237,7 @@ describe("agent session coordination", () => {
       mode: "message_only" as const,
       author,
       idempotencyKey: "event-once",
-      metadata: { causation: ["activation-1"] },
+      causation: ["activation-1"],
     };
     await sessions.deliver(identity, project.id, session.id, delivery);
     await sessions.deliver(identity, project.id, session.id, delivery);
@@ -2725,7 +2729,7 @@ describe("agent session coordination", () => {
     };
     const notificationInput = {
       author,
-      metadata: { causation: base.causation },
+      causation: base.causation,
       content: "Review ready",
       mode: "message_only" as const,
       attention: "required" as const,
@@ -2829,25 +2833,53 @@ describe("agent session coordination", () => {
     expect(
       (await sessions.get(identity, project.id, session.id)).attentionRevision,
     ).toBe(0);
+    // A session action taken here runs where the session is.
+    expect(
+      await actions.execute({
+        identity,
+        projectId: project.id,
+        author,
+        causation: ["activation-remote"],
+        operation: "complete",
+        args: {
+          sessionId: session.id,
+          content: "Finished remotely",
+          idempotencyKey: "remote-complete",
+        },
+      }),
+    ).toMatchObject({ delivery: "queued" });
     const items = await sessions.mailboxes.list(identity, project.id, {
       destinationHostId: "remote-host",
     });
-    expect(items).toHaveLength(1);
-    expect(items[0]?.metadata?.attention).toBe("required");
+    expect(items).toEqual([
+      expect.objectContaining({
+        kind: "input",
+        attention: true,
+        deliveredBy: identity.externalUserId,
+      }),
+      expect.objectContaining({
+        kind: "action",
+        action: expect.objectContaining({
+          operation: "complete",
+          actor: author,
+        }),
+        causation: ["activation-remote"],
+      }),
+    ]);
     await db
       .updateTable("agent_sessions")
       .set({ authority_host_id: sessions.hostId })
       .where("id", "=", session.id)
       .execute();
-    const mailboxItem = items[0];
-    if (!mailboxItem) throw new Error("Expected a mailbox item");
-    const item = { ...mailboxItem, destinationHostId: sessions.hostId };
     sessions.setSessionActionHandler((input) => actions.execute(input));
-    await sessions.importMailbox(identity, project.id, item);
-    await sessions.importMailbox(identity, project.id, item);
-    expect(
-      (await sessions.get(identity, project.id, session.id)).attentionRevision,
-    ).toBe(1);
+    for (const mailboxItem of items) {
+      const item = { ...mailboxItem, destinationHostId: sessions.hostId };
+      await sessions.importMailbox(identity, project.id, item);
+      await sessions.importMailbox(identity, project.id, item);
+    }
+    const imported = await sessions.get(identity, project.id, session.id);
+    expect(imported.attentionRevision).toBe(1);
+    expect(imported.workStatus).toBe("completed");
     expect(
       (await transcriptOf(session.id, project.id)).filter(
         (message) => message.content === "Remote result",
@@ -2865,6 +2897,7 @@ describe("agent session coordination", () => {
       destinationHostId: sessions.hostId,
       authorityRevision: session.authorityRevision,
       idempotencyKey: null,
+      causation: [],
       createdAt: new Date().toISOString(),
     };
     const other = await sessions.importMailbox(identity, project.id, {
@@ -2877,8 +2910,11 @@ describe("agent session coordination", () => {
         text: "From someone else",
         attachments: [],
       },
+      kind: "input",
       mode: "queue",
-      metadata: { ownerAuthored: false, deliveredBy: "someone-else" },
+      attention: false,
+      deliveredBy: "someone-else",
+      ownerAuthored: false,
     });
     expect(other).toMatchObject({ mode: "message_only", turnId: null });
     const own = await sessions.importMailbox(identity, project.id, {
@@ -2891,19 +2927,17 @@ describe("agent session coordination", () => {
         text: "From the owner",
         attachments: [],
       },
+      kind: "input",
       mode: "queue",
-      metadata: { ownerAuthored: true },
+      attention: false,
+      deliveredBy: identity.externalUserId,
+      ownerAuthored: true,
     });
     expect(own.mode).toBe("queue");
     expect(own.turnId).not.toBeNull();
     // The flag is the server's word for the item, never kept on it.
     const items = (await snapshot(session.id, project.id)).items;
-    expect(
-      items.some(
-        (item) =>
-          item.kind === "user_message" && "ownerAuthored" in item.metadata,
-      ),
-    ).toBe(false);
+    expect(items.some((item) => "ownerAuthored" in item)).toBe(false);
     // Someone else's words are for people to read: the owner's turn, on
     // their own machine, never takes them in (ADR 0199).
     expect(

@@ -102,7 +102,7 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0087](0087-workflow-woken-session-attention.md) | Workflow-woken sessions are the notification record | Superseded by 0156 (who a workflow's chat reaches) |
 | [0088](0088-desktop-web-links-stay-in-workspace.md) | Desktop web links stay in the workspace | Accepted |
 | [0089](0089-project-shaped-member-shell.md) | Project-shaped member shell and durable session provenance | Accepted |
-| [0090](0090-first-class-subsessions-and-delegation.md) | First-class subsessions and explicit delegation grants | Accepted (amended by 0197, 0202) |
+| [0090](0090-first-class-subsessions-and-delegation.md) | First-class subsessions and explicit delegation grants | Accepted (amended by 0197, 0202; causation is a typed delivery field by 0219) |
 | [0091](0091-on-demand-desktop-harness-components.md) | Desktop coding harnesses use verified on-demand components | Accepted |
 | [0092](0092-project-owned-capability-experiences.md) | Project-owned capability experiences | Accepted (`when.builder` superseded by 0158) |
 | [0093](0093-session-model-overrides-and-desktop-toolchain.md) | Session model overrides and the desktop toolchain | Accepted (PATH amended by 0202) |
@@ -211,7 +211,7 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0196](0196-installed-claude-code-first.md) | The person's own Claude Code runs first; Claude Code and Codex pins move by scheduled pull request | Accepted |
 | [0197](0197-agent-sessions-are-an-event-log-of-turns.md) | Agent sessions are an event log of turns | Accepted (amends 0195: replies to a waiting question steer the turn; input item kinds by 0217) |
 | [0198](0198-agent-runners-run-harnesses-beside-their-workspace.md) | Agent runners run harnesses beside their workspace | Accepted (amended by 0214: a chat keeps its harness) |
-| [0199](0199-subscription-sign-ins-stay-on-the-machine.md) | Subscription sign-ins stay on the machine they were made on | Accepted (amended by 0213: Codex only, on a member's own machine) |
+| [0199](0199-subscription-sign-ins-stay-on-the-machine.md) | Subscription sign-ins stay on the machine they were made on | Accepted (amended by 0213: Codex only, on a member's own machine; who delivered an input is a typed field by 0219) |
 | [0200](0200-sidebars-move-first-content-settles-after.md) | Sidebars move first; the content settles after them | Accepted |
 | [0201](0201-work-keeps-passkeys-in-the-profile-vault.md) | Work keeps passkeys in the profile's vault: the sheet saves and signs in, autofill offers them, Bitwarden and KeePassXC files import | Accepted (amends 0185, 0151) |
 | [0202](0202-agents-see-the-browser-subagents-and-their-path.md) | Agents see the browser, their subagents and their PATH | Accepted (amends 0133, 0090, 0112, 0093) |
@@ -229,4 +229,5 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0214](0214-a-chat-runs-on-one-harness.md) | A chat runs on one harness | Accepted (amends 0198) |
 | [0215](0215-a-chats-own-worktree.md) | A chat's own worktree: chosen by the person, set up, put away, brought back | Accepted (refines 0045, 0063, 0208) |
 | [0216](0216-voice-local-speech-in-any-chat-and-the-assistant.md) | Voice: local speech, in any chat, and the assistant | Proposed (experimental; session notes are task notifications by 0217) |
-| [0217](0217-only-people-write-user-messages.md) | Only people write user messages: inbound messages and task notifications | Accepted (amends 0074, 0155, 0197, 0216) |
+| [0217](0217-only-people-write-user-messages.md) | Only people write user messages: inbound messages and task notifications | Accepted (amends 0074, 0155, 0197, 0216; delivery fields typed by 0219) |
+| [0219](0219-typed-deliveries.md) | Deliveries are typed: no free-form input metadata, mailbox inputs or actions | Accepted (amends 0090, 0199, 0217) |

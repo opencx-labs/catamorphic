@@ -87,7 +87,8 @@ const input = (turnId: string, text: string): UserMessageItem => ({
   dispatch: "queue",
   attention: null,
   idempotencyKey: null,
-  metadata: {},
+  deliveredBy: null,
+  causation: [],
 });
 
 const reply = (turnId: string, text: string): AssistantMessageItem => ({

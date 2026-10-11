@@ -44,7 +44,8 @@ const common = {
   dispatch: "queue" as const,
   attention: null,
   idempotencyKey: null,
-  metadata: {},
+  deliveredBy: null,
+  causation: [],
 };
 
 const inbound = (

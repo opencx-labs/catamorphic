@@ -600,6 +600,7 @@ describe("RemoteSessionMirror", () => {
         destinationHostId: "desktop:test-host",
         authorityRevision: 1,
         messageId: "message-1",
+        kind: "input",
         input: {
           kind: "inbound_message",
           from: { kind: "workflow", runId: "run-1", workflowName: "prChecks" },
@@ -607,8 +608,11 @@ describe("RemoteSessionMirror", () => {
           attachments: [],
         },
         mode: "queue",
+        attention: false,
+        deliveredBy: "member",
+        ownerAuthored: true,
         idempotencyKey: "delivery-1",
-        metadata: null,
+        causation: [],
         createdAt: new Date().toISOString(),
       },
     ];

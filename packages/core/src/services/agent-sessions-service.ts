@@ -27,6 +27,7 @@ import {
   type SessionMessageAuthor,
   type SessionSnapshot,
   type SessionStreamMessage,
+  type SettledAlert,
   sessionInputSchema,
   type Turn,
   type TurnError,
@@ -304,7 +305,6 @@ interface AgentExecutionRuntime {
 export interface SessionOperationOrigin {
   author: SessionMessageAuthor;
   causation?: string[];
-  provenance?: JsonObject;
 }
 
 type SessionVisibility = "latent" | "promoted" | "archived";
@@ -2053,7 +2053,9 @@ export class AgentSessionsService {
       dispatch: DispatchMode;
       attention?: "required" | "none";
       idempotencyKey?: string;
-      metadata?: JsonObject;
+      /** The member whose call delivered it (ADR 0199). */
+      deliveredBy: string | null;
+      causation?: string[];
       commandId?: string;
       /** Pre-allocated item id (a mailbox delivery keeps its id across hosts). */
       itemId?: string;
@@ -2102,7 +2104,7 @@ export class AgentSessionsService {
         projectId: session.project_id,
         owner: session.external_user_id,
         input,
-        metadata: delivery.metadata ?? null,
+        deliveredBy: delivery.deliveredBy,
         executor: trx,
       })) ||
       (await trx
@@ -2120,12 +2122,11 @@ export class AgentSessionsService {
     // later; a permission request is withdrawn.
     const replyToWaiting =
       joinable &&
-      (input.kind === "user_message" ||
+      ((input.kind === "user_message" && !input.answer) ||
         (input.kind === "inbound_message" &&
           input.from.kind === "assistant")) &&
       delivery.dispatch === "queue" &&
-      active?.status === "waiting" &&
-      delivery.metadata?.questionRequestId === undefined;
+      active?.status === "waiting";
     // A notification reaches a turn while it works; once it waits on the
     // person or its answer is on the way, the next turn takes it in.
     const steerable =
@@ -2151,7 +2152,7 @@ export class AgentSessionsService {
       (await this.alikeForOwner(trx, {
         session,
         input,
-        metadata: delivery.metadata ?? null,
+        deliveredBy: delivery.deliveredBy,
         turn: waitingTurn,
       }))
         ? waitingTurn
@@ -2219,11 +2220,7 @@ export class AgentSessionsService {
         });
       }
     }
-    const attention =
-      (delivery.attention ?? delivery.metadata?.attention) === "required";
-    const metadata: JsonObject = { ...delivery.metadata };
-    delete metadata.attention;
-    delete metadata.attachments;
+    const attention = delivery.attention === "required";
     const item: InputItem = {
       id: itemId,
       sessionId,
@@ -2245,7 +2242,8 @@ export class AgentSessionsService {
       dispatch,
       attention: attention ? "required" : null,
       idempotencyKey: delivery.idempotencyKey ?? null,
-      metadata: protocolJson(metadata),
+      deliveredBy: delivery.deliveredBy,
+      causation: delivery.causation ?? [],
     };
     // The item comes first: a turn's input is in the log before the turn.
     events.unshift({ type: "item.added", item });
@@ -2278,7 +2276,7 @@ export class AgentSessionsService {
         payload: { itemId },
       });
     // The actor and causation of the workflow-facing events (ADR 0090).
-    await sql`select set_config('catamorphic.session_actor', ${JSON.stringify({ ...inputActor(input), causation: delivery.metadata?.causation ?? [] })}, true)`.execute(
+    await sql`select set_config('catamorphic.session_actor', ${JSON.stringify({ ...inputActor(input), causation: delivery.causation ?? [] })}, true)`.execute(
       trx,
     );
     await this.log.append(trx, {
@@ -2362,7 +2360,10 @@ export class AgentSessionsService {
       mode: DispatchMode;
       attention?: "required" | "none";
       idempotencyKey?: string;
-      metadata?: JsonObject;
+      /** The enablements whose runs led here; an agent's are looked up. */
+      causation?: string[];
+      /** A workflow's ask that the chat's people hear when the turn settles. */
+      alert?: SettledAlert;
       attachments?: AgentAttachment[];
       /** Move the chat's workspace to a ref before its next turn (ADR 0178). */
       workspace?: SessionWorkspaceRequest;
@@ -2376,23 +2377,28 @@ export class AgentSessionsService {
         input.workspace,
       );
     const causation =
-      input.author.kind === "agent" && !input.metadata?.causation
+      input.causation ??
+      (input.author.kind === "agent"
         ? await this.causalContext({
             identity,
             projectId: input.author.projectId ?? projectId,
             sessionId: input.author.sessionId,
           })
-        : undefined;
+        : []);
+    const message = messageInput({
+      author: input.author,
+      text: input.content,
+      ...(input.attachments ? { attachments: input.attachments } : {}),
+    });
     return this.deliverInput(identity, projectId, sessionId, {
-      input: messageInput({
-        author: input.author,
-        text: input.content,
-        ...(input.attachments ? { attachments: input.attachments } : {}),
-      }),
+      input:
+        message.kind === "inbound_message" && input.alert
+          ? { ...message, alert: input.alert }
+          : message,
       mode: input.mode,
       ...(input.attention ? { attention: input.attention } : {}),
       ...(input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : {}),
-      metadata: { ...input.metadata, ...(causation ? { causation } : {}) },
+      causation,
     });
   }
 
@@ -2415,7 +2421,6 @@ export class AgentSessionsService {
       source?: InputSource | null;
       mode?: "steer" | "message_only";
       idempotencyKey: string;
-      metadata?: JsonObject;
     },
   ): Promise<SessionDeliveryReceipt> {
     // Checked here, so a host's mistake fails its call rather than a
@@ -2431,7 +2436,6 @@ export class AgentSessionsService {
       input: notification,
       mode: input.mode ?? "steer",
       idempotencyKey: input.idempotencyKey,
-      ...(input.metadata ? { metadata: input.metadata } : {}),
     });
   }
 
@@ -2444,15 +2448,12 @@ export class AgentSessionsService {
       mode: DispatchMode;
       attention?: "required" | "none";
       idempotencyKey?: string;
-      metadata?: JsonObject;
+      causation?: string[];
     },
   ): Promise<SessionDeliveryReceipt> {
-    const metadata: JsonObject = {
-      ...delivery.metadata,
-      // Whose call delivered it, whoever wrote it: a chat that runs on its
-      // owner's own sign-in answers only their own doing (ADR 0199).
-      deliveredBy: identity.externalUserId,
-    };
+    // Whose call delivered it, whoever wrote it: a chat that runs on its
+    // owner's own sign-in answers only their own doing (ADR 0199).
+    const deliveredBy = identity.externalUserId;
     const session = await this.requireSession(identity, projectId, sessionId);
     if (session.status !== "active")
       throw new AgentSessionClosedError(sessionId);
@@ -2465,24 +2466,25 @@ export class AgentSessionsService {
           hostId: session.authority_host_id,
           revision: Number(session.authority_revision),
         },
-        input: delivery.input,
-        mode: delivery.mode,
-        ...(delivery.idempotencyKey
-          ? { idempotencyKey: delivery.idempotencyKey }
-          : {}),
-        // The authority applies the attention when it imports the item,
-        // and runs a turn only for what the owner wrote: it runs on the
-        // owner's own machine and credentials (ADR 0199).
-        metadata: {
-          ...metadata,
-          ...(delivery.attention ? { attention: delivery.attention } : {}),
+        // The authority runs a turn only for what the owner wrote: it runs
+        // on the owner's own machine and credentials (ADR 0199).
+        delivery: {
+          kind: "input",
+          input: delivery.input,
+          mode: delivery.mode,
+          attention: delivery.attention === "required",
+          deliveredBy,
           ownerAuthored: await this.authoredByOwner({
             projectId,
             owner: session.external_user_id,
             input: delivery.input,
-            metadata,
+            deliveredBy,
           }),
         },
+        ...(delivery.idempotencyKey
+          ? { idempotencyKey: delivery.idempotencyKey }
+          : {}),
+        ...(delivery.causation ? { causation: delivery.causation } : {}),
       });
     await this.claimLocalAuthority(session);
     const receipt = await this.db.transaction().execute(async (trx) => {
@@ -2502,7 +2504,8 @@ export class AgentSessionsService {
         ...(delivery.idempotencyKey
           ? { idempotencyKey: delivery.idempotencyKey }
           : {}),
-        metadata,
+        deliveredBy,
+        ...(delivery.causation ? { causation: delivery.causation } : {}),
       });
     });
     // Work delivered to an archived chat runs; the chat comes back into view.
@@ -2531,44 +2534,25 @@ export class AgentSessionsService {
       item.destinationHostId !== this.hostId
     )
       throw new SessionMirrorDivergedError(item.sessionId);
-    const action = item.metadata?.sessionAction;
-    if (
-      action &&
-      typeof action === "object" &&
-      !Array.isArray(action) &&
-      typeof action.operation === "string" &&
-      this.sessionActionHandler
-    ) {
+    if (item.kind === "action") {
+      const handle = this.sessionActionHandler;
+      if (!handle) throw new Error("Session actions are not configured here");
       const { SESSION_ACTION_SCHEMAS } = await import(
         "./session-actions-service.js"
       );
-      const operation = action.operation;
-      if (!(operation in SESSION_ACTION_SCHEMAS))
+      const named = {
+        operation: item.action.operation,
+        schemas: SESSION_ACTION_SCHEMAS,
+      };
+      if (!isSessionActionOperation(named))
         throw new Error("Unknown session action");
-      await this.sessionActionHandler({
+      await handle({
         identity,
         projectId,
-        author:
-          item.input.kind === "user_message"
-            ? item.input.author
-            : item.input.kind === "inbound_message"
-              ? item.input.from
-              : (() => {
-                  throw new Error("A session action names who took it");
-                })(),
-        operation: operation as keyof typeof SESSION_ACTION_SCHEMAS,
-        args: action.args,
-        provenance:
-          action.provenance &&
-          typeof action.provenance === "object" &&
-          !Array.isArray(action.provenance)
-            ? action.provenance
-            : {},
-        causation: Array.isArray(action.causation)
-          ? action.causation.filter(
-              (id): id is string => typeof id === "string",
-            )
-          : [],
+        author: item.action.actor,
+        operation: named.operation,
+        args: item.action.args,
+        causation: item.causation,
       });
       return {
         messageId: item.messageId,
@@ -2580,7 +2564,6 @@ export class AgentSessionsService {
     // This host runs the chat on its owner's own machine and credentials:
     // only what the owner wrote starts a turn; anything else is delivered
     // to read, attributed, and runs nothing (ADR 0199).
-    const { ownerAuthored, ...metadata } = item.metadata ?? {};
     const receipt = await this.db.transaction().execute(async (trx) => {
       const locked = await trx
         .selectFrom("agent_sessions")
@@ -2591,11 +2574,13 @@ export class AgentSessionsService {
       return this.deliverIn(trx, {
         session: locked,
         input: item.input,
-        dispatch: ownerAuthored === true ? item.mode : "message_only",
-        forAgent: ownerAuthored === true,
+        dispatch: item.ownerAuthored ? item.mode : "message_only",
+        forAgent: item.ownerAuthored,
         itemId: item.messageId,
         idempotencyKey: `mailbox:${item.sourceHostId}:${item.id}`,
-        metadata,
+        ...(item.attention ? { attention: "required" as const } : {}),
+        deliveredBy: item.deliveredBy,
+        causation: item.causation,
       });
     });
     if (receipt.turnId) this.kick(item.sessionId);
@@ -2797,7 +2782,7 @@ export class AgentSessionsService {
                 dispatch,
                 idempotencyKey: commandId,
                 commandId,
-                metadata: { deliveredBy: identity.externalUserId },
+                deliveredBy: identity.externalUserId,
               });
               return {
                 itemId: delivered.messageId,
@@ -3767,18 +3752,16 @@ export class AgentSessionsService {
           },
           text: `${questions}\n\nUser answer:\n${response.answers.join("\n")}`,
           attachments: [],
+          // The batch and the raw answer render the history entry.
+          answer: {
+            requestId: request.id,
+            questions: request.questions ?? [],
+            answers: response.answers,
+          },
         },
         dispatch: turn && isActiveTurnStatus(turn.status) ? "steer" : "queue",
         idempotencyKey: `question-answer:${request.id}`,
-        metadata: {
-          questionRequestId: request.id,
-          deliveredBy: input.identity.externalUserId,
-          // The batch and the raw answer render the history entry.
-          question: protocolJson({
-            questions: request.questions ?? [],
-            answers: response.answers,
-          }),
-        },
+        deliveredBy: input.identity.externalUserId,
       });
     }
     return { requestId: request.id };
@@ -4201,7 +4184,7 @@ export class AgentSessionsService {
           projectId: session.project_id,
           owner: session.external_user_id,
           input: item,
-          metadata: item.metadata,
+          deliveredBy: item.deliveredBy,
         }),
       reattach: (input) => this.reattachRunner(input),
       hostTool: (input) => this.runHostTool(input),
@@ -5050,7 +5033,7 @@ export class AgentSessionsService {
       inputItem?.kind === "inbound_message" &&
       inputItem.from.kind === "workflow" &&
       input.completion.status !== "interrupted"
-        ? workflowNotification(inputItem.metadata as JsonObject)
+        ? inputItem.alert
         : undefined;
     return {
       outcome: {
@@ -6203,15 +6186,14 @@ export class AgentSessionsService {
     projectId: string;
     owner: string;
     input: SessionInput;
-    metadata?: JsonObject | null;
+    deliveredBy: string | null;
     executor?: Kysely<DB> | Transaction<DB>;
   }): Promise<boolean> {
     const { owner, projectId } = input;
     const db = input.executor ?? this.db;
     if (input.input.kind === "user_message")
       return input.input.author.externalUserId === owner;
-    // Stamped by `deliver` with the identity whose call delivered it.
-    if (input.metadata?.deliveredBy !== owner) return false;
+    if (input.deliveredBy !== owner) return false;
     if (input.input.kind === "task_notification") return true;
     const author = input.input.from;
     switch (author.kind) {
@@ -6262,7 +6244,7 @@ export class AgentSessionsService {
     input: {
       session: SessionRow;
       input: SessionInput;
-      metadata: JsonObject | null;
+      deliveredBy: string | null;
       turn: Turn;
     },
   ): Promise<boolean> {
@@ -6275,17 +6257,17 @@ export class AgentSessionsService {
       : undefined;
     const waiting = row ? itemFromRow(row) : null;
     if (!waiting || !isInputItem(waiting)) return false;
-    const owned = (candidate: SessionInput, metadata: JsonObject | null) =>
+    const owned = (candidate: SessionInput, deliveredBy: string | null) =>
       this.authoredByOwner({
         projectId: input.session.project_id,
         owner: input.session.external_user_id,
         input: candidate,
-        metadata,
+        deliveredBy,
         executor: trx,
       });
     return (
-      (await owned(input.input, input.metadata)) ===
-      (await owned(waiting, waiting.metadata))
+      (await owned(input.input, input.deliveredBy)) ===
+      (await owned(waiting, waiting.deliveredBy))
     );
   }
 
@@ -6330,7 +6312,7 @@ export class AgentSessionsService {
           projectId: input.projectId,
           owner: input.owner,
           input: item,
-          metadata: item.metadata,
+          deliveredBy: item.deliveredBy,
         }))
       )
         return false;
@@ -7548,11 +7530,8 @@ export class AgentSessionsService {
       const receipt = await this.deliverIn(transaction, {
         session: childRow,
         input: messageInput({ author: origin.author, text: task }),
-        metadata: {
-          causation: origin.causation ?? [],
-          provenance: origin.provenance ?? {},
-          deliveredBy: identity.externalUserId,
-        },
+        deliveredBy: identity.externalUserId,
+        causation: origin.causation ?? [],
         dispatch: "queue",
         idempotencyKey: `delegation:${delegation.id}:task`,
       });
@@ -7714,11 +7693,7 @@ export class AgentSessionsService {
       .where("turn.status", "in", [...ACTIVE_TURN_STATUSES])
       .executeTakeFirst();
     const item = row ? itemFromRow(row) : null;
-    const chain =
-      item && isInputItem(item) ? item.metadata.causation : undefined;
-    return Array.isArray(chain)
-      ? chain.filter((id): id is string => typeof id === "string")
-      : [];
+    return item && isInputItem(item) ? item.causation : [];
   }
 
   /** Explicitly claim a mirrored session for this host with a fencing CAS. */
@@ -11100,25 +11075,12 @@ function resolveDelegationTarget(input: {
   return resolved;
 }
 
-function workflowNotification(
-  metadata: JsonObject | null | undefined,
-): { title?: string; body?: string } | undefined {
-  const value = metadata?.workflowNotification;
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return undefined;
-  }
-  const title =
-    typeof value.title === "string" && value.title.trim()
-      ? value.title.trim()
-      : undefined;
-  const body =
-    typeof value.body === "string" && value.body.trim()
-      ? value.body.trim()
-      : undefined;
-  return {
-    ...(title ? { title } : {}),
-    ...(body ? { body } : {}),
-  };
+/** Whether a forwarded action names one this host runs. */
+function isSessionActionOperation<T extends object>(input: {
+  operation: string;
+  schemas: T;
+}): input is { operation: Extract<keyof T, string>; schemas: T } {
+  return Object.hasOwn(input.schemas, input.operation);
 }
 
 function parseSessionSource(value: string): AgentSessionSource {

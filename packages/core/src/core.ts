@@ -560,11 +560,11 @@ export class CatamorphicCore {
         ),
         stop: async (context, args) => {
           const origin = await this.workflowSessionOrigin(context);
-          if (
-            !origin.provenance.sessionId ||
-            !origin.provenance.watcherId ||
-            !this.sessionActions
-          )
+          const watcher =
+            origin.author.kind === "workflow"
+              ? origin.author.watcher
+              : undefined;
+          if (!watcher || !this.sessionActions)
             throw new Error(
               "Only a temporary workflow can stop its own activation",
             );
@@ -575,8 +575,8 @@ export class CatamorphicCore {
             ...origin,
             args: {
               ...(args && typeof args === "object" ? args : {}),
-              sessionId: origin.provenance.sessionId,
-              watcherId: origin.provenance.watcherId,
+              sessionId: watcher.sessionId,
+              watcherId: watcher.id,
             },
           });
         },
@@ -599,13 +599,11 @@ export class CatamorphicCore {
             mode: input.mode,
             ...(input.attention ? { attention: input.attention } : {}),
             idempotencyKey,
-            metadata: {
-              provenance: origin.provenance,
-              causation: origin.causation,
-              ...(input.notification || "key" in input
-                ? { workflowNotification: input.notification ?? {} }
-                : {}),
-            },
+            causation: origin.causation,
+            // A chat a workflow keeps alerts its people when the turn settles.
+            ...(input.notification || "key" in input
+              ? { alert: input.notification ?? {} }
+              : {}),
           };
           const nameApprovers = async (owner: Identity, sessionId: string) => {
             const approvers = input.approvers;
@@ -1352,6 +1350,10 @@ export class CatamorphicCore {
       ...previous,
       ...(run.workflow_enablement_id ? [run.workflow_enablement_id] : []),
     ];
+    const runInput =
+      run.input && typeof run.input === "object" && !Array.isArray(run.input)
+        ? run.input
+        : {};
     const author: SessionMessageAuthor = {
       kind: "workflow",
       runId: context.runId,
@@ -1362,34 +1364,20 @@ export class CatamorphicCore {
       typeof run.provenance.displayName === "string"
         ? { displayName: run.provenance.displayName }
         : {}),
+      ...(run.workflow_enablement_id
+        ? { enablementId: run.workflow_enablement_id }
+        : {}),
+      ...(watcher?.session_id
+        ? { watcher: { id: watcher.id, sessionId: watcher.session_id } }
+        : {}),
+      ...(typeof runInput.scheduledFor === "string"
+        ? { scheduledFor: runInput.scheduledFor }
+        : {}),
+      ...(typeof runInput.firedAt === "string"
+        ? { firedAt: runInput.firedAt }
+        : {}),
     };
-    return {
-      author,
-      causation,
-      provenance: {
-        projectId: context.projectId,
-        hostId: this.agentSessions?.hostId ?? "",
-        runId: context.runId,
-        workflowName: context.workflowName,
-        scheduledFor:
-          run.input &&
-          typeof run.input === "object" &&
-          !Array.isArray(run.input) &&
-          typeof run.input.scheduledFor === "string"
-            ? run.input.scheduledFor
-            : null,
-        firedAt:
-          run.input &&
-          typeof run.input === "object" &&
-          !Array.isArray(run.input) &&
-          typeof run.input.firedAt === "string"
-            ? run.input.firedAt
-            : null,
-        enablementId: run.workflow_enablement_id,
-        watcherId: watcher?.id ?? null,
-        sessionId: watcher?.session_id ?? null,
-      },
-    };
+    return { author, causation };
   }
 }
 

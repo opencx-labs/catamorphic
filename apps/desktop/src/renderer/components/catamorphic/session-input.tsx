@@ -305,7 +305,6 @@ export function InboundMessageRow({
   focused?: boolean;
 }) {
   const Icon = SENDER_ICONS[item.from.kind];
-  const provenance = record(item.metadata.provenance);
   const source = senderSource(item.from);
   // Attachments read by name, where they were placed in the words.
   const text = messageWithAttachmentNames(item.text, item.attachments);
@@ -318,14 +317,16 @@ export function InboundMessageRow({
       href: `workflow:${encodeURIComponent(item.from.workflowName)}`,
       label: "Open workflow",
     });
-  const originatingId = string(provenance?.sessionId);
-  const originating =
-    originatingId && item.from.kind !== "agent"
-      ? hrefOf({ kind: "session", sessionId: originatingId }, sourceHref)
-      : null;
+  const workflow = item.from.kind === "workflow" ? item.from : undefined;
+  const originating = workflow?.watcher
+    ? hrefOf(
+        { kind: "session", sessionId: workflow.watcher.sessionId },
+        sourceHref,
+      )
+    : null;
   if (originating) links.push({ href: originating, label: "Originating chat" });
-  const scheduledFor = string(provenance?.scheduledFor);
-  const firedAt = string(provenance?.firedAt);
+  const scheduledFor = workflow?.scheduledFor;
+  const firedAt = workflow?.firedAt;
   const late =
     scheduledFor !== undefined &&
     firedAt !== undefined &&

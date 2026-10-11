@@ -163,6 +163,14 @@ export type InboundSender =
       workflowName: string;
       /** The workflow's `@displayname`, for people; `workflowName` is code. */
       displayName?: string;
+      /** The enablement that ran it, when one did (ADR 0156). */
+      enablementId?: string;
+      /** The temporary watcher it ran as, and the chat it watches for (ADR 0074). */
+      watcher?: { id: string; sessionId: string };
+      /** A scheduled run: when it was due. */
+      scheduledFor?: string;
+      /** When its trigger fired. */
+      firedAt?: string;
     };
 
 /** Who wrote an input: the person, or an {@link InboundSender}. */
@@ -209,6 +217,21 @@ export interface NotifiedTask {
   status: TaskNotificationStatus;
 }
 
+/** A person's answer to an agent's questions (ADR 0195). */
+export interface QuestionAnswer {
+  /** The question request it answers. */
+  requestId: string;
+  questions: AgentQuestion[];
+  /** One per question, as the person picked or wrote it. */
+  answers: string[];
+}
+
+/** What people are told when the turn an input started settles. */
+export interface SettledAlert {
+  title?: string;
+  body?: string;
+}
+
 /**
  * What a delivery puts into a session (ADR 0217): a person's words, words
  * someone else sent, or Work's notification about a task the agent
@@ -220,12 +243,16 @@ export type SessionInput =
       author: SessionUser;
       text: string;
       attachments: AgentAttachment[];
+      /** Present when the words answer the agent's questions. */
+      answer?: QuestionAnswer;
     }
   | {
       kind: "inbound_message";
       from: InboundSender;
       text: string;
       attachments: AgentAttachment[];
+      /** A workflow's ask that its chat's people hear when the turn settles. */
+      alert?: SettledAlert;
     }
   | {
       kind: "task_notification";
@@ -435,14 +462,20 @@ export interface ItemCommon {
   endedAt: string | null;
 }
 
-/** What every delivered input carries besides its own fields. */
+/** What every delivered input carries besides its own fields (ADR 0219). */
 export interface DeliveryFields {
   dispatch: DispatchMode;
   /** A delivery that asked the owner to look (ADR 0090). */
   attention: "required" | null;
   idempotencyKey: string | null;
-  /** Provenance and causation of a delivery: data, never instructions. */
-  metadata: JsonObject;
+  /**
+   * The member whose call delivered it, whoever wrote it: a turn on the
+   * chat owner's own sign-in takes in only their own doing (ADR 0199).
+   * Null for what was delivered before Work recorded it.
+   */
+  deliveredBy: string | null;
+  /** The enablements whose runs led to it, oldest first (ADR 0090). */
+  causation: string[];
 }
 
 /**
