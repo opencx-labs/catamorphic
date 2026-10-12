@@ -62,19 +62,19 @@
       "messages": [
         {
           "type": "replay.input",
-          "uuid": "e9e1c0ba-9856-47cc-b359-1d66d9fb1342",
+          "uuid": "6a03db22-1f3f-4c1d-9d9a-aef64674e194",
           "text": "Look up two words"
         },
         {
           "type": "command_lifecycle",
-          "command_uuid": "e9e1c0ba-9856-47cc-b359-1d66d9fb1342",
+          "command_uuid": "6a03db22-1f3f-4c1d-9d9a-aef64674e194",
           "state": "queued",
           "uuid": "f3bc06aa-f38e-454d-92fb-fd631561d29a",
           "session_id": "bbf80ba1-183b-4dd2-a53d-811ff2734ccd"
         },
         {
           "type": "command_lifecycle",
-          "command_uuid": "e9e1c0ba-9856-47cc-b359-1d66d9fb1342",
+          "command_uuid": "6a03db22-1f3f-4c1d-9d9a-aef64674e194",
           "state": "started",
           "uuid": "7a4bdeba-a084-4ec8-8814-47b0bf628c76",
           "session_id": "bbf80ba1-183b-4dd2-a53d-811ff2734ccd"
@@ -254,8 +254,8 @@
           "parent_tool_use_id": null,
           "uuid": "ae2fce91-cc62-439e-9913-15e78e4d538c",
           "ttft_ms": 4,
-          "user_message_uuid": "e9e1c0ba-9856-47cc-b359-1d66d9fb1342",
-          "user_message_uuids": ["e9e1c0ba-9856-47cc-b359-1d66d9fb1342"]
+          "user_message_uuid": "6a03db22-1f3f-4c1d-9d9a-aef64674e194",
+          "user_message_uuids": ["6a03db22-1f3f-4c1d-9d9a-aef64674e194"]
         },
         {
           "type": "stream_event",
@@ -757,7 +757,7 @@
                 "role": "user",
                 "content": "Look up two words"
               },
-              "uuid": "e9e1c0ba-9856-47cc-b359-1d66d9fb1342",
+              "uuid": "6a03db22-1f3f-4c1d-9d9a-aef64674e194",
               "timestamp": "2026-10-02T14:13:31.001Z",
               "permissionMode": "acceptEdits",
               "promptSource": "sdk",
@@ -769,7 +769,7 @@
               "gitBranch": "HEAD"
             },
             {
-              "parentUuid": "e9e1c0ba-9856-47cc-b359-1d66d9fb1342",
+              "parentUuid": "6a03db22-1f3f-4c1d-9d9a-aef64674e194",
               "isSidechain": false,
               "attachment": {
                 "type": "agent_listing_delta",
@@ -1202,14 +1202,14 @@
           "ttft_stream_ms": 36,
           "time_to_request_ms": 32,
           "first_content_frame_ms": 36,
-          "user_message_uuid": "e9e1c0ba-9856-47cc-b359-1d66d9fb1342",
-          "user_message_uuids": ["e9e1c0ba-9856-47cc-b359-1d66d9fb1342"],
+          "user_message_uuid": "6a03db22-1f3f-4c1d-9d9a-aef64674e194",
+          "user_message_uuids": ["6a03db22-1f3f-4c1d-9d9a-aef64674e194"],
           "request_sent_wall_ms": 1790950411030,
           "queued_turn_count": 0
         },
         {
           "type": "command_lifecycle",
-          "command_uuid": "e9e1c0ba-9856-47cc-b359-1d66d9fb1342",
+          "command_uuid": "6a03db22-1f3f-4c1d-9d9a-aef64674e194",
           "state": "completed",
           "uuid": "22dfa66c-f7b8-4d51-8bb6-3f2d5d7bbd14",
           "session_id": "bbf80ba1-183b-4dd2-a53d-811ff2734ccd"

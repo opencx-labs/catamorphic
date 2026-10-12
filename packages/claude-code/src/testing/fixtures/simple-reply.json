@@ -60,19 +60,19 @@
       "messages": [
         {
           "type": "replay.input",
-          "uuid": "89ba3f0d-6748-4494-9c4a-1bc15533691d",
+          "uuid": "bd83c8ac-5e2a-4a05-a1da-771389f11abb",
           "text": "Say hello"
         },
         {
           "type": "command_lifecycle",
-          "command_uuid": "89ba3f0d-6748-4494-9c4a-1bc15533691d",
+          "command_uuid": "bd83c8ac-5e2a-4a05-a1da-771389f11abb",
           "state": "queued",
           "uuid": "ef73fdc0-3cad-45c2-84f1-fe4d47e8b3e1",
           "session_id": "ce7a8cfd-32a7-47c5-a7a4-d05b324c36c2"
         },
         {
           "type": "command_lifecycle",
-          "command_uuid": "89ba3f0d-6748-4494-9c4a-1bc15533691d",
+          "command_uuid": "bd83c8ac-5e2a-4a05-a1da-771389f11abb",
           "state": "started",
           "uuid": "8945ba71-9e4b-475d-b380-57960c7de131",
           "session_id": "ce7a8cfd-32a7-47c5-a7a4-d05b324c36c2"
@@ -246,8 +246,8 @@
           "parent_tool_use_id": null,
           "uuid": "cee27271-679d-4807-a5fc-9eae79a6171d",
           "ttft_ms": 7,
-          "user_message_uuid": "89ba3f0d-6748-4494-9c4a-1bc15533691d",
-          "user_message_uuids": ["89ba3f0d-6748-4494-9c4a-1bc15533691d"]
+          "user_message_uuid": "bd83c8ac-5e2a-4a05-a1da-771389f11abb",
+          "user_message_uuids": ["bd83c8ac-5e2a-4a05-a1da-771389f11abb"]
         },
         {
           "type": "stream_event",
@@ -271,7 +271,7 @@
           "estimated_tokens_delta": 9,
           "session_id": "ce7a8cfd-32a7-47c5-a7a4-d05b324c36c2",
           "uuid": "2d4c5d6c-bbb1-42cf-96c5-74648238b936",
-          "user_message_uuid": "89ba3f0d-6748-4494-9c4a-1bc15533691d"
+          "user_message_uuid": "bd83c8ac-5e2a-4a05-a1da-771389f11abb"
         },
         {
           "type": "stream_event",
@@ -473,7 +473,7 @@
                 "role": "user",
                 "content": "Say hello"
               },
-              "uuid": "89ba3f0d-6748-4494-9c4a-1bc15533691d",
+              "uuid": "bd83c8ac-5e2a-4a05-a1da-771389f11abb",
               "timestamp": "2026-10-02T14:13:28.925Z",
               "permissionMode": "acceptEdits",
               "promptSource": "sdk",
@@ -485,7 +485,7 @@
               "gitBranch": "HEAD"
             },
             {
-              "parentUuid": "89ba3f0d-6748-4494-9c4a-1bc15533691d",
+              "parentUuid": "bd83c8ac-5e2a-4a05-a1da-771389f11abb",
               "isSidechain": false,
               "attachment": {
                 "type": "agent_listing_delta",
@@ -779,14 +779,14 @@
           "ttft_stream_ms": 44,
           "time_to_request_ms": 37,
           "first_content_frame_ms": 44,
-          "user_message_uuid": "89ba3f0d-6748-4494-9c4a-1bc15533691d",
-          "user_message_uuids": ["89ba3f0d-6748-4494-9c4a-1bc15533691d"],
+          "user_message_uuid": "bd83c8ac-5e2a-4a05-a1da-771389f11abb",
+          "user_message_uuids": ["bd83c8ac-5e2a-4a05-a1da-771389f11abb"],
           "request_sent_wall_ms": 1790950408951,
           "queued_turn_count": 0
         },
         {
           "type": "command_lifecycle",
-          "command_uuid": "89ba3f0d-6748-4494-9c4a-1bc15533691d",
+          "command_uuid": "bd83c8ac-5e2a-4a05-a1da-771389f11abb",
           "state": "completed",
           "uuid": "a4363bb9-e704-4157-ac41-7821bc9774f0",
           "session_id": "ce7a8cfd-32a7-47c5-a7a4-d05b324c36c2"

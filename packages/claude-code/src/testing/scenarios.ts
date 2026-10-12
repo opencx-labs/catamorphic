@@ -991,6 +991,80 @@ const errorRateLimit: ClaudeScenario = {
   },
 };
 
+const retrySameInput: ClaudeScenario = {
+  name: "retry-same-input",
+  description:
+    "A retry resends the failed turn's own input on its native thread, and it runs.",
+  // Sent once, the provider is overloaded; sent again, it answers.
+  model: (request) => {
+    const sends = sent(request).split("Plan the launch").length - 1;
+    if (sends === 1)
+      return {
+        error: { status: 529, type: "overloaded_error", message: "Overloaded" },
+      };
+    return sends > 1 ? text("Planned after the retry.") : unexpected(request);
+  },
+  attempts: [
+    {
+      start: (context) => {
+        const attempt = scenarioAttempt({
+          context,
+          scenario: "retry-same-input",
+          turn: 1,
+          text: "Plan the launch",
+        });
+        return {
+          ...attempt,
+          env: { ...attempt.env, CLAUDE_CODE_MAX_RETRIES: "0" },
+        };
+      },
+    },
+    {
+      // Work's retry: the same turn and input item, a new attempt.
+      start: (context) => {
+        const first = context.previous[0];
+        assert.ok(first?.thread);
+        return scenarioAttempt({
+          context,
+          scenario: "retry-same-input",
+          turn: 1,
+          text: "Plan the launch",
+          thread: {
+            mode: "resume",
+            providerThreadId: first.attempt.thread.providerThreadId,
+            nativeRef: first.thread,
+          },
+          overrides: {
+            attemptId: "attempt-retry-same-input-1-retry",
+            reason: "retry",
+          },
+        });
+      },
+    },
+  ],
+  check: ([first, second]) => {
+    settled(first, "failed");
+    settled(second, "completed");
+    assert.equal(
+      second?.attempt.input?.itemId,
+      first?.attempt.input?.itemId,
+      "the same input item",
+    );
+    assert.equal(
+      second?.thread?.id,
+      first?.thread?.id,
+      "the same native thread",
+    );
+    assert.ok(
+      second?.calls.some(
+        (call) => call.kind === "native_state.load" && !call.thread,
+      ),
+      "the stored transcript was loaded",
+    );
+    assert.equal(reply(second), "Planned after the retry.");
+  },
+};
+
 const restore: ClaudeScenario = {
   name: "restore",
   description:
@@ -1146,6 +1220,7 @@ export const CLAUDE_SCENARIOS: readonly ClaudeScenario[] = [
   subagentForeground,
   errorAuth,
   errorRateLimit,
+  retrySameInput,
   restore,
   fork,
 ];

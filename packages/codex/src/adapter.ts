@@ -822,16 +822,20 @@ class CodexAttempt {
     });
   }
 
+  /** Ask Work, and wait for the answer or for why there will be none. */
   private async ask(
     id: JsonRpcId,
     key: string,
     request: RequestDraft,
-  ): Promise<Awaited<ReturnType<AttemptHost["request"]>> | undefined> {
+  ): Promise<{
+    response?: Awaited<ReturnType<AttemptHost["request"]>>;
+    closed?: string;
+  }> {
     this.requestKeys.set(id, key);
     try {
-      return await this.host.request(key, request);
+      return { response: await this.host.request(key, request) };
     } catch (error) {
-      if (error instanceof RequestClosedError) return undefined;
+      if (error instanceof RequestClosedError) return { closed: error.reason };
       throw error;
     } finally {
       this.requestKeys.delete(id);
@@ -866,7 +870,7 @@ class CodexAttempt {
     const decisions = Array.isArray(params.availableDecisions)
       ? params.availableDecisions
       : undefined;
-    const response = await this.ask(
+    const { response } = await this.ask(
       id,
       `approval:${String(params.approvalId ?? params.itemId ?? id)}`,
       {
@@ -900,20 +904,24 @@ class CodexAttempt {
   ): Promise<JsonValue> {
     const itemId = typeof params.itemId === "string" ? params.itemId : "";
     const paths = this.fileChangePaths.get(itemId) ?? [];
-    const response = await this.ask(id, `approval:${itemId || String(id)}`, {
-      kind: "approval",
-      blocking: true,
-      title: "Apply these file changes?",
-      ...(typeof params.reason === "string" && params.reason
-        ? { description: params.reason }
-        : {}),
-      origin: CODEX_ORIGIN,
-      approval: {
-        action: "Change files",
-        ...(paths.length > 0 ? { details: paths.join("\n") } : {}),
-        tool: { server: null, name: "apply_patch", input: { paths } },
+    const { response } = await this.ask(
+      id,
+      `approval:${itemId || String(id)}`,
+      {
+        kind: "approval",
+        blocking: true,
+        title: "Apply these file changes?",
+        ...(typeof params.reason === "string" && params.reason
+          ? { description: params.reason }
+          : {}),
+        origin: CODEX_ORIGIN,
+        approval: {
+          action: "Change files",
+          ...(paths.length > 0 ? { details: paths.join("\n") } : {}),
+          tool: { server: null, name: "apply_patch", input: { paths } },
+        },
       },
-    });
+    );
     return { decision: approvalDecision(response, undefined) };
   }
 
@@ -922,7 +930,7 @@ class CodexAttempt {
     params: JsonObject,
   ): Promise<JsonValue> {
     const requested = isObject(params.permissions) ? params.permissions : {};
-    const response = await this.ask(
+    const { response } = await this.ask(
       id,
       `permissions:${String(params.itemId ?? id)}`,
       {
@@ -973,12 +981,15 @@ class CodexAttempt {
           description: String(option.description ?? ""),
         })),
     }));
-    const response = await this.ask(
+    const { response, closed } = await this.ask(
       id,
       `question:${String(params.itemId ?? id)}`,
       {
         kind: "question",
-        blocking: params.isBlocking !== false,
+        // Codex waits for this reply whatever its `isBlocking` says: Work
+        // answers a non-blocking question with a message instead, which
+        // would leave the turn waiting forever.
+        blocking: true,
         title: questions[0]?.header || "Question",
         origin: CODEX_ORIGIN,
         questions,
@@ -987,10 +998,25 @@ class CodexAttempt {
     const answers = response?.kind === "question" ? response.answers : [];
     return {
       answers: Object.fromEntries(
-        native.map((question, index) => [
-          String(question.id ?? index),
-          { answers: answers[index] === undefined ? [] : [answers[index]] },
-        ]),
+        native.map((question, index) => {
+          const answer = answers[index];
+          return [
+            String(question.id ?? index),
+            {
+              // Closed without an answer (the person wrote in the chat, or
+              // the turn stopped): Codex's own free-text form says why
+              // once, as other harnesses hear it.
+              answers:
+                answer !== undefined
+                  ? [answer]
+                  : closed && index === 0
+                    ? [
+                        `user_note: The question was closed without an answer: ${closed}`,
+                      ]
+                    : [],
+            },
+          ];
+        }),
       ),
     };
   }
@@ -1028,19 +1054,23 @@ class CodexAttempt {
     const schema = isObject(params.requestedSchema)
       ? params.requestedSchema
       : undefined;
-    const response = await this.ask(id, `elicitation:${server}:${String(id)}`, {
-      kind: "elicitation",
-      blocking: true,
-      title: `${server} needs your input`,
-      ...(message ? { description: message } : {}),
-      origin: { kind: "mcp", id: server, displayName: server },
-      elicitation: {
-        server,
-        message,
-        ...(schema ? { schema } : {}),
-        ...(typeof params.url === "string" ? { url: params.url } : {}),
+    const { response } = await this.ask(
+      id,
+      `elicitation:${server}:${String(id)}`,
+      {
+        kind: "elicitation",
+        blocking: true,
+        title: `${server} needs your input`,
+        ...(message ? { description: message } : {}),
+        origin: { kind: "mcp", id: server, displayName: server },
+        elicitation: {
+          server,
+          message,
+          ...(schema ? { schema } : {}),
+          ...(typeof params.url === "string" ? { url: params.url } : {}),
+        },
       },
-    });
+    );
     if (response?.kind !== "elicitation")
       return { action: "cancel", content: null, _meta: null };
     return {

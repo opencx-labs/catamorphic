@@ -19,7 +19,7 @@ function shape(events: HarnessEvent[]): unknown[] {
   );
 }
 
-it.each(["simple-reply", "host-and-mcp-tools"] as const)(
+it.each(["simple-reply", "host-and-mcp-tools", "user-question"] as const)(
   "the pinned Codex CLI still produces the recorded %s transcript's events",
   async (name) => {
     const command = pinnedCodexCommand();

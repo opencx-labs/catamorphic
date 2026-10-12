@@ -60,19 +60,19 @@
       "messages": [
         {
           "type": "replay.input",
-          "uuid": "95d2d186-b62e-433e-abd5-141f186c4b7b",
+          "uuid": "c4092eb2-f648-41a8-aa36-eb92d0eab91c",
           "text": "First word: apple"
         },
         {
           "type": "command_lifecycle",
-          "command_uuid": "95d2d186-b62e-433e-abd5-141f186c4b7b",
+          "command_uuid": "c4092eb2-f648-41a8-aa36-eb92d0eab91c",
           "state": "queued",
           "uuid": "ee7e4430-a2fa-458e-b6f2-721986015e0e",
           "session_id": "8fb5ec83-ddc9-4340-a616-b67459a7b741"
         },
         {
           "type": "command_lifecycle",
-          "command_uuid": "95d2d186-b62e-433e-abd5-141f186c4b7b",
+          "command_uuid": "c4092eb2-f648-41a8-aa36-eb92d0eab91c",
           "state": "started",
           "uuid": "46d4791d-6d62-488f-a982-f375ac9f7ebe",
           "session_id": "8fb5ec83-ddc9-4340-a616-b67459a7b741"
@@ -246,8 +246,8 @@
           "parent_tool_use_id": null,
           "uuid": "991aff93-2c1c-4bed-bc7a-16770a7d9357",
           "ttft_ms": 3,
-          "user_message_uuid": "95d2d186-b62e-433e-abd5-141f186c4b7b",
-          "user_message_uuids": ["95d2d186-b62e-433e-abd5-141f186c4b7b"]
+          "user_message_uuid": "c4092eb2-f648-41a8-aa36-eb92d0eab91c",
+          "user_message_uuids": ["c4092eb2-f648-41a8-aa36-eb92d0eab91c"]
         },
         {
           "type": "stream_event",
@@ -382,7 +382,7 @@
                 "role": "user",
                 "content": "First word: apple"
               },
-              "uuid": "95d2d186-b62e-433e-abd5-141f186c4b7b",
+              "uuid": "c4092eb2-f648-41a8-aa36-eb92d0eab91c",
               "timestamp": "2026-10-02T14:13:38.092Z",
               "permissionMode": "acceptEdits",
               "promptSource": "sdk",
@@ -394,7 +394,7 @@
               "gitBranch": "HEAD"
             },
             {
-              "parentUuid": "95d2d186-b62e-433e-abd5-141f186c4b7b",
+              "parentUuid": "c4092eb2-f648-41a8-aa36-eb92d0eab91c",
               "isSidechain": false,
               "attachment": {
                 "type": "agent_listing_delta",
@@ -615,14 +615,14 @@
           "ttft_stream_ms": 34,
           "time_to_request_ms": 31,
           "first_content_frame_ms": 34,
-          "user_message_uuid": "95d2d186-b62e-433e-abd5-141f186c4b7b",
-          "user_message_uuids": ["95d2d186-b62e-433e-abd5-141f186c4b7b"],
+          "user_message_uuid": "c4092eb2-f648-41a8-aa36-eb92d0eab91c",
+          "user_message_uuids": ["c4092eb2-f648-41a8-aa36-eb92d0eab91c"],
           "request_sent_wall_ms": 1790950418111,
           "queued_turn_count": 0
         },
         {
           "type": "command_lifecycle",
-          "command_uuid": "95d2d186-b62e-433e-abd5-141f186c4b7b",
+          "command_uuid": "c4092eb2-f648-41a8-aa36-eb92d0eab91c",
           "state": "completed",
           "uuid": "c17f2aa4-c1b3-4502-85a7-de4002248b55",
           "session_id": "8fb5ec83-ddc9-4340-a616-b67459a7b741"
@@ -790,7 +790,7 @@
                 "role": "user",
                 "content": "First word: apple"
               },
-              "uuid": "95d2d186-b62e-433e-abd5-141f186c4b7b",
+              "uuid": "c4092eb2-f648-41a8-aa36-eb92d0eab91c",
               "timestamp": "2026-10-02T14:13:38.092Z",
               "permissionMode": "acceptEdits",
               "promptSource": "sdk",
@@ -802,7 +802,7 @@
               "gitBranch": "HEAD"
             },
             {
-              "parentUuid": "95d2d186-b62e-433e-abd5-141f186c4b7b",
+              "parentUuid": "c4092eb2-f648-41a8-aa36-eb92d0eab91c",
               "isSidechain": false,
               "attachment": {
                 "type": "agent_listing_delta",
@@ -949,7 +949,7 @@
         },
         {
           "type": "replay.input",
-          "uuid": "422fd95d-f002-4b03-9c9e-c7184314d96f",
+          "uuid": "32f39cc2-eda9-4e99-82e1-1549103a6d56",
           "text": "Second word: banana"
         },
         {
@@ -961,14 +961,14 @@
         },
         {
           "type": "command_lifecycle",
-          "command_uuid": "422fd95d-f002-4b03-9c9e-c7184314d96f",
+          "command_uuid": "32f39cc2-eda9-4e99-82e1-1549103a6d56",
           "state": "queued",
           "uuid": "17ba865d-5e19-4409-bc6b-9a95e515e614",
           "session_id": "8fb5ec83-ddc9-4340-a616-b67459a7b741"
         },
         {
           "type": "command_lifecycle",
-          "command_uuid": "422fd95d-f002-4b03-9c9e-c7184314d96f",
+          "command_uuid": "32f39cc2-eda9-4e99-82e1-1549103a6d56",
           "state": "started",
           "uuid": "e8aedd85-68c6-4374-b3ad-9fdee8d8cdc3",
           "session_id": "8fb5ec83-ddc9-4340-a616-b67459a7b741"
@@ -1142,8 +1142,8 @@
           "parent_tool_use_id": null,
           "uuid": "51b97eab-f5ce-4cbb-824c-52068a02a5c6",
           "ttft_ms": 4,
-          "user_message_uuid": "422fd95d-f002-4b03-9c9e-c7184314d96f",
-          "user_message_uuids": ["422fd95d-f002-4b03-9c9e-c7184314d96f"]
+          "user_message_uuid": "32f39cc2-eda9-4e99-82e1-1549103a6d56",
+          "user_message_uuids": ["32f39cc2-eda9-4e99-82e1-1549103a6d56"]
         },
         {
           "type": "stream_event",
@@ -1278,7 +1278,7 @@
                 "role": "user",
                 "content": "Second word: banana"
               },
-              "uuid": "422fd95d-f002-4b03-9c9e-c7184314d96f",
+              "uuid": "32f39cc2-eda9-4e99-82e1-1549103a6d56",
               "timestamp": "2026-10-02T14:13:38.355Z",
               "permissionMode": "acceptEdits",
               "promptSource": "sdk",
@@ -1290,7 +1290,7 @@
               "gitBranch": "HEAD"
             },
             {
-              "parentUuid": "422fd95d-f002-4b03-9c9e-c7184314d96f",
+              "parentUuid": "32f39cc2-eda9-4e99-82e1-1549103a6d56",
               "isSidechain": false,
               "attachment": {
                 "type": "total_tokens_reminder",
@@ -1440,14 +1440,14 @@
           "ttft_stream_ms": 33,
           "time_to_request_ms": 30,
           "first_content_frame_ms": 33,
-          "user_message_uuid": "422fd95d-f002-4b03-9c9e-c7184314d96f",
-          "user_message_uuids": ["422fd95d-f002-4b03-9c9e-c7184314d96f"],
+          "user_message_uuid": "32f39cc2-eda9-4e99-82e1-1549103a6d56",
+          "user_message_uuids": ["32f39cc2-eda9-4e99-82e1-1549103a6d56"],
           "request_sent_wall_ms": 1790950418374,
           "queued_turn_count": 0
         },
         {
           "type": "command_lifecycle",
-          "command_uuid": "422fd95d-f002-4b03-9c9e-c7184314d96f",
+          "command_uuid": "32f39cc2-eda9-4e99-82e1-1549103a6d56",
           "state": "completed",
           "uuid": "414eeb70-0aa6-449f-a422-e425eba94d92",
           "session_id": "8fb5ec83-ddc9-4340-a616-b67459a7b741"
@@ -1628,7 +1628,7 @@
                 "role": "user",
                 "content": "First word: apple"
               },
-              "uuid": "95d2d186-b62e-433e-abd5-141f186c4b7b",
+              "uuid": "c4092eb2-f648-41a8-aa36-eb92d0eab91c",
               "timestamp": "2026-10-02T14:13:38.092Z",
               "permissionMode": "acceptEdits",
               "promptSource": "sdk",
@@ -1640,7 +1640,7 @@
               "gitBranch": "HEAD"
             },
             {
-              "parentUuid": "95d2d186-b62e-433e-abd5-141f186c4b7b",
+              "parentUuid": "c4092eb2-f648-41a8-aa36-eb92d0eab91c",
               "isSidechain": false,
               "attachment": {
                 "type": "agent_listing_delta",
@@ -1805,7 +1805,7 @@
                 "role": "user",
                 "content": "Second word: banana"
               },
-              "uuid": "422fd95d-f002-4b03-9c9e-c7184314d96f",
+              "uuid": "32f39cc2-eda9-4e99-82e1-1549103a6d56",
               "timestamp": "2026-10-02T14:13:38.355Z",
               "permissionMode": "acceptEdits",
               "promptSource": "sdk",
@@ -1817,7 +1817,7 @@
               "gitBranch": "HEAD"
             },
             {
-              "parentUuid": "422fd95d-f002-4b03-9c9e-c7184314d96f",
+              "parentUuid": "32f39cc2-eda9-4e99-82e1-1549103a6d56",
               "isSidechain": false,
               "attachment": {
                 "type": "total_tokens_reminder",
@@ -1898,7 +1898,7 @@
         },
         {
           "type": "replay.input",
-          "uuid": "19295f0e-18c8-411d-96c8-ebf6b269f308",
+          "uuid": "26c280b1-8b8f-4686-b97a-122e506b8c68",
           "text": "Which words have I told you?"
         },
         {
@@ -1910,14 +1910,14 @@
         },
         {
           "type": "command_lifecycle",
-          "command_uuid": "19295f0e-18c8-411d-96c8-ebf6b269f308",
+          "command_uuid": "26c280b1-8b8f-4686-b97a-122e506b8c68",
           "state": "queued",
           "uuid": "285c913c-3d04-4565-ad87-11270779e39c",
           "session_id": "d387cfb2-4816-42be-a212-cfb49f801858"
         },
         {
           "type": "command_lifecycle",
-          "command_uuid": "19295f0e-18c8-411d-96c8-ebf6b269f308",
+          "command_uuid": "26c280b1-8b8f-4686-b97a-122e506b8c68",
           "state": "started",
           "uuid": "21d82469-957c-49f1-a136-34dee61dcece",
           "session_id": "d387cfb2-4816-42be-a212-cfb49f801858"
@@ -2109,8 +2109,8 @@
           "parent_tool_use_id": null,
           "uuid": "d38b5a72-dd13-47cf-9b7b-515945eab398",
           "ttft_ms": 3,
-          "user_message_uuid": "19295f0e-18c8-411d-96c8-ebf6b269f308",
-          "user_message_uuids": ["19295f0e-18c8-411d-96c8-ebf6b269f308"]
+          "user_message_uuid": "26c280b1-8b8f-4686-b97a-122e506b8c68",
+          "user_message_uuids": ["26c280b1-8b8f-4686-b97a-122e506b8c68"]
         },
         {
           "type": "stream_event",
@@ -2245,7 +2245,7 @@
                 "role": "user",
                 "content": "First word: apple"
               },
-              "uuid": "95d2d186-b62e-433e-abd5-141f186c4b7b",
+              "uuid": "c4092eb2-f648-41a8-aa36-eb92d0eab91c",
               "timestamp": "2026-10-02T14:13:38.092Z",
               "permissionMode": "acceptEdits",
               "promptSource": "sdk",
@@ -2257,7 +2257,7 @@
               "gitBranch": "HEAD"
             },
             {
-              "parentUuid": "95d2d186-b62e-433e-abd5-141f186c4b7b",
+              "parentUuid": "c4092eb2-f648-41a8-aa36-eb92d0eab91c",
               "isSidechain": false,
               "attachment": {
                 "type": "agent_listing_delta",
@@ -2398,7 +2398,7 @@
                 "role": "user",
                 "content": "Which words have I told you?"
               },
-              "uuid": "19295f0e-18c8-411d-96c8-ebf6b269f308",
+              "uuid": "26c280b1-8b8f-4686-b97a-122e506b8c68",
               "timestamp": "2026-10-02T14:13:38.639Z",
               "permissionMode": "acceptEdits",
               "promptSource": "sdk",
@@ -2410,7 +2410,7 @@
               "gitBranch": "HEAD"
             },
             {
-              "parentUuid": "19295f0e-18c8-411d-96c8-ebf6b269f308",
+              "parentUuid": "26c280b1-8b8f-4686-b97a-122e506b8c68",
               "isSidechain": false,
               "attachment": {
                 "type": "total_tokens_reminder",
@@ -2560,14 +2560,14 @@
           "ttft_stream_ms": 32,
           "time_to_request_ms": 30,
           "first_content_frame_ms": 33,
-          "user_message_uuid": "19295f0e-18c8-411d-96c8-ebf6b269f308",
-          "user_message_uuids": ["19295f0e-18c8-411d-96c8-ebf6b269f308"],
+          "user_message_uuid": "26c280b1-8b8f-4686-b97a-122e506b8c68",
+          "user_message_uuids": ["26c280b1-8b8f-4686-b97a-122e506b8c68"],
           "request_sent_wall_ms": 1790950418658,
           "queued_turn_count": 0
         },
         {
           "type": "command_lifecycle",
-          "command_uuid": "19295f0e-18c8-411d-96c8-ebf6b269f308",
+          "command_uuid": "26c280b1-8b8f-4686-b97a-122e506b8c68",
           "state": "completed",
           "uuid": "bbde6950-a0ef-47c9-9049-576bcaa72167",
           "session_id": "d387cfb2-4816-42be-a212-cfb49f801858"

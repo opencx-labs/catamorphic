@@ -60,19 +60,19 @@
       "messages": [
         {
           "type": "replay.input",
-          "uuid": "2a2ddcf3-121b-4d10-9670-6f5c1d06a1ca",
+          "uuid": "a4a58e72-c6bb-412c-9cce-2754710f8c17",
           "text": "Run the slow check"
         },
         {
           "type": "command_lifecycle",
-          "command_uuid": "2a2ddcf3-121b-4d10-9670-6f5c1d06a1ca",
+          "command_uuid": "a4a58e72-c6bb-412c-9cce-2754710f8c17",
           "state": "queued",
           "uuid": "ab62d557-8230-480a-a7cc-1fcafb121fe1",
           "session_id": "5c11afc8-32a9-4cce-a20b-229b921b8293"
         },
         {
           "type": "command_lifecycle",
-          "command_uuid": "2a2ddcf3-121b-4d10-9670-6f5c1d06a1ca",
+          "command_uuid": "a4a58e72-c6bb-412c-9cce-2754710f8c17",
           "state": "started",
           "uuid": "d0ea513c-9001-448f-a914-02544425922d",
           "session_id": "5c11afc8-32a9-4cce-a20b-229b921b8293"
@@ -246,8 +246,8 @@
           "parent_tool_use_id": null,
           "uuid": "cbad928b-d8a0-4f1e-8256-7dc7790e7973",
           "ttft_ms": 3,
-          "user_message_uuid": "2a2ddcf3-121b-4d10-9670-6f5c1d06a1ca",
-          "user_message_uuids": ["2a2ddcf3-121b-4d10-9670-6f5c1d06a1ca"]
+          "user_message_uuid": "a4a58e72-c6bb-412c-9cce-2754710f8c17",
+          "user_message_uuids": ["a4a58e72-c6bb-412c-9cce-2754710f8c17"]
         },
         {
           "type": "stream_event",
@@ -394,7 +394,7 @@
         },
         {
           "type": "replay.input",
-          "uuid": "74c59aa8-6d56-48ce-b4ee-1dea5bf380cf",
+          "uuid": "ba03e6ca-41fc-444f-a693-406f675b52b4",
           "text": "Also mention the steer"
         },
         {
@@ -434,7 +434,7 @@
         },
         {
           "type": "command_lifecycle",
-          "command_uuid": "74c59aa8-6d56-48ce-b4ee-1dea5bf380cf",
+          "command_uuid": "ba03e6ca-41fc-444f-a693-406f675b52b4",
           "state": "queued",
           "uuid": "06424f36-4ba4-4170-95f5-a2326ee61841",
           "session_id": "5c11afc8-32a9-4cce-a20b-229b921b8293"
@@ -467,7 +467,7 @@
                 "role": "user",
                 "content": "Run the slow check"
               },
-              "uuid": "2a2ddcf3-121b-4d10-9670-6f5c1d06a1ca",
+              "uuid": "a4a58e72-c6bb-412c-9cce-2754710f8c17",
               "timestamp": "2026-10-02T14:13:31.645Z",
               "permissionMode": "acceptEdits",
               "promptSource": "sdk",
@@ -479,7 +479,7 @@
               "gitBranch": "HEAD"
             },
             {
-              "parentUuid": "2a2ddcf3-121b-4d10-9670-6f5c1d06a1ca",
+              "parentUuid": "a4a58e72-c6bb-412c-9cce-2754710f8c17",
               "isSidechain": false,
               "attachment": {
                 "type": "agent_listing_delta",
@@ -721,7 +721,7 @@
         },
         {
           "type": "command_lifecycle",
-          "command_uuid": "74c59aa8-6d56-48ce-b4ee-1dea5bf380cf",
+          "command_uuid": "ba03e6ca-41fc-444f-a693-406f675b52b4",
           "state": "started",
           "uuid": "541968e9-371a-4651-ac26-dc1d5948c7d5",
           "session_id": "5c11afc8-32a9-4cce-a20b-229b921b8293"
@@ -865,7 +865,7 @@
         },
         {
           "type": "command_lifecycle",
-          "command_uuid": "74c59aa8-6d56-48ce-b4ee-1dea5bf380cf",
+          "command_uuid": "ba03e6ca-41fc-444f-a693-406f675b52b4",
           "state": "completed",
           "uuid": "49b95a6f-e3bb-4185-8e51-1236dc9f3295",
           "session_id": "5c11afc8-32a9-4cce-a20b-229b921b8293"
@@ -915,7 +915,7 @@
               "attachment": {
                 "type": "queued_command",
                 "prompt": "Also mention the steer",
-                "source_uuid": "74c59aa8-6d56-48ce-b4ee-1dea5bf380cf",
+                "source_uuid": "ba03e6ca-41fc-444f-a693-406f675b52b4",
                 "commandMode": "prompt",
                 "timestamp": "2026-10-02T14:13:31.705Z"
               },
@@ -1088,17 +1088,17 @@
           "ttft_stream_ms": 29,
           "time_to_request_ms": 27,
           "first_content_frame_ms": 30,
-          "user_message_uuid": "2a2ddcf3-121b-4d10-9670-6f5c1d06a1ca",
+          "user_message_uuid": "a4a58e72-c6bb-412c-9cce-2754710f8c17",
           "user_message_uuids": [
-            "2a2ddcf3-121b-4d10-9670-6f5c1d06a1ca",
-            "74c59aa8-6d56-48ce-b4ee-1dea5bf380cf"
+            "a4a58e72-c6bb-412c-9cce-2754710f8c17",
+            "ba03e6ca-41fc-444f-a693-406f675b52b4"
           ],
           "request_sent_wall_ms": 1790950411663,
           "queued_turn_count": 0
         },
         {
           "type": "command_lifecycle",
-          "command_uuid": "2a2ddcf3-121b-4d10-9670-6f5c1d06a1ca",
+          "command_uuid": "a4a58e72-c6bb-412c-9cce-2754710f8c17",
           "state": "completed",
           "uuid": "579be18e-c9b9-4a6e-b5e8-3e88f5857658",
           "session_id": "5c11afc8-32a9-4cce-a20b-229b921b8293"

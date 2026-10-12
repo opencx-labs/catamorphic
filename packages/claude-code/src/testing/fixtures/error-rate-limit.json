@@ -60,19 +60,19 @@
       "messages": [
         {
           "type": "replay.input",
-          "uuid": "12b0bcc9-3b3e-47ce-9223-2ec53abf963f",
+          "uuid": "994deb74-1eb8-473a-9a67-adda700921fb",
           "text": "Hello?"
         },
         {
           "type": "command_lifecycle",
-          "command_uuid": "12b0bcc9-3b3e-47ce-9223-2ec53abf963f",
+          "command_uuid": "994deb74-1eb8-473a-9a67-adda700921fb",
           "state": "queued",
           "uuid": "937d23ba-2aa0-4fb5-a1ad-0789ed39cd2f",
           "session_id": "5270332d-c9f1-412e-a5a1-b78979291419"
         },
         {
           "type": "command_lifecycle",
-          "command_uuid": "12b0bcc9-3b3e-47ce-9223-2ec53abf963f",
+          "command_uuid": "994deb74-1eb8-473a-9a67-adda700921fb",
           "state": "started",
           "uuid": "2a91b63b-a0f2-4c9a-bcfb-bd5bd957a5cd",
           "session_id": "5270332d-c9f1-412e-a5a1-b78979291419"
@@ -267,8 +267,8 @@
           "timestamp": "2026-10-02T14:13:37.283Z",
           "error": "rate_limit",
           "is_api_error_message": true,
-          "user_message_uuid": "12b0bcc9-3b3e-47ce-9223-2ec53abf963f",
-          "user_message_uuids": ["12b0bcc9-3b3e-47ce-9223-2ec53abf963f"]
+          "user_message_uuid": "994deb74-1eb8-473a-9a67-adda700921fb",
+          "user_message_uuids": ["994deb74-1eb8-473a-9a67-adda700921fb"]
         },
         {
           "type": "replay.store",
@@ -298,7 +298,7 @@
                 "role": "user",
                 "content": "Hello?"
               },
-              "uuid": "12b0bcc9-3b3e-47ce-9223-2ec53abf963f",
+              "uuid": "994deb74-1eb8-473a-9a67-adda700921fb",
               "timestamp": "2026-10-02T14:13:37.245Z",
               "permissionMode": "acceptEdits",
               "promptSource": "sdk",
@@ -310,7 +310,7 @@
               "gitBranch": "HEAD"
             },
             {
-              "parentUuid": "12b0bcc9-3b3e-47ce-9223-2ec53abf963f",
+              "parentUuid": "994deb74-1eb8-473a-9a67-adda700921fb",
               "isSidechain": false,
               "attachment": {
                 "type": "agent_listing_delta",
@@ -516,13 +516,13 @@
           "type": "result",
           "duration_ms": 51,
           "uuid": "d40c56fc-2e3f-48df-97ba-4772a0bfe5fb",
-          "user_message_uuid": "12b0bcc9-3b3e-47ce-9223-2ec53abf963f",
-          "user_message_uuids": ["12b0bcc9-3b3e-47ce-9223-2ec53abf963f"],
+          "user_message_uuid": "994deb74-1eb8-473a-9a67-adda700921fb",
+          "user_message_uuids": ["994deb74-1eb8-473a-9a67-adda700921fb"],
           "queued_turn_count": 0
         },
         {
           "type": "command_lifecycle",
-          "command_uuid": "12b0bcc9-3b3e-47ce-9223-2ec53abf963f",
+          "command_uuid": "994deb74-1eb8-473a-9a67-adda700921fb",
           "state": "cancelled",
           "uuid": "a37448de-559c-4a3f-b327-7d194133e471",
           "session_id": "5270332d-c9f1-412e-a5a1-b78979291419"

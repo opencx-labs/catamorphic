@@ -60,19 +60,19 @@
       "messages": [
         {
           "type": "replay.input",
-          "uuid": "020ca4dd-ebf5-44cb-bb7e-e59dab6b9de5",
+          "uuid": "2877b0f0-420b-4fa1-a134-b5ffc55802c6",
           "text": "Hello?"
         },
         {
           "type": "command_lifecycle",
-          "command_uuid": "020ca4dd-ebf5-44cb-bb7e-e59dab6b9de5",
+          "command_uuid": "2877b0f0-420b-4fa1-a134-b5ffc55802c6",
           "state": "queued",
           "uuid": "75b892c8-aa4b-4edb-b1b3-fcd7376ba8ea",
           "session_id": "1d7f7715-292a-46e0-ac94-10b524f20855"
         },
         {
           "type": "command_lifecycle",
-          "command_uuid": "020ca4dd-ebf5-44cb-bb7e-e59dab6b9de5",
+          "command_uuid": "2877b0f0-420b-4fa1-a134-b5ffc55802c6",
           "state": "started",
           "uuid": "abb2affc-a582-4167-bbdd-aa6070ddbcd9",
           "session_id": "1d7f7715-292a-46e0-ac94-10b524f20855"
@@ -267,8 +267,8 @@
           "timestamp": "2026-10-02T14:13:36.988Z",
           "error": "authentication_failed",
           "is_api_error_message": true,
-          "user_message_uuid": "020ca4dd-ebf5-44cb-bb7e-e59dab6b9de5",
-          "user_message_uuids": ["020ca4dd-ebf5-44cb-bb7e-e59dab6b9de5"]
+          "user_message_uuid": "2877b0f0-420b-4fa1-a134-b5ffc55802c6",
+          "user_message_uuids": ["2877b0f0-420b-4fa1-a134-b5ffc55802c6"]
         },
         {
           "type": "replay.store",
@@ -298,7 +298,7 @@
                 "role": "user",
                 "content": "Hello?"
               },
-              "uuid": "020ca4dd-ebf5-44cb-bb7e-e59dab6b9de5",
+              "uuid": "2877b0f0-420b-4fa1-a134-b5ffc55802c6",
               "timestamp": "2026-10-02T14:13:36.947Z",
               "permissionMode": "acceptEdits",
               "promptSource": "sdk",
@@ -310,7 +310,7 @@
               "gitBranch": "HEAD"
             },
             {
-              "parentUuid": "020ca4dd-ebf5-44cb-bb7e-e59dab6b9de5",
+              "parentUuid": "2877b0f0-420b-4fa1-a134-b5ffc55802c6",
               "isSidechain": false,
               "attachment": {
                 "type": "agent_listing_delta",
@@ -515,13 +515,13 @@
           "type": "result",
           "duration_ms": 56,
           "uuid": "8c320439-04e1-4ca1-88d2-44adfb61b891",
-          "user_message_uuid": "020ca4dd-ebf5-44cb-bb7e-e59dab6b9de5",
-          "user_message_uuids": ["020ca4dd-ebf5-44cb-bb7e-e59dab6b9de5"],
+          "user_message_uuid": "2877b0f0-420b-4fa1-a134-b5ffc55802c6",
+          "user_message_uuids": ["2877b0f0-420b-4fa1-a134-b5ffc55802c6"],
           "queued_turn_count": 0
         },
         {
           "type": "command_lifecycle",
-          "command_uuid": "020ca4dd-ebf5-44cb-bb7e-e59dab6b9de5",
+          "command_uuid": "2877b0f0-420b-4fa1-a134-b5ffc55802c6",
           "state": "cancelled",
           "uuid": "0c3cb065-94a9-44bb-8e14-57a7df86066a",
           "session_id": "1d7f7715-292a-46e0-ac94-10b524f20855"

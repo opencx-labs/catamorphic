@@ -60,19 +60,19 @@
       "messages": [
         {
           "type": "replay.input",
-          "uuid": "290e22de-d017-440e-81d0-670016528c87",
+          "uuid": "63d8a808-8dd8-4b99-acf0-488964b7dfc8",
           "text": "The code is 4417"
         },
         {
           "type": "command_lifecycle",
-          "command_uuid": "290e22de-d017-440e-81d0-670016528c87",
+          "command_uuid": "63d8a808-8dd8-4b99-acf0-488964b7dfc8",
           "state": "queued",
           "uuid": "86f41c7c-f348-4d09-8ecf-db33e3e2b964",
           "session_id": "c3461f56-b341-4e73-a6a8-9f98596a8e93"
         },
         {
           "type": "command_lifecycle",
-          "command_uuid": "290e22de-d017-440e-81d0-670016528c87",
+          "command_uuid": "63d8a808-8dd8-4b99-acf0-488964b7dfc8",
           "state": "started",
           "uuid": "c236253f-ab95-437c-a062-5f5783e6fe60",
           "session_id": "c3461f56-b341-4e73-a6a8-9f98596a8e93"
@@ -246,8 +246,8 @@
           "parent_tool_use_id": null,
           "uuid": "452ddbb8-cd96-4646-bfaa-a1be560d06d6",
           "ttft_ms": 3,
-          "user_message_uuid": "290e22de-d017-440e-81d0-670016528c87",
-          "user_message_uuids": ["290e22de-d017-440e-81d0-670016528c87"]
+          "user_message_uuid": "63d8a808-8dd8-4b99-acf0-488964b7dfc8",
+          "user_message_uuids": ["63d8a808-8dd8-4b99-acf0-488964b7dfc8"]
         },
         {
           "type": "stream_event",
@@ -382,7 +382,7 @@
                 "role": "user",
                 "content": "The code is 4417"
               },
-              "uuid": "290e22de-d017-440e-81d0-670016528c87",
+              "uuid": "63d8a808-8dd8-4b99-acf0-488964b7dfc8",
               "timestamp": "2026-10-02T14:13:37.551Z",
               "permissionMode": "acceptEdits",
               "promptSource": "sdk",
@@ -394,7 +394,7 @@
               "gitBranch": "HEAD"
             },
             {
-              "parentUuid": "290e22de-d017-440e-81d0-670016528c87",
+              "parentUuid": "63d8a808-8dd8-4b99-acf0-488964b7dfc8",
               "isSidechain": false,
               "attachment": {
                 "type": "agent_listing_delta",
@@ -615,14 +615,14 @@
           "ttft_stream_ms": 36,
           "time_to_request_ms": 33,
           "first_content_frame_ms": 36,
-          "user_message_uuid": "290e22de-d017-440e-81d0-670016528c87",
-          "user_message_uuids": ["290e22de-d017-440e-81d0-670016528c87"],
+          "user_message_uuid": "63d8a808-8dd8-4b99-acf0-488964b7dfc8",
+          "user_message_uuids": ["63d8a808-8dd8-4b99-acf0-488964b7dfc8"],
           "request_sent_wall_ms": 1790950417572,
           "queued_turn_count": 0
         },
         {
           "type": "command_lifecycle",
-          "command_uuid": "290e22de-d017-440e-81d0-670016528c87",
+          "command_uuid": "63d8a808-8dd8-4b99-acf0-488964b7dfc8",
           "state": "completed",
           "uuid": "ed7091d4-f164-4ce6-9383-c2051ae18a24",
           "session_id": "c3461f56-b341-4e73-a6a8-9f98596a8e93"
@@ -790,7 +790,7 @@
                 "role": "user",
                 "content": "The code is 4417"
               },
-              "uuid": "290e22de-d017-440e-81d0-670016528c87",
+              "uuid": "63d8a808-8dd8-4b99-acf0-488964b7dfc8",
               "timestamp": "2026-10-02T14:13:37.551Z",
               "permissionMode": "acceptEdits",
               "promptSource": "sdk",
@@ -802,7 +802,7 @@
               "gitBranch": "HEAD"
             },
             {
-              "parentUuid": "290e22de-d017-440e-81d0-670016528c87",
+              "parentUuid": "63d8a808-8dd8-4b99-acf0-488964b7dfc8",
               "isSidechain": false,
               "attachment": {
                 "type": "agent_listing_delta",
@@ -949,7 +949,7 @@
         },
         {
           "type": "replay.input",
-          "uuid": "9cb66691-b37a-4d73-bc63-e0bec9d32874",
+          "uuid": "6f7901a7-e00a-4157-9ab1-25cac1f5d4cd",
           "text": "What was the code?"
         },
         {
@@ -961,14 +961,14 @@
         },
         {
           "type": "command_lifecycle",
-          "command_uuid": "9cb66691-b37a-4d73-bc63-e0bec9d32874",
+          "command_uuid": "6f7901a7-e00a-4157-9ab1-25cac1f5d4cd",
           "state": "queued",
           "uuid": "b9543a59-dd9c-4131-9564-e83e283ce3c7",
           "session_id": "c3461f56-b341-4e73-a6a8-9f98596a8e93"
         },
         {
           "type": "command_lifecycle",
-          "command_uuid": "9cb66691-b37a-4d73-bc63-e0bec9d32874",
+          "command_uuid": "6f7901a7-e00a-4157-9ab1-25cac1f5d4cd",
           "state": "started",
           "uuid": "35fc0706-04e7-4b36-8694-5e23c3a1d093",
           "session_id": "c3461f56-b341-4e73-a6a8-9f98596a8e93"
@@ -1142,8 +1142,8 @@
           "parent_tool_use_id": null,
           "uuid": "26211cfe-c0e9-471e-ab9a-397767c78d9e",
           "ttft_ms": 3,
-          "user_message_uuid": "9cb66691-b37a-4d73-bc63-e0bec9d32874",
-          "user_message_uuids": ["9cb66691-b37a-4d73-bc63-e0bec9d32874"]
+          "user_message_uuid": "6f7901a7-e00a-4157-9ab1-25cac1f5d4cd",
+          "user_message_uuids": ["6f7901a7-e00a-4157-9ab1-25cac1f5d4cd"]
         },
         {
           "type": "stream_event",
@@ -1278,7 +1278,7 @@
                 "role": "user",
                 "content": "What was the code?"
               },
-              "uuid": "9cb66691-b37a-4d73-bc63-e0bec9d32874",
+              "uuid": "6f7901a7-e00a-4157-9ab1-25cac1f5d4cd",
               "timestamp": "2026-10-02T14:13:37.827Z",
               "permissionMode": "acceptEdits",
               "promptSource": "sdk",
@@ -1290,7 +1290,7 @@
               "gitBranch": "HEAD"
             },
             {
-              "parentUuid": "9cb66691-b37a-4d73-bc63-e0bec9d32874",
+              "parentUuid": "6f7901a7-e00a-4157-9ab1-25cac1f5d4cd",
               "isSidechain": false,
               "attachment": {
                 "type": "total_tokens_reminder",
@@ -1440,14 +1440,14 @@
           "ttft_stream_ms": 32,
           "time_to_request_ms": 29,
           "first_content_frame_ms": 32,
-          "user_message_uuid": "9cb66691-b37a-4d73-bc63-e0bec9d32874",
-          "user_message_uuids": ["9cb66691-b37a-4d73-bc63-e0bec9d32874"],
+          "user_message_uuid": "6f7901a7-e00a-4157-9ab1-25cac1f5d4cd",
+          "user_message_uuids": ["6f7901a7-e00a-4157-9ab1-25cac1f5d4cd"],
           "request_sent_wall_ms": 1790950417844,
           "queued_turn_count": 0
         },
         {
           "type": "command_lifecycle",
-          "command_uuid": "9cb66691-b37a-4d73-bc63-e0bec9d32874",
+          "command_uuid": "6f7901a7-e00a-4157-9ab1-25cac1f5d4cd",
           "state": "completed",
           "uuid": "1689f2bf-3c8c-4cf9-a37f-bf3d41a61a72",
           "session_id": "c3461f56-b341-4e73-a6a8-9f98596a8e93"

@@ -60,19 +60,19 @@
       "messages": [
         {
           "type": "replay.input",
-          "uuid": "ec9c950c-2a25-46d0-be7d-bea739cefdc0",
+          "uuid": "7022f8ca-c3a6-4048-84bd-fa52a3337961",
           "text": "Remember the word mango"
         },
         {
           "type": "command_lifecycle",
-          "command_uuid": "ec9c950c-2a25-46d0-be7d-bea739cefdc0",
+          "command_uuid": "7022f8ca-c3a6-4048-84bd-fa52a3337961",
           "state": "queued",
           "uuid": "04bd5db5-8e7b-41ad-99e2-df8fff4ccde4",
           "session_id": "fabe4171-9345-4c43-a385-7cdc4b510c37"
         },
         {
           "type": "command_lifecycle",
-          "command_uuid": "ec9c950c-2a25-46d0-be7d-bea739cefdc0",
+          "command_uuid": "7022f8ca-c3a6-4048-84bd-fa52a3337961",
           "state": "started",
           "uuid": "0e699bb0-af89-4380-9357-5e394731e7df",
           "session_id": "fabe4171-9345-4c43-a385-7cdc4b510c37"
@@ -246,8 +246,8 @@
           "parent_tool_use_id": null,
           "uuid": "6cf677b7-53fc-4904-bdd3-0f3b358b25ce",
           "ttft_ms": 3,
-          "user_message_uuid": "ec9c950c-2a25-46d0-be7d-bea739cefdc0",
-          "user_message_uuids": ["ec9c950c-2a25-46d0-be7d-bea739cefdc0"]
+          "user_message_uuid": "7022f8ca-c3a6-4048-84bd-fa52a3337961",
+          "user_message_uuids": ["7022f8ca-c3a6-4048-84bd-fa52a3337961"]
         },
         {
           "type": "stream_event",
@@ -382,7 +382,7 @@
                 "role": "user",
                 "content": "Remember the word mango"
               },
-              "uuid": "ec9c950c-2a25-46d0-be7d-bea739cefdc0",
+              "uuid": "7022f8ca-c3a6-4048-84bd-fa52a3337961",
               "timestamp": "2026-10-02T14:13:29.214Z",
               "permissionMode": "acceptEdits",
               "promptSource": "sdk",
@@ -394,7 +394,7 @@
               "gitBranch": "HEAD"
             },
             {
-              "parentUuid": "ec9c950c-2a25-46d0-be7d-bea739cefdc0",
+              "parentUuid": "7022f8ca-c3a6-4048-84bd-fa52a3337961",
               "isSidechain": false,
               "attachment": {
                 "type": "agent_listing_delta",
@@ -615,14 +615,14 @@
           "ttft_stream_ms": 34,
           "time_to_request_ms": 31,
           "first_content_frame_ms": 34,
-          "user_message_uuid": "ec9c950c-2a25-46d0-be7d-bea739cefdc0",
-          "user_message_uuids": ["ec9c950c-2a25-46d0-be7d-bea739cefdc0"],
+          "user_message_uuid": "7022f8ca-c3a6-4048-84bd-fa52a3337961",
+          "user_message_uuids": ["7022f8ca-c3a6-4048-84bd-fa52a3337961"],
           "request_sent_wall_ms": 1790950409233,
           "queued_turn_count": 0
         },
         {
           "type": "command_lifecycle",
-          "command_uuid": "ec9c950c-2a25-46d0-be7d-bea739cefdc0",
+          "command_uuid": "7022f8ca-c3a6-4048-84bd-fa52a3337961",
           "state": "completed",
           "uuid": "6dacb864-2372-40f0-b1f9-35a4f807ffae",
           "session_id": "fabe4171-9345-4c43-a385-7cdc4b510c37"
@@ -790,7 +790,7 @@
                 "role": "user",
                 "content": "Remember the word mango"
               },
-              "uuid": "ec9c950c-2a25-46d0-be7d-bea739cefdc0",
+              "uuid": "7022f8ca-c3a6-4048-84bd-fa52a3337961",
               "timestamp": "2026-10-02T14:13:29.214Z",
               "permissionMode": "acceptEdits",
               "promptSource": "sdk",
@@ -802,7 +802,7 @@
               "gitBranch": "HEAD"
             },
             {
-              "parentUuid": "ec9c950c-2a25-46d0-be7d-bea739cefdc0",
+              "parentUuid": "7022f8ca-c3a6-4048-84bd-fa52a3337961",
               "isSidechain": false,
               "attachment": {
                 "type": "agent_listing_delta",
@@ -949,7 +949,7 @@
         },
         {
           "type": "replay.input",
-          "uuid": "87d68dcb-9916-42ed-a638-7c976b7f86ad",
+          "uuid": "8c91982d-06ec-4ba7-9a90-40fba21f047f",
           "text": "Which word did I ask you to remember?"
         },
         {
@@ -961,14 +961,14 @@
         },
         {
           "type": "command_lifecycle",
-          "command_uuid": "87d68dcb-9916-42ed-a638-7c976b7f86ad",
+          "command_uuid": "8c91982d-06ec-4ba7-9a90-40fba21f047f",
           "state": "queued",
           "uuid": "b8438fa1-1dbe-456a-bebb-609ed4915046",
           "session_id": "fabe4171-9345-4c43-a385-7cdc4b510c37"
         },
         {
           "type": "command_lifecycle",
-          "command_uuid": "87d68dcb-9916-42ed-a638-7c976b7f86ad",
+          "command_uuid": "8c91982d-06ec-4ba7-9a90-40fba21f047f",
           "state": "started",
           "uuid": "ea74df8e-e64b-4669-94cb-b5ba193b6037",
           "session_id": "fabe4171-9345-4c43-a385-7cdc4b510c37"
@@ -1142,8 +1142,8 @@
           "parent_tool_use_id": null,
           "uuid": "245b86ea-f24b-47ca-a8d4-f405979011f9",
           "ttft_ms": 5,
-          "user_message_uuid": "87d68dcb-9916-42ed-a638-7c976b7f86ad",
-          "user_message_uuids": ["87d68dcb-9916-42ed-a638-7c976b7f86ad"]
+          "user_message_uuid": "8c91982d-06ec-4ba7-9a90-40fba21f047f",
+          "user_message_uuids": ["8c91982d-06ec-4ba7-9a90-40fba21f047f"]
         },
         {
           "type": "stream_event",
@@ -1278,7 +1278,7 @@
                 "role": "user",
                 "content": "Which word did I ask you to remember?"
               },
-              "uuid": "87d68dcb-9916-42ed-a638-7c976b7f86ad",
+              "uuid": "8c91982d-06ec-4ba7-9a90-40fba21f047f",
               "timestamp": "2026-10-02T14:13:29.492Z",
               "permissionMode": "acceptEdits",
               "promptSource": "sdk",
@@ -1290,7 +1290,7 @@
               "gitBranch": "HEAD"
             },
             {
-              "parentUuid": "87d68dcb-9916-42ed-a638-7c976b7f86ad",
+              "parentUuid": "8c91982d-06ec-4ba7-9a90-40fba21f047f",
               "isSidechain": false,
               "attachment": {
                 "type": "total_tokens_reminder",
@@ -1440,14 +1440,14 @@
           "ttft_stream_ms": 34,
           "time_to_request_ms": 29,
           "first_content_frame_ms": 34,
-          "user_message_uuid": "87d68dcb-9916-42ed-a638-7c976b7f86ad",
-          "user_message_uuids": ["87d68dcb-9916-42ed-a638-7c976b7f86ad"],
+          "user_message_uuid": "8c91982d-06ec-4ba7-9a90-40fba21f047f",
+          "user_message_uuids": ["8c91982d-06ec-4ba7-9a90-40fba21f047f"],
           "request_sent_wall_ms": 1790950409511,
           "queued_turn_count": 0
         },
         {
           "type": "command_lifecycle",
-          "command_uuid": "87d68dcb-9916-42ed-a638-7c976b7f86ad",
+          "command_uuid": "8c91982d-06ec-4ba7-9a90-40fba21f047f",
           "state": "completed",
           "uuid": "3a054b9b-28f9-4dea-9016-8636dcaaaaf0",
           "session_id": "fabe4171-9345-4c43-a385-7cdc4b510c37"

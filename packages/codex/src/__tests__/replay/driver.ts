@@ -41,7 +41,11 @@ export class NativeStore {
 
 /** What the fake host does while an attempt runs. */
 export interface HostScript {
-  /** The person's answer; `undefined` leaves the request open. */
+  /**
+   * The person's answer; `undefined` leaves the request open. As in Work,
+   * a blocking request's answer goes back to the harness and a
+   * non-blocking question's arrives as a message.
+   */
   answer?: (
     request: RequestDraft,
     key: string,
@@ -54,6 +58,8 @@ export interface HostScript {
     act: {
       steer: (text: string) => void;
       interrupt: () => void;
+      /** End the wait on a request without an answer (ADR 0195). */
+      release: (requestKey: string, reason: string) => void;
     },
   ) => void;
 }
@@ -114,6 +120,8 @@ export async function driveAttempt(input: {
       });
     },
     interrupt: () => send({ kind: "interrupt" }),
+    release: (requestKey: string, reason: string) =>
+      send({ kind: "release", requestKey, reason }),
   };
   send({ kind: "start", attempt });
   const deadline = Date.now() + (input.timeoutMs ?? 60_000);
@@ -138,8 +146,10 @@ export async function driveAttempt(input: {
         if (event.type === "thread") ownThread = event.ref.id;
         if (event.type === "request.opened") {
           const response = script.answer?.(event.request, event.key);
-          if (response)
+          if (response && event.request.blocking)
             send({ kind: "respond", requestKey: event.key, response });
+          else if (response?.kind === "question")
+            act.steer(response.answers.join("\n"));
         }
         script.onEvent?.(event, act);
       }

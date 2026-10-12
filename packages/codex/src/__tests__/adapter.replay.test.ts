@@ -287,7 +287,9 @@ describe("Codex adapter, replayed from the pinned app-server", () => {
       key: "question:call_1_0",
       request: {
         kind: "question",
-        blocking: false,
+        // Recorded `isBlocking: false`, yet Codex waits for the reply: the
+        // turn waits on the person, and the answer goes back to Codex.
+        blocking: true,
         title: "Theme",
         origin: { kind: "provider", id: "codex", displayName: "Codex" },
         questions: [
@@ -304,6 +306,48 @@ describe("Codex adapter, replayed from the pinned app-server", () => {
       },
     });
     // The recorded `{ answers: { theme: { answers: ["Orange"] } } }` matched.
+    expect(completionOf(run)?.status).toBe("completed");
+  });
+
+  it("tells Codex why its question went unanswered when the person writes in the chat instead", async () => {
+    const reason =
+      "The user wrote in the chat before answering. Their message follows.";
+    const recorded = await loadCodexFixture("user-question");
+    // The recording's reply, as Codex hears a question the person did not
+    // answer: its own free-text form, saying why.
+    const transcript = {
+      ...recorded,
+      entries: recorded.entries.map((entry) =>
+        "expect_outbound" in entry &&
+        "result" in entry.expect_outbound &&
+        entry.expect_outbound.id === 0
+          ? {
+              expect_outbound: {
+                ...entry.expect_outbound,
+                result: {
+                  answers: {
+                    theme: {
+                      answers: [
+                        `user_note: The question was closed without an answer: ${reason}`,
+                      ],
+                    },
+                  },
+                },
+              },
+            }
+          : entry,
+      ),
+    };
+    const run = await replay("user-question", {
+      transcript,
+      scripts: {
+        0: {
+          onEvent: (event, act) => {
+            if (event.type === "request.opened") act.release(event.key, reason);
+          },
+        },
+      },
+    });
     expect(completionOf(run)?.status).toBe("completed");
   });
 

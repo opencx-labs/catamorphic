@@ -157,6 +157,66 @@ it("an MCP elicitation becomes an elicitation request (authored from the SDK's t
   });
 });
 
+it.each(["completed", "cancelled", "refused"])(
+  "an input the CLI ends (%s) without running fails the turn instead of waiting for a result",
+  async (state) => {
+    const places = await directories();
+    const scenario = CLAUDE_SCENARIOS.find(
+      (entry) => entry.name === "simple-reply",
+    );
+    if (!scenario) throw new Error("simple-reply is missing");
+    const transcript = await loadClaudeTranscript({
+      scenario: "simple-reply",
+      tokens: scenarioTokens({ directories: places, modelUrl: MODEL_URL }),
+    });
+    const first = transcript.attempts[0];
+    if (!first) throw new Error("no attempt");
+    const [input, queued] = first.messages;
+    // Lifecycle frames are outside the SDK's message types.
+    const kind: string | undefined = queued?.type;
+    if (
+      input?.type !== "replay.input" ||
+      !queued ||
+      kind !== "command_lifecycle"
+    )
+      throw new Error("simple-reply no longer starts with its input");
+    const ended = structuredClone(queued);
+    Reflect.set(ended, "state", state);
+    transcript.source = "authored";
+    // A CLI that already holds the message (a resumed thread): it ends it at
+    // once, runs nothing and stays up for more input.
+    first.messages = [
+      input,
+      queued,
+      ended,
+      { type: "replay.input", uuid: "never-sent", text: "" },
+    ];
+    const outcomes = await runScenario({
+      scenario,
+      directories: places,
+      modelUrl: MODEL_URL,
+      fixtureServer: { transport: "stdio", command: "fixture-mcp-server" },
+      runner: () =>
+        new InProcessRunner({
+          adapters: {
+            "claude-code": createClaudeCodeAdapter({
+              query: replayQuery(transcript),
+            }),
+          },
+          version: "replay",
+        }),
+      timeoutMs: 10_000,
+    });
+    const completed = outcomes[0]?.completed;
+    expect(completed?.status).toBe("failed");
+    expect(completed?.error?.message).toBe(
+      "Claude Code ended the message without running it. Retry to send it again.",
+    );
+    // Not a provider's refusal: nothing retries it on its own.
+    expect(completed?.error?.retrySafe).toBeUndefined();
+  },
+);
+
 it("a replay refuses an adapter that asks the SDK for something else", async () => {
   const places = await directories();
   const scenario = CLAUDE_SCENARIOS.find(
