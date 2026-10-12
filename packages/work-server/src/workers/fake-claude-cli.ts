@@ -57,7 +57,21 @@ const transcriptFile = path.join(
   `${sessionId}.jsonl`,
 );
 const mirrors = process.argv.includes("--session-mirror");
-let lastUuid: string | null = null;
+
+/** Where the transcript left off: a resumed thread's last line. */
+function lastLineUuid(): string | null {
+  try {
+    const lines = fs
+      .readFileSync(transcriptFile, "utf8")
+      .split("\n")
+      .filter((line) => line.trim());
+    const uuid = record(JSON.parse(lines.at(-1) ?? "{}")).uuid;
+    return typeof uuid === "string" ? uuid : null;
+  } catch {
+    return null;
+  }
+}
+let lastUuid = lastLineUuid();
 
 /** Append an entry to the transcript, and mirror it to the SDK. */
 function writeTranscript(entry: Json): void {
@@ -210,8 +224,14 @@ async function finish(result: Json): Promise<void> {
   writeTranscript({ type: "system", subtype: "turn_duration", durationMs: 1 });
 }
 
-async function turn(prompt: string): Promise<void> {
-  writeTranscript({ type: "user", message: { role: "user", content: prompt } });
+async function turn(prompt: string, uuid: string | undefined): Promise<void> {
+  /** The person's message, as the SDK sent it, after the session's init. */
+  const userLine = () =>
+    writeTranscript({
+      type: "user",
+      ...(uuid ? { uuid } : {}),
+      message: { role: "user", content: prompt },
+    });
   if (!process.env.ANTHROPIC_BASE_URL && process.env.CLAUDE_CONFIG_DIR) {
     const answer = personalAnswer(prompt);
     emit({
@@ -228,6 +248,7 @@ async function turn(prompt: string): Promise<void> {
       slash_commands: [],
       output_style: "default",
     });
+    userLine();
     converse({
       type: "assistant",
       session_id: sessionId,
@@ -277,6 +298,7 @@ async function turn(prompt: string): Promise<void> {
     slash_commands: [],
     output_style: "default",
   });
+  userLine();
   const messages: Json[] = [{ role: "user", content: prompt }];
   const total = { input_tokens: 0, output_tokens: 0 };
   let answer = "";
@@ -413,7 +435,8 @@ lines.on("line", (line) => {
   }
   if (message.type === "user") {
     const prompt = promptOf(message);
-    pending = pending.then(() => turn(prompt));
+    const uuid = typeof message.uuid === "string" ? message.uuid : undefined;
+    pending = pending.then(() => turn(prompt, uuid));
   }
 });
 lines.on("close", () => {

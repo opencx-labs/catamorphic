@@ -207,7 +207,8 @@ export class EchoAdapter implements HarnessAdapter {
       const store = () =>
         host.nativeState.append({ entries: [{ turn: turnNumber, text }] });
       const storeLate = async () => {
-        const ms = Number(late?.split(" ")[1]) || LATE_STORE_MS;
+        const given = Number(late?.split(" ")[1]);
+        const ms = Number.isNaN(given) ? LATE_STORE_MS : given;
         await new Promise((resolve) => setTimeout(resolve, ms));
         await store();
       };

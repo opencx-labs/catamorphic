@@ -91,7 +91,13 @@ const host: TurnEngineHost = {
         }),
     };
   },
-  reattach: async ({ location }) => sandboxChannel({ provider, location }),
+  // As the service finds one: only a process its sandbox still lists.
+  reattach: async ({ location }) =>
+    (
+      await provider.processes.listProcesses({ sandboxId: location.sandboxId })
+    ).some((entry) => entry.processId === location.processId)
+      ? sandboxChannel({ provider, location })
+      : undefined,
   hostTool: async () => {
     throw new Error("No host tools here");
   },
@@ -185,17 +191,24 @@ async function until(check: () => Promise<boolean>, what: string) {
   }
 }
 
-/** Whether a runner's process in its sandbox is still up. */
-async function running(location: RunnerLocation): Promise<boolean> {
-  if (location.kind !== "sandbox_process") return false;
+/** A runner's process as its sandbox lists it: running, exited, or gone. */
+async function processStatus(location: RunnerLocation): Promise<string> {
+  if (location.kind !== "sandbox_process") return "not in a sandbox";
   const listed = await provider.processes.listProcesses({
     sandboxId: location.sandboxId,
   });
-  return listed.some(
-    (entry) =>
-      entry.processId === location.processId && entry.status === "running",
+  return (
+    listed.find((entry) => entry.processId === location.processId)?.status ??
+    "gone"
   );
 }
+
+/** The runner's process exits (its exit frame comes a moment before). */
+const exits = (location: RunnerLocation) =>
+  until(
+    async () => (await processStatus(location)) === "exited",
+    "the runner to exit",
+  );
 
 function runnerLocation(runner: unknown): RunnerLocation {
   if (
@@ -260,7 +273,7 @@ describe("the turn engine over sandbox runners", () => {
       { turn: 1, text: "remember this [[late]]" },
     ]);
     const [attempt] = await attemptsOf(sessionId);
-    expect(await running(runnerLocation(attempt?.runner))).toBe(false);
+    await exits(runnerLocation(attempt?.runner));
   }, 60_000);
 
   it("settles a finalizing turn on a replica that stops, never handing it back", async () => {
@@ -294,13 +307,16 @@ describe("the turn engine over sandbox runners", () => {
       leaseToken: turn.lease_token ?? "",
     });
     await working;
+    // Replica a left the runner winding down with nothing stored yet.
+    const [left] = await attemptsOf(sessionId);
+    expect(await processStatus(runnerLocation(left?.runner))).toBe("running");
+    expect(await stored(sessionId)).toEqual([]);
     expect(await replica("replica-b").runNext({ sessionId })).toBe(true);
     expect((await turnOf(sessionId)).status).toBe("completed");
     expect(await stored(sessionId)).toEqual([
       { turn: 1, text: "remember this [[late 3000]]" },
     ]);
-    const [attempt] = await attemptsOf(sessionId);
-    expect(await running(runnerLocation(attempt?.runner))).toBe(false);
+    await exits(runnerLocation(left?.runner));
   }, 60_000);
 
   it("drains a superseded runner before a steer restart that changed hands", async () => {
@@ -333,6 +349,12 @@ describe("the turn engine over sandbox runners", () => {
     // Replica a stops meanwhile and hands the restart back.
     await a.stop({ timeoutMs: 5_000, reattachable: () => true });
     await working;
+    // Replica a left the superseded runner winding down, nothing stored.
+    const [superseded] = await attemptsOf(sessionId);
+    expect(await processStatus(runnerLocation(superseded?.runner))).toBe(
+      "running",
+    );
+    expect(await stored(sessionId)).toEqual([]);
     expect(await replica("replica-b").runNext({ sessionId })).toBe(true);
     expect((await turnOf(sessionId)).status).toBe("completed");
     const attempts = await attemptsOf(sessionId);
@@ -342,6 +364,8 @@ describe("the turn engine over sandbox runners", () => {
     ]);
     // The new attempt resumed the thread with the superseded one in it.
     expect((await replies(sessionId)).at(-1)).toContain("(turn 2)");
-    expect(await running(runnerLocation(attempts[0]?.runner))).toBe(false);
+    await exits(runnerLocation(attempts[0]?.runner));
+    // Nobody reattaches it again.
+    expect(attempts[0]?.runner).toMatchObject({ ended: true });
   }, 60_000);
 });

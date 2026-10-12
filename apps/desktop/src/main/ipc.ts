@@ -1703,8 +1703,10 @@ export function registerIpcHandlers(
         } else if (action === "focus") {
           // The key window, as a person working in it has: a native click on
           // a window that is not key only activates it (macOS).
-          app.focus({ steal: true });
-          window.focus();
+          if (!window.isFocused()) {
+            app.focus({ steal: true });
+            window.focus();
+          }
         } else if (action === "zoom") {
           // Films on a 1x display: a 1680x1050 window zoomed by 1.3125 lays
           // out at 1280x800 and renders, and screencasts, at 1680x1050.
