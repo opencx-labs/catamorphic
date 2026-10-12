@@ -76,7 +76,10 @@ store check runs on its own), and `fontSettings` reports default fonts.
   change the extension makes.
 - **Context menus.** Items live in main and are saved per version, so an
   extension that creates them once at install still has them after a
-  restart; creating one again replaces the saved item.
+  restart; creating one again replaces the saved item. A page's menu is
+  Work's (ADR 0221): main adds the items as menu data after Work's own
+  entries and before Inspect, the window draws them, and a pick runs the
+  item's `contextMenus.onClicked`.
 - **Brand headers.** Any `session.webRequest` listener stops extension
   `webRequest` and `declarativeNetRequest` for the whole session. A profile
   with an extension that filters requests drops the Sec-CH-UA listener and

@@ -172,7 +172,14 @@ describe("configurable browser workspace", () => {
         `[...${aside}.querySelectorAll('[data-tree-primary], [data-tree-primary] *')].filter((element) => element.checkVisibility() && getComputedStyle(element).opacity !== '1').map((element) => element.outerHTML.slice(0, 80) + ' ' + getComputedStyle(element).opacity)`,
       );
     const before = await dimmed();
-    // Slowed, so the close can be read while it runs.
+    // Slowed, so the close can be read while it runs. Only once the window
+    // is still: an animation in flight as the timeline's rate changes (the
+    // bookmark dialog fading out, the folder opening) is left with a start
+    // time far in the future, frozen at its first frame.
+    await app.waitFor(
+      "document.getAnimations().every((animation) => animation.effect?.getComputedTiming().endTime === Infinity || (animation.playState !== 'running' && !animation.pending))",
+      { label: "no animation in flight" },
+    );
     await app.cdp("Animation.enable");
     await app.cdp("Animation.setPlaybackRate", { playbackRate: 0.1 });
     try {
@@ -197,6 +204,7 @@ describe("configurable browser workspace", () => {
       })); true`);
     } finally {
       await app.cdp("Animation.setPlaybackRate", { playbackRate: 1 });
+      await app.cdp("Animation.disable");
     }
     await app.waitFor(
       `${aside}.dataset.motion === 'open' && ${aside}.dataset.settled === 'true' && (${leaving})(${aside}).length === 0`,
@@ -345,7 +353,7 @@ describe("configurable browser workspace", () => {
     ).toBeGreaterThan(2);
     expect(collapse).toMatchObject({ connected: true, state: "closed" });
     await run("$('button[aria-label=\"More actions for Reference\"]').click()");
-    await run("button('Edit bookmark…').click()");
+    await run("button('Edit…').click()");
     await app.waitFor(
       "!!document.querySelector('select[name=bookmarkFolder]')",
     );

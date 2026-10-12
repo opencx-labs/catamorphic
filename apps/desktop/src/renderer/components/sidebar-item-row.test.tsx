@@ -200,7 +200,14 @@ describe("SidebarItemRow menu motion", () => {
     });
     expect(document.activeElement).toBe(buttons[1]);
 
-    act(() => window.dispatchEvent(new Event("pointerdown")));
+    // A press anywhere else lands on the shield under the menu.
+    act(() => {
+      const shield = document.querySelector("[data-menu-shield]");
+      shield?.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true }));
+      shield?.dispatchEvent(
+        new MouseEvent("mousedown", { bubbles: true, cancelable: true }),
+      );
+    });
     expect(document.querySelector('[role="menu"]')).toBe(menu);
     expect(panel.classList).toContain("animate-pop-out");
 

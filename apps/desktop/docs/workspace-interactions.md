@@ -12,8 +12,16 @@
 Use Ctrl for Cmd and Alt for Option outside macOS. Explicit gestures take priority
 over a configured default. Resource rows, sidebar items, palette results, chat links,
 and attachments share this language through `shared/open-mode.ts`. Commands and
-folder disclosure are not navigation. Context menus expose the same four labels.
-There is no shortcut for converting the current surface to floating.
+folder disclosure are not navigation. Context menus expose the same four labels;
+a link's menu in a web page offers the three that open elsewhere, since a click
+opens it here. There is no shortcut for converting the current surface to floating.
+
+An open menu holds the window, as a native one does (ADR 0221): the next press
+anywhere else, a web page included, only closes it, and a right-click elsewhere
+opens that place's menu. Escape, focus leaving it, the window losing focus, and
+the menu's row scrolling away, hiding or turning inert (its sidebar closing)
+close it too, and focus returns to where it was. Menus opened by a right-click
+start at the pointer.
 
 Opening here can reuse a compatible clean browser/editor. Preserve dirty buffers
 and running sessions. An existing surface retains identity when focused, tiled,

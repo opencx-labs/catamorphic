@@ -132,15 +132,27 @@ describe("bookmark organization", () => {
       label: "Docs",
       url: "https://example.com",
     });
-    store.update("project", bookmark.id, { folderId: folder.id });
-    store.rename("project", "profile", folder.id, "Reference");
+    const where = { projectId: "project", profileId: "profile" };
+    store.update({
+      ...where,
+      scope: "project",
+      id: bookmark.id,
+      folderId: folder.id,
+    });
+    store.renameFolder({
+      ...where,
+      scope: "project",
+      id: folder.id,
+      label: "Reference",
+    });
     expect(
       new BookmarksStore(file).forProject("project").folders[0]?.label,
     ).toBe("Reference");
-    store.remove("project", folder.id);
+    store.remove({ ...where, scope: "project", id: folder.id });
+    // First, and only, in the folder; then back at the root.
     expect(new BookmarksStore(file).forProject("project")).toEqual({
       folders: [],
-      bookmarks: [{ ...bookmark, folderId: undefined }],
+      bookmarks: [{ ...bookmark, position: 0, folderId: undefined }],
     });
   });
   it("pins across projects without retaining a folder from another project", () => {

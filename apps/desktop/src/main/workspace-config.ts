@@ -52,30 +52,6 @@ import {
 export type { SidebarSectionConfig } from "../shared/sidebar.js";
 export type { WorkspaceConfig } from "../shared/workspace-config.js";
 
-/** Hover menu for a project bookmark when the config doesn't override it. */
-export const DEFAULT_BOOKMARK_MENU: SidebarMenuEntry[] = [
-  { label: "Open in new tab", action: "open-tab" },
-  { label: "Copy link", action: "copy-url" },
-  { label: "Pin across projects", action: "pin" },
-  { label: "Edit bookmark…", action: "edit" },
-  { label: "Delete", action: "remove", danger: true },
-];
-
-/** Same, for an already-pinned bookmark. */
-export const DEFAULT_PINNED_MENU: SidebarMenuEntry[] = [
-  { label: "Open in new tab", action: "open-tab" },
-  { label: "Copy link", action: "copy-url" },
-  { label: "Unpin into this project", action: "unpin" },
-  { label: "Rename…", action: "rename" },
-  { label: "Delete", action: "remove", danger: true },
-];
-
-/** Menu offered to custom items that don't declare their own. */
-export const DEFAULT_CUSTOM_MENU: SidebarMenuEntry[] = [
-  { label: "Open in new tab", action: "open-tab" },
-  { label: "Copy link", action: "copy-url" },
-];
-
 export const DEFAULT_WORKSPACE_CONFIG: WorkspaceConfig = {
   sidebars: {
     left: [

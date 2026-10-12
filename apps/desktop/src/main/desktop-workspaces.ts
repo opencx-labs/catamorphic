@@ -3,8 +3,6 @@ import {
   autoUpdater,
   BrowserWindow,
   ipcMain,
-  Menu,
-  type MenuItemConstructorOptions,
   screen,
   type WebContents,
 } from "electron";
@@ -19,15 +17,16 @@ import type {
 } from "../shared/desktop-workspace.js";
 import {
   type DockDrag,
-  type DockMenuEntry,
   type DockRegion,
   type DockSize,
   dockLanding,
   dockPosition,
   fitDockSize,
 } from "../shared/dock-position.js";
+import type { MenuItem } from "../shared/menu.js";
 import { dockClicks } from "./dock-clicks.js";
 import type { WindowProfileRegistry } from "./index.js";
+import { popupNativeMenu } from "./native-menu.js";
 import type { ProfileConfigManager } from "./profile-config.js";
 
 const dockShapeSchema = z
@@ -120,36 +119,11 @@ export class DesktopWorkspaces {
     // the picked action.
     ipcMain.handle(
       "catamorphic:dock-menu",
-      (event, entries: readonly DockMenuEntry[]) => {
+      (event, entries: readonly MenuItem[]) => {
         const profileId = options.windows.profileFor(event.sender);
         const window = this.floating.get(profileId);
         if (!window || window.webContents !== event.sender) return null;
-        return new Promise<string | null>((resolve) => {
-          let picked: string | null = null;
-          const template = (
-            list: readonly DockMenuEntry[],
-          ): MenuItemConstructorOptions[] =>
-            list.map((entry) => ({
-              label: entry.detail
-                ? `${entry.label}  ${entry.detail}`
-                : entry.label,
-              ...(entry.submenu
-                ? { submenu: template(entry.submenu) }
-                : entry.checked === undefined
-                  ? {}
-                  : { type: "checkbox" as const, checked: entry.checked }),
-              click: () => {
-                picked = entry.action;
-              },
-            }));
-          Menu.buildFromTemplate(template(entries)).popup({
-            // At the cursor: window-relative coordinates land off target on
-            // the transparent strip, and a right-click puts the cursor here.
-            window,
-            // Closing fires before click on some platforms; settle after both.
-            callback: () => setTimeout(() => resolve(picked), 0),
-          });
-        });
+        return popupNativeMenu(window, entries);
       },
     );
     ipcMain.handle(

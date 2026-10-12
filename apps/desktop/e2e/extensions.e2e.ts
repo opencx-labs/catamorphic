@@ -86,6 +86,9 @@ chrome.runtime.onInstalled.addListener((details) => {
   log({ event: "installed", reason: details.reason });
   chrome.contextMenus.create({ id: "work-test", title: "Work Test: %s", contexts: ["selection"] });
 });
+chrome.contextMenus.onClicked.addListener((info, tab) => {
+  log({ event: "menu", item: info.menuItemId, text: info.selectionText, tabId: tab && tab.id });
+});
 chrome.tabs.onUpdated.addListener((tabId, change, tab) => {
   if (change.status === "complete" && tab.url) log({ event: "updated", tabId, url: tab.url });
 });
@@ -632,6 +635,50 @@ describe("an unpacked extension", () => {
         label: "popup closed when the page took focus",
       },
     );
+  });
+
+  it("adds its items to the page's menu, after Work's own", async () => {
+    await inPage(
+      "(() => { const range = document.createRange(); range.selectNodeContents(document.querySelector('p')); getSelection().removeAllRanges(); getSelection().addRange(range); return true; })()",
+    );
+    const point = await app.eval<{ x: number; y: number }>(`(async () => {
+      const view = ${pageView};
+      const box = await view.executeJavaScript("(() => { const r = document.querySelector('p').getBoundingClientRect(); return { x: r.left + 4, y: r.top + r.height / 2 }; })()", true);
+      const page = view.getBoundingClientRect();
+      return { x: Math.round(page.left + box.x), y: Math.round(page.top + box.y) };
+    })()`);
+    await app.cdp("Input.dispatchMouseEvent", { type: "mouseMoved", ...point });
+    for (const type of ["mousePressed", "mouseReleased"])
+      await app.cdp("Input.dispatchMouseEvent", {
+        type,
+        ...point,
+        button: "right",
+        clickCount: 1,
+      });
+    const menu = `document.querySelector('[data-sidebar-menu][aria-label="Page"]')`;
+    await app.waitFor(
+      `[...(${menu}?.querySelectorAll('button') ?? [])].some((b) => b.textContent.trim() === 'Work Test: one')`,
+      { label: "extension item in the page menu" },
+    );
+    const labels = await app.eval<string[]>(
+      `[...${menu}.querySelectorAll('button')].map((b) => b.textContent.trim())`,
+    );
+    expect(labels.indexOf("Work Test: one")).toBeGreaterThan(
+      labels.indexOf("Copy"),
+    );
+    expect(labels.at(-1)).toBe("Inspect");
+    await app.waitFor(
+      `${menu}.getAnimations({ subtree: true }).every((animation) => animation.playState === 'finished')`,
+    );
+    await app.eval(
+      `[...${menu}.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Work Test: one').click(); true`,
+    );
+    const worker = await app.connectToFrame(`${extensionId}/sw.js`);
+    await worker.waitFor(
+      `chrome.storage.local.get('log').then(({ log }) => (log || []).some((entry) => entry.event === 'menu' && entry.item === 'work-test' && entry.text === 'one' && typeof entry.tabId === 'number'))`,
+      { label: "contextMenus.onClicked reached the worker" },
+    );
+    worker.close();
   });
 
   it("asks before an optional permission and then offers its API", async () => {

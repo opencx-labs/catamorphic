@@ -13,15 +13,13 @@ import {
   downloadOpensInWork,
   isActiveDownload,
 } from "../../shared/downloads.js";
+import { MENU_SEPARATOR, type MenuItem } from "../../shared/menu.js";
 import type { OpenMode } from "../../shared/open-mode.js";
+import { type MenuAt, MenuPortal, menuAtPointer } from "../components/menu.js";
 import { Modal } from "../components/modal.js";
 import { OpenResourceButton } from "../components/open-resource-button.js";
 import { PendingButton } from "../components/pending-button.js";
 import { ShortcutHint } from "../components/shortcut-hint.js";
-import {
-  type ContextMenuEntry,
-  MenuPortal,
-} from "../components/sidebar-item-row.js";
 import { desktopApi } from "../lib/desktop-api.js";
 import {
   describeDownload,
@@ -47,10 +45,11 @@ function dayLabel(time: number): string {
   });
 }
 
-const MENU: readonly ContextMenuEntry[] = [
+const MENU: readonly MenuItem[] = [
   { label: "Open", action: "open" },
   { label: "Show in Finder", action: "reveal" },
   { label: "Copy download link", action: "copy-link" },
+  MENU_SEPARATOR,
   { label: "Remove from list", action: "remove", danger: true },
 ];
 
@@ -74,7 +73,7 @@ export function DownloadsScreen({
   const [clearing, setClearing] = useState(false);
   const [menu, setMenu] = useState<{
     record: DownloadRecord;
-    position: { x: number; y: number };
+    at: MenuAt;
     open: boolean;
   } | null>(null);
   const filtered = useMemo(() => {
@@ -174,9 +173,7 @@ export function DownloadsScreen({
                 <DownloadRow
                   record={record}
                   onOpen={(mode) => open(record, mode)}
-                  onMenu={(position) =>
-                    setMenu({ record, position, open: true })
-                  }
+                  onMenu={(at) => setMenu({ record, at, open: true })}
                 />
               </Fragment>
             );
@@ -195,7 +192,8 @@ export function DownloadsScreen({
       {menu && (
         <MenuPortal
           open={menu.open}
-          position={menu.position}
+          at={menu.at}
+          label={menu.record.filename}
           entries={MENU}
           onPick={(entry) => {
             pick(menu.record, entry.action);
@@ -258,7 +256,7 @@ function DownloadRow({
 }: {
   record: DownloadRecord;
   onOpen: (mode: OpenMode) => void;
-  onMenu: (position: { x: number; y: number }) => void;
+  onMenu: (at: MenuAt) => void;
 }) {
   const Icon = downloadIcon(record.filename);
   const progress = downloadProgress(record);
@@ -275,7 +273,7 @@ function DownloadRow({
       data-state={record.state}
       onContextMenu={(event) => {
         event.preventDefault();
-        onMenu({ x: event.clientX, y: event.clientY });
+        onMenu(menuAtPointer(event));
       }}
       className="group flex min-w-0 items-center gap-1 rounded-md transition-colors duration-150 hover:bg-bg-overlay focus-within:bg-bg-overlay"
     >
