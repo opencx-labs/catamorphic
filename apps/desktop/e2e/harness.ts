@@ -644,6 +644,18 @@ export const setReactValueJs = `const setReactValue = (el, value) => {
   };`;
 
 /**
+ * Makes the app's window the key window, as a person working in it has.
+ * Electron's `sendInputEvent` reaches a page only while its window is
+ * focused, and on macOS a test app can start out inactive.
+ */
+export async function focusWindow(app: AppHandle): Promise<void> {
+  await app.waitFor(
+    "window.catamorphicDesktop.devWindow('focus').then((state) => state?.focused === true)",
+    { label: "the window is key" },
+  );
+}
+
+/**
  * Moves the CDP pointer onto `selector` in a web page (`view` is an
  * expression for its <webview>) until the page's own pointer events put it
  * there. The window routes input to a page a frame or more after it shows

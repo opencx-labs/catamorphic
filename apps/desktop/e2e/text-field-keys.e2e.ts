@@ -1,6 +1,6 @@
 import http from "node:http";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { type AppHandle, launchApp } from "./harness.js";
+import { type AppHandle, focusWindow, launchApp } from "./harness.js";
 
 /**
  * Cmd+Left and Cmd+Right go back and forward in a browser tab, but a text
@@ -53,15 +53,20 @@ const windowKey = (key: string, focus: string) =>
     document.activeElement.dispatchEvent(event);
     return event.defaultPrevented;
   })()`);
-/** The same key pressed inside the page, through its real input path. */
-const pageKey = (keyCode: string) =>
-  app.eval(`(() => {
+/**
+ * The same key pressed inside the page, through its real input path, which
+ * needs the window focused.
+ */
+const pageKey = async (keyCode: string) => {
+  await focusWindow(app);
+  return app.eval(`(() => {
     const page = ${view};
     page.focus();
     for (const type of ['keyDown', 'keyUp'])
       page.sendInputEvent({ type, keyCode: ${JSON.stringify(keyCode)}, modifiers: [${JSON.stringify(mac ? "meta" : "control")}] });
     return true;
   })()`);
+};
 const settle = () => new Promise((resolve) => setTimeout(resolve, 400));
 
 beforeAll(async () => {
