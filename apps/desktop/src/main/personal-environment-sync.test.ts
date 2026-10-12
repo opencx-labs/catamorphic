@@ -435,14 +435,21 @@ describe("PersonalEnvironmentSync", () => {
       );
       await env.sync.syncNow(env.target);
       expect(env.puts).toHaveLength(1);
-      fs.writeFileSync(
-        path.join(env.root, PERSONAL_ENVIRONMENT_PATH),
-        JSON.stringify({ files: [], setup: "make tools" }),
-      );
+      // macOS reports a folder's changes only once its FSEvents stream has
+      // started, a moment after the watch begins (longer under load): a
+      // write made before then is never reported. Write again until the
+      // watcher reports one, each write after the 750 ms debounce.
+      const expected = { files: [], setup: "make tools" };
       await vi.waitFor(
-        () =>
-          expect(env.puts.at(-1)).toEqual({ files: [], setup: "make tools" }),
-        { timeout: 5_000 },
+        () => {
+          if (JSON.stringify(env.puts.at(-1)) !== JSON.stringify(expected))
+            fs.writeFileSync(
+              path.join(env.root, PERSONAL_ENVIRONMENT_PATH),
+              JSON.stringify(expected),
+            );
+          expect(env.puts.at(-1)).toEqual(expected);
+        },
+        { timeout: 10_000, interval: 1_000 },
       );
     } finally {
       env.sync.stop();

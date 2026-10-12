@@ -3,8 +3,12 @@ import fs from "node:fs";
 import { z } from "zod";
 import { orderedSiblings } from "../shared/bookmark-order.js";
 import type {
+  BookmarkFolderRename,
   BookmarkMove,
   BookmarkPlacement,
+  BookmarkRemoval,
+  BookmarkScope,
+  BookmarkUpdate,
 } from "../shared/bookmark-target.js";
 import { ConfigFile } from "./config-file.js";
 
@@ -89,6 +93,26 @@ function tree(
 ): ProjectBookmarks {
   trees[key] ??= empty();
   return trees[key];
+}
+
+/** The tree a scope names in the file, created when a change first needs it. */
+function scopeTree(
+  data: BookmarksFile,
+  {
+    scope,
+    projectId,
+    profileId,
+  }: {
+    scope: BookmarkScope;
+    projectId: string;
+    profileId: string;
+  },
+): ProjectBookmarks {
+  return scope === "project"
+    ? tree(data.byProject, projectId)
+    : scope === "pinned"
+      ? tree(data.pinnedByProfile, profileId)
+      : tree(data.libraryByProfile, profileId);
 }
 
 /** Same site: scheme and a leading `www.` do not make it another one. */
@@ -403,12 +427,7 @@ export class BookmarksStore {
    */
   move({ projectId, profileId, scope, id, folderId, beforeId }: BookmarkMove) {
     this.edit((data) => {
-      const target =
-        scope === "project"
-          ? tree(data.byProject, projectId)
-          : scope === "pinned"
-            ? tree(data.pinnedByProfile, profileId)
-            : tree(data.libraryByProfile, profileId);
+      const target = scopeTree(data, { scope, projectId, profileId });
       const parentId = folderId ?? undefined;
       if (parentId && !target.folders.some((folder) => folder.id === parentId))
         throw new Error("This bookmark folder no longer exists.");
@@ -432,28 +451,65 @@ export class BookmarksStore {
     });
   }
 
-  update(
-    projectId: string,
-    id: string,
-    patch: { label?: string; url?: string; folderId?: string | null },
-  ): void {
+  /**
+   * Edit a bookmark where it lives, in any scope. A new address must be a
+   * web page's; a bookmark moved to another site drops the old site's icon
+   * until the new page reports its own. An emptied name keeps the old one.
+   * A new folder takes the bookmark last among its children. A library
+   * bookmark that is also pinned is one bookmark shown twice: its name and
+   * address change in both places, so unpinning keeps the edit.
+   */
+  update({
+    projectId,
+    profileId,
+    scope,
+    id,
+    label,
+    url,
+    folderId,
+  }: BookmarkUpdate): void {
     this.edit((data) => {
-      const bookmark = data.byProject[projectId]?.bookmarks.find(
+      const target = scopeTree(data, { scope, projectId, profileId });
+      const bookmark = target.bookmarks.find(
         (candidate) => candidate.id === id,
       );
-      if (!bookmark) return;
-      if (patch.label !== undefined) bookmark.label = patch.label;
-      if (patch.url !== undefined) bookmark.url = patch.url;
-      if (patch.folderId !== undefined)
-        setParent(bookmark, "folderId", patch.folderId ?? undefined);
+      if (!bookmark) throw new Error("This bookmark no longer exists.");
+      if (url !== undefined && url !== bookmark.url && !bookmarkSiteKey(url))
+        throw new Error("Enter an http or https address.");
+      const name = label?.trim();
+      const copies = [
+        data.byProject[projectId],
+        data.pinnedByProfile[profileId],
+        data.libraryByProfile[profileId],
+      ].flatMap(
+        (tree) => tree?.bookmarks.filter((entry) => entry.id === id) ?? [],
+      );
+      for (const copy of copies) {
+        if (url !== undefined && url !== copy.url) {
+          if (bookmarkSiteKey(url) !== bookmarkSiteKey(copy.url))
+            delete copy.faviconUrl;
+          copy.url = url;
+        }
+        if (name) copy.label = name;
+      }
+      const parentId =
+        folderId === undefined ? bookmark.folderId : (folderId ?? undefined);
+      if (parentId !== bookmark.folderId) {
+        if (
+          parentId &&
+          !target.folders.some((folder) => folder.id === parentId)
+        )
+          throw new Error("This bookmark folder no longer exists.");
+        setParent(bookmark, "folderId", parentId);
+        placeAmongSiblings(target, id, parentId, undefined);
+      }
     });
   }
 
-  remove(projectId: string, id: string): void {
+  /** Remove a bookmark, or a folder whose children move up one level. */
+  remove({ projectId, profileId, scope, id }: BookmarkRemoval): void {
     this.edit((data) => {
-      const scope = data.byProject[projectId];
-      if (!scope) return;
-      removeEntry(scope, id);
+      removeEntry(scopeTree(data, { scope, projectId, profileId }), id);
     });
   }
 
@@ -520,47 +576,23 @@ export class BookmarksStore {
     });
   }
 
-  /** Rename works in any scope: the caller may not know which. */
-  rename(
-    projectId: string,
-    profileId: string,
-    id: string,
-    label: string,
-  ): void {
-    const trimmed = label.trim();
-    if (!trimmed) return;
+  renameFolder({
+    projectId,
+    profileId,
+    scope,
+    id,
+    label,
+  }: BookmarkFolderRename): void {
+    const name = label.trim();
+    if (!name) throw new Error("Name the folder.");
     this.edit((data) => {
-      const entries = [
-        data.libraryByProfile[profileId],
-        data.byProject[projectId],
-        data.pinnedByProfile[profileId],
-      ].flatMap((scope) =>
-        scope
-          ? [...scope.bookmarks, ...scope.folders].filter(
-              (entry) => entry.id === id,
-            )
-          : [],
-      );
-      if (entries.length === 0) return;
-      for (const entry of entries) entry.label = trimmed;
-    });
-  }
-
-  removeLibrary(profileId: string, id: string): void {
-    this.edit((data) => {
-      const scope = data.libraryByProfile[profileId];
-      if (!scope) return;
-      removeEntry(scope, id);
-    });
-  }
-
-  removePinned(profileId: string, id: string): void {
-    this.edit((data) => {
-      const pinned = data.pinnedByProfile[profileId];
-      if (!pinned) return;
-      pinned.bookmarks = pinned.bookmarks.filter(
-        (candidate) => candidate.id !== id,
-      );
+      const folder = scopeTree(data, {
+        scope,
+        projectId,
+        profileId,
+      }).folders.find((candidate) => candidate.id === id);
+      if (!folder) throw new Error("This bookmark folder no longer exists.");
+      folder.label = name;
     });
   }
 }

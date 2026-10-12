@@ -38,6 +38,7 @@ import {
   type WebStoreMethod,
 } from "../../shared/extensions.js";
 import { matchesShortcut } from "../../shared/keybindings.js";
+import { MENU_SEPARATOR, type MenuItem } from "../../shared/menu.js";
 import { ActionStore, cssColor, DEFAULT_BADGE_BACKGROUND } from "./actions.js";
 import { type ApiHandler, type Caller, createApi } from "./api.js";
 import { extractArchive } from "./archive.js";
@@ -232,6 +233,18 @@ const portKey = (context: ExtensionContext, portId: string) =>
 
 function errorMessage(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause);
+}
+
+/** Where a right-click picked an extension's item, as onClicked reports it. */
+interface MenuClickTarget {
+  pageUrl: string;
+  frameUrl?: string | null;
+  frameId: number;
+  linkUrl?: string | null;
+  srcUrl?: string | null;
+  mediaType?: string | null;
+  selectionText?: string | null;
+  editable: boolean;
 }
 
 export class ExtensionsHost {
@@ -2303,14 +2316,23 @@ export class ExtensionsHost {
 
   // ---- Page context menu ----------------------------------------------------------------------
 
-  /** Extension entries for a right-click in a tab. */
+  /**
+   * Extension entries for a right-click in a tab, as menu data the window
+   * draws after Work's own, and `run` for the one picked.
+   */
   pageMenu(
     guest: WebContents,
     params: Electron.ContextMenuParams,
-  ): Electron.MenuItemConstructorOptions[] {
+  ): { items: MenuItem[]; run: (action: string) => boolean } {
+    const clicks = new Map<string, () => void>();
+    const run = (action: string) => {
+      const click = clicks.get(action);
+      click?.();
+      return click !== undefined;
+    };
     const tab = this.tabs.tab(guest.id);
     const profileId = this.profileOfSession(guest.session);
-    if (!profileId || !tab) return [];
+    if (!profileId || !tab) return { items: [], run };
     const frame = params.frame;
     const target = pageMenuTarget({
       pageURL: params.pageURL,
@@ -2322,34 +2344,69 @@ export class ExtensionsHost {
       isEditable: params.isEditable,
       frameId: frame && frame !== guest.mainFrame ? frame.frameTreeNodeId : 0,
     });
-    const template: Electron.MenuItemConstructorOptions[] = [];
+    const items: MenuItem[] = [];
     for (const extension of this.loadedIn(profileId)) {
       if (!extension.has("contextMenus")) continue;
       const entries = this.menus.entries(profileId, extension.id, target);
       if (entries.length === 0) continue;
-      const items = this.menuTemplate(extension, entries, tab, target);
+      const own = this.menuItems(extension, entries, tab, target, clicks);
       // Chrome groups an extension's several items under its name.
       if (entries.length > 1)
-        template.push({ label: extension.name, submenu: items });
-      else template.push(...items);
+        items.push({
+          label: extension.name,
+          action: `extension:${extension.id}`,
+          submenu: own,
+        });
+      else items.push(...own);
     }
-    return template;
+    return { items, run };
   }
 
+  private menuItems(
+    extension: LoadedExtension,
+    entries: MenuEntry[],
+    tab: TabRecord,
+    target: MenuClickTarget,
+    clicks: Map<string, () => void>,
+  ): MenuItem[] {
+    return entries.map((entry): MenuItem => {
+      const { item } = entry;
+      if (item.type === "separator") return MENU_SEPARATOR;
+      const action = `extension:${extension.id}:${item.id}`;
+      const disabled = item.enabled
+        ? {}
+        : { disabledReason: `${extension.name} turned this off` };
+      if (entry.children.length > 0)
+        return {
+          label: entry.label,
+          action,
+          ...disabled,
+          submenu: this.menuItems(
+            extension,
+            entry.children,
+            tab,
+            target,
+            clicks,
+          ),
+        };
+      clicks.set(action, () => this.menuClick(extension, item, tab, target));
+      return {
+        label: entry.label,
+        action,
+        ...disabled,
+        ...(item.type === "checkbox" || item.type === "radio"
+          ? { checked: item.checked, setting: item.type === "checkbox" }
+          : {}),
+      };
+    });
+  }
+
+  /** The toolbar action's native menu shows the same items. */
   private menuTemplate(
     extension: LoadedExtension,
     entries: MenuEntry[],
     tab: TabRecord,
-    target: {
-      pageUrl: string;
-      frameUrl?: string | null;
-      frameId: number;
-      linkUrl?: string | null;
-      srcUrl?: string | null;
-      mediaType?: string | null;
-      selectionText?: string | null;
-      editable: boolean;
-    },
+    target: MenuClickTarget,
   ): Electron.MenuItemConstructorOptions[] {
     return entries.map((entry): Electron.MenuItemConstructorOptions => {
       const { item } = entry;
@@ -2370,47 +2427,53 @@ export class ExtensionsHost {
               ? "radio"
               : "normal",
         checked: item.checked,
-        click: () => {
-          const wasChecked = this.menus.click(
-            extension.profileId,
-            extension.id,
-            item.id,
-          );
-          this.noteGesture(extension.profileId, extension.id);
-          this.grantActiveTab(extension, tab.id);
-          const info: Record<string, unknown> = {
-            menuItemId: item.rawId,
-            ...(item.rawParentId !== null
-              ? { parentMenuItemId: item.rawParentId }
-              : {}),
-            pageUrl: target.pageUrl,
-            frameId: target.frameId,
-            editable: target.editable,
-            ...(target.frameUrl ? { frameUrl: target.frameUrl } : {}),
-            ...(target.linkUrl ? { linkUrl: target.linkUrl } : {}),
-            ...(target.srcUrl ? { srcUrl: target.srcUrl } : {}),
-            ...(target.mediaType ? { mediaType: target.mediaType } : {}),
-            ...(target.selectionText
-              ? { selectionText: target.selectionText }
-              : {}),
-            ...(item.type === "checkbox" || item.type === "radio"
-              ? {
-                  wasChecked,
-                  checked:
-                    this.menus.item(extension.profileId, extension.id, item.id)
-                      ?.checked ?? false,
-                }
-              : {}),
-          };
-          this.events.dispatch(
-            extension.profileId,
-            extension.id,
-            "contextMenus.onClicked",
-            [info, this.tabObject(extension, tab)],
-          );
-        },
+        click: () => this.menuClick(extension, item, tab, target),
       };
     });
+  }
+
+  /** `contextMenus.onClicked`, as Chrome reports a pick. */
+  private menuClick(
+    extension: LoadedExtension,
+    item: MenuEntry["item"],
+    tab: TabRecord,
+    target: MenuClickTarget,
+  ): void {
+    const wasChecked = this.menus.click(
+      extension.profileId,
+      extension.id,
+      item.id,
+    );
+    this.noteGesture(extension.profileId, extension.id);
+    this.grantActiveTab(extension, tab.id);
+    const info: Record<string, unknown> = {
+      menuItemId: item.rawId,
+      ...(item.rawParentId !== null
+        ? { parentMenuItemId: item.rawParentId }
+        : {}),
+      pageUrl: target.pageUrl,
+      frameId: target.frameId,
+      editable: target.editable,
+      ...(target.frameUrl ? { frameUrl: target.frameUrl } : {}),
+      ...(target.linkUrl ? { linkUrl: target.linkUrl } : {}),
+      ...(target.srcUrl ? { srcUrl: target.srcUrl } : {}),
+      ...(target.mediaType ? { mediaType: target.mediaType } : {}),
+      ...(target.selectionText ? { selectionText: target.selectionText } : {}),
+      ...(item.type === "checkbox" || item.type === "radio"
+        ? {
+            wasChecked,
+            checked:
+              this.menus.item(extension.profileId, extension.id, item.id)
+                ?.checked ?? false,
+          }
+        : {}),
+    };
+    this.events.dispatch(
+      extension.profileId,
+      extension.id,
+      "contextMenus.onClicked",
+      [info, this.tabObject(extension, tab)],
+    );
   }
 
   // ---- Keyboard commands ----------------------------------------------------------------------------
@@ -2481,6 +2544,11 @@ export class ExtensionsHost {
     if (!hit) return false;
     void this.runCommand(profileId, hit.extensionId, hit.name, tab);
     return true;
+  }
+
+  /** One of Work's extension popups or side panels, not a tab's page. */
+  isView(guest: WebContents): boolean {
+    return this.views.has(guest.id);
   }
 
   /**

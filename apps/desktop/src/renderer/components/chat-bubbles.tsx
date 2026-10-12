@@ -23,8 +23,8 @@ import { EASE_STANDARD, motionMs } from "../lib/motion.js";
 import type { ChatDockEntry } from "./chat-dock";
 import { ChatGlyph } from "./chat-icon";
 import { type ChatSignals, SignalBadge, SignalGlyph } from "./chat-signals";
+import { type MenuAt, MenuPortal, menuAtPointer } from "./menu.js";
 import { ShortcutHint } from "./shortcut-hint";
-import { MenuPortal, useMenuDismiss } from "./sidebar-item-row.js";
 
 /** Bubbles identify themselves on hover without delay (unlike buttons,
     whose labels are usually inferable — a bubble is just an icon). */
@@ -157,7 +157,7 @@ function Bubble({
   onExited: (localId: string) => void;
 }) {
   const [asking, setAsking] = useState(false);
-  const [menuAt, setMenuAt] = useState<{ x: number; y: number } | null>(null);
+  const [menuAt, setMenuAt] = useState<MenuAt | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   const prevAwaitingRef = useRef(signals.awaitingInput ?? false);
@@ -165,14 +165,6 @@ function Bubble({
     prevAwaitingRef.current = signals.awaitingInput ?? false;
     if (signals.awaitingInput) setAsking(true);
   }
-  // Only a scroll that carries the bubble detaches the menu from it. A
-  // streaming chat keeps its timeline following new output, and those
-  // scrolls must not close a menu the person just opened.
-  useMenuDismiss({
-    open: menuOpen,
-    close: () => setMenuOpen(false),
-    anchor: rootRef,
-  });
   return (
     <div
       ref={rootRef}
@@ -215,7 +207,7 @@ function Bubble({
                     });
                     return;
                   }
-                  setMenuAt({ x: event.clientX, y: event.clientY });
+                  setMenuAt(menuAtPointer(event));
                   setMenuOpen(true);
                 }
               : undefined
@@ -255,12 +247,18 @@ function Bubble({
       {menuAt && menu && (
         <MenuPortal
           open={menuOpen}
-          position={menuAt}
+          at={menuAt}
+          // Only a scroll that carries the bubble detaches the menu from
+          // it. A streaming chat keeps its timeline following new output,
+          // and those scrolls must not close a menu the person just opened.
+          anchor={rootRef}
+          label={label}
           entries={menu}
           onPick={(action) => {
             setMenuOpen(false);
             onMenuAction(entry.localId, action);
           }}
+          onDismiss={() => setMenuOpen(false)}
           onExited={() => setMenuAt(null)}
         />
       )}
@@ -314,9 +312,7 @@ export function ChatBubbles({
   const keybindings = useKeybindings();
   // Right-click on the collapsed bubble or the arrows: moves the dock
   // between the window and its own always-on-top window for this session.
-  const [dockMenuAt, setDockMenuAt] = useState<{ x: number; y: number } | null>(
-    null,
-  );
+  const [dockMenuAt, setDockMenuAt] = useState<MenuAt | null>(null);
   const [dockMenuOpen, setDockMenuOpen] = useState(false);
   const dockMenuEntries = [
     ...(onToggleDetached
@@ -352,14 +348,10 @@ export function ChatBubbles({
             void desktopApi.dockMenu(dockMenuEntries).then(pickDockMenu);
             return;
           }
-          setDockMenuAt({ x: event.clientX, y: event.clientY });
+          setDockMenuAt(menuAtPointer(event));
           setDockMenuOpen(true);
         }
       : undefined;
-  useMenuDismiss({
-    open: dockMenuOpen,
-    close: () => setDockMenuOpen(false),
-  });
   // Opened by hand while a chat tab folds it: until such a tab gains focus
   // again. Only the person's choice outlasts a tab.
   const [peeked, setPeeked] = useState(false);
@@ -769,12 +761,14 @@ export function ChatBubbles({
       {dockMenuAt && (
         <MenuPortal
           open={dockMenuOpen}
-          position={dockMenuAt}
+          at={dockMenuAt}
+          label="Dock"
           entries={dockMenuEntries}
           onPick={(entry) => {
             setDockMenuOpen(false);
             pickDockMenu(entry.action);
           }}
+          onDismiss={() => setDockMenuOpen(false)}
           onExited={() => setDockMenuAt(null)}
         />
       )}

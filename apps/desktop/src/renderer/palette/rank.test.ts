@@ -277,6 +277,33 @@ it("lists one row per destination", async () => {
       row("tab-2", "OpenCX", { usage: page, category: "tab" }),
     ]),
   ).toEqual(["tab-1", "tab-2"]);
+  // The tab standing in for a bookmark is that bookmark open: one row,
+  // named as the person named it, found by the bookmark's words too, and
+  // listed where the bookmark was (an open tab alone is found by typing).
+  const [merged] = oneRowPerDestination([
+    row("bookmark", "Team wiki", {
+      usage: page,
+      category: "bookmark",
+      bookmarked: true,
+      keywords: ["docs"],
+    }),
+    row("tab", "Inbox · OpenCX", {
+      usage: page,
+      category: "tab",
+      searchOnly: true,
+      keywords: ["tab"],
+    }),
+  ]);
+  expect(merged).toMatchObject({
+    id: "tab",
+    label: "Team wiki",
+    category: "tab",
+    bookmarked: true,
+    searchOnly: false,
+  });
+  expect(merged?.keywords).toEqual(
+    expect.arrayContaining(["tab", "Team wiki", "docs"]),
+  );
   // An app surface keeps its own row over its open tab.
   expect(
     ids([

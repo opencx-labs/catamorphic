@@ -374,7 +374,7 @@ describe("configurable browser workspace", () => {
     ).toBeGreaterThan(2);
     expect(collapse).toMatchObject({ connected: true, state: "closed" });
     await run("$('button[aria-label=\"More actions for Reference\"]').click()");
-    await run("button('Edit bookmark…').click()");
+    await run("button('Edit…').click()");
     await app.waitFor(
       "!!document.querySelector('select[name=bookmarkFolder]')",
     );

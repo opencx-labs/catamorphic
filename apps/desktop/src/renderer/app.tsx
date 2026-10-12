@@ -64,6 +64,7 @@ import {
   type OpenModifiers,
   openModeFromEvent,
 } from "../shared/open-mode.js";
+import { samePage } from "../shared/page-url.js";
 import {
   type ProjectExperienceContext,
   writesProgram,
@@ -1746,6 +1747,38 @@ export function App({
     [activeProfile, updateWorkspace],
   );
 
+  /**
+   * A page already open in a tab opens there (`switchToOpenTab`): a link,
+   * a bookmark or a link from another app goes to that tab instead of
+   * opening the page twice. Callers asked for a new tab on purpose never
+   * ask. A page an agent is driving, and a chip kept off the strip, do
+   * not count. Returns the tab's key, or null to open the page as usual.
+   */
+  const switchToOpenPage = (url: string): string | null => {
+    if (prefsRef.current?.switchToOpenTab === false) return null;
+    if (!/^https?:/i.test(url)) return null;
+    const ws = workspaceRef.current;
+    const focused = ws.floatingKey ?? ws.activeTabKey;
+    const open = ws.browsers.filter(
+      (browser) =>
+        !browser.agentControlled &&
+        !browser.background &&
+        samePage(browser.url || browser.initialUrl, url),
+    );
+    const target =
+      open.find((browser) => browserTabKey(browser.localId) === focused) ??
+      open[0];
+    if (!target) return null;
+    const key = browserTabKey(target.localId);
+    if (key !== ws.floatingKey)
+      updateWorkspace((current) =>
+        transitionWorkspace(current, { type: "select", key }),
+      );
+    return key;
+  };
+  const switchToOpenPageRef = useRef(switchToOpenPage);
+  switchToOpenPageRef.current = switchToOpenPage;
+
   /** Open a terminal tab; the shell starts in the project folder. */
   const openTerminalTab = (opts?: {
     chatLocalId?: string;
@@ -1829,6 +1862,8 @@ export function App({
       background?: boolean;
       newTab?: boolean;
       mode?: CommitMode;
+      /** The person clicked it: a page already open goes to its tab. */
+      clicked?: boolean;
     } = {},
   ): Promise<string> => {
     const intent =
@@ -1880,6 +1915,11 @@ export function App({
       throw new Error("Choose a profile before opening this link");
     const focusedKey =
       workspaceRef.current.floatingKey ?? workspaceRef.current.activeTabKey;
+    const openTab =
+      browserUrl && opts.clicked && intent === "replace" && !opts.background
+        ? switchToOpenPage(browserUrl)
+        : null;
+    if (openTab) return openTab;
     if (
       browserUrl &&
       intent === "replace" &&
@@ -2085,6 +2125,11 @@ export function App({
       return;
     }
     if (navigation.open === "browser") {
+      if (
+        (navigation.mode ?? "replace") === "replace" &&
+        switchToOpenPage(navigation.url)
+      )
+        return;
       openBrowserTab(navigation.url, {
         title: navigation.title,
         side: navigation.mode === "side",
@@ -2143,6 +2188,7 @@ export function App({
   ) => {
     void openLinkedSurface(value, {
       chatLocalId: entry.localId,
+      clicked: true,
       mode:
         typeof modifiers === "string"
           ? modifiers
@@ -2240,7 +2286,9 @@ export function App({
       void desktopApi
         .browserTakePendingUrls()
         .then((urls) => {
-          for (const url of urls) openBrowserTabRef.current(url);
+          for (const url of urls)
+            if (!switchToOpenPageRef.current(url))
+              openBrowserTabRef.current(url);
         })
         .catch(() => {});
     };
@@ -2248,16 +2296,18 @@ export function App({
     return desktopApi.onPendingBrowserUrls(take);
   }, [runtime.visible, activeProfile?.id, linksLandSettled]);
   useEffect(() => {
-    return desktopApi.onBrowserOpenUrl(
-      (url, mode) =>
-        visibleRef.current &&
-        openBrowserTabRef.current(url, {
-          floating: mode
-            ? mode === "floating"
-            : prefsRef.current?.linkOpenMode === "floating",
-          side: mode === "side",
-        }),
-    );
+    return desktopApi.onBrowserOpenUrl((url, mode) => {
+      if (!visibleRef.current) return;
+      // No mode: a page's link to a new window, or a link from another app.
+      // A mode is a new tab (or side, floating) asked for on purpose.
+      if (!mode && switchToOpenPageRef.current(url)) return;
+      openBrowserTabRef.current(url, {
+        floating: mode
+          ? mode === "floating"
+          : prefsRef.current?.linkOpenMode === "floating",
+        side: mode === "side",
+      });
+    });
   }, []);
 
   // navigate(url) handles per live browser tab, for "open in current tab"
@@ -2331,8 +2381,9 @@ export function App({
   tabAsleepRef.current = tabSleep.asleep;
 
   /**
-   * Bookmark/link click behavior: "replace" reuses the focused browser
-   * tab; anything else (or no focused browser tab) opens a new tab.
+   * Bookmark/link click behavior: "replace" goes to the page's open tab
+   * (`switchToOpenTab`) or reuses the focused browser tab; anything else
+   * (or no focused browser tab) opens a new tab.
    */
   const openUrl = async (url: string, mode: CommitMode) => {
     if (url.startsWith("file:")) {
@@ -2396,6 +2447,7 @@ export function App({
       selectProject(target.projectId);
       return;
     }
+    if (mode === "replace" && switchToOpenPage(url)) return;
     const ws = workspaceRef.current;
     const focusedKey = ws.floatingKey ?? ws.activeTabKey;
     const focusedBrowserId = focusedKey?.startsWith("browser:")
@@ -3833,6 +3885,19 @@ export function App({
 
   /** An open tab, from a list (the palette's tab rows): opened the way asked. */
   const focusTab = (key: string, mode?: CommitMode) => {
+    // A page's tab asked to open in a new tab (a New Tab's palette, Cmd+Enter,
+    // "Open in new tab") opens the page again there, as the person asked.
+    const page =
+      mode === "tab"
+        ? workspaceRef.current.browsers.find(
+            (browser) => browserTabKey(browser.localId) === key,
+          )
+        : undefined;
+    const pageUrl = page ? page.url || page.initialUrl : "";
+    if (/^https?:/i.test(pageUrl)) {
+      openBrowserTab(pageUrl);
+      return;
+    }
     if (mode === "floating") {
       if (workspaceRef.current.floatingKey !== key) floatSurface(key);
       return;
