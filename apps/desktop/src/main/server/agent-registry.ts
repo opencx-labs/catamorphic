@@ -184,9 +184,12 @@ const DEFAULT_MODEL_TTL_MS = 60_000;
 /** Server key of the per-project workflow-tools MCP server (session-scoped). */
 export const WORKFLOWS_SERVER_KEY = PROJECT_TOOLS_SERVER_KEY;
 
-/** The harness adapters themselves hold no agent settings: one each. */
-const claudeCode = createClaudeCodeAdapter();
-const codex = createCodexAdapter();
+/**
+ * How long a chat's Claude Code or Codex stays up after its turn, and how
+ * many stay up at once (ADR 0222): a follow-up within the window runs on
+ * the live harness, its prompt cache, shell and connections intact.
+ */
+export const DESKTOP_WARM_HARNESSES = { idleMs: 10 * 60_000, max: 6 };
 
 /**
  * The desktop's dynamic {@link CodingAgentRegistry}: agents come from the
@@ -221,6 +224,14 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
   private voice: VoiceControl | null = null;
   private readonly harnessComponents: HarnessComponentStore;
   private readonly mcp: DesktopAgentMcp;
+  /**
+   * The harness adapters hold no agent settings, so there is one each; they
+   * keep each chat's harness warm between its turns (ADR 0222).
+   */
+  private readonly claudeCode = createClaudeCodeAdapter({
+    warm: DESKTOP_WARM_HARNESSES,
+  });
+  private readonly codex = createCodexAdapter({ warm: DESKTOP_WARM_HARNESSES });
 
   constructor(private readonly deps: DesktopAgentRegistryDeps) {
     this.mcp = new DesktopAgentMcp(deps);
@@ -254,6 +265,11 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
           ),
       );
     if (needsOpenRouterDefault) void this.refreshOpenRouterDefault();
+  }
+
+  /** End the harnesses kept warm between turns; the app is stopping. */
+  async dispose(): Promise<void> {
+    await Promise.all([this.claudeCode.dispose?.(), this.codex.dispose?.()]);
   }
 
   /** Resolve a packaged or one-time-downloaded native harness executable. */
@@ -1019,12 +1035,12 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
           harness: {
             placement: "host",
             adapter: desktopAdapter({
-              id: claudeCode.id,
+              id: this.claudeCode.id,
               capabilities: () => CLAUDE_CODE_CAPABILITIES,
               prepare: (attempt, report) =>
                 this.nativeAttempt({
                   harness: "claude-code",
-                  adapter: claudeCode,
+                  adapter: this.claudeCode,
                   attempt,
                   report,
                   keyEnv: apiKey
@@ -1070,12 +1086,12 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
           harness: {
             placement: "host",
             adapter: desktopAdapter({
-              id: codex.id,
+              id: this.codex.id,
               capabilities: () => CODEX_CAPABILITIES,
               prepare: (attempt, report) =>
                 this.nativeAttempt({
                   harness: "codex",
-                  adapter: codex,
+                  adapter: this.codex,
                   attempt,
                   report,
                   keyEnv: apiKey

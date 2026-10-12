@@ -279,3 +279,62 @@ it("brings a tab in from its side of the strip", () => {
     undefined,
   );
 });
+
+it("an agent terminal lives as long as its command: its chip leaves, its tab stays until closed (ADR 0223)", () => {
+  const agentTerminal = (localId: string, sessionId: string) => ({
+    localId,
+    title: localId,
+    chatLocalId: "c",
+    attachSessionId: sessionId,
+    agentControlled: true,
+    running: true,
+    busy: true,
+  });
+  let ws: Workspace = {
+    ...initial(),
+    terminals: [
+      { ...agentTerminal("chip", "s1"), background: true },
+      agentTerminal("tab", "s2"),
+      agentTerminal("live", "s3"),
+    ],
+    activeTabKey: "terminal:tab",
+  };
+  // News for a terminal this workspace does not hold, or no news, changes
+  // nothing.
+  expect(
+    transitionWorkspace(ws, { type: "terminal-ended", sessionId: "other" }),
+  ).toBe(ws);
+  expect(
+    transitionWorkspace(ws, {
+      type: "terminal-busy",
+      sessionId: "s1",
+      busy: true,
+    }),
+  ).toBe(ws);
+
+  ws = transitionWorkspace(ws, { type: "terminal-ended", sessionId: "s1" });
+  ws = transitionWorkspace(ws, { type: "terminal-ended", sessionId: "s2" });
+  expect(ws.terminals.map(({ localId }) => localId)).toEqual(["tab", "live"]);
+  expect(ws.terminals[0]).toMatchObject({ running: false, busy: false });
+  // A view that attaches after the end says so again: nothing changes.
+  expect(
+    transitionWorkspace(ws, { type: "terminal-ended", sessionId: "s2" }),
+  ).toBe(ws);
+
+  // A tab whose command still runs closes back to its chip.
+  ws = transitionWorkspace(ws, { type: "close", key: "terminal:live" });
+  expect(ws.terminals.find(({ localId }) => localId === "live")).toMatchObject({
+    background: true,
+    running: true,
+  });
+  // One whose command ended closes for good, and nothing reopens it.
+  ws = transitionWorkspace(ws, { type: "close", key: "terminal:tab" });
+  expect(ws.terminals.map(({ localId }) => localId)).toEqual(["live"]);
+  ws = transitionWorkspace(ws, {
+    type: "close",
+    key: "terminal:live",
+    force: true,
+  });
+  expect(ws.terminals).toEqual([]);
+  expect(ws.closedTabs).toEqual([]);
+});

@@ -390,6 +390,48 @@ export function attemptPermissionMode(input: {
     : (input.options.permissionMode ?? "acceptEdits");
 }
 
+/** JSON with every object's keys sorted, so equal settings read the same. */
+function stableJson(value: unknown): string {
+  return JSON.stringify(value, (_key, inner: unknown) =>
+    inner && typeof inner === "object" && !Array.isArray(inner)
+      ? Object.fromEntries(
+          Object.entries(inner).sort(([a], [b]) =>
+            a < b ? -1 : a > b ? 1 : 0,
+          ),
+        )
+      : inner,
+  );
+}
+
+/**
+ * Everything a CLI starts with for an attempt, as one string: an idle CLI
+ * serves another attempt only when it is the same (ADR 0222). What each
+ * attempt brings of its own (its input and context, tool policies, ids)
+ * is not in it: the CLI reaches those through its callbacks as they fire.
+ */
+export function launchSignature(input: {
+  attempt: AttemptStart;
+  options: ClaudeCodeAttemptOptions;
+}): string {
+  const { attempt, options } = input;
+  return stableJson({
+    workingDirectory: attempt.workingDirectory,
+    systemPrompt: attempt.systemPrompt.trim(),
+    model: attempt.model ?? null,
+    effort: attempt.effort ?? null,
+    permissions: attempt.permissions,
+    permissionMode: attemptPermissionMode({ attempt, options }),
+    modelAccess: attempt.modelAccess,
+    mcpServers: attempt.mcpServers,
+    // Which servers are policed decides what the CLI allows outright.
+    policed: Object.keys(attempt.toolPolicies).sort(),
+    hostTools: attempt.hostTools,
+    plugins: attempt.plugins,
+    env: attempt.env,
+    options,
+  });
+}
+
 /** Why an attempt cannot start, in words for the person. */
 export class ClaudeStartError extends Error {
   override readonly name = "ClaudeStartError";

@@ -258,12 +258,21 @@ interface LocalTurn {
 function runnerWrite(
   runner: RunnerState,
   added: ReadonlyArray<[string, HostCall]> = [],
+  /** Appends applied with the frames that carried them. */
+  applied: readonly string[] = [],
 ) {
   const { calls: _calls, applied: _applied, ...rest } = runner;
   return sql<Json>`${JSON.stringify(rest)}::jsonb || jsonb_build_object(
     'calls', coalesce(runner -> 'calls', '{}'::jsonb) || ${JSON.stringify(Object.fromEntries(added))}::jsonb,
-    'applied', coalesce(runner -> 'applied', '{}'::jsonb))`;
+    'applied', coalesce(runner -> 'applied', '{}'::jsonb) || ${JSON.stringify(Object.fromEntries(applied.map((callId) => [callId, true])))}::jsonb)`;
 }
+
+/**
+ * What an applied append is recorded as until its result is acknowledged:
+ * a holder that takes over answers it again, and its entries are stored
+ * already, so they are not kept twice.
+ */
+const APPLIED_APPEND: HostCall = { kind: "native_state.append", entries: [] };
 
 /** The text a continuation turn gives the agent (ADR 0198). */
 export const CONTINUATION_PROMPT =
@@ -1078,12 +1087,23 @@ export class TurnEngine {
     } else if (sameHarness?.native_ref) {
       thread = providerThreadFromRow(sameHarness);
       const nativeRef = sameHarness.native_ref as unknown as NativeRef;
+      // Where the thread's history ends, for a harness kept warm since.
+      const last = await db
+        .selectFrom("agent_turn_attempts")
+        .select("native_turn_ref")
+        .where("provider_thread_id", "=", thread.id)
+        .where("native_turn_ref", "is not", null)
+        .orderBy("created_at", "desc")
+        .limit(1)
+        .executeTakeFirst();
+      const lastTurnRef = last?.native_turn_ref as unknown as NativeRef | null;
       binding = {
         mode: (await this.native.has({ threadId: thread.id }))
           ? "restore"
           : "resume",
         providerThreadId: thread.id,
         nativeRef,
+        ...(lastTurnRef ? { lastTurnRef } : {}),
         ...(sameHarness.state_path
           ? { statePath: sameHarness.state_path }
           : {}),
@@ -1382,6 +1402,13 @@ export class TurnEngine {
         thread = outcome.thread;
         runner = outcome.runner;
         if (outcome.completion) completion = outcome.completion;
+        if (outcome.appended.length > 0)
+          await this.sendResults(
+            local,
+            attempt.id,
+            channel,
+            outcome.appended.map((callId) => ({ callId, result: null })),
+          );
         if (outcome.calls.length > 0)
           void this.answerCalls(
             local,
@@ -1610,6 +1637,8 @@ export class TurnEngine {
     thread: ProviderThread;
     runner: RunnerState;
     calls: Array<[string, HostCall]>;
+    /** Appends stored with these frames: their results are due now. */
+    appended: string[];
     refusedSteers: string[];
     completion?: {
       status: "completed" | "failed" | "interrupted";
@@ -1641,6 +1670,14 @@ export class TurnEngine {
         frame.type === "event" ? [frame.event] : [],
       );
       const calls: Array<[string, HostCall]> = [];
+      // Native state appends are output like events: stored with the
+      // cursor that read them, so applied exactly once, and answered as
+      // soon as this commits.
+      const appends: Array<{
+        callId: string;
+        subpath?: string;
+        entries: JsonValue[];
+      }> = [];
       const delivered: string[] = [];
       const acked: string[] = [];
       const refusedSteers: string[] = [];
@@ -1654,13 +1691,26 @@ export class TurnEngine {
             },
           };
         else if (frame.type === "call") {
-          if (!(frame.callId in runner.calls)) {
+          if (frame.callId in runner.calls) continue;
+          const call = frame.call;
+          // An append names no thread but its own: a fork writes its own.
+          if (call.kind === "native_state.append") {
+            appends.push({
+              callId: frame.callId,
+              ...(call.subpath ? { subpath: call.subpath } : {}),
+              entries: call.entries,
+            });
             runner = {
               ...runner,
-              calls: { ...runner.calls, [frame.callId]: frame.call },
+              calls: { ...runner.calls, [frame.callId]: APPLIED_APPEND },
             };
-            calls.push([frame.callId, frame.call]);
+            continue;
           }
+          runner = {
+            ...runner,
+            calls: { ...runner.calls, [frame.callId]: call },
+          };
+          calls.push([frame.callId, call]);
         } else if (frame.type === "ack") {
           // Only queued turn commands are acknowledged in Postgres; the
           // engine's own (start, stop) are not rows, and an acknowledged
@@ -1815,6 +1865,27 @@ export class TurnEngine {
           .set({ state_path: ingested.statePath })
           .where("id", "=", ingested.thread.id)
           .execute();
+      // After this batch's own thread events: the row turned portable
+      // carries the native reference they set.
+      for (const append of appends) {
+        const turnedPortable = await this.native.append({
+          threadId: ingested.thread.id,
+          ...(append.subpath ? { subpath: append.subpath } : {}),
+          entries: append.entries,
+          executor: trx,
+        });
+        // The projection changes only through the log (ADR 0197).
+        if (turnedPortable)
+          await log.append(trx, {
+            sessionId: input.turn.sessionId,
+            events: [
+              {
+                type: "provider_thread.changed",
+                thread: providerThreadFromRow(turnedPortable),
+              },
+            ],
+          });
+      }
       // A person's steer the harness refused restarts the attempt with it.
       // Anyone else's (a subagent's result) does not stop the work: it is
       // acknowledged here and runs as a turn of its own when this one ends.
@@ -1825,9 +1896,22 @@ export class TurnEngine {
         status: "acknowledged",
         executor: trx,
       });
+      const appended = appends.map((append) => append.callId);
       await trx
         .updateTable("agent_turn_attempts")
-        .set({ runner: runnerWrite(runner, calls) })
+        .set({
+          runner: runnerWrite(
+            runner,
+            [
+              ...calls,
+              ...appended.map((callId): [string, HostCall] => [
+                callId,
+                APPLIED_APPEND,
+              ]),
+            ],
+            appended,
+          ),
+        })
         .where("id", "=", attempt.id)
         .execute();
       for (const callId of delivered) {
@@ -1842,6 +1926,7 @@ export class TurnEngine {
         thread: ingested.thread,
         runner,
         calls,
+        appended,
         refusedSteers: restartSteers,
         ...(ingested.completed ? { completion: ingested.completed } : {}),
       };
@@ -1964,26 +2049,49 @@ export class TurnEngine {
       } catch (caught) {
         error = caught instanceof Error ? caught.message : String(caught);
       }
-      // The call is forgotten once the runner acknowledges the result;
-      // until then it is sent again (and answered again after a takeover).
-      const frame: RunnerCommandFrame = {
-        id: `result:${ctx.attempt.id}:${callId}`,
+      await this.sendResults(
+        local,
+        ctx.attempt.id,
+        channel,
+        error === undefined
+          ? [{ callId, result: result ?? null }]
+          : [{ callId, error }],
+      );
+    }
+  }
+
+  /**
+   * Send host results. A call is forgotten once the runner acknowledges
+   * its result; until then it is sent again (and answered again after a
+   * takeover).
+   */
+  private async sendResults(
+    local: LocalTurn,
+    attemptId: string,
+    channel: RunnerChannel,
+    results: ReadonlyArray<
+      { callId: string; result: JsonValue } | { callId: string; error: string }
+    >,
+  ): Promise<void> {
+    const frames = results.map(
+      (answer): RunnerCommandFrame => ({
+        id: `result:${attemptId}:${answer.callId}`,
         command: {
           kind: "host_result",
-          callId,
-          ...(error === undefined
-            ? { result: result ?? null }
-            : { error: { message: error } }),
+          callId: answer.callId,
+          ...("error" in answer
+            ? { error: { message: answer.error } }
+            : { result: answer.result }),
         },
-      };
-      local.results.set(frame.id, frame);
-      local.resultsSentAt = Date.now();
-      await channel
-        .send([frame])
-        .catch((caught) =>
-          console.warn("[catamorphic] Could not send a host result", caught),
-        );
-    }
+      }),
+    );
+    for (const frame of frames) local.results.set(frame.id, frame);
+    local.resultsSentAt = Date.now();
+    await channel
+      .send(frames)
+      .catch((caught) =>
+        console.warn("[catamorphic] Could not send a host result", caught),
+      );
   }
 
   private async forgetCall(

@@ -48,14 +48,19 @@ export interface TerminalEntry {
   busy?: boolean;
   /** The agent is driving this terminal; input waits on Take over. */
   agentControlled?: boolean;
-  /** Agent terminals: process still running (activity indicator). */
+  /**
+   * The process behind it still runs. An agent terminal lives as long as
+   * its command (ADR 0223): once it ended, a tab keeps its final output
+   * until closed, and nothing brings it back.
+   */
   running?: boolean;
   /**
    * Agent terminal without a workspace tab: the PTY runs and the chip
    * rides the chat's surfaces rail, but no tab appears and focus stays
    * put. Cleared when the user clicks the chip or the agent shows the
-   * terminal via open_surface; closing an agent-controlled terminal tab
-   * sets it back instead of killing the shell.
+   * terminal via open_surface; closing the tab of a terminal attached to
+   * a chat sets it back while its process runs. A background agent
+   * terminal leaves the chat when its command ends.
    */
   background?: boolean;
 }
@@ -416,7 +421,17 @@ export type WorkspaceEvent =
   | { type: "cycle-chat"; direction: -1 | 1 }
   | { type: "reorder"; key: string; beforeKey: string | null }
   | { type: "finish-expansion"; key: string; split: SplitView }
-  | { type: "dismiss-floating"; key?: string };
+  | { type: "dismiss-floating"; key?: string }
+  | TerminalEvent;
+
+/** News from the PTY behind a terminal: a command runs in it, or it ended. */
+export type TerminalEvent =
+  | { type: "terminal-busy"; sessionId: string; busy: boolean }
+  | { type: "terminal-ended"; sessionId: string };
+
+/** The workspace's terminals backed by this PTY session. */
+const backedBy = (terminal: TerminalEntry, sessionId: string) =>
+  terminal.attachSessionId === sessionId || terminal.ptySessionId === sessionId;
 
 /** A retained agent chip becomes a view without creating a second native resource. */
 function materializeSurface(ws: Workspace, key: string): Workspace {
@@ -605,8 +620,10 @@ function applyWorkspaceEvent(
         );
         // Any terminal attached to a chat returns to the background instead
         // of dying. Taking control changes who may type, not who owns its
-        // durable chip. Explicit chip/agent removal (`force`) is final.
-        if (closing?.chatLocalId && !opts?.force) {
+        // durable chip. Explicit chip/agent removal (`force`) is final, and
+        // so is closing an agent terminal whose command ended (ADR 0223).
+        const ended = Boolean(closing?.attachSessionId) && !closing?.running;
+        if (closing?.chatLocalId && !opts?.force && !ended) {
           const terminals = ws.terminals.map((terminal) =>
             terminal.localId === localId
               ? { ...terminal, background: true }
@@ -628,15 +645,14 @@ function applyWorkspaceEvent(
           ...ws,
           terminals,
           closedTabs: remember(
-            closing
+            // User terminals only: an agent terminal's process is gone,
+            // so there is nothing to reopen.
+            closing && !closing.attachSessionId
               ? {
                   kind: "terminal",
                   chatLocalId: closing.chatLocalId,
-                  // User terminals only: reopening replays the dead
-                  // shell's scrollback (agent sessions aren't buried).
-                  ptySessionId: closing.attachSessionId
-                    ? undefined
-                    : closing.ptySessionId,
+                  // Reopening replays the dead shell's scrollback.
+                  ptySessionId: closing.ptySessionId,
                   ...(closing.remoteSessionId
                     ? {
                         remoteSessionId: closing.remoteSessionId,
@@ -837,6 +853,40 @@ function applyWorkspaceEvent(
       return event.key && ws.floatingKey !== event.key
         ? ws
         : { ...ws, floatingKey: undefined };
+    case "terminal-busy": {
+      const { sessionId, busy } = event;
+      if (
+        !ws.terminals.some(
+          (terminal) =>
+            backedBy(terminal, sessionId) && Boolean(terminal.busy) !== busy,
+        )
+      )
+        return ws;
+      return {
+        ...ws,
+        terminals: ws.terminals.map((terminal) =>
+          backedBy(terminal, sessionId) ? { ...terminal, busy } : terminal,
+        ),
+      };
+    }
+    // Its process ended (ADR 0223): nothing runs in it any more. An agent
+    // terminal that only rode its chat as a chip leaves with its command;
+    // one open as a tab keeps its final output until the person closes it.
+    case "terminal-ended": {
+      const { sessionId } = event;
+      const terminals = ws.terminals.flatMap((terminal) =>
+        !backedBy(terminal, sessionId) ||
+        (!terminal.busy && terminal.running === false)
+          ? [terminal]
+          : terminal.attachSessionId && terminal.background
+            ? []
+            : [{ ...terminal, busy: false, running: false }],
+      );
+      return terminals.length === ws.terminals.length &&
+        terminals.every((terminal, index) => terminal === ws.terminals[index])
+        ? ws
+        : { ...ws, terminals };
+    }
     case "finish-expansion":
       return ws.split === event.split && ws.activeTabKey === event.key
         ? { ...ws, split: null }

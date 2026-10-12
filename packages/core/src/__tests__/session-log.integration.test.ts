@@ -11,7 +11,10 @@ import {
   type SessionStreamMessage,
   sessionStateFromSnapshot,
 } from "@catamorphic/agent-protocol";
-import type { HarnessAdapter } from "@catamorphic/agent-protocol/runner";
+import type {
+  HarnessAdapter,
+  ThreadBinding,
+} from "@catamorphic/agent-protocol/runner";
 import { EchoAdapter } from "@catamorphic/agent-runner";
 import type { DB } from "@catamorphic/db";
 import { migrateToLatest } from "@catamorphic/db";
@@ -68,6 +71,8 @@ describe("session log", () => {
   let makeService: () => AgentSessionsService;
   /** Each checkout's commit, as the host reports it. */
   const heads = new Map<string, string>();
+  /** The thread each attempt of the recording agent started on. */
+  const bindings: ThreadBinding[] = [];
   /** What the lingering harness's tool call after its turn ended got. */
   const lateTools: string[] = [];
 
@@ -216,6 +221,22 @@ describe("session log", () => {
       id: "blocked",
       unavailable: "Approve this agent first.",
     };
+    // Echo, noting which thread binding each attempt starts with.
+    const recording: RegisteredCodingAgent = {
+      ...echo,
+      id: "recording",
+      harness: {
+        placement: "host",
+        adapter: {
+          id: "echo",
+          capabilities: () => inner.capabilities(),
+          start: (attempt, host) => {
+            bindings.push(attempt.thread);
+            return inner.start(attempt, host);
+          },
+        },
+      },
+    };
     // The same echo on another harness.
     const elsewhere: RegisteredCodingAgent = {
       ...echo,
@@ -250,6 +271,7 @@ describe("session log", () => {
               lingering,
               elsewhere,
               blocked,
+              recording,
             ].find((agent) => agent.id === id),
           list: () => [
             echo,
@@ -260,6 +282,7 @@ describe("session log", () => {
             lingering,
             elsewhere,
             blocked,
+            recording,
           ],
         },
         nativeAgentCheckout: {
@@ -561,6 +584,11 @@ describe("session log", () => {
     expect(stored.map((row) => row.entry)).toEqual([
       { turn: 1, text: "remember this [[late]]" },
     ]);
+    // Exactly as written, key order included: a resumed harness sends its
+    // model this history, and a reordered one misses the prompt cache.
+    expect(JSON.stringify(stored[0]?.entry)).toBe(
+      '{"turn":1,"text":"remember this [[late]]"}',
+    );
     const second = await sessions.sendMessage(
       identity,
       projectId,
@@ -570,6 +598,31 @@ describe("session log", () => {
     expect(
       second.reply?.kind === "assistant_message" && second.reply.text,
     ).toBe("Echo: again (turn 2)");
+  });
+
+  it("names the native turn a resumed thread ends with", async () => {
+    const project = await projects.create(identity, { name: "Last turn" });
+    const session = await sessions.create(identity, project.id, {
+      agentId: "recording",
+    });
+    bindings.length = 0;
+    await sessions.sendMessage(identity, project.id, session.id, "one");
+    await sessions.sendMessage(identity, project.id, session.id, "two");
+    const [first, second] = bindings;
+    expect(first?.mode).toBe("fresh");
+    const recorded = await db
+      .selectFrom("agent_turn_attempts")
+      .select("native_turn_ref")
+      .where("session_id", "=", session.id)
+      .orderBy("created_at")
+      .executeTakeFirstOrThrow();
+    // A harness kept warm since the first turn checks it ran that turn.
+    expect(
+      second?.mode === "resume" || second?.mode === "restore"
+        ? second.lastTurnRef
+        : undefined,
+    ).toEqual(recorded.native_turn_ref);
+    expect(recorded.native_turn_ref).toBeTruthy();
   });
 
   it("restarts for a refused steer on what the interrupted attempt stored on the way out", async () => {

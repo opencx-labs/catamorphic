@@ -24,12 +24,18 @@ import {
   type HarnessCapabilities,
   RequestClosedError,
 } from "@catamorphic/agent-protocol/runner";
+import {
+  type WarmSession,
+  WarmSessions,
+  type WarmSessionsOptions,
+} from "@catamorphic/sandbox";
 import { classifyClaudeError } from "./errors.js";
 import { hostToolServer, hostToolServers } from "./host-tools.js";
 import { inputUuid, renderPrompt } from "./input.js";
 import {
   buildQueryOptions,
   ClaudeStartError,
+  launchSignature,
   readAttemptOptions,
 } from "./options.js";
 import { askUserAnswerInput, parseAskUserQuestions } from "./questions.js";
@@ -59,8 +65,15 @@ export interface ClaudeCodeAdapterOptions {
   query?: ClaudeQuery;
   /** How long an interrupt waits for the CLI to stop before aborting it. */
   interruptGraceMs?: number;
-  /** How long a settled turn waits for the CLI to flush and exit. */
+  /** How long a closing CLI may take to flush and exit. */
   exitGraceMs?: number;
+  /**
+   * Keep each thread's CLI up between attempts (ADR 0222). Only for hosts
+   * that keep the adapter for their lifetime and call `dispose` when they
+   * stop: a runner that exits with its attempt leaves it unset, and every
+   * attempt's CLI exits when the attempt settles.
+   */
+  warm?: WarmSessionsOptions;
 }
 
 export const CLAUDE_CODE_CAPABILITIES: HarnessCapabilities = {
@@ -86,12 +99,17 @@ export const CLAUDE_CODE_CAPABILITIES: HarnessCapabilities = {
  * runner, so beside the workspace: in the session's sandbox on a server,
  * on the host for the desktop. The adapter is built once with no agent
  * settings; everything per agent arrives in the attempt
- * ({@link readAttemptOptions} lists `AttemptStart.options`).
+ * ({@link readAttemptOptions} lists `AttemptStart.options`). With `warm`,
+ * a thread's CLI serves its next attempt too when nothing it started with
+ * changed (ADR 0222).
  */
 export function createClaudeCodeAdapter(
   options: ClaudeCodeAdapterOptions = {},
 ): HarnessAdapter {
   const query: ClaudeQuery = options.query ?? sdkQuery;
+  const sessions = options.warm
+    ? new WarmSessions<ClaudeSession>(options.warm)
+    : undefined;
   return {
     id: "claude-code",
     capabilities: () => CLAUDE_CODE_CAPABILITIES,
@@ -102,11 +120,13 @@ export function createClaudeCodeAdapter(
         query,
         interruptGraceMs: options.interruptGraceMs ?? 5_000,
         exitGraceMs: options.exitGraceMs ?? 10_000,
+        sessions,
       }).control(),
+    ...(sessions ? { dispose: () => sessions.dispose() } : {}),
   };
 }
 
-/** The input stream a streaming-input query reads, open until the turn settles. */
+/** The input stream a streaming-input query reads, open while its CLI serves. */
 class InputQueue implements AsyncIterable<SDKUserMessage> {
   private readonly items: SDKUserMessage[] = [];
   private wake?: () => void;
@@ -196,16 +216,128 @@ function metaToolUseId(meta: unknown): string | undefined {
   return undefined;
 }
 
-/** One attempt: one streaming-input query, from its input to its settled turn. */
+/** The native thread an attempt continues, when it continues one. */
+function continuedThread(attempt: AttemptStart): string | undefined {
+  const thread = attempt.thread;
+  return thread.mode === "resume" || thread.mode === "restore"
+    ? thread.nativeRef.id
+    : undefined;
+}
+
+/**
+ * One Claude Code CLI: a streaming-input query that serves the attempts of
+ * its thread one at a time (ADR 0222). Everything the CLI calls back with
+ * (tool permissions, questions, host tools, its transcript, the turn's
+ * context) reaches the attempt it serves now; between attempts it is idle,
+ * and what it reports then reaches nobody.
+ */
+class ClaudeSession implements WarmSession {
+  readonly inputs = new InputQueue();
+  readonly abort = new AbortController();
+  /** The UserPromptSubmit hook's per-turn context: the serving attempt's. */
+  readonly live: { turnContext?: string } = {};
+  /** The native session id, once the CLI names it. */
+  nativeId?: string;
+  /** The native turn its last attempt ended on (an assistant uuid). */
+  lastTurn?: string;
+  stderr = "";
+  private handle?: ClaudeQueryHandle;
+  private serving?: ClaudeAttempt;
+  private ended = false;
+  private resolveExited!: () => void;
+  readonly exited = new Promise<void>((resolve) => {
+    this.resolveExited = resolve;
+  });
+  /** Called once the CLI's message stream ends. */
+  onExit = () => {};
+
+  constructor(
+    /** Everything the CLI was started with ({@link launchSignature}). */
+    readonly signature: string,
+    private readonly exitGraceMs: number,
+  ) {}
+
+  get alive(): boolean {
+    return !this.ended && !this.inputs.ended && !this.abort.signal.aborted;
+  }
+
+  /** The attempt the CLI serves now. */
+  get attempt(): ClaudeAttempt | undefined {
+    return this.serving;
+  }
+
+  serve(attempt: ClaudeAttempt, turnContext: string | undefined): void {
+    this.serving = attempt;
+    this.live.turnContext = turnContext;
+  }
+
+  release(attempt: ClaudeAttempt): void {
+    if (this.serving !== attempt) return;
+    this.serving = undefined;
+    this.live.turnContext = undefined;
+  }
+
+  start(query: ClaudeQuery, options: Options): void {
+    this.handle = query({ prompt: this.inputs, options });
+    void this.read(this.handle);
+  }
+
+  interrupt(): Promise<unknown> {
+    return this.handle ? this.handle.interrupt() : Promise.resolve();
+  }
+
+  private async read(handle: ClaudeQueryHandle): Promise<void> {
+    let failure: unknown;
+    try {
+      for await (const message of handle) {
+        if (!this.nativeId && "session_id" in message && message.session_id)
+          this.nativeId = message.session_id;
+        this.serving?.observe(message);
+      }
+    } catch (error) {
+      failure = error;
+    } finally {
+      this.ended = true;
+      handle.close();
+      this.resolveExited();
+      this.onExit();
+    }
+    this.serving?.harnessEnded(failure);
+  }
+
+  /** End the CLI: no more input, so it flushes and exits; aborted when it lingers. */
+  async close(): Promise<void> {
+    this.inputs.end();
+    if (!this.handle) {
+      this.ended = true;
+      this.resolveExited();
+      return;
+    }
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const lingering = new Promise<"timeout">((resolve) => {
+      timer = setTimeout(() => resolve("timeout"), this.exitGraceMs);
+    });
+    const outcome = await Promise.race([this.exited, lingering]);
+    clearTimeout(timer);
+    if (outcome === "timeout") {
+      this.abort.abort();
+      this.handle.close();
+    }
+  }
+}
+
+/** One attempt: its input run to a settled turn on a thread's CLI. */
 class ClaudeAttempt {
   private readonly attempt: AttemptStart;
   private readonly host: AttemptHost;
   private readonly query: ClaudeQuery;
   private readonly interruptGraceMs: number;
   private readonly exitGraceMs: number;
-  private readonly inputs = new InputQueue();
-  private readonly abort = new AbortController();
-  private readonly transcript: ClaudeTranscript;
+  private readonly sessions?: WarmSessions<ClaudeSession>;
+  readonly transcript: ClaudeTranscript;
+  private session?: ClaudeSession;
+  /** Where the session's stderr stood when this attempt began. */
+  private stderrFrom = 0;
   /** Steered inputs not yet taken into the turn, by SDK uuid. */
   private readonly pendingSteers = new Map<string, string>();
   /** The SDK uuid of this attempt's own input, once sent. */
@@ -214,14 +346,16 @@ class ClaudeAttempt {
   private ownInputStarted = false;
   /** The CLI finished a native turn of this attempt. */
   private resultSeen = false;
-  private handle?: ClaudeQueryHandle;
   private threadEmitted = false;
   private interruptRequested = false;
   private interruptTimer?: ReturnType<typeof setTimeout>;
   private settled = false;
-  private stderr = "";
-  /** Starts the wait for the CLI to exit, once the turn settled. */
-  private onSettled = () => {};
+  /** The turn settled as failed. */
+  private failed = false;
+  private resolveSettled!: () => void;
+  private readonly settledTurn = new Promise<void>((resolve) => {
+    this.resolveSettled = resolve;
+  });
 
   constructor(input: {
     attempt: AttemptStart;
@@ -229,16 +363,23 @@ class ClaudeAttempt {
     query: ClaudeQuery;
     interruptGraceMs: number;
     exitGraceMs: number;
+    sessions: WarmSessions<ClaudeSession> | undefined;
   }) {
     this.attempt = input.attempt;
     this.host = input.host;
     this.query = input.query;
     this.interruptGraceMs = input.interruptGraceMs;
     this.exitGraceMs = input.exitGraceMs;
+    this.sessions = input.sessions;
     this.transcript = new ClaudeTranscript(
       (event) => this.host.emit(event),
       new Set(this.attempt.hostTools.map(hostToolServer)),
     );
+  }
+
+  /** The host this attempt reports to: the session's callbacks reach it. */
+  get attemptHost(): AttemptHost {
+    return this.host;
   }
 
   control(): AttemptControl {
@@ -267,16 +408,18 @@ class ClaudeAttempt {
       });
       return;
     }
-    let options: Options;
+    let message: SDKUserMessage;
+    let signature: string;
     try {
       const prompt = await renderPrompt({
         ...input,
         stateDirectory: this.attempt.stateDirectory,
       });
-      const message = this.userMessage({ itemId: input.itemId, text: prompt });
-      this.ownInputUuid = message.uuid;
-      this.inputs.push(message);
-      options = this.options();
+      message = this.userMessage({ itemId: input.itemId, text: prompt });
+      signature = launchSignature({
+        attempt: this.attempt,
+        options: readAttemptOptions(this.attempt.options),
+      });
     } catch (error) {
       this.settle({
         status: "failed",
@@ -293,42 +436,92 @@ class ClaudeAttempt {
       this.settle({ status: "interrupted" });
       return;
     }
-    try {
-      this.handle = this.query({ prompt: this.inputs, options });
-      await this.pump(this.handle);
-      if (!this.settled) this.settleWithoutResult();
-    } catch (error) {
-      if (!this.settled) this.settleWithoutResult(error);
-    } finally {
-      this.inputs.end();
-      this.handle?.close();
-    }
-  }
-
-  /** Read the query to its end; after the turn settles, only until the CLI exits. */
-  private async pump(handle: ClaudeQueryHandle): Promise<void> {
-    const iterator = handle[Symbol.asyncIterator]();
-    let exitTimer: ReturnType<typeof setTimeout> | undefined;
-    const exited = new Promise<"timeout">((resolve) => {
-      this.onSettled = () => {
-        exitTimer = setTimeout(() => resolve("timeout"), this.exitGraceMs);
-      };
-    });
-    try {
-      for (;;) {
-        const reading = iterator.next();
-        // A read still pending when the exit wait gives up may reject later.
-        reading.catch(() => {});
-        const next = await Promise.race([reading, exited]);
-        if (next === "timeout" || next.done) return;
-        this.observe(next.value);
+    const warm = await this.warmSession(signature);
+    if (this.interruptRequested) {
+      // Stopped before its input reached the CLI: a warm one is untouched.
+      if (warm?.nativeId) {
+        warm.release(this);
+        this.sessions?.release(warm.nativeId, warm);
       }
-    } finally {
-      clearTimeout(exitTimer);
+      this.settle({ status: "interrupted" });
+      return;
     }
+    const session = warm ?? this.coldSession(signature);
+    if (!session) return;
+    this.session = session;
+    this.stderrFrom = session.stderr.length;
+    this.ownInputUuid = message.uuid;
+    session.inputs.push(message);
+    await this.settledTurn;
+    const thread = session.nativeId;
+    // A failed turn's CLI ends: whatever failed it (an expired sign-in, a
+    // broken connection) should not meet the retry.
+    if (this.sessions && thread && session.alive && !this.failed) {
+      session.release(this);
+      this.sessions.release(thread, session);
+      return;
+    }
+    // The CLI flushes its transcript and exits; the attempt holds on until
+    // it has, so whatever it stores on its way out reaches Work.
+    await session.close();
+    session.release(this);
   }
 
-  private observe(message: SDKMessage): void {
+  /** The thread's idle CLI, when nothing it started with changed since. */
+  private async warmSession(
+    signature: string,
+  ): Promise<ClaudeSession | undefined> {
+    const thread = continuedThread(this.attempt);
+    if (!this.sessions || !thread) return undefined;
+    const lastTurn =
+      this.attempt.thread.mode === "resume" ||
+      this.attempt.thread.mode === "restore"
+        ? this.attempt.thread.lastTurnRef?.id
+        : undefined;
+    const session = await this.sessions.take(
+      thread,
+      (candidate) =>
+        candidate.signature === signature &&
+        candidate.nativeId === thread &&
+        candidate.lastTurn === lastTurn,
+    );
+    session?.serve(this, this.attempt.context.trim() || undefined);
+    return session;
+  }
+
+  /** A new CLI for this attempt's thread, resumed from Work's copy of it. */
+  private coldSession(signature: string): ClaudeSession | undefined {
+    const session = new ClaudeSession(signature, this.exitGraceMs);
+    // A resumed thread's history ends where Work last recorded it.
+    const thread = this.attempt.thread;
+    if (thread.mode === "resume" || thread.mode === "restore")
+      session.lastTurn = thread.lastTurnRef?.id;
+    session.serve(this, this.attempt.context.trim() || undefined);
+    let options: Options;
+    try {
+      options = this.options(session);
+    } catch (error) {
+      session.release(this);
+      this.settle({
+        status: "failed",
+        error: {
+          message:
+            error instanceof ClaudeStartError
+              ? error.message
+              : `Claude Code could not start: ${errorMessage(error)}`,
+        },
+      });
+      return undefined;
+    }
+    const sessions = this.sessions;
+    session.onExit = () => {
+      if (session.nativeId) sessions?.forget(session.nativeId, session);
+    };
+    session.start(this.query, options);
+    return session;
+  }
+
+  observe(message: SDKMessage): void {
     if (!this.threadEmitted && "session_id" in message && message.session_id) {
       this.threadEmitted = true;
       this.host.emit({
@@ -387,6 +580,11 @@ class ClaudeAttempt {
     if (!more) this.settleFromResult(message);
   }
 
+  /** The CLI's messages ended (it exited) while this attempt was its own. */
+  harnessEnded(error?: unknown): void {
+    if (!this.settled) this.settleWithoutResult(error);
+  }
+
   private consume(uuids: string[]): void {
     const itemIds = uuids.flatMap((uuid) => {
       const itemId = this.pendingSteers.get(uuid);
@@ -427,11 +625,14 @@ class ClaudeAttempt {
   }
 
   private settleWithoutResult(error?: unknown): void {
-    if (this.interruptRequested || this.abort.signal.aborted) {
+    if (
+      this.interruptRequested ||
+      this.session?.abort.signal.aborted === true
+    ) {
       this.settle({ status: "interrupted" });
       return;
     }
-    const stderr = this.stderr.trim();
+    const stderr = (this.session?.stderr ?? "").slice(this.stderrFrom).trim();
     const message = error
       ? errorMessage(error)
       : "Claude Code stopped before finishing its turn.";
@@ -474,18 +675,18 @@ class ClaudeAttempt {
   }): void {
     if (this.settled) return;
     this.settled = true;
+    this.failed = input.status === "failed";
     clearTimeout(this.interruptTimer);
     this.transcript.close({ interrupted: input.status === "interrupted" });
     const last = this.transcript.lastAssistantUuid;
+    if (last && this.session) this.session.lastTurn = last;
     this.host.emit({
       type: "turn.completed",
       status: input.status,
       ...(input.error ? { error: input.error } : {}),
       ...(last ? { ref: { id: last, strength: "strong" } } : {}),
     });
-    // No more input: the CLI flushes its transcript and exits.
-    this.inputs.end();
-    this.onSettled();
+    this.resolveSettled();
   }
 
   private userMessage(input: { itemId: string; text: string }): SDKUserMessage {
@@ -505,36 +706,40 @@ class ClaudeAttempt {
     text: string;
     attachments: AgentAttachment[];
   }): Promise<boolean> {
-    if (this.settled || this.interruptRequested || !this.handle) return false;
+    if (this.settled || this.interruptRequested || !this.session) return false;
     const prompt = await renderPrompt({
       ...input,
       stateDirectory: this.attempt.stateDirectory,
     });
-    if (this.settled || this.interruptRequested) return false;
+    const session = this.session;
+    if (this.settled || this.interruptRequested || !session.alive) return false;
     const message = this.userMessage({ itemId: input.itemId, text: prompt });
     if (message.uuid) this.pendingSteers.set(message.uuid, input.itemId);
     // "next" folds the input into the running turn at its next step; "now"
     // would abort the step in flight.
-    this.inputs.push({ ...message, priority: "next" });
+    session.inputs.push({ ...message, priority: "next" });
     return true;
   }
 
   private interrupt(): void {
     if (this.settled || this.interruptRequested) return;
     this.interruptRequested = true;
-    const handle = this.handle;
-    if (!handle) {
-      this.abort.abort();
-      return;
-    }
+    const session = this.session;
+    // Not started yet: the attempt settles as soon as `run` looks again.
+    if (!session) return;
     this.interruptTimer = setTimeout(
-      () => this.abort.abort(),
+      () => session.abort.abort(),
       this.interruptGraceMs,
     );
-    void handle.interrupt().catch(() => this.abort.abort());
+    void session.interrupt().catch(() => session.abort.abort());
   }
 
-  private options(): Options {
+  /**
+   * The SDK options a new CLI starts with. Its callbacks reach whichever
+   * attempt the session serves when they fire, so they stay right for the
+   * attempts after this one.
+   */
+  private options(session: ClaudeSession): Options {
     const attempt = this.attempt;
     const own =
       attempt.thread.mode === "fresh"
@@ -544,33 +749,64 @@ class ClaudeAttempt {
           : attempt.thread.nativeRef.id;
     const source =
       attempt.thread.mode === "fork" ? attempt.thread.source.id : undefined;
-    const live = { turnContext: attempt.context.trim() || undefined };
     const onMcpResult: HookCallback = async (hookInput) => {
       const toolUseId = Reflect.get(hookInput, "tool_use_id");
       if (typeof toolUseId === "string")
-        this.transcript.mcpResult(
+        session.attempt?.transcript.mcpResult(
           toolUseId,
           extractMcpToolResult(Reflect.get(hookInput, "tool_response")),
         );
       return {};
+    };
+    const serving = () => {
+      const current = session.attempt;
+      if (!current)
+        throw new Error("Claude Code called back between turns of its chat.");
+      return current;
+    };
+    const nativeState: AttemptHost["nativeState"] = {
+      // What the CLI stores between turns (it writes nothing then, only
+      // metadata as it exits) has no attempt to reach.
+      append: (input) =>
+        session.attempt
+          ? session.attempt.attemptHost.nativeState.append(input)
+          : Promise.resolve(),
+      load: (input) =>
+        session.attempt
+          ? session.attempt.attemptHost.nativeState.load(input)
+          : Promise.resolve(null),
+      subpaths: (input) =>
+        session.attempt
+          ? session.attempt.attemptHost.nativeState.subpaths(input)
+          : Promise.resolve([]),
     };
     return buildQueryOptions({
       attempt,
       options: readAttemptOptions(attempt.options),
       hostServers: hostToolServers({
         tools: attempt.hostTools,
-        call: (call) => this.host.callTool(call),
+        call: (call) => serving().attemptHost.callTool(call),
         toolUseId: ({ server, name, meta }) =>
-          metaToolUseId(meta) ?? this.transcript.takeHostCall(server, name),
+          metaToolUseId(meta) ??
+          session.attempt?.transcript.takeHostCall(server, name),
       }),
-      canUseTool: this.canUseTool,
-      onElicitation: this.onElicitation,
+      canUseTool: (toolName, toolInput, callOptions) =>
+        session.attempt
+          ? session.attempt.canUseTool(toolName, toolInput, callOptions)
+          : Promise.resolve({
+              behavior: "deny",
+              message: "The turn already ended.",
+            }),
+      onElicitation: (request, callOptions) =>
+        session.attempt
+          ? session.attempt.onElicitation(request, callOptions)
+          : Promise.resolve({ action: "cancel" }),
       hooks: {
         PostToolUse: [{ matcher: "^mcp__", hooks: [onMcpResult] }],
-        ...turnContextHooks(live),
+        ...turnContextHooks(session.live),
       },
       sessionStore: hostSessionStore({
-        nativeState: this.host.nativeState,
+        nativeState,
         // A fork reads its source thread; everything else is the
         // attempt's own (named only when it is not).
         threadFor: (sessionId) =>
@@ -578,14 +814,14 @@ class ClaudeAttempt {
             ? undefined
             : sessionId,
       }),
-      abortController: this.abort,
+      abortController: session.abort,
       stderr: (data) => {
-        this.stderr = (this.stderr + data).slice(-8_000);
+        session.stderr = (session.stderr + data).slice(-8_000);
       },
     });
   }
 
-  private readonly canUseTool: CanUseTool = async (
+  readonly canUseTool: CanUseTool = async (
     toolName,
     toolInput,
     { signal, toolUseID },
@@ -666,7 +902,7 @@ class ClaudeAttempt {
     }
   }
 
-  private readonly onElicitation: OnElicitation = async (
+  readonly onElicitation: OnElicitation = async (
     request,
     { requestId },
   ): Promise<ElicitationResult> => {

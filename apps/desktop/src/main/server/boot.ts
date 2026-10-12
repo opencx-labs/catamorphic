@@ -1577,6 +1577,8 @@ export async function startEmbeddedServer(
           { name: "previews", dispose: () => remotePreviews.close() },
           { name: "HTTP server", dispose: () => app.close() },
           { name: "framework services", dispose: () => catamorphic.close() },
+          // After the turns stopped: the harnesses kept warm for their chats.
+          { name: "warm harnesses", dispose: () => agentRegistry.dispose() },
           // The host owns Kysely. Always attempt its WAL flush last and report
           // a failure instead of silently treating an unsafe shutdown as clean.
           { name: "database", dispose: () => db.destroy() },

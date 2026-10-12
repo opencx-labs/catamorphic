@@ -154,6 +154,12 @@ export type ThreadBinding =
       mode: "resume" | "restore";
       providerThreadId: string;
       nativeRef: NativeRef;
+      /**
+       * The native turn the thread's history ends with, as Work recorded
+       * it: a harness kept warm since then serves this attempt only when
+       * its own last turn is this one (ADR 0222).
+       */
+      lastTurnRef?: NativeRef;
       /** For `file` state: where the native file lives, relative to the harness home. */
       statePath?: string;
     }
@@ -550,4 +556,9 @@ export interface HarnessAdapter {
     host: AttemptHost,
     local?: Record<string, unknown>,
   ): AttemptControl;
+  /**
+   * End every harness the adapter kept warm between attempts (ADR 0222).
+   * Hosts that keep adapters for their lifetime call it as they stop.
+   */
+  dispose?(): Promise<void>;
 }

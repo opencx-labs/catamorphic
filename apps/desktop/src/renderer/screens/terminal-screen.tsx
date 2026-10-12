@@ -51,7 +51,11 @@ export interface TerminalScreenProps {
   remoteChat?: { sessionId: string };
   /** Shell title changes (OSC 0/2) — feeds the tab label. */
   onTitle: (title: string) => void;
-  /** The shell exited (Ctrl+D, `exit`) — the tab closes itself. */
+  /**
+   * The shell exited (Ctrl+D, `exit`) — the tab closes itself. An attached
+   * agent terminal reports it too when it had ended before this view
+   * attached.
+   */
   onExit: () => void;
   /**
    * Reports the PTY session backing this tab. The workspace records it so
@@ -213,11 +217,12 @@ export function TerminalScreen({
           // Attach to the agent's live session: replay, then stream. The
           // shared PTY snaps to this view's geometry (tmux-attach style) —
           // the shell redraws on SIGWINCH, cleaning up replay wrapping.
-          sessionId = attachSessionId;
           const history = await desktopApi.terminalBuffer(attachSessionId);
           if (disposed) return;
           if (history?.buffer) term.write(history.buffer);
-          void desktopApi.terminalResize(attachSessionId, term.cols, term.rows);
+          // Its command ended before this view attached (ADR 0223): what
+          // it printed stays to read, and nothing runs in it to type into.
+          if (history?.running) sessionId = attachSessionId;
         } else {
           // Reopened tab: the dead session's scrollback prints first —
           // sanitized to plain text (raw ANSI replay is grid-state
@@ -272,26 +277,29 @@ export function TerminalScreen({
           if (progress) term.write("\r\x1b[2K");
           sessionId = created.sessionId;
         }
-        onSessionRef.current?.(sessionId);
-        // The layout may have changed while the PTY was being created.
-        void desktopApi.terminalResize(sessionId, term.cols, term.rows);
-
-        unsubscribes.push(
-          desktopApi.onTerminalData((payload) => {
-            if (payload.sessionId === sessionId) term?.write(payload.data);
-          }),
-          desktopApi.onTerminalExit((payload) => {
-            if (payload.sessionId !== sessionId) return;
-            sessionId = null;
-            // Ended for a reason of its own (its workspace was given back,
-            // the server went away): the tab stays to say so.
-            if (payload.message) {
-              term?.write(`\r\n\x1b[2m${payload.message}\x1b[0m\r\n`);
-              return;
-            }
-            onExitRef.current();
-          }),
-        );
+        if (sessionId) {
+          onSessionRef.current?.(sessionId);
+          // The layout may have changed while the PTY was being created.
+          void desktopApi.terminalResize(sessionId, term.cols, term.rows);
+          unsubscribes.push(
+            desktopApi.onTerminalData((payload) => {
+              if (payload.sessionId === sessionId) term?.write(payload.data);
+            }),
+            desktopApi.onTerminalExit((payload) => {
+              if (payload.sessionId !== sessionId) return;
+              sessionId = null;
+              // Ended for a reason of its own (its workspace was given
+              // back, the server went away): the tab stays to say so.
+              if (payload.message) {
+                term?.write(`\r\n\x1b[2m${payload.message}\x1b[0m\r\n`);
+                return;
+              }
+              onExitRef.current();
+            }),
+          );
+        } else {
+          onExitRef.current();
+        }
         // Cursor states, native-terminal style: blinking solid block when
         // focused and idle, pinned solid while typing, and a steady hollow
         // outline while the terminal is unfocused. Read-only terminals

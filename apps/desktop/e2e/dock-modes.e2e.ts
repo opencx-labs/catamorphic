@@ -681,22 +681,22 @@ describe("dock modes", () => {
   }, 60_000);
 
   it("chips fold into an animated group chip past the threshold; the split affordance is hover-only", async () => {
-    // Three quick terminal turns after the lurk test's one cross
-    // SURFACE_GROUP_THRESHOLD (3). On retry the group already exists, so
-    // stop as soon as its semantic control is present instead of assuming
-    // an exact accumulated count.
-    for (const label of ["two", "three", "four"]) {
+    // A terminal's chip lasts as long as its command (ADR 0223): four
+    // commands left running cross SURFACE_GROUP_THRESHOLD (3). On retry
+    // the group already exists, so stop as soon as its semantic control is
+    // present instead of assuming an exact accumulated count.
+    for (const label of ["one", "two", "three", "four"]) {
       const grouped = await run<boolean>(
         `return !!frontDock().querySelector('button[aria-label$=" terminals"]');`,
       );
       if (grouped) break;
       const marker = `${label}-${Date.now()}`;
       await run(
-        `setComposer('terminal: echo ${marker}'); send(); return true;`,
+        `setComposer('start: echo ${marker} && sleep 600'); send(); return true;`,
       );
       await runWait(
         `return [...frontDock().querySelectorAll('[role="log"] article')].some(el =>
-          el.textContent.includes('terminal result:') && el.textContent.includes('${marker}'));`,
+          el.textContent.includes('in the background') && el.textContent.includes('${marker}'));`,
         { timeoutMs: 30_000, label: `terminal turn ${label}` },
       );
     }
