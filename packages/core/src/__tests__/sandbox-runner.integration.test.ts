@@ -148,6 +148,45 @@ describe("sandbox runner", () => {
     await channel.kill();
   }, 60_000);
 
+  it("stores what its harness writes after the turn ended, and exits once that is answered", async () => {
+    const sandbox = await provider.createSandbox({});
+    const channel = await startSandboxRunner({
+      provider,
+      allocationId: "allocation",
+      sandboxId: sandbox.id,
+      stateDirectory: "/workspace/.work-session",
+    });
+    await channel.send([
+      {
+        id: "start",
+        command: { kind: "start", attempt: attempt("[[late]] remember") },
+      },
+    ]);
+    const frames: RunnerFrame[] = [];
+    await readUntil({
+      channel,
+      cursor: 0,
+      frames,
+      done: (read) => read.some((frame) => frame.type === "exit"),
+    });
+    const ended = frames.findIndex(
+      (frame) =>
+        frame.type === "event" && frame.event.type === "turn.completed",
+    );
+    const stored = frames.flatMap((frame, index) =>
+      frame.type === "call" && frame.call.kind === "native_state.append"
+        ? [index]
+        : [],
+    );
+    const exit = frames.findIndex((frame) => frame.type === "exit");
+    // A host keeps answering after the turn ended: the last state comes then.
+    expect(ended).toBeGreaterThan(0);
+    expect(stored).toHaveLength(1);
+    expect(stored[0]).toBeGreaterThan(ended);
+    expect(exit).toBeGreaterThan(stored[0] ?? frames.length);
+    await channel.kill();
+  }, 60_000);
+
   it("is read on by another holder from the stored cursor, and reuses the uploaded bundle", async () => {
     const sandbox = await provider.createSandbox({});
     const first = await startSandboxRunner({

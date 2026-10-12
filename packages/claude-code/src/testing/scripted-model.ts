@@ -219,6 +219,10 @@ export function scriptedModelEnv(input: {
     CLAUDE_CODE_OAUTH_TOKEN: "",
     ANTHROPIC_MODEL: "",
     ANTHROPIC_BASE_URL: input.url,
+    // Never another provider a shell or `.env` may switch on.
+    CLAUDE_CODE_USE_BEDROCK: "",
+    CLAUDE_CODE_USE_VERTEX: "",
+    CLAUDE_CODE_USE_FOUNDRY: "",
     CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
     DISABLE_AUTOUPDATER: "1",
     HTTP_PROXY: "http://127.0.0.1:9",

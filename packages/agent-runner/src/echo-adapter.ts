@@ -38,6 +38,8 @@ const CAPABILITIES: HarnessCapabilities = {
  * - `[[title <text>]]` sets the chat title
  * - `[[env <NAME>]]` says the variable as the attempt's environment has it
  * - `[[big <n>]]` says, and stores under subpath `big`, n three-byte characters
+ * - `[[late]]` stores the turn a moment after it ended, interrupted too, as
+ *   a harness that writes its transcript on its way out does
  *
  * Its native state is the list of turns it saw, stored with Work, so a
  * restored thread remembers ("turn 3") wherever it resumes.
@@ -196,8 +198,16 @@ export class EchoAdapter implements HarnessAdapter {
           });
         }
       }
+      const late = directives(text).includes("late");
+      const store = () =>
+        host.nativeState.append({ entries: [{ turn: turnNumber, text }] });
+      const storeLate = async () => {
+        await new Promise((resolve) => setTimeout(resolve, LATE_STORE_MS));
+        await store();
+      };
       if (interrupted) {
         host.emit({ type: "turn.completed", status: "interrupted" });
+        if (late) await storeLate();
         return;
       }
       const reply = `Echo: ${stripDirectives(text)}${seen.length ? ` (turn ${turnNumber})` : ""}`;
@@ -228,9 +238,7 @@ export class EchoAdapter implements HarnessAdapter {
           text: `\nSteered: ${steer}`,
         });
       host.emit({ type: "item.completed", key, status: "completed" });
-      await host.nativeState.append({
-        entries: [{ turn: turnNumber, text }],
-      });
+      if (!late) await store();
       host.emit({
         type: "usage",
         usage: {
@@ -244,6 +252,7 @@ export class EchoAdapter implements HarnessAdapter {
         status: "completed",
         ref: { id: `${ref.id}:${turnNumber}`, strength: "strong" },
       });
+      if (late) await storeLate();
     };
     const finished = run().catch((error: unknown) => {
       host.emit({
@@ -268,6 +277,9 @@ export class EchoAdapter implements HarnessAdapter {
     };
   }
 }
+
+/** How long after its turn ended a `[[late]]` turn is stored. */
+const LATE_STORE_MS = 100;
 
 function say(host: AttemptHost, key: string, text: string): void {
   host.emit({

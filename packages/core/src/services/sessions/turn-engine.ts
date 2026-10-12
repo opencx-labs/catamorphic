@@ -233,6 +233,8 @@ interface LocalTurn {
   channel?: RunnerChannel;
   /** This process is stopping: hand reattachable work back instead. */
   handingBack: boolean;
+  /** Its attempt ended and it finalizes: it settles here, never handed back. */
+  finalizing: boolean;
   /** Host call results sent and not acknowledged yet, by frame id: sent again. */
   results: Map<string, RunnerCommandFrame>;
   resultsSentAt: number;
@@ -269,6 +271,19 @@ const INTERRUPT_GRACE_MS = 30_000;
 const START_GRACE_MS = 15_000;
 /** How long a host result waits for the runner's acknowledgement before it is sent again. */
 const RESULT_RESEND_MS = 2_000;
+/**
+ * How long a runner whose attempt ended is answered while its harness
+ * winds down, before it is stopped. Longer than a harness's own wait for
+ * its process to exit (Claude Code's is 10 s).
+ */
+const RUNNER_EXIT_GRACE_MS = 15_000;
+/** What a stopping process keeps of its stop's time to settle its turns. */
+const STOP_SETTLE_MS = 1_000;
+/** What a tool call answers when an earlier holder may have run it. */
+const TAKEN_OVER_TOOL =
+  "The machine running this turn stopped while this tool ran. It may or may not have completed: check its effects before trying again.";
+/** What a tool call answers once its attempt ended. */
+const ENDED_TOOL = "This turn already ended, so the tool did not run.";
 
 /**
  * Drives claimed turns (ADR 0198): prepares an attempt, starts its runner
@@ -283,6 +298,8 @@ export class TurnEngine {
   private readonly local = new Map<string, LocalTurn>();
   private readonly native: NativeStateStore;
   private stopping = false;
+  /** When a stop must be done by: an in-process drain ends in time to settle. */
+  private stopDeadline: number | undefined;
 
   constructor(
     private readonly deps: {
@@ -330,10 +347,11 @@ export class TurnEngine {
     reattachable: (location: RunnerLocation) => boolean;
   }): Promise<void> {
     this.stopping = true;
+    this.stopDeadline = Date.now() + input.timeoutMs;
     const pending: Promise<void>[] = [];
     for (const local of this.local.values()) {
       const location = local.channel?.location;
-      if (location && input.reattachable(location)) {
+      if (location && !local.finalizing && input.reattachable(location)) {
         local.handingBack = true;
         local.abort.abort();
         pending.push(
@@ -400,6 +418,7 @@ export class TurnEngine {
       abort: new AbortController(),
       wake: () => wake(),
       handingBack: false,
+      finalizing: false,
       results: new Map(),
       resultsSentAt: 0,
     };
@@ -506,13 +525,21 @@ export class TurnEngine {
     for (;;) {
       if (local.abort.signal.aborted) return;
       if (turn.status === "finalizing") {
+        local.finalizing = true;
         const attempt = await this.activeAttempt(turn);
+        const cursor = await this.reattachEnded(local, {
+          identity,
+          session,
+          turn,
+          attempt,
+        });
         await this.finalize(local, {
           identity,
           session,
           turn,
           attempt,
           completion: { status: attemptOutcome(attempt) },
+          ...(cursor === undefined ? {} : { cursor }),
         });
         return;
       }
@@ -561,6 +588,7 @@ export class TurnEngine {
           turn: result.turn,
           attempt: result.attempt,
           completion: result.completion,
+          ...(result.cursor === undefined ? {} : { cursor: result.cursor }),
         });
         return;
       }
@@ -1149,6 +1177,8 @@ export class TurnEngine {
           status: "completed" | "failed" | "interrupted";
           error?: TurnError;
         };
+        /** How far the runner, left up while its harness winds down, was read. */
+        cursor?: number;
       }
   > {
     const { db, log, queue } = this.deps;
@@ -1180,15 +1210,7 @@ export class TurnEngine {
           reason: "The machine running this turn stopped before it finished.",
         };
       local.channel = channel;
-      // Taken over: every value the chat could repeat is masked, as its
-      // preparer masked it (ADR 0206).
-      if (!local.mask)
-        local.mask = new SecretMask(
-          (await this.deps.host.secretValues?.({
-            identity: ctx.identity,
-            session: ctx.session,
-          })) ?? {},
-        );
+      await this.maskTakenOver(local, ctx);
       // A holder can stop between recording the runner and sending its
       // start. A runner that never said hello never got it: stop it and
       // prepare the same attempt again, as for a preparation that died.
@@ -1235,7 +1257,7 @@ export class TurnEngine {
         ctx,
         channel,
         Object.entries(runner.calls),
-        true,
+        TAKEN_OVER_TOOL,
       );
     }
     let thread = await this.loadThread(attempt.providerThreadId);
@@ -1290,24 +1312,7 @@ export class TurnEngine {
     let commandsInFlight: Promise<void> | undefined;
     for (;;) {
       if (local.abort.signal.aborted) return { kind: "aborted", channel };
-      // A result the runner has not acknowledged is sent again: a send can
-      // fail, and the harness waits on every call.
-      if (
-        local.results.size > 0 &&
-        Date.now() - local.resultsSentAt > RESULT_RESEND_MS
-      ) {
-        local.resultsSentAt = Date.now();
-        // Only this attempt's: an earlier attempt's runner is gone, and its
-        // call ids mean other calls to this one.
-        const own = `result:${attempt.id}:`;
-        for (const id of local.results.keys())
-          if (!id.startsWith(own)) local.results.delete(id);
-        await channel
-          .send([...local.results.values()])
-          .catch((error) =>
-            console.warn("[catamorphic] Could not send host results", error),
-          );
-      }
+      await this.resendResults(local, attempt.id, channel);
       if (!commandsInFlight)
         commandsInFlight = local.waiter?.then(async () => {
           rearm();
@@ -1351,7 +1356,7 @@ export class TurnEngine {
             ctx,
             channel,
             outcome.calls,
-            false,
+            outcome.completion ? ENDED_TOOL : undefined,
           ).catch((error) =>
             console.warn("[catamorphic] A host call failed", error),
           );
@@ -1424,8 +1429,15 @@ export class TurnEngine {
             });
           });
           if (!stopped) {
-            await this.stopRunner(local, channel);
-            local.channel = undefined;
+            // The next attempt resumes this native thread: everything the
+            // harness stores on its way out comes first.
+            await this.drainRunner(
+              local,
+              { ...ctx, turn, attempt },
+              channel,
+              runner.cursor,
+            );
+            if (local.abort.signal.aborted) return { kind: "aborted", channel };
             local.results.clear();
             return {
               kind: "restart",
@@ -1433,9 +1445,14 @@ export class TurnEngine {
             };
           }
         }
-        await this.stopRunner(local, channel);
-        local.channel = undefined;
-        return { kind: "completed", turn, attempt, completion };
+        // The runner stays up while the turn finalizes (see drainRunner).
+        return {
+          kind: "completed",
+          turn,
+          attempt,
+          completion,
+          cursor: runner.cursor,
+        };
       }
       if (read.exited)
         return {
@@ -1451,6 +1468,7 @@ export class TurnEngine {
       ) {
         // A harness that ignores its interrupt is stopped by force.
         await channel.kill();
+        local.channel = undefined;
         return {
           kind: "completed",
           turn,
@@ -1826,7 +1844,8 @@ export class TurnEngine {
    * Answer host calls. Native state is Postgres-only, so it is answered in
    * one transaction with forgetting the call: never applied twice. A host
    * tool runs outside it; one found taken after a takeover is answered
-   * with the uncertainty, never run twice (ADR 0198).
+   * with the uncertainty, never run twice (ADR 0198), and one called after
+   * its attempt ended never runs.
    */
   private async answerCalls(
     local: LocalTurn,
@@ -1838,8 +1857,11 @@ export class TurnEngine {
     },
     channel: RunnerChannel,
     calls: ReadonlyArray<[string, HostCall]>,
-    /** Answering what an earlier holder took: a tool it may have run is not run again. */
-    takeover: boolean,
+    /**
+     * Why a tool call is answered with this error instead of running: an
+     * earlier holder may have run it, or its attempt ended.
+     */
+    refusal: string | undefined,
   ): Promise<void> {
     for (const [callId, call] of calls) {
       if (local.abort.signal.aborted) return;
@@ -1895,9 +1917,8 @@ export class TurnEngine {
             })) ?? null;
         } else if (call.kind === "native_state.subpaths") {
           result = await this.native.subpaths({ threadId });
-        } else if (takeover) {
-          error =
-            "The machine running this turn stopped while this tool ran. It may or may not have completed: check its effects before trying again.";
+        } else if (refusal) {
+          error = refusal;
         } else {
           const answer = await this.deps.host.hostTool({
             identity: ctx.identity,
@@ -1990,6 +2011,179 @@ export class TurnEngine {
     return own;
   }
 
+  /** Send again the results the runner has not acknowledged in a while. */
+  private async resendResults(
+    local: LocalTurn,
+    attemptId: string,
+    channel: RunnerChannel,
+  ): Promise<void> {
+    // A send can fail, and the harness waits on every call.
+    if (
+      local.results.size === 0 ||
+      Date.now() - local.resultsSentAt <= RESULT_RESEND_MS
+    )
+      return;
+    local.resultsSentAt = Date.now();
+    // Only this attempt's: an earlier attempt's runner is gone, and its
+    // call ids mean other calls to this one.
+    const own = `result:${attemptId}:`;
+    for (const id of local.results.keys())
+      if (!id.startsWith(own)) local.results.delete(id);
+    await channel
+      .send([...local.results.values()])
+      .catch((error) =>
+        console.warn("[catamorphic] Could not send host results", error),
+      );
+  }
+
+  /**
+   * Answer the runner of an attempt that ended until it exits. A harness
+   * may still store native state on its way out (Claude Code flushes its
+   * transcript after its result, the Codex adapter stores the rollout lines
+   * Codex wrote as it shut down), and a thread resumed anywhere else needs
+   * all of it. The runner is told to stop at once, which an attempt that
+   * ended ignores while it winds down; its events are over, and a tool it
+   * still calls is refused. One still up after RUNNER_EXIT_GRACE_MS is
+   * ended.
+   */
+  private async drainRunner(
+    local: LocalTurn,
+    ctx: {
+      identity: Identity;
+      session: SessionRow;
+      turn: Turn;
+      attempt: Attempt;
+    },
+    channel: RunnerChannel,
+    from: number,
+  ): Promise<void> {
+    if (local.abort.signal.aborted) return;
+    const grace = Date.now() + RUNNER_EXIT_GRACE_MS;
+    let cursor = from;
+    let exited = false;
+    try {
+      await channel
+        .send([{ id: `stop:${randomUUID()}`, command: { kind: "stop" } }])
+        .catch(() => {});
+      for (;;) {
+        if (local.abort.signal.aborted) return;
+        // A runner in this process dies with it: while it stops, the turn
+        // settles in time instead.
+        const deadline =
+          channel.location.kind === "in_process" &&
+          this.stopDeadline !== undefined
+            ? Math.min(grace, this.stopDeadline - STOP_SETTLE_MS)
+            : grace;
+        const left = deadline - Date.now();
+        if (left <= 0) {
+          console.warn(
+            `[catamorphic] agent runner (turn ${ctx.turn.id}) was still up when its attempt's wind-down ran out of time; ending it`,
+          );
+          return;
+        }
+        await this.resendResults(local, ctx.attempt.id, channel);
+        const read = await channel.read({
+          cursor,
+          waitMs: Math.min(
+            left,
+            channel.location.kind === "in_process" ? 500 : 2_000,
+          ),
+        });
+        for (const line of read.diagnostics)
+          console.warn(
+            `[catamorphic] agent runner (turn ${ctx.turn.id}): ${local.mask?.text(line) ?? line}`,
+          );
+        cursor = read.cursor;
+        const calls: Array<[string, HostCall]> = [];
+        for (const frame of read.frames) {
+          if (frame.type === "call") calls.push([frame.callId, frame.call]);
+          else if (frame.type === "ack") local.results.delete(frame.commandId);
+        }
+        if (calls.length > 0)
+          await this.answerCalls(local, ctx, channel, calls, ENDED_TOOL);
+        // Its exit frame is its last word, whenever its process goes.
+        exited =
+          read.exited || read.frames.some((frame) => frame.type === "exit");
+        if (exited) return;
+      }
+    } catch (error) {
+      console.warn(
+        "[catamorphic] Could not answer an ended attempt's runner",
+        error,
+      );
+    } finally {
+      // Lost or handed back: as for any runner of an aborted turn.
+      if (!local.abort.signal.aborted) {
+        if (!exited || channel.location.kind === "in_process")
+          await channel
+            .kill()
+            .catch((error) =>
+              console.warn(
+                "[catamorphic] Could not end an agent runner",
+                error,
+              ),
+            );
+        if (local.channel === channel) local.channel = undefined;
+      }
+    }
+  }
+
+  /**
+   * Taken over while it finalized: a sandbox runner its last holder was
+   * still answering is reattached, its calls that holder recorded are
+   * answered again, and it is read on from the cursor recorded for it.
+   * Where it starts reading, when there is one.
+   */
+  private async reattachEnded(
+    local: LocalTurn,
+    ctx: {
+      identity: Identity;
+      session: SessionRow;
+      turn: Turn;
+      attempt: Attempt & { runner: RunnerState | null };
+    },
+  ): Promise<number | undefined> {
+    const runner = ctx.attempt.runner;
+    const location = runner?.location;
+    if (local.channel || !runner || location?.kind !== "sandbox_process")
+      return undefined;
+    const channel = await this.deps.host
+      .reattach({ identity: ctx.identity, session: ctx.session, location })
+      .catch(() => undefined);
+    if (!channel) return undefined;
+    try {
+      await this.maskTakenOver(local, ctx);
+    } catch (error) {
+      // Nothing it says could be masked: it is ended unread.
+      console.warn("[catamorphic] Could not mask a reattached runner", error);
+      await channel.kill().catch(() => {});
+      return undefined;
+    }
+    local.channel = channel;
+    await this.answerCalls(
+      local,
+      ctx,
+      channel,
+      Object.entries(runner.calls),
+      TAKEN_OVER_TOOL,
+    );
+    return runner.cursor;
+  }
+
+  /** Taken over: every value the chat could repeat is masked, as its preparer masked it (ADR 0206). */
+  private async maskTakenOver(
+    local: LocalTurn,
+    ctx: { identity: Identity; session: SessionRow },
+  ): Promise<void> {
+    if (local.mask) return;
+    local.mask = new SecretMask(
+      (await this.deps.host.secretValues?.({
+        identity: ctx.identity,
+        session: ctx.session,
+      })) ?? {},
+    );
+  }
+
   private async stopRunner(
     local: LocalTurn,
     channel: RunnerChannel | undefined,
@@ -2017,9 +2211,12 @@ export class TurnEngine {
         status: "completed" | "failed" | "interrupted";
         error?: TurnError;
       };
+      /** How far the attempt's runner, still up, was read. */
+      cursor?: number;
     },
   ): Promise<void> {
     const { db, log } = this.deps;
+    local.finalizing = true;
     let turn: Turn = ctx.turn;
     if (turn.status !== "finalizing") {
       turn = {
@@ -2047,13 +2244,24 @@ export class TurnEngine {
     const inputText = inputItem
       ? itemText(itemFromRow(inputItem))
       : CONTINUATION_PROMPT;
-    const finalized = await this.deps.host.finalize({
-      identity: ctx.identity,
-      session: ctx.session,
-      turn,
-      inputText,
-      completion: { status: ctx.completion.status },
-    });
+    // Its runner is answered while the host finalizes, so the turn settles
+    // with everything its harness stored on the way out.
+    const drained =
+      local.channel && ctx.cursor !== undefined
+        ? this.drainRunner(local, ctx, local.channel, ctx.cursor)
+        : undefined;
+    let finalized: FinalizedTurn;
+    try {
+      finalized = await this.deps.host.finalize({
+        identity: ctx.identity,
+        session: ctx.session,
+        turn,
+        inputText,
+        completion: { status: ctx.completion.status },
+      });
+    } finally {
+      await drained;
+    }
     const status = finalized.failure ? "failed" : ctx.completion.status;
     await this.settle(local, {
       identity: ctx.identity,
