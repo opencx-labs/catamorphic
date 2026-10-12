@@ -226,6 +226,7 @@ describe("VoiceConversation", () => {
     );
     await voice.poll();
     expect(voice.spoken).toEqual(["Okay, I'll stop listening."]);
+    voice.conversation.said("a");
     expect(finished).toEqual([]);
     // The turn ends with one more reply: it goes to speech first.
     voice.set(
@@ -235,11 +236,70 @@ describe("VoiceConversation", () => {
       ]),
     );
     await voice.poll();
+    expect(voice.spoken).toEqual(["Okay, I'll stop listening.", "Talk soon."]);
+    // Over, but not yet said.
+    expect(finished).toEqual([]);
+    voice.conversation.said("b");
     expect(finished).toEqual([["Okay, I'll stop listening.", "Talk soon."]]);
-    // Finished, it reads the chat no more.
+    // Finished, it reads the chat no more and finishes once.
     voice.set(detail([message("c", "Later news.")]));
     await voice.poll();
+    voice.conversation.said("c");
     expect(voice.spoken).toHaveLength(2);
+    expect(finished).toHaveLength(1);
+  });
+
+  it("finishes at once when the turn ends with nothing left to say", async () => {
+    vi.useFakeTimers();
+    const voice = harness(detail([message("a", "Done.")], { busy: true }));
+    await voice.conversation.start();
+    let finished = 0;
+    voice.conversation.finish(() => {
+      finished += 1;
+    });
+    voice.set(detail([message("a", "Done.")]));
+    await voice.poll();
+    expect(finished).toBe(1);
+  });
+
+  it("does not finish on its first read when that began before the agent stopped listening", async () => {
+    vi.useFakeTimers();
+    let current = detail([]);
+    const reads: Array<() => void> = [];
+    let finished = 0;
+    const conversation = new VoiceConversation(ref, {
+      sessions: {
+        get: () => {
+          const seen = current;
+          return new Promise((resolve) => reads.push(() => resolve(seen)));
+        },
+        send: async () => {},
+        interrupt: async () => {},
+      },
+      speech: { speak: () => {}, cue: () => {}, stopSpeaking: () => {} },
+      onBusy: () => {},
+      onError: () => {},
+    });
+    // The first read sees an idle chat, then a turn starts and its agent
+    // stops listening before that read lands.
+    const start = conversation.start();
+    const stale = reads.shift();
+    current = detail([], { busy: true });
+    conversation.finish(() => {
+      finished += 1;
+    });
+    stale?.();
+    await start;
+    expect(finished).toBe(0);
+    await vi.advanceTimersByTimeAsync(0);
+    for (const read of reads.splice(0)) read();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(finished).toBe(0);
+    current = detail([]);
+    await vi.advanceTimersByTimeAsync(1_000);
+    for (const read of reads.splice(0)) read();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(finished).toBe(1);
   });
 
   it("finishes only on a read of the chat begun after its agent stopped listening", async () => {

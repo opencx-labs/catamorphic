@@ -187,6 +187,18 @@ export class VoiceEngine {
     this.held = false;
     this.utterance = [];
     this.learning = null;
+    this.audio({ type: "close-microphone" });
+  }
+
+  /**
+   * Another audio page took over (a microphone move): whatever the old one
+   * had still to play went with it, so it counts as played, and a voice
+   * that stopped listening closes the new page's microphone too.
+   */
+  audioReplaced(): void {
+    this.drainedSeq = this.sentSeq;
+    this.settlePlayback();
+    if (!this.listening) this.audio({ type: "close-microphone" });
   }
 
   /**

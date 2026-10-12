@@ -10,6 +10,11 @@ import { useEffect, useRef } from "react";
  * until the user interacts with the element (pointerdown/focus) or the
  * agent points elsewhere, and fades out the way it came
  * (`animate-agent-pointer-out`) before its marks come off.
+ *
+ * The pointed elements are React's: a re-render that rewrites one's
+ * className (a tab turning active, a row selected) takes the glow's
+ * classes with it. A glowing element puts them back at once, steady
+ * (`agent-pointer-held`), so the ring neither vanishes nor fades in again.
  */
 
 export interface AgentPointer {
@@ -18,22 +23,32 @@ export interface AgentPointer {
 }
 
 const ENTER = "animate-agent-pointer-in";
+const HELD = "agent-pointer-held";
 const LEAVE = "animate-agent-pointer-out";
 /** Beyond the 200ms exit: hidden windows can skip animationend. */
 const LEAVE_FALLBACK_MS = 400;
 
-function light(element: HTMLElement) {
+/** The ring is showing: entering, or held after a class rewrite. */
+const showing = (element: HTMLElement) =>
+  element.classList.contains("agent-pointer") &&
+  (element.classList.contains(ENTER) || element.classList.contains(HELD));
+
+function light(element: HTMLElement, steady: boolean) {
   element.classList.remove(LEAVE);
-  element.classList.add("agent-pointer", ENTER);
+  element.classList.add("agent-pointer", steady ? HELD : ENTER);
+}
+
+/** Puts back what a className rewrite took off a glowing element. */
+function hold(element: HTMLElement) {
+  if (!showing(element)) element.classList.add("agent-pointer", HELD);
 }
 
 function unlight(element: HTMLElement) {
-  element.classList.remove(ENTER);
-  element.classList.add(LEAVE);
   const done = () => {
     element.removeEventListener("animationend", ended);
     // Pointed at again meanwhile: the glow stays.
-    if (!element.classList.contains(LEAVE)) return;
+    if (element.classList.contains(ENTER) || element.classList.contains(HELD))
+      return;
     element.classList.remove("agent-pointer", LEAVE);
     element.removeAttribute("data-agent-pointer-note");
   };
@@ -41,6 +56,14 @@ function unlight(element: HTMLElement) {
     if (event.target === element && event.animationName === "agent-pointer-out")
       done();
   };
+  // Only a ring on screen fades: one a rewrite already took goes quietly.
+  const visible = showing(element);
+  element.classList.remove(ENTER, HELD);
+  if (!visible) {
+    done();
+    return;
+  }
+  element.classList.add(LEAVE);
   element.addEventListener("animationend", ended);
   window.setTimeout(done, LEAVE_FALLBACK_MS);
 }
@@ -61,6 +84,9 @@ export function AgentPointers({
   const lit = useRef(
     new Map<HTMLElement, { target: string; detach: () => void }>(),
   );
+  // Rewrites outside a workspace change (a row selected) put the glow
+  // back too, before the frame paints.
+  const watcher = useRef<MutationObserver | null>(null);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: revision re-resolves pointers after tab mounts
   useEffect(() => {
@@ -71,6 +97,9 @@ export function AgentPointers({
       );
       if (element instanceof HTMLElement) wanted.set(element, pointer);
     }
+    // Targets already glowing: a new element for one (a remount) takes the
+    // ring steady instead of fading in again.
+    const glowing = new Set([...lit.current.values()].map((x) => x.target));
     for (const [element, entry] of lit.current) {
       if (wanted.get(element)?.target === entry.target) continue;
       entry.detach();
@@ -85,8 +114,11 @@ export function AgentPointers({
       } else {
         element.removeAttribute("data-agent-pointer-note");
       }
-      if (lit.current.has(element)) continue;
-      light(element);
+      if (lit.current.has(element)) {
+        hold(element);
+        continue;
+      }
+      light(element, glowing.has(pointer.target));
       const dismiss = () => onDismissRef.current(pointer.target);
       element.addEventListener("pointerdown", dismiss);
       element.addEventListener("focusin", dismiss);
@@ -107,15 +139,30 @@ export function AgentPointers({
         });
       }
     }
+    watcher.current ??= new MutationObserver((records) => {
+      for (const record of records)
+        if (
+          record.target instanceof HTMLElement &&
+          lit.current.has(record.target)
+        )
+          hold(record.target);
+    });
+    watcher.current.disconnect();
+    for (const element of lit.current.keys())
+      watcher.current.observe(element, {
+        attributes: true,
+        attributeFilter: ["class"],
+      });
   }, [pointers, revision]);
 
   // Unmounted with the workspace: nothing is left to fade into.
   useEffect(() => {
     const glowing = lit.current;
     return () => {
+      watcher.current?.disconnect();
       for (const [element, entry] of glowing) {
         entry.detach();
-        element.classList.remove("agent-pointer", ENTER, LEAVE);
+        element.classList.remove("agent-pointer", ENTER, HELD, LEAVE);
         element.removeAttribute("data-agent-pointer-note");
       }
       glowing.clear();

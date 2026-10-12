@@ -1038,3 +1038,52 @@ function applyWorkspaceEvent(
     }
   }
 }
+
+/**
+ * Whether an agent's open shows in front: only in the workspace Work shows,
+ * in a window on screen, and only while the person watches the asking chat,
+ * talks with it by voice (ADR 0216) or already looks at the target. A
+ * session with no chat here (a subsession, an automation's chat, a closed
+ * chat) is nobody's view to take; an open no session asked for (the
+ * terminal `open` hook) shows in front, as a person's own command would.
+ */
+export function agentOpenInFront({
+  shown,
+  voice,
+  chat,
+  targetInFront,
+}: {
+  shown: boolean;
+  voice: boolean;
+  /** The asking chat: on screen, off it, not here, or none named. */
+  chat: "visible" | "hidden" | "absent" | "unnamed";
+  targetInFront: boolean;
+}): boolean {
+  if (!shown) return false;
+  return targetInFront || voice || chat === "visible" || chat === "unnamed";
+}
+
+/**
+ * Which side a tab arrives from when the tab in front changes from `from`
+ * to `to`: where `to` sits in the strip now against where `from` stood
+ * (`from` itself, or the nearest tab left of it that is still there, when
+ * it closed or left the strip). New tabs land in their kind's place, not
+ * always at the end. Undefined when `to` isn't in the strip.
+ */
+export function stripTravel(
+  before: readonly string[],
+  after: readonly string[],
+  from: string,
+  to: string,
+): "left" | "right" | undefined {
+  const toIndex = after.indexOf(to);
+  if (toIndex === -1) return undefined;
+  let anchor = after.indexOf(from);
+  if (anchor === -1) {
+    for (let index = before.indexOf(from) - 1; index >= 0; index--) {
+      anchor = after.indexOf(before[index] ?? "");
+      if (anchor !== -1) break;
+    }
+  }
+  return toIndex > anchor ? "right" : "left";
+}

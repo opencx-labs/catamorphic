@@ -337,7 +337,7 @@ screen, or under reduced motion.
 | `profile-veil-in` / `profile-veil-out` (in-place profile switch) | 200ms | each other (exact mirror) |
 | `question-in` (ask_user panel) | 260ms | — |
 | `pane-in-left` / `pane-in-right` (keyboard tab cycling; an agent's open or close changing the tab in front of a visible workspace) | 200ms | — (content-changed signal on a persistent wrapper; no exit to pair; a person's click stays instant) |
-| `agent-pointer-in` / `agent-pointer-out` (`point_at`'s ring and its note) | 200ms | each other (exact mirror; the entrance's fill holds the ring steady, nothing loops) |
+| `agent-pointer-in` / `agent-pointer-out` (`point_at`'s ring and its note) | 200ms | each other (exact mirror; the entrance's fill holds the ring steady, `agent-pointer-held` puts it back unanimated after a re-render rewrites the element's classes, nothing loops) |
 | `content-fade-out` / `content-fade-in` (content settling beside a still sidebar, view transition: the old snapshot fades where it was, the new one fades in) | 300ms, linear (a sanctioned exception) | each other (the old snapshot leaves as the new one arrives) |
 | `dock-float` / `dock-rail` / `workspace-tabs` groups (a floating chat, the bubble strip and the tab strip gliding while the content settles, view transition) | 200ms | within the content's 300ms fade; a chat tab (`dock-tab`) fades in place with `content-fade-out` / `content-fade-in` from its own place |
 | Tab strip `translate` (the horizontal strip slides with the left sidebar's panel, to where the settle puts it) | 200ms, the panel's easing and item wait | the panel's own slide; dropped without a transition when the content settles |
@@ -2207,12 +2207,15 @@ minimized or the dock's assistant nowhere on screen, so what it shows
 opens in front. Only what Work shows opens in front: an open for a project
 in the background, or a window that is hidden, is prepared as a tab, and
 the agent hears that the person has not seen it yet. Nothing raises a
-window. An agent that asks from a session with no chat in the workspace no
-longer borrows whichever chat is working, which could step that chat out
-of its tab.
+window. An agent that asks from a session with no chat in the workspace
+(a subsession, an automation's chat) no longer borrows whichever chat is
+working, which could step that chat out of its tab; what it opens waits as
+a tab in the background. A chat steps aside only when it was on screen.
 
 `point_at`'s ring fades in, holds steady and fades out the way it came,
 with its note. It used to pulse forever, which the motion contract allows
-only for progress, and vanished at once when cleared. Pointing at a row
-in a closed sidebar now says the sidebar is closed instead of glowing off
-screen.
+only for progress, and vanished at once when cleared. A re-render that
+rewrites the pointed element's classes (a tab turning active) puts the
+ring back steady instead of dropping it. Pointing at something in a closed
+sidebar (a row, or a tab while tabs live there) now says the sidebar is
+closed instead of glowing off screen.

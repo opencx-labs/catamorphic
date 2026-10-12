@@ -102,7 +102,8 @@ export function ProjectSwitcher({
       </ResourceInspector>
 
       <div
-        className={`absolute inset-x-0 top-full z-50 mt-1 origin-top rounded-lg border border-border bg-bg-overlay p-1 shadow-2xl transition-[opacity,scale] duration-150 ease-[cubic-bezier(0.2,0,0,1)] ${
+        // As wide as the sidebar's content, however wide the button is.
+        className={`absolute left-0 top-full z-50 mt-1 w-[calc(var(--left-sidebar-width,16rem)_-_1.5rem)] origin-top rounded-lg border border-border bg-bg-overlay p-1 shadow-2xl transition-[opacity,scale] duration-150 ease-[cubic-bezier(0.2,0,0,1)] ${
           open
             ? "scale-100 opacity-100"
             : "pointer-events-none scale-95 opacity-0"

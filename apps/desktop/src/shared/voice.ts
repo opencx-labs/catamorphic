@@ -233,7 +233,9 @@ export type VoiceAudioUp =
 export type VoiceAudioDown =
   | { type: "play"; seq: number; samples: Float32Array; sampleRate: number }
   /** Drop everything queued or playing, now. */
-  | { type: "flush"; seq: number };
+  | { type: "flush"; seq: number }
+  /** Stop capturing for good: the microphone goes off, playback goes on. */
+  | { type: "close-microphone" };
 
 /** The IPC message that carries the audio port into the audio page. */
 export const VOICE_PORT_MESSAGE = "catamorphic:voice-port";

@@ -1752,6 +1752,11 @@ describe("agent shows and points", () => {
     await runWait(`return !$('[data-floating-surface]') && !!floatingDock();`, {
       label: "the floating app left and the chat stepped aside",
     });
+    // The page arrives a frame after it commits.
+    await runWait(
+      `return window.__agentMotion.some((name) => name.startsWith('pane-in'));`,
+      { label: "the page arrived" },
+    );
     const played = await motion();
     const exit = played.indexOf("floating-surface-out");
     expect(exit).toBeGreaterThanOrEqual(0);
@@ -1760,28 +1765,52 @@ describe("agent shows and points", () => {
     ).toBeGreaterThan(exit);
   });
 
-  it("point_at fades its glow in and out, and refuses a row in a closed sidebar", async () => {
-    const tab = await run<string>(
-      `return ${strip}.find((el) => el.querySelector('button[aria-current]'))
-         ?.getAttribute('data-point-key');`,
-    );
+  it("point_at fades its glow in and out, holds it through a re-render, and refuses what a closed sidebar holds", async () => {
+    // A tab not in front: bringing it in front rewrites its classes, and
+    // the ring stays on, steady, without fading in again.
+    const tab = "app:bg-demo";
+    const glow = `$('[data-tab-orientation] [data-point-key=${JSON.stringify(tab)}]')`;
     await recordMotion();
     await askAgent(`point: ${tab}`, `Pointing at ${tab}.`);
-    await runWait(
-      `const el = $('[data-point-key=${JSON.stringify(tab)}]');
-       return el.classList.contains('agent-pointer') &&
-         getComputedStyle(el).animationName === 'agent-pointer-in';`,
-      { label: "the glow faded in and holds" },
+    await runWait(`return ${glow}.classList.contains('agent-pointer');`, {
+      label: "the glow faded in",
+    });
+    await askAgent(
+      `show: ${tab}`,
+      `Opened ${tab} ("key":"${tab}", "opened":"focused")`,
     );
+    await runWait(`return !!${glow}.querySelector('button[aria-current]');`, {
+      label: "the pointed tab in front",
+    });
+    expect(
+      await run<boolean>(
+        `const el = ${glow};
+         return el.classList.contains('agent-pointer') &&
+           getComputedStyle(el).boxShadow !== 'none';`,
+      ),
+    ).toBe(true);
+    expect(
+      (await motion()).filter((name) => name === "agent-pointer-in"),
+    ).toHaveLength(1);
     await askAgent("unpoint", "Cleared the pointers.");
-    await runWait(
-      `return !$('[data-point-key=${JSON.stringify(tab)}]').classList.contains('agent-pointer');`,
-      { label: "the glow left" },
-    );
+    await runWait(`return !${glow}.classList.contains('agent-pointer');`, {
+      label: "the glow left",
+    });
     expect(await motion()).toEqual(
       expect.arrayContaining(["agent-pointer-in", "agent-pointer-out"]),
     );
-    // Both sidebars closed: a row there would glow off screen.
+    // Closed sidebars: a row there, or a tab while tabs live in the
+    // sidebar, would glow off screen.
+    const placement = await run<string>(
+      `return window.catamorphicDesktop.getPrefs().then((prefs) => prefs.tabPlacement);`,
+    );
+    await run(
+      `return window.catamorphicDesktop.setPrefs({ tabPlacement: 'sidebar' }).then(() => true);`,
+    );
+    await runWait(
+      `return !!$('[data-workspace-visible="true"] aside[data-sidebar="left"] [data-point-key=${JSON.stringify(tab)}]');`,
+      { label: "tabs in the left sidebar" },
+    );
     const toggles = ["sidebar", "right sidebar"];
     const reopen: string[] = [];
     for (const side of toggles) {
@@ -1796,23 +1825,31 @@ describe("agent shows and points", () => {
          .every((el) => el.getAttribute('data-motion') === 'closed');`,
       { label: "sidebars closed" },
     );
+    const refused = (name: string) =>
+      run<boolean>(
+        `return timelineMessages().some((m) => m.text.includes('point error:') &&
+           m.text.includes(${JSON.stringify(name)}) && m.text.includes('closed sidebar'));`,
+      );
     await askAgent("point: sidebar:Anything", "point error:");
-    expect(
-      await run<boolean>(
-        `return timelineMessages().some((m) => m.text.includes('point error:') && m.text.includes('sidebar') && m.text.includes('closed'));`,
-      ),
-    ).toBe(true);
+    expect(await refused("Anything")).toBe(true);
+    await askAgent(`point: ${tab}`, "point error:");
+    expect(await refused(tab)).toBe(true);
+    await run(
+      `return window.catamorphicDesktop.setPrefs({ tabPlacement: ${JSON.stringify(placement)} }).then(() => true);`,
+    );
     for (const side of reopen) {
       await run(
         `$('[data-workspace-visible="true"] [aria-label="Expand ${side}"]').click(); return true;`,
       );
       await runWait(
         `return !!$('[data-workspace-visible="true"] [aria-label="Collapse ${side}"]');`,
-        {
-          label: `${side} open again`,
-        },
+        { label: `${side} open again` },
       );
     }
+    if (placement !== "sidebar")
+      await runWait(`return !!$('[data-tab-orientation="horizontal"]');`, {
+        label: "tabs back on top",
+      });
   });
 });
 

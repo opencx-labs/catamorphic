@@ -106,11 +106,15 @@ export class VoiceConversation {
   private stopped = false;
   private busy = false;
   private heardThrough: string | null = null;
-  /** Set once the chat's agent stopped listening; runs when its turn is over. */
+  /** Set once the chat's agent stopped listening; runs when all is said. */
   private finished: (() => void) | null = null;
   /** Reads of the chat so far; only those begun after finishing count. */
   private reads = 0;
   private finishedAfter = 0;
+  /** The turn the agent stopped listening in is over. */
+  private turnOver = false;
+  /** Replies handed to speech and not yet over, said or cut off. */
+  private readonly unsaid = new Set<string>();
 
   constructor(
     readonly ref: VoiceSessionRef,
@@ -131,6 +135,7 @@ export class VoiceConversation {
   ) {}
 
   async start(): Promise<void> {
+    const read = ++this.reads;
     const chat = await this.deps.sessions.get(this.ref);
     const unheard = new Set(
       unheardReplies(chat.messages, this.deps.heardThrough ?? null).map(
@@ -145,7 +150,7 @@ export class VoiceConversation {
       )
         this.settled.add(message.id);
     for (const question of chat.questions) this.asked.add(question.id);
-    this.observe(chat);
+    this.observe(chat, read);
     this.schedule();
   }
 
@@ -156,14 +161,20 @@ export class VoiceConversation {
 
   /**
    * The chat's agent stopped listening: what the person says is dropped,
-   * and `done` runs once the chat's turn is over, after its replies went
-   * to speech. The chat is read now, so a turn already running counts.
+   * and `done` runs once the chat's turn is over and its replies have been
+   * said. The chat is read now, so a turn already running counts.
    */
   finish(done: () => void): void {
     if (this.stopped || this.finished) return;
     this.finished = done;
     this.finishedAfter = this.reads;
     this.schedule(0);
+  }
+
+  /** A reply handed to speech is over: said, or cut off. */
+  said(id: string): void {
+    this.unsaid.delete(id);
+    this.finishIfSaid();
   }
 
   /** What the person said, as the recognizer heard it. */
@@ -207,7 +218,7 @@ export class VoiceConversation {
     this.schedule();
   }
 
-  private observe(chat: VoiceChat, read = this.reads): void {
+  private observe(chat: VoiceChat, read: number): void {
     if (this.stopped) return;
     this.setBusy(chat.busy);
     // A reply is spoken once it is finished, all of it at once.
@@ -220,7 +231,7 @@ export class VoiceConversation {
         continue;
       this.settled.add(message.id);
       const spoken = speakableText(message.text);
-      if (spoken) this.deps.speech.speak(message.id, spoken);
+      if (spoken) this.speak(message.id, spoken);
     }
     // Heard through the latest message before any reply still being
     // written: everything up to it was said by the person or to them.
@@ -235,18 +246,31 @@ export class VoiceConversation {
       if (this.asked.has(question.id)) continue;
       this.asked.add(question.id);
       const prompt = speakableText(question.prompt);
-      this.deps.speech.speak(
+      this.speak(
         question.id,
         question.options.length
           ? `${prompt} ${listed(question.options)}`
           : prompt,
       );
     }
-    const finished = this.finished;
-    if (finished && !chat.busy && read > this.finishedAfter) {
+    if (this.finished && !chat.busy && read > this.finishedAfter) {
+      this.turnOver = true;
       this.stop();
-      finished();
+      this.finishIfSaid();
     }
+  }
+
+  private speak(id: string, text: string): void {
+    // Blank text is never said, so it is never over either.
+    if (text.trim()) this.unsaid.add(id);
+    this.deps.speech.speak(id, text);
+  }
+
+  private finishIfSaid(): void {
+    const done = this.finished;
+    if (!done || !this.turnOver || this.unsaid.size > 0) return;
+    this.finished = null;
+    done();
   }
 
   private markHeard(messageId: string): void {

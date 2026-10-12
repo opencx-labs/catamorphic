@@ -63,16 +63,12 @@ afterEach(async () => {
   await rm(root, { recursive: true, force: true });
 });
 
-it("leaves an installed binary, or one electron-vite is told to use, alone", async () => {
+it("leaves an installed binary alone", async () => {
   await writeInstaller(downloadingInstaller);
-  const input = { desktopPath, nodePath: process.execPath };
-  ensureElectronBinary({ ...input, env: { ELECTRON_EXEC_PATH: "/opt/e" } });
-  expect(await installerRuns()).toBe(0);
-
   await mkdir(path.join(packagePath, "dist"));
   await writeFile(path.join(packagePath, "dist", "electron"), "");
   await writeFile(path.join(packagePath, "path.txt"), "electron");
-  ensureElectronBinary({ ...input, env: {} });
+  ensureElectronBinary({ desktopPath, nodePath: process.execPath, env: {} });
   expect(await installerRuns()).toBe(0);
   expect(console.log).not.toHaveBeenCalled();
 });

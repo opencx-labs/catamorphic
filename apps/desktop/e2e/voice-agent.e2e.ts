@@ -896,7 +896,10 @@ describe("voice", () => {
     expect(phases.slice(thinking)).toContain("speaking");
     expect(phases.slice(thinking)).not.toContain("listening");
     expect(phases.at(-1)).toBe("off");
-    const status = await run<{ error?: string }>(`return api.voiceStatus();`);
-    expect(status.error).toBeUndefined();
+    // Turned off cleanly, not stopped by a failure.
+    const status = await run<{ error: string | null }>(
+      `return api.voiceStatus();`,
+    );
+    expect(status.error).toBeNull();
   }, 120_000);
 });

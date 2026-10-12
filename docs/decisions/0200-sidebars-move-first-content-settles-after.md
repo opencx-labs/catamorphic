@@ -53,8 +53,12 @@ the panel follows them 100 ms later (amended 2026-10-09, below).
   slides in step, with the panel's duration, easing and wait for its
   items, to where the settle puts it, and drops that translate in the
   frame the content takes or gives back the space. It is not a page, so
-  moving it waits on nothing. Should it land off by a little, it glides
-  the rest of the way in its own layer while the content settles.
+  moving it waits on nothing. Closing, the content, still where it was,
+  lets the strip out sideways (never down) over where the sidebar was;
+  opening, the strip's far end stays clear of the right sidebar's toggle.
+  Framed content keeps its rounded clip, so there the strip glides in its
+  own layer while the content settles instead, as it does the rest of the
+  way should it ever land off by a little.
 - Any page resize waits for the page to repaint, so that wait falls in a
   short hold between the slide and the fade, while nothing moves.
 - An overlay sidebar (the compact window's reveal) only slides; the content

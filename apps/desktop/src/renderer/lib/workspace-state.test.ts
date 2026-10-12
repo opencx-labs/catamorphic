@@ -1,8 +1,10 @@
 import { expect, it } from "vitest";
 import {
+  agentOpenInFront,
   emptyUtilityWorkspace,
   reconcileWorkspace,
   serializeWorkspace,
+  stripTravel,
   transitionWorkspace,
   type Workspace,
   type WorkspaceEvent,
@@ -210,4 +212,70 @@ it("keeps a New Tab with typed input, or one still on screen", () => {
     name: "a",
     label: undefined,
   });
+});
+
+it("opens an agent's surface in front only where the person is looking", () => {
+  const front = (
+    chat: "visible" | "hidden" | "absent" | "unnamed",
+    more: { shown?: boolean; voice?: boolean; targetInFront?: boolean } = {},
+  ) =>
+    agentOpenInFront({
+      shown: more.shown ?? true,
+      voice: more.voice ?? false,
+      targetInFront: more.targetInFront ?? false,
+      chat,
+    });
+  expect(front("visible")).toBe(true);
+  expect(front("hidden")).toBe(false);
+  // A subsession, an automation's chat or a closed chat takes no view.
+  expect(front("absent")).toBe(false);
+  // The terminal `open` hook names no session: the person's own command.
+  expect(front("unnamed")).toBe(true);
+  // Talking by voice is watching, even with the chat out of sight.
+  expect(front("hidden", { voice: true })).toBe(true);
+  expect(front("absent", { voice: true })).toBe(true);
+  expect(front("hidden", { targetInFront: true })).toBe(true);
+  // A project or window Work isn't showing never opens in front.
+  expect(front("visible", { shown: false })).toBe(false);
+  expect(front("visible", { shown: false, voice: true })).toBe(false);
+});
+
+it("brings a tab in from its side of the strip", () => {
+  const strip = ["app:a", "browser:b", "browser:c", "chat:d"];
+  expect(stripTravel(strip, strip, "browser:c", "browser:b")).toBe("left");
+  expect(stripTravel(strip, strip, "browser:b", "chat:d")).toBe("right");
+  // A new app lands among the apps, left of the page in front.
+  expect(
+    stripTravel(
+      strip,
+      ["app:a", "app:new", ...strip.slice(1)],
+      "browser:b",
+      "app:new",
+    ),
+  ).toBe("left");
+  // A new page lands after the pages; the chat that stepped aside left
+  // the strip, so the new page stands in its place.
+  expect(
+    stripTravel(
+      strip,
+      ["app:a", "browser:b", "browser:c", "browser:new"],
+      "chat:d",
+      "browser:new",
+    ),
+  ).toBe("right");
+  expect(
+    stripTravel(
+      strip,
+      ["app:a", "browser:b", "browser:c"],
+      "chat:d",
+      "browser:b",
+    ),
+  ).toBe("left");
+  // A close brings in its neighbour from that neighbour's side.
+  const closed = ["app:a", "browser:c", "chat:d"];
+  expect(stripTravel(strip, closed, "browser:b", "app:a")).toBe("left");
+  expect(stripTravel(strip, closed, "browser:b", "browser:c")).toBe("right");
+  expect(stripTravel(strip, closed, "browser:b", "browser:gone")).toBe(
+    undefined,
+  );
 });

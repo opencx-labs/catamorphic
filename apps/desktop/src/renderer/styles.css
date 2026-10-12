@@ -1257,6 +1257,15 @@ kbd {
   animation: agent-pointer-out 200ms cubic-bezier(0.2, 0, 0, 1) both;
 }
 
+/* A glow put back after React rewrote its element's classes: the ring the
+   entrance holds, steady, with nothing replayed. Unlayered, so it beats
+   the element's own shadow utilities. */
+.agent-pointer-held {
+  box-shadow:
+    0 0 0 2px color-mix(in srgb, var(--color-accent) 65%, transparent),
+    0 0 12px color-mix(in srgb, var(--color-accent) 35%, transparent);
+}
+
 @keyframes agent-pointer-note-in {
   from {
     opacity: 0;
@@ -1975,13 +1984,14 @@ html[data-surface="dock"] #root {
   margin-inline: auto;
 }
 /* The tab strip (or, with tabs in the sidebar, the page's title) starts
-   at the left sidebar's edge, so it moves with the panel: while the panel slides, the strip slides in step (same duration,
-   easing and wait for the items) to where the content's settle puts it,
-   the chrome's own sidebar toggle taking the row's start once the sidebar
-   has gone. Centred tabs move half as far: the strip's far end stays. Its
-   translate drops, with no transition, in the frame the content takes or
-   gives back the space (lib/sidebar-motion.ts), so it lands without a
-   jump. The toggle's slot is its button (size-7) and the row's gap
+   at the left sidebar's edge, so it moves with the panel: while the panel
+   slides, the strip slides in step (same duration, easing and wait for the
+   items) to where the content's settle puts it, the chrome's own sidebar
+   toggle taking the row's start once the sidebar has gone. Centred tabs
+   move half as far: the strip's far end stays. Its translate drops, with
+   no transition, in the commit the content takes or gives back the space
+   (the sidebar's data-settled, lib/sidebar-motion.ts), so it lands without
+   a jump. The toggle's slot is its button (size-7) and the row's gap
    (gap-1), plus the corner kept for the window buttons when they show. */
 .workspace-chrome {
   --chrome-toggle-slot: 32px;
@@ -1995,7 +2005,12 @@ html[data-surface="dock"] #root {
     var(--left-sidebar-width, 0px) -
     var(--chrome-toggle-slot)
   );
-  transition: translate 200ms var(--ease-standard);
+  /* At rest it clips nothing its own scrolling does not, and the clip has
+     something to move from. */
+  clip-path: inset(0);
+  transition:
+    translate 200ms var(--ease-standard),
+    clip-path 200ms var(--ease-standard);
 }
 .workspace-chrome > [data-tab-alignment="center"] {
   --tab-strip-shift: calc(
@@ -2009,15 +2024,28 @@ html[data-surface="dock"] #root {
   > :is([data-tab-orientation="horizontal"], [data-workspace-title]) {
   transition-delay: 100ms;
 }
+/* Closing, the content still sits where it was and clips what leaves its
+   left edge, so it lets the strip out sideways (never down) over where the
+   sidebar was. Framed content keeps its rounded clip; there the strip
+   glides during the settle instead (below). */
+[data-sidebar="left"][data-docked="true"]:is(
+  [data-motion="closing"],
+  [data-motion="closed"]
+) ~ .workspace-surface:not([data-content-frame="on"]) {
+  overflow-x: visible;
+  overflow-y: clip;
+}
 [data-sidebar="left"][data-docked="true"]:is(
     [data-motion="closing"],
     [data-motion="closed"]
   )
-  ~ .workspace-surface
+  ~ .workspace-surface:not([data-content-frame="on"])
   .workspace-chrome
   > :is([data-tab-orientation="horizontal"], [data-workspace-title]) {
   translate: calc(-1 * var(--tab-strip-shift)) 0;
 }
+/* Opening, its far end stays where it rests, clear of the right sidebar's
+   toggle, as the content gives the strip's start to the sidebar. */
 [data-sidebar="left"][data-docked="false"]:is(
     [data-motion="opening"],
     [data-motion="open"]
@@ -2026,8 +2054,10 @@ html[data-surface="dock"] #root {
   .workspace-chrome
   > :is([data-tab-orientation="horizontal"], [data-workspace-title]) {
   translate: var(--tab-strip-shift) 0;
+  clip-path: inset(0 var(--tab-strip-shift) 0 0);
 }
-:root[data-content-settling]
+[data-sidebar="left"][data-settled="true"]
+  ~ .workspace-surface
   .workspace-chrome
   > :is([data-tab-orientation="horizontal"], [data-workspace-title]) {
   transition: none;

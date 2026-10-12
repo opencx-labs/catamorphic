@@ -103,14 +103,12 @@ interface ActiveVoice {
   voiceOf: string | null;
   hearing: boolean;
   speaking: Set<string>;
-  /** Replies asked to be said and not yet over, spoken or cut off. */
-  unsaid: Set<string>;
   busy: boolean;
   /**
-   * The chat's agent stopped listening: voice waits for its turn to end,
-   * then for its replies to be said, and turns off.
+   * The chat's agent stopped listening: voice turns off once its turn is
+   * over and said.
    */
-  ending: "turn" | "speech" | null;
+  ending: boolean;
   live: LiveStatus;
   applied: Applied;
   /** Microphone moves, one at a time: each opens a new audio page. */
@@ -233,11 +231,6 @@ export function registerVoiceSupport(deps: {
   const talking = (sessionId: string) =>
     !active?.ending && active?.conversation?.ref.sessionId === sessionId;
 
-  /** An ending voice turns off once its last turn's replies are said. */
-  const endIfSaid = (voice: ActiveVoice) => {
-    if (voice.ending === "speech" && voice.unsaid.size === 0) void stop();
-  };
-
   /**
    * A chat's agent stops listening (its stop_listening tool): the person
    * is no longer heard, and voice turns off once the turn is said.
@@ -245,15 +238,15 @@ export function registerVoiceSupport(deps: {
   const stopListening = (sessionId: string): boolean => {
     const voice = active;
     const conversation = voice?.conversation;
-    if (!voice || !conversation || !talking(sessionId)) return false;
-    voice.ending = "turn";
+    if (!voice || conversation?.ref.sessionId !== sessionId) return false;
+    // Asked again before it is over: it is ending already.
+    if (voice.ending) return true;
+    voice.ending = true;
     voice.hearing = false;
     send(voice, { type: "stop-listening" });
-    update(voice);
+    update(voice, { learning: false });
     conversation.finish(() => {
-      if (active !== voice) return;
-      voice.ending = "speech";
-      endIfSaid(voice);
+      if (active === voice) void stop();
     });
     return true;
   };
@@ -382,6 +375,8 @@ export function registerVoiceSupport(deps: {
   ) => {
     const profileId = voice.profileId;
     const assistant = request.kind === "assistant";
+    // Here the server is up: its agents hear of voice and can end it.
+    state.current?.agentRegistry.setVoice({ talking, stopListening });
     voice.voiceOf = voiceOf;
     voice.applied.voice = agentVoice(prefs(profileId).load(), voiceOf);
     send(voice, { type: "voice", voice: voice.applied.voice });
@@ -409,11 +404,7 @@ export function registerVoiceSupport(deps: {
           sessions.interrupt(identity, target.projectId, target.sessionId),
       },
       speech: {
-        speak: (id, text) => {
-          // Blank text is never said, so it is never over either.
-          if (text.trim()) voice.unsaid.add(id);
-          send(voice, { type: "speak", id, text });
-        },
+        speak: (id, text) => send(voice, { type: "speak", id, text }),
         cue: () => send(voice, { type: "cue" }),
         stopSpeaking: () => send(voice, { type: "stop-speaking" }),
       },
@@ -507,8 +498,7 @@ export function registerVoiceSupport(deps: {
         break;
       case "spoken":
         voice.speaking.delete(event.id);
-        voice.unsaid.delete(event.id);
-        endIfSaid(voice);
+        voice.conversation?.said(event.id);
         break;
       case "failed":
         void stop(event.message);
@@ -558,7 +548,6 @@ export function registerVoiceSupport(deps: {
   ) => {
     errors.delete(profileId);
     lastRequests.set(profileId, request);
-    state.current?.agentRegistry.setVoice({ talking, stopListening });
     const worker = utilityProcess.fork(
       path.join(import.meta.dirname, "voice-worker.js"),
       [],
@@ -572,9 +561,8 @@ export function registerVoiceSupport(deps: {
       voiceOf: null,
       hearing: false,
       speaking: new Set(),
-      unsaid: new Set(),
       busy: false,
-      ending: null,
+      ending: false,
       live: {
         phase: "preparing",
         target: targetOf(request),

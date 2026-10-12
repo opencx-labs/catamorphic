@@ -29,8 +29,6 @@ export function ensureElectronBinary(input: {
   nodePath: string;
   env: NodeJS.ProcessEnv;
 }): void {
-  // electron-vite launches this instead of the package's binary when it is set.
-  if (input.env.ELECTRON_EXEC_PATH) return;
   const packagePath = path.dirname(
     createRequire(path.join(input.desktopPath, "package.json")).resolve(
       "electron/package.json",

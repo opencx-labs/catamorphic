@@ -24,10 +24,13 @@ answers that voice is not on and changes nothing.
 
 **The microphone closes at once; the turn is still said.** The speech
 worker stops hearing (`stop-listening`: no detection, no push to talk, and
-nothing still being recognized interrupts speech). The conversation drops
-anything heard, reads the chat now, and once a read begun after the call
-shows the turn over, every reply of it has gone to speech. Voice turns off
-when those replies have been said. A goodbye written before or after the
+nothing still being recognized interrupts speech) and the audio page stops
+capturing, so the system's microphone light goes out; playback goes on.
+The conversation drops anything heard, reads the chat now, and once a read
+begun after the call shows the turn over, every reply of it has gone to
+speech. Voice turns off when those replies have been said (the
+conversation counts them out as the worker reports each one over). Asked
+again before then, the tool answers that it stopped listening. A goodbye written before or after the
 call is heard; the microphone shows thinking or speaking meanwhile, never
 listening. While voice is ending, its own microphone turns it off at once,
 and another microphone, push to talk or learning a voice starts over, as

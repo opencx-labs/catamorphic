@@ -773,10 +773,22 @@ describe("chats over a settling sidebar", () => {
     await settled(true);
     // Toggles the left sidebar and follows the + and the panel's edge every
     // frame until both are still and the content has settled.
+    type Frame = {
+      plus: number;
+      edge: number;
+      docked: string;
+      seen: boolean;
+      rightToggle: boolean;
+    };
     const toggle = (label: string) =>
-      run<{ plus: number; edge: number; docked: string }[]>(`
+      run<Frame[]>(`
         const plus = () => $('[data-workspace-visible="true"] .workspace-chrome [aria-label="New tab"]');
         const side = () => $('[data-workspace-visible="true"] [data-sidebar="left"]');
+        // What a press at an element's centre would reach: drawn, not clipped.
+        const reached = (element) => {
+          const box = element?.getBoundingClientRect();
+          return !!box && element.contains(document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2));
+        };
         const frames = [];
         [...document.querySelectorAll('[aria-label="${label}"]')]
           .find((b) => !b.closest('[inert]') && b.getBoundingClientRect().width > 0)
@@ -788,6 +800,8 @@ describe("chats over a settling sidebar", () => {
               plus: Math.round(plus().getBoundingClientRect().left),
               edge: Math.round(side().querySelector('.sidebar-inner').getBoundingClientRect().right),
               docked: side().dataset.docked,
+              seen: reached(plus()),
+              rightToggle: reached($('[data-workspace-visible="true"] .workspace-chrome [aria-label$="right sidebar"]')),
             });
             if (side().dataset.settled === 'true' && performance.now() - started > 200) resolve(frames);
             else if (performance.now() - started > 5000) resolve(frames);
@@ -796,10 +810,7 @@ describe("chats over a settling sidebar", () => {
           requestAnimationFrame(tick);
         });
       `);
-    const check = (
-      frames: { plus: number; edge: number; docked: string }[],
-      from: number,
-    ) => {
+    const check = (frames: Frame[], from: number) => {
       const to = frames.at(-1)?.plus ?? from;
       const width = Math.max(...frames.map((frame) => frame.edge));
       // While the panel is midway, so is the +.
@@ -810,6 +821,10 @@ describe("chats over a settling sidebar", () => {
       for (const frame of midway) {
         expect(frame.plus).toBeGreaterThan(Math.min(from, to) + 2);
         expect(frame.plus).toBeLessThan(Math.max(from, to) - 2);
+        // Drawn where it is, even past where the content's edge was, and
+        // never over the right sidebar's toggle.
+        expect(frame.seen, JSON.stringify(frame)).toBe(true);
+        expect(frame.rightToggle, JSON.stringify(frame)).toBe(true);
       }
       // Once the content has taken or given back the space, the + is where
       // it rests: no jump when the layout changes.
