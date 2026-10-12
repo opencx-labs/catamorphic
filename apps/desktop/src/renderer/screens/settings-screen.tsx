@@ -249,7 +249,10 @@ export function SettingsScreen({
             </p>
             <DefaultBrowserButton className="mt-3 max-w-xs" />
           </section>
-          <LayoutSection title="Browser" keys={["browserTabSleep"]} />
+          <LayoutSection
+            title="Browser"
+            keys={["switchToOpenTab", "browserTabSleep"]}
+          />
           <LayoutSection projectId={projectId} />
           <LayoutSection
             keys={[

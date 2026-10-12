@@ -109,6 +109,17 @@ const expectAtPointer = async (point: { x: number; y: number }) => {
     `menu ${JSON.stringify(box)} at ${point.y}`,
   ).toBe(true);
 };
+/**
+ * A link's menu: its own group first and Inspect last. On macOS a
+ * right-click also selects the word under it, as it does in Chrome, so the
+ * selection's group (Copy, Search, Look up) may come between.
+ */
+const expectLinkMenu = async (group: string[]) => {
+  const shown = await entries();
+  expect(shown.slice(0, group.length + 1)).toEqual([...group, "—"]);
+  expect(shown.at(-1)).toBe("Inspect");
+  if (!mac) expect(shown).toHaveLength(group.length + 2);
+};
 const settled = () =>
   app.waitFor(
     `!!${menu} && ${menu}.getAnimations({ subtree: true }).every(animation => animation.playState === 'finished')`,
@@ -386,15 +397,13 @@ describe("page menus", () => {
 
   it("copy a link's address", async () => {
     await pageMenuAt("#link");
-    expect(await entries()).toEqual([
+    await expectLinkMenu([
       "Open link in new tab",
       "Open link to the side",
       "Open link floating",
       "—",
       "Copy link address",
       "Download linked file",
-      "—",
-      "Inspect",
     ]);
     await pick("Copy link address");
     await pasteIntoField();
@@ -403,22 +412,12 @@ describe("page menus", () => {
 
   it("copy an email address and a phone number without their schemes", async () => {
     await pageMenuAt("#mail");
-    expect(await entries()).toEqual([
-      "Send email",
-      "Copy email address",
-      "—",
-      "Inspect",
-    ]);
+    await expectLinkMenu(["Send email", "Copy email address"]);
     await pick("Copy email address");
     await pasteIntoField();
     await fieldHolds("ada@example.test");
     await pageMenuAt("#phone");
-    expect(await entries()).toEqual([
-      "Call",
-      "Copy phone number",
-      "—",
-      "Inspect",
-    ]);
+    await expectLinkMenu(["Call", "Copy phone number"]);
     await pick("Copy phone number");
     await pasteIntoField();
     await fieldHolds("+15550100");
@@ -461,10 +460,14 @@ describe("page menus", () => {
     );
     await pageMenuAt("#field");
     const shown = await entries();
-    expect(shown).toContain("Cut (off)");
-    expect(shown).toContain("Copy (off)");
-    expect(shown).toContain("Paste");
-    expect(shown).toContain("Select all");
+    expect(shown).toEqual(
+      expect.arrayContaining(["Paste", "Paste and match style", "Select all"]),
+    );
+    // With nothing selected; on macOS the right-click selects the word.
+    if (!mac)
+      expect(shown).toEqual(
+        expect.arrayContaining(["Cut (off)", "Copy (off)"]),
+      );
     await pick("Select all");
     await app.waitFor(
       `${view}.executeJavaScript("(() => { const field = document.getElementById('field'); return document.activeElement === field && field.selectionStart === 0 && field.selectionEnd === 3; })()", true)`,

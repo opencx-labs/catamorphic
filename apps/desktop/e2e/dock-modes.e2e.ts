@@ -840,6 +840,13 @@ describe("dock modes", () => {
         };`);
         throw new Error(`${String(error)}; rects: ${JSON.stringify(rects)}`);
       });
+      // The person is in this window. An earlier test leaves it inactive
+      // (the window blurred), and on macOS a click on an inactive window
+      // only activates it: the page never gets that press.
+      await app.waitFor(
+        "window.catamorphicDesktop.devWindow('focus').then((state) => state?.focused === true)",
+        { label: "window active" },
+      );
       // Chromium's own pointer may still be where an earlier hover left it
       // (see hoverChip): park it off the chat, as the native one moves.
       await app.cdp("Input.dispatchMouseEvent", {

@@ -23,6 +23,13 @@ the menu's row scrolling away, hiding or turning inert (its sidebar closing)
 close it too, and focus returns to where it was. Menus opened by a right-click
 start at the pointer.
 
+A page already open in a tab opens there (Settings, Browser: "Switch to a page's
+open tab", on by default): a link or bookmark clicked, a page's link to a new
+window, and a link from another app. A new tab asked for on purpose (Cmd-click,
+"Open in new tab", a New Tab's palette) opens another. Cmd+P lists an open page
+once, by its bookmark's name when it has one, and goes to its tab; a New Tab's
+palette opens the page in that new tab. Pages an agent is driving don't count.
+
 Opening here can reuse a compatible clean browser/editor. Preserve dirty buffers
 and running sessions. An existing surface retains identity when focused, tiled,
 floated or restored. A collapsed tab group affects the strip, not materialization.

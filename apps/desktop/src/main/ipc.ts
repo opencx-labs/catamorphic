@@ -1691,6 +1691,7 @@ export function registerIpcHandlers(
           | "restore"
           | "setSize"
           | "zoom"
+          | "focus"
           | "get",
         width?: number,
         height?: number,
@@ -1699,6 +1700,11 @@ export function registerIpcHandlers(
         if (!window) return null;
         if (action === "get") {
           // Read-only: geometry as the OS reports it (window-state tests).
+        } else if (action === "focus") {
+          // The window the person is in. On macOS a click on an inactive
+          // window only activates it, so native clicks need it active.
+          if (process.platform === "darwin") app.focus({ steal: true });
+          window.focus();
         } else if (action === "zoom") {
           // Films on a 1x display: a 1680x1050 window zoomed by 1.3125 lays
           // out at 1280x800 and renders, and screencasts, at 1680x1050.

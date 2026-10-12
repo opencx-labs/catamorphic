@@ -580,6 +580,13 @@ the error gives way only when the next page commits or fails in turn.
 Retrying used to uncover Chromium's white error page until the page arrived,
 a white flash in a dark theme.
 
+A page already open in a tab opens there: a bookmark, a link in a chat or a
+page's link to a new window, and a link from another app go to its tab
+instead of opening it twice ("Switch to a page's open tab", on by default).
+A new tab asked for on purpose still opens one. The palette lists an open
+bookmarked page once, under the bookmark's name, found by either's words:
+Cmd+P goes to its tab, a New Tab's palette opens it in that new tab.
+
 ### 2026-10-11: One chat timeline, the same on the desktop and the phone
 
 The chat the desktop shows is now the registry's chat timeline, installed as

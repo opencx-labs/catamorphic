@@ -20,6 +20,7 @@ import {
 } from "../../shared/browser-history.js";
 import type { HistoryProject } from "../../shared/history.js";
 import type { OpenMode } from "../../shared/open-mode.js";
+import { samePage } from "../../shared/page-url.js";
 import { siteOrigin } from "../../shared/site-settings.js";
 import { AuthorizationInspector } from "../components/authorization-inspector.js";
 import {
@@ -141,24 +142,6 @@ interface Suggestion {
 
 /** Matches the `tab-in` keyframe duration in styles.css. */
 const TAB_OPEN_ANIMATION_MS = 200;
-
-/**
- * Match bookmarks by normalized URL so "example.com" and "example.com/"
- * (or a trailing #fragment) are the same page — otherwise the star reads
- * as unstarred right after starring.
- */
-function sameUrl(a: string, b: string): boolean {
-  const normalize = (raw: string) => {
-    try {
-      const url = new URL(raw);
-      url.hash = "";
-      return url.href.replace(/\/$/, "");
-    } catch {
-      return raw.replace(/\/$/, "");
-    }
-  };
-  return normalize(a) === normalize(b);
-}
 
 export function BrowserScreen({
   profileId,
@@ -1203,7 +1186,7 @@ export function BrowserScreen({
       if (!bookmarks) return undefined;
       for (const scope of ["pinned", "project", "library"] as const) {
         const saved = bookmarks[scope]?.bookmarks.find((entry) =>
-          sameUrl(entry.url, pageUrl),
+          samePage(entry.url, pageUrl),
         );
         if (saved) return { ...saved, scope };
       }
