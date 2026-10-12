@@ -413,6 +413,12 @@ export function registerAgentBridge(
       held.delete(payload.key);
     },
   );
+  /** An agent terminal ended: its tab key and handoff go with it. */
+  const forgetTerminal = (terminalId: string) => {
+    const key = terminalKeys.get(terminalId);
+    terminalKeys.delete(terminalId);
+    if (key) takenOver.delete(key);
+  };
   const guardControl = (key: string) => {
     if (takenOver.has(key)) {
       throw new Error(
@@ -522,7 +528,14 @@ export function registerAgentBridge(
   };
 
   const background = new BackgroundCommands({
-    terminals: agentTerminals,
+    terminals: {
+      ...agentTerminals,
+      // A command's terminal ends with it, however it ended (ADR 0223).
+      kill: (terminalId) => {
+        forgetTerminal(terminalId);
+        return agentTerminals.kill(terminalId);
+      },
+    },
     attach: async ({ projectId, sessionId, terminalId, title }) => {
       const attached = await rpc<{ key: string } | null>(
         "attachAgentTerminal",
@@ -855,7 +868,7 @@ export function registerAgentBridge(
         });
         if (info?.terminalId) {
           agentTerminals.kill(info.terminalId);
-          terminalKeys.delete(info.terminalId);
+          forgetTerminal(info.terminalId);
         }
       }
       await rpc("closeSurface", { projectId, key });

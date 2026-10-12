@@ -167,7 +167,7 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0152](0152-agent-context-channels.md) | Agent context: a short standing prompt and per-turn context beside the message | Accepted |
 | [0153](0153-downloads-in-the-dock.md) | Downloads in the dock: no save dialog, a dock button with progress, a Downloads page | Accepted |
 | [0154](0154-profile-history.md) | History belongs to the profile: loose files, the project as an attribute, a project scope on the page | Accepted |
-| [0155](0155-shells-background-commands-and-live-status.md) | Native shells, host background commands, and the agent's live status | Accepted (refined by 0174; wakes are task notifications by 0217) |
+| [0155](0155-shells-background-commands-and-live-status.md) | Native shells, host background commands, and the agent's live status | Accepted (refined by 0174; wakes are task notifications by 0217; terminals end with their command by 0223) |
 | [0156](0156-project-automations-webhooks-and-command-watches.md) | Project automations, one deliver, webhooks, and command watches | Accepted (webhook ingress refined by 0171; keys and chat placement by 0173) |
 | [0157](0157-workflow-status-chrome.md) | Workflow tabs: status chrome and a panel that follows its subject | Accepted |
 | [0158](0158-project-permissions.md) | Project permissions: read, write, publish, and what workflows declare | Accepted (directory events by 0210) |
@@ -210,7 +210,7 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0195](0195-conversation-continues-around-agent-questions.md) | The conversation continues around agent questions: replies defer, agents close, no "Other" row | Accepted (amended by 0197) |
 | [0196](0196-installed-claude-code-first.md) | The person's own Claude Code runs first; Claude Code and Codex pins move by scheduled pull request | Accepted |
 | [0197](0197-agent-sessions-are-an-event-log-of-turns.md) | Agent sessions are an event log of turns | Accepted (amends 0195: replies to a waiting question steer the turn; input item kinds by 0217) |
-| [0198](0198-agent-runners-run-harnesses-beside-their-workspace.md) | Agent runners run harnesses beside their workspace | Accepted (amended by 0214: a chat keeps its harness) |
+| [0198](0198-agent-runners-run-harnesses-beside-their-workspace.md) | Agent runners run harnesses beside their workspace | Accepted (amended by 0214: a chat keeps its harness; by 0222: desktop harnesses stay warm) |
 | [0199](0199-subscription-sign-ins-stay-on-the-machine.md) | Subscription sign-ins stay on the machine they were made on | Accepted (amended by 0213: Codex only, on a member's own machine; who delivered an input is a typed field by 0219) |
 | [0200](0200-sidebars-move-first-content-settles-after.md) | Sidebars move first; the content settles after them | Accepted |
 | [0201](0201-work-keeps-passkeys-in-the-profile-vault.md) | Work keeps passkeys in the profile's vault: the sheet saves and signs in, autofill offers them, Bitwarden and KeePassXC files import | Accepted (amends 0185, 0151; browsing windows by 0220) |
@@ -234,3 +234,5 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0219](0219-typed-deliveries.md) | Deliveries are typed: no free-form input metadata, mailbox inputs or actions | Accepted (amends 0090, 0199, 0217) |
 | [0220](0220-sign-in-popups-answer-passkeys.md) | Sign-in popups answer passkeys in a sheet of their own | Accepted (amends 0201, 0185) |
 | [0221](0221-menus-hold-the-window-and-pages-get-work-menus.md) | Menus hold the window, and pages get Work's menus | Accepted (amends 0121, 0203) |
+| [0222](0222-desktop-harnesses-stay-warm-between-turns.md) | Desktop harnesses stay warm between turns | Accepted (amends 0198) |
+| [0223](0223-an-agent-terminal-lives-as-long-as-its-command.md) | An agent terminal lives as long as its command | Accepted (amends 0155) |

@@ -19,8 +19,8 @@ import { TerminalLifecycle } from "./terminal-lifecycle.js";
  * Two owners exist: user sessions are bound to the window that created
  * them (output streams only there; the window closing reaps them), and
  * agent sessions belong to a project (output broadcasts to every window
- * so any renderer can attach a live view; they outlive windows and die
- * with the app or by agent request).
+ * so any renderer can attach a live view; they outlive windows and live
+ * as long as their command, ADR 0223).
  *
  * Every session keeps a rolling output buffer so agents can read what a
  * terminal shows and renderers can replay history when attaching.
@@ -115,7 +115,7 @@ export interface AgentTerminals {
    * terminal agent-controlled.
    */
   writeAny(sessionId: string, data: string): boolean;
-  /** Rolling buffer tail (most recent `maxChars`). */
+  /** Rolling buffer tail (most recent `maxChars`), or an ended one's last. */
   read(sessionId: string, maxChars?: number): string | null;
   /** Characters written so far (absolute) — baseline for "output since" reads. */
   bufferLength(sessionId: string): number | null;
@@ -141,8 +141,11 @@ export interface AgentTerminals {
   kill(sessionId: string): boolean;
 }
 
-/** Closed-session scrollback kept for Cmd+Shift+T restores. */
-const MORGUE_CAP = 10;
+/**
+ * Ended sessions' scrollback: Cmd+Shift+T restores a user terminal with it,
+ * and a tab still open on an ended agent terminal keeps showing it.
+ */
+const MORGUE_CAP = 20;
 
 export function registerTerminalSupport(
   state: ServerState,
@@ -193,12 +196,14 @@ export function registerTerminalSupport(
     return session.chunks[0] ?? "";
   };
 
-  // When a user session ends (shell exit, tab close), its buffer moves
-  // here so a reopened tab can replay the scrollback above its fresh
-  // shell. Insertion-ordered; oldest entries fall off past the cap.
+  // When a session ends (shell exit, tab close, its command over), its
+  // buffer moves here: a reopened user tab replays the scrollback above
+  // its fresh shell, and a view of an ended agent terminal (a tab that
+  // remounts, or mounted late) still shows what it printed.
+  // Insertion-ordered; oldest entries fall off past the cap.
   const morgue = new Map<string, string>();
   const bury = (sessionId: string, session: TerminalSession) => {
-    if (session.agent || session.chunksLength === 0) return;
+    if (session.chunksLength === 0) return;
     morgue.delete(sessionId);
     morgue.set(sessionId, bufferText(session));
     while (morgue.size > MORGUE_CAP) {
@@ -226,13 +231,41 @@ export function registerTerminalSupport(
     }
   };
 
+  /**
+   * Every way a session ends says so here (ADR 0223): no command runs in a
+   * shell that is gone, so its chip stops spinning first, then its views
+   * hear that it ended.
+   */
+  const announceEnd = (
+    sessionId: string,
+    session: TerminalSession,
+    exit: { exitCode: number; message?: string },
+  ) => {
+    if (session.busy) {
+      session.busy = false;
+      emit(session, "catamorphic:terminal-busy", { sessionId, busy: false });
+    }
+    emit(session, "catamorphic:terminal-exit", { sessionId, ...exit });
+  };
+
+  /**
+   * End a session for good: closed, killed, its window, its chat archived,
+   * or its command over. The pty exit callback skips deleted sessions, so
+   * a shell still running is announced here; one that exited by itself
+   * was announced then.
+   */
+  const end = (sessionId: string, session: TerminalSession) => {
+    bury(sessionId, session);
+    sessions.delete(sessionId);
+    session.releaseSender?.();
+    if (!session.running) return;
+    session.pty.kill();
+    announceEnd(sessionId, session, { exitCode: 0 });
+  };
+
   const reapFor = (sender: WebContents) => {
     for (const [id, session] of sessions) {
-      if (session.sender === sender) {
-        sessions.delete(id);
-        session.releaseSender?.();
-        session.pty.kill();
-      }
+      if (session.sender === sender) end(id, session);
     }
   };
 
@@ -414,14 +447,13 @@ export function registerTerminalSupport(
       session.exitCode = exitCode;
       session.releaseSender?.();
       if (!sessions.has(sessionId)) return;
-      emit(session, "catamorphic:terminal-exit", {
-        sessionId,
+      announceEnd(sessionId, session, {
         exitCode,
         ...(message ? { message } : {}),
       });
-      // Agent sessions stay readable (buffer) until explicitly killed or
-      // the app quits; user sessions are done once their tab reacts —
-      // their scrollback moves to the morgue for Cmd+Shift+T.
+      // An agent session stays until its background command reads the
+      // exit code and ends it; user sessions are done once their tab
+      // reacts — their scrollback moves to the morgue for Cmd+Shift+T.
       if (!session.agent) {
         bury(sessionId, session);
         sessions.delete(sessionId);
@@ -485,17 +517,10 @@ export function registerTerminalSupport(
   );
 
   ipcMain.handle("catamorphic:terminal-kill", (_event, sessionId: string) => {
+    // A kill from a live tab (Cmd+D) closes it through the exit event.
+    // Unmount-triggered kills unsubscribed already; it is a no-op for them.
     const session = sessions.get(sessionId);
-    if (!session) return;
-    bury(sessionId, session);
-    sessions.delete(sessionId);
-    session.releaseSender?.();
-    if (session.running) session.pty.kill();
-    // The pty exit callback skips deleted sessions — announce the death
-    // ourselves so a kill triggered by a live tab (Cmd+D) still closes
-    // it. Unmount-triggered kills unsubscribed already; this is a no-op
-    // for them.
-    emit(session, "catamorphic:terminal-exit", { sessionId, exitCode: 0 });
+    if (session) end(sessionId, session);
   });
 
   /**
@@ -511,12 +536,16 @@ export function registerTerminalSupport(
     },
   );
 
-  /** Replay history when a renderer attaches to a live (agent) session. */
+  /**
+   * Replay history when a renderer attaches to an agent session: a live
+   * one, or one that ended (its view keeps the final output).
+   */
   ipcMain.handle("catamorphic:terminal-buffer", (_event, sessionId: string) => {
     const session = sessions.get(sessionId);
-    return session
-      ? { buffer: bufferText(session), running: session.running }
-      : null;
+    if (session)
+      return { buffer: bufferText(session), running: session.running };
+    const buffer = morgue.get(sessionId);
+    return buffer !== undefined ? { buffer, running: false } : null;
   });
 
   /**
@@ -582,7 +611,9 @@ export function registerTerminalSupport(
     },
     read: (sessionId, maxChars = 20_000) => {
       const session = sessions.get(sessionId);
-      return session ? bufferText(session).slice(-maxChars) : null;
+      // An ended terminal's tab still shows its last output: so does this.
+      const text = session ? bufferText(session) : morgue.get(sessionId);
+      return text === undefined ? null : text.slice(-maxChars);
     },
     bufferLength: (sessionId) => {
       const session = sessions.get(sessionId);
@@ -633,29 +664,20 @@ export function registerTerminalSupport(
           session.agent?.projectId === projectId &&
           owners.has(session.agent.sessionId),
       );
-      for (const [sessionId, session] of matches) {
-        sessions.delete(sessionId);
-        if (session.running) session.pty.kill();
-        broadcast("catamorphic:terminal-exit", { sessionId, exitCode: 0 });
-      }
+      for (const [sessionId, session] of matches) end(sessionId, session);
       return matches.length;
     },
     kill: (sessionId) => {
       const session = sessions.get(sessionId);
       if (!session?.agent) return false;
-      sessions.delete(sessionId);
-      if (session.running) session.pty.kill();
-      broadcast("catamorphic:terminal-exit", { sessionId, exitCode: 0 });
+      end(sessionId, session);
       return true;
     },
   };
 
   return {
-    hasActiveWork: () =>
-      [...sessions.values()].some(
-        (session) =>
-          session.running && (Boolean(session.agent) || computeBusy(session)),
-      ),
+    // Work is a command running in a terminal, not a shell idling there.
+    hasActiveWork: () => [...sessions.values()].some(computeBusy),
     dispose() {
       clearInterval(busyPoll);
       for (const session of sessions.values()) session.releaseSender?.();

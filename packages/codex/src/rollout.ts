@@ -16,16 +16,25 @@ export class RolloutMirror {
   /** Bytes taken: always the end of a complete line. */
   private offset: number;
   private chain: Promise<void> = Promise.resolve();
+  /** The last line stored. */
+  private last: JsonValue | undefined;
+  /**
+   * Where lines are stored: the attempt Codex serves now. A Codex kept
+   * warm between attempts (ADR 0222) has none while idle, and what it
+   * writes then is stored by the next attempt.
+   */
+  host: Pick<AttemptHost, "nativeState"> | undefined;
 
   constructor(
     private readonly input: {
       file: string;
-      host: AttemptHost;
+      host: Pick<AttemptHost, "nativeState">;
       /** Bytes already stored (a resumed or restored thread's existing file). */
       offset: number;
     },
   ) {
     this.offset = input.offset;
+    this.host = input.host;
   }
 
   /** Read and store new complete lines; never throws. */
@@ -34,7 +43,23 @@ export class RolloutMirror {
     return this.chain;
   }
 
+  /**
+   * Store lines until the turn's own end is among them (Codex records the
+   * end of every turn), or `timeoutMs` passes: then everything the turn
+   * wrote is stored, with no process shutdown to flush it.
+   */
+  async turnStored(timeoutMs: number): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      await this.poll();
+      if (turnEnd(this.last) || Date.now() >= deadline) return;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+  }
+
   private async read(): Promise<void> {
+    const host = this.host;
+    if (!host) return;
     let handle: Awaited<ReturnType<typeof open>>;
     try {
       handle = await open(this.input.file, "r");
@@ -59,12 +84,27 @@ export class RolloutMirror {
     if (!complete) return;
     this.offset += complete.length;
     const entries = rolloutLines(complete.toString("utf8"));
-    if (entries.length > 0)
-      await this.input.host.nativeState.append({
+    if (entries.length > 0) {
+      this.last = entries.at(-1);
+      await host.nativeState.append({
         subpath: ROLLOUT_SUBPATH,
         entries,
       });
+    }
   }
+}
+
+/** A rollout line that ends a turn: completed, or aborted. */
+function turnEnd(entry: JsonValue | undefined): boolean {
+  if (!entry || typeof entry !== "object" || Array.isArray(entry)) return false;
+  const payload = entry.payload;
+  return (
+    entry.type === "event_msg" &&
+    !!payload &&
+    typeof payload === "object" &&
+    !Array.isArray(payload) &&
+    (payload.type === "task_complete" || payload.type === "turn_aborted")
+  );
 }
 
 /**

@@ -227,6 +227,7 @@ import {
   reconcileWorkspace,
   serializeWorkspace,
   type TerminalEntry,
+  type TerminalEvent,
   tabbedBrowsers,
   tabbedEditors,
   tabbedTerminals,
@@ -1121,8 +1122,13 @@ export function App({
     return [
       ...new Set(
         workspace.terminals
-          .filter((terminal) =>
-            terminal.chatLocalId ? chatIds.has(terminal.chatLocalId) : false,
+          // A terminal whose command ended has no process left to stop.
+          .filter(
+            (terminal) =>
+              terminal.running !== false &&
+              (terminal.chatLocalId
+                ? chatIds.has(terminal.chatLocalId)
+                : false),
           )
           .flatMap((terminal) =>
             terminal.ptySessionId ? [terminal.ptySessionId] : [],
@@ -1436,6 +1442,23 @@ export function App({
       });
     },
     [projectId, workspaceKey, defaultWorkspaceFor],
+  );
+
+  /**
+   * A terminal's news (a command started or ended in it) reaches its tab
+   * in whichever project's workspace holds it, open on screen or not.
+   */
+  const updateTerminals = useCallback(
+    (event: TerminalEvent) =>
+      setWorkspaces((current) => {
+        const next = Object.entries(current).map(
+          ([id, ws]) => [id, transitionWorkspace(ws, event)] as const,
+        );
+        return next.every(([id, ws]) => ws === current[id])
+          ? current
+          : Object.fromEntries(next);
+      }),
+    [],
   );
 
   const floatingMotion = useFloatingMotion(
@@ -5055,18 +5078,19 @@ export function App({
   // command runs, not for the shell's whole lifetime.
   useEffect(
     () =>
-      desktopApi.onTerminalBusy(({ sessionId, busy }) => {
-        updateWorkspace((ws) => ({
-          ...ws,
-          terminals: ws.terminals.map((terminal) =>
-            terminal.attachSessionId === sessionId ||
-            terminal.ptySessionId === sessionId
-              ? { ...terminal, busy }
-              : terminal,
-          ),
-        }));
-      }),
-    [updateWorkspace],
+      desktopApi.onTerminalBusy(({ sessionId, busy }) =>
+        updateTerminals({ type: "terminal-busy", sessionId, busy }),
+      ),
+    [updateTerminals],
+  );
+  // A terminal's process ended, whether or not a view of it ever mounted
+  // (ADR 0223): an agent terminal's chip leaves with its command.
+  useEffect(
+    () =>
+      desktopApi.onTerminalExit(({ sessionId }) =>
+        updateTerminals({ type: "terminal-ended", sessionId }),
+      ),
+    [updateTerminals],
   );
 
   const appPresentations = useAppPresentations(projectId, [
@@ -5581,8 +5605,23 @@ export function App({
         ? { ...surface, attention: true }
         : surface,
     );
+    // A resource that is gone (a terminal whose command ended, a removed
+    // chip) leaves no chip behind its attention.
+    const gone = (key: string) =>
+      (key.startsWith("terminal:") &&
+        !workspace.terminals.some(
+          (terminal) => terminalTabKey(terminal.localId) === key,
+        )) ||
+      (key.startsWith("browser:") &&
+        !workspace.browsers.some(
+          (browser) => browserTabKey(browser.localId) === key,
+        )) ||
+      (key.startsWith("editor:") &&
+        !workspace.editors.some(
+          (editor) => editorTabKey(editor.localId) === key,
+        ));
     for (const key of attentionKeys) {
-      if (!marked.some((surface) => surface.key === key)) {
+      if (!marked.some((surface) => surface.key === key) && !gone(key)) {
         marked.push({ ...synthesizedSurface(key), attention: true });
       }
     }
@@ -6787,17 +6826,14 @@ export function App({
                             }))
                           }
                           onExit={() => {
-                            // Agent terminals stay open to read; the activity
-                            // indicator stops. User terminals close as before.
+                            // An agent terminal ended with its command: its
+                            // chip leaves, a tab stays to read. User
+                            // terminals close as before.
                             if (terminal.attachSessionId) {
-                              updateWorkspace((ws) => ({
-                                ...ws,
-                                terminals: ws.terminals.map((t) =>
-                                  t.localId === terminal.localId
-                                    ? { ...t, running: false }
-                                    : t,
-                                ),
-                              }));
+                              updateTerminals({
+                                type: "terminal-ended",
+                                sessionId: terminal.attachSessionId,
+                              });
                             } else {
                               closeTab(terminalTabKey(terminal.localId));
                             }

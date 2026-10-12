@@ -85,7 +85,7 @@ export async function recordScenario(input: {
 }
 
 /** A loopback Responses API that serves a scenario's responses in order. */
-async function modelServer(
+export async function modelServer(
   responses: ModelResponse[],
   problems: string[],
 ): Promise<{
