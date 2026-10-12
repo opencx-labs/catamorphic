@@ -360,7 +360,7 @@ describe("dock modes", () => {
        return true;`,
     );
     // Where the window rests, once it has: a dock window that just opened
-    // still moves and resizes to the size its chat reports.
+    // still moves into its workspace's chat region and to its chat's size.
     const settled = async () => {
       let last = await bounds();
       const deadline = Date.now() + 10_000;
@@ -824,6 +824,24 @@ describe("dock modes", () => {
           label: "expanded while the composer has focus",
         },
       );
+      // The person works in this window, so it is the key window: on macOS
+      // a click on a window that is not only activates it, and the page
+      // never sees it. Say whether it was, for a failure to point at.
+      const keyBefore = await app.eval<{ focused: boolean }>(
+        "window.catamorphicDesktop.devWindow('get')",
+      );
+      console.info(
+        `[dock-modes] workspace window key before the page click: ${keyBefore.focused}`,
+      );
+      await app.eval(`window.catamorphicDesktop.devWindow('focus')`);
+      await app.waitFor(
+        `window.catamorphicDesktop.devWindow('get').then((state) => state.focused)`,
+        { label: "the workspace window is key", timeoutMs: 5_000 },
+      );
+      await runWait(
+        `return dockH() > 400 && !frontDock().hasAttribute('data-lurking');`,
+        { label: "still expanded in the focused window" },
+      );
       // The person moves from the chat onto the page and clicks it.
       // On a small window the chat covers most of the page: aim at page the
       // chat leaves uncovered, its margins included, clear of every edge so
@@ -861,18 +879,6 @@ describe("dock modes", () => {
         };`);
         throw new Error(`${String(error)}; rects: ${JSON.stringify(rects)}`);
       });
-      // The person works in this window, so it is the key window: on macOS
-      // a click on a window that is not only activates it, and the page
-      // never sees it (an earlier test focused the dock's own window).
-      await app.eval(`window.catamorphicDesktop.devWindow('focus')`);
-      await app.waitFor(
-        `window.catamorphicDesktop.devWindow('get').then((state) => state.focused)`,
-        { label: "the workspace window is key" },
-      );
-      await runWait(
-        `return dockH() > 400 && !frontDock().hasAttribute('data-lurking');`,
-        { label: "still expanded in the focused window" },
-      );
       // Chromium's own pointer may still be where an earlier hover left it
       // (see hoverChip): park it off the chat, as the native one moves.
       await app.cdp("Input.dispatchMouseEvent", {
@@ -895,7 +901,7 @@ describe("dock modes", () => {
           "window.catamorphicDesktop.devWindow('get')",
         );
         throw new Error(
-          `${String(error)}; state: ${JSON.stringify(state)}; key window: ${window.focused}; point: ${JSON.stringify(points.page)}`,
+          `${String(error)}; state: ${JSON.stringify(state)}; key window before: ${keyBefore.focused}, after: ${window.focused}; point: ${JSON.stringify(points.page)}`,
         );
       });
     } finally {

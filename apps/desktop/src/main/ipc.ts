@@ -1704,7 +1704,8 @@ export function registerIpcHandlers(
           // The key window, as a person working in it has: a native click on
           // a window that is not key only activates it (macOS).
           if (!window.isFocused()) {
-            app.focus({ steal: true });
+            // Elsewhere app.focus() focuses whichever window comes first.
+            if (process.platform === "darwin") app.focus({ steal: true });
             window.focus();
           }
         } else if (action === "zoom") {

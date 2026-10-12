@@ -291,22 +291,27 @@ export async function enqueue(input: {
 }
 
 /**
- * Every file under a directory, links not followed. A sandbox's transient
- * files (a lock, an index being rewritten) may go while it is walked: what
- * is gone by then is not listed.
+ * Every regular file under a directory, links not followed. A sandbox's
+ * transient files (a lock, an index being rewritten) may go while it is
+ * walked: what is gone by then is not listed. The directory itself must be
+ * there, so a scan of it never passes for want of files.
  */
 export function filesUnder(directory: string): string[] {
+  return walkFiles(directory, true);
+}
+
+function walkFiles(directory: string, root: boolean): string[] {
   let entries: fs.Dirent[];
   try {
     entries = fs.readdirSync(directory, { withFileTypes: true });
   } catch (error) {
-    if (isMissing(error)) return [];
+    if (!root && isMissing(error)) return [];
     throw error;
   }
   return entries.flatMap((entry) => {
     const full = path.join(directory, entry.name);
-    if (entry.isSymbolicLink()) return [];
-    return entry.isDirectory() ? filesUnder(full) : [full];
+    if (entry.isDirectory()) return walkFiles(full, false);
+    return entry.isFile() ? [full] : [];
   });
 }
 

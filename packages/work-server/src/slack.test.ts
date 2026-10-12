@@ -16,6 +16,7 @@ import {
   type WorkServer,
 } from "./server.js";
 import {
+  filesHolding,
   oauthAccessToken,
   replyOf,
   testServerOptions,
@@ -595,20 +596,6 @@ describe("Slack from project code (#117)", () => {
       .execute();
     expect(runs.length).toBeGreaterThan(0);
     expect(JSON.stringify(runs)).not.toContain(BOT_TOKEN);
-    const files: string[] = [];
-    const walk = (dir: string) => {
-      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-        const full = path.join(dir, entry.name);
-        if (entry.isDirectory()) walk(full);
-        else if (entry.isFile()) files.push(full);
-      }
-    };
-    walk(root);
-    for (const file of files) {
-      expect(
-        fs.readFileSync(file).includes(BOT_TOKEN),
-        `${file} holds the bot token`,
-      ).toBe(false);
-    }
+    expect(filesHolding(root, BOT_TOKEN)).toEqual([]);
   });
 });
