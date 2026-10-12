@@ -21,7 +21,7 @@ import {
   SERVER_TENANT_ID,
   type WorkServer,
 } from "./server.js";
-import { testServerOptions } from "./test-support.js";
+import { filesHolding, filesUnder, testServerOptions } from "./test-support.js";
 import { startWorkWorker } from "./workers/worker-runtime.js";
 
 /**
@@ -252,15 +252,6 @@ function freePort(): Promise<number> {
       const port = typeof address === "object" && address ? address.port : 0;
       probe.close(() => resolve(port));
     });
-  });
-}
-
-function filesUnder(directory: string): string[] {
-  if (!fs.existsSync(directory)) return [];
-  return fs.readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
-    const full = path.join(directory, entry.name);
-    if (entry.isSymbolicLink()) return [];
-    return entry.isDirectory() ? filesUnder(full) : [full];
   });
 }
 
@@ -784,8 +775,7 @@ describe.skipIf(!databaseUrl)("reviewing pull requests (#118)", () => {
     expect(env).toMatch(/^exit=0\n/);
     for (const secret of secrets) {
       expect(answer.includes(secret)).toBe(false);
-      for (const file of filesUnder(workerDir))
-        expect(fs.readFileSync(file).includes(secret), file).toBe(false);
+      expect(filesHolding(workerDir, secret)).toEqual([]);
     }
   }, 180_000);
 

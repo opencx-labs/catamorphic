@@ -36,7 +36,7 @@ import {
   withTelemetryContext,
 } from "@catamorphic/otel";
 import type { Span } from "@opentelemetry/api";
-import { type Kysely, sql, type Transaction } from "kysely";
+import { type Kysely, type Selectable, sql, type Transaction } from "kysely";
 import type { Identity } from "../../identity.js";
 import {
   type HeldTurnLease,
@@ -91,6 +91,11 @@ export interface RunnerState {
   ownerOnlyBecause?: OwnerOnlyCause;
   /** Steered inputs the harness could not take; the attempt restarts with them. */
   restartWith: string[];
+  /**
+   * Its attempt ended and it was answered until it exited, or ended, or
+   * found gone: nobody reattaches it again.
+   */
+  ended?: boolean;
   /** Steered inputs the harness took in (an accepted one never taken is queued again). */
   consumed: string[];
   interruptSentAt: string | null;
@@ -522,6 +527,11 @@ export class TurnEngine {
         },
       });
     let turn = await this.loadTurn(turnId);
+    // Taken over while it restarted for a steer: the attempt it superseded
+    // may still be storing what it wrote, on a sandbox that outlived its
+    // holder. The next attempt resumes that thread, so it comes first.
+    if (local.claim.recovered && turn.status === "preparing")
+      await this.drainSuperseded(local, { identity, session, turn });
     for (;;) {
       if (local.abort.signal.aborted) return;
       if (turn.status === "finalizing") {
@@ -619,11 +629,33 @@ export class TurnEngine {
           .executeTakeFirst()
       : undefined;
     if (!row) throw new Error(`Turn ${turn.id} has no attempt`);
-    return {
-      ...attemptFromRow(row),
-      runner: (row.runner as unknown as RunnerState | null) ?? null,
-      providerStartedAt: row.provider_started_at,
-    };
+    return withRunner(row);
+  }
+
+  /**
+   * The sandbox runners of superseded attempts nobody saw end, oldest
+   * first, reattached and answered until they exit (see reattachEnded and
+   * drainRunner).
+   */
+  private async drainSuperseded(
+    local: LocalTurn,
+    ctx: { identity: Identity; session: SessionRow; turn: Turn },
+  ): Promise<void> {
+    const rows = await this.deps.db
+      .selectFrom("agent_turn_attempts")
+      .selectAll()
+      .where("turn_id", "=", ctx.turn.id)
+      .where("status", "=", "superseded")
+      .orderBy("ordinal")
+      .execute();
+    for (const row of rows) {
+      if (local.abort.signal.aborted) return;
+      const attempt = withRunner(row);
+      const cursor = await this.reattachEnded(local, { ...ctx, attempt });
+      if (cursor === undefined || !local.channel) continue;
+      await this.drainRunner(local, { ...ctx, attempt }, local.channel, cursor);
+      local.results.clear();
+    }
   }
 
   /** Why the next attempt of this turn runs. */
@@ -2058,6 +2090,35 @@ export class TurnEngine {
     from: number,
   ): Promise<void> {
     if (local.abort.signal.aborted) return;
+    await withSpan(
+      {
+        tracer,
+        name: "agent.runner.drain",
+        attributes: {
+          "catamorphic.agent.turn.id": ctx.turn.id,
+          "catamorphic.agent.attempt.id": ctx.attempt.id,
+          "catamorphic.agent.runner.location": channel.location.kind,
+        },
+      },
+      async (span) => {
+        const exited = await this.answerUntilExit(local, ctx, channel, from);
+        span.setAttribute("catamorphic.agent.runner.exited", exited);
+      },
+    );
+  }
+
+  /** drainRunner's reading; whether the runner exited by itself. */
+  private async answerUntilExit(
+    local: LocalTurn,
+    ctx: {
+      identity: Identity;
+      session: SessionRow;
+      turn: Turn;
+      attempt: Attempt;
+    },
+    channel: RunnerChannel,
+    from: number,
+  ): Promise<boolean> {
     const grace = Date.now() + RUNNER_EXIT_GRACE_MS;
     let cursor = from;
     let exited = false;
@@ -2066,7 +2127,7 @@ export class TurnEngine {
         .send([{ id: `stop:${randomUUID()}`, command: { kind: "stop" } }])
         .catch(() => {});
       for (;;) {
-        if (local.abort.signal.aborted) return;
+        if (local.abort.signal.aborted) return false;
         // A runner in this process dies with it: while it stops, the turn
         // settles in time instead.
         const deadline =
@@ -2079,7 +2140,7 @@ export class TurnEngine {
           console.warn(
             `[catamorphic] agent runner (turn ${ctx.turn.id}) was still up when its attempt's wind-down ran out of time; ending it`,
           );
-          return;
+          return false;
         }
         await this.resendResults(local, ctx.attempt.id, channel);
         const read = await channel.read({
@@ -2104,13 +2165,14 @@ export class TurnEngine {
         // Its exit frame is its last word, whenever its process goes.
         exited =
           read.exited || read.frames.some((frame) => frame.type === "exit");
-        if (exited) return;
+        if (exited) return true;
       }
     } catch (error) {
       console.warn(
         "[catamorphic] Could not answer an ended attempt's runner",
         error,
       );
+      return false;
     } finally {
       // Lost or handed back: as for any runner of an aborted turn.
       if (!local.abort.signal.aborted) {
@@ -2124,15 +2186,35 @@ export class TurnEngine {
               ),
             );
         if (local.channel === channel) local.channel = undefined;
+        // Only a runner in a sandbox outlives its holder for another to find.
+        if (channel.location.kind === "sandbox_process")
+          await this.markEnded(local, ctx.attempt.id);
       }
     }
   }
 
+  /** Record that an ended attempt's runner needs nobody any more. */
+  private async markEnded(local: LocalTurn, attemptId: string): Promise<void> {
+    await this.deps.db
+      .transaction()
+      .execute(async (trx) => {
+        await this.assertOwned(local, trx);
+        await trx
+          .updateTable("agent_turn_attempts")
+          .set({ runner: sql`jsonb_set(runner, '{ended}', 'true'::jsonb)` })
+          .where("id", "=", attemptId)
+          .execute();
+      })
+      .catch((error) =>
+        console.warn("[catamorphic] Could not record an ended runner", error),
+      );
+  }
+
   /**
-   * Taken over while it finalized: a sandbox runner its last holder was
-   * still answering is reattached, its calls that holder recorded are
-   * answered again, and it is read on from the cursor recorded for it.
-   * Where it starts reading, when there is one.
+   * Taken over while it finalized or restarted: a sandbox runner its last
+   * holder may still have been answering is reattached, its calls that
+   * holder recorded are answered again, and it is read on from the cursor
+   * recorded for it. Where it starts reading, when there is one.
    */
   private async reattachEnded(
     local: LocalTurn,
@@ -2145,18 +2227,40 @@ export class TurnEngine {
   ): Promise<number | undefined> {
     const runner = ctx.attempt.runner;
     const location = runner?.location;
-    if (local.channel || !runner || location?.kind !== "sandbox_process")
+    if (
+      local.channel ||
+      !runner ||
+      runner.ended ||
+      location?.kind !== "sandbox_process"
+    )
       return undefined;
-    const channel = await this.deps.host
-      .reattach({ identity: ctx.identity, session: ctx.session, location })
-      .catch(() => undefined);
-    if (!channel) return undefined;
+    let channel: RunnerChannel | undefined;
+    try {
+      channel = await this.deps.host.reattach({
+        identity: ctx.identity,
+        session: ctx.session,
+        location,
+      });
+    } catch (error) {
+      // Left for whoever takes the turn over next to try again.
+      console.warn(
+        "[catamorphic] Could not reattach an ended attempt's runner",
+        error,
+      );
+      return undefined;
+    }
+    if (!channel) {
+      // Gone with its process: nothing is left to answer.
+      await this.markEnded(local, ctx.attempt.id);
+      return undefined;
+    }
     try {
       await this.maskTakenOver(local, ctx);
     } catch (error) {
       // Nothing it says could be masked: it is ended unread.
       console.warn("[catamorphic] Could not mask a reattached runner", error);
       await channel.kill().catch(() => {});
+      await this.markEnded(local, ctx.attempt.id);
       return undefined;
     }
     local.channel = channel;
@@ -2869,6 +2973,17 @@ export class TurnEngine {
       throw new TurnLeaseLostError(local.claim.turn.id);
     }
   }
+}
+
+/** An attempt row with its runner state and when its provider started. */
+function withRunner(
+  row: Selectable<DB["agent_turn_attempts"]>,
+): Attempt & { runner: RunnerState | null; providerStartedAt: Date | null } {
+  return {
+    ...attemptFromRow(row),
+    runner: (row.runner as unknown as RunnerState | null) ?? null,
+    providerStartedAt: row.provider_started_at,
+  };
 }
 
 /** This process no longer holds the turn: another took it over. */

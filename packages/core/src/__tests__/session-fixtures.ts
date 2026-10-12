@@ -91,6 +91,59 @@ export function sessionLogFixture(db: Kysely<DB>) {
         return turn;
       });
     },
+    /** A person's message steered into the turn working now. */
+    async steer(input: {
+      sessionId: string;
+      turnId: string;
+      text: string;
+    }): Promise<void> {
+      await db.transaction().execute(async (trx) => {
+        const turn = await trx
+          .selectFrom("agent_turns")
+          .select("active_attempt_id")
+          .where("id", "=", input.turnId)
+          .executeTakeFirstOrThrow();
+        const now = new Date().toISOString();
+        const itemId = randomUUID();
+        await queue.enqueueCommand(trx, {
+          turnId: input.turnId,
+          attemptId: turn.active_attempt_id,
+          kind: "steer",
+          payload: { itemId },
+        });
+        await log.append(trx, {
+          sessionId: input.sessionId,
+          events: [
+            {
+              type: "item.added",
+              item: {
+                id: itemId,
+                sessionId: input.sessionId,
+                turnId: input.turnId,
+                attemptId: null,
+                parentItemId: null,
+                position: 0,
+                status: "completed",
+                nativeRef: null,
+                createdAt: now,
+                updatedAt: now,
+                startedAt: now,
+                endedAt: now,
+                kind: "user_message",
+                author: { kind: "user", externalUserId: "member" },
+                text: input.text,
+                attachments: [],
+                dispatch: "steer",
+                attention: null,
+                idempotencyKey: null,
+                deliveredBy: null,
+                causation: [],
+              },
+            },
+          ],
+        });
+      });
+    },
     /** Settle a claimed turn as completed and give up its lease. */
     async complete(turn: Turn): Promise<void> {
       await db.transaction().execute(async (trx) => {
