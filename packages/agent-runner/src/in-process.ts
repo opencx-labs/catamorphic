@@ -51,9 +51,9 @@ export class InProcessRunner {
   }
 
   /**
-   * Frames after `afterSeq`, waiting up to `waitMs` for the first. Frames up
-   * to `afterSeq` are released: a later read from before it is refused,
-   * never answered with a gap.
+   * Frames after `afterSeq`, waiting up to `waitMs` for the first while it
+   * runs (none come after its exit). Frames up to `afterSeq` are released:
+   * a later read from before it is refused, never answered with a gap.
    */
   async read(input: {
     afterSeq: number;
@@ -71,7 +71,8 @@ export class InProcessRunner {
       count += 1;
     }
     this.frames.splice(0, count);
-    if (this.frames.length > 0 || input.waitMs <= 0) return [...this.frames];
+    if (this.frames.length > 0 || input.waitMs <= 0 || this.exited)
+      return [...this.frames];
     await new Promise<void>((resolve) => {
       const timer = setTimeout(() => {
         this.waiters.delete(wake);

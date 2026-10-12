@@ -68,6 +68,8 @@ describe("session log", () => {
   let makeService: () => AgentSessionsService;
   /** Each checkout's commit, as the host reports it. */
   const heads = new Map<string, string>();
+  /** What the lingering harness's tool call after its turn ended got. */
+  const lateTools: string[] = [];
 
   beforeAll(async () => {
     await migrateToLatest({ db, schema });
@@ -163,6 +165,45 @@ describe("session log", () => {
       id: "forger",
       harness: { placement: "host", adapter: forgerAdapter },
     };
+    // Lingers after its turn ended, as a harness whose process does not
+    // exit: it still calls a tool, and runs until the engine ends it.
+    const lingeringAdapter: HarnessAdapter = {
+      id: "echo",
+      capabilities: () => inner.capabilities(),
+      start: (_attempt, host) => {
+        host.emit({
+          type: "thread",
+          ref: { id: randomUUID(), strength: "strong" },
+        });
+        host.emit({ type: "turn.started" });
+        host.emit({
+          type: "item.started",
+          key: "reply",
+          status: "completed",
+          item: { kind: "assistant_message", text: "Done.", agentId: null },
+        });
+        host.emit({ type: "turn.completed", status: "completed" });
+        setTimeout(() => {
+          void host.callTool({ name: "after_the_end", input: {} }).then(
+            () => lateTools.push("ran"),
+            (error: unknown) =>
+              lateTools.push(
+                error instanceof Error ? error.message : String(error),
+              ),
+          );
+        }, 100);
+        return {
+          steer: () => Promise.resolve(false),
+          interrupt: () => {},
+          finished: new Promise<void>(() => {}),
+        };
+      },
+    };
+    const lingering: RegisteredCodingAgent = {
+      ...echo,
+      id: "lingering",
+      harness: { placement: "host", adapter: lingeringAdapter },
+    };
     // Its tools on `prod` ask the person first (ADR 0054).
     const guarded: RegisteredCodingAgent = {
       ...echo,
@@ -200,15 +241,23 @@ describe("session log", () => {
         codingAgents: {
           defaultAgentId: () => "echo",
           get: (id) =>
-            [echo, guarded, stubborn, flaky, forger, elsewhere, blocked].find(
-              (agent) => agent.id === id,
-            ),
+            [
+              echo,
+              guarded,
+              stubborn,
+              flaky,
+              forger,
+              lingering,
+              elsewhere,
+              blocked,
+            ].find((agent) => agent.id === id),
           list: () => [
             echo,
             guarded,
             stubborn,
             flaky,
             forger,
+            lingering,
             elsewhere,
             blocked,
           ],
@@ -486,6 +535,101 @@ describe("session log", () => {
       .where("status", "in", ["pending", "sent"])
       .execute();
     expect(open).toEqual([]);
+  }, 40_000);
+
+  it("settles a turn with what its harness stored on the way out", async () => {
+    const { projectId, sessionId } = await chat("Late");
+    const first = await sessions.sendMessage(
+      identity,
+      projectId,
+      sessionId,
+      "remember this [[late]]",
+    );
+    expect(first.turn.status).toBe("completed");
+    // Stored by the time the turn settled, so the thread resumes anywhere.
+    const thread = await db
+      .selectFrom("agent_provider_threads")
+      .select("id")
+      .where("session_id", "=", sessionId)
+      .executeTakeFirstOrThrow();
+    const stored = await db
+      .selectFrom("agent_provider_thread_entries")
+      .select("entry")
+      .where("thread_id", "=", thread.id)
+      .orderBy("seq")
+      .execute();
+    expect(stored.map((row) => row.entry)).toEqual([
+      { turn: 1, text: "remember this [[late]]" },
+    ]);
+    const second = await sessions.sendMessage(
+      identity,
+      projectId,
+      sessionId,
+      "again",
+    );
+    expect(
+      second.reply?.kind === "assistant_message" && second.reply.text,
+    ).toBe("Echo: again (turn 2)");
+  });
+
+  it("restarts for a refused steer on what the interrupted attempt stored on the way out", async () => {
+    const project = await projects.create(identity, { name: "Late steer" });
+    const session = await sessions.create(identity, project.id, {
+      agentId: "stubborn",
+    });
+    await sessions.command(identity, project.id, session.id, {
+      type: "send",
+      commandId: randomUUID(),
+      text: "[[hang]] [[late]]",
+    });
+    await vi.waitFor(
+      async () => {
+        const detail = await sessions.get(identity, project.id, session.id);
+        expect(detail.snapshot.turns[0]?.status).toBe("running");
+      },
+      { timeout: 10_000 },
+    );
+    await sessions.command(identity, project.id, session.id, {
+      type: "send",
+      commandId: randomUUID(),
+      text: "also this",
+      dispatch: "steer",
+    });
+    await vi.waitFor(
+      async () => {
+        const detail = await sessions.get(identity, project.id, session.id);
+        expect(detail.snapshot.turns.map((turn) => turn.status)).toEqual([
+          "completed",
+        ]);
+      },
+      { timeout: 20_000 },
+    );
+    const detail = await sessions.get(identity, project.id, session.id);
+    const replies = detail.snapshot.items.flatMap((item) =>
+      item.kind === "assistant_message" ? [item.text] : [],
+    );
+    // The new attempt resumed the thread with the interrupted one in it.
+    expect(replies.at(-1)).toContain("(turn 2)");
+  }, 40_000);
+
+  it("settles a turn whose harness never exits, refusing its late tool call", async () => {
+    const project = await projects.create(identity, { name: "Lingering" });
+    const session = await sessions.create(identity, project.id, {
+      agentId: "lingering",
+    });
+    const started = Date.now();
+    const { turn } = await sessions.sendMessage(
+      identity,
+      project.id,
+      session.id,
+      "finish and stay",
+    );
+    expect(turn.status).toBe("completed");
+    // Answered until the grace ran out, then ended.
+    expect(Date.now() - started).toBeGreaterThanOrEqual(15_000);
+    expect(lateTools).toEqual([
+      "This turn already ended, so the tool did not run.",
+    ]);
   }, 40_000);
 
   it("keeps a turn on its owner's sign-in to the owner's words (ADR 0199)", async () => {

@@ -63,8 +63,15 @@ workspace tools) are host calls. The lease holder records each call in the
 attempt's runner state with the output cursor and forgets it once answered;
 a tool call still recorded after a takeover answers that the host stopped
 while it ran and it may have completed, and is never run again. Native
-state calls are simply answered again. Tool policy travels to the runner as data and is
-decided there; only `ask` leaves it, as an approval.
+state calls are simply answered again. A harness stores what it writes on
+its way out (Claude Code flushes its transcript after its result, the Codex
+adapter stores the rollout lines Codex wrote as it shut down), and a thread
+resumed anywhere needs all of it: the holder answers a runner whose attempt
+ended until it exits, at most 15 s, while the turn finalizes (a replica
+that takes over a finalizing turn reattaches its sandbox runner) and
+before a steer restart. Tool calls it still makes are refused. Tool policy
+travels to the runner as data and is decided there; only `ask` leaves it,
+as an approval.
 
 **Adapters declare capabilities.** Each adapter reports what it can do
 natively (steer, interrupt, retry, fork, rollback, structured questions
