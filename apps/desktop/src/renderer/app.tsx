@@ -5040,6 +5040,10 @@ export function App({
               const page =
                 linked.kind === "browser" ||
                 (linked.kind === "file" && isBrowserFile(linked.path));
+              // "Open here" is the asking chat's here. With that chat off
+              // screen (voice, the dock's assistant), a page gets a tab of
+              // its own rather than replacing the one the person reads.
+              const ownTab = page && !requesterVisible;
               const root =
                 linked.kind === "file" && !page && projectIdRef.current
                   ? await desktopApi.projectRoot(projectIdRef.current)
@@ -5056,7 +5060,7 @@ export function App({
               const reused =
                 floating &&
                 (page
-                  ? floating.startsWith("browser:")
+                  ? !ownTab && floating.startsWith("browser:")
                   : linked.kind === "file" &&
                     ws.editors.some(
                       (editor) =>
@@ -5073,6 +5077,7 @@ export function App({
                 () =>
                   openLinkedSurfaceRef.current(target, {
                     chatLocalId: requesterId,
+                    newTab: ownTab,
                   }),
               );
               stepChatAside();

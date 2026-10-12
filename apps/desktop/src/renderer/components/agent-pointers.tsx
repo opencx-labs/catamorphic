@@ -14,7 +14,9 @@ import { useEffect, useRef } from "react";
  * The pointed elements are React's: a re-render that rewrites one's
  * className (a tab turning active, a row selected) takes the glow's
  * classes with it. A glowing element puts them back at once, steady
- * (`agent-pointer-held`), so the ring neither vanishes nor fades in again.
+ * (`agent-pointer-held`), so the ring neither vanishes nor fades in again;
+ * a fading one resumes its fade where the rewrite cut it (a press on a
+ * pointed tab dismisses its glow, then the click makes it active).
  */
 
 export interface AgentPointer {
@@ -43,9 +45,14 @@ function hold(element: HTMLElement) {
   if (!showing(element)) element.classList.add("agent-pointer", HELD);
 }
 
-function unlight(element: HTMLElement) {
+/** Elements fading out, with when their fade began. */
+type Fading = Map<HTMLElement, number>;
+
+function unlight(element: HTMLElement, fading: Fading) {
   const done = () => {
     element.removeEventListener("animationend", ended);
+    fading.delete(element);
+    element.style.removeProperty("--agent-pointer-elapsed");
     // Pointed at again meanwhile: the glow stays.
     if (element.classList.contains(ENTER) || element.classList.contains(HELD))
       return;
@@ -64,8 +71,20 @@ function unlight(element: HTMLElement) {
     return;
   }
   element.classList.add(LEAVE);
+  fading.set(element, performance.now());
   element.addEventListener("animationend", ended);
   window.setTimeout(done, LEAVE_FALLBACK_MS);
+}
+
+/** Puts a fade a className rewrite took back, as far along as it was. */
+function resume(element: HTMLElement, fading: Fading) {
+  const began = fading.get(element);
+  if (began === undefined || element.classList.contains(LEAVE)) return;
+  element.style.setProperty(
+    "--agent-pointer-elapsed",
+    `${Math.round(began - performance.now())}ms`,
+  );
+  element.classList.add("agent-pointer", LEAVE);
 }
 
 export function AgentPointers({
@@ -84,6 +103,7 @@ export function AgentPointers({
   const lit = useRef(
     new Map<HTMLElement, { target: string; detach: () => void }>(),
   );
+  const fading = useRef<Fading>(new Map());
   // Rewrites outside a workspace change (a row selected) put the glow
   // back too, before the frame paints.
   const watcher = useRef<MutationObserver | null>(null);
@@ -104,7 +124,7 @@ export function AgentPointers({
       if (wanted.get(element)?.target === entry.target) continue;
       entry.detach();
       lit.current.delete(element);
-      if (!wanted.has(element)) unlight(element);
+      if (!wanted.has(element)) unlight(element, fading.current);
     }
     // Newest pointer last in state → reversed here so it wins the scroll.
     let scrolled = false;
@@ -140,15 +160,14 @@ export function AgentPointers({
       }
     }
     watcher.current ??= new MutationObserver((records) => {
-      for (const record of records)
-        if (
-          record.target instanceof HTMLElement &&
-          lit.current.has(record.target)
-        )
-          hold(record.target);
+      for (const { target } of records) {
+        if (!(target instanceof HTMLElement)) continue;
+        if (lit.current.has(target)) hold(target);
+        else resume(target, fading.current);
+      }
     });
     watcher.current.disconnect();
-    for (const element of lit.current.keys())
+    for (const element of [...lit.current.keys(), ...fading.current.keys()])
       watcher.current.observe(element, {
         attributes: true,
         attributeFilter: ["class"],
@@ -158,8 +177,12 @@ export function AgentPointers({
   // Unmounted with the workspace: nothing is left to fade into.
   useEffect(() => {
     const glowing = lit.current;
+    const leaving = fading.current;
     return () => {
       watcher.current?.disconnect();
+      for (const element of leaving.keys())
+        element.style.removeProperty("--agent-pointer-elapsed");
+      leaving.clear();
       for (const [element, entry] of glowing) {
         entry.detach();
         element.classList.remove("agent-pointer", ENTER, HELD, LEAVE);

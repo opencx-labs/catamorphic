@@ -1253,8 +1253,11 @@ kbd {
   animation: agent-pointer-in 200ms cubic-bezier(0.2, 0, 0, 1) both;
 }
 
+/* A fade a className rewrite interrupted resumes where it was
+   (components/agent-pointers.tsx). */
 .animate-agent-pointer-out {
   animation: agent-pointer-out 200ms cubic-bezier(0.2, 0, 0, 1) both;
+  animation-delay: var(--agent-pointer-elapsed, 0ms);
 }
 
 /* A glow put back after React rewrote its element's classes: the ring the
@@ -1290,6 +1293,7 @@ kbd {
 
 .animate-agent-pointer-out[data-agent-pointer-note]::after {
   animation: agent-pointer-note-out 200ms var(--ease-standard) both;
+  animation-delay: var(--agent-pointer-elapsed, 0ms);
 }
 
 /* The agent's short note, floated above the pointed element. */
@@ -2005,9 +2009,10 @@ html[data-surface="dock"] #root {
     var(--left-sidebar-width, 0px) -
     var(--chrome-toggle-slot)
   );
-  /* At rest it clips nothing its own scrolling does not, and the clip has
-     something to move from. */
-  clip-path: inset(0);
+  /* At rest it clips nothing (the address bar's suggestions hang below the
+     title row, focus rings reach past its start); opening, only its far
+     end moves. A clip there is what the opening moves from. */
+  clip-path: inset(-100vh 0 -100vh -100vw);
   transition:
     translate 200ms var(--ease-standard),
     clip-path 200ms var(--ease-standard);
@@ -2054,7 +2059,7 @@ html[data-surface="dock"] #root {
   .workspace-chrome
   > :is([data-tab-orientation="horizontal"], [data-workspace-title]) {
   translate: var(--tab-strip-shift) 0;
-  clip-path: inset(0 var(--tab-strip-shift) 0 0);
+  clip-path: inset(-100vh var(--tab-strip-shift) -100vh -100vw);
 }
 [data-sidebar="left"][data-settled="true"]
   ~ .workspace-surface

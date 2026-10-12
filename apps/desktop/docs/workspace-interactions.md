@@ -80,8 +80,12 @@ paths: an open is placed as a press on the surface's chip places it
 the tab's close. When either changes the tab in front of the visible workspace,
 the content arrives with `pane-in` from that side of the strip; a person's click
 stays instant. An open goes in front only when this project and its window are
-on screen and the person watches the asking chat or talks with it by voice;
-otherwise it is prepared in the background and reported so.
+on screen and the person watches the asking chat, talks with it by voice, or
+already looks at the target; otherwise, including for a session with no chat
+here, it is prepared in the background and reported so. An agent terminal's
+`open` names no session: it asks for the working chat, and opens in front when
+there is none. A page opened in front for a chat that is not on screen gets its
+own tab instead of replacing the page in front.
 
 ## Sidebar defaults
 
