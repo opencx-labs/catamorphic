@@ -70,6 +70,11 @@ export interface AppPrefs {
    */
   contentFrame: boolean;
   sidebarDividers: boolean;
+  /**
+   * The macOS close, minimize and full screen buttons in a workspace
+   * window's top-left corner, and the space the chrome keeps for them.
+   */
+  windowButtons: boolean;
   contentPadding: number;
   contentRadius: number;
   /** Profile-wide favorites can be compact tiles or labeled rows. */
@@ -144,6 +149,7 @@ export const DEFAULT_PREFS: AppPrefs = {
   headerPlacement: "top",
   contentFrame: false,
   sidebarDividers: false,
+  windowButtons: true,
   contentPadding: 6,
   contentRadius: 14,
   pinnedBookmarks: "tiles",
@@ -253,6 +259,7 @@ export function normalizePrefs(raw: unknown): AppPrefs {
     headerPlacement: record.headerPlacement === "sidebar" ? "sidebar" : "top",
     contentFrame: record.contentFrame === true,
     sidebarDividers: record.sidebarDividers === true,
+    windowButtons: record.windowButtons !== false,
     contentPadding: dimension(record.contentPadding, 6, 48),
     contentRadius: dimension(record.contentRadius, 14, 48),
     pinnedBookmarks: record.pinnedBookmarks === "list" ? "list" : "tiles",

@@ -83,6 +83,10 @@ it("identifies the owning profile and primary project paths, with live file erro
     "| chatWorkLive | While the agent works: Notes are what the agent writes",
   );
   expect(DESKTOP_SETTINGS_SKILL).toContain('"notes" (Notes only)');
+  // A person's agent can hide the window buttons, and knows where it can.
+  expect(DESKTOP_SETTINGS_SKILL).toMatch(
+    /\| windowButtons \| Window buttons: .* Only on macOS; elsewhere it changes nothing\. \| boolean \| profile \| true \|/,
+  );
 });
 it("distinguishes restricted native access from an unavailable host filesystem", () => {
   const { config, one } = fixture();

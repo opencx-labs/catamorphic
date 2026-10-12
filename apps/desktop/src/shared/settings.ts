@@ -69,6 +69,14 @@ export const SETTINGS = {
     valid: oneOf("keep", "collapse"),
     options: { keep: "Keep the notes", collapse: "Fold notes into steps" },
   },
+  windowButtons: {
+    label: "Window buttons",
+    description:
+      "Close, minimize and full screen at the top left of the window. While they are hidden, the menu bar still has each of them.",
+    scopes: profileScope,
+    valid: boolean,
+    macOnly: true,
+  },
   sidebarDividers: {
     label: "Sidebar dividers",
     description: "Show a vertical separator beside each sidebar.",
@@ -247,6 +255,8 @@ export const SETTINGS = {
       options?: Record<string, string>;
       range?: { min: number; max: number; step: number };
       description?: string;
+      /** Only macOS has it; Settings and the palette offer it nowhere else. */
+      macOnly?: boolean;
     }
   >
 >;

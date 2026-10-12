@@ -638,16 +638,6 @@ export function registerIpcHandlers(
     window.focus();
   });
 
-  ipcMain.handle(
-    "catamorphic:window-controls-visible",
-    (event, visible: unknown) => {
-      const window = BrowserWindow.fromWebContents(event.sender);
-      if (process.platform === "darwin" && typeof visible === "boolean") {
-        window?.setWindowButtonVisibility(visible);
-      }
-    },
-  );
-
   const sidebarEdgeWatchers = new Map<number, () => void>();
   ipcMain.handle(
     "catamorphic:sidebar-edge-enabled",
@@ -1721,6 +1711,16 @@ export function registerIpcHandlers(
           window[action]();
         }
         const bounds = window.getBounds();
+        // What macOS draws, through Electron's own test accessor; null
+        // where the OS frame owns the buttons.
+        const buttonsGetter: unknown = Reflect.get(
+          window,
+          "_getWindowButtonVisibility",
+        );
+        const windowButtons: unknown =
+          process.platform === "darwin" && typeof buttonsGetter === "function"
+            ? Reflect.apply(buttonsGetter, window, [])
+            : null;
         return {
           ...bounds,
           contentBounds: window.getContentBounds(),
@@ -1729,6 +1729,8 @@ export function registerIpcHandlers(
           focused: window.isFocused(),
           focusable: window.isFocusable(),
           opacity: window.getOpacity(),
+          windowButtons:
+            typeof windowButtons === "boolean" ? windowButtons : null,
         };
       },
     );

@@ -85,7 +85,7 @@ describe("design lint", () => {
       .flatMap(({ file, text }) =>
         [...text.matchAll(/\stitle=\{|\stitle="/g)].map(() => file),
       );
-    expect(titles.length).toBeLessThanOrEqual(66);
+    expect(titles.length).toBeLessThanOrEqual(61);
   });
   it("focus rings come from the ring tokens, never a private recipe", () => {
     // One ring (DESIGN.md "Focus rings"): the global :focus-visible rule or
