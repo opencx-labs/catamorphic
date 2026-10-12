@@ -67,9 +67,10 @@ state calls are simply answered again. A harness stores what it writes on
 its way out (Claude Code flushes its transcript after its result, the Codex
 adapter stores the rollout lines Codex wrote as it shut down), and a thread
 resumed anywhere needs all of it: the holder answers a runner whose attempt
-ended until it exits, at most 15 s, while the turn finalizes (a replica
-that takes over a finalizing turn reattaches its sandbox runner) and
-before a steer restart. Tool calls it still makes are refused. Tool policy
+ended until it exits, at most 15 s, while the turn finalizes and before a
+steer restart. A replica that takes a turn over in either step reattaches
+that sandbox runner and answers it first. Tool calls it still makes are
+refused. Tool policy
 travels to the runner as data and is decided there; only `ask` leaves it,
 as an approval.
 

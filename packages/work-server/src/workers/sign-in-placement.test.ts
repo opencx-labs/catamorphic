@@ -17,7 +17,12 @@ import {
   SERVER_TENANT_ID,
   type WorkServer,
 } from "../server.js";
-import { oauthAccessToken, say, testServerOptions } from "../test-support.js";
+import {
+  filesHolding,
+  oauthAccessToken,
+  say,
+  testServerOptions,
+} from "../test-support.js";
 import { signInOnMachine, signInRoot, signOutOnMachine } from "./sign-ins.js";
 import { startWorkWorker } from "./worker-runtime.js";
 
@@ -85,22 +90,6 @@ async function waitFor(
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
   throw new Error(`Timed out waiting for ${what}`);
-}
-
-function filesUnder(directory: string): string[] {
-  if (!fs.existsSync(directory)) return [];
-  return fs.readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
-    const full = path.join(directory, entry.name);
-    if (entry.isSymbolicLink()) return [];
-    return entry.isDirectory() ? filesUnder(full) : [full];
-  });
-}
-
-/** Files under a directory whose bytes contain the text. */
-function holding(directory: string, text: string): string[] {
-  return filesUnder(directory).filter((file) =>
-    fs.readFileSync(file).includes(text),
-  );
 }
 
 const sha256 = (text: string) =>
@@ -454,14 +443,14 @@ describe("members' own sign-ins on the machine (ADRs 0199, 0213)", () => {
     // disk or database, not an operation forwarded to the worker.
     const controlPlane = path.join(root, "control-plane");
     for (const token of Object.values(TOKENS))
-      expect(holding(controlPlane, token)).toEqual([]);
+      expect(filesHolding(controlPlane, token)).toEqual([]);
     const forwarded = await server.catamorphic.core.db
       .selectFrom("remote_operations")
       .select(["operation", "response"])
       .execute();
     expect(JSON.stringify(forwarded)).not.toContain(TOKENS.alice);
     // The sign-in stays where she made it, unchanged.
-    expect(holding(workerDirs["alice-box"] ?? "", TOKENS.alice)).toEqual([
+    expect(filesHolding(workerDirs["alice-box"] ?? "", TOKENS.alice)).toEqual([
       path.join(home, "auth.json"),
     ]);
   }, 120_000);
@@ -606,7 +595,7 @@ describe("members' own sign-ins on the machine (ADRs 0199, 0213)", () => {
       `sign-in:codex:${users.alice}`,
     );
     expect((await machines())["worker.alice-box-2"]).toBe("signed-in");
-    expect(holding(root, TOKENS.aliceFromApp)).toEqual([
+    expect(filesHolding(root, TOKENS.aliceFromApp)).toEqual([
       path.join(
         machineSignInHome({
           root: signInRoot(workerDirs["alice-box-2"] ?? ""),

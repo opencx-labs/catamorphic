@@ -1,4 +1,6 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
 import type { AgentTurnUsage, Item, Turn } from "@catamorphic/agent-protocol";
 import type { AgentSessionsService, Identity } from "@catamorphic/core";
 import pg from "pg";
@@ -286,4 +288,48 @@ export async function enqueue(input: {
   if (receipt.status !== "accepted" || typeof turnId !== "string")
     throw new Error(receipt.error?.message ?? "The message started no turn");
   return turnId;
+}
+
+/**
+ * Every regular file under a directory, links not followed. A sandbox's
+ * transient files (a lock, an index being rewritten) may go while it is
+ * walked: what is gone by then is not listed. The directory itself must be
+ * there, so a scan of it never passes for want of files.
+ */
+export function filesUnder(directory: string): string[] {
+  return walkFiles(directory, true);
+}
+
+function walkFiles(directory: string, root: boolean): string[] {
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(directory, { withFileTypes: true });
+  } catch (error) {
+    if (!root && isMissing(error)) return [];
+    throw error;
+  }
+  return entries.flatMap((entry) => {
+    const full = path.join(directory, entry.name);
+    if (entry.isDirectory()) return walkFiles(full, false);
+    return entry.isFile() ? [full] : [];
+  });
+}
+
+/**
+ * Files under a directory whose bytes contain the text, as a leak check
+ * reads them: a file gone before it is read holds nothing.
+ */
+export function filesHolding(directory: string, text: string): string[] {
+  return filesUnder(directory).filter((file) => {
+    try {
+      return fs.readFileSync(file).includes(text);
+    } catch (error) {
+      if (isMissing(error)) return false;
+      throw error;
+    }
+  });
+}
+
+function isMissing(error: unknown): boolean {
+  return error instanceof Error && "code" in error && error.code === "ENOENT";
 }

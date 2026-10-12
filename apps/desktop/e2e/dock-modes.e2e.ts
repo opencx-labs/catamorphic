@@ -359,9 +359,25 @@ describe("dock modes", () => {
        }, true);
        return true;`,
     );
+    // Where the window rests, once it has: a dock window that just opened
+    // still moves into its workspace's chat region and to its chat's size.
+    const settled = async () => {
+      let last = await bounds();
+      const deadline = Date.now() + 10_000;
+      for (;;) {
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        const next = await bounds();
+        if (JSON.stringify(next) === JSON.stringify(last)) return next;
+        if (Date.now() > deadline)
+          throw new Error(
+            `The dock window never settled: ${JSON.stringify(next)}`,
+          );
+        last = next;
+      }
+    };
     // The margin beside the chat is empty space in the dock window: the
     // pointer passes over it, and the click lands on the workspace behind.
-    const first = await bounds();
+    const first = await settled();
     const margin = {
       x: first.dock.x - first.main.x + Math.floor(first.chat.left / 2),
       y:
@@ -480,8 +496,10 @@ describe("dock modes", () => {
       );
     });
     const focused = await bounds();
-    expect(focused.dock.x).toBe(first.dock.x);
-    expect(focused.dock.y).toBe(first.dock.y);
+    expect(
+      { x: focused.dock.x, y: focused.dock.y },
+      JSON.stringify({ first: first.dock, focused: focused.dock }),
+    ).toEqual({ x: first.dock.x, y: first.dock.y });
     await dockRun(
       `setComposer('terminal: sleep 15 && echo through-done'); send(); return true;`,
     );
@@ -806,9 +824,28 @@ describe("dock modes", () => {
           label: "expanded while the composer has focus",
         },
       );
+      // The person works in this window, so it is the key window: on macOS
+      // a click on a window that is not only activates it, and the page
+      // never sees it. Say whether it was, for a failure to point at.
+      const keyBefore = await app.eval<{ focused: boolean }>(
+        "window.catamorphicDesktop.devWindow('get')",
+      );
+      console.info(
+        `[dock-modes] workspace window key before the page click: ${keyBefore.focused}`,
+      );
+      await app.eval(`window.catamorphicDesktop.devWindow('focus')`);
+      await app.waitFor(
+        `window.catamorphicDesktop.devWindow('get').then((state) => state.focused)`,
+        { label: "the workspace window is key", timeoutMs: 5_000 },
+      );
+      await runWait(
+        `return dockH() > 400 && !frontDock().hasAttribute('data-lurking');`,
+        { label: "still expanded in the focused window" },
+      );
       // The person moves from the chat onto the page and clicks it.
       // On a small window the chat covers most of the page: aim at page the
-      // chat leaves uncovered, its margins included.
+      // chat leaves uncovered, its margins included, clear of every edge so
+      // a pixel's rounding cannot put the click on the sidebar or the chat.
       const points = await runWait<{
         dock: { x: number; y: number };
         page: { x: number; y: number };
@@ -817,15 +854,17 @@ describe("dock modes", () => {
         const view = $$('webview').find((w) => (w.src ?? '').startsWith(${JSON.stringify(origin)}));
         const page = view.getBoundingClientRect();
         const dock = frontDock().getBoundingClientRect();
+        const clear = (x, y) =>
+          [[0, 0], [-10, 0], [10, 0], [0, -10], [0, 10]].every(([dx, dy]) => {
+            const px = x + dx;
+            const py = y + dy;
+            const outside = px < dock.left || px > dock.right || py < dock.top || py > dock.bottom;
+            return outside && document.elementFromPoint(px, py) === view;
+          });
         let target;
-        for (let y = page.top + 6; !target && y < page.bottom - 6; y += 12)
-          for (const x of [page.left + 6, page.right - 6, (page.left + page.right) / 2]) {
-            const outside = x < dock.left || x > dock.right || y < dock.top || y > dock.bottom;
-            if (outside && document.elementFromPoint(x, y) === view) {
-              target = { x, y };
-              break;
-            }
-          }
+        for (let y = page.top + 12; !target && y < page.bottom - 12; y += 8)
+          for (let x = page.left + 12; !target && x < page.right - 12; x += 8)
+            if (clear(x, y)) target = { x, y };
         return target && {
           dock: { x: dock.left + dock.width / 2, y: dock.top + 40 },
           page: target,
@@ -858,7 +897,12 @@ describe("dock modes", () => {
           hovered: frontDock()?.matches(':hover'),
           height: dockH(),
         };`);
-        throw new Error(`${String(error)}; state: ${JSON.stringify(state)}`);
+        const window = await app.eval<{ focused: boolean }>(
+          "window.catamorphicDesktop.devWindow('get')",
+        );
+        throw new Error(
+          `${String(error)}; state: ${JSON.stringify(state)}; key window before: ${keyBefore.focused}, after: ${window.focused}; point: ${JSON.stringify(points.page)}`,
+        );
       });
     } finally {
       server.close();

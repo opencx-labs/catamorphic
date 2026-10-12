@@ -42,6 +42,9 @@ const dockShapeSchema = z
   .max(256)
   .nullable();
 
+/** How long focus may be in no window while it passes between two. */
+const FOCUS_SETTLE_MS = 150;
+
 /** One owner per project. Presentation can be hidden without disposing resources. */
 export class DesktopWorkspaces {
   private readonly owners = new Map<string, WebContents>();
@@ -59,6 +62,11 @@ export class DesktopWorkspaces {
     { x: number; left: number; side: "left" | "right" }
   >();
   private quitting = false;
+  /**
+   * Focus left the app, not just passed between its windows; so too at
+   * launch, until a window first has it.
+   */
+  private focusLeftApp = true;
   // Detaching is a session choice; the `dockDetached` preference is only
   // the state a fresh launch starts in. Closing the detached window or
   // picking "Return dock to the window" never rewrites that default.
@@ -90,7 +98,14 @@ export class DesktopWorkspaces {
     autoUpdater.on("before-quit-for-update", () => {
       this.quitting = true;
     });
+    // Focus passes between windows through none at all for a moment (on
+    // X11, from the workspace to the dock): only focus still gone a moment
+    // after a blur left the app, and any window taking it, the dock's own
+    // included, means it did not.
+    let leftApp: ReturnType<typeof setTimeout> | undefined;
     app.on("browser-window-focus", (_event, window) => {
+      clearTimeout(leftApp);
+      this.focusLeftApp = false;
       const profileId = options.windows.profileFor(window.webContents);
       if (this.floating.get(profileId) === window) return;
       this.lastWindows.delete(profileId);
@@ -100,13 +115,15 @@ export class DesktopWorkspaces {
       this.syncFloating(profileId);
     });
     app.on("browser-window-blur", () => {
-      // Focus settles a tick later; when it left the app, the dock returns
-      // to the display's work area.
-      setTimeout(() => {
-        if (BrowserWindow.getFocusedWindow()) return;
+      // When focus left the app, the dock returns to the display's work
+      // area.
+      clearTimeout(leftApp);
+      leftApp = setTimeout(() => {
+        if (this.quitting || BrowserWindow.getFocusedWindow()) return;
+        this.focusLeftApp = true;
         for (const profileId of this.floating.keys())
           this.syncFloating(profileId);
-      }, 0);
+      }, FOCUS_SETTLE_MS);
     });
     options.config.onPrefsChanged((profileId, prefs) => {
       // A changed default wins over the session choice made before it.
@@ -732,7 +749,12 @@ export class DesktopWorkspaces {
    */
   private dockArea(profileId: string, dock: BrowserWindow) {
     const focused = BrowserWindow.getFocusedWindow();
-    const anchor = focused === dock ? this.lastWindows.get(profileId) : focused;
+    // While focus is on the dock, or passing between windows, the dock
+    // keeps to the workspace it last sat in.
+    const anchor =
+      focused === dock || (!focused && !this.focusLeftApp)
+        ? this.lastWindows.get(profileId)
+        : focused;
     if (
       anchor &&
       anchor !== dock &&

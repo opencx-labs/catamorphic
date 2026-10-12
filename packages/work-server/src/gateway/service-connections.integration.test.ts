@@ -13,6 +13,7 @@ import {
   type WorkServer,
 } from "../server.js";
 import {
+  filesHolding,
   oauthAccessToken,
   replyOf,
   testServerOptions,
@@ -484,18 +485,7 @@ describe.skipIf(!databaseUrl)("service connections (ADR 0172)", () => {
 
     // The worker never saw the credential: not in its files, not in any
     // operation forwarded to it.
-    const files: string[] = [];
-    const walk = (dir: string) => {
-      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-        const full = path.join(dir, entry.name);
-        if (entry.isDirectory()) walk(full);
-        else if (entry.isFile()) files.push(full);
-      }
-    };
-    walk(workerDir);
-    for (const file of files) {
-      expect(fs.readFileSync(file, "utf8")).not.toContain(password);
-    }
+    expect(filesHolding(workerDir, password)).toEqual([]);
     const forwarded = await core.db
       .selectFrom("remote_operations")
       .select(["operation", "response"])
