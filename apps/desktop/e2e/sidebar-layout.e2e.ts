@@ -171,15 +171,15 @@ describe("configurable browser workspace", () => {
       app.eval<string[]>(
         `[...${aside}.querySelectorAll('[data-tree-primary], [data-tree-primary] *')].filter((element) => element.checkVisibility() && getComputedStyle(element).opacity !== '1').map((element) => element.outerHTML.slice(0, 80) + ' ' + getComputedStyle(element).opacity)`,
       );
-    const before = await dimmed();
-    // Slowed, so the close can be read while it runs. Only once the window
-    // is still: an animation in flight as the timeline's rate changes (the
-    // bookmark dialog fading out, the folder opening) is left with a start
-    // time far in the future, frozen at its first frame.
+    // What the last test set moving (its dialog closing, the folder
+    // opening) ends first: an animation still running when the timeline is
+    // slowed below can stall there, and leave a row clipped under its section.
     await app.waitFor(
-      "document.getAnimations().every((animation) => animation.effect?.getComputedTiming().endTime === Infinity || (animation.playState !== 'running' && !animation.pending))",
-      { label: "no animation in flight" },
+      "document.getAnimations().every((animation) => animation.playState !== 'running' || animation.effect?.getTiming().iterations === Infinity)",
+      { label: "the window at rest before time slows" },
     );
+    const before = await dimmed();
+    // Slowed, so the close can be read while it runs.
     await app.cdp("Animation.enable");
     await app.cdp("Animation.setPlaybackRate", { playbackRate: 0.1 });
     try {
@@ -234,10 +234,31 @@ describe("configurable browser workspace", () => {
 
   it("draws one keyboard-led ring: none after right-click and Escape, the accent at once on Tab", async () => {
     // The row may still be sliding into its expanded folder.
-    const point = await app.waitFor<{ x: number; y: number }>(
-      "(() => { const el = document.querySelector('[data-point-key=\"sidebar:Reference\"] [data-tree-primary]'); const r = el.getBoundingClientRect(); const x = r.x + r.width / 2, y = r.y + r.height / 2; return el.contains(document.elementFromPoint(x, y)) ? { x, y } : false })()",
-      { label: "Reference row reachable" },
-    );
+    const point = await app
+      .waitFor<{ x: number; y: number }>(
+        "(() => { const el = document.querySelector('[data-point-key=\"sidebar:Reference\"] [data-tree-primary]'); const r = el.getBoundingClientRect(); const x = r.x + r.width / 2, y = r.y + r.height / 2; return el.contains(document.elementFromPoint(x, y)) ? { x, y } : false })()",
+        { label: "Reference row reachable" },
+      )
+      .catch(async (error: unknown) => {
+        // What stands where the row should be, for a failure to point at.
+        const state = await app.eval(`(() => {
+          const el = document.querySelector('[data-point-key="sidebar:Reference"] [data-tree-primary]');
+          const r = el?.getBoundingClientRect();
+          const hit = r && document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
+          const aside = document.querySelector('aside[data-sidebar=left]');
+          const scroller = el?.closest('[data-sidebar-scroll], .overflow-y-auto, .overflow-auto');
+          return {
+            rect: r && { x: r.x, y: r.y, width: r.width, height: r.height },
+            viewport: { width: innerWidth, height: innerHeight },
+            hit: hit ? hit.outerHTML.slice(0, 200) : null,
+            hidden: el?.closest('[aria-hidden="true"], [inert]')?.outerHTML.slice(0, 120) ?? null,
+            aside: aside && { ...aside.dataset },
+            scroller: scroller && { top: scroller.scrollTop, height: scroller.clientHeight },
+            running: [...document.getAnimations()].filter((animation) => animation.playState === 'running').map((animation) => animation.id || animation.animationName || animation.transitionProperty).slice(0, 10),
+          };
+        })()`);
+        throw new Error(`${String(error)}; state: ${JSON.stringify(state)}`);
+      });
     for (const type of ["mousePressed", "mouseReleased"])
       await app.cdp("Input.dispatchMouseEvent", {
         type,
