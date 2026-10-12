@@ -149,6 +149,13 @@ export const SETTINGS = {
     scopes: projectScopes,
     valid: boolean,
   },
+  switchToOpenTab: {
+    label: "Switch to a page's open tab",
+    description:
+      "Opening a page that is already open, from a link, a bookmark or another app, goes to its tab. Opening it in a new tab on purpose still does.",
+    scopes: profileScope,
+    valid: boolean,
+  },
   browserTabSleep: {
     label: "Sleep unused tabs",
     description:

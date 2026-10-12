@@ -13,8 +13,11 @@ import {
 import type { AppPrefs } from "../../shared/app-prefs.js";
 import type { BackgroundCommandView } from "../../shared/background-commands.js";
 import type {
+  BookmarkFolderRename,
   BookmarkMove,
   BookmarkPlacement,
+  BookmarkRemoval,
+  BookmarkUpdate,
 } from "../../shared/bookmark-target.js";
 import type {
   BrowserHistory,
@@ -36,7 +39,6 @@ import type {
 } from "../../shared/desktop-workspace.js";
 import type {
   DockDrag,
-  DockMenuEntry,
   DockRegion,
   DockSize,
 } from "../../shared/dock-position.js";
@@ -66,6 +68,7 @@ import type {
   HistoryQuery,
   HistoryVisit,
 } from "../../shared/history.js";
+import type { MenuItem, PageContextMenu } from "../../shared/menu.js";
 import type { OpenMode } from "../../shared/open-mode.js";
 import type {
   PasskeyChoice,
@@ -1213,7 +1216,7 @@ export interface CatamorphicDesktopApi {
   /** Session-only; the `dockDetached` preference stays the launch default. */
   dockDetach: (detached: boolean) => Promise<void>;
   /** Native context menu for the detached dock window; resolves the action. */
-  dockMenu: (entries: readonly DockMenuEntry[]) => Promise<string | null>;
+  dockMenu: (entries: readonly MenuItem[]) => Promise<string | null>;
   /** The workspace window reports where its chat region sits; null clears. */
   dockRegion: (region: DockRegion | null) => Promise<void>;
   onDockSnapshot: (listener: (snapshot: DockSnapshot) => void) => () => void;
@@ -1689,6 +1692,15 @@ export interface CatamorphicDesktopApi {
     profileId: string;
     query: string;
   }) => Promise<BrowserSuggestions>;
+  /** A right-click in one of this window's pages: the menu to show there. */
+  onBrowserContextMenu: (
+    listener: (menu: PageContextMenu) => void,
+  ) => () => void;
+  /** The entry picked from a page's menu, or null when it closed without one. */
+  browserContextMenuPick: (input: {
+    menuId: string;
+    action: string | null;
+  }) => Promise<void>;
   onBrowserOpenUrl: (
     listener: (url: string, mode?: OpenMode) => void,
   ) => () => void;
@@ -1836,19 +1848,10 @@ export interface CatamorphicDesktopApi {
     label: string;
     parentId?: string;
   }) => Promise<BookmarkFolder>;
-  bookmarksUpdate: (input: {
-    projectId: string;
-    profileId: string;
-    id: string;
-    label?: string;
-    url?: string;
-    folderId?: string | null;
-  }) => Promise<void>;
-  bookmarksRemove: (input: {
-    projectId: string;
-    profileId: string;
-    id: string;
-  }) => Promise<void>;
+  /** Edit a bookmark where it lives: name, address and folder. */
+  bookmarksUpdate: (input: BookmarkUpdate) => Promise<void>;
+  /** Remove a bookmark, or a folder whose children move up one level. */
+  bookmarksRemove: (input: BookmarkRemoval) => Promise<void>;
   bookmarksPin: (input: {
     projectId: string;
     profileId: string;
@@ -1859,22 +1862,7 @@ export interface CatamorphicDesktopApi {
     profileId: string;
     id: string;
   }) => Promise<void>;
-  bookmarksRemoveLibrary: (input: {
-    projectId: string;
-    profileId: string;
-    id: string;
-  }) => Promise<void>;
-  bookmarksRemovePinned: (input: {
-    projectId: string;
-    profileId: string;
-    id: string;
-  }) => Promise<void>;
-  bookmarksRename: (input: {
-    projectId: string;
-    profileId: string;
-    id: string;
-    label: string;
-  }) => Promise<void>;
+  bookmarksRenameFolder: (input: BookmarkFolderRename) => Promise<void>;
   onBookmarksChanged: (listener: (data: BookmarksChange) => void) => () => void;
 
   getTheme: (

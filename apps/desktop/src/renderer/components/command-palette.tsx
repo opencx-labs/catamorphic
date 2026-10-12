@@ -424,9 +424,12 @@ export function CommandPalette({
     ];
     const seen = new Set<string>();
     const unique = rows.filter((row) => !seen.has(row.id) && seen.add(row.id));
+    const nativeRows = oneRowPerDestination(unique);
+    // Listed rows are found without typing; an open tab is listed only
+    // where it stands in for a listed row (a bookmark of its page).
     return {
-      nativeRows: oneRowPerDestination(unique),
-      listedRows: oneRowPerDestination(unique.filter((row) => !row.searchOnly)),
+      nativeRows,
+      listedRows: nativeRows.filter((row) => !row.searchOnly),
     };
   }, [
     actionItems,

@@ -8,7 +8,6 @@ import {
   desktopCapturer,
   dialog,
   ipcMain,
-  Menu,
   Notification,
   nativeTheme,
   type Session,
@@ -26,8 +25,11 @@ import {
   PAGE_FIRST_ACTIONS,
 } from "../shared/actions.js";
 import type {
+  BookmarkFolderRename,
   BookmarkMove,
   BookmarkPlacement,
+  BookmarkRemoval,
+  BookmarkUpdate,
 } from "../shared/bookmark-target.js";
 import {
   type BrowserHistory,
@@ -43,7 +45,7 @@ import {
   historyVisitSchema,
 } from "../shared/history.js";
 import { matchesShortcut } from "../shared/keybindings.js";
-import { OPEN_ACTIONS } from "../shared/open-mode.js";
+import type { PageContextMenu } from "../shared/menu.js";
 import { paletteUseSchema } from "../shared/palette.js";
 import type { PasswordFileImportResult } from "../shared/password-import.js";
 import {
@@ -108,6 +110,14 @@ import { DownloadsManager, DownloadsStore } from "./downloads.js";
 import { ExtensionsHost } from "./extensions/host.js";
 import type { WindowProfileRegistry } from "./index.js";
 import { LoginCapture, type LoginSubmission } from "./login-capture.js";
+import { popupNativeMenu } from "./native-menu.js";
+import {
+  menuActions,
+  type PageMenuHost,
+  pageMenu,
+  pageMenuTargetOf,
+  runPageMenuAction,
+} from "./page-menu.js";
 import { PaletteUsageStore } from "./palette-usage.js";
 import { registerPasskeys } from "./passkeys.js";
 import { generateStrongPassword } from "./password-generator.js";
@@ -1042,6 +1052,175 @@ export function registerBrowserSupport(
     }
   };
 
+  // --- page context menus (ADR 0221) ---
+  /**
+   * Each page's open context menu: the window draws it, and the pick (or
+   * none) comes back here to run against the page it was built for.
+   */
+  const pageMenus = new Map<
+    string,
+    {
+      guest: WebContents;
+      host: WebContents;
+      /** What a pick may name: the menu's enabled entries. */
+      actions: Set<string>;
+      run: (action: string) => void;
+    }
+  >();
+  /** Each page's latest right-click: an older one still reading the vault yields. */
+  const pageMenuRequests = new Map<number, number>();
+  /** Where a page's menu sends what it opens and what it asks the OS for. */
+  const pageMenuHost = ({
+    opener,
+    page,
+    password,
+    runExtension = () => false,
+  }: {
+    /** The tab whose window opens links as tabs (a popup's opener). */
+    opener: WebContents;
+    page: WebContents;
+    password?: { profileId: string; origin: string };
+    runExtension?: (action: string) => boolean;
+  }): PageMenuHost => ({
+    openUrl: (url, mode) => {
+      const host = opener.isDestroyed() ? null : opener.hostWebContents;
+      if (host && !host.isDestroyed())
+        host.send("catamorphic:browser-open-url", { url, mode });
+    },
+    writeText: (text) => clipboard.writeText(text),
+    // The person chose this link's app from the menu, as a click on it
+    // would have; nothing in the page asked for it.
+    openExternal: (url) => void shell.openExternal(url).catch(() => {}),
+    showEmojiPanel: () => app.showEmojiPanel(),
+    fillCredential: (id) => {
+      if (!password) return;
+      void vault.reveal(password.profileId, id).then((revealed) => {
+        if (
+          !revealed ||
+          page.isDestroyed() ||
+          httpOrigin(page.getURL()) !== password.origin
+        )
+          return;
+        page.send("catamorphic:fill-credentials", {
+          username: revealed.username,
+          password: revealed.password,
+        });
+      });
+    },
+    suggestPassword: () => {
+      if (password && httpOrigin(page.getURL()) === password.origin)
+        fillGenerated(page, password.origin, generateStrongPassword());
+    },
+    runExtension,
+  });
+  /**
+   * A page's menu, natively: for windows without a workspace to draw it (a
+   * sign-in popup) and extension popups and side panels, which hold focus
+   * in ways an in-window menu over them would break.
+   */
+  const showNativePageMenu = (
+    window: BrowserWindow,
+    page: WebContents,
+    params: Electron.ContextMenuParams,
+    opener: WebContents,
+  ) => {
+    const target = pageMenuTargetOf(params);
+    const items = pageMenu(target, {
+      canGoBack: page.navigationHistory.canGoBack(),
+      canGoForward: page.navigationHistory.canGoForward(),
+      mac: process.platform === "darwin",
+      emojiPanel: app.isEmojiPanelSupported(),
+      credentials: null,
+      extensions: [],
+    });
+    void popupNativeMenu(window, items).then((action) => {
+      if (action)
+        runPageMenuAction({
+          action,
+          target,
+          page,
+          host: pageMenuHost({ opener, page }),
+        });
+    });
+  };
+  const showPageMenu = async (
+    guest: WebContents,
+    params: Electron.ContextMenuParams,
+  ) => {
+    const host = guest.hostWebContents;
+    if (!host || host.isDestroyed()) return;
+    if (extensions.isView(guest)) {
+      const window = BrowserWindow.fromWebContents(host);
+      if (window) showNativePageMenu(window, guest, params, guest);
+      return;
+    }
+    const request = (pageMenuRequests.get(guest.id) ?? 0) + 1;
+    pageMenuRequests.set(guest.id, request);
+    const target = pageMenuTargetOf(params);
+    // Extensions' own items (chrome.contextMenus) follow Work's entries.
+    const extension = extensions.pageMenu(guest, params);
+    const password =
+      params.formControlType === "input-password" ? guestContext(guest) : null;
+    // A vault that cannot open still leaves the field its edit commands.
+    const credentials = password
+      ? await vault.list(password.profileId, password.origin).catch(() => null)
+      : null;
+    if (
+      guest.isDestroyed() ||
+      host.isDestroyed() ||
+      pageMenuRequests.get(guest.id) !== request
+    )
+      return;
+    const items = pageMenu(target, {
+      canGoBack: guest.navigationHistory.canGoBack(),
+      canGoForward: guest.navigationHistory.canGoForward(),
+      mac: process.platform === "darwin",
+      emojiPanel: app.isEmojiPanelSupported(),
+      credentials:
+        credentials?.map(({ id, username }) => ({ id, username })) ?? null,
+      extensions: extension.items,
+    });
+    // One menu per page: a newer right-click replaces the one before it.
+    for (const [menuId, menu] of pageMenus)
+      if (menu.guest === guest) pageMenus.delete(menuId);
+    const menuId = randomUUID();
+    const menuHost = pageMenuHost({
+      opener: guest,
+      page: guest,
+      password: password ?? undefined,
+      runExtension: extension.run,
+    });
+    pageMenus.set(menuId, {
+      guest,
+      host,
+      actions: new Set(menuActions(items)),
+      run: (action) =>
+        runPageMenuAction({ action, target, page: guest, host: menuHost }),
+    });
+    // Chromium reports a guest's right-click in its window's view, in
+    // device-independent pixels: the window's own zoom scales them to CSS.
+    const zoom = host.getZoomFactor() || 1;
+    host.send("catamorphic:browser-context-menu", {
+      guestId: guest.id,
+      menuId,
+      x: params.x / zoom,
+      y: params.y / zoom,
+      items,
+    } satisfies PageContextMenu);
+  };
+  ipcMain.handle(
+    "catamorphic:browser-context-menu-pick",
+    (event, input: unknown) => {
+      const { menuId, action } = z
+        .object({ menuId: z.string(), action: z.string().nullable() })
+        .parse(input);
+      const menu = pageMenus.get(menuId);
+      if (!menu || menu.host !== event.sender) return;
+      pageMenus.delete(menuId);
+      if (action && menu.actions.has(action)) menu.run(action);
+    },
+  );
+
   const guestMacros = new Map<string, TerminalMacro[]>();
   profileConfig.onPrefsChanged((profileId, prefs) =>
     guestMacros.set(profileId, prefs.terminalMacros),
@@ -1113,6 +1292,10 @@ export function registerBrowserSupport(
         if (/^https?:/i.test(url)) openAsTab(url);
         return { action: "deny" };
       });
+      // A popup has no workspace to draw a menu in: the same menu, native.
+      popup.webContents.on("context-menu", (_event, params) =>
+        showNativePageMenu(popup, popup.webContents, params, contents),
+      );
     });
     contents.on("before-input-event", (event, input) => {
       if (input.type !== "keyDown") return;
@@ -1235,78 +1418,9 @@ export function registerBrowserSupport(
     });
 
     contents.on("context-menu", (_event, params) => {
-      // Extensions' own items (chrome.contextMenus) follow Work's entries.
-      const extensionItems = extensions.pageMenu(contents, params);
-      const popup = (template: Electron.MenuItemConstructorOptions[]) => {
-        const items =
-          extensionItems.length === 0
-            ? template
-            : template.length === 0
-              ? extensionItems
-              : [
-                  ...template,
-                  { type: "separator" as const },
-                  ...extensionItems,
-                ];
-        if (items.length > 0) Menu.buildFromTemplate(items).popup();
-      };
-      if (/^https?:\/\//i.test(params.linkURL)) {
-        const url = params.linkURL;
-        popup(
-          OPEN_ACTIONS.map(({ label, mode }) => ({
-            label,
-            click: () => {
-              if (contents.isDestroyed()) return;
-              if (mode === "replace") void contents.loadURL(url);
-              else {
-                const host = contents.hostWebContents;
-                if (host && !host.isDestroyed())
-                  host.send("catamorphic:browser-open-url", { url, mode });
-              }
-            },
-          })),
-        );
-        return;
-      }
-      const context =
-        params.formControlType === "input-password"
-          ? guestContext(contents)
-          : null;
-      if (!context) {
-        popup([]);
-        return;
-      }
-      void vault.list(context.profileId, context.origin).then((credentials) => {
-        if (contents.isDestroyed()) return;
-        const stillHere = () =>
-          !contents.isDestroyed() &&
-          httpOrigin(contents.getURL()) === context.origin;
-        const template: Electron.MenuItemConstructorOptions[] = credentials.map(
-          (credential) => ({
-            label: credential.username || "Saved password",
-            click: () => {
-              void vault
-                .reveal(context.profileId, credential.id)
-                .then((revealed) => {
-                  if (!revealed || !stillHere()) return;
-                  contents.send("catamorphic:fill-credentials", {
-                    username: revealed.username,
-                    password: revealed.password,
-                  });
-                });
-            },
-          }),
-        );
-        if (template.length > 0) template.push({ type: "separator" });
-        template.push({
-          label: "Suggest strong password",
-          click: () => {
-            if (stillHere())
-              fillGenerated(contents, context.origin, generateStrongPassword());
-          },
-        });
-        popup(template);
-      });
+      showPageMenu(contents, params).catch((error: unknown) =>
+        console.error("[browser] Page menu failed:", error),
+      );
     });
     // A request to open another app belongs to the page that made it: once
     // the tab commits another page, answering must not launch anything.
@@ -1323,6 +1437,9 @@ export function registerBrowserSupport(
     // window it was sent to takes it back.
     const hostForWithdrawal = contents.hostWebContents;
     contents.once("destroyed", () => {
+      pageMenuRequests.delete(contents.id);
+      for (const [menuId, menu] of pageMenus)
+        if (menu.guest === contents) pageMenus.delete(menuId);
       loginCapture.forget(contents.id);
       suggestedPasswords.delete(contents.id);
       mediaRefusalsShown.delete(contents.id);
@@ -2431,25 +2548,15 @@ export function registerBrowserSupport(
   );
   ipcMain.handle(
     "catamorphic:bookmarks-update",
-    (
-      _event,
-      input: {
-        projectId: string;
-        profileId: string;
-        id: string;
-        label?: string;
-        url?: string;
-        folderId?: string | null;
-      },
-    ) => {
-      bookmarks.update(input.projectId, input.id, input);
+    (_event, input: BookmarkUpdate) => {
+      bookmarks.update(input);
       bookmarksChanged(input.projectId, input.profileId);
     },
   );
   ipcMain.handle(
     "catamorphic:bookmarks-remove",
-    (_event, input: { projectId: string; profileId: string; id: string }) => {
-      bookmarks.remove(input.projectId, input.id);
+    (_event, input: BookmarkRemoval) => {
+      bookmarks.remove(input);
       bookmarksChanged(input.projectId, input.profileId);
     },
   );
@@ -2468,32 +2575,9 @@ export function registerBrowserSupport(
     },
   );
   ipcMain.handle(
-    "catamorphic:bookmarks-rename",
-    (
-      _event,
-      input: {
-        projectId: string;
-        profileId: string;
-        id: string;
-        label: string;
-      },
-    ) => {
-      bookmarks.rename(input.projectId, input.profileId, input.id, input.label);
-      bookmarksChanged(input.projectId, input.profileId);
-    },
-  );
-  ipcMain.handle(
-    "catamorphic:bookmarks-remove-pinned",
-    (_event, input: { projectId: string; profileId: string; id: string }) => {
-      bookmarks.removePinned(input.profileId, input.id);
-      bookmarksChanged(input.projectId, input.profileId);
-    },
-  );
-
-  ipcMain.handle(
-    "catamorphic:bookmarks-remove-library",
-    (_event, input: { projectId: string; profileId: string; id: string }) => {
-      bookmarks.removeLibrary(input.profileId, input.id);
+    "catamorphic:bookmarks-rename-folder",
+    (_event, input: BookmarkFolderRename) => {
+      bookmarks.renameFolder(input);
       bookmarksChanged(input.projectId, input.profileId);
     },
   );

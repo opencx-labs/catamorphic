@@ -21,8 +21,11 @@ const invoke = <T>(channel: string, ...args: unknown[]): Promise<T> =>
 import type { AgentCommandsResult } from "../shared/agent-commands.js";
 import type { AgentDefaultModelResult } from "../shared/agent-default-model.js";
 import type {
+  BookmarkFolderRename,
   BookmarkMove,
   BookmarkPlacement,
+  BookmarkRemoval,
+  BookmarkUpdate,
 } from "../shared/bookmark-target.js";
 import type {
   BrowserHistory,
@@ -41,7 +44,6 @@ import type {
 } from "../shared/desktop-workspace.js";
 import type {
   DockDrag,
-  DockMenuEntry,
   DockRegion,
   DockSize,
 } from "../shared/dock-position.js";
@@ -53,6 +55,7 @@ import type {
   GitOverviewSubscription,
   GitRecordInput,
 } from "../shared/git.js";
+import type { MenuItem, PageContextMenu } from "../shared/menu.js";
 import type { OpenMode } from "../shared/open-mode.js";
 import type { PrCommentInput, PrDecisionInput } from "../shared/pr-details.js";
 import type { SettingsScope } from "../shared/settings.js";
@@ -135,7 +138,7 @@ const api = {
   ): Promise<boolean> => invoke("catamorphic:dock-shape", rects),
   dockDetach: (detached: boolean): Promise<void> =>
     invoke("catamorphic:dock-detach", detached),
-  dockMenu: (entries: readonly DockMenuEntry[]): Promise<string | null> =>
+  dockMenu: (entries: readonly MenuItem[]): Promise<string | null> =>
     invoke("catamorphic:dock-menu", entries),
   dockRegion: (region: DockRegion | null): Promise<void> =>
     invoke("catamorphic:dock-region", region),
@@ -1029,6 +1032,18 @@ const api = {
     matches: { url: string; title: string }[];
     inline: string | null;
   }> => invoke("catamorphic:browser-suggest", input),
+  onBrowserContextMenu: (
+    listener: (menu: PageContextMenu) => void,
+  ): (() => void) => {
+    const handler = (_event: unknown, menu: PageContextMenu) => listener(menu);
+    ipcRenderer.on("catamorphic:browser-context-menu", handler);
+    return () =>
+      ipcRenderer.removeListener("catamorphic:browser-context-menu", handler);
+  },
+  browserContextMenuPick: (input: {
+    menuId: string;
+    action: string | null;
+  }): Promise<void> => invoke("catamorphic:browser-context-menu-pick", input),
   onBrowserOpenUrl: (
     listener: (url: string, mode?: OpenMode) => void,
   ): (() => void) => {
@@ -1327,19 +1342,10 @@ const api = {
     label: string;
     parentId?: string;
   }): Promise<unknown> => invoke("catamorphic:bookmarks-add-folder", input),
-  bookmarksUpdate: (input: {
-    projectId: string;
-    profileId: string;
-    id: string;
-    label?: string;
-    url?: string;
-    folderId?: string | null;
-  }): Promise<void> => invoke("catamorphic:bookmarks-update", input),
-  bookmarksRemove: (input: {
-    projectId: string;
-    profileId: string;
-    id: string;
-  }): Promise<void> => invoke("catamorphic:bookmarks-remove", input),
+  bookmarksUpdate: (input: BookmarkUpdate): Promise<void> =>
+    invoke("catamorphic:bookmarks-update", input),
+  bookmarksRemove: (input: BookmarkRemoval): Promise<void> =>
+    invoke("catamorphic:bookmarks-remove", input),
   bookmarksPin: (input: {
     projectId: string;
     profileId: string;
@@ -1350,22 +1356,8 @@ const api = {
     profileId: string;
     id: string;
   }): Promise<void> => invoke("catamorphic:bookmarks-unpin", input),
-  bookmarksRemoveLibrary: (input: {
-    projectId: string;
-    profileId: string;
-    id: string;
-  }): Promise<void> => invoke("catamorphic:bookmarks-remove-library", input),
-  bookmarksRemovePinned: (input: {
-    projectId: string;
-    profileId: string;
-    id: string;
-  }): Promise<void> => invoke("catamorphic:bookmarks-remove-pinned", input),
-  bookmarksRename: (input: {
-    projectId: string;
-    profileId: string;
-    id: string;
-    label: string;
-  }): Promise<void> => invoke("catamorphic:bookmarks-rename", input),
+  bookmarksRenameFolder: (input: BookmarkFolderRename): Promise<void> =>
+    invoke("catamorphic:bookmarks-rename-folder", input),
   onBookmarksChanged: (listener: (data: unknown) => void): (() => void) => {
     const handler = (_event: unknown, data: unknown) => listener(data);
     ipcRenderer.on("catamorphic:bookmarks-changed", handler);

@@ -81,6 +81,11 @@ export interface AppPrefs {
   pinnedBookmarks: "tiles" | "list";
   linkOpenMode: "tab" | "floating";
   previewLinksWithAlt: boolean;
+  /**
+   * Opening a page already open in a tab (a link, a bookmark, a link from
+   * another app) goes to that tab; a new tab asked for on purpose stays new.
+   */
+  switchToOpenTab: boolean;
   /** How long a browser tab stays out of sight before it sleeps. */
   browserTabSleep: BrowserTabSleep;
   terminalMacros: TerminalMacro[];
@@ -155,6 +160,7 @@ export const DEFAULT_PREFS: AppPrefs = {
   pinnedBookmarks: "tiles",
   linkOpenMode: "tab",
   previewLinksWithAlt: true,
+  switchToOpenTab: true,
   browserTabSleep: "1h",
   terminalMacros: [],
   terminalAppearance: "app",
@@ -290,6 +296,10 @@ export function normalizePrefs(raw: unknown): AppPrefs {
       typeof record.previewLinksWithAlt === "boolean"
         ? record.previewLinksWithAlt
         : true,
+    switchToOpenTab:
+      typeof record.switchToOpenTab === "boolean"
+        ? record.switchToOpenTab
+        : DEFAULT_PREFS.switchToOpenTab,
     browserTabSleep:
       BROWSER_TAB_SLEEP.find((value) => value === record.browserTabSleep) ??
       DEFAULT_PREFS.browserTabSleep,

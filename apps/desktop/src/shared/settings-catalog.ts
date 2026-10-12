@@ -55,6 +55,9 @@ export const SETTINGS_CATALOG: readonly SettingsEntry[] = [
         ...(key === "browserTabSleep"
           ? ["memory", "saver", "inactive", "discard", "browser", "tabs"]
           : []),
+        ...(key === "switchToOpenTab"
+          ? ["existing", "duplicate", "reuse", "already open", "links", "tabs"]
+          : []),
         ...(key === "contentFrame"
           ? ["border", "rounded", "inset", "window", "frame"]
           : []),

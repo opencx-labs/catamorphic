@@ -249,7 +249,10 @@ export function SettingsScreen({
             </p>
             <DefaultBrowserButton className="mt-3 max-w-xs" />
           </section>
-          <LayoutSection heading="Browser" keys={["browserTabSleep"]} />
+          <LayoutSection
+            heading="Browser"
+            keys={["switchToOpenTab", "browserTabSleep"]}
+          />
           <LayoutSection projectId={projectId} />
           {/Mac/.test(navigator.platform) && (
             <LayoutSection heading="Window" keys={["windowButtons"]} />

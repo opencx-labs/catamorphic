@@ -1,6 +1,6 @@
 import http from "node:http";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { type AppHandle, launchApp } from "./harness.js";
+import { type AppHandle, focusWindow, launchApp } from "./harness.js";
 
 /**
  * Find in page, as in Chrome: Cmd+F opens the tab's find bar (unless the
@@ -48,14 +48,18 @@ const view = `document.querySelector('webview')`;
 const findInput = `document.querySelector('input[aria-label="Find in page"]')`;
 const count = `document.querySelector('[data-testid="find-count"]')?.textContent`;
 /** A key pressed inside the page, through the guest's real input path. */
-const pageKey = (keyCode: string, modifiers: string[] = []) =>
-  app.eval(`(() => {
+// A key pressed in the page, through its real input path, which needs the
+// window focused.
+const pageKey = async (keyCode: string, modifiers: string[] = []) => {
+  await focusWindow(app);
+  return app.eval(`(() => {
     const page = ${view};
     page.focus();
     page.sendInputEvent({ type: 'keyDown', keyCode: ${JSON.stringify(keyCode)}, modifiers: ${JSON.stringify(modifiers)} });
     page.sendInputEvent({ type: 'keyUp', keyCode: ${JSON.stringify(keyCode)}, modifiers: ${JSON.stringify(modifiers)} });
     return true;
   })()`);
+};
 const command = mac ? "meta" : "control";
 const SHIFT = 8;
 const inGuest = <T>(code: string) =>

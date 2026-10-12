@@ -294,7 +294,12 @@ describe("BookmarksStore", () => {
       bookmark,
     ]);
     expect(value.library("other-profile").bookmarks).toHaveLength(0);
-    value.removeLibrary("profile", bookmark.folderId ?? "missing");
+    value.remove({
+      projectId: "project",
+      profileId: "profile",
+      scope: "library",
+      id: bookmark.folderId ?? "missing",
+    });
     expect(value.library("profile").bookmarks[0]?.folderId).toBe(
       value.library("profile").folders[0]?.id,
     );
@@ -443,5 +448,144 @@ describe("BookmarksStore", () => {
       url: "https://example.com",
     });
     expect(unpinned?.folderId).toBeUndefined();
+  });
+
+  it("edits a bookmark's name, address and folder wherever it lives", () => {
+    const { value } = store();
+    const where = { projectId: "project", profileId: "profile" };
+    value.importPinned("profile", {
+      folders: [{ path: ["Work"] }],
+      bookmarks: [{ label: "Docs", url: "https://docs.test/start" }],
+    });
+    value.observeFavicon({
+      ...where,
+      projectIds: [],
+      url: "https://docs.test/start",
+      faviconUrl: "https://docs.test/icon.png",
+    });
+    const pinned = value.pinned("profile");
+    const folder = pinned.folders[0];
+    const docs = pinned.bookmarks[0];
+    if (!folder || !docs) throw new Error("import missing");
+
+    // Another page of the same site keeps the icon.
+    value.update({
+      ...where,
+      scope: "pinned",
+      id: docs.id,
+      label: "  Reference  ",
+      url: "https://docs.test/reference",
+      folderId: folder.id,
+    });
+    expect(value.pinned("profile").bookmarks[0]).toMatchObject({
+      id: docs.id,
+      label: "Reference",
+      url: "https://docs.test/reference",
+      folderId: folder.id,
+      faviconUrl: "https://docs.test/icon.png",
+    });
+
+    // Another site drops it until the new page reports its own; an emptied
+    // name keeps the old one; null takes it back to the root.
+    value.update({
+      ...where,
+      scope: "pinned",
+      id: docs.id,
+      label: " ",
+      url: "https://www.other.test/",
+      folderId: null,
+    });
+    const moved = value.pinned("profile").bookmarks[0];
+    expect(moved).toMatchObject({
+      label: "Reference",
+      url: "https://www.other.test/",
+    });
+    expect(moved?.folderId).toBeUndefined();
+    expect(moved?.faviconUrl).toBeUndefined();
+    // The project's tree never saw it.
+    expect(value.forProject("project").bookmarks).toEqual([]);
+  });
+
+  it("keeps an edit to a pinned library bookmark when it is unpinned", () => {
+    const { value } = store();
+    const where = { projectId: "project", profileId: "profile" };
+    value.importBookmarks("profile", {
+      folders: [],
+      bookmarks: [{ label: "Docs", url: "https://docs.test/" }],
+    });
+    const saved = value.library("profile").bookmarks[0];
+    if (!saved) throw new Error("import missing");
+    value.pin("project", "profile", saved.id);
+    value.update({
+      ...where,
+      scope: "pinned",
+      id: saved.id,
+      label: "Reference",
+      url: "https://docs.test/reference",
+    });
+    value.unpin("profile", "project", saved.id);
+    expect(value.pinned("profile").bookmarks).toEqual([]);
+    expect(value.library("profile").bookmarks[0]).toMatchObject({
+      id: saved.id,
+      label: "Reference",
+      url: "https://docs.test/reference",
+    });
+  });
+
+  it("refuses an address that is not a web page's, and a bookmark that is gone", () => {
+    const { value } = store();
+    const where = { projectId: "project", profileId: "profile" };
+    const bookmark = value.addBookmark("project", {
+      label: "Docs",
+      url: "https://docs.test/",
+    });
+    expect(() =>
+      value.update({
+        ...where,
+        scope: "project",
+        id: bookmark.id,
+        url: "javascript:alert(1)",
+      }),
+    ).toThrow("Enter an http or https address.");
+    expect(() =>
+      value.update({ ...where, scope: "pinned", id: bookmark.id, label: "X" }),
+    ).toThrow("This bookmark no longer exists.");
+    expect(value.forProject("project").bookmarks[0]).toEqual(bookmark);
+  });
+
+  it("renames and removes folders in the scope that holds them", () => {
+    const { value } = store();
+    const where = { projectId: "project", profileId: "profile" };
+    value.importPinned("profile", {
+      folders: [{ path: ["Work"] }],
+      bookmarks: [
+        { label: "Docs", url: "https://docs.test/", folderPath: ["Work"] },
+      ],
+    });
+    const folder = value.pinned("profile").folders[0];
+    if (!folder) throw new Error("import missing");
+    value.renameFolder({
+      ...where,
+      scope: "pinned",
+      id: folder.id,
+      label: "Reading",
+    });
+    expect(value.pinned("profile").folders[0]?.label).toBe("Reading");
+    expect(() =>
+      value.renameFolder({
+        ...where,
+        scope: "pinned",
+        id: folder.id,
+        label: "",
+      }),
+    ).toThrow("Name the folder.");
+
+    // Removing a pinned folder keeps its bookmarks, one level up.
+    value.remove({ ...where, scope: "pinned", id: folder.id });
+    expect(value.pinned("profile").folders).toEqual([]);
+    expect(value.pinned("profile").bookmarks[0]).toMatchObject({
+      label: "Docs",
+    });
+    expect(value.pinned("profile").bookmarks[0]?.folderId).toBeUndefined();
   });
 });

@@ -11,30 +11,31 @@ import {
   openModeFromEvent,
 } from "../../shared/open-mode.js";
 import { parseSurfaceLink } from "../../shared/surface-link.js";
-import { MenuPortal, useMenuDismiss } from "./sidebar-item-row.js";
+import { type MenuAt, MenuPortal, menuAtPointer } from "./menu.js";
 
 function useResourceMenu() {
-  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  const [menu, setMenu] = useState<MenuAt | null>(null);
   const [open, setOpen] = useState(false);
   const pending = useRef<OpenMode | undefined>(undefined);
   const choose = useRef<(mode: OpenMode) => void>(() => {});
-  useMenuDismiss({ open, close: () => setOpen(false) });
   return {
     show(position: { x: number; y: number }, onOpen: (mode: OpenMode) => void) {
       pending.current = undefined;
       choose.current = onOpen;
-      setMenu(position);
+      setMenu(menuAtPointer({ clientX: position.x, clientY: position.y }));
       setOpen(true);
     },
     portal: menu && (
       <MenuPortal
         open={open}
-        position={menu}
+        at={menu}
+        label="Open"
         entries={OPEN_ACTIONS}
         onPick={(entry) => {
           pending.current = entry.mode;
           setOpen(false);
         }}
+        onDismiss={() => setOpen(false)}
         onExited={() => {
           setMenu(null);
           const mode = pending.current;
