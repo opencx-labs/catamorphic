@@ -1,4 +1,4 @@
-import type { DB } from "@catamorphic/db";
+import { type DB, jsonbText } from "@catamorphic/db";
 import { getTracer, withSpan } from "@catamorphic/otel";
 import type { Kysely } from "kysely";
 import { type Identity, identityCovers } from "../identity.js";
@@ -99,12 +99,12 @@ export class AppStorageService {
           .values({
             app_id: app.id,
             external_user_id: identity.externalUserId,
-            data: JSON.stringify(data),
+            data: jsonbText(data),
             updated_at: new Date(),
           })
           .onConflict((oc) =>
             oc.columns(["app_id", "external_user_id"]).doUpdateSet({
-              data: JSON.stringify(data),
+              data: jsonbText(data),
               updated_at: new Date(),
             }),
           )

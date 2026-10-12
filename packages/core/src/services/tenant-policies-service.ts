@@ -1,4 +1,4 @@
-import type { DB } from "@catamorphic/db";
+import { type DB, jsonbText } from "@catamorphic/db";
 import type { Kysely, Transaction } from "kysely";
 import { sql } from "kysely";
 import type { RateLimit } from "./rate-reservations-service.js";
@@ -303,5 +303,5 @@ function requirePositiveFinite(value: number, name: string): void {
 }
 
 function jsonbColumn(value: unknown) {
-  return sql<never>`${JSON.stringify(value)}::jsonb`;
+  return sql<never>`${jsonbText(value)}::jsonb`;
 }

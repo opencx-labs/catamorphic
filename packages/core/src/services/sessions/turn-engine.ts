@@ -28,7 +28,7 @@ import {
   type RunnerFrame,
   type ThreadBinding,
 } from "@catamorphic/agent-protocol/runner";
-import type { DB, Json } from "@catamorphic/db";
+import { type DB, type Json, jsonbText } from "@catamorphic/db";
 import {
   getTracer,
   setSpanCorrelation,
@@ -262,9 +262,9 @@ function runnerWrite(
   applied: readonly string[] = [],
 ) {
   const { calls: _calls, applied: _applied, ...rest } = runner;
-  return sql<Json>`${JSON.stringify(rest)}::jsonb || jsonb_build_object(
-    'calls', coalesce(runner -> 'calls', '{}'::jsonb) || ${JSON.stringify(Object.fromEntries(added))}::jsonb,
-    'applied', coalesce(runner -> 'applied', '{}'::jsonb) || ${JSON.stringify(Object.fromEntries(applied.map((callId) => [callId, true])))}::jsonb)`;
+  return sql<Json>`${jsonbText(rest)}::jsonb || jsonb_build_object(
+    'calls', coalesce(runner -> 'calls', '{}'::jsonb) || ${jsonbText(Object.fromEntries(added))}::jsonb,
+    'applied', coalesce(runner -> 'applied', '{}'::jsonb) || ${jsonbText(Object.fromEntries(applied.map((callId) => [callId, true])))}::jsonb)`;
 }
 
 /**

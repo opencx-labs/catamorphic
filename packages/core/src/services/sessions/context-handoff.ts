@@ -183,5 +183,10 @@ function quoted(value: string, max: number): string {
 
 function truncate(value: string, max: number): string {
   const text = value.replace(/\s+\n/g, "\n").trim();
-  return text.length > max ? `${text.slice(0, Math.max(0, max - 1))}…` : text;
+  if (text.length <= max) return text;
+  const cut = Math.max(0, max - 1);
+  // Never end on the first half of a surrogate pair.
+  const code = text.charCodeAt(cut - 1);
+  const end = code >= 0xd800 && code <= 0xdbff ? cut - 1 : cut;
+  return `${text.slice(0, end)}…`;
 }

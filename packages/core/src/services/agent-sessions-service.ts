@@ -40,7 +40,12 @@ import {
   type McpServerSpec,
   type PolicyLayer,
 } from "@catamorphic/agent-protocol/runner";
-import type { DB, Json, JsonObject } from "@catamorphic/db";
+import {
+  type DB,
+  type Json,
+  type JsonObject,
+  jsonbText,
+} from "@catamorphic/db";
 import { moveCheckoutBase, type ProjectManager } from "@catamorphic/git";
 import { getTracer, markSpanError, withSpan } from "@catamorphic/otel";
 import type { PluginResolver } from "@catamorphic/plugins";
@@ -2276,7 +2281,7 @@ export class AgentSessionsService {
         payload: { itemId },
       });
     // The actor and causation of the workflow-facing events (ADR 0090).
-    await sql`select set_config('catamorphic.session_actor', ${JSON.stringify({ ...inputActor(input), causation: delivery.causation ?? [] })}, true)`.execute(
+    await sql`select set_config('catamorphic.session_actor', ${jsonbText({ ...inputActor(input), causation: delivery.causation ?? [] })}, true)`.execute(
       trx,
     );
     await this.log.append(trx, {
@@ -5220,7 +5225,7 @@ export class AgentSessionsService {
       (await this.prepareSessionCreate(identity, projectId, input));
     const insert = async (transaction: Transaction<DB>) => {
       if (input.origin)
-        await sql`select set_config('catamorphic.session_actor', ${JSON.stringify({ ...input.origin.author, causation: input.origin.causation ?? [] })}, true)`.execute(
+        await sql`select set_config('catamorphic.session_actor', ${jsonbText({ ...input.origin.author, causation: input.origin.causation ?? [] })}, true)`.execute(
           transaction,
         );
       return prepared.insert(transaction);
@@ -7450,7 +7455,7 @@ export class AgentSessionsService {
         ? await readFullSnapshot({ db: this.db, sessionId: sourceSessionId })
         : null;
     const created = await this.db.transaction().execute(async (transaction) => {
-      await sql`select set_config('catamorphic.session_actor', ${JSON.stringify({ ...origin.author, causation: origin.causation ?? [] })}, true)`.execute(
+      await sql`select set_config('catamorphic.session_actor', ${jsonbText({ ...origin.author, causation: origin.causation ?? [] })}, true)`.execute(
         transaction,
       );
       const lockedSource = await transaction
@@ -8693,7 +8698,7 @@ export class AgentSessionsService {
 
         const busy = await this.db.transaction().execute(async (trx) => {
           if (input.origin)
-            await sql`select set_config('catamorphic.session_actor', ${JSON.stringify({ ...input.origin.author, causation: input.origin.causation ?? [] })}, true)`.execute(
+            await sql`select set_config('catamorphic.session_actor', ${jsonbText({ ...input.origin.author, causation: input.origin.causation ?? [] })}, true)`.execute(
               trx,
             );
           for (const id of sessionIds)
@@ -9127,7 +9132,7 @@ export class AgentSessionsService {
       .transaction()
       .execute(async (transaction) => {
         if (input.origin)
-          await sql`select set_config('catamorphic.session_actor', ${JSON.stringify({ ...input.origin.author, causation: input.origin.causation ?? [] })}, true)`.execute(
+          await sql`select set_config('catamorphic.session_actor', ${jsonbText({ ...input.origin.author, causation: input.origin.causation ?? [] })}, true)`.execute(
             transaction,
           );
         await transaction
@@ -9311,7 +9316,7 @@ export class AgentSessionsService {
     }
     await this.db.transaction().execute(async (transaction) => {
       if (input.origin)
-        await sql`select set_config('catamorphic.session_actor', ${JSON.stringify({ ...input.origin.author, causation: input.origin.causation ?? [] })}, true)`.execute(
+        await sql`select set_config('catamorphic.session_actor', ${jsonbText({ ...input.origin.author, causation: input.origin.causation ?? [] })}, true)`.execute(
           transaction,
         );
       await transaction

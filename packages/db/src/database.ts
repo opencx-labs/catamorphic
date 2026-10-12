@@ -1,7 +1,7 @@
 import { Kysely, PostgresDialect, WithSchemaPlugin } from "kysely";
 import pg from "pg";
 import { DEFAULT_SCHEMA } from "./config.js";
-import { JsonArrayParametersPlugin } from "./json-parameters.js";
+import { StorableParametersPlugin } from "./storable-parameters.js";
 
 export type CreateDatabaseOptions =
   | {
@@ -64,7 +64,7 @@ export function knownPoolSize(db: object): number | undefined {
 
 export function createDatabase(options: CreateDatabaseOptions) {
   if ("pool" in options) {
-    const db = withJsonArrayParameters(
+    const db = withStorableParameters(
       new Kysely<import("./generated/db.js").DB>({
         dialect: new PostgresDialect({ pool: options.pool }),
         plugins: [new WithSchemaPlugin(options.schema ?? DEFAULT_SCHEMA)],
@@ -95,7 +95,7 @@ export function createDatabase(options: CreateDatabaseOptions) {
     );
   });
 
-  const db = withJsonArrayParameters(
+  const db = withStorableParameters(
     new Kysely<import("./generated/db.js").DB>({
       dialect: new PostgresDialect({ pool }),
     }),
@@ -104,19 +104,21 @@ export function createDatabase(options: CreateDatabaseOptions) {
   return db;
 }
 
-const withJsonArrays = new WeakSet<object>();
+const withStorable = new WeakSet<object>();
 
 /**
- * The same database, sending array parameters to Postgres as JSON text
- * ({@link JsonArrayParametersPlugin}): node-postgres would send them as
- * Postgres arrays, which jsonb stores as `{}` or refuses. Idempotent, and the
- * wrapped instance keeps the pool size recorded for the original. Core
- * applies it to whatever database a host injects.
+ * The same database, sending every parameter as a value Postgres stores
+ * ({@link StorableParametersPlugin}): arrays and plain objects as JSON text
+ * jsonb accepts, strings without U+0000 or half of a surrogate pair.
+ * node-postgres would send an array as a Postgres array, which jsonb stores
+ * as `{}` or refuses, and jsonb refuses half of a surrogate pair. Idempotent, and the wrapped instance
+ * keeps the pool size recorded for the original. Core applies it to
+ * whatever database a host injects.
  */
-export function withJsonArrayParameters<T>(db: Kysely<T>): Kysely<T> {
-  if (withJsonArrays.has(db)) return db;
-  const wrapped = db.withPlugin(new JsonArrayParametersPlugin());
-  withJsonArrays.add(wrapped);
+export function withStorableParameters<T>(db: Kysely<T>): Kysely<T> {
+  if (withStorable.has(db)) return db;
+  const wrapped = db.withPlugin(new StorableParametersPlugin());
+  withStorable.add(wrapped);
   const size = poolSizes.get(db);
   if (size !== undefined) poolSizes.set(wrapped, size);
   return wrapped;

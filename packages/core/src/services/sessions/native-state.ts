@@ -46,7 +46,12 @@ export class NativeStateStore {
             subpath,
             seq,
             entry_uuid: uuid,
-            entry: entry as Json,
+            // As the harness wrote it: json keeps its text, key order and
+            // every character included, and refuses none of it. An entry
+            // may be a bare string (a rollout line that is not JSON), which
+            // both drivers would send as raw text. SQL never reads inside
+            // an entry: a json operator refuses a \u0000 escape in it.
+            entry: sql<Json>`${JSON.stringify(entry)}::json`,
           };
         }),
       )

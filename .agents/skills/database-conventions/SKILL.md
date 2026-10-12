@@ -45,17 +45,30 @@ const runs = await db
   .execute();
 ```
 
-Pass JSON values to `jsonb` columns as plain JS values. node-postgres would
-send an array as a Postgres array literal, which `jsonb` stores as `{}` or
-refuses. Core therefore applies `withJsonArrayParameters` from `@catamorphic/db`
-to every host's database, and `createDatabase` applies it to its own, so every
-array parameter is sent as JSON text. As a result, never add a Postgres array
-column (`text[]`) or bind an array for `= ANY(...)`: use `jsonb` or `IN` lists.
-An array on the right of a builder comparison is a list (`@> ($1, $2)`); pass
-`eb.val(array)` to compare against one jsonb value.
-A value that can be a bare string (a cursor, a token, a result) still needs
-`jsonColumn` (`::jsonb`): both drivers send a string as raw text, which
-`jsonb` refuses or misreads.
+Pass JSON values to `jsonb` columns as plain JS values. Core applies
+`withStorableParameters` from `@catamorphic/db` to every host's database, and
+`createDatabase` applies it to its own, so every parameter reaches Postgres as
+a value it stores:
+
+- An array or a plain object is sent as JSON text (`jsonbText`). node-postgres
+  would send an array as a Postgres array literal, which `jsonb` stores as `{}`
+  or refuses.
+- In that text, half of a surrogate pair (a string cut at a length through an
+  emoji) and U+0000 become U+FFFD. `jsonb` refuses the first with `invalid
+  input syntax for type json` and the second with `unsupported Unicode escape
+  sequence`, and with either the whole statement.
+- In a string, U+0000 and half of a surrogate pair become U+FFFD too: `text`
+  refuses U+0000, and PGlite miscounts the bytes of half a pair, cutting the
+  value short.
+
+As a result, never add a Postgres array column (`text[]`) or bind an array for
+`= ANY(...)`: use `jsonb` or `IN` lists. An array on the right of a builder
+comparison is a list (`@> ($1, $2)`); pass `eb.val(array)` to compare against
+one jsonb value. JSON text you build yourself skips all this: build it with
+`jsonbText`, not `JSON.stringify`, when it can carry text from people, apps or
+tools. A value that can be a bare string (a cursor, a token, a result) needs
+`jsonColumn` (`jsonbText` cast `::jsonb`): both drivers send a string as raw
+text, which `jsonb` refuses or misreads.
 
 `WithSchemaPlugin` qualifies builder queries only. In a raw `sql` template, do
 not name a table bare, since a host-owned pool never has Catamorphic's

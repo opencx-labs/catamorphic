@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { SessionMessageAuthor } from "@catamorphic/agent-protocol";
-import type { DB, Json } from "@catamorphic/db";
+import { type DB, type Json, jsonbText } from "@catamorphic/db";
 import { getTracer, withSpan } from "@catamorphic/otel";
 import { type Kysely, sql } from "kysely";
 import { z } from "zod";
@@ -481,7 +481,7 @@ export class SessionActionsService {
               .forUpdate()
               .executeTakeFirst();
             if (!owned) throw new Error("Session action lease was replaced");
-            await sql`select set_config('catamorphic.session_actor', ${JSON.stringify({ ...input.author, causation: input.causation ?? [] })}, true)`.execute(
+            await sql`select set_config('catamorphic.session_actor', ${jsonbText({ ...input.author, causation: input.causation ?? [] })}, true)`.execute(
               trx,
             );
             if (
@@ -618,8 +618,12 @@ function actorIdentity(author: SessionMessageAuthor): SessionMessageAuthor {
   };
 }
 
+/**
+ * A value as jsonb stores it, so an action compares equal to its own stored
+ * copy: half of a surrogate pair and U+0000 are U+FFFD there.
+ */
 function json(value: unknown): Json {
-  return JSON.parse(JSON.stringify(value ?? null));
+  return JSON.parse(jsonbText(value));
 }
 function canonical(value: Json): string {
   if (Array.isArray(value)) return JSON.stringify(value.map(canonical));
