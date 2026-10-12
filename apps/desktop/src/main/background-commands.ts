@@ -12,7 +12,9 @@ export type { BackgroundCommandView };
  * and keeps working beside. Each runs in its own agent terminal, so the
  * person can open it and watch; it outlives the turn that started it; and
  * it wakes the agent's chat when it finishes (or prints a line the agent
- * asked to hear about), for every harness alike.
+ * asked to hear about), for every harness alike. Its terminal lives as
+ * long as the command (ADR 0223): once it finishes or is stopped, the
+ * shell ends, and the agent reads what it left from here.
  */
 interface Tracked extends Omit<BackgroundCommandView, "kind" | "key"> {
   key: string;
@@ -33,6 +35,13 @@ interface Tracked extends Omit<BackgroundCommandView, "kind" | "key"> {
   reported: Map<string, number>;
   /** Reads in progress: the agent is watching, so nothing needs waking. */
   reading: number;
+  /** Interrupted and ending: what the shell does meanwhile is not news. */
+  stopping: boolean;
+  /**
+   * Once its terminal ended: the output the agent had not read yet, which
+   * its next read returns (then nothing).
+   */
+  unread: string | null;
 }
 
 export interface BackgroundCommandsDeps {
@@ -175,6 +184,8 @@ export class BackgroundCommands {
       lastOutputWake: 0,
       reported: new Map(),
       reading: 0,
+      stopping: false,
+      unread: null,
     };
     this.commands.set(id, tracked);
     terminals.writeAny(id, this.deps.encode(command));
@@ -262,20 +273,16 @@ export class BackgroundCommands {
     output: string;
   }> {
     const tracked = this.owned(input.sessionId, input.id);
-    if (tracked.status === "running") {
+    if (tracked.status === "running" && !tracked.stopping) {
       const { terminals } = this.deps;
+      // The interrupt ends the command: that is this stop, not its finish.
+      tracked.stopping = true;
       terminals.writeAny(tracked.id, "\u0003");
       const deadline = Date.now() + 2_000;
       while (Date.now() < deadline && terminals.isBusy(tracked.id)) {
         await sleep(100);
       }
-      const output = this.takeOutput(tracked);
-      terminals.kill(tracked.id);
-      tracked.status = "stopped";
-      tracked.reported.clear();
-      tracked.endedAt = Date.now();
-      this.changed();
-      return { status: tracked.status, output };
+      this.end(tracked, "stopped");
     }
     return { status: tracked.status, output: this.takeOutput(tracked) };
   }
@@ -306,6 +313,12 @@ export class BackgroundCommands {
   }
 
   private takeOutput(tracked: Tracked): string {
+    // Its terminal is gone: what it left reads once.
+    if (tracked.unread !== null) {
+      const output = tracked.unread;
+      tracked.unread = "";
+      return output;
+    }
     const raw = this.deps.terminals.readFrom(
       tracked.id,
       tracked.readOffset,
@@ -331,9 +344,23 @@ export class BackgroundCommands {
     this.timer.unref?.();
   }
 
+  /**
+   * The command is over: keep what the agent has not read yet, then end
+   * its terminal. It is no longer running by then, so observe never reads
+   * this kill as the person closing its terminal.
+   */
+  private end(tracked: Tracked, status: "finished" | "stopped"): void {
+    tracked.unread = this.takeOutput(tracked);
+    tracked.status = status;
+    tracked.reported.clear();
+    tracked.endedAt = Date.now();
+    this.deps.terminals.kill(tracked.id);
+    this.changed();
+  }
+
   /** Advance one command: detect its end and watched output, and wake its chat. */
   private observe(tracked: Tracked, opts: { wake: boolean }): void {
-    if (tracked.status !== "running") return;
+    if (tracked.status !== "running" || tracked.stopping) return;
     const { terminals } = this.deps;
     if (tracked.wakeOnOutput && opts.wake) this.scanOutput(tracked);
     const shellExit = terminals.isRunning(tracked.id)
@@ -341,10 +368,7 @@ export class BackgroundCommands {
       : terminals.exitCode(tracked.id);
     if (!terminals.isRunning(tracked.id) && shellExit === undefined) {
       // The person closed its terminal (or the chat was archived).
-      tracked.status = "stopped";
-      tracked.reported.clear();
-      tracked.endedAt = Date.now();
-      this.changed();
+      this.end(tracked, "stopped");
       if (opts.wake)
         this.wake(tracked, {
           key: "closed",
@@ -378,30 +402,32 @@ export class BackgroundCommands {
       }
     }
     if (!finished) return;
-    tracked.status = "finished";
-    tracked.reported.clear();
+    const wake = opts.wake && tracked.wakeOnExit;
+    // Read the wake's tail before ending the terminal takes it away.
+    const tail = wake
+      ? this.deps
+          .modelOutput(
+            terminals.readFrom(tracked.id, tracked.startOffset, RAW_READ_CAP),
+          )
+          .slice(-WAKE_OUTPUT_TAIL)
+      : "";
     tracked.exitCode = exitCode;
-    tracked.endedAt = Date.now();
-    this.changed();
-    if (opts.wake && tracked.wakeOnExit) {
-      const tail = this.deps
-        .modelOutput(
-          terminals.readFrom(tracked.id, tracked.startOffset, RAW_READ_CAP),
-        )
-        .slice(-WAKE_OUTPUT_TAIL);
-      const failed = exitCode !== null && exitCode !== 0;
-      this.wake(tracked, {
-        key: "exit",
-        status: failed ? "failed" : "completed",
-        summary: failed
-          ? `${tracked.description} failed (exit ${exitCode})`
-          : `${tracked.description} finished`,
-        detail: [
-          `Command: ${tracked.command}`,
-          tail ? `Last output:\n${tail}` : "It printed nothing.",
-        ].join("\n"),
-      });
-    }
+    this.end(tracked, "finished");
+    if (!wake) return;
+    const failed = exitCode !== null && exitCode !== 0;
+    this.wake(tracked, {
+      key: "exit",
+      status: failed ? "failed" : "completed",
+      summary: failed
+        ? `${tracked.description} failed (exit ${exitCode})`
+        : `${tracked.description} finished`,
+      detail: [
+        `Command: ${tracked.command}`,
+        tail ? `Last output:\n${tail}` : "It printed nothing.",
+      ].join("\n"),
+      // Its terminal ended with it: there is nothing to open.
+      surfaceKey: null,
+    });
   }
 
   private wake(

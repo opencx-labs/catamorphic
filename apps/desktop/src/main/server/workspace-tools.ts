@@ -880,7 +880,7 @@ export function buildWorkspaceToolkit(
     {
       name: "run_background_command",
       description:
-        "Start a long-running command (a dev server, a watcher, a slow build or test run, anything you would otherwise wait on) in its own background terminal and keep working. It keeps running after this turn, shows as a chip on your chat the person can open to watch, and wakes this chat with a message when it finishes, so never poll with sleep. Use your own shell for quick commands. Returns the command's id, its status, and its first output (a quick failure shows up here). Set wake_on_output to also be woken when a line matches, e.g. 'ready on|listening|error'.",
+        "Start a long-running command (a dev server, a watcher, a slow build or test run, anything you would otherwise wait on) in its own background terminal and keep working. It keeps running after this turn, shows as a chip on your chat the person can open to watch, and wakes this chat with a message when it finishes, so never poll with sleep. Its terminal ends with it; read_background_output still returns its last output. Use your own shell for quick commands. Returns the command's id, its status, and its first output (a quick failure shows up here). Set wake_on_output to also be woken when a line matches, e.g. 'ready on|listening|error'.",
       parameters: {
         command: z.string().describe("The shell command to run"),
         description: z

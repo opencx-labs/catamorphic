@@ -11,6 +11,13 @@ import { createCodexAdapter } from "@catamorphic/codex";
 const adapters = { codex: createCodexAdapter() };
 ```
 
+A host that keeps the adapter for its lifetime can keep each thread's Codex
+up between attempts (ADR 0222) with `createCodexAdapter({ warm: { idleMs,
+max } })`, and calls `adapter.dispose()` as it stops. The next attempt on a
+thread then runs on its loaded thread without restoring the rollout, when
+Work's `lastTurnRef` is the session's own last turn and nothing Codex
+started with changed; the turn settles once its rollout's end is stored.
+
 The adapter takes no per-agent settings. Everything arrives with each
 `AttemptStart`:
 

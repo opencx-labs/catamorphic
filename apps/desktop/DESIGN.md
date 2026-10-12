@@ -2130,3 +2130,16 @@ own page in a transparent view, because the workspace's sheet would open
 behind it. A saved passkey signs in there; one kept on a phone or in iCloud
 Keychain gets the sheet's explanation and Cancel, and the site offers its
 other ways in. See ADR 0220.
+
+### 2026-10-12: An agent's terminal lasts as long as its command
+
+A background command the agent stopped kept its chip spinning forever, and
+one that finished left an idle shell and its chip on the chat for as long as
+the app ran. A terminal now shows as working only while a command runs in
+it, however it ends, and an agent's terminal ends with its command: once it
+finishes or is stopped, its shell ends and its chip leaves the chat. The
+chat's step ("Ran command in background") and its notification stay, and the
+agent still reads what it printed. A terminal the person has open as a tab
+keeps its last output until they close it, and then it is gone; Cmd+Shift+T
+does not offer it back, because there is no process to return to. See ADR
+0223.

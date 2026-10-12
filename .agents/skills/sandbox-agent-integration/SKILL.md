@@ -178,6 +178,16 @@ Rules that hold across harnesses:
   closes it, with its MCP children, when the attempt ends or its transport
   fails. Its native state is the rollout file the runner mirrors. Pending
   approvals are cancelled when their turn ends (ADR 0112).
+- **Warm harnesses** (ADR 0222): a host that keeps its adapters for its
+  lifetime may pass `warm: { idleMs, max }` to `createClaudeCodeAdapter` and
+  `createCodexAdapter`. A thread's CLI or app-server then serves its next
+  attempt when the attempt resumes that thread, Work's `lastTurnRef` is the
+  session's own last turn, and nothing the process started with changed;
+  otherwise the attempt starts cold, and a failed turn ends its harness.
+  The host calls `adapter.dispose()` as
+  it stops. The desktop does this; sandbox runners exit with their attempt
+  and stay cold. Native state is stored as written (`json`), so a cold
+  resume sends the history the model cached.
 - **Sign-ins** stay on the machine they were made on (ADR 0199): an agent with
   `signIn` places only on a machine reporting the chat owner's sign-in, and
   Work never reads or moves the credential.

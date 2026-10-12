@@ -15,12 +15,22 @@ function fakeTerminals() {
       completions: number;
       exit: number | null;
       shellExit?: number;
+      /** How long the shell takes to show an interrupt ended its command. */
+      interruptMs?: number;
+      busyUntil?: number;
     }
   >();
   let next = 0;
   const written: Array<{ id: string; data: string }> = [];
+  const killed: string[] = [];
   return {
     written,
+    killed,
+    /** ^C ends the command at once, but the shell takes a while to show it. */
+    slowInterrupt(id: string, ms: number) {
+      const terminal = state.get(id);
+      if (terminal) terminal.interruptMs = ms;
+    },
     print(id: string, text: string) {
       const terminal = state.get(id);
       if (terminal) terminal.buffer += text;
@@ -57,7 +67,11 @@ function fakeTerminals() {
         written.push({ id, data });
         if (data === "\u0003") {
           const terminal = state.get(id);
-          if (terminal) terminal.completions += 1;
+          if (terminal) {
+            terminal.completions += 1;
+            terminal.exit = 130;
+            terminal.busyUntil = Date.now() + (terminal.interruptMs ?? 0);
+          }
         }
         return true;
       },
@@ -65,7 +79,11 @@ function fakeTerminals() {
       exitCode: (id: string) => state.get(id)?.shellExit,
       isBusy: (id: string) => {
         const terminal = state.get(id);
-        return Boolean(terminal?.running && terminal.completions === 0);
+        return Boolean(
+          terminal?.running &&
+            (terminal.completions === 0 ||
+              Date.now() < (terminal.busyUntil ?? 0)),
+        );
       },
       commandTracking: (id: string) => {
         const terminal = state.get(id);
@@ -81,10 +99,10 @@ function fakeTerminals() {
       bufferLength: (id: string) => state.get(id)?.buffer.length ?? null,
       readFrom: (id: string, offset: number) =>
         state.get(id)?.buffer.slice(offset) ?? "",
+      // Like the real one: a killed terminal is gone, buffer and all.
       kill: (id: string) => {
-        const terminal = state.get(id);
-        if (terminal) terminal.running = false;
-        return true;
+        killed.push(id);
+        return state.delete(id);
       },
     },
   };
@@ -135,8 +153,9 @@ describe("BackgroundCommands", () => {
     fake.print("t1", "error: missing module\n");
     fake.finish("t1", 1);
     await until(() => wakes.length > 0);
-    // A task notification (ADR 0217): one line for the person, the
-    // output for the agent, and the terminal to open.
+    // A task notification (ADR 0217): one line for the person, and the
+    // output for the agent. Its terminal ended with it (ADR 0223), so
+    // there is no terminal to open.
     expect(wakes[0]).toMatchObject({
       sessionId: "chat",
       task: {
@@ -146,7 +165,7 @@ describe("BackgroundCommands", () => {
         status: "failed",
       },
       summary: "Build the app failed (exit 1)",
-      surfaceKey: "terminal:t1",
+      surfaceKey: null,
     });
     expect(wakes[0]?.detail).toContain("Command: bun run build");
     expect(wakes[0]?.detail).toContain("error: missing module");
@@ -154,8 +173,44 @@ describe("BackgroundCommands", () => {
       status: "finished",
       exitCode: 1,
     });
+    expect(fake.killed).toEqual(["t1"]);
+    // The agent still reads what it had not read yet, once.
+    expect(await commands.read({ sessionId: "chat", id: "t1" })).toEqual({
+      status: "finished",
+      exitCode: 1,
+      output: "error: missing module\n",
+    });
+    expect((await commands.read({ sessionId: "chat", id: "t1" })).output).toBe(
+      "",
+    );
+    // Ending its terminal is not the person closing it.
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(wakes).toHaveLength(1);
     commands.dispose();
   }, 10_000);
+
+  it("ends a command's terminal when it finishes while the agent waits on it", async () => {
+    const { fake, commands, wakes } = setup();
+    const started = commands.start({
+      projectId: "p",
+      sessionId: "chat",
+      command: "sleep 2 && echo done",
+      description: "Wait",
+      wakeOnExit: false,
+    });
+    await until(() => fake.written.length > 0);
+    await started;
+    setTimeout(() => {
+      fake.print("t1", "done\n");
+      fake.finish("t1", 0);
+    }, 100);
+    expect(
+      await commands.read({ sessionId: "chat", id: "t1", waitMs: 5_000 }),
+    ).toEqual({ status: "finished", exitCode: 0, output: "done\n" });
+    expect(fake.killed).toEqual(["t1"]);
+    expect(wakes).toEqual([]);
+    commands.dispose();
+  });
 
   it("reads only new output and wakes on watched lines", async () => {
     const { fake, commands, wakes } = setup();
@@ -225,6 +280,8 @@ describe("BackgroundCommands", () => {
       status: "finished",
       exitCode: 0,
     });
+    // Its shell is gone from the app too.
+    expect(fake.killed).toEqual(["t1"]);
     commands.dispose();
   }, 10_000);
 
@@ -238,11 +295,17 @@ describe("BackgroundCommands", () => {
     });
     await until(() => fake.written.length > 0);
     await first;
-    expect(await commands.stop({ sessionId: "chat", id: "t1" })).toMatchObject({
+    fake.print("t1", "line 1\n");
+    expect(await commands.stop({ sessionId: "chat", id: "t1" })).toEqual({
       status: "stopped",
+      output: "line 1\n",
     });
     expect(fake.written.at(-1)?.data).toBe("\u0003");
-    expect(fake.terminals.isRunning("t1")).toBe(false);
+    expect(fake.killed).toEqual(["t1"]);
+    expect(await commands.read({ sessionId: "chat", id: "t1" })).toMatchObject({
+      status: "stopped",
+      output: "",
+    });
 
     const second = commands.start({
       projectId: "p",
@@ -261,6 +324,30 @@ describe("BackgroundCommands", () => {
     });
     commands.dispose();
   }, 15_000);
+
+  it("a stop is a stop, however the interrupted command ends meanwhile", async () => {
+    const { fake, commands, wakes } = setup();
+    const started = commands.start({
+      projectId: "p",
+      sessionId: "chat",
+      command: "bun run dev",
+      description: "Start the dev server",
+    });
+    await until(() => fake.written.length > 0);
+    await started;
+    fake.slowInterrupt("t1", 300);
+    expect(await commands.stop({ sessionId: "chat", id: "t1" })).toMatchObject({
+      status: "stopped",
+    });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(commands.list()[0]).toMatchObject({
+      status: "stopped",
+      exitCode: null,
+    });
+    expect(fake.killed).toEqual(["t1"]);
+    expect(wakes).toEqual([]);
+    commands.dispose();
+  });
 
   it("wakes about a matching line once, however often it prints again", async () => {
     const { fake, commands, wakes } = setup();

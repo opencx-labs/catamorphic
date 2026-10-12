@@ -83,6 +83,11 @@ export {
   AGENT_EFFORT_LEVELS,
   resolveMcpServers,
 } from "./coding-agent/types.js";
+export {
+  type WarmSession,
+  WarmSessions,
+  type WarmSessionsOptions,
+} from "./coding-agent/warm-sessions.js";
 export { CommandDeploymentRuntimeProvider } from "./command-deployment-runtime.js";
 export {
   gitCloneFailure,
