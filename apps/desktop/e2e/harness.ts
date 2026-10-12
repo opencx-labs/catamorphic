@@ -643,6 +643,39 @@ export const setReactValueJs = `const setReactValue = (el, value) => {
     ));
   };`;
 
+/**
+ * Moves the CDP pointer onto `selector` in a web page (`view` is an
+ * expression for its <webview>) until the page's own pointer events put it
+ * there. The window routes input to a page a frame or more after it shows
+ * one, and a press sent before then lands nowhere.
+ */
+export async function pointerOnPage(
+  app: AppHandle,
+  input: { view: string; selector: string; point: { x: number; y: number } },
+): Promise<void> {
+  const inPage = <T>(code: string) =>
+    app.eval<T>(
+      `${input.view}.executeJavaScript(${JSON.stringify(code)}, true)`,
+    );
+  await inPage(
+    "(() => { window.__e2ePointerOn = null; if (!window.__e2ePointerWatched) { window.__e2ePointerWatched = true; addEventListener('pointermove', (event) => { window.__e2ePointerOn = event.target; }, true); } return true; })()",
+  );
+  for (let attempt = 0; ; attempt += 1) {
+    await app.cdp("Input.dispatchMouseEvent", {
+      type: "mouseMoved",
+      x: input.point.x + (attempt % 2),
+      y: input.point.y,
+    });
+    const on = await inPage<boolean>(
+      `document.querySelector(${JSON.stringify(input.selector)}).contains(window.__e2ePointerOn)`,
+    );
+    if (on) return;
+    if (attempt === 50)
+      throw new Error(`${input.selector} never took the pointer`);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+}
+
 export async function terminate(child: ChildProcess): Promise<void> {
   if (child.exitCode === null && child.signalCode === null) {
     const exited = new Promise<void>((resolve) => {

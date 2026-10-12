@@ -1,6 +1,6 @@
 import http from "node:http";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { type AppHandle, launchApp } from "./harness.js";
+import { type AppHandle, launchApp, pointerOnPage } from "./harness.js";
 
 /**
  * Cmd+Left and Cmd+Right go back and forward in a browser tab, but a text
@@ -103,6 +103,7 @@ beforeAll(async () => {
     const frame = ${view}.getBoundingClientRect();
     return { x: frame.left + box.x, y: frame.top + box.y };
   })()`);
+  await pointerOnPage(app, { view, selector: "#next", point: link });
   for (const type of ["mousePressed", "mouseReleased"])
     await app.cdp("Input.dispatchMouseEvent", {
       type,
