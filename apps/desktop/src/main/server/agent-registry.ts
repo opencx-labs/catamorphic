@@ -79,6 +79,7 @@ import {
 } from "./workspace-context-agent.js";
 import {
   buildWorkspaceToolkit,
+  type VoiceControl,
   type WorkspaceTool,
   type WorkspaceToolkit,
 } from "./workspace-tools.js";
@@ -217,7 +218,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
   readonly workspaceToolkit: WorkspaceToolkit | undefined;
   /** The assistant's tools over the person's chats (ADR 0216). */
   private assistantTools: ExtraTool[] = [];
-  private talking: (sessionId: string) => boolean = () => false;
+  private voice: VoiceControl | null = null;
   private readonly harnessComponents: HarnessComponentStore;
   private readonly mcp: DesktopAgentMcp;
 
@@ -1186,7 +1187,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
         ? `${instructions}\n\n${ASSISTANT_INSTRUCTIONS}`
         : instructions,
       context: async (turn: AgentTurnContext) => [
-        ...(turn.sessionId && this.talking(turn.sessionId)
+        ...(turn.sessionId && this.voice?.talking(turn.sessionId)
           ? [VOICE_CONTEXT]
           : []),
         ...(turn.sessionId
@@ -1317,11 +1318,13 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
   }
 
   /**
-   * Late-bound: whether the person is talking with a chat by voice, which
-   * puts voice's note in its turns (ADR 0216).
+   * Late-bound: voice (ADR 0216). Whether the person is talking with a
+   * chat by voice puts voice's note in its turns, and its agent can stop
+   * listening.
    */
-  setVoiceTalking(talking: (sessionId: string) => boolean): void {
-    this.talking = talking;
+  setVoice(voice: VoiceControl): void {
+    this.voice = voice;
+    this.workspaceToolkit?.setVoiceControl(voice);
   }
 
   /** Live policy/configuration, shared by direct and discovered projections. */

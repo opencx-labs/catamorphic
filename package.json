@@ -13,7 +13,6 @@
     "apps/*"
   ],
   "trustedDependencies": [
-    "electron",
     "node"
   ],
   "scripts": {

@@ -1627,6 +1627,193 @@ describe("agent shows and points", () => {
       { label: "attention cleared and the app tab focused" },
     );
   });
+
+  // What an agent does moves as what a person does (DESIGN.md, motion
+  // contract): animationstart records which motion each step played.
+  const recordMotion = () =>
+    run(`
+      window.__agentMotion = [];
+      if (!window.__agentMotionListener) {
+        window.__agentMotionListener = (event) => {
+          if (/^(pane-in|floating-surface-out|agent-pointer)/.test(event.animationName))
+            window.__agentMotion.push(event.animationName);
+        };
+        document.addEventListener('animationstart', window.__agentMotionListener, true);
+      }
+      return true;
+    `);
+  const motion = () => run<string[]>(`return window.__agentMotion;`);
+  const strip = `$$('[data-workspace-visible="true"] [data-tab-orientation] [data-point-key]')`;
+  /** The pane-in an agent's open of `key` plays: from its side of the strip. */
+  const arrivalFrom = (key: string) =>
+    run<string>(`
+      const keys = ${strip}.map((el) => el.getAttribute('data-point-key'));
+      const active = ${strip}.find((el) => el.querySelector('button[aria-current]'))
+        ?.getAttribute('data-point-key');
+      return keys.indexOf(${JSON.stringify(key)}) > keys.indexOf(active)
+        ? 'pane-in-right' : 'pane-in-left';
+    `);
+  /** Sends a message from the chat on screen and waits for the reply. */
+  const askAgent = async (message: string, reply: string) => {
+    const before = await run<number>(
+      `return timelineMessages().filter((m) => m.text.includes(${JSON.stringify(reply)})).length;`,
+    );
+    await run(`
+      const ta = visibleDock().querySelector('[data-composer-input]');
+      setReactValue(ta, ${JSON.stringify(message)});
+      ta.closest('form').requestSubmit();
+      return true;
+    `);
+    await runWait(
+      `return timelineMessages().filter((m) => m.text.includes(${JSON.stringify(reply)})).length > ${before};`,
+      { timeoutMs: 30_000, label: `agent replied ${reply}` },
+    );
+  };
+
+  it("an agent's show brings the tab in from its side of the strip; a click swaps at once", async () => {
+    const page = await run<string>(
+      `return ${strip}.find((el) => el.getAttribute('data-point-key').startsWith('browser:'))
+         ?.getAttribute('data-point-key');`,
+    );
+    expect(page).toBeTruthy();
+    const arrival = await arrivalFrom(page);
+    await recordMotion();
+    await askAgent(
+      `show: ${page}`,
+      `Opened ${page} ("key":"${page}", "opened":"focused")`,
+    );
+    await runWait(
+      `return window.__agentMotion.includes(${JSON.stringify(arrival)});`,
+      { label: "the page arrived from its side of the strip" },
+    );
+    // A person's own click is its own cue: the content swaps at once.
+    await recordMotion();
+    await run(
+      `$('[data-tab-orientation] [data-point-key="app:bg-demo"] button').click(); return true;`,
+    );
+    await runWait(
+      `return !!$('[data-tab-orientation] [data-point-key="app:bg-demo"] button[aria-current]');`,
+      { label: "the app tab is in front" },
+    );
+    await run(
+      `return new Promise((resolve) => setTimeout(() => resolve(true), 400));`,
+    );
+    expect(
+      (await motion()).filter((name) => name.startsWith("pane-in")),
+    ).toEqual([]);
+  });
+
+  it("an agent's close brings the next tab in", async () => {
+    const page = await run<string>(
+      `return ${strip}.find((el) => el.getAttribute('data-point-key').startsWith('browser:'))
+         ?.getAttribute('data-point-key');`,
+    );
+    await askAgent(
+      `show: ${page}`,
+      `Opened ${page} ("key":"${page}", "opened":"focused")`,
+    );
+    await recordMotion();
+    await askAgent(
+      `E2E workspace tool ${JSON.stringify({
+        name: "surface_control",
+        input: { key: page, action: "close" },
+        serial: "agent-close",
+      })}`,
+      "E2E result agent-close:",
+    );
+    await runWait(`return !$('[data-point-key=${JSON.stringify(page)}]');`, {
+      label: "the agent's page closed",
+    });
+    await runWait(
+      `return window.__agentMotion.some((name) => name.startsWith('pane-in'));`,
+      { label: "the next tab arrived" },
+    );
+  });
+
+  it("an agent's show over a floating surface plays the floating exit first", async () => {
+    // The chat as a tab, with its app floating over it: the person still
+    // watches the chat, so the show opens in front.
+    await run(`pressKey('m', { metaKey: true, shiftKey: true }); return true;`);
+    await runWait(`return !floatingDock() && !!visibleDock();`, {
+      label: "chat is a tab",
+    });
+    await run(`
+      visibleDock()
+        .querySelector('[data-testid="surface-chip"][data-kind="app"] button')
+        .dispatchEvent(new MouseEvent('click', { bubbles: true, altKey: true }));
+      return true;
+    `);
+    await runWait(`return !!$('[data-floating-surface="app:bg-demo"]');`, {
+      label: "the app floats over the chat",
+    });
+    await recordMotion();
+    const url = "https://example.com/?agent-motion";
+    await askAgent(`show: ${url}`, `Opened ${url}`);
+    await runWait(`return !$('[data-floating-surface]') && !!floatingDock();`, {
+      label: "the floating app left and the chat stepped aside",
+    });
+    const played = await motion();
+    const exit = played.indexOf("floating-surface-out");
+    expect(exit).toBeGreaterThanOrEqual(0);
+    expect(
+      played.findIndex((name) => name.startsWith("pane-in")),
+    ).toBeGreaterThan(exit);
+  });
+
+  it("point_at fades its glow in and out, and refuses a row in a closed sidebar", async () => {
+    const tab = await run<string>(
+      `return ${strip}.find((el) => el.querySelector('button[aria-current]'))
+         ?.getAttribute('data-point-key');`,
+    );
+    await recordMotion();
+    await askAgent(`point: ${tab}`, `Pointing at ${tab}.`);
+    await runWait(
+      `const el = $('[data-point-key=${JSON.stringify(tab)}]');
+       return el.classList.contains('agent-pointer') &&
+         getComputedStyle(el).animationName === 'agent-pointer-in';`,
+      { label: "the glow faded in and holds" },
+    );
+    await askAgent("unpoint", "Cleared the pointers.");
+    await runWait(
+      `return !$('[data-point-key=${JSON.stringify(tab)}]').classList.contains('agent-pointer');`,
+      { label: "the glow left" },
+    );
+    expect(await motion()).toEqual(
+      expect.arrayContaining(["agent-pointer-in", "agent-pointer-out"]),
+    );
+    // Both sidebars closed: a row there would glow off screen.
+    const toggles = ["sidebar", "right sidebar"];
+    const reopen: string[] = [];
+    for (const side of toggles) {
+      const collapse = `[data-workspace-visible="true"] [aria-label="Collapse ${side}"]`;
+      if (await run<boolean>(`return !!$('${collapse}');`)) {
+        reopen.push(side);
+        await run(`$('${collapse}').click(); return true;`);
+      }
+    }
+    await runWait(
+      `return $$('[data-workspace-visible="true"] aside[data-sidebar]')
+         .every((el) => el.getAttribute('data-motion') === 'closed');`,
+      { label: "sidebars closed" },
+    );
+    await askAgent("point: sidebar:Anything", "point error:");
+    expect(
+      await run<boolean>(
+        `return timelineMessages().some((m) => m.text.includes('point error:') && m.text.includes('sidebar') && m.text.includes('closed'));`,
+      ),
+    ).toBe(true);
+    for (const side of reopen) {
+      await run(
+        `$('[data-workspace-visible="true"] [aria-label="Expand ${side}"]').click(); return true;`,
+      );
+      await runWait(
+        `return !!$('[data-workspace-visible="true"] [aria-label="Collapse ${side}"]');`,
+        {
+          label: `${side} open again`,
+        },
+      );
+    }
+  });
 });
 
 describe("subagents and background watchers", () => {

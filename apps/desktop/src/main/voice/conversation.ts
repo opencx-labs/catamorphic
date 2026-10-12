@@ -106,6 +106,11 @@ export class VoiceConversation {
   private stopped = false;
   private busy = false;
   private heardThrough: string | null = null;
+  /** Set once the chat's agent stopped listening; runs when its turn is over. */
+  private finished: (() => void) | null = null;
+  /** Reads of the chat so far; only those begun after finishing count. */
+  private reads = 0;
+  private finishedAfter = 0;
 
   constructor(
     readonly ref: VoiceSessionRef,
@@ -149,9 +154,21 @@ export class VoiceConversation {
     clearTimeout(this.timer);
   }
 
+  /**
+   * The chat's agent stopped listening: what the person says is dropped,
+   * and `done` runs once the chat's turn is over, after its replies went
+   * to speech. The chat is read now, so a turn already running counts.
+   */
+  finish(done: () => void): void {
+    if (this.stopped || this.finished) return;
+    this.finished = done;
+    this.finishedAfter = this.reads;
+    this.schedule(0);
+  }
+
   /** What the person said, as the recognizer heard it. */
   async heard(text: string): Promise<void> {
-    if (this.stopped) return;
+    if (this.stopped || this.finished) return;
     if (isStopCommand(text)) {
       this.deps.speech.stopSpeaking();
       if (this.busy) await this.deps.sessions.interrupt(this.ref);
@@ -178,8 +195,9 @@ export class VoiceConversation {
 
   private async poll(): Promise<void> {
     if (this.stopped) return;
+    const read = ++this.reads;
     try {
-      this.observe(await this.deps.sessions.get(this.ref));
+      this.observe(await this.deps.sessions.get(this.ref), read);
     } catch (cause) {
       this.deps.onError(
         `The chat could not be read: ${cause instanceof Error ? cause.message : String(cause)}`,
@@ -189,7 +207,7 @@ export class VoiceConversation {
     this.schedule();
   }
 
-  private observe(chat: VoiceChat): void {
+  private observe(chat: VoiceChat, read = this.reads): void {
     if (this.stopped) return;
     this.setBusy(chat.busy);
     // A reply is spoken once it is finished, all of it at once.
@@ -223,6 +241,11 @@ export class VoiceConversation {
           ? `${prompt} ${listed(question.options)}`
           : prompt,
       );
+    }
+    const finished = this.finished;
+    if (finished && !chat.busy && read > this.finishedAfter) {
+      this.stop();
+      finished();
     }
   }
 

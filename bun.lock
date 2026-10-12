@@ -761,7 +761,6 @@
     },
   },
   "trustedDependencies": [
-    "electron",
     "node",
   ],
   "overrides": {

@@ -794,6 +794,20 @@ async function* fakeScript(turn: FakeTurn): AsyncGenerator<FakeStep> {
 
   // What voice tells agents (ADR 0216): any chat hears that the person
   // talks by voice while they do, and the assistant who it is.
+  // The person's own instructions would say when voice ends; this agent
+  // ends it when told to, saying goodbye before and after.
+  if (prompt.includes("stop listening")) {
+    yield { type: "text", content: "Okay, I'll stop listening." };
+    yield { type: "tool_call", toolName: "stop_listening", toolInput: {} };
+    const result = await turn.tool("stop_listening", {});
+    yield {
+      type: "text",
+      content: String(result).startsWith("Stopped listening")
+        ? "Talk soon."
+        : `Voice was not on: ${String(result)}`,
+    };
+    return;
+  }
   if (prompt.includes("how am i talking to you")) {
     yield {
       type: "text",

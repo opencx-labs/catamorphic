@@ -40,6 +40,7 @@ describe("workspace coordination tools", () => {
       "run_background_command",
       "spawn_subsession",
       "stop_background_command",
+      "stop_listening",
       "update_todo_list",
       "wait_for_subsessions",
       "watch_command",
@@ -97,6 +98,33 @@ describe("workspace coordination tools", () => {
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
+  });
+
+  it("tells the workspace when the person is talking with the chat by voice", async () => {
+    const asked: Array<{ session: string; voice?: boolean }> = [];
+    const toolkit = buildWorkspaceToolkit({
+      openTarget: async (_project, session, target, options) => {
+        asked.push({ session, voice: options?.voice });
+        return { key: target, opened: "focused" };
+      },
+    } as WorkspaceBridge);
+    const open = toolkit.tools.find((tool) => tool.name === "open_surface");
+    const target = { target: "https://example.com/" };
+    // Before voice ever starts, nobody is talking.
+    await open?.execute(target, context);
+    toolkit.setVoiceControl({
+      talking: (sessionId) => sessionId === "session",
+      stopListening: () => false,
+    });
+    await open?.execute(target, context);
+    await open?.execute(target, { ...context, sessionId: "other" });
+    await open?.execute(target, { projectId: "project" });
+    expect(asked).toEqual([
+      { session: "session", voice: false },
+      { session: "session", voice: true },
+      { session: "other", voice: false },
+      { session: "", voice: false },
+    ]);
   });
 
   it("previews apps by default and publishes only on an explicit request", async () => {
@@ -272,6 +300,31 @@ describe("workspace coordination tools", () => {
       ["interrupt", "project", "session", "child"],
       ["attention", "project", "session"],
     ]);
+  });
+
+  it("stops listening only in the chat the person is talking with by voice", async () => {
+    const toolkit = buildWorkspaceToolkit({} as WorkspaceBridge);
+    const stopListening = toolkit.tools.find(
+      (tool) => tool.name === "stop_listening",
+    );
+    expect(await stopListening?.execute({}, context)).toBe(
+      "Voice is not on in this chat.",
+    );
+    const stopped: string[] = [];
+    toolkit.setVoiceControl({
+      talking: (sessionId) => sessionId === "session",
+      stopListening: (sessionId) => {
+        stopped.push(sessionId);
+        return sessionId === "session";
+      },
+    });
+    expect(await stopListening?.execute({}, context)).toBe(
+      "Stopped listening. Voice turns off once this turn's replies are read aloud.",
+    );
+    expect(
+      await stopListening?.execute({}, { ...context, sessionId: "other" }),
+    ).toBe("Voice is not on in this chat.");
+    expect(stopped).toEqual(["session", "other"]);
   });
 
   it("changes checkout only through explicit tools", async () => {

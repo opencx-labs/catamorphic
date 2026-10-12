@@ -393,6 +393,55 @@ describe("VoiceEngine push to talk", () => {
       text: "what is on tonight",
     });
   });
+
+  it("once it stops listening, finishes what it says and hears nothing more", async () => {
+    const voice = harness(["wait", "one more thing"]);
+    voice.engine.speak("bye", "Talk soon.");
+    await voice.settle();
+    // Speech underway when listening stops ends, and nothing is heard.
+    voice.frame(0.5, 3);
+    voice.engine.stopListening();
+    voice.frame(0);
+    voice.frame(0.5, 3);
+    voice.frame(0);
+    await voice.settle();
+    voice.drain();
+    expect(voice.events).toEqual([
+      { type: "speaking", id: "bye" },
+      { type: "speech-start" },
+      { type: "speech-end" },
+      { type: "spoken", id: "bye", interrupted: false },
+    ]);
+  });
+
+  it("drops what it was still recognizing when listening stops", async () => {
+    const voice = harness(["wait"]);
+    voice.engine.speak("bye", "Talk soon.");
+    voice.frame(0.5, 3);
+    voice.frame(0);
+    // Recognition is underway; listening stops before it answers.
+    voice.engine.stopListening();
+    await voice.settle();
+    voice.drain();
+    expect(voice.events.map((event) => event.type)).not.toContain("barge-in");
+    expect(voice.events.map((event) => event.type)).not.toContain("utterance");
+    expect(voice.events.at(-1)).toEqual({
+      type: "spoken",
+      id: "bye",
+      interrupted: false,
+    });
+  });
+
+  it("holds nothing for push to talk once it stops listening", async () => {
+    const voice = harness(["list my sessions"]);
+    voice.engine.setPushToTalk(true);
+    voice.engine.stopListening();
+    voice.engine.hold(true);
+    voice.frame(0.5, 20);
+    voice.engine.hold(false);
+    await voice.settle();
+    expect(voice.events).toEqual([]);
+  });
 });
 
 describe("resample", () => {

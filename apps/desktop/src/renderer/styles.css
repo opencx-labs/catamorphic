@@ -1150,10 +1150,12 @@ kbd {
   color: var(--color-fg-muted);
 }
 
-/* Keyboard tab cycling (Cmd+[ / Cmd+]): the persistent content pane
-   nudges in from the direction of travel — a content-changed signal on
+/* Keyboard tab cycling (Cmd+[ / Cmd+]), and an agent's open or close
+   changing the tab in front: the persistent content pane nudges in from
+   the direction of travel along the strip, a content-changed signal on
    a wrapper that never unmounts (so no exit pair), like title-change.
-   Click-switching stays instant; only deliberate cycling narrates. */
+   A person's click stays instant: their own press is the cue. Only
+   deliberate cycling and swaps nobody pressed for narrate. */
 @keyframes pane-in-left {
   from {
     transform: translateX(-14px);
@@ -1210,27 +1212,75 @@ kbd {
 }
 
 /* Agent pointer: the agent directing the user's attention at an element
-   (point_at tool). A soft accent ring with a gentle breathing pulse — a
-   waiting state, like the question badge's pulse: it loops only until the
-   user interacts with the element or the agent points elsewhere. */
+   (point_at tool). A soft accent ring fades in and holds, steady, until
+   the user interacts with the element or the agent points elsewhere, then
+   fades out the way it came (components/agent-pointers.tsx). Nothing
+   loops: a waiting glow is not progress (motion contract, rule 3). The
+   ring is held by the entrance's fill, which beats the element's own
+   box-shadow while it glows. */
 .agent-pointer {
   position: relative;
   border-radius: 6px;
-  animation: agent-pointer-pulse 2s ease-in-out infinite;
 }
 
-@keyframes agent-pointer-pulse {
-  0%,
-  100% {
+@keyframes agent-pointer-in {
+  from {
+    box-shadow:
+      0 0 0 2px transparent,
+      0 0 12px transparent;
+  }
+  to {
     box-shadow:
       0 0 0 2px color-mix(in srgb, var(--color-accent) 65%, transparent),
-      0 0 10px color-mix(in srgb, var(--color-accent) 30%, transparent);
+      0 0 12px color-mix(in srgb, var(--color-accent) 35%, transparent);
   }
-  50% {
+}
+
+@keyframes agent-pointer-out {
+  from {
     box-shadow:
-      0 0 0 2px color-mix(in srgb, var(--color-accent) 35%, transparent),
-      0 0 16px color-mix(in srgb, var(--color-accent) 45%, transparent);
+      0 0 0 2px color-mix(in srgb, var(--color-accent) 65%, transparent),
+      0 0 12px color-mix(in srgb, var(--color-accent) 35%, transparent);
   }
+  to {
+    box-shadow:
+      0 0 0 2px transparent,
+      0 0 12px transparent;
+  }
+}
+
+.animate-agent-pointer-in {
+  animation: agent-pointer-in 200ms cubic-bezier(0.2, 0, 0, 1) both;
+}
+
+.animate-agent-pointer-out {
+  animation: agent-pointer-out 200ms cubic-bezier(0.2, 0, 0, 1) both;
+}
+
+@keyframes agent-pointer-note-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes agent-pointer-note-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+.animate-agent-pointer-in[data-agent-pointer-note]::after {
+  animation: agent-pointer-note-in 200ms var(--ease-standard) both;
+}
+
+.animate-agent-pointer-out[data-agent-pointer-note]::after {
+  animation: agent-pointer-note-out 200ms var(--ease-standard) both;
 }
 
 /* The agent's short note, floated above the pointed element. */
@@ -1923,6 +1973,99 @@ html[data-surface="dock"] #root {
   inset-block: auto 0;
   inset-inline: 0;
   margin-inline: auto;
+}
+/* The tab strip (or, with tabs in the sidebar, the page's title) starts
+   at the left sidebar's edge, so it moves with the panel: while the panel slides, the strip slides in step (same duration,
+   easing and wait for the items) to where the content's settle puts it,
+   the chrome's own sidebar toggle taking the row's start once the sidebar
+   has gone. Centred tabs move half as far: the strip's far end stays. Its
+   translate drops, with no transition, in the frame the content takes or
+   gives back the space (lib/sidebar-motion.ts), so it lands without a
+   jump. The toggle's slot is its button (size-7) and the row's gap
+   (gap-1), plus the corner kept for the window buttons when they show. */
+.workspace-chrome {
+  --chrome-toggle-slot: 32px;
+}
+[data-window-buttons="on"] .workspace-chrome {
+  --chrome-toggle-slot: 102px;
+}
+.workspace-chrome
+  > :is([data-tab-orientation="horizontal"], [data-workspace-title]) {
+  --tab-strip-shift: calc(
+    var(--left-sidebar-width, 0px) -
+    var(--chrome-toggle-slot)
+  );
+  transition: translate 200ms var(--ease-standard);
+}
+.workspace-chrome > [data-tab-alignment="center"] {
+  --tab-strip-shift: calc(
+    (var(--left-sidebar-width, 0px) - var(--chrome-toggle-slot)) /
+    2
+  );
+}
+[data-sidebar="left"][data-items-lead]
+  ~ .workspace-surface
+  .workspace-chrome
+  > :is([data-tab-orientation="horizontal"], [data-workspace-title]) {
+  transition-delay: 100ms;
+}
+[data-sidebar="left"][data-docked="true"]:is(
+    [data-motion="closing"],
+    [data-motion="closed"]
+  )
+  ~ .workspace-surface
+  .workspace-chrome
+  > :is([data-tab-orientation="horizontal"], [data-workspace-title]) {
+  translate: calc(-1 * var(--tab-strip-shift)) 0;
+}
+[data-sidebar="left"][data-docked="false"]:is(
+    [data-motion="opening"],
+    [data-motion="open"]
+  )
+  ~ .workspace-surface
+  .workspace-chrome
+  > :is([data-tab-orientation="horizontal"], [data-workspace-title]) {
+  translate: var(--tab-strip-shift) 0;
+}
+:root[data-content-settling]
+  .workspace-chrome
+  > :is([data-tab-orientation="horizontal"], [data-workspace-title]) {
+  transition: none;
+}
+/* Should the strip land off by a little (a slot it did not know), it takes
+   a layer of its own while the content settles and glides the rest of the
+   way, as the bubble strip does, instead of fading in place. Its width
+   changes with the content's, so its snapshots keep their own size (tabs
+   never stretch), resting where the tabs align. */
+:root[data-content-settling]
+  [data-workspace-visible="true"]
+  .workspace-chrome
+  > [data-tab-orientation="horizontal"] {
+  view-transition-name: workspace-tabs;
+}
+:root[data-content-settling]
+  [data-workspace-visible="true"]
+  .workspace-chrome
+  > [data-tab-alignment="center"] {
+  view-transition-class: centered;
+}
+::view-transition-group(workspace-tabs),
+::view-transition-old(workspace-tabs),
+::view-transition-new(workspace-tabs) {
+  animation-duration: 200ms;
+  animation-timing-function: var(--ease-standard);
+}
+::view-transition-old(workspace-tabs),
+::view-transition-new(workspace-tabs) {
+  inline-size: auto;
+  block-size: auto;
+}
+/* Centred by translation: auto margins stop centring a snapshot wider than
+   the strip, the new one on a collapse. */
+::view-transition-old(workspace-tabs.centered),
+::view-transition-new(workspace-tabs.centered) {
+  inset-inline-start: 50%;
+  translate: -50% 0;
 }
 /* Browser setup actions keep their footprint when they become status rows. */
 .browser-setup-action {

@@ -117,6 +117,8 @@ export class VoiceEngine {
   private pushToTalk = false;
   /** The push-to-talk keys are down. */
   private held = false;
+  /** Off for good once voice is ending: nothing more is heard. */
+  private listening = true;
   /** Speech heard while learning the voice print; null when not learning. */
   private learning: Float32Array[] | null = null;
 
@@ -173,6 +175,21 @@ export class VoiceEngine {
   }
 
   /**
+   * Hear nothing more, for the rest of this voice: no speech is detected,
+   * push to talk holds nothing, and nothing still being recognized
+   * interrupts the speech already asked for.
+   */
+  stopListening(): void {
+    if (!this.listening) return;
+    this.listening = false;
+    if (this.inSpeech) this.emit({ type: "speech-end" });
+    this.inSpeech = false;
+    this.held = false;
+    this.utterance = [];
+    this.learning = null;
+  }
+
+  /**
    * Push to talk: the person says when they talk, by holding a key, so
    * nothing is detected and nothing else is heard. Off, voice listens for
    * speech on its own.
@@ -191,7 +208,7 @@ export class VoiceEngine {
    * whole, with no wait for silence and no check of whose voice it is.
    */
   hold(held: boolean): void {
-    if (!this.pushToTalk || held === this.held) return;
+    if (!this.pushToTalk || !this.listening || held === this.held) return;
     this.held = held;
     if (held) {
       if (this.audible) {
@@ -245,7 +262,7 @@ export class VoiceEngine {
       if (this.filled < this.window.length) break;
       this.filled = 0;
       this.keep(this.window.slice());
-      if (this.pushToTalk) continue;
+      if (this.pushToTalk || !this.listening) continue;
       activity.accept(this.window);
       this.afterWindow();
     }
@@ -306,6 +323,7 @@ export class VoiceEngine {
     segment: Float32Array,
     { pressed }: { pressed: boolean },
   ): Promise<void> {
+    if (!this.listening) return;
     if (this.learning) {
       this.learnFrom(segment);
       return;
@@ -315,6 +333,7 @@ export class VoiceEngine {
       return;
     }
     const text = (await this.parts.recognize(segment)).trim();
+    if (!this.listening) return;
     const speaking = this.audible;
     if (!meaningfulUtterance(text) || (speaking && isEcho(text, this.recent)))
       return;

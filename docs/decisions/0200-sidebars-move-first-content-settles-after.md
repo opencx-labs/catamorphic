@@ -47,6 +47,14 @@ the panel follows them 100 ms later (amended 2026-10-09, below).
   where it shows, fades the same way from its own place; a floating chat
   and the bubble strip glide to their new places. The snapshots blend
   plus-lighter, as a browser cross-fade does, so nothing dims midway.
+- The tab strip starts at the left sidebar's edge, so it moves with the
+  panel (amended 2026-10-13: faded in place, its tabs and + stayed behind
+  as the sidebar left, then jumped). While the panel slides, the strip
+  slides in step, with the panel's duration, easing and wait for its
+  items, to where the settle puts it, and drops that translate in the
+  frame the content takes or gives back the space. It is not a page, so
+  moving it waits on nothing. Should it land off by a little, it glides
+  the rest of the way in its own layer while the content settles.
 - Any page resize waits for the page to repaint, so that wait falls in a
   short hold between the slide and the fade, while nothing moves.
 - An overlay sidebar (the compact window's reveal) only slides; the content

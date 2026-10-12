@@ -5,6 +5,7 @@ import { createServer } from "node:net";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { migrateDevData } from "./dev-data.js";
+import { ensureElectronBinary } from "./dev-electron.js";
 import { createDevPlan, type DevPorts, type DevTarget } from "./dev-plan.js";
 import {
   type DevChildExit,
@@ -203,12 +204,20 @@ if (import.meta.main) {
       process.removeListener("SIGTERM", onPrintSigterm);
     }
   } else {
+    const runtime = toolRuntime({ rootPath, env: process.env });
+    // Before replacing a running instance, so a failed download leaves it up.
+    if (target !== "server") {
+      ensureElectronBinary({
+        desktopPath: path.join(rootPath, "apps", "desktop"),
+        nodePath: runtime.nodePath,
+        env: runtime.env,
+      });
+    }
     const instanceLock = await acquireDevInstanceLock({
       lockPath: placeholderPlan.lockPath,
       pid: process.pid,
       replaceExisting: true,
     });
-    const runtime = toolRuntime({ rootPath, env: process.env });
     let activeProcessGroupId: number | undefined;
     let forwardedSignal: NodeJS.Signals | undefined;
     let stopping: Promise<void> | undefined;

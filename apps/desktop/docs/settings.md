@@ -134,5 +134,6 @@ says so; elsewhere the OS draws the frame and the key changes nothing.
 (a collapsed sidebar holding the header hides them until revealed). It applies
 before a new window first shows and on every preference change, including file
 edits, so an agent can turn them off. While they are hidden the chrome gives back
-the corner it keeps for them, and the menu bar still closes (File > Close Window),
-minimizes and enters full screen.
+the corner it keeps for them: the sidebar's project switcher moves up into the
+row beside its toggle, unless the header shares that row. The menu bar still
+closes (File > Close Window), minimizes and enters full screen.

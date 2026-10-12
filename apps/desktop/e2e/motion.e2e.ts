@@ -698,6 +698,15 @@ describe("animate-before-unmount", () => {
 });
 
 describe("chats over a settling sidebar", () => {
+  const settled = (open: boolean) =>
+    runWait(
+      `const side = $('[data-workspace-visible="true"] [data-sidebar="left"]');
+       return side?.getAttribute('aria-hidden') === '${!open}' && side.dataset.settled === 'true' &&
+         !document.getAnimations().some((a) => a.effect?.pseudoElement?.startsWith('::view-transition')) &&
+         !('contentSettling' in document.documentElement.dataset);`,
+      { label: `left sidebar ${open ? "open" : "closed"} and settled` },
+    );
+
   it("a floating chat glides with the content instead of vanishing under it", async () => {
     await run(`$('button[aria-label="New chat"]').click(); return true;`);
     await runWait(
@@ -705,14 +714,6 @@ describe("chats over a settling sidebar", () => {
        return !!dock && getComputedStyle(dock).opacity === '1' && dock.getAnimations().every((a) => a.playState !== 'running');`,
       { label: "floating chat at rest" },
     );
-    const settled = (open: boolean) =>
-      runWait(
-        `const side = $('[data-workspace-visible="true"] [data-sidebar="left"]');
-         return side?.getAttribute('aria-hidden') === '${!open}' && side.dataset.settled === 'true' &&
-           !document.getAnimations().some((a) => a.effect?.pseudoElement?.startsWith('::view-transition')) &&
-           !('contentSettling' in document.documentElement.dataset);`,
-        { label: `left sidebar ${open ? "open" : "closed"} and settled` },
-      );
     // Where everything rests: the dock on the visible chat region (anchored),
     // the chat centred in it.
     const geometry = () =>
@@ -745,7 +746,7 @@ describe("chats over a settling sidebar", () => {
             // the chat's own layer, whatever name the browser generates.
             seen.dockGroup ||= document.getAnimations().some((a) => {
               const name = /^::view-transition-group((.+))$/.exec(a.effect?.pseudoElement ?? '')?.[1];
-              return !!name && !['root', 'workspace-content', 'sidebar-left', 'sidebar-right'].includes(name);
+              return !!name && !['root', 'workspace-content', 'workspace-tabs', 'sidebar-left', 'sidebar-right'].includes(name);
             });
           }
           if ((seen.layered && seen.dockGroup) || performance.now() - started > 5000) resolve(seen);
@@ -765,6 +766,68 @@ describe("chats over a settling sidebar", () => {
     await run(`$('[aria-label="Expand sidebar"]').click(); return true;`);
     await settled(true);
     expect(await geometry()).toEqual(before);
+    expect(app.getRendererErrors()).toEqual([]);
+  });
+
+  it("the tab strip's + slides with the sidebar and lands without a jump", async () => {
+    await settled(true);
+    // Toggles the left sidebar and follows the + and the panel's edge every
+    // frame until both are still and the content has settled.
+    const toggle = (label: string) =>
+      run<{ plus: number; edge: number; docked: string }[]>(`
+        const plus = () => $('[data-workspace-visible="true"] .workspace-chrome [aria-label="New tab"]');
+        const side = () => $('[data-workspace-visible="true"] [data-sidebar="left"]');
+        const frames = [];
+        [...document.querySelectorAll('[aria-label="${label}"]')]
+          .find((b) => !b.closest('[inert]') && b.getBoundingClientRect().width > 0)
+          .click();
+        return new Promise((resolve) => {
+          const started = performance.now();
+          const tick = () => {
+            frames.push({
+              plus: Math.round(plus().getBoundingClientRect().left),
+              edge: Math.round(side().querySelector('.sidebar-inner').getBoundingClientRect().right),
+              docked: side().dataset.docked,
+            });
+            if (side().dataset.settled === 'true' && performance.now() - started > 200) resolve(frames);
+            else if (performance.now() - started > 5000) resolve(frames);
+            else requestAnimationFrame(tick);
+          };
+          requestAnimationFrame(tick);
+        });
+      `);
+    const check = (
+      frames: { plus: number; edge: number; docked: string }[],
+      from: number,
+    ) => {
+      const to = frames.at(-1)?.plus ?? from;
+      const width = Math.max(...frames.map((frame) => frame.edge));
+      // While the panel is midway, so is the +.
+      const midway = frames.filter(
+        (frame) => frame.edge > width * 0.25 && frame.edge < width * 0.75,
+      );
+      expect(midway.length, JSON.stringify(frames)).toBeGreaterThan(0);
+      for (const frame of midway) {
+        expect(frame.plus).toBeGreaterThan(Math.min(from, to) + 2);
+        expect(frame.plus).toBeLessThan(Math.max(from, to) - 2);
+      }
+      // Once the content has taken or given back the space, the + is where
+      // it rests: no jump when the layout changes.
+      const flipped = frames.findIndex(
+        (frame) => frame.docked !== frames[0]?.docked,
+      );
+      expect(flipped, JSON.stringify(frames)).toBeGreaterThan(0);
+      for (const frame of frames.slice(flipped)) expect(frame.plus).toBe(to);
+      return to;
+    };
+    const open = await run<number>(
+      `return Math.round($('[data-workspace-visible="true"] .workspace-chrome [aria-label="New tab"]').getBoundingClientRect().left);`,
+    );
+    const closed = check(await toggle("Collapse sidebar"), open);
+    expect(closed).toBeLessThan(open);
+    await settled(false);
+    expect(check(await toggle("Expand sidebar"), closed)).toBe(open);
+    await settled(true);
     expect(app.getRendererErrors()).toEqual([]);
   });
 });

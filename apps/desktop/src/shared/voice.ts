@@ -164,6 +164,8 @@ export type VoiceWorkerCommand =
   | { type: "push-to-talk"; enabled: boolean }
   /** The push-to-talk keys went down, or came up. */
   | { type: "hold"; held: boolean }
+  /** Hear nothing more; speech already asked for is still said. */
+  | { type: "stop-listening" }
   /** Learn the person's voice from the next few seconds they speak. */
   | { type: "learn" }
   /** Listen to this voice alone from now on; null listens to anyone. */

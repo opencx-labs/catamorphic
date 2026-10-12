@@ -200,12 +200,15 @@ export interface WorkspaceBridge {
    * is on another surface, the tab is prepared in the background and the
    * surface's chip on the agent's chat carries an attention indicator
    * instead (`opened: "background"`, plus a `note` telling the agent to
-   * narrate rather than assume the user saw it).
+   * narrate rather than assume the user saw it). A person talking with the
+   * chat by voice (`voice`) counts as watching it. Either way, a project
+   * or window Work isn't showing gets the background open.
    */
   openTarget(
     projectId: string,
     sessionId: string,
     target: string,
+    options?: { voice?: boolean },
   ): Promise<{
     key: string;
     opened: "focused" | "background";
@@ -738,11 +741,16 @@ export function registerAgentBridge(
       return agentTerminals.writeAny(terminalId, data);
     },
 
-    async openTarget(projectId, sessionId, target) {
+    async openTarget(projectId, sessionId, target, options) {
       const result = await rpc<
         | { key: string; opened: "focused" | "background"; note?: string }
         | { error: string }
-      >("openTarget", { projectId, sessionId, target });
+      >("openTarget", {
+        projectId,
+        sessionId,
+        target,
+        voice: options?.voice === true,
+      });
       if (!result || "error" in result) {
         throw new Error(
           (result as { error?: string } | null)?.error ??

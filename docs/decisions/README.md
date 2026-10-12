@@ -234,3 +234,4 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0219](0219-typed-deliveries.md) | Deliveries are typed: no free-form input metadata, mailbox inputs or actions | Accepted (amends 0090, 0199, 0217) |
 | [0220](0220-sign-in-popups-answer-passkeys.md) | Sign-in popups answer passkeys in a sheet of their own | Accepted (amends 0201, 0185) |
 | [0221](0221-menus-hold-the-window-and-pages-get-work-menus.md) | Menus hold the window, and pages get Work's menus | Accepted (amends 0121, 0203) |
+| [0224](0224-a-voice-agent-can-stop-listening.md) | A voice conversation's agent can stop listening | Accepted (amends 0133, 0216) |

@@ -43,6 +43,9 @@ process.parentPort.on("message", (message) => {
     case "hold":
       engine?.hold(command.held);
       return;
+    case "stop-listening":
+      engine?.stopListening();
+      return;
     case "learn":
       engine?.learn();
       return;

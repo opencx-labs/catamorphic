@@ -211,6 +211,76 @@ describe("VoiceConversation", () => {
     expect(voice.spoken).toEqual(["Which branch? main, or release?"]);
     voice.conversation.stop();
   });
+
+  it("once its agent stops listening, hears nothing and finishes after the turn is said", async () => {
+    vi.useFakeTimers();
+    const voice = harness(detail([], { busy: true }));
+    await voice.conversation.start();
+    const finished: string[][] = [];
+    voice.conversation.finish(() => finished.push([...voice.spoken]));
+    await voice.conversation.heard("one more thing");
+    expect(voice.sent).toEqual([]);
+    expect(voice.calls).toEqual([]);
+    voice.set(
+      detail([message("a", "Okay, I'll stop listening.")], { busy: true }),
+    );
+    await voice.poll();
+    expect(voice.spoken).toEqual(["Okay, I'll stop listening."]);
+    expect(finished).toEqual([]);
+    // The turn ends with one more reply: it goes to speech first.
+    voice.set(
+      detail([
+        message("a", "Okay, I'll stop listening."),
+        message("b", "Talk soon."),
+      ]),
+    );
+    await voice.poll();
+    expect(finished).toEqual([["Okay, I'll stop listening.", "Talk soon."]]);
+    // Finished, it reads the chat no more.
+    voice.set(detail([message("c", "Later news.")]));
+    await voice.poll();
+    expect(voice.spoken).toHaveLength(2);
+  });
+
+  it("finishes only on a read of the chat begun after its agent stopped listening", async () => {
+    vi.useFakeTimers();
+    let current = detail([]);
+    const reads: Array<() => void> = [];
+    let finished = 0;
+    const conversation = new VoiceConversation(ref, {
+      sessions: {
+        // Each read holds the chat as it was when the read began.
+        get: () => {
+          const seen = current;
+          return new Promise((resolve) => reads.push(() => resolve(seen)));
+        },
+        send: async () => {},
+        interrupt: async () => {},
+      },
+      speech: { speak: () => {}, cue: () => {}, stopSpeaking: () => {} },
+      onBusy: () => {},
+      onError: () => {},
+    });
+    const start = conversation.start();
+    reads.shift()?.();
+    await start;
+    // A read begins while the chat is idle, and lands after a turn began
+    // and its agent stopped listening.
+    await vi.advanceTimersByTimeAsync(1_000);
+    const stale = reads.shift();
+    current = detail([], { busy: true });
+    conversation.finish(() => {
+      finished += 1;
+    });
+    stale?.();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(finished).toBe(0);
+    current = detail([]);
+    await vi.advanceTimersByTimeAsync(1_000);
+    for (const read of reads.splice(0)) read();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(finished).toBe(1);
+  });
 });
 
 describe("voiceChatOf", () => {

@@ -38,7 +38,7 @@ const CHAT_TABS = "[data-dock-host]:not([data-dock-native]) [data-chat-tab]";
  * they fade (ADR 0200, amended 2026-10-09: the box growing into place
  * showed the app's background around it, which read as a glitch). A chat
  * tab over the content fades the same way, from its own place; floating
- * chats and the bubble strip glide (styles.css).
+ * chats, the bubble strip and the tab strip glide (styles.css).
  *
  * `update` always runs, animated or not; without a transition when
  * `wanted` no longer holds (the sidebar moved again). Only the visible
@@ -84,7 +84,8 @@ export function settleSidebarContent({
     if (element !== content)
       element.style.setProperty("view-transition-class", "dock-tab");
   }
-  // Floating chats and the bubble strip take layers of their own meanwhile.
+  // Floating chats, the bubble strip and the tab strip take layers of their
+  // own meanwhile.
   root.dataset.contentSettling = "";
   const placement = document.createElement("style");
   const cleanup = () => {

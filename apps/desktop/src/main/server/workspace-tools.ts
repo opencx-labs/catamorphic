@@ -175,6 +175,18 @@ export interface CheckoutBridge {
   ): Promise<{ path: string; kind?: string; branch?: string | null }>;
 }
 
+/** Voice on this desktop (ADR 0216), wired once voice first starts. */
+export interface VoiceControl {
+  /** Whether the person is talking with this chat by voice now. */
+  talking(sessionId: string): boolean;
+  /**
+   * The chat's agent stops listening: the person is no longer heard, and
+   * voice turns off once the chat's turn is over and said. False when
+   * voice is not on in that chat.
+   */
+  stopListening(sessionId: string): boolean;
+}
+
 export interface WorkspaceTool extends ExtraTool {
   effect: "read" | "write";
   readOnly: boolean;
@@ -198,6 +210,8 @@ export interface WorkspaceToolkit {
   setTodoListBridge(bridge: TodoListBridge): void;
   setCheckoutBridge(bridge: CheckoutBridge): void;
   setSessionVisibility(visibility: SessionVisibility): void;
+  /** Late-bound: voice lives in the main process, started on demand. */
+  setVoiceControl(voice: VoiceControl): void;
 }
 
 const TRANSCRIPT_MESSAGE_CAP = 40;
@@ -258,6 +272,9 @@ export const WORKSPACE_TOOL_POLICY: Readonly<
   read_background_output: { ...read, eager: true },
   stop_background_command: { ...write, eager: true },
   watch_command: { ...write, eager: true },
+  // A voice conversation's agent ends it when the person's own
+  // instructions say so; it must be in reach mid-conversation (ADR 0216).
+  stop_listening: { ...presentation, eager: true },
   write_terminal: write,
   sync_project: write,
   create_pull_request: write,
@@ -283,6 +300,7 @@ export function buildWorkspaceToolkit(
   let todoList: TodoListBridge | null = null;
   let checkouts: CheckoutBridge | null = null;
   let sessionVisible: SessionVisibility = async () => true;
+  let voice: VoiceControl | null = null;
 
   const definitions: ExtraTool[] = [
     {
@@ -638,10 +656,13 @@ export function buildWorkspaceToolkit(
             );
           }
         }
+        // A person talking with this chat by voice asked to be shown, even
+        // with the chat itself out of sight (ADR 0216).
         const result = await bridge.openTarget(
           ctx.projectId,
           ctx.sessionId ?? "",
           target,
+          { voice: Boolean(ctx.sessionId && voice?.talking(ctx.sessionId)) },
         );
         return result;
       },
@@ -1018,6 +1039,17 @@ export function buildWorkspaceToolkit(
       },
     },
     {
+      // Says what it does, never when: that is the person's to teach.
+      name: "stop_listening",
+      description:
+        "Stop listening: turn voice off once this turn's replies are read aloud.",
+      parameters: {},
+      execute: async (_input, ctx) =>
+        ctx.sessionId && voice?.stopListening(ctx.sessionId)
+          ? "Stopped listening. Voice turns off once this turn's replies are read aloud."
+          : "Voice is not on in this chat.",
+    },
+    {
       name: "write_terminal",
       description:
         "Type raw input into a terminal: answer a prompt, drive an interactive command (REPLs, ssh, installers), or send control sequences. End a line with \\r to press Enter; '\\u0003' sends Ctrl+C to stop the foreground process. Targeting the user's own terminal takes it over first (they see the handoff). Fails if the user has taken the terminal over.",
@@ -1211,6 +1243,9 @@ export function buildWorkspaceToolkit(
     },
     setSessionVisibility(visibility) {
       sessionVisible = visibility;
+    },
+    setVoiceControl(control) {
+      voice = control;
     },
   };
 }

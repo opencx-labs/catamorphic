@@ -110,6 +110,16 @@ export function TabbedSidebar({
   useLayoutEffect(() => {
     onMotionChange?.({ phase: motion.phase, docked: motion.docked });
   }, [motion.phase, motion.docked, onMotionChange]);
+  // The content beside it reads the panel's width, so what starts at the
+  // sidebar's edge can slide with the panel (styles.css).
+  useLayoutEffect(() => {
+    const row = root.current?.parentElement;
+    const name = `--${side}-sidebar-width`;
+    row?.style.setProperty(name, `${layout.width}px`);
+    return () => {
+      row?.style.removeProperty(name);
+    };
+  }, [side, layout.width]);
   // Closing from open, the items leave before the panel does (and the
   // panel waits for them: data-items-lead). Opening again mid-close plays
   // them back from where they are; once closed they are put back at once.
