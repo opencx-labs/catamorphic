@@ -38,8 +38,11 @@ const CAPABILITIES: HarnessCapabilities = {
  * - `[[title <text>]]` sets the chat title
  * - `[[env <NAME>]]` says the variable as the attempt's environment has it
  * - `[[big <n>]]` says, and stores under subpath `big`, n three-byte characters
- * - `[[late]]` stores the turn a moment after it ended, interrupted too, as
- *   a harness that writes its transcript on its way out does
+ * - `[[late <ms>]]` stores the turn a moment (or `ms`) after it ended,
+ *   interrupted too, as a harness that writes its transcript on its way out
+ *   does
+ * - `[[refuse-steers]]` refuses steered input, as a harness that cannot take
+ *   input mid-turn: the turn restarts with it
  *
  * Its native state is the list of turns it saw, stored with Work, so a
  * restored thread remembers ("turn 3") wherever it resumes.
@@ -198,11 +201,14 @@ export class EchoAdapter implements HarnessAdapter {
           });
         }
       }
-      const late = directives(text).includes("late");
+      const late = directives(text).find(
+        (directive) => directive.split(" ")[0] === "late",
+      );
       const store = () =>
         host.nativeState.append({ entries: [{ turn: turnNumber, text }] });
       const storeLate = async () => {
-        await new Promise((resolve) => setTimeout(resolve, LATE_STORE_MS));
+        const ms = Number(late?.split(" ")[1]) || LATE_STORE_MS;
+        await new Promise((resolve) => setTimeout(resolve, ms));
         await store();
       };
       if (interrupted) {
@@ -263,8 +269,12 @@ export class EchoAdapter implements HarnessAdapter {
         },
       });
     });
+    const refusesSteers = directives(attempt.input?.text ?? "").includes(
+      "refuse-steers",
+    );
     return {
       steer: async (input) => {
+        if (refusesSteers) return false;
         steered.push(input.text);
         host.emit({ type: "input.consumed", itemIds: [input.itemId] });
         return true;

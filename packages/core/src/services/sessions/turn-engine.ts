@@ -36,7 +36,7 @@ import {
   withTelemetryContext,
 } from "@catamorphic/otel";
 import type { Span } from "@opentelemetry/api";
-import { type Kysely, sql, type Transaction } from "kysely";
+import { type Kysely, type Selectable, sql, type Transaction } from "kysely";
 import type { Identity } from "../../identity.js";
 import {
   type HeldTurnLease,
@@ -522,6 +522,11 @@ export class TurnEngine {
         },
       });
     let turn = await this.loadTurn(turnId);
+    // Taken over while it restarted for a steer: the attempt it superseded
+    // may still be storing what it wrote, on a sandbox that outlived its
+    // holder. The next attempt resumes that thread, so it comes first.
+    if (local.claim.recovered && turn.status === "preparing")
+      await this.drainSuperseded(local, { identity, session, turn });
     for (;;) {
       if (local.abort.signal.aborted) return;
       if (turn.status === "finalizing") {
@@ -619,11 +624,31 @@ export class TurnEngine {
           .executeTakeFirst()
       : undefined;
     if (!row) throw new Error(`Turn ${turn.id} has no attempt`);
-    return {
-      ...attemptFromRow(row),
-      runner: (row.runner as unknown as RunnerState | null) ?? null,
-      providerStartedAt: row.provider_started_at,
-    };
+    return withRunner(row);
+  }
+
+  /**
+   * A superseded attempt's sandbox runner, reattached and answered until
+   * it exits (see reattachEnded and drainRunner).
+   */
+  private async drainSuperseded(
+    local: LocalTurn,
+    ctx: { identity: Identity; session: SessionRow; turn: Turn },
+  ): Promise<void> {
+    const row = await this.deps.db
+      .selectFrom("agent_turn_attempts")
+      .selectAll()
+      .where("turn_id", "=", ctx.turn.id)
+      .where("status", "=", "superseded")
+      .orderBy("ordinal", "desc")
+      .limit(1)
+      .executeTakeFirst();
+    if (!row) return;
+    const attempt = withRunner(row);
+    const cursor = await this.reattachEnded(local, { ...ctx, attempt });
+    if (cursor === undefined || !local.channel) return;
+    await this.drainRunner(local, { ...ctx, attempt }, local.channel, cursor);
+    local.results.clear();
   }
 
   /** Why the next attempt of this turn runs. */
@@ -2869,6 +2894,17 @@ export class TurnEngine {
       throw new TurnLeaseLostError(local.claim.turn.id);
     }
   }
+}
+
+/** An attempt row with its runner state and when its provider started. */
+function withRunner(
+  row: Selectable<DB["agent_turn_attempts"]>,
+): Attempt & { runner: RunnerState | null; providerStartedAt: Date | null } {
+  return {
+    ...attemptFromRow(row),
+    runner: (row.runner as unknown as RunnerState | null) ?? null,
+    providerStartedAt: row.provider_started_at,
+  };
 }
 
 /** This process no longer holds the turn: another took it over. */

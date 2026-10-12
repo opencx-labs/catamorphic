@@ -8,6 +8,11 @@
  * results back, and reports the answer and usage as a `result`. Tests put
  * it on a sandbox's PATH as `claude`.
  *
+ * Like the CLI, it writes its transcript under `<config dir>/projects` and,
+ * started with `--session-mirror` (a `SessionStore`), mirrors each line to
+ * the SDK as a `transcript_mirror` frame, the turn's last line only after
+ * its `result`.
+ *
  * On a member's own sign-in (ADR 0199: `CLAUDE_CONFIG_DIR` at their home on
  * the machine and no `ANTHROPIC_BASE_URL`) it calls no model: it runs the command of a
  * `run: <command>` line itself, and otherwise answers with a report of the
@@ -16,6 +21,7 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline";
 
@@ -42,6 +48,37 @@ function flag(name: string): string | undefined {
 
 const sessionId = flag("--session-id") ?? flag("--resume") ?? randomUUID();
 const model = flag("--model") ?? "claude-test";
+
+/** The transcript, where the CLI keeps it: one JSON line per entry. */
+const transcriptFile = path.join(
+  process.env.CLAUDE_CONFIG_DIR ?? path.join(os.homedir(), ".claude"),
+  "projects",
+  process.cwd().replace(/[^a-zA-Z0-9]/g, "-"),
+  `${sessionId}.jsonl`,
+);
+const mirrors = process.argv.includes("--session-mirror");
+let lastUuid: string | null = null;
+
+/** Append an entry to the transcript, and mirror it to the SDK. */
+function writeTranscript(entry: Json): void {
+  const line: Json = {
+    ...entry,
+    uuid: typeof entry.uuid === "string" ? entry.uuid : randomUUID(),
+    parentUuid: lastUuid,
+    sessionId,
+    cwd: process.cwd(),
+    timestamp: new Date().toISOString(),
+  };
+  lastUuid = String(line.uuid);
+  fs.mkdirSync(path.dirname(transcriptFile), { recursive: true });
+  fs.appendFileSync(transcriptFile, `${JSON.stringify(line)}\n`);
+  if (mirrors)
+    emit({
+      type: "transcript_mirror",
+      filePath: transcriptFile,
+      entries: [line],
+    });
+}
 
 /** The key: `ANTHROPIC_API_KEY`, else what the settings' helper prints. */
 function apiKey(): string {
@@ -153,7 +190,28 @@ function personalAnswer(prompt: string): string {
   return `Done: ${run.stdout}${run.stderr}`;
 }
 
+/** A conversation message: to the SDK, and into the transcript. */
+function converse(message: Json): void {
+  emit(message);
+  writeTranscript({
+    type: message.type,
+    uuid: message.uuid,
+    message: message.message,
+  });
+}
+
+/**
+ * The turn's result, then, a moment later as the CLI finishes up, the line
+ * it writes after it.
+ */
+async function finish(result: Json): Promise<void> {
+  emit(result);
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  writeTranscript({ type: "system", subtype: "turn_duration", durationMs: 1 });
+}
+
 async function turn(prompt: string): Promise<void> {
+  writeTranscript({ type: "user", message: { role: "user", content: prompt } });
   if (!process.env.ANTHROPIC_BASE_URL && process.env.CLAUDE_CONFIG_DIR) {
     const answer = personalAnswer(prompt);
     emit({
@@ -170,7 +228,7 @@ async function turn(prompt: string): Promise<void> {
       slash_commands: [],
       output_style: "default",
     });
-    emit({
+    converse({
       type: "assistant",
       session_id: sessionId,
       uuid: randomUUID(),
@@ -183,7 +241,7 @@ async function turn(prompt: string): Promise<void> {
         usage: { input_tokens: 3, output_tokens: 5 },
       },
     });
-    emit({
+    await finish({
       type: "result",
       subtype: "success",
       is_error: false,
@@ -227,7 +285,7 @@ async function turn(prompt: string): Promise<void> {
       const reply = await callModel(messages);
       total.input_tokens += reply.usage.input_tokens;
       total.output_tokens += reply.usage.output_tokens;
-      emit({
+      converse({
         type: "assistant",
         session_id: sessionId,
         uuid: randomUUID(),
@@ -258,7 +316,7 @@ async function turn(prompt: string): Promise<void> {
           is_error: run.status !== 0,
         };
       });
-      emit({
+      converse({
         type: "user",
         session_id: sessionId,
         uuid: randomUUID(),
@@ -267,7 +325,7 @@ async function turn(prompt: string): Promise<void> {
       });
       messages.push({ role: "user", content: results });
     }
-    emit({
+    await finish({
       type: "result",
       subtype: "success",
       is_error: false,
@@ -296,7 +354,7 @@ async function turn(prompt: string): Promise<void> {
       permission_denials: [],
     });
   } catch (error) {
-    emit({
+    await finish({
       type: "result",
       subtype: "error_during_execution",
       is_error: true,

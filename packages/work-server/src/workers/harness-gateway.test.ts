@@ -12,7 +12,12 @@ import {
   SERVER_TENANT_ID,
   type WorkServer,
 } from "../server.js";
-import { replyOf, testServerOptions } from "../test-support.js";
+import {
+  filesHolding,
+  filesUnder,
+  replyOf,
+  testServerOptions,
+} from "../test-support.js";
 import { startWorkWorker } from "./worker-runtime.js";
 
 /**
@@ -160,15 +165,6 @@ async function waitFor(
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
   throw new Error(`Timed out waiting for ${what}`);
-}
-
-function filesUnder(directory: string): string[] {
-  if (!fs.existsSync(directory)) return [];
-  return fs.readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
-    const full = path.join(directory, entry.name);
-    if (entry.isSymbolicLink()) return [];
-    return entry.isDirectory() ? filesUnder(full) : [full];
-  });
 }
 
 /** Refuses one model, like a policy on what agents may run. */
@@ -392,6 +388,37 @@ describe("Claude Code on a worker, with its model through the gateway", () => {
     if (!notes) throw new Error("notes.md is not in the worker's sandbox");
     expect(fs.readFileSync(notes, "utf8")).toBe("edited by claude code");
 
+    // The CLI's whole transcript is stored with Work by the time the turn
+    // settled, the line it writes after its result included (ADR 0198).
+    const db = server.catamorphic.core.db;
+    const thread = await db
+      .selectFrom("agent_provider_threads")
+      .select(["id", "native_ref"])
+      .where("session_id", "=", sessionId)
+      .executeTakeFirstOrThrow();
+    const ref = thread.native_ref;
+    const nativeId =
+      ref && typeof ref === "object" && !Array.isArray(ref) ? ref.id : null;
+    const transcript = filesUnder(workerDir).find(
+      (file) => path.basename(file) === `${String(nativeId)}.jsonl`,
+    );
+    if (!transcript) throw new Error("The CLI wrote no transcript");
+    const written = fs
+      .readFileSync(transcript, "utf8")
+      .split("\n")
+      .filter((line) => line.trim())
+      .map((line): unknown => JSON.parse(line));
+    const stored = await db
+      .selectFrom("agent_provider_thread_entries")
+      .select("entry")
+      .where("thread_id", "=", thread.id)
+      .where("subpath", "=", "")
+      .orderBy("seq")
+      .execute();
+    expect(written.at(-1)).toMatchObject({ subtype: "turn_duration" });
+    expect(stored).toHaveLength(written.length);
+    expect(stored.map((row) => row.entry)).toEqual(written);
+
     // Both model calls went through the gateway with the organization's key.
     expect(upstreamKeys).toEqual([REAL_KEY, REAL_KEY]);
     expect(upstreamBodies[0]).toContain("claude-test");
@@ -445,10 +472,7 @@ describe("Claude Code on a worker, with its model through the gateway", () => {
       `ANTHROPIC_BASE_URL=${base}/api/gateway/model/anthropic`,
     );
     expect(answer.content).not.toContain(REAL_KEY);
-    for (const file of filesUnder(workerDir)) {
-      const content = fs.readFileSync(file);
-      expect(content.includes(REAL_KEY), file).toBe(false);
-    }
+    expect(filesHolding(workerDir, REAL_KEY)).toEqual([]);
     const file = grantFile();
     if (!file) throw new Error("No grant file in the sandbox");
     expect(fs.readFileSync(file, "utf8").trim()).toMatch(/\S{20,}/);

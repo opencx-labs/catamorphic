@@ -14,7 +14,12 @@ import {
   SERVER_TENANT_ID,
   type WorkServer,
 } from "../server.js";
-import { replyOf, testServerOptions } from "../test-support.js";
+import {
+  filesHolding,
+  filesUnder,
+  replyOf,
+  testServerOptions,
+} from "../test-support.js";
 import { startWorkWorker } from "./worker-runtime.js";
 
 const execute = promisify(execFile);
@@ -152,15 +157,6 @@ async function waitFor(
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
   throw new Error(`Timed out waiting for ${what}`);
-}
-
-function filesUnder(directory: string): string[] {
-  if (!fs.existsSync(directory)) return [];
-  return fs.readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
-    const full = path.join(directory, entry.name);
-    if (entry.isSymbolicLink()) return [];
-    return entry.isDirectory() ? filesUnder(full) : [full];
-  });
 }
 
 let mainHead: string;
@@ -515,10 +511,7 @@ describe("a pull request review chat with Git through the gateway", () => {
     // No upstream credential anywhere in the sandbox: not in its
     // environment, not in any file the worker holds.
     expect(await run("env")).not.toContain(UPSTREAM_SECRET);
-    for (const file of filesUnder(workerDir)) {
-      const content = fs.readFileSync(file);
-      expect(content.includes(UPSTREAM_SECRET), file).toBe(false);
-    }
+    expect(filesHolding(workerDir, UPSTREAM_SECRET)).toEqual([]);
     expect(refusedUpstreamRequests).toEqual([]);
 
     // Every fetch and push was audited with its refs and outcome.

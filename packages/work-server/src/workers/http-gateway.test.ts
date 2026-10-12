@@ -12,6 +12,8 @@ import {
   type WorkServer,
 } from "../server.js";
 import {
+  filesHolding,
+  filesUnder,
   replyOf,
   testExecutionSettings,
   testServerOptions,
@@ -92,15 +94,6 @@ async function waitFor(
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
   throw new Error(`Timed out waiting for ${what}`);
-}
-
-function filesUnder(directory: string): string[] {
-  if (!fs.existsSync(directory)) return [];
-  return fs.readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
-    const full = path.join(directory, entry.name);
-    if (entry.isSymbolicLink()) return [];
-    return entry.isDirectory() ? filesUnder(full) : [full];
-  });
 }
 
 beforeAll(async () => {
@@ -329,10 +322,7 @@ describe("code in a chat's sandbox calls an HTTP API through the gateway", () =>
     // The password is nowhere in the sandbox: not in its environment, not
     // in any file the worker holds.
     expect(await run(sessionId, "env")).not.toContain(UPSTREAM_PASSWORD);
-    for (const file of filesUnder(workerDir))
-      expect(fs.readFileSync(file).includes(UPSTREAM_PASSWORD), file).toBe(
-        false,
-      );
+    expect(filesHolding(workerDir, UPSTREAM_PASSWORD)).toEqual([]);
 
     // Each request is audited with its method, path and query.
     const audit = await server.catamorphic.core.db
