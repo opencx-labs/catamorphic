@@ -62,8 +62,11 @@ export class DesktopWorkspaces {
     { x: number; left: number; side: "left" | "right" }
   >();
   private quitting = false;
-  /** Focus left the app, not just passed between its windows. */
-  private focusLeftApp = false;
+  /**
+   * Focus left the app, not just passed between its windows; so too at
+   * launch, until a window first has it.
+   */
+  private focusLeftApp = true;
   // Detaching is a session choice; the `dockDetached` preference is only
   // the state a fresh launch starts in. Closing the detached window or
   // picking "Return dock to the window" never rewrites that default.

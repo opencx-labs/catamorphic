@@ -471,8 +471,12 @@ describe("chat flows", () => {
         label: "chat metadata hover preview",
       },
     );
-    const previewText = await run<string>(
-      `return $('[data-resource-inspector]').textContent;`,
+    // The reply arrives before its turn has finished saving: the chat
+    // reads Ready once the turn settled.
+    const previewText = await runWait<string>(
+      `const text = $('[data-resource-inspector]')?.textContent ?? '';
+       return text.includes('Ready') && text;`,
+      { label: "the chat's preview reads Ready once its turn settled" },
     );
     expect(previewText).toContain("Fake Agent");
     expect(previewText).toContain("Environment");
