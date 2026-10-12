@@ -292,8 +292,9 @@ describe.each(databases)("text Postgres cannot store, on %s", (name, open) => {
     );
     expect(turn.error).toBeNull();
     expect(turn.status).toBe("completed");
-    // The command's streamed output, its transcript entries (a host call,
-    // then the entries), each with U+FFFD in place.
+    // The command's streamed output has U+FFFD in place. Its transcript
+    // entries passed through a host call (jsonb), and are kept exactly as
+    // the agent wrote them (json).
     const { items, entries } = await storedText(sessionId);
     const command = items.find((item) => item.kind === "command");
     expect(command?.payload).toMatchObject({
@@ -301,8 +302,8 @@ describe.each(databases)("text Postgres cannot store, on %s", (name, open) => {
       exitCode: 0,
     });
     expect(entries.map((row) => row.entry)).toEqual([
-      PRINTED_STORED,
-      { output: PRINTED_STORED },
+      PRINTED,
+      { output: PRINTED },
     ]);
   });
 
