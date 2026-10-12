@@ -76,7 +76,7 @@ jobs:
         if: steps.bump.outputs.changed == 'true' && steps.existing.outputs.found == 'false'
         run: |
           # Only the lockfile and the SDK manifests are needed: skip the
-          # Electron and browser downloads postinstall scripts do.
+          # downloads postinstall scripts do.
           bun install --ignore-scripts
           bun run test:scripts -- scripts/harness-bump.test.ts
       - name: Open the pull request

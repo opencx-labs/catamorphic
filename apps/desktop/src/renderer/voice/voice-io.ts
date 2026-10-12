@@ -29,14 +29,20 @@ window.addEventListener("message", (event: MessageEvent<unknown>) => {
   const port = event.ports[0];
   if (!port) return;
   const speaker = new Speaker(port);
-  port.onmessage = (message: MessageEvent<VoiceAudioDown>) =>
-    speaker.receive(message.data);
-  void listen(port, event.data.microphone).catch((cause: unknown) =>
-    post(port, {
-      type: "failed",
-      message: `The microphone could not start: ${cause instanceof Error ? cause.message : String(cause)}`,
-    }),
+  const microphone = listen(port, event.data.microphone).catch(
+    (cause: unknown) => {
+      post(port, {
+        type: "failed",
+        message: `The microphone could not start: ${cause instanceof Error ? cause.message : String(cause)}`,
+      });
+      return undefined;
+    },
   );
+  port.onmessage = (message: MessageEvent<VoiceAudioDown>) => {
+    if (message.data.type === "close-microphone")
+      void microphone.then((close) => close?.());
+    else speaker.receive(message.data);
+  };
 });
 
 // Copied, never transferred: a port that ends in a utility process
@@ -45,10 +51,11 @@ function post(port: MessagePort, message: VoiceAudioUp) {
   port.postMessage(message);
 }
 
+/** Opens the microphone and streams it; resolves to what closes it. */
 async function listen(
   port: MessagePort,
   microphone: string | null,
-): Promise<void> {
+): Promise<() => void> {
   const stream = await openMicrophone(microphone);
   const [track] = stream.getAudioTracks();
   const context = new AudioContext({ sampleRate: SPEECH_SAMPLE_RATE });
@@ -86,6 +93,10 @@ async function listen(
   };
   context.createMediaStreamSource(stream).connect(tap);
   await context.resume();
+  return () => {
+    for (const capture of stream.getTracks()) capture.stop();
+    void context.close();
+  };
 }
 
 /** The chosen microphone, or the system's when it is gone or unset. */
@@ -138,7 +149,9 @@ class Speaker {
 
   constructor(private readonly port: MessagePort) {}
 
-  receive(message: VoiceAudioDown): void {
+  receive(
+    message: Exclude<VoiceAudioDown, { type: "close-microphone" }>,
+  ): void {
     if (message.type === "play") this.play(message);
     else this.flush(message.seq);
   }

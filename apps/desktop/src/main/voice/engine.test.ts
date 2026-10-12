@@ -393,6 +393,91 @@ describe("VoiceEngine push to talk", () => {
       text: "what is on tonight",
     });
   });
+
+  it("once it stops listening, finishes what it says and hears nothing more", async () => {
+    const voice = harness(["wait", "one more thing"]);
+    voice.engine.speak("bye", "Talk soon.");
+    await voice.settle();
+    // Speech underway when listening stops ends, and nothing is heard.
+    voice.frame(0.5, 3);
+    voice.engine.stopListening();
+    voice.frame(0);
+    voice.frame(0.5, 3);
+    voice.frame(0);
+    await voice.settle();
+    voice.drain();
+    expect(voice.events).toEqual([
+      { type: "speaking", id: "bye" },
+      { type: "speech-start" },
+      { type: "speech-end" },
+      { type: "spoken", id: "bye", interrupted: false },
+    ]);
+  });
+
+  it("drops what it was still recognizing when listening stops", async () => {
+    let answer: (text: string) => void = () => {};
+    const voice = harness([], (parts) => {
+      parts.recognize = () =>
+        new Promise((resolve) => {
+          answer = resolve;
+        });
+    });
+    voice.engine.speak("bye", "Talk soon.");
+    voice.frame(0.5, 3);
+    voice.frame(0);
+    await voice.settle();
+    // Recognition is underway; listening stops before it answers.
+    voice.engine.stopListening();
+    answer("wait");
+    await voice.settle();
+    voice.drain();
+    expect(voice.events.map((event) => event.type)).not.toContain("barge-in");
+    expect(voice.events.map((event) => event.type)).not.toContain("utterance");
+    expect(voice.events.at(-1)).toEqual({
+      type: "spoken",
+      id: "bye",
+      interrupted: false,
+    });
+  });
+
+  it("closes the microphone when it stops listening, and on a page that takes over", () => {
+    const voice = harness();
+    voice.engine.stopListening();
+    voice.engine.stopListening();
+    voice.engine.audioReplaced();
+    expect(
+      voice.audio.filter((message) => message.type === "close-microphone"),
+    ).toHaveLength(2);
+  });
+
+  it("counts what a replaced audio page had still to play as played", async () => {
+    const voice = harness();
+    voice.engine.speak("reply", "Here is the answer.");
+    await voice.settle();
+    expect(voice.engine.audible).toBe(true);
+    // The page that was playing it is gone; it never reports drained.
+    voice.engine.audioReplaced();
+    expect(voice.engine.audible).toBe(false);
+    expect(voice.events.at(-1)).toEqual({
+      type: "spoken",
+      id: "reply",
+      interrupted: false,
+    });
+    expect(
+      voice.audio.some((message) => message.type === "close-microphone"),
+    ).toBe(false);
+  });
+
+  it("holds nothing for push to talk once it stops listening", async () => {
+    const voice = harness(["list my sessions"]);
+    voice.engine.setPushToTalk(true);
+    voice.engine.stopListening();
+    voice.engine.hold(true);
+    voice.frame(0.5, 20);
+    voice.engine.hold(false);
+    await voice.settle();
+    expect(voice.events).toEqual([]);
+  });
 });
 
 describe("resample", () => {

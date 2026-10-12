@@ -32,6 +32,7 @@ process.parentPort.on("message", (message) => {
         if (isAudioUp(data)) engine?.onAudio(data);
       });
       port.start();
+      engine?.audioReplaced();
       return;
     }
     case "start":
@@ -42,6 +43,9 @@ process.parentPort.on("message", (message) => {
       return;
     case "hold":
       engine?.hold(command.held);
+      return;
+    case "stop-listening":
+      engine?.stopListening();
       return;
     case "learn":
       engine?.learn();

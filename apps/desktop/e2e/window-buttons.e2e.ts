@@ -19,6 +19,7 @@ const input=()=>[...document.querySelectorAll('textarea[aria-label="Search comma
 const key=(key, mods={})=>input().dispatchEvent(new KeyboardEvent('keydown',{key,bubbles:true,cancelable:true,...mods}));
 const rows=()=>[...input().closest('[role="dialog"]').querySelectorAll('[role="option"]')];
 const headerInset=()=>getComputedStyle($('[data-sidebar="left"] button[aria-label="Collapse sidebar"]').closest('.app-drag')).paddingLeft;
+const projectInHeader=()=>!!$('[data-sidebar="left"] [data-sidebar-project]').closest('.app-drag');
 `;
 const run = <T>(code: string) => app.eval<T>(`(()=>{${helpers};${code}})()`);
 const wait = (code: string, label?: string) =>
@@ -78,6 +79,7 @@ it.skipIf(!mac)(
   async () => {
     expect(await drawn()).toBe(true);
     expect(await run("return headerInset()")).toBe("86px");
+    expect(await run("return projectInHeader()")).toBe(false);
 
     await searchPalette("window buttons");
     expect(await run("return rows()[0].textContent")).toContain(
@@ -106,6 +108,8 @@ it.skipIf(!mac)(
     );
     await poll(drawn).toBe(false);
     expect(await run("return headerInset()")).toBe("12px");
+    // The project switcher moves up into the row the buttons kept.
+    expect(await run("return projectInHeader()")).toBe(true);
     expect(JSON.parse(fs.readFileSync(prefsFile, "utf8"))).toMatchObject({
       windowButtons: false,
     });
@@ -137,6 +141,7 @@ it.skipIf(!mac)(
     );
     await poll(drawn).toBe(true);
     expect(await run("return headerInset()")).toBe("86px");
+    expect(await run("return projectInHeader()")).toBe(false);
     expect(
       await app.eval(
         `document.querySelector('[name="windowButtons"]').checked`,

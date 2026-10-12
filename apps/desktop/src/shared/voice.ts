@@ -164,6 +164,8 @@ export type VoiceWorkerCommand =
   | { type: "push-to-talk"; enabled: boolean }
   /** The push-to-talk keys went down, or came up. */
   | { type: "hold"; held: boolean }
+  /** Hear nothing more; speech already asked for is still said. */
+  | { type: "stop-listening" }
   /** Learn the person's voice from the next few seconds they speak. */
   | { type: "learn" }
   /** Listen to this voice alone from now on; null listens to anyone. */
@@ -231,7 +233,9 @@ export type VoiceAudioUp =
 export type VoiceAudioDown =
   | { type: "play"; seq: number; samples: Float32Array; sampleRate: number }
   /** Drop everything queued or playing, now. */
-  | { type: "flush"; seq: number };
+  | { type: "flush"; seq: number }
+  /** Stop capturing for good: the microphone goes off, playback goes on. */
+  | { type: "close-microphone" };
 
 /** The IPC message that carries the audio port into the audio page. */
 export const VOICE_PORT_MESSAGE = "catamorphic:voice-port";

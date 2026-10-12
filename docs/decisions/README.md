@@ -236,3 +236,4 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0221](0221-menus-hold-the-window-and-pages-get-work-menus.md) | Menus hold the window, and pages get Work's menus | Accepted (amends 0121, 0203) |
 | [0222](0222-desktop-harnesses-stay-warm-between-turns.md) | Desktop harnesses stay warm between turns | Accepted (amends 0198) |
 | [0223](0223-an-agent-terminal-lives-as-long-as-its-command.md) | An agent terminal lives as long as its command | Accepted (amends 0155) |
+| [0224](0224-a-voice-agent-can-stop-listening.md) | A voice conversation's agent can stop listening | Accepted (amends 0133, 0216) |

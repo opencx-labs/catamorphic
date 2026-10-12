@@ -1,15 +1,16 @@
 # Agent tool surface
 
 Accepted in ADR 0133, following the September 2026 audit of desktop tools and
-review apps. The default desktop projection has fifteen fixed host registrations:
+review apps. The default desktop projection has sixteen fixed host registrations:
 `discover_capabilities`, `invoke_capability`, `workspace_overview`, `read_tab`,
 `open_surface`, `update_todo_list`, the three background-command tools
 (`run_background_command`, `read_background_output`, `stop_background_command`,
 ADR 0155), `watch_command` (ADR 0156), the browser's `open_browser`,
-`browser_snapshot` and `browser_act`, and the subagent pair `spawn_subsession`
-and `wait_for_subsessions` (ADR 0202). Harness-native execution and question
-adapters are additional. Claude Code receives every host tool with
-`_meta["anthropic/alwaysLoad"]`, so its own tool search never defers them.
+`browser_snapshot` and `browser_act`, the subagent pair `spawn_subsession`
+and `wait_for_subsessions` (ADR 0202), and voice's `stop_listening` (ADR
+0224). Harness-native execution and question adapters are additional.
+Claude Code receives every host tool with `_meta["anthropic/alwaysLoad"]`,
+so its own tool search never defers them.
 Previously up to 57 fixed host registrations were offered, before connectors,
 workflow tools, native tools and duplicate gateway mounts.
 
@@ -56,6 +57,7 @@ Availability also depends on identity, services, agent sandboxing and topology.
 | `surface_control` | Deferred, release, reclaim or close a browser tab or terminal. A browser tab the agent drives goes back to the person by itself when the turn ends |
 | `run_background_command`, `read_background_output`, `stop_background_command` | Eager, long-running processes in their own agent terminals; they outlive the turn and wake the chat when they finish (ADR 0155). Foreground commands use each harness's native shell |
 | `watch_command` | Eager. A quick check re-run on an interval in the chat's working directory; wakes the chat once on success or on every output change. Durable across restarts, missed checks coalesce, `stop_background_command` ends it (ADR 0156) |
+| `stop_listening` | Eager. Turns voice off in this chat once the turn's replies are read aloud; the microphone closes at once. Says what it does, never when (ADR 0224) |
 | `write_terminal` | Deferred, raw input to a terminal (prompts, REPLs, Ctrl+C, the person's own terminal on request) |
 | `build_app` | Deferred, host preview by default; `publish: true` explicitly publishes |
 | `sync_project`, `create_pull_request` | Deferred, managed checkout and linked-remote semantics |
@@ -196,3 +198,8 @@ Any chat the person talks with by voice gets one context fragment per turn
 (`VOICE_CONTEXT`, source `voice`): that they talk by voice, that messages
 are read aloud as they finish, and that voice can end. It is information,
 never rules, so the agent's own instructions decide how it talks.
+
+`stop_listening` ends a voice conversation from the agent's side (ADR 0224):
+the microphone closes at once, the turn's replies are still read aloud, and
+then voice turns off. Its description says what it does and never when, so
+the person teaches their agents when to call it.

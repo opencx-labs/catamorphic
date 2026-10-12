@@ -608,6 +608,7 @@ function TabStrip({
     <div
       className={`app-no-drag flex min-w-0 gap-1 ${vertical ? "flex-col" : `flex-1 items-center ${alignment === "center" ? "[justify-content:safe_center]" : "justify-start"} self-stretch overflow-x-auto overflow-y-hidden`}`}
       data-tab-orientation={orientation}
+      data-tab-alignment={alignment}
       onDragOver={(event) => {
         if (dragKey) {
           event.preventDefault();

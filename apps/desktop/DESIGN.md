@@ -315,6 +315,15 @@ fade in place from its old layout to its new one (ADR 0200). The content resizes
 toggle, never while anything moves. New motion beside a page, terminal,
 editor or app frame moves over it rather than animating its size.
 
+What an agent does to the workspace moves as what a person does: its opens
+and closes go through the same functions as a press on its surface's chip
+or a tab's close button, with their tab, split, floating and sidebar
+motion. A person's click swaps the content at once, since their own press
+is the cue; a swap nobody pressed for (an agent's open or close changing
+the tab in front) narrates with `pane-in-left` / `pane-in-right` from that
+side of the strip. Nothing moves in a project or window that is off
+screen, or under reduced motion.
+
 ### Current motion inventory
 
 | Animation | Duration | Pairs with |
@@ -327,9 +336,11 @@ editor or app frame moves over it rather than animating its size.
 | `pairing-qr-in` (QR readiness reveal) | 200ms | — (one-shot content-ready signal inside a fixed stage) |
 | `profile-veil-in` / `profile-veil-out` (in-place profile switch) | 200ms | each other (exact mirror) |
 | `question-in` (ask_user panel) | 260ms | — |
-| `pane-in-left` / `pane-in-right` (keyboard tab cycling) | 200ms | — (content-changed signal on a persistent wrapper; no exit to pair) |
+| `pane-in-left` / `pane-in-right` (keyboard tab cycling; an agent's open or close changing the tab in front of a visible workspace) | 200ms | — (content-changed signal on a persistent wrapper; no exit to pair; a person's click stays instant) |
+| `agent-pointer-in` / `agent-pointer-out` (`point_at`'s ring and its note) | 200ms | each other (exact mirror; the entrance's fill holds the ring steady, `agent-pointer-held` puts it back unanimated after a re-render rewrites the element's classes, nothing loops) |
 | `content-fade-out` / `content-fade-in` (content settling beside a still sidebar, view transition: the old snapshot fades where it was, the new one fades in) | 300ms, linear (a sanctioned exception) | each other (the old snapshot leaves as the new one arrives) |
-| `dock-float` / `dock-rail` groups (a floating chat and the bubble strip gliding while the content settles, view transition) | 200ms | within the content's 300ms fade; a chat tab (`dock-tab`) fades in place with `content-fade-out` / `content-fade-in` from its own place |
+| `dock-float` / `dock-rail` / `workspace-tabs` groups (a floating chat, the bubble strip and the tab strip gliding while the content settles, view transition) | 200ms | within the content's 300ms fade; a chat tab (`dock-tab`) fades in place with `content-fade-out` / `content-fade-in` from its own place |
+| Tab strip `translate` (the horizontal strip slides with the left sidebar's panel, to where the settle puts it) | 200ms, the panel's easing and item wait | the panel's own slide; dropped without a transition when the content settles |
 | `bubble-ask` (agent question arrival) | 280ms | — (one-shot nudge on a persistent bubble; no exit to pair) |
 | `input-recall-{up,down}-{a,b}` (composer ↑/↓ history) | 150ms | — (transform-only directional content signal; paired names replay rapid same-direction recalls without a classless frame) |
 | `cat-activity-leave` / `cat-activity-arrive` (agent activity line swap; shared from `@catamorphic/ui/styles.css` with `cat-fade-in`, `cat-fold-away` and `cat-step-in`) | 150ms / 200ms | — (one beat of the working pulse carries a content swap on a persistent line: the old text dims up and away, the new rises in, then `animate-pulse` resumes) |
@@ -378,7 +389,8 @@ that friction is intentional.
 - One chrome row: the macOS drag region (`titleBarStyle: hiddenInset`,
   `.app-drag`), sidebar toggle, and the workspace tab strip share the top
   40px. No dead space above tabs. The window buttons are a profile choice
-  (`windowButtons`); hidden, the corner kept for them goes too.
+  (`windowButtons`); hidden, the corner kept for them goes too and the
+  project switcher moves up into the sidebar's top row.
 - Workspace tabs host workflows, apps, and chats alike; minimized chats live
   in the bottom bubble strip (see the design log for collapse behavior).
 - Empty states are quiet: one sentence of `--color-fg-faint` + one action. Errors stay `--color-fg-muted`.
@@ -2187,3 +2199,36 @@ agent still reads what it printed. A terminal the person has open as a tab
 keeps its last output until they close it, and then it is gone; Cmd+Shift+T
 does not offer it back, because there is no process to return to. See ADR
 0223.
+
+### 2026-10-13: What an agent shows moves as what a person opens
+
+Talking with Work by voice, the person mostly watches: the agent opens a
+page to show them something, closes it, opens the next. Those changes
+snapped. An agent focusing a tab set the workspace state itself, so a
+split lost its collapse, a floating preview vanished without its exit, and
+the content swapped in one frame; a person's open looks smooth only
+because the palette fades away over the swap and their own press is the
+cue. Now an agent's open goes through what a press on its surface's chip
+does (the same split, floating and chip-attention handling), a floating
+surface leaves with its exit first, and when the tab in front changes the
+content nudges in from that side of the strip with the keyboard cycling's
+`pane-in`. A person's click stays instant. Closing works the same way: the
+tab's own exit, then its successor arrives from where it sits.
+
+A person talking with a chat by voice is watching it, even with the chat
+minimized or the dock's assistant nowhere on screen, so what it shows
+opens in front. Only what Work shows opens in front: an open for a project
+in the background, or a window that is hidden, is prepared as a tab, and
+the agent hears that the person has not seen it yet. Nothing raises a
+window. An agent that asks from a session with no chat in the workspace
+(a subsession, an automation's chat) no longer borrows whichever chat is
+working, which could step that chat out of its tab; what it opens waits as
+a tab in the background. A chat steps aside only when it was on screen.
+
+`point_at`'s ring fades in, holds steady and fades out the way it came,
+with its note. It used to pulse forever, which the motion contract allows
+only for progress, and vanished at once when cleared. A re-render that
+rewrites the pointed element's classes (a tab turning active) puts the
+ring back steady instead of dropping it. Pointing at something in a closed
+sidebar (a row, or a tab while tabs live there) now says the sidebar is
+closed instead of glowing off screen.

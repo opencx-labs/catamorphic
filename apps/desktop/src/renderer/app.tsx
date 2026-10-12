@@ -36,6 +36,7 @@ import {
   Suspense,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -175,6 +176,7 @@ import {
   matchesBinding,
   useKeybindings,
 } from "./lib/keybindings.js";
+import { prefersReducedMotion } from "./lib/motion.js";
 import { notifyDesktop, playChime } from "./lib/notify.js";
 import {
   ipcErrorText,
@@ -210,6 +212,7 @@ import {
   WorkspaceSourcesProvider,
 } from "./lib/workspace-sources.js";
 import {
+  agentOpenInFront,
   attachedTabKeys,
   type BrowserEntry,
   browserTabKey,
@@ -226,6 +229,7 @@ import {
   orderedTabKeys,
   reconcileWorkspace,
   serializeWorkspace,
+  stripTravel,
   type TerminalEntry,
   type TerminalEvent,
   tabbedBrowsers,
@@ -487,6 +491,14 @@ function findSidebarSearchButton(action: string) {
       `button[data-sidebar-search="${action}"]`,
     ),
   ].find((element) => !element.closest("[inert]") && element.checkVisibility());
+}
+
+/** An agent's open or close changing the tab in front, awaiting its commit. */
+interface AgentArrival {
+  /** The strip before the change. */
+  strip: string[];
+  from: string;
+  to: string;
 }
 
 export function App({
@@ -1464,6 +1476,9 @@ export function App({
   const floatingMotion = useFloatingMotion(
     workspace.floatingKey ? `${projectId}:${workspace.floatingKey}` : undefined,
   );
+  // Ref'd for the agent-bridge handler (a mount-time effect closure).
+  const floatingMotionRef = useRef(floatingMotion);
+  floatingMotionRef.current = floatingMotion;
   const dismissFloating = () => {
     const key = workspace.floatingKey;
     floatingMotion.dismiss(() =>
@@ -3515,9 +3530,10 @@ export function App({
   // shortcut dispatcher below AND the palette's action rows, so a key
   // press and a palette pick always do the same thing. Rebuilt per render
   // (closures over fresh state), read through a ref by the listeners.
-  // Keyboard tab cycling nudges the content pane in from the direction of
-  // travel (see styles.css pane-in-*). Cleared on animationend; the
-  // null-then-rAF dance restarts the keyframe on rapid consecutive cycles.
+  // Keyboard tab cycling, and an agent's open or close, nudge the content
+  // pane in from the direction of travel (see styles.css pane-in-*).
+  // Cleared on animationend; the null-then-rAF dance restarts the keyframe
+  // on rapid consecutive cycles.
   const [paneMotion, setPaneMotion] = useState<{
     direction: "left" | "right";
     nonce: number;
@@ -3533,6 +3549,38 @@ export function App({
       }
     });
   };
+  // An agent's open or close waiting for its commit: the strip it left,
+  // the tab that was in front and the one it brings. The side it arrives
+  // from is read from the strip as committed, where a new tab landed in
+  // its kind's place. Stale after a second, should its commit never come.
+  const agentArrival = useRef<(AgentArrival & { until: number }) | null>(null);
+  const playArrival = (arrival: AgentArrival, after: Workspace) => {
+    const direction = stripTravel(
+      arrival.strip,
+      orderedTabKeys(after, { includeCollapsed: true }),
+      arrival.from,
+      arrival.to,
+    );
+    if (direction) playPaneMotion(direction);
+  };
+  const awaitArrival = (arrival: AgentArrival) => {
+    agentArrival.current = null;
+    // Committed already: read it now.
+    if (workspaceRef.current.activeTabKey === arrival.to) {
+      playArrival(arrival, workspaceRef.current);
+      return;
+    }
+    agentArrival.current = { ...arrival, until: performance.now() + 1000 };
+  };
+  const awaitArrivalRef = useRef(awaitArrival);
+  awaitArrivalRef.current = awaitArrival;
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the commit that brings the awaited tab in front is the only trigger
+  useLayoutEffect(() => {
+    const arrival = agentArrival.current;
+    if (!arrival || workspace.activeTabKey !== arrival.to) return;
+    agentArrival.current = null;
+    if (performance.now() <= arrival.until) playArrival(arrival, workspace);
+  }, [workspace.activeTabKey]);
 
   const cycleTab = (direction: -1 | 1) => {
     const ws = workspaceRef.current;
@@ -3843,6 +3891,9 @@ export function App({
       }),
     );
   };
+  // An agent showing a surface places it as a press on its chip would.
+  const openSurfaceRef = useRef(openSurface);
+  openSurfaceRef.current = openSurface;
 
   // Cmd+, / Cmd+. walk the non-tab chats in bubble-strip order, showing
   // each as the floating dock (the docks' own expand/collapse motion
@@ -4462,6 +4513,86 @@ export function App({
       return preferred?.localId;
     };
 
+    /** This project's workspace is the one on screen, in a window on screen. */
+    const shownHere = () =>
+      visibleRef.current && document.visibilityState === "visible";
+
+    /**
+     * A floating surface over the view leaves with its paired exit before an
+     * agent shows something else, as its close button plays it, and the
+     * dismissal commits before this resolves, so the open decides on the
+     * view as it now is. The open goes ahead regardless: a dismissal
+     * already under way, or a newer floating surface, skips this one's
+     * finish.
+     */
+    const leaveFloating = (keep?: string) =>
+      new Promise<void>((resolve) => {
+        const key = workspaceRef.current.floatingKey;
+        if (!key || key === keep) {
+          resolve();
+          return;
+        }
+        const fallback = window.setTimeout(resolve, 400);
+        floatingMotionRef.current.dismiss(() => {
+          window.clearTimeout(fallback);
+          flushSync(() =>
+            updateWorkspace((current) =>
+              transitionWorkspace(current, { type: "dismiss-floating", key }),
+            ),
+          );
+          resolve();
+        });
+      });
+
+    /**
+     * An agent's open or close that changes the tab in front narrates the
+     * swap: the content arrives from that side of the strip (pane-in), where
+     * a person's click stays instant. `before` is the workspace before the
+     * change; the side is read once the change commits (awaitArrival). A
+     * surface already on screen (a split's other pane, the floating one)
+     * has nowhere to arrive from. Nothing moves in a workspace or window
+     * off screen, or under reduced motion.
+     */
+    const narrateSwap = (before: Workspace, to: string | undefined) => {
+      const from = before.activeTabKey;
+      if (!from || !to || from === to || !shownHere()) return;
+      if (prefersReducedMotion() || workspaceLayout(before).viewSlots[to])
+        return;
+      awaitArrivalRef.current({
+        strip: orderedTabKeys(before, { includeCollapsed: true }),
+        from,
+        to,
+      });
+    };
+
+    /**
+     * Why something can't be pointed at: it sits in a closed sidebar (a
+     * row, or a tab while tabs live in the sidebar), so its glow would be
+     * off screen. A sidebar row not found yet is refused when every
+     * sidebar is closed.
+     */
+    const closedSidebarFor = (target: string): string | undefined => {
+      const root =
+        document.querySelector(
+          `[data-project-runtime="${CSS.escape(projectIdRef.current ?? "")}"]`,
+        ) ?? document;
+      const element = root.querySelector(
+        `[data-point-key="${CSS.escape(target)}"]`,
+      );
+      const row = target.startsWith("sidebar:");
+      const holder = element?.closest("aside[data-sidebar]");
+      const sidebars = holder
+        ? [holder]
+        : !element && row
+          ? [...root.querySelectorAll("aside[data-sidebar]")]
+          : [];
+      const onScreen = (sidebar: Element) =>
+        ["open", "opening"].includes(sidebar.getAttribute("data-motion") ?? "");
+      if (sidebars.length === 0 || sidebars.some(onScreen)) return undefined;
+      const name = row ? target.slice("sidebar:".length) : target;
+      return `"${name}" is in a closed sidebar, so the person can't see it. Tell them where it is, or ask them to open the sidebar.`;
+    };
+
     const handle = async (
       method: string,
       params: Record<string, unknown>,
@@ -4792,23 +4923,46 @@ export function App({
             typeof params.sessionId === "string" ? params.sessionId : undefined;
           // Who is asking, and is the user watching them? If the
           // requesting chat IS the user's active surface (its tab
-          // focused, or its floating dock up), the agent is showing
-          // them something — open in front, as always. Otherwise the
-          // user is busy elsewhere: never steal their focus. Prepare
-          // the tab in the background and light the attention dot on
-          // the surface's chip on the agent's own chat; the result
-          // tells the agent which of the two happened so it narrates
-          // honestly. A target the user is ALREADY looking at counts
-          // as watched — nothing to steal.
-          const requesterId = resolveWorkingChat(sessionId);
+          // focused, or its floating dock up), or they are talking with
+          // it by voice (ADR 0216), the agent is showing them something:
+          // open in front. Otherwise the user is busy elsewhere: never
+          // steal their focus. Prepare the tab in the background and
+          // light the attention dot on the surface's chip on the agent's
+          // own chat; the result tells the agent which of the two
+          // happened so it narrates honestly. A target the user is
+          // ALREADY looking at counts as watched: nothing to steal.
+          // A session named here with no chat in this workspace (a
+          // subsession, an automation's chat, a closed chat) is nobody's
+          // view: it opens in the background, as a visible tab, unless the
+          // person talks with it by voice (the dock's assistant before its
+          // chat is opened). The assistant's chat typed to in the dock is
+          // one of this workspace's chats. Only the terminal `open` hook,
+          // which names no session, borrows the working chat.
+          const requesterId = sessionId
+            ? ws.chats.find((chat) => chat.sessionId === sessionId)?.localId
+            : resolveWorkingChat();
           const requester = ws.chats.find(
             (chat) => chat.localId === requesterId,
           );
-          // Without a chat to carry the chip, a background open would
-          // be invisible — fall back to opening in front.
-          const watching = requester ? chatVisible(ws, requester) : true;
+          const requesterVisible = requester
+            ? chatVisible(ws, requester)
+            : false;
+          // Only what Work shows opens in front: this project in its
+          // window, the window on screen. Nothing here raises a window.
+          const shown = shownHere();
           const openInBackground = (key: string) =>
-            !watching && Boolean(requester) && ws.activeTabKey !== key;
+            !agentOpenInFront({
+              shown,
+              voice: params.voice === true,
+              chat: requester
+                ? requesterVisible
+                  ? "visible"
+                  : "hidden"
+                : sessionId
+                  ? "absent"
+                  : "unnamed",
+              targetInFront: ws.activeTabKey === key,
+            });
           const background = (key: string) => {
             if (requester) {
               setChipAttention((current) => {
@@ -4818,17 +4972,64 @@ export function App({
                   : { ...current, [requester.localId]: [...keys, key] };
               });
             }
+            const chip = requester
+              ? " and its chip is highlighted on your chat"
+              : "";
             return {
               key,
               opened: "background" as const,
-              note: "The user is looking at something else — the tab is ready in the background and its chip is highlighted on your chat. Tell them it's ready instead of assuming they saw it.",
+              note: shown
+                ? `The user is looking at something else, so the tab is ready in the background${chip}. Tell them it's ready instead of assuming they saw it.`
+                : `Work isn't showing this project right now (another project is in front, or its window is hidden), so the tab is ready in the background${chip}. Tell them where it is instead of assuming they saw it.`,
             };
           };
+          // A surface kept as a chip waits in the strip when no chat here
+          // carries its chip.
+          const asTab = (key: string) =>
+            updateWorkspace((current) => ({
+              ...current,
+              browsers: current.browsers.map((browser) =>
+                browserTabKey(browser.localId) === key
+                  ? { ...browser, background: false }
+                  : browser,
+              ),
+              editors: current.editors.map((editor) =>
+                editorTabKey(editor.localId) === key
+                  ? { ...editor, background: false }
+                  : editor,
+              ),
+              terminals: current.terminals.map((terminal) =>
+                terminalTabKey(terminal.localId) === key
+                  ? { ...terminal, background: false }
+                  : terminal,
+              ),
+            }));
+          // Shown as a press on the surface's chip shows it: a floating
+          // surface over the view leaves with its exit first, then the
+          // same placement (openSurface), the content arriving from its
+          // side of the strip.
+          const show = async (
+            keep: string | undefined,
+            open: () => string | Promise<string>,
+          ) => {
+            await leaveFloating(keep);
+            const before = workspaceRef.current;
+            const key = await open();
+            narrateSwap(before, key);
+            return key;
+          };
+          const showTab = (key: string) =>
+            show(key, () => {
+              openSurfaceRef.current(key, "replace");
+              return key;
+            });
           // The chat steps down from full tab to its floating dock so the
           // opened tab is visible behind it — the agent is SHOWING the
-          // user something, not replacing their view with itself.
+          // user something, not replacing their view with itself. Only a
+          // chat that was on screen: a voice open leaves a chat tab the
+          // person wasn't looking at where it was.
           const stepChatAside = () => {
-            if (!requesterId) return;
+            if (!requesterId || !requesterVisible) return;
             updateWorkspace((current) => ({
               ...current,
               chats: current.chats.map((chat) =>
@@ -4840,17 +5041,68 @@ export function App({
           };
           const linked = parseSurfaceLink(target);
           if (linked && linked.kind !== "tab") {
-            const backgroundOpen = openInBackground(
+            const named =
               linked.kind === "app" || linked.kind === "workflow"
                 ? `${linked.kind}:${linked.name}`
-                : "",
-            );
+                : undefined;
+            const backgroundOpen = openInBackground(named ?? "");
             try {
-              const key = await openLinkedSurfaceRef.current(target, {
-                chatLocalId: requesterId,
-                background: backgroundOpen,
-              });
-              if (backgroundOpen) return background(key);
+              if (backgroundOpen)
+                return background(
+                  await openLinkedSurfaceRef.current(target, {
+                    chatLocalId: requesterId,
+                    background: true,
+                  }),
+                );
+              // A page or file has no key before it opens. What stays on
+              // screen follows openLinkedSurface's own reuse: a file already
+              // open in an editor opens there; otherwise a floating page,
+              // or clean editor, takes it in place, as "open here" does.
+              // Anything else floating leaves for it.
+              const floating = ws.floatingKey;
+              const page =
+                linked.kind === "browser" ||
+                (linked.kind === "file" && isBrowserFile(linked.path));
+              // "Open here" is the asking chat's here. With that chat off
+              // screen (voice, the dock's assistant), a page gets a tab of
+              // its own rather than replacing the one the person reads.
+              const ownTab = page && !requesterVisible;
+              const root =
+                linked.kind === "file" && !page && projectIdRef.current
+                  ? await desktopApi.projectRoot(projectIdRef.current)
+                  : null;
+              const fileEditor =
+                linked.kind === "file" && root !== null
+                  ? ws.editors.find(
+                      (editor) =>
+                        editor.filePath ===
+                        resolveProjectFileLocation(root, linked.path)
+                          .relativePath,
+                    )
+                  : undefined;
+              const reused =
+                floating &&
+                (page
+                  ? !ownTab && floating.startsWith("browser:")
+                  : linked.kind === "file" &&
+                    ws.editors.some(
+                      (editor) =>
+                        editorTabKey(editor.localId) === floating &&
+                        !editor.dirty,
+                    ));
+              const key = await show(
+                named ??
+                  (fileEditor
+                    ? editorTabKey(fileEditor.localId)
+                    : reused
+                      ? floating
+                      : undefined),
+                () =>
+                  openLinkedSurfaceRef.current(target, {
+                    chatLocalId: requesterId,
+                    newTab: ownTab,
+                  }),
+              );
               stepChatAside();
               return { key, opened: "focused" };
             } catch (cause) {
@@ -4869,22 +5121,10 @@ export function App({
             const localId = target.slice("terminal:".length);
             if (ws.terminals.some((t) => t.localId === localId)) {
               if (openInBackground(target)) {
-                updateWorkspace((current) => ({
-                  ...current,
-                  terminals: current.terminals.map((t) =>
-                    t.localId === localId ? { ...t, background: false } : t,
-                  ),
-                }));
+                asTab(target);
                 return background(target);
               }
-              updateWorkspace((current) => ({
-                ...current,
-                terminals: current.terminals.map((t) =>
-                  t.localId === localId ? { ...t, background: false } : t,
-                ),
-                activeTabKey: target,
-                split: null,
-              }));
+              await showTab(target);
               stepChatAside();
               return { key: target, opened: "focused" };
             }
@@ -4898,22 +5138,11 @@ export function App({
               editorTabKey(editor.localId) === target && editor.background,
           );
           if (detachedBrowser || detachedEditor) {
-            if (openInBackground(target)) return background(target);
-            updateWorkspace((current) => ({
-              ...current,
-              browsers: current.browsers.map((browser) =>
-                browserTabKey(browser.localId) === target
-                  ? { ...browser, background: false }
-                  : browser,
-              ),
-              editors: current.editors.map((editor) =>
-                editorTabKey(editor.localId) === target
-                  ? { ...editor, background: false }
-                  : editor,
-              ),
-              activeTabKey: target,
-              split: null,
-            }));
+            if (openInBackground(target)) {
+              if (!requester) asTab(target);
+              return background(target);
+            }
+            await showTab(target);
             stepChatAside();
             return { key: target, opened: "focused" };
           }
@@ -4926,29 +5155,18 @@ export function App({
             };
           }
           // The tab already exists; "background" is just not focusing
-          // it — the chip's attention dot does the pointing.
+          // it: the chip's attention dot does the pointing.
           if (openInBackground(target)) return background(target);
-          updateWorkspace((current) => ({
-            ...current,
-            activeTabKey: target,
-            split: null,
-            ...(target.startsWith("chat:")
-              ? {
-                  activeChatId: target.slice("chat:".length),
-                  chats: current.chats.map((chat) =>
-                    chat.localId === target.slice("chat:".length)
-                      ? { ...chat, mode: "tab" }
-                      : chat,
-                  ),
-                }
-              : {}),
-          }));
+          await showTab(target);
           if (!target.startsWith("chat:")) stepChatAside();
           return { key: target, opened: "focused" };
         }
         case "pointAt": {
           const target = String(params.target ?? "").trim();
           if (!target) return { ok: false, error: "Empty target" };
+          // A glow in a closed sidebar would point at nothing on screen.
+          const closed = closedSidebarFor(target);
+          if (closed) return { ok: false, error: closed };
           const note =
             typeof params.note === "string" && params.note.trim()
               ? params.note.trim().slice(0, 60)
@@ -5051,9 +5269,24 @@ export function App({
           return { ok: true };
         }
         case "closeSurface": {
+          const key = String(params.key);
+          const before = workspaceRef.current;
           // The agent's close is final (main already killed an agent
           // terminal's PTY) — never soft-close back to a background chip.
-          closeTabRef.current(String(params.key), { force: true });
+          // A floating surface plays its own exit; closing the tab in
+          // front brings its successor in from its side of the strip,
+          // unless a workflow draft asks first.
+          closeTabRef.current(key, { force: true });
+          const asks = before.tabs.some(
+            (tab) =>
+              tab.kind === "workflow" && tabKey(tab) === key && tab.draft,
+          );
+          if (before.floatingKey !== key && !asks)
+            narrateSwap(
+              before,
+              transitionWorkspace(before, { type: "close", key, force: true })
+                .activeTabKey,
+            );
           return { ok: true };
         }
         default:
@@ -6020,6 +6253,9 @@ export function App({
   // macOS draws them in the page; elsewhere the preference changes nothing.
   const windowButtons =
     prefs?.windowButtons !== false || !/Mac/.test(navigator.platform);
+  // Without the buttons, the sidebar's top row would hold only its toggle,
+  // so the project switcher moves up into it.
+  const projectInSidebarHeader = !windowButtons && !headerInSidebar;
   const { sidebarRef, revealed, reveal, revealOnHover } =
     useSidebarReveal(compactWindow);
   const sidebarVisible = sidebarOpen || revealed;
@@ -6093,6 +6329,25 @@ export function App({
         if (!key) setDropSideHover(null);
       }}
     />
+  );
+  const projectControls = (
+    <>
+      <ProjectSwitcher
+        projects={projects}
+        activeProjectId={projectId}
+        onSelect={selectProject}
+        onOpenWindow={(id) => {
+          void desktopApi.workspaceNavigate({
+            projectId: id,
+            newWindow: true,
+          });
+        }}
+        onNewProject={() => setProjectModalOpen(true)}
+        onConnectRemote={() => setRemoteConnect({ open: true, link: null })}
+        onDeleteProject={setDeletingProject}
+      />
+      <RemoteConnectionIndicator projectId={projectId} />
+    </>
   );
 
   const workspaceTabBar = renderWorkspaceTabBar(
@@ -6263,8 +6518,18 @@ export function App({
             header={
               <>
                 <div
-                  className={`app-drag flex h-10 shrink-0 items-center justify-end gap-1 pr-3 ${windowButtons ? "pl-[86px]" : "pl-3"}`}
+                  className={`app-drag flex h-10 shrink-0 items-center justify-end gap-1 pr-3 ${windowButtons ? "pl-[86px]" : "pl-3"} ${projectInSidebarHeader ? "mb-2" : ""}`}
                 >
+                  {/* As wide as its name: the rest of the row still
+                      drags the window. */}
+                  {projectInSidebarHeader && (
+                    <div
+                      className="app-no-drag mr-auto flex min-w-0 items-center gap-1"
+                      data-sidebar-project
+                    >
+                      {projectControls}
+                    </div>
+                  )}
                   {sidebarMotion.phase !== "closed" && sidebarToggle("left")}
                   {headerInSidebar && (
                     <div
@@ -6282,25 +6547,14 @@ export function App({
                   </div>
                 )}
 
-                <div className="flex items-center gap-1 px-3 pb-3">
-                  <ProjectSwitcher
-                    projects={projects}
-                    activeProjectId={projectId}
-                    onSelect={selectProject}
-                    onOpenWindow={(id) => {
-                      void desktopApi.workspaceNavigate({
-                        projectId: id,
-                        newWindow: true,
-                      });
-                    }}
-                    onNewProject={() => setProjectModalOpen(true)}
-                    onConnectRemote={() =>
-                      setRemoteConnect({ open: true, link: null })
-                    }
-                    onDeleteProject={setDeletingProject}
-                  />
-                  <RemoteConnectionIndicator projectId={projectId} />
-                </div>
+                {!projectInSidebarHeader && (
+                  <div
+                    className="flex items-center gap-1 px-3 pb-3"
+                    data-sidebar-project
+                  >
+                    {projectControls}
+                  </div>
+                )}
               </>
             }
             footer={

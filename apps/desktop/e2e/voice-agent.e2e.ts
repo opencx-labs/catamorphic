@@ -14,7 +14,8 @@ import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
  * A session's question that arrives while voice is off shows on the
  * microphone, and the next start says it first. A chat's own microphone
  * talks to that chat's agent, which hears that the person talks by voice
- * until they type again. The dock's microphone can leave the dock, and its
+ * until they type again. An agent can stop listening, and voice turns off
+ * once its goodbye is said. The dock's microphone can leave the dock, and its
  * shortcut turns it on and off; in push to talk it hears only while the
  * keys are held, even in a web page.
  */
@@ -29,6 +30,7 @@ const UTTERANCES = [
   "who are you",
   "how am i talking to you",
   "how am i talking to you",
+  "that's all, stop listening",
 ];
 /** The assistant's own tools over the person's chats. */
 const ASSISTANT_SESSION_TOOLS = [
@@ -399,6 +401,7 @@ describe("voice", () => {
       expect.arrayContaining([
         ...ASSISTANT_SESSION_TOOLS,
         "open_surface",
+        "stop_listening",
         "update_todo_list",
       ]),
     );
@@ -861,5 +864,42 @@ describe("voice", () => {
        if (!item) return false; item.click(); return true;`,
       { label: "push to talk off again" },
     );
+  }, 120_000);
+
+  it("stops listening when its agent says so, once its goodbye is said", async () => {
+    await recordPhases();
+    await run(`mic().click(); return true;`);
+    const ref = await runWait<Ref>(
+      `const status = await api.voiceStatus();
+       const prefs = await api.getPrefs();
+       return status.phase !== 'off' && status.phase !== 'preparing' && prefs.assistantSession;`,
+      { timeoutMs: 30_000, label: "voice on in the assistant's chat" },
+    );
+    await runWait(
+      `const detail = await session(${JSON.stringify(ref)});
+       return detail.messages.some((m) => m.role === 'user' && m.content === ${JSON.stringify(UTTERANCES[9])}) &&
+         detail.messages.some((m) => m.role === 'assistant' && m.content === 'Talk soon.');`,
+      {
+        timeoutMs: 30_000,
+        label: "the agent stopped listening and said goodbye",
+      },
+    );
+    await runWait(`return mic().dataset.phase === 'off';`, {
+      timeoutMs: 30_000,
+      label: "voice off once the goodbye is said",
+    });
+    const phases = await run<string[]>(`return window.__voicePhases;`);
+    // Once the agent took the turn it never listened again: it spoke, and
+    // voice went off.
+    const thinking = phases.indexOf("thinking", phases.lastIndexOf("hearing"));
+    expect(thinking).toBeGreaterThan(0);
+    expect(phases.slice(thinking)).toContain("speaking");
+    expect(phases.slice(thinking)).not.toContain("listening");
+    expect(phases.at(-1)).toBe("off");
+    // Turned off cleanly, not stopped by a failure.
+    const status = await run<{ error: string | null }>(
+      `return api.voiceStatus();`,
+    );
+    expect(status.error).toBeNull();
   }, 120_000);
 });
