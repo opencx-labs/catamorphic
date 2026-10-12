@@ -109,9 +109,9 @@ const withStorable = new WeakSet<object>();
 /**
  * The same database, sending every parameter as a value Postgres stores
  * ({@link StorableParametersPlugin}): arrays and plain objects as JSON text
- * jsonb accepts, strings without U+0000. node-postgres would send an array
- * as a Postgres array, which jsonb stores as `{}` or refuses, and jsonb
- * refuses half of a surrogate pair. Idempotent, and the wrapped instance
+ * jsonb accepts, strings without U+0000 or half of a surrogate pair.
+ * node-postgres would send an array as a Postgres array, which jsonb stores
+ * as `{}` or refuses, and jsonb refuses half of a surrogate pair. Idempotent, and the wrapped instance
  * keeps the pool size recorded for the original. Core applies it to
  * whatever database a host injects.
  */

@@ -88,8 +88,9 @@ describe.each(databases)("text Postgres cannot store, on %s", (name, open) => {
       harness: { placement: "host", adapter: echoAdapter },
       topology: "native",
     };
-    // Runs a command whose output carries what a tool printed, and keeps
-    // that in its transcript, once as a bare line as Codex keeps one.
+    // Runs a command whose output carries what a tool printed, passes it to
+    // a host tool, and keeps it in its transcript, once as a bare line as
+    // Codex keeps one.
     const printer: RegisteredCodingAgent = {
       id: "printer",
       harness: {
@@ -129,6 +130,11 @@ describe.each(databases)("text Postgres cannot store, on %s", (name, open) => {
                 status: "completed",
                 item: { exitCode: 0 },
               });
+              // The runner records the call (jsonb) before it is answered;
+              // no host tool by that name exists, so it fails.
+              await host
+                .callTool({ name: "note", input: { text: PRINTED } })
+                .catch(() => undefined);
               await host.nativeState.append({
                 entries: [PRINTED, { output: PRINTED }],
               });
@@ -264,7 +270,7 @@ describe.each(databases)("text Postgres cannot store, on %s", (name, open) => {
     expect(turn.error).toBeNull();
     expect(turn.status).toBe("completed");
     // Each arrives as U+FFFD, in the message, the reply streamed back, and
-    // the agent's own transcript (a host call, then its entries).
+    // the agent's own transcript.
     expect(reply?.kind === "assistant_message" && reply.text).toBe(
       "Echo: build log \uFFFD done\uFFFD exit 0",
     );
@@ -292,8 +298,8 @@ describe.each(databases)("text Postgres cannot store, on %s", (name, open) => {
     );
     expect(turn.error).toBeNull();
     expect(turn.status).toBe("completed");
-    // The command's streamed output has U+FFFD in place. Its transcript
-    // entries passed through a host call (jsonb), and are kept exactly as
+    // The command's streamed output has U+FFFD in place, as has the record
+    // of its tool call (jsonb). Its transcript entries are kept exactly as
     // the agent wrote them (json).
     const { items, entries } = await storedText(sessionId);
     const command = items.find((item) => item.kind === "command");
