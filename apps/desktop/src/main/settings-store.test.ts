@@ -206,3 +206,27 @@ it("validates workspace dimensions and preserves explicit zero and divider overr
     }),
   ).toThrow();
 });
+it("keeps window buttons a profile choice, shown until turned off", () => {
+  const paths = files();
+  expect(loadSettings(paths).values.windowButtons).toBe(true);
+  expect(() =>
+    saveSettings({
+      files: paths,
+      scope: "personal",
+      patch: { windowButtons: false },
+    }),
+  ).toThrow("profile setting");
+  const saved = saveSettings({
+    files: paths,
+    scope: "profile",
+    patch: { windowButtons: false },
+  });
+  expect(saved.values.windowButtons).toBe(false);
+  expect(saved.sources.windowButtons).toBe("profile");
+  // A project file cannot hide them for everyone who opens it.
+  fs.writeFileSync(paths.project ?? "", '{"windowButtons":true}');
+  expect(loadSettings(paths).errors).toEqual([
+    expect.stringContaining("Window buttons is a profile setting"),
+  ]);
+  expect(loadSettings(paths).values.windowButtons).toBe(false);
+});

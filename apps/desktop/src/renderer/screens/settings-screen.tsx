@@ -239,7 +239,7 @@ export function SettingsScreen({
       id: "workspace",
       label: "Workspace",
       keywords:
-        "layout sidebar tabs header address bookmarks links preview floating border frame default browser http https sleep memory chat responses steps reasoning notes collapse fold",
+        "layout sidebar tabs header address bookmarks links preview floating border frame window buttons traffic lights default browser http https sleep memory chat responses steps reasoning notes collapse fold",
       content: (
         <>
           <section className="settings-card mt-4">
@@ -250,10 +250,13 @@ export function SettingsScreen({
             <DefaultBrowserButton className="mt-3 max-w-xs" />
           </section>
           <LayoutSection
-            title="Browser"
+            heading="Browser"
             keys={["switchToOpenTab", "browserTabSleep"]}
           />
           <LayoutSection projectId={projectId} />
+          {/Mac/.test(navigator.platform) && (
+            <LayoutSection heading="Window" keys={["windowButtons"]} />
+          )}
           <LayoutSection
             keys={[
               "dockMultiProject",
@@ -263,10 +266,10 @@ export function SettingsScreen({
               "chatWorkLive",
               "chatWorkSettled",
             ]}
-            title="Chat dock"
+            heading="Chat dock"
           />
           <LayoutSection
-            title="Code review"
+            heading="Code review"
             keys={[
               "diffLayout",
               "diffWrap",
@@ -854,7 +857,7 @@ function NotificationsSection() {
   return (
     <LayoutSection
       keys={["notificationSounds", "desktopNotifications"]}
-      title="Agent activity"
+      heading="Agent activity"
     />
   );
 }
@@ -1085,7 +1088,7 @@ function TerminalSection() {
   return (
     <LayoutSection
       keys={["codeTheme", "terminalAppearance"]}
-      title="Code and terminal"
+      heading="Code and terminal"
     >
       {source === "ghostty" && (
         <>
@@ -1126,12 +1129,12 @@ function TerminalSection() {
 function LayoutSection({
   projectId,
   keys = WORKSPACE_SETTING_KEYS,
-  title = "Workspace layout",
+  heading = "Workspace layout",
   children,
 }: {
   projectId?: string;
   keys?: SettingKey[];
-  title?: string;
+  heading?: string;
   /** Extra rows that belong to the same card, after the settings. */
   children?: ReactNode;
 }) {
@@ -1225,11 +1228,11 @@ function LayoutSection({
   return (
     <section
       className="settings-card mt-4 flex flex-col gap-3"
-      data-settings-layout={title === "Workspace layout" ? "" : undefined}
+      data-settings-layout={heading === "Workspace layout" ? "" : undefined}
       aria-busy={saving || undefined}
     >
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <h2 className="text-sm font-semibold">{title}</h2>
+        <h2 className="text-sm font-semibold">{heading}</h2>
         {projectId && (
           <select
             aria-label="Settings scope"

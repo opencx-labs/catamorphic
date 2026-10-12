@@ -15,7 +15,7 @@ const tableCell = (text: string) => text.replaceAll("|", "\\|");
 export const DESKTOP_SETTINGS_SKILL = `---
 name: configuring-catamorphic-desktop
 title: Configure desktop settings
-description: Edit Work desktop configuration files to customize theme, fonts, shortcuts, sidebar sections and command palette modes (workspace.js), tabs, notifications, terminal macros or browser bookmarks, including project overrides and reset.
+description: Edit Work desktop configuration files to customize theme, fonts, shortcuts, sidebar sections and command palette modes (workspace.js), tabs, window buttons, notifications, terminal macros or browser bookmarks, including project overrides and reset.
 ---
 
 # Configure the desktop
@@ -75,10 +75,11 @@ ${SETTING_KEYS.map((key) => {
         : key === "terminalMacros"
           ? "array of macros (below)"
           : "boolean";
-  const meaning =
+  const meaning = `${
     "description" in definition
       ? `${definition.label}: ${definition.description}`
-      : definition.label;
+      : definition.label
+  }${"macOnly" in definition ? " Only on macOS; elsewhere it changes nothing." : ""}`;
   return `| ${key} | ${tableCell(meaning)} | ${tableCell(value)} | ${definition.scopes.join(", ")} | ${JSON.stringify(normalizePrefs({})[key])} |`;
 }).join("\n")}
 

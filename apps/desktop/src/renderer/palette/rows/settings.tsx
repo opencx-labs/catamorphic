@@ -9,7 +9,9 @@ export function useSettingRows() {
   const { onOpenTab } = usePaletteHost();
   const settingItems = useMemo<PaletteItem[]>(
     () =>
-      SETTINGS_CATALOG.map((setting) => ({
+      SETTINGS_CATALOG.filter(
+        (setting) => !setting.macOnly || /Mac/.test(navigator.platform),
+      ).map((setting) => ({
         id: `setting:${setting.id}`,
         label: setting.label,
         detail: `Settings · ${setting.category}`,

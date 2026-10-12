@@ -39,6 +39,12 @@ describe("PrefsStore", () => {
     expect(normalizePrefs({ dockCollapsed: "yes" }).dockCollapsed).toBe(false);
   });
 
+  it("shows the window buttons unless turned off", () => {
+    expect(normalizePrefs({}).windowButtons).toBe(true);
+    expect(normalizePrefs({ windowButtons: false }).windowButtons).toBe(false);
+    expect(normalizePrefs({ windowButtons: "no" }).windowButtons).toBe(true);
+  });
+
   it("keeps each choice for how a running turn reads, and only those", () => {
     for (const choice of ["all", "latest", "notes"])
       expect(normalizePrefs({ chatWorkLive: choice }).chatWorkLive).toBe(
