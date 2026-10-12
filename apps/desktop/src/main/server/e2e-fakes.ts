@@ -1634,9 +1634,14 @@ export const catalog = defineWorkflow(({ defineBoundary }) => ({
 
   // "terminal: <cmd>" → the REAL run_background_command tool, then a
   // blocking read until it ends: e2e's path through the bridge with the
-  // deterministic agent (chips, spinners, output). "background: <cmd>"
-  // starts one and ends the turn, leaving it to wake the chat.
-  const terminalRun = /^(terminal|background):\s*(.+)$/s.exec(message.trim());
+  // deterministic agent (chips, spinners, output). Its terminal ends with
+  // the command (ADR 0223), so the answer links none. "background: <cmd>"
+  // starts one and ends the turn, leaving it to wake the chat; "start:
+  // <cmd>" starts one that wakes nobody and links its terminal while it
+  // runs; "stop: <cmd>" starts one and stops it a moment later.
+  const terminalRun = /^(terminal|background|start|stop):\s*(.+)$/s.exec(
+    message.trim(),
+  );
   if (terminalRun?.[2]) {
     const [, mode, command] = terminalRun;
     // Without words of its own, a command is titled by itself.
@@ -1670,6 +1675,27 @@ export const catalog = defineWorkflow(({ defineBoundary }) => ({
         };
         return;
       }
+      if (mode === "start") {
+        yield {
+          type: "text",
+          content: `Started \`${command}\` in the background ("terminalId":"${started.id}").\n\n[Open terminal](${started.key})`,
+        };
+        return;
+      }
+      if (mode === "stop") {
+        // Long enough to watch its chip spin first.
+        await turn.pause(3_000);
+        const stopped = z
+          .object({ status: z.string() })
+          .parse(
+            await turn.tool("stop_background_command", { id: started.id }),
+          );
+        yield {
+          type: "text",
+          content: `Stopped it ("terminalId":"${started.id}", "status":"${stopped.status}").`,
+        };
+        return;
+      }
       let output = started.output;
       if (started.status === "running") {
         const finished = z.object({ output: z.string() }).parse(
@@ -1682,7 +1708,7 @@ export const catalog = defineWorkflow(({ defineBoundary }) => ({
       }
       yield {
         type: "text",
-        content: `Ran it in the terminal ("terminalId":"${started.id}"). terminal result:\n\n${cleanTerminalText(output)}\n\n[Open terminal](${started.key})`,
+        content: `Ran it in the terminal ("terminalId":"${started.id}"). terminal result:\n\n${cleanTerminalText(output)}`,
       };
     } catch (error) {
       yield {

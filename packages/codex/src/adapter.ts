@@ -19,7 +19,13 @@ import {
   RequestClosedError,
   type RequestDraft,
 } from "@catamorphic/agent-protocol/runner";
-import { positiveTokenCount, renderUserMessage } from "@catamorphic/sandbox";
+import {
+  positiveTokenCount,
+  renderUserMessage,
+  type WarmSession,
+  WarmSessions,
+  type WarmSessionsOptions,
+} from "@catamorphic/sandbox";
 import {
   CodexAppServer,
   type CodexServerRequest,
@@ -67,27 +73,41 @@ export interface CodexAdapterOptions {
    * `@catamorphic/codex/testing`; hosts leave it unset.
    */
   transport?: CodexTransportFactory;
+  /**
+   * Keep each thread's Codex up between attempts (ADR 0222). Only for
+   * hosts that keep the adapter for their lifetime and call `dispose` when
+   * they stop: a runner that exits with its attempt leaves it unset, and
+   * every attempt's Codex exits when the attempt settles.
+   */
+  warm?: WarmSessionsOptions;
 }
 
 /**
- * The Codex harness adapter (`codex`): one pinned `codex app-server`
- * process per attempt, beside the workspace it edits (ADR 0198). Per-agent
- * settings arrive with each attempt, never here.
+ * The Codex harness adapter (`codex`): a pinned `codex app-server` process
+ * beside the workspace it edits (ADR 0198), one per attempt, or with `warm`
+ * one per thread while nothing it started with changes (ADR 0222).
+ * Per-agent settings arrive with each attempt, never here.
  */
 export function createCodexAdapter(
   options: CodexAdapterOptions = {},
 ): HarnessAdapter {
+  const sessions = options.warm
+    ? new WarmSessions<CodexSession>(options.warm)
+    : undefined;
   return {
     id: "codex",
     capabilities: () => CODEX_CAPABILITIES,
     start: (attempt, host) =>
-      new CodexAttempt(attempt, host, options.transport).control(),
+      new CodexAttempt(attempt, host, options.transport, sessions).control(),
+    ...(sessions ? { dispose: () => sessions.dispose() } : {}),
   };
 }
 
 /** How long an interrupted turn may take to say so before Codex is stopped. */
 const INTERRUPT_GRACE_MS = 10_000;
 const THREAD_TIMEOUT_MS = 120_000;
+/** How long a warm Codex's settled turn waits for its rollout to be written. */
+const TURN_STORED_MS = 3_000;
 const CODEX_ORIGIN = {
   kind: "provider",
   id: "codex",
@@ -100,12 +120,79 @@ interface ThreadInfo {
   model: string | null;
 }
 
+/** JSON with every object's keys sorted, so equal settings read the same. */
+function stableJson(value: unknown): string {
+  return JSON.stringify(value, (_key, inner: unknown) =>
+    inner && typeof inner === "object" && !Array.isArray(inner)
+      ? Object.fromEntries(
+          Object.entries(inner).sort(([a], [b]) =>
+            a < b ? -1 : a > b ? 1 : 0,
+          ),
+        )
+      : inner,
+  );
+}
+
+/**
+ * One `codex app-server` with its thread loaded, serving that thread's
+ * attempts one at a time (ADR 0222). Its notifications and requests reach
+ * the attempt it serves now; between attempts it is idle, and what it
+ * reports then reaches nobody.
+ */
+class CodexSession implements WarmSession {
+  client?: CodexAppServer;
+  thread?: ThreadInfo;
+  mirror?: RolloutMirror;
+  /** The native turn its last attempt ended on. */
+  lastTurn?: string;
+  private serving?: CodexAttempt;
+  private exited = false;
+
+  constructor(
+    /** Everything Codex and its thread started with. */
+    readonly signature: string,
+    readonly launch: CodexLaunch,
+  ) {}
+
+  get alive(): boolean {
+    return !this.exited && this.client !== undefined;
+  }
+
+  get attempt(): CodexAttempt | undefined {
+    return this.serving;
+  }
+
+  serve(attempt: CodexAttempt, host: AttemptHost): void {
+    this.serving = attempt;
+    if (this.mirror) this.mirror.host = host;
+  }
+
+  release(attempt: CodexAttempt): void {
+    if (this.serving !== attempt) return;
+    this.serving = undefined;
+    if (this.mirror) this.mirror.host = undefined;
+  }
+
+  /** Codex's process ended: it serves nobody again. */
+  ended(): void {
+    this.exited = true;
+  }
+
+  async close(): Promise<void> {
+    this.exited = true;
+    await this.client?.close();
+  }
+}
+
 class CodexAttempt {
   private client?: CodexAppServer;
+  private session?: CodexSession;
   private launch?: CodexLaunch;
   private thread?: ThreadInfo;
   private turnId?: string;
   private turnStartedEmitted = false;
+  /** Codex itself ended the turn, without failing (or never began one). */
+  private turnFinished = false;
   private finishing = false;
   private completed = false;
   private interruptRequested = false;
@@ -141,6 +228,7 @@ class CodexAttempt {
     private readonly attempt: AttemptStart,
     private readonly host: AttemptHost,
     private readonly transport: CodexTransportFactory | undefined,
+    private readonly sessions: WarmSessions<CodexSession> | undefined,
   ) {
     for (const tool of attempt.hostTools) {
       const taken = this.hostTools.has(tool.name);
@@ -191,7 +279,18 @@ class CodexAttempt {
           : { error: { message: errorMessage(error) } }),
       });
     } finally {
-      await this.shutdown();
+      const session = this.session;
+      const thread = session?.thread;
+      // Only a turn Codex itself finished leaves its thread ready for the
+      // next one; anything else ends this Codex.
+      if (this.sessions && session?.alive && thread && this.turnFinished) {
+        session.release(this);
+        this.sessions.release(thread.id, session);
+        await this.removeInputs();
+      } else {
+        await this.shutdown();
+        session?.release(this);
+      }
     }
   }
 
@@ -224,63 +323,17 @@ class CodexAttempt {
         ),
       ]),
     ];
-    const binding = await this.prepareThread(home);
+    const signature = this.launchSignature(launch);
+    const warm = await this.warmSession(signature);
+    const thread = warm
+      ? await this.joinSession(warm, home)
+      : await this.startSession(signature, launch, home);
+    if (!thread) return;
+    const client = this.client;
+    if (!client) throw new Error("Codex was not started.");
     if (this.interruptRequested) {
-      this.complete({ status: "interrupted" });
-      return;
-    }
-    const client = new CodexAppServer({
-      spawn: launch.spawn,
-      ...(this.transport ? { transport: this.transport } : {}),
-      onNotification: (method, params) => this.onNotification(method, params),
-      onRequest: (request) => this.onRequest(request),
-      onWithdrawn: (id) => this.onWithdrawn(id),
-    });
-    this.client = client;
-    void client.exited.then((exit) => {
-      if (this.completed || this.finishing) return;
-      if (exit.stderr.trim())
-        this.host.emit({
-          type: "diagnostic",
-          level: "error",
-          message: exit.stderr.trim().slice(-2_000),
-        });
-      this.items.closeOpen(this.interruptRequested ? "interrupted" : "failed");
-      this.complete(
-        this.interruptRequested
-          ? { status: "interrupted" }
-          : {
-              status: "failed",
-              error: {
-                message:
-                  "Codex stopped before it finished the turn. Retry the turn.",
-              },
-            },
-      );
-    });
-    await client.initialize();
-    const thread = await this.openThread(client, binding);
-    this.thread = thread;
-    this.host.emit({
-      type: "thread",
-      ref: { id: thread.id, strength: "strong" },
-      ...(thread.path && statePathOf({ home, file: thread.path })
-        ? { statePath: statePathOf({ home, file: thread.path }) }
-        : {}),
-    });
-    // A fork keeps its ancestors' rollouts, so it restores anywhere.
-    for (const ancestor of this.ancestors)
-      await this.host.nativeState.append(ancestor);
-    if (thread.path)
-      this.mirror = new RolloutMirror({
-        file: thread.path,
-        host: this.host,
-        offset:
-          binding.mode === "fresh" || binding.mode === "fork"
-            ? 0
-            : (binding.restoredBytes ?? (await fileSize(thread.path)) ?? 0),
-      });
-    if (this.interruptRequested) {
+      // No turn started: the loaded thread is as ready as it was.
+      this.turnFinished = true;
       this.complete({ status: "interrupted" });
       return;
     }
@@ -316,6 +369,157 @@ class CodexAttempt {
     this.resolveTurnReady();
     if (this.interruptRequested) this.sendInterrupt();
     await this.turnDone;
+  }
+
+  /**
+   * Everything Codex and its thread start with, as one string: an idle
+   * Codex serves another attempt only when it is the same (ADR 0222). The
+   * model and effort travel with each turn, so they are not in it.
+   */
+  private launchSignature(launch: CodexLaunch): string {
+    return stableJson({
+      spawn: launch.spawn,
+      home: launch.home,
+      sandbox: launch.sandbox,
+      approvalPolicy: launch.approvalPolicy,
+      threadConfig: launch.threadConfig,
+      cwd: this.attempt.workingDirectory,
+      developerInstructions: this.developerInstructions(),
+      dynamicTools: [...this.hostTools.entries()],
+    });
+  }
+
+  /** The thread's idle Codex, when nothing it started with changed since. */
+  private async warmSession(
+    signature: string,
+  ): Promise<CodexSession | undefined> {
+    const binding = this.attempt.thread;
+    if (
+      !this.sessions ||
+      (binding.mode !== "resume" && binding.mode !== "restore")
+    )
+      return undefined;
+    return this.sessions.take(
+      binding.nativeRef.id,
+      (candidate) =>
+        candidate.signature === signature &&
+        candidate.thread?.id === binding.nativeRef.id &&
+        candidate.lastTurn === binding.lastTurnRef?.id,
+    );
+  }
+
+  /** Serve this attempt on a live Codex whose thread is loaded already. */
+  private async joinSession(
+    session: CodexSession,
+    home: string,
+  ): Promise<ThreadInfo | undefined> {
+    this.session = session;
+    this.client = session.client;
+    this.thread = session.thread;
+    this.mirror = session.mirror;
+    session.serve(this, this.host);
+    const thread = session.thread;
+    if (!thread) throw new Error("Codex has no thread loaded.");
+    this.host.emit({
+      type: "thread",
+      ref: { id: thread.id, strength: "strong" },
+      ...(thread.path && statePathOf({ home, file: thread.path })
+        ? { statePath: statePathOf({ home, file: thread.path }) }
+        : {}),
+    });
+    // Whatever it wrote since its last turn ended belongs to the thread.
+    await this.mirror?.poll();
+    return thread;
+  }
+
+  /** A new Codex for this attempt's thread, from Work's copy of it. */
+  private async startSession(
+    signature: string,
+    launch: CodexLaunch,
+    home: string,
+  ): Promise<ThreadInfo | undefined> {
+    const binding = await this.prepareThread(home);
+    if (this.interruptRequested) {
+      this.complete({ status: "interrupted" });
+      return undefined;
+    }
+    const session = new CodexSession(signature, launch);
+    const own = this.attempt.thread;
+    // A resumed thread's history ends where Work last recorded it.
+    if (own.mode === "resume" || own.mode === "restore")
+      session.lastTurn = own.lastTurnRef?.id;
+    this.session = session;
+    session.serve(this, this.host);
+    const client = new CodexAppServer({
+      spawn: launch.spawn,
+      ...(this.transport ? { transport: this.transport } : {}),
+      onNotification: (method, params) =>
+        session.attempt?.onNotification(method, params),
+      onRequest: (request) =>
+        session.attempt
+          ? session.attempt.onRequest(request)
+          : Promise.reject(
+              new Error("Codex asked for something between turns."),
+            ),
+      onWithdrawn: (id) => session.attempt?.onWithdrawn(id),
+    });
+    session.client = client;
+    this.client = client;
+    const sessions = this.sessions;
+    void client.exited.then((exit) => {
+      session.ended();
+      if (session.thread) sessions?.forget(session.thread.id, session);
+      session.attempt?.codexExited(exit);
+    });
+    await client.initialize();
+    const thread = await this.openThread(client, binding);
+    this.thread = thread;
+    session.thread = thread;
+    this.host.emit({
+      type: "thread",
+      ref: { id: thread.id, strength: "strong" },
+      ...(thread.path && statePathOf({ home, file: thread.path })
+        ? { statePath: statePathOf({ home, file: thread.path }) }
+        : {}),
+    });
+    // A fork keeps its ancestors' rollouts, so it restores anywhere.
+    for (const ancestor of this.ancestors)
+      await this.host.nativeState.append(ancestor);
+    if (thread.path) {
+      this.mirror = new RolloutMirror({
+        file: thread.path,
+        host: this.host,
+        offset:
+          binding.mode === "fresh" || binding.mode === "fork"
+            ? 0
+            : (binding.restoredBytes ?? (await fileSize(thread.path)) ?? 0),
+      });
+      session.mirror = this.mirror;
+    }
+    return thread;
+  }
+
+  /** Codex's process ended while this attempt was its own. */
+  private codexExited(exit: Awaited<CodexAppServer["exited"]>): void {
+    if (this.completed || this.finishing) return;
+    if (exit.stderr.trim())
+      this.host.emit({
+        type: "diagnostic",
+        level: "error",
+        message: exit.stderr.trim().slice(-2_000),
+      });
+    this.items.closeOpen(this.interruptRequested ? "interrupted" : "failed");
+    this.complete(
+      this.interruptRequested
+        ? { status: "interrupted" }
+        : {
+            status: "failed",
+            error: {
+              message:
+                "Codex stopped before it finished the turn. Retry the turn.",
+            },
+          },
+    );
   }
 
   /**
@@ -743,8 +947,14 @@ class CodexAttempt {
     this.items.closeOpen(status);
     const usage = this.turnUsage();
     if (usage) this.host.emit({ type: "usage", usage });
-    // The turn's rollout lines are stored before it settles.
-    await this.mirror?.poll();
+    // The turn's rollout lines are stored before it settles. A Codex kept
+    // warm is not stopped, so nothing flushes them later: wait for the
+    // turn's own end to be written.
+    if (this.sessions) await this.mirror?.turnStored(TURN_STORED_MS);
+    else await this.mirror?.poll();
+    // A failed turn's Codex ends: whatever failed it (an expired sign-in,
+    // a broken connection) should not meet the retry.
+    this.turnFinished = status !== "failed";
     const error =
       status === "failed"
         ? classifyTurnError(
@@ -792,6 +1002,7 @@ class CodexAttempt {
     this.completed = true;
     this.finishing = true;
     clearTimeout(this.interruptTimer);
+    if (event.ref && this.session) this.session.lastTurn = event.ref.id;
     this.host.emit({ type: "turn.completed", ...event });
     this.resolveTurnReady();
     this.resolveTurn();
@@ -799,8 +1010,13 @@ class CodexAttempt {
 
   /** Stop Codex, then store the rollout lines it wrote on its way out. */
   private async shutdown(): Promise<void> {
-    await this.client?.close();
+    await (this.session ? this.session.close() : this.client?.close());
     await this.mirror?.poll();
+    await this.removeInputs();
+  }
+
+  /** The turn's media files, written for Codex to read. */
+  private async removeInputs(): Promise<void> {
     if (this.inputDirectory)
       await rm(this.inputDirectory, { recursive: true, force: true }).catch(
         () => {},

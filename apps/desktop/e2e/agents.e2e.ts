@@ -1108,23 +1108,34 @@ describe("agents and profiles", () => {
     );
   });
 
-  it("terminal chips appear, spin only while the command runs, and survive tab open/close", async () => {
+  it("a terminal chip spins while its command runs and leaves with it; an open tab keeps the output until closed", async () => {
     await runWait(`return !!visibleDock();`, { label: "chat open" });
-    // A slow-ish command: the chip must spin DURING it and stop AFTER.
-    await run(`
-      const ta = visibleDock().querySelector('[data-composer-input]');
-      setReactValue(ta, 'terminal: sleep 3 && echo chip-done');
-      ta.closest('form').requestSubmit();
-      return true;
-    `);
-    try {
-      await runWait(
-        `return !!$('[data-testid="surface-chip"][data-active]');`,
-        {
-          timeoutMs: 30_000,
-          label: "chip spinning while the command runs",
-        },
+    // An agent terminal lives as long as its command (ADR 0223), so a
+    // terminal chip in this app is one whose command still runs.
+    const chip = `$('[data-testid="surface-chip"][data-kind="terminal"]')`;
+    const tabs = `$$('[data-point-key]').filter((el) =>
+      (el.getAttribute('data-point-key') ?? '').startsWith('terminal:'))`;
+    const send = (text: string) =>
+      run(`
+        const ta = visibleDock().querySelector('[data-composer-input]');
+        setReactValue(ta, ${JSON.stringify(text)});
+        ta.closest('form').requestSubmit();
+        return true;
+      `);
+    const reply = (marker: string) =>
+      runWait<string>(
+        `return $$('[role="log"] article').find((el) =>
+           el.textContent.includes(${JSON.stringify(marker)}) &&
+           el.textContent.includes('terminal result'))?.textContent ?? false;`,
+        { timeoutMs: 30_000, label: `${marker} returned to the agent` },
       );
+    // A slow-ish command: the chip must spin DURING it and leave AFTER.
+    await send("terminal: sleep 3 && echo chip-done");
+    try {
+      await runWait(`return !!${chip}?.hasAttribute('data-active');`, {
+        timeoutMs: 30_000,
+        label: "chip spinning while the command runs",
+      });
     } catch (error) {
       console.log(
         "chip-debug:",
@@ -1143,72 +1154,93 @@ describe("agents and profiles", () => {
       );
       throw error;
     }
-    await runWait(
-      `return $$('[role="log"] article')
-        .some((el) => el.textContent.includes('chip-done'));`,
-      { timeoutMs: 30_000, label: "command output returned to the agent" },
-    );
-    // Command over, shell still alive: the spinner must be OFF.
-    await runWait(
-      `return !!$('[data-testid="surface-chip"]') &&
-              !$('[data-testid="surface-chip"][data-active]');`,
-      { timeoutMs: 15_000, label: "chip idle once the command finished" },
-    );
-
     // The agent's terminal is BACKGROUND: a chip on the rail, but no
     // workspace tab (strip tabs carry their key as data-point-key) —
     // a background command must not move the user's view.
     await run(`
-      const keys = $$('[data-point-key]')
-        .map((el) => el.getAttribute('data-point-key') ?? '')
-        .filter((key) => key.startsWith('terminal:'));
+      const keys = ${tabs}.map((el) => el.getAttribute('data-point-key'));
       if (keys.length > 0) {
         throw new Error('a background command opened a workspace tab: ' + keys.join(' | '));
       }
       return true;
     `);
+    await reply("chip-done");
+    // Command over: its shell ended, and its chip left the chat.
+    await runWait(`return !${chip};`, {
+      timeoutMs: 15_000,
+      label: "chip gone once the command finished",
+    });
 
-    // Open the chip as a tab, close the tab — later chats must still get
-    // their chips (regression: this used to strand future attachments).
+    // Opened as a tab while it runs, a terminal keeps showing what it
+    // printed once its command ends, until the person closes it.
+    await send("terminal: sleep 5 && echo tab-done");
+    await runWait(`return !!${chip}?.hasAttribute('data-active');`, {
+      timeoutMs: 30_000,
+      label: "second command running",
+    });
+    await run(`${chip}.querySelector('button').click(); return true;`);
+    await runWait(`return ${tabs}.length === 1;`, {
+      label: "terminal open as a tab",
+    });
+    const terminalId = /terminalId\W+([0-9a-f-]{36})/.exec(
+      await reply("tab-done"),
+    )?.[1];
+    if (!terminalId) throw new Error("the reply names no terminal");
+    await runWait(
+      `return ${tabs}.length === 1 && !${chip}?.hasAttribute('data-active');`,
+      {
+        timeoutMs: 15_000,
+        label: "ended terminal's tab stays, idle",
+      },
+    );
+    expect(
+      await app.eval<{ buffer: string; running: boolean } | null>(
+        `window.catamorphicDesktop.terminalBuffer(${JSON.stringify(terminalId)})`,
+      ),
+    ).toMatchObject({
+      running: false,
+      buffer: expect.stringContaining("tab-done"),
+    });
+    // Closing it is final: no chip comes back for a shell that is gone.
     await run(`
-      $('[data-testid="surface-chip"] button').click();
+      ${tabs}[0].querySelector('button[aria-label^="Close "]').click();
       return true;
     `);
-    await runWait(
-      `return !!$('[data-point-key^="terminal:"] button[aria-label^="Close "]');`,
-      { label: "terminal open as a tab" },
-    );
-    await run(`
-      $('[data-point-key^="terminal:"] button[aria-label^="Close "]').click();
-      return true;
-    `);
-    // Closing an agent-controlled terminal's tab backgrounds it: the tab
-    // is gone, but the chip (and the shell behind it) survives.
-    await runWait(
-      `return !$$('[data-point-key]').some((el) =>
-        (el.getAttribute('data-point-key') ?? '').startsWith('terminal:')) &&
-        !!$('[data-testid="surface-chip"]');`,
-      { label: "closed agent terminal returns to a chip" },
-    );
+    await runWait(`return ${tabs}.length === 0 && !${chip};`, {
+      label: "closed ended terminal leaves no chip",
+    });
+
+    // Later chats still get their chips (regression: closing a terminal
+    // tab used to strand future attachments).
     await run(`pressKey('n', { metaKey: true }); return true;`);
     await runWait(`return !!visibleDock();`, { label: "fresh chat open" });
-    await run(`
-      const ta = visibleDock().querySelector('[data-composer-input]');
-      setReactValue(ta, 'terminal: echo chip-two');
-      ta.closest('form').requestSubmit();
-      return true;
-    `);
+    await send("terminal: sleep 3 && echo chip-two");
+    await runWait(`return !!${chip};`, {
+      timeoutMs: 15_000,
+      label: "new chat still gets its terminal chip",
+    });
+    await reply("chip-two");
+    await runWait(`return !${chip};`, {
+      timeoutMs: 15_000,
+      label: "new chat's chip gone once its command finished",
+    });
+
+    // Stopped by its agent, a command leaves no spinning chip behind.
+    await send("stop: sleep 60");
+    await runWait(`return !!${chip}?.hasAttribute('data-active');`, {
+      timeoutMs: 30_000,
+      label: "chip spinning before the stop",
+    });
     await runWait(
-      // The user prompt also contains chip-two. Wait for the completed tool
-      // result before the next scenario extracts its terminalId.
-      `return $$('[role="log"] article')
-        .some((el) => el.textContent.includes('chip-two') &&
-                      el.textContent.includes('terminal result'));`,
-      { timeoutMs: 30_000, label: "second run returned output" },
+      `return $$('[role="log"] article').some((el) =>
+        el.textContent.includes('Stopped it') && el.textContent.includes('stopped'));`,
+      { timeoutMs: 30_000, label: "agent stopped its command" },
     );
     await runWait(
-      `return !!visibleDock().querySelector('[data-testid="surface-chip"]');`,
-      { timeoutMs: 15_000, label: "new chat still gets its terminal chip" },
+      `return !${chip} &&
+         [...visibleDock().querySelectorAll('[data-testid="chat-background-status"]')]
+           .some((el) => el.textContent === 'Stopped command in background');`,
+      { timeoutMs: 15_000, label: "stopped command's chip gone" },
     );
   });
 

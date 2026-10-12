@@ -285,11 +285,13 @@ it("gives AI file references pills and web links inline cards, resolving project
 });
 it("previews recent terminal output from the composer rail", async () => {
   await clear();
+  // A terminal's chip lasts as long as its command (ADR 0223): this one
+  // keeps running for the scenarios that follow.
   await run(
-    `paste('terminal: echo preview-terminal-output'); composer().dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true,cancelable:true}));`,
+    `paste('start: echo preview-terminal-output && sleep 600'); composer().dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true,cancelable:true}));`,
   );
   await wait(
-    `const button = front().querySelector('[data-testid="surface-chip"][data-kind="terminal"] button'); return button && !button.closest("[inert]") && front().textContent.includes("terminal result:");`,
+    `const button = front().querySelector('[data-testid="surface-chip"][data-kind="terminal"] button'); return button && !button.closest("[inert]") && front().textContent.includes("in the background");`,
   );
   await run(
     `front().querySelector('[data-testid="surface-chip"][data-kind="terminal"] button').focus();`,
@@ -312,10 +314,10 @@ it("expands a plural group into every member without clipping the list", async (
   for (const marker of ["second", "third", "fourth"]) {
     await clear();
     await run(
-      `paste('terminal: echo preview-group-${marker}'); composer().dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true,cancelable:true}));`,
+      `paste('start: echo preview-group-${marker} && sleep 600'); composer().dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true,cancelable:true}));`,
     );
     await wait(
-      `return [...front().querySelectorAll('[role="log"] article')].some(el => el.textContent.includes('terminal result:') && el.textContent.includes('preview-group-${marker}'));`,
+      `return [...front().querySelectorAll('[role="log"] article')].some(el => el.textContent.includes('in the background') && el.textContent.includes('preview-group-${marker}'));`,
     );
   }
   await wait(

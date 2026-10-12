@@ -1669,7 +1669,7 @@ describe("subagents and background watchers", () => {
     );
   });
 
-  it("a background command pulses until it ends, then wakes the chat", async () => {
+  it("a background command pulses until it ends, then wakes the chat and leaves no terminal behind", async () => {
     await run(`
       const ta = floatingDock().querySelector('[data-composer-input]');
       setReactValue(ta, 'background: sleep 6 && echo bg-done');
@@ -1713,6 +1713,20 @@ describe("subagents and background watchers", () => {
            .some((el) => el.textContent === 'Ran command in background');`,
       { label: "the step says it ran" },
     );
+    // Its terminal ended with it (ADR 0223): the chip left the chat, and
+    // the notification has no terminal to open.
+    await runWait(
+      `return ![...floatingDock().querySelectorAll('[data-testid="surface-chip"][data-kind="terminal"]')]
+         .some((el) => el.textContent.includes('Run it in the background'));`,
+      { label: "its terminal chip left with it" },
+    );
+    expect(
+      await run(
+        `const row = [...floatingDock().querySelectorAll('[data-testid="chat-task-notification"]')]
+           .find((el) => el.textContent.includes('Run it in the background finished'));
+         return !!row && !row.querySelector('[data-testid="chat-input-source"]');`,
+      ),
+    ).toBe(true);
   });
 });
 
@@ -1792,7 +1806,7 @@ describe("news from a background command (ADR 0217)", () => {
     expect(news.bubbles).toBe(0);
     // The repeating error woke the chat once, for all eight prints.
     expect(news.printed).toBe(1);
-    // It opens to what the agent read, and to its terminal.
+    // It opens to what the agent read; its terminal ended with it.
     await run(
       `const end = ${ended};
        const toggle = end.closest('[data-testid="chat-turn-steps"]')
@@ -1803,8 +1817,9 @@ describe("news from a background command (ADR 0217)", () => {
     await runWait(
       `const end = ${ended};
        return end?.querySelector('button')?.getAttribute('aria-expanded') === 'true' &&
-         end.querySelector('[data-testid="chat-step-source"], [data-testid="chat-input-source"] a')?.textContent === 'Open terminal';`,
-      { label: "the end opens to its terminal" },
+         end.textContent.includes('Debugger.enable') &&
+         !end.querySelector('[data-testid="chat-step-source"], [data-testid="chat-input-source"] a');`,
+      { label: "the end opens to its output, with no terminal to open" },
     );
     await new Promise((resolve) => setTimeout(resolve, 400));
     await app.screenshot(
