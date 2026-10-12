@@ -62,6 +62,8 @@ export class DesktopWorkspaces {
     { x: number; left: number; side: "left" | "right" }
   >();
   private quitting = false;
+  /** Focus left the app, not just passed between its windows. */
+  private focusLeftApp = false;
   // Detaching is a session choice; the `dockDetached` preference is only
   // the state a fresh launch starts in. Closing the detached window or
   // picking "Return dock to the window" never rewrites that default.
@@ -100,6 +102,7 @@ export class DesktopWorkspaces {
     let leftApp: ReturnType<typeof setTimeout> | undefined;
     app.on("browser-window-focus", (_event, window) => {
       clearTimeout(leftApp);
+      this.focusLeftApp = false;
       const profileId = options.windows.profileFor(window.webContents);
       if (this.floating.get(profileId) === window) return;
       this.lastWindows.delete(profileId);
@@ -113,7 +116,8 @@ export class DesktopWorkspaces {
       // area.
       clearTimeout(leftApp);
       leftApp = setTimeout(() => {
-        if (BrowserWindow.getFocusedWindow()) return;
+        if (this.quitting || BrowserWindow.getFocusedWindow()) return;
+        this.focusLeftApp = true;
         for (const profileId of this.floating.keys())
           this.syncFloating(profileId);
       }, FOCUS_SETTLE_MS);
@@ -742,7 +746,12 @@ export class DesktopWorkspaces {
    */
   private dockArea(profileId: string, dock: BrowserWindow) {
     const focused = BrowserWindow.getFocusedWindow();
-    const anchor = focused === dock ? this.lastWindows.get(profileId) : focused;
+    // While focus is on the dock, or passing between windows, the dock
+    // keeps to the workspace it last sat in.
+    const anchor =
+      focused === dock || (!focused && !this.focusLeftApp)
+        ? this.lastWindows.get(profileId)
+        : focused;
     if (
       anchor &&
       anchor !== dock &&
