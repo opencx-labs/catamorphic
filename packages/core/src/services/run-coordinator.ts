@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { DB, Json } from "@catamorphic/db";
+import { type DB, type Json, jsonbText } from "@catamorphic/db";
 import type {
   WorkflowCapabilities,
   WorkflowExecutionDescriptor,
@@ -1553,7 +1553,7 @@ export function withoutNul(text: string): string {
 }
 
 export function jsonColumn(value: Json) {
-  return sql<Json>`${JSON.stringify(value)}::jsonb`;
+  return sql<Json>`${jsonbText(value)}::jsonb`;
 }
 
 export function jsonRecord(value: unknown): Record<string, unknown> {

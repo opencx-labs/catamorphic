@@ -15,7 +15,7 @@ import {
   type DB,
   DEFAULT_SCHEMA,
   migrateToLatest,
-  withJsonArrayParameters,
+  withStorableParameters,
 } from "@catamorphic/db";
 import {
   createApp,
@@ -358,7 +358,7 @@ async function createWorkServerInner(
     const pglite = new PGlite(path.join(data, "db"), {
       extensions: { pgcrypto },
     });
-    ownDb = withJsonArrayParameters(
+    ownDb = withStorableParameters(
       new Kysely<DB>({
         dialect: new PGliteDialect({ pglite }),
         plugins: [new WithSchemaPlugin(DEFAULT_SCHEMA)],

@@ -3,7 +3,12 @@ import type {
   SessionSnapshot,
   StoredSessionEvent,
 } from "@catamorphic/agent-protocol";
-import type { DB, Json, JsonObject } from "@catamorphic/db";
+import {
+  type DB,
+  type Json,
+  type JsonObject,
+  jsonbText,
+} from "@catamorphic/db";
 import { type Kysely, type Selectable, sql } from "kysely";
 import type { Identity } from "../identity.js";
 import type { AgentSessionSource } from "./agent-sessions-service.js";
@@ -180,7 +185,7 @@ export async function writeSessionMirror({
           title: input.title ?? null,
           icon: input.icon ?? null,
           work_status: input.workStatus ?? "open",
-          todos: sql<Json>`${JSON.stringify(input.todos ?? [])}::jsonb`,
+          todos: sql<Json>`${jsonbText(input.todos ?? [])}::jsonb`,
           authority_host_id: input.authority.hostId,
           authority_revision: input.authority.revision,
           authority_seen_at: new Date(),
@@ -230,7 +235,7 @@ export async function writeSessionMirror({
         ...(input.icon !== undefined ? { icon: input.icon } : {}),
         ...(input.workStatus ? { work_status: input.workStatus } : {}),
         ...(input.todos
-          ? { todos: sql<Json>`${JSON.stringify(input.todos)}::jsonb` }
+          ? { todos: sql<Json>`${jsonbText(input.todos)}::jsonb` }
           : {}),
         updated_at: new Date(),
         authority_host_id: input.authority.hostId,

@@ -1,5 +1,5 @@
 import type { SessionMessageAuthor } from "@catamorphic/agent-protocol";
-import { type DB, type Json, withJsonArrayParameters } from "@catamorphic/db";
+import { type DB, type Json, withStorableParameters } from "@catamorphic/db";
 import type { ProjectManager } from "@catamorphic/git";
 import type { PluginResolver } from "@catamorphic/plugins";
 import type {
@@ -473,8 +473,9 @@ export class CatamorphicCore {
   readonly hostSkillFiles: Record<string, string>;
 
   constructor(config: CatamorphicCoreConfig) {
-    // Array parameters reach jsonb as JSON on every host's database.
-    this.db = withJsonArrayParameters(config.db);
+    // Every parameter reaches Postgres as a value it stores, on every
+    // host's database.
+    this.db = withStorableParameters(config.db);
     this.notifications = new UserNotificationsService(
       this.db,
       config.pushNotifications,
