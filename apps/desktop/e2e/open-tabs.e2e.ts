@@ -1,11 +1,6 @@
 import http from "node:http";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import {
-  type AppHandle,
-  launchApp,
-  pointerOnPage,
-  setReactValueJs,
-} from "./harness.js";
+import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
 
 /**
  * A page already open in a tab opens there (`switchToOpenTab`): a bookmark,
@@ -126,22 +121,13 @@ describe("a page already open in a tab", () => {
   it("opens there from a page's link to a new window", async () => {
     expect(await selectTab("Beta page")).toBe(true);
     await showing("Beta page");
-    const point = await app.eval<{ x: number; y: number }>(`(async () => {
-      const page = ${view};
-      const box = await page.executeJavaScript("(() => { const r = document.getElementById('out').getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()", true);
-      const r = page.getBoundingClientRect();
-      return { x: Math.round(r.left + box.x), y: Math.round(r.top + box.y) };
-    })()`);
-    // A page just brought to the front takes the pointer a frame or more
-    // after it shows.
-    await pointerOnPage(app, { view, selector: "#out", point });
-    for (const type of ["mousePressed", "mouseReleased"])
-      await app.cdp("Input.dispatchMouseEvent", {
-        type,
-        ...point,
-        button: "left",
-        clickCount: 1,
-      });
+    // The page follows its link as a person's click does: with a user
+    // gesture, so the new window it asks for comes as a foreground tab.
+    // (Synthetic presses on a page just brought to the front are timing
+    // sensitive, on macOS most of all; the menu tests cover the pointer.)
+    await app.eval(
+      `${view}.executeJavaScript("document.getElementById('out').click(); true", true)`,
+    );
     await showing("Alpha docs");
     expect(await browserTabs()).toBe(2);
   });

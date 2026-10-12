@@ -1,6 +1,6 @@
 import http from "node:http";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { type AppHandle, launchApp, pointerOnPage } from "./harness.js";
+import { type AppHandle, launchApp } from "./harness.js";
 
 /**
  * Cmd+Left and Cmd+Right go back and forward in a browser tab, but a text
@@ -97,20 +97,12 @@ beforeAll(async () => {
     return true;
   })()`);
   await loaded("First");
-  // A real press on the link, so the page has a back entry.
-  const link = await app.eval<{ x: number; y: number }>(`(async () => {
-    const box = await ${view}.executeJavaScript("(() => { const r = document.getElementById('next').getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()");
-    const frame = ${view}.getBoundingClientRect();
-    return { x: frame.left + box.x, y: frame.top + box.y };
-  })()`);
-  await pointerOnPage(app, { view, selector: "#next", point: link });
-  for (const type of ["mousePressed", "mouseReleased"])
-    await app.cdp("Input.dispatchMouseEvent", {
-      type,
-      ...link,
-      button: "left",
-      clickCount: 1,
-    });
+  // The link followed with a user gesture, as a person's click does, so
+  // the first page keeps a back entry (Chromium skips entries a page left
+  // without one).
+  await app.eval(
+    `${view}.executeJavaScript("document.getElementById('next').click(); true", true)`,
+  );
   await loaded("Second");
 });
 afterAll(async () => {
