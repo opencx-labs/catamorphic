@@ -110,7 +110,7 @@ describe("drag tabs and chats into bookmarks", () => {
     if (!pinned) throw new Error("The chat was not pinned");
     expect(new URL(pinned.url).searchParams.get("session")).toBe(sessionId);
     await app.eval(
-      `window.catamorphicDesktop.bookmarksRename({...window.__bookmarkScope,id:${JSON.stringify(pinned.id)},label:'Saved conversation'})`,
+      `window.catamorphicDesktop.bookmarksUpdate({...window.__bookmarkScope,scope:'pinned',id:${JSON.stringify(pinned.id)},label:'Saved conversation'})`,
     );
     await app.waitFor(
       "!!document.querySelector('[data-drop-zone=pinned] button[aria-label=\"Saved conversation\"]') || [...document.querySelectorAll('[data-drop-zone=pinned] button')].some(b=>b.textContent.trim()==='Saved conversation')",

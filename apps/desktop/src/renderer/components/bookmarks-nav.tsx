@@ -15,7 +15,11 @@ import {
   useState,
 } from "react";
 import { orderedSiblings, siblingRanks } from "../../shared/bookmark-order.js";
-import { parseChatBookmarkUrl } from "../../shared/bookmark-target.js";
+import {
+  type BookmarkScope,
+  parseChatBookmarkUrl,
+} from "../../shared/bookmark-target.js";
+import { MENU_SEPARATOR, type MenuSeparator } from "../../shared/menu.js";
 import type { OpenMode } from "../../shared/open-mode.js";
 import { readBookmarkDrop } from "../lib/bookmark-drag.js";
 import {
@@ -49,29 +53,35 @@ import { SidebarSubsection } from "./sidebar-subsection.js";
 import { SidebarTree } from "./sidebar-tree.js";
 import { SiteFavicon } from "./site-favicon.js";
 
-const PROJECT_MENU: SidebarMenuEntry[] = [
-  { label: "Open in new tab", action: "open-tab" },
-  { label: "Copy link", action: "copy-url" },
-  { label: "Pin across projects", action: "pin" },
-  { label: "Edit bookmark…", action: "edit" },
-  { label: "Delete", action: "remove", danger: true },
-];
-const PINNED_MENU: SidebarMenuEntry[] = [
-  { label: "Open in new tab", action: "open-tab" },
-  { label: "Copy link", action: "copy-url" },
-  { label: "Unpin", action: "unpin" },
-  { label: "Rename…", action: "rename" },
-  { label: "Delete", action: "remove", danger: true },
-];
-const FOLDER_MENU: SidebarMenuEntry[] = [
+/**
+ * A bookmark's own entries, after the open actions every resource row
+ * offers. Pinned or not, every bookmark edits its name and address in
+ * one place.
+ */
+function bookmarkMenu(
+  scope: BookmarkScope,
+): (SidebarMenuEntry | MenuSeparator)[] {
+  return [
+    { label: "Copy link", action: "copy-url" },
+    scope === "pinned"
+      ? { label: "Unpin", action: "unpin" }
+      : { label: "Pin across projects", action: "pin" },
+    { label: "Edit…", action: "edit" },
+    MENU_SEPARATOR,
+    { label: "Delete", action: "remove", danger: true },
+  ];
+}
+const FOLDER_MENU: (SidebarMenuEntry | MenuSeparator)[] = [
   { label: "Rename folder…", action: "rename" },
+  MENU_SEPARATOR,
   { label: "Remove folder, keep bookmarks", action: "remove", danger: true },
 ];
 
 type BookmarkEdit =
-  | { kind: "bookmark"; bookmark?: Bookmark }
-  | { kind: "folder" }
-  | { kind: "rename"; id: string; label: string };
+  | { kind: "add" }
+  | { kind: "bookmark"; scope: BookmarkScope; bookmark: Bookmark }
+  | { kind: "new-folder" }
+  | { kind: "folder"; scope: BookmarkScope; id: string; label: string };
 
 function SiteIcon({
   bookmark,
@@ -146,6 +156,10 @@ export function BookmarksNav({
   const contribution = useSidebarContribution();
   const [data, setData] = useState<BookmarksData | null>(null);
   const [edit, setEdit] = useState<BookmarkEdit | null>(null);
+  // The dialog fades out with the form it showed, not an emptied panel.
+  const lastEdit = useRef<BookmarkEdit | null>(null);
+  if (edit) lastEdit.current = edit;
+  const shownEdit = edit ?? lastEdit.current;
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState("");
   const [gridDrop, setGridDrop] = useState<{
@@ -483,9 +497,9 @@ export function BookmarksNav({
   const runAction = (
     entry: SidebarMenuEntry,
     bookmark: Bookmark,
-    pinned: boolean,
+    scope: BookmarkScope,
   ) => {
-    const scope = { projectId, profileId, id: bookmark.id };
+    const target = { projectId, profileId, id: bookmark.id };
     switch (entry.action) {
       case "open":
         open(bookmark.url);
@@ -500,31 +514,21 @@ export function BookmarksNav({
         perform(navigator.clipboard.writeText(bookmark.url));
         break;
       case "pin":
-        perform(desktopApi.bookmarksPin(scope));
+        perform(desktopApi.bookmarksPin(target));
         break;
       case "unpin":
-        perform(desktopApi.bookmarksUnpin(scope));
+        perform(desktopApi.bookmarksUnpin(target));
         break;
       case "edit":
-        setEdit(
-          pinned
-            ? { kind: "rename", id: bookmark.id, label: bookmark.label }
-            : { kind: "bookmark", bookmark },
-        );
-        break;
-      case "rename":
-        setEdit({ kind: "rename", id: bookmark.id, label: bookmark.label });
+        setEdit({ kind: "bookmark", scope, bookmark });
         break;
       case "remove":
-        perform(
-          pinned
-            ? desktopApi.bookmarksRemovePinned(scope)
-            : desktopApi.bookmarksRemove(scope),
-        );
+        perform(desktopApi.bookmarksRemove({ ...target, scope }));
         break;
     }
   };
-  const row = (bookmark: Bookmark, pinned: boolean, library = false) => (
+  /** A pinned bookmark in the tile grid (or its list rows). */
+  const row = (bookmark: Bookmark) => (
     <li
       key={bookmark.id}
       data-item-id={bookmark.id}
@@ -556,92 +560,46 @@ export function BookmarksNav({
     >
       <SidebarItemRow
         itemId={bookmark.id}
-        presentation={pinned && pinnedStyle === "tiles" ? "tile" : "row"}
+        presentation={pinnedStyle === "tiles" ? "tile" : "row"}
         label={bookmark.label}
         title={`${bookmark.label} · ${bookmark.url}`}
         icon={
           <SiteIcon
             key={bookmark.url}
             bookmark={bookmark}
-            tile={pinned && pinnedStyle === "tiles"}
+            tile={pinnedStyle === "tiles"}
           />
         }
         menu={menuOverride}
-        defaultMenu={
-          pinned
-            ? PINNED_MENU
-            : library
-              ? PROJECT_MENU.map((entry) =>
-                  entry.action === "edit"
-                    ? { label: "Rename…", action: "rename" }
-                    : entry,
-                )
-              : PROJECT_MENU
-        }
+        defaultMenu={bookmarkMenu("pinned")}
         resource
         defaultOpenMode={defaultOpenMode}
         onOpen={(mode) => open(bookmark.url, mode)}
-        onAction={(entry) =>
-          library && entry.action === "remove"
-            ? perform(
-                desktopApi.bookmarksRemoveLibrary({
-                  projectId,
-                  profileId,
-                  id: bookmark.id,
-                }),
-              )
-            : runAction(entry, bookmark, pinned)
-        }
+        onAction={(entry) => runAction(entry, bookmark, "pinned")}
       />
     </li>
   );
 
-  const treeRow = (bookmark: Bookmark, pinned: boolean, library = false) => (
+  const treeRow = (bookmark: Bookmark, scope: BookmarkScope) => (
     <SidebarItemRow
       itemId={bookmark.id}
       label={bookmark.label}
       title={`${bookmark.label} · ${bookmark.url}`}
       icon={<SiteIcon key={bookmark.url} bookmark={bookmark} />}
       menu={menuOverride}
-      defaultMenu={
-        pinned
-          ? PINNED_MENU
-          : library
-            ? PROJECT_MENU.map((entry) =>
-                entry.action === "edit"
-                  ? { label: "Rename…", action: "rename" }
-                  : entry,
-              )
-            : PROJECT_MENU
-      }
+      defaultMenu={bookmarkMenu(scope)}
       resource
       defaultOpenMode={defaultOpenMode}
       onOpen={(mode) => open(bookmark.url, mode)}
-      onAction={(entry) =>
-        library && entry.action === "remove"
-          ? perform(
-              desktopApi.bookmarksRemoveLibrary({
-                projectId,
-                profileId,
-                id: bookmark.id,
-              }),
-            )
-          : runAction(entry, bookmark, pinned)
-      }
+      onAction={(entry) => runAction(entry, bookmark, scope)}
     />
   );
 
   const renderTree = (
     scope: ProjectBookmarks,
-    pinned: boolean,
-    library = false,
+    scopeName: Scope,
     foldersOnly = false,
   ) => {
-    const scopeName: Scope = library
-      ? "library"
-      : pinned
-        ? "pinned"
-        : "project";
     const folderIds = new Set(scope.folders.map((folder) => folder.id));
     const items: Entry[] = [
       ...scope.folders.map((folder) => ({
@@ -672,21 +630,21 @@ export function BookmarksNav({
       <SidebarTree
         items={items}
         label={
-          library
+          scopeName === "library"
             ? "Saved bookmarks"
-            : pinned
+            : scopeName === "pinned"
               ? "Pinned folders"
               : "Project bookmarks"
         }
         // Long lists scroll inside the tree itself; a scrolling wrapper
         // around a virtualized tree gives two competing scrollbars.
-        height={pinned ? undefined : 256}
+        height={scopeName === "pinned" ? undefined : 256}
         defaultExpanded={false}
         dragAndDrop={dragAndDropFor(scopeName)}
         renderItem={(item, tree) =>
           item.bookmark ? (
             <div style={{ marginLeft: tree.depth * 14 }}>
-              {treeRow(item.bookmark, pinned, library)}
+              {treeRow(item.bookmark, scopeName)}
             </div>
           ) : (
             <div style={{ marginLeft: tree.depth * 14 }}>
@@ -694,22 +652,24 @@ export function BookmarksNav({
                 itemId={item.id}
                 label={item.label}
                 icon="Folder"
-                menu={FOLDER_MENU}
+                defaultMenu={FOLDER_MENU}
                 disclosure={{ open: tree.expanded, onToggle: tree.toggle }}
                 expanded={tree.expanded}
                 onOpen={tree.toggle}
                 onAction={(entry) => {
                   if (entry.action === "rename")
-                    setEdit({ kind: "rename", id: item.id, label: item.label });
+                    setEdit({
+                      kind: "folder",
+                      scope: scopeName,
+                      id: item.id,
+                      label: item.label,
+                    });
                   else if (entry.action === "remove")
                     perform(
-                      (library
-                        ? desktopApi.bookmarksRemoveLibrary
-                        : pinned
-                          ? desktopApi.bookmarksRemovePinned
-                          : desktopApi.bookmarksRemove)({
+                      desktopApi.bookmarksRemove({
                         projectId,
                         profileId,
+                        scope: scopeName,
                         id: item.id,
                       }),
                     );
@@ -777,12 +737,12 @@ export function BookmarksNav({
                       Drop a tab here to pin across projects
                     </li>
                   )}
-                  {pinnedTiles.map((bookmark) => row(bookmark, true))}
+                  {pinnedTiles.map((bookmark) => row(bookmark))}
                 </PinnedList>
               )}
               {data && (
                 <ul role="list" className="flex flex-col gap-0.5">
-                  {renderTree(data.pinned, true, false, true)}
+                  {renderTree(data.pinned, "pinned", true)}
                 </ul>
               )}
             </section>
@@ -799,7 +759,7 @@ export function BookmarksNav({
           <SidebarSubsection>
             <section aria-label="Bookmark library">
               <ul role="list" className="flex flex-col gap-0.5">
-                {library && renderTree(library, false, true)}
+                {library && renderTree(library, "library")}
               </ul>
             </section>
           </SidebarSubsection>
@@ -807,12 +767,12 @@ export function BookmarksNav({
       </Collapsible>
       <SidebarSubsection label="This project" collapsible>
         <ul role="list" className="flex flex-col gap-0.5">
-          {data && renderTree(unpinned(data.project), false)}
+          {data && renderTree(unpinned(data.project), "project")}
         </ul>
         <div className="flex items-center gap-1 px-1">
           <button
             type="button"
-            onClick={() => setEdit({ kind: "bookmark" })}
+            onClick={() => setEdit({ kind: "add" })}
             className="flex h-7 min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-md px-1 text-xs text-fg-muted hover:bg-bg-overlay/60 hover:text-fg"
           >
             <Plus className="size-4 shrink-0" />
@@ -822,7 +782,7 @@ export function BookmarksNav({
             <button
               type="button"
               aria-label="New bookmark folder"
-              onClick={() => setEdit({ kind: "folder" })}
+              onClick={() => setEdit({ kind: "new-folder" })}
               className="grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-fg-muted hover:bg-bg-overlay/60 hover:text-fg"
             >
               <FolderPlus className="size-4 shrink-0" />
@@ -839,13 +799,17 @@ export function BookmarksNav({
         {status}
       </p>
       <Modal open={edit !== null} onClose={() => setEdit(null)} width={400}>
-        {edit && (
+        {shownEdit && (
           <BookmarkForm
-            key={JSON.stringify(edit)}
-            edit={edit}
+            key={JSON.stringify(shownEdit)}
+            edit={shownEdit}
             projectId={projectId}
             profileId={profileId}
-            folders={data?.project.folders ?? []}
+            folders={
+              (shownEdit.kind === "bookmark"
+                ? data?.[shownEdit.scope]?.folders
+                : data?.project.folders) ?? []
+            }
             onClose={() => setEdit(null)}
           />
         )}
@@ -854,6 +818,22 @@ export function BookmarksNav({
   );
 }
 
+/** What the address field holds, as the web address it names. */
+function webAddress(input: string): string {
+  const typed = input.trim();
+  const parsed = new URL(
+    /^[a-z][a-z\d+.-]*:/i.test(typed) ? typed : `https://${typed}`,
+  );
+  if (!["http:", "https:"].includes(parsed.protocol))
+    throw new Error("Enter an http or https address.");
+  return parsed.href;
+}
+
+/**
+ * Adds and edits bookmarks and folders. A bookmark's name, address and
+ * folder change together wherever it lives (this project, pinned, the
+ * library); a saved chat keeps its address, since it names a conversation.
+ */
 function BookmarkForm({
   edit,
   projectId,
@@ -867,27 +847,22 @@ function BookmarkForm({
   folders: BookmarksData["project"]["folders"];
   onClose: () => void;
 }) {
+  const bookmark = edit.kind === "bookmark" ? edit.bookmark : undefined;
+  const isFolder = edit.kind === "folder" || edit.kind === "new-folder";
+  const chat = bookmark ? parseChatBookmarkUrl(bookmark.url) !== null : false;
   const [label, setLabel] = useState(
-    edit.kind === "rename"
-      ? edit.label
-      : edit.kind === "bookmark"
-        ? (edit.bookmark?.label ?? "")
-        : "",
+    edit.kind === "folder" ? edit.label : (bookmark?.label ?? ""),
   );
-  const [url, setUrl] = useState(
-    edit.kind === "bookmark" ? (edit.bookmark?.url ?? "") : "",
-  );
-  const [folderId, setFolderId] = useState(
-    edit.kind === "bookmark" ? (edit.bookmark?.folderId ?? "") : "",
-  );
+  const [url, setUrl] = useState(bookmark?.url ?? "");
+  const [folderId, setFolderId] = useState(bookmark?.folderId ?? "");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const title =
-    edit.kind === "folder"
+    edit.kind === "new-folder"
       ? "New folder"
-      : edit.kind === "rename"
-        ? "Rename"
-        : edit.bookmark
+      : edit.kind === "folder"
+        ? "Rename folder"
+        : edit.kind === "bookmark"
           ? "Edit bookmark"
           : "Add bookmark";
   const save = async () => {
@@ -896,30 +871,36 @@ function BookmarkForm({
     setError(null);
     try {
       const scope = { projectId, profileId };
-      if (edit.kind === "folder")
+      if (edit.kind === "new-folder")
         await desktopApi.bookmarksAddFolder({ ...scope, label });
-      else if (edit.kind === "rename")
-        await desktopApi.bookmarksRename({ ...scope, id: edit.id, label });
-      else {
-        const parsed = new URL(url.includes(":") ? url : `https://${url}`);
-        if (!["http:", "https:"].includes(parsed.protocol))
-          throw new Error("Enter an http or https address.");
-        const input = {
+      else if (edit.kind === "folder")
+        await desktopApi.bookmarksRenameFolder({
           ...scope,
-          label: label.trim() || parsed.hostname,
-          url: parsed.href,
-        };
-        if (edit.bookmark)
-          await desktopApi.bookmarksUpdate({
-            ...input,
-            id: edit.bookmark.id,
-            folderId: folderId || null,
-          });
-        else
-          await desktopApi.bookmarksAdd({
-            ...input,
-            folderId: folderId || undefined,
-          });
+          scope: edit.scope,
+          id: edit.id,
+          label,
+        });
+      else if (edit.kind === "bookmark")
+        await desktopApi.bookmarksUpdate({
+          ...scope,
+          scope: edit.scope,
+          id: edit.bookmark.id,
+          label,
+          // Unchanged, the address is left as it is (it may be one an agent
+          // wrote that the form would refuse).
+          ...(chat || url === edit.bookmark.url
+            ? {}
+            : { url: webAddress(url) }),
+          folderId: folderId || null,
+        });
+      else {
+        const address = webAddress(url);
+        await desktopApi.bookmarksAdd({
+          ...scope,
+          label: label.trim() || new URL(address).hostname,
+          url: address,
+          folderId: folderId || undefined,
+        });
       }
       onClose();
     } catch (cause) {
@@ -945,40 +926,45 @@ function BookmarkForm({
           name="bookmarkName"
           value={label}
           onChange={(event) => setLabel(event.target.value)}
-          required={edit.kind !== "bookmark"}
+          required={isFolder || edit.kind === "bookmark"}
+          // biome-ignore lint/a11y/noAutofocus: the dialog opens to edit this field
+          autoFocus
           className="field h-8 rounded-md px-2 text-sm"
         />
       </label>
-      {edit.kind === "bookmark" && (
-        <>
-          <label className="flex flex-col gap-1.5 text-sm">
-            Address
-            <input
-              name="bookmarkUrl"
-              value={url}
-              onChange={(event) => setUrl(event.target.value)}
-              required
-              placeholder="https://example.com"
-              className="field h-8 rounded-md px-2 text-sm"
-            />
-          </label>
-          <label className="flex flex-col gap-1.5 text-sm">
-            Folder
-            <select
-              name="bookmarkFolder"
-              value={folderId}
-              onChange={(event) => setFolderId(event.target.value)}
-              className="field h-8 rounded-md px-2 text-sm"
-            >
-              <option value="">No folder</option>
-              {folders.map((folder) => (
-                <option key={folder.id} value={folder.id}>
-                  {folder.label}
-                </option>
-              ))}
-            </select>
-          </label>
-        </>
+      {!isFolder && !chat && (
+        <label className="flex flex-col gap-1.5 text-sm">
+          Address
+          <input
+            name="bookmarkUrl"
+            value={url}
+            onChange={(event) => setUrl(event.target.value)}
+            required
+            placeholder="https://example.com"
+            spellCheck={false}
+            autoCapitalize="off"
+            autoCorrect="off"
+            className="field h-8 rounded-md px-2 text-sm"
+          />
+        </label>
+      )}
+      {!isFolder && folders.length > 0 && (
+        <label className="flex flex-col gap-1.5 text-sm">
+          Folder
+          <select
+            name="bookmarkFolder"
+            value={folderId}
+            onChange={(event) => setFolderId(event.target.value)}
+            className="field h-8 rounded-md px-2 text-sm"
+          >
+            <option value="">No folder</option>
+            {folders.map((folder) => (
+              <option key={folder.id} value={folder.id}>
+                {folder.label}
+              </option>
+            ))}
+          </select>
+        </label>
       )}
       {error && (
         <p role="alert" className="text-sm text-danger">
@@ -986,11 +972,7 @@ function BookmarkForm({
         </p>
       )}
       <div className="flex justify-end gap-2">
-        <button
-          type="button"
-          onClick={onClose}
-          className="h-8 cursor-pointer rounded-md px-3 text-sm text-fg-muted hover:bg-bg-overlay"
-        >
+        <button type="button" onClick={onClose} className="button-ghost">
           Cancel
         </button>
         <PendingButton

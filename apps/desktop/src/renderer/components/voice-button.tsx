@@ -22,12 +22,13 @@ import {
 import { type AgentInfo, desktopApi } from "../lib/desktop-api.js";
 import { formatBinding, useKeybindings } from "../lib/keybindings";
 import { useAppPreferences } from "../lib/use-app-preferences.js";
-import { ShortcutHint } from "./shortcut-hint.js";
 import {
   type ContextMenuEntry,
+  type MenuAt,
   MenuPortal,
-  useMenuDismiss,
-} from "./sidebar-item-row.js";
+  menuAtPointer,
+} from "./menu.js";
+import { ShortcutHint } from "./shortcut-hint.js";
 
 type Microphone = { id: string; label: string };
 
@@ -363,7 +364,7 @@ export function VoiceButton({
   useEffect(() => {
     if (phase !== "off" || error) setStarting(false);
   }, [phase, error]);
-  const [menuAt, setMenuAt] = useState<{ x: number; y: number } | null>(null);
+  const [menuAt, setMenuAt] = useState<MenuAt | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const on = phase !== "off";
   const loading = starting || phase === "preparing";
@@ -557,10 +558,9 @@ export function VoiceButton({
         .then(pick);
       return;
     }
-    setMenuAt({ x: event.clientX, y: event.clientY });
+    setMenuAt(menuAtPointer(event));
     setMenuOpen(true);
   };
-  useMenuDismiss({ open: menuOpen, close: () => setMenuOpen(false) });
   // Out of chats, a composer shows its microphone only while voice talks
   // to its chat; a menu it had open goes with it.
   const hidden = !!chat && (!loaded || (!prefs.voiceInChats && !on));
@@ -641,12 +641,14 @@ export function VoiceButton({
       {menuAt && (
         <MenuPortal
           open={menuOpen}
-          position={menuAt}
+          at={menuAt}
+          label="Voice"
           entries={entries}
           onPick={(entry) => {
             setMenuOpen(false);
             pick(entry.action);
           }}
+          onDismiss={() => setMenuOpen(false)}
           onExited={() => setMenuAt(null)}
         />
       )}

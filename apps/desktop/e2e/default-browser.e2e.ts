@@ -68,4 +68,34 @@ describe("default browser links", () => {
     ).toEqual([]);
     expect(app.getRendererErrors()).toEqual([]);
   }, 180_000);
+  it("goes to the tab a link's page is already open in", async () => {
+    const browserTabs = `document.querySelectorAll('[data-tab-orientation] [data-point-key^="browser:"]').length`;
+    await app.waitFor(`${browserTabs} === 1`, { label: "one page tab" });
+    const pageTab = `document.querySelector('[data-tab-orientation] [data-point-key^="browser:"]')?.dataset.pointKey`;
+    const tab = await app.eval<string>(pageTab);
+    // Saved with the project's workspace (a moment after its last change).
+    await app.waitFor(
+      `window.catamorphicDesktop.getPrefs().then((prefs) => window.catamorphicDesktop.workspaceStateGet(prefs.lastProjectId)).then((saved) => JSON.stringify(saved ?? null).includes(${JSON.stringify(tab.slice("browser:".length))}))`,
+      { label: "page tab saved", timeoutMs: 30_000 },
+    );
+    // The same link from another app, on the next launch: the project
+    // reopens with the page's tab, and the link goes to it.
+    const directory = app.userDataDir;
+    await app.stop({ preserveUserData: true });
+    app = await launchApp({
+      userDataDir: directory,
+      urls: [`${origin}/three`],
+    });
+    await app.waitFor(
+      `[...document.querySelectorAll('webview')].some((view) => view.getAttribute('src') === ${JSON.stringify(`${origin}/three`)} && view.checkVisibility())`,
+      { timeoutMs: 45_000, label: "the page's tab in front" },
+    );
+    await app.waitFor(
+      "window.catamorphicDesktop.browserTakePendingUrls().then((urls) => urls.length === 0)",
+      { label: "link taken" },
+    );
+    expect(await app.eval(browserTabs)).toBe(1);
+    // The tab it reopened, not one the link made.
+    expect(await app.eval(pageTab)).toBe(tab);
+  }, 180_000);
 });

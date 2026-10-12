@@ -1030,6 +1030,18 @@ describe("chat tab activity indicators", () => {
     await runWait(`return !!byText('button', 'New chat');`, {
       label: "chat tab in the strip",
     });
+    // The spinner shows for the few seconds the turn runs. Watched every
+    // frame from before the send: polling can miss it on a loaded runner,
+    // where hiding the chat takes most of that time.
+    await run(`
+      window.__tabSpinnerSeen = false;
+      const watch = () => {
+        if (${tabSpinnerOn}) window.__tabSpinnerSeen = true;
+        else requestAnimationFrame(watch);
+      };
+      requestAnimationFrame(watch);
+      return true;
+    `);
     await run(`
       const ta = visibleDock().querySelector('[data-composer-input]');
       setReactValue(ta, 'work slowly please');
@@ -1046,7 +1058,7 @@ describe("chat tab activity indicators", () => {
           .find((el) => !el.closest('[inert]'));`,
       { label: "chat hidden behind a fresh palette tab" },
     );
-    await runWait(`return ${tabSpinnerOn};`, {
+    await runWait(`return window.__tabSpinnerSeen;`, {
       label: "tab icon spinner during the turn",
     });
   });

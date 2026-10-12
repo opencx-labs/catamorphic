@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import type { BookmarkScope } from "../../shared/bookmark-target.js";
 import {
   type BrowserHistory,
   type BrowserSleepBlocker,
@@ -19,6 +20,7 @@ import {
 } from "../../shared/browser-history.js";
 import type { HistoryProject } from "../../shared/history.js";
 import type { OpenMode } from "../../shared/open-mode.js";
+import { samePage } from "../../shared/page-url.js";
 import { siteOrigin } from "../../shared/site-settings.js";
 import { AuthorizationInspector } from "../components/authorization-inspector.js";
 import {
@@ -29,6 +31,7 @@ import {
 } from "../components/extensions/extension-side-panel.js";
 import { ExtensionToolbar } from "../components/extensions/extension-toolbar.js";
 import { FindBar, type FindResult } from "../components/find-bar.js";
+import { PageMenu } from "../components/page-menu.js";
 import { usePasswordAutofill } from "../components/password-autofill.js";
 import {
   type PasswordDraft,
@@ -38,6 +41,7 @@ import {
   PasswordPrompt,
   type PasswordPromptState,
 } from "../components/password-prompt.js";
+import { PendingButton } from "../components/pending-button.js";
 import { ShortcutHint } from "../components/shortcut-hint.js";
 import {
   moveFocusAsApp,
@@ -138,24 +142,6 @@ interface Suggestion {
 
 /** Matches the `tab-in` keyframe duration in styles.css. */
 const TAB_OPEN_ANIMATION_MS = 200;
-
-/**
- * Match bookmarks by normalized URL so "example.com" and "example.com/"
- * (or a trailing #fragment) are the same page — otherwise the star reads
- * as unstarred right after starring.
- */
-function sameUrl(a: string, b: string): boolean {
-  const normalize = (raw: string) => {
-    try {
-      const url = new URL(raw);
-      url.hash = "";
-      return url.href.replace(/\/$/, "");
-    } catch {
-      return raw.replace(/\/$/, "");
-    }
-  };
-  return normalize(a) === normalize(b);
-}
 
 export function BrowserScreen({
   profileId,
@@ -809,10 +795,10 @@ export function BrowserScreen({
         window.clearTimeout(historyTimer),
       );
 
-      listen("did-start-loading", () => {
-        setLoading(true);
-        setLoadError(null);
-      });
+      // A failed page stays until another page commits in its place (or
+      // fails in turn), as Chrome's error page does: clearing it as a retry
+      // starts showed Chromium's white error page under it until then.
+      listen("did-start-loading", () => setLoading(true));
       listen("did-stop-loading", () => setLoading(false));
       listen("found-in-page", ((event: CustomEvent) => {
         const { result } = event as unknown as {
@@ -830,6 +816,7 @@ export function BrowserScreen({
       }) as EventListener);
       listen("did-navigate", ((event: CustomEvent) => {
         const { url } = event as unknown as { url: string };
+        setLoadError(null);
         // Another page ends the find, as in Chrome; the query stays.
         setFindOpen(false);
         setFindResult(null);
@@ -1004,7 +991,6 @@ export function BrowserScreen({
       setSuggestions([]);
       setPageUrl(url);
       setInputValue(url);
-      setLoadError(null);
       // Going somewhere else answers an open save offer with "not now".
       dismissPasswordPrompt();
       if (firstUrl === null) {
@@ -1195,23 +1181,17 @@ export function BrowserScreen({
 
   // The saved entry for the current page, if any — pinned bookmarks count
   // too, so starring a pinned page doesn't create a project duplicate.
-  const currentBookmark:
-    | (Bookmark & { pinned: boolean; library?: boolean })
-    | undefined = (() => {
-    if (!bookmarks) return undefined;
-    const pinned = bookmarks.pinned.bookmarks.find((entry) =>
-      sameUrl(entry.url, pageUrl),
-    );
-    if (pinned) return { ...pinned, pinned: true };
-    const owned = bookmarks.project.bookmarks.find((entry) =>
-      sameUrl(entry.url, pageUrl),
-    );
-    if (owned) return { ...owned, pinned: false };
-    const saved = bookmarks.library?.bookmarks.find((entry) =>
-      sameUrl(entry.url, pageUrl),
-    );
-    return saved ? { ...saved, pinned: false, library: true } : undefined;
-  })();
+  const currentBookmark: (Bookmark & { scope: BookmarkScope }) | undefined =
+    (() => {
+      if (!bookmarks) return undefined;
+      for (const scope of ["pinned", "project", "library"] as const) {
+        const saved = bookmarks[scope]?.bookmarks.find((entry) =>
+          samePage(entry.url, pageUrl),
+        );
+        if (saved) return { ...saved, scope };
+      }
+      return undefined;
+    })();
 
   const toggleBookmark = () => {
     if (!projectId) return;
@@ -1230,24 +1210,14 @@ export function BrowserScreen({
         .catch(ignore);
       return;
     }
-    (currentBookmark.library
-      ? desktopApi.bookmarksRemoveLibrary({
-          projectId,
-          profileId,
-          id: currentBookmark.id,
-        })
-      : currentBookmark.pinned
-        ? desktopApi.bookmarksRemovePinned({
-            projectId,
-            profileId,
-            id: currentBookmark.id,
-          })
-        : desktopApi.bookmarksRemove({
-            projectId,
-            profileId,
-            id: currentBookmark.id,
-          })
-    ).catch(ignore);
+    desktopApi
+      .bookmarksRemove({
+        projectId,
+        profileId,
+        scope: currentBookmark.scope,
+        id: currentBookmark.id,
+      })
+      .catch(ignore);
   };
 
   const updateSuggestions = useCallback(
@@ -1639,8 +1609,9 @@ export function BrowserScreen({
                 <p className="mt-1 break-all font-mono text-xs text-fg-muted">
                   {loadError.description}
                 </p>
-                <button
+                <PendingButton
                   type="button"
+                  pending={loading}
                   onClick={() => {
                     recoveriesRef.current = 0;
                     remountWebview();
@@ -1649,11 +1620,12 @@ export function BrowserScreen({
                 >
                   <RotateCw className="size-3" />
                   Try again
-                </button>
+                </PendingButton>
               </div>
             </div>
           )}
           {autofill.overlay}
+          <PageMenu guest={webviewRef} visible={visible} />
           {/* The page's own cards at its top right: the find bar above a
             password offer, never over it. */}
           <div className="pointer-events-none absolute right-3 top-3 z-30 flex w-[340px] max-w-[calc(100%-24px)] flex-col items-end gap-2">

@@ -58,8 +58,9 @@ These work at section level, itemDefaults, itemOverrides and custom item level.
 Action names include open, open-tab, open-here, open-side, open-floating, copy-url,
 pin, unpin, edit, rename, remove, archive, unarchive, mark-read, mark-unread, stop,
 fork, new-subsession, history, publish, new-chat, new-workflow, refresh and search. Only actions supported by the
-source item are enabled. A static custom URL does not become an editable bookmark;
-use the bookmarks source for bookmark mutations. A url on an action gives it its
+source item are enabled. On bookmarks, edit changes a bookmark's name, address and
+folder in one dialog and rename names a folder. A static custom URL does not become
+an editable bookmark; use the bookmarks source for bookmark mutations. A url on an action gives it its
 own resource destination. Never configure an action that silently does nothing.
 headerActions controls section header buttons; [] removes them. Header commands
 are new-chat, new-workflow, search and refresh, or an explicit url destination.

@@ -377,7 +377,8 @@ that friction is intentional.
 
 - One chrome row: the macOS drag region (`titleBarStyle: hiddenInset`,
   `.app-drag`), sidebar toggle, and the workspace tab strip share the top
-  40px. No dead space above tabs.
+  40px. No dead space above tabs. The window buttons are a profile choice
+  (`windowButtons`); hidden, the corner kept for them goes too.
 - Workspace tabs host workflows, apps, and chats alike; minimized chats live
   in the bottom bubble strip (see the design log for collapse behavior).
 - Empty states are quiet: one sentence of `--color-fg-faint` + one action. Errors stay `--color-fg-muted`.
@@ -544,6 +545,49 @@ the historical log explains how it arrived here.
 - [Performance](docs/performance.md): idle lifecycle checks and sustained measurement.
 
 ## Design log
+### 2026-10-12: Menus hold the window; pages get Work's menus
+
+A menu now holds the window while it is open, as a native one does: a
+transparent shield under it takes the next press, wherever it lands (a
+sidebar row, a web page, an app's frame, the title bar), and that press only
+closes the menu; a right-click elsewhere opens that place's menu, as on
+macOS. Focus returns to where it was. Pages run in their own process, so a sidebar menu used to
+stay open over the page the person clicked. A menu also leaves with the row
+it belongs to: closing the sidebar or switching its tab closes it. Every
+menu dismisses the same way through `MenuPortal` (ADR 0221); history and
+downloads menus used to close only on Escape. Right-click menus open at the
+pointer and extend right and down, flipping at the window's edges, instead
+of covering the row they came from. Groups are separated by rules, and an
+entry that cannot run is dimmed with its reason on hover.
+
+A right-click in a web page shows Work's own menu, drawn by the window at
+the click: a link opens in a new tab, to the side or floating, copies or
+downloads; an email address sends or copies; a phone number calls or
+copies; an image or video opens, downloads or copies; selected text copies,
+searches or (on macOS) looks up; a text field offers spelling suggestions
+and the edit commands; the page itself goes back, forward, reloads, copies
+its address, prints or shows its source. Extensions' items follow, and
+Inspect ends every menu. Picking or leaving the menu gives the page its
+focus back. Sign-in popups and extension popups and side panels show the
+same entries natively, without saved sign-ins or extensions' items.
+
+Every bookmark edits its name and address in one dialog, pinned and
+library bookmarks included; bookmark menus no longer list "Open in new
+tab" twice.
+
+A page that failed to load keeps its error while it is retried, as Chrome's
+error page does: the toolbar shows Stop, Try again shows its spinner, and
+the error gives way only when the next page commits or fails in turn.
+Retrying used to uncover Chromium's white error page until the page arrived,
+a white flash in a dark theme.
+
+A page already open in a tab opens there: a bookmark, a link in a chat or a
+page's link to a new window, and a link from another app go to its tab
+instead of opening it twice ("Switch to a page's open tab", on by default).
+A new tab asked for on purpose still opens one. The palette lists an open
+bookmarked page once, under the bookmark's name, found by either's words:
+Cmd+P goes to its tab, a New Tab's palette opens it in that new tab.
+
 ### 2026-10-11: One chat timeline, the same on the desktop and the phone
 
 The chat the desktop shows is now the registry's chat timeline, installed as

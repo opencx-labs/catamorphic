@@ -20,6 +20,8 @@ export interface SettingsEntry {
     | "voice"
     | "import";
   keywords: string[];
+  /** Offered only on macOS. */
+  macOnly?: boolean;
 }
 
 /** Search metadata and stable navigation ids, shared by the UI and agent reference. */
@@ -53,10 +55,17 @@ export const SETTINGS_CATALOG: readonly SettingsEntry[] = [
         ...(key === "browserTabSleep"
           ? ["memory", "saver", "inactive", "discard", "browser", "tabs"]
           : []),
+        ...(key === "switchToOpenTab"
+          ? ["existing", "duplicate", "reuse", "already open", "links", "tabs"]
+          : []),
         ...(key === "contentFrame"
           ? ["border", "rounded", "inset", "window", "frame"]
           : []),
+        ...(key === "windowButtons"
+          ? ["traffic lights", "close", "minimize", "zoom", "title bar"]
+          : []),
       ],
+      ...("macOnly" in definition ? { macOnly: definition.macOnly } : {}),
     };
   }),
   {

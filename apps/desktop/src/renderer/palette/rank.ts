@@ -216,7 +216,9 @@ export function createPaletteIndex<T extends Rankable>(items: readonly T[]) {
  * the imported library, a bookmark and a sidebar link to it) collapse into
  * one. An app surface keeps its own row and an open tab stands in for the
  * page, bookmark, chat or file it shows; tabs are places, so two tabs of
- * one page both stay. Otherwise the first copy the empty palette lists
+ * one page both stay. A tab standing in is that destination open now: it
+ * takes a bookmark's name, is found by every copy's words, and is listed
+ * wherever a copy was. Otherwise the first copy the empty palette lists
  * wins, starred and ranked with the sidebar when any copy is.
  */
 export function oneRowPerDestination<
@@ -235,7 +237,29 @@ export function oneRowPerDestination<
   return rows.flatMap((row) => {
     const usage = row.usage;
     if (!usage || row.category === "surface") return [row];
-    if (row.category === "tab") return surfaces.has(usage) ? [] : [row];
+    if (row.category === "tab") {
+      if (surfaces.has(usage)) return [];
+      const shown = copies.get(usage);
+      if (!shown) return [row];
+      const named = shown.find((copy) => copy.bookmarked);
+      return [
+        {
+          ...row,
+          ...(named ? { label: named.label } : {}),
+          keywords: [
+            ...new Set([
+              ...row.keywords,
+              ...shown.flatMap((copy) => [copy.label, ...copy.keywords]),
+            ]),
+          ],
+          ...(shown.some((copy) => copy.sidebar) ? { sidebar: true } : {}),
+          ...(named ? { bookmarked: true } : {}),
+          ...(shown.some((copy) => !copy.searchOnly)
+            ? { searchOnly: false }
+            : {}),
+        },
+      ];
+    }
     if (standIns.has(usage)) return [];
     const group = copies.get(usage) ?? [row];
     if ((group.find((copy) => !copy.searchOnly) ?? group[0]) !== row) return [];

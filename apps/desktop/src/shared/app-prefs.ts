@@ -70,12 +70,22 @@ export interface AppPrefs {
    */
   contentFrame: boolean;
   sidebarDividers: boolean;
+  /**
+   * The macOS close, minimize and full screen buttons in a workspace
+   * window's top-left corner, and the space the chrome keeps for them.
+   */
+  windowButtons: boolean;
   contentPadding: number;
   contentRadius: number;
   /** Profile-wide favorites can be compact tiles or labeled rows. */
   pinnedBookmarks: "tiles" | "list";
   linkOpenMode: "tab" | "floating";
   previewLinksWithAlt: boolean;
+  /**
+   * Opening a page already open in a tab (a link, a bookmark, a link from
+   * another app) goes to that tab; a new tab asked for on purpose stays new.
+   */
+  switchToOpenTab: boolean;
   /** How long a browser tab stays out of sight before it sleeps. */
   browserTabSleep: BrowserTabSleep;
   terminalMacros: TerminalMacro[];
@@ -144,11 +154,13 @@ export const DEFAULT_PREFS: AppPrefs = {
   headerPlacement: "top",
   contentFrame: false,
   sidebarDividers: false,
+  windowButtons: true,
   contentPadding: 6,
   contentRadius: 14,
   pinnedBookmarks: "tiles",
   linkOpenMode: "tab",
   previewLinksWithAlt: true,
+  switchToOpenTab: true,
   browserTabSleep: "1h",
   terminalMacros: [],
   terminalAppearance: "app",
@@ -253,6 +265,7 @@ export function normalizePrefs(raw: unknown): AppPrefs {
     headerPlacement: record.headerPlacement === "sidebar" ? "sidebar" : "top",
     contentFrame: record.contentFrame === true,
     sidebarDividers: record.sidebarDividers === true,
+    windowButtons: record.windowButtons !== false,
     contentPadding: dimension(record.contentPadding, 6, 48),
     contentRadius: dimension(record.contentRadius, 14, 48),
     pinnedBookmarks: record.pinnedBookmarks === "list" ? "list" : "tiles",
@@ -283,6 +296,10 @@ export function normalizePrefs(raw: unknown): AppPrefs {
       typeof record.previewLinksWithAlt === "boolean"
         ? record.previewLinksWithAlt
         : true,
+    switchToOpenTab:
+      typeof record.switchToOpenTab === "boolean"
+        ? record.switchToOpenTab
+        : DEFAULT_PREFS.switchToOpenTab,
     browserTabSleep:
       BROWSER_TAB_SLEEP.find((value) => value === record.browserTabSleep) ??
       DEFAULT_PREFS.browserTabSleep,

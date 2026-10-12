@@ -2,11 +2,11 @@ import { ChevronDown, History, Search, Trash2, X } from "lucide-react";
 import { Fragment, useEffect, useRef, useState } from "react";
 import type { HistoryEntry } from "../../shared/history.js";
 import type { OpenMode } from "../../shared/open-mode.js";
+import { type MenuAt, MenuPortal, menuAtControl } from "../components/menu.js";
 import { Modal } from "../components/modal.js";
 import { OpenResourceButton } from "../components/open-resource-button.js";
 import { PendingButton } from "../components/pending-button.js";
 import { ShortcutHint } from "../components/shortcut-hint.js";
-import { MenuPortal } from "../components/sidebar-item-row.js";
 import { SiteFavicon } from "../components/site-favicon.js";
 import { desktopApi } from "../lib/desktop-api.js";
 import { historyDetail, historyIcon, useHistory } from "../lib/history.js";
@@ -67,7 +67,7 @@ export function HistoryScreen({
   const [error, setError] = useState<string | null>(null);
   const [scopeMenu, setScopeMenu] = useState<{
     open: boolean;
-    position: { x: number; y: number };
+    at: MenuAt;
   } | null>(null);
   const scopeButton = useRef<HTMLButtonElement>(null);
   const list = useRef<HTMLDivElement>(null);
@@ -126,11 +126,10 @@ export function HistoryScreen({
             aria-expanded={Boolean(scopeMenu?.open)}
             data-testid="history-scope"
             onClick={() => {
-              const rect = scopeButton.current?.getBoundingClientRect();
-              if (!rect) return;
+              if (!scopeButton.current) return;
               setScopeMenu({
                 open: true,
-                position: { x: rect.right, y: rect.bottom + 4 },
+                at: menuAtControl(scopeButton.current),
               });
             }}
             className="flex h-7 max-w-56 items-center gap-1 rounded-md px-2 text-xs text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
@@ -289,7 +288,9 @@ export function HistoryScreen({
       {scopeMenu && (
         <MenuPortal
           open={scopeMenu.open}
-          position={scopeMenu.position}
+          at={scopeMenu.at}
+          anchor={scopeButton}
+          label="Show history for"
           entries={scopeEntries}
           onPick={(entry) => {
             setProjectId(entry.action);
