@@ -5977,6 +5977,10 @@ export function App({
   const tabsInSidebar = prefs?.tabPlacement === "sidebar";
   const headerInSidebar = tabsInSidebar && prefs?.headerPlacement === "sidebar";
   const compactWindow = headerInSidebar && !sidebarOpen;
+  // The chrome keeps the window buttons' corner free while they show. Only
+  // macOS draws them in the page; elsewhere the preference changes nothing.
+  const windowButtons =
+    prefs?.windowButtons !== false || !/Mac/.test(navigator.platform);
   const { sidebarRef, revealed, reveal, revealOnHover } =
     useSidebarReveal(compactWindow);
   const sidebarVisible = sidebarOpen || revealed;
@@ -6061,6 +6065,7 @@ export function App({
       <PaletteHostProvider value={paletteHost}>
         <div
           data-sidebar-dividers={prefs?.sidebarDividers ? "on" : "off"}
+          data-window-buttons={windowButtons ? "on" : "off"}
           // The project's workspace is restored, revealed, and taking
           // shortcuts: what automation waits for before pressing keys.
           data-workspace-ready={
@@ -6218,7 +6223,9 @@ export function App({
             onMotionChange={setSidebarMotion}
             header={
               <>
-                <div className="app-drag flex h-10 shrink-0 items-center justify-end gap-1 pl-[86px] pr-3">
+                <div
+                  className={`app-drag flex h-10 shrink-0 items-center justify-end gap-1 pr-3 ${windowButtons ? "pl-[86px]" : "pl-3"}`}
+                >
                   {sidebarMotion.phase !== "closed" && sidebarToggle("left")}
                   {headerInSidebar && (
                     <div
@@ -6349,7 +6356,7 @@ export function App({
                     // Under the panel until the content makes room; the
                     // panel's own toggle is the live one.
                     inert={sidebarMotion.phase !== "closed"}
-                    className="app-no-drag ml-[70px] flex shrink-0 items-center"
+                    className={`app-no-drag flex shrink-0 items-center ${windowButtons ? "ml-[70px]" : ""}`}
                   >
                     {sidebarToggle("left")}
                   </span>

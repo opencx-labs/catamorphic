@@ -15,8 +15,9 @@ For project-overridable settings, lowest to highest priority:
 
 Layout, framed content, bookmarks presentation and link defaults support all three
 editable scopes. Notifications, terminal appearance, terminal macros,
-switching to a page's open tab (`switchToOpenTab`) and browser tab sleep
-(`browserTabSleep`, ADR 0194) are profile choices. `SETTINGS` is the executable scope allowlist. A shared project
+switching to a page's open tab (`switchToOpenTab`), browser tab sleep
+(`browserTabSleep`, ADR 0194) and window buttons (`windowButtons`) are profile
+choices. `SETTINGS` is the executable scope allowlist. A shared project
 file is ordinary committed project configuration; a personal override never enters
 team git history. Without a local project root, shared-file editing is unavailable.
 
@@ -122,3 +123,16 @@ insets the workspace as a rounded window with a 1px border; `contentPadding`
 apply only while it is on. Dimensions accept 0 through 48px. Together with
 `sidebarDividers` (default false) they support profile, shared project and
 personal overrides, appear in settings search and apply live in every tab layout.
+
+## Window buttons
+
+`windowButtons` (default true) shows the macOS close, minimize and full screen
+buttons at a workspace window's top left. A setting marked `macOnly` appears in
+Settings (Workspace > Window) and the palette only on macOS, and the skill table
+says so; elsewhere the OS draws the frame and the key changes nothing.
+`main/window-buttons.ts` combines the preference with the workspace's own hiding
+(a collapsed sidebar holding the header hides them until revealed). It applies
+before a new window first shows and on every preference change, including file
+edits, so an agent can turn them off. While they are hidden the chrome gives back
+the corner it keeps for them, and the menu bar still closes (File > Close Window),
+minimizes and enters full screen.

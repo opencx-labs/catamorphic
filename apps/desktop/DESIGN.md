@@ -377,7 +377,8 @@ that friction is intentional.
 
 - One chrome row: the macOS drag region (`titleBarStyle: hiddenInset`,
   `.app-drag`), sidebar toggle, and the workspace tab strip share the top
-  40px. No dead space above tabs.
+  40px. No dead space above tabs. The window buttons are a profile choice
+  (`windowButtons`); hidden, the corner kept for them goes too.
 - Workspace tabs host workflows, apps, and chats alike; minimized chats live
   in the bottom bubble strip (see the design log for collapse behavior).
 - Empty states are quiet: one sentence of `--color-fg-faint` + one action. Errors stay `--color-fg-muted`.

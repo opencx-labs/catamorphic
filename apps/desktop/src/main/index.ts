@@ -10,6 +10,7 @@ import {
   dialog,
   ipcMain,
   Menu,
+  type MenuItemConstructorOptions,
   nativeTheme,
   powerMonitor,
   safeStorage,
@@ -58,6 +59,7 @@ import {
   registerDesktopUpdater,
 } from "./updater.js";
 import { registerVoiceSupport } from "./voice/index.js";
+import { WindowButtons } from "./window-buttons.js";
 import { WindowStateStore } from "./window-state.js";
 import { desktopProfileMcpProvider } from "./workflow-mcp-connections.js";
 
@@ -296,6 +298,7 @@ const windows: WindowProfileRegistry = {
         profileConfig.forProfile(profileId).theme.resolved(),
       ),
     );
+    if (window) windowButtons.apply(window);
     applyMenuForFocusedWindow();
   },
   attach(contents, profileId) {
@@ -309,6 +312,23 @@ const windows: WindowProfileRegistry = {
     window.focus();
   },
 };
+
+const windowButtons = new WindowButtons({
+  allowed: (window: BrowserWindow) =>
+    profileConfig
+      .forProfile(windows.profileFor(window.webContents))
+      .prefs.load().windowButtons,
+});
+
+/** A collapsed sidebar holding the header hides them until it is revealed. */
+ipcMain.handle(
+  "catamorphic:window-controls-visible",
+  (event, visible: unknown) => {
+    const window = BrowserWindow.fromWebContents(event.sender);
+    if (window && typeof visible === "boolean")
+      windowButtons.request(window, visible);
+  },
+);
 
 function sendToProfile(
   profileId: string,
@@ -400,6 +420,7 @@ function createWindow(
   // window.webContents throws "Object has been destroyed".
   const webContentsId = window.webContents.id;
   windowProfiles.set(webContentsId, profile.id);
+  if (!dock) windowButtons.manage(window);
   profilesStore.setLastActiveProfile(profile.id);
   window.on("closed", () => {
     windowProfiles.delete(webContentsId);
@@ -467,6 +488,16 @@ function buildMenu(bindings: Keybindings): Menu {
             }
           },
         },
+        // The close button's action, for windows that hide their buttons.
+        // Elsewhere the Window menu's close role has it.
+        ...(process.platform === "darwin"
+          ? [
+              {
+                label: "Close Window",
+                click: (_item, window) => window?.close(),
+              } satisfies MenuItemConstructorOptions,
+            ]
+          : []),
       ],
     },
     { role: "editMenu" },
@@ -599,6 +630,8 @@ app.whenReady().then(async () => {
     sendToProfile(profileId, "catamorphic:workspace-config-changed", null);
   });
   profileConfig.onPrefsChanged((profileId, prefs) => {
+    for (const window of windows.windowsFor(profileId))
+      windowButtons.apply(window);
     sendToProfile(profileId, "catamorphic:prefs-changed", prefs);
   });
   profileConfig.onConnectionsChanged((profileId) => {
