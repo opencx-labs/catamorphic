@@ -136,8 +136,35 @@ const pick = async (label: string) => {
   );
   await closed();
 };
+/**
+ * Moves the pointer onto the element until the page's own pointer events
+ * say it is there: the window routes input to a page a frame or more after
+ * it shows, and a press before then lands nowhere.
+ */
+const pointerOnPage = async (
+  selector: string,
+  point: { x: number; y: number },
+) => {
+  await inPage(
+    "(() => { window.__pointerOn = null; if (!window.__pointerWatched) { window.__pointerWatched = true; addEventListener('pointermove', (event) => { window.__pointerOn = event.target; }, true); } return true; })()",
+  );
+  for (let attempt = 0; ; attempt += 1) {
+    await app.cdp("Input.dispatchMouseEvent", {
+      type: "mouseMoved",
+      x: point.x + (attempt % 2),
+      y: point.y,
+    });
+    const on = await inPage<boolean>(
+      `document.querySelector(${JSON.stringify(selector)}).contains(window.__pointerOn)`,
+    );
+    if (on) return;
+    if (attempt === 50) throw new Error(`${selector} never took the pointer`);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+};
 const pageMenuAt = async (selector: string, dx = 0.5, dy = 0.5) => {
   const point = await pagePoint(selector, dx, dy);
+  await pointerOnPage(selector, point);
   await mouse(point, "right");
   await app.waitFor(`${menu}?.getAttribute('aria-label') === 'Page'`, {
     label: `page menu on ${selector}`,

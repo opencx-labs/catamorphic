@@ -17,7 +17,7 @@ const server = http.createServer((request, response) => {
     return;
   }
   response.end(
-    `<title>Beta page</title><h1>Beta</h1><p><a id="out" href="/a" target="_blank" style="font-size:28px">Alpha in a new window</a></p>`,
+    `<title>Beta page</title><h1>Beta</h1><p><a id="out" href="/a" target="_blank" style="font-size:28px">Alpha in a new window</a></p><script>addEventListener('pointermove', (event) => { window.pointerOn = event.target; }, true);</script>`,
   );
 });
 
@@ -127,7 +127,23 @@ describe("a page already open in a tab", () => {
       const r = page.getBoundingClientRect();
       return { x: Math.round(r.left + box.x), y: Math.round(r.top + box.y) };
     })()`);
-    await app.cdp("Input.dispatchMouseEvent", { type: "mouseMoved", ...point });
+    // A page just brought to the front takes the pointer once the window
+    // routes input to it, a frame or more later: until the page's own
+    // pointer events put it on the link, a press would land nowhere.
+    await app.eval(`${view}.executeJavaScript("window.pointerOn = null")`);
+    for (let attempt = 0; ; attempt += 1) {
+      await app.cdp("Input.dispatchMouseEvent", {
+        type: "mouseMoved",
+        x: point.x + (attempt % 2),
+        y: point.y,
+      });
+      const on = await app.eval<boolean>(
+        `${view}.executeJavaScript("document.getElementById('out').contains(window.pointerOn)")`,
+      );
+      if (on) break;
+      if (attempt === 50) throw new Error("The link never took the pointer");
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
     for (const type of ["mousePressed", "mouseReleased"])
       await app.cdp("Input.dispatchMouseEvent", {
         type,
