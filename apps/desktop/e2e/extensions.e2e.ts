@@ -7,7 +7,12 @@ import { strToU8, zipSync } from "fflate";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { extensionIdFromKey, keyHash } from "../src/main/extensions/crx.js";
 import { buildCrx } from "../src/main/extensions/crx-builder.js";
-import { type AppHandle, type FrameHandle, launchApp } from "./harness.js";
+import {
+  type AppHandle,
+  type FrameHandle,
+  launchApp,
+  pointerOnPage,
+} from "./harness.js";
 
 /**
  * Chrome extensions (ADR 0203). A test extension loaded unpacked runs its
@@ -647,7 +652,9 @@ describe("an unpacked extension", () => {
       const page = view.getBoundingClientRect();
       return { x: Math.round(page.left + box.x), y: Math.round(page.top + box.y) };
     })()`);
-    await app.cdp("Input.dispatchMouseEvent", { type: "mouseMoved", ...point });
+    // The window routes input to the page a frame or more after showing
+    // it: a press sent before the page has the pointer lands nowhere.
+    await pointerOnPage(app, { view: pageView, selector: "p", point });
     for (const type of ["mousePressed", "mouseReleased"])
       await app.cdp("Input.dispatchMouseEvent", {
         type,
