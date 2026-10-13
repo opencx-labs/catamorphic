@@ -174,4 +174,50 @@ describe("ProfileBar", () => {
     expect(trigger?.getAttribute("aria-expanded")).toBe("false");
     expect(document.activeElement).toBe(trigger);
   });
+
+  it("keeps a New profile field opened before its focus frame", async () => {
+    await act(async () => {
+      root.render(
+        <ProfileBar
+          data={{
+            defaultProfileId: "profile-1",
+            profiles: [
+              {
+                id: "profile-1",
+                name: "Default Profile",
+                color: "#8b5cf6",
+                projectIds: ["project-1"],
+                defaultProjectId: "project-1",
+              },
+            ],
+          }}
+          activeProfileId="profile-1"
+          onSwitch={() => undefined}
+          onOpenSettings={() => undefined}
+        />,
+      );
+    });
+    const trigger = container.querySelector<HTMLButtonElement>(
+      '[aria-label^="Switch profile"]',
+    );
+    // A quick press on New profile lands before the frame that moves
+    // focus into the opened dialog.
+    await act(async () => {
+      trigger?.click();
+      [...container.querySelectorAll("button")]
+        .find((button) => button.textContent?.includes("New profile"))
+        ?.click();
+    });
+    const field = () =>
+      container.querySelector<HTMLInputElement>(
+        'input[placeholder="Profile name"]',
+      );
+    expect(document.activeElement).toBe(field());
+    await act(
+      () =>
+        new Promise((resolve) => requestAnimationFrame(() => resolve(null))),
+    );
+    expect(field()).not.toBeNull();
+    expect(document.activeElement).toBe(field());
+  });
 });

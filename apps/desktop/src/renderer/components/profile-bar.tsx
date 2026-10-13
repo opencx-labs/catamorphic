@@ -55,6 +55,9 @@ export function ProfileBar({
     if (!open) return;
     const frame = requestAnimationFrame(() => {
       const popover = popoverRef.current;
+      // Already inside (a quick press on New profile focused its field):
+      // moving focus now would blur that field, which drops it.
+      if (popover?.contains(document.activeElement)) return;
       const target =
         popover?.querySelector<HTMLElement>("[data-profile-active]") ??
         popover?.querySelector<HTMLElement>("button");
