@@ -27,9 +27,11 @@ const IMAGE = process.env.WORK_TEST_CONTAINER_IMAGE ?? "oven/bun:1.3.14-alpine";
 // Pinned, as every image these tests pull: an upstream release never
 // changes a run.
 const DIND_IMAGE = "docker:29.8.2-dind";
+const NESTED_IMAGE = "alpine:3.22.2";
 // The daemon inside the sandbox has no mirror of its own: pull through
-// Google's public one, as Docker Hub rate-limits shared runner addresses.
-const NESTED_IMAGE = "mirror.gcr.io/library/alpine:3.22.2";
+// Google's public one, as Docker Hub rate-limits shared runner addresses,
+// and from Docker Hub only when the mirror fails.
+const PULL_NESTED = `(docker pull mirror.gcr.io/library/${NESTED_IMAGE} && docker tag mirror.gcr.io/library/${NESTED_IMAGE} ${NESTED_IMAGE}) || docker pull ${NESTED_IMAGE}`;
 const MINUTES = 60_000;
 
 describe.skipIf(!enabled)("container sandboxes (ADR 0204)", () => {
@@ -385,7 +387,7 @@ describe.skipIf(!enabled)("container sandboxes (ADR 0204)", () => {
       const id = await created(sandboxProvider, { containers: true });
       const nested = await sandboxProvider.executeCommand(
         id,
-        `docker run --rm ${NESTED_IMAGE} echo nested-ok`,
+        `${PULL_NESTED} && docker run --rm ${NESTED_IMAGE} echo nested-ok`,
         { timeout: 300 },
       );
       expect(nested.result, nested.result).toContain("nested-ok");

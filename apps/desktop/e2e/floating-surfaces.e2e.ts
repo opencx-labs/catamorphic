@@ -67,8 +67,10 @@ beforeAll(async () => {
     { label: "New Tab palette" },
   );
   await prefs({ tabPlacement: "sidebar", headerPlacement: "sidebar" });
+  // The new layout mounts the New Tab page again: wait for its input too.
   await app.waitFor(
-    "!!document.querySelector('aside [data-tab-orientation=vertical]') && !document.querySelector('.workspace-chrome')",
+    `!!document.querySelector('aside [data-tab-orientation=vertical]') && !document.querySelector('.workspace-chrome') && !!document.querySelector(${JSON.stringify(NEW_TAB_INPUT)})`,
+    { label: "sidebar layout with its New Tab palette" },
   );
   await run(
     `setReactValue($(${JSON.stringify(NEW_TAB_INPUT)}),${JSON.stringify(`${origin}/anchor`)})`,

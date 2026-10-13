@@ -343,8 +343,8 @@ export function registerTerminalSupport(
     // foreground-process heuristic when an agent borrows one).
     const integration = input.agent ? await shellIntegration(shell) : null;
     // The `open` shim (URLs land as in-app tabs) rides the same
-    // agent-only integration: the zsh hooks put CATAMORPHIC_BIN first on
-    // PATH after the user's profiles ran.
+    // agent-only integration: the zsh and bash hooks put CATAMORPHIC_BIN
+    // first on PATH after the user's profiles ran.
     const shimBin = input.agent ? await shellBinShimDir() : null;
     const agentExtraEnv = input.agent
       ? ((await agentEnv?.(input.agent.projectId)) ?? {})

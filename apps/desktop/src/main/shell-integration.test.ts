@@ -6,7 +6,28 @@ import { describe, expect, it } from "vitest";
 import { scanOsc133 } from "../shared/terminal-text.js";
 import { shellIntegration } from "./shell-integration.js";
 
-/** A bash with PS0 (4.4+) on this machine, if any: macOS ships 3.2. */
+function bashVersion(candidate: string): [number, number] | undefined {
+  try {
+    const version = execFileSync(candidate, ["-c", 'echo "$BASH_VERSION"'], {
+      encoding: "utf8",
+    });
+    const [, major = 0, minor = 0] =
+      /^(\d+)\.(\d+)/.exec(version.trim())?.map(Number) ?? [];
+    return [major, minor];
+  } catch {
+    return undefined;
+  }
+}
+
+/** A bash before 4.4 on this machine, if any: macOS ships 3.2. */
+function oldBash(): string | undefined {
+  return ["/bin/bash", "/usr/bin/bash"].find((candidate) => {
+    const version = bashVersion(candidate);
+    return version && (version[0] < 4 || (version[0] === 4 && version[1] < 4));
+  });
+}
+
+/** A bash with PS0 (4.4+) on this machine, if any. */
 function modernBash(): string | undefined {
   for (const candidate of [
     "/bin/bash",
@@ -14,24 +35,14 @@ function modernBash(): string | undefined {
     "/usr/local/bin/bash",
     "/opt/homebrew/bin/bash",
   ]) {
-    try {
-      const [major = 0, minor = 0] = execFileSync(
-        candidate,
-        ["-c", 'echo "${BASH_VERSINFO[0]} ${BASH_VERSINFO[1]}"'],
-        { encoding: "utf8" },
-      )
-        .trim()
-        .split(" ")
-        .map(Number);
-      if (major > 4 || (major === 4 && minor >= 4)) return candidate;
-    } catch {
-      // Not here.
-    }
+    const [major, minor] = bashVersion(candidate) ?? [0, 0];
+    if (major > 4 || (major === 4 && minor >= 4)) return candidate;
   }
   return undefined;
 }
 
 const bash = modernBash();
+const bash3 = oldBash();
 
 describe("shell integration for agent terminals", () => {
   it("starts zsh as a login shell through its ZDOTDIR shim", async () => {
@@ -40,17 +51,32 @@ describe("shell integration for agent terminals", () => {
     expect(zsh?.env.ZDOTDIR).toBeTruthy();
   });
 
-  it("starts bash with an init file that reads the login profile first", async () => {
-    const integrated = await shellIntegration("/usr/bin/bash");
-    expect(integrated?.args[0]).toBe("--init-file");
-    const init = fs.readFileSync(integrated?.args[1] ?? "", "utf8");
-    // bash -l reads no init file, so the shim reads the profile itself,
-    // in bash's own order, before adding its hooks.
-    expect(init.indexOf("/etc/profile")).toBeLessThan(init.indexOf("PS0="));
-    expect(init).toContain('"$HOME/.bash_profile" "$HOME/.bash_login"');
-    expect(init).toContain("\\e]133;C\\a");
-    expect(init).toContain("\\e]133;D;%s\\a");
-  });
+  it.skipIf(!bash)(
+    "starts bash with an init file that reads the login profile first",
+    async () => {
+      const integrated = await shellIntegration(bash ?? "");
+      expect(integrated?.args[0]).toBe("--init-file");
+      const file = integrated?.args[1] ?? "";
+      const init = fs.readFileSync(file, "utf8");
+      // bash -l reads no init file, so the shim reads the profile itself,
+      // in bash's own order, before adding its hooks.
+      expect(init.indexOf("/etc/profile")).toBeLessThan(init.indexOf("PS0="));
+      expect(init).toContain('"$HOME/.bash_profile" "$HOME/.bash_login"');
+      expect(init).toContain("\\e]133;C\\a");
+      expect(init).toContain("\\e]133;D;%s\\a");
+      // Private to this user: nobody else can plant it.
+      expect(fs.statSync(path.dirname(path.dirname(file))).mode & 0o077).toBe(
+        0,
+      );
+    },
+  );
+
+  it.skipIf(!bash3)(
+    "leaves a bash without PS0 (before 4.4) a plain login shell",
+    async () => {
+      expect(await shellIntegration(bash3 ?? "")).toBeNull();
+    },
+  );
 
   it("leaves other shells to the foreground-process heuristic", async () => {
     expect(await shellIntegration("/usr/bin/fish")).toBeNull();
@@ -108,7 +134,24 @@ describe("shell integration for agent terminals", () => {
         // One start, one end with its exit code: the loop's steps between
         // its sleeps are no end.
         expect(markers.slice(before)).toEqual(["C", "D1"]);
-        expect(output).toContain("[own hook]");
+        // The person's hook runs first; the end comes once the prompt is
+        // theirs, right before it shows.
+        const ran = output.lastIndexOf("\u001b]133;C");
+        expect(output.indexOf("[own hook]", ran)).toBeGreaterThan(ran);
+        expect(output.indexOf("[own hook]", ran)).toBeLessThan(
+          output.indexOf("\u001b]133;D;1", ran),
+        );
+        // The exported PROMPT_COMMAND stays this shell's: a nested shell
+        // never runs hooks it does not have.
+        const nested = markers.length;
+        pty.write("bash -i\r");
+        pty.write("echo nested-$((40 + 2)); exit\r");
+        await until(
+          () =>
+            output.includes("nested-42") &&
+            markers.slice(nested).includes("D0"),
+        );
+        expect(output).not.toContain("command not found");
       } finally {
         pty.kill();
         await exited;

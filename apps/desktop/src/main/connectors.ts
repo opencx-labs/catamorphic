@@ -133,7 +133,9 @@ export class ConnectorsService {
   ): Promise<Response> =>
     (this.deps.catalogFetch ?? fetch)(input, {
       ...init,
-      signal: this.quitting.signal,
+      signal: init?.signal
+        ? AbortSignal.any([init.signal, this.quitting.signal])
+        : this.quitting.signal,
     });
 
   dispose(): void {

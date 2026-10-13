@@ -43,7 +43,7 @@ export function registerDesktopShutdown({
         () => {
           // Electron frees Node only once these settle, so one left
           // running holds the exit: name it, for a test that times out.
-          const pending = pendingRequests();
+          const pending = diagnose(pendingRequests);
           console.info(
             `[desktop] Shutdown complete in ${Date.now() - startedAt}ms${pending.length ? `; still in flight: ${pending.join(", ")}` : ""}`,
           );
@@ -60,6 +60,15 @@ export function registerDesktopShutdown({
         },
       );
   });
+}
+
+/** A diagnostic never stands between quit and exit. */
+function diagnose(read: () => readonly string[]): readonly string[] {
+  try {
+    return read();
+  } catch {
+    return [];
+  }
 }
 
 /** Native requests still running, counted by kind (`GetAddrInfoReqWrap×1`). */

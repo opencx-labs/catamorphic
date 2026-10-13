@@ -620,12 +620,6 @@ const KEY_CODES = {
 } as const;
 
 /**
- * Page-side helper source for suite `helpers` strings: set a field's value
- * through the setter React instruments. The chat composer is a
- * contenteditable (inline pills), so that branch keeps [data-pill-id]
- * children, sets the text, and lets the input handler read the DOM back.
- */
-/**
  * The New Tab page's palette input. The overlay palette (Cmd+P) is always
  * mounted, closed and inert, with the same "Search or ask" placeholder, so
  * a test that types into the New Tab page waits for this one: typing into
@@ -633,6 +627,16 @@ const KEY_CODES = {
  */
 export const NEW_TAB_INPUT = '[data-palette="tab"] textarea';
 
+/** The overlay palette's input while it is open (Cmd+P). */
+export const OVERLAY_INPUT =
+  '[aria-hidden="false"] [data-palette="overlay"] textarea';
+
+/**
+ * Page-side helper source for suite `helpers` strings: set a field's value
+ * through the setter React instruments. The chat composer is a
+ * contenteditable (inline pills), so that branch keeps [data-pill-id]
+ * children, sets the text, and lets the input handler read the DOM back.
+ */
 export const setReactValueJs = `const setReactValue = (el, value) => {
     if (el.isContentEditable) {
       const pills = [...el.querySelectorAll('[data-pill-id]')];

@@ -112,6 +112,7 @@ jobs:
         id: setup
         with:
           cache-suffix: workspace-${{ matrix.shard }}
+          electron: "true"
       - run: bun run check --lane=workspace --shard=${{ matrix.shard }}/${{ matrix.total }}
       - uses: ./.github/actions/test-cache-save
         if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
@@ -170,6 +171,7 @@ jobs:
         id: setup
         with:
           cache-suffix: desktop-linux-${{ matrix.shard }}
+          electron: "true"
       - name: Install private desktop
         run: |
           sudo apt-get update
@@ -219,6 +221,7 @@ jobs:
         id: setup
         with:
           cache-suffix: desktop-macos-${{ matrix.shard }}
+          electron: "true"
       - name: Test native macOS desktop
         env:
           # The runner inherits Bash; desktop terminals on macOS use Zsh,

@@ -653,8 +653,8 @@ app.whenReady().then(async () => {
       path.join(paths.profilesDir, profileId, "connectors"),
     connectionsFor: (profileId) =>
       profileConfig.forProfile(profileId).connections,
-    // E2E runs never reach the public catalogs: no test reads them, and a
-    // request still out when the app quits can hold its exit.
+    // Scripted runs (E2E, demo recordings) never reach the public catalogs:
+    // none reads them, and a request still out at quit can hold the exit.
     ...(e2eDataDir
       ? { catalogFetch: async () => new Response(null, { status: 404 }) }
       : {}),

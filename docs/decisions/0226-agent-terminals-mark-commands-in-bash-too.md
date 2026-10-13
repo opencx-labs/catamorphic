@@ -19,15 +19,24 @@ accept.
 
 ## Decision
 
-**bash gets the same markers as zsh.**
+**bash 4.4 and later gets the same markers as zsh.**
 - An agent bash starts non-login, with an init file Work writes:
   `bash --init-file <shim>`. A login bash reads no init file, so the shim
-  reads the login files itself: `/etc/profile`, then the first of
-  `~/.bash_profile`, `~/.bash_login` and `~/.profile`.
+  reads the login files itself, in bash's order: `/etc/profile`, then the
+  first of `~/.bash_profile`, `~/.bash_login` and `~/.profile`.
 - It then puts Work's command shims first on `PATH`.
-- `PS0` prints `133;C` as a command starts (bash 4.4 and later).
-- The first `PROMPT_COMMAND` entry prints `133;D;<exit>`. A person's own
-  `PROMPT_COMMAND` still runs after it, whether a string or an array.
+- `PS0` prints `133;C` as a command starts.
+- `PROMPT_COMMAND` keeps the person's own hooks, whether a string or an
+  array, between two of Work's: the first keeps the command's exit status,
+  the last prints `133;D;<exit>` right before the prompt shows.
+- `PROMPT_COMMAND` stays in this shell (`export -n`), so a nested bash
+  never runs hooks it does not have.
+- A read-only `PROMPT_COMMAND` gets no markers, and its shell keeps the
+  heuristic below.
+- A bash before 4.4 has no `PS0`. It starts as a plain login shell, as
+  before. macOS ships bash 3.2, and agent terminals there default to zsh.
+- The shims live in a directory private to the person (`0700`, created
+  fresh), written atomically, so no other user can plant one.
 - The person's own terminals stay untouched, as before.
 
 **A guessed end must last.** A shell without markers (fish, sh, bash
@@ -42,6 +51,10 @@ Rejected:
 
 ## Consequences
 
-Background commands, `run_terminal` exit codes and terminal busy state are
+Background commands, a command's exit code and terminal busy state are
 exact in bash, as in zsh. Linux CI keeps exercising bash. A marker-less
 shell reports a command's end about a second later than it did.
+
+On Debian-family systems an agent bash reads `/etc/bash.bashrc` twice:
+bash itself reads it before the init file, and `/etc/profile` reads it
+again, as it does for a login shell.

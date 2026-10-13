@@ -1,3 +1,4 @@
+import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -37,10 +38,10 @@ autoload -Uz add-zsh-hook 2>/dev/null && {
   add-zsh-hook preexec __catamorphic_preexec
   add-zsh-hook precmd __catamorphic_precmd
 }
-if [[ -n "$CATAMORPHIC_BIN" && -d "$CATAMORPHIC_BIN" ]]; then
+if [[ -n "\${CATAMORPHIC_BIN:-}" && -d "\${CATAMORPHIC_BIN:-}" ]]; then
   export PATH="$CATAMORPHIC_BIN:$PATH"
 fi
-if [[ -n "$CATAMORPHIC_TOOLCHAIN_BIN" && -d "$CATAMORPHIC_TOOLCHAIN_BIN" ]]; then
+if [[ -n "\${CATAMORPHIC_TOOLCHAIN_BIN:-}" && -d "\${CATAMORPHIC_TOOLCHAIN_BIN:-}" ]]; then
   export PATH="$CATAMORPHIC_TOOLCHAIN_BIN:$PATH"
 fi
 `;
@@ -101,32 +102,74 @@ fi
 exec /usr/bin/open "$@"
 `;
 
-let binDir: Promise<string | null> | null = null;
+/**
+ * This process's own directory for the shims: created private (0700) and
+ * checked to still be ours before each use, so another local user can
+ * never plant a file an agent terminal would run (a shared /tmp on Linux).
+ * A cleaner that removes it is answered with a new one.
+ */
+let root: string | null = null;
 
-async function ensureBinShim(): Promise<string | null> {
-  const dir = path.join(os.tmpdir(), "catamorphic-shell-integration", "bin");
+async function ownedPrivately(dir: string): Promise<boolean> {
   try {
-    await fs.mkdir(dir, { recursive: true });
-    await fs.writeFile(path.join(dir, "open"), OPEN_SHIM, { mode: 0o755 });
+    const stat = await fs.stat(dir);
+    return (
+      stat.isDirectory() &&
+      stat.uid === process.getuid?.() &&
+      (stat.mode & 0o077) === 0
+    );
+  } catch {
+    return false;
+  }
+}
+
+async function shimRoot(): Promise<string> {
+  if (root && (await ownedPrivately(root))) return root;
+  root = await fs.mkdtemp(path.join(os.tmpdir(), "catamorphic-shell-"));
+  return root;
+}
+
+/**
+ * Write a shim file whole: a shell starting meanwhile reads the old file
+ * or the new one, never half of it. Written at every use, so a removed
+ * file is back for the next terminal.
+ */
+async function writeShim(input: {
+  dir: string;
+  name: string;
+  content: string;
+  mode?: number;
+}): Promise<string> {
+  await fs.mkdir(input.dir, { recursive: true, mode: 0o700 });
+  const file = path.join(input.dir, input.name);
+  const staging = `${file}.${process.pid}.${Math.random().toString(36).slice(2)}`;
+  await fs.writeFile(staging, input.content, { mode: input.mode ?? 0o600 });
+  await fs.rename(staging, file);
+  return file;
+}
+
+/** The shim bin directory, or null off-macOS / on write failure. */
+export async function shellBinShimDir(): Promise<string | null> {
+  if (process.platform !== "darwin") return null;
+  try {
+    const dir = path.join(await shimRoot(), "bin");
+    await writeShim({ dir, name: "open", content: OPEN_SHIM, mode: 0o755 });
     return dir;
   } catch {
     return null;
   }
 }
 
-/** The shim bin directory, or null off-macOS / on write failure. */
-export function shellBinShimDir(): Promise<string | null> {
-  if (process.platform !== "darwin") return Promise.resolve(null);
-  binDir ??= ensureBinShim();
-  return binDir;
-}
-
 /**
  * The bash init file: a login shell's startup files, as `bash -l` reads
  * them (bash reads no init file in a login shell, so this one starts
- * non-login and does it itself), then the same PATH shims and markers as
- * zsh: `PS0` prints `133;C` as a command starts (bash 4.4+) and the first
- * `PROMPT_COMMAND` entry `133;D;<exit>` at each prompt.
+ * non-login and does it itself; Debian's bash also reads /etc/bash.bashrc
+ * first, as VS Code's integration finds), then the same PATH shims as zsh
+ * and the markers: `PS0` prints `133;C` as a command starts, the first
+ * `PROMPT_COMMAND` entry keeps the command's status and the last prints
+ * `133;D;<exit>` after the person's own hooks. A read-only
+ * `PROMPT_COMMAND` (audit setups) gets no markers: a start without an end
+ * would keep every command busy.
  */
 const BASH_INIT = `
 [ -f /etc/profile ] && . /etc/profile
@@ -137,87 +180,102 @@ for __catamorphic_profile in "$HOME/.bash_profile" "$HOME/.bash_login" "$HOME/.p
   fi
 done
 unset __catamorphic_profile
-if [[ -n "$CATAMORPHIC_BIN" && -d "$CATAMORPHIC_BIN" ]]; then
+if [[ -n "\${CATAMORPHIC_BIN:-}" && -d "\${CATAMORPHIC_BIN:-}" ]]; then
   export PATH="$CATAMORPHIC_BIN:$PATH"
 fi
-if [[ -n "$CATAMORPHIC_TOOLCHAIN_BIN" && -d "$CATAMORPHIC_TOOLCHAIN_BIN" ]]; then
+if [[ -n "\${CATAMORPHIC_TOOLCHAIN_BIN:-}" && -d "\${CATAMORPHIC_TOOLCHAIN_BIN:-}" ]]; then
   export PATH="$CATAMORPHIC_TOOLCHAIN_BIN:$PATH"
 fi
 # --- Work shell integration (OSC 133 semantic prompts) ---
-if (( BASH_VERSINFO[0] > 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] >= 4) )); then
-  __catamorphic_precmd() {
-    local status=$?
-    builtin printf '\\e]133;D;%s\\a' "$status"
-    return "$status"
+__catamorphic_flags=$(declare -p PROMPT_COMMAND 2>/dev/null)
+__catamorphic_flags=\${__catamorphic_flags#declare -}
+__catamorphic_flags=\${__catamorphic_flags%% *}
+if [[ "$__catamorphic_flags" != *r* ]]; then
+  __catamorphic_status() {
+    __catamorphic_last=$?
+    return "$__catamorphic_last"
   }
-  PS0="\${PS0}"$'\\e]133;C\\a'
-  if [[ "$(declare -p PROMPT_COMMAND 2>/dev/null)" == "declare -a"* ]]; then
-    PROMPT_COMMAND=(__catamorphic_precmd "\${PROMPT_COMMAND[@]}")
+  __catamorphic_precmd() {
+    builtin printf '\\e]133;D;%s\\a' "\${__catamorphic_last:-0}"
+  }
+  if [[ "$__catamorphic_flags" == *a* ]] && (( BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 1) )); then
+    PROMPT_COMMAND=(__catamorphic_status "\${PROMPT_COMMAND[@]}" __catamorphic_precmd)
   else
-    PROMPT_COMMAND="__catamorphic_precmd\${PROMPT_COMMAND:+;$PROMPT_COMMAND}"
+    PROMPT_COMMAND="__catamorphic_status\${PROMPT_COMMAND:+;$PROMPT_COMMAND};__catamorphic_precmd"
   fi
+  # Nested shells (a poetry shell, tmux) would inherit hook names they lack.
+  export -n PROMPT_COMMAND
+  PS0="\${PS0:-}"$'\\e]133;C\\a'
 fi
+unset __catamorphic_flags
 `;
 
-let shimDir: Promise<string | null> | null = null;
+/** Whether a bash prints `PS0`, which marks a command's start (4.4+). */
+const bashVersions = new Map<string, Promise<boolean>>();
 
-async function ensureShim(): Promise<string | null> {
-  const dir = path.join(os.tmpdir(), "catamorphic-shell-integration", "zsh");
-  try {
-    await fs.mkdir(dir, { recursive: true });
-    await Promise.all([
-      fs.writeFile(path.join(dir, ".zshenv"), sourcingScript(".zshenv")),
-      fs.writeFile(path.join(dir, ".zprofile"), sourcingScript(".zprofile")),
-      fs.writeFile(path.join(dir, ".zlogin"), sourcingScript(".zlogin")),
-      fs.writeFile(path.join(dir, ".zshrc"), ZSHRC),
-    ]);
-    return dir;
-  } catch {
-    return null;
-  }
+function bashMarksCommands(shell: string): Promise<boolean> {
+  const known = bashVersions.get(shell);
+  if (known) return known;
+  const marks = new Promise<boolean>((resolve) => {
+    execFile(
+      shell,
+      ["-c", 'echo "$BASH_VERSION"'],
+      { timeout: 2_000 },
+      (error, stdout) => resolve(!error && hasPs0(String(stdout))),
+    );
+  });
+  bashVersions.set(shell, marks);
+  return marks;
 }
 
-let bashInit: Promise<string | null> | null = null;
-
-async function ensureBashInit(): Promise<string | null> {
-  const dir = path.join(os.tmpdir(), "catamorphic-shell-integration", "bash");
-  try {
-    await fs.mkdir(dir, { recursive: true });
-    const file = path.join(dir, "init.bash");
-    await fs.writeFile(file, BASH_INIT);
-    return file;
-  } catch {
-    return null;
-  }
+/** A `BASH_VERSION` (`5.2.37(1)-release`) of 4.4 or later. */
+function hasPs0(version: string): boolean {
+  const [, major = 0, minor = 0] =
+    /^(\d+)\.(\d+)/.exec(version.trim())?.map(Number) ?? [];
+  return major > 4 || (major === 4 && minor >= 4);
 }
 
 /**
  * How an agent terminal's shell starts with integration: its arguments
  * and extra environment, or null when the shell can't be integrated
- * (another shell, or the shim failed to write).
+ * (another shell, bash before 4.4, or a shim that failed to write).
  */
 export async function shellIntegration(
   shell: string,
 ): Promise<{ args: string[]; env: Record<string, string> } | null> {
-  const name = path.basename(shell);
-  if (name === "zsh") {
-    shimDir ??= ensureShim();
-    const dir = await shimDir;
-    if (!dir) return null;
-    return {
-      // A login shell, like Terminal.app; the shim reads the user's files.
-      args: ["-l"],
-      env: {
-        ZDOTDIR: dir,
-        USER_ZDOTDIR: process.env.ZDOTDIR ?? os.homedir(),
-      },
-    };
-  }
-  if (name === "bash") {
-    bashInit ??= ensureBashInit();
-    const file = await bashInit;
-    if (!file) return null;
-    return { args: ["--init-file", file], env: {} };
+  try {
+    const name = path.basename(shell);
+    if (name === "zsh") {
+      const dir = path.join(await shimRoot(), "zsh");
+      await Promise.all([
+        writeShim({ dir, name: ".zshenv", content: sourcingScript(".zshenv") }),
+        writeShim({
+          dir,
+          name: ".zprofile",
+          content: sourcingScript(".zprofile"),
+        }),
+        writeShim({ dir, name: ".zlogin", content: sourcingScript(".zlogin") }),
+        writeShim({ dir, name: ".zshrc", content: ZSHRC }),
+      ]);
+      return {
+        // A login shell, like Terminal.app; the shim reads the user's files.
+        args: ["-l"],
+        env: {
+          ZDOTDIR: dir,
+          USER_ZDOTDIR: process.env.ZDOTDIR ?? os.homedir(),
+        },
+      };
+    }
+    if (name === "bash" && (await bashMarksCommands(shell))) {
+      const file = await writeShim({
+        dir: path.join(await shimRoot(), "bash"),
+        name: "init.bash",
+        content: BASH_INIT,
+      });
+      return { args: ["--init-file", file], env: {} };
+    }
+  } catch {
+    // The terminal still works, on the foreground-process heuristic.
   }
   return null;
 }
