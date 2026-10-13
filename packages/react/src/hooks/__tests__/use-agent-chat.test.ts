@@ -807,7 +807,7 @@ describe("useAgentChat commands", () => {
         useAgentChat(PROJECT_ID, { sessionId, live: false }),
       { initialProps: { sessionId: SESSION_ID } },
     );
-    let first: Promise<boolean> = Promise.resolve(false);
+    let first: Promise<unknown> = Promise.resolve(null);
     act(() => {
       first = result.current.send("To the first chat");
     });

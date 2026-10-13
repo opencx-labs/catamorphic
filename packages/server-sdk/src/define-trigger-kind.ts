@@ -55,7 +55,11 @@ export function defineTriggerKind<
    * authoring time through the generated trigger types.
    */
   output?: z.ZodType;
-  /** Pure routing filter. Complex business conditions belong in workflow code. */
+  /**
+   * Pure routing filter, over config and payload in their stored form (a NUL
+   * or half an emoji as U+FFFD). Complex business conditions belong in
+   * workflow code.
+   */
   matches?: (input: {
     config: z.output<ConfigSchema>;
     payload: z.output<PayloadSchema>;

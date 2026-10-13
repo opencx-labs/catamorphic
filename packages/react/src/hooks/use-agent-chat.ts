@@ -439,7 +439,9 @@ export function useAgentChat(
             : {}),
         },
       });
-      blockedRef.current = null;
+      // Only this chat's held send is cleared: a late receipt from a chat
+      // the hook has left must not drop the next chat's.
+      if (blockedRef.current?.token === token) blockedRef.current = null;
       refreshUnlessStreaming(target);
       const itemId =
         typeof receipt.result?.itemId === "string"
