@@ -1,8 +1,6 @@
 import { EventEmitter } from "node:events";
 import { app, ipcMain, type WebContents, webContents } from "electron";
 import {
-  isScriptDialog,
-  PAGE_DIALOG_MESSAGE_LIMIT,
   type PageDialog,
   type PageDialogAnswer,
   pageDialogAnswerSchema,
@@ -10,6 +8,7 @@ import {
   type UnloadIntent,
   unloadIntentSchema,
 } from "../shared/page-dialogs.js";
+import type { ScriptDialogReply } from "../shared/script-dialogs.js";
 import { PageDialogs } from "./page-dialogs.js";
 
 /**
@@ -61,7 +60,7 @@ export type CloseAsk = "close" | "asking";
 /** What Leave does: the browser's attempt again, or the page's own. */
 type HeldAction = { kind: "browser"; intent: UnloadIntent } | { kind: "page" };
 
-/** A Leave answered this long ago still lets the redone unload through. */
+/** For this long after Leave, the page is let go without asking again. */
 const LEAVE_WINDOW_MS = 5_000;
 /** What led to "Leave site?" was asked at most this long before it. */
 const INTENT_WINDOW_MS = 3_000;
@@ -73,10 +72,12 @@ const PROBE_WORLD = 1006;
 const PROBE_MS = 400;
 /** How often a frame that asked is checked for having gone (removed, crashed). */
 const FRAME_CHECK_MS = 500;
+/** How long Chromium's transient user activation lasts (kActivationLifespan). */
+const ACTIVATION_MS = 5_000;
 
 let current: PageDialogs | null = null;
 let noteIntent: ((guestId: number, intent: UnloadIntent) => void) | null = null;
-let closingPages: ReadonlySet<number> = new Set();
+let closeGuard: (guestId: number) => boolean = () => false;
 
 /** The open dialogs of every tab's page, for the browser driver. */
 export function pageDialogs(): PageDialogs | null {
@@ -90,11 +91,13 @@ export function noteUnloadIntent(guestId: number, intent: UnloadIntent): void {
 
 /**
  * The page's tab is being closed and its beforeunload asked. Electron
- * grants the page a user activation as it asks, so it opens no windows
- * meanwhile.
+ * grants the page a user activation as it asks, so it opens no windows,
+ * asks for no permission and shares no screen with it: while asked, for as
+ * long as the activation lasts after, and once it is leaving, until it is
+ * gone.
  */
 export function pageClosing(guestId: number): boolean {
-  return closingPages.has(guestId);
+  return closeGuard(guestId);
 }
 
 function httpOrigin(raw: string): string | null {
@@ -171,24 +174,46 @@ export function registerBrowserDialogs(host: BrowserDialogsHost): () => void {
   };
 
   // --- what was leaving the page, for "Leave site?" ---
+  /** What the person or an agent last did to leave each page. */
   const intents = new Map<number, { intent: UnloadIntent; at: number }>();
-  /** The page's own navigation (a link, a form, a script), as it started. */
-  const pageNavigations = new Map<number, { reload: boolean; at: number }>();
-  /** Leave was chosen: the redone unload goes without asking again. */
+  /**
+   * The page's own navigation (a link, a form, a script), as it started;
+   * `user` when the person's own press in the page started it.
+   */
+  const pageNavigations = new Map<
+    number,
+    { reload: boolean; user: boolean; at: number }
+  >();
+  /** Leave was chosen: until then, the page is let go without asking. */
   const leaving = new Map<number, number>();
   /**
-   * What an open "Leave site?" would do on Leave: the latest attempt it
-   * held, which also names it ("Reload site?").
+   * What an open "Leave site?" would do on Leave, which also names it
+   * ("Reload site?").
    */
   const held = new Map<number, HeldAction | null>();
   /** Tabs being closed, waiting on the page's beforeunload. */
   const closing = new Set<number>();
-  closingPages = closing;
+  /**
+   * Each tab's goings (the person's or an agent's, and every top-frame
+   * navigation), counted: a sign-in asked before one never shows after it.
+   */
+  const goings = new Map<number, number>();
+  const went = (guestId: number) =>
+    goings.set(guestId, (goings.get(guestId) ?? 0) + 1);
+  /**
+   * Until when a page whose tab was closed holds the activation the close
+   * granted it: the activation's own lifespan, or for good once it leaves.
+   */
+  const activated = new Map<number, number>();
+  closeGuard = (guestId) =>
+    closing.has(guestId) || (activated.get(guestId) ?? 0) > Date.now();
   noteIntent = (guestId, intent) => {
     intents.set(guestId, { intent, at: Date.now() });
-    // Going somewhere else answers the page's own dialogs with Cancel, as
-    // Chrome's address bar does, before Chromium's beforeunload wait.
-    dialogs.cancel(guestId, (dialog) => isScriptDialog(dialog.kind));
+    went(guestId);
+    // Going somewhere else answers the page's own dialogs and sign-ins
+    // with Cancel, as Chrome's address bar does, before Chromium's
+    // beforeunload wait. "Leave site?" stays: it asks about this going.
+    dialogs.cancel(guestId, (dialog) => dialog.kind !== "beforeunload");
   };
   const forgetIntents = (guestId: number) => {
     intents.delete(guestId);
@@ -205,16 +230,22 @@ export function registerBrowserDialogs(host: BrowserDialogsHost): () => void {
   };
   const onPageNavigating = (
     event: Electron.IpcMainEvent,
-    payload: { reload?: unknown },
+    payload: { reload?: unknown; user?: unknown },
   ) => {
     if (event.senderFrame?.parent === null && hostOf(event.sender))
       pageNavigations.set(event.sender.id, {
         reload: payload?.reload === true,
+        user: payload?.user === true,
         at: Date.now(),
       });
   };
 
-  /** What is leaving the page now: the latest attempt, browser's or page's. */
+  /**
+   * What is leaving the page now. The person's or an agent's attempt comes
+   * first: the page's script cannot pass a navigation of its own off as
+   * theirs, however often it starts one. Only the person's own press in
+   * the page (a link, a form) after it is what leaves instead.
+   */
   const heldAttempt = (
     guestId: number,
     now: number,
@@ -224,7 +255,10 @@ export function registerBrowserDialogs(host: BrowserDialogsHost): () => void {
     const page = pageNavigations.get(guestId);
     const fromBrowser = browser && fresh(browser.at) ? browser : null;
     const fromPage = page && fresh(page.at) ? page : null;
-    if (fromPage && (!fromBrowser || fromPage.at > fromBrowser.at))
+    if (
+      fromPage &&
+      (!fromBrowser || (fromPage.user && fromPage.at > fromBrowser.at))
+    )
       return { action: { kind: "page" }, reload: fromPage.reload };
     if (fromBrowser)
       return {
@@ -287,32 +321,31 @@ export function registerBrowserDialogs(host: BrowserDialogsHost): () => void {
         candidate.processId === frame.processId,
     );
   const onScriptDialog = (event: Electron.IpcMainEvent, payload: unknown) => {
-    const request = scriptDialogRequestSchema.safeParse(payload);
-    const kind = request.success ? request.data.kind : "alert";
-    const reply = (answer: PageDialogAnswer | null) => {
-      event.returnValue = scriptAnswer(kind, answer);
+    const reply = (value: ScriptDialogReply) => {
+      event.returnValue = value;
     };
+    // Refused without asking anyone; the frame stops asking (preload).
+    const refuse = (why: "document" | "busy") => reply({ refused: why });
+    const request = scriptDialogRequestSchema.safeParse(payload);
     const guest = event.sender;
     const frame = event.senderFrame;
-    if (!request.success || !frame || !hostOf(guest)) {
-      reply(null);
-      return;
-    }
+    if (!request.success || !frame) return refuse("document");
+    // No window shows the tab's page just now (one closing).
+    if (!hostOf(guest)) return refuse("busy");
     // A page that has gone (unloading after the next one committed) asks
     // nothing over its successor.
-    if (!inPage(guest, frame)) {
-      reply(null);
-      return;
-    }
+    if (!inPage(guest, frame)) return refuse("document");
     const origin = frameOrigin(frame.origin);
     const page = frameOrigin(guest.mainFrame.origin);
     const embedded = frame.parent !== null && origin !== page;
     // A sandboxed or opaque frame has no origin to name: as Chrome does for
     // a sandbox without allow-modals, it shows nothing.
-    if (frame.parent !== null && origin === "") {
-      reply(null);
-      return;
-    }
+    if (frame.parent !== null && origin === "") return refuse("document");
+    const { kind } = request.data;
+    const refusal = dialogs.refusal(guest.id, kind);
+    // Told to show no more dialogs, the page stays so until another loads;
+    // one waiting on too many may ask again once some are answered.
+    if (refusal) return refuse(refusal === "suppressed" ? "document" : "busy");
     void dialogs
       .ask(
         {
@@ -320,11 +353,8 @@ export function registerBrowserDialogs(host: BrowserDialogsHost): () => void {
           kind,
           origin,
           embedded,
-          message: request.data.message.slice(0, PAGE_DIALOG_MESSAGE_LIMIT),
-          defaultValue: (request.data.defaultValue ?? "").slice(
-            0,
-            PAGE_DIALOG_MESSAGE_LIMIT,
-          ),
+          message: request.data.message,
+          defaultValue: request.data.defaultValue,
           reload: false,
         },
         {
@@ -335,7 +365,10 @@ export function registerBrowserDialogs(host: BrowserDialogsHost): () => void {
           },
         },
       )
-      .then(reply, () => reply(null));
+      .then(
+        (answer) => reply({ answer: scriptAnswer(kind, answer) }),
+        () => reply({ answer: scriptAnswer(kind, null) }),
+      );
   };
 
   ipcMain.on("catamorphic:page-dialog", onScriptDialog);
@@ -384,6 +417,7 @@ export function registerBrowserDialogs(host: BrowserDialogsHost): () => void {
       ]);
       if (!touched || guest.isDestroyed()) return "close";
       closing.add(guest.id);
+      activated.set(guest.id, Date.now() + ACTIVATION_MS);
       // The page's beforeunload runs; "-before-unload-fired" keeps the page
       // either way: one that let go leaves with its tab's own exit, one
       // that holds on asks "Leave site?". A page with no handler closes at
@@ -429,13 +463,17 @@ export function registerBrowserDialogs(host: BrowserDialogsHost): () => void {
   }): Promise<{ username: string; password: string } | null> => {
     const { guest, owner, target, details, authInfo } = input;
     const profileId = host.profileFor(owner);
+    const going = goings.get(guest.id) ?? 0;
     const saved = authInfo.isProxy
       ? []
       : await host.vault.list(profileId, target).then(
           (logins) => logins.map(({ id, username }) => ({ id, username })),
           () => [],
         );
-    if (guest.isDestroyed()) return null;
+    // The tab went elsewhere while the vault was read: as for a sign-in
+    // already asked, the request it was for goes unanswered.
+    if (guest.isDestroyed() || (goings.get(guest.id) ?? 0) !== going)
+      return null;
     const key = `${target}\n${authInfo.realm}`;
     const tried = triedUsernames.get(guest.id);
     const answer = await dialogs.ask({
@@ -533,23 +571,30 @@ export function registerBrowserDialogs(host: BrowserDialogsHost): () => void {
     contents.on("will-prevent-unload", (event) => {
       const owner = hostOf(contents);
       if (!owner) return;
-      const leaveUntil = leaving.get(id);
-      if (leaveUntil !== undefined && leaveUntil > Date.now()) {
-        leaving.delete(id);
+      // Leave was chosen: what it redid goes, and so does whatever else
+      // the page tries before it does.
+      if ((leaving.get(id) ?? 0) > Date.now()) {
         event.preventDefault();
         return;
       }
       // The page stays for now. One "Leave site?" per page: asking again
-      // (a second reload) changes it to what was tried last.
+      // (a second reload) changes it to what was tried last, except that
+      // once the person or an agent tried, only they change it.
       const attempt = closing.has(id)
         ? { action: null, reload: false }
         : heldAttempt(id, Date.now());
-      held.set(id, attempt.action);
       const open = dialogs.find(id, "beforeunload");
       if (open) {
+        if (
+          held.get(id)?.kind === "browser" &&
+          attempt.action?.kind !== "browser"
+        )
+          return;
+        held.set(id, attempt.action);
         dialogs.update(open.id, { reload: attempt.reload });
         return;
       }
+      held.set(id, attempt.action);
       // A tab being closed in the background comes forward to ask.
       if (closing.has(id))
         owner.send("catamorphic:browser-reveal-guest", { guestId: id });
@@ -568,6 +613,8 @@ export function registerBrowserDialogs(host: BrowserDialogsHost): () => void {
           if (contents.isDestroyed()) return;
           if (closing.delete(id)) {
             held.delete(id);
+            // Leaving with its tab: no window or permission until it goes.
+            if (answer?.accept) activated.set(id, Number.POSITIVE_INFINITY);
             if (!owner.isDestroyed())
               owner.send("catamorphic:browser-close-answer", {
                 guestId: id,
@@ -576,7 +623,11 @@ export function registerBrowserDialogs(host: BrowserDialogsHost): () => void {
             return;
           }
           if (answer?.accept) leave(contents);
-          else held.delete(id);
+          else {
+            // Stayed: what was tried is done with.
+            held.delete(id);
+            forgetIntents(id);
+          }
         });
     });
     // Closing a tab runs the page's beforeunload through Electron's close,
@@ -594,6 +645,7 @@ export function registerBrowserDialogs(host: BrowserDialogsHost): () => void {
         event.preventDefault();
         if (!proceed) return;
         closing.delete(id);
+        activated.set(id, Number.POSITIVE_INFINITY);
         const owner = contents.hostWebContents;
         if (owner && !owner.isDestroyed())
           owner.send("catamorphic:browser-close-answer", {
@@ -621,6 +673,7 @@ export function registerBrowserDialogs(host: BrowserDialogsHost): () => void {
       if (details.isSameDocument) return;
       if (details.isMainFrame) {
         mainNavigations.set(id, details.url);
+        went(id);
         forgetIntents(id);
         dialogs.cancel(id);
         return;
@@ -634,6 +687,7 @@ export function registerBrowserDialogs(host: BrowserDialogsHost): () => void {
         mainNavigations.set(id, details.url);
     });
     contents.on("did-navigate", (_event, url, httpResponseCode) => {
+      went(id);
       dialogs.navigated(id);
       forgetIntents(id);
       held.delete(id);
@@ -667,9 +721,11 @@ export function registerBrowserDialogs(host: BrowserDialogsHost): () => void {
       held.delete(id);
       leaving.delete(id);
       closing.delete(id);
+      activated.delete(id);
       pendingSaves.delete(id);
       triedUsernames.delete(id);
       mainNavigations.delete(id);
+      goings.delete(id);
     });
   };
   app.on("web-contents-created", wire);
@@ -686,6 +742,6 @@ export function registerBrowserDialogs(host: BrowserDialogsHost): () => void {
     for (const guestId of [...hosts.keys()]) dialogs.forget(guestId);
     if (current === dialogs) current = null;
     noteIntent = null;
-    closingPages = new Set();
+    closeGuard = () => false;
   };
 }

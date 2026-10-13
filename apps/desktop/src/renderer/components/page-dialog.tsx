@@ -12,11 +12,11 @@ import {
 import {
   originHost,
   PAGE_DIALOG_CREDENTIAL_LIMIT,
-  PAGE_DIALOG_MESSAGE_LIMIT,
   type PageDialog,
   type PageDialogAnswer,
   pageDialogAsker,
 } from "../../shared/page-dialogs.js";
+import { PAGE_DIALOG_MESSAGE_LIMIT } from "../../shared/script-dialogs.js";
 
 /**
  * A page's dialog over its own tab (ADR 0226), as Chrome's tab-modal

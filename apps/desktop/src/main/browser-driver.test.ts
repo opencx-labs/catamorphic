@@ -114,4 +114,51 @@ describe("browser driver and page dialogs", () => {
       dialog: { kind: "alert" },
     });
   });
+
+  it("answers only a dialog the agent was shown: a press or address meant for the page reports a new one instead", async () => {
+    const guest = new Guest();
+    const driver = new BrowserDriver(
+      asWebContents(guest),
+      () => {},
+      async () => {},
+    );
+    // The person closes the tab while the agent works: "Leave site?".
+    void pageDialogs()?.ask({
+      guestId: guest.id,
+      kind: "beforeunload",
+      origin: "https://example.com",
+      embedded: false,
+      message: "",
+      defaultValue: "",
+      reload: false,
+    });
+    await expect(
+      driver.act({ type: "press", key: "Enter" }),
+    ).resolves.toMatchObject({ dialog: { kind: "beforeunload" } });
+    expect(pageDialogs()?.current(guest.id)?.kind).toBe("beforeunload");
+    // Shown now: the agent's next press answers it as the person would.
+    await expect(driver.act({ type: "press", key: "Escape" })).resolves.toEqual(
+      { ok: true, answered: "beforeunload", accepted: false },
+    );
+    expect(pageDialogs()?.has(guest.id)).toBe(false);
+
+    // Going elsewhere does not cancel a dialog it never saw either.
+    openDialog(guest.id);
+    await expect(
+      driver.act({ type: "navigate", url: "https://example.com/next" }),
+    ).resolves.toMatchObject({ dialog: { kind: "alert" } });
+    expect(pageDialogs()?.current(guest.id)?.kind).toBe("alert");
+    await expect(driver.act({ type: "press", key: "Enter" })).resolves.toEqual({
+      ok: true,
+      answered: "alert",
+      accepted: true,
+    });
+
+    // One dialog seen does not let it answer the next one unseen.
+    openDialog(guest.id);
+    await expect(
+      driver.act({ type: "fill", uid: "dialog", text: "x" }),
+    ).resolves.toMatchObject({ dialog: { kind: "alert" } });
+    expect(pageDialogs()?.has(guest.id)).toBe(true);
+  });
 });

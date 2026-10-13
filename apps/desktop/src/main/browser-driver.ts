@@ -5,11 +5,8 @@ import { setTimeout as delay } from "node:timers/promises";
 import { agentToolResult } from "@catamorphic/sandbox";
 import { type WebContents, webContents } from "electron";
 import { z } from "zod";
-import {
-  PAGE_DIALOG_MESSAGE_LIMIT,
-  type PageDialog,
-  pageDialogAsker,
-} from "../shared/page-dialogs.js";
+import { type PageDialog, pageDialogAsker } from "../shared/page-dialogs.js";
+import { PAGE_DIALOG_MESSAGE_LIMIT } from "../shared/script-dialogs.js";
 import { noteUnloadIntent, pageDialogs } from "./browser-dialogs.js";
 import { BROWSER_GUEST } from "./browser-guest.js";
 import { consoleLogOf, downloadLogOf } from "./browser-tab-records.js";
@@ -171,6 +168,12 @@ export class BrowserDriver {
   /** Finished requests an agent has read; pending ones come again. */
   private networkRead = new WeakSet<NetworkEntry>();
   private networkDropped = 0;
+  /**
+   * The open dialogs this tab's agents have been shown. An agent answers
+   * only those: a press meant for the page never answers a dialog that
+   * opened meanwhile, such as the person's own "Leave site?".
+   */
+  private shownDialogs = new Set<string>();
   constructor(
     private guest: WebContents,
     private guard: () => void,
@@ -359,6 +362,10 @@ export class BrowserDriver {
   }
 
   private reportDialog(dialog: PageDialog): Record<string, unknown> {
+    const dialogs = pageDialogs();
+    for (const id of this.shownDialogs)
+      if (!dialogs?.get(id)) this.shownDialogs.delete(id);
+    this.shownDialogs.add(dialog.id);
     return dialogReport(dialog, {
       url: this.guest.isDestroyed() ? "" : this.guest.getURL(),
       title: this.guest.isDestroyed() ? "" : this.guest.getTitle(),
@@ -400,9 +407,11 @@ export class BrowserDriver {
   /**
    * An agent answers the page's dialog as the person would: Enter is OK
    * (or Leave), Escape is Cancel (or Stay), and a prompt's field takes
-   * `fill`. A sign-in is the person's alone.
+   * `fill`. A sign-in is the person's alone, and a dialog the agent has not
+   * been shown is reported first, not answered.
    */
   private actOnDialog(dialog: PageDialog, action: BrowserAction): unknown {
+    if (!this.shownDialogs.has(dialog.id)) return this.reportDialog(dialog);
     if (dialog.kind === "auth")
       throw new Error(
         "The page waits for a sign-in, which only the person answers: tell them the tab is waiting for their username and password.",
@@ -783,6 +792,8 @@ export class BrowserDriver {
       const open = this.openDialog();
       if (open && action.type !== "navigate")
         return this.actOnDialog(open, action);
+      if (open && !this.shownDialogs.has(open.id))
+        return this.reportDialog(open);
       // Going somewhere else answers the page's dialogs with Cancel, as the
       // address bar does; a page holding on with beforeunload asks again.
       if (open) pageDialogs()?.cancel(this.guest.id);

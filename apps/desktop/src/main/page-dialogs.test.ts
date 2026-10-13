@@ -141,6 +141,31 @@ describe("page dialogs", () => {
     expect(dialogs.list(1)).toHaveLength(PAGE_DIALOG_QUEUE_LIMIT);
   });
 
+  it("says why it would refuse, and puts Leave site? first, past the limit", async () => {
+    const { dialogs } = setup();
+    expect(dialogs.refusal(1, "alert")).toBeNull();
+    for (let index = 0; index < PAGE_DIALOG_QUEUE_LIMIT; index++)
+      void dialogs.ask(request(1, { kind: "auth", message: `${index}` }));
+    expect(dialogs.refusal(1, "alert")).toBe("full");
+    expect(dialogs.refusal(1, "beforeunload")).toBeNull();
+    const leave = dialogs.ask(request(1, { kind: "beforeunload" }));
+    expect(dialogs.current(1)?.kind).toBe("beforeunload");
+    expect(dialogs.list(1)).toHaveLength(PAGE_DIALOG_QUEUE_LIMIT + 1);
+    dialogs.answer({ id: dialogs.current(1)?.id ?? "", accept: true });
+    await expect(leave).resolves.toMatchObject({ accept: true });
+    expect(dialogs.current(1)?.message).toBe("0");
+
+    dialogs.navigated(1);
+    void dialogs.ask(request(1, { kind: "confirm" }));
+    dialogs.answer({
+      id: dialogs.current(1)?.id ?? "",
+      accept: true,
+      suppress: true,
+    });
+    expect(dialogs.refusal(1, "prompt")).toBe("suppressed");
+    expect(dialogs.refusal(1, "auth")).toBeNull();
+  });
+
   it("changes an open Leave site? in place", () => {
     const { dialogs, published } = setup();
     void dialogs.ask(request(1, { kind: "beforeunload", message: "" }));
