@@ -1355,6 +1355,11 @@ export interface CatamorphicDesktopApi {
   onConnectionsChanged: (
     listener: (connections: ConnectionInfo[]) => void,
   ) => () => void;
+  /**
+   * This computer's chats may have changed: logged session events or a
+   * change through its API, a burst arriving as one (ADR 0228).
+   */
+  onSessionsChanged: (listener: () => void) => () => void;
   /** Fired after a turn checkpoint moves a project's git state. */
   onGitChanged: (
     listener: (change: { projectId: string }) => void,
@@ -2042,6 +2047,9 @@ export const desktopApi: CatamorphicDesktopApi = {
   ),
   onExtensionDebuggingChanged: shareEvent((publish) =>
     nativeApi.onExtensionDebuggingChanged(publish),
+  ),
+  onSessionsChanged: shareEvent((publish) =>
+    nativeApi.onSessionsChanged(() => publish(undefined)),
   ),
   onGitChanged: shareEvent((publish) => nativeApi.onGitChanged(publish)),
   onBookmarksChanged: shareEvent((publish) =>

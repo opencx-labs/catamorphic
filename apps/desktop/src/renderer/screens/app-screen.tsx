@@ -6,7 +6,9 @@ import type {
 import { useCatamorphic } from "@catamorphic/react";
 import { AppMount } from "@catamorphic/ui";
 import { useQuery } from "@tanstack/react-query";
+import { useRemoteProject } from "../components/project-authority-provider.js";
 import { type AppSummary, appsQuery } from "../lib/apps.js";
+import { LOCAL_CHATS_POLL_MS } from "../lib/session-change-hints.js";
 import { appHostTheme, useTheme } from "../lib/theme.js";
 import { useAppPreferences } from "../lib/use-app-preferences.js";
 
@@ -19,10 +21,14 @@ export type { AppSummary } from "../lib/apps.js";
 
 export function useApps(projectId: string | undefined) {
   const { apiClient } = useCatamorphic();
+  // Each read lists the project's files. This computer's projects read
+  // again when a turn's checkpoint changes them (`onGitChanged`), so their
+  // timer only backs that up; a remote server's apps are polled.
+  const remote = useRemoteProject(projectId);
   return useQuery<AppSummary[]>({
     ...appsQuery({ apiClient, projectId }),
     enabled: Boolean(projectId),
-    refetchInterval: 5000,
+    refetchInterval: remote ? 5000 : LOCAL_CHATS_POLL_MS,
   });
 }
 

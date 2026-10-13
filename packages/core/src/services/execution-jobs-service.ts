@@ -6,6 +6,7 @@ import {
   withSpan,
 } from "@catamorphic/otel";
 import { type Kysely, type Selectable, sql, type Transaction } from "kysely";
+import type { WorkWakeups } from "./work-wakeups.js";
 
 export type ExecutionJobKind =
   | "durable_boundary"
@@ -141,7 +142,26 @@ export class ExecutionJobsService {
   constructor(
     private readonly db: Kysely<DB>,
     private readonly workerNode?: { id: string; token: string },
+    /** Tells this process's workers that a job may be waiting (ADR 0228). */
+    private readonly wakeups?: WorkWakeups,
   ) {}
+
+  /**
+   * When the soonest pending job of these kinds becomes claimable, or null
+   * when none is pending. An idle worker sleeps no longer than this.
+   */
+  async nextAvailableAt(args: {
+    kinds: readonly ExecutionJobKind[];
+  }): Promise<Date | null> {
+    if (args.kinds.length === 0) return null;
+    const row = await this.db
+      .selectFrom("execution_jobs")
+      .select((eb) => eb.fn.min("available_at").as("at"))
+      .where("status", "=", "pending")
+      .where("kind", "in", [...args.kinds])
+      .executeTakeFirst();
+    return row?.at ? new Date(row.at) : null;
+  }
 
   async enqueue(args: {
     tenantId: string;
@@ -196,6 +216,7 @@ export class ExecutionJobsService {
           span,
           attributes: { "catamorphic.queue.job.id": row.id },
         });
+        this.wakeups?.notify("execution");
         return mapExecutionJob(row);
       },
     );
@@ -269,6 +290,7 @@ export class ExecutionJobsService {
               .doUpdateSet(reviveTerminalJob),
           )
           .execute();
+        this.wakeups?.notify("execution");
       },
     );
   }
@@ -689,6 +711,7 @@ export class ExecutionJobsService {
       .where("status", "=", "pending")
       .where("available_at", ">", availableAt)
       .execute();
+    this.wakeups?.notify("execution");
   }
 
   /**
@@ -714,7 +737,9 @@ export class ExecutionJobsService {
       .where("status", "=", "pending")
       .where("available_at", ">", availableAt)
       .executeTakeFirst();
-    return Number(result.numUpdatedRows);
+    const moved = Number(result.numUpdatedRows);
+    if (moved > 0) this.wakeups?.notify("execution");
+    return moved;
   }
 
   async redrive(args: {
@@ -743,7 +768,9 @@ export class ExecutionJobsService {
       .where("tenant_id", "=", args.tenantId)
       .where("status", "=", "failed")
       .executeTakeFirst();
-    return Number(result.numUpdatedRows) === 1;
+    const redriven = Number(result.numUpdatedRows) === 1;
+    if (redriven) this.wakeups?.notify("execution");
+    return redriven;
   }
 
   async requeueExpired(args: { limit?: number } = {}): Promise<number> {

@@ -823,6 +823,11 @@ export {
   WebhooksService,
   WebhookTooLargeError,
 } from "./services/webhooks-service.js";
+export {
+  PollPacer,
+  type WorkTopic,
+  WorkWakeups,
+} from "./services/work-wakeups.js";
 export type { WorkerCapacity } from "./services/worker-capacity.js";
 export {
   capacityFits,

@@ -58,6 +58,62 @@ describe("shared collections", () => {
     expect(disconnect).toHaveBeenCalledTimes(1);
   });
 
+  it("re-reads quietly for a routine check: views hear only of changed rows", async () => {
+    let publish: ((change: CollectionChange<Item>) => void) | undefined;
+    let label = "A";
+    let release: (() => void) | undefined;
+    const load = vi.fn(async () => {
+      if (release) await new Promise<void>((resolve) => (release = resolve));
+      return { items: [{ id: "a", label }] };
+    });
+    const collection = createCollection<Item>({
+      source: {
+        load,
+        subscribe: (listener) => {
+          publish = listener;
+          return () => {};
+        },
+      },
+    });
+    const stop = collection.acquire();
+    await flush();
+    await flush();
+    const structure = vi.fn();
+    const item = vi.fn();
+    collection.subscribe(structure);
+    collection.subscribeItem("a", item);
+    // A poll finding nothing new: no fetching flag, no notification.
+    release = () => {};
+    publish?.({ type: "invalidate", quiet: true });
+    await flush();
+    expect(collection.getBranch(null).fetching).toBeFalsy();
+    release();
+    release = undefined;
+    await flush();
+    await flush();
+    expect(load).toHaveBeenCalledTimes(2);
+    expect(structure).not.toHaveBeenCalled();
+    expect(item).not.toHaveBeenCalled();
+    // A changed row still reaches its view.
+    label = "Renamed";
+    publish?.({ type: "invalidate", quiet: true });
+    await flush();
+    await flush();
+    expect(item).toHaveBeenCalledTimes(1);
+    expect(structure).not.toHaveBeenCalled();
+    // A refresh someone asked for says so while it reads.
+    release = () => {};
+    publish?.({ type: "invalidate" });
+    await flush();
+    expect(collection.getBranch(null).fetching).toBe(true);
+    release();
+    release = undefined;
+    await flush();
+    await flush();
+    expect(collection.getBranch(null).fetching).toBeFalsy();
+    stop();
+  });
+
   it("loads roots and children independently and retains loaded pages on refresh", async () => {
     const load = vi.fn(async ({ parentId, cursor }) =>
       parentId

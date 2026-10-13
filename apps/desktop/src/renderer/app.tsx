@@ -115,6 +115,7 @@ import {
 } from "./components/preview-port-dialog.js";
 import { ProfileBar } from "./components/profile-bar.js";
 import { ProjectAgentConsentDialog } from "./components/project-agent-consent.js";
+import { useRemoteProject } from "./components/project-authority-provider.js";
 import { ProjectModal } from "./components/project-modal.js";
 import { ProjectSwitcher } from "./components/project-switcher.js";
 import {
@@ -183,6 +184,7 @@ import {
   lastPreviewPort,
   rememberPreviewPort,
 } from "./lib/remote-workspace.js";
+import { LOCAL_CHATS_POLL_MS } from "./lib/session-change-hints.js";
 import { sessionLabel } from "./lib/session-label.js";
 import type { SidebarMotion } from "./lib/sidebar-motion.js";
 import { skillInvocation } from "./lib/skills.js";
@@ -1074,8 +1076,14 @@ export function App({
   }, [profileVeil]);
 
   // Shared with SessionsNav via the query cache; titles feed tab labels.
+  // This computer's chats follow its hints (ADR 0228); a remote server's
+  // are polled.
   const { apiClient } = useCatamorphic();
-  const sessionsQuery = useAgentSessions(projectId, { limit: 100 });
+  const remoteProject = useRemoteProject(projectId);
+  const sessionsQuery = useAgentSessions(projectId, {
+    limit: 100,
+    refetchInterval: remoteProject ? 2_000 : LOCAL_CHATS_POLL_MS,
+  });
   const projectAttention = runtime.attention;
   const sessionsById = new Map(
     [...(sessionsQuery.data?.items ?? []), ...(projectAttention ?? [])].map(

@@ -273,6 +273,7 @@ import {
 } from "./store-sync.js";
 import { UserNotificationsService } from "./user-notifications-service.js";
 import { temporaryVolumes, temporaryVolumesNote } from "./volume-holds.js";
+import { PollPacer, type WorkWakeups } from "./work-wakeups.js";
 import { EnvironmentCapacityError } from "./worker-capacity.js";
 import {
   runWorkspaceSetup,
@@ -876,6 +877,12 @@ interface AgentSessionsDeps {
   workerNode?: { id: string; token: string };
   /** Source-host presence window before a mirrored session is shown paused. */
   authorityLeaseMs?: number;
+  /**
+   * This process's hints that turns or session events may be waiting, and
+   * how often its pollers look when none came (ADR 0228).
+   */
+  wakeups?: WorkWakeups;
+  idlePollMs?: number;
   projectManager: ProjectManager;
   codingAgents: CodingAgentRegistry;
   /**
@@ -1016,6 +1023,8 @@ export class AgentSessionsService {
   readonly hostId: string;
   private readonly workerNode?: { id: string; token: string };
   readonly authorityLeaseMs: number;
+  private readonly wakeups?: WorkWakeups;
+  private readonly idlePollMs?: number;
   private readonly projectManager: ProjectManager;
   private readonly codingAgents: CodingAgentRegistry;
   private readonly nativeAgentCheckout?: NativeAgentCheckout;
@@ -1126,13 +1135,25 @@ export class AgentSessionsService {
       externalUserId: string;
     }) => Promise<Identity | null>;
     pollIntervalMs?: number;
+    /**
+     * How often it polls while nothing is queued, due or hinted in this
+     * process (ADR 0228). Defaults to the host's `idlePollMs`; without
+     * either it polls every `pollIntervalMs`.
+     */
+    idlePollIntervalMs?: number;
     /** How often idle chats' workspaces are checked (ADR 0173). */
     idleReleaseIntervalMs?: number;
   }): { stop(): Promise<void> } {
     this.resolveOwner = input.resolveIdentity;
     let stopped = false;
     let nextIdleSweep = 0;
-    let polling: Promise<void> | undefined;
+    const controller = new AbortController();
+    const pacer = new PollPacer({
+      quickMs: input.pollIntervalMs ?? 1_000,
+      idleMs: input.idlePollIntervalMs ?? this.idlePollMs,
+      wakeups: this.wakeups,
+      topic: "agent",
+    });
     const poll = async () => {
       const candidates = await this.db
         .selectFrom("agent_sessions")
@@ -1203,6 +1224,7 @@ export class AgentSessionsService {
           ),
         )
         .execute();
+      if (candidates.length > 0) pacer.busy();
       for (const candidate of candidates) {
         if (stopped || this.stoppingTurns) return;
         if (this.drainers.has(candidate.id)) continue;
@@ -1225,29 +1247,47 @@ export class AgentSessionsService {
         );
       }
     };
-    const tick = () => {
-      if (stopped || polling) return;
-      polling = poll()
-        .catch((error) =>
+    const loop = async () => {
+      while (!stopped) {
+        await poll().catch((error) =>
           console.warn("[catamorphic] Agent queue recovery failed", error),
-        )
-        .finally(() => {
-          polling = undefined;
-        });
+        );
+        if (stopped) return;
+        // Idle: sleep until a queued turn falls due (a retry's backoff),
+        // a hint from this process, or the idle poll.
+        const due = pacer.quick
+          ? undefined
+          : await this.nextQueuedTurnAt().catch(() => undefined);
+        await pacer.wait(controller.signal, { until: due?.getTime() });
+      }
     };
-    const timer = setInterval(tick, input.pollIntervalMs ?? 1_000);
-    timer.unref();
-    tick();
+    const running = loop();
     return {
       stop: async () => {
         stopped = true;
-        clearInterval(timer);
-        await polling;
+        controller.abort();
+        await running;
         // The resolver belongs to this worker.
         if (this.resolveOwner === input.resolveIdentity)
           this.resolveOwner = undefined;
       },
     };
+  }
+
+  /** When this host's soonest queued turn falls due, or null with none queued. */
+  private async nextQueuedTurnAt(): Promise<Date | null> {
+    const row = await this.db
+      .selectFrom("agent_turns")
+      .innerJoin(
+        "agent_sessions",
+        "agent_sessions.id",
+        "agent_turns.session_id",
+      )
+      .select((eb) => eb.fn.min("agent_turns.available_at").as("at"))
+      .where("agent_sessions.authority_host_id", "=", this.hostId)
+      .where("agent_turns.status", "=", "queued")
+      .executeTakeFirst();
+    return row?.at ? new Date(row.at) : null;
   }
 
   /**
@@ -1330,9 +1370,14 @@ export class AgentSessionsService {
     this.workerNode = deps.workerNode;
     this.authorityLeaseMs = deps.authorityLeaseMs ?? 90_000;
     this.mailboxes = new SessionMailboxesService(db, deps.hostId);
-    this.log = new SessionLog(db);
+    this.wakeups = deps.wakeups;
+    this.idlePollMs = deps.idlePollMs;
+    this.log = new SessionLog(db, deps.wakeups);
     this.queue = new TurnQueue(db, this.log);
-    this.feed = new SessionFeed(db, this.log);
+    this.feed = new SessionFeed(db, this.log, {
+      idleMs: deps.idlePollMs,
+      wakeups: deps.wakeups,
+    });
     this.projectManager = deps.projectManager;
     this.codingAgents = deps.codingAgents;
     this.nativeAgentCheckout = deps.nativeAgentCheckout;

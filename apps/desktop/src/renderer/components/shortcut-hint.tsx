@@ -240,9 +240,16 @@ export function DisabledControlHints() {
   const [visible, setVisible] = useState(false);
   useEffect(() => {
     let target: HTMLElement | null = null;
+    /** A hint is on screen (or leaving): only then is there one to hide. */
+    let shown = false;
     let showTimer: ReturnType<typeof setTimeout> | undefined;
     let exitTimer: ReturnType<typeof setTimeout> | undefined;
     const hide = () => {
+      // Scrolls and presses reach this all the time (a chat following its
+      // answer scrolls every frame): with no hint coming or shown, nothing
+      // to do.
+      if (!target && !shown) return;
+      shown = false;
       clearTimeout(showTimer);
       setVisible(false);
       clearTimeout(exitTimer);
@@ -280,6 +287,7 @@ export function DisabledControlHints() {
               ? Math.max(8, rect.top - 44)
               : rect.bottom + 7,
         });
+        shown = true;
         setVisible(true);
       }, SHOW_DELAY_MS);
     };

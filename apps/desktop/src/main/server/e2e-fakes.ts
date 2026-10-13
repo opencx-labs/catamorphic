@@ -248,6 +248,8 @@ const FAKE_CAPABILITIES: HarnessCapabilities = {
 type FakeStep =
   | { type: "title"; content: string }
   | { type: "text"; content: string }
+  /** More of the text being written, as a model streams it. */
+  | { type: "text_delta"; content: string }
   /** Ends the turn failed, with the provider's own words. */
   | { type: "error"; content: string; retrySafe?: boolean }
   | {
@@ -347,6 +349,9 @@ interface FakeTurn {
  * - "show: <target>" → open_surface.
  * - "slowly" → a ~4s turn (mid-turn UI: spinners, queueing, interrupts).
  * - "narrate" / "step by step" → paced notes and commands.
+ * - "perf turn [steps=N] [quiet=S] [stream=S]" → many short steps, one
+ *   long quiet step, then a long Markdown answer streamed in small chunks
+ *   (resource measurements); "perf answer" → that answer at once.
  * - "auth error" / "rate limit" → a provider failure once per message.
  * - "expired sign-in" / "expired sign-in xN" → a Claude Code sign-in that
  *   did not refresh, safe to retry, on the first (N) attempts.
@@ -579,7 +584,16 @@ class FakeTranscript {
   constructor(private readonly host: AttemptHost) {}
 
   apply(step: FakeStep): void {
-    if (step.type === "text") {
+    if (step.type === "text_delta" && this.openText) {
+      this.host.emit({
+        type: "item.delta",
+        key: this.openText,
+        field: "text",
+        text: step.content,
+      });
+      return;
+    }
+    if (step.type === "text" || step.type === "text_delta") {
       if (this.openText) {
         this.host.emit({
           type: "item.delta",
@@ -747,6 +761,37 @@ function withoutEarlierDeliveries(text: string): string {
     "",
   );
 }
+
+/** A long Markdown answer: prose, lists, a table and code blocks. */
+const PERF_ANSWER = Array.from(
+  { length: 6 },
+  (_, part) => `## Part ${part + 1}: what changed
+
+The parser now treats **empty input** as an empty program instead of an
+error, and the lexer keeps \`line\` and \`column\` for every token so the
+editor can point at the exact place a problem starts.
+
+- Tokens carry their source range.
+- Empty input parses to \`[]\`.
+- Errors name the token they stopped at, with [a link](file:src/parser.ts).
+
+| Case | Before | After |
+| --- | --- | --- |
+| \`""\` | throws | \`[]\` |
+| \`"a b"\` | 2 tokens | 2 tokens with ranges |
+
+\`\`\`ts
+export function parse(input = ""): Token[] {
+  const tokens: Token[] = [];
+  for (const match of input.matchAll(/\\S+/g)) {
+    tokens.push({ text: match[0], at: match.index ?? 0 });
+  }
+  return tokens;
+}
+\`\`\`
+
+`,
+).join("");
 
 async function* fakeScript(turn: FakeTurn): AsyncGenerator<FakeStep> {
   const message = turn.message;
@@ -1481,6 +1526,70 @@ export const catalog = defineWorkflow(({ defineBoundary }) => ({
     yield { type: "file_edit", content: "write", filePath: "NOTES.md" };
     await turn.writeFiles({ "NOTES.md": "notes from the fake agent\n" });
     yield { type: "text", content: "All done: two preambles, one summary." };
+    return;
+  }
+
+  // Resource measurements: a turn shaped like a real one — many short
+  // steps with changing activity, a long quiet step, then a long answer
+  // streamed in small chunks, as a model writes it.
+  if (prompt.includes("perf turn")) {
+    const setting = (name: string, fallback: number) =>
+      Number(new RegExp(`${name}=(\\d+)`).exec(prompt)?.[1] ?? fallback);
+    yield { type: "title", content: "Performance turn" };
+    const steps = setting("steps", 24);
+    for (let index = 0; index < steps && !turn.interrupted(); index += 1) {
+      if (index % 4 === 0)
+        yield {
+          type: "text",
+          content: `Checking part ${index / 4 + 1} of the parser before changing it.`,
+        };
+      const toolUseId = `perf-${index}`;
+      yield {
+        type: "command",
+        content: `rg -n 'token${index}' src`,
+        description: `Search for token ${index}`,
+        toolUseId,
+      };
+      await turn.pause(250);
+      yield {
+        type: "command",
+        toolUseId,
+        status: "ended",
+        toolResult: `src/parser.ts:${index}: token${index}`,
+      };
+    }
+    if (turn.interrupted()) return;
+    yield {
+      type: "command",
+      content: "bun test",
+      description: "Run every test",
+      toolUseId: "perf-quiet",
+    };
+    await turn.pause(setting("quiet", 8) * 1000);
+    if (turn.interrupted()) return;
+    yield {
+      type: "command",
+      toolUseId: "perf-quiet",
+      status: "ended",
+      toolResult: "120 passed",
+    };
+    const answer = PERF_ANSWER;
+    const chunkMs = 40;
+    const chunks = Math.max(
+      1,
+      Math.floor((setting("stream", 12) * 1000) / chunkMs),
+    );
+    const size = Math.ceil(answer.length / chunks);
+    for (let at = 0; at < answer.length; at += size) {
+      if (turn.interrupted()) return;
+      yield { type: "text_delta", content: answer.slice(at, at + size) };
+      await turn.pause(chunkMs);
+    }
+    return;
+  }
+  if (prompt.includes("perf answer")) {
+    yield { type: "title", content: "Performance history" };
+    yield { type: "text", content: PERF_ANSWER.slice(0, 1_800) };
     return;
   }
 

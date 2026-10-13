@@ -13,7 +13,7 @@ import {
 } from "@catamorphic/agent-protocol";
 import { ATTACHMENT_MARKER } from "@catamorphic/sandbox/attachments";
 import { useQueryClient } from "@tanstack/react-query";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CatamorphicError, toCatamorphicError } from "../lib/errors.js";
 import { randomId } from "../lib/random-id.js";
 import {
@@ -24,6 +24,7 @@ import {
   type QueuedMessage,
   sessionQueue,
   sessionTimeline,
+  shareTimeline,
   startingTurn,
   type TimelineTurn,
 } from "../lib/session-timeline.js";
@@ -528,7 +529,17 @@ export function useAgentChat(
   const connectionLost = live.connection === "reconnecting";
   const sending = inFlight > 0;
   const error = actionError ?? live.error;
-  const timeline = state ? sessionTimeline(state) : [];
+  // Derived once per state, and turns that did not change keep their
+  // identity, so views can skip them while a live turn streams.
+  const sharedTimeline = useRef<TimelineTurn[] | undefined>(undefined);
+  const timeline = useMemo(() => {
+    const next = shareTimeline(
+      sharedTimeline.current,
+      state ? sessionTimeline(state) : [],
+    );
+    sharedTimeline.current = next;
+    return next;
+  }, [state]);
 
   return {
     sessionId,

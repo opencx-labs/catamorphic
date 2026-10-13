@@ -65,6 +65,7 @@ import { RemoteClientRunners } from "../remote-client-runner.js";
 import { RemoteSessionMirror } from "../remote-mirror.js";
 import { RemotePreviewOrigins } from "../remote-previews.js";
 import type { RemoteTerminalRequest } from "../remote-terminal.js";
+import { startSessionChangeHints } from "../session-change-hints.js";
 import { shutdownDesktopServices } from "../shutdown.js";
 import { userSkillFiles, userSkillInfos } from "../user-skills.js";
 import {
@@ -111,6 +112,12 @@ import { WorkspaceStateStore } from "./workspace-state.js";
 /** The desktop app is single-tenant: one fixed identity for the machine. */
 export const DESKTOP_TENANT_ID = "00000000-0000-4000-8000-00000000d001";
 export const DESKTOP_USER_ID = "desktop-user";
+/**
+ * How often the embedded server's idle pollers look for work no write in
+ * this process announced (ADR 0228): scheduled retries and timers carry
+ * their own due time, so this bounds only what nothing hinted.
+ */
+const DESKTOP_IDLE_POLL_MS = 5_000;
 
 export interface EmbeddedServer {
   url: string;
@@ -157,6 +164,11 @@ export interface EmbeddedServer {
   syncSessionMailboxes: () => void;
   /** The member's remote environment per linked project (ADR 0184). */
   personalEnvironment: PersonalEnvironmentSync;
+  /**
+   * Hear when this server's chats may have changed (ADR 0228): it logged
+   * session events or served a change to a project. Bursts arrive as one.
+   */
+  onSessionsChanged: (listener: () => void) => () => void;
   sessionMoveEligibility: (
     projectId: string,
     sessionId: string,
@@ -516,6 +528,10 @@ export async function startEmbeddedServer(
   // and it backs import, sync, pull requests, and the event poller.
   const github = desktopGithubProvider();
   const catamorphic = createCatamorphic({
+    // Every write to this database is this process's own, and each one
+    // wakes the poller it concerns at once, so idle pollers look rarely
+    // (ADR 0228).
+    idlePollMs: DESKTOP_IDLE_POLL_MS,
     hostSkills: (defaults) => ({
       ...defaults,
       "configuring-catamorphic-desktop/SKILL.md": DESKTOP_SETTINGS_SKILL,
@@ -1422,6 +1438,22 @@ export async function startEmbeddedServer(
           .send({ error: "Project has no remote authority" });
     },
   });
+  // Chat lists in the app's windows refresh on these hints rather than on
+  // a short poll (ADR 0228).
+  const sessionsListeners = new Set<() => void>();
+  const sessionHints = startSessionChangeHints({
+    wakeups: catamorphic.core.wakeups,
+    send: () => {
+      for (const listener of sessionsListeners) listener();
+    },
+  });
+  app.addHook("onResponse", (request, _reply, done) => {
+    // A change to a project through the API (an agent's tool, a workflow,
+    // another window) may change its chats without a session event.
+    if (request.method !== "GET" && request.url.startsWith("/api/projects/"))
+      sessionHints.hint();
+    done();
+  });
   app.addHook("onSend", (request, reply, payload, done) => {
     if (
       request.method === "GET" &&
@@ -1544,6 +1576,8 @@ export async function startEmbeddedServer(
     monitors: catamorphic.core.projectEventMonitors,
     providers: catamorphic.core.projectEventSources,
     placement: "local",
+    idlePollMs: DESKTOP_IDLE_POLL_MS,
+    wakeups: catamorphic.core.wakeups,
   });
   const eventDispatcher = startEventDispatcher({ core: catamorphic.core });
   const suspendExecution = async () => {
@@ -1645,6 +1679,8 @@ export async function startEmbeddedServer(
       clearInterval(notificationTimer);
       clearInterval(sessionMailboxTimer);
       clearInterval(sessionMirrorTimer);
+      sessionHints.dispose();
+      sessionsListeners.clear();
       clearInterval(scheduleTimer);
       sessionNotes.dispose();
       signInRecovery.dispose();
@@ -1697,6 +1733,10 @@ export async function startEmbeddedServer(
     resumeExecution,
     syncSessionMailboxes: () => sessionMirror.syncMailboxesInBackground(),
     personalEnvironment,
+    onSessionsChanged: (listener) => {
+      sessionsListeners.add(listener);
+      return () => sessionsListeners.delete(listener);
+    },
     sessionMoveEligibility: (projectId, sessionId) =>
       sessionMirror.eligibility(projectId, sessionId),
     moveSessionToServer: (projectId, sessionId) =>

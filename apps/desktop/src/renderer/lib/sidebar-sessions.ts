@@ -18,6 +18,9 @@ import {
   projectSidebarItems,
   sidebarItemPresentation,
 } from "../components/sidebar-contribution.js";
+import { desktopApi } from "./desktop-api.js";
+import { isRemoteQueryClient } from "./remote-query-clients.js";
+import { LOCAL_CHATS_POLL_MS } from "./session-change-hints.js";
 
 export interface SessionTreeItem extends AgentSession {
   parentId: string | null;
@@ -33,7 +36,11 @@ type ApiClient = ReturnType<typeof useCatamorphic>["apiClient"];
  * stays small. The tree asks for the next page one viewport before the end.
  */
 export const SIDEBAR_SESSION_PAGE = 30;
-/** How often the chats list looks for changes while the window is shown. */
+/**
+ * How often a remote project's chats list looks for changes while the
+ * window is shown. This computer's own lists follow its hints instead
+ * (ADR 0228), reading every loaded page every `LOCAL_CHATS_POLL_MS`.
+ */
 const POLL_MS = 2000;
 /**
  * A poll of a deep list reads the first page, where new chats arrive (two
@@ -146,12 +153,18 @@ const stores = new WeakMap<
   Map<string, Collection<SessionTreeItem>>
 >();
 
+/**
+ * A wakeup: how much to read again, and whether the person asked for it
+ * (a Refresh press shows the section refreshing; routine checks do not).
+ */
+type SessionsWakeup = (pages: CollectionRefresh, asked: boolean) => void;
+
 const updates = new WeakMap<
   QueryClient,
   Map<
     string,
     {
-      listeners: Set<(pages: CollectionRefresh) => void>;
+      listeners: Set<SessionsWakeup>;
       dispose: () => void;
     }
   >
@@ -168,32 +181,42 @@ export function subscribeSidebarSessions({
 }: {
   client: QueryClient;
   projectId: string;
-  listener: (pages: CollectionRefresh) => void;
+  listener: SessionsWakeup;
 }) {
   const projects = updates.get(client) ?? new Map();
   updates.set(client, projects);
   let entry = projects.get(projectId);
   if (!entry) {
-    const listeners = new Set<(pages: CollectionRefresh) => void>();
+    const listeners = new Set<SessionsWakeup>();
+    const remote = isRemoteQueryClient(client);
     let ticks = 0;
-    const refresh = (pages: CollectionRefresh) => {
+    const refresh = (pages: CollectionRefresh, asked = false) => {
       if (document.hidden) return;
       if (pages === "loaded") ticks = 0;
       void client.invalidateQueries({
         queryKey: sessionPageKey(projectId),
         refetchType: "none",
       });
-      for (const notify of listeners) notify(pages);
+      for (const notify of listeners) notify(pages, asked);
     };
-    const timer = window.setInterval(() => {
-      ticks += 1;
-      refresh(ticks >= EVERY_LOADED_PAGE_TICKS ? "loaded" : "first");
-    }, POLL_MS);
+    const timer = window.setInterval(
+      () => {
+        ticks += 1;
+        refresh(
+          !remote || ticks >= EVERY_LOADED_PAGE_TICKS ? "loaded" : "first",
+        );
+      },
+      remote ? POLL_MS : LOCAL_CHATS_POLL_MS,
+    );
+    // This computer says when its chats change: new rows arrive first.
+    const hinted = remote
+      ? () => {}
+      : desktopApi.onSessionsChanged(() => refresh("first"));
     const refreshLoaded = () => refresh("loaded");
     window.addEventListener("focus", refreshLoaded);
     const explicitRefresh = (event: Event) => {
       if (event instanceof CustomEvent && event.detail === projectId)
-        refresh("loaded");
+        refresh("loaded", true);
     };
     window.addEventListener("catamorphic:sidebar-refresh", explicitRefresh);
     const stop = client.getQueryCache().subscribe((event) => {
@@ -210,6 +233,7 @@ export function subscribeSidebarSessions({
       listeners,
       dispose: () => {
         clearInterval(timer);
+        hinted();
         window.removeEventListener("focus", refreshLoaded);
         window.removeEventListener(
           "catamorphic:sidebar-refresh",
@@ -408,11 +432,14 @@ export function useSidebarSessions({
           subscribeSidebarSessions({
             client,
             projectId,
-            listener: (pages) => {
+            listener: (pages, asked) => {
               for (const parentId of parents)
                 publish({
                   type: "invalidate",
                   parentId,
+                  // Polls and other routine checks change the list only
+                  // when its rows do (no refreshing spinner every poll).
+                  quiet: !asked,
                   // A short list is read whole, so no row of it lags.
                   pages:
                     pages === "first" &&

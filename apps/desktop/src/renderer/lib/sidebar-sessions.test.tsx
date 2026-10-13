@@ -5,6 +5,7 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
 import type { SidebarSectionConfig } from "../../shared/sidebar.js";
+import { remoteQueryClients } from "./remote-query-clients.js";
 import {
   readSidebarSessionPage,
   SIDEBAR_SESSION_PAGE,
@@ -12,7 +13,10 @@ import {
   useSidebarSessions,
 } from "./sidebar-sessions.js";
 
-const mocks = vi.hoisted(() => ({ fetch: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  fetch: vi.fn(),
+  hints: new Set<() => void>(),
+}));
 const apiClient = createApiClient({
   baseUrl: "http://sidebar.test",
   fetch: mocks.fetch,
@@ -20,6 +24,18 @@ const apiClient = createApiClient({
 vi.mock("@catamorphic/react", () => ({
   useCatamorphic: () => ({ apiClient }),
 }));
+vi.mock("./desktop-api.js", () => ({
+  desktopApi: {
+    onSessionsChanged: (listener: () => void) => {
+      mocks.hints.add(listener);
+      return () => mocks.hints.delete(listener);
+    },
+  },
+}));
+/** This computer says its chats may have changed (ADR 0228). */
+const hint = () => {
+  for (const listener of mocks.hints) listener();
+};
 afterEach(() => {
   vi.useRealTimers();
   mocks.fetch.mockReset();
@@ -137,7 +153,8 @@ it("refreshes one hidden page and restores the visible loaded depth", async () =
   expect(collection.getItem("second")).toBeDefined();
   requests.length = 0;
   await act(async () => {
-    await vi.advanceTimersByTimeAsync(2_001);
+    hint();
+    await vi.advanceTimersByTimeAsync(1);
   });
   expect(requests).toHaveLength(1);
   expect(requests[0]?.searchParams.get("offset")).toBe("0");
@@ -321,7 +338,7 @@ async function loadRows(view: ReturnType<typeof mountSessions>, rows: number) {
   return { collection, release };
 }
 
-it("polls a deep list's first page and reads every loaded page every 30 seconds", async () => {
+it("reads a deep list's first page on a hint and every loaded page every 30 seconds", async () => {
   vi.useFakeTimers();
   const { pages } = chatList(20);
   const view = mountSessions({
@@ -337,18 +354,19 @@ it("polls a deep list's first page and reads every loaded page every 30 seconds"
   expect(collection.getBranch(null).ids).toHaveLength(12);
   pages.length = 0;
   await act(async () => {
-    await vi.advanceTimersByTimeAsync(2_000);
+    hint();
+    await vi.advanceTimersByTimeAsync(1);
   });
-  // However deep the list is loaded, a poll reads one page.
+  // However deep the list is loaded, a hint reads one page.
   expect(pages.map((url) => url.searchParams.get("offset"))).toEqual(["0"]);
   pages.length = 0;
+  // Nothing more until the timer: hints say when chats change.
   await act(async () => {
-    await vi.advanceTimersByTimeAsync(2_000 * 13);
+    await vi.advanceTimersByTimeAsync(29_000);
   });
-  expect(pages).toHaveLength(13);
-  pages.length = 0;
+  expect(pages).toHaveLength(0);
   await act(async () => {
-    await vi.advanceTimersByTimeAsync(2_000);
+    await vi.advanceTimersByTimeAsync(1_000);
   });
   expect(pages.map((url) => url.searchParams.get("offset"))).toEqual([
     "0",
@@ -381,7 +399,33 @@ it("polls a deep list's first page and reads every loaded page every 30 seconds"
   await view.unmount();
 });
 
-it("reads a short list whole on every poll, so no loaded row lags", async () => {
+it("polls a remote project's list, whose server sends no hints", async () => {
+  vi.useFakeTimers();
+  const { pages } = chatList(20);
+  const view = mountSessions({
+    section: {
+      id: "remote",
+      type: "chats",
+      source: { type: "chats", pageSize: 4 },
+    },
+  });
+  remoteQueryClients.set("connection:1", view.client);
+  try {
+    await view.mount();
+    const { release } = await loadRows(view, 12);
+    pages.length = 0;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_000);
+    });
+    expect(pages.map((url) => url.searchParams.get("offset"))).toEqual(["0"]);
+    act(() => release());
+  } finally {
+    remoteQueryClients.delete("connection:1");
+    await view.unmount();
+  }
+});
+
+it("reads a short list whole on every hint, so no loaded row lags", async () => {
   vi.useFakeTimers();
   const { pages } = chatList(20);
   const view = mountSessions({
@@ -396,7 +440,8 @@ it("reads a short list whole on every poll, so no loaded row lags", async () => 
   expect(collection.getBranch(null).ids).toHaveLength(6);
   pages.length = 0;
   await act(async () => {
-    await vi.advanceTimersByTimeAsync(2_000);
+    hint();
+    await vi.advanceTimersByTimeAsync(1);
   });
   expect(pages.map((url) => url.searchParams.get("offset"))).toEqual([
     "0",
@@ -448,7 +493,8 @@ it("keeps every chat when a new one arrives in a sorted section", async () => {
     createdAt: new Date(Date.UTC(2026, 0, 2)).toISOString(),
   });
   await act(async () => {
-    await vi.advanceTimersByTimeAsync(2_000);
+    hint();
+    await vi.advanceTimersByTimeAsync(1);
   });
   expect(collection.getBranch(null).ids).toEqual(["new", ...before]);
   act(() => release());

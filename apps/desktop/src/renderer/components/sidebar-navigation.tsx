@@ -991,8 +991,10 @@ function AppsNav({
         : items.length
           ? "ready"
           : "empty",
-    refreshing: query.isFetching && !query.isLoading,
-    idle: !query.isFetching,
+    // Its polls are routine: the section shows nothing for them, and this
+    // view reads no fetching state so a poll that finds nothing new does not
+    // render it again (a Refresh press shows on its own button).
+    idle: !query.isLoading,
     error: query.isError ? "Could not load apps." : undefined,
     retry: query.refetch,
     empty: "No apps yet.",

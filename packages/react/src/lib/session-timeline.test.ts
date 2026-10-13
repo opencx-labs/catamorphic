@@ -1,4 +1,7 @@
-import { sessionStateFromSnapshot } from "@catamorphic/agent-protocol";
+import {
+  applySessionEvents,
+  sessionStateFromSnapshot,
+} from "@catamorphic/agent-protocol";
 import { describe, expect, it } from "vitest";
 import {
   notice,
@@ -15,6 +18,7 @@ import {
   QUESTIONS_DISMISSED_MESSAGE,
   sessionQueue,
   sessionTimeline,
+  shareTimeline,
 } from "./session-timeline.js";
 
 describe("sessionTimeline", () => {
@@ -186,5 +190,48 @@ describe("sessionTimeline", () => {
     ]);
     const answer = entries[2];
     expect(answer?.kind === "answer" && answer.dismissed).toBe(true);
+  });
+});
+
+describe("shareTimeline", () => {
+  it("keeps every turn a streamed delta did not touch, and itself when nothing changed", () => {
+    const state = sessionStateFromSnapshot(
+      snapshot({
+        sequence: 10,
+        turns: [turn("t1", 1), turn("t2", 2)],
+        items: [
+          userMessage("t1:input", 1, "t1", "First"),
+          reply("a1", 2, "t1", "First answer"),
+          userMessage("t2:input", 3, "t2", "Second"),
+          reply("a2", 4, "t2", "Second ans"),
+        ],
+      }),
+    );
+    const before = shareTimeline(undefined, sessionTimeline(state));
+    expect(shareTimeline(before, sessionTimeline(state))).toBe(before);
+    const streamed = applySessionEvents(state, [
+      {
+        sessionId: state.session.id,
+        sequence: 11,
+        at: "2026-10-01T10:01:00.000Z",
+        commandId: null,
+        event: {
+          type: "item.text_appended",
+          itemId: "a2",
+          field: "text",
+          text: "wer",
+          at: "2026-10-01T10:01:00.000Z",
+        },
+      },
+    ]);
+    const after = shareTimeline(before, sessionTimeline(streamed));
+    expect(after).not.toBe(before);
+    expect(after[0]).toBe(before[0]);
+    expect(after[1]).not.toBe(before[1]);
+    expect(
+      after[1]?.entries.flatMap((entry) =>
+        entry.kind === "reply" ? [entry.item.text] : [],
+      ),
+    ).toEqual(["Second answer"]);
   });
 });

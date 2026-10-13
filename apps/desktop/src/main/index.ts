@@ -50,7 +50,7 @@ import {
   registerDesktopShutdown,
   shutdownDesktopServices,
 } from "./shutdown.js";
-import { projectTelemetrySettings } from "./telemetry-settings.js";
+import { cachedProjectTelemetrySettings } from "./telemetry-settings.js";
 import { registerTerminalSupport } from "./terminal.js";
 import { windowBackgroundColor } from "./theme.js";
 import { consumeUpdateRestart } from "./update-restart.js";
@@ -788,9 +788,10 @@ app.whenReady().then(async () => {
     // profiles' sessions) carry this run's token to the embedded API, which
     // refuses web pages without it.
     allowDesktopWindowsApi({ url: server.url, token: server.apiToken });
+    const telemetrySettings = cachedProjectTelemetrySettings();
     telemetry.configureProjects({
       resolve: (projectId) =>
-        projectTelemetrySettings({
+        telemetrySettings({
           projectId,
           rootPath: server?.projectRoots.getSync(projectId),
           userDataPath: app.getPath("userData"),
@@ -806,6 +807,9 @@ app.whenReady().then(async () => {
     });
     server.personalEnvironment.subscribe((change) =>
       state.broadcast("catamorphic:personal-environment-changed", change),
+    );
+    server.onSessionsChanged(() =>
+      state.broadcast("catamorphic:sessions-changed", {}),
     );
     // Don't hold job leases through OS sleep. A lease held by a frozen
     // process expires on the wall clock, so the step's work is discarded on

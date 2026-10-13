@@ -144,6 +144,7 @@ describe("ChatBubbles fold", () => {
     folded: boolean;
     autoCollapse?: boolean;
     open?: boolean;
+    working?: boolean;
   }) {
     const onFoldedChange = vi.fn();
     const container = document.createElement("div");
@@ -159,7 +160,7 @@ describe("ChatBubbles fold", () => {
             labels={{ a: "Launch plan" }}
             icons={{}}
             forks={{}}
-            signals={{}}
+            signals={next.working ? { a: { working: true } } : {}}
             unread={{}}
             attention={{}}
             menus={{}}
@@ -189,6 +190,18 @@ describe("ChatBubbles fold", () => {
     expect(collapsed()).toBe("false");
     render({ folded: true, open: false });
     expect(collapsed()).toBe("true");
+  });
+
+  it("spins the folded bubble only while it shows", () => {
+    const { container, render } = strip({ folded: false, working: true });
+    const folded = () =>
+      container.querySelector(
+        'button[aria-label="Expand chat bubbles"] .animate-spin',
+      );
+    // Open, the strip keeps the folded bubble mounted but invisible.
+    expect(folded()).toBeNull();
+    render({ folded: true, working: true });
+    expect(folded()).not.toBeNull();
   });
 
   it("folds behind a chat tab and returns to the person's choice after it", () => {

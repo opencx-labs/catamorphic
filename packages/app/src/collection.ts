@@ -48,6 +48,12 @@ export type CollectionChange<T> =
       parentId?: string | null;
       /** Defaults to `loaded`. */
       pages?: CollectionRefresh;
+      /**
+       * A routine check nobody asked to watch (a poll): loaded rows are
+       * read again without the branch reporting `fetching`, so a view
+       * changes only when its rows do.
+       */
+      quiet?: boolean;
     };
 
 export interface CollectionSource<T extends CollectionItem> {
@@ -97,7 +103,21 @@ export function createCollection<T extends CollectionItem>({
   let snapshotRevision = 0;
   let mutation = 0;
   const changedAt = new Map<string, number>();
-  const invalidated = new Map<string | null, CollectionRefresh>();
+  const invalidated = new Map<
+    string | null,
+    { pages: CollectionRefresh; quiet: boolean }
+  >();
+  /** Two refreshes waiting on one read run once: the wider, louder one. */
+  const merge = (
+    parentId: string | null,
+    next: { pages: CollectionRefresh; quiet: boolean },
+  ) => {
+    const current = invalidated.get(parentId);
+    invalidated.set(parentId, {
+      pages: current?.pages === "loaded" ? "loaded" : next.pages,
+      quiet: (current?.quiet ?? true) && next.quiet,
+    });
+  };
 
   const notify = ({
     id,
@@ -179,12 +199,15 @@ export function createCollection<T extends CollectionItem>({
     parentId = null,
     more = false,
     pages = "loaded",
+    quiet = false,
   }: {
     parentId?: string | null;
     /** Read the page after the loaded rows. */
     more?: boolean;
     /** What a refresh reads again (ignored with `more`). */
     pages?: CollectionRefresh;
+    /** A refresh that does not report `fetching` (see `invalidate`). */
+    quiet?: boolean;
   } = {}) => {
     const before = branch(parentId);
     if (more && !before.cursor) {
@@ -206,8 +229,7 @@ export function createCollection<T extends CollectionItem>({
       }
       // So does a refresh (a Refresh press during a poll): the widest one
       // asked for runs once the IO settles, and the caller waits for it.
-      if (invalidated.get(parentId) !== "loaded")
-        invalidated.set(parentId, pages);
+      merge(parentId, { pages, quiet });
       return new Promise<void>((resolve) => {
         waiting.set(parentId, [...(waiting.get(parentId) ?? []), resolve]);
       });
@@ -226,17 +248,20 @@ export function createCollection<T extends CollectionItem>({
     const startedAt = mutation;
     const controller = new AbortController();
     requests.set(parentId, controller);
-    setBranch(
-      parentId,
-      more
-        ? { ...before, paging: true, pageError: undefined }
-        : {
-            ...before,
-            fetching: true,
-            status: before.status === "idle" ? "loading" : before.status,
-            error: undefined,
-          },
-    );
+    // A quiet refresh of loaded rows leaves the branch as it is until its
+    // rows (or an error) say otherwise.
+    if (!quiet || more || before.status !== "ready")
+      setBranch(
+        parentId,
+        more
+          ? { ...before, paging: true, pageError: undefined }
+          : {
+              ...before,
+              fetching: true,
+              status: before.status === "idle" ? "loading" : before.status,
+              error: undefined,
+            },
+      );
     try {
       const loaded: T[] = [];
       const pageIds = new Set<string>();
@@ -380,7 +405,7 @@ export function createCollection<T extends CollectionItem>({
       for (const resolve of waiters) resolve();
     };
     if (pending && (branchReferences.has(parentId) || waiters.length))
-      void load({ parentId, pages: pending }).finally(answer);
+      void load({ parentId, ...pending }).finally(answer);
     else answer();
   };
   const abort = (parentId: string | null) => {
@@ -401,13 +426,13 @@ export function createCollection<T extends CollectionItem>({
     if (change.type === "invalidate") {
       const parentId = change.parentId ?? null;
       const pages = change.pages ?? "loaded";
+      const quiet = change.quiet ?? false;
       if (requests.has(parentId)) {
         // Coalesced: the widest refresh asked for runs once the IO settles.
-        if (invalidated.get(parentId) !== "loaded")
-          invalidated.set(parentId, pages);
+        merge(parentId, { pages, quiet });
         return;
       }
-      if (branchReferences.has(parentId)) void load({ parentId, pages });
+      if (branchReferences.has(parentId)) void load({ parentId, pages, quiet });
       else setBranch(parentId, { ...branch(parentId), status: "idle" });
       return;
     }
