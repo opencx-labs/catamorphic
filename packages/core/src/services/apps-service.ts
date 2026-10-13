@@ -49,6 +49,7 @@ import {
 import { assertProjectPermission } from "./artifact-scope.js";
 import type { DevSandboxService } from "./dev-sandbox-service.js";
 import { requireTenantProject } from "./projects-service.js";
+import { toJson } from "./run-coordinator.js";
 import type { SessionArtifactsService } from "./session-artifacts-service.js";
 
 const tracer = getTracer("@catamorphic/core");
@@ -745,11 +746,11 @@ export class AppsService {
               bundle_key: bundleKey,
               css_key: cssKey,
               bundle_bytes: bundleBytes,
-              allowed_workflows: JSON.stringify(allowedWorkflows),
+              allowed_workflows: allowedWorkflows,
               // Frozen IO shapes for the callable set, so the MCP tool
               // surface serves real input schemas without a parse.
-              workflow_shapes: JSON.stringify(workflowShapes),
-              access: JSON.stringify(access),
+              workflow_shapes: toJson(workflowShapes),
+              access: toJson(access),
               ready_at: new Date(),
             })
             .where("id", "=", version.id)

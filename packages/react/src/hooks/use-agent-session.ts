@@ -57,11 +57,20 @@ export interface UseAgentSessionOptions {
   /**
    * Stream live events (default true). Off, or past the client's stream
    * limit, the snapshot is polled instead: every `pollIntervalMs` while a
-   * turn is unsettled, and not at all while idle.
+   * turn is unsettled or the snapshot is behind `awaitSequence`, and not
+   * at all while idle.
    */
   live?: boolean;
   /** Poll cadence while a turn is unsettled and nothing streams (default 1500). */
   pollIntervalMs?: number;
+  /**
+   * The server accepted something at this event sequence (a command
+   * receipt's), such as a message: without a stream, keep polling until a
+   * snapshot reaches it. A snapshot read just before the message was
+   * accepted shows nothing running, and an idle snapshot off screen would
+   * otherwise be the last one loaded.
+   */
+  awaitSequence?: number;
 }
 
 export interface UseAgentSessionResult {
@@ -114,6 +123,7 @@ export function useAgentSession(
   const enabled = Boolean(projectId && sessionId);
   const live = options.live ?? true;
   const pollIntervalMs = options.pollIntervalMs ?? 1_500;
+  const awaitSequence = options.awaitSequence;
   // Whether this reader holds a stream; one past the limit polls instead.
   const [streaming, setStreaming] = useState(false);
   const query = useQuery<AgentSessionData, CatamorphicError>({
@@ -159,6 +169,7 @@ export function useAgentSession(
         data: current.state.data,
         streaming,
         onScreen: live,
+        awaitSequence,
         pollIntervalMs,
       }),
   });
@@ -359,24 +370,30 @@ export function useAgentSession(
  * Without a stream, a reader on screen (waiting for a stream slot) polls,
  * so nothing it shows goes stale; one off screen polls only while
  * anything is unsettled: a turn running, waiting to start, or waiting to
- * retry.
+ * retry, or the snapshot still behind something the caller sent.
  */
 export function snapshotRefetchInterval({
   error,
   data,
   streaming,
   onScreen = false,
+  awaitSequence,
   pollIntervalMs,
 }: {
   error: unknown;
   data: AgentSessionData | undefined;
   streaming: boolean;
   onScreen?: boolean;
+  awaitSequence?: number | undefined;
   pollIntervalMs: number;
 }): number | false {
   if (error) return isPermanentFailure(error) ? false : 3_000;
   if (streaming || !data) return false;
-  if (onScreen) return pollIntervalMs;
+  if (
+    onScreen ||
+    (awaitSequence !== undefined && data.state.sequence < awaitSequence)
+  )
+    return pollIntervalMs;
   return Object.values(data.state.turns).some(
     (turn) => !isSettledTurnStatus(turn.status),
   )

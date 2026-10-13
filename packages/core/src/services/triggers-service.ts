@@ -1,4 +1,4 @@
-import type { DB, Json } from "@catamorphic/db";
+import { type DB, type Json, storedJson } from "@catamorphic/db";
 import {
   OriginDraftRepo,
   type ProjectManager,
@@ -31,6 +31,7 @@ import {
 import { PROJECT_CHECK_SCRIPT } from "../seeds.js";
 import { assertProjectPermission, resolveScope } from "./artifact-scope.js";
 import { requireTenantProject } from "./projects-service.js";
+import { jsonColumn, toJson } from "./run-coordinator.js";
 import type {
   EnrollmentConflictPolicy,
   RunSuspensionReason,
@@ -624,18 +625,18 @@ export class TriggersService {
             wanted.has(binding.workflowName),
           );
         }
+        // Bindings hold their config and filters as stored, with U+FFFD for
+        // half of an emoji or a NUL; the payload is matched in that form.
+        const payload = storedJson(args.payload);
         if (kind.matches) {
           targets = targets.filter(({ binding }) =>
-            kind.matches?.({
-              config: binding.config as Json,
-              payload: args.payload,
-            }),
+            kind.matches?.({ config: binding.config as Json, payload }),
           );
         }
         // Declarative filters run here, on the control plane, for every
         // kind and every fire path (ADR 0171).
         targets = targets.filter(({ binding }) =>
-          matchesAllWhere(binding.where, args.payload),
+          matchesAllWhere(binding.where, payload),
         );
         span.setAttribute("catamorphic.trigger.target_count", targets.length);
 
@@ -978,21 +979,26 @@ export class TriggersService {
           );
           continue;
         }
-        bindings.push({
-          workflowName: workflow.functionName,
-          kind: binding.kind,
-          config: binding.config as Json,
-          where: binding.where as Json[],
-          ...(binding.projectKind ? { projectKind: binding.projectKind } : {}),
-          canSuspend: workflow.graph.canSuspend,
-          inputParameters: workflow.graph.input.parameters,
-          inputSchema: (workflow.graph.inputSchema ?? {}) as Json,
-          outputSchema: (workflow.graph.outputSchema ?? {}) as Json,
-          connectionRequirements: JSON.parse(
-            JSON.stringify(workflow.graph.connections),
-          ) as Json,
-          bindingIndex,
-        });
+        // As every replica reads it back from its row, with U+FFFD for
+        // half of an emoji or a NUL the source wrote, so this replica
+        // matches and names it as the others do.
+        bindings.push(
+          storedJson({
+            workflowName: workflow.functionName,
+            kind: binding.kind,
+            config: binding.config as Json,
+            where: binding.where as Json[],
+            ...(binding.projectKind
+              ? { projectKind: binding.projectKind }
+              : {}),
+            canSuspend: workflow.graph.canSuspend,
+            inputParameters: workflow.graph.input.parameters,
+            inputSchema: (workflow.graph.inputSchema ?? {}) as Json,
+            outputSchema: (workflow.graph.outputSchema ?? {}) as Json,
+            connectionRequirements: toJson(workflow.graph.connections),
+            bindingIndex,
+          }),
+        );
       }
     }
     // One webhook name is one URL that verifies and answers senders one
@@ -1055,19 +1061,17 @@ export class TriggersService {
               commit_sha: args.commitSha,
               trigger_kind: binding.kind,
               workflow_name: binding.workflowName,
-              // Stringified so array-valued JSON is not mistaken for a
-              // Postgres array literal by the driver.
-              config: JSON.stringify(binding.config),
-              where_filters: JSON.stringify(binding.where),
+              // Config and schemas are whatever JSON the source wrote, a
+              // bare string included.
+              config: jsonColumn(binding.config),
+              where_filters: binding.where,
               project_kind: binding.projectKind ?? null,
               binding_index: binding.bindingIndex,
               can_suspend: binding.canSuspend,
-              input_parameters: JSON.stringify(binding.inputParameters),
-              input_schema: JSON.stringify(binding.inputSchema),
-              output_schema: JSON.stringify(binding.outputSchema),
-              connection_requirements: JSON.stringify(
-                binding.connectionRequirements,
-              ),
+              input_parameters: toJson(binding.inputParameters),
+              input_schema: jsonColumn(binding.inputSchema),
+              output_schema: jsonColumn(binding.outputSchema),
+              connection_requirements: binding.connectionRequirements,
             })),
           )
           .onConflict((oc) =>

@@ -32,6 +32,16 @@ export function jsonbText(value: unknown): string {
   );
 }
 
+/**
+ * A JSON value as jsonb gives it back: {@link jsonbText}, read. Keep a value
+ * in this form when it is compared with one read from the database, so both
+ * carry U+FFFD in the same places. `T` is JSON: as in JSON, a property whose
+ * value is undefined is left out.
+ */
+export function storedJson<T>(value: T): T {
+  return JSON.parse(jsonbText(value));
+}
+
 /** A value the drivers would send as JSON: an array, or a plain object. */
 function isJsonContainer(value: unknown): value is object {
   if (Array.isArray(value)) return true;
@@ -48,13 +58,18 @@ function isJsonContainer(value: unknown): value is object {
 const UNSTORABLE_CHARACTER = /[\u0000\ud800-\udfff]/gu;
 
 /**
- * A parameter as Postgres stores it. In a string, U+0000 and a lone
- * surrogate become U+FFFD: text refuses U+0000, and PGlite miscounts the
- * bytes of a lone surrogate, cutting the value short or refusing it.
+ * Text as Postgres stores it: U+0000 and a lone surrogate become U+FFFD.
+ * text refuses U+0000, and PGlite miscounts the bytes of a lone surrogate,
+ * cutting the value short or refusing it. Name a thing in this form when the
+ * name is also stored, so the two stay the same name.
  */
+export function storableText(text: string): string {
+  return text.replace(UNSTORABLE_CHARACTER, "\uFFFD");
+}
+
+/** A parameter as Postgres stores it (see {@link storableText}). */
 function storable(value: unknown): unknown {
-  if (typeof value === "string")
-    return value.replace(UNSTORABLE_CHARACTER, "\uFFFD");
+  if (typeof value === "string") return storableText(value);
   return isJsonContainer(value) ? jsonbText(value) : value;
 }
 

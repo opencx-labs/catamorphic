@@ -83,6 +83,8 @@ export interface PendingAgentMessage {
   status: "sending" | "sent" | "failed";
   /** The item the server created for it, once the receipt says. */
   itemId?: string;
+  /** The receipt's event sequence: a snapshot at or past it was read after. */
+  sequence?: number;
   error?: CatamorphicError;
 }
 
@@ -222,24 +224,37 @@ export function useAgentChat(
   const { apiClient } = useCatamorphic();
   const queryClient = useQueryClient();
   const createSession = useCreateAgentSession(projectId);
-  const live = useAgentSession(projectId, sessionId ?? undefined, {
-    live: options.live ?? true,
-  });
-  const optionsRef = useRef(options);
-  optionsRef.current = options;
-
   const [pendingByScope, setPending] = useState<{
     token: object;
     items: PendingAgentMessage[];
   }>({ token: scope.token, items: [] });
   const pending =
     pendingByScope.token === scope.token ? pendingByScope.items : [];
+  // The refresh after a send can be a load already under way, read before
+  // the message was accepted: off screen, keep loading until a snapshot
+  // reaches the latest receipt.
+  const awaitSequence = pending.reduce<number | undefined>(
+    (latest, message) =>
+      message.status === "sent" && message.sequence !== undefined
+        ? Math.max(latest ?? message.sequence, message.sequence)
+        : latest,
+    undefined,
+  );
+  const live = useAgentSession(projectId, sessionId ?? undefined, {
+    live: options.live ?? true,
+    awaitSequence,
+  });
+  const optionsRef = useRef(options);
+  optionsRef.current = options;
+
   const updatePending = useCallback(
     (
       token: object,
       update: (items: PendingAgentMessage[]) => PendingAgentMessage[],
     ) =>
       setPending((current) => {
+        // A late answer for a chat this hook has since left changes nothing.
+        if (token !== scopeRef.current.token) return current;
         const items = current.token === token ? current.items : [];
         return { token, items: update(items) };
       }),
@@ -424,7 +439,9 @@ export function useAgentChat(
             : {}),
         },
       });
-      blockedRef.current = null;
+      // Only this chat's held send is cleared: a late receipt from a chat
+      // the hook has left must not drop the next chat's.
+      if (blockedRef.current?.token === token) blockedRef.current = null;
       refreshUnlessStreaming(target);
       const itemId =
         typeof receipt.result?.itemId === "string"
@@ -433,7 +450,12 @@ export function useAgentChat(
       updatePending(token, (items) =>
         items.map((item) =>
           item.commandId === message.commandId
-            ? { ...item, status: "sent", ...(itemId ? { itemId } : {}) }
+            ? {
+                ...item,
+                status: "sent",
+                sequence: receipt.sequence,
+                ...(itemId ? { itemId } : {}),
+              }
             : item,
         ),
       );

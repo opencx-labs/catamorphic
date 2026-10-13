@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { lstat } from "node:fs/promises";
 import path from "node:path";
-import type { DB } from "@catamorphic/db";
+import { type DB, storableText } from "@catamorphic/db";
 import {
   fetchRemote,
   type ProjectManager,
@@ -127,12 +127,11 @@ export class SessionArtifactsService {
                   'import { createRoot } from "react-dom/client";\nimport App from "./App";\ncreateRoot(document.getElementById("root")!).render(<App />);\n',
               }
             : {};
-        const files = {
+        const files = validFiles({
           ...defaults,
           ...input.files,
           [sourcePath]: input.source,
-        };
-        validateFiles(files);
+        });
         const snapshot = await this.snapshot({
           ...input,
           files,
@@ -153,7 +152,7 @@ export class SessionArtifactsService {
                 name: input.name,
                 title: input.title ?? input.name,
                 source_path: sourcePath,
-                source_paths: JSON.stringify(snapshot.paths),
+                source_paths: snapshot.paths,
                 remote_branch: remoteBranch,
                 commit_sha: snapshot.commitSha,
               })
@@ -164,7 +163,7 @@ export class SessionArtifactsService {
               .values({
                 artifact_id: id,
                 commit_sha: snapshot.commitSha,
-                source_paths: JSON.stringify(snapshot.paths),
+                source_paths: snapshot.paths,
               })
               .execute();
             return present(row);
@@ -261,7 +260,7 @@ export class SessionArtifactsService {
         },
       },
       async () => {
-        validateFiles(input.files);
+        const files = validFiles(input.files);
         const previous = await this.row(input);
         if (!previous.session_id) throw new SessionArtifactNotFoundError();
         await this.assertSession({ ...input, sessionId: previous.session_id });
@@ -274,6 +273,7 @@ export class SessionArtifactsService {
         const remoteBranch = artifactCandidateBranch(previous.id);
         const snapshot = await this.snapshot({
           ...input,
+          files,
           kind: artifactKind(previous.kind),
           name: previous.name,
           sourcePath: previous.source_path,
@@ -286,7 +286,7 @@ export class SessionArtifactsService {
         const paths = [
           ...new Set(
             [...pathsOf(previous.source_paths), ...snapshot.paths].filter(
-              (path) => input.files[path] !== null,
+              (path) => files[path] !== null,
             ),
           ),
         ];
@@ -312,7 +312,7 @@ export class SessionArtifactsService {
             .values({
               artifact_id: row.id,
               commit_sha: snapshot.commitSha,
-              source_paths: JSON.stringify(paths),
+              source_paths: paths,
             })
             .onConflict((conflict) => conflict.doNothing())
             .execute();
@@ -322,7 +322,7 @@ export class SessionArtifactsService {
               commit_sha: snapshot.commitSha,
               remote_branch: remoteBranch,
               revision: row.revision + 1,
-              source_paths: JSON.stringify(paths),
+              source_paths: paths,
               title: input.title ?? row.title,
               updated_at: new Date(),
             })
@@ -734,7 +734,15 @@ function present(row: ArtifactRow): SessionArtifact {
   };
 }
 
-function validateFiles(files: Record<string, string | null>): void {
+/**
+ * The files of an artifact write, under the names git and Postgres keep for
+ * them: half of a surrogate pair (a name cut through an emoji) becomes
+ * U+FFFD, as the file system writes it, so every comparison, commit and
+ * stored path uses one name. A NUL cannot be in a file name.
+ */
+function validFiles<T extends string | null>(
+  files: Record<string, T>,
+): Record<string, T> {
   const entries = Object.entries(files);
   if (entries.length > 256)
     throw new SessionArtifactValidationError(
@@ -742,6 +750,10 @@ function validateFiles(files: Record<string, string | null>): void {
     );
   let bytes = 0;
   for (const [file, content] of entries) {
+    if (file.includes("\u0000"))
+      throw new SessionArtifactValidationError(
+        `Invalid artifact path: ${JSON.stringify(file)} holds a NUL character`,
+      );
     if (
       !file ||
       file.startsWith("/") ||
@@ -760,6 +772,9 @@ function validateFiles(files: Record<string, string | null>): void {
   }
   if (bytes > 5 * 1024 * 1024)
     throw new SessionArtifactValidationError("Artifact source exceeds 5 MiB");
+  return Object.fromEntries(
+    entries.map(([file, content]) => [storableText(file), content]),
+  );
 }
 
 /** Selected paths must not follow links supplied by committed repository code. */

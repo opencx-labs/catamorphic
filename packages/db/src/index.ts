@@ -13,4 +13,8 @@ export type {
 } from "./migrate.js";
 export { migrateToLatest } from "./migrate.js";
 export { getMigrationsDir } from "./migrations-dir.js";
-export { jsonbText } from "./storable-parameters.js";
+export {
+  jsonbText,
+  storableText,
+  storedJson,
+} from "./storable-parameters.js";

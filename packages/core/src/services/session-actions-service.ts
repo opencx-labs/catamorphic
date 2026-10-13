@@ -168,10 +168,18 @@ export class SessionActionsService {
           const detail = open ? await read(open) : null;
           return detail ? json(detail) : null;
         }
+        const key =
+          "idempotencyKey" in parsed &&
+          typeof parsed.idempotencyKey === "string"
+            ? actionKey({
+                author: input.author,
+                idempotencyKey: parsed.idempotencyKey,
+              })
+            : undefined;
         // A retried mutation whose chat is gone (closed) still answers
         // with its recorded result.
         const earlier =
-          !open && "idempotencyKey" in parsed
+          !open && key !== undefined
             ? await this.db
                 .selectFrom("session_actions")
                 .select([
@@ -182,11 +190,7 @@ export class SessionActionsService {
                   "session_id",
                 ])
                 .where("project_id", "=", input.projectId)
-                .where(
-                  "idempotency_key",
-                  "=",
-                  JSON.stringify([input.author, parsed.idempotencyKey]),
-                )
+                .where("idempotency_key", "=", key)
                 .executeTakeFirst()
             : undefined;
         const retried =
@@ -240,8 +244,7 @@ export class SessionActionsService {
             throw new Error("No message in this chat has that id");
           return json({ sessionId: session.id, key: session.key, messages });
         }
-        if (!("idempotencyKey" in args))
-          throw new Error("idempotencyKey is required");
+        if (key === undefined) throw new Error("idempotencyKey is required");
         // Everything past this point changes the session: settle access
         // before the action is recorded, so a denied caller leaves no trace.
         await this.sessions.assertSession(
@@ -250,10 +253,6 @@ export class SessionActionsService {
           args.sessionId,
           "change",
         );
-        const key = JSON.stringify([
-          actorIdentity(input.author),
-          args.idempotencyKey,
-        ]);
         const accepted = await this.db
           .insertInto("session_actions")
           .values({
@@ -605,8 +604,19 @@ function actionLabel(operation: SessionActionOperation): string {
   }[operation];
 }
 /**
+ * The key an action is recorded under: who acted and the caller's key. The
+ * only way to build it, for the record and for every lookup of it.
+ */
+function actionKey(input: {
+  author: SessionMessageAuthor;
+  idempotencyKey: string;
+}): string {
+  return JSON.stringify([actorIdentity(input.author), input.idempotencyKey]);
+}
+/**
  * Who acted, without a workflow run's circumstances (its enablement,
- * watcher and schedule): a retried action keys as it did before.
+ * watcher and schedule): the run is the actor, and its actions keep the
+ * key they had before the sender carried those.
  */
 function actorIdentity(author: SessionMessageAuthor): SessionMessageAuthor {
   if (author.kind !== "workflow") return author;
