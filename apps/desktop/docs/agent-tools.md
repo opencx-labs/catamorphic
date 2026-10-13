@@ -70,7 +70,7 @@ Availability also depends on identity, services, agent sandboxing and topology.
 | Project-defined workflow tools, `catamorphic_poll_run` | Deferred live deployed workflow bindings and continuation; identical execution service to public MCP |
 | `components.read` | Existing deferred, installable component packs; composition and evidence remain code and skills |
 | `context.read`, `environments.list`, `assignments.current` | Existing deferred framework context and allocation facts |
-| Profile connector tools | Deferred per-service discovery through the authenticated host pool; no global roster fetch on an empty query |
+| Profile connector tools | A harness with tool search (Claude Code, Codex) gets each connector as its own MCP server, served from the authenticated host pool and loaded on demand (ADR 0225). The built-in agent discovers them per service through the catalog; no global roster fetch on an empty query |
 
 Removed duplicate registrations: `list_subsessions` becomes
 `list_project_sessions {children_only:true}`; `use_project_checkout` becomes
@@ -82,7 +82,8 @@ public contracts.
 
 Explicit Environment Allocation connection bindings remain harness MCP servers:
 they are a caller-selected, capability-granted roster, not the entire profile's
-connector catalog. Installed connector plugin projections retain skills and
+connector catalog. Both kinds of connector server list tools and return results
+as the connector declared and sent them (ADR 0225). Installed connector plugin projections retain skills and
 commands while stripping duplicate MCP declarations.
 
 ## Implementation and verification

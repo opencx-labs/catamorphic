@@ -30,8 +30,15 @@ export interface ConnectionAuthorizationResult {
 
 export interface ConnectionActionDefinition {
   name: string;
+  /** The action's display name. */
+  title?: string;
   description?: string;
   inputSchema: Json;
+  /**
+   * JSON Schema of an MCP tool's `structuredContent`, as its server
+   * declared it: harnesses type the tool's results from it (ADR 0225).
+   */
+  outputSchema?: Json;
   annotations?: Json;
 }
 
@@ -142,6 +149,13 @@ export interface ConnectionProvider {
    * through the gateway (ADR 0212).
    */
   readonly http?: ConnectionHttpEndpoint;
+  /**
+   * The connection is an MCP server: its actions are the server's tools
+   * and `invoke` returns each call's `CallToolResult` as the server sent
+   * it, which agents receive unchanged (ADR 0225). Other providers'
+   * actions return plain JSON.
+   */
+  readonly mcp?: boolean;
   /**
    * Start authorizing a member's or a service connection. `projectId` is
    * absent for a tenant service connection; `externalUserId` is whoever

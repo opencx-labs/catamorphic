@@ -4,7 +4,11 @@ import type {
   McpToolPolicyLayers,
   ToolPolicyAnnotations,
 } from "@catamorphic/sandbox";
-import { narrowingLayer, PROJECT_TOOLS_SERVER_KEY } from "@catamorphic/sandbox";
+import {
+  narrowingLayer,
+  PROJECT_TOOLS_SERVER_KEY,
+  resolveToolPermissionAcross,
+} from "@catamorphic/sandbox";
 import { DESKTOP_DEFAULT_SANDBOXING } from "../../shared/agent-permissions.js";
 import type { AgentConfig } from "../agents-store.js";
 import {
@@ -34,6 +38,26 @@ export interface ResolvedMcp {
   annotations: Record<string, Record<string, ToolPolicyAnnotations>>;
   /** Server key → connection id, for the connection's own tools. */
   connectionIds: Record<string, string>;
+}
+
+/**
+ * Whether an agent may reach a connector's tool at all: no layer denies
+ * it, and a contained agent only reads. An ask is decided at each call
+ * (ADR 0054), by the catalog's gate or by the runner for a mounted server.
+ */
+export function connectorToolPermitted(input: {
+  layers: McpToolPolicyLayers | undefined;
+  readOnly: boolean;
+  tool: { name: string; annotations?: ToolPolicyAnnotations };
+}): boolean {
+  return (
+    (!input.readOnly || input.tool.annotations?.readOnlyHint === true) &&
+    resolveToolPermissionAcross(
+      input.layers,
+      input.tool.name,
+      input.tool.annotations,
+    ) !== "deny"
+  );
 }
 
 interface DesktopAgentMcpDeps {

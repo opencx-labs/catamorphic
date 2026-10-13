@@ -4,6 +4,7 @@ import type { JsonObject } from "@catamorphic/agent-protocol";
 import type {
   AttemptStart,
   HarnessAdapter,
+  HarnessCapabilities,
 } from "@catamorphic/agent-protocol/runner";
 import { AI_SDK_HARNESS, type ShellState } from "@catamorphic/ai-sdk";
 import {
@@ -26,7 +27,11 @@ import {
   projectAgentId,
   validateAgentDefinition,
 } from "@catamorphic/core";
-import { type ExtraTool, PROJECT_TOOLS_SERVER_KEY } from "@catamorphic/sandbox";
+import {
+  type AgentMcpServerConfig,
+  type ExtraTool,
+  PROJECT_TOOLS_SERVER_KEY,
+} from "@catamorphic/sandbox";
 import { PROJECT_AGENTS_DIR } from "@catamorphic/workflow/project-layout";
 import type { AgentCommandsResult } from "../../shared/agent-commands.js";
 import type { AgentDefaultModelResult } from "../../shared/agent-default-model.js";
@@ -55,7 +60,7 @@ import type { ProfilesStore } from "../profiles.js";
 import { projectDefaultAgentSlug } from "../project-manifest.js";
 import { shellBinShimDir } from "../shell-integration.js";
 import { ASSISTANT_INSTRUCTIONS, VOICE_CONTEXT } from "../voice/guidance.js";
-import { DesktopAgentMcp } from "./agent-mcp-policy.js";
+import { DesktopAgentMcp, type ResolvedMcp } from "./agent-mcp-policy.js";
 import {
   assistantDelegation,
   assistantHostTools,
@@ -113,6 +118,15 @@ export interface DesktopAgentRegistryDeps {
   workspaceBridge?: WorkspaceBridge;
   /** Installed connector plugins (Claude Code loads them natively). */
   connectors?: ConnectorsService;
+  /**
+   * Where the embedded server serves one of a chat's profile connectors
+   * as an MCP server of its own (ADR 0225); undefined until it listens.
+   */
+  connectorMcpUrl?: (input: {
+    projectId: string;
+    sessionId: string;
+    server: string;
+  }) => string | undefined;
   /**
    * Project folder lookup for PROJECT agents (`project:<id>:<slug>`), whose
    * committed `.work/agents/<slug>.json` definitions are read from disk here —
@@ -1062,6 +1076,12 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
             },
             // Connector plugins and the host skills load natively.
             plugins: this.mcp.resolve({ config, profileId }).plugins,
+            mcpServers: (context) =>
+              this.connectorServers({
+                capabilities: CLAUDE_CODE_CAPABILITIES,
+                mcp: live(),
+                context,
+              }),
           },
           options: {
             memory: config.memory === true,
@@ -1111,7 +1131,17 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
             },
             // Stateful native computer use belongs to the Codex process
             // that started it, never the profile-wide tool pool.
-            mcpServers: () => live().nativeServers ?? {},
+            mcpServers: (context) => {
+              const mcp = live();
+              return {
+                ...this.connectorServers({
+                  capabilities: CODEX_CAPABILITIES,
+                  mcp,
+                  context,
+                }),
+                ...(mcp.nativeServers ?? {}),
+              };
+            },
           },
           options: {
             // Host subsessions and todos replace Codex's own.
@@ -1126,6 +1156,32 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
         };
       }
     }
+  }
+
+  /**
+   * The agent's connectors as MCP servers of their own, for a harness that
+   * searches its tools (ADR 0225). Each is served from the host's pool
+   * under the server key its policy layers already use, so the runner
+   * gates it like any MCP server and the capability catalog leaves it out.
+   */
+  private connectorServers(input: {
+    capabilities: HarnessCapabilities;
+    mcp: ResolvedMcp;
+    context: AgentTurnContext;
+  }): Record<string, AgentMcpServerConfig> {
+    const sessionId = input.context.sessionId;
+    if (!input.capabilities.toolSearch || !sessionId) return {};
+    const servers: Record<string, AgentMcpServerConfig> = {};
+    for (const server of Object.keys(input.mcp.connectionIds)) {
+      if (input.mcp.nativeServers?.[server]) continue;
+      const url = this.deps.connectorMcpUrl?.({
+        projectId: input.context.projectId,
+        sessionId,
+        server,
+      });
+      if (url) servers[server] = { transport: "http", url };
+    }
+    return servers;
   }
 
   /**
@@ -1357,7 +1413,19 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
       readOnly: config.sandboxing === "contained",
       profileId,
       mcp: this.mcp.live({ config, profileId }),
+      // A harness that searches its tools has each connector mounted as
+      // its own MCP server (ADR 0225); the catalog offers them otherwise.
+      connectorsMounted: this.searchesTools(id),
     };
+  }
+
+  private searchesTools(id: string): boolean {
+    const harness = this.get(id)?.harness;
+    return (
+      this.deps.connectorMcpUrl !== undefined &&
+      harness?.placement === "host" &&
+      harness.adapter.capabilities().toolSearch
+    );
   }
 
   /**

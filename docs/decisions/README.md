@@ -145,7 +145,7 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0130](0130-macos-browser-password-import.md) | Prebuilt macOS browser password import helper | Accepted |
 | [0131](0131-content-addressed-test-reuse.md) | Content-addressed test reuse | Accepted |
 | [0132](0132-shared-contextual-sidebar-contributions.md) | Shared contextual sidebar contributions | Accepted |
-| [0133](0133-lean-agent-tool-surface.md) | Lean agent tool surface | Accepted (eager surface amended by 0202) |
+| [0133](0133-lean-agent-tool-surface.md) | Lean agent tool surface | Accepted (eager surface amended by 0202; connectors for harnesses with tool search by 0225) |
 | [0134](0134-consent-and-collection-lifecycle.md) | Consent binding and collection lifecycle | Accepted |
 | [0135](0135-artifact-publication-before-admission.md) | Publish artifact candidates before admitting revisions | Accepted |
 | [0136](0136-local-work-and-project-proposals.md) | Local work and project proposals | Accepted |
@@ -237,3 +237,4 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0222](0222-desktop-harnesses-stay-warm-between-turns.md) | Desktop harnesses stay warm between turns | Accepted (amends 0198) |
 | [0223](0223-an-agent-terminal-lives-as-long-as-its-command.md) | An agent terminal lives as long as its command | Accepted (amends 0155) |
 | [0224](0224-a-voice-agent-can-stop-listening.md) | A voice conversation's agent can stop listening | Accepted (amends 0133, 0216) |
+| [0225](0225-harnesses-get-connectors-as-mcp-servers-results-unchanged.md) | Harnesses get connectors as MCP servers, results unchanged | Accepted (amends 0065, 0133) |

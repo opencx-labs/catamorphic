@@ -71,6 +71,10 @@ import {
 } from "./assistant-agent.js";
 import { assistantTools } from "./assistant-tools.js";
 import { componentRegistryCapability } from "./component-registry.js";
+import {
+  connectorMcpPath,
+  registerConnectorMcpRoute,
+} from "./connector-mcp.js";
 import { validateDatabaseFiles } from "./database-files.js";
 import { desktopCapabilitySource } from "./desktop-capabilities.js";
 import { DESKTOP_SETTINGS_SKILL } from "./desktop-settings-skill.js";
@@ -421,6 +425,18 @@ export async function startEmbeddedServer(
     e2eFake: e2eFakeAgent,
     workspaceBridge,
     connectors,
+    // A harness that searches its tools reaches each profile connector as
+    // an MCP server of its own, served from the host's pool (ADR 0225).
+    ...(mcpApps
+      ? {
+          connectorMcpUrl: (input: {
+            projectId: string;
+            sessionId: string;
+            server: string;
+          }) =>
+            apiBaseUrl ? `${apiBaseUrl}${connectorMcpPath(input)}` : undefined,
+        }
+      : {}),
     // Project agents (`project:<id>:<slug>`, ADR 0050): definitions are
     // read from the project's folder; secrets resolve through core.
     projectRootPath: (projectId) => projectRoots.getSync(projectId),
@@ -1400,6 +1416,15 @@ export async function startEmbeddedServer(
         .header("content-security-policy", mcpAppViewCsp(view))
         .header("cache-control", "no-store")
         .send(mcpAppViewDocument(view));
+    });
+    registerConnectorMcpRoute(app, {
+      core: () => catamorphic.core,
+      agents: agentRegistry,
+      mcpApps,
+      identity: {
+        tenantId: DESKTOP_TENANT_ID,
+        externalUserId: DESKTOP_USER_ID,
+      },
     });
   }
 

@@ -69,9 +69,16 @@ function iconScore(icon: McpIcon): number {
 
 export interface McpToolInfo {
   name: string;
+  /** The tool's display name, when it declares one. */
+  title?: string;
   description: string;
   /** JSON Schema for the tool's arguments. */
   inputSchema: Record<string, unknown>;
+  /**
+   * JSON Schema of the tool's `structuredContent`, when it declares one:
+   * harnesses type the tool's results from it (ADR 0225).
+   */
+  outputSchema?: Record<string, unknown>;
   /** The tool's `_meta`, when present (MCP Apps ui linkage lives here). */
   meta?: Record<string, unknown>;
   /** Spec tool annotations (hints, not guarantees) — permission defaults
@@ -266,11 +273,13 @@ export async function connectMcpServer(
     const listed = await client.listTools();
     const tools: McpToolInfo[] = listed.tools.map((tool) => ({
       name: tool.name,
+      ...(tool.title ? { title: tool.title } : {}),
       description: tool.description ?? "",
       inputSchema: (tool.inputSchema ?? { type: "object" }) as Record<
         string,
         unknown
       >,
+      ...(tool.outputSchema ? { outputSchema: tool.outputSchema } : {}),
       ...((tool as { _meta?: Record<string, unknown> })._meta
         ? { meta: (tool as { _meta?: Record<string, unknown> })._meta }
         : {}),

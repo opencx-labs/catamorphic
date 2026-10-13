@@ -6,6 +6,13 @@ export {
   identityFromBearer,
   identityFromHeaders,
 } from "./http-identity.js";
+export {
+  forwardedTool,
+  forwardedToolResult,
+  handleMcpPost,
+  McpRequestError,
+  negotiateProtocolVersion,
+} from "./mcp-shared.js";
 export type {
   CatamorphicPluginOptions,
   ProjectMcpHost,

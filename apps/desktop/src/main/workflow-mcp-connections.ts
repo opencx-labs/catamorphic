@@ -6,8 +6,9 @@ import {
   type Identity,
 } from "@catamorphic/core";
 import type { Json } from "@catamorphic/db";
-import { connectMcpServer } from "@catamorphic/mcp";
+import { connectMcpServer, mcpToolActions } from "@catamorphic/mcp";
 import type { AgentMcpServerConfig } from "@catamorphic/sandbox";
+import { z } from "zod";
 import {
   connectionServerKeys,
   type McpConnection,
@@ -22,23 +23,20 @@ export const DESKTOP_PROFILE_MCP_PROVIDER_KIND = "desktop-profile-mcp";
 export const desktopProfileMcpProvider: ConnectionProvider = {
   kind: DESKTOP_PROFILE_MCP_PROVIDER_KIND,
   displayName: "Desktop MCP connection",
+  mcp: true,
   async listActions(input) {
     const server = await connectMcpServer(decodeServer(input.material));
     try {
-      return server.tools
-        .filter((tool) => input.capabilities.includes(tool.name))
-        .map((tool) => ({
-          name: tool.name,
-          description: tool.description,
-          inputSchema: JSON.parse(JSON.stringify(tool.inputSchema)) as Json,
-          ...(tool.annotations
-            ? {
-                annotations: JSON.parse(
-                  JSON.stringify(tool.annotations),
-                ) as Record<string, Json>,
-              }
+      return mcpToolActions(server.tools, input.capabilities).map(
+        ({ inputSchema, outputSchema, annotations, ...action }) => ({
+          ...action,
+          inputSchema: z.json().parse(inputSchema),
+          ...(outputSchema
+            ? { outputSchema: z.json().parse(outputSchema) }
             : {}),
-        }));
+          ...(annotations ? { annotations: z.json().parse(annotations) } : {}),
+        }),
+      );
     } finally {
       await server.close().catch(() => {});
     }

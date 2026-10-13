@@ -1,6 +1,7 @@
 import type { CatamorphicCore, Identity } from "@catamorphic/core";
 import { MCP_POLL_RUN_TOOL, RunNotFoundError } from "@catamorphic/core";
 import type { FastifyReply } from "fastify";
+import { z } from "zod";
 
 /**
  * The JSON-RPC / MCP plumbing shared by the plugin's MCP endpoints — the
@@ -124,6 +125,64 @@ export function toolValue(value: unknown): Record<string, unknown> {
 
 export function toolError(message: string): Record<string, unknown> {
   return { content: [{ type: "text", text: message }], isError: true };
+}
+
+/**
+ * Another MCP server's tool, listed as that server declared it (ADR 0225).
+ * These endpoints speak revisions where an output schema describes an
+ * object, so any other is left out: advertising it would make clients
+ * reject the results it describes.
+ */
+export function forwardedTool(tool: {
+  name: string;
+  title?: string;
+  description?: string;
+  inputSchema: unknown;
+  outputSchema?: unknown;
+  annotations?: unknown;
+}): Record<string, unknown> {
+  return {
+    name: tool.name,
+    ...(tool.title ? { title: tool.title } : {}),
+    ...(tool.description ? { description: tool.description } : {}),
+    inputSchema: tool.inputSchema,
+    ...(isObjectSchema(tool.outputSchema)
+      ? { outputSchema: tool.outputSchema }
+      : {}),
+    ...(tool.annotations ? { annotations: tool.annotations } : {}),
+  };
+}
+
+const ForwardedToolResultSchema = z.looseObject({
+  content: z.array(z.unknown()),
+  structuredContent: z.unknown().optional(),
+});
+
+/**
+ * Another MCP server's tool result, forwarded as it was sent: content,
+ * structured content, `isError` and `_meta` unchanged (ADR 0225). Only
+ * structured content that is not an object (which newer revisions allow)
+ * rides the text content instead, as these revisions require.
+ */
+export function forwardedToolResult(result: unknown): Record<string, unknown> {
+  const { structuredContent, ...rest } =
+    ForwardedToolResultSchema.parse(result);
+  if (structuredContent === undefined) return rest;
+  if (isObject(structuredContent)) return { ...rest, structuredContent };
+  return rest.content.length > 0
+    ? rest
+    : {
+        ...rest,
+        content: [{ type: "text", text: JSON.stringify(structuredContent) }],
+      };
+}
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isObjectSchema(schema: unknown): boolean {
+  return isObject(schema) && schema.type === "object";
 }
 
 /**

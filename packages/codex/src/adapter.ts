@@ -60,6 +60,8 @@ export const CODEX_CAPABILITIES: HarnessCapabilities = {
   questions: true,
   approvals: true,
   elicitations: true,
+  // Tool search (or code mode's ALL_TOOLS) finds MCP tools on demand.
+  toolSearch: true,
   subagents: true,
   streamsText: true,
   streamsReasoning: true,

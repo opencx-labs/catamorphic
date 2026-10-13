@@ -5,7 +5,21 @@ import {
 import type { Json } from "@catamorphic/db";
 import type { FastifyInstance } from "fastify";
 import type { RouteContext } from "../app.js";
+import {
+  forwardedTool,
+  forwardedToolResult,
+  handleMcpPost,
+  McpRequestError,
+  negotiateProtocolVersion,
+  toolError,
+  toolValue,
+} from "../mcp-shared.js";
 
+/**
+ * One brokered connection as an agent's MCP server (`connection_<alias>`).
+ * An MCP connection's tools and results pass through as its server sent
+ * them; other connections' actions answer as JSON tool results (ADR 0225).
+ */
 export function registerConnectionMcpRoutes(
   app: FastifyInstance,
   ctx: RouteContext,
@@ -41,107 +55,76 @@ export function registerConnectionMcpRoutes(
           .status(401)
           .send({ error: "Connection grant is no longer active" });
       }
-      const rawBody = record(request.body);
-      const method =
-        rawBody.jsonrpc === "2.0" && typeof rawBody.method === "string"
-          ? rawBody.method
-          : undefined;
-      const id = rpcId(rawBody.id);
-      if (!method) {
-        return reply.send(rpcError(id, -32600, "Invalid Request"));
-      }
-      const respond = (result: unknown) => ({
-        jsonrpc: "2.0" as const,
-        id,
-        result,
-      });
-      if (method === "initialize") {
-        return reply.send(
-          respond({
-            protocolVersion: "2025-11-25",
-            capabilities: { tools: {} },
-            serverInfo: { name: "catamorphic-connection-broker", version: "1" },
-          }),
-        );
-      }
-      if (method === "notifications/initialized")
-        return reply.status(202).send();
-      if (method === "tools/list") {
-        try {
-          const tools = await broker.listActions({
-            identity,
-            allocationId: allocation.id,
-            alias: binding.alias,
-          });
-          return reply.send(respond({ tools }));
-        } catch {
-          return reply.send(rpcError(id, -32_000, "Connection action failed"));
-        }
-      }
-      if (method === "tools/call") {
-        const params = record(rawBody.params);
-        const name = typeof params.name === "string" ? params.name : "";
-        if (!binding.capabilities.includes(name)) {
-          return reply.send(
-            rpcError(id, -32602, "Tool is outside the connection grant"),
-          );
-        }
-        try {
-          const output = await broker.invoke({
-            identity,
-            allocationId: allocation.id,
-            alias: binding.alias,
-            action: name,
-            input: toJson(params.arguments),
-            caller: "agent",
-            ...(grant.agentSessionId
-              ? { agentSessionId: grant.agentSessionId }
-              : {}),
-          });
-          return reply.send(
-            respond({
-              content: [{ type: "text", text: JSON.stringify(output) }],
-              structuredContent: output,
-            }),
-          );
-        } catch (error) {
-          // A policy refusal is information the agent can act on (narrow
-          // the query, ask differently); other failures stay opaque.
-          if (
-            error instanceof ConnectionActionDeniedError ||
-            error instanceof ConnectionActionRefusedError
-          ) {
-            return reply.send(
-              respond({
-                content: [{ type: "text", text: error.message }],
-                isError: true,
-              }),
-            );
+      return handleMcpPost(reply, request.body, async (method, params) => {
+        switch (method) {
+          case "initialize":
+            return {
+              protocolVersion: negotiateProtocolVersion(params.protocolVersion),
+              capabilities: { tools: {} },
+              serverInfo: {
+                name: "catamorphic-connection-broker",
+                version: "1",
+              },
+            };
+          case "ping":
+            return {};
+          case "tools/list": {
+            try {
+              const actions = await broker.listActions({
+                identity,
+                allocationId: allocation.id,
+                alias: binding.alias,
+              });
+              return { tools: actions.map(forwardedTool) };
+            } catch {
+              throw new McpRequestError(-32_000, "Connection action failed");
+            }
           }
-          return reply.send(rpcError(id, -32_000, "Connection action failed"));
+          case "tools/call": {
+            const name = typeof params.name === "string" ? params.name : "";
+            if (!binding.capabilities.includes(name)) {
+              throw new McpRequestError(
+                -32602,
+                "Tool is outside the connection grant",
+              );
+            }
+            try {
+              const output = await broker.invoke({
+                identity,
+                allocationId: allocation.id,
+                alias: binding.alias,
+                action: name,
+                input: toJson(params.arguments),
+                caller: "agent",
+                ...(grant.agentSessionId
+                  ? { agentSessionId: grant.agentSessionId }
+                  : {}),
+              });
+              return broker.servesMcp(binding.providerKind)
+                ? forwardedToolResult(output)
+                : toolValue(output);
+            } catch (error) {
+              // A policy refusal is information the agent can act on (narrow
+              // the query, ask differently); other failures stay opaque.
+              if (
+                error instanceof ConnectionActionDeniedError ||
+                error instanceof ConnectionActionRefusedError
+              ) {
+                return toolError(error.message);
+              }
+              throw new McpRequestError(-32_000, "Connection action failed");
+            }
+          }
+          default:
+            throw new McpRequestError(-32601, "Method not found");
         }
-      }
-      return reply.send(rpcError(id, -32601, "Method not found"));
+      });
     },
   );
 }
 
-function rpcId(value: unknown): string | number | null {
-  return typeof value === "string" || typeof value === "number" ? value : null;
-}
-
-function rpcError(id: string | number | null, code: number, message: string) {
-  return { jsonrpc: "2.0" as const, id, error: { code, message } };
-}
-
 function bearer(value: string | undefined): string | undefined {
   return value?.match(/^Bearer\s+(.+)$/i)?.[1];
-}
-
-function record(value: unknown): Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : {};
 }
 
 function toJson(value: unknown): Json {

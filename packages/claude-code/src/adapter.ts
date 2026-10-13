@@ -87,6 +87,8 @@ export const CLAUDE_CODE_CAPABILITIES: HarnessCapabilities = {
   questions: true,
   approvals: true,
   elicitations: true,
+  // Tool search defers MCP tools until the model looks for them.
+  toolSearch: true,
   subagents: true,
   streamsText: true,
   streamsReasoning: true,

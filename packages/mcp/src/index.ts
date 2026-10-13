@@ -15,6 +15,7 @@ export {
 export {
   defineMcpConnectionProvider,
   type McpConnectionCredential,
+  mcpToolActions,
 } from "./connection-provider.js";
 export {
   type ElicitFormField,
