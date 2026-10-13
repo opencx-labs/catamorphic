@@ -78,6 +78,7 @@ export function SidebarItemRow<
   contextMenu,
   actions,
   description,
+  keepDescription = false,
   badges,
   progress,
   presentation = "row",
@@ -107,6 +108,11 @@ export function SidebarItemRow<
   contextMenu?: readonly TMenuEntry[];
   actions?: readonly TMenuEntry[];
   description?: string;
+  /**
+   * A short identifier (a pull request's number) stays whole and the label
+   * gives way instead; a long description (a path) shrinks first.
+   */
+  keepDescription?: boolean;
   badges?: readonly string[];
   progress?: number;
   presentation?: "row" | "tile";
@@ -462,7 +468,13 @@ export function SidebarItemRow<
                 ))
               )}
               {description && (
-                <span className="min-w-0 max-w-32 shrink-[3] truncate text-[11px] text-fg-faint">
+                <span
+                  className={`text-[11px] text-fg-faint ${
+                    keepDescription
+                      ? "shrink-0 whitespace-nowrap"
+                      : "min-w-0 max-w-32 shrink-[3] truncate"
+                  }`}
+                >
                   {description}
                 </span>
               )}

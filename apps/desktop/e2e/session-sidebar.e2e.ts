@@ -176,6 +176,14 @@ it("shows the chat's worktree and a pull request its agent records, live", async
     `document.querySelector('${details} [data-sidebar-item-id="${pullRequest}"]')?.textContent.includes('Merged')`,
     { timeoutMs: 60_000, label: "the merged state" },
   );
+  // The number stays whole; the title gives way when the row is narrow.
+  expect(
+    await app.eval(`(() => {
+      const row = document.querySelector('${details} [data-sidebar-item-id="${pullRequest}"]');
+      const number = [...row.querySelectorAll('span')].find((span) => span.textContent === '#42');
+      return !!number && number.scrollWidth <= number.clientWidth;
+    })()`),
+  ).toBe(true);
   const metadata = await fetch(`${base}/${sessionId}`).then(
     (response) =>
       response.json() as Promise<{

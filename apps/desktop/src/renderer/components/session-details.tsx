@@ -255,6 +255,7 @@ function SessionRows({
                   itemId={pr.id}
                   label={row.label}
                   description={row.description}
+                  keepDescription={Boolean(pr.title && pr.number)}
                   icon={row.icon}
                   badges={row.badges}
                   preview={{
