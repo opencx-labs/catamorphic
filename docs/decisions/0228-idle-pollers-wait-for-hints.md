@@ -1,6 +1,6 @@
 # 0228 — Idle pollers wait for hints from their own process
 
-- **Status:** Proposed (refines [0193](0193-no-cross-replica-state-in-replica-memory.md) and [0197](0197-agent-sessions-are-an-event-log-of-turns.md))
+- **Status:** Accepted (refines [0193](0193-no-cross-replica-state-in-replica-memory.md) and [0197](0197-agent-sessions-are-an-event-log-of-turns.md))
 - **Date:** 2026-10-13
 
 ## Context
