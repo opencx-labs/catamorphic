@@ -72,7 +72,7 @@ export const KNOWN_DRIFT: Readonly<Record<string, KnownDrift>> = {
   },
   "desktop/todo-progress.tsx": {
     reason: "An opaque popover surface where the registry's is translucent.",
-    copy: "1851d12b25cd",
+    copy: "c4de3f17ab3b",
   },
 };
 

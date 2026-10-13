@@ -6571,11 +6571,12 @@ export function App({
                 <div
                   className={`app-drag flex h-10 shrink-0 items-center justify-end gap-1 pr-3 ${windowButtons ? "pl-[86px]" : "pl-3"} ${projectInSidebarHeader ? "mb-2" : ""}`}
                 >
-                  {/* As wide as its name: the rest of the row still
-                      drags the window. */}
+                  {/* The project heads the sidebar across its width, as
+                      it does below the buttons' row; the tab strip drags
+                      the window. */}
                   {projectInSidebarHeader && (
                     <div
-                      className="app-no-drag mr-auto flex min-w-0 items-center gap-1"
+                      className="app-no-drag flex min-w-0 flex-1 items-center gap-1"
                       data-sidebar-project
                     >
                       {projectControls}

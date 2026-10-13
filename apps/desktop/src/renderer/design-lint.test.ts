@@ -89,18 +89,57 @@ describe("design lint", () => {
   });
   // DESIGN.md "Menus and popovers" (ADR 0221): one primitive owns each
   // kind of dismissal, presses inside pages and app frames included, which
-  // the window never sees itself. Registry mirrors under
-  // components/catamorphic are installed copies their hosts dismiss.
+  // the window never sees itself. Registry copies under
+  // components/catamorphic are installed as the registry ships them: their
+  // popups take a host's dismissal, and the desktop passes its own.
+  const REGISTRY = "components/catamorphic/";
   const appSources = () =>
-    sources().filter(({ file }) => !file.startsWith("components/catamorphic/"));
+    sources().filter(({ file }) => !file.startsWith(REGISTRY));
+  const registryCopies = () =>
+    sources().filter(({ file }) => file.startsWith(REGISTRY));
   const occurrences = (text: string, pattern: RegExp) =>
     [...text.matchAll(pattern)].length;
   /** A menu MenuPortal draws, or a native one main builds. */
   const menusDrawn = (text: string) =>
     occurrences(text, /<MenuPortal\b/g) +
     occurrences(text, /desktopApi\.\w+Menu\(/g);
-  const closesThroughPrimitive = (text: string) =>
-    /\busePopoverDismiss\(/.test(text) || menusDrawn(text) > 0;
+  /**
+   * Controls that open a menu: `aria-haspopup` "menu", or "true" (which
+   * means menu in ARIA, as the bare attribute does in JSX), and ⋯ icons.
+   */
+  const menuControls = (text: string) =>
+    Math.max(
+      occurrences(
+        text,
+        /\s"?aria-haspopup"?(?:(?:=|: )\{?"?(?:menu|true)\b"?|(?=[\s/>]))/g,
+      ),
+      occurrences(
+        text,
+        /<(?:MoreHorizontal|MoreVertical|Ellipsis|EllipsisVertical)(?:Icon)?\b/g,
+      ),
+    );
+  /**
+   * Popups a file opens that are not menus, one per popup: a control that
+   * says it opens one (`aria-haspopup`) and the popup's role (`dialog`,
+   * `listbox`) are the same popup, so each kind counts the larger of the
+   * two. Trees and grids are roles of lists that stay put, so only the
+   * control counts for those.
+   */
+  const otherPopups = (text: string) =>
+    ["dialog", "listbox", "tree", "grid"].reduce(
+      (total, kind) =>
+        total +
+        Math.max(
+          occurrences(
+            text,
+            new RegExp(`\\s"?aria-haspopup"?(?:=|: )\\{?"${kind}"`, "g"),
+          ),
+          kind === "dialog" || kind === "listbox"
+            ? occurrences(text, new RegExp(`\\srole(?:=|: )"${kind}"`, "g"))
+            : 0,
+        ),
+      0,
+    );
 
   it("menus open through MenuPortal, never a hand-rolled dropdown", () => {
     // Attributes and elements, not selectors such as '[role="menu"]'.
@@ -109,13 +148,7 @@ describe("design lint", () => {
       .flatMap(({ file, text }) => {
         if (/\srole(?:=|: )"menu"/.test(text)) return [`${file}: role="menu"`];
         // Each ⋯ button or menu button needs a menu of its own drawn.
-        const controls = Math.max(
-          occurrences(text, /\s"?aria-haspopup"?(?:=|: )\{?"menu"/g),
-          occurrences(
-            text,
-            /<(?:MoreHorizontal|MoreVertical|Ellipsis|EllipsisVertical)(?:Icon)?\b/g,
-          ),
-        );
+        const controls = menuControls(text);
         return controls > menusDrawn(text)
           ? [`${file}: ${controls} menu controls, ${menusDrawn(text)} menus`]
           : [];
@@ -123,10 +156,10 @@ describe("design lint", () => {
     expect(handRolled).toEqual([]);
   });
 
-  it("whatever pops up closes through usePopoverDismiss or a menu", () => {
-    // A control that says it opens a popup (aria-haspopup, any value), or
-    // a popup role, in a file with neither primitive. The rest close some
-    // other way, said here.
+  it("whatever pops up closes through usePopoverDismiss, one per popup", () => {
+    // A popup that is not a menu (the menu rule above counts those) needs
+    // a usePopoverDismiss of its own: one call in a file does not close
+    // every popup in it. The rest close some other way, said here.
     const ownDismissal: Record<string, string> = {
       "components/menu.tsx": "the menu primitive",
       "components/resource-inspector.tsx": "the hover inspector primitive",
@@ -144,14 +177,63 @@ describe("design lint", () => {
     };
     const unclosed = appSources()
       .filter(({ file }) => !(file in ownDismissal))
-      .filter(
-        ({ text }) =>
-          /\saria-haspopup\b|"aria-haspopup"|\srole(?:=|: )"(?:listbox|dialog)"/.test(
-            text,
-          ) && !closesThroughPrimitive(text),
-      )
-      .map(({ file }) => file);
+      .flatMap(({ file, text }) => {
+        const popups = otherPopups(text);
+        const dismissals = occurrences(text, /\busePopoverDismiss\(/g);
+        return popups > dismissals
+          ? [`${file}: ${popups} popups, ${dismissals} usePopoverDismiss`]
+          : [];
+      });
     expect(unclosed).toEqual([]);
+  });
+
+  it("registry popups close through the dismissal the desktop passes them", () => {
+    // A registry copy cannot import the desktop's primitives. Each popup
+    // in one (menus included) takes a host's dismissal hook, `useDismiss`,
+    // and every place the desktop draws it passes usePopoverDismiss.
+    const copies = registryCopies().filter(
+      ({ text }) => menuControls(text) + otherPopups(text) > 0,
+    );
+    const unhosted = copies.flatMap(({ file, text }) => {
+      const popups = menuControls(text) + otherPopups(text);
+      const hooks = occurrences(text, /\buseDismiss\(/g);
+      return popups > hooks
+        ? [`${file}: ${popups} popups, ${hooks} hooks`]
+        : [];
+    });
+    expect(unhosted).toEqual([]);
+    const unpassed = copies.flatMap(({ file }) => {
+      const module = file.slice(REGISTRY.length).replace(/\.tsx?$/, "");
+      return appSources().flatMap(({ file: user, text }) => {
+        const imported = [
+          ...text.matchAll(
+            new RegExp(
+              `import\\s*\\{([^}]*)\\}\\s*from\\s*"[^"]*/catamorphic/${module}(?:\\.js)?"`,
+              "g",
+            ),
+          ),
+        ].flatMap(([, names = ""]) =>
+          names
+            .split(",")
+            .map((name) => name.trim())
+            .filter((name) => /^[A-Z]/.test(name)),
+        );
+        return imported.flatMap((name) =>
+          [
+            ...text.matchAll(new RegExp(`<${name}\\b(?:=>|[^>])*>`, "g")),
+          ].flatMap(([element]) =>
+            element.includes("useDismiss={usePopoverDismiss}")
+              ? []
+              : [`${user}: <${name}> without useDismiss={usePopoverDismiss}`],
+          ),
+        );
+      });
+    });
+    expect(unpassed).toEqual([]);
+    // The rule sees the desktop's one registry popup today.
+    expect(copies.map(({ file }) => file)).toContain(
+      "components/catamorphic/todo-progress.tsx",
+    );
   });
 
   it("window-wide input listeners are listed with what they are for", () => {
@@ -169,6 +251,16 @@ describe("design lint", () => {
       "components/chat-dock.tsx": {
         count: 3,
         reason: "a press outside folds the chat; Escape minimizes it",
+      },
+      "components/catamorphic/agent-question-panel.tsx": {
+        count: 1,
+        reason:
+          "Escape sets an agent's questions aside before the chat takes it",
+      },
+      "components/catamorphic/todo-progress.tsx": {
+        count: 2,
+        reason:
+          "the registry's default dismissal, for hosts without one; the desktop passes usePopoverDismiss",
       },
       "components/command-palette.tsx": {
         count: 3,
@@ -229,7 +321,7 @@ describe("design lint", () => {
     };
     const listener =
       /(?:\b(?:window|document|globalThis|doc)(?:\.body)?|\bownerDocument)\s*\.\s*addEventListener\(\s*"(?:pointerdown|mousedown|mouseup|click|keydown|keyup)"/g;
-    const over = appSources().flatMap(({ file, text }) => {
+    const over = sources().flatMap(({ file, text }) => {
       const found = occurrences(text, listener);
       const limit = allowed[file]?.count ?? 0;
       return found > limit ? [`${file}: ${found} > ${limit}`] : [];

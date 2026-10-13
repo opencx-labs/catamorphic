@@ -22,6 +22,7 @@ let app: AppHandle;
 let origin: string;
 let temp: string;
 const REMOTE = "https://github.com/example/popup-fixture.git";
+const LONG_NAME = "A project whose name runs well past the sidebar's edge";
 const server = http.createServer((_request, response) => {
   response.setHeader("Content-Type", "text/html");
   response.end(`<title>Popup lab</title>
@@ -163,6 +164,12 @@ beforeAll(async () => {
       name: "Popup fixture",
       rootPath: fixture,
       importExisting: true,
+    })})`,
+  );
+  await app.eval(
+    `window.catamorphicDesktop.createProject(${JSON.stringify({
+      name: LONG_NAME,
+      rootPath: path.join(app.userDataDir, "popup-long"),
     })})`,
   );
   // The project list loads both on the next load.
@@ -340,6 +347,110 @@ describe("the project list", () => {
       `${view}.executeJavaScript('window.__presses', true).then(count => count === ${before + 1})`,
       { label: "page pressed" },
     );
+    expect(app.getRendererErrors()).toEqual([]);
+  });
+
+  it("spans the sidebar's content, however short the name, at any width", async () => {
+    // The list's edges, the sidebar's content edges (the project row's
+    // inset from the panel), and how wide the trigger's name is.
+    const geometry = () =>
+      app.eval<{
+        list: { left: number; right: number };
+        content: { left: number; right: number };
+        name: number;
+        sideways: boolean;
+      }>(`(() => {
+        const list = ${listbox}.getBoundingClientRect();
+        const rows = ${listbox}.querySelector('.overflow-y-auto');
+        const row = ${trigger}.closest('[data-sidebar-project]');
+        const panel = row.closest('.sidebar-inner').getBoundingClientRect();
+        const style = getComputedStyle(row);
+        return {
+          list: { left: list.left, right: list.right },
+          content: {
+            left: panel.left + parseFloat(style.paddingLeft),
+            right: panel.right - parseFloat(style.paddingRight),
+          },
+          name: ${trigger}.querySelector('span').getBoundingClientRect().width,
+          sideways: rows.scrollWidth > rows.clientWidth,
+        };
+      })()`);
+    const spans = async () => {
+      const { list, content, name, sideways } = await geometry();
+      // A long name truncates; the list never scrolls sideways.
+      expect(sideways).toBe(false);
+      expect(Math.abs(list.left - content.left)).toBeLessThanOrEqual(1);
+      expect(Math.abs(list.right - content.right)).toBeLessThanOrEqual(1);
+      expect(name).toBeLessThan(list.right - list.left - 40);
+      return list;
+    };
+    const artifacts = process.env.CATAMORPHIC_E2E_ARTIFACTS_DIR ?? os.tmpdir();
+    await hoverFixture();
+    const list = await spans();
+    // The fixture's card opens beside the list, not over it.
+    const beside = await app.eval<{ left: number; right: number }>(
+      `(() => { const r = ${panel}.getBoundingClientRect(); return { left: r.left, right: r.right }; })()`,
+    );
+    expect(beside.left >= list.right || beside.right <= list.left).toBe(true);
+    await app.screenshot(path.join(artifacts, "project-list.png"));
+    await app.press("Escape");
+    await cardClosed();
+    await app.press("Escape");
+    await listClosed();
+    // A wider sidebar: the list follows it.
+    const resize = async (key: "ArrowLeft" | "ArrowRight") => {
+      await app.eval(
+        `document.querySelector('[role="separator"][aria-label="Resize left sidebar"]').focus(); true`,
+      );
+      for (let step = 0; step < 4; step += 1) await app.press(key);
+    };
+    const before = await app.eval<number>(
+      `${trigger}.closest('.sidebar-inner').getBoundingClientRect().width`,
+    );
+    await resize("ArrowRight");
+    await app.waitFor(
+      `${trigger}.closest('.sidebar-inner').getBoundingClientRect().width === ${before + 80}`,
+      { label: "sidebar widened" },
+    );
+    try {
+      await press(await centerOf(trigger, "switcher"));
+      await listOpen();
+      await spans();
+      await app.screenshot(path.join(artifacts, "project-list-wide.png"));
+      await app.press("Escape");
+      await listClosed();
+    } finally {
+      await resize("ArrowLeft");
+    }
+    await app.waitFor(
+      `${trigger}.closest('.sidebar-inner').getBoundingClientRect().width === ${before}`,
+      { label: "sidebar width restored" },
+    );
+    // A name longer than the trigger: it truncates, the list stays put.
+    await press(await centerOf(trigger, "switcher"));
+    await listOpen();
+    await press(await centerOf(row(LONG_NAME), "long-named row"));
+    await app.waitFor(
+      `${trigger}?.textContent.includes(${JSON.stringify(LONG_NAME)})`,
+      { label: "long-named project in front", timeoutMs: 30_000 },
+    );
+    await press(await centerOf(trigger, "switcher"));
+    await listOpen();
+    await spans();
+    // Off the trigger, whose own card would open over the page.
+    await move(
+      await centerOf(
+        `[...${listbox}.querySelectorAll('button')].find(b => b.textContent.trim() === 'New project')`,
+        "New project",
+      ),
+    );
+    await app.waitFor(
+      "!document.querySelector('[data-resource-inspector][data-open]')",
+      { label: "no card open" },
+    );
+    await app.screenshot(path.join(artifacts, "project-list-long-name.png"));
+    await app.press("Escape");
+    await listClosed();
     expect(app.getRendererErrors()).toEqual([]);
   });
 });

@@ -82,11 +82,16 @@ bubbles, a chat's surface groups) each wrote their own listeners and never
 heard a press inside a web page. Now:
 
 - **A menu is `MenuPortal`.** A file that renders `role="menu"`,
-  `aria-haspopup="menu"` or an overflow icon must render `MenuPortal` (or
-  open a native menu through `desktopApi`); design-lint fails anything else.
-  A menu opened from a hover card holds that card open until it has closed.
+  `aria-haspopup="menu"` (or `"true"`, which means menu) or an overflow
+  icon must render `MenuPortal` (or open a native menu through
+  `desktopApi`); design-lint fails anything else. A menu opened from a
+  hover card holds that card open until it has closed, and focus it hands
+  back is the app's move, which opens no hover card.
 - **A popover that isn't a menu uses `usePopoverDismiss`**
   (`renderer/lib/popover-dismiss.ts`): it closes on a press outside it, a
   press inside a page or app frame, the window losing focus, and Escape,
-  ignoring presses on its own hover cards and menus. Design-lint ratchets
-  window and document press listeners outside these primitives.
+  ignoring presses on its own hover cards and menus. Design-lint counts
+  one per popup and ratchets window and document press listeners outside
+  these primitives. A registry component's popover (the chat's todo list)
+  takes its host's dismissal as a `useDismiss` hook; the desktop passes
+  `usePopoverDismiss`, other hosts keep the registry's window default.

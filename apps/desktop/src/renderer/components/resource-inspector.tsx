@@ -179,6 +179,7 @@ export function ResourceInspector<T extends HTMLElement = HTMLButtonElement>({
   disabled = false,
   testId,
   placement = "side",
+  anchorRef,
   warmup,
 }: {
   label: string;
@@ -195,6 +196,13 @@ export function ResourceInspector<T extends HTMLElement = HTMLButtonElement>({
   testId?: string;
   /** Where the panel sits relative to its trigger; see computeInspectorPosition. */
   placement?: "side" | "above";
+  /**
+   * What the panel sits beside, when more than the trigger: the list the
+   * trigger is a row of, so the panel clears the list's edge and the row's
+   * other buttons instead of covering them. Its top still follows the
+   * trigger.
+   */
+  anchorRef?: RefObject<Element | null>;
   children: (props: ResourceInspectorTriggerProps<T>) => ReactNode;
   content: ReactNode | ((dismiss: () => void) => ReactNode);
   delayMs?: number;
@@ -242,18 +250,19 @@ export function ResourceInspector<T extends HTMLElement = HTMLButtonElement>({
     if (dragging.current || disabled) return;
     const rect = triggerRef.current?.getBoundingClientRect();
     if (!rect) return;
+    const beside = anchorRef?.current?.getBoundingClientRect() ?? rect;
     setAnchor({
       top: rect.top,
-      right: rect.right,
+      right: beside.right,
       bottom: rect.bottom,
-      left: rect.left,
+      left: beside.left,
     });
     pointer.current = enteredAt.current;
     clearTimeout(warmTimer.current);
     setMounted(true);
     setOpen(true);
     setWarming(false);
-  }, [disabled]);
+  }, [disabled, anchorRef]);
   useEffect(() => {
     if (!disabled) return;
     clearTimeout(openTimer.current);
@@ -321,6 +330,15 @@ export function ResourceInspector<T extends HTMLElement = HTMLButtonElement>({
       holds.current.delete("panel-child");
       // A picked action may have closed the panel already.
       if (!openRef.current) return;
+      // Focus holds it only where the keyboard put it: arrowing through the
+      // menu held the panel for focus, but a press that closed the menu
+      // leaves the panel to the pointer, wherever the menu handed focus.
+      const active = document.activeElement;
+      const keyboard = active !== null && keyboardLeads(active);
+      if (!keyboard || !triggerRef.current?.contains(active))
+        holds.current.delete("trigger-focus");
+      if (!keyboard || active.closest("[data-resource-inspector]")?.id !== id)
+        holds.current.delete("panel-focus");
       // Where the pointer is now decides. Its enter and leave events say
       // nothing reliable: the menu and its shield sit inside the panel in
       // React's tree, so crossing onto them never left the panel, and once
@@ -579,21 +597,40 @@ export function InspectorPortal({
   const [shown, setShown] = useState(false);
   const pending = useRef(new Set<string>());
   const measured = useRef(false);
-  const report = useCallback((key: string, isPending: boolean) => {
-    if (isPending) pending.current.add(key);
-    else pending.current.delete(key);
-    if (measured.current && pending.current.size === 0) setShown(true);
+  // SETTLE_MAX_MS has passed: it appears whatever is still loading.
+  const overdue = useRef(false);
+  const openRef = useRef(open);
+  openRef.current = open;
+  // Only while it is open: a panel closed before it was seen never appears.
+  const reveal = useCallback(() => {
+    if (
+      openRef.current &&
+      measured.current &&
+      (pending.current.size === 0 || overdue.current)
+    )
+      setShown(true);
   }, []);
+  const report = useCallback(
+    (key: string, isPending: boolean) => {
+      if (isPending) pending.current.add(key);
+      else pending.current.delete(key);
+      reveal();
+    },
+    [reveal],
+  );
   // After the content's own layout effects have reported.
   useLayoutEffect(() => {
     measured.current = true;
-    if (pending.current.size === 0) {
-      setShown(true);
-      return;
-    }
-    const timer = window.setTimeout(() => setShown(true), SETTLE_MAX_MS);
+    reveal();
+    const timer = window.setTimeout(() => {
+      overdue.current = true;
+      reveal();
+    }, SETTLE_MAX_MS);
     return () => window.clearTimeout(timer);
-  }, []);
+  }, [reveal]);
+  useLayoutEffect(() => {
+    if (open) reveal();
+  }, [open, reveal]);
   useEffect(() => {
     if (!shown) return;
     // Height changes animate only once the panel is seen.
@@ -667,9 +704,15 @@ export function InspectorPortal({
     for (const media of ref.current?.querySelectorAll("audio, video") ?? []) {
       if (media instanceof HTMLMediaElement) media.pause();
     }
+    // Never seen: there is nothing to see leave, and its exit motion,
+    // which starts from full opacity, would flash it on its way out.
+    if (!shown) {
+      onExited();
+      return;
+    }
     const timer = window.setTimeout(onExited, 180);
     return () => window.clearTimeout(timer);
-  }, [open, onExited]);
+  }, [open, shown, onExited]);
 
   return createPortal(
     <div

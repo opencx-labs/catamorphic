@@ -78,6 +78,7 @@ import {
   readEditorSelection,
   selectionFromClipboard,
 } from "../lib/editor-selection";
+import { usePopoverDismiss } from "../lib/popover-dismiss.js";
 import { ipcErrorText } from "../lib/remote-workspace.js";
 import { skillsForAgent, useProjectSkillCatalog } from "../lib/skills";
 import {
@@ -2308,7 +2309,10 @@ function ChatDockContent({
             data-testid="chat-status-controls"
             className={`z-10 flex shrink-0 items-center gap-1 ${presentsAsTab ? "absolute right-2 top-2" : "relative"}`}
           >
-            <TodoProgress todos={chat.session?.todos ?? []} />
+            <TodoProgress
+              todos={chat.session?.todos ?? []}
+              useDismiss={usePopoverDismiss}
+            />
             <span className="flex items-center gap-0.5 rounded-lg border border-border bg-bg-raised p-0.5">
               <SessionInspector
                 projectId={projectId}

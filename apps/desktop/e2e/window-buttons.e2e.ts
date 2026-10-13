@@ -108,8 +108,14 @@ it.skipIf(!mac)(
     );
     await poll(drawn).toBe(false);
     expect(await run("return headerInset()")).toBe("12px");
-    // The project switcher moves up into the row the buttons kept.
+    // The project switcher moves up into the row the buttons kept, and
+    // heads the sidebar across it, not only as wide as its name.
     expect(await run("return projectInHeader()")).toBe(true);
+    expect(
+      await run(
+        `const row=$('[data-sidebar="left"] [data-sidebar-project]').closest('.app-drag').getBoundingClientRect();const trigger=$('[data-sidebar="left"] [aria-label="Switch project"]').getBoundingClientRect();const toggle=$('[data-sidebar="left"] button[aria-label="Collapse sidebar"]').getBoundingClientRect();return trigger.left - row.left <= 16 && toggle.left - trigger.right <= 12`,
+      ),
+    ).toBe(true);
     expect(JSON.parse(fs.readFileSync(prefsFile, "utf8"))).toMatchObject({
       windowButtons: false,
     });

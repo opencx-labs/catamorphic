@@ -624,6 +624,41 @@ describe("paged branches", () => {
     expect(collection.getItem("a")?.label).toBe("New");
   });
 
+  it("answers a queued Refresh when the next page queued before it has nothing to read", async () => {
+    const pending: Array<(page: CollectionPage<Item>) => void> = [];
+    const collection = createCollection<Item>({
+      source: { load: () => new Promise((resolve) => pending.push(resolve)) },
+    });
+    const first = collection.load();
+    pending[0]?.({ items: [{ id: "a", label: "A" }], cursor: "1" });
+    await first;
+    // A refresh is in flight; the list scrolls to its end, then Refresh.
+    const poll = collection.load();
+    void collection.load({ more: true });
+    let answered = false;
+    const refresh = collection.load().then(() => {
+      answered = true;
+    });
+    expect(collection.getBranch(null).paging).toBe(true);
+    // The refresh finds no rows past the loaded ones: no next page to read.
+    pending[1]?.({ items: [{ id: "a", label: "A" }] });
+    await poll;
+    await flush();
+    expect(collection.getBranch(null).paging).toBeUndefined();
+    // The queued Refresh still runs, and its caller hears back.
+    expect(pending).toHaveLength(3);
+    expect(answered).toBe(false);
+    pending[2]?.({ items: [{ id: "a", label: "Fresh" }] });
+    await refresh;
+    expect(answered).toBe(true);
+    expect(collection.getItem("a")?.label).toBe("Fresh");
+    expect(collection.getBranch(null)).toMatchObject({
+      ids: ["a"],
+      status: "ready",
+    });
+    expect(collection.getBranch(null).fetching).toBeFalsy();
+  });
+
   it("runs the widest refresh asked for while one is in flight", async () => {
     const pending: Array<(page: CollectionPage<Item>) => void> = [];
     const cursors: Array<string | undefined> = [];

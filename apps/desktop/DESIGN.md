@@ -241,11 +241,12 @@ its entries as data (`shared/menu.ts`), or a native menu main builds
 and run the picked action from `onExited`. While open it holds the window: a
 press anywhere else, a web page or an app's frame included, only closes it;
 Escape, focus or the window leaving, and its anchor going close it too, and
-focus goes back. A menu opened inside a hover card holds the card
+focus goes back as the app's move (`moveFocusAsApp`), so the control it
+lands on opens no hover card. A menu opened inside a hover card holds the card
 (`useHoldInspector`) from opening until it has exited, so the card neither
 closes under the menu's shield nor takes Escape before it; once the menu
-has gone, the card stays only if the pointer is on it (or keyboard focus
-is in it), wherever the press that closed the menu landed.
+has gone, the card stays only if the pointer is on it (or the keyboard
+leads and focus is in it), wherever the press that closed the menu landed.
 
 A **popover** is anything else that drops from a control: a switcher whose
 rows preview on hover, a bubble with toggles or a field. It closes through
@@ -259,13 +260,16 @@ closes. No menu or popover keeps press or Escape listeners of its own; a
 hover card closes on a press in a page too, and when its control turns
 inert or hidden (its list or sidebar closed).
 
-Design lint fails a file with more menu controls (`aria-haspopup="menu"`,
-an overflow icon) than menus it draws (`MenuPortal`) or asks main for
-(`desktopApi.*Menu`), a `role="menu"` outside the primitive, and a file
-with `aria-haspopup` or a popup role (`listbox`, `dialog`) that neither
-uses `usePopoverDismiss` nor draws a menu, unless it is listed with how it
-closes. Window, document and body listeners for presses and keys are
-listed per file with their job.
+Design lint fails a file with more menu controls (`aria-haspopup` "menu"
+or "true", an overflow icon) than menus it draws (`MenuPortal`) or asks
+main for (`desktopApi.*Menu`), a `role="menu"` outside the primitive, and
+a file with more other popups (a `dialog` or `listbox` control or role,
+the control and its popup counted once) than `usePopoverDismiss` calls,
+unless it is listed with how it closes. A registry component that pops up
+(`components/catamorphic/`) takes its host's dismissal as a `useDismiss`
+hook, and the desktop passes `usePopoverDismiss` wherever it draws one.
+Window, document and body listeners for presses and keys are listed per
+file with their job, registry copies included.
 
 ## Shape & spacing
 
@@ -559,7 +563,9 @@ rows inside shared chrome. The chrome owns status; sections own rows.
   `warmup`; a pointer passing over reads nothing), and the panel waits,
   unseen, for those its content reports pending (`useInspectorPending`) at
   most 250ms, on every path it opens by (hover, keyboard focus, a request),
-  so it opens with what it shows. A value still loading holds its line with
+  so it opens with what it shows. It appears only while it is still open:
+  one closed before it was seen (the pointer or Tab moved on) goes at once,
+  with no exit motion to flash it. A value still loading holds its line with
   a still skeleton bar of the line's height, never "Loading…" or "…" text of
   another height; a read that fails or finds nothing says so quietly on its
   own line ("Unavailable", "None"), never in a warning banner, and a state
@@ -2400,3 +2406,8 @@ menu now, holding the card open under it, and every remaining popover
 (project and profile switchers, the extensions and downloads bubbles, a
 chat's surface groups) closes through one hook that also hears presses
 inside pages, which those missed. Design lint fails a hand-rolled menu.
+
+The switcher's list spans the sidebar's content, whatever the project's
+name and the sidebar's width, and a project's card sits beside the whole
+list (`ResourceInspector`'s `anchorRef`), clear of its edge and each row's
+window button, level with the row it describes.
