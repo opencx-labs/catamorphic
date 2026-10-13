@@ -109,6 +109,7 @@ import { recordDownload, trackConsole } from "./browser-tab-records.js";
 import { PasswordVault } from "./browser-vault.js";
 import { DownloadsManager, DownloadsStore } from "./downloads.js";
 import { ExtensionsHost } from "./extensions/host.js";
+import { restoreGuestHistory } from "./history-restore.js";
 import type { WindowProfileRegistry } from "./index.js";
 import { LoginCapture, type LoginSubmission } from "./login-capture.js";
 import { popupNativeMenu } from "./native-menu.js";
@@ -706,11 +707,7 @@ export function registerBrowserSupport(
       const history = historyForGuest.get(guest);
       if (!history) return;
       historyForGuest.delete(guest);
-      void guest.navigationHistory.restore(history).catch(() => {
-        // Restored or not, the tab shows its page.
-        const page = history.entries[history.index];
-        if (page && !guest.isDestroyed()) void guest.loadURL(page.url);
-      });
+      void restoreGuestHistory({ guest, history });
     };
     // A tab's page runs its preload in every frame, so an embedded frame
     // asks through Work's dialogs too (ADR 0226); the preload keeps the
