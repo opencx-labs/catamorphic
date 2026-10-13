@@ -28,7 +28,10 @@ import {
   RemoteReceiptRefusedError,
   registerExecutorKey,
 } from "../services/remote-operations.js";
+import type { RunsService } from "../services/runs-service.js";
+import { SessionArtifactValidationError } from "../services/session-artifacts-service.js";
 import type { TriggerKindRuntime } from "../services/trigger-kinds.js";
+import { TriggersService } from "../services/triggers-service.js";
 import { testEnvironmentProvider } from "./test-environment.js";
 
 /*
@@ -49,6 +52,25 @@ const identity: Identity = {
 const HALF_EMOJI = "🚀".slice(0, 1);
 /** In Unicode mode, a surrogate is a character of its own only when alone. */
 const LONE_SURROGATE = /[\ud800-\udfff]/u;
+
+/** Every string in a value, keys included. */
+function strings(value: unknown): string[] {
+  if (typeof value === "string") return [value];
+  if (Array.isArray(value)) return value.flatMap(strings);
+  if (typeof value === "object" && value !== null)
+    return Object.entries(value).flatMap(([key, item]) => [
+      key,
+      ...strings(item),
+    ]);
+  return [];
+}
+
+/** The strings in a value that hold half of an emoji or a NUL. */
+function unstorable(value: unknown): string[] {
+  return strings(value).filter(
+    (text) => LONE_SURROGATE.test(text) || text.includes("\u0000"),
+  );
+}
 
 /**
  * A workflow whose trigger config, filter and input type carry a NUL and
@@ -237,9 +259,7 @@ describe.each(databases)("JSON a service builds, on %s", (name, open) => {
     if (!core.apps) throw new Error("apps not configured");
     return core.apps;
   }
-
-  it("records the trigger bindings of a commit whose filter and schema carry them", async () => {
-    const projectId = await project("Triggers");
+  async function publish(projectId: string): Promise<void> {
     await projectManager.publishFiles({
       tenantId: identity.tenantId,
       projectId,
@@ -247,6 +267,11 @@ describe.each(databases)("JSON a service builds, on %s", (name, open) => {
       message: "Triage tickets",
       author: { name: "Builder", email: "builder@example.com" },
     });
+  }
+
+  it("records the trigger bindings of a commit whose filter and schema carry them", async () => {
+    const projectId = await project("Triggers");
+    await publish(projectId);
     const bindings = await core.triggers.list({ identity, projectId });
     expect(bindings.map((binding) => binding.workflowName)).toEqual(["triage"]);
     const stored = await db
@@ -272,7 +297,46 @@ describe.each(databases)("JSON a service builds, on %s", (name, open) => {
     expect(stored.output_schema).toMatchObject({
       properties: { ok: { type: "string" } },
     });
-    expect(JSON.stringify(stored)).not.toMatch(LONE_SURROGATE);
+    expect(unstorable(stored)).toEqual([]);
+  });
+
+  it("gives every replica a commit's trigger bindings as stored, and matches payloads in that form", async () => {
+    const projectId = await project("Trigger replicas");
+    await publish(projectId);
+    const started: unknown[] = [];
+    // Replicas of one control plane: their own scan memo, one database.
+    const replica = () =>
+      new TriggersService(db, {
+        kinds: [ticketCreated],
+        projectManager,
+        runs: {
+          triggerProduction: async (args: { input: unknown }) => {
+            started.push(args.input);
+            return { id: randomUUID() };
+          },
+        } as unknown as RunsService,
+      });
+    const scanning = replica();
+    const other = replica();
+    // The first scans the commit and records it; the second reads the rows.
+    const scanned = await scanning.list({ identity, projectId });
+    const read = await other.list({ identity, projectId });
+    expect(unstorable(scanned)).toEqual([]);
+    expect(scanned).toEqual(read);
+    expect(scanned[0]?.where).toEqual([{ title: { $prefix: "\uFFFD\uFFFD" } }]);
+    // A ticket whose title starts as the filter was written matches on both,
+    // and one that does not on neither. Each run gets the payload as sent.
+    const down = { ticketId: "t-1", title: `${HALF_EMOJI}\u0000 down` };
+    for (const triggers of [scanning, other])
+      for (const payload of [down, { ticketId: "t-2", title: "all good" }])
+        await triggers.fire({
+          identity,
+          projectId,
+          kind: "ticket.created",
+          payload,
+          interactive: true,
+        });
+    expect(started).toEqual([down, down]);
   });
 
   it("builds an app whose workflow contract carries them", async () => {
@@ -306,12 +370,15 @@ describe.each(databases)("JSON a service builds, on %s", (name, open) => {
       triage: { inputSchema: STORED_INPUT_SCHEMA },
     });
     expect(stored.access).toEqual({});
+    expect(unstorable(stored)).toEqual([]);
   });
 
-  it("keeps an artifact whose file names carry half an emoji", async () => {
+  it("keeps a file whose name an agent cut through an emoji under one name", async () => {
     const projectId = await project("Artifacts");
     const session = await sessions().create(identity, projectId);
-    const notes = `notes/plan ${HALF_EMOJI}.md`;
+    // As the agent names it, and as git and Postgres keep it.
+    const named = `notes/plan ${HALF_EMOJI}.md`;
+    const kept = "notes/plan \uFFFD.md";
     const artifact = await core.sessionArtifacts.create({
       identity,
       projectId,
@@ -319,32 +386,56 @@ describe.each(databases)("JSON a service builds, on %s", (name, open) => {
       kind: "app",
       name: "review",
       source: "export default function App() { return <p>Plan</p>; }",
-      files: { [notes]: "# Plan" },
+      files: { [named]: "# Plan" },
     });
-    const updated = await core.sessionArtifacts.update({
-      identity,
-      projectId,
-      artifactId: artifact.id,
+    const address = { identity, projectId, artifactId: artifact.id };
+    const keptPaths = async () => {
+      const { source_paths } = await db
+        .selectFrom("session_artifacts")
+        .select("source_paths")
+        .where("id", "=", artifact.id)
+        .executeTakeFirstOrThrow();
+      return Array.isArray(source_paths)
+        ? source_paths.filter((path) => path === kept)
+        : [];
+    };
+    expect((await core.sessionArtifacts.files(address))[kept]).toBe("# Plan");
+    expect(await keptPaths()).toEqual([kept]);
+    // Written again under the name the agent gave it: one file, one path.
+    const rewritten = await core.sessionArtifacts.update({
+      ...address,
       revision: artifact.revision,
-      files: { [`notes/next ${HALF_EMOJI}.md`]: "# Next" },
+      files: { [named]: "# Plan, again" },
     });
-    expect(updated.revision).toBe(artifact.revision + 1);
-    const files = await core.sessionArtifacts.files({
-      identity,
-      projectId,
-      artifactId: artifact.id,
+    expect((await core.sessionArtifacts.files(address))[kept]).toBe(
+      "# Plan, again",
+    );
+    expect(await keptPaths()).toEqual([kept]);
+    // Deleted by that name: gone from the files and the paths.
+    await core.sessionArtifacts.update({
+      ...address,
+      revision: rewritten.revision,
+      files: { [named]: null },
     });
-    expect(files[artifact.sourcePath]).toContain("<p>Plan</p>");
-    // Each revision records its paths with U+FFFD in place.
+    expect(
+      Object.keys(await core.sessionArtifacts.files(address)),
+    ).not.toContain(kept);
+    expect(await keptPaths()).toEqual([]);
     const revisions = await db
       .selectFrom("session_artifact_revisions")
       .select("source_paths")
       .where("artifact_id", "=", artifact.id)
       .execute();
-    expect(revisions).toHaveLength(2);
-    expect(JSON.stringify(revisions)).not.toMatch(LONE_SURROGATE);
-    expect(JSON.stringify(revisions)).toContain("notes/plan \uFFFD.md");
-    expect(JSON.stringify(revisions)).toContain("notes/next \uFFFD.md");
+    expect(revisions).toHaveLength(3);
+    expect(unstorable(revisions)).toEqual([]);
+    // A NUL cannot be in a file name.
+    await expect(
+      core.sessionArtifacts.update({
+        ...address,
+        revision: rewritten.revision + 1,
+        files: { "notes/a\u0000.md": "# A" },
+      }),
+    ).rejects.toThrow(SessionArtifactValidationError);
   });
 
   it("names approvers whose names carry them", async () => {
@@ -364,7 +455,7 @@ describe.each(databases)("JSON a service builds, on %s", (name, open) => {
     expect(stored.approvers).toEqual({ roles: ["lead \uFFFD\uFFFD"] });
   });
 
-  it("stores a machine's error with U+FFFD and hands its output back as printed", async () => {
+  it("stores a machine's error with U+FFFD and hands its output back with NUL as U+FFFD", async () => {
     const lease = {
       executor: `node:${randomUUID()}`,
       leaseToken: randomUUID(),
@@ -395,8 +486,9 @@ describe.each(databases)("JSON a service builds, on %s", (name, open) => {
       });
       return job.id;
     };
-    // The response is sealed before it is stored, so the controller reads
-    // what the machine printed, as it would from a sandbox of its own.
+    // The response is sealed before it is stored; its NUL arrives as U+FFFD,
+    // as a machine's output always has (the Work server's remote execution
+    // test pins it), and the rest as printed.
     const printed = `built\u0000 ok ${HALF_EMOJI}`;
     const ran = provider.executeCommand("sandbox-1", "cat build.log");
     await queue.complete({
@@ -404,20 +496,43 @@ describe.each(databases)("JSON a service builds, on %s", (name, open) => {
       operationId: await take(),
       response: { exitCode: 0, result: printed },
     });
-    await expect(ran).resolves.toEqual({ exitCode: 0, result: printed });
+    await expect(ran).resolves.toEqual({
+      exitCode: 0,
+      result: `built\uFFFD ok ${HALF_EMOJI}`,
+    });
     // An error is stored in the clear, as text Postgres keeps.
-    const failed = provider.downloadFile("sandbox-1", "/missing");
-    const failure = failed.catch((error: unknown) => error);
-    const operationId = await take();
     const error = `No such file: notes\u0000 ${HALF_EMOJI}`;
-    await queue.complete({ ...lease, operationId, error });
+    const failed = provider.downloadFile("sandbox-1", "/missing");
+    const failure = failed.catch((cause: unknown) => cause);
+    await queue.complete({ ...lease, operationId: await take(), error });
     expect(String(await failure)).toContain("No such file: notes\uFFFD \uFFFD");
-    // The same receipt retried is still recognized as recorded, or refused
-    // once its controller has read it.
-    await queue
-      .complete({ ...lease, operationId, error })
-      .catch((refused: unknown) =>
-        expect(refused).toBeInstanceOf(RemoteReceiptRefusedError),
-      );
+    // A receipt retried after its answer was lost, for an operation no
+    // controller has read yet, is recognized as recorded: its error matches
+    // the stored one, U+FFFD and all.
+    const { id } = await db
+      .insertInto("remote_operations")
+      .values({
+        executor: lease.executor,
+        lease_token: lease.leaseToken,
+        operation: { kind: "download" },
+        status: "running",
+        reply_key: keys.publicKey,
+        expires_at: new Date(Date.now() + 60_000),
+      })
+      .returning("id")
+      .executeTakeFirstOrThrow();
+    await queue.complete({ ...lease, operationId: id, error });
+    await queue.complete({ ...lease, operationId: id, error });
+    expect(
+      await db
+        .selectFrom("remote_operations")
+        .select(["status", "error"])
+        .where("id", "=", id)
+        .executeTakeFirstOrThrow(),
+    ).toEqual({ status: "failed", error: "No such file: notes\uFFFD \uFFFD" });
+    // Another receipt for it is refused.
+    await expect(
+      queue.complete({ ...lease, operationId: id, error: "Other" }),
+    ).rejects.toBeInstanceOf(RemoteReceiptRefusedError);
   });
 });

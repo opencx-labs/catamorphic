@@ -124,7 +124,7 @@ describe("snapshotRefetchInterval", () => {
 
   it("keeps a chat on screen current while it waits for a stream", () => {
     const settled = {
-      state: { turns: {} },
+      state: { sequence: 2, turns: {} },
     } as unknown as Parameters<typeof snapshotRefetchInterval>[0]["data"];
     const input = {
       error: null,
@@ -139,21 +139,17 @@ describe("snapshotRefetchInterval", () => {
     expect(
       snapshotRefetchInterval({ ...input, onScreen: true, streaming: true }),
     ).toBe(false);
-    // Off screen, a sent message the snapshot does not show yet keeps it
-    // loading: that snapshot may predate the message.
+    // Off screen, a snapshot behind a message's receipt keeps loading: it
+    // may have been read before the message was accepted. One that reached
+    // the receipt stops, whether or not it still shows the message.
     expect(
-      snapshotRefetchInterval({
-        ...input,
-        onScreen: false,
-        awaitingChange: true,
-      }),
+      snapshotRefetchInterval({ ...input, onScreen: false, awaitSequence: 3 }),
     ).toBe(1_500);
     expect(
-      snapshotRefetchInterval({
-        ...input,
-        awaitingChange: true,
-        streaming: true,
-      }),
+      snapshotRefetchInterval({ ...input, onScreen: false, awaitSequence: 2 }),
+    ).toBe(false);
+    expect(
+      snapshotRefetchInterval({ ...input, awaitSequence: 3, streaming: true }),
     ).toBe(false);
   });
 });

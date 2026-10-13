@@ -12,7 +12,7 @@ import {
 import pg from "pg";
 import { describe, expect, it } from "vitest";
 import { createDatabase, withStorableParameters } from "../database.js";
-import { jsonbText } from "../storable-parameters.js";
+import { jsonbText, storableText, storedJson } from "../storable-parameters.js";
 
 interface Row {
   id: string;
@@ -152,6 +152,20 @@ describe("parameters reach Postgres as values it stores", () => {
         .where("label", "in", ["\u0000"])
         .compile().parameters,
     ).toEqual(['{"output":"\\ufffd"}', "\ufffd"]);
+  });
+
+  it("gives text and JSON back as Postgres stores them", () => {
+    const cut = "🚀".slice(0, 1);
+    expect(storableText(`a${cut}b\u0000🚀 \\ud83d`)).toBe(
+      "a\ufffdb\ufffd🚀 \\ud83d",
+    );
+    expect(
+      storedJson({
+        title: `x${cut}`,
+        items: ["\u0000", "🚀"],
+        gone: undefined,
+      }),
+    ).toStrictEqual({ title: "x\ufffd", items: ["\ufffd", "🚀"] });
   });
 
   it("is applied once however often it is asked for", () => {

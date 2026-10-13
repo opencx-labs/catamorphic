@@ -202,6 +202,27 @@ describe.each(databases)("retried session actions, on %s", (name, open) => {
   );
 
   it.each(runs)(
+    "keys %s's actions by the run: the next run of the same enablement gets nothing recorded",
+    async (_run, sender) => {
+      const first = sender();
+      const { projectId, sessionId } = await keyedChat("Next run");
+      const close = (author: SessionMessageAuthor) =>
+        actions.execute({
+          identity,
+          projectId,
+          operation: "close",
+          args: { key: "pr-7", idempotencyKey: "merged-7" },
+          author,
+        });
+      expect(await close(first)).toEqual({ sessionId, closed: true });
+      // The same enablement fires again with the same step: a new run, so
+      // a new action, not the first run's answer.
+      const next = { ...first, runId: randomUUID() };
+      expect(await close(next)).toEqual({ sessionId: null, closed: false });
+    },
+  );
+
+  it.each(runs)(
     "finishes %s's close that stopped after closing the chat",
     async (_run, sender) => {
       const author = sender();

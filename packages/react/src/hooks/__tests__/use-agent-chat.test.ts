@@ -700,19 +700,20 @@ describe("useAgentChat commands", () => {
     expect(events.filter((event) => event.startsWith("send:"))).toHaveLength(2);
   });
 
-  it("off screen, keeps loading until a sent message shows, even past a snapshot read before it", async () => {
+  it("off screen, keeps loading past a snapshot read before a sent message, until one reaches its receipt", async () => {
     // The first snapshot of a new session is read before the message is
-    // accepted and answered after its receipt, so the refresh the receipt
-    // asks for is that same load. It shows nothing running.
+    // accepted and answered only after the receipt has been handled, so the
+    // refresh the receipt asks for is that same load. It shows nothing
+    // running.
     let current = snapshot();
     let snapshots = 0;
     let getRead = () => {};
     const readBeforeSend = new Promise<void>((resolve) => {
       getRead = resolve;
     });
-    let sendAnswered = () => {};
-    const answered = new Promise<void>((resolve) => {
-      sendAnswered = resolve;
+    let releaseRead = () => {};
+    const released = new Promise<void>((resolve) => {
+      releaseRead = resolve;
     });
     server.use(
       http.post(apiUrl(`/api/projects/${PROJECT_ID}/agent/sessions`), () =>
@@ -723,8 +724,7 @@ describe("useAgentChat commands", () => {
         const read = current;
         if (snapshots === 1) {
           getRead();
-          await answered;
-          await new Promise((resolve) => setTimeout(resolve, 50));
+          await released;
         }
         return HttpResponse.json(sessionDetail(read));
       }),
@@ -736,7 +736,6 @@ describe("useAgentChat commands", () => {
           turns: [turn("t1", 1, { status: "running", inputItemId: "m1" })],
           items: [userMessage("m1", 2, "t1", "Work slowly")],
         });
-        setTimeout(sendAnswered, 0);
         return HttpResponse.json({
           commandId: body.commandId,
           status: "accepted",
@@ -752,12 +751,85 @@ describe("useAgentChat commands", () => {
     await act(async () => {
       await result.current.send("Work slowly");
     });
-    expect(result.current.pending[0]?.status).toBe("sent");
+    expect(result.current.pending[0]).toMatchObject({
+      status: "sent",
+      sequence: 3,
+    });
+    // Only now does the load read before the send answer.
+    expect(snapshots).toBe(1);
+    releaseRead();
     await waitFor(() => expect(result.current.isWorking).toBe(true), {
       timeout: 4_000,
     });
     expect(snapshots).toBeGreaterThan(1);
     await waitFor(() => expect(result.current.pending).toEqual([]));
+  });
+
+  it("a late receipt from the chat it left leaves the current chat's sends alone", async () => {
+    const OTHER = "00000000-0000-4000-8000-0000000000b2";
+    const otherBase = `/api/projects/${PROJECT_ID}/agent/sessions/${OTHER}`;
+    let answerFirst = () => {};
+    const firstAnswered = new Promise<void>((resolve) => {
+      answerFirst = resolve;
+    });
+    let firstPosted = () => {};
+    const posted = new Promise<void>((resolve) => {
+      firstPosted = resolve;
+    });
+    const receipt = async (request: Request, sequence: number) => {
+      const body = (await request.json()) as Record<string, unknown>;
+      return HttpResponse.json({
+        commandId: body.commandId,
+        status: "accepted",
+        sequence,
+        result: { itemId: `item-${sequence}`, turnId: `turn-${sequence}` },
+        error: null,
+      });
+    };
+    server.use(
+      http.get(apiUrl(BASE), () =>
+        HttpResponse.json(sessionDetail(snapshot())),
+      ),
+      http.get(apiUrl(otherBase), () =>
+        HttpResponse.json(sessionDetail(snapshot())),
+      ),
+      http.post(apiUrl(`${BASE}/commands`), async ({ request }) => {
+        firstPosted();
+        await firstAnswered;
+        return receipt(request, 5);
+      }),
+      http.post(apiUrl(`${otherBase}/commands`), ({ request }) =>
+        receipt(request, 7),
+      ),
+    );
+    const { result, rerender } = renderHookWithProviders(
+      ({ sessionId }: { sessionId: string }) =>
+        useAgentChat(PROJECT_ID, { sessionId, live: false }),
+      { initialProps: { sessionId: SESSION_ID } },
+    );
+    let first: Promise<boolean> = Promise.resolve(false);
+    act(() => {
+      first = result.current.send("To the first chat");
+    });
+    // The first chat's command is on its way when the hook moves on.
+    await act(async () => {
+      await posted;
+    });
+    rerender({ sessionId: OTHER });
+    await act(async () => {
+      await result.current.send("To the second chat");
+    });
+    expect(result.current.pending).toMatchObject([
+      { text: "To the second chat", status: "sent" },
+    ]);
+    // The first chat's receipt lands after the switch: it changes nothing here.
+    await act(async () => {
+      answerFirst();
+      await first;
+    });
+    expect(result.current.pending).toMatchObject([
+      { text: "To the second chat", status: "sent" },
+    ]);
   });
 
   it("keeps a failed send with its command id for resending", async () => {

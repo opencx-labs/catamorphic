@@ -1,4 +1,4 @@
-import type { DB, Json } from "@catamorphic/db";
+import { type DB, type Json, storedJson } from "@catamorphic/db";
 import {
   OriginDraftRepo,
   type ProjectManager,
@@ -625,18 +625,18 @@ export class TriggersService {
             wanted.has(binding.workflowName),
           );
         }
+        // Bindings hold their config and filters as stored, with U+FFFD for
+        // half of an emoji or a NUL; the payload is matched in that form.
+        const payload = storedJson(args.payload);
         if (kind.matches) {
           targets = targets.filter(({ binding }) =>
-            kind.matches?.({
-              config: binding.config as Json,
-              payload: args.payload,
-            }),
+            kind.matches?.({ config: binding.config as Json, payload }),
           );
         }
         // Declarative filters run here, on the control plane, for every
         // kind and every fire path (ADR 0171).
         targets = targets.filter(({ binding }) =>
-          matchesAllWhere(binding.where, args.payload),
+          matchesAllWhere(binding.where, payload),
         );
         span.setAttribute("catamorphic.trigger.target_count", targets.length);
 
@@ -979,19 +979,26 @@ export class TriggersService {
           );
           continue;
         }
-        bindings.push({
-          workflowName: workflow.functionName,
-          kind: binding.kind,
-          config: binding.config as Json,
-          where: binding.where as Json[],
-          ...(binding.projectKind ? { projectKind: binding.projectKind } : {}),
-          canSuspend: workflow.graph.canSuspend,
-          inputParameters: workflow.graph.input.parameters,
-          inputSchema: (workflow.graph.inputSchema ?? {}) as Json,
-          outputSchema: (workflow.graph.outputSchema ?? {}) as Json,
-          connectionRequirements: toJson(workflow.graph.connections),
-          bindingIndex,
-        });
+        // As every replica reads it back from its row, with U+FFFD for
+        // half of an emoji or a NUL the source wrote, so this replica
+        // matches and names it as the others do.
+        bindings.push(
+          storedJson({
+            workflowName: workflow.functionName,
+            kind: binding.kind,
+            config: binding.config as Json,
+            where: binding.where as Json[],
+            ...(binding.projectKind
+              ? { projectKind: binding.projectKind }
+              : {}),
+            canSuspend: workflow.graph.canSuspend,
+            inputParameters: workflow.graph.input.parameters,
+            inputSchema: (workflow.graph.inputSchema ?? {}) as Json,
+            outputSchema: (workflow.graph.outputSchema ?? {}) as Json,
+            connectionRequirements: toJson(workflow.graph.connections),
+            bindingIndex,
+          }),
+        );
       }
     }
     // One webhook name is one URL that verifies and answers senders one

@@ -445,23 +445,34 @@ describe("remote operation queue (ADR 0187)", () => {
       operationId: job?.id ?? "",
       error,
     });
-    const stored = await db
-      .selectFrom("remote_operations")
-      .select("error")
-      .where("id", "=", job?.id ?? "")
-      .executeTakeFirst();
-    // Its controller may already have deleted the row.
-    if (stored) expect(stored.error).not.toContain("ghs_secret");
     const failure = await result.catch((cause: unknown) => cause);
     expect(failure).toBeInstanceOf(Error);
     expect(String(failure)).toContain("[redacted]@github.com");
     expect(String(failure)).not.toContain("ghs_secret");
-    // The same receipt retried is still recognized as recorded, or refused
-    // once its controller has read it.
-    await remote.queue
-      .complete({ ...remote.lease, operationId: job?.id ?? "", error })
-      .catch((refused: unknown) =>
-        expect(refused).toBeInstanceOf(RemoteReceiptRefusedError),
-      );
+    // For an operation no controller has read yet, the error is stored
+    // without the credentials, and the same receipt retried after its
+    // answer was lost is recognized as recorded.
+    const { id } = await db
+      .insertInto("remote_operations")
+      .values({
+        executor: remote.lease.executor,
+        lease_token: remote.lease.leaseToken,
+        operation: { kind: "clone" },
+        status: "running",
+        reply_key: remote.keys.publicKey,
+        expires_at: new Date(Date.now() + 60_000),
+      })
+      .returning("id")
+      .executeTakeFirstOrThrow();
+    await remote.queue.complete({ ...remote.lease, operationId: id, error });
+    await remote.queue.complete({ ...remote.lease, operationId: id, error });
+    const stored = await db
+      .selectFrom("remote_operations")
+      .select(["status", "error"])
+      .where("id", "=", id)
+      .executeTakeFirstOrThrow();
+    expect(stored.status).toBe("failed");
+    expect(stored.error).toContain("[redacted]@github.com");
+    expect(stored.error).not.toContain("ghs_secret");
   });
 });
