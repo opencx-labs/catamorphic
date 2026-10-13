@@ -24,11 +24,13 @@ import {
 } from "lucide-react";
 import {
   createContext,
+  memo,
   type ReactNode,
   useContext,
   useEffect,
   useRef,
   useState,
+  useSyncExternalStore,
 } from "react";
 import { SwapText, useLinger } from "./activity-text.js";
 import {
@@ -60,6 +62,13 @@ function elapsedReserve(ms: number): string {
   return seconds < 60 ? "00s" : seconds < 3600 ? "00m 00s" : "00h 00m";
 }
 
+/**
+ * How far ahead of the reading the clock's room moves to a wider form:
+ * past the next tick (which may come late) and its widening (200 ms), so
+ * the time never reads wider than its room.
+ */
+const RESERVE_AHEAD_MS = 1_500;
+
 /** "4s", "2m 14s", "1h 5m": how long something ran, to the second. */
 export function formatElapsed(ms: number): string {
   const seconds = Math.max(0, Math.floor(ms / 1000));
@@ -69,15 +78,72 @@ export function formatElapsed(ms: number): string {
   return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
 }
 
-/** The current time, read again every second while `active`. */
+/**
+ * Whether the timeline is on screen: laid out (not in a hidden or lurking
+ * chat) in a window that shows. What enters reads it once as it mounts, so
+ * what a chat shows as it appears is simply there; clocks tick only while
+ * it holds.
+ */
+export interface OnScreenState {
+  readonly current: boolean;
+  subscribe: (listener: () => void) => () => void;
+}
+
+/** An on-screen state its owner sets (see `OnScreenState`). */
+export interface OnScreenSource extends OnScreenState {
+  set: (value: boolean) => void;
+}
+
+export function onScreenSource(): OnScreenSource {
+  const listeners = new Set<() => void>();
+  let current = false;
+  return {
+    get current() {
+      return current;
+    },
+    subscribe(listener) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    set(value) {
+      if (value === current) return;
+      current = value;
+      for (const listener of listeners) listener();
+    },
+  };
+}
+
+const ALWAYS_ON_SCREEN: OnScreenState = {
+  current: true,
+  subscribe: () => () => undefined,
+};
+
+/** The timeline's on-screen state; outside a timeline, always on screen. */
+export const OnScreen = createContext<OnScreenState>(ALWAYS_ON_SCREEN);
+
+/** Whether the timeline is on screen now, rendering again when that changes. */
+function useOnScreen(): boolean {
+  const state = useContext(OnScreen);
+  return useSyncExternalStore(
+    state.subscribe,
+    () => state.current,
+    () => state.current,
+  );
+}
+
+/**
+ * The current time, read again every second while `active` and the
+ * timeline is on screen; it catches up as the timeline comes back.
+ */
 export function useNow(active: boolean): number {
   const [now, setNow] = useState(() => Date.now());
+  const ticking = useOnScreen() && active;
   useEffect(() => {
-    if (!active) return;
+    if (!ticking) return;
     setNow(Date.now());
     const timer = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(timer);
-  }, [active]);
+  }, [ticking]);
   return now;
 }
 
@@ -527,11 +593,6 @@ function itemTiming(item: WorkItem): StepTiming {
 const firstLineOf = (text: string): string =>
   text.split("\n", 1)[0]?.trim() ?? "";
 
-/**
- * The turn's steps, from its work items. The chat keeps its prose calm:
- * this is where the full commands, file paths and tool payloads live, on
- * demand. Work a harness's private subagent did reads under its step.
- */
 /** Whether these sources read as at least one step (some are bookkeeping). */
 export function hasSteps(sources: StepSource[]): boolean {
   return sources.some(
@@ -542,6 +603,11 @@ export function hasSteps(sources: StepSource[]): boolean {
   );
 }
 
+/**
+ * The turn's steps, from its work items. The chat keeps its prose calm:
+ * this is where the full commands, file paths and tool payloads live, on
+ * demand. Work a harness's private subagent did reads under its step.
+ */
 export function turnStepsOf(
   sources: StepSource[],
   context: {
@@ -919,6 +985,31 @@ export function assignBackgroundCommands(
   return assigned;
 }
 
+/**
+ * Whether two pairings say the same: every step paired with a process in
+ * the same state. The timeline keeps its last pairing while this holds, so
+ * the steps reading it render only when a process changes.
+ */
+export function sameBackgroundStates(
+  previous: ReadonlyMap<string, ChatBackgroundCommand>,
+  next: ReadonlyMap<string, ChatBackgroundCommand>,
+): boolean {
+  if (previous.size !== next.size) return false;
+  for (const [ref, command] of next) {
+    const was = previous.get(ref);
+    if (
+      was !== command &&
+      (was?.kind !== command.kind ||
+        was.command !== command.command ||
+        was.description !== command.description ||
+        was.status !== command.status ||
+        was.exitCode !== command.exitCode)
+    )
+      return false;
+  }
+  return true;
+}
+
 /** Each background step's process, by the step's item id. */
 export const BackgroundStates = createContext<
   ReadonlyMap<string, ChatBackgroundCommand>
@@ -1024,11 +1115,14 @@ export function TurnClock({ leaving = false }: { leaving?: boolean }) {
         >
           <Timer className="size-3" />
           {/* The time holds the width of its longest reading in its current
-              form ("00s", then "00m 00s"), widening smoothly when it moves
-              on to minutes, so what follows it never moves as it counts. */}
+              form ("00s", then "00m 00s"), widening smoothly just before it
+              moves on to minutes, so what follows it never moves as it
+              counts and the time never overruns it. */}
           <span className="relative inline-block whitespace-nowrap">
             <span aria-hidden className="invisible">
-              <SwapText value={elapsedReserve(now - started)} />
+              <SwapText
+                value={elapsedReserve(now - started + RESERVE_AHEAD_MS)}
+              />
             </span>
             <span
               className="absolute top-0 left-0"
@@ -1046,8 +1140,11 @@ export function TurnClock({ leaving = false }: { leaving?: boolean }) {
           }`}
           data-testid="chat-activity-stalled"
         >
-          {/* Plain words, not an alarm: a long test run is quiet too. */}
-          {`No updates for ${formatElapsed(silent.current)}`}
+          {/* Plain words, not an alarm: a long test run is quiet too. The
+              log announces them once as they appear; the seconds that
+              follow count silently, never read out again each second. */}
+          No updates for{" "}
+          <span aria-live="off">{formatElapsed(silent.current)}</span>
         </span>
       )}
     </span>
@@ -1112,6 +1209,7 @@ export function TurnSteps({
   // Read once; dropped after it played, so the block never clips again.
   const [entering, setEntering] = useState(enter);
   const backgroundStates = useContext(BackgroundStates);
+  const onScreen = useContext(OnScreen);
   useEffect(() => {
     if (defaultExpanded) setChosen(true);
   }, [defaultExpanded]);
@@ -1120,10 +1218,12 @@ export function TurnSteps({
   // nodes: a new step at the end, earlier work folding in above, or a
   // background command that ended moving from the running rows into the
   // list.
+  // A row that arrives in a hidden chat is simply there when it shows.
   const shown = useRef(false);
   useEffect(() => {
     shown.current = true;
   }, []);
+  const rowsEnter = shown.current && onScreen.current;
   // The clock fades out where it was before it goes, when the turn ends
   // or a later line takes it.
   const clockShown = useLinger(clock ? true : undefined, CLOCK_FADE_MS);
@@ -1163,8 +1263,10 @@ export function TurnSteps({
           }`}
           inert={bare}
         >
-          {/* Clipped only vertically: the clock reaches past the line's end. */}
-          <div className="min-h-0 overflow-x-visible overflow-y-clip">
+          {/* Clipped only vertically: the clock reaches past the line's end.
+              Its 3px of slack, given back by its margin, keep the toggle's
+              focus ring whole without moving the line. */}
+          <div className="-my-[3px] min-h-0 overflow-x-visible overflow-y-clip py-[3px]">
             <div className="flex items-center gap-2">
               <button
                 type="button"
@@ -1196,7 +1298,7 @@ export function TurnSteps({
               <StepRow
                 key={step.background?.ref}
                 step={step}
-                enter={shown.current}
+                enter={rowsEnter}
                 {...handlers}
               />
             ))}
@@ -1217,7 +1319,7 @@ export function TurnSteps({
                 <StepRow
                   key={step.key}
                   step={step}
-                  enter={shown.current}
+                  enter={rowsEnter}
                   {...handlers}
                 />
               ))}
@@ -1229,18 +1331,25 @@ export function TurnSteps({
   );
 }
 
-function StepRow({
+interface StepRowProps extends StepHandlers {
+  step: TurnStep;
+  /** Joined a list already on screen: plays its entrance once. */
+  enter?: boolean;
+}
+
+/**
+ * One step's row. Its list builds its steps afresh whenever its message
+ * changes, so a row renders again only when its own step reads otherwise
+ * (`sameStepRow`), and a growing list renders only its new rows.
+ */
+const StepRow = memo(function StepRow({
   step,
   enter = false,
   resolveToolIcon,
   onFileClick,
   onLinkClick,
   renderMarkdown,
-}: {
-  step: TurnStep;
-  /** Joined a list already on screen: plays its entrance once. */
-  enter?: boolean;
-} & StepHandlers) {
+}: StepRowProps) {
   const [open, setOpen] = useState(false);
   // Read once: a row that was already there never gains the entrance.
   const [entering, setEntering] = useState(enter);
@@ -1395,6 +1504,54 @@ function StepRow({
       </div>
     </div>
   );
+}, sameStepRow);
+
+/** Compares a step's field; a field TurnStep gains must say how here. */
+const sameField =
+  <K extends keyof TurnStep>(field: K) =>
+  (a: TurnStep, b: TurnStep) =>
+    a[field] === b[field];
+
+const SAME_STEP: {
+  [K in keyof TurnStep]-?: (a: TurnStep, b: TurnStep) => boolean;
+} = {
+  key: sameField("key"),
+  kind: sameField("kind"),
+  icon: (a, b) =>
+    a.icon?.Icon === b.icon?.Icon && a.icon?.className === b.icon?.className,
+  link: (a, b) =>
+    a.link?.href === b.link?.href && a.link?.label === b.link?.label,
+  messageId: sameField("messageId"),
+  markdown: sameField("markdown"),
+  label: sameField("label"),
+  mono: sameField("mono"),
+  filePath: sameField("filePath"),
+  toolName: sameField("toolName"),
+  detail: sameField("detail"),
+  detailMono: sameField("detailMono"),
+  background: (a, b) =>
+    a.background?.ref === b.background?.ref &&
+    a.background?.kind === b.background?.kind &&
+    a.background?.description === b.background?.description,
+  status: sameField("status"),
+  startedAt: sameField("startedAt"),
+  endedAt: sameField("endedAt"),
+  finished: sameField("finished"),
+  awaitsEnd: sameField("awaitsEnd"),
+  running: sameField("running"),
+};
+const STEP_COMPARISONS = Object.values(SAME_STEP);
+
+/** `enter` is read once, as the row mounts: it never renders a row again. */
+function sameStepRow(previous: StepRowProps, next: StepRowProps): boolean {
+  return (
+    (previous.step === next.step ||
+      STEP_COMPARISONS.every((same) => same(previous.step, next.step))) &&
+    previous.resolveToolIcon === next.resolveToolIcon &&
+    previous.onFileClick === next.onFileClick &&
+    previous.onLinkClick === next.onLinkClick &&
+    previous.renderMarkdown === next.renderMarkdown
+  );
 }
 
 /**
@@ -1414,6 +1571,8 @@ function StepDuration({ step }: { step: TurnStep }) {
     <span
       className="cat-fade-in shrink-0 tabular-nums text-fg-faint"
       data-testid="chat-step-duration"
+      // A running step counts silently: the log never reads it each second.
+      aria-live="off"
     >
       {formatElapsed(ms)}
     </span>

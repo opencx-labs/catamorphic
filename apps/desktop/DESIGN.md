@@ -2526,16 +2526,33 @@ duration and chevron, and settling dropped the notes' steps in one frame
   scroll anchoring, so whatever grows or shrinks above (a streamed line, a
   step, a fold) keeps the bottom where it is in the same frame, without a
   scroll spring laying the page out every frame. Scrolled up, anchoring
-  keeps what the person reads in place.
+  keeps what the person reads in place. It holds the end only while the
+  chat follows: a reader who let go a few pixels short of the end stays
+  let go; a press in the conversation, and text selected in it, hold what
+  is under the pointer still (a drag that selects lets go); and a touch
+  drag, a key that scrolls up, a press on the scrollbar or a jump to an
+  earlier message let go even mid-stream, where the scroll library's own
+  reading of scroll events is drowned out by the growing answer.
 - **Only what changes renders.** The clock is the one part that renders
   every second; a beat renders only the text it changes; a turn handed
   back unchanged keeps its rows; a streaming reply parses only its last
-  block. A settled turn out of view skips style and layout, keeping its
-  last size. Loops stop where nobody sees them (a hidden chat, an activity
-  line scrolled away), and the running step no longer pulses beside the
-  breathing activity line; a command running in the background still does.
+  block; a step row renders only when its step reads otherwise, and the
+  steps' background commands are handed down again only when a process
+  changes. A settled turn out of view skips style and layout, keeping its
+  last size, where the browser anchors scrolling (not Safari, where its
+  placeholders would move what the person reads). Loops stop where nobody
+  sees them (a hidden chat, an activity line scrolled away), clocks wait
+  in a hidden chat and catch up as it shows, and the running step no
+  longer pulses beside the breathing activity line; a command running in
+  the background still does.
+- **A chat shown again is as it was.** A lurking chat shown again
+  mid-turn, or a chat opened mid-turn, has its activity line open and its
+  reply at its height; what arrived while it was hidden is simply there,
+  and nothing it held enters again.
 
 `e2e/chat-motion.e2e.ts` samples every frame of a paced turn: the spinner,
 the words' box and a folded steps line hold still, the clock and the
-silence sit on the steps line, rows keep their places, and the activity
-line closes before it goes.
+silence sit on the steps line, rows keep their places, the activity line
+closes before it goes, selected text holds still under the pointer,
+PageUp and the scrollbar take the view from a streaming answer, and an
+un-lurked chat's activity line is open from its first frame.

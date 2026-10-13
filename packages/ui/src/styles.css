@@ -2180,7 +2180,11 @@
 /* Something that opens its own height in the timeline's column and closes
    it again (the activity line, the turn line above it): one transition both
    ways on one element, so a quick change back reverses from where it is.
-   Closed, it gives back the column's gap (--cat-reveal-gap). */
+   Closed, it gives back the column's gap (--cat-reveal-gap). It opens from
+   nothing only as it appears in a chat on screen (data-entering, which the
+   timeline drops once it has opened): a chat shown again mid-turn, which
+   lays it out anew, has it open already. Its line is clipped only while it
+   moves (data-moving, data-closed), so a focus ring in it shows whole. */
 .cat-reveal {
   display: grid;
   grid-template-rows: 1fr;
@@ -2198,7 +2202,7 @@
 }
 
 @starting-style {
-  .cat-reveal {
+  .cat-reveal[data-entering] {
     grid-template-rows: 0fr;
     opacity: 0;
     margin-top: var(--cat-reveal-gap, 0px);
@@ -2207,16 +2211,36 @@
 
 .cat-reveal > * {
   min-height: 0;
+}
+
+.cat-reveal:is([data-moving], [data-closed]) > * {
   overflow-x: visible;
   overflow-y: clip;
 }
 
 /* A conversation in view only, from first to last. A settled turn out of
-   view skips style, layout and paint (it keeps its last size, so the
-   scroll does not move when it comes back); the live turn never does. */
-.cat-settled {
-  content-visibility: auto;
-  contain-intrinsic-size: auto 240px;
+   view skips style, layout and paint; the live turn never does. Every row
+   (cat-row) remembers its last laid-out size, live ones included, so a
+   turn that settles in view keeps its height for the frame before the
+   browser finds it in view (a guess there could collapse the conversation
+   for a frame and drop the scroll to the top), and one coming back into
+   view takes the size it left with. Only a row never laid out guesses.
+   Only where the browser anchors scrolling: a placeholder taking its real
+   size as it comes into view moves what the person reads unless anchoring
+   makes up for it (Safari has no overflow-anchor). Skipping paint clips at
+   the row's padding box, so 4px of padding, given back by the margin,
+   keeps focus rings and a deep-linked message's outline whole without
+   moving a pixel. */
+.cat-row {
+  contain-intrinsic-size: auto 80px;
+}
+
+@supports (overflow-anchor: auto) {
+  .cat-settled {
+    content-visibility: auto;
+    padding: 4px;
+    margin: -4px;
+  }
 }
 
 /* While the chat follows its latest message (data-pinned), only the anchor

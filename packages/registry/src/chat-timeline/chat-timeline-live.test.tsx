@@ -10,6 +10,7 @@ import {
   input,
   reply,
   timelineOf,
+  toolCall,
   turn,
 } from "./timeline-fixtures.js";
 import type { WorkDisplay } from "./turn-rows.js";
@@ -224,6 +225,27 @@ describe("ChatTimeline live chrome", () => {
     expect($('[data-testid="chat-activity"]')).toBeNull();
   });
 
+  it("opens the activity line from nothing only when it appears in a chat on screen", async () => {
+    const timeline = timelineOf({ turns: [running()], items: working });
+    const reveal = () =>
+      $('[data-testid="chat-activity"]')?.closest(".cat-reveal");
+    // A chat opened mid-turn has it open already.
+    await render({ timeline, activity: "Running tests" });
+    expect(reveal()?.hasAttribute("data-entering")).toBe(false);
+    expect(reveal()?.hasAttribute("data-moving")).toBe(false);
+    await render({ timeline });
+    await wait(250);
+    expect(reveal()).toBeUndefined();
+    // Work starting in a chat on screen opens it, clipped while it moves.
+    await render({ timeline, activity: "Running tests" });
+    expect(reveal()?.hasAttribute("data-entering")).toBe(true);
+    expect(reveal()?.hasAttribute("data-moving")).toBe(true);
+    // Once open, it never opens again, wherever the chat goes meanwhile.
+    await wait(350);
+    expect(reveal()?.hasAttribute("data-entering")).toBe(false);
+    expect(reveal()?.hasAttribute("data-moving")).toBe(false);
+  });
+
   it("changes a folded count on a beat, its words read whole", async () => {
     const steps = (count: number): Item[] => [
       input("t1", "Fix the parser"),
@@ -262,5 +284,56 @@ describe("ChatTimeline live chrome", () => {
       });
     expect(toggle()?.textContent).toBe("10 steps");
     expect(count()?.className).not.toMatch(/cat-swap-(out|in)/);
+  });
+
+  it("leaves a settled turn's steps alone while a later reply streams", async () => {
+    const start = {
+      tool: "run_background_command",
+      input: { command: "bun run dev", description: "Start the dev server" },
+    };
+    const first: Item[] = [
+      input("t1", "Read everything"),
+      toolCall("b1", "t1", start),
+      ...Array.from({ length: 20 }, (_, index) => toolCall(`r${index}`, "t1")),
+      reply("a1", "t1", "Read."),
+    ];
+    const streaming = (text: string) =>
+      timelineOf({
+        turns: [turn("t1", 1), running({ id: "t2", ordinal: 2 })],
+        items: [
+          ...first,
+          input("t2", "Now explain"),
+          reply("a2", "t2", text, { status: "in_progress" }),
+        ],
+      });
+    // The reducer hands back a turn it did not change as the same object.
+    const settledTurn = streaming("").at(0);
+    const at = (text: string) => {
+      const timeline = streaming(text);
+      return settledTurn ? [settledTurn, ...timeline.slice(1)] : timeline;
+    };
+    const backgroundCommands = [
+      {
+        kind: "command" as const,
+        command: "bun run dev",
+        description: "Start the dev server",
+        status: "running" as const,
+        exitCode: null,
+      },
+    ];
+    // Every step row asks for its tool's icon as it renders.
+    const resolveToolIcon = vi.fn(() => undefined);
+    const props = {
+      activity: "Writing",
+      backgroundCommands,
+      resolveToolIcon,
+      workDisplay: { live: "all", settled: "keep" } as const,
+    };
+    await render({ ...props, timeline: at("The") });
+    expect(resolveToolIcon.mock.calls.length).toBeGreaterThanOrEqual(20);
+    resolveToolIcon.mockClear();
+    for (const text of ["The parser", "The parser reads", "The parser reads."])
+      await render({ ...props, timeline: at(text) });
+    expect(resolveToolIcon.mock.calls.length).toBe(0);
   });
 });

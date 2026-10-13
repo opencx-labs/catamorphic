@@ -14,7 +14,12 @@ import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
  *   the turn's clock after it) slides when the count gains a digit;
  * - the turn's clock and a long silence sit on that steps line;
  * - an open list's rows keep their places as wider steps join it;
- * - the activity line closes its height when the turn ends.
+ * - the activity line closes its height when the turn ends;
+ * - text pressed and selected while an answer streams holds still under
+ *   the pointer, and a key or a press on the scrollbar takes the view
+ *   away from the latest words for good;
+ * - a lurking chat shown again mid-turn has its activity line open, not
+ *   opening.
  *
  * Positions are sampled on every animation frame and compared within the
  * phase where nothing should move, so a slow host only means fewer
@@ -45,6 +50,24 @@ const helpers = `
       key, bubbles: true, cancelable: true, ...(mods.metaKey && !/Mac/.test(navigator.platform) ? { ...mods, metaKey: false, ctrlKey: true } : mods) }));
     window.dispatchEvent(new KeyboardEvent('keyup', { key, bubbles: true }));
   };
+  const logScroller = () => frontDock()?.querySelector('[role="log"]')?.firstElementChild;
+  const following = () => {
+    const s = logScroller();
+    return !!s && s.scrollHeight - s.clientHeight - s.scrollTop < 2 &&
+      s.firstElementChild.hasAttribute('data-pinned');
+  };
+  const toLatest = () =>
+    frontDock().querySelector('[aria-label="Scroll to latest message"]')?.click();
+  const hoverDock = () => frontDock().dispatchEvent(
+    new MouseEvent('mouseover', { bubbles: true, relatedTarget: document.body }));
+  // A real leave: the pointer moves somewhere outside the dock first.
+  const unhoverDock = () => {
+    window.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: 4, clientY: 4 }));
+    frontDock().dispatchEvent(
+      new MouseEvent('mouseout', { bubbles: true, relatedTarget: document.body, clientX: 4, clientY: 4 }));
+  };
+  const clickOutside = () =>
+    window.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
 `;
 
 const run = <T = unknown>(body: string) =>
@@ -77,6 +100,8 @@ interface Frame {
   stallOnLine: boolean;
   /** The first row of the live list's left and its chevron's. */
   firstRow: Box;
+  /** The line of the answer a test pressed on (`data-e2e-held`). */
+  held: Box;
   firstChevron: Box;
   reveal: Box;
   /** The log's scroll position and its content's height. */
@@ -128,6 +153,7 @@ const RECORDER = `(() => {
       stall: box(stall), stallOnLine: !!stall?.closest('[data-testid="chat-turn-steps"]'),
       firstRow: box(first?.querySelector('button')),
       firstChevron: box(first?.querySelector('button > svg:last-child')),
+      held: box(log?.querySelector('[data-e2e-held]')),
       reveal: box(row?.closest('.cat-reveal')),
       scroll: log ? log.firstElementChild.scrollTop : null,
       content: log ? round(log.firstElementChild.firstElementChild.getBoundingClientRect().height) : null,
@@ -207,6 +233,24 @@ const scrollJumps = (frames: Frame[]) =>
     const shrank = (before.content ?? 0) - (frame.content ?? 0);
     return fell > Math.max(shrank, 0) + 2;
   });
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** Marks a moment on the renderer's clock, to read the frames around it. */
+const mark = (name: string) =>
+  app.eval(
+    `(window.__marks ??= {})[${JSON.stringify(name)}] = performance.now()`,
+  );
+const readMarks = () => app.eval<Record<string, number>>("window.__marks");
+
+/** Waits for a long answer streaming in a chat taller than its view. */
+const streamingLong = () =>
+  runWait(
+    `const s = logScroller();
+     return !!s && s.textContent.includes('Part 2') &&
+       s.scrollHeight > s.clientHeight + 120 && following();`,
+    { label: "a long answer streaming, followed", timeoutMs: 30_000 },
+  );
 
 /** The activity line's parts, less a Cancel at its far end. */
 const lineParts = (frame: Frame) =>
@@ -403,10 +447,6 @@ describe("chat motion", () => {
   it("holds the latest words still as an answer streams, and lets a reader scroll away", async () => {
     await setDisplay("all");
     await newChat();
-    const mark = (name: string) =>
-      app.eval(
-        `(window.__marks ??= {})[${JSON.stringify(name)}] = performance.now()`,
-      );
     const frames = await recordTurn(
       "streaming",
       "pace the work quickly at length",
@@ -440,7 +480,7 @@ describe("chat motion", () => {
         );
       },
     );
-    const marks = await app.eval<Record<string, number>>("window.__marks");
+    const marks = await readMarks();
     const between = (from: number, to: number) =>
       frames.filter((frame) => frame.t >= from && frame.t < to);
     // Following: the activity line holds still while the words grow above it.
@@ -464,5 +504,215 @@ describe("chat motion", () => {
     // Back at the latest, it follows to the end.
     const last = frames.at(-1);
     expect((last?.room ?? 0) - (last?.scroll ?? 0)).toBeLessThan(2);
+  }, 120_000);
+
+  it("holds text still under the pointer while a person selects it as an answer streams", async () => {
+    await setDisplay("all");
+    await newChat();
+    const frames = await recordTurn(
+      "selecting",
+      "pace the work quickly at length",
+      async () => {
+        await streamingLong();
+        // A line of the answer in the middle of the view.
+        const at = await runWait<{ x: number; y: number }>(
+          `const s = logScroller();
+           const view = s.getBoundingClientRect();
+           const line = [...s.querySelectorAll('.cat-markdown:not([data-testid]) :is(p, li)')].find((el) => {
+             const r = el.getBoundingClientRect();
+             return r.width > 160 && r.top > view.top + view.height * 0.25 &&
+               r.bottom < view.top + view.height * 0.6 &&
+               el.contains(document.elementFromPoint(r.left + 6, r.top + r.height / 2));
+           });
+           if (!line) return false;
+           line.setAttribute('data-e2e-held', '');
+           const r = line.getBoundingClientRect();
+           return { x: Math.round(r.left + 6), y: Math.round(r.top + r.height / 2) };`,
+          { label: "a line in the middle of the view" },
+        );
+        const mouse = (type: string, x: number, buttons: number) =>
+          app.cdp("Input.dispatchMouseEvent", {
+            type,
+            x,
+            y: at.y,
+            button: "left",
+            buttons,
+            clickCount: 1,
+          });
+        await mouse("mousePressed", at.x, 1);
+        await mark("pressed");
+        for (const dx of [20, 40, 60, 80, 100]) {
+          await mouse("mouseMoved", at.x + dx, 1);
+          await sleep(80);
+        }
+        await sleep(1200);
+        await mouse("mouseReleased", at.x + 100, 0);
+        expect(
+          await run<string>(
+            `return document.getSelection()?.toString() ?? '';`,
+          ),
+          "text was selected",
+        ).not.toBe("");
+        await sleep(800);
+        await mark("after");
+        // A selection lets go of the latest words: they wait below.
+        expect(
+          await run<boolean>(
+            `return !!frontDock().querySelector('[aria-label="Scroll to latest message"]');`,
+          ),
+        ).toBe(true);
+        await run(
+          `document.getSelection()?.removeAllRanges(); toLatest(); return true;`,
+        );
+      },
+    );
+    const marks = await readMarks();
+    const held = frames.filter(
+      (frame) =>
+        frame.held &&
+        frame.t >= (marks.pressed ?? 0) &&
+        frame.t < (marks.after ?? 0),
+    );
+    expect(held.length).toBeGreaterThan(20);
+    expect(
+      spread(held.map((frame) => frame.held?.[1] ?? 0)),
+      "the pressed line, pressed, selected and let go",
+    ).toBeLessThanOrEqual(0.5);
+    expect(
+      spread(held.map((frame) => frame.content ?? 0)),
+      "the answer grew meanwhile",
+    ).toBeGreaterThan(20);
+  }, 120_000);
+
+  it("lets a key or a press on the scrollbar take the view from the latest words as an answer streams", async () => {
+    await setDisplay("all");
+    await newChat();
+    let onBar = false;
+    const frames = await recordTurn(
+      "escapes",
+      "pace the work quickly at length",
+      async () => {
+        await streamingLong();
+        // A press on the scrollbar's track, above its thumb.
+        const bar = await run<{ x: number; y: number } | null>(
+          `const s = logScroller();
+           const r = s.getBoundingClientRect();
+           const x = Math.round(r.right - 3);
+           const y = Math.round(r.top + r.height * 0.2);
+           return document.elementFromPoint(x, y) === s ? { x, y } : null;`,
+        );
+        // Overlay scrollbars (macOS) show only while scrolling.
+        if (process.platform === "linux") expect(bar).not.toBeNull();
+        if (bar) {
+          onBar = true;
+          for (const type of ["mousePressed", "mouseReleased"])
+            await app.cdp("Input.dispatchMouseEvent", {
+              type,
+              ...bar,
+              button: "left",
+              buttons: type === "mousePressed" ? 1 : 0,
+              clickCount: 1,
+            });
+          await mark("bar");
+          await sleep(1200);
+          await mark("barred");
+          // Back to the latest.
+          await run(`toLatest(); return true;`);
+          await runWait(`return following();`, {
+            label: "following again",
+            timeoutMs: 10_000,
+          });
+        }
+        // PageUp with focus on a control in the conversation.
+        expect(
+          await run<string | undefined>(
+            `logScroller().querySelector('[data-testid="chat-turn-steps-toggle"]')?.focus({ preventScroll: true });
+             return document.activeElement?.dataset.testid;`,
+          ),
+        ).toBe("chat-turn-steps-toggle");
+        const pageUp = {
+          key: "PageUp",
+          code: "PageUp",
+          windowsVirtualKeyCode: 33,
+          nativeVirtualKeyCode: 33,
+        };
+        await app.cdp("Input.dispatchKeyEvent", {
+          type: "rawKeyDown",
+          ...pageUp,
+        });
+        await app.cdp("Input.dispatchKeyEvent", { type: "keyUp", ...pageUp });
+        await mark("key");
+        await sleep(1200);
+        await mark("keyed");
+        await run(`toLatest(); return true;`);
+      },
+    );
+    const marks = await readMarks();
+    const away = (from: number, to: number) => {
+      // Past the browser's own smooth scroll for the key or the track.
+      const still = frames.filter(
+        (frame) => frame.t >= from + 400 && frame.t < to,
+      );
+      expect(still.length).toBeGreaterThan(20);
+      expect(
+        spread(still.map((frame) => frame.scroll ?? 0)),
+        "the view stays where the person took it",
+      ).toBe(0);
+      expect(
+        Math.min(
+          ...still.map((frame) => (frame.room ?? 0) - (frame.scroll ?? 0)),
+        ),
+        "away from the latest words",
+      ).toBeGreaterThan(100);
+      expect(
+        spread(still.map((frame) => frame.content ?? 0)),
+        "the answer grew meanwhile",
+      ).toBeGreaterThan(20);
+    };
+    if (onBar) away(marks.bar ?? 0, marks.barred ?? 0);
+    away(marks.key ?? 0, marks.keyed ?? 0);
+  }, 120_000);
+
+  it("shows a lurking chat's activity line open, not opening, when it comes back mid-turn", async () => {
+    await setDisplay("all");
+    await newChat();
+    const frames = await recordTurn("lurking", "pace the work", async () => {
+      await runWait(
+        `return /^[2-9] steps$/.test(logScroller()?.querySelector('[data-live-work] [data-testid="chat-turn-steps-toggle"]')?.textContent ?? '');`,
+        { label: "two steps", timeoutMs: 30_000 },
+      );
+      await mark("lurk");
+      await run(`unhoverDock(); clickOutside(); return true;`);
+      await runWait(`return frontDock().hasAttribute('data-lurking');`, {
+        label: "lurking",
+        timeoutMs: 10_000,
+      });
+      // Steps arrive while it lurks.
+      await sleep(1600);
+      await mark("back");
+      await run(`hoverDock(); return true;`);
+      await runWait(`return !frontDock().hasAttribute('data-lurking');`, {
+        label: "back from lurking",
+      });
+    });
+    const marks = await readMarks();
+    const open = frames
+      .filter((frame) => frame.t < (marks.lurk ?? 0) && frame.reveal)
+      .map((frame) => frame.reveal?.[3] ?? 0);
+    const full = Math.max(...open);
+    expect(full).toBeGreaterThan(10);
+    const back = frames.filter(
+      (frame) =>
+        frame.t >= (marks.back ?? 0) &&
+        !frame.answer &&
+        (frame.reveal?.[3] ?? 0) > 0,
+    );
+    expect(back.length).toBeGreaterThan(20);
+    expect(
+      back
+        .map((frame) => frame.reveal?.[3])
+        .filter((height) => height !== full),
+      "the activity line's height from its first frame back",
+    ).toEqual([]);
   }, 120_000);
 });
