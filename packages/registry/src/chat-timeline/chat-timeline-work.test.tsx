@@ -207,6 +207,11 @@ describe("ChatTimeline work display", () => {
     });
     expect(toggles()).toEqual(["false"]);
     expect(container.querySelectorAll(".cat-fold-away")).toHaveLength(2);
+    // Each note closes up whole, with the step it showed in place, so the
+    // conversation never loses those rows' height in one frame.
+    expect(
+      container.querySelectorAll('.cat-fold-away [data-testid="chat-step"]'),
+    ).toHaveLength(2);
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 300));
     });

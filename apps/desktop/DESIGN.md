@@ -386,7 +386,10 @@ screen, or under reduced motion.
 | Tab strip `translate` (the horizontal strip slides with the left sidebar's panel, to where the settle puts it) | 200ms, the panel's easing and item wait | the panel's own slide; dropped without a transition when the content settles |
 | `bubble-ask` (agent question arrival) | 280ms | — (one-shot nudge on a persistent bubble; no exit to pair) |
 | `input-recall-{up,down}-{a,b}` (composer ↑/↓ history) | 150ms | — (transform-only directional content signal; paired names replay rapid same-direction recalls without a classless frame) |
-| `cat-activity-leave` / `cat-activity-arrive` (agent activity line swap; shared from `@catamorphic/ui/styles.css` with `cat-fade-in`, `cat-fold-away` and `cat-step-in`) | 150ms / 200ms | — (one beat of the working pulse carries a content swap on a persistent line: the old text dims up and away, the new rises in, then `animate-pulse` resumes) |
+| `cat-swap-out` / `cat-swap-in` (text changing in place: the agent's activity line, a steps line's count and word; shared from `@catamorphic/ui/styles.css` with `cat-fade-in`, `cat-fold-away` and `cat-step-in`) | 200ms / 200ms | each other (opacity only: the old text fades out from the opacity it had, the activity line's breath included, then the new fades in; the activity line resumes `animate-pulse`) |
+| `.cat-swap-slot` transition (a changing label's place, so what follows it slides to the new width) | 200ms | itself, only while a swap plays |
+| `.cat-reveal` transition (the activity line and the turn line above it opening and closing their height; `@starting-style` for arrival) | 200ms | itself: one transition both ways, giving back the column's gap when closed |
+| `.cat-grow` transition (prose being written follows its own height) | 180ms | — (only while the text streams; the box lets go once written) |
 | sidebar leave (Web Animations in `lib/sidebar-leave.ts`: a closing sidebar's rows leave, each drawing a thread behind it; the panel's slide waits 100ms for them) | 160ms | its own reverse when the sidebar opens mid-close; opening shows the items in place as before (a sanctioned exception) |
 | `title-change` (rename flash) | 1200ms | **sanctioned exception** — the
   one decorative-adjacent signal (see design log 2026-07-31); allowlisted in
@@ -2480,3 +2483,59 @@ which main notices by the credentials changing (every few seconds for ten
 minutes after the failure, then on focus and wake). It does so for chats
 that are not on screen too, once per change, only for the chat's latest
 turn. See ADR 0227.
+
+### 2026-10-13: The activity line says what the agent does; the steps line keeps time
+
+The turn's clock and "No updates for 45s" sat right after the activity
+line's words, so every new activity moved them (by up to 40 px), and a new
+activity slid its words up through a blur. A streamed answer pushed the
+activity line down a line at a time, a wider step shifted every row's
+duration and chevron, and settling dropped the notes' steps in one frame
+(the whole conversation jumped by their height).
+
+- **One line, one job.** The activity line is the spinner and what the
+  agent does, on one line that never wraps. Nothing sits beside the words
+  (withdrawing a message about to start waits at the far end). A new
+  activity rides one strong beat of the breathing: the old words fade all
+  the way out from wherever their breath was, then the new ones fade in,
+  opacity only. The line opens its height when work starts and closes it
+  when the turn ends.
+- **The steps line keeps time.** The clock, and the silence after 30
+  seconds, follow the count on the running turn's latest steps line: the
+  work in progress, or the latest note's steps until more work follows.
+  While a turn runs, each block of its work shows its line, a lone step's
+  included, so the clock always has a home and a second step no longer
+  grows a line above the first; once answered, a lone step is its own row
+  again. The clock holds the width of its longest reading in seconds or
+  minutes (widening smoothly into minutes) and lends the reply none, so
+  nothing after it or below it moves. A turn quiet before
+  its first step says so on a line of its own above the activity line. An
+  open list longer than the view can scroll the line away; the running
+  step's own time stays in view.
+- **Counts change on a beat.** A count and its word fade out and in, and
+  their places widen or narrow over 200 ms, so "steps" and the clock slide
+  when the count gains a digit.
+- **What arrives opens its place, and what leaves closes it.** Work and
+  prose joining a running turn grow in, and prose being written follows
+  its height on a short transition. A note folding into its answer closes
+  up whole, its steps with it, in the same frame its steps join the
+  answer. A row carries its own spacing, which opens with it, and its
+  duration and chevron follow its label, not the reply's right edge.
+- **The browser holds the latest message still.** While the chat follows
+  it, everything but an anchor at the conversation's end opts out of
+  scroll anchoring, so whatever grows or shrinks above (a streamed line, a
+  step, a fold) keeps the bottom where it is in the same frame, without a
+  scroll spring laying the page out every frame. Scrolled up, anchoring
+  keeps what the person reads in place.
+- **Only what changes renders.** The clock is the one part that renders
+  every second; a beat renders only the text it changes; a turn handed
+  back unchanged keeps its rows; a streaming reply parses only its last
+  block. A settled turn out of view skips style and layout, keeping its
+  last size. Loops stop where nobody sees them (a hidden chat, an activity
+  line scrolled away), and the running step no longer pulses beside the
+  breathing activity line; a command running in the background still does.
+
+`e2e/chat-motion.e2e.ts` samples every frame of a paced turn: the spinner,
+the words' box and a folded steps line hold still, the clock and the
+silence sit on the steps line, rows keep their places, and the activity
+line closes before it goes.

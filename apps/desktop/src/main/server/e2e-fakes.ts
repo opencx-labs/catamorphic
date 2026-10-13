@@ -352,6 +352,9 @@ interface FakeTurn {
  * - "perf turn [steps=N] [quiet=S] [stream=S]" → many short steps, one
  *   long quiet step, then a long Markdown answer streamed in small chunks
  *   (resource measurements); "perf answer" → that answer at once.
+ * - "pace the work" → a dozen commands, each changing the live line, then
+ *   an answer streamed a few words at a time ("quickly", "with notes",
+ *   "then go quiet" and "at length" vary it).
  * - "auth error" / "rate limit" → a provider failure once per message.
  * - "expired sign-in" / "expired sign-in xN" → a Claude Code sign-in that
  *   did not refresh, safe to retry, on the first (N) attempts.
@@ -599,7 +602,8 @@ class FakeTranscript {
           type: "item.delta",
           key: this.openText,
           field: "text",
-          text: `\n\n${step.content}`,
+          text:
+            step.type === "text_delta" ? step.content : `\n\n${step.content}`,
         });
         return;
       }
@@ -1590,6 +1594,73 @@ export const catalog = defineWorkflow(({ defineBoundary }) => ({
   if (prompt.includes("perf answer")) {
     yield { type: "title", content: "Performance history" };
     yield { type: "text", content: PERF_ANSWER.slice(0, 1_800) };
+    return;
+  }
+
+  // "pace the work" → an even, longer turn for watching the chat move: a
+  // note, then a dozen commands whose programs each change the live line
+  // (and carry the step count past ten), optionally a note every four
+  // ("with notes") and a silence past the stall notice ("then go quiet"),
+  // then an answer streamed a few words at a time.
+  if (prompt.includes("pace the work")) {
+    yield { type: "title", content: "Paced work" };
+    yield {
+      type: "text",
+      content: "Reading the parser and its callers first.",
+    };
+    const commands: Array<[string, string]> = [
+      ["cat src/parser.ts", "Read the parser"],
+      ["rg -n 'parse(' src", "Find the parser's callers"],
+      ["ls src/fixtures", "List the fixtures"],
+      ["git log -5 --oneline src/parser.ts", "Read the parser's history"],
+      ["bun test src/parser.test.ts", "Run the parser tests"],
+      ["cat src/lexer.ts", "Read the lexer"],
+      ["make lint", "Lint the sources"],
+      ["curl -s localhost:4100/health", "Check the dev server"],
+      ["vitest run src/lexer.test.ts", "Run the lexer tests"],
+      ["node scripts/check-fixtures.js", "Check the fixtures"],
+      ["find src -name '*.test.ts'", "Find every test"],
+      ["python3 tools/coverage.py", "Measure the coverage"],
+    ];
+    const notes = [
+      "The parser is fine. The lexer drops empty input.",
+      "Fixed the lexer. Checking the fixtures and coverage.",
+    ];
+    const pace = prompt.includes("quickly") ? 350 : 800;
+    for (const [index, [command, description]] of commands.entries()) {
+      if (turn.interrupted()) return;
+      if (prompt.includes("with notes") && index > 0 && index % 4 === 0)
+        yield { type: "text", content: notes[index / 4 - 1] ?? "Still going." };
+      const toolUseId = `pace-${index}`;
+      yield { type: "command", content: command, description, toolUseId };
+      await turn.pause(pace);
+      yield { type: "command", toolUseId, status: "ended", toolResult: "ok" };
+    }
+    if (prompt.includes("then go quiet")) await turn.pause(33_000);
+    if (turn.interrupted()) return;
+    const answer = [
+      "Fixed: the lexer now keeps empty input, so the parser returns an empty list instead of throwing.\n\n",
+      "What changed:\n\n",
+      "- `src/lexer.ts` returns no tokens for an empty string.\n",
+      "- `src/parser.ts` treats no tokens as an empty program.\n",
+      "- A fixture covers both, and the coverage report is back above ninety percent.\n\n",
+      "Every test passes, and the dev server answers its health check.",
+      // "at length" → a long Markdown answer, for the cost of streaming one.
+      ...(prompt.includes("at length")
+        ? Array.from(
+            { length: 12 },
+            (_, n) =>
+              `\n\n## Part ${n + 1}\n\nThe lexer reads part ${n + 1} of the input one token at a time, and the parser builds a node for each statement it finds.\n\n- Tokens keep their offsets.\n- Errors name the line.\n\n\`\`\`ts\nconst part${n + 1} = parse(lex(input));\n\`\`\``,
+          )
+        : []),
+    ]
+      .join("")
+      .split(/(?<= )/);
+    for (let at = 0; at < answer.length; at += 3) {
+      if (turn.interrupted()) return;
+      yield { type: "text_delta", content: answer.slice(at, at + 3).join("") };
+      await turn.pause(45);
+    }
     return;
   }
 

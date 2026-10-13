@@ -205,16 +205,27 @@ describe("ChatTimeline DOM contract", () => {
     expect(
       live?.querySelector('[data-testid="chat-step"][data-running]'),
     ).not.toBeNull();
-    // A lone step's toggle stays mounted, closed away and inert.
+    // While the turn runs, its lone step keeps its line, which carries the
+    // turn's clock.
+    const toggle = live?.querySelector(
+      '[data-testid="chat-turn-steps-toggle"]',
+    );
+    expect(toggle?.closest("[inert]")).toBeNull();
+    expect(toggle?.textContent).toBe("1 step");
     expect(
-      live
-        ?.querySelector('[data-testid="chat-turn-steps-toggle"]')
-        ?.closest("[inert]"),
-    ).not.toBeNull();
+      live?.querySelector(
+        '[role="timer"] [data-testid="chat-activity-elapsed"]',
+      )?.textContent,
+    ).toBe("10s");
+    // The activity line is its spinner and its words, nothing beside them.
     expect($('[data-testid="activity-text"]')?.textContent).toBe(
       "Running tests",
     );
-    expect($('[data-testid="chat-activity-elapsed"]')?.textContent).toBe("10s");
+    expect(
+      [...($('[data-testid="chat-activity"]')?.children ?? [])].map(
+        (child) => child.getAttribute("data-testid") ?? child.tagName,
+      ),
+    ).toEqual(["svg", "activity-text"]);
   });
 
   it("closes turns with their outcome", async () => {
