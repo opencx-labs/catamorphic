@@ -36,9 +36,9 @@ export interface ResolvedMcp {
   /**
    * Tool policy layers per server key: the connection's own (the
    * profile's ceiling) then the agent's narrowing, when it has one. Every
-   * assigned connection gets an entry, decided by the catalog or by a
-   * mounted connector's endpoint (ADR 0225); the harness gates what
-   * remains here and pre-approves the rest (session-scoped surfaces).
+   * assigned connection gets an entry. The catalog, or a mounted
+   * connector's endpoint (ADR 0225), decides connector calls; the harness
+   * gates the other servers here and pre-approves the rest.
    */
   policies: Record<string, McpToolPolicyLayers>;
   /** Cached tool annotations per server key (for `auto` off the hot path). */
@@ -50,7 +50,7 @@ export interface ResolvedMcp {
 /**
  * Whether an agent may reach a connector's tool at all: no layer denies
  * it, and a contained agent only reads. An ask is decided at each call
- * (ADR 0054), by the catalog's gate or by the runner for a mounted server.
+ * (ADR 0054), by the catalog or by a mounted connector's endpoint.
  */
 export function connectorToolPermitted(input: {
   layers: McpToolPolicyLayers | undefined;

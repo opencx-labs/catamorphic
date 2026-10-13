@@ -2,6 +2,7 @@ import {
   type ConnectedMcpServer,
   connectMcpServer,
   type ElicitHandler,
+  mcpConnectionLost,
   uiResourceUri,
 } from "@catamorphic/mcp";
 import type { ConnectionsStore, McpConnection } from "./connections-store.js";
@@ -74,7 +75,7 @@ export class McpAppsService {
     try {
       return (await this.connect(profileId, connection)).tools;
     } catch {
-      await this.drop(profileId, connection);
+      // A failed connect has left the pool; this one starts afresh.
       return (await this.connect(profileId, connection)).tools;
     }
   }
@@ -115,8 +116,9 @@ export class McpAppsService {
    * A tool call on the host's own connection: from an embedded view, the
    * capability catalog or a mounted connector (ADR 0225). Scoped to the
    * SAME server as `viewToolKey`, so an embedded app can never reach
-   * another connection's tools. A call that fails drops the client, so
-   * the next one connects afresh rather than reusing a dead one.
+   * another connection's tools. A call that finds the connection gone
+   * drops that client, so the next one connects afresh; errors the server
+   * sent leave it in use.
    */
   async callTool(
     profileId: string,
@@ -125,11 +127,13 @@ export class McpAppsService {
     args: Record<string, unknown>,
   ): Promise<Record<string, unknown>> {
     const { connection } = this.resolve(profileId, viewToolKey);
-    const server = await this.connect(profileId, connection);
+    const pending = this.connect(profileId, connection);
+    const server = await pending;
     try {
       return await server.callToolRaw(toolName, args);
     } catch (error) {
-      await this.drop(profileId, connection);
+      if (mcpConnectionLost(error))
+        this.drop(`${profileId}:${connection.id}`, pending);
       throw error;
     }
   }
@@ -187,15 +191,18 @@ export class McpAppsService {
     return pending;
   }
 
-  private async drop(
-    profileId: string,
-    connection: McpConnection,
-  ): Promise<void> {
-    const key = `${profileId}:${connection.id}`;
-    const pending = this.pool.get(key);
-    if (!pending) return;
+  /**
+   * Retire the client one call used, unless another call has already
+   * replaced it: concurrent calls on a dead connection drop it once.
+   */
+  private drop(key: string, pending: Promise<ConnectedMcpServer>): void {
+    if (this.pool.get(key) !== pending) return;
     this.pool.delete(key);
-    await pending.then((server) => server.close()).catch(() => {});
+    const closed: Promise<void> = pending
+      .then((server) => server.close())
+      .catch(() => {})
+      .finally(() => this.closing.delete(closed));
+    this.closing.add(closed);
   }
 
   async releaseProfile(profileId: string): Promise<void> {

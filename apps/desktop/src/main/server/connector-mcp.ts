@@ -5,7 +5,11 @@ import {
   serveForwardedTools,
   toolError,
 } from "@catamorphic/fastify-plugin/mcp";
-import type { McpToolInfo } from "@catamorphic/mcp";
+import {
+  type McpToolInfo,
+  mcpConnectionLost,
+  mcpServerError,
+} from "@catamorphic/mcp";
 import { getTracer, withSpan } from "@catamorphic/otel";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
@@ -40,9 +44,10 @@ export function connectorMcpPath(input: {
 
 /**
  * One bearer per chat for this run of the desktop: the same for every turn
- * (a warm harness keeps its configuration, ADR 0222), unguessable from the
- * session id, so one chat's harness, or any other program, cannot reach
- * another chat's connectors.
+ * (a warm harness keeps its configuration, ADR 0222) and unguessable from
+ * the session id, so knowing a chat's address reaches none of its
+ * connectors. Like the rest of the loopback API, it trusts the person's own
+ * programs, which can read a harness's arguments.
  */
 export function connectorMcpTokens() {
   const key = randomBytes(32);
@@ -185,8 +190,24 @@ export function registerConnectorMcpRoute(
                 call.arguments,
               );
             } catch (error) {
-              console.warn(`[desktop] Connector ${server} call failed`, error);
-              throw new McpRequestError(-32_000, `${server} call failed`);
+              // The server's own error reaches the agent as it sent it, so
+              // the agent can correct its arguments; a lost connection reads
+              // generically; anything else (a timeout, an invalid result)
+              // is the call's failed result.
+              const sent = mcpServerError(error);
+              if (sent) throw new McpRequestError(sent.code, sent.message);
+              if (mcpConnectionLost(error)) {
+                console.warn(
+                  `[desktop] Connector ${server} call failed`,
+                  error,
+                );
+                throw new McpRequestError(-32_000, `${server} is unavailable`);
+              }
+              return toolError(
+                error instanceof Error
+                  ? error.message
+                  : `${server} call failed`,
+              );
             }
           },
         ),

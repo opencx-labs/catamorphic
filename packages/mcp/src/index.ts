@@ -8,6 +8,8 @@ export {
   type McpResourceContent,
   type McpToolAnnotations,
   type McpToolInfo,
+  mcpConnectionLost,
+  mcpServerError,
   pickIcon,
   probeMcpServer,
   uiResourceUri,

@@ -51,7 +51,8 @@ would then reject the results that don't match it.
   native computer use stays in its own process.
 - The host's pooled client calls the connector, so credentials,
   elicitation and the live roster stay in the host. The pool drops a client
-  whose call failed.
+  whose connection was lost. The server's own errors reach the agent as it
+  sent them.
 - The server key is the one the connection's policy layers already use.
   Keys never take a host tool server's name (`workspace`, `catamorphic`).
 - The address and a per-chat bearer stay the same for the chat's life, so
@@ -90,3 +91,6 @@ Costs:
   search support loads them up front, as in the harness's own app.
 - Mounted calls bypass the capability registry's invocation path. They
   keep the registry's policy layers and approvals, and get their own span.
+- An ask inside a call waits only as long as the harness's HTTP client:
+  Codex an hour; Claude Code's may give up after about five minutes. That
+  is as long as an attended ask lasts, but shorter than an unattended one.

@@ -7,6 +7,15 @@ import {
 } from "./connector-mcp.js";
 
 vi.mock("electron", () => ({ safeStorage: {} }));
+vi.mock("@catamorphic/mcp", () => ({
+  // A server-sent error carries a numeric code; a lost connection says so.
+  mcpServerError: (error: unknown) =>
+    error instanceof Error && "code" in error && typeof error.code === "number"
+      ? { code: error.code, message: error.message }
+      : undefined,
+  mcpConnectionLost: (error: unknown) =>
+    error instanceof Error && error.message === "connection lost",
+}));
 
 const LOOKUP = {
   name: "lookup",
@@ -49,9 +58,14 @@ function serve(
     policy?: Record<string, unknown>;
     approval?: "allow" | "deny";
     session?: "missing";
+    /** What the connector's call throws instead of answering. */
+    failure?: Error;
   } = {},
 ) {
-  const callTool = vi.fn(async () => RESULT);
+  const callTool = vi.fn(async () => {
+    if (surface.failure) throw surface.failure;
+    return RESULT;
+  });
   const askApproval = vi.fn(async () => surface.approval ?? "allow");
   const tokens = connectorMcpTokens();
   const app = Fastify();
@@ -235,5 +249,27 @@ describe("a chat's connector as an MCP server of its own (ADR 0225)", () => {
     expect(
       (await serve({ session: "missing" }).rpc("tools/list")).statusCode,
     ).toBe(404);
+  });
+
+  it("passes on the server's own error, and a lost connection generically", async () => {
+    const sent = Object.assign(new Error("Invalid arguments: name"), {
+      code: -32602,
+    });
+    expect(
+      (
+        await serve({ failure: sent }).rpc("tools/call", {
+          name: "lookup",
+          arguments: {},
+        })
+      ).json().error,
+    ).toEqual({ code: -32602, message: "Invalid arguments: name" });
+    expect(
+      (
+        await serve({ failure: new Error("connection lost") }).rpc(
+          "tools/call",
+          { name: "lookup", arguments: {} },
+        )
+      ).json().error,
+    ).toEqual({ code: -32000, message: "probe is unavailable" });
   });
 });

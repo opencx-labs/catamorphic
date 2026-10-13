@@ -1,6 +1,10 @@
 import type { AgentMcpServerConfig } from "@catamorphic/sandbox";
 import {
   Client,
+  ProtocolError,
+  SdkError,
+  SdkErrorCode,
+  SdkHttpError,
   SSEClientTransport,
   StreamableHTTPClientTransport,
 } from "@modelcontextprotocol/client";
@@ -238,6 +242,33 @@ function pickAnnotations(raw: Record<string, unknown>): McpToolAnnotations {
       ? { openWorldHint: bool(raw.openWorldHint) }
       : {}),
   };
+}
+
+/**
+ * The JSON-RPC error a server answered a request with, when that is what
+ * failed: a forwarding host passes it on as the server sent it.
+ */
+export function mcpServerError(
+  error: unknown,
+): { code: number; message: string } | undefined {
+  return ProtocolError.isInstance(error)
+    ? { code: error.code, message: error.message }
+    : undefined;
+}
+
+/**
+ * Whether a request failed because the connection to the server is gone,
+ * so a pooled client should be dropped and the next use reconnect. Errors
+ * the server sent, invalid results and timeouts leave the client in use.
+ */
+export function mcpConnectionLost(error: unknown): boolean {
+  if (SdkError.isInstance(error))
+    return (
+      error.code === SdkErrorCode.NotConnected ||
+      error.code === SdkErrorCode.ConnectionClosed ||
+      error.code === SdkErrorCode.SendFailed
+    );
+  return SdkHttpError.isInstance(error) || error instanceof TypeError;
 }
 
 /** Result content flattened to text the model (or a settings pane) can read. */
