@@ -656,6 +656,25 @@ the historical log explains how it arrived here.
 - [Performance](docs/performance.md): idle lifecycle checks and sustained measurement.
 
 ## Design log
+### 2026-10-14: Values read as values; efforts and models go by their own names
+
+A project's card showed a copy button on every row, so it read as a row
+of buttons. A copy button beside a value (a folder, a remote, a sign-in
+command, a published link, a webhook URL) now rests hidden in its place
+until its row is hovered or holds keyboard focus (`.copy-reveal` inside a
+`[data-copyable]` row), and stays while it says the copy landed. Nothing
+moves when it shows. Labelled buttons that are a flow's next step (a
+device code's Copy, Copy invite link) stay visible.
+
+The effort pickers named levels "Extra-high effort" with descriptions
+the harnesses never gave ("Extended reasoning"). Every picker and the
+chat's status now show the level as Claude Code and Codex name it, as is:
+low, medium, high, xhigh, max. Model pickers title a row by the display
+name the harness or provider gives the model and put the id it sends
+beside it (an alias, its versioned id). A model without a name of its
+own, or whose name only repeats its id (OpenAI's catalog names none),
+shows the id once. No name is made up from an id.
+
 ### 2026-10-13: The window drags by the tab strip's empty end; every way out folds the strip
 
 With the macOS window buttons hidden, the project switcher spans the

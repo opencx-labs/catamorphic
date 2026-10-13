@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
-import { Check, Copy } from "lucide-react";
 import { type FormEvent, useEffect, useState } from "react";
 import { desktopApi } from "../lib/desktop-api.js";
+import { CopyButton } from "./copy-button.js";
 import { Modal } from "./modal.js";
 import { PendingButton } from "./pending-button.js";
 import type { RemoteFeatures } from "./remote-nav.js";
@@ -35,7 +35,6 @@ export function RemotePublishModal({
   const [pending, setPending] = useState(false);
   const [result, setResult] = useState<{ absoluteUrl: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
   const publicAllowed =
     features === undefined || features.publications === "public";
 
@@ -45,7 +44,6 @@ export function RemotePublishModal({
     setPending(false);
     setResult(null);
     setError(null);
-    setCopied(false);
   }, [open]);
 
   const submit = async (event: FormEvent) => {
@@ -60,13 +58,6 @@ export function RemotePublishModal({
     } finally {
       setPending(false);
     }
-  };
-
-  const copy = async () => {
-    if (!result) return;
-    await navigator.clipboard.writeText(result.absoluteUrl);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
   };
 
   const name = path?.split("/").at(-1) ?? "";
@@ -127,25 +118,14 @@ export function RemotePublishModal({
               </p>
             </>
           ) : (
-            <div className="flex items-center gap-2">
+            <div data-copyable className="flex items-center gap-2">
               <input
                 readOnly
                 value={result.absoluteUrl}
                 data-testid="publish-url"
                 className="field h-8 min-w-0 flex-1 px-2.5 font-mono text-[12px] text-fg"
               />
-              <button
-                type="button"
-                onClick={() => void copy()}
-                className="grid size-8 shrink-0 cursor-pointer place-items-center rounded-md border border-border text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
-                aria-label="Copy link"
-              >
-                {copied ? (
-                  <Check className="size-3.5" />
-                ) : (
-                  <Copy className="size-3.5" />
-                )}
-              </button>
+              <CopyButton value={result.absoluteUrl} label="Copy link" />
             </div>
           )}
           {error && <p className="text-xs text-danger">{error}</p>}

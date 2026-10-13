@@ -46,6 +46,13 @@ const row = (name: string) =>
 const card = `[...document.querySelectorAll('[data-resource-inspector][data-open="true"] [data-testid="project-inspector"]')].find(c => c.querySelector('h2')?.textContent === 'Popup fixture')`;
 const panel = `${card}?.closest('[data-resource-inspector]')`;
 const menu = `document.querySelector('[data-sidebar-menu][aria-label="Actions for Popup fixture"]')`;
+const copyButton = (label: string) =>
+  `${card}?.querySelector('[aria-label="${label}"]')`;
+/** Settled at full or no opacity: shown or hidden, not mid-fade. */
+const shown = (label: string) =>
+  `getComputedStyle(${copyButton(label)}).opacity === '1'`;
+const hidden = (label: string) =>
+  `getComputedStyle(${copyButton(label)}).opacity === '0'`;
 
 /** The middle of what `expression` finds, once it can take the pointer. */
 const centerOf = (expression: string, label: string) =>
@@ -241,6 +248,55 @@ describe("a project's card", () => {
     );
   });
 
+  it("shows a copy button only on the row the pointer or the keyboard is on", async () => {
+    // The pointer still rests on the project's row in the list: the card
+    // reads as values, with no copy buttons.
+    await app.waitFor(
+      `${hidden("Copy folder path")} && ${hidden("Copy Git remote")}`,
+      { label: "copy buttons hidden at rest" },
+    );
+    // Hidden, each keeps its place: the value beside it does not move.
+    const valueRight = `${copyButton("Copy Git remote")}.closest('dd').querySelector('bdi').parentElement.getBoundingClientRect().right`;
+    const restingRight = await app.eval<number>(valueRight);
+    // The pointer on the remote's label shows that row's button alone.
+    await move(
+      await centerOf(
+        `${copyButton("Copy Git remote")}?.closest('[data-copyable]')?.querySelector('dt')`,
+        "Git remote label",
+      ),
+    );
+    await app.waitFor(
+      `${shown("Copy Git remote")} && ${hidden("Copy folder path")}`,
+      { label: "the remote's copy button on hover" },
+    );
+    expect(await app.eval<number>(valueRight)).toBe(restingRight);
+    // The pointer on the card's title: none again.
+    await move(await centerOf(`${card}?.querySelector('h2')`, "card title"));
+    await app.waitFor(
+      `${hidden("Copy folder path")} && ${hidden("Copy Git remote")}`,
+      { label: "copy buttons hidden off their rows" },
+    );
+    // The keyboard reaches each button, which shows while it has focus.
+    await app.eval(
+      `${card}.querySelector('[aria-label="Actions for Popup fixture"]').focus(); true`,
+    );
+    await app.press("Tab");
+    await app.waitFor(
+      `${copyButton("Copy folder path")}.matches(':focus-visible') && ${shown("Copy folder path")} && ${hidden("Copy Git remote")}`,
+      { label: "folder's copy button on focus" },
+    );
+    await app.press("Tab");
+    await app.waitFor(
+      `${copyButton("Copy Git remote")}.matches(':focus-visible') && ${shown("Copy Git remote")} && ${hidden("Copy folder path")}`,
+      { label: "remote's copy button on focus" },
+    );
+    await app.eval(`document.activeElement.blur(); true`);
+    await app.waitFor(`${hidden("Copy Git remote")}`, {
+      label: "hidden again once focus leaves",
+    });
+    expect(await app.eval<boolean>(`!!${card}`)).toBe(true);
+  });
+
   it("copies its Git remote", async () => {
     await press(
       await centerOf(
@@ -251,6 +307,18 @@ describe("a project's card", () => {
     await app.waitFor(
       `${card}?.querySelector('[aria-label="Copy Git remote"]')?.dataset.copied === 'true'`,
       { label: "copied" },
+    );
+    // Its confirmation stays in view when the pointer leaves the row, then
+    // the button rests hidden again.
+    await move(await centerOf(`${card}?.querySelector('h2')`, "card title"));
+    expect(
+      await app.eval<boolean>(
+        `${copyButton("Copy Git remote")}.dataset.copied === 'true' && ${shown("Copy Git remote")}`,
+      ),
+    ).toBe(true);
+    await app.waitFor(
+      `!${copyButton("Copy Git remote")}.dataset.copied && ${hidden("Copy Git remote")}`,
+      { label: "hidden after the confirmation" },
     );
     // What the clipboard holds, pasted into the page.
     await app.eval(`${view}.focus(); true`);

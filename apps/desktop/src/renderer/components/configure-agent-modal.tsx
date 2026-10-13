@@ -13,6 +13,7 @@ import {
   sandboxingLabel,
 } from "../../shared/agent-permissions.js";
 import { VOICES, type VoiceId, voiceIdOf } from "../../shared/voice.js";
+import { EFFORT_LEVELS } from "../lib/agent-effort.js";
 import {
   type AgentAuthMode,
   type AgentConnectionsSetting,
@@ -58,14 +59,6 @@ const MODEL_PLACEHOLDERS: Record<AgentHarness, string> = {
   "claude-code": "claude-sonnet-4-5",
   codex: "gpt-5.3-codex",
 };
-
-const EFFORT_OPTIONS: Array<{ value: AgentEffort; label: string }> = [
-  { value: "low", label: "Low — fast, direct" },
-  { value: "medium", label: "Medium — balanced" },
-  { value: "high", label: "High — thorough" },
-  { value: "xhigh", label: "Extra high — extended reasoning" },
-  { value: "max", label: "Max — deepest reasoning" },
-];
 
 const COORDINATION_OPTIONS: Array<{
   value: AgentCoordinationStrategy;
@@ -503,16 +496,16 @@ function ProfileAgentBody({
                   className="field h-8 px-2 text-[13px] text-fg"
                   data-testid="agent-effort"
                 >
-                  {EFFORT_OPTIONS.map((option) => (
-                    <option key={option.value} value={option.value}>
-                      {option.label}
+                  {EFFORT_LEVELS.map((level) => (
+                    <option key={level} value={level}>
+                      {level}
                     </option>
                   ))}
                 </select>
                 {harness === "codex" &&
                   (effort === "max" || effort === "xhigh") && (
                     <span className="text-fg-faint">
-                      Codex tops out at extra high; max runs there.
+                      Codex tops out at xhigh; max runs there.
                     </span>
                   )}
               </label>

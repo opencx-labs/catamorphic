@@ -71,6 +71,36 @@ export function modelId(
 }
 
 /**
+ * A model's row in a model picker: the display name its harness or
+ * provider gives it as the title, and beside it the id the harness sends
+ * (an alias, "sonnet" or "default", resolves to its versioned id). A model
+ * without a name of its own, or whose name only repeats that id, is titled
+ * by its id with nothing beside it but the id an alias resolves to. Names
+ * are never made up from ids.
+ */
+export function modelLabel(
+  model: { id: string; name?: string },
+  catalog?: readonly { id: string; resolvedId?: string }[],
+): { title: string; detail?: string } {
+  const sent = modelId(model.id, catalog);
+  const name = model.name?.trim();
+  if (name && name.toLowerCase() !== sent.toLowerCase())
+    return { title: name, detail: sent };
+  return sent === model.id
+    ? { title: model.id }
+    : { title: model.id, detail: sent };
+}
+
+/** What a typed search matches in a model's row: its name and its ids. */
+export function modelSearchText(model: {
+  id: string;
+  name?: string;
+  resolvedId?: string;
+}): string {
+  return [model.name, model.id, model.resolvedId].filter(Boolean).join(" ");
+}
+
+/**
  * How to name an unpinned model: the id the harness said it will send,
  * otherwise who decides ("Claude Code default"), never a vague "Automatic".
  */

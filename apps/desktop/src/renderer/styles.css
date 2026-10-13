@@ -1125,8 +1125,29 @@ kbd {
 .row-reveal[aria-expanded="true"] {
   opacity: 1;
 }
+/* A copy button beside a value (a path, an address, a command) rests
+   hidden in its place until its copyable item, the nearest
+   [data-copyable], is hovered or holds keyboard focus, so a card of values
+   reads as values. It stays while it says how the copy went, so the
+   outcome is not cut off when the pointer leaves. Its place is kept:
+   nothing moves when it shows. */
+.copy-reveal {
+  opacity: 0;
+  transition:
+    opacity 150ms var(--ease-standard),
+    color 150ms var(--ease-standard),
+    background-color 150ms var(--ease-standard);
+}
+[data-copyable]:hover .copy-reveal,
+[data-copyable]:has(:focus-visible) .copy-reveal,
+.copy-reveal:focus-visible,
+.copy-reveal[data-copied],
+.copy-reveal[data-copy-failed] {
+  opacity: 1;
+}
 @media (prefers-reduced-motion: reduce) {
-  .row-reveal {
+  .row-reveal,
+  .copy-reveal {
     transition: none;
   }
 }

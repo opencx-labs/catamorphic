@@ -502,7 +502,8 @@ export interface McpAppViewData {
 
 export interface HarnessModelInfo {
   id: string;
-  name: string;
+  /** The harness's or provider's display name; absent when it gives none. */
+  name?: string;
   description?: string;
   /** Versioned model id an alias resolves to (e.g. "sonnet" → "claude-sonnet-5"). */
   resolvedId?: string;
@@ -512,7 +513,8 @@ export interface HarnessModelInfo {
 
 export interface OpenRouterModelInfo {
   id: string;
-  name: string;
+  /** OpenRouter's display name, when it gives one. */
+  name?: string;
   contextLength: number;
   free: boolean;
   created: number;

@@ -6,10 +6,13 @@ const SHOWN_MS = 1500;
 
 /**
  * An icon button that copies `value`, for a value shown beside it (a path,
- * an address). Its icon turns into a check once the clipboard has it, or a
- * cross if the copy failed, in the same footprint, for a moment that starts
- * again with every press; assistive technology hears each outcome. Its
- * hint names what it copies.
+ * an address, a command). It rests hidden in its place until its copyable
+ * item, the nearest element marked `data-copyable` (the row holding the
+ * value and the button), is hovered or holds keyboard focus. Its icon
+ * turns into a check once the clipboard has it, or a cross if the copy
+ * failed, in the same footprint, for a moment that starts again with every
+ * press; the button stays shown for that moment and assistive technology
+ * hears each outcome. Its hint names what it copies.
  */
 export function CopyButton({
   value,
@@ -50,7 +53,7 @@ export function CopyButton({
               () => setOutcome({ copied: false, press }),
             );
           }}
-          className="grid size-5 shrink-0 cursor-pointer place-items-center rounded text-fg-faint transition-colors duration-150 hover:bg-bg-raised hover:text-fg"
+          className="copy-reveal grid size-5 shrink-0 cursor-pointer place-items-center rounded text-fg-faint hover:bg-bg-raised hover:text-fg"
         >
           <Copy aria-hidden="true" className={icon(!outcome)} />
           <Check
@@ -62,7 +65,7 @@ export function CopyButton({
       </ShortcutHint>
       <span className="sr-only" role="status">
         {outcome
-          ? `${outcome.copied ? "Copied" : "Could not copy"}${"\u00a0".repeat((outcome.press + 1) % 2)}`
+          ? `${outcome.copied ? "Copied" : "Could not copy"}${" ".repeat((outcome.press + 1) % 2)}`
           : ""}
       </span>
     </>

@@ -21,7 +21,7 @@ async function executable(body: string) {
 }
 
 describe("Codex model discovery", () => {
-  it("initializes, reads every catalog page and maps visible model effort options", async () => {
+  it("initializes, reads every catalog page and maps visible model names and effort options", async () => {
     const binary = await executable(`
       const readline = require('node:readline');
       let initialized = false;
@@ -30,7 +30,7 @@ describe("Codex model discovery", () => {
         if (message.method === 'initialized') { initialized = true; return; }
         if (message.method === 'initialize') { console.log(JSON.stringify({id: message.id, result: {}})); return; }
         if (!initialized || message.method !== 'model/list' || process.argv[2] !== 'app-server' || process.env.TEST_ACCOUNT !== 'selected') process.exit(1);
-        const page = message.params.cursor ? {data: [{model: 'second', displayName: 'Second', supportedReasoningEfforts: []}], nextCursor: null} : {data: [{model: 'first', displayName: 'First', supportedReasoningEfforts: [{reasoningEffort: 'high'}, {reasoningEffort: 'unknown'}]}, {model: 'hidden', hidden: true}], nextCursor: 'page-2'};
+        const page = message.params.cursor ? {data: [{model: 'second', displayName: 'Second', supportedReasoningEfforts: []}, {model: 'unnamed', displayName: '', supportedReasoningEfforts: []}], nextCursor: null} : {data: [{model: 'first', displayName: 'First', supportedReasoningEfforts: [{reasoningEffort: 'high'}, {reasoningEffort: 'unknown'}]}, {model: 'hidden', hidden: true}], nextCursor: 'page-2'};
         console.log(JSON.stringify({method: 'notification', params: {}}));
         console.log(JSON.stringify({id: message.id, result: page}));
       });
@@ -50,6 +50,12 @@ describe("Codex model discovery", () => {
       {
         id: "second",
         name: "Second",
+        supportsEffort: false,
+        supportedEffortLevels: [],
+      },
+      // No display name: none is made up from the id.
+      {
+        id: "unnamed",
         supportsEffort: false,
         supportedEffortLevels: [],
       },

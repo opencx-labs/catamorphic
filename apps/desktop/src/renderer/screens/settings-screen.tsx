@@ -1,6 +1,4 @@
 import {
-  Check,
-  Copy,
   Monitor,
   Pencil,
   Plug,
@@ -43,6 +41,7 @@ import { TOKEN_LABELS } from "../../shared/theme-tokens.js";
 import { VOICES, voiceIdOf } from "../../shared/voice.js";
 import { BrowserImport } from "../components/browser-import.js";
 import { Collapsible } from "../components/collapsible.js";
+import { CopyButton } from "../components/copy-button.js";
 import { DefaultBrowserButton } from "../components/default-browser.js";
 import { Modal } from "../components/modal.js";
 import { PendingButton } from "../components/pending-button.js";
@@ -497,7 +496,6 @@ function AgentsSection({
   const [data, setData] = useState<AgentsData | null>(null);
   const [loginOk, setLoginOk] = useState<Record<string, boolean>>({});
   const [login, setLogin] = useState<Record<string, AgentLoginUi>>({});
-  const [copiedId, setCopiedId] = useState<string | null>(null);
 
   useEffect(() => {
     void desktopApi.agentsList().then(setData);
@@ -557,15 +555,6 @@ function AgentsSection({
         [id]: { error: cause instanceof Error ? cause.message : String(cause) },
       }));
     }
-  };
-
-  const copyCommand = (id: string, command: string) => {
-    void navigator.clipboard.writeText(command);
-    setCopiedId(id);
-    window.setTimeout(
-      () => setCopiedId((current) => (current === id ? null : current)),
-      1500,
-    );
   };
 
   return (
@@ -663,25 +652,17 @@ function AgentsSection({
                   <div className="mt-2 flex flex-col gap-1.5">
                     {ui.command ? (
                       <>
-                        <div className="flex items-center gap-1.5">
+                        <div
+                          data-copyable
+                          className="flex items-center gap-1.5"
+                        >
                           <code className="min-w-0 flex-1 truncate rounded-md border border-border bg-bg-inset px-2 py-1 font-mono text-[11px] text-fg-muted">
                             {ui.command}
                           </code>
-                          <button
-                            type="button"
-                            onClick={() =>
-                              ui.command && copyCommand(agent.id, ui.command)
-                            }
-                            className="grid size-6 shrink-0 cursor-pointer place-items-center rounded text-fg-muted transition-colors duration-150 hover:text-fg"
-                            aria-label="Copy sign-in command"
-                            title="Copy command"
-                          >
-                            {copiedId === agent.id ? (
-                              <Check className="size-3 text-success" />
-                            ) : (
-                              <Copy className="size-3" />
-                            )}
-                          </button>
+                          <CopyButton
+                            value={ui.command}
+                            label="Copy sign-in command"
+                          />
                         </div>
                         <p className="text-[11px] text-fg-faint">
                           Finish sign-in in your terminal, then come back.

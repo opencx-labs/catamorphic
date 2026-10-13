@@ -16,14 +16,19 @@ import { BUILTIN_PALETTE_TRIGGERS } from "../../../shared/palette.js";
 import {
   defaultModelLabel,
   modelId,
+  modelLabel,
+  modelSearchText,
   useAgentDefaultModel,
 } from "../../lib/agent-default-model.js";
-import { effectiveEffort, supportedEfforts } from "../../lib/agent-effort.js";
+import {
+  EFFORT_LEVELS,
+  effectiveEffort,
+  supportedEfforts,
+} from "../../lib/agent-effort.js";
 import { permissionModeChoices } from "../../lib/agent-permissions.js";
 import { startsNewChat } from "../../lib/agent-switch.js";
 import { commandScore } from "../../lib/command-score.js";
 import {
-  type AgentEffort,
   type AgentInfo,
   desktopApi,
   type HarnessModelInfo,
@@ -153,25 +158,14 @@ function agentAuthLabel(agent: AgentInfo): string {
     : "separate account";
 }
 
-const EFFORT_LEVELS: Array<{
-  id: AgentEffort;
-  label: string;
-  description: string;
-}> = [
-  { id: "low", label: "Low effort", description: "Fast, direct responses" },
-  { id: "medium", label: "Medium effort", description: "Balanced reasoning" },
-  { id: "high", label: "High effort", description: "Deep, thorough reasoning" },
-  {
-    id: "xhigh",
-    label: "Extra-high effort",
-    description: "Extended reasoning (Codex's deepest)",
-  },
-  {
-    id: "max",
-    label: "Max effort",
-    description: "Deepest reasoning",
-  },
-];
+/** A model row's label and detail: its display name, its id beside it. */
+const labelOf = (
+  model: { id: string; name?: string },
+  catalog?: readonly HarnessModelInfo[],
+): Pick<PaletteItem, "label" | "detail"> => {
+  const { title, detail } = modelLabel(model, catalog);
+  return detail ? { label: title, detail } : { label: title };
+};
 
 /** Choice rows answer the active question and put the palette away. */
 const asAnswer = (row: PaletteItem): PaletteItem =>
@@ -312,12 +306,12 @@ export function useChoiceModes({
       const current = focusedChat ? (focusedChat.model ?? "") : agent.model;
       const rows: PaletteItem[] = [];
       if (agent.harness === "ai-sdk" && agent.provider === "openrouter") {
+        // OpenRouter's name for the model, its id beside it.
         const modelRow = (model: OpenRouterCatalog["models"][number]) =>
           ({
             id: `pick:model:${model.id}`,
             icon: Cpu,
-            label: model.name,
-            detail: model.id,
+            ...labelOf(model),
             keywords: [],
             kind: "action",
             ...(model.id === current ? { current: true } : {}),
@@ -367,7 +361,7 @@ export function useChoiceModes({
           ? models
               .map((model) => ({
                 model,
-                score: commandScore(`${model.name} ${model.id}`, trimmed, []),
+                score: commandScore(modelSearchText(model), trimmed, []),
               }))
               .filter((entry) => entry.score > 0)
               .sort((a, b) => b.score - a.score)
@@ -435,9 +429,9 @@ export function useChoiceModes({
         ({
           id: `pick:model:${model.id}`,
           icon: Cpu,
-          label: model.name,
-          // Aliases ("sonnet") show the versioned id they resolve to.
-          detail: modelId(model.id, supported),
+          // The harness's name for the model, and the id it sends beside
+          // it: aliases ("sonnet") show the versioned id they resolve to.
+          ...labelOf(model, supported),
           keywords: [],
           kind: "action",
           ...(model.id === current ? { current: true } : {}),
@@ -460,7 +454,7 @@ export function useChoiceModes({
         ? supported
             .map((model) => ({
               model,
-              score: commandScore(`${model.name} ${model.id}`, trimmed, []),
+              score: commandScore(modelSearchText(model), trimmed, []),
             }))
             .filter((entry) => entry.score > 0)
             .sort((a, b) => b.score - a.score)
@@ -586,8 +580,9 @@ export function useChoiceModes({
                       },
                     ]
                   : []),
+                // Each level by the harness's own name, nothing beside it.
                 ...EFFORT_LEVELS.filter((level) =>
-                  supportedEfforts(targetAgent, effortModel).includes(level.id),
+                  supportedEfforts(targetAgent, effortModel).includes(level),
                 ).map((level) => {
                   const current = effectiveEffort(
                     targetAgent,
@@ -595,16 +590,20 @@ export function useChoiceModes({
                     effortModel,
                   );
                   return {
-                    id: `pick:effort:${level.id}`,
+                    id: `pick:effort:${level}`,
                     icon: Gauge,
-                    label: level.label,
-                    detail: level.description,
-                    keywords: [level.id, "effort", "reasoning"],
+                    label: level,
+                    keywords: [
+                      level,
+                      ...(level === "xhigh" ? ["extra high"] : []),
+                      "effort",
+                      "reasoning",
+                    ],
                     kind: "action" as const,
                     // Supported levels keep their low-to-high order; the check
                     // alone marks the active one (no reordering).
-                    ...(level.id === current ? { current: true } : {}),
-                    run: () => onPickEffort(level.id),
+                    ...(level === current ? { current: true } : {}),
+                    run: () => onPickEffort(level),
                   };
                 }),
               ]
