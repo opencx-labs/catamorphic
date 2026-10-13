@@ -1,13 +1,16 @@
 import type { CatamorphicCore, Identity } from "@catamorphic/core";
 import { MCP_POLL_RUN_TOOL, RunNotFoundError } from "@catamorphic/core";
 import type { FastifyReply } from "fastify";
+import { z } from "zod";
 
 /**
  * The JSON-RPC / MCP plumbing shared by the plugin's MCP endpoints — the
- * apps server (`/projects/:id/apps-mcp`) and the workflow-tools server
- * (`/projects/:id/mcp`). Both are stateless Streamable-HTTP handlers
- * speaking the `initialize`-handshake protocol era (≤2025-11-25): requests
- * are independent, no sessions, notifications answered with a bare 202.
+ * apps server (`/projects/:id/apps-mcp`), the workflow-tools server
+ * (`/projects/:id/mcp`) and the connection broker (`/connection-mcp`) —
+ * and by hosts that forward MCP servers of their own. All are stateless
+ * Streamable-HTTP handlers speaking the `initialize`-handshake protocol era
+ * (≤2025-11-25): requests are independent, no sessions, notifications
+ * answered with a bare 202.
  */
 
 export interface JsonRpcMessage {
@@ -45,7 +48,7 @@ export class McpRequestError extends Error {
 }
 
 /**
- * The stateless request shell both endpoints share: body-shape validation,
+ * The stateless request shell the endpoints share: body-shape validation,
  * the notification 202, missing-method rejection, and error mapping.
  * `dispatch` returns the JSON-RPC result for a method; it throws
  * {@link McpRequestError} for coded failures (-32601 method-not-found,
@@ -124,6 +127,67 @@ export function toolValue(value: unknown): Record<string, unknown> {
 
 export function toolError(message: string): Record<string, unknown> {
   return { content: [{ type: "text", text: message }], isError: true };
+}
+
+/**
+ * Another MCP server's tool, listed as that server declared it (ADR 0225).
+ * These endpoints speak revisions where an output schema describes an
+ * object, so any other is left out: advertising it would make clients
+ * reject the results it describes.
+ */
+export function forwardedTool(tool: {
+  name: string;
+  title?: string;
+  description?: string;
+  inputSchema: unknown;
+  outputSchema?: unknown;
+  annotations?: unknown;
+}): Record<string, unknown> {
+  return {
+    name: tool.name,
+    ...(tool.title ? { title: tool.title } : {}),
+    ...(tool.description ? { description: tool.description } : {}),
+    inputSchema: tool.inputSchema,
+    ...(isObjectSchema(tool.outputSchema)
+      ? { outputSchema: tool.outputSchema }
+      : {}),
+    ...(tool.annotations ? { annotations: tool.annotations } : {}),
+  };
+}
+
+const ForwardedToolResultSchema = z.looseObject({
+  content: z.array(z.unknown()),
+  structuredContent: z.unknown().optional(),
+});
+
+/**
+ * Another MCP server's tool result, forwarded as it was sent: content,
+ * structured content, `isError` and `_meta` unchanged (ADR 0225). These
+ * revisions require structured content to be an object, so any other
+ * (which newer revisions allow) is left out, and becomes the text when the
+ * server sent none. Anything that is not a tool result answers as a value,
+ * never as a failure: the call has already run.
+ */
+export function forwardedToolResult(result: unknown): Record<string, unknown> {
+  const parsed = ForwardedToolResultSchema.safeParse(result);
+  if (!parsed.success) return toolValue(result);
+  const { structuredContent, ...rest } = parsed.data;
+  if (structuredContent === undefined) return rest;
+  if (isObject(structuredContent)) return { ...rest, structuredContent };
+  return rest.content.length > 0
+    ? rest
+    : {
+        ...rest,
+        content: [{ type: "text", text: JSON.stringify(structuredContent) }],
+      };
+}
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isObjectSchema(schema: unknown): boolean {
+  return isObject(schema) && schema.type === "object";
 }
 
 /**
@@ -208,4 +272,60 @@ export async function fetchRunSnapshot(
         }
       : {}),
   };
+}
+
+/** A tool another MCP server declared, as a forwarding endpoint lists it. */
+export interface ForwardedToolDefinition {
+  name: string;
+  title?: string;
+  description?: string;
+  inputSchema: unknown;
+  outputSchema?: unknown;
+  annotations?: unknown;
+}
+
+const CallParamsSchema = z.object({
+  name: z.string().min(1),
+  arguments: z.record(z.string(), z.unknown()).default({}),
+});
+
+/**
+ * A stateless MCP endpoint serving another server's tools: tools listed
+ * and results returned as that server declared and sent them (ADR 0225).
+ * `callTool` answers with the server's own result (any tool result, such
+ * as {@link toolError}, passes through), or throws {@link McpRequestError}
+ * for a refusal at the protocol boundary.
+ */
+export function serveForwardedTools(args: {
+  reply: FastifyReply;
+  body: unknown;
+  serverName: string;
+  listTools(): Promise<readonly ForwardedToolDefinition[]>;
+  callTool(call: {
+    name: string;
+    arguments: Record<string, unknown>;
+  }): Promise<unknown>;
+}): Promise<FastifyReply> {
+  return handleMcpPost(args.reply, args.body, async (method, params) => {
+    switch (method) {
+      case "initialize":
+        return {
+          protocolVersion: negotiateProtocolVersion(params.protocolVersion),
+          capabilities: { tools: {} },
+          serverInfo: { name: args.serverName, version: "1" },
+        };
+      case "ping":
+        return {};
+      case "tools/list":
+        return { tools: (await args.listTools()).map(forwardedTool) };
+      case "tools/call": {
+        const call = CallParamsSchema.safeParse(params);
+        if (!call.success)
+          throw new McpRequestError(-32602, "Invalid tool call");
+        return forwardedToolResult(await args.callTool(call.data));
+      }
+      default:
+        throw new McpRequestError(-32601, "Method not found");
+    }
+  });
 }

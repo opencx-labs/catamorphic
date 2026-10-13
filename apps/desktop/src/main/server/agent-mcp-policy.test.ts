@@ -5,7 +5,7 @@ import { resolveToolPermissionAcross } from "@catamorphic/sandbox";
 import { afterEach, expect, it } from "vitest";
 import { ProfileConfigManager } from "../profile-config.js";
 import { ProfilesStore } from "../profiles.js";
-import { DesktopAgentMcp } from "./agent-mcp-policy.js";
+import { connectorToolPermitted, DesktopAgentMcp } from "./agent-mcp-policy.js";
 import type { DataPaths } from "./paths.js";
 
 const cleanups: Array<() => void> = [];
@@ -117,4 +117,34 @@ it("keeps the assigned computer-use service native to Codex and preserves ceilin
       profileId: one.id,
     }).nativeServers,
   ).toEqual({});
+});
+
+it("lets an agent reach a connector's tool unless a layer denies it or it writes for a contained agent", () => {
+  const layers = [
+    {
+      default: "allow" as const,
+      tools: { purge: "deny" as const, rename: "ask" as const },
+    },
+  ];
+  const tool = (name: string, readOnlyHint?: boolean) => ({
+    name,
+    ...(readOnlyHint === undefined ? {} : { annotations: { readOnlyHint } }),
+  });
+  // An ask is decided at the call, so the tool stays reachable.
+  expect(
+    connectorToolPermitted({ layers, readOnly: false, tool: tool("rename") }),
+  ).toBe(true);
+  expect(
+    connectorToolPermitted({ layers, readOnly: false, tool: tool("purge") }),
+  ).toBe(false);
+  expect(
+    connectorToolPermitted({ layers, readOnly: true, tool: tool("rename") }),
+  ).toBe(false);
+  expect(
+    connectorToolPermitted({
+      layers,
+      readOnly: true,
+      tool: tool("lookup", true),
+    }),
+  ).toBe(true);
 });

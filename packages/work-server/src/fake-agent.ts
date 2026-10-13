@@ -290,6 +290,9 @@ async function background(input: {
 const ToolAnswer = z.object({
   result: z
     .object({
+      content: z
+        .array(z.object({ type: z.string(), text: z.string().optional() }))
+        .default([]),
       structuredContent: z.unknown().optional(),
       isError: z.boolean().optional(),
     })
@@ -318,7 +321,11 @@ async function callConnectionTool(
   });
   const parsed = ToolAnswer.parse(await response.json());
   if (parsed.error) return `error: ${parsed.error.message}`;
-  return `${parsed.result?.isError ? "error: " : ""}${JSON.stringify(
-    parsed.result?.structuredContent ?? null,
-  )}`;
+  const result = parsed.result;
+  // Structured content when the tool sent it, its text otherwise.
+  const value =
+    result?.structuredContent !== undefined
+      ? JSON.stringify(result.structuredContent)
+      : (result?.content ?? []).map((block) => block.text ?? "").join("\n");
+  return `${result?.isError ? "error: " : ""}${value}`;
 }

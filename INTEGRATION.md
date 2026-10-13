@@ -1086,6 +1086,16 @@ runner runs the harness's CLI beside the workspace, with the gateway as its
 only model endpoint, and any replica can read it or reattach to it (ADR
 0198). Harness binaries come from the Environment image.
 
+MCP connections (ADR 0225): a provider whose actions are an MCP server's
+tools sets `mcp: true` (`defineMcpConnectionProvider` from `@catamorphic/mcp`
+does), lists each tool's `title` and `outputSchema` beside its input schema,
+and returns each call's `CallToolResult` as the server sent it. Agents reach
+the alias as `connection_<alias>` through `/connection-mcp`, which passes
+those tools and results through unchanged; every other provider's actions
+answer there as JSON tool results with no output schema. Workflows get each
+action's result either way. A host serving MCP tools of its own the same way
+uses `serveForwardedTools` from `@catamorphic/fastify-plugin/mcp`.
+
 HTTP APIs through the gateway (ADR 0212): a provider whose connection is an
 HTTP API code in sandboxes may call sets `http: { baseUrl, paths?,
 headers({ material }) }` (`defineHttpApiConnectionProvider` offers it for

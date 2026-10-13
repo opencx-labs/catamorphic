@@ -8,7 +8,7 @@ import { expect, it, vi } from "vitest";
 
 const starts = vi.hoisted(() => [] as AttemptStart[]);
 vi.mock("@catamorphic/claude-code", () => ({
-  CLAUDE_CODE_CAPABILITIES: { steer: true },
+  CLAUDE_CODE_CAPABILITIES: { steer: true, toolSearch: true },
   createClaudeCodeAdapter: () => ({
     id: "claude-code",
     capabilities: () => ({ steer: true }),
@@ -37,6 +37,7 @@ import {
 function registryWith(
   config: Record<string, unknown>,
   extra: Partial<Record<keyof DesktopAgentRegistryDeps, unknown>> = {},
+  connections: unknown[] = [],
 ): DesktopAgentRegistry {
   const deps = {
     profiles: {
@@ -46,7 +47,7 @@ function registryWith(
     profileConfig: {
       forProfile: () => ({
         agents: { list: () => [config], get: () => config },
-        connections: { list: () => [] },
+        connections: { list: () => connections },
       }),
       forProject: () => ({
         agentBindings: { get: () => undefined },
@@ -98,6 +99,57 @@ it("registers Claude Code as a native host harness with the agent's settings", (
     harnessPermissions: { permissionMode: "plan" },
   });
   expect(harness.env?.CLAUDE_CONFIG_DIR).toContain("claude");
+});
+
+const probeConnection = {
+  id: "probe-id",
+  name: "probe",
+  transport: "http",
+  url: "https://probe.example/mcp",
+  enabled: true,
+  source: { kind: "custom" },
+};
+
+const connectorMcp = {
+  url: (input: { projectId: string; sessionId: string; server: string }) =>
+    `http://127.0.0.1:1/${input.projectId}/${input.sessionId}/${input.server}`,
+  token: (sessionId: string) => `token-${sessionId}`,
+};
+
+it("mounts each connector as its own MCP server for a harness that searches its tools", () => {
+  const registry = registryWith(claudeAgent, { connectorMcp }, [
+    probeConnection,
+  ]);
+  const { harness } = hostOf(registry, "claude");
+  // Served by the host under the key its policies use; the chat's bearer,
+  // never the connector's credentials.
+  expect(
+    harness.mcpServers?.({ projectId: "p", sessionId: "s", turnId: "t" }),
+  ).toEqual({
+    probe: {
+      transport: "http",
+      url: "http://127.0.0.1:1/p/s/probe",
+      headers: { Authorization: "Bearer token-s" },
+      defaultToolsApprovalMode: "approve",
+      timeouts: { startupSeconds: 60, callSeconds: 3600 },
+    },
+  });
+  // The endpoint decides its calls, so no permission mode can skip an ask.
+  expect(harness.toolPolicies?.()).not.toHaveProperty("probe");
+  // The capability catalog leaves mounted connectors out.
+  expect(registry.capabilitySurface("claude")?.connectorsMounted).toBe(true);
+  // A turn outside a chat has no chat to serve.
+  expect(harness.mcpServers?.({ projectId: "p", turnId: "t" })).toEqual({});
+});
+
+it("leaves connectors in the catalog when the host cannot serve them", () => {
+  const registry = registryWith(claudeAgent, {}, [probeConnection]);
+  const { harness } = hostOf(registry, "claude");
+  expect(
+    harness.mcpServers?.({ projectId: "p", sessionId: "s", turnId: "t" }),
+  ).toEqual({});
+  expect(harness.toolPolicies?.()).toHaveProperty("probe");
+  expect(registry.capabilitySurface("claude")?.connectorsMounted).toBe(false);
 });
 
 it("starts the downloaded executable with its toolchain and friendly errors", async () => {

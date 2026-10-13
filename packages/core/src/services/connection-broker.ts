@@ -126,6 +126,14 @@ export class ConnectionBroker {
     });
   }
 
+  /**
+   * Whether a provider's actions are an MCP server's tools, whose results
+   * agents receive as the server sent them (ADR 0225).
+   */
+  servesMcp(providerKind: string): boolean {
+    return this.providers.get(providerKind)?.mcp === true;
+  }
+
   async invoke(args: {
     identity: Identity;
     allocationId: string;

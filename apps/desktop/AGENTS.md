@@ -179,8 +179,11 @@ Follow ADR 0133 and [Agent tool surface](docs/agent-tools.md). Prefer native
 files/code and skills for ordinary work. Host-owned operations enter the existing
 capability registry. A permanent tool needs evidence of an interaction benefit,
 an explicit exposure policy, and scenario coverage; do not mount another broad
-MCP catalog into project sessions. Keep recipes in skills and preserve native
-execution, live authorization, media, and user takeover across projections.
+MCP catalog into project sessions. The exception is profile connectors for a
+harness with tool search: each is its own MCP server, and its endpoint decides
+every call (ADR 0225, `src/main/server/connector-mcp.ts`). Keep recipes in skills
+and preserve native execution, live authorization, media, and user takeover
+across projections.
 
 ## Workflow authoring
 

@@ -234,6 +234,7 @@ const FAKE_CAPABILITIES: HarnessCapabilities = {
   questions: true,
   approvals: true,
   elicitations: true,
+  toolSearch: false,
   subagents: true,
   streamsText: true,
   streamsReasoning: false,

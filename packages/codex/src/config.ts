@@ -136,6 +136,12 @@ export function mcpServersConfig(input: {
         : {
             url: spec.url,
             ...(spec.headers ? { http_headers: spec.headers } : {}),
+            ...(spec.timeouts?.startupSeconds
+              ? { startup_timeout_sec: spec.timeouts.startupSeconds }
+              : {}),
+            ...(spec.timeouts?.callSeconds
+              ? { tool_timeout_sec: spec.timeouts.callSeconds }
+              : {}),
           }),
       ...(filter.disabled_tools
         ? { disabled_tools: filter.disabled_tools }

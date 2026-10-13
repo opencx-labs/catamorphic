@@ -51,4 +51,28 @@ describe("Codex MCP tool policy", () => {
       files: { command: "files-mcp", args: ["--ro"] },
     });
   });
+
+  it("waits for a host-authorized server as long as its host says", () => {
+    expect(
+      mcpServersConfig({
+        servers: {
+          probe: {
+            transport: "http",
+            url: "http://127.0.0.1:1/connectors/probe/mcp",
+            defaultToolsApprovalMode: "approve",
+            timeouts: { startupSeconds: 60, callSeconds: 3600 },
+          },
+        },
+        policies: {},
+        annotations: {},
+      }),
+    ).toEqual({
+      probe: {
+        url: "http://127.0.0.1:1/connectors/probe/mcp",
+        startup_timeout_sec: 60,
+        tool_timeout_sec: 3600,
+        default_tools_approval_mode: "approve",
+      },
+    });
+  });
 });

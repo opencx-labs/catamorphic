@@ -315,6 +315,9 @@ export function gatewayProviders(
         (await provider.listActions(input)).map((action) => ({
           ...action,
           inputSchema: z.json().parse(action.inputSchema),
+          outputSchema: action.outputSchema
+            ? z.json().parse(action.outputSchema)
+            : undefined,
           annotations: action.annotations
             ? z.json().parse(action.annotations)
             : undefined,

@@ -1,6 +1,6 @@
 # 0133: Lean agent tool surface
 
-- **Status:** Accepted (the browser and subsessions join the eager surface, amended by [0202](0202-agents-see-the-browser-subagents-and-their-path.md))
+- **Status:** Accepted (the browser and subsessions join the eager surface, amended by [0202](0202-agents-see-the-browser-subagents-and-their-path.md); a harness with tool search gets each connector as its own MCP server, amended by [0225](0225-harnesses-get-connectors-as-mcp-servers-results-unchanged.md))
 - **Date:** 2026-09-11
 - **Refines:** 0101, 0103, 0111, 0124, 0125, 0126
 

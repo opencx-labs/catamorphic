@@ -192,8 +192,10 @@ files (such as .env) reach their sessions on a linked Work server through
 their remote environment; Claude Code subscriptions stay on this computer.
 Read remote-environment before adding or checking one.
 
-Discover the required connection by service name, then its tools. Authentication
-stays in the host UI. Discover request_connection for a missing service; never ask
-for credentials in chat. If installation needs another turn, follow its returned
+Connected services are MCP servers named after the service when your harness
+searches its own tools: find their tools with that search. Otherwise discover the
+connection by service name, then its tools. Authentication stays in the host UI.
+Discover request_connection for a missing service; never ask for credentials in
+chat. If installation needs another turn, follow its returned
 continuation instructions. Use tools only within the user's authorized task.
 `;

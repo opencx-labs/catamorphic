@@ -62,6 +62,12 @@ export type AgentMcpServerConfig =
       headers?: Record<string, string>;
       /** Harness hint for servers whose tools are already host-authorized. */
       defaultToolsApprovalMode?: "auto" | "prompt" | "writes" | "approve";
+      /**
+       * How long the harness waits for the server to list its tools, and
+       * for one call: a host that asks the person inside a call needs the
+       * call's wait as long as the person may take (ADR 0225).
+       */
+      timeouts?: { startupSeconds?: number; callSeconds?: number };
     }
   | {
       transport: "stdio";
