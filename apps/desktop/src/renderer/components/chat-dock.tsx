@@ -1072,8 +1072,8 @@ function ChatDockContent({
   // pointed at Settings by the error text itself. Main runs the failed
   // turn again once the sign-in works, however it came back (a re-login
   // here, `/login` in a terminal, a new key): the person already said what
-  // they wanted (ADR 0227). It hears of a failure shown here too, for one
-  // from before this run.
+  // they wanted (ADR 0227). It hears of a failure shown here too (one from
+  // before this run, or one it has forgotten), and again on a re-login.
   const latestTurn = chat.timeline.at(-1)?.turn;
   const authFailure =
     !authority &&
@@ -1082,17 +1082,21 @@ function ChatDockContent({
       ? latestTurn.id
       : undefined;
   const authFailureAgentId = sessionAgentId ?? activeAgent?.id;
-  useEffect(() => {
-    if (!authFailure || !chat.sessionId || !authFailureAgentId) return;
+  const authFailureSessionId = chat.sessionId;
+  const reportAuthFailure = useCallback(() => {
+    if (!authFailure || !authFailureSessionId || !authFailureAgentId) return;
     void desktopApi
       .agentAuthFailureShown({
         projectId,
-        sessionId: chat.sessionId,
+        sessionId: authFailureSessionId,
         turnId: authFailure,
         agentId: authFailureAgentId,
       })
       .catch(() => {});
-  }, [authFailure, chat.sessionId, authFailureAgentId, projectId]);
+  }, [authFailure, authFailureSessionId, authFailureAgentId, projectId]);
+  useEffect(() => {
+    reportAuthFailure();
+  }, [reportAuthFailure]);
 
   // Lurk mode: while the agent works and a tab is visible behind the
   // floating dock, the dock shrinks VERTICALLY to a strip — header, the
@@ -1383,7 +1387,12 @@ function ChatDockContent({
             activeAgent.provider === "openrouter"
               ? "Reconnect OpenRouter"
               : `Re-login ${activeAgent.name}`,
-          run: () => void desktopApi.agentLogin(activeAgent.id),
+          run: () => {
+            // Main forgets a failure after a while: the one shown here
+            // runs again once this re-login finishes, however old it is.
+            reportAuthFailure();
+            void desktopApi.agentLogin(activeAgent.id);
+          },
         }
       : undefined;
 

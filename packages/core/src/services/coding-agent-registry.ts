@@ -68,7 +68,7 @@ export type AgentHarness =
 
 /** One more attempt a host asks for after a passing failure (ADR 0227). */
 export interface AgentRetry {
-  /** How long the turn waits before the attempt starts. */
+  /** How long the turn waits before the attempt starts: a minute at most. */
   afterMs: number;
   /** The turn's activity line meanwhile ("Reconnecting to Claude…"). */
   activity: string;

@@ -291,6 +291,11 @@ export const CONTINUATION_PROMPT =
   "Your previous turn was interrupted because the machine running it stopped. Continue where you left off. First check what was already done (files, commands, messages) so you do not repeat anything that had side effects.";
 
 const BACKOFF_MS = [5_000, 15_000, 30_000, 60_000, 120_000];
+/**
+ * The longest a host's retry of a failed attempt waits (ADR 0227): the
+ * turn holds its lease and reads as active meanwhile.
+ */
+const HOST_RETRY_MAX_MS = 60_000;
 const MAX_TRANSIENT_RETRIES = 5;
 const INTERRUPT_GRACE_MS = 30_000;
 /** How long a reattached runner that never said hello has to show it got its start. */
@@ -755,7 +760,7 @@ export class TurnEngine {
         ctx.cursor,
       );
     local.results.clear();
-    const due = Date.now() + Math.max(0, retry.afterMs);
+    const due = Date.now() + hostRetryDelay(retry.afterMs);
     for (;;) {
       if (local.abort.signal.aborted) return { kind: "settled" };
       const current = await this.loadTurn(ctx.turn.id);
@@ -772,16 +777,9 @@ export class TurnEngine {
       }
       const left = due - Date.now();
       if (left <= 0) return { kind: "retry", turn: current };
-      // A stop wakes the pause early; so do commands, which wait for the
-      // next attempt.
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      await Promise.race([
-        local.waiter ?? new Promise<void>(() => {}),
-        new Promise<void>((resolve) => {
-          timer = setTimeout(resolve, left);
-        }),
-      ]);
-      clearTimeout(timer);
+      // A stop wakes the pause early, and so do commands, which wait for
+      // the next attempt; a lost lease ends it.
+      await abortableSleep(left, local.abort.signal, local.waiter);
       rearm();
     }
   }
@@ -3400,8 +3398,12 @@ function onlyDeltas(read: RunnerRead): boolean {
   );
 }
 
-/** Sleep, ending early when `signal` aborts. */
-function abortableSleep(milliseconds: number, signal: AbortSignal) {
+/** Sleep, ending early when `signal` aborts or `wake` resolves. */
+function abortableSleep(
+  milliseconds: number,
+  signal: AbortSignal,
+  wake?: Promise<void>,
+) {
   return new Promise<void>((resolve) => {
     if (signal.aborted) return resolve();
     const done = () => {
@@ -3411,5 +3413,16 @@ function abortableSleep(milliseconds: number, signal: AbortSignal) {
     };
     const timer = setTimeout(done, milliseconds);
     signal.addEventListener("abort", done, { once: true });
+    void wake?.then(done);
   });
+}
+
+/**
+ * How long a host's retry of a failed attempt waits, from its answer
+ * (ADR 0227): never less than nothing, never past {@link HOST_RETRY_MAX_MS},
+ * and no wait at all for an answer that is not a number.
+ */
+export function hostRetryDelay(afterMs: number): number {
+  if (Number.isNaN(afterMs)) return 0;
+  return Math.min(HOST_RETRY_MAX_MS, Math.max(0, afterMs));
 }

@@ -35,6 +35,10 @@ import { ExecutionEnvironmentsService } from "../services/execution-environments
 import { ProjectEnvironmentsService } from "../services/project-environments-service.js";
 import { ProjectsService } from "../services/projects-service.js";
 import { readFullSnapshot } from "../services/sessions/session-reads.js";
+import {
+  hostRetryDelay,
+  TurnEngine,
+} from "../services/sessions/turn-engine.js";
 import { testEnvironmentProvider } from "./test-environment.js";
 
 /*
@@ -1393,6 +1397,144 @@ describe("session log", () => {
       );
       expect(await attemptsOf(pausing?.id ?? "")).toHaveLength(1);
       signIn.afterMs = 50;
+    });
+
+    it("lets the turn go at once when its lease is lost during the pause, for its next holder to retry", async () => {
+      signIn.refreshable = true;
+      signIn.afterMs = 30_000;
+      const { projectId, sessionId } = await signInChat("Sign-in lease lost");
+      await sessions.command(identity, projectId, sessionId, {
+        type: "send",
+        commandId: randomUUID(),
+        text: "sign-in 1",
+      });
+      const pausing = await vi.waitFor(
+        async () => {
+          const detail = await sessions.get(identity, projectId, sessionId);
+          const [turn] = orderedTurns(
+            sessionStateFromSnapshot(detail.snapshot),
+          );
+          expect(turn?.activity).toBe("Reconnecting to Claude…");
+          return turn;
+        },
+        { timeout: 10_000 },
+      );
+      const turnId = pausing?.id ?? "";
+      const engine: unknown = Reflect.get(sessions, "engine");
+      if (!(engine instanceof TurnEngine)) throw new Error("No turn engine");
+      expect(engine.runningTurnIds()).toContain(turnId);
+      // Its replica loses the lease, as when it is cut off: it stops
+      // holding the turn well before the pause would have ended.
+      await db
+        .updateTable("agent_turns")
+        .set({
+          lease_owner: "gone",
+          lease_expires_at: new Date(Date.now() - 1_000),
+        })
+        .where("id", "=", turnId)
+        .execute();
+      await vi.waitFor(
+        () => expect(engine.runningTurnIds()).not.toContain(turnId),
+        { timeout: 5_000 },
+      );
+      const survivor = makeService();
+      const worker = survivor.startWorker({
+        resolveIdentity: async () => identity,
+        pollIntervalMs: 200,
+      });
+      try {
+        await vi.waitFor(
+          async () => {
+            const detail = await survivor.get(identity, projectId, sessionId);
+            const [turn] = orderedTurns(
+              sessionStateFromSnapshot(detail.snapshot),
+            );
+            expect(turn?.status).toBe("completed");
+          },
+          { timeout: 15_000 },
+        );
+      } finally {
+        await worker.stop();
+        await survivor.stopLocalTurns();
+        signIn.afterMs = 50;
+      }
+      expect(
+        (await attemptsOf(turnId)).map(({ reason, status }) => [
+          reason,
+          status,
+        ]),
+      ).toEqual([
+        ["initial", "failed"],
+        ["retry", "completed"],
+      ]);
+    }, 40_000);
+
+    it("waits a minute at most, and not at all for an answer that is no number", () => {
+      expect(hostRetryDelay(3_000)).toBe(3_000);
+      expect(hostRetryDelay(Number.POSITIVE_INFINITY)).toBe(60_000);
+      expect(hostRetryDelay(-5)).toBe(0);
+      expect(hostRetryDelay(Number.NaN)).toBe(0);
+    });
+
+    it("runs a host's retry only while its turn is still the chat's latest", async () => {
+      signIn.refreshable = false;
+      const { projectId, sessionId } = await signInChat("Sign-in overtaken");
+      const { turn: failed } = await sessions.sendMessage(
+        identity,
+        projectId,
+        sessionId,
+        "sign-in 9",
+      );
+      expect(failed.status).toBe("failed");
+      signIn.refreshable = true;
+      // The person wrote again before the host's retry came.
+      await sessions.sendMessage(identity, projectId, sessionId, "hello");
+      const refused = await sessions.command(
+        identity,
+        projectId,
+        sessionId,
+        { type: "retry", commandId: randomUUID(), turnId: failed.id },
+        { ifLatestTurnId: failed.id },
+      );
+      expect(refused).toMatchObject({
+        status: "rejected",
+        error: { code: "not_latest" },
+      });
+      const detail = await sessions.get(identity, projectId, sessionId);
+      expect(
+        orderedTurns(sessionStateFromSnapshot(detail.snapshot)).map(
+          (turn) => turn.status,
+        ),
+      ).toEqual(["failed", "completed"]);
+
+      // Still the latest: the retry runs.
+      signIn.refreshable = false;
+      const { turn: latest } = await sessions.sendMessage(
+        identity,
+        projectId,
+        sessionId,
+        "sign-in 1",
+      );
+      expect(latest.status).toBe("failed");
+      const accepted = await sessions.command(
+        identity,
+        projectId,
+        sessionId,
+        { type: "retry", commandId: randomUUID(), turnId: latest.id },
+        { ifLatestTurnId: latest.id },
+      );
+      expect(accepted.status).toBe("accepted");
+      signIn.refreshable = true;
+      await vi.waitFor(
+        async () => {
+          const after = await sessions.get(identity, projectId, sessionId);
+          expect(
+            orderedTurns(sessionStateFromSnapshot(after.snapshot)).at(-1)
+              ?.status,
+          ).toBe("completed");
+        },
+        { timeout: 10_000 },
+      );
     });
   });
 

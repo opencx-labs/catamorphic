@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  accessTokenFresh,
   claudeOauthHealth,
   signInRefreshable,
   signInUsable,
@@ -142,6 +143,46 @@ describe("signInUsable", () => {
     ).toBe(true);
     expect(
       signInUsable({ harness: "codex", raw: JSON.stringify({}), now: NOW }),
+    ).toBe(false);
+  });
+});
+
+describe("accessTokenFresh (ADR 0227)", () => {
+  const jwt = (claims: Record<string, unknown>) =>
+    `header.${Buffer.from(JSON.stringify(claims)).toString("base64url")}.signature`;
+
+  it("holds for a Claude access token well before its expiry", () => {
+    const fresh = (expiresAt: unknown) =>
+      accessTokenFresh({
+        harness: "claude-code",
+        raw: creds({ accessToken: "access", expiresAt }),
+        now: NOW,
+      });
+    expect(fresh(NOW + 8 * 3_600_000)).toBe(true);
+    // Near its expiry the CLI refreshes it first, which is what failed.
+    expect(fresh(NOW + 60_000)).toBe(false);
+    expect(fresh(NOW - 1)).toBe(false);
+    expect(fresh(undefined)).toBe(false);
+    expect(fresh("soon")).toBe(false);
+  });
+
+  it("reads a Codex sign-in's access token expiry, never a key", () => {
+    const fresh = (raw: unknown) =>
+      accessTokenFresh({
+        harness: "codex",
+        raw: JSON.stringify(raw),
+        now: NOW,
+      });
+    expect(
+      fresh({ tokens: { access_token: jwt({ exp: NOW / 1000 + 3_600 }) } }),
+    ).toBe(true);
+    expect(
+      fresh({ tokens: { access_token: jwt({ exp: NOW / 1000 - 60 }) } }),
+    ).toBe(false);
+    expect(fresh({ tokens: { access_token: "opaque" } })).toBe(false);
+    expect(fresh({ OPENAI_API_KEY: "key" })).toBe(false);
+    expect(
+      accessTokenFresh({ harness: "codex", raw: "garbage", now: NOW }),
     ).toBe(false);
   });
 });

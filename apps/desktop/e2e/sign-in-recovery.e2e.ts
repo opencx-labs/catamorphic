@@ -14,7 +14,8 @@ import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
  * - While the sign-in can still refresh, the turn retries once, quietly:
  *   "Reconnecting to Claude…", and no error card.
  * - When that retry fails too, the card shows; the sign-in renewed outside
- *   Work (another process refreshing it) runs the turn again unasked.
+ *   Work (another process refreshing it) runs the turn again unasked, even
+ *   when the renewal landed before the failure was seen.
  * - A sign-in whose refresh token expired fails at once.
  */
 
@@ -183,6 +184,22 @@ describe("a sign-in that can still refresh", () => {
         !$('[data-testid="chat-error-card"]');`,
       { timeoutMs: 30_000, label: "the renewed sign-in ran the turn again" },
     );
+  });
+
+  it("runs a turn again by itself when its sign-in was refreshed before the failure was seen", async () => {
+    // The sign-in is fresh already, as when another Claude Code refreshed
+    // it while the retry ran: no change follows, and the turn still runs.
+    const answered = `return $$('[role="log"] article').filter((el) =>
+      el.textContent.includes('Signed in again.')).length;`;
+    const before = await run<number>(answered);
+    await watchChat();
+    await run(`send('refreshed meanwhile: expired sign-in x2'); return true;`);
+    await runWait(
+      `return (() => { ${answered} })() > ${before} &&
+        !$('[data-testid="chat-error-card"]');`,
+      { timeoutMs: 30_000, label: "the fresh sign-in ran the turn again" },
+    );
+    expect(await seen()).toEqual({ card: true, reconnecting: true });
   });
 
   it("fails at once when the refresh token expired", async () => {

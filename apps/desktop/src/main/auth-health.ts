@@ -118,3 +118,47 @@ export function signInUsable(input: {
     return false;
   }
 }
+
+/**
+ * How near its expiry an access token stops counting as fresh: a CLI
+ * refreshes one that close before using it, and a refresh is what failed.
+ */
+const FRESH_MARGIN_MS = 5 * 60_000;
+
+/** A JWT's expiry (its `exp` claim) in milliseconds, or NaN. */
+function jwtExpiry(token: unknown): number {
+  if (typeof token !== "string") return Number.NaN;
+  const payload = token.split(".")[1];
+  if (!payload) return Number.NaN;
+  const claims = record(
+    JSON.parse(Buffer.from(payload, "base64url").toString("utf-8")),
+  );
+  return typeof claims?.exp === "number" ? claims.exp * 1000 : Number.NaN;
+}
+
+/**
+ * Whether a harness's sign-in holds an access token a new CLI would use
+ * as it is (ADR 0227): Claude Code's `expiresAt`, or the expiry of a Codex
+ * sign-in's token, comfortably ahead. After a CLI was turned away with an
+ * expired one, this means something refreshed it since. Only the expiry
+ * is read.
+ */
+export function accessTokenFresh(input: {
+  harness: SignInHarness;
+  raw: string | null;
+  now: number;
+}): boolean {
+  if (!input.raw) return false;
+  try {
+    const parsed = record(JSON.parse(input.raw));
+    const expiresAt =
+      input.harness === "codex"
+        ? jwtExpiry(record(parsed?.tokens)?.access_token)
+        : Number(record(parsed?.claudeAiOauth)?.expiresAt ?? Number.NaN);
+    return (
+      Number.isFinite(expiresAt) && expiresAt > input.now + FRESH_MARGIN_MS
+    );
+  } catch {
+    return false;
+  }
+}

@@ -1287,10 +1287,6 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
   }
 
   /**
-   * Who failed, for errors the person can act on: raw provider bodies
-   * (OpenRouter's 401 is literally "User not found.") become a reconnect.
-   */
-  /**
    * One quiet retry for an auth failure on a sign-in that can still
    * refresh (ADR 0227). Claude Code refreshes an expired access token
    * under a lock every Claude Code on the machine shares; a CLI that finds
@@ -1361,6 +1357,10 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     return found ? signInOf(found.config) : undefined;
   }
 
+  /**
+   * Who failed, for errors the person can act on: raw provider bodies
+   * (OpenRouter's 401 is literally "User not found.") become a reconnect.
+   */
   private errorLabels(config: AgentConfig): AgentErrorLabels {
     const labels: Record<string, string> = {
       anthropic: "Anthropic",

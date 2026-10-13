@@ -41,7 +41,11 @@ import { Kysely, PGliteDialect, sql, WithSchemaPlugin } from "kysely";
 import { rosterAgentId } from "../../shared/voice.js";
 import type { WorkspaceBridge } from "../agent-bridge.js";
 import { readAgentCredentials } from "../agent-credentials.js";
-import { signInRefreshable, signInUsable } from "../auth-health.js";
+import {
+  accessTokenFresh,
+  signInRefreshable,
+  signInUsable,
+} from "../auth-health.js";
 import type { ConnectorsService } from "../connectors.js";
 import { DesktopCredentialVault } from "../credential-vault.js";
 import {
@@ -95,7 +99,7 @@ import { ProjectRootsStore } from "./project-roots.js";
 import { REMOTE_ENVIRONMENT_SKILL } from "./remote-environment-skill.js";
 import { SessionCheckouts } from "./session-checkouts.js";
 import { SessionNotes } from "./session-notes.js";
-import { SignInRecovery } from "./sign-in-recovery.js";
+import { mayRunAgain, SignInRecovery } from "./sign-in-recovery.js";
 import { syncReport } from "./sync-report.js";
 import {
   DESKTOP_MCP_TOOL_KINDS,
@@ -479,38 +483,41 @@ export async function startEmbeddedServer(
     signInFor: (agentId) => agentRegistry.signInFor(agentId),
     readSignIn: async (signIn) => {
       const credentials = await readAgentCredentials(signIn, credentialPlaces);
+      const read = {
+        harness: signIn.harness,
+        raw: credentials.raw,
+        now: Date.now(),
+      };
       return {
         fingerprint: credentials.fingerprint,
-        usable: signInUsable({
-          harness: signIn.harness,
-          raw: credentials.raw,
-          now: Date.now(),
-        }),
+        usable: signInUsable(read),
+        fresh: accessTokenFresh(read),
       };
     },
-    stillFailed: async ({ projectId, sessionId, turnId }) => {
+    mayRunAgain: async ({ projectId, sessionId, turnId }) => {
       const service = catamorphic.core.agentSessions;
       if (!service) return false;
       const detail = await service.get(desktopIdentity, projectId, sessionId);
-      const latest = orderedTurns(sessionStateFromSnapshot(detail.snapshot)).at(
-        -1,
-      );
-      return (
-        latest?.id === turnId &&
-        latest.status === "failed" &&
-        latest.error?.kind === "auth"
-      );
+      const state = sessionStateFromSnapshot(detail.snapshot);
+      return mayRunAgain({
+        turnId,
+        session: detail,
+        turns: orderedTurns(state),
+        items: state.items,
+      });
     },
     retry: async ({ projectId, sessionId, turnId }) => {
       const service = catamorphic.core.agentSessions;
       if (!service) return;
+      // A message the person sent since comes first: the retry is refused.
       const receipt = await service.command(
         desktopIdentity,
         projectId,
         sessionId,
         { type: "retry", commandId: randomUUID(), turnId },
+        { ifLatestTurnId: turnId },
       );
-      if (receipt.status === "rejected")
+      if (receipt.status === "rejected" && receipt.error?.code !== "not_latest")
         console.warn(
           `[desktop] A chat's turn did not run again after its agent signed in: ${receipt.error?.message ?? "rejected"}`,
         );

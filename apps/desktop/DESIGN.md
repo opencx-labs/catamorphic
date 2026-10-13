@@ -2480,9 +2480,13 @@ only after Work's own re-login. Main now runs the failed turn again
 whenever the sign-in comes back, however: Work's re-login, a new key in
 Settings, `/login` in a terminal or another process refreshing the login,
 which main notices by the credentials changing (every few seconds for ten
-minutes after the failure, then on focus and wake). It does so for chats
-that are not on screen too, once per change, only for the chat's latest
-turn. See ADR 0227.
+minutes after the failure, then on focus and wake, for half an hour), or,
+for a turn that just failed, by an access token fresh enough that
+something refreshed it meanwhile. It does so for chats that are not on
+screen too, once per change, three times at most, only for the chat's
+latest turn, and only for a person's own message in a top-level chat they
+keep: a chat put away, a subsession, or a workflow's turn waits for a
+person. See ADR 0227.
 
 ### 2026-10-13: The activity line says what the agent does; the steps line keeps time
 

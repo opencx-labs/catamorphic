@@ -52,7 +52,8 @@ export interface ClaudeCodeAttemptOptions {
   /**
    * Where the CLI writes its debug log for this attempt (`--debug-file`):
    * a host diagnosing a failure it retries (a sign-in that did not
-   * refresh) names a file only it can read.
+   * refresh) names a file only it can read. Its CLI is never kept warm:
+   * it ends with the attempt, so the log covers that attempt alone.
    */
   debugFile?: string;
 }

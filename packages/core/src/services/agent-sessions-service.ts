@@ -2857,13 +2857,22 @@ export class AgentSessionsService {
   /**
    * Run a person's command on a session, at most once per `commandId`
    * (scoped to them). Returns the durable receipt: a repeat returns the
-   * first one.
+   * first one. A host running one by itself names what must still hold
+   * when it runs, checked in the command's own transaction.
    */
   async command(
     identity: Identity,
     projectId: string,
     sessionId: string,
     command: SessionCommand,
+    conditions: {
+      /**
+       * Only while this turn is still the session's latest, nothing after
+       * it: an automatic retry (ADR 0227) never overtakes a message the
+       * person sent meanwhile.
+       */
+      ifLatestTurnId?: string;
+    } = {},
   ): Promise<CommandReceipt> {
     // An answer checks its own audience (an unattended chat's approvers,
     // who may hold no other access to it); every other command changes the
@@ -2928,6 +2937,20 @@ export class AgentSessionsService {
             .selectAll()
             .where("id", "=", sessionId)
             .executeTakeFirstOrThrow();
+          if (conditions.ifLatestTurnId !== undefined) {
+            const latest = await trx
+              .selectFrom("agent_turns")
+              .select("id")
+              .where("session_id", "=", sessionId)
+              .orderBy("ordinal", "desc")
+              .limit(1)
+              .executeTakeFirst();
+            if (latest?.id !== conditions.ifLatestTurnId)
+              throw new SessionCommandRejectedError(
+                "not_latest",
+                "Something came after that turn.",
+              );
+          }
           switch (command.type) {
             case "send": {
               this.assertAcceptsInput(locked);
