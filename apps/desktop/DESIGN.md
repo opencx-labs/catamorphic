@@ -372,6 +372,7 @@ screen, or under reduced motion.
 | `bubble-in` / `bubble-out` | 200ms | each other |
 | Bubble strip fold (the chats' `width` from their own size, capped by `calc-size`, never a `max-width`; the rail's gap and padding; its slide between resting spots) | 250ms | itself: one motion both ways, reversing from where it is (the slide shortened as CSS shortens the reversed transitions, so both land together); folded beside a leaving chat, however it leaves, it runs with that chat's exit |
 | `tab-in` / `tab-out` | 200ms / 180ms | each other (exit snappier) |
+| `.workspace-tab-close` transition (a strip tab's close button showing on hover or keyboard focus: opacity and scale 0.8 to 1, over the label's end; the title's end fades under it through `--tab-title-end`) | 150ms | itself: one transition both ways, so a pointer crossing the strip turns each back from where it is; nothing beside it moves |
 | `.sidebar-tab-slot` transition (a sidebar tab's place growing in or shrinking out of its strip: This session beside a chat; `@starting-style` for arrival) | 200ms | itself: one transition both ways on one element, so a quick change back reverses from where it is; at no width the place gives back its flex gap |
 | `.sidebar-strip` transition (a sidebar's tab strip opening as a second tab arrives, folding as the count drops to one; never for the sidebar's own opening) | 200ms | itself, reversing the same way; the panel below follows its height |
 | `fade-in` / `fade-out` (modal section swap; agent-control overlay) | 200ms | each other (exact mirror; `fade-out` holds its final frame for removal on animationend) |
@@ -656,6 +657,24 @@ the historical log explains how it arrived here.
 - [Performance](docs/performance.md): idle lifecycle checks and sustained measurement.
 
 ## Design log
+### 2026-10-14: A tab's close button shows on hover
+
+Every tab in the top strip kept 20px for its close button, shown or not,
+so tabs were wider than their titles and the strip held fewer. Now a tab
+is as wide as its icon and title (a short title's tab is 20px narrower;
+the widest, a 160px title, is 202px instead of 222px, and `tab-in` /
+`tab-out` grow to that). The close button takes no room: it rides over
+the end of the label, where the title's padding was, and shows while the
+tab is hovered or holds keyboard focus (led by the keyboard, as rings
+are), the tab in front included. It fades and grows from 0.8 in 150 ms on
+one transition both ways, so a pointer sweeping the strip turns each back
+from where it is and nothing beside it moves; the title runs on under it,
+its last 12px clearing and the 16px before them fading, instead of
+reflowing. Hidden, it lets presses through to the tab; shown, it takes
+them at once. A dragged tab hides them all. Where nothing can hover, the
+tab in front keeps its button. Tabs in the sidebar keep their row's
+close action.
+
 ### 2026-10-13: The window drags by the tab strip's empty end; every way out folds the strip
 
 With the macOS window buttons hidden, the project switcher spans the
