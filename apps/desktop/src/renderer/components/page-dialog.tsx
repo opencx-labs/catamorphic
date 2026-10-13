@@ -19,7 +19,7 @@ import {
 import { PAGE_DIALOG_MESSAGE_LIMIT } from "../../shared/script-dialogs.js";
 
 /**
- * A page's dialog over its own tab (ADR 0226), as Chrome's tab-modal
+ * A page's dialog over its own tab (ADR 0227), as Chrome's tab-modal
  * dialogs are: the page under it dims and waits, while the rest of the
  * window (the toolbar, other tabs, the chat) carries on. A tab shows one
  * dialog at a time, in the order its page asked; a tab out of sight keeps

@@ -1,4 +1,4 @@
-# 0226 — Pages ask through Work's dialogs
+# 0227 — Pages ask through Work's dialogs
 
 - **Status:** Accepted
 - **Date:** 2026-10-13

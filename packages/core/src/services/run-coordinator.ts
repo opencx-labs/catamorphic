@@ -692,7 +692,7 @@ export class RunCoordinator {
       // Jobs deferred while this run was paused are parked an hour out rather
       // than polling for it. Pull them forward in the same transaction, so a
       // resume that commits always leaves its work runnable, and wake this
-      // process's workers (ADR 0228).
+      // process's workers (ADR 0229).
       await this.jobs.makeRunAvailable({
         runId: args.runId,
         availableAt: now,

@@ -598,7 +598,7 @@ rows inside shared chrome. The chrome owns status; sections own rows.
 - **Tabs follow the chat in front, and never take the panel.** A tab whose
   sections need a chat's session (This session, `when.session`) exists only
   beside the chat, or a page, file or terminal it opened, whose session the
-  sidebar keeps (ADR 0225); its links open as the chat's, in a tab it owns,
+  sidebar keeps (ADR 0226); its links open as the chat's, in a tab it owns,
   so a click never takes the tab away under the pointer. It is never the
   default choice: arriving never changes the tab shown, and the person's
   choice of it comes back with the next chat. Its place grows into the strip
@@ -692,7 +692,7 @@ Work used a tenth of a core with nothing happening and much more while a
 chat answered. Most of it was polling: the embedded server's workers,
 the chat stream feed and every discarded artifact looked for work on
 short timers, and the window read its chat lists every two seconds,
-flashing a refreshing spinner each time. Now idle means idle (ADR 0228).
+flashing a refreshing spinner each time. Now idle means idle (ADR 0229).
 The server's pollers slow down when nothing is queued and the writes that
 queue work wake them. The window's chat lists, attention and watchers
 read again when the main process says chats changed, backed by a
@@ -737,7 +737,7 @@ message box that looked nothing like Work and belonged to no tab, `prompt`
 threw, a page holding its changes with `beforeunload` silently kept every
 reload, address and link from happening, and HTTP sign-ins failed with the
 401 page. Now a page asks through Work's own dialog, drawn over its tab's page
-as Chrome's tab-modal dialogs are (ADR 0226): the page dims and waits,
+as Chrome's tab-modal dialogs are (ADR 0227): the page dims and waits,
 while the toolbar, other tabs, the chat and the window carry on. It is
 centered in the page like every Work dialog, with the shared buttons,
 fields, checkbox and focus ring, and the modal's paired motion (200 ms in,
@@ -766,7 +766,7 @@ A chat's worktree lived in its status popup and its pull requests nowhere.
 Now the right sidebar leads, while a chat is in front, with a "This session"
 tab: where the chat works (as the popup says it; a click shows the folder)
 and the pull requests its agent recorded, each opening in Work's browser.
-Nothing records them natively. A chat's session holds metadata (ADR 0225),
+Nothing records them natively. A chat's session holds metadata (ADR 0226),
 named values agents set with `set_session_metadata`, and the skills tell
 agents to keep `pull_requests` there; the same values reach sections a person
 writes, whose sources get the chat in front. The tab is a section like any
@@ -2522,7 +2522,7 @@ something refreshed it meanwhile. It does so for chats that are not on
 screen too, once per change, three times at most, only for the chat's
 latest turn, and only for a person's own message in a top-level chat they
 keep: a chat put away, a subsession, or a workflow's turn waits for a
-person. See ADR 0227.
+person. See ADR 0228.
 
 ### 2026-10-13: The activity line says what the agent does; the steps line keeps time
 

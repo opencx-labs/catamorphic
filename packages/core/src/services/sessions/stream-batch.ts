@@ -3,7 +3,7 @@ import type { RunnerChannel, RunnerRead } from "./runner-channels.js";
 
 /**
  * How long an item's streamed deltas (an answer, a command's output) gather
- * before they are recorded (ADR 0228): harnesses write in many small
+ * before they are recorded (ADR 0229): harnesses write in many small
  * pieces, and each read becomes a transaction, session events and a stream
  * message. Streams deliver no faster than the session feed polls (150 ms).
  */
@@ -12,7 +12,7 @@ export const STREAM_BATCH_MS = 100;
 export const STREAM_BATCH_MAX_FRAMES = 256;
 
 /**
- * Batch a runner read of streamed deltas (ADR 0228). A read carrying only
+ * Batch a runner read of streamed deltas (ADR 0229). A read carrying only
  * deltas of items already streaming waits {@link STREAM_BATCH_MS} and takes
  * what arrived meanwhile with one more read that does not wait, so the
  * ingest records one append per item instead of one per delta. An item's

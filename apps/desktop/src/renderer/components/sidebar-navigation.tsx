@@ -176,7 +176,7 @@ export function ConfiguredSection({
   onOpenUrl: (url: string, mode: CommitMode) => void;
   /**
    * Open a page for the chat whose session the sidebar shows, as a link
-   * in that chat opens: in a tab the chat owns (ADR 0225).
+   * in that chat opens: in a tab the chat owns (ADR 0226).
    */
   onOpenSessionLink: (url: string, mode: CommitMode) => void;
   onOpenFile: (filePath: string, mode?: CommitMode) => void;
@@ -190,7 +190,7 @@ export function ConfiguredSection({
     () => resolveSidebarSection(configured),
     [configured],
   );
-  // Its rows belong to the chat beside it (ADR 0225): links open as the
+  // Its rows belong to the chat beside it (ADR 0226): links open as the
   // chat's, and the palette, which has no chat, does not search it.
   const sessionScoped =
     section.type === "session" || section.when?.session === true;

@@ -5,7 +5,7 @@ import path from "node:path";
 const KEPT_LOGS = 5;
 
 /**
- * A new file for the CLI's debug log of a sign-in retry (ADR 0227): in
+ * A new file for the CLI's debug log of a sign-in retry (ADR 0228): in
  * `sign-in/` under Work's logs, readable by this user alone, with only the
  * newest few kept. What the CLI says about its token refresh stays on this
  * machine for whoever diagnoses the next failure; Work never reads or

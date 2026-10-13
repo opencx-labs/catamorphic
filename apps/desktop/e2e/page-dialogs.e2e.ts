@@ -4,7 +4,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
 
 /**
- * Pages ask through Work's dialogs (ADR 0226): alert, confirm and prompt
+ * Pages ask through Work's dialogs (ADR 0227): alert, confirm and prompt
  * from the page and its frames, "Leave site?" when a beforeunload holds a
  * reload, a navigation or a close, and HTTP sign-ins. Each dialog sits
  * over its own tab, which waits while the rest of Work carries on.

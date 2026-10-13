@@ -228,7 +228,7 @@ export interface TurnEngineHost {
   /**
    * A failed attempt nothing ran in, whose failure the engine does not
    * retry by itself: whether the host knows it is passing and asks for one
-   * more attempt (ADR 0227). Asked at most once per turn.
+   * more attempt (ADR 0228). Asked at most once per turn.
    */
   retryFailure?(input: {
     identity: Identity;
@@ -292,7 +292,7 @@ export const CONTINUATION_PROMPT =
 
 const BACKOFF_MS = [5_000, 15_000, 30_000, 60_000, 120_000];
 /**
- * The longest a host's retry of a failed attempt waits (ADR 0227): the
+ * The longest a host's retry of a failed attempt waits (ADR 0228): the
  * turn holds its lease and reads as active meanwhile.
  */
 const HOST_RETRY_MAX_MS = 60_000;
@@ -648,7 +648,7 @@ export class TurnEngine {
 
   /**
    * One more attempt before a failed turn settles, when its host knows the
-   * failure is passing (ADR 0227): a sign-in the harness could not refresh
+   * failure is passing (ADR 0228): a sign-in the harness could not refresh
    * in time, though it still can be. Only for a failure nothing ran in that
    * the engine does not retry by itself (rate limits and outages queue
    * their own), and once per turn: never after an earlier attempt of it
@@ -3398,7 +3398,7 @@ function abortableSleep(
 
 /**
  * How long a host's retry of a failed attempt waits, from its answer
- * (ADR 0227): never less than nothing, never past {@link HOST_RETRY_MAX_MS},
+ * (ADR 0228): never less than nothing, never past {@link HOST_RETRY_MAX_MS},
  * and no wait at all for an answer that is not a number.
  */
 export function hostRetryDelay(afterMs: number): number {

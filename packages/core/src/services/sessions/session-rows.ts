@@ -221,7 +221,7 @@ export function sessionFieldsFromRow(row: SessionRow): SessionFields {
   };
 }
 
-/** The metadata column (ADR 0225): an object, as its constraint keeps it. */
+/** The metadata column (ADR 0226): an object, as its constraint keeps it. */
 export function sessionMetadataFromRow(value: Json): SessionMetadata {
   const metadata = protocolJsonValue(value);
   return typeof metadata === "object" &&

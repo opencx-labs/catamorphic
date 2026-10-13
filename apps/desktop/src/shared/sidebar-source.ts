@@ -4,7 +4,7 @@ import type { SidebarItem } from "./sidebar.js";
 
 /**
  * The chat a session-scoped section (`when.session`) sits beside, given to
- * its source (ADR 0225): what agents record on the session reaches a
+ * its source (ADR 0226): what agents record on the session reaches a
  * section the person wrote. The section loads again when it changes.
  */
 export interface SidebarSourceSession {
@@ -93,6 +93,6 @@ export interface SidebarSourceRequest {
   action?: string;
   beforeId?: string;
   payload?: SidebarDropPayload;
-  /** A session-scoped section's chat (ADR 0225). */
+  /** A session-scoped section's chat (ADR 0226). */
   session?: SidebarSourceSession;
 }

@@ -150,7 +150,7 @@ export interface CatamorphicCoreConfig {
   /**
    * How long this process's pollers (workflow and agent workers, event
    * delivery, live session streams) wait after a poll while no work was
-   * found, hinted or due (ADR 0228). Writes made in this process hint them
+   * found, hinted or due (ADR 0229). Writes made in this process hint them
    * at once, so only work written elsewhere waits for an idle poll.
    * Default: they always wait their short interval. A single-process host,
    * where every write is its own, can raise it freely; a host with several
@@ -389,7 +389,7 @@ export interface CatamorphicCoreConfig {
  */
 export class CatamorphicCore {
   readonly db: Kysely<DB>;
-  /** This process's hints that durable work may be waiting (ADR 0228). */
+  /** This process's hints that durable work may be waiting (ADR 0229). */
   readonly wakeups = new WorkWakeups();
   /** See {@link CatamorphicCoreConfig.idlePollMs}. */
   readonly idlePollMs?: number;

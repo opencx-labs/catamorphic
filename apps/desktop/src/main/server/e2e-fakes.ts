@@ -237,6 +237,7 @@ const FAKE_CAPABILITIES: HarnessCapabilities = {
   questions: true,
   approvals: true,
   elicitations: true,
+  toolSearch: false,
   subagents: true,
   streamsText: true,
   streamsReasoning: false,
@@ -2025,7 +2026,7 @@ export const catalog = defineWorkflow(({ defineBoundary }) => ({
   }
 
   // "record pr: <number> <state>" → the REAL set_session_metadata tool,
-  // as the desktop-workspace skill teaches (ADR 0225): read the chat's
+  // as the desktop-workspace skill teaches (ADR 0226): read the chat's
   // pull_requests, then write the list back with this one in it. The
   // address never resolves (.invalid), so opening it stays offline.
   const recordPr = /^record pr:\s*(\d+)\s+(open|draft|merged|closed)$/.exec(
@@ -2245,7 +2246,7 @@ export const catalog = defineWorkflow(({ defineBoundary }) => ({
   // "expired sign-in" (or "expired sign-in xN") → Claude Code turned away
   // on an access token it did not refresh, before any work, on the
   // message's first attempt (or first N): what a refresh lost to another
-  // Claude Code holding the shared lock looks like (ADR 0227).
+  // Claude Code holding the shared lock looks like (ADR 0228).
   const expired = /expired sign-in(?: x(\d+))?/.exec(prompt);
   if (expired) {
     const failures = signInFailures.get(prompt) ?? 0;

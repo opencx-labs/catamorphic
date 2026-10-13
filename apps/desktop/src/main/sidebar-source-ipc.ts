@@ -32,7 +32,7 @@ const requestSchema = identity
         url: z.string().optional(),
       })
       .optional(),
-    // A session-scoped section's chat (ADR 0225), as the renderer holds it.
+    // A session-scoped section's chat (ADR 0226), as the renderer holds it.
     session: z
       .object({
         id: z.string().min(1),

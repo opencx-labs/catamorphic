@@ -879,7 +879,7 @@ interface AgentSessionsDeps {
   authorityLeaseMs?: number;
   /**
    * This process's hints that turns or session events may be waiting, and
-   * how often its pollers look when none came (ADR 0228).
+   * how often its pollers look when none came (ADR 0229).
    */
   wakeups?: WorkWakeups;
   idlePollMs?: number;
@@ -1137,7 +1137,7 @@ export class AgentSessionsService {
     pollIntervalMs?: number;
     /**
      * How long it waits after a poll while nothing is queued, due or
-     * hinted in this process (ADR 0228). Defaults to the host's
+     * hinted in this process (ADR 0229). Defaults to the host's
      * `idlePollMs`; without either it waits `pollIntervalMs` after each
      * poll.
      */
@@ -1278,7 +1278,7 @@ export class AgentSessionsService {
   }
 
   /**
-   * When this host's agent worker next has something due (ADR 0228): a
+   * When this host's agent worker next has something due (ADR 0229): a
    * queued turn's `available_at` (a retry's backoff), an active turn's
    * lease running out, or a pending request's deadline. Null with none.
    */
@@ -1954,7 +1954,7 @@ export class AgentSessionsService {
   }
 
   /**
-   * A session's metadata (ADR 0225), for whoever may read the session: an
+   * A session's metadata (ADR 0226), for whoever may read the session: an
    * agent reads a key before writing it whole again.
    */
   async metadata(args: {
@@ -1972,7 +1972,7 @@ export class AgentSessionsService {
   }
 
   /**
-   * Set named values on a session (ADR 0225): each key of `values` takes
+   * Set named values on a session (ADR 0226): each key of `values` takes
    * its value, and null removes the key. Whoever may change the session
    * may set them, as for its activity, on the host holding its authority
    * (`AgentSessionAuthorityRequiredError` elsewhere, and
@@ -2909,7 +2909,7 @@ export class AgentSessionsService {
     conditions: {
       /**
        * Only while this turn is still the session's latest, nothing after
-       * it: an automatic retry (ADR 0227) never overtakes a message the
+       * it: an automatic retry (ADR 0228) never overtakes a message the
        * person sent meanwhile.
        */
       ifLatestTurnId?: string;
@@ -4429,7 +4429,7 @@ export class AgentSessionsService {
       finalize: (input) => this.finalizeTurn(input),
       settled: (input) => this.afterTurn(input),
       approvalsOpened: (input) => this.notifyApprovers(input),
-      // Whether a failure is passing is the agent's host's to say (ADR 0227).
+      // Whether a failure is passing is the agent's host's to say (ADR 0228).
       retryFailure: async ({ session, turn, error }) => {
         const agent = await this.resolveAgent(
           session.agent_id,
@@ -11090,7 +11090,7 @@ export class AgentSessionsService {
   /**
    * Tell this process's chat lists a chat changed outside the session log
    * (its visibility, attention or icon), once the change is committed
-   * (ADR 0228). What the log records hints by itself.
+   * (ADR 0229). What the log records hints by itself.
    */
   private chatsChanged(): void {
     this.wakeups?.notify("chats");
@@ -11492,6 +11492,7 @@ function protocolMcpServers(
             ...(server.defaultToolsApprovalMode
               ? { defaultToolsApprovalMode: server.defaultToolsApprovalMode }
               : {}),
+            ...(server.timeouts ? { timeouts: { ...server.timeouts } } : {}),
           },
     ]),
   );

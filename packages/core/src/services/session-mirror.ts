@@ -212,7 +212,7 @@ export async function writeSessionMirror({
           providerThreads: input.base.providerThreads.map(away),
         },
       });
-      // What was set on the session before this copy existed (ADR 0225),
+      // What was set on the session before this copy existed (ADR 0226),
       // held to a write's limits; later changes arrive as its events.
       assertSessionMetadata(input.base.session.metadata);
       await trx

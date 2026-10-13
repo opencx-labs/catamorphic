@@ -452,7 +452,7 @@ export interface UseAgentSessionFieldsResult {
 
 /**
  * A session's shared fields for a view beside its conversation, such as a
- * sidebar (ADR 0225). It reads the session's one cache entry, loading the
+ * sidebar (ADR 0226). It reads the session's one cache entry, loading the
  * snapshot only when no other reader has. It streams only while `live`;
  * otherwise it shows what the conversation's own live reader keeps current
  * (the chat on screen streams; {@link useAgentSession}). It re-renders

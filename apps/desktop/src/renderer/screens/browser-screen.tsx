@@ -112,7 +112,7 @@ export interface BrowserCommands {
   sleepBlocker: () => Promise<BrowserSleepBlocker | null>;
   /**
    * Ask the page whether its tab may close: its beforeunload may hold it
-   * with "Leave site?" (ADR 0226). Resolves false when the person stays.
+   * with "Leave site?" (ADR 0227). Resolves false when the person stays.
    */
   mayClose: () => Promise<boolean>;
 }
@@ -160,7 +160,7 @@ const CLOSE_ASK_MS = 2_000;
 /**
  * Tell main what is about to leave the page, before it does: a page whose
  * beforeunload holds it asks "Leave site?", and Leave does it again (ADR
- * 0226).
+ * 0227).
  */
 function announceLeaving(view: WebviewElement, intent: UnloadIntent): void {
   try {
@@ -361,7 +361,7 @@ export function BrowserScreen({
   );
   const [passwordEditorOpen, setPasswordEditorOpen] = useState(false);
   const pageAreaRef = useRef<HTMLDivElement | null>(null);
-  // What the page waits on (ADR 0226): alert, confirm, prompt, Leave site?
+  // What the page waits on (ADR 0227): alert, confirm, prompt, Leave site?
   // and sign-ins, shown over the page one at a time.
   const [dialogs, setShownDialogs] = useState<PageDialog[]>([]);
   const dialogsRef = useRef(dialogs);

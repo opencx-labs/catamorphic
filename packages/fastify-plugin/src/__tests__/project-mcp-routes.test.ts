@@ -578,7 +578,7 @@ describe("project MCP surface (ADR 0055): documents, skills, ask_agent", () => {
     });
   });
 
-  it("reads and sets a key of the calling session's metadata, and of no other (ADR 0225)", async () => {
+  it("reads and sets a key of the calling session's metadata, and of no other (ADR 0226)", async () => {
     const { core, calls } = surfaceCore();
     Object.assign(core.agentSessions, {
       metadata: async (args: unknown) => {

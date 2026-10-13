@@ -4,6 +4,7 @@ import type { JsonObject } from "@catamorphic/agent-protocol";
 import type {
   AttemptStart,
   HarnessAdapter,
+  HarnessCapabilities,
 } from "@catamorphic/agent-protocol/runner";
 import { AI_SDK_HARNESS, type ShellState } from "@catamorphic/ai-sdk";
 import {
@@ -26,7 +27,11 @@ import {
   projectAgentId,
   validateAgentDefinition,
 } from "@catamorphic/core";
-import { type ExtraTool, PROJECT_TOOLS_SERVER_KEY } from "@catamorphic/sandbox";
+import {
+  type AgentMcpServerConfig,
+  type ExtraTool,
+  PROJECT_TOOLS_SERVER_KEY,
+} from "@catamorphic/sandbox";
 import { PROJECT_AGENTS_DIR } from "@catamorphic/workflow/project-layout";
 import type { AgentCommandsResult } from "../../shared/agent-commands.js";
 import type { AgentDefaultModelResult } from "../../shared/agent-default-model.js";
@@ -56,7 +61,7 @@ import type { ProfilesStore } from "../profiles.js";
 import { projectDefaultAgentSlug } from "../project-manifest.js";
 import { shellBinShimDir } from "../shell-integration.js";
 import { ASSISTANT_INSTRUCTIONS, VOICE_CONTEXT } from "../voice/guidance.js";
-import { DesktopAgentMcp } from "./agent-mcp-policy.js";
+import { DesktopAgentMcp, type ResolvedMcp } from "./agent-mcp-policy.js";
 import {
   assistantDelegation,
   assistantHostTools,
@@ -99,7 +104,7 @@ type BuiltAgent = Pick<
 
 /**
  * How long a turn whose sign-in can still refresh waits before its one
- * quiet retry (ADR 0227): long enough for another Claude Code holding the
+ * quiet retry (ADR 0228): long enough for another Claude Code holding the
  * shared refresh lock to finish with it.
  */
 export const SIGN_IN_RETRY_MS = 3_000;
@@ -135,6 +140,19 @@ export interface DesktopAgentRegistryDeps {
   workspaceBridge?: WorkspaceBridge;
   /** Installed connector plugins (Claude Code loads them natively). */
   connectors?: ConnectorsService;
+  /**
+   * The embedded server's endpoint serving each of a chat's profile
+   * connectors as an MCP server of its own (ADR 0225): its address
+   * (undefined until the server listens) and the chat's bearer.
+   */
+  connectorMcp?: {
+    url(input: {
+      projectId: string;
+      sessionId: string;
+      server: string;
+    }): string | undefined;
+    token(sessionId: string): string;
+  };
   /**
    * Project folder lookup for PROJECT agents (`project:<id>:<slug>`), whose
    * committed `.work/agents/<slug>.json` definitions are read from disk here —
@@ -178,7 +196,7 @@ export interface DesktopAgentRegistryDeps {
   e2eFake?: boolean;
   /**
    * Whether an agent's own harness sign-in can still refresh itself
-   * (ADR 0227), read from this machine's credentials when a turn on it
+   * (ADR 0228), read from this machine's credentials when a turn on it
    * fails on auth. Without it, such a turn fails at once.
    */
   signInRefreshable?: (signIn: AgentSignIn) => Promise<boolean>;
@@ -220,6 +238,14 @@ export const WORKFLOWS_SERVER_KEY = PROJECT_TOOLS_SERVER_KEY;
  * the live harness, its prompt cache, shell and connections intact.
  */
 export const DESKTOP_WARM_HARNESSES = { idleMs: 10 * 60_000, max: 6 };
+
+/**
+ * A mounted connector's waits (ADR 0225): a connector that starts a process
+ * or refreshes a sign-in may take a while to list its tools, and a call may
+ * wait for the person to answer an ask.
+ */
+const CONNECTOR_STARTUP_SECONDS = 60;
+const CONNECTOR_CALL_SECONDS = 60 * 60;
 
 /**
  * The desktop's dynamic {@link CodingAgentRegistry}: agents come from the
@@ -264,7 +290,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
   private readonly codex = createCodexAdapter({ warm: DESKTOP_WARM_HARNESSES });
   /**
    * Turns whose next attempt is a sign-in retry, until when: its Claude
-   * Code writes a debug log (ADR 0227).
+   * Code writes a debug log (ADR 0228).
    */
   private readonly signInRetries = new Map<string, number>();
 
@@ -1101,6 +1127,17 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
             },
             // Connector plugins and the host skills load natively.
             plugins: this.mcp.resolve({ config, profileId }).plugins,
+            mcpServers: (context) =>
+              this.connectorServers({
+                capabilities: CLAUDE_CODE_CAPABILITIES,
+                mcp: live(),
+                context,
+              }),
+            toolPolicies: () =>
+              this.harnessPolicies({
+                capabilities: CLAUDE_CODE_CAPABILITIES,
+                mcp: live(),
+              }),
           },
           options: {
             memory: config.memory === true,
@@ -1151,7 +1188,22 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
             },
             // Stateful native computer use belongs to the Codex process
             // that started it, never the profile-wide tool pool.
-            mcpServers: () => live().nativeServers ?? {},
+            mcpServers: (context) => {
+              const mcp = live();
+              return {
+                ...this.connectorServers({
+                  capabilities: CODEX_CAPABILITIES,
+                  mcp,
+                  context,
+                }),
+                ...(mcp.nativeServers ?? {}),
+              };
+            },
+            toolPolicies: () =>
+              this.harnessPolicies({
+                capabilities: CODEX_CAPABILITIES,
+                mcp: live(),
+              }),
           },
           options: {
             // Host subsessions and todos replace Codex's own.
@@ -1167,6 +1219,72 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
         };
       }
     }
+  }
+
+  /**
+   * Whether a harness gets the agent's connectors as MCP servers of their
+   * own (ADR 0225): it searches its tools and this host serves them. The
+   * capability catalog offers them otherwise.
+   */
+  private mountsConnectors(capabilities: HarnessCapabilities): boolean {
+    return capabilities.toolSearch && this.deps.connectorMcp !== undefined;
+  }
+
+  /**
+   * The agent's connectors as MCP servers of their own, each served from
+   * the host's pool under the server key its policy layers use. The
+   * endpoint decides every call (so an ask waits inside it, given a long
+   * call timeout), and the address and bearer are the chat's for every
+   * turn, so a warm harness keeps them.
+   */
+  private connectorServers(input: {
+    capabilities: HarnessCapabilities;
+    mcp: ResolvedMcp;
+    context: AgentTurnContext;
+  }): Record<string, AgentMcpServerConfig> {
+    const sessionId = input.context.sessionId;
+    const endpoint = this.deps.connectorMcp;
+    if (!this.mountsConnectors(input.capabilities) || !endpoint || !sessionId)
+      return {};
+    const servers: Record<string, AgentMcpServerConfig> = {};
+    for (const server of Object.keys(input.mcp.connectionIds)) {
+      if (input.mcp.nativeServers?.[server]) continue;
+      const url = endpoint.url({
+        projectId: input.context.projectId,
+        sessionId,
+        server,
+      });
+      if (!url) continue;
+      servers[server] = {
+        transport: "http",
+        url,
+        headers: { Authorization: `Bearer ${endpoint.token(sessionId)}` },
+        defaultToolsApprovalMode: "approve",
+        timeouts: {
+          startupSeconds: CONNECTOR_STARTUP_SECONDS,
+          callSeconds: CONNECTOR_CALL_SECONDS,
+        },
+      };
+    }
+    return servers;
+  }
+
+  /**
+   * The policy layers the harness enforces: none for connectors mounted as
+   * servers of their own, whose endpoint decides every call whatever the
+   * harness's permission mode (ADR 0225).
+   */
+  private harnessPolicies(input: {
+    capabilities: HarnessCapabilities;
+    mcp: ResolvedMcp;
+  }): ResolvedMcp["policies"] {
+    if (!this.mountsConnectors(input.capabilities)) return input.mcp.policies;
+    return Object.fromEntries(
+      Object.entries(input.mcp.policies).filter(
+        ([server]) =>
+          !input.mcp.connectionIds[server] || input.mcp.nativeServers?.[server],
+      ),
+    );
   }
 
   /**
@@ -1288,7 +1406,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
 
   /**
    * One quiet retry for an auth failure on a sign-in that can still
-   * refresh (ADR 0227). Claude Code refreshes an expired access token
+   * refresh (ADR 0228). Claude Code refreshes an expired access token
    * under a lock every Claude Code on the machine shares; a CLI that finds
    * it busy too long, or loses the refresh to the network, goes on with the
    * expired token and is turned away. A fresh CLI a few seconds later
@@ -1463,7 +1581,8 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
   /** Live policy/configuration, shared by direct and discovered projections. */
   capabilitySurface(id: string) {
     const found = this.configFor(id);
-    if (!found || !this.get(id)) return undefined;
+    const agent = found ? this.get(id) : undefined;
+    if (!found || !agent) return undefined;
     const { config, profileId } = found;
     const tools = this.workspaceTools(config, "native", true) ?? [];
     return {
@@ -1474,6 +1593,11 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
       readOnly: config.sandboxing === "contained",
       profileId,
       mcp: this.mcp.live({ config, profileId }),
+      // A harness that searches its tools has each connector mounted as
+      // its own MCP server (ADR 0225); the catalog offers them otherwise.
+      connectorsMounted:
+        agent.harness.placement === "host" &&
+        this.mountsConnectors(agent.harness.adapter.capabilities()),
     };
   }
 

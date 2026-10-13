@@ -96,7 +96,7 @@ it("reads files, serializes simultaneous writes, watches changes, and keeps cons
   release();
 });
 
-it("hands a session-scoped section's chat to load and actions, and nothing elsewhere (ADR 0225)", async () => {
+it("hands a session-scoped section's chat to load and actions, and nothing elsewhere (ADR 0226)", async () => {
   const { root, runtime, load } = setup(`
     import { writeFile } from 'node:fs/promises';
     export default {

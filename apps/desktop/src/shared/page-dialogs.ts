@@ -6,7 +6,7 @@ import {
 } from "./script-dialogs.js";
 
 /**
- * What a page in a browser tab asks through Work's own dialogs (ADR 0226):
+ * What a page in a browser tab asks through Work's own dialogs (ADR 0227):
  * the page's `alert`, `confirm` and `prompt`, "Leave site?" when its
  * `beforeunload` holds a navigation, and an HTTP sign-in. Each belongs to
  * its tab and waits there, over the page, until it is answered.

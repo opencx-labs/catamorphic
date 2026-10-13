@@ -107,7 +107,7 @@ export interface ProjectEventSourceProvider {
 export class ProjectEventMonitorsService {
   constructor(
     private readonly db: Kysely<DB>,
-    /** Tells this process's monitor worker a monitor may be due (ADR 0228). */
+    /** Tells this process's monitor worker a monitor may be due (ADR 0229). */
     private readonly wakeups?: WorkWakeups,
   ) {}
 
@@ -204,7 +204,7 @@ export class ProjectEventMonitorsService {
   /**
    * When the soonest monitor a worker of this placement claims falls due
    * (its next poll, or the end of another worker's lease), or null when
-   * none is watched. An idle worker sleeps no longer than this (ADR 0228).
+   * none is watched. An idle worker sleeps no longer than this (ADR 0229).
    */
   async nextDueAt(input: {
     placement: Exclude<EventSourcePlacement, "any">;
@@ -274,7 +274,7 @@ export function startProjectEventMonitorWorker(input: {
   placement: Exclude<EventSourcePlacement, "any">;
   pollEveryMs?: number;
   /**
-   * How long it waits while no monitor is due (ADR 0228), ending at the
+   * How long it waits while no monitor is due (ADR 0229), ending at the
    * next due monitor or this process's event hints. Without one it waits
    * `pollEveryMs` between polls.
    */

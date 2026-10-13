@@ -9,7 +9,7 @@ import {
 } from "../metadata.js";
 import type { JsonValue } from "../model.js";
 
-describe("session metadata writes (ADR 0225)", () => {
+describe("session metadata writes (ADR 0226)", () => {
   const pr = { url: "https://github.com/acme/web/pull/7", number: 7 };
 
   it("sets, replaces and removes keys, keeping the others", () => {

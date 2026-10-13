@@ -1,4 +1,4 @@
-# 0227 — A sign-in that can still refresh is retried, and a fixed one runs the turn again
+# 0228 — A sign-in that can still refresh is retried, and a fixed one runs the turn again
 
 - **Status:** Accepted (amends [0222](0222-desktop-harnesses-stay-warm-between-turns.md))
 - **Date:** 2026-10-13

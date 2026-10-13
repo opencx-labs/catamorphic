@@ -142,7 +142,7 @@ export class ExecutionJobsService {
   constructor(
     private readonly db: Kysely<DB>,
     private readonly workerNode?: { id: string; token: string },
-    /** Tells this process's workers that a job may be waiting (ADR 0228). */
+    /** Tells this process's workers that a job may be waiting (ADR 0229). */
     private readonly wakeups?: WorkWakeups,
   ) {}
 
@@ -150,7 +150,7 @@ export class ExecutionJobsService {
    * When the soonest job of these kinds becomes claimable: a pending job's
    * `available_at`, or a running job's lease running out (a lapsed lease is
    * requeued by the next maintenance sweep). Null when there is none. An
-   * idle worker sleeps no longer than this (ADR 0228).
+   * idle worker sleeps no longer than this (ADR 0229).
    */
   async nextDueAt(args: {
     kinds: readonly ExecutionJobKind[];

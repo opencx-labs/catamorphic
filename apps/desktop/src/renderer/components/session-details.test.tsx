@@ -166,7 +166,7 @@ async function mount() {
   return { node, render, rows, reports, opened, cleanup };
 }
 
-describe("the session section (ADR 0225)", () => {
+describe("the session section (ADR 0226)", () => {
   it("shows where the chat works and the pull requests its agent recorded", async () => {
     session.fields = { metadata: { pull_requests: pullRequests } };
     checkout.data = worktree;

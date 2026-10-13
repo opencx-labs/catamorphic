@@ -1,5 +1,5 @@
 import type { AgentMcpServerConfig } from "@catamorphic/sandbox";
-import { connectMcpServer } from "./client.js";
+import { connectMcpServer, type McpToolInfo } from "./client.js";
 import type { McpOAuthClientHint } from "./marketplace.js";
 import {
   bearerHeaders,
@@ -87,6 +87,7 @@ export function defineMcpConnectionProvider(args: {
           },
         }
       : {}),
+    mcp: true as const,
     async listActions(input: {
       material: Uint8Array;
       capabilities: readonly string[];
@@ -96,14 +97,10 @@ export function defineMcpConnectionProvider(args: {
         input.material,
       );
       try {
-        return server.tools
-          .filter((tool) => input.capabilities.includes(tool.name))
-          .map((tool) => ({
-            name: tool.name,
-            description: tool.description,
-            inputSchema: tool.inputSchema,
-            ...(tool.annotations ? { annotations: tool.annotations } : {}),
-          }));
+        return mcpToolActions({
+          tools: server.tools,
+          capabilities: input.capabilities,
+        });
       } finally {
         await server.close().catch(() => {});
       }
@@ -137,6 +134,26 @@ export function defineMcpConnectionProvider(args: {
       }
     },
   };
+}
+
+/**
+ * A connection action for each granted tool, as the server declared it:
+ * its title, schemas and annotations reach agents unchanged (ADR 0225).
+ */
+export function mcpToolActions(input: {
+  tools: readonly McpToolInfo[];
+  capabilities: readonly string[];
+}) {
+  return input.tools
+    .filter((tool) => input.capabilities.includes(tool.name))
+    .map((tool) => ({
+      name: tool.name,
+      ...(tool.title ? { title: tool.title } : {}),
+      description: tool.description,
+      inputSchema: tool.inputSchema,
+      ...(tool.outputSchema ? { outputSchema: tool.outputSchema } : {}),
+      ...(tool.annotations ? { annotations: tool.annotations } : {}),
+    }));
 }
 
 async function connectWithCredential(

@@ -82,7 +82,7 @@ export type WorkspaceTab = (
       faviconUrl?: string | null;
       /** The page is unloaded to save memory until the tab is shown. */
       asleep?: boolean;
-      /** The page waits on its dialog (ADR 0226). */
+      /** The page waits on its dialog (ADR 0227). */
       pageDialog?: boolean;
     }
   | {

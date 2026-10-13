@@ -941,7 +941,7 @@ kbd {
 }
 
 /* A sidebar tab joining or leaving its strip (a contextual tab such as This
-   session, ADR 0225): its place grows from nothing while its neighbours
+   session, ADR 0226): its place grows from nothing while its neighbours
    slide, and shrinks away the way it came. Transitions, not keyframes: a
    quick change back reverses from wherever it is. At no width the place
    gives back its flex gap. */

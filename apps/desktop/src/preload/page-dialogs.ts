@@ -7,7 +7,7 @@ import {
 } from "../shared/script-dialogs.js";
 
 /**
- * Page dialogs in a browser tab (ADR 0226), for the tab preload.
+ * Page dialogs in a browser tab (ADR 0227), for the tab preload.
  *
  * Every frame's `alert`, `confirm` and `prompt` are replaced, in the page's
  * own world, by functions that wait on a synchronous IPC until the person

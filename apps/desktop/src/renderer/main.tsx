@@ -32,7 +32,7 @@ document.documentElement.dataset.surface = detachedWindow
     : "workspace";
 installFocusModality();
 
-/** This window's chat lists follow this computer's hints (ADR 0228). */
+/** This window's chat lists follow this computer's hints (ADR 0229). */
 function SessionChangeHints() {
   useSessionChangeHints();
   return null;

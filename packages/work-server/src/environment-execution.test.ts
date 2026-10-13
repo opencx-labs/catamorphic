@@ -56,6 +56,7 @@ class WorkspaceAgent {
         questions: false,
         approvals: false,
         elicitations: false,
+        toolSearch: false,
         subagents: false,
         streamsText: false,
         streamsReasoning: false,

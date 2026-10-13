@@ -53,7 +53,7 @@ describe("claudeOauthHealth", () => {
   });
 });
 
-describe("signInRefreshable (ADR 0227)", () => {
+describe("signInRefreshable (ADR 0228)", () => {
   it("holds for a Claude sign-in with a live refresh token, its access token expired or not", () => {
     for (const expiresAt of [NOW - 6 * 60_000, NOW + 60_000])
       expect(
@@ -147,7 +147,7 @@ describe("signInUsable", () => {
   });
 });
 
-describe("accessTokenFresh (ADR 0227)", () => {
+describe("accessTokenFresh (ADR 0228)", () => {
   const jwt = (claims: Record<string, unknown>) =>
     `header.${Buffer.from(JSON.stringify(claims)).toString("base64url")}.signature`;
 

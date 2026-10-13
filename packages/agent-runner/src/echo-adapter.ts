@@ -18,6 +18,7 @@ const CAPABILITIES: HarnessCapabilities = {
   questions: true,
   approvals: true,
   elicitations: false,
+  toolSearch: false,
   subagents: false,
   streamsText: true,
   streamsReasoning: false,

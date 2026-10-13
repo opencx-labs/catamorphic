@@ -57,6 +57,12 @@ export interface HarnessCapabilities {
   approvals: boolean;
   /** Pass MCP elicitations through. */
   elicitations: boolean;
+  /**
+   * Loads MCP tools on demand by searching them, so a host may mount every
+   * connector as its own MCP server without loading every tool's schema
+   * up front (ADR 0225).
+   */
+  toolSearch: boolean;
   /** Run private subagents whose activity it reports. */
   subagents: boolean;
   /** Stream assistant text as it is written. */
@@ -80,6 +86,7 @@ export const NO_CAPABILITIES: HarnessCapabilities = {
   questions: false,
   approvals: false,
   elicitations: false,
+  toolSearch: false,
   subagents: false,
   streamsText: false,
   streamsReasoning: false,
@@ -118,6 +125,8 @@ export type McpServerSpec =
       url: string;
       headers?: Record<string, string>;
       defaultToolsApprovalMode?: "auto" | "prompt" | "writes" | "approve";
+      /** How long to wait for the server's tools, and for one call (ADR 0225). */
+      timeouts?: { startupSeconds?: number; callSeconds?: number };
     }
   | {
       transport: "stdio";

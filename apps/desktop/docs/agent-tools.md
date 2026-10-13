@@ -49,11 +49,11 @@ Availability also depends on identity, services, agent sandboxing and topology.
 | `list_project_sessions`, `read_project_session`, `send_project_session_message` | Deferred, authorized peer coordination; `children_only` filters the listing |
 | `spawn_subsession`, `wait_for_subsessions` | Eager, the agent's subagents: host-owned child sessions whose results steer into the parent's working turn (ADR 0202) |
 | `interrupt_subsession` | Deferred, stops a direct child |
-| `request_user_attention`, `set_session_activity`, `set_session_metadata`, `read_todo_list` | Deferred, session state; `set_session_metadata` sets one named value the sidebar reads (ADR 0225) |
+| `request_user_attention`, `set_session_activity`, `set_session_metadata`, `read_todo_list` | Deferred, session state; `set_session_metadata` sets one named value the sidebar reads (ADR 0226) |
 | `list_worktrees`, `create_worktree`, `use_worktree` | Deferred and native-only; `path: null` returns to primary. Git facts use shell; assignment uses the host |
 | `point_at`, `set_chat_icon` | Deferred, optional presentation; `target: null` clears highlighting |
 | `desktop_settings` | Deferred, the owning profile's settings files, scopes and validation errors for the configuration skill |
-| `open_browser`, `browser_snapshot`, `browser_act` | Eager, the signed-in browser: real input, uploads, downloads, and the page's console, network and JavaScript (ADR 0202); a page's dialogs are reported and answered with `press` and `fill`, never a sign-in (ADR 0226) |
+| `open_browser`, `browser_snapshot`, `browser_act` | Eager, the signed-in browser: real input, uploads, downloads, and the page's console, network and JavaScript (ADR 0202); a page's dialogs are reported and answered with `press` and `fill`, never a sign-in (ADR 0227) |
 | `surface_control` | Deferred, release, reclaim or close a browser tab or terminal. A browser tab the agent drives goes back to the person by itself when the turn ends |
 | `run_background_command`, `read_background_output`, `stop_background_command` | Eager, long-running processes in their own agent terminals; they outlive the turn and wake the chat when they finish (ADR 0155). Foreground commands use each harness's native shell |
 | `watch_command` | Eager. A quick check re-run on an interval in the chat's working directory; wakes the chat once on success or on every output change. Durable across restarts, missed checks coalesce, `stop_background_command` ends it (ADR 0156) |
@@ -70,7 +70,7 @@ Availability also depends on identity, services, agent sandboxing and topology.
 | Project-defined workflow tools, `catamorphic_poll_run` | Deferred live deployed workflow bindings and continuation; identical execution service to public MCP |
 | `components.read` | Existing deferred, installable component packs; composition and evidence remain code and skills |
 | `context.read`, `environments.list`, `assignments.current` | Existing deferred framework context and allocation facts |
-| Profile connector tools | Deferred per-service discovery through the authenticated host pool; no global roster fetch on an empty query |
+| Profile connector tools | A harness with tool search (Claude Code, Codex) gets each connector as its own MCP server, served from the authenticated host pool and loaded on demand (ADR 0225). The built-in agent discovers them per service through the catalog; no global roster fetch on an empty query |
 
 Removed duplicate registrations: `list_subsessions` becomes
 `list_project_sessions {children_only:true}`; `use_project_checkout` becomes
@@ -81,9 +81,13 @@ delivery operation cover them. External project MCP consumers retain these
 public contracts.
 
 Explicit Environment Allocation connection bindings remain harness MCP servers:
-they are a caller-selected, capability-granted roster, not the entire profile's
-connector catalog. Installed connector plugin projections retain skills and
-commands while stripping duplicate MCP declarations.
+a caller-selected, capability-granted roster (`connection_<alias>`). A harness
+with tool search also gets each of the agent's profile connectors as its own MCP
+server, served from the host pool by `connector-mcp.ts`; the built-in agent
+reaches them through the catalog. Both kinds of server list tools and return
+results as the connector declared and sent them (ADR 0225). Installed connector
+plugin projections retain skills and commands while stripping duplicate MCP
+declarations.
 
 ## Implementation and verification
 
@@ -93,6 +97,9 @@ native-only constraint and eager status. Missing policy fails construction.
 registry. It reloads caller/agent policies; core fences Allocation and membership,
 validates input, completes approval, then re-resolves authority before execution.
 Discovery is bounded and cursor-based. It does not grant permission.
+`connector-mcp.ts` serves mounted connectors: it lists only the tools the
+agent's layers permit and decides each call with the same gate and approval
+request as the catalog, so no harness permission mode skips an ask.
 
 `project-capabilities.ts` projects the public project implementations. Workflow
 inputs are passed unchanged; only host-owned session operations bind their owner
@@ -204,7 +211,7 @@ the microphone closes at once, the turn's replies are still read aloud, and
 then voice turns off. Its description says what it does and never when, so
 the person teaches their agents when to call it.
 
-## Session metadata (ADR 0225)
+## Session metadata (ADR 0226)
 
 A chat's details beside it (its pull requests, or any key a person's own
 sidebar section reads) had no home: `create_pull_request` stored nothing and

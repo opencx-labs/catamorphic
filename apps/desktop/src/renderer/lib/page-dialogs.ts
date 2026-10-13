@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from "react";
 
 /**
- * The browser tabs whose page waits on a dialog (ADR 0226), by surface key
+ * The browser tabs whose page waits on a dialog (ADR 0227), by surface key
  * ("browser:<id>"), so a tab out of sight still shows that it waits. Each
  * tab's browser screen keeps its own entry.
  */

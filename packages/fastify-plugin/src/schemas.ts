@@ -1718,7 +1718,7 @@ export const ProviderThreadSchema = describes<ProviderThread>()(
     .meta({ id: "ProviderThread" }),
 );
 
-/** A session's metadata (ADR 0225): values by key, each any JSON. */
+/** A session's metadata (ADR 0226): values by key, each any JSON. */
 export const SessionMetadataSchema = describes<SessionMetadata>()(
   z.record(z.string(), JsonValueSchema).meta({ id: "SessionMetadata" }),
 );
@@ -1753,7 +1753,7 @@ export const SessionFieldsSchema = describes<SessionFields>()(
 );
 
 /**
- * Set named values on a session (ADR 0225): each key takes its value, and
+ * Set named values on a session (ADR 0226): each key takes its value, and
  * null removes the key. Keys are lowercase words of letters and digits
  * joined by `_`, `-` or `.`; core bounds the count and sizes.
  */

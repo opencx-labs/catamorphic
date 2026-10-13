@@ -66,7 +66,7 @@ export type AgentHarness =
       id: string;
     };
 
-/** One more attempt a host asks for after a passing failure (ADR 0227). */
+/** One more attempt a host asks for after a passing failure (ADR 0228). */
 export interface AgentRetry {
   /** How long the turn waits before the attempt starts: a minute at most. */
   afterMs: number;
@@ -139,7 +139,7 @@ export interface RegisteredCodingAgent {
    * A failure nothing ran in (`retrySafe`) that core does not retry by
    * itself: whether it is passing and worth one more attempt, from what
    * the host knows and the error cannot say, such as a sign-in the harness
-   * could not refresh in time though it still can be (ADR 0227). Asked at
+   * could not refresh in time though it still can be (ADR 0228). Asked at
    * most once per turn; undefined lets the turn fail.
    */
   retryFailure?(input: {

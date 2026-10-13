@@ -99,7 +99,7 @@ async function mount() {
   return { reports, refreshes, cleanup };
 }
 
-describe("a session-scoped live source (ADR 0225)", () => {
+describe("a session-scoped live source (ADR 0226)", () => {
   it("says a failed read of its chat, and runs the module only with the chat", async () => {
     chat.error = new Error("Session not found");
     const view = await mount();

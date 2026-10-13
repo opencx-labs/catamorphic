@@ -1275,7 +1275,7 @@ export interface CatamorphicDesktopApi {
   ) => Promise<{ health: "ok" | "expired" | "missing"; reauth: boolean }>;
   /**
    * A chat shows a turn that failed on its agent's sign-in: main runs it
-   * again once the sign-in works, however it comes back (ADR 0227).
+   * again once the sign-in works, however it comes back (ADR 0228).
    */
   agentAuthFailureShown: (failure: {
     projectId: string;
@@ -1357,7 +1357,7 @@ export interface CatamorphicDesktopApi {
   ) => () => void;
   /**
    * This computer's chats may have changed: logged session events or a
-   * change through its API, a burst arriving as one (ADR 0228).
+   * change through its API, a burst arriving as one (ADR 0229).
    */
   onSessionsChanged: (listener: () => void) => () => void;
   /** Fired after a turn checkpoint moves a project's git state. */
@@ -1645,7 +1645,7 @@ export interface CatamorphicDesktopApi {
   onExtensionInstalled: (
     listener: (installed: ExtensionInstalled) => void,
   ) => () => void;
-  /** The dialogs a browser tab's page waits on (ADR 0226). */
+  /** The dialogs a browser tab's page waits on (ADR 0227). */
   pageDialogs: (input: { guestId: number }) => Promise<PageDialog[]>;
   pageDialogAnswer: (answer: PageDialogAnswer) => Promise<boolean>;
   onPageDialogs: (

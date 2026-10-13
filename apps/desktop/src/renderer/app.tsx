@@ -1076,7 +1076,7 @@ export function App({
   }, [profileVeil]);
 
   // Shared with SessionsNav via the query cache; titles feed tab labels.
-  // This computer's chats follow its hints (ADR 0228); a remote server's
+  // This computer's chats follow its hints (ADR 0229); a remote server's
   // are polled.
   const { apiClient } = useCatamorphic();
   const remoteProject = useRemoteProject(projectId);
@@ -2551,7 +2551,7 @@ export function App({
   ) => {
     const { final, ...close } = opts ?? {};
     // A close that disposes a page asks it first: a beforeunload may hold
-    // it with "Leave site?" (ADR 0226). A chat's attached page only goes
+    // it with "Leave site?" (ADR 0227). A chat's attached page only goes
     // back to its chip, still loaded, so nothing is asked then.
     const localId = key.startsWith("browser:")
       ? key.slice("browser:".length)
@@ -6159,7 +6159,7 @@ export function App({
     (editor) => editorTabKey(editor.localId) === sidebarSurfaceKey,
   );
   // A page, file or terminal a chat opened keeps that chat's session beside
-  // it (ADR 0225): This session, the chat's checkout and its other
+  // it (ADR 0226): This session, the chat's checkout and its other
   // session-scoped sections stay while the person looks at what it opened.
   const sidebarSessionChat =
     sidebarChat ??
@@ -6286,7 +6286,7 @@ export function App({
           onOpenUrl={openUrl}
           onOpenSessionLink={(url, mode) => {
             // As a link in the chat opens: a tab the chat owns, so the
-            // session's sections stay beside it (ADR 0225).
+            // session's sections stay beside it (ADR 0226).
             if (sidebarSessionChat)
               openMessageLink(url, sidebarSessionChat, mode);
             else void openUrl(url, mode);

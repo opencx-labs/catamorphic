@@ -4,7 +4,7 @@ import { desktopApi } from "./desktop-api.js";
 
 /**
  * How often lists that this computer's own work changes look again on
- * their own (ADR 0228): its chats, their attention and watchers, which
+ * their own (ADR 0229): its chats, their attention and watchers, which
  * follow `desktopApi.onSessionsChanged`, and its apps, which follow
  * `desktopApi.onGitChanged`. The timer only backs those up. A remote
  * project's server says nothing: its lists keep their shorter polls.

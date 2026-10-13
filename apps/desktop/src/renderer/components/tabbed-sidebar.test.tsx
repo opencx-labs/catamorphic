@@ -193,7 +193,7 @@ it("separates relevance and content states while preserving a hidden widget and 
     await render({ kind: "chat", sessionId: "a" }, "empty");
     const widget = node.querySelector('[data-sidebar-widget="children"]');
     // Its only section emptied, so the tab leaves: the panel fades out as it
-    // was, the section inert at once but not folding while it goes (ADR 0225).
+    // was, the section inert at once but not folding while it goes (ADR 0226).
     expect(widget?.hasAttribute("inert")).toBe(true);
     expect(
       widget
@@ -310,7 +310,7 @@ it("keeps its sections live while the panel slides away, on either side", async 
   }
 });
 
-describe("contextual tabs (ADR 0225)", () => {
+describe("contextual tabs (ADR 0226)", () => {
   const tabs: SidebarTabConfig[] = [
     {
       id: "this-session",

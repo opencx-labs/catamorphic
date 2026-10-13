@@ -1,4 +1,4 @@
-# 0228 — Idle pollers wait for hints from their own process
+# 0229 — Idle pollers wait for hints from their own process
 
 - **Status:** Accepted (refines [0193](0193-no-cross-replica-state-in-replica-memory.md), [0197](0197-agent-sessions-are-an-event-log-of-turns.md) and [0207](0207-operations-are-sealed-to-their-executor.md))
 - **Date:** 2026-10-13

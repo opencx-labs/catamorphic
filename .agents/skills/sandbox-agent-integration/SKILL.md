@@ -128,8 +128,9 @@ recovery stay in core, never in a harness.
 
 To add a harness, implement `HarnessAdapter`: `id`, `capabilities()` (a
 `HarnessCapabilities`: native steer, interrupt, retry, fork, rollback,
-questions, approvals, elicitations, subagents, streamed text, `nativeState`, and
-id strengths), and `start(attempt, host, local?)` returning `AttemptControl`
+questions, approvals, elicitations, tool search (`toolSearch`: MCP tools load on
+demand, so a host may mount each connector as its own server, ADR 0225),
+subagents, streamed text, `nativeState`, and id strengths), and `start(attempt, host, local?)` returning `AttemptControl`
 (`steer`, `interrupt`, `finished`). The adapter emits `HarnessEvent`s through
 `host.emit` (`thread` as soon as it knows the native thread, items as they
 happen, exactly one `turn.completed`), runs host tools with `host.callTool`,

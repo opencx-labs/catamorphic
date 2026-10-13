@@ -6,7 +6,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
 
 /**
- * A Claude Code sign-in that is not really lost (ADR 0227). The fake agent
+ * A Claude Code sign-in that is not really lost (ADR 0228). The fake agent
  * answers as a local Claude Code agent and is turned away the way a CLI
  * that lost its token refresh is; the agent's sign-in is a file this test
  * writes (the e2e credentials seam), never a real login.

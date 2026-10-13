@@ -123,7 +123,7 @@ export interface CatamorphicHostConfig {
   agentCapabilities?: AgentCapabilityOptions;
   /** Optional leased execution instance. The host owns registration/heartbeat. */
   workerNode?: CatamorphicCoreConfig["workerNode"];
-  /** How often idle pollers look for work (ADR 0228); see the core option. */
+  /** How often idle pollers look for work (ADR 0229); see the core option. */
   idlePollMs?: CatamorphicCoreConfig["idlePollMs"];
   database: DatabaseConfig;
   storage: StorageConfig;

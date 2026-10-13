@@ -147,7 +147,7 @@ export class ConnectionsService {
       connectionId: string;
     }) => Promise<void>;
     /**
-     * Wakes the workflow jobs a connection was waiting for (ADR 0228); by
+     * Wakes the workflow jobs a connection was waiting for (ADR 0229); by
      * default they are found at the workers' next poll.
      */
     jobs?: Pick<ExecutionJobsService, "makeJobsAvailable">;

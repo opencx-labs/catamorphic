@@ -47,7 +47,7 @@ function serve() {
   return { streams, snapshots: () => snapshots };
 }
 
-describe("useAgentSessionFields (ADR 0225)", () => {
+describe("useAgentSessionFields (ADR 0226)", () => {
   it("follows what the conversation's live reader folds, without a stream of its own", async () => {
     const served = serve();
     const { result } = renderHookWithProviders(() => ({

@@ -53,7 +53,7 @@ interface WatchersDeps {
   eventSources?: readonly ProjectEventSourceProvider[];
   /**
    * Tells this process a session's watchers changed, and that a monitor a
-   * new watcher observes may be due (ADR 0228).
+   * new watcher observes may be due (ADR 0229).
    */
   wakeups?: WorkWakeups;
 }

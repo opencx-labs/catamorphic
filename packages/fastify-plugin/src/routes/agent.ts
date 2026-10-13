@@ -1037,7 +1037,7 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
     },
   });
 
-  // Named values on a session (ADR 0225): each key takes its value, null
+  // Named values on a session (ADR 0226): each key takes its value, null
   // removes it. Agents set them through their tools; any client may.
   typed.route({
     method: "PATCH",

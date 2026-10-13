@@ -14,7 +14,7 @@ import { installPageDialogs } from "./page-dialogs.js";
  * Guest preload for browser-tab webviews. Runs inside untrusted pages with
  * context isolation, in every frame of the page (main/browser.ts turns on
  * subframes for tabs) so that each frame asks through Work's dialogs
- * (page-dialogs.ts, ADR 0226); everything else is the top frame's.
+ * (page-dialogs.ts, ADR 0227); everything else is the top frame's.
  * Credential secrets travel directly between this guest and the trusted
  * main process; the embedding renderer receives metadata and status only.
  * (Chrome's client-hint brands and passkeys come from the browsing

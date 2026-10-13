@@ -34,7 +34,7 @@ export function SidebarActivity({
   const remote = useRemoteProject(projectId);
   const sessions = useAgentSessions(projectId, {
     limit: 100,
-    // This computer's chats follow its hints (ADR 0228).
+    // This computer's chats follow its hints (ADR 0229).
     refetchInterval: visible ? (remote ? 2000 : LOCAL_CHATS_POLL_MS) : false,
   });
   const workflows = useWorkflows(projectId);

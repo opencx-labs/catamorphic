@@ -6,7 +6,7 @@ import { PollPacer } from "./services/work-wakeups.js";
  * workflows bound to them within about a second. Every host that runs
  * workflows starts one. It waits `pollEveryMs` after each delivery pass;
  * with the host's `idlePollMs` it waits that long while nothing arrives,
- * and an event recorded in this process wakes it at once (ADR 0228).
+ * and an event recorded in this process wakes it at once (ADR 0229).
  */
 export function startEventDispatcher(input: {
   core: Pick<CatamorphicCore, "dispatchEvents"> &

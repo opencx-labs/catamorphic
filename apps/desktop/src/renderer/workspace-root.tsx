@@ -221,7 +221,7 @@ function AttentionMonitor({
 }) {
   const authority = useRemoteAuthority();
   const attention = useAgentAttention({
-    // This computer's attention follows its hints (ADR 0228).
+    // This computer's attention follows its hints (ADR 0229).
     refetchInterval: authority ? 5_000 : LOCAL_CHATS_POLL_MS,
   });
   const remoteProjectId = authority?.remoteProjectId ?? projectId;

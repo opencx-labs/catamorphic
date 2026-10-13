@@ -303,7 +303,7 @@ describe("paired motion (enter/exit mirrors)", () => {
     ).toBeLessThanOrEqual(50);
   });
 
-  it("a sidebar tab and its strip arrive and leave on one reversible transition (ADR 0225)", async () => {
+  it("a sidebar tab and its strip arrive and leave on one reversible transition (ADR 0226)", async () => {
     const transitions = await run<
       Array<{ selector: string; durations: string; easing: string }>
     >(`

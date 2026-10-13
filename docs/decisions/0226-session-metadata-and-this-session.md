@@ -1,4 +1,4 @@
-# 0225 — Session metadata, and a sidebar section for the chat in front
+# 0226 — Session metadata, and a sidebar section for the chat in front
 
 - **Status:** Accepted
 - **Date:** 2026-10-13

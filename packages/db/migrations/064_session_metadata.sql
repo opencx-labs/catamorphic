@@ -1,4 +1,4 @@
--- A session's metadata (ADR 0225): named JSON values agents and people set
+-- A session's metadata (ADR 0226): named JSON values agents and people set
 -- on a chat and clients read, such as the pull requests it opened. One
 -- object per session; core bounds its keys and size, and logs each change
 -- as a session.changed event, so the column is the log's projection.

@@ -8,9 +8,8 @@ vi.mock("electron", () => ({
   },
 }));
 
-const { workflowMcpConnectionEntries } = await import(
-  "./workflow-mcp-connections.js"
-);
+const { desktopProfileMcpProvider, workflowMcpConnectionEntries } =
+  await import("./workflow-mcp-connections.js");
 
 describe("workflowMcpConnectionEntries", () => {
   it("uses the same deterministic aliases as agent MCP configuration", () => {
@@ -63,5 +62,28 @@ describe("workflowMcpConnectionEntries", () => {
         },
       ]),
     ).toEqual([]);
+  });
+});
+
+describe("profile MCP connections in the broker (ADR 0225)", () => {
+  it("passes each tool's results through as its server sent them", () => {
+    expect(desktopProfileMcpProvider.mcp).toBe(true);
+  });
+
+  it("never names a connector after a host tool server it would shadow", () => {
+    const entries = workflowMcpConnectionEntries(
+      ["Workspace", "Catamorphic"].map((name) => ({
+        id: name,
+        name,
+        transport: "http" as const,
+        url: `https://${name.toLowerCase()}.example.test/mcp`,
+        enabled: true,
+        source: { kind: "manual" as const },
+      })),
+    );
+    expect(entries.map((entry) => entry.alias)).toEqual([
+      "workspace-2",
+      "catamorphic-2",
+    ]);
   });
 });

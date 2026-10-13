@@ -71,7 +71,7 @@ function followsSurface(when: SidebarSectionConfig["when"]): boolean {
 
 /**
  * A tab that comes and goes with what is in front (This session beside a
- * chat, ADR 0225). It is never the default choice, so its arriving never
+ * chat, ADR 0226). It is never the default choice, so its arriving never
  * changes the tab the person sees.
  */
 function contextualTab(tab: SidebarTabConfig): boolean {
@@ -205,7 +205,7 @@ export function TabbedSidebar({
     );
   }, []);
   // A session-scoped section needs a chat's session: the chat in front, or
-  // the chat that opened the page, file or terminal in front (ADR 0225).
+  // the chat that opened the page, file or terminal in front (ADR 0226).
   const sectionRelevant = (section: SidebarSectionConfig) =>
     matchesSidebarSurface(section.when, surface) &&
     (!sessionScoped(section) || Boolean(surface.sessionId));
@@ -249,7 +249,7 @@ export function TabbedSidebar({
     if (motionReady && shownSelected !== undefined && selected !== undefined)
       setTabMotion(true);
   }
-  // Tabs join and leave the strip (ADR 0225): one grows into its place
+  // Tabs join and leave the strip (ADR 0226): one grows into its place
   // while its neighbours slide, and one leaving shrinks away the way it
   // came. Each keeps one element throughout, so a quick change back
   // reverses from where it is (CSS transitions, styles.css). The strip

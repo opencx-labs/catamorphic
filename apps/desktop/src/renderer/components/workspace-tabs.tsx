@@ -241,7 +241,7 @@ export interface TabGroup {
 }
 
 export function WorkspaceTabBar(props: Parameters<typeof TabStrip>[0]) {
-  // A tab whose page waits on its dialog says so (ADR 0226); one out of
+  // A tab whose page waits on its dialog says so (ADR 0227); one out of
   // sight also wears the waiting question's badge. A tab on screen shows
   // the dialog itself.
   const waiting = usePageDialogsWaiting();

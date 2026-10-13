@@ -200,7 +200,7 @@ it("leaves an idle chat and its sidebar alone: chat lists wait for hints, and re
   );
   // The settled turn's own follow-up reads land first.
   await app.eval("new Promise((resolve) => setTimeout(resolve, 3000))");
-  // Chat lists read every two seconds (three of them before ADR 0228) make
+  // Chat lists read every two seconds (three of them before ADR 0229) make
   // at least ten reads in this window; 30 s safety polls make at most one
   // per list.
   const idle = await app.eval<{ reads: number; spinners: number }>(`

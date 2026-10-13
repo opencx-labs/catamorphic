@@ -1,10 +1,19 @@
+import type { JsonValue } from "@catamorphic/agent-protocol";
+import type { CatamorphicCore } from "@catamorphic/core";
 import type {
   AgentMcpServerConfig,
   AgentPluginConfig,
   McpToolPolicyLayers,
+  ToolGateVerdict,
+  ToolPermissionHandler,
   ToolPolicyAnnotations,
 } from "@catamorphic/sandbox";
-import { narrowingLayer, PROJECT_TOOLS_SERVER_KEY } from "@catamorphic/sandbox";
+import {
+  narrowingLayer,
+  PROJECT_TOOLS_SERVER_KEY,
+  resolveToolPermissionAcross,
+  ToolGate,
+} from "@catamorphic/sandbox";
 import { DESKTOP_DEFAULT_SANDBOXING } from "../../shared/agent-permissions.js";
 import type { AgentConfig } from "../agents-store.js";
 import {
@@ -17,8 +26,9 @@ import type { ProfileConfigManager } from "../profile-config.js";
 import type { HostSkillsRuntime } from "./host-skills.js";
 
 const WORKFLOWS_SERVER_KEY = PROJECT_TOOLS_SERVER_KEY;
-/** An agent's resolved MCP surface: servers for every harness, plugin
- * directories for the harness that can load them natively. */
+/** An agent's resolved MCP surface: its connectors' servers (reached
+ * through the host's pool, ADR 0225), plugin directories for the harness
+ * that can load them natively. */
 export interface ResolvedMcp {
   servers: Record<string, AgentMcpServerConfig>;
   nativeServers?: Record<string, AgentMcpServerConfig>;
@@ -26,14 +36,89 @@ export interface ResolvedMcp {
   /**
    * Tool policy layers per server key: the connection's own (the
    * profile's ceiling) then the agent's narrowing, when it has one. Every
-   * assigned connection gets an entry — the harness gates the ones it
-   * finds here and pre-approves the rest (session-scoped surfaces).
+   * assigned connection gets an entry. The catalog, or a mounted
+   * connector's endpoint (ADR 0225), decides connector calls; the harness
+   * gates the other servers here and pre-approves the rest.
    */
   policies: Record<string, McpToolPolicyLayers>;
   /** Cached tool annotations per server key (for `auto` off the hot path). */
   annotations: Record<string, Record<string, ToolPolicyAnnotations>>;
   /** Server key → connection id, for the connection's own tools. */
   connectionIds: Record<string, string>;
+}
+
+/**
+ * Whether an agent may reach a connector's tool at all: no layer denies
+ * it, and a contained agent only reads. An ask is decided at each call
+ * (ADR 0054), by the catalog or by a mounted connector's endpoint.
+ */
+export function connectorToolPermitted(input: {
+  layers: McpToolPolicyLayers | undefined;
+  readOnly: boolean;
+  tool: { name: string; annotations?: ToolPolicyAnnotations };
+}): boolean {
+  return (
+    (!input.readOnly || input.tool.annotations?.readOnlyHint === true) &&
+    resolveToolPermissionAcross(
+      input.layers,
+      input.tool.name,
+      input.tool.annotations,
+    ) !== "deny"
+  );
+}
+
+/**
+ * One call of a tool the host serves, decided against its policy layers
+ * (ADR 0054). An `ask` becomes a request on the chat's working turn, which
+ * every client of the chat sees and any of them may answer (ADR 0198), and
+ * an "Always allow" there lands on the connection's policy.
+ */
+export async function decideHostToolCall(input: {
+  core: CatamorphicCore;
+  sessionId: string | undefined;
+  server: string;
+  tool: string;
+  input: Record<string, unknown>;
+  layers: McpToolPolicyLayers | undefined;
+  annotations?: ToolPolicyAnnotations;
+  signal?: AbortSignal;
+}): Promise<ToolGateVerdict> {
+  const ask: ToolPermissionHandler = async (request, signal) => {
+    const sessions = input.core.agentSessions;
+    if (!sessions || !request.sessionId) return { decision: "deny" };
+    const verdict = await sessions.askApproval({
+      sessionId: request.sessionId,
+      title: `Allow ${request.tool}?`,
+      ...(request.description ? { description: request.description } : {}),
+      origin: { kind: "mcp", id: request.server, displayName: request.server },
+      approval: {
+        action: `${request.server} · ${request.tool}`,
+        ...(request.description ? { details: request.description } : {}),
+        tool: {
+          server: request.server,
+          name: request.tool,
+          input: jsonValue(request.input),
+        },
+      },
+      ...(signal ? { signal } : {}),
+    });
+    return { decision: verdict };
+  };
+  return new ToolGate(ask).decide({
+    server: input.server,
+    tool: input.tool,
+    input: input.input,
+    sessionId: input.sessionId,
+    layers: input.layers,
+    annotations: input.annotations,
+    abortSignal: input.signal,
+  });
+}
+
+/** A tool's input as plain JSON, for the approval the person reads. */
+function jsonValue(value: unknown): JsonValue {
+  const parsed: JsonValue = JSON.parse(JSON.stringify(value ?? null));
+  return parsed;
 }
 
 interface DesktopAgentMcpDeps {

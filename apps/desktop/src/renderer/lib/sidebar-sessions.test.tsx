@@ -32,7 +32,7 @@ vi.mock("./desktop-api.js", () => ({
     },
   },
 }));
-/** This computer says its chats may have changed (ADR 0228). */
+/** This computer says its chats may have changed (ADR 0229). */
 const hint = () => {
   for (const listener of mocks.hints) listener();
 };

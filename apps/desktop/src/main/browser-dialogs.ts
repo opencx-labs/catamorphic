@@ -12,7 +12,7 @@ import type { ScriptDialogReply } from "../shared/script-dialogs.js";
 import { PageDialogs } from "./page-dialogs.js";
 
 /**
- * Pages in browser tabs ask through Work's dialogs (ADR 0226). Electron
+ * Pages in browser tabs ask through Work's dialogs (ADR 0227). Electron
  * shows `alert` and `confirm` as native message boxes over the whole
  * window, refuses `prompt`, cancels every HTTP sign-in and silently keeps a
  * page whose `beforeunload` holds a navigation. Here:

@@ -710,7 +710,7 @@ export function registerBrowserSupport(
       void restoreGuestHistory({ guest, history });
     };
     // A tab's page runs its preload in every frame, so an embedded frame
-    // asks through Work's dialogs too (ADR 0226); the preload keeps the
+    // asks through Work's dialogs too (ADR 0227); the preload keeps the
     // rest of its work to the top frame. Extension views keep theirs.
     const framesPreload = (
       _attach: Electron.Event,
@@ -1049,7 +1049,7 @@ export function registerBrowserSupport(
   );
   ipcMain.on("catamorphic:browser-username-submitted", onSubmittedUsername);
 
-  // --- page dialogs: alert, confirm, prompt, Leave site?, sign-ins (ADR 0226) ---
+  // --- page dialogs: alert, confirm, prompt, Leave site?, sign-ins (ADR 0227) ---
   const disposeDialogs = registerBrowserDialogs({
     isTab: (guest) =>
       guest.getType() === "webview" && !extensions.isView(guest),
@@ -1616,7 +1616,7 @@ export function registerBrowserSupport(
     request: async (guest, profileId, permission, details) => {
       // Asked whether its tab may close, a page holds a user activation
       // Electron grants for the question; it asks for nothing with it
-      // (fullscreen, devices) while the question is open (ADR 0226).
+      // (fullscreen, devices) while the question is open (ADR 0227).
       if (pageClosing(guest.id)) return false;
       const origin = siteOrigin(details.requestingUrl ?? guest.getURL());
       if (!origin) return ALWAYS_GRANTED_PERMISSIONS.has(permission);
@@ -1690,7 +1690,7 @@ export function registerBrowserSupport(
       const host = guest?.hostWebContents;
       if (
         guest?.getType() !== "webview" ||
-        // The activation a tab's close granted shares no screen (ADR 0226).
+        // The activation a tab's close granted shares no screen (ADR 0227).
         pageClosing(guest.id) ||
         !origin ||
         !host ||

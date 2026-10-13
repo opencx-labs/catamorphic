@@ -47,7 +47,7 @@ export function changesChatLists(request: {
 /**
  * Tells the app's windows when its chats may have changed, so their chat
  * lists, attention and watchers read again then rather than on a short
- * poll (ADR 0228): whenever core hints `chats` (a session event lists
+ * poll (ADR 0229): whenever core hints `chats` (a session event lists
  * show, a chat's visibility, attention or watchers), and whenever this
  * server serves a request on a route that changes them (`hint`). A burst
  * of changes goes out as one hint: after `quietMs` without another, or

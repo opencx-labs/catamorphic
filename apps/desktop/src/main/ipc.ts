@@ -712,7 +712,7 @@ export function registerIpcHandlers(
       const agent = store.update(id, patch);
       agentsChanged(event, store);
       // A new key or sign-in mode: chats that failed on the old one run
-      // again, as the auth card promises (ADR 0227).
+      // again, as the auth card promises (ADR 0228).
       if (
         agent &&
         before &&
@@ -724,7 +724,7 @@ export function registerIpcHandlers(
   );
 
   // A chat shows a turn that failed on its agent's sign-in (one from before
-  // this run, say): it runs again once the sign-in works (ADR 0227).
+  // this run, say): it runs again once the sign-in works (ADR 0228).
   ipcMain.handle(
     "catamorphic:agent-auth-failure-shown",
     (
@@ -1415,7 +1415,7 @@ export function registerIpcHandlers(
 
   /**
    * A sign-in Work ran finished: windows hear it, and on success the chats
-   * that failed on that agent's sign-in run again (ADR 0227).
+   * that failed on that agent's sign-in run again (ADR 0228).
    */
   const loginFinished = (agentId: string, ok: boolean) => {
     state.broadcast("catamorphic:agent-login-finished", { agentId, ok });

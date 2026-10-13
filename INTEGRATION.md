@@ -496,7 +496,7 @@ lost and a continuation turn resumes the native thread (`recovery:
 
 Agent sessions carry source provenance, hierarchy, fork lineage, presentation,
 archive, attention, activity, todo, metadata, and authority state in one
-generated schema. Metadata (ADR 0225) is named JSON values agents and clients
+generated schema. Metadata (ADR 0226) is named JSON values agents and clients
 set on a session by key (`PATCH .../sessions/:sessionId/metadata`, where
 null removes a key, or the `set_session_metadata` MCP tool, where
 `remove: true` does and a null value is refused) and every client reads from
@@ -943,7 +943,7 @@ retry, rate limit, batch, or child call settles inline) and `.start(input)`
 - Host-owned pools and Kysely instances are never destroyed by catamorphic; `catamorphic.close()` only closes what catamorphic created.
 - Stop handles returned by `catamorphic.startExecutionWorker(...)` during host shutdown. Constructing the SDK or Fastify plugin never starts workers implicitly.
 - Start `catamorphic.startAgentWorker({ resolveIdentity? })` after migrations when using coding agents. It restores due queue entries and persisted retries only for this host. Resolve current user authority through your auth model; the default uses Catamorphic memberships. `catamorphic.close()` stops both kinds of worker. Expired agent executions with uncertain outcomes require an explicit retry, not automatic side-effect replay (ADR 0094).
-- Pollers (workflow and agent workers, event delivery, live session streams) wait their short interval after each poll by default. A host whose database only it writes, such as a single-process embed, can pass `createCatamorphic({ idlePollMs })`: pollers then wait that long while nothing is found or due, and writes made through the same `catamorphic` wake the poller they concern at once (ADR 0228). Work another process writes waits up to `idlePollMs`, so a host with several replicas keeps the default or measures first.
+- Pollers (workflow and agent workers, event delivery, live session streams) wait their short interval after each poll by default. A host whose database only it writes, such as a single-process embed, can pass `createCatamorphic({ idlePollMs })`: pollers then wait that long while nothing is found or due, and writes made through the same `catamorphic` wake the poller they concern at once (ADR 0229). Work another process writes waits up to `idlePollMs`, so a host with several replicas keeps the default or measures first.
 - Client reconnection does not restart execution. Automatic turn retries require a provider-confirmed rejection before execution began. Reconnecting to the same native provider attempt after an ambiguous disconnect is not yet implemented; the long-lived runtime cutover in ADR 0067 remains separate from this durable queue and progress model.
 
 ## Execution Environments and credential connections
@@ -1094,6 +1094,16 @@ as a process with standard input (providers implement
 runner runs the harness's CLI beside the workspace, with the gateway as its
 only model endpoint, and any replica can read it or reattach to it (ADR
 0198). Harness binaries come from the Environment image.
+
+MCP connections (ADR 0225): a provider whose actions are an MCP server's
+tools sets `mcp: true` (`defineMcpConnectionProvider` from `@catamorphic/mcp`
+does), lists each tool's `title` and `outputSchema` beside its input schema,
+and returns each call's `CallToolResult` as the server sent it. Agents reach
+the alias as `connection_<alias>` through `/connection-mcp`, which passes
+those tools and results through unchanged; every other provider's actions
+answer there as JSON tool results with no output schema. Workflows get each
+action's result either way. A host serving MCP tools of its own the same way
+uses `serveForwardedTools` from `@catamorphic/fastify-plugin/mcp`.
 
 HTTP APIs through the gateway (ADR 0212): a provider whose connection is an
 HTTP API code in sandboxes may call sets `http: { baseUrl, paths?,

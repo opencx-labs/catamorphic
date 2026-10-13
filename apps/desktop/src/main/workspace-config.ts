@@ -68,7 +68,7 @@ export const DEFAULT_WORKSPACE_CONFIG: WorkspaceConfig = {
       },
     ],
     right: [
-      // Exists only beside a chat, or what it opened (ADR 0225): its
+      // Exists only beside a chat, or what it opened (ADR 0226): its
       // worktree and the pull requests its agent recorded in the session's
       // metadata.
       {

@@ -74,7 +74,7 @@ function tracked() {
   return made;
 }
 
-describe("SignInRecovery (ADR 0227)", () => {
+describe("SignInRecovery (ADR 0228)", () => {
   it("runs a failed turn again exactly once when its sign-in changes to a usable one", async () => {
     const { recovery, signIn, retried, fail } = tracked();
     fail("t1");
@@ -254,7 +254,7 @@ describe("SignInRecovery (ADR 0227)", () => {
   });
 });
 
-describe("mayRunAgain (ADR 0227)", () => {
+describe("mayRunAgain (ADR 0228)", () => {
   const turn = (overrides: Partial<Turn> = {}): Turn => ({
     id: "t1",
     sessionId: "s1",

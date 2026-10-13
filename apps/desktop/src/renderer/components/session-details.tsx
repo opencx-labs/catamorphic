@@ -84,7 +84,7 @@ interface SessionDetailsProps {
 }
 
 /**
- * The "session" section (ADR 0225): the chat in front, where it works (its
+ * The "session" section (ADR 0226): the chat in front, where it works (its
  * folder or worktree, as its status popup says, ADR 0215) and the pull
  * requests its agent recorded in the session's metadata. Rows only; the
  * section chrome draws loading, empty and errors (ADR 0147). A connected

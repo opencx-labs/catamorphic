@@ -139,7 +139,7 @@ export interface SessionCoordinationBridge {
     sessionId: string,
     activity: string | null,
   ): Promise<void>;
-  /** Set keys of the session's metadata, null removing one (ADR 0225). */
+  /** Set keys of the session's metadata, null removing one (ADR 0226). */
   setMetadata(
     projectId: string,
     sessionId: string,
@@ -267,7 +267,7 @@ export const WORKSPACE_TOOL_POLICY: Readonly<
   request_user_attention: presentation,
   set_session_activity: presentation,
   // Recorded a few times in a chat, when something worth showing happens
-  // (a pull request opened): discovered, not on every turn (ADR 0225).
+  // (a pull request opened): discovered, not on every turn (ADR 0226).
   set_session_metadata: presentation,
   read_todo_list: read,
   update_todo_list: { ...presentation, eager: true },

@@ -1,4 +1,3 @@
-import type { JsonValue } from "@catamorphic/agent-protocol";
 import {
   type AgentCapability,
   type AgentCapabilityContext,
@@ -12,19 +11,15 @@ import type { McpToolInfo } from "@catamorphic/mcp";
 import {
   agentToolResult,
   resolveToolPermissionAcross,
-  ToolGate,
-  type ToolPermissionHandler,
   type ToolPolicyAnnotations,
 } from "@catamorphic/sandbox";
 import { z } from "zod";
 import type { McpAppsService } from "../mcp-apps.js";
+import {
+  connectorToolPermitted,
+  decideHostToolCall,
+} from "./agent-mcp-policy.js";
 import type { DesktopAgentRegistry } from "./agent-registry.js";
-
-/** A tool's input as plain JSON, for the approval the person reads. */
-function jsonValue(value: unknown): JsonValue {
-  const parsed: JsonValue = JSON.parse(JSON.stringify(value ?? null));
-  return parsed;
-}
 
 /** Desktop, project and connection operations enter core's single live registry. */
 export function desktopCapabilitySource(deps: {
@@ -77,41 +72,15 @@ export function desktopCapabilitySource(deps: {
       invocation: AgentCapabilityInvocation;
       annotations?: ToolPolicyAnnotations;
     }) => {
-      // An `ask` becomes a request on the chat's working turn (ADR 0198):
-      // every client of the chat sees it and any of them may answer.
-      const ask: ToolPermissionHandler = async (request, signal) => {
-        const sessions = core.agentSessions;
-        if (!sessions || !request.sessionId) return { decision: "deny" };
-        const verdict = await sessions.askApproval({
-          sessionId: request.sessionId,
-          title: `Allow ${request.tool}?`,
-          ...(request.description ? { description: request.description } : {}),
-          origin: {
-            kind: "mcp",
-            id: request.server,
-            displayName: request.server,
-          },
-          approval: {
-            action: `${request.server} · ${request.tool}`,
-            ...(request.description ? { details: request.description } : {}),
-            tool: {
-              server: request.server,
-              name: request.tool,
-              input: jsonValue(request.input),
-            },
-          },
-          ...(signal ? { signal } : {}),
-        });
-        return { decision: verdict };
-      };
-      const verdict = await new ToolGate(ask).decide({
+      const verdict = await decideHostToolCall({
+        core,
+        sessionId: context.sessionId,
         server: args.server,
         tool: args.name,
         input: z.record(z.string(), z.unknown()).parse(args.input),
-        sessionId: context.sessionId,
         layers: layers(args.server),
         annotations: args.annotations,
-        abortSignal: args.invocation.signal,
+        signal: args.invocation.signal,
       });
       if (!verdict.allowed) throw new Error(verdict.message);
     };
@@ -174,8 +143,11 @@ export function desktopCapabilitySource(deps: {
       );
     }
     const mcpApps = deps.mcpApps;
+    // A harness that searches its tools has the connectors mounted as MCP
+    // servers of their own (ADR 0225); the catalog serves the others.
     if (
       mcpApps &&
+      !surface.connectorsMounted &&
       (!selection.name || selection.name.startsWith("connections."))
     ) {
       for (const [server, connectionId] of Object.entries(
@@ -202,8 +174,11 @@ export function desktopCapabilitySource(deps: {
             inputSchema: z.fromJSONSchema(tool.inputSchema),
             outputSchema: z.unknown(),
             authorize: () =>
-              (!surface.readOnly || tool.annotations?.readOnlyHint === true) &&
-              allowed(server, tool.name, tool.annotations),
+              connectorToolPermitted({
+                layers: layers(server),
+                readOnly: surface.readOnly,
+                tool,
+              }),
             beforeInvoke: (invocation, input) =>
               approve({
                 server,
@@ -266,10 +241,12 @@ export function desktopCapabilitySource(deps: {
             },
           });
         const load = async () =>
-          (await mcpApps.tools(surface.profileId, server)).filter(
-            (tool) =>
-              allowed(server, tool.name, tool.annotations) &&
-              (!surface.readOnly || tool.annotations?.readOnlyHint === true),
+          (await mcpApps.tools(surface.profileId, server)).filter((tool) =>
+            connectorToolPermitted({
+              layers: layers(server),
+              readOnly: surface.readOnly,
+              tool,
+            }),
           );
         // An empty/global discovery never connects every installed service.
         // Service-specific discovery (or a previously discovered invocation) loads its roster.

@@ -67,7 +67,7 @@ export class SessionLog {
 
   constructor(
     private readonly db: Kysely<DB>,
-    /** Tells this process's streams and agent worker what it wrote (ADR 0228). */
+    /** Tells this process's streams and agent worker what it wrote (ADR 0229). */
     private readonly wakeups?: WorkWakeups,
   ) {}
 
@@ -998,7 +998,7 @@ async function ownEvents(
   const own = input.events.map((event): SessionEvent => {
     switch (event.type) {
       case "session.changed":
-        // Another copy's metadata keeps a write's limits here too (ADR 0225).
+        // Another copy's metadata keeps a write's limits here too (ADR 0226).
         if ("metadata" in event.session)
           assertSessionMetadata(event.session.metadata);
         return {

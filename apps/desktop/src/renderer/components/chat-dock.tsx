@@ -586,7 +586,7 @@ function ChatDockContent({
     projectId,
     chat.sessionId ?? entry.sessionId ?? undefined,
     {
-      // This computer's chats follow its hints (ADR 0228).
+      // This computer's chats follow its hints (ADR 0229).
       refetchInterval:
         refreshWhileIdle || chat.isSending
           ? authority
@@ -1073,7 +1073,7 @@ function ChatDockContent({
   // pointed at Settings by the error text itself. Main runs the failed
   // turn again once the sign-in works, however it came back (a re-login
   // here, `/login` in a terminal, a new key): the person already said what
-  // they wanted (ADR 0227). It hears of a failure shown here too (one from
+  // they wanted (ADR 0228). It hears of a failure shown here too (one from
   // before this run, or one it has forgotten), and again on a re-login.
   const latestTurn = chat.timeline.at(-1)?.turn;
   const authFailure =

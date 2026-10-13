@@ -28,7 +28,7 @@ suite for hidden loops, browser visibility and guest cleanup.
 
 ## Idle work and live chats
 
-ADR 0228 records the measurements. An idle Work does nothing on a short
+ADR 0229 records the measurements. An idle Work does nothing on a short
 timer: the embedded server's pollers wait `idlePollMs` (5 s) after a poll
 that found nothing, unless known work falls due sooner, and are woken by
 the writes that queue work; the window's chat lists, attention and

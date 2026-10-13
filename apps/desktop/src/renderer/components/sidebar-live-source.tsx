@@ -71,7 +71,7 @@ function LiveSourceRows({ projectId }: { projectId: string }) {
     null,
   );
   // A session-scoped section (`when.session`) is given the chat in front
-  // (ADR 0225), and keeps the one it showed while it leaves.
+  // (ADR 0226), and keeps the one it showed while it leaves.
   const sessionScoped = section?.when?.session === true;
   const surfaceSessionId = sessionScoped
     ? contribution?.surface.sessionId
@@ -174,7 +174,7 @@ function LiveSourceRows({ projectId }: { projectId: string }) {
       sessionScoped ? sessionId : undefined,
     ],
   );
-  // A session-scoped module runs only with its chat (ADR 0225): until the
+  // A session-scoped module runs only with its chat (ADR 0226): until the
   // chat is read nothing loads it, a refresh reads the chat, and a failed
   // read is the section's error.
   const awaitingSession = sessionScoped && session === undefined;

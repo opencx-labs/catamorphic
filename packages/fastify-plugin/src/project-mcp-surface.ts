@@ -598,7 +598,7 @@ export function surfaceTools(
       }),
     });
 
-    // A key of the calling chat's metadata (ADR 0225): bound to the
+    // A key of the calling chat's metadata (ADR 0226): bound to the
     // session this connection serves, so there is none without one.
     if (currentSessionId) {
       const sessionId = currentSessionId;

@@ -51,7 +51,7 @@ input.on("line", (line) => {
   }
   const controller = new AbortController();
   controllers.set(message.id, controller);
-  // A session-scoped section's chat (ADR 0225), for every handler.
+  // A session-scoped section's chat (ADR 0226), for every handler.
   const session = message.session ? { session: message.session } : {};
   const run = async () => {
     try {

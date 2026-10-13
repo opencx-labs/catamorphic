@@ -35,7 +35,7 @@ import { readFullSnapshot } from "../services/sessions/session-reads.js";
 import { testEnvironmentProvider } from "./test-environment.js";
 
 /*
- * Session metadata (ADR 0225): named JSON values on a session, set by
+ * Session metadata (ADR 0226): named JSON values on a session, set by
  * whoever may change it, logged as session.changed so snapshots, streams
  * and mirrors follow, and bounded so it stays a few facts.
  */

@@ -6,7 +6,7 @@ import { DEFAULT_WORKSPACE_CONFIG } from "../src/main/workspace-config.js";
 import { type AppHandle, launchApp } from "./harness.js";
 
 /**
- * "This session" (ADR 0225): a right-sidebar tab that exists only while a
+ * "This session" (ADR 0226): a right-sidebar tab that exists only while a
  * chat is in front, showing where the chat works and the pull requests its
  * agent recorded in the session's metadata with set_session_metadata. The
  * fake agent calls the real tool through discovery, as a model would.

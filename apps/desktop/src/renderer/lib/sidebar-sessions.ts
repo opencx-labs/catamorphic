@@ -39,7 +39,7 @@ export const SIDEBAR_SESSION_PAGE = 30;
 /**
  * How often a remote project's chats list looks for changes while the
  * window is shown. This computer's own lists follow its hints instead
- * (ADR 0228), reading every loaded page every `LOCAL_CHATS_POLL_MS`.
+ * (ADR 0229), reading every loaded page every `LOCAL_CHATS_POLL_MS`.
  */
 const POLL_MS = 2000;
 /**

@@ -307,7 +307,7 @@ describe("workspace coordination tools", () => {
     ]);
   });
 
-  it("reads and sets one key of this chat's metadata through the coordination bridge (ADR 0225)", async () => {
+  it("reads and sets one key of this chat's metadata through the coordination bridge (ADR 0226)", async () => {
     const toolkit = buildWorkspaceToolkit({} as WorkspaceBridge);
     const tool = toolkit.tools.find(
       (entry) => entry.name === "set_session_metadata",

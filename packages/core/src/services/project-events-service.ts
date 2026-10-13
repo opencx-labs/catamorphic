@@ -22,7 +22,7 @@ const tracer = getTracer("@catamorphic/core");
 export class ProjectEventsService {
   constructor(
     private readonly db: Kysely<DB>,
-    /** Tells this process's dispatcher an event may be waiting (ADR 0228). */
+    /** Tells this process's dispatcher an event may be waiting (ADR 0229). */
     private readonly wakeups?: WorkWakeups,
   ) {}
 

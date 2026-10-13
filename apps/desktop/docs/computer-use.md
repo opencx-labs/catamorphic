@@ -18,7 +18,7 @@ its own control is not a cover. Password values are omitted from DOM snapshots;
 screenshots are pictures of the page and are not a redaction boundary.
 
 A page waiting on a dialog (its `alert`, `confirm` or `prompt`, "Leave site?",
-or an HTTP sign-in, ADR 0226) runs nothing else. `browser_snapshot`, `read` and
+or an HTTP sign-in, ADR 0227) runs nothing else. `browser_snapshot`, `read` and
 every other action report the dialog instead (its kind, who asks, its text),
 and an action that opens one returns that report rather than hanging (and
 goes no further once the page answers). Agents
@@ -101,6 +101,8 @@ not proof. Test native app reading, a harmless action, and a screenshot through
 the imported runtime, then restore the test app's state.
 
 The assigned computer-use server runs directly in the initiating Codex app-server,
-not in the shared profile tool pool. Other profile connector catalogs remain
-deferred. Full-access defaults permit tools without an explicit policy; saved
-connection policies, agent restrictions and provisioner ceilings still intersect.
+not in the shared profile tool pool. Other profile connectors stay deferred:
+harnesses with tool search load them on demand, the built-in agent through the
+catalog (ADR 0225). Full-access defaults permit tools without an explicit policy;
+saved connection policies, agent restrictions and provisioner ceilings still
+intersect.

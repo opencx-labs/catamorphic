@@ -1,6 +1,10 @@
 import type { AgentMcpServerConfig } from "@catamorphic/sandbox";
 import {
   Client,
+  ProtocolError,
+  SdkError,
+  SdkErrorCode,
+  SdkHttpError,
   SSEClientTransport,
   StreamableHTTPClientTransport,
 } from "@modelcontextprotocol/client";
@@ -69,9 +73,16 @@ function iconScore(icon: McpIcon): number {
 
 export interface McpToolInfo {
   name: string;
+  /** The tool's display name, when it declares one. */
+  title?: string;
   description: string;
   /** JSON Schema for the tool's arguments. */
   inputSchema: Record<string, unknown>;
+  /**
+   * JSON Schema of the tool's `structuredContent`, when it declares one:
+   * harnesses type the tool's results from it (ADR 0225).
+   */
+  outputSchema?: Record<string, unknown>;
   /** The tool's `_meta`, when present (MCP Apps ui linkage lives here). */
   meta?: Record<string, unknown>;
   /** Spec tool annotations (hints, not guarantees) — permission defaults
@@ -233,6 +244,33 @@ function pickAnnotations(raw: Record<string, unknown>): McpToolAnnotations {
   };
 }
 
+/**
+ * The JSON-RPC error a server answered a request with, when that is what
+ * failed: a forwarding host passes it on as the server sent it.
+ */
+export function mcpServerError(
+  error: unknown,
+): { code: number; message: string } | undefined {
+  return ProtocolError.isInstance(error)
+    ? { code: error.code, message: error.message }
+    : undefined;
+}
+
+/**
+ * Whether a request failed because the connection to the server is gone,
+ * so a pooled client should be dropped and the next use reconnect. Errors
+ * the server sent, invalid results and timeouts leave the client in use.
+ */
+export function mcpConnectionLost(error: unknown): boolean {
+  if (SdkError.isInstance(error))
+    return (
+      error.code === SdkErrorCode.NotConnected ||
+      error.code === SdkErrorCode.ConnectionClosed ||
+      error.code === SdkErrorCode.SendFailed
+    );
+  return SdkHttpError.isInstance(error) || error instanceof TypeError;
+}
+
 /** Result content flattened to text the model (or a settings pane) can read. */
 export function flattenToolResult(result: {
   content?: Array<Record<string, unknown>>;
@@ -266,11 +304,13 @@ export async function connectMcpServer(
     const listed = await client.listTools();
     const tools: McpToolInfo[] = listed.tools.map((tool) => ({
       name: tool.name,
+      ...(tool.title ? { title: tool.title } : {}),
       description: tool.description ?? "",
       inputSchema: (tool.inputSchema ?? { type: "object" }) as Record<
         string,
         unknown
       >,
+      ...(tool.outputSchema ? { outputSchema: tool.outputSchema } : {}),
       ...((tool as { _meta?: Record<string, unknown> })._meta
         ? { meta: (tool as { _meta?: Record<string, unknown> })._meta }
         : {}),

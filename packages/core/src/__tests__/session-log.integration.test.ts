@@ -82,7 +82,7 @@ describe("session log", () => {
   /** What the lingering harness's tool call after its turn ended got. */
   const lateTools: string[] = [];
   /**
-   * The sign-in agent's host (ADR 0227): whether the sign-in can still
+   * The sign-in agent's host (ADR 0228): whether the sign-in can still
    * refresh, how long its retry waits, and how often it was asked.
    */
   const signIn = { refreshable: true, afterMs: 50, asked: 0 };
@@ -1290,7 +1290,7 @@ describe("session log", () => {
     expect(turn.error?.message).toContain("Credentials revoked");
   });
 
-  describe("a sign-in that can still refresh (ADR 0227)", () => {
+  describe("a sign-in that can still refresh (ADR 0228)", () => {
     async function signInChat(name: string) {
       const project = await projects.create(identity, { name });
       const session = await sessions.create(identity, project.id, {

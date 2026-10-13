@@ -25,7 +25,7 @@ interface Subscriber {
  * their cursors in one query, in Postgres order, with no LISTEN/NOTIFY
  * (ADR 0193). It waits `quickMs` between polls while events arrive, and
  * with an `idleMs` waits that long once they stop, until this process's
- * session log hints at new events (ADR 0228). A subscriber that falls
+ * session log hints at new events (ADR 0229). A subscriber that falls
  * behind is closed; its client resumes from its cursor. Replica memory
  * (a): the streams this process serves.
  */

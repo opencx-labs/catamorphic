@@ -85,7 +85,7 @@ describe("session streams", () => {
 
   it("refuses a server on another session protocol", () => {
     expect(speaksSessionProtocol({ agentProtocol: { session: 2 } })).toBe(true);
-    // A server from before session metadata (ADR 0225).
+    // A server from before session metadata (ADR 0226).
     expect(speaksSessionProtocol({ agentProtocol: { session: 1 } })).toBe(
       false,
     );

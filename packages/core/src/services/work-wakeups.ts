@@ -14,7 +14,7 @@ export interface Wakeup {
 }
 
 /**
- * In-process hints that durable work may be waiting (ADRs 0207, 0228). A
+ * In-process hints that durable work may be waiting (ADRs 0207, 0229). A
  * writer in this process calls {@link notify} once it has queued work in
  * Postgres; whoever waits for that key looks at once instead of at its
  * next poll. Pollers key it by {@link WorkTopic}; remote operations by
@@ -65,7 +65,7 @@ export class WorkWakeups<Key extends string = WorkTopic> {
 export const QUICK_FOR_MS = 2_000;
 
 /**
- * Paces one polling loop (ADR 0228): every `quickMs` while there is work
+ * Paces one polling loop (ADR 0229): every `quickMs` while there is work
  * about (the last poll found some, or a hint came in the last
  * {@link QUICK_FOR_MS}), every `idleMs` otherwise. Each wait runs after a
  * poll ends, so a slow poll delays the next one rather than overlapping

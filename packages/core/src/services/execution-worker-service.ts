@@ -31,7 +31,7 @@ export interface ExecutionWorkerOptions {
   pollIntervalMs?: number;
   /**
    * How long a loop with nothing to do waits after a poll when no job is
-   * due sooner and no hint from this process came (ADR 0228). Defaults to
+   * due sooner and no hint from this process came (ADR 0229). Defaults to
    * the host's `idlePollMs`; without either it waits `pollIntervalMs`.
    */
   idlePollIntervalMs?: number;
@@ -121,7 +121,7 @@ export class ExecutionWorkerService {
     private readonly retention?: RetentionService,
     /** The Kysely instance behind {@link jobs}, for the pool-size check. */
     private readonly db?: object,
-    /** Idle pacing and this process's job hints (ADR 0228). */
+    /** Idle pacing and this process's job hints (ADR 0229). */
     private readonly pacing: {
       wakeups?: WorkWakeups;
       idlePollMs?: number;

@@ -1,6 +1,6 @@
 /**
  * What a frame's `alert`, `confirm` and `prompt` send to main and get back
- * (ADR 0226). Shared by the tab preload, which runs sandboxed and loads no
+ * (ADR 0227). Shared by the tab preload, which runs sandboxed and loads no
  * dependency, and main, which checks the request (shared/page-dialogs.ts).
  */
 

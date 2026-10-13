@@ -70,7 +70,7 @@ function filled(value: unknown): boolean {
 
 /**
  * Whether a harness's sign-in can still get itself a working access token
- * (ADR 0227): Claude Code's while it holds a refresh token that has not
+ * (ADR 0228): Claude Code's while it holds a refresh token that has not
  * expired, Codex's ChatGPT sign-in while it holds its refresh token. A
  * failure on such a sign-in may be passing (a refresh lost to another
  * process holding the lock, a network hiccup); without one, only signing
@@ -138,7 +138,7 @@ function jwtExpiry(token: unknown): number {
 
 /**
  * Whether a harness's sign-in holds an access token a new CLI would use
- * as it is (ADR 0227): Claude Code's `expiresAt`, or the expiry of a Codex
+ * as it is (ADR 0228): Claude Code's `expiresAt`, or the expiry of a Codex
  * sign-in's token, comfortably ahead. After a CLI was turned away with an
  * expired one, this means something refreshed it since. Only the expiry
  * is read.

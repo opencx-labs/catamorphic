@@ -86,6 +86,11 @@ import {
 } from "./assistant-agent.js";
 import { assistantTools } from "./assistant-tools.js";
 import { componentRegistryCapability } from "./component-registry.js";
+import {
+  connectorMcpPath,
+  connectorMcpTokens,
+  registerConnectorMcpRoute,
+} from "./connector-mcp.js";
 import { validateDatabaseFiles } from "./database-files.js";
 import { desktopCapabilitySource } from "./desktop-capabilities.js";
 import { DESKTOP_SETTINGS_SKILL } from "./desktop-settings-skill.js";
@@ -121,7 +126,7 @@ export const DESKTOP_TENANT_ID = "00000000-0000-4000-8000-00000000d001";
 export const DESKTOP_USER_ID = "desktop-user";
 /**
  * How often the embedded server's idle pollers look for work no write in
- * this process announced (ADR 0228): scheduled retries and timers carry
+ * this process announced (ADR 0229): scheduled retries and timers carry
  * their own due time, so this bounds only what nothing hinted.
  */
 const DESKTOP_IDLE_POLL_MS = 5_000;
@@ -151,7 +156,7 @@ export interface EmbeddedServer {
   workspaceStates: WorkspaceStateStore;
   /** Dynamic roster of configured agents (per-profile agents.json files). */
   agentRegistry: DesktopAgentRegistry;
-  /** Runs chats failed on a sign-in again once it works (ADR 0227). */
+  /** Runs chats failed on a sign-in again once it works (ADR 0228). */
   signInRecovery: SignInRecovery;
   /** Desktop trigger kinds: firing helpers for chat/terminal event sources. */
   triggers: DesktopTriggers;
@@ -172,7 +177,7 @@ export interface EmbeddedServer {
   /** The member's remote environment per linked project (ADR 0184). */
   personalEnvironment: PersonalEnvironmentSync;
   /**
-   * Hear when this server's chats may have changed (ADR 0228): it logged
+   * Hear when this server's chats may have changed (ADR 0229): it logged
    * session events or served a change to a project. Bursts arrive as one.
    */
   onSessionsChanged: (listener: () => void) => () => void;
@@ -443,6 +448,7 @@ export async function startEmbeddedServer(
     homeDir: electronApp.getPath("home"),
     agentHomesDir: paths.agentHomesDir,
   };
+  const connectorTokens = connectorMcpTokens();
   const agentRegistry = new DesktopAgentRegistry({
     profiles,
     profileConfig,
@@ -455,6 +461,23 @@ export async function startEmbeddedServer(
     e2eFake: e2eFakeAgent,
     workspaceBridge,
     connectors,
+    // A harness that searches its tools reaches each profile connector as
+    // an MCP server of its own, served from the host's pool (ADR 0225).
+    ...(mcpApps
+      ? {
+          connectorMcp: {
+            url: (input: {
+              projectId: string;
+              sessionId: string;
+              server: string;
+            }) =>
+              apiBaseUrl
+                ? `${apiBaseUrl}${connectorMcpPath(input)}`
+                : undefined,
+            token: connectorTokens.token,
+          },
+        }
+      : {}),
     // Project agents (`project:<id>:<slug>`, ADR 0050): definitions are
     // read from the project's folder; secrets resolve through core.
     projectRootPath: (projectId) => projectRoots.getSync(projectId),
@@ -470,7 +493,7 @@ export async function startEmbeddedServer(
     checkoutNotice: (projectId, sessionId) =>
       sessionCheckouts.notice({ projectId, sessionId }),
     // A turn turned away on a sign-in that can still refresh retries once
-    // (ADR 0227); its CLI writes a debug log under Work's logs.
+    // (ADR 0228); its CLI writes a debug log under Work's logs.
     signInRefreshable: async (signIn) =>
       signInRefreshable({
         harness: signIn.harness,
@@ -480,7 +503,7 @@ export async function startEmbeddedServer(
     logsDir: electronApp.getPath("logs"),
   });
   // A chat that failed on its agent's sign-in runs again once the sign-in
-  // works, however it came back (ADR 0227).
+  // works, however it came back (ADR 0228).
   const signInRecovery = new SignInRecovery({
     credentialAgentId: rosterAgentId,
     signInFor: (agentId) => agentRegistry.signInFor(agentId),
@@ -540,7 +563,7 @@ export async function startEmbeddedServer(
   const catamorphic = createCatamorphic({
     // Every write to this database is this process's own, and each one
     // wakes the poller it concerns at once, so idle pollers look rarely
-    // (ADR 0228).
+    // (ADR 0229).
     idlePollMs: DESKTOP_IDLE_POLL_MS,
     hostSkills: (defaults) => ({
       ...defaults,
@@ -1449,7 +1472,7 @@ export async function startEmbeddedServer(
     },
   });
   // Chat lists in the app's windows refresh on these hints rather than on
-  // a short poll (ADR 0228).
+  // a short poll (ADR 0229).
   const sessionsListeners = new Set<() => void>();
   const sessionHints = startSessionChangeHints({
     wakeups: catamorphic.core.wakeups,
@@ -1535,6 +1558,16 @@ export async function startEmbeddedServer(
         .header("content-security-policy", mcpAppViewCsp(view))
         .header("cache-control", "no-store")
         .send(mcpAppViewDocument(view));
+    });
+    registerConnectorMcpRoute(app, {
+      core: () => catamorphic.core,
+      agents: agentRegistry,
+      mcpApps,
+      identity: {
+        tenantId: DESKTOP_TENANT_ID,
+        externalUserId: DESKTOP_USER_ID,
+      },
+      tokens: connectorTokens,
     });
   }
 

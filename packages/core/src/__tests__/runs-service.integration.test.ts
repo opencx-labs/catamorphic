@@ -1733,7 +1733,7 @@ describeIf("unified RunsService integration", () => {
       "paused",
     );
     // Work deferred while a run is paused is parked an hour out: resuming
-    // pulls it forward and wakes this process's workers (ADR 0228).
+    // pulls it forward and wakes this process's workers (ADR 0229).
     await db
       .updateTable("execution_jobs")
       .set({ available_at: new Date(Date.now() + 60 * 60 * 1_000) })

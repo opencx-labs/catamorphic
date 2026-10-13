@@ -62,7 +62,7 @@ const MAX_RETRIES_PER_TURN = 3;
 const RETRIES_KEPT_MS = 24 * 60 * 60_000;
 
 /**
- * Whether a chat's failed turn may run again by itself (ADR 0227): it is
+ * Whether a chat's failed turn may run again by itself (ADR 0228): it is
  * still the chat's latest and failed on its sign-in; the chat is a
  * top-level one the person keeps (active, not archived, not a subsession,
  * not continued on a server); and the turn ran the person's own message,
@@ -106,7 +106,7 @@ export function mayRunAgain(input: {
 }
 
 /**
- * Keeps the auth card's promise (ADR 0227): a chat whose latest turn failed
+ * Keeps the auth card's promise (ADR 0228): a chat whose latest turn failed
  * on its agent's sign-in runs that turn again once the sign-in works,
  * however it came back. Work's own re-login and a changed key say so
  * directly; a sign-in renewed outside Work (`/login` in a terminal,

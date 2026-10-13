@@ -170,7 +170,7 @@ function attempt(job: () => void): void {
 }
 
 // A tab's embedded frames run the session's preloads too, for the tab
-// preload's page dialogs (ADR 0226). They get nothing of this one, as
+// preload's page dialogs (ADR 0227). They get nothing of this one, as
 // before: everything here is for a top frame or a service worker.
 if (process.type === "service-worker" || window.top === window)
   installForContext();

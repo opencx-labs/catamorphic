@@ -3,7 +3,7 @@ import type { JsonValue, SessionMetadata } from "./model.js";
 
 /**
  * Bounds that keep a session's metadata a few facts about the session, not
- * a store (ADR 0225). Every writer enforces them; a client may check first.
+ * a store (ADR 0226). Every writer enforces them; a client may check first.
  */
 export const SESSION_METADATA_LIMITS = {
   /** Keys one session holds. */
@@ -191,7 +191,7 @@ function sameJson(left: JsonValue, right: JsonValue): boolean {
 }
 
 // ---------------------------------------------------------------------------
-// The pull requests a chat keeps (ADR 0225)
+// The pull requests a chat keeps (ADR 0226)
 
 /** The states a recorded pull request can say it is in. */
 export type SessionPullRequestState = "open" | "draft" | "merged" | "closed";

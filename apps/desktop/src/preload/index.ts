@@ -380,7 +380,7 @@ const api = {
     invoke("catamorphic:workspace-state-get", projectId),
   workspaceStateSet: (projectId: string, snapshot: unknown): Promise<void> =>
     invoke("catamorphic:workspace-state-set", projectId, snapshot),
-  /** This computer's chats may have changed (ADR 0228). */
+  /** This computer's chats may have changed (ADR 0229). */
   onSessionsChanged: (listener: () => void): (() => void) => {
     const handler = () => listener();
     ipcRenderer.on("catamorphic:sessions-changed", handler);
@@ -920,7 +920,7 @@ const api = {
     return () =>
       ipcRenderer.removeListener("catamorphic:extensions-installed", handler);
   },
-  // Page dialogs in browser tabs (ADR 0226).
+  // Page dialogs in browser tabs (ADR 0227).
   pageDialogs: (input: { guestId: number }): Promise<unknown[]> =>
     invoke("catamorphic:page-dialogs", input),
   pageDialogAnswer: (input: unknown): Promise<boolean> =>

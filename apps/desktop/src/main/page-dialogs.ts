@@ -7,7 +7,7 @@ import {
 } from "../shared/page-dialogs.js";
 
 /**
- * The dialogs pages in browser tabs are waiting on (ADR 0226): a queue per
+ * The dialogs pages in browser tabs are waiting on (ADR 0227): a queue per
  * page, of which the window shows the first. Pure bookkeeping, keyed by the
  * guest's WebContents id, so it runs without Electron in tests; the
  * Electron side (browser-dialogs.ts) asks, and settles what the person or

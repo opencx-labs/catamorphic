@@ -1,6 +1,6 @@
 # 0222 — Desktop harnesses stay warm between turns
 
-- **Status:** Accepted (amends [0198](0198-agent-runners-run-harnesses-beside-their-workspace.md); amended by [0227](0227-a-sign-in-that-can-still-refresh-is-retried.md): a failure on a sign-in that can still refresh gets one quiet retry on a fresh harness)
+- **Status:** Accepted (amends [0198](0198-agent-runners-run-harnesses-beside-their-workspace.md); amended by [0228](0228-a-sign-in-that-can-still-refresh-is-retried.md): a failure on a sign-in that can still refresh gets one quiet retry on a fresh harness)
 - **Date:** 2026-10-12
 
 ## Context
