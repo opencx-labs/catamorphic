@@ -2534,19 +2534,30 @@ export function App({
 
   const closeTab = (
     key: string,
-    opts?: { force?: boolean; discardDraft?: boolean; pageAsked?: boolean },
+    opts?: {
+      force?: boolean;
+      discardDraft?: boolean;
+      /** An agent's, an extension's, or a page closing itself: not asked. */
+      final?: boolean;
+    },
   ) => {
-    const { pageAsked, ...close } = opts ?? {};
-    // The person's close asks the page first: a beforeunload may hold it
-    // with "Leave site?" (ADR 0226). A page that closed itself has asked;
-    // a forced close (an agent's, an extension's) is final.
+    const { final, ...close } = opts ?? {};
+    // A close that disposes a page asks it first: a beforeunload may hold
+    // it with "Leave site?" (ADR 0226). A chat's attached page only goes
+    // back to its chip, still loaded, so nothing is asked then.
+    const localId = key.startsWith("browser:")
+      ? key.slice("browser:".length)
+      : null;
+    const browser = workspaceRef.current.browsers.find(
+      (item) => item.localId === localId,
+    );
     const page =
-      key.startsWith("browser:") && !pageAsked && !close.force
-        ? browserCommandsRef.current.get(key.slice("browser:".length))
+      localId && browser && (!browser.chatLocalId || close.force) && !final
+        ? browserCommandsRef.current.get(localId)
         : undefined;
     if (page) {
       void page.mayClose().then((leave) => {
-        if (leave) closeTab(key, { ...close, pageAsked: true });
+        if (leave) closeTab(key, { ...close, final: true });
       });
       return;
     }
@@ -3113,6 +3124,7 @@ export function App({
           ) {
             closeTabRef.current(browserTabKey(browser.localId), {
               force: true,
+              final: true,
             });
             closed = true;
           }
@@ -3836,6 +3848,7 @@ export function App({
       const sessionId = terminal?.attachSessionId ?? terminal?.ptySessionId;
       if (sessionId) void desktopApi.terminalKill(sessionId);
     }
+    // The person's own removal from the chat: the page is asked first.
     closeTab(key, { force: true });
   };
 
@@ -5290,7 +5303,7 @@ export function App({
           // A floating surface plays its own exit; closing the tab in
           // front brings its successor in from its side of the strip,
           // unless a workflow draft asks first.
-          closeTabRef.current(key, { force: true });
+          closeTabRef.current(key, { force: true, final: true });
           const asks = before.tabs.some(
             (tab) =>
               tab.kind === "workflow" && tabKey(tab) === key && tab.draft,
@@ -5590,7 +5603,10 @@ export function App({
         case "close-tab": {
           const localId = localIdOf(request.guestId);
           if (!localId) return;
-          closeTabRef.current(browserTabKey(localId), { force: true });
+          closeTabRef.current(browserTabKey(localId), {
+            force: true,
+            final: true,
+          });
           respond({});
           return;
         }
@@ -6134,6 +6150,20 @@ export function App({
   const sidebarEditor = workspace.editors.find(
     (editor) => editorTabKey(editor.localId) === sidebarSurfaceKey,
   );
+  // A page, file or terminal a chat opened keeps that chat's session beside
+  // it (ADR 0225): This session, the chat's checkout and its other
+  // session-scoped sections stay while the person looks at what it opened.
+  const sidebarSessionChat =
+    sidebarChat ??
+    (sidebarSurfaceKey
+      ? workspace.chats.find(
+          (chat) =>
+            chat.sessionId &&
+            attachedTabKeys(workspace, chat.localId).includes(
+              sidebarSurfaceKey,
+            ),
+        )
+      : undefined);
   const sidebarSurface: SidebarSurface = {
     kind: sidebarChat
       ? "chat"
@@ -6143,7 +6173,7 @@ export function App({
             ?.kind ?? "none"),
     key: sidebarChat ? chatTabKey(sidebarChat.localId) : sidebarSurfaceKey,
     projectId,
-    sessionId: sidebarChat?.sessionId ?? undefined,
+    sessionId: sidebarSessionChat?.sessionId ?? undefined,
     path: sidebarEditor?.filePath ?? undefined,
     selection: Boolean(sidebarEditor && sidebarHasSelection),
   };
@@ -6246,6 +6276,13 @@ export function App({
           onOpenSession={openSession}
           onSessionAction={applySessionAction}
           onOpenUrl={openUrl}
+          onOpenSessionLink={(url, mode) => {
+            // As a link in the chat opens: a tab the chat owns, so the
+            // session's sections stay beside it (ADR 0225).
+            if (sidebarSessionChat)
+              openMessageLink(url, sidebarSessionChat, mode);
+            else void openUrl(url, mode);
+          }}
           onOpenFile={openProjectFile}
           onOpenHistory={setRemoteHistoryPath}
           onPublish={(path, features) => setRemotePublish({ path, features })}
@@ -6952,7 +6989,7 @@ export function App({
                         }
                         onPageClose={() =>
                           closeTab(browserTabKey(browser.localId), {
-                            pageAsked: true,
+                            final: true,
                           })
                         }
                         onOpenSiteSettings={setSiteSettingsOrigin}
@@ -7512,7 +7549,7 @@ export function App({
                       }
                       onPageClose={() =>
                         closeTab(browserTabKey(browser.localId), {
-                          pageAsked: true,
+                          final: true,
                         })
                       }
                       onOpenSiteSettings={setSiteSettingsOrigin}

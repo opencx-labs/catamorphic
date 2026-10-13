@@ -8,48 +8,67 @@ import { contextBridge, ipcRenderer } from "electron";
  * (or an agent) answers Work's dialog in the tab. The frame stays blocked
  * meanwhile, as in Chrome; Work, the chat and other tabs do not, since
  * main answers asynchronously. Chrome shows no dialog from a page that is
- * unloading, so neither do these: no listener of the preload's own does
- * that, which would make every page one with a beforeunload handler (and
- * every navigation from it wait on the page); the page's current event
- * tells.
+ * being left: a beforeunload handler (the page's current event tells; a
+ * beforeunload listener of the preload's own would make every page one
+ * with a handler, and every navigation from it wait on the page), or
+ * anything from pagehide on, the visibilitychange and unload of leaving
+ * included. Main refuses a frame that is no longer the tab's page.
+ *
+ * The bridge reaches the page's world only as an argument of the code that
+ * replaces the three functions, never as a global the page could call.
  *
  * The top frame also remembers the navigation it starts itself (a link, a
  * form, a script), which comes before its `beforeunload`: when that holds
  * the page and the person chooses Leave, main asks the page to go again.
  */
 export function installPageDialogs({ top }: { top: boolean }): void {
-  contextBridge.exposeInMainWorld(
-    "__workDialogs",
-    (kind: unknown, message: unknown, defaultValue: unknown): unknown => {
-      try {
-        return ipcRenderer.sendSync("catamorphic:page-dialog", {
-          kind,
-          message,
-          defaultValue,
-        });
-      } catch {
-        return null;
-      }
-    },
-  );
+  // From pagehide on, the page is being left (or stored for back and
+  // forward): its visibilitychange and unload ask nothing either.
+  let leaving = false;
+  window.addEventListener("pagehide", () => {
+    leaving = true;
+  });
+  window.addEventListener("pageshow", () => {
+    leaving = false;
+  });
+  const bridge = (
+    kind: unknown,
+    message: unknown,
+    defaultValue: unknown,
+  ): unknown => {
+    if (leaving) return null;
+    try {
+      return ipcRenderer.sendSync("catamorphic:page-dialog", {
+        kind,
+        message,
+        defaultValue,
+      });
+    } catch {
+      return null;
+    }
+  };
   contextBridge.executeInMainWorld({
-    func: () => {
-      type Ask = (
+    func: (
+      bridge: (
         kind: "alert" | "confirm" | "prompt",
         message: string,
         defaultValue?: string,
-      ) => unknown;
-      const bridge = (window as Window & { __workDialogs?: Ask }).__workDialogs;
+      ) => unknown,
+    ) => {
+      type Ask = typeof bridge;
       if (typeof bridge !== "function") return;
+      // The event the page is handling, read through the getter as the
+      // page found it: a page replacing `window.event` changes nothing.
+      const currentEvent = (
+        Object.getOwnPropertyDescriptor(window, "event") ??
+        Object.getOwnPropertyDescriptor(Window.prototype, "event")
+      )?.get;
       // Chrome refuses dialogs from beforeunload, pagehide and unload
-      // handlers: the event the page is handling says when.
+      // handlers.
       const ask: Ask = (kind, message, defaultValue) => {
-        const handling = (window as Window & { event?: Event }).event?.type;
-        if (
-          handling === "beforeunload" ||
-          handling === "pagehide" ||
-          handling === "unload"
-        )
+        const handling = currentEvent?.call(window);
+        const type = handling instanceof Event ? handling.type : "";
+        if (type === "beforeunload" || type === "pagehide" || type === "unload")
           return null;
         return bridge(kind, message, defaultValue);
       };
@@ -86,7 +105,7 @@ export function installPageDialogs({ top }: { top: boolean }): void {
         },
       });
     },
-    args: [],
+    args: [bridge],
   });
   if (top) rememberLeaving();
 }
@@ -139,8 +158,11 @@ function rememberLeaving(): void {
         source instanceof HTMLElement && source !== form ? source : null,
       post: event.formData !== null,
     };
-    // Before the page's beforeunload runs: main learns the page is going.
-    ipcRenderer.send("catamorphic:page-navigating");
+    // Before the page's beforeunload runs: main learns the page is going,
+    // and whether it reloads ("Reload site?").
+    ipcRenderer.send("catamorphic:page-navigating", {
+      reload: event.navigationType === "reload",
+    });
   });
   ipcRenderer.on("catamorphic:page-proceed", () => {
     const next = leaving;

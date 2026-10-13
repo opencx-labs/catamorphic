@@ -8,7 +8,7 @@ import type { SidebarSectionConfig } from "../../shared/sidebar.js";
 import {
   readSidebarSessionPage,
   SIDEBAR_SESSION_PAGE,
-  useRevealSidebarSession,
+  useOpenSidebarSession,
   useSidebarSessions,
 } from "./sidebar-sessions.js";
 
@@ -197,16 +197,34 @@ it("keeps a hidden empty section empty while its availability request is pending
 });
 
 /** A newest-first project of `count` promoted chats, `c0` the newest. */
-function chatList(count: number) {
+function chatList(
+  count: number,
+  extra: Array<{
+    id: string;
+    title?: string;
+    visibility?: string;
+    parentSessionId?: string | null;
+    /** Its age in chats: 4.5 sits between c4 and c5. */
+    age: number;
+  }> = [],
+) {
   const created = (index: number) =>
     new Date(Date.UTC(2026, 0, 1) - index * 60_000).toISOString();
   const chats = Array.from({ length: count }, (_, index) => ({
     id: `c${index}`,
     title: `Chat ${index}`,
     visibility: "promoted",
-    parentSessionId: null,
+    parentSessionId: null as string | null,
     childCount: 0,
     createdAt: created(index),
+  }));
+  const others = extra.map((chat) => ({
+    id: chat.id,
+    title: chat.title ?? chat.id,
+    visibility: chat.visibility ?? "promoted",
+    parentSessionId: chat.parentSessionId ?? null,
+    childCount: 0,
+    createdAt: created(chat.age),
   }));
   const pages: URL[] = [];
   const reads: string[] = [];
@@ -215,17 +233,10 @@ function chatList(count: number) {
     const single = url.pathname.match(/\/agent\/sessions\/([^/]+)$/);
     if (single) {
       reads.push(single[1] ?? "");
-      return Response.json(
-        chats.find((chat) => chat.id === single[1]) ?? {
-          id: single[1],
-          title: "Elsewhere",
-          visibility: "promoted",
-          parentSessionId: null,
-          createdAt: new Date(
-            Date.UTC(2026, 0, 1) - 4.5 * 60_000,
-          ).toISOString(),
-        },
-      );
+      const chat = [...chats, ...others].find(({ id }) => id === single[1]);
+      return chat
+        ? Response.json(chat)
+        : Response.json({ error: "Not found" }, { status: 404 });
     }
     pages.push(url);
     const offset = Number(url.searchParams.get("offset"));
@@ -250,7 +261,10 @@ function mountSessions({
   });
   Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", true);
   const root = createRoot(document.createElement("div"));
-  const state: { current?: ReturnType<typeof useSidebarSessions> } = {};
+  const state: {
+    current?: ReturnType<typeof useSidebarSessions>;
+    open?: ReturnType<typeof useOpenSidebarSession>;
+  } = {};
   function Probe() {
     const sessions = useSidebarSessions({
       projectId: "paged",
@@ -259,7 +273,7 @@ function mountSessions({
       relevant: true,
     });
     state.current = sessions;
-    useRevealSidebarSession({
+    state.open = useOpenSidebarSession({
       ...sessions,
       projectId: "paged",
       sessionId: activeSessionId,
@@ -270,6 +284,7 @@ function mountSessions({
   }
   return {
     state,
+    client,
     mount: () =>
       act(async () =>
         root.render(
@@ -285,17 +300,8 @@ function mountSessions({
   };
 }
 
-it("polls only the first page and reads every loaded page every 30 seconds", async () => {
-  vi.useFakeTimers();
-  const { pages } = chatList(10);
-  const view = mountSessions({
-    section: {
-      id: "polled",
-      type: "chats",
-      source: { type: "chats", pageSize: 3 },
-    },
-  });
-  await view.mount();
+/** Acquire the root as the tree does and read until `rows` are loaded. */
+async function loadRows(view: ReturnType<typeof mountSessions>, rows: number) {
   const collection = view.state.current?.collection;
   if (!collection) throw new Error("Missing session store");
   let release = () => {};
@@ -305,11 +311,30 @@ it("polls only the first page and reads every loaded page every 30 seconds", asy
   await vi.waitFor(() =>
     expect(collection.getBranch(null).status).toBe("ready"),
   );
-  await act(async () => {
-    await collection.load({ more: true });
-    await collection.load({ more: true });
+  while (
+    collection.getBranch(null).ids.length < rows &&
+    collection.getBranch(null).cursor
+  )
+    await act(async () => {
+      await collection.load({ more: true });
+    });
+  return { collection, release };
+}
+
+it("polls a deep list's first page and reads every loaded page every 30 seconds", async () => {
+  vi.useFakeTimers();
+  const { pages } = chatList(20);
+  const view = mountSessions({
+    section: {
+      id: "polled",
+      type: "chats",
+      source: { type: "chats", pageSize: 4 },
+    },
   });
-  expect(collection.getBranch(null).ids).toHaveLength(9);
+  await view.mount();
+  // Pages of four start two rows early: 4, then 2 new rows per page.
+  const { collection, release } = await loadRows(view, 12);
+  expect(collection.getBranch(null).ids).toHaveLength(12);
   pages.length = 0;
   await act(async () => {
     await vi.advanceTimersByTimeAsync(2_000);
@@ -327,34 +352,115 @@ it("polls only the first page and reads every loaded page every 30 seconds", asy
   });
   expect(pages.map((url) => url.searchParams.get("offset"))).toEqual([
     "0",
-    "3",
+    "2",
+    "4",
     "6",
+    "8",
   ]);
-  expect(collection.getBranch(null).ids).toHaveLength(9);
+  expect(collection.getBranch(null).ids).toHaveLength(12);
   // Coming back to the window reads everything loaded, too.
+  await vi.waitFor(() =>
+    expect(collection.getBranch(null).fetching).toBeFalsy(),
+  );
   pages.length = 0;
   await act(async () => {
     window.dispatchEvent(new Event("focus"));
     await vi.advanceTimersByTimeAsync(1);
   });
-  expect(pages).toHaveLength(3);
+  await vi.waitFor(() =>
+    expect(collection.getBranch(null).fetching).toBeFalsy(),
+  );
+  expect(pages.map((url) => url.searchParams.get("offset"))).toEqual([
+    "0",
+    "2",
+    "4",
+    "6",
+    "8",
+  ]);
   act(() => release());
   await view.unmount();
 });
 
-it("starts a next page a few rows early and merges the repeats", async () => {
+it("reads a short list whole on every poll, so no loaded row lags", async () => {
+  vi.useFakeTimers();
+  const { pages } = chatList(20);
+  const view = mountSessions({
+    section: {
+      id: "short",
+      type: "chats",
+      source: { type: "chats", pageSize: 4 },
+    },
+  });
+  await view.mount();
+  const { collection, release } = await loadRows(view, 6);
+  expect(collection.getBranch(null).ids).toHaveLength(6);
+  pages.length = 0;
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(2_000);
+  });
+  expect(pages.map((url) => url.searchParams.get("offset"))).toEqual([
+    "0",
+    "2",
+  ]);
+  act(() => release());
+  await view.unmount();
+});
+
+it("keeps every chat when a new one arrives in a sorted section", async () => {
+  vi.useFakeTimers();
+  const { chats } = chatList(9);
+  // Titles that a per-page sort would reorder: c1 and c2 before c0.
+  for (const [index, title] of [
+    "c",
+    "a",
+    "b",
+    "e",
+    "d",
+    "f",
+    "h",
+    "g",
+    "i",
+  ].entries())
+    if (chats[index]) chats[index].title = title;
+  const view = mountSessions({
+    section: {
+      id: "sorted",
+      type: "chats",
+      source: {
+        type: "chats",
+        pageSize: 3,
+        sort: { field: "title", direction: "asc" },
+      },
+    },
+  });
+  await view.mount();
+  const { collection, release } = await loadRows(view, 9);
+  const before = [...collection.getBranch(null).ids];
+  expect(before).toHaveLength(9);
+  // Pages keep the server's order; the view sorts.
+  expect(before).toEqual(chats.map((chat) => chat.id));
+  chats.unshift({
+    id: "new",
+    title: "z",
+    visibility: "promoted",
+    parentSessionId: null,
+    childCount: 0,
+    createdAt: new Date(Date.UTC(2026, 0, 2)).toISOString(),
+  });
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(2_000);
+  });
+  expect(collection.getBranch(null).ids).toEqual(["new", ...before]);
+  act(() => release());
+  await view.unmount();
+});
+
+it("starts a next page five rows early and merges the repeats", async () => {
   const { pages } = chatList(SIDEBAR_SESSION_PAGE * 2 + 4);
   const view = mountSessions({ section: { id: "chats", type: "chats" } });
   await view.mount();
-  const collection = view.state.current?.collection;
-  if (!collection) throw new Error("Missing session store");
-  let release = () => {};
-  await act(async () => {
-    release = collection.acquire();
-  });
-  await vi.waitFor(() =>
-    expect(collection.getBranch(null).ids).toHaveLength(SIDEBAR_SESSION_PAGE),
-  );
+  const { collection, release } = await loadRows(view, 1);
+  expect(collection.getBranch(null).ids).toHaveLength(SIDEBAR_SESSION_PAGE);
   expect(pages[0]?.searchParams.get("limit")).toBe(
     String(SIDEBAR_SESSION_PAGE),
   );
@@ -362,75 +468,98 @@ it("starts a next page a few rows early and merges the repeats", async () => {
     await collection.load({ more: true });
   });
   expect(pages.at(-1)?.searchParams.get("offset")).toBe(
-    String(SIDEBAR_SESSION_PAGE - 3),
+    String(SIDEBAR_SESSION_PAGE - 5),
   );
-  // Three rows read again, merged: the next page adds the rest.
   const ids = collection.getBranch(null).ids;
-  expect(ids).toHaveLength(SIDEBAR_SESSION_PAGE * 2 - 3);
+  expect(ids).toHaveLength(SIDEBAR_SESSION_PAGE * 2 - 5);
   expect(new Set(ids).size).toBe(ids.length);
   expect(collection.getBranch(null).cursor).toBe(
-    String(SIDEBAR_SESSION_PAGE * 2 - 3),
+    `${SIDEBAR_SESSION_PAGE * 2 - 5}~c${SIDEBAR_SESSION_PAGE * 2 - 6}`,
   );
   act(() => release());
   await view.unmount();
 });
 
-it("loads pages until the open chat is in the list", async () => {
-  const { pages } = chatList(12);
+it("starts a page earlier when more chats went away than the overlap covers", async () => {
+  const { chats, pages } = chatList(30);
   const view = mountSessions({
     section: {
-      id: "reveal",
+      id: "archived",
+      type: "chats",
+      source: { type: "chats", pageSize: 10 },
+    },
+  });
+  await view.mount();
+  const { collection, release } = await loadRows(view, 1);
+  expect(collection.getBranch(null).ids).toHaveLength(10);
+  // Seven chats on the first page are archived elsewhere: every later
+  // offset moves up by seven, past the five-row overlap.
+  chats.splice(1, 7);
+  // As the archive's own refresh does: the cached pages are stale now.
+  await view.client.invalidateQueries({ refetchType: "none" });
+  pages.length = 0;
+  await act(async () => {
+    await collection.load({ more: true });
+  });
+  expect(pages.map((url) => url.searchParams.get("offset"))).toEqual([
+    "5",
+    "0",
+  ]);
+  // c10 now sits at offset 3: it is read, not skipped.
+  expect(collection.getBranch(null).ids).toContain("c10");
+  act(() => release());
+  await view.unmount();
+});
+
+it("shows an older open chat past the loaded rows without reading up to it", async () => {
+  const { pages, reads } = chatList(12);
+  const view = mountSessions({
+    section: {
+      id: "open",
       type: "chats",
       source: { type: "chats", pageSize: 3 },
     },
     activeSessionId: "c7",
   });
   await view.mount();
-  const collection = view.state.current?.collection;
-  if (!collection) throw new Error("Missing session store");
-  let release = () => {};
-  await act(async () => {
-    release = collection.acquire();
-  });
-  await vi.waitFor(() =>
-    expect(collection.getBranch(null).ids).toContain("c7"),
-  );
-  await act(async () => {});
-  expect(collection.getBranch(null).ids).toHaveLength(9);
-  expect(
-    pages.map((url) => url.searchParams.get("offset")).filter(Boolean),
-  ).toEqual(["0", "3", "6"]);
+  const { collection, release } = await loadRows(view, 1);
+  await vi.waitFor(() => expect(view.state.open?.id).toBe("c7"));
+  expect(view.state.open).toMatchObject({ parentId: null, hasChildren: false });
+  expect(reads).toEqual(["c7"]);
+  expect(pages).toHaveLength(1);
+  expect(collection.getBranch(null).ids).toHaveLength(3);
   act(() => release());
   await view.unmount();
 });
 
-it("stops looking once the loaded chats are older than the open one", async () => {
-  const { pages, reads } = chatList(12);
-  const view = mountSessions({
-    section: {
-      id: "elsewhere",
-      type: "chats",
-      source: { type: "chats", pageSize: 3 },
-    },
-    // Not in this list: made between c4 and c5.
-    activeSessionId: "elsewhere",
-  });
-  await view.mount();
-  const collection = view.state.current?.collection;
-  if (!collection) throw new Error("Missing session store");
-  let release = () => {};
-  await act(async () => {
-    release = collection.acquire();
-  });
-  await vi.waitFor(() => expect(reads).toEqual(["elsewhere"]));
-  await vi.waitFor(() =>
-    expect(collection.getBranch(null).ids).toHaveLength(6),
-  );
-  await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 20));
-  });
-  expect(collection.getBranch(null).ids).toHaveLength(6);
-  expect(pages).toHaveLength(2);
-  act(() => release());
-  await view.unmount();
+it("shows a fork's family row, and nothing for chats the list does not hold", async () => {
+  const { reads } = chatList(12, [
+    { id: "fork", parentSessionId: "c9", age: 9.5 },
+    { id: "gone", visibility: "archived", age: 8.5 },
+    { id: "fresh", age: 0.5 },
+  ]);
+  const shown = async (activeSessionId: string) => {
+    const view = mountSessions({
+      section: {
+        id: `open-${activeSessionId}`,
+        type: "chats",
+        source: { type: "chats", pageSize: 3 },
+      },
+      activeSessionId,
+    });
+    await view.mount();
+    const { release } = await loadRows(view, 1);
+    await vi.waitFor(() => expect(reads).toContain(activeSessionId));
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    });
+    const open = view.state.open?.id;
+    act(() => release());
+    await view.unmount();
+    return open;
+  };
+  expect(await shown("fork")).toBe("c9");
+  // Archived: not in this list. Newer than the loaded rows: the next poll.
+  expect(await shown("gone")).toBeUndefined();
+  expect(await shown("fresh")).toBeUndefined();
 });

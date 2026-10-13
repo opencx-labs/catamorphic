@@ -1026,11 +1026,28 @@ export function BrowserScreen({
       );
       answeredRef.current.add(answer.id);
       setShownDialogs(rest);
-      void desktopApi.pageDialogAnswer(answer).catch(() => {});
+      // Main refused the answer (or never got it): the dialog comes back
+      // as main has it, rather than staying hidden over a waiting page.
+      const reread = () => {
+        answeredRef.current.delete(answer.id);
+        let guestId: number;
+        try {
+          guestId = webviewRef.current?.getWebContentsId() ?? -1;
+        } catch {
+          return;
+        }
+        void desktopApi
+          .pageDialogs({ guestId })
+          .then(setDialogs)
+          .catch(() => {});
+      };
+      void desktopApi.pageDialogAnswer(answer).then((taken) => {
+        if (!taken) reread();
+      }, reread);
       // Focus goes back to the page, unless another dialog takes it.
       if (hadFocus && rest.length === 0) webviewRef.current?.focus();
     },
-    [],
+    [setDialogs],
   );
   const mayClose = useCallback(async (): Promise<boolean> => {
     const view = webviewRef.current;

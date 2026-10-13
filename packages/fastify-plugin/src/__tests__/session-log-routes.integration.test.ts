@@ -458,6 +458,17 @@ describe("session log routes", () => {
         .map((item: { text: string }) => item.text),
     ).toEqual(["Echo: first", expect.stringMatching(/^Echo: second/)]);
 
+    // The copy is the source's: writing its metadata here would fork it.
+    const written = await copy.app.inject({
+      method: "PATCH",
+      url: `${copyUrl}/metadata`,
+      payload: { metadata: { note: "from the copy" } },
+    });
+    expect([written.statusCode, written.json()]).toMatchObject([
+      409,
+      { code: "authority_required" },
+    ]);
+
     // Another authority than the copy's own is a fork: stop pushing.
     const forked = await push({
       authority: { hostId: "another-host", revision: 1 },

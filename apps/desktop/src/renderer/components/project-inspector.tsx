@@ -1,4 +1,4 @@
-import { useAgentSessions } from "@catamorphic/react";
+import { useCatamorphic } from "@catamorphic/react";
 import type { AgentSession, ProjectSummary } from "@catamorphic/react/types";
 import { useQuery } from "@tanstack/react-query";
 import { AlertCircle, Box, CheckCircle2, MoreHorizontal } from "lucide-react";
@@ -8,7 +8,7 @@ import { desktopApi, type RemoteProjectStatus } from "../lib/desktop-api.js";
 import { CopyButton } from "./copy-button.js";
 import { LazyList } from "./lazy-list.js";
 import { type MenuAt, MenuPortal, menuAtControl } from "./menu.js";
-import { useHoldInspector } from "./resource-inspector.js";
+import { useHoldInspector, useInspectorPending } from "./resource-inspector.js";
 import { ShortcutHint } from "./shortcut-hint.js";
 
 export type ProjectInspectorSession = Pick<AgentSession, "id"> &
@@ -30,6 +30,9 @@ export interface ProjectInspectorData {
   /** Other projects only: the current one's chats are in the sidebar. */
   sessions: ProjectInspectorSession[] | "unavailable" | undefined;
 }
+
+/** A glance, not a live view: reads within this long are reused. */
+const SESSIONS_FRESH_MS = 5_000;
 
 /**
  * The card's reads, shared by the card and its warmup so a hover that
@@ -53,17 +56,28 @@ export function useProjectInspectorData(
     staleTime: 15_000,
     retry: false,
   });
-  const sessions = useAgentSessions(current ? undefined : projectId, {
-    limit: 100,
+  // Another project's chats, read again only once they are a few seconds
+  // old, so the warmup's read serves the card that opens after it.
+  const { apiClient } = useCatamorphic();
+  const sessions = useQuery({
+    queryKey: ["desktop", "project-card-sessions", projectId],
+    queryFn: async () => {
+      const result = await apiClient.GET(
+        "/api/projects/{projectId}/agent/sessions",
+        { params: { path: { projectId }, query: { limit: 100 } } },
+      );
+      if (!result.data) throw new Error("Sessions are unavailable");
+      return result.data.items;
+    },
+    enabled: !current,
+    staleTime: SESSIONS_FRESH_MS,
+    refetchInterval: SESSIONS_FRESH_MS,
+    retry: false,
   });
   return {
     root: root.isError ? "unavailable" : root.data,
     server: server.isError ? "unavailable" : server.data,
-    sessions: current
-      ? []
-      : sessions.isError
-        ? "unavailable"
-        : sessions.data?.items,
+    sessions: current ? [] : sessions.isError ? "unavailable" : sessions.data,
   };
 }
 
@@ -121,11 +135,18 @@ export function ProjectInspectorView({
   const picked = useRef(false);
   // The menu's shield covers the card; the card stays until it has gone.
   useHoldInspector(menuAt !== null);
+  // The card appears once what it shows has landed (or soon after).
+  useInspectorPending(
+    data.root === undefined ||
+      data.server === undefined ||
+      (!current && data.sessions === undefined),
+  );
   const server = data.server;
-  const member =
-    typeof server === "object" &&
-    server !== null &&
-    !writesProgram(server.capabilities);
+  // Only a project known to be this person's to delete says Delete; until
+  // its server answers, the safe word is removing the copy here.
+  const deletes =
+    server === null ||
+    (typeof server === "object" && writesProgram(server.capabilities));
   const remote = project.remoteUrl ? displayRemote(project.remoteUrl) : null;
 
   return (
@@ -151,6 +172,8 @@ export function ProjectInspectorView({
             aria-expanded={menuOpen}
             onClick={() => {
               if (!actionsRef.current) return;
+              // A pick from a menu that has since been dismissed is gone.
+              picked.current = false;
               setMenuAt(menuAtControl(actionsRef.current));
               setMenuOpen(true);
             }}
@@ -168,8 +191,10 @@ export function ProjectInspectorView({
         <dd className="min-w-0" aria-busy={data.root === undefined}>
           {data.root === undefined ? (
             <Pending width="70%" />
-          ) : data.root === null || data.root === "unavailable" ? (
+          ) : data.root === "unavailable" ? (
             <Absent>Unavailable</Absent>
+          ) : data.root === null ? (
+            <Absent>None</Absent>
           ) : (
             <CopyableValue value={data.root} copyLabel="Copy folder path" />
           )}
@@ -207,7 +232,7 @@ export function ProjectInspectorView({
           entries={[
             {
               action: "delete",
-              label: member ? "Remove from this device…" : "Delete project…",
+              label: deletes ? "Delete project…" : "Remove from this device…",
               danger: true,
             },
           ]}
@@ -370,17 +395,29 @@ function CopyableValue({
   );
 }
 
-/** An http(s) remote without credentials a URL might carry. */
+/**
+ * A Git remote without the secrets a URL can carry. An http(s) remote's
+ * user is a token as often as a name, so the whole userinfo goes; other
+ * schemes (ssh) keep their user and lose only a password; scp-style
+ * `git@host:path` has none. Userinfo is what comes before an `@` ahead of
+ * the first slash; a URL that still does not parse loses everything up to
+ * its last `@`, failing closed.
+ */
 export function displayRemote(url: string): string {
-  if (!/^https?:\/\//i.test(url)) return url;
+  const scheme = /^([a-z][a-z0-9+.-]*):\/\//i.exec(url)?.[1];
+  if (!scheme) return url;
+  const http = /^(?:git\+)?https?$/i.test(scheme);
+  const userinfo = http
+    ? /^([a-z][a-z0-9+.-]*:\/\/)[^/]*@/i
+    : /^([a-z][a-z0-9+.-]*:\/\/[^:@/]*):[^/]*@/i;
+  if (userinfo.test(url)) return url.replace(userinfo, http ? "$1" : "$1@");
   try {
-    const parsed = new URL(url);
-    if (!parsed.username && !parsed.password) return url;
-    parsed.username = "";
-    parsed.password = "";
-    return parsed.toString();
-  } catch {
+    new URL(url);
     return url;
+  } catch {
+    return http
+      ? url.replace(/^([a-z][a-z0-9+.-]*:\/\/).*@/i, "$1")
+      : url.replace(/^([a-z][a-z0-9+.-]*:\/\/[^:@/]*):.*@/i, "$1@");
   }
 }
 

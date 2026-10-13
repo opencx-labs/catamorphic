@@ -90,9 +90,10 @@ own tab instead of replacing the page in front.
 ## Sidebar defaults
 
 New profiles use top tabs and no framed content. A single sidebar tab hides its
-strip. The right sidebar leads with This session while a chat is in front (ADR
-0225); a tab that comes and goes with the content is never the default choice,
-so its arrival never changes the tab shown. Left sidebar profile/settings controls remain sticky at the bottom.
+strip. The right sidebar leads with This session while a chat, or a page, file
+or terminal it opened, is in front (ADR 0225); a tab that comes and goes with
+the content is never the default choice, so its arrival never changes the tab
+shown. A session-scoped section's links open as the chat's links do. Left sidebar profile/settings controls remain sticky at the bottom.
 The right sidebar toggle stays at the workspace header's right edge, including
 before a project is open and while the left sidebar is collapsed.
 An empty right sidebar starts closed on launch and context changes. Configured,

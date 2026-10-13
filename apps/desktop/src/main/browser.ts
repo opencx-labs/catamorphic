@@ -74,7 +74,7 @@ import {
 } from "../shared/site-settings.js";
 import type { TerminalMacro } from "../shared/terminal-macros.js";
 import { isCaretKey, TEXT_FIELD_PROBE } from "../shared/text-field.js";
-import { registerBrowserDialogs } from "./browser-dialogs.js";
+import { pageClosing, registerBrowserDialogs } from "./browser-dialogs.js";
 import { HistoryStore } from "./browser-history.js";
 import {
   importBrowserCookies,
@@ -1293,6 +1293,9 @@ export function registerBrowserSupport(
         host.send("catamorphic:browser-open-url", { url });
     };
     contents.setWindowOpenHandler(({ url, disposition }) => {
+      // Asked whether its tab may close, a page holds a user activation
+      // Electron grants for the question; it opens nothing with it.
+      if (pageClosing(contents.id)) return { action: "deny" };
       const action = guestWindowOpenAction({ url, disposition });
       if (action === "popup") {
         const host = contents.hostWebContents;
@@ -1614,6 +1617,10 @@ export function registerBrowserSupport(
 
   sitePermissionPolicy = {
     request: async (guest, profileId, permission, details) => {
+      // Asked whether its tab may close, a page holds a user activation
+      // Electron grants for the question; it asks for nothing with it
+      // (fullscreen, devices) while the question is open (ADR 0226).
+      if (pageClosing(guest.id)) return false;
       const origin = siteOrigin(details.requestingUrl ?? guest.getURL());
       if (!origin) return ALWAYS_GRANTED_PERMISSIONS.has(permission);
       const decision = decideSitePermission(

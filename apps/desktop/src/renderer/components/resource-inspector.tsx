@@ -11,10 +11,16 @@ import {
   useState,
 } from "react";
 import { createPortal } from "react-dom";
+import { appIsMovingFocus, onPagePress } from "../lib/app-focus.js";
 import { themeStyle, useTheme } from "../lib/theme.js";
+import { anchorGone } from "./menu.js";
 
 export const RESOURCE_INSPECTOR_DELAY_MS = 400;
 const CLOSE_GRACE_MS = 120;
+/** Rest on a trigger this long before its panel's reads start. */
+const WARM_DELAY_MS = 120;
+/** The longest a panel waits, unseen, for reads its content says are due. */
+export const SETTLE_MAX_MS = 250;
 
 type InspectorInput = "pointer" | "focus";
 type InspectorHold =
@@ -111,11 +117,44 @@ export function useHoldInspector(held: boolean): void {
   }, [held, hold]);
 }
 
+const InspectorPendingContext = createContext<
+  ((key: string, pending: boolean) => void) | null
+>(null);
+
+/**
+ * Says a read the panel shows has not landed yet and would change its
+ * size when it does (a list). The panel waits for it, unseen, before it
+ * appears, at most SETTLE_MAX_MS, so it opens at its size. Reported before
+ * paint, so a panel whose reads are cached appears at once.
+ */
+export function useInspectorPending(pending: boolean): void {
+  const report = useContext(InspectorPendingContext);
+  const key = useId();
+  useLayoutEffect(() => {
+    if (!report) return;
+    report(key, pending);
+    return () => report(key, false);
+  }, [report, key, pending]);
+}
+
+/**
+ * Keyboard focus leads: focus that Tab or the arrows moved, not the focus
+ * a pressed button takes or a menu hands back after a press. Only that
+ * holds a panel open (DESIGN.md, "Pointer and focus hold an inspector
+ * independently").
+ */
+function keyboardLeads(target: EventTarget | null): boolean {
+  const modality = document.documentElement.dataset.focusModality;
+  if (modality) return modality === "keyboard";
+  return target instanceof Element && target.matches(":focus-visible");
+}
+
 export interface ResourceInspectorTriggerProps<
   T extends HTMLElement = HTMLButtonElement,
 > {
   ref: RefObject<T | null>;
-  onPointerEnter: () => void;
+  /** Where the pointer entered, when spread onto the trigger. */
+  onPointerEnter: (event?: { clientX: number; clientY: number }) => void;
   onPointerLeave: () => void;
   onPointerDown: () => void;
   onClick: () => void;
@@ -144,9 +183,12 @@ export function ResourceInspector<T extends HTMLElement = HTMLButtonElement>({
 }: {
   label: string;
   /**
-   * Rendered, unseen, while the pointer rests on the trigger before the
-   * panel opens: a component that only starts the panel's data loading, so
-   * the panel opens with what it shows instead of filling in.
+   * Rendered, unseen, once the pointer has rested on the trigger a moment
+   * (a pointer passing over starts nothing) until the panel opens: a
+   * component that only starts the panel's reads, so the panel opens with
+   * what it shows instead of filling in. A panel opened at once (focus, an
+   * open request) mounts its content, whose reads start then, and waits
+   * for those it reports pending (useInspectorPending) before it appears.
    */
   warmup?: ReactNode;
   disabled?: boolean;
@@ -170,6 +212,9 @@ export function ResourceInspector<T extends HTMLElement = HTMLButtonElement>({
   const closeTimer = useRef<ReturnType<typeof setTimeout> | undefined>(
     undefined,
   );
+  const warmTimer = useRef<ReturnType<typeof setTimeout> | undefined>(
+    undefined,
+  );
   // What holds the inspector open. The pointer and keyboard focus hold it
   // independently, on the trigger and on the panel: the pointer leaving must
   // not close what focus holds, nor focus leaving what the pointer holds.
@@ -183,8 +228,10 @@ export function ResourceInspector<T extends HTMLElement = HTMLButtonElement>({
   const [warming, setWarming] = useState(false);
   const openRef = useRef(open);
   openRef.current = open;
-  // Where the pointer last was while the panel showed, in window terms.
+  // Where the pointer last was while the panel showed, in window terms,
+  // starting where it entered the trigger; unknown is never "on the panel".
   const pointer = useRef<{ x: number; y: number } | null>(null);
+  const enteredAt = useRef<{ x: number; y: number } | null>(null);
   const onOpenRef = useRef(onOpen);
   onOpenRef.current = onOpen;
   useEffect(() => {
@@ -201,6 +248,8 @@ export function ResourceInspector<T extends HTMLElement = HTMLButtonElement>({
       bottom: rect.bottom,
       left: rect.left,
     });
+    pointer.current = enteredAt.current;
+    clearTimeout(warmTimer.current);
     setMounted(true);
     setOpen(true);
     setWarming(false);
@@ -209,6 +258,7 @@ export function ResourceInspector<T extends HTMLElement = HTMLButtonElement>({
     if (!disabled) return;
     clearTimeout(openTimer.current);
     clearTimeout(closeTimer.current);
+    clearTimeout(warmTimer.current);
     setOpen(false);
     setMounted(false);
     setWarming(false);
@@ -218,6 +268,7 @@ export function ResourceInspector<T extends HTMLElement = HTMLButtonElement>({
       dragging.current = true;
       clearTimeout(openTimer.current);
       clearTimeout(closeTimer.current);
+      clearTimeout(warmTimer.current);
       pinned.current = false;
       holds.current.clear();
       setOpen(false);
@@ -241,13 +292,16 @@ export function ResourceInspector<T extends HTMLElement = HTMLButtonElement>({
     clearTimeout(openTimer.current);
     if (immediate) show();
     else {
-      if (warmup) setWarming(true);
+      clearTimeout(warmTimer.current);
+      if (warmup)
+        warmTimer.current = setTimeout(() => setWarming(true), WARM_DELAY_MS);
       openTimer.current = setTimeout(show, delayMs);
     }
   };
   const scheduleClose = () => {
     clearTimeout(openTimer.current);
     clearTimeout(closeTimer.current);
+    clearTimeout(warmTimer.current);
     closeTimer.current = setTimeout(() => {
       if (!pinned.current && holds.current.size === 0) {
         setOpen(false);
@@ -267,8 +321,12 @@ export function ResourceInspector<T extends HTMLElement = HTMLButtonElement>({
       holds.current.delete("panel-child");
       // A picked action may have closed the panel already.
       if (!openRef.current) return;
-      // The menu and its shield are gone and the pointer may rest on the
-      // panel or trigger again, which no enter event reports until it moves.
+      // Where the pointer is now decides. Its enter and leave events say
+      // nothing reliable: the menu and its shield sit inside the panel in
+      // React's tree, so crossing onto them never left the panel, and once
+      // they are gone no event reports what is under a still pointer.
+      holds.current.delete("panel-pointer");
+      holds.current.delete("trigger-pointer");
       const at = pointer.current;
       const under =
         at && typeof document.elementFromPoint === "function"
@@ -342,6 +400,23 @@ export function ResourceInspector<T extends HTMLElement = HTMLButtonElement>({
     const trackPointer = (event: PointerEvent) => {
       pointer.current = { x: event.clientX, y: event.clientY };
     };
+    const close = () => {
+      pinned.current = false;
+      holds.current.clear();
+      setOpen(false);
+    };
+    // A press inside a page, which the window never sees itself.
+    const stopPagePress = onPagePress(close);
+    // The trigger turned inert or hidden: its list or sidebar closed.
+    const observer = new MutationObserver(() => {
+      const trigger = triggerRef.current;
+      if (trigger && anchorGone(trigger)) close();
+    });
+    observer.observe(document.body, {
+      subtree: true,
+      attributes: true,
+      attributeFilter: ["inert", "hidden"],
+    });
     window.addEventListener("keydown", dismiss, true);
     window.addEventListener("scroll", dismissForScroll, true);
     window.addEventListener("pointerdown", dismissForPointer);
@@ -351,6 +426,8 @@ export function ResourceInspector<T extends HTMLElement = HTMLButtonElement>({
     });
     window.addEventListener("pointerdown", trackPointer, true);
     return () => {
+      stopPagePress();
+      observer.disconnect();
       window.removeEventListener("keydown", dismiss, true);
       window.removeEventListener("scroll", dismissForScroll, true);
       window.removeEventListener("pointerdown", dismissForPointer);
@@ -369,6 +446,7 @@ export function ResourceInspector<T extends HTMLElement = HTMLButtonElement>({
     () => () => {
       clearTimeout(openTimer.current);
       clearTimeout(closeTimer.current);
+      clearTimeout(warmTimer.current);
     },
     [],
   );
@@ -377,11 +455,15 @@ export function ResourceInspector<T extends HTMLElement = HTMLButtonElement>({
     <>
       {children({
         ref: triggerRef,
-        onPointerEnter: () => {
+        onPointerEnter: (event) => {
+          enteredAt.current = event
+            ? { x: event.clientX, y: event.clientY }
+            : null;
           holds.current.add("trigger-pointer");
           scheduleOpen();
         },
         onPointerLeave: () => {
+          enteredAt.current = null;
           holds.current.delete("trigger-pointer");
           scheduleClose();
         },
@@ -405,9 +487,10 @@ export function ResourceInspector<T extends HTMLElement = HTMLButtonElement>({
           else setOpen(false);
         },
         onFocus: () => {
-          // Focus from a click or from Escape returning to the trigger leaves
-          // the preview to the pointer, and a disabled inspector ignores focus.
-          if (pointerFocus.current || disabled) return;
+          // Focus from a click, from Escape returning to the trigger, or
+          // that the app moved (a popover handing it back) leaves the preview
+          // to the pointer, and a disabled inspector ignores focus.
+          if (pointerFocus.current || disabled || appIsMovingFocus()) return;
           holds.current.add("trigger-focus");
           scheduleOpen(true);
         },
@@ -491,6 +574,33 @@ export function InspectorPortal({
   // snapping it. The first measurement lands before paint, untransitioned.
   const [height, setHeight] = useState<number | null>(null);
   const [settled, setSettled] = useState(false);
+  // Unseen until the reads its content reports pending land, or for at most
+  // SETTLE_MAX_MS: it appears at its size (useInspectorPending).
+  const [shown, setShown] = useState(false);
+  const pending = useRef(new Set<string>());
+  const measured = useRef(false);
+  const report = useCallback((key: string, isPending: boolean) => {
+    if (isPending) pending.current.add(key);
+    else pending.current.delete(key);
+    if (measured.current && pending.current.size === 0) setShown(true);
+  }, []);
+  // After the content's own layout effects have reported.
+  useLayoutEffect(() => {
+    measured.current = true;
+    if (pending.current.size === 0) {
+      setShown(true);
+      return;
+    }
+    const timer = window.setTimeout(() => setShown(true), SETTLE_MAX_MS);
+    return () => window.clearTimeout(timer);
+  }, []);
+  useEffect(() => {
+    if (!shown) return;
+    // Height changes animate only once the panel is seen.
+    const frame = requestAnimationFrame(() => setSettled(true));
+    return () => cancelAnimationFrame(frame);
+  }, [shown]);
+  const visible = open && shown;
   useLayoutEffect(() => {
     const node = content.current;
     const panel = ref.current;
@@ -508,16 +618,12 @@ export function InspectorPortal({
     };
     const measure = () => setHeight(node.offsetHeight + chrome());
     measure();
-    const frame = requestAnimationFrame(() => setSettled(true));
     const observer =
       typeof ResizeObserver === "undefined"
         ? undefined
         : new ResizeObserver(measure);
     observer?.observe(node);
-    return () => {
-      cancelAnimationFrame(frame);
-      observer?.disconnect();
-    };
+    return () => observer?.disconnect();
   }, []);
   const [position, setPosition] = useState<{
     left: number;
@@ -574,9 +680,9 @@ export function InspectorPortal({
       data-resource-inspector
       data-side={position.side}
       data-testid={testId}
-      data-open={open || undefined}
-      aria-hidden={!open}
-      inert={!open}
+      data-open={visible || undefined}
+      aria-hidden={!visible}
+      inert={!visible}
       data-theme={theme?.appearance}
       style={{
         ...themeStyle(theme),
@@ -587,7 +693,10 @@ export function InspectorPortal({
       data-settled={settled || undefined}
       onPointerEnter={() => onEnter("pointer")}
       onPointerLeave={() => onLeave("pointer")}
-      onFocusCapture={() => onEnter("focus")}
+      // A pressed button takes focus too; only keyboard focus holds it.
+      onFocusCapture={(event) => {
+        if (keyboardLeads(event.target)) onEnter("focus");
+      }}
       onBlurCapture={(event) => {
         if (
           event.relatedTarget instanceof Node &&
@@ -606,9 +715,11 @@ export function InspectorPortal({
           onExited();
       }}
       // Over a window's drag row its buttons must still take clicks.
-      className={`app-no-drag fixed z-[130] max-h-[calc(100vh-1rem)] max-w-[calc(100vw-1rem)] w-80 overflow-y-auto overscroll-contain rounded-lg border border-border bg-bg-overlay p-3 shadow-2xl [scrollbar-gutter:stable] ${settled ? "transition-[height,top] duration-200 ease-[cubic-bezier(0.2,0,0,1)] motion-reduce:transition-none" : ""} ${open ? `animate-inspector-in-${position.side}` : `pointer-events-none opacity-0 animate-inspector-out-${position.side}`}`}
+      className={`app-no-drag fixed z-[130] max-h-[calc(100vh-1rem)] max-w-[calc(100vw-1rem)] w-80 overflow-y-auto overscroll-contain rounded-lg border border-border bg-bg-overlay p-3 shadow-2xl [scrollbar-gutter:stable] ${settled ? "transition-[height,top] duration-200 ease-[cubic-bezier(0.2,0,0,1)] motion-reduce:transition-none" : ""} ${!shown ? "pointer-events-none opacity-0" : open ? `animate-inspector-in-${position.side}` : `pointer-events-none opacity-0 animate-inspector-out-${position.side}`}`}
     >
-      <div ref={content}>{children}</div>
+      <InspectorPendingContext.Provider value={report}>
+        <div ref={content}>{children}</div>
+      </InspectorPendingContext.Provider>
     </div>,
     document.body,
   );

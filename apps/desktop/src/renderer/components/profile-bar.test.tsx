@@ -107,4 +107,71 @@ describe("ProfileBar", () => {
     });
     expect(preview()).toBeNull();
   });
+
+  it("takes focus into its dialog as it opens and gives it back as it closes", async () => {
+    const data = {
+      defaultProfileId: "profile-1",
+      profiles: [
+        {
+          id: "profile-1",
+          name: "Default Profile",
+          color: "#8b5cf6",
+          projectIds: ["project-1"],
+          defaultProjectId: "project-1",
+        },
+        {
+          id: "profile-2",
+          name: "Work",
+          color: "#22c55e",
+          projectIds: [],
+        },
+      ],
+    };
+    await act(async () => {
+      root.render(
+        <ProfileBar
+          data={data}
+          activeProfileId="profile-2"
+          onSwitch={() => undefined}
+          onOpenSettings={() => undefined}
+        />,
+      );
+    });
+    const trigger = container.querySelector<HTMLButtonElement>(
+      '[aria-label^="Switch profile"]',
+    );
+    const preview = () =>
+      document.querySelector("[data-resource-inspector][data-open]");
+    await act(async () => {
+      trigger?.focus();
+      trigger?.click();
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+    });
+    // On the profile in use, without opening its preview.
+    expect(document.activeElement?.getAttribute("aria-current")).toBe("true");
+    expect(document.activeElement?.textContent).toContain("Work");
+    expect(preview()).toBeNull();
+    await act(async () => {
+      document.activeElement?.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Escape",
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    });
+    expect(trigger?.getAttribute("aria-expanded")).toBe("false");
+    expect(document.activeElement).toBe(trigger);
+    expect(preview()).toBeNull();
+    // Closed by picking a profile, focus goes back to the control too.
+    await act(async () => {
+      trigger?.click();
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+    });
+    await act(async () =>
+      (document.activeElement as HTMLButtonElement | null)?.click(),
+    );
+    expect(trigger?.getAttribute("aria-expanded")).toBe("false");
+    expect(document.activeElement).toBe(trigger);
+  });
 });

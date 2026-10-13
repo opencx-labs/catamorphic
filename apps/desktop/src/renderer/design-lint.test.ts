@@ -87,55 +87,154 @@ describe("design lint", () => {
       );
     expect(titles.length).toBeLessThanOrEqual(56);
   });
+  // DESIGN.md "Menus and popovers" (ADR 0221): one primitive owns each
+  // kind of dismissal, presses inside pages and app frames included, which
+  // the window never sees itself. Registry mirrors under
+  // components/catamorphic are installed copies their hosts dismiss.
+  const appSources = () =>
+    sources().filter(({ file }) => !file.startsWith("components/catamorphic/"));
+  const occurrences = (text: string, pattern: RegExp) =>
+    [...text.matchAll(pattern)].length;
+  /** A menu MenuPortal draws, or a native one main builds. */
+  const menusDrawn = (text: string) =>
+    occurrences(text, /<MenuPortal\b/g) +
+    occurrences(text, /desktopApi\.\w+Menu\(/g);
+  const closesThroughPrimitive = (text: string) =>
+    /\busePopoverDismiss\(/.test(text) || menusDrawn(text) > 0;
+
   it("menus open through MenuPortal, never a hand-rolled dropdown", () => {
-    // DESIGN.md "Menus and popovers" (ADR 0221): MenuPortal owns placement,
-    // keys and dismissal, presses inside pages and app frames included. A
-    // file with a menu's semantics or an overflow (⋯) button that draws no
-    // MenuPortal and asks main for no native menu (desktopApi.*Menu) holds
-    // a hand-rolled dropdown that nothing closes. Registry mirrors under
-    // components/catamorphic are their hosts' to dismiss.
-    // Attributes, not selectors such as '[role="menu"]' that find menus.
-    const menuSignals =
-      /\srole(?:=|: )"menu"|\s"?aria-haspopup"?(?:=|: )"menu"|\b(?:MoreHorizontal|MoreVertical|Ellipsis|EllipsisVertical)\b/;
-    const handRolled = sources()
-      .filter(
-        ({ file }) =>
-          !file.startsWith("components/catamorphic/") &&
-          file !== "components/menu.tsx",
-      )
-      .filter(
-        ({ text }) =>
-          menuSignals.test(text) &&
-          !/<MenuPortal\b|desktopApi\.\w+Menu\(/.test(text),
-      )
-      .map(({ file }) => file);
+    // Attributes and elements, not selectors such as '[role="menu"]'.
+    const handRolled = appSources()
+      .filter(({ file }) => file !== "components/menu.tsx")
+      .flatMap(({ file, text }) => {
+        if (/\srole(?:=|: )"menu"/.test(text)) return [`${file}: role="menu"`];
+        // Each ⋯ button or menu button needs a menu of its own drawn.
+        const controls = Math.max(
+          occurrences(text, /\s"?aria-haspopup"?(?:=|: )\{?"menu"/g),
+          occurrences(
+            text,
+            /<(?:MoreHorizontal|MoreVertical|Ellipsis|EllipsisVertical)(?:Icon)?\b/g,
+          ),
+        );
+        return controls > menusDrawn(text)
+          ? [`${file}: ${controls} menu controls, ${menusDrawn(text)} menus`]
+          : [];
+      });
     expect(handRolled).toEqual([]);
   });
-  it("popovers close through usePopoverDismiss; their own press listeners only shrink", () => {
-    // DESIGN.md "Menus and popovers": a popover's own window or document
-    // press listener misses presses inside pages, which run in their own
-    // process. Primitives (menu, hover inspector, tooltip, lib/) are the
-    // dismissal's owners. Debt: lower this when you convert one.
-    const primitives = new Set([
-      "components/menu.tsx",
-      "components/resource-inspector.tsx",
-      "components/shortcut-hint.tsx",
-    ]);
-    const listeners = sources()
+
+  it("whatever pops up closes through usePopoverDismiss or a menu", () => {
+    // A control that says it opens a popup (aria-haspopup, any value), or
+    // a popup role, in a file with neither primitive. The rest close some
+    // other way, said here.
+    const ownDismissal: Record<string, string> = {
+      "components/menu.tsx": "the menu primitive",
+      "components/resource-inspector.tsx": "the hover inspector primitive",
+      "components/modal.tsx": "the dialog primitive: backdrop and Escape",
+      "components/command-palette.tsx":
+        "a modal overlay that holds focus and closes on Escape",
+      "components/extensions/extension-popup.tsx":
+        "an extension's page: closes as focus leaves it and on page presses",
+      "components/password-autofill.tsx":
+        "bound to a page's field, closing with the field's blur",
+      "components/password-prompt.tsx":
+        "Chrome's password bubble: it waits for an answer",
+      "components/slash-menu.tsx":
+        "bound to the composer's text, closing as the text changes",
+    };
+    const unclosed = appSources()
+      .filter(({ file }) => !(file in ownDismissal))
       .filter(
-        ({ file }) =>
-          !primitives.has(file) &&
-          !file.startsWith("lib/") &&
-          !file.startsWith("components/catamorphic/"),
+        ({ text }) =>
+          /\saria-haspopup\b|"aria-haspopup"|\srole(?:=|: )"(?:listbox|dialog)"/.test(
+            text,
+          ) && !closesThroughPrimitive(text),
       )
-      .flatMap(({ file, text }) =>
-        [
-          ...text.matchAll(
-            /(?:window|document)\.addEventListener\(\s*"(?:pointerdown|mousedown)"/g,
-          ),
-        ].map(() => file),
-      );
-    expect(listeners.length).toBeLessThanOrEqual(6);
+      .map(({ file }) => file);
+    expect(unclosed).toEqual([]);
+  });
+
+  it("window-wide input listeners are listed with what they are for", () => {
+    // A popover's own press or Escape listener misses presses inside
+    // pages; usePopoverDismiss and MenuPortal hear them. Every other
+    // window, document or body listener for presses and keys is listed
+    // here with its job, at most as many as listed (lower a count when
+    // you remove one).
+    const allowed: Record<string, { count: number; reason: string }> = {
+      "app.tsx": {
+        count: 5,
+        reason:
+          "workspace shortcuts, mouse back and forward buttons, the split divider's drag, which floating chat was last pressed and a chat's step-down handoff",
+      },
+      "components/chat-dock.tsx": {
+        count: 3,
+        reason: "a press outside folds the chat; Escape minimizes it",
+      },
+      "components/command-palette.tsx": {
+        count: 3,
+        reason: "the palette's keys and its deferred focus giving way",
+      },
+      "components/dock-host.tsx": { count: 1, reason: "chat dock shortcuts" },
+      "components/extensions/extension-popup.tsx": {
+        count: 2,
+        reason: "an extension's popup page, which takes no hover card",
+      },
+      "components/extensions/extension-side-panel.tsx": {
+        count: 1,
+        reason: "ends the side panel's resize drag",
+      },
+      "components/markdown/bubble-menu.tsx": {
+        count: 1,
+        reason: "shows the format bar once a selection drag ends",
+      },
+      "components/markdown/row-drag.ts": {
+        count: 1,
+        reason: "ends a row drag",
+      },
+      "components/menu.tsx": { count: 2, reason: "the menu primitive" },
+      "components/modal.tsx": { count: 1, reason: "the dialog primitive" },
+      "components/password-autofill.tsx": {
+        count: 1,
+        reason: "a press in the window closes a page field's suggestions",
+      },
+      "components/resource-inspector.tsx": {
+        count: 3,
+        reason: "the hover inspector primitive",
+      },
+      "components/shortcut-hint.tsx": {
+        count: 3,
+        reason: "tooltips hide on any press or key",
+      },
+      "components/sidebar-item-row.tsx": {
+        count: 1,
+        reason: "Escape closes a row's hover preview",
+      },
+      "screens/settings-screen.tsx": {
+        count: 2,
+        reason: "recording a shortcut takes the next key",
+      },
+      "screens/terminal-screen.tsx": {
+        count: 1,
+        reason: "ends a selection drag",
+      },
+      "lib/app-focus.ts": {
+        count: 2,
+        reason: "counts the person's input for focus the app moves",
+      },
+      "lib/focus-modality.ts": {
+        count: 2,
+        reason: "keyboard or pointer leads, for focus rings",
+      },
+      "lib/popover-dismiss.ts": { count: 2, reason: "the popover primitive" },
+    };
+    const listener =
+      /(?:\b(?:window|document|globalThis|doc)(?:\.body)?|\bownerDocument)\s*\.\s*addEventListener\(\s*"(?:pointerdown|mousedown|mouseup|click|keydown|keyup)"/g;
+    const over = appSources().flatMap(({ file, text }) => {
+      const found = occurrences(text, listener);
+      const limit = allowed[file]?.count ?? 0;
+      return found > limit ? [`${file}: ${found} > ${limit}`] : [];
+    });
+    expect(over).toEqual([]);
   });
   it("focus rings come from the ring tokens, never a private recipe", () => {
     // One ring (DESIGN.md "Focus rings"): the global :focus-visible rule or

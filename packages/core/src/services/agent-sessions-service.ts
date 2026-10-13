@@ -1820,23 +1820,70 @@ export class AgentSessionsService {
     if (normalized && normalized.length > 500) {
       throw new Error("Session activity must be 500 characters or fewer");
     }
-    await this.db.transaction().execute((trx) =>
-      this.log.append(trx, {
+    await this.db.transaction().execute(async (trx) => {
+      await this.log.lock(trx, sessionId);
+      await this.assertLocalAuthority(trx, sessionId);
+      await this.log.append(trx, {
         sessionId,
         events: [
           { type: "session.changed", session: { activity: normalized } },
         ],
-      }),
+      });
+    });
+  }
+
+  /**
+   * Refuse a change to a session another host holds (ADR 0197): the copy
+   * here is a mirror, and an event logged on it would fork the person's
+   * chat when its holder next pushes. Call under the session's lock.
+   */
+  private async assertLocalAuthority(
+    trx: Transaction<DB>,
+    sessionId: string,
+  ): Promise<void> {
+    const session = await trx
+      .selectFrom("agent_sessions")
+      .select(["authority_host_id", "authority_revision"])
+      .where("id", "=", sessionId)
+      .executeTakeFirstOrThrow();
+    if (
+      session.authority_host_id !== "unassigned" &&
+      session.authority_host_id !== this.hostId
+    )
+      throw new AgentSessionAuthorityRequiredError(
+        sessionId,
+        session.authority_host_id,
+        Number(session.authority_revision),
+      );
+  }
+
+  /**
+   * A session's metadata (ADR 0225), for whoever may read the session: an
+   * agent reads a key before writing it whole again.
+   */
+  async metadata(args: {
+    identity: Identity;
+    projectId: string;
+    sessionId: string;
+  }): Promise<SessionMetadata> {
+    const session = await this.requireSession(
+      args.identity,
+      args.projectId,
+      args.sessionId,
+      "read",
     );
+    return sessionMetadataFromRow(session.metadata);
   }
 
   /**
    * Set named values on a session (ADR 0225): each key of `values` takes
    * its value, and null removes the key. Whoever may change the session
-   * may set them, as for its activity; the change is logged, so every
-   * viewer's snapshot and stream follow it. Returns the session's metadata.
-   * Throws `SessionMetadataError` for a malformed key or value, or past
-   * the limits (`SESSION_METADATA_LIMITS`).
+   * may set them, as for its activity, on the host holding its authority
+   * (`AgentSessionAuthorityRequiredError` elsewhere), closed or archived
+   * included; the change is logged, so every viewer's snapshot and stream
+   * follow it. Returns the session's metadata. Throws
+   * `SessionMetadataError` for a malformed key or value, or past the
+   * limits (`SESSION_METADATA_LIMITS`).
    */
   async setMetadata(args: {
     identity: Identity;
@@ -1853,6 +1900,7 @@ export class AgentSessionsService {
     const values = storedJson(args.values);
     return this.db.transaction().execute(async (trx) => {
       await this.log.lock(trx, args.sessionId);
+      await this.assertLocalAuthority(trx, args.sessionId);
       const row = await trx
         .selectFrom("agent_sessions")
         .select("metadata")

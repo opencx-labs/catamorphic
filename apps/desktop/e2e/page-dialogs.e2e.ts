@@ -48,9 +48,13 @@ const server = http.createServer((request, response) => {
     return;
   }
   if (url.startsWith("/leaving-alert")) {
-    // Chrome refuses dialogs from a page that is unloading.
+    // Chrome refuses dialogs from a page that is being left.
     response.end(`<title>Leaving alert</title><script>
       addEventListener('beforeunload', () => { alert('Leaving'); });
+      addEventListener('pagehide', () => { alert('Hiding'); });
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'hidden') confirm('Hidden?');
+      });
     </script>`);
     return;
   }
@@ -80,6 +84,12 @@ const DIALOG = `${VIEW}?.parentElement.querySelector('[data-testid="page-dialog"
 const ACTIVE_KEY = `document.querySelector('[data-point-key] [aria-current="true"]')?.closest('[data-point-key]')?.dataset.pointKey`;
 const ADDRESS = `[...document.querySelectorAll('input[aria-label="Address and search bar"]')].find(${SHOWN})`;
 const host = (url: string) => url.slice("http://".length);
+
+/** Where the record of every dialog list main sent stands now. */
+const markDialogs = () => app.eval<number>("window.__dialogLists.length");
+/** The dialog kinds each list main sent since `mark` held. */
+const dialogsSince = (mark: number) =>
+  app.eval<string[][]>(`window.__dialogLists.slice(${mark})`);
 
 /** Run script in the page with a user gesture, without waiting for it. */
 const start = (code: string, gesture = true) =>
@@ -173,6 +183,13 @@ beforeAll(async () => {
   await app.waitFor("!!document.querySelector('[data-workspace-ready]')", {
     label: "workspace ready for shortcuts",
   });
+  // Every dialog list main sends, to tell what showed even for a moment.
+  await app.eval(`(() => {
+    window.__dialogLists = [];
+    window.catamorphicDesktop.onPageDialogs((change) =>
+      window.__dialogLists.push(change.dialogs.map((dialog) => dialog.kind)));
+    return true;
+  })()`);
   await newTab();
   await go(`${origin}/dialogs`);
   await loaded("Dialogs");
@@ -364,13 +381,17 @@ describe("page dialogs", () => {
     );
   });
 
-  it("a page that is unloading shows no dialog", async () => {
+  it("a page that is being left shows no dialog, not even for a moment", async () => {
     await go(`${origin}/leaving-alert`);
     await loaded("Leaving alert");
     await finished(await start("document.body.click()"));
+    const mark = await markDialogs();
     await go(`${origin}/plain?after=leaving-alert`);
     await loaded("Plain");
-    expect(await app.eval<boolean>(`!${DIALOG}`)).toBe(true);
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    expect(
+      (await dialogsSince(mark)).filter((kinds) => kinds.length > 0),
+    ).toEqual([]);
   });
 
   it("Leave site? holds a reload, an address and a link, and Leave goes on", async () => {
@@ -419,11 +440,27 @@ describe("page dialogs", () => {
     await go(`${origin}/unload`);
     await loaded("Unload");
     await finished(await start("document.body.click()"));
+    // The click's own activation has passed (Chromium's lasts 5 seconds).
+    await new Promise((resolve) => setTimeout(resolve, 5_500));
+    expect(await inPage<boolean>("navigator.userActivation.isActive")).toBe(
+      false,
+    );
     const key = await app.eval<string>(ACTIVE_KEY);
     const close = `document.querySelector('[data-point-key=${JSON.stringify(key)}] button[aria-label^="Close"]').click(); true`;
     await app.eval(close);
     await dialogShows("beforeunload");
     expect(await text("page-dialog-title")).toBe("Leave site?");
+    // Electron grants the page an activation as it asks; the page opens
+    // no window with it while the question is open.
+    console.info(
+      "[page-dialogs] activation while the close asks:",
+      await inPage<boolean>("navigator.userActivation.isActive"),
+    );
+    const tabs = `document.querySelectorAll('[data-point-key^="browser:"]').length`;
+    const before = await app.eval<number>(tabs);
+    await inPage("window.open('/plain?from=popup'); true");
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    expect(await app.eval<number>(tabs)).toBe(before);
     await click("page-dialog-cancel");
     await dialogGone();
     expect(
@@ -453,6 +490,22 @@ describe("page dialogs", () => {
     expect(await inPage<string>("document.body.innerText")).toContain(
       "Sign-in required",
     );
+
+    // Many requests for the same sign-in ask once, as in Chrome.
+    const mark = await markDialogs();
+    const fetches = await start(
+      "Promise.all(Array.from({ length: 6 }, () => fetch('/auth?api').then((response) => response.status)))",
+    );
+    await dialogShows("auth");
+    for (let round = 0; round < 20 && (await running(fetches)); round++) {
+      if (await app.eval<boolean>(`!!${DIALOG}`))
+        await click("page-dialog-cancel");
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+    expect((await finished(fetches)).value).toEqual(Array(6).fill(401));
+    expect(
+      Math.max(...(await dialogsSince(mark)).map((kinds) => kinds.length)),
+    ).toBe(1);
 
     await go(`${origin}/auth?again`);
     await dialogShows("auth");
@@ -540,6 +593,8 @@ const logs=()=>[...document.querySelectorAll('[role="log"]')].map(el=>el.textCon
       origin,
     });
     expect(String(opened.note)).toContain("press");
+    // Clearing pointers does not wait on a page that waits on its dialog.
+    expect(await tool("point_at", { target: null })).toEqual({ ok: true });
     expect((await tool("browser_snapshot", { key })).dialog).toMatchObject({
       kind: "confirm",
     });
@@ -655,5 +710,60 @@ const logs=()=>[...document.querySelectorAll('[role="log"]')].map(el=>el.textCon
         url: `${origin}/plain?from=agent`,
       }),
     ).toMatchObject({ ok: true });
+  });
+
+  it("a chat's page closes back to its chip still loaded; removing it from the chat asks the page", async () => {
+    const { key } = await tool("open_browser", { url: `${origin}/unload` });
+    await tool("browser_act", { key, action: "wait_for", text: "Away" });
+    // A real click in the page: it may hold on to it from now on.
+    await tool("browser_act", { key, action: "click", x: 200, y: 200 });
+    const tab = `document.querySelector('[data-point-key=${JSON.stringify(key)}]')`;
+    await app.eval(`${tab}.querySelector('button').click(); true`);
+    await loaded("Unload");
+    // Closing the tab only takes it back to the chat's chip: the page is
+    // neither asked nor unloaded.
+    const mark = await markDialogs();
+    await app.eval(
+      `${tab}.querySelector('button[aria-label^="Close"]').click(); true`,
+    );
+    await app.waitFor(`!${tab}`, { label: "tab back to its chip" });
+    expect(
+      await tool("browser_act", {
+        key,
+        action: "evaluate",
+        expression: "document.title",
+      }),
+    ).toMatchObject({ value: "Unload" });
+    expect(
+      (await dialogsSince(mark)).filter((kinds) => kinds.length > 0),
+    ).toEqual([]);
+    // Removing it from the chat disposes of the page, so the page is
+    // asked, and its tab comes forward to ask.
+    const remove = `document.querySelector('button[aria-label="Remove Unload"]').click(); true`;
+    const anyDialog = `document.querySelector('[data-testid="page-dialog"]:not([inert])')`;
+    await app.eval(remove);
+    await app.waitFor(`${anyDialog}?.dataset.kind === 'beforeunload'`, {
+      label: "Leave site? for the chip's page",
+    });
+    await app.eval(
+      `${anyDialog}.querySelector('[data-testid="page-dialog-cancel"]').click(); true`,
+    );
+    await app.waitFor(`!${anyDialog}`, { label: "stayed" });
+    expect(
+      await app.eval<boolean>(
+        `!!document.querySelector('button[aria-label="Remove Unload"]')`,
+      ),
+    ).toBe(true);
+    await app.eval(remove);
+    await app.waitFor(`${anyDialog}?.dataset.kind === 'beforeunload'`, {
+      label: "Leave site? again",
+    });
+    await app.eval(
+      `${anyDialog}.querySelector('[data-testid="page-dialog-accept"]').click(); true`,
+    );
+    await app.waitFor(
+      `!document.querySelector('button[aria-label="Remove Unload"]') && !${tab}`,
+      { label: "the page went with its chip" },
+    );
   });
 });

@@ -1,6 +1,7 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { SET_SESSION_METADATA_DESCRIPTION } from "@catamorphic/agent-protocol";
 import {
   agentCapabilityTools,
   type ExtraToolContext,
@@ -213,6 +214,7 @@ describe("workspace coordination tools", () => {
       requestAttention: async () => ({}),
       setActivity: async () => {},
       setMetadata: async () => ({}),
+      readMetadata: async () => ({}),
     });
     const list = toolkit.tools.find(
       (tool) => tool.name === "list_project_sessions",
@@ -259,6 +261,7 @@ describe("workspace coordination tools", () => {
       },
       setActivity: async () => {},
       setMetadata: async () => ({}),
+      readMetadata: async () => ({}),
     });
 
     const execute = (name: string, input: Record<string, unknown> = {}) =>
@@ -304,7 +307,7 @@ describe("workspace coordination tools", () => {
     ]);
   });
 
-  it("sets one key of this chat's metadata through the coordination bridge (ADR 0225)", async () => {
+  it("reads and sets one key of this chat's metadata through the coordination bridge (ADR 0225)", async () => {
     const toolkit = buildWorkspaceToolkit({} as WorkspaceBridge);
     const tool = toolkit.tools.find(
       (entry) => entry.name === "set_session_metadata",
@@ -327,6 +330,10 @@ describe("workspace coordination tools", () => {
         calls.push(args);
         return { pull_requests: [{ url: "https://x/pull/1", number: 1 }] };
       },
+      readMetadata: async (...args) => {
+        calls.push(["read", ...args]);
+        return { note: "kept" };
+      },
     });
     const pullRequests = [{ url: "https://x/pull/1", number: 1 }];
     expect(
@@ -336,10 +343,17 @@ describe("workspace coordination tools", () => {
       ),
     ).toEqual({ metadata: { pull_requests: pullRequests } });
     await tool.execute({ key: "note", value: null }, context);
+    // No value reads: an agent keeps what a list already holds.
+    expect(await tool.execute({ key: "pull_requests" }, context)).toEqual({
+      metadata: { note: "kept" },
+    });
     expect(calls).toEqual([
       ["project", "session", { pull_requests: pullRequests }],
       ["project", "session", { note: null }],
+      ["read", "project", "session"],
     ]);
+    // One contract wherever the tool is offered.
+    expect(tool.description).toBe(SET_SESSION_METADATA_DESCRIPTION);
     // The schema the agent sees refuses keys outside the convention.
     const schema = z.object(
       z.record(z.string(), z.instanceof(z.ZodType)).parse(tool.parameters),

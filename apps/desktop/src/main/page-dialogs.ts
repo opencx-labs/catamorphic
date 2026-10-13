@@ -16,6 +16,12 @@ import {
 
 export type PageDialogRequest = Omit<PageDialog, "id" | "canSuppress">;
 
+/**
+ * A page asking more than this at once (frames, sign-ins for different
+ * realms) gets the rest cancelled: nobody answers dozens of dialogs.
+ */
+export const PAGE_DIALOG_QUEUE_LIMIT = 20;
+
 interface Entry {
   dialog: PageDialog;
   /** The frame that asked (frameTreeNodeId); its navigation takes it back. */
@@ -44,16 +50,23 @@ export class PageDialogs {
   /**
    * Ask the person, in the page's tab. Resolves with the answer, or null
    * when nobody will answer: the page was told to show no more dialogs, it
-   * navigated, or its tab closed. Script dialogs from the second on offer
-   * to stop the page's dialogs, as Chrome does.
+   * navigated, or its tab closed, or it already waits on too many. Script
+   * dialogs from the second on offer to stop the page's dialogs, as Chrome
+   * does.
    */
   ask(
     request: PageDialogRequest,
-    options: { frame?: number | null } = {},
+    options: {
+      frame?: number | null;
+      /** Called with the dialog as it joins the page's queue. */
+      queued?: (dialog: PageDialog) => void;
+    } = {},
   ): Promise<PageDialogAnswer | null> {
     const page = this.page(request.guestId);
     const script = isScriptDialog(request.kind);
     if (script && page.suppressed) return Promise.resolve(null);
+    if (page.queue.length >= PAGE_DIALOG_QUEUE_LIMIT)
+      return Promise.resolve(null);
     const canSuppress = script && page.asked > 0;
     if (script) page.asked += 1;
     return new Promise((resolve) => {
@@ -64,6 +77,7 @@ export class PageDialogs {
         settle: resolve,
       });
       this.byId.set(dialog.id, request.guestId);
+      options.queued?.(dialog);
       this.changed(request.guestId);
       for (const listener of this.openListeners.get(request.guestId) ?? [])
         listener(dialog);

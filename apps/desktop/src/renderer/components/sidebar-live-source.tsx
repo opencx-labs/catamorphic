@@ -16,6 +16,7 @@ import {
   sidebarItemDragSpec,
 } from "../lib/sidebar-drag.js";
 import { TAB_DRAG_TYPE } from "../lib/tab-drag.js";
+import { SessionAccess } from "./session-details.js";
 import {
   projectSidebarItems,
   sidebarItemPresentation,
@@ -30,8 +31,33 @@ function sourceError(cause: unknown): Error {
   return cause instanceof Error ? cause : new Error(String(cause));
 }
 
+/** A value as JSON with object keys in order: the same for the same data. */
+function stableJson(value: unknown): string {
+  return JSON.stringify(value, (_key, entry: unknown) =>
+    typeof entry === "object" && entry !== null && !Array.isArray(entry)
+      ? Object.fromEntries(
+          Object.entries(entry).sort(([a], [b]) =>
+            a < b ? -1 : a > b ? 1 : 0,
+          ),
+        )
+      : entry,
+  );
+}
+
 /** One collection owns cache, cancellation, subscriptions and paged branches. */
 export function SidebarLiveSource({ projectId }: { projectId: string }) {
+  const section = useSidebarContribution()?.section;
+  // A session-scoped section reads its chat where the chat is read.
+  return section?.when?.session === true ? (
+    <SessionAccess projectId={projectId}>
+      <LiveSourceRows projectId={projectId} />
+    </SessionAccess>
+  ) : (
+    <LiveSourceRows projectId={projectId} />
+  );
+}
+
+function LiveSourceRows({ projectId }: { projectId: string }) {
   const contribution = useSidebarContribution();
   const section = contribution?.section;
   const sectionId = section?.id ?? "";
@@ -144,31 +170,40 @@ export function SidebarLiveSource({ projectId }: { projectId: string }) {
   );
   // A relevant hidden section keeps only a root availability lease. The native
   // tree owns expanded branch leases while visible, matching built-in sources.
+  const active =
+    (contribution?.relevant ?? true) &&
+    ((contribution?.visible ?? true) || section?.hideEmpty === true) &&
+    (!sessionScoped || session !== undefined);
   const { root } = useCollection({
     collection,
-    active:
-      (contribution?.relevant ?? true) &&
-      ((contribution?.visible ?? true) || section?.hideEmpty === true) &&
-      (!sessionScoped || session !== undefined),
+    active,
     mode: "preview",
     projected: true,
   });
-  // What an agent sets on the session shows at once: the section loads
-  // again whenever the chat's title or metadata changes. Another chat is a
-  // new collection, which loads by itself.
-  const sessionKey = session ? JSON.stringify(session) : undefined;
+  // What an agent sets on the session shows: the section loads again when
+  // the chat's title or metadata changes (the same data in another key
+  // order is no change), at once when shown and when it is shown next
+  // otherwise. Another chat is a new collection, which loads by itself.
+  const sessionKey = useMemo(
+    () => (session ? stableJson(session) : undefined),
+    [session],
+  );
   const loaded = useRef({ collection, sessionKey });
+  const stale = useRef(false);
   useEffect(() => {
     const previous = loaded.current;
     loaded.current = { collection, sessionKey };
-    if (
-      previous.collection === collection &&
+    if (previous.collection !== collection) stale.current = false;
+    else if (
       previous.sessionKey !== undefined &&
       sessionKey !== undefined &&
       previous.sessionKey !== sessionKey
     )
-      void collection.load().catch(() => undefined);
-  }, [collection, sessionKey]);
+      stale.current = true;
+    if (!active || !stale.current) return;
+    stale.current = false;
+    void collection.load().catch(() => undefined);
+  }, [collection, sessionKey, active]);
   const project = useCallback(
     (items: readonly SidebarSourceItem[]) =>
       projectSidebarItems(items, section).filter(

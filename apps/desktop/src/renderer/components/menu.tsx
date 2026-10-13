@@ -82,7 +82,7 @@ export function placeMenu(
 }
 
 /** True once the control a menu belongs to can no longer be used or seen. */
-function anchorGone(anchor: Element): boolean {
+export function anchorGone(anchor: Element): boolean {
   return (
     !anchor.isConnected ||
     anchor.closest("[inert], [hidden]") !== null ||

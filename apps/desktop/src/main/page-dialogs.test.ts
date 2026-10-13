@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import type { PageDialog } from "../shared/page-dialogs.js";
-import { type PageDialogRequest, PageDialogs } from "./page-dialogs.js";
+import {
+  PAGE_DIALOG_QUEUE_LIMIT,
+  type PageDialogRequest,
+  PageDialogs,
+} from "./page-dialogs.js";
 
 const request = (
   guestId: number,
@@ -127,6 +131,14 @@ describe("page dialogs", () => {
     stop();
     void dialogs.ask(request(1));
     expect(opened).toHaveBeenCalledTimes(1);
+  });
+
+  it("cancels what a page asks beyond its queue's limit", async () => {
+    const { dialogs } = setup();
+    for (let index = 0; index < PAGE_DIALOG_QUEUE_LIMIT; index++)
+      void dialogs.ask(request(1, { kind: "auth", message: `${index}` }));
+    await expect(dialogs.ask(request(1, { kind: "auth" }))).resolves.toBeNull();
+    expect(dialogs.list(1)).toHaveLength(PAGE_DIALOG_QUEUE_LIMIT);
   });
 
   it("changes an open Leave site? in place", () => {

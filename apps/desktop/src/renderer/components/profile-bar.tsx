@@ -1,5 +1,6 @@
 import { Check, ChevronDown, Plus, Star } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { moveFocusAsApp } from "../lib/app-focus.js";
 import type { Profile, ProfilesData } from "../lib/desktop-api.js";
 import { desktopApi } from "../lib/desktop-api.js";
 import { usePopoverDismiss } from "../lib/popover-dismiss.js";
@@ -29,6 +30,7 @@ export function ProfileBar({
   const [newName, setNewName] = useState("");
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const popoverRef = useRef<HTMLDivElement | null>(null);
   const createInputRef = useRef<HTMLInputElement | null>(null);
 
   const active: Profile | undefined =
@@ -44,6 +46,29 @@ export function ProfileBar({
     onDismiss: () => setOpen(false),
     returnFocus: triggerRef,
   });
+
+  // A dialog takes focus as it opens (on the profile in use) and hands it
+  // back to its control as it closes; it comes before the control in tab
+  // order, so Tab would not reach it. These are the app's own focus moves:
+  // they open no profile's preview.
+  useEffect(() => {
+    if (!open) return;
+    const frame = requestAnimationFrame(() => {
+      const popover = popoverRef.current;
+      const target =
+        popover?.querySelector<HTMLElement>("[data-profile-active]") ??
+        popover?.querySelector<HTMLElement>("button");
+      if (target) moveFocusAsApp(() => target.focus());
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [open]);
+  // Before the closed dialog turns inert and drops the focus it holds.
+  useLayoutEffect(() => {
+    if (open) return;
+    const trigger = triggerRef.current;
+    if (trigger && popoverRef.current?.contains(document.activeElement))
+      moveFocusAsApp(() => trigger.focus());
+  }, [open]);
 
   useEffect(() => {
     if (creating) createInputRef.current?.focus();
@@ -75,6 +100,7 @@ export function ProfileBar({
   return (
     <div ref={containerRef} className="relative min-w-0 flex-1">
       <div
+        ref={popoverRef}
         className={`absolute left-0 w-[244px] bottom-full z-50 mb-1 origin-bottom rounded-lg border border-border bg-bg-overlay p-1 shadow-2xl transition-[opacity,translate,scale] duration-150 ease-[cubic-bezier(0.2,0,0,1)] ${
           open
             ? "translate-y-0 scale-100 opacity-100"
@@ -113,6 +139,8 @@ export function ProfileBar({
                 <button
                   {...inspectorProps}
                   type="button"
+                  aria-current={isActive || undefined}
+                  data-profile-active={isActive || undefined}
                   onClick={() => {
                     setOpen(false);
                     if (!isActive) onSwitch(profile);

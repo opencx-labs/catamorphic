@@ -5,7 +5,11 @@ import { setTimeout as delay } from "node:timers/promises";
 import { agentToolResult } from "@catamorphic/sandbox";
 import { type WebContents, webContents } from "electron";
 import { z } from "zod";
-import { type PageDialog, pageDialogAsker } from "../shared/page-dialogs.js";
+import {
+  PAGE_DIALOG_MESSAGE_LIMIT,
+  type PageDialog,
+  pageDialogAsker,
+} from "../shared/page-dialogs.js";
 import { noteUnloadIntent, pageDialogs } from "./browser-dialogs.js";
 import { BROWSER_GUEST } from "./browser-guest.js";
 import { consoleLogOf, downloadLogOf } from "./browser-tab-records.js";
@@ -365,22 +369,30 @@ export class BrowserDriver {
    * Run work on the page, unless it waits on a dialog: then, or as soon as
    * the page opens one meanwhile (a click that calls alert), report the
    * dialog. The page answers nothing while it waits, so the work would
-   * hang; it carries on once the dialog is answered.
+   * hang; the driver's queue goes on without it. The work is told it was
+   * given up (`live` throws from then on), so once the page answers it
+   * stops instead of typing or clicking into whatever is focused by then.
    */
   private untilDialog<T>(
-    work: () => Promise<T>,
+    work: (live: () => void) => Promise<T>,
   ): Promise<T | Record<string, unknown>> {
     const dialogs = pageDialogs();
     const open = this.openDialog();
     if (open) return Promise.resolve(this.reportDialog(open));
-    if (!dialogs) return work();
+    let givenUp = false;
+    const live = () => {
+      if (givenUp)
+        throw new Error("The page opened a dialog; this action stopped there.");
+    };
+    if (!dialogs) return work(live);
     let stop = () => {};
     const opened = new Promise<Record<string, unknown>>((resolve) => {
-      stop = dialogs.onOpen(this.guest.id, (dialog) =>
-        resolve(this.reportDialog(dialog)),
-      );
+      stop = dialogs.onOpen(this.guest.id, (dialog) => {
+        givenUp = true;
+        resolve(this.reportDialog(dialog));
+      });
     });
-    const running = work();
+    const running = work(live);
     running.catch(() => {});
     return Promise.race([running, opened]).finally(() => stop());
   }
@@ -403,7 +415,9 @@ export class BrowserDriver {
       dialog.kind === "prompt"
     ) {
       // The person sees the answer go into the field.
-      dialogs?.update(dialog.id, { defaultValue: action.text });
+      dialogs?.update(dialog.id, {
+        defaultValue: action.text.slice(0, PAGE_DIALOG_MESSAGE_LIMIT),
+      });
       return { ok: true };
     }
     const key = action.type === "press" ? action.key : "";
@@ -436,8 +450,9 @@ export class BrowserDriver {
     }
     return this.evaluate("glance", [limit]);
   }
+  /** A page waiting on its dialog keeps its pointers until it is answered. */
   clear(): Promise<unknown> {
-    return this.serial(() => this.evaluate("clear"));
+    return this.serial(() => this.untilDialog(() => this.evaluate("clear")));
   }
   point(
     uid: string,
@@ -475,13 +490,16 @@ export class BrowserDriver {
   private async pointer(
     point: { x: number; y: number },
     click: boolean,
+    live: () => void,
   ): Promise<void> {
     const position = await this.coordinates(point);
+    live();
     await this.input("Input.dispatchMouseEvent", {
       type: "mouseMoved",
       ...position,
     });
     if (!click) return;
+    live();
     await this.input("Input.dispatchMouseEvent", {
       type: "mousePressed",
       button: "left",
@@ -558,6 +576,7 @@ export class BrowserDriver {
     uid: string,
     requested: string[],
     workingDirectory: string | undefined,
+    live: () => void,
   ): Promise<unknown> {
     if (requested.length === 0) throw new Error("upload needs files.");
     const files: string[] = [];
@@ -608,12 +627,13 @@ export class BrowserDriver {
     opened.catch(() => {});
     try {
       const point = pointSchema.parse(await this.evaluate("prepare", [uid]));
-      await this.pointer(point, true);
+      await this.pointer(point, true, live);
       startTimer();
       const chooser = await opened;
       if (chooser.mode === "selectSingle" && files.length > 1)
         throw new Error("This file input takes one file.");
       this.guard();
+      live();
       await debug.sendCommand("DOM.setFileInputFiles", {
         files,
         backendNodeId: chooser.backendNodeId,
@@ -767,7 +787,7 @@ export class BrowserDriver {
       // address bar does; a page holding on with beforeunload asks again.
       if (open) pageDialogs()?.cancel(this.guest.id);
       this.watch();
-      return this.untilDialog(() => this.perform(action));
+      return this.untilDialog((live) => this.perform(action, live));
     });
   }
 
@@ -776,6 +796,8 @@ export class BrowserDriver {
       BrowserAction,
       { type: "console" | "network" | "downloads" }
     >,
+    /** Throws once the page opened a dialog and the action was given up. */
+    live: () => void,
   ): Promise<unknown> {
     try {
       switch (action.type) {
@@ -785,6 +807,7 @@ export class BrowserDriver {
             action.uid,
             action.files,
             action.workingDirectory,
+            live,
           );
         case "evaluate":
           return await this.evaluateInPage(action.expression);
@@ -803,11 +826,14 @@ export class BrowserDriver {
             "uid" in action
               ? pointSchema.parse(await this.evaluate("prepare", [action.uid]))
               : action;
-          await this.pointer(point, action.type === "click");
+          await this.pointer(point, action.type === "click", live);
           break;
         }
         case "fill":
           await this.evaluate("prepare", [action.uid, true]);
+          // Focusing the field may have opened a dialog: then nothing is
+          // typed anywhere once it is answered.
+          live();
           this.guest.selectAll();
           this.guard();
           // Chromium performs replacement and emits genuine editing events.
@@ -824,6 +850,7 @@ export class BrowserDriver {
           const { width, height } = viewportSchema.parse(
             await this.evaluate("viewport"),
           );
+          live();
           await this.input("Input.dispatchMouseEvent", {
             type: "mouseWheel",
             x: width / 2,
@@ -836,11 +863,13 @@ export class BrowserDriver {
         case "drag": {
           const from = await this.coordinates(action);
           const to = await this.coordinates({ x: action.toX, y: action.toY });
+          live();
           await this.input("Input.dispatchMouseEvent", {
             type: "mouseMoved",
             x: from.x,
             y: from.y,
           });
+          live();
           await this.input("Input.dispatchMouseEvent", {
             type: "mousePressed",
             button: "left",
@@ -850,7 +879,8 @@ export class BrowserDriver {
             y: from.y,
           });
           try {
-            for (let step = 1; step <= 8; step++)
+            for (let step = 1; step <= 8; step++) {
+              live();
               await this.input("Input.dispatchMouseEvent", {
                 type: "mouseMoved",
                 button: "left",
@@ -858,6 +888,7 @@ export class BrowserDriver {
                 x: from.x + ((to.x - from.x) * step) / 8,
                 y: from.y + ((to.y - from.y) * step) / 8,
               });
+            }
           } finally {
             await this.input(
               "Input.dispatchMouseEvent",
@@ -875,6 +906,7 @@ export class BrowserDriver {
           const generation = await this.evaluate("generation");
           do {
             this.guard();
+            live();
             if (
               this.guest.isDestroyed() ||
               (await this.evaluate("generation")) !== generation

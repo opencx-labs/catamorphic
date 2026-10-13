@@ -609,7 +609,10 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
       } catch (err) {
         if (err instanceof ProjectNotFoundError)
           return reply.status(404).send({ error: "Project not found" });
-        if (err instanceof ForeignSessionEventError)
+        if (
+          err instanceof ForeignSessionEventError ||
+          err instanceof SessionMetadataError
+        )
           return reply.status(400).send({ error: err.message });
         if (err instanceof SessionMirrorDivergedError)
           return reply
@@ -999,7 +1002,12 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
     schema: {
       params: AgentSessionIdParamsSchema,
       body: UpdateAgentSessionActivitySchema,
-      response: { 200: OkSchema, 404: ErrorSchema, 503: ErrorSchema },
+      response: {
+        200: OkSchema,
+        404: ErrorSchema,
+        409: SessionConflictSchema,
+        503: ErrorSchema,
+      },
     },
     handler: async (request, reply) => {
       const agentSessions = ctx.core?.agentSessions;
@@ -1021,6 +1029,9 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
         ) {
           return reply.status(404).send({ error: "Session not found" });
         }
+        // Only the host holding the session changes it.
+        const conflict = sessionConflict(error);
+        if (conflict) return reply.status(409).send(conflict);
         throw error;
       }
     },
@@ -1039,6 +1050,7 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
         400: ErrorSchema,
         403: ErrorSchema,
         404: ErrorSchema,
+        409: SessionConflictSchema,
         503: ErrorSchema,
       },
     },
@@ -1065,6 +1077,9 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
         ) {
           return reply.status(404).send({ error: "Session not found" });
         }
+        // Only the host holding the session writes it (a mirror would fork).
+        const conflict = sessionConflict(error);
+        if (conflict) return reply.status(409).send(conflict);
         throw error;
       }
     },

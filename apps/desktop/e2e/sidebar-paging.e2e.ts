@@ -11,7 +11,8 @@ let app: AppHandle;
 const CHATS = 45;
 const title = (index: number) => `Paged chat ${String(index).padStart(2, "0")}`;
 const chats = `[data-workspace-visible="true"] [data-sidebar-section="chats"]`;
-const tree = `${chats} [role="tree"]`;
+/** The list's scroller; the `role="tree"` inside it holds only the rows. */
+const tree = `${chats} [data-tree-viewport]`;
 const holding = `${chats} [data-tree-more="placeholder"]:not(.animate-session-row-out)`;
 const hasRow = (index: number) =>
   `[...document.querySelectorAll('${chats} [role="treeitem"]')].some(row => row.textContent.includes(${JSON.stringify(title(index))}))`;

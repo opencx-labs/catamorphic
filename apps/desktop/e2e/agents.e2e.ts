@@ -500,7 +500,7 @@ describe("agents and profiles", () => {
     `);
 
     await run(
-      `byText('button[aria-haspopup="menu"]', 'Default Profile').click(); return true;`,
+      `byText('button[aria-haspopup="dialog"]', 'Default Profile').click(); return true;`,
     );
     await runWait(`return !!byText('button', 'New profile');`, {
       label: "profile menu open",
@@ -519,14 +519,14 @@ describe("agents and profiles", () => {
     await runWait(
       `return window.__veilSeen === true &&
               !$('[class*="animate-profile-veil"]') &&
-              !!byText('button[aria-haspopup="menu"]', 'Work');`,
+              !!byText('button[aria-haspopup="dialog"]', 'Work');`,
       { timeoutMs: 15_000, label: "veil played and settled on Work" },
     );
 
     // Switch back the same way (the fresh profile has no projects, which
     // must still count as an empty workspace).
     await run(
-      `byText('button[aria-haspopup="menu"]', 'Work').click(); return true;`,
+      `byText('button[aria-haspopup="dialog"]', 'Work').click(); return true;`,
     );
     await runWait(`return !!byText('button', 'Default Profile');`, {
       label: "profile menu lists Default Profile",
@@ -534,7 +534,7 @@ describe("agents and profiles", () => {
     await run(`byText('button', 'Default Profile').click(); return true;`);
     await runWait(
       `return !$('[class*="animate-profile-veil"]') &&
-              !!byText('button[aria-haspopup="menu"]', 'Default Profile') &&
+              !!byText('button[aria-haspopup="dialog"]', 'Default Profile') &&
               !!byText('[role="tab"], button', 'New Tab');`,
       { timeoutMs: 15_000, label: "back on the default profile workspace" },
     );

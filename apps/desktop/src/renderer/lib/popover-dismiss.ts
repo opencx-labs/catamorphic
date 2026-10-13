@@ -1,5 +1,5 @@
 import { type RefObject, useEffect, useRef } from "react";
-import { onPagePress } from "./app-focus.js";
+import { moveFocusAsApp, onPagePress } from "./app-focus.js";
 
 /**
  * What a popover opened above itself, whose presses belong to it: a row's
@@ -18,9 +18,10 @@ const ABOVE =
  * Menus close through MenuPortal, whose shield also keeps the press from
  * acting; design lint keeps either from rolling its own listeners.
  *
- * Escape goes to the innermost surface first: a menu or hover card above
- * the popover claims it (`preventDefault`), and the popover claims it from
- * window listeners such as the expanded chat's.
+ * Escape goes to the innermost surface first: an open menu (its shield is
+ * up) or a hover card above the popover takes it, and the popover claims it
+ * from window listeners such as the expanded chat's. Focus it hands back is
+ * the app's move, so the control's own hover card does not open for it.
  */
 export function usePopoverDismiss({
   open,
@@ -61,10 +62,13 @@ export function usePopoverDismiss({
     };
     const key = (event: KeyboardEvent) => {
       if (event.key !== "Escape" || event.defaultPrevented) return;
+      // The menu's own window listener runs after this document one.
+      if (document.querySelector("[data-menu-shield]")) return;
       event.preventDefault();
       const focusInside = contains(document.activeElement);
       dismiss();
-      if (focusInside) returnFocusRef.current?.current?.focus();
+      const back = returnFocusRef.current?.current;
+      if (focusInside && back) moveFocusAsApp(() => back.focus());
     };
     window.addEventListener("pointerdown", press, true);
     document.addEventListener("keydown", key);

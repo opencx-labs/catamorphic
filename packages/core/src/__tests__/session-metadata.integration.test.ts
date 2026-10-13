@@ -18,7 +18,10 @@ import { pgcrypto } from "@electric-sql/pglite/contrib/pgcrypto";
 import { Kysely, PGliteDialect, sql, WithSchemaPlugin } from "kysely";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { Identity } from "../identity.js";
-import { AgentSessionsService } from "../services/agent-sessions-service.js";
+import {
+  AgentSessionAuthorityRequiredError,
+  AgentSessionsService,
+} from "../services/agent-sessions-service.js";
 import { AccessDeniedError } from "../services/artifact-scope.js";
 import type { RegisteredCodingAgent } from "../services/coding-agent-registry.js";
 import { ExecutionAllocationsService } from "../services/execution-allocations-service.js";
@@ -362,5 +365,109 @@ describe("session metadata", () => {
       (await sessions.get(identity, project.id, sessionId)).snapshot.session
         .metadata,
     ).toEqual({ pull_requests: merged });
+    // The copy belongs to the desktop that pushed it: a write here would
+    // fork the person's chat when it next pushes.
+    await expect(
+      sessions.setMetadata({
+        identity,
+        projectId: project.id,
+        sessionId,
+        values: { note: "from the server" },
+      }),
+    ).rejects.toThrow(AgentSessionAuthorityRequiredError);
+    await expect(
+      sessions.setActivity(identity, project.id, sessionId, "Reviewing"),
+    ).rejects.toThrow(AgentSessionAuthorityRequiredError);
+    // Reading needs no authority.
+    expect(
+      await sessions.metadata({ identity, projectId: project.id, sessionId }),
+    ).toEqual({ pull_requests: merged });
+    // A copy holds another copy's metadata to a write's limits.
+    const oversized = Object.fromEntries(
+      Array.from({ length: 33 }, (_, index) => [`key${index}`, index]),
+    );
+    await expect(
+      sessions.mirror(identity, project.id, sessionId, {
+        authority: { hostId: "desktop-origin", revision: 1 },
+        events: [
+          {
+            sessionId,
+            sequence: copy.snapshot.sequence + 2,
+            at: new Date().toISOString(),
+            commandId: null,
+            event: {
+              type: "session.changed",
+              session: { metadata: oversized },
+            },
+          },
+        ],
+      }),
+    ).rejects.toThrow(SessionMetadataError);
+    const fresh = randomUUID();
+    const another = copySettledHistory({
+      snapshot: await readFullSnapshot({ db, sessionId: source.id }),
+      sessionId: fresh,
+    });
+    if (!another) throw new Error("Expected a copy");
+    await expect(
+      sessions.mirror(identity, project.id, fresh, {
+        authority: { hostId: "desktop-origin", revision: 1 },
+        todos: [],
+        base: {
+          ...another.snapshot,
+          session: { ...another.snapshot.session, metadata: oversized },
+        },
+        events: [],
+      }),
+    ).rejects.toThrow(SessionMetadataError);
+  });
+
+  it("writes only where the session's authority is, and reads anywhere", async () => {
+    const project = await projects.create(identity, { name: "Holder" });
+    const session = await sessions.create(identity, project.id);
+    const write = () =>
+      sessions.setMetadata({
+        identity,
+        projectId: project.id,
+        sessionId: session.id,
+        values: { note: "here" },
+      });
+    const authority = (hostId: string) =>
+      db
+        .updateTable("agent_sessions")
+        .set({ authority_host_id: hostId })
+        .where("id", "=", session.id)
+        .execute();
+    // Nobody holds it yet, or this host does: writes go through.
+    await authority("unassigned");
+    await expect(write()).resolves.toEqual({ note: "here" });
+    await authority("metadata-test-host");
+    await sessions.setActivity(identity, project.id, session.id, "Working");
+    // Another host holds it: nothing is logged here.
+    await authority("another-host");
+    const { sequence } = (await sessions.get(identity, project.id, session.id))
+      .snapshot;
+    await expect(
+      sessions.setMetadata({
+        identity,
+        projectId: project.id,
+        sessionId: session.id,
+        values: { note: null },
+      }),
+    ).rejects.toMatchObject({
+      name: "AgentSessionAuthorityRequiredError",
+      authorityHostId: "another-host",
+    });
+    await expect(
+      sessions.setActivity(identity, project.id, session.id, null),
+    ).rejects.toThrow(AgentSessionAuthorityRequiredError);
+    expect(await eventsAfter(session.id, sequence)).toEqual([]);
+    expect(
+      await sessions.metadata({
+        identity,
+        projectId: project.id,
+        sessionId: session.id,
+      }),
+    ).toEqual({ note: "here" });
   });
 });

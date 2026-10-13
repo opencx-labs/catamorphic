@@ -43,7 +43,7 @@ import {
 } from "../lib/desktop-api.js";
 import { sessionLabel } from "../lib/session-label.js";
 import {
-  useRevealSidebarSession,
+  useOpenSidebarSession,
   useSidebarSessions,
 } from "../lib/sidebar-sessions.js";
 import { TAB_DRAG_TYPE, type TabDragPayload } from "../lib/tab-drag.js";
@@ -132,6 +132,7 @@ export function ConfiguredSection({
   onSessionCommand,
   onSessionAction,
   onOpenUrl,
+  onOpenSessionLink,
   onOpenFile,
   onOpenHistory,
   onPublish,
@@ -173,6 +174,11 @@ export function ConfiguredSection({
   onSessionCommand: (session: AgentSession, command: SessionCommand) => void;
   onSessionAction: (sessionId: string, action: ChatSessionAction) => void;
   onOpenUrl: (url: string, mode: CommitMode) => void;
+  /**
+   * Open a page for the chat whose session the sidebar shows, as a link
+   * in that chat opens: in a tab the chat owns (ADR 0225).
+   */
+  onOpenSessionLink: (url: string, mode: CommitMode) => void;
   onOpenFile: (filePath: string, mode?: CommitMode) => void;
   onOpenHistory: (filePath: string) => void;
   onPublish: (filePath: string, features: RemoteFeatures | undefined) => void;
@@ -184,6 +190,11 @@ export function ConfiguredSection({
     () => resolveSidebarSection(configured),
     [configured],
   );
+  // Its rows belong to the chat beside it (ADR 0225): links open as the
+  // chat's, and the palette, which has no chat, does not search it.
+  const sessionScoped =
+    section.type === "session" || section.when?.session === true;
+  const openLink = sessionScoped ? onOpenSessionLink : onOpenUrl;
   const sources = useWorkspaceSourcesContext();
   const grantKey = JSON.stringify(section.collections ?? []);
   // biome-ignore lint/correctness/useExhaustiveDependencies: grantKey is the value identity of the grant list
@@ -240,9 +251,8 @@ export function ConfiguredSection({
     ...(!memberShell ? ["new-workflow"] : []),
     // Every list section is searchable in the palette; header buttons stay
     // where configured (headerActions) or built in (files, changes, PRs).
-    ...(section.type !== "app" &&
-    section.type !== "note" &&
-    section.type !== "session"
+    // A session-scoped section lists one chat's rows; the palette has none.
+    ...(section.type !== "app" && section.type !== "note" && !sessionScoped
       ? ["search"]
       : []),
     ...([
@@ -555,7 +565,7 @@ export function ConfiguredSection({
             <SessionDetails
               projectId={projectId}
               sessionId={surface.sessionId}
-              onOpenUrl={onOpenUrl}
+              onOpenUrl={onOpenSessionLink}
             />
           </SidebarSection>
         );
@@ -592,7 +602,7 @@ export function ConfiguredSection({
               <CustomItems
                 section={section}
                 experienceContext={experienceContext}
-                onOpenUrl={onOpenUrl}
+                onOpenUrl={openLink}
               />
             )}
           </SidebarSection>
@@ -616,7 +626,7 @@ export function ConfiguredSection({
         status: resolvedStatus,
         report: setStatus,
         reportItems,
-        open: onOpenUrl,
+        open: openLink,
         commands,
         registerRefresh,
         command: async (action) => {
@@ -1041,7 +1051,8 @@ function SessionsNav({
     visible,
     relevant: contribution?.relevant ?? true,
   });
-  useRevealSidebarSession({
+  // The open chat, when older than every loaded row, shows past the end.
+  const openChat = useOpenSidebarSession({
     collection,
     root,
     projectId,
@@ -1049,6 +1060,7 @@ function SessionsNav({
     section,
     active: visible,
   });
+  const tail = useMemo(() => (openChat ? [openChat] : undefined), [openChat]);
   useSidebarRefresh(collection.load);
   const contentStatus = root.status;
   const contentIds = root.ids;
@@ -1123,6 +1135,7 @@ function SessionsNav({
         )
       }
       active={visible}
+      tail={tail}
       selectedId={activeSessionId}
       rowHeight={contribution?.section.rowHeight}
       label={contribution?.section.title ?? "Chats"}

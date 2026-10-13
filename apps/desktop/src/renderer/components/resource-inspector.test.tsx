@@ -4,10 +4,13 @@ import { act, useState } from "react";
 import { createPortal } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { notePagePress } from "../lib/app-focus.js";
 import {
   computeInspectorPosition,
   ResourceInspector,
+  SETTLE_MAX_MS,
   useHoldInspector,
+  useInspectorPending,
 } from "./resource-inspector";
 
 /** Content that opens a menu over the panel, as the project card's ⋯ does. */
@@ -24,6 +27,22 @@ function MenuOwner() {
       </button>
       {held && createPortal(<div data-menu-shield />, document.body)}
     </>
+  );
+}
+
+/** Content whose read lands when the test says. */
+function PendingContent({ pending }: { pending: boolean }) {
+  useInspectorPending(pending);
+  return <p>{pending ? "…" : "Loaded"}</p>;
+}
+
+/** A boundary crossing as the browser reports it, from one element to another. */
+function cross(from: Element | null | undefined, to: Element | null) {
+  from?.dispatchEvent(
+    new MouseEvent("pointerout", { bubbles: true, relatedTarget: to }),
+  );
+  to?.dispatchEvent(
+    new MouseEvent("pointerover", { bubbles: true, relatedTarget: from }),
   );
 }
 
@@ -45,6 +64,7 @@ describe("ResourceInspector", () => {
     document.querySelectorAll("[data-resource-inspector]").forEach((node) => {
       node.remove();
     });
+    delete document.documentElement.dataset.focusModality;
     vi.useRealTimers();
     Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", false);
   });
@@ -262,6 +282,8 @@ describe("ResourceInspector", () => {
     });
     const trigger = container.querySelector("button");
     const dialog = () => document.querySelector('[role="dialog"]');
+    // Tab moved focus: the keyboard leads (lib/focus-modality).
+    document.documentElement.dataset.focusModality = "keyboard";
     await act(async () => trigger?.focus());
     await act(async () => {
       dialog()?.querySelector("button")?.focus();
@@ -276,6 +298,42 @@ describe("ResourceInspector", () => {
       vi.advanceTimersByTime(1_000);
     });
     expect(dialog()?.getAttribute("data-open")).toBe("true");
+  });
+
+  it("leaves a pressed button's focus in its panel to the pointer", async () => {
+    await act(async () => {
+      root.render(
+        <ResourceInspector
+          label="Project details"
+          content={<button type="button">Copy</button>}
+        >
+          {(props) => (
+            <button type="button" {...props}>
+              Project
+            </button>
+          )}
+        </ResourceInspector>,
+      );
+    });
+    const trigger = container.querySelector("button");
+    const dialog = () => document.querySelector('[role="dialog"]');
+    await act(async () => {
+      cross(document.body, trigger);
+      vi.advanceTimersByTime(1_000);
+    });
+    const button = dialog()?.querySelector("button");
+    // Pressed: Chromium focuses the button, the pointer leads.
+    document.documentElement.dataset.focusModality = "pointer";
+    await act(async () => {
+      cross(trigger, button ?? null);
+      button?.focus();
+      button?.click();
+    });
+    await act(async () => {
+      cross(button, document.body);
+      vi.advanceTimersByTime(1_000);
+    });
+    expect(dialog()?.className).toContain("animate-inspector-out-");
   });
 
   it("pins on click and dismisses on an outside pointer", async () => {
@@ -333,13 +391,16 @@ describe("ResourceInspector", () => {
       vi.advanceTimersByTime(1_000);
     });
     expect(dialog()?.getAttribute("data-open")).toBe("true");
-    await act(async () =>
-      dialog()?.querySelector<HTMLButtonElement>("[data-open-menu]")?.click(),
-    );
-    // The shield covers the panel and the trigger: the pointer leaves both.
+    const opener =
+      dialog()?.querySelector<HTMLButtonElement>("[data-open-menu]");
     await act(async () => {
-      pointer(trigger, "pointerout");
-      pointer(dialog(), "pointerout");
+      cross(trigger, opener ?? null);
+      opener?.click();
+    });
+    // The shield covers the panel. It sits inside the panel in React's
+    // tree, so crossing onto it never leaves the panel there.
+    await act(async () => {
+      cross(opener, document.querySelector("[data-menu-shield]"));
       vi.advanceTimersByTime(1_000);
     });
     expect(dialog()?.getAttribute("data-open")).toBe("true");
@@ -443,19 +504,25 @@ describe("ResourceInspector", () => {
         new MouseEvent(type, { bubbles: true, relatedTarget: document.body }),
       );
     const warm = () => container.querySelector("[data-warmup]");
-    // Passing over: warm for a moment, then nothing.
-    await act(async () => pointer("pointerover"));
-    expect(warm()).not.toBeNull();
-    expect(document.querySelector('[role="dialog"]')).toBeNull();
+    // Passing over starts nothing.
+    await act(async () => {
+      pointer("pointerover");
+      vi.advanceTimersByTime(60);
+    });
+    expect(warm()).toBeNull();
     await act(async () => {
       pointer("pointerout");
       vi.advanceTimersByTime(1_000);
     });
     expect(warm()).toBeNull();
     expect(document.querySelector('[role="dialog"]')).toBeNull();
-    // Resting: the panel takes over from the warmup.
-    await act(async () => pointer("pointerover"));
+    // Resting a moment starts the reads; the panel takes over from them.
+    await act(async () => {
+      pointer("pointerover");
+      vi.advanceTimersByTime(150);
+    });
     expect(warm()).not.toBeNull();
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
     await act(async () => {
       vi.advanceTimersByTime(1_000);
     });
@@ -463,6 +530,96 @@ describe("ResourceInspector", () => {
     expect(
       document.querySelector('[role="dialog"]')?.getAttribute("data-open"),
     ).toBe("true");
+  });
+
+  it("closes on a press inside a page and when its trigger turns inert", async () => {
+    await act(async () => {
+      root.render(
+        <div data-list>
+          <ResourceInspector label="Project details" content={<p>Details</p>}>
+            {(props) => (
+              <button type="button" {...props}>
+                Project
+              </button>
+            )}
+          </ResourceInspector>
+        </div>,
+      );
+    });
+    const trigger = container.querySelector("button");
+    const dialog = () => document.querySelector('[role="dialog"]');
+    const open = async () => {
+      await act(async () => {
+        cross(document.body, trigger);
+        vi.advanceTimersByTime(1_000);
+      });
+      expect(dialog()?.getAttribute("data-open")).toBe("true");
+    };
+    await open();
+    await act(async () => notePagePress());
+    expect(dialog()?.getAttribute("data-open")).toBeNull();
+    await act(async () => {
+      cross(trigger, document.body);
+      vi.advanceTimersByTime(1_000);
+    });
+    await open();
+    // Its list closed under it.
+    await act(async () => {
+      container.querySelector("[data-list]")?.setAttribute("inert", "");
+      await Promise.resolve();
+    });
+    expect(dialog()?.getAttribute("data-open")).toBeNull();
+  });
+
+  it("waits, unseen, for what its content says is still loading", async () => {
+    const render = (pending: boolean) =>
+      root.render(
+        <ResourceInspector
+          label="Project details"
+          content={<PendingContent pending={pending} />}
+        >
+          {(props) => (
+            <button type="button" {...props}>
+              Project
+            </button>
+          )}
+        </ResourceInspector>,
+      );
+    await act(async () => render(true));
+    const trigger = container.querySelector("button");
+    const panel = () => document.querySelector("[data-resource-inspector]");
+    await act(async () => trigger?.focus());
+    // Mounted, measuring, but not seen.
+    expect(panel()).not.toBeNull();
+    expect(panel()?.getAttribute("data-open")).toBeNull();
+    expect(panel()?.getAttribute("aria-hidden")).toBe("true");
+    await act(async () => render(false));
+    expect(panel()?.getAttribute("data-open")).toBe("true");
+    expect(panel()?.textContent).toBe("Loaded");
+  });
+
+  it("appears anyway once its reads take too long", async () => {
+    await act(async () =>
+      root.render(
+        <ResourceInspector
+          label="Project details"
+          content={<PendingContent pending />}
+        >
+          {(props) => (
+            <button type="button" {...props}>
+              Project
+            </button>
+          )}
+        </ResourceInspector>,
+      ),
+    );
+    await act(async () => container.querySelector("button")?.focus());
+    const panel = () => document.querySelector("[data-resource-inspector]");
+    expect(panel()?.getAttribute("data-open")).toBeNull();
+    await act(async () => {
+      vi.advanceTimersByTime(SETTLE_MAX_MS);
+    });
+    expect(panel()?.getAttribute("data-open")).toBe("true");
   });
 
   it("flips left and clamps vertically at viewport edges", () => {

@@ -32,9 +32,12 @@ export interface CollectionBranch {
 }
 /**
  * How much of a branch a refresh reads again. `loaded` reads every loaded
- * page. `first` reads from the start only until its rows meet the rows
- * already loaded, keeping the rest: a cheap poll for sources whose new rows
- * arrive at the start (newest first), at any loaded depth.
+ * page (as many reads as built them, and one more). `first` reads from the
+ * start only until its rows meet the rows already loaded, keeping the rest:
+ * a cheap poll for sources whose new rows arrive at the start (newest
+ * first), at any loaded depth. Rows past the meeting point are not read
+ * again, so pair it with a periodic `loaded` refresh. It needs pages in one
+ * stable order: filter in the source, sort in the view.
  */
 export type CollectionRefresh = "first" | "loaded";
 export type CollectionChange<T> =
@@ -78,7 +81,11 @@ export function createCollection<T extends CollectionItem>({
   const branchReferences = new Map<string | null, number>();
   let previewReferences = 0;
   const retainedCounts = new Map<string | null, number>();
+  /** How many reads built a branch's loaded depth; a refresh reads no more. */
+  const retainedReads = new Map<string | null, number>();
   const requests = new Map<string | null, AbortController>();
+  /** Callers of a refresh queued behind IO, answered once it lands. */
+  const waiting = new Map<string | null, Array<() => void>>();
   /** Next pages asked for while a refresh of the branch was in flight. */
   const wantMore = new Set<string | null>();
   const dirty = new Set<string>();
@@ -185,12 +192,25 @@ export function createCollection<T extends CollectionItem>({
       return;
     }
     if (requests.has(parentId)) {
-      // The next page follows a refresh in flight instead of being lost.
-      if (more && !before.paging) {
-        wantMore.add(parentId);
-        setBranch(parentId, { ...before, paging: true, pageError: undefined });
+      if (more) {
+        // The next page follows a refresh in flight instead of being lost.
+        if (!before.paging) {
+          wantMore.add(parentId);
+          setBranch(parentId, {
+            ...before,
+            paging: true,
+            pageError: undefined,
+          });
+        }
+        return;
       }
-      return;
+      // So does a refresh (a Refresh press during a poll): the widest one
+      // asked for runs once the IO settles, and the caller waits for it.
+      if (invalidated.get(parentId) !== "loaded")
+        invalidated.set(parentId, pages);
+      return new Promise<void>((resolve) => {
+        waiting.set(parentId, [...(waiting.get(parentId) ?? []), resolve]);
+      });
     }
     const preview =
       parentId === null &&
@@ -199,6 +219,10 @@ export function createCollection<T extends CollectionItem>({
     const retainedCount = preview
       ? 0
       : Math.max(retainedCounts.get(parentId) ?? 0, before.ids.length);
+    // A refresh reads as deep as the loaded rows went, never further: a
+    // source that filters (or rows that stopped matching) cannot turn it
+    // into a read of the whole history.
+    const readLimit = Math.max(1, retainedReads.get(parentId) ?? 0) + 1;
     const startedAt = mutation;
     const controller = new AbortController();
     requests.set(parentId, controller);
@@ -219,7 +243,9 @@ export function createCollection<T extends CollectionItem>({
       let cursor = more ? before.cursor : undefined;
       const seenCursors = new Set<string>(cursor ? [cursor] : []);
       let met = false;
+      let reads = 0;
       do {
+        reads += 1;
         const part = await source.load({
           parentId,
           cursor,
@@ -253,7 +279,13 @@ export function createCollection<T extends CollectionItem>({
           Boolean(cursor) &&
           loaded.length < retainedCount &&
           meeting(loaded, branch(parentId).ids) >= 0;
-      } while (!met && !more && cursor && loaded.length < retainedCount);
+      } while (
+        !met &&
+        !more &&
+        cursor &&
+        loaded.length < retainedCount &&
+        reads < readLimit
+      );
       const page = { items: loaded, cursor };
       if (controller.signal.aborted || requests.get(parentId) !== controller)
         return;
@@ -279,7 +311,14 @@ export function createCollection<T extends CollectionItem>({
         ]),
       ];
       const nextCursor = met ? current.cursor : page.cursor;
-      if (!preview) retainedCounts.set(parentId, ids.length);
+      if (!preview) {
+        retainedCounts.set(parentId, ids.length);
+        const built = retainedReads.get(parentId) ?? 0;
+        retainedReads.set(
+          parentId,
+          more ? built + reads : met ? Math.max(built, reads) : reads,
+        );
+      }
       setBranch(parentId, {
         ids,
         status: "ready",
@@ -313,12 +352,18 @@ export function createCollection<T extends CollectionItem>({
     } finally {
       if (requests.get(parentId) === controller) {
         requests.delete(parentId);
-        const pending = invalidated.get(parentId);
         if (wantMore.delete(parentId)) void load({ parentId, more: true });
-        else if (pending) {
+        else {
+          const pending = invalidated.get(parentId);
+          const waiters = waiting.get(parentId) ?? [];
           invalidated.delete(parentId);
-          if (branchReferences.has(parentId))
-            void load({ parentId, pages: pending });
+          waiting.delete(parentId);
+          const answer = () => {
+            for (const resolve of waiters) resolve();
+          };
+          if (pending && (branchReferences.has(parentId) || waiters.length))
+            void load({ parentId, pages: pending }).finally(answer);
+          else answer();
         }
       }
     }
@@ -327,6 +372,8 @@ export function createCollection<T extends CollectionItem>({
     requests.get(parentId)?.abort();
     requests.delete(parentId);
     wantMore.delete(parentId);
+    for (const resolve of waiting.get(parentId) ?? []) resolve();
+    waiting.delete(parentId);
     const current = branch(parentId);
     if (current.fetching || current.paging)
       setBranch(parentId, {
@@ -375,6 +422,7 @@ export function createCollection<T extends CollectionItem>({
         abort(id);
         branches.delete(id);
         retainedCounts.delete(id);
+        retainedReads.delete(id);
         notify({ id });
       }
       for (const [parentId, value] of branches) {

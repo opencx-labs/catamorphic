@@ -4,7 +4,7 @@ import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SidebarSectionConfig } from "../../shared/sidebar.js";
 import { desktopApi, type SessionCheckoutDetail } from "../lib/desktop-api.js";
-import { SessionDetails, sessionPullRequests } from "./session-details.js";
+import { SessionDetails } from "./session-details.js";
 import {
   SidebarContribution,
   type SidebarStatus,
@@ -18,7 +18,11 @@ const session = vi.hoisted(() => ({
 }));
 const checkout = vi.hoisted(() => ({
   data: undefined as SessionCheckoutDetail | undefined,
+  error: null as Error | null,
   remote: false,
+  /** The project's access: read, being read, or failed. */
+  access: "ready" as "ready" | "pending" | "failed",
+  enabled: [] as boolean[],
 }));
 
 vi.mock("@catamorphic/react", () => ({
@@ -33,16 +37,43 @@ vi.mock("@catamorphic/react", () => ({
   },
 }));
 vi.mock("../lib/use-session-checkout.js", () => ({
-  useSessionCheckout: () => ({
-    data: checkout.data,
-    isLoading: false,
-    isFetching: false,
-    error: null,
-    refetch: async () => undefined,
-  }),
+  // As the query does: disabled, it reads nothing.
+  useSessionCheckout: (
+    _projectId: string,
+    _sessionId: string | undefined,
+    options: { enabled?: boolean } = {},
+  ) => {
+    const enabled = options.enabled ?? true;
+    checkout.enabled.push(enabled);
+    return {
+      data: enabled ? checkout.data : undefined,
+      isLoading: false,
+      isFetching: false,
+      error: enabled ? checkout.error : null,
+      refetch: async () => undefined,
+    };
+  },
 }));
 vi.mock("./project-authority-provider.js", () => ({
-  useRemoteProject: () => checkout.remote,
+  // The project's own access: a connected project's chat is read inside it.
+  ProjectAuthorityProvider: ({
+    projectId,
+    children,
+    fallback,
+  }: {
+    projectId: string;
+    children: React.ReactNode;
+    fallback?: (error: Error | null) => React.ReactNode;
+  }) =>
+    checkout.access === "ready" ? (
+      <div data-project-access={projectId}>{children}</div>
+    ) : (
+      fallback?.(
+        checkout.access === "failed" ? new Error("Server unreachable") : null,
+      )
+    ),
+  useRemoteAuthority: () =>
+    checkout.remote ? { serverUrl: "https://s" } : null,
 }));
 vi.mock("../lib/desktop-api.js", () => ({
   desktopApi: { revealFolder: vi.fn(async () => {}) },
@@ -51,7 +82,7 @@ vi.mock("../lib/desktop-api.js", () => ({
 const section: SidebarSectionConfig = {
   id: "session",
   type: "session",
-  when: { surface: ["chat"], session: true },
+  when: { session: true },
 };
 const worktree: SessionCheckoutDetail = {
   kind: "managed",
@@ -79,7 +110,10 @@ afterEach(() => {
   session.error = null;
   session.asked = [];
   checkout.data = undefined;
+  checkout.error = null;
   checkout.remote = false;
+  checkout.access = "ready";
+  checkout.enabled = [];
   vi.mocked(desktopApi.revealFolder).mockClear();
 });
 
@@ -196,28 +230,75 @@ describe("the session section (ADR 0225)", () => {
     }
   });
 
-  it("leaves status to the chrome: loading, and empty without a folder", async () => {
+  it("leaves status to the chrome: loading, empty, and errors only with nothing to show", async () => {
     session.isLoading = true;
     const view = await mount();
     try {
       await view.render("s1");
       expect(view.reports.at(-1)?.state).toBe("loading");
       expect(view.node.textContent).toBe("");
-      // A connected project's chat works on its server: no folder here.
       session.isLoading = false;
+      session.fields = { metadata: { pull_requests: pullRequests } };
+      checkout.data = worktree;
+      await view.render("s1");
+      expect(view.rows()).toHaveLength(3);
+      // A refresh that fails keeps the rows it had.
+      session.error = new Error("offline");
+      checkout.error = new Error("offline");
+      await view.render("s1");
+      expect(view.reports.at(-1)?.state).toBe("ready");
+      expect(view.rows()).toHaveLength(3);
+      // Nothing read at all: the chrome says so, with Retry.
+      session.fields = null;
+      await view.render("s1");
+      expect(view.reports.at(-1)).toMatchObject({
+        state: "error",
+        error: "Could not read this chat.",
+      });
+      expect(view.rows()).toEqual([]);
+    } finally {
+      await view.cleanup();
+    }
+  });
+
+  it("reads a connected project's chat in the project's own access, with no folder here", async () => {
+    session.fields = { metadata: { pull_requests: pullRequests } };
+    checkout.data = worktree;
+    checkout.remote = true;
+    const view = await mount();
+    try {
+      await view.render("s1");
+      // The rows read the session inside the project's access (its
+      // server's cache, which the chat's stream keeps current).
+      const access = view.node.querySelector('[data-project-access="p"]');
+      expect(access?.querySelectorAll("[data-sidebar-item-id]").length).toBe(2);
+      // The chat works on its server: no folder, and no checkout read.
+      expect(view.rows().map((row) => row.id)).not.toContain("folder");
+      expect(checkout.enabled.at(-1)).toBe(false);
       session.fields = { metadata: {} };
-      checkout.remote = true;
       await view.render("s1");
       expect(view.reports.at(-1)).toMatchObject({
         state: "empty",
         empty: "No pull requests yet.",
       });
       expect(view.node.textContent).toBe("");
-      session.error = new Error("gone");
+    } finally {
+      await view.cleanup();
+    }
+  });
+
+  it("shows the project's access being read, or failing, as section status", async () => {
+    checkout.access = "pending";
+    const view = await mount();
+    try {
+      await view.render("s1");
+      expect(view.reports.at(-1)?.state).toBe("loading");
+      expect(view.node.textContent).toBe("");
+      checkout.access = "failed";
       await view.render("s1");
       expect(view.reports.at(-1)).toMatchObject({
         state: "error",
-        error: "Could not read this chat.",
+        error: "Server unreachable",
       });
     } finally {
       await view.cleanup();
@@ -236,32 +317,5 @@ describe("the session section (ADR 0225)", () => {
     } finally {
       await view.cleanup();
     }
-  });
-});
-
-describe("sessionPullRequests", () => {
-  it("keeps entries of the convention's shape and nothing else", () => {
-    expect(
-      sessionPullRequests({
-        pull_requests: [
-          { url: " https://github.com/a/b/pull/1 ", number: 1, state: "open" },
-          { url: "https://github.com/a/b/pull/1", number: 1 },
-          { url: "javascript:alert(1)" },
-          { number: 2 },
-          "https://github.com/a/b/pull/3",
-          {
-            url: "https://gitlab.com/a/b/-/merge_requests/4",
-            number: 4.5,
-            title: "  ",
-            state: "approved",
-          },
-        ],
-      }),
-    ).toEqual([
-      { url: "https://github.com/a/b/pull/1", number: 1, state: "open" },
-      { url: "https://gitlab.com/a/b/-/merge_requests/4" },
-    ]);
-    expect(sessionPullRequests({ pull_requests: "nope" })).toEqual([]);
-    expect(sessionPullRequests(undefined)).toEqual([]);
   });
 });

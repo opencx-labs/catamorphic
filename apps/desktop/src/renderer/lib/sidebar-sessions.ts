@@ -12,7 +12,7 @@ import {
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
-import { useEffect, useMemo } from "react";
+import { useMemo } from "react";
 import type { SidebarSectionConfig } from "../../shared/sidebar.js";
 import {
   projectSidebarItems,
@@ -36,18 +36,40 @@ export const SIDEBAR_SESSION_PAGE = 30;
 /** How often the chats list looks for changes while the window is shown. */
 const POLL_MS = 2000;
 /**
- * A poll reads the first page, where new chats arrive. Every loaded page is
- * read again on this tick (about every 30 seconds), on focus, on Refresh,
- * and when the app itself changes a chat, so the cost of a poll never grows
- * with how far the person scrolled.
+ * A poll of a deep list reads the first page, where new chats arrive (two
+ * pages or fewer are read whole every time, so the first sixty chats never
+ * lag). Every loaded page is read again on this tick (about every 30
+ * seconds), on focus, on Refresh, and when the app itself changes a chat,
+ * so the cost of a poll never grows with how far the person scrolled.
  */
 const EVERY_LOADED_PAGE_TICKS = 15;
+/** Loaded pages a poll still reads whole. */
+const WHOLE_POLL_PAGES = 2;
 /**
- * A next page starts a tenth of a page early (at most five rows): a chat
- * archived above the loaded rows shifts every later offset, and the overlap
- * keeps that from skipping one. Repeated rows are merged by id.
+ * A next page starts up to five rows early (half a page when pages are
+ * smaller): a chat archived above the loaded rows shifts every later
+ * offset, and the overlap keeps that from skipping one. Its cursor also
+ * names the last row read; when even the overlap misses it (more chats went
+ * away), the read starts a page earlier. Repeated rows are merged by id.
  */
-const pageOverlap = (limit: number) => Math.min(5, Math.floor(limit / 10));
+const pageOverlap = (limit: number) => Math.min(5, Math.floor(limit / 2));
+/**
+ * Raw pages one read may look through for rows a section's filter keeps
+ * ("Working chats"). Past that it returns what it found with its cursor,
+ * and the tree waits for the person before looking further.
+ */
+const FILTER_SCAN_PAGES = 4;
+/** `offset~lastRowId`: where the next page starts, and the row before it. */
+const readCursor = (cursor?: string) => {
+  if (!cursor) return { offset: 0, last: undefined };
+  const split = cursor.indexOf("~");
+  return split < 0
+    ? { offset: Number(cursor), last: undefined }
+    : {
+        offset: Number(cursor.slice(0, split)),
+        last: cursor.slice(split + 1),
+      };
+};
 
 const sessionPageKey = (projectId: string) => [
   "desktop",
@@ -230,6 +252,10 @@ export function useSidebarSessions({
     const existing = cache.get(key);
     if (existing) return existing;
     const parents = new Set<string | null>();
+    const unsorted: SidebarSectionConfig = {
+      ...section,
+      source: section.source && { ...section.source, sort: undefined },
+    };
     const load = async ({
       parentId,
       cursor,
@@ -264,12 +290,9 @@ export function useSidebarSessions({
         };
       }
       const limit = section.source?.pageSize ?? SIDEBAR_SESSION_PAGE;
-      let offset = cursor
-        ? Math.max(0, Number(cursor) - pageOverlap(limit))
-        : 0;
-      for (;;) {
-        const parent = parentId ?? (childrenOnly ? sessionId : undefined);
-        const page = await readSidebarSessionPage({
+      const parent = parentId ?? (childrenOnly ? sessionId : undefined);
+      const read = (offset: number) =>
+        readSidebarSessionPage({
           apiClient,
           client,
           projectId,
@@ -283,7 +306,24 @@ export function useSidebarSessions({
             ...(parent ? { parentSessionId: parent } : { rootsOnly: "true" }),
           },
         });
-        const items = projectSidebarItems(page.items, section)
+      const start = readCursor(cursor);
+      let offset = Math.max(0, start.offset - pageOverlap(limit));
+      for (let scanned = 1; ; scanned += 1) {
+        let page = await read(offset);
+        if (
+          start.last &&
+          scanned === 1 &&
+          offset > 0 &&
+          pageOverlap(limit) > 0 &&
+          !page.items.some((session) => session.id === start.last)
+        ) {
+          // More chats went away above than the overlap covers.
+          offset = Math.max(0, start.offset - limit);
+          page = await read(offset);
+        }
+        // Pages keep the server's order: the section's sort is applied
+        // across every loaded row by the view, never within one page.
+        const items = projectSidebarItems(page.items, unsorted)
           .filter(
             (session) =>
               !sidebarItemPresentation({ section, id: session.id }).hide &&
@@ -298,8 +338,17 @@ export function useSidebarSessions({
             hasChildren: Boolean(session.childCount),
           }));
         offset += page.items.length;
-        const next = offset < page.total ? String(offset) : undefined;
-        if (items.length || !next || !page.items.length)
+        const last = page.items.at(-1)?.id;
+        const next =
+          offset < page.total
+            ? `${offset}${last ? `~${last}` : ""}`
+            : undefined;
+        if (
+          items.length ||
+          !next ||
+          !page.items.length ||
+          scanned >= FILTER_SCAN_PAGES
+        )
           return { items, cursor: next };
       }
     };
@@ -312,7 +361,18 @@ export function useSidebarSessions({
             projectId,
             listener: (pages) => {
               for (const parentId of parents)
-                publish({ type: "invalidate", parentId, pages });
+                publish({
+                  type: "invalidate",
+                  parentId,
+                  // A short list is read whole, so no row of it lags.
+                  pages:
+                    pages === "first" &&
+                    collection.getBranch(parentId).ids.length >
+                      WHOLE_POLL_PAGES *
+                        (section.source?.pageSize ?? SIDEBAR_SESSION_PAGE)
+                      ? "first"
+                      : "loaded",
+                });
             },
           }),
       },
@@ -337,13 +397,13 @@ export function useSidebarSessions({
 const REVEAL_ANCESTORS = 8;
 
 /**
- * The open chat stays in the list even when it is older than every loaded
- * row: the next pages load until it arrives, and stop as soon as the loaded
- * rows are older than it (it is not in this list). A fork brings in the
- * top-level chat it hangs under. Lists of one chat's children are not
- * chased: they hold a single family.
+ * The open chat's row when it is older than every loaded row: the list
+ * shows it past its end (`CollectionTree`'s `tail`) instead of reading every
+ * page above it, so opening an old chat costs one read and never deepens
+ * what later refreshes read. A fork brings in the top-level chat it hangs
+ * under. Lists of one chat's children hold a single family and need none.
  */
-export function useRevealSidebarSession({
+export function useOpenSidebarSession({
   collection,
   root,
   projectId,
@@ -357,7 +417,7 @@ export function useRevealSidebarSession({
   sessionId?: string;
   section: SidebarSectionConfig;
   active: boolean;
-}) {
+}): SessionTreeItem | undefined {
   const { apiClient } = useCatamorphic();
   const scoped =
     (section.source?.type ?? section.type) === "subsessions" ||
@@ -371,7 +431,7 @@ export function useRevealSidebarSession({
       "sidebar",
       "agent",
       projectId,
-      "reveal",
+      "open",
       sessionId,
       includeLatent,
     ],
@@ -399,28 +459,29 @@ export function useRevealSidebarSession({
     },
   });
   const target = query.data;
-  const belongs = Boolean(
-    target &&
+  // Only a chat older than the loaded rows belongs past their end; a newer
+  // one arrives with the next poll.
+  const lastId = root.ids.at(-1);
+  const last = lastId ? collection.getItem(lastId) : undefined;
+  const shown = Boolean(
+    active &&
+      !scoped &&
+      !loaded &&
+      target &&
+      root.cursor &&
+      !root.ids.includes(target.id) &&
       target.visibility !== "archived" &&
       (includeLatent || target.visibility === "promoted") &&
       projectSidebarItems([target], section).length &&
-      !sidebarItemPresentation({ section, id: target.id }).hide,
-  );
-  const lastId = root.ids.at(-1);
-  const last = lastId ? collection.getItem(lastId) : undefined;
-  const chase = Boolean(
-    active &&
-      target &&
-      belongs &&
-      !root.ids.includes(target.id) &&
-      root.cursor &&
-      !root.paging &&
-      !root.pageError &&
+      !sidebarItemPresentation({ section, id: target.id }).hide &&
       last &&
       Date.parse(last.createdAt) >= Date.parse(target.createdAt),
   );
-  const depth = root.ids.length;
-  useEffect(() => {
-    if (chase && depth) void collection.load({ more: true });
-  }, [chase, collection, depth]);
+  return useMemo(
+    () =>
+      shown && target
+        ? { ...target, parentId: null, hasChildren: false }
+        : undefined,
+    [shown, target],
+  );
 }

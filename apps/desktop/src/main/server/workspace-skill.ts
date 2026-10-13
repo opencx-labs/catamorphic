@@ -1,3 +1,5 @@
+import { SESSION_PULL_REQUESTS_CONTRACT } from "@catamorphic/agent-protocol";
+
 /** Replaceable desktop doctrine. Mechanics live in the existing host services. */
 export const DESKTOP_WORKSPACE_SKILL = `---
 name: desktop-workspace
@@ -174,15 +176,14 @@ rollback. Activity publication is optional when it adds useful peer context.
 
 ## What a chat shows beside it
 
-A chat has metadata: named values its session holds, which Work's sidebar
-reads. Discover set_session_metadata to set one key; each call replaces that
-key's whole value, and null removes it. The chat's This session section lists
-pull_requests, an array of { url, number, title, state } with state open,
-draft, merged or closed: the pull requests this chat opened or works on. A
-pull request you open, or are asked to work on, belongs there with the ones
-already listed, and its state changes when you see it merged or closed. A
-person's own sidebar sections can read other keys; keep the ones they ask
-for.
+A chat has metadata: named values its session holds, which Work shows
+beside it. Discover set_session_metadata: a call with a value replaces that
+key's whole value, null removes the key, and a call without a value reads the
+metadata. ${SESSION_PULL_REQUESTS_CONTRACT} The chat's This session section
+shows them. A pull request you open, or are asked to work on, belongs in that
+list: read it first and include the ones already there, and write it again
+when you see one merged or closed. A person's own sidebar sections can read
+other keys; keep the ones they ask for.
 
 ## Apps, workflows, sharing and connections
 
@@ -195,10 +196,10 @@ Attached checkouts follow the user's/project's commit instructions. Managed
 projects may checkpoint and sync automatically. Do not commit just to save work.
 Discover sync_project and create_pull_request for managed linked-remote operations;
 they preserve the host's sync, checkout and conflict policies. A pull request
-they open is not recorded on the chat by itself; record it in pull_requests. Work never pushes
-to a repository it did not create: sync only pulls there, and local commits are
-shared as a work/ branch with create_pull_request. Do not substitute raw push/pull
-for managed sync. Unrelated repository tasks may use ordinary git.
+they open is not recorded on the chat by itself; add it to pull_requests. Work
+never pushes to a repository it did not create: sync only pulls there, and local
+commits are shared as a work/ branch with create_pull_request. Do not substitute
+raw push/pull for managed sync. Unrelated repository tasks may use ordinary git.
 
 The person's own Codex sign-in (made on a machine of their own) and private
 files (such as .env) reach their sessions on a linked Work server through

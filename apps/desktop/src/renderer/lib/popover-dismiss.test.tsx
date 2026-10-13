@@ -3,8 +3,11 @@
 import { act, useRef, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { notePagePress } from "./app-focus.js";
+import { appIsMovingFocus, notePagePress } from "./app-focus.js";
 import { usePopoverDismiss } from "./popover-dismiss.js";
+
+/** Whether the app moved the focus its trigger last took. */
+let triggerFocusByApp: boolean | undefined;
 
 function Popover({ closeOnBlur }: { closeOnBlur?: boolean }) {
   const [open, setOpen] = useState(true);
@@ -19,7 +22,14 @@ function Popover({ closeOnBlur }: { closeOnBlur?: boolean }) {
   });
   return (
     <div ref={root} data-open={open || undefined}>
-      <button ref={trigger} type="button" onClick={() => setOpen(true)}>
+      <button
+        ref={trigger}
+        type="button"
+        onClick={() => setOpen(true)}
+        onFocus={() => {
+          triggerFocusByApp = appIsMovingFocus();
+        }}
+      >
         Switch
       </button>
       {open && (
@@ -124,5 +134,24 @@ describe("usePopoverDismiss", () => {
     // Claimed from window listeners such as the expanded chat's.
     expect(unclaimed.defaultPrevented).toBe(true);
     expect(document.activeElement?.textContent).toBe("Switch");
+    // The app's move: the trigger's own hover card does not open for it.
+    expect(triggerFocusByApp).toBe(true);
+  });
+
+  it("leaves Escape to a menu open above it", async () => {
+    await mount();
+    const shield = document.createElement("div");
+    shield.setAttribute("data-menu-shield", "");
+    document.body.append(shield);
+    const key = new KeyboardEvent("keydown", {
+      key: "Escape",
+      bubbles: true,
+      cancelable: true,
+    });
+    await act(async () =>
+      container.querySelector("[data-row]")?.dispatchEvent(key),
+    );
+    expect(isOpen()).toBe(true);
+    expect(key.defaultPrevented).toBe(false);
   });
 });

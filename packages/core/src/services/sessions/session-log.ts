@@ -1,5 +1,6 @@
 import {
   ACTIVE_TURN_STATUSES,
+  assertSessionMetadata,
   type CommandReceipt,
   type Item,
   isInputItem,
@@ -961,6 +962,9 @@ async function ownEvents(
   const own = input.events.map((event): SessionEvent => {
     switch (event.type) {
       case "session.changed":
+        // Another copy's metadata keeps a write's limits here too (ADR 0225).
+        if ("metadata" in event.session)
+          assertSessionMetadata(event.session.metadata);
         return {
           type: "session.changed",
           session: Object.fromEntries(

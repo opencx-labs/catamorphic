@@ -1,14 +1,15 @@
-import { Check, Copy } from "lucide-react";
-import { useEffect, useState } from "react";
+import { Check, Copy, X } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 import { ShortcutHint } from "./shortcut-hint.js";
 
-const COPIED_MS = 1500;
+const SHOWN_MS = 1500;
 
 /**
  * An icon button that copies `value`, for a value shown beside it (a path,
- * an address). The copy icon turns into a check for a moment once the
- * clipboard has it, in the same footprint, and assistive technology hears
- * that it was copied. Its hint names what it copies.
+ * an address). Its icon turns into a check once the clipboard has it, or a
+ * cross if the copy failed, in the same footprint, for a moment that starts
+ * again with every press; assistive technology hears each outcome. Its
+ * hint names what it copies.
  */
 export function CopyButton({
   value,
@@ -18,13 +19,22 @@ export function CopyButton({
   /** What it copies, as its accessible name and hint ("Copy Git remote"). */
   label: string;
 }) {
-  const [state, setState] = useState<"idle" | "copied" | "failed">("idle");
+  // A new object per press: the moment restarts, and the announcement
+  // differs from the last one so it is read again.
+  const [outcome, setOutcome] = useState<{
+    copied: boolean;
+    press: number;
+  } | null>(null);
+  const presses = useRef(0);
   useEffect(() => {
-    if (state === "idle") return;
-    const timer = setTimeout(() => setState("idle"), COPIED_MS);
+    if (!outcome) return;
+    const timer = setTimeout(() => setOutcome(null), SHOWN_MS);
     return () => clearTimeout(timer);
-  }, [state]);
-  const copied = state === "copied";
+  }, [outcome]);
+  const copied = outcome?.copied === true;
+  const failed = outcome?.copied === false;
+  const icon = (shown: boolean) =>
+    `col-start-1 row-start-1 size-3 transition-opacity duration-150 ${shown ? "opacity-100" : "opacity-0"}`;
   return (
     <>
       <ShortcutHint label={label}>
@@ -32,26 +42,28 @@ export function CopyButton({
           type="button"
           aria-label={label}
           data-copied={copied || undefined}
+          data-copy-failed={failed || undefined}
           onClick={() => {
+            const press = ++presses.current;
             navigator.clipboard.writeText(value).then(
-              () => setState("copied"),
-              () => setState("failed"),
+              () => setOutcome({ copied: true, press }),
+              () => setOutcome({ copied: false, press }),
             );
           }}
           className="grid size-5 shrink-0 cursor-pointer place-items-center rounded text-fg-faint transition-colors duration-150 hover:bg-bg-raised hover:text-fg"
         >
-          <Copy
-            aria-hidden="true"
-            className={`col-start-1 row-start-1 size-3 transition-opacity duration-150 ${copied ? "opacity-0" : "opacity-100"}`}
-          />
+          <Copy aria-hidden="true" className={icon(!outcome)} />
           <Check
             aria-hidden="true"
-            className={`col-start-1 row-start-1 size-3 text-success transition-opacity duration-150 ${copied ? "opacity-100" : "opacity-0"}`}
+            className={`${icon(copied)} text-success`}
           />
+          <X aria-hidden="true" className={`${icon(failed)} text-danger`} />
         </button>
       </ShortcutHint>
       <span className="sr-only" role="status">
-        {copied ? "Copied" : state === "failed" ? "Could not copy" : ""}
+        {outcome
+          ? `${outcome.copied ? "Copied" : "Could not copy"}${"\u00a0".repeat((outcome.press + 1) % 2)}`
+          : ""}
       </span>
     </>
   );

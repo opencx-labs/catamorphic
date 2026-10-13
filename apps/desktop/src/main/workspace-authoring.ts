@@ -30,7 +30,8 @@ Filters and grouping apply to loaded source records; sorting orders loaded sibli
 Use a custom collection provider when ordering requires a server-side query over all records.
 
 Relevance belongs on when, independently of permissions:
-{ surface: ["chat"], session: true } shows beside a chat with a durable session.
+{ surface: ["chat"], session: true } shows beside a chat with a durable session;
+{ session: true } also beside a page, file or terminal that chat opened.
 Other conditions: pathPrefix, selection (boolean), builder, permissions.
 Surface kinds include chat, editor, browser, terminal, workflow, app and diff.
 These are current-content conditions; focusing the sidebar keeps its content target.
@@ -38,11 +39,12 @@ Subsessions defaults to current-chat children, including latent children, and hi
 when empty. This does not promote a child or change archive behavior.
 session shows the chat in front: where it works (row id folder) and the pull
 requests its agent recorded in the session's metadata under pull_requests (row
-ids are their urls). It needs a chat; the default "This session" tab holds it
-with when { surface: ["chat"], session: true }, so the tab exists only beside a
-chat and arriving never changes the selected tab. Move, retitle or remove it
-like any section. Agents set metadata keys with set_session_metadata; a key's
-value is any JSON.
+ids are their urls; a click opens one in a tab the chat owns). It needs a
+session: the chat in front, or the chat that opened the page, file or terminal
+in front. The default "This session" tab holds it with when { session: true },
+so the tab exists only there and arriving never changes the selected tab. Move,
+retitle or remove it like any section. Agents set metadata keys with
+set_session_metadata; a key's value is any JSON.
 hideEmpty hides ready-but-empty content, not loading or errors. Parent tabs disappear
 when every section is unavailable. Contextually hidden resources remain searchable.
 Every section shares one status presentation: a header spinner while loading or
@@ -93,7 +95,8 @@ Use @catamorphic/app createHostCollection({source:"chats"}) and the shared
 @catamorphic/app/ui CollectionTree, CollectionItemView and useItemActions.
 Create the collection once, e.g. with useMemo. CollectionTree reads each next page
 (roots and open children) as the person nears its end, holding the end with
-placeholder rows and offering Retry when a page fails; it lazily loads children,
+placeholder rows, offering Retry when a page fails and Show more when a page
+showed nothing new; it lazily loads children,
 virtualizes rows and maintains identities. Use runCollectionAction
 ({source,itemId,action}) for a row's advertised actions. subscribeDisplay provides
 live {mode,visible,surface}; unsubscribe in effect cleanup and pause expensive work
@@ -128,7 +131,8 @@ projects retain host-authorized app widgets. No app build or workflow is require
 
 A section with when.session true is session-scoped: load, actions, move and drop
 also receive session {id,title,metadata}, the chat in front, and the section
-loads again whenever that chat's title or metadata changes. Ask the chat's agent
+loads again when that chat's title or metadata changes (when shown). Its links
+open as the chat's, and the palette does not search it. Ask the chat's agent
 to keep a metadata key (it sets keys with set_session_metadata), then show it:
 export default {
   async load({session}) {
@@ -137,8 +141,7 @@ export default {
       url:deploy.url,icon:"Rocket"}))};
   }
 };
-with { id: "deploys", type: "custom", title: "Deploys",
-  when: { surface: ["chat"], session: true },
+with { id: "deploys", type: "custom", title: "Deploys", when: { session: true },
   source: { type: "custom", module: ".work/deploys.ts" } }.
 
 load({projectRoot,parentId,cursor,signal}) returns {items,cursor?}. Items have unique

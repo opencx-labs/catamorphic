@@ -1,6 +1,6 @@
 import {
-  SESSION_METADATA_KEY_PATTERN,
-  SESSION_METADATA_LIMITS,
+  SET_SESSION_METADATA_DESCRIPTION,
+  setSessionMetadataInputSchema,
 } from "@catamorphic/agent-protocol";
 import type { CatamorphicCore, Identity } from "@catamorphic/core";
 import {
@@ -36,23 +36,6 @@ import { sessionArtifactTool } from "./session-artifact-tools.js";
  */
 
 const READ_ONLY = { readOnlyHint: true } as const;
-
-/** One key of a session's metadata (ADR 0225); the same contract as the desktop's tool. */
-const SetSessionMetadataInput = z.object({
-  sessionId: z
-    .string()
-    .optional()
-    .describe("The session; defaults to the one calling"),
-  key: z
-    .string()
-    .max(SESSION_METADATA_LIMITS.keyLength)
-    .regex(SESSION_METADATA_KEY_PATTERN)
-    .describe("Lowercase words joined by _, - or ., e.g. pull_requests"),
-  value: z.json().describe("Any JSON value; null removes the key"),
-});
-
-const SET_SESSION_METADATA_DESCRIPTION =
-  "Set one named value on a chat session, replacing what the key held, or remove the key with null; Work's clients read these values. pull_requests lists the pull requests the chat opened or works on: an array of { url, number?, title?, state? } with state open, draft, merged or closed. Returns the session's metadata.";
 
 export interface SurfaceTool {
   definition: Record<string, unknown>;
@@ -614,26 +597,32 @@ export function surfaceTools(
       }),
     });
 
-    tools.push({
-      definition: {
-        name: "set_session_metadata",
-        description: SET_SESSION_METADATA_DESCRIPTION,
-        inputSchema: z.toJSONSchema(SetSessionMetadataInput),
-      },
-      call: guarded(async (args) => {
-        const input = SetSessionMetadataInput.parse(args);
-        const sessionId = input.sessionId ?? currentSessionId;
-        if (!sessionId) throw new Error("sessionId is required");
-        return {
-          metadata: await sessions.setMetadata({
-            identity,
-            projectId,
-            sessionId,
-            values: { [input.key]: input.value },
-          }),
-        };
-      }),
-    });
+    // A key of the calling chat's metadata (ADR 0225): bound to the
+    // session this connection serves, so there is none without one.
+    if (currentSessionId) {
+      const sessionId = currentSessionId;
+      tools.push({
+        definition: {
+          name: "set_session_metadata",
+          description: SET_SESSION_METADATA_DESCRIPTION,
+          inputSchema: z.toJSONSchema(setSessionMetadataInputSchema),
+        },
+        call: guarded(async (args) => {
+          const { key, value } = setSessionMetadataInputSchema.parse(args);
+          return {
+            metadata:
+              value === undefined
+                ? await sessions.metadata({ identity, projectId, sessionId })
+                : await sessions.setMetadata({
+                    identity,
+                    projectId,
+                    sessionId,
+                    values: { [key]: value },
+                  }),
+          };
+        }),
+      });
+    }
 
     tools.push({
       definition: {

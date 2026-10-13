@@ -1,3 +1,4 @@
+import { SESSION_PULL_REQUESTS_CONTRACT } from "@catamorphic/agent-protocol";
 import { GITHUB_TRIGGER_LIBRARY } from "./github-trigger-library.js";
 
 /**
@@ -107,6 +108,10 @@ export const REVIEWER_DOCTRINE = `You review pull requests for this company's re
 its own chat; your workspace is checked out at its head, and each later push
 moves it to the new head and tells you what changed.
 
+When you start, record the pull request on this chat so people opening it see
+what it reviews: discover \`set_session_metadata\`, read \`pull_requests\` (no
+value), and write the list back with this one in it. ${SESSION_PULL_REQUESTS_CONTRACT}
+
 ## What to look for
 
 - **Correctness.** Does the change do what it says, including edge cases,
@@ -145,10 +150,8 @@ issues, data loss, broken tests), \`COMMENT\` otherwise; never approve. Then
 report a check run named "Work review" on the head commit with
 \`create_check_run\`: conclusion \`success\` when nothing blocks, \`failure\` when
 you requested changes, \`neutral\` when you could not verify; the summary names
-the verdict, what you verified, and open questions. Where the host offers
-\`set_session_metadata\`, the pull request goes in this chat's \`pull_requests\`
-({ url, number, title, state }), so people opening the chat see what it
-reviews.
+the verdict, what you verified, and open questions. Each time you post, write
+the pull request's entry again with the state GitHub reports for it.
 
 Be specific and brief: cite files and lines, say what is wrong and what would
 fix it, and skip style preferences the project's linters do not enforce. After

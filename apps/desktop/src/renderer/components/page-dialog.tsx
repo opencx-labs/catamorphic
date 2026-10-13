@@ -11,6 +11,8 @@ import {
 } from "react";
 import {
   originHost,
+  PAGE_DIALOG_CREDENTIAL_LIMIT,
+  PAGE_DIALOG_MESSAGE_LIMIT,
   type PageDialog,
   type PageDialogAnswer,
   pageDialogAsker,
@@ -84,8 +86,23 @@ export function PageDialogLayer({
         }
       }}
     >
-      {/* The page waits under it: dimmed, and out of reach of the pointer. */}
-      <div aria-hidden className="absolute inset-0 bg-black/45" />
+      {/* The page waits under it: dimmed, and out of reach of the pointer.
+          A press there keeps the keyboard in the dialog. */}
+      <div
+        aria-hidden
+        className="absolute inset-0 bg-black/45"
+        onMouseDown={(event) => {
+          event.preventDefault();
+          const panel = event.currentTarget.parentElement?.querySelector(
+            '[data-testid="page-dialog"]:not([inert])',
+          );
+          if (
+            panel instanceof HTMLElement &&
+            !panel.contains(document.activeElement)
+          )
+            panel.focus({ preventScroll: true });
+        }}
+      />
       {shown && (
         <PageDialogPanel
           key={shown.id}
@@ -148,19 +165,20 @@ function PageDialogPanel({
     if (first instanceof HTMLInputElement && prompt) first.select();
   }, [prompt]);
   // Arriving, it takes focus from the page (or from nothing, or from the
-  // dialog before it), never from wherever else the person is.
-  const arrival = useRef({ active, page });
+  // dialog before it), never from wherever else the person is; whether its
+  // tab is in front is read as it arrives.
+  const activeRef = useRef(active);
+  activeRef.current = active;
   useLayoutEffect(() => {
     const focused = document.activeElement;
-    const { active: inFront, page: pageElement } = arrival.current;
     if (
-      inFront &&
+      activeRef.current &&
       (focused === null ||
         focused === document.body ||
-        focused === pageElement.current)
+        focused === page.current)
     )
       focusFirst();
-  }, [focusFirst]);
+  }, [focusFirst, page]);
   const lastFocusRequest = useRef(focusRequest);
   useEffect(() => {
     if (focusRequest === lastFocusRequest.current) return;
@@ -205,6 +223,13 @@ function PageDialogPanel({
       answer(dialog.kind === "alert");
       return;
     }
+    // Focus on the dialog itself (after a press on its text or the dim
+    // page): Enter is still OK.
+    if (event.key === "Enter" && event.target === event.currentTarget) {
+      event.preventDefault();
+      answer(true);
+      return;
+    }
     if (event.key !== "Tab" || !panelRef.current) return;
     // Tab stays in the dialog, as in the page it covers.
     const focusable = Array.from(
@@ -215,7 +240,10 @@ function PageDialogPanel({
     const first = focusable[0];
     const last = focusable.at(-1);
     if (!first || !last) return;
-    if (event.shiftKey && document.activeElement === first) {
+    if (document.activeElement === panelRef.current) {
+      event.preventDefault();
+      (event.shiftKey ? last : first).focus();
+    } else if (event.shiftKey && document.activeElement === first) {
       event.preventDefault();
       last.focus();
     } else if (!event.shiftKey && document.activeElement === last) {
@@ -255,6 +283,8 @@ function PageDialogPanel({
       aria-describedby={dialog.message ? ids.message : undefined}
       data-testid="page-dialog"
       data-kind={dialog.kind}
+      // A press on its text keeps the keyboard here, not in the app.
+      tabIndex={-1}
       inert={leaving ? true : undefined}
       onKeyDown={onKeyDown}
       onSubmit={(event) => {
@@ -268,7 +298,7 @@ function PageDialogPanel({
         )
           onExited();
       }}
-      className={`relative flex max-h-full w-[420px] max-w-full flex-col overflow-hidden rounded-xl border border-border bg-bg-raised shadow-2xl ${
+      className={`relative flex max-h-full w-[420px] max-w-full flex-col overflow-hidden rounded-xl border border-border bg-bg-raised shadow-2xl outline-none ${
         leaving ? "animate-modal-out" : "animate-modal-in"
       }`}
     >
@@ -281,11 +311,20 @@ function PageDialogPanel({
           {title}
         </h2>
         {!script && host && (
+          // Wrapped, never cut: the end of a host names the site.
           <p
-            className="mt-0.5 truncate text-xs text-fg-muted"
+            className="mt-0.5 text-xs text-fg-muted [overflow-wrap:anywhere]"
             data-testid="page-dialog-origin"
           >
             {auth?.proxy ? `The proxy ${host}` : host}
+          </p>
+        )}
+        {auth && dialog.embedded && (
+          <p
+            className="mt-0.5 text-xs text-fg-muted"
+            data-testid="page-dialog-embedded"
+          >
+            Asked by a page embedded in this one.
           </p>
         )}
         {script && dialog.message && (
@@ -314,6 +353,7 @@ function PageDialogPanel({
             data-testid="page-dialog-input"
             value={text}
             onChange={(event) => setText(event.target.value)}
+            maxLength={PAGE_DIALOG_MESSAGE_LIMIT}
             spellCheck={false}
             autoComplete="off"
             className="field mt-3 h-8 w-full rounded-md px-2.5 text-[13px]"
@@ -447,6 +487,7 @@ function AuthFields({
             data-testid="page-dialog-username"
             value={username}
             onChange={(event) => onUsername(event.target.value)}
+            maxLength={PAGE_DIALOG_CREDENTIAL_LIMIT}
             autoComplete="off"
             spellCheck={false}
             className="field h-8 w-full rounded-md px-2.5 text-[13px]"
@@ -461,6 +502,7 @@ function AuthFields({
             data-testid="page-dialog-password"
             value={password}
             onChange={(event) => onPassword(event.target.value)}
+            maxLength={PAGE_DIALOG_CREDENTIAL_LIMIT}
             autoComplete="off"
             spellCheck={false}
             className="field h-8 w-full rounded-md px-2.5 text-[13px]"

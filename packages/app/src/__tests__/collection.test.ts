@@ -574,6 +574,56 @@ describe("paged branches", () => {
     expect(collection.getItem("b")?.label).toBe("B");
   });
 
+  it("re-reads only as deep as the loaded pages went", async () => {
+    // A filtering source: one matching row per read, until none match.
+    let matching = true;
+    const load = vi.fn(async ({ cursor }: { cursor?: string }) => {
+      const page = cursor ? Number(cursor) : 0;
+      return {
+        items: matching ? [{ id: `p${page}`, label: `Page ${page}` }] : [],
+        cursor: page < 100 ? String(page + 1) : undefined,
+      };
+    });
+    const collection = createCollection<Item>({ source: { load } });
+    await collection.load();
+    await collection.load({ more: true });
+    await collection.load({ more: true });
+    expect(collection.getBranch(null).ids).toEqual(["p0", "p1", "p2"]);
+    // The rows stop matching: reading on to the old row count would read
+    // the whole history. The refresh reads the three pages, and one more.
+    matching = false;
+    load.mockClear();
+    await collection.load();
+    expect(load).toHaveBeenCalledTimes(4);
+    expect(collection.getBranch(null)).toMatchObject({
+      ids: [],
+      cursor: "4",
+      status: "ready",
+    });
+  });
+
+  it("queues a Refresh pressed during IO and answers it when that lands", async () => {
+    const pending: Array<(page: CollectionPage<Item>) => void> = [];
+    const collection = createCollection<Item>({
+      source: { load: () => new Promise((resolve) => pending.push(resolve)) },
+    });
+    const first = collection.load();
+    let answered = false;
+    const refresh = collection.load().then(() => {
+      answered = true;
+    });
+    expect(pending).toHaveLength(1);
+    pending[0]?.({ items: [{ id: "a", label: "Old" }] });
+    await first;
+    await flush();
+    // Not dropped: it reads again once the first read lands.
+    expect(pending).toHaveLength(2);
+    expect(answered).toBe(false);
+    pending[1]?.({ items: [{ id: "a", label: "New" }] });
+    await refresh;
+    expect(collection.getItem("a")?.label).toBe("New");
+  });
+
   it("runs the widest refresh asked for while one is in flight", async () => {
     const pending: Array<(page: CollectionPage<Item>) => void> = [];
     const cursors: Array<string | undefined> = [];

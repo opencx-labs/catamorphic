@@ -204,10 +204,11 @@ export function TabbedSidebar({
       current.get(id) === state ? current : new Map(current).set(id, state),
     );
   }, []);
+  // A session-scoped section needs a chat's session: the chat in front, or
+  // the chat that opened the page, file or terminal in front (ADR 0225).
   const sectionRelevant = (section: SidebarSectionConfig) =>
     matchesSidebarSurface(section.when, surface) &&
-    (!sessionScoped(section) ||
-      (surface.kind === "chat" && Boolean(surface.sessionId)));
+    (!sessionScoped(section) || Boolean(surface.sessionId));
   const sectionAvailable = (section: SidebarSectionConfig) => {
     if (!sectionRelevant(section)) return false;
     const state = content.get(section.id);
@@ -248,23 +249,26 @@ export function TabbedSidebar({
     if (motionReady && shownSelected !== undefined && selected !== undefined)
       setTabMotion(true);
   }
-  // Tabs join and leave the strip (ADR 0225): one grows in beside its
-  // neighbours, which slide; one leaving shrinks away the way it came. The
-  // strip itself opens and folds as the count crosses one. Off screen, or
-  // before the first paint, they change at once; reduced motion settles
-  // at once through styles.css.
+  // Tabs join and leave the strip (ADR 0225): one grows into its place
+  // while its neighbours slide, and one leaving shrinks away the way it
+  // came. Each keeps one element throughout, so a quick change back
+  // reverses from where it is (CSS transitions, styles.css). The strip
+  // itself opens and folds as the tab count crosses one. Only changes to a
+  // tab list already shown move: the first list (the workspace file
+  // arriving), the sidebar's own opening (its header controls) and a
+  // sidebar off screen change at once; reduced motion settles at once.
   const showStrip = tabs.length > 1 || Boolean(headerActions);
   const tabIds = tabs.map((tab) => tab.id);
   const [strip, setStrip] = useState<{
     ids: readonly string[];
     shown: boolean;
-    entering: ReadonlySet<string>;
+    arriving: ReadonlySet<string>;
     leaving: ReadonlySet<string>;
-    motion: "in" | "out" | null;
+    motion: "arriving" | "folding" | null;
   }>(() => ({
     ids: tabIds,
     shown: showStrip,
-    entering: new Set(),
+    arriving: new Set(),
     leaving: new Set(),
     motion: null,
   }));
@@ -273,15 +277,17 @@ export function TabbedSidebar({
     tabIds.length !== strip.ids.length ||
     tabIds.some((id, index) => strip.ids[index] !== id)
   ) {
-    const animate = motionReady && onScreen;
+    const animate = motionReady && onScreen && strip.ids.length > 0;
     const added = tabIds.filter((id) => !strip.ids.includes(id));
     const removed = strip.ids.filter((id) => !tabIds.includes(id));
+    // The strip moves for the tabs only, never for its header controls.
+    const countCrossed = tabIds.length > 1 !== strip.ids.length > 1;
     setStrip({
       ids: tabIds,
       shown: showStrip,
-      entering: animate
+      arriving: animate
         ? new Set([
-            ...[...strip.entering].filter((id) => tabIds.includes(id)),
+            ...[...strip.arriving].filter((id) => tabIds.includes(id)),
             ...added,
           ])
         : new Set(),
@@ -291,18 +297,21 @@ export function TabbedSidebar({
             ...removed,
           ])
         : new Set(),
-      motion:
-        animate && showStrip !== strip.shown
+      motion: !animate
+        ? null
+        : showStrip === strip.shown || !countCrossed
           ? showStrip
-            ? "in"
-            : "out"
-          : animate
-            ? strip.motion
-            : null,
+            ? strip.motion === "folding"
+              ? "arriving"
+              : strip.motion
+            : null
+          : showStrip
+            ? "arriving"
+            : "folding",
     });
   }
   const stripMoving =
-    strip.entering.size > 0 || strip.leaving.size > 0 || strip.motion !== null;
+    strip.arriving.size > 0 || strip.leaving.size > 0 || strip.motion !== null;
   // biome-ignore lint/correctness/useExhaustiveDependencies: every change to the strip restarts its settle, so what just started moving finishes
   useEffect(() => {
     if (!stripMoving) return;
@@ -310,7 +319,7 @@ export function TabbedSidebar({
       () =>
         setStrip((current) => ({
           ...current,
-          entering: new Set(),
+          arriving: new Set(),
           leaving: new Set(),
           motion: null,
         })),
@@ -321,6 +330,7 @@ export function TabbedSidebar({
   const stripTabs = configuredTabs.filter(
     (tab) => tabIds.includes(tab.id) || strip.leaving.has(tab.id),
   );
+  const stripFolding = !showStrip && strip.motion === "folding";
   const previousSelected = useRef(selected);
   const focusWithin = useRef(false);
   useLayoutEffect(() => {
@@ -336,6 +346,26 @@ export function TabbedSidebar({
     }
     previousSelected.current = selected;
   }, [selected, id]);
+  // Focus on a tab that leaves, or in a strip that folds, would be lost
+  // with it: it moves to the tab in front, or its panel.
+  useLayoutEffect(() => {
+    const active = document.activeElement;
+    if (
+      !(active instanceof HTMLElement) ||
+      !active.closest(
+        "[data-sidebar-tab-leaving], [data-sidebar-strip-folding]",
+      )
+    )
+      return;
+    const target =
+      !stripFolding && selected
+        ? document.getElementById(`${id}-tab-${selected}`)
+        : null;
+    (
+      target ??
+      (selected ? document.getElementById(`${id}-panel-${selected}`) : null)
+    )?.focus();
+  });
   useEffect(() => {
     // Persist the initial tab before the first click. Keep an existing choice
     // while tabs are temporarily filtered during project/permission loading.
@@ -391,10 +421,19 @@ export function TabbedSidebar({
         style={{ width: layout.width }}
       >
         {header}
-        {showStrip ? (
+        {(showStrip || stripFolding) && (
+          // One strip element while it opens, shows and folds; folding, it
+          // is what it showed, no longer tabs.
           <div
-            className={`flex h-10 shrink-0 items-center gap-2 px-2 ${
-              strip.motion === "in" ? "animate-sidebar-strip-in" : ""
+            aria-hidden={stripFolding || undefined}
+            inert={stripFolding}
+            data-sidebar-strip-folding={stripFolding ? "" : undefined}
+            className={`sidebar-strip flex h-10 shrink-0 items-center gap-2 px-2 ${
+              stripFolding
+                ? "sidebar-strip-folding"
+                : strip.motion === "arriving"
+                  ? "sidebar-strip-arriving"
+                  : ""
             }`}
           >
             {headerActions}
@@ -404,90 +443,75 @@ export function TabbedSidebar({
               className="flex min-w-0 flex-1 items-center justify-center gap-1 overflow-x-auto"
             >
               {stripTabs.map((tab) => {
-                if (strip.leaving.has(tab.id))
-                  return (
-                    <span
-                      key={tab.id}
-                      aria-hidden="true"
-                      data-sidebar-tab-leaving={tab.id}
-                      data-selected={selected === tab.id || undefined}
-                      className="sidebar-tab animate-sidebar-tab-icon-out"
-                    >
-                      <TabIcon name={tab.icon} />
-                    </span>
-                  );
+                const leaving = strip.leaving.has(tab.id);
+                const interactive = !leaving && !stripFolding;
                 const index = tabs.indexOf(tab);
                 return (
-                  <ShortcutHint key={tab.id} label={tab.title}>
-                    <button
-                      type="button"
-                      role="tab"
-                      id={`${id}-tab-${tab.id}`}
-                      aria-controls={`${id}-panel-${tab.id}`}
-                      aria-label={tab.title}
-                      aria-selected={selected === tab.id}
-                      tabIndex={selected === tab.id ? 0 : -1}
-                      className={`sidebar-tab ${
-                        strip.entering.has(tab.id)
-                          ? "animate-sidebar-tab-icon-in"
+                  <ShortcutHint
+                    key={tab.id}
+                    label={tab.title}
+                    className={`sidebar-tab-slot ${
+                      leaving
+                        ? "sidebar-tab-slot-leaving"
+                        : strip.arriving.has(tab.id)
+                          ? "sidebar-tab-slot-arriving"
                           : ""
-                      }`}
-                      onClick={() => select(tab.id)}
-                      onKeyDown={(event) => {
-                        const next =
-                          event.key === "ArrowRight"
-                            ? (index + 1) % tabs.length
-                            : event.key === "ArrowLeft"
-                              ? (index + tabs.length - 1) % tabs.length
-                              : event.key === "Home"
-                                ? 0
-                                : event.key === "End"
-                                  ? tabs.length - 1
-                                  : null;
-                        if (next === null) return;
-                        event.preventDefault();
-                        const target = tabs[next];
-                        if (target) {
-                          select(target.id);
-                          document
-                            .getElementById(`${id}-tab-${target.id}`)
-                            ?.focus();
-                        }
-                      }}
-                    >
-                      <TabIcon name={tab.icon} />
-                    </button>
+                    }`}
+                  >
+                    {interactive ? (
+                      <button
+                        type="button"
+                        role="tab"
+                        id={`${id}-tab-${tab.id}`}
+                        aria-controls={`${id}-panel-${tab.id}`}
+                        aria-label={tab.title}
+                        aria-selected={selected === tab.id}
+                        tabIndex={selected === tab.id ? 0 : -1}
+                        className="sidebar-tab"
+                        onClick={() => select(tab.id)}
+                        onKeyDown={(event) => {
+                          const next =
+                            event.key === "ArrowRight"
+                              ? (index + 1) % tabs.length
+                              : event.key === "ArrowLeft"
+                                ? (index + tabs.length - 1) % tabs.length
+                                : event.key === "Home"
+                                  ? 0
+                                  : event.key === "End"
+                                    ? tabs.length - 1
+                                    : null;
+                          if (next === null) return;
+                          event.preventDefault();
+                          const target = tabs[next];
+                          if (target) {
+                            select(target.id);
+                            document
+                              .getElementById(`${id}-tab-${target.id}`)
+                              ?.focus();
+                          }
+                        }}
+                      >
+                        <TabIcon name={tab.icon} />
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        id={`${id}-tab-${tab.id}`}
+                        tabIndex={-1}
+                        aria-hidden="true"
+                        data-sidebar-tab-leaving={leaving ? tab.id : undefined}
+                        data-selected={selected === tab.id || undefined}
+                        className="sidebar-tab"
+                      >
+                        <TabIcon name={tab.icon} />
+                      </button>
+                    )}
                   </ShortcutHint>
                 );
               })}
             </div>
           </div>
-        ) : strip.motion === "out" ? (
-          // The strip folding away as the count drops to one: what it
-          // showed, no longer tabs.
-          <div
-            aria-hidden="true"
-            inert
-            data-sidebar-strip-leaving=""
-            className="animate-sidebar-strip-out flex h-10 shrink-0 items-center gap-2 px-2"
-          >
-            <div className="flex min-w-0 flex-1 items-center justify-center gap-1">
-              {stripTabs.map((tab) => (
-                <span
-                  key={tab.id}
-                  data-selected={selected === tab.id || undefined}
-                  className={`sidebar-tab ${
-                    strip.leaving.has(tab.id)
-                      ? "animate-sidebar-tab-icon-out"
-                      : ""
-                  }`}
-                >
-                  <TabIcon name={tab.icon} />
-                </span>
-              ))}
-            </div>
-          </div>
-        ) : null}
+        )}
         {error && (
           <p role="alert" className="px-3 pb-2 text-xs text-warning">
             workspace.js could not reload. {error}
@@ -523,6 +547,7 @@ export function TabbedSidebar({
                     sectionRelevant(section)
                   }
                   available={sectionAvailable(section)}
+                  still={selected !== tab.id}
                   visible={onScreen && selected === tab.id}
                   observeEmpty={
                     onScreen &&
@@ -608,6 +633,7 @@ function SidebarSlot({
   mounted,
   relevant,
   available,
+  still = false,
   visible,
   observeEmpty = false,
   report,
@@ -617,6 +643,11 @@ function SidebarSlot({
   mounted: boolean;
   relevant: boolean;
   available: boolean;
+  /**
+   * Its panel is hidden or fading away: it keeps the shape it had, since
+   * folding it too would move what is leaving, and catches up when shown.
+   */
+  still?: boolean;
   visible: boolean;
   /** Hidden only for being empty. */
   observeEmpty?: boolean;
@@ -643,10 +674,11 @@ function SidebarSlot({
   // opens from nothing: sections below slide instead of jumping.
   const [shownAvailable, setShownAvailable] = useState(available);
   const [leaving, setLeaving] = useState(false);
-  if (available !== shownAvailable) {
+  if (!still && available !== shownAvailable) {
     setShownAvailable(available);
     setLeaving(!available);
   }
+  const shown = still ? shownAvailable : available;
   useEffect(() => {
     if (!leaving) return;
     const timer = setTimeout(() => setLeaving(false), motionMs(200));
@@ -655,10 +687,10 @@ function SidebarSlot({
   return (
     <div
       data-sidebar-widget={section.id}
-      hidden={!available && !leaving}
+      hidden={!shown && !leaving}
       inert={!available}
     >
-      <Collapsible open={available}>
+      <Collapsible open={shown}>
         {(visited || (mounted && relevant)) &&
           renderSection(
             section,

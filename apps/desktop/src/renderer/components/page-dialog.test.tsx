@@ -184,6 +184,61 @@ describe("page dialog layer", () => {
     });
   });
 
+  it("keeps the keyboard in the dialog after a press on the dim page or its text", () => {
+    const { answers, page } = mount([dialog()]);
+    const layer = byTestId("page-dialog-layer");
+    const dim = layer?.querySelector<HTMLElement>('[aria-hidden="true"]');
+    const press = () => {
+      const pressed = new MouseEvent("mousedown", {
+        bubbles: true,
+        cancelable: true,
+      });
+      act(() => {
+        dim?.dispatchEvent(pressed);
+      });
+      return pressed;
+    };
+    // Focus in the dialog stays where it is.
+    const accept = byTestId("page-dialog-accept");
+    expect(document.activeElement).toBe(accept);
+    expect(press().defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(accept);
+    // Focus elsewhere comes to the dialog.
+    act(() => page.focus());
+    press();
+    expect(document.activeElement).toBe(panel());
+    // Enter on the dialog itself is OK.
+    key(panel() as HTMLElement, "Enter");
+    expect(answers.at(-1)?.answer).toEqual({ id: "one", accept: true });
+  });
+
+  it("limits what can be typed to what main takes", () => {
+    mount([
+      dialog({
+        kind: "auth",
+        message: "",
+        embedded: true,
+        auth: {
+          realm: "",
+          scheme: "basic",
+          proxy: false,
+          insecure: false,
+          retry: false,
+          username: "",
+          saved: [],
+        },
+      }),
+    ]);
+    expect(byTestId<HTMLInputElement>("page-dialog-username")?.maxLength).toBe(
+      4096,
+    );
+    expect(byTestId<HTMLInputElement>("page-dialog-password")?.maxLength).toBe(
+      4096,
+    );
+    // Another site's frame asking over this page says so.
+    expect(byTestId("page-dialog-embedded")?.textContent).toContain("embedded");
+  });
+
   it("leaves the page's focus alone when the person is elsewhere", () => {
     const elsewhere = document.createElement("input");
     document.body.append(elsewhere);

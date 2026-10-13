@@ -6,96 +6,84 @@
 
 ## Context
 
-A page in a Work browser tab could not ask the person anything. Measured
-against local pages on Electron 45.0.0-beta.1: `alert` and `confirm` went
-to Electron's native message box (a GTK dialog in the Linux test display),
-outside Work's look and not tied to the tab; `prompt` threw "prompt() is
-not supported"; a `beforeunload` that holds the page emitted
-`will-prevent-unload`, which nothing handled, so reloads, typed addresses,
-links and Back silently did nothing (the address bar kept the address that
-never loaded); and every HTTP sign-in was cancelled, showing the 401 page.
-
-Electron has no hook for a page's JavaScript dialogs, and CDP's
-`Page.javascriptDialogOpening` only observes them beside Electron's own
-dialog manager, which answers `prompt` at once.
+A page in a Work browser tab could not ask anything. Measured on Electron
+45.0.0-beta.1: `alert` and `confirm` went to Electron's native message box,
+tied to no tab; `prompt` threw; a held `beforeunload` silently stopped
+reloads, addresses and links; every HTTP sign-in was cancelled.
+Electron has no hook for page dialogs, and CDP only observes them beside
+Electron's own dialog manager, which answers `prompt` at once.
 
 ## Decision
 
-**A page's own dialogs are answered over a synchronous IPC.** The tab
-preload replaces `alert`, `confirm` and `prompt` in the page's main world
-(`contextBridge.executeInMainWorld`, as `Notification` already was) with
-functions that `ipcRenderer.sendSync` and return what main sets as
-`event.returnValue`. Main sets it when the person or an agent answers, so
-the page waits exactly as in Chrome while main, the window, the chat and
-other tabs carry on. Tabs run their preload in every frame
-(`nodeIntegrationInSubFrames`, turned on in `will-attach-webview` for the
-tab preload only), so an embedded frame asks too and is named by its own
-origin ("An embedded page at … says"); everything else in both preloads
-stays the top frame's, as before. Dialogs from `beforeunload`, `pagehide`
-and `unload` handlers are refused, as Chrome refuses them; the page's
-current event tells, since a listener of the preload's own would give
-every page a beforeunload handler and make each navigation wait on it.
+**Script dialogs go over a synchronous IPC.** The tab preload replaces
+`alert`, `confirm` and `prompt` in the page's world with functions that
+`sendSync` and return what main sets as `event.returnValue` once the person
+or an agent answers. The page waits as in Chrome; main, other tabs and the
+chat do not. The bridge reaches the page only as an argument of that code,
+never as a global it could call. Tabs run their preload in every frame
+(`nodeIntegrationInSubFrames`, tab webviews only), so embedded frames ask
+too, named by their own origin; all other preload work stays in the top
+frame.
 
-**"Leave site?" keeps the page, then redoes what was leaving it.**
-`will-prevent-unload` must be answered synchronously, and a sync wait in
-the page loses to Chromium's 500 ms beforeunload timeout for anything the
-browser starts (measured: a navigation started half a second into a
-three-second handler). So main lets the page stay and asks. Leave allows
-the next unload for five seconds and does again what was leaving: the tab
-tells main before it reloads, goes to an address, back or forward; the
-page's own navigation (a link, a form, a script) is the one the Navigation
-API's `navigate` event announced just before, which the preload replays.
-Closing a tab asks the page first (`webContents.close({ waitForBeforeUnload:
-true })`) unless the person never touched it, and Leave closes it. Electron
-lets a webview's page close even when its beforeunload holds it (its
-internal `-before-unload-fired` handler honours the answer only for
-windows), so main cancels a held close on that event; forced closes (an
-agent's, an extension's) are final.
+**What never asks.** As in Chrome, a page being left: a `beforeunload`
+handler (read from the page's current event, since a beforeunload listener
+of the preload's own would make every navigation wait on the page), or
+anything from `pagehide` on. Main also refuses a frame that is detached or
+no longer in the tab's frame tree, so an old page unloading after its
+successor committed cannot ask over it, and an embedded frame with an
+opaque origin, since the preload cannot see whether a sandbox allows
+modals.
 
-**Sign-ins ask in the tab.** `login` on a tab's page opens a sign-in dialog
-naming the site (or the proxy) and its realm, with the profile's saved
-sign-ins for that origin: picking one reads its password in main, never the
-renderer. A typed sign-in that the site accepts (the page commits without
-401) gets the password card's "Save password?". Cancel answers nothing, so
-the 401 page shows; a refused sign-in asks again with the username kept.
-Another site's subresource never asks. Sign-in popups and extension views
-keep Electron's answer for now.
+**"Leave site?" asks after the fact and replays.** `will-prevent-unload`
+must be answered synchronously, and blocking the page instead loses to
+Chromium's 500 ms beforeunload timeout for anything the browser starts
+(measured). So main keeps the page, asks, and on Leave redoes the latest
+attempt: a reload, address, back or forward the tab announced, or the
+page's own navigation announced by the Navigation API's `navigate` event,
+which the preload replays.
 
-**Tab-modal, one at a time.** Main keeps a queue per page
-(`main/page-dialogs.ts`) and tells the tab's window; the tab shows the
-first over its page, dimmed, centered like every Work dialog but inside
-the page's area. A tab out of sight keeps its dialog and shows the waiting
-"?" badge; brought forward, the dialog takes focus. Navigation or closing
-the tab cancels what the page asked. From a page load's second script
-dialog on, "Don't let this page show more dialogs" stops them until the
-next load. A page waiting on a dialog does not sleep.
+**Closing asks only when it disposes of the page.** A person's tab close,
+or their removal of a chat's page, asks; a chat page going back to its chip
+(still loaded), or an agent's or extension's close, does not. The page's
+beforeunload runs through `webContents.close({ waitForBeforeUnload: true })`.
+Electron unloads a webview's page whatever it answers (its internal
+`-before-unload-fired` handler honours the answer only for windows), so
+main keeps the page loaded on that private event and the tab leaves with
+its own exit. That close also grants the page a user activation
+(measured), so its windows and permission requests are refused until it is
+answered.
 
-**Agents answer as a person would.** `browser_snapshot` reports the dialog
-(kind, who asks, its text) instead of reading a page that cannot answer;
-`browser_act` answers with `press` Enter or Escape, fills a prompt with
-`fill` on uid `dialog`, and any other action fails with the dialog's
-report. An action that opens a dialog returns its report rather than
-hanging. A sign-in is the person's: the agent is told to ask them. No tool
-schema changed.
+**Sign-ins ask in the tab,** naming the site or proxy and its realm. The
+profile's saved sign-ins for that origin are offered; picking one reads the
+password in main, never in the renderer, and a typed sign-in the top frame
+lands gets the usual save offer. Requests for one sign-in (page, proxy,
+site, realm) share one dialog and its answer, as in Chrome. Another site's
+subresource never asks, and another site's embedded page says it is one.
+Cancel leaves the 401 page.
 
-Alternatives: CDP dialog interception (Electron's own manager answers
-first); `disableDialogs` (pages get instant answers, no question); a sync
-wait for beforeunload in the page (Chromium's timeout overrides it);
-window-modal dialogs (one page would hold the whole window again).
+**Tab-modal, one at a time.** Main keeps a queue per page; the tab shows
+one dialog over its dimmed page, keeps it while out of sight, and cancels
+it on navigation or close.
+
+**Agents answer as a person would.** Snapshots report the dialog, `press`
+and `fill` answer it, and an action that opens one returns rather than
+hanging (apps/desktop/docs/computer-use.md). A sign-in is never the
+agent's to answer. No tool schema changed.
+
+Alternatives: CDP interception (Electron answers first); `disableDialogs`
+(nobody is asked); blocking the page for beforeunload (the timeout wins);
+window-modal dialogs (one page would hold all of Work).
 
 ## Consequences
 
-- Pages behave as in Chrome for dialogs and sign-ins, without blocking Work.
-- The tab preload now loads in every frame of a tab; it does only dialog
-  work there. The session preload, loaded there too, returns at once.
-- A sandboxed frame without `allow-modals` can ask (the preload cannot see
-  the sandbox flags); "Don't let this page show more dialogs" stops it.
-- While "Leave site?" is open the page keeps running, unlike Chrome's.
-  Redoing a page's form submission sends the form again from the page;
-  a navigation the Navigation API did not announce (another site's frame
-  navigating the top) is only allowed, not redone.
-- Sign-in popups still show Electron's native alert and confirm; neither
-  they nor extension views ask for HTTP sign-ins.
-- Keeping a held tab close relies on Electron's internal
-  `-before-unload-fired` event. Without it (a later Electron) the tab closes
-  as it did before; `e2e/page-dialogs.e2e.ts` fails then.
+- Without `-before-unload-fired` (a later Electron), a held tab close
+  unloads the page as before; `e2e/page-dialogs.e2e.ts` fails then.
+- The activation from a close also reaches APIs that need no permission
+  (a file chooser).
+- A sandboxed frame that keeps its origin can still ask without
+  `allow-modals`; one with an opaque origin never asks, even with it.
+- While "Leave site?" is open the page keeps running. A replayed form
+  submission is sent again from the page; a navigation the Navigation API
+  did not announce is allowed, not redone.
+- Sign-in popups keep Electron's native alert and confirm; neither they nor
+  extension views get a sign-in dialog.

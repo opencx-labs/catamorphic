@@ -8857,6 +8857,20 @@ export interface paths {
                     };
                 };
                 /** @description Default Response */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            /** @enum {string} */
+                            code: "session_closed" | "authority_required" | "handoff_pending";
+                            authorityRevision?: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
                 503: {
                     headers: {
                         [name: string]: unknown;
@@ -8946,6 +8960,20 @@ export interface paths {
                     content: {
                         "application/json": {
                             error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            /** @enum {string} */
+                            code: "session_closed" | "authority_required" | "handoff_pending";
+                            authorityRevision?: number;
                         };
                     };
                 };

@@ -68,19 +68,14 @@ export const DEFAULT_WORKSPACE_CONFIG: WorkspaceConfig = {
       },
     ],
     right: [
-      // Exists only while a chat is in front (ADR 0225): its worktree and
-      // the pull requests its agent recorded in the session's metadata.
+      // Exists only beside a chat, or what it opened (ADR 0225): its
+      // worktree and the pull requests its agent recorded in the session's
+      // metadata.
       {
         id: "this-session",
         title: "This session",
         icon: "MessageSquareText",
-        sections: [
-          {
-            id: "session",
-            type: "session",
-            when: { surface: ["chat"], session: true },
-          },
-        ],
+        sections: [{ id: "session", type: "session", when: { session: true } }],
       },
       {
         id: "companion",
@@ -689,6 +684,11 @@ function sanitizePaletteModes({
         : undefined;
     if (mode.section !== undefined) {
       if (!section) throw new Error(`${where}: no section ${mode.section}.`);
+      // Its rows are one chat's; the palette has no chat beside it.
+      if (section.when?.session === true)
+        throw new Error(
+          `${where}: section ${mode.section} lists the chat in front (when.session); the palette has none.`,
+        );
       const type = resolveSidebarSection(section).type;
       if (
         type === "custom"

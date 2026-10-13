@@ -303,19 +303,33 @@ describe("paired motion (enter/exit mirrors)", () => {
     ).toBeLessThanOrEqual(50);
   });
 
-  it("a sidebar tab and its strip arrive and leave as mirrors (ADR 0225)", async () => {
-    const rules = await collectAnimationRules();
-    for (const name of ["sidebar-tab-icon", "sidebar-strip"]) {
-      const enter = rules.find(
-        (rule) => rule.selector === `animate-${name}-in`,
-      );
-      const exit = rules.find(
-        (rule) => rule.selector === `animate-${name}-out`,
-      );
-      expect(enter, name).toBeDefined();
-      expect(exit, name).toBeDefined();
-      expect(exit?.durationMs, name).toBe(enter?.durationMs);
-      expect(exit?.easing, name).toBe(enter?.easing);
+  it("a sidebar tab and its strip arrive and leave on one reversible transition (ADR 0225)", async () => {
+    const transitions = await run<
+      Array<{ selector: string; durations: string; easing: string }>
+    >(`
+      return allStyleRules()
+        .filter((rule) => rule.selectorText === '.sidebar-tab-slot' || rule.selectorText === '.sidebar-strip')
+        .map((rule) => ({
+          selector: rule.selectorText,
+          durations: rule.style.transitionDuration,
+          easing: rule.style.transitionTimingFunction,
+        }));
+    `);
+    expect(transitions.map((rule) => rule.selector).sort()).toEqual([
+      ".sidebar-strip",
+      ".sidebar-tab-slot",
+    ]);
+    for (const rule of transitions) {
+      // One duration and the standard curve both ways: leaving reverses
+      // arriving from wherever it is.
+      expect(
+        new Set(rule.durations.split(",").map((value) => value.trim())),
+        rule.selector,
+      ).toEqual(new Set(["200ms"]));
+      expect(
+        new Set(rule.easing.split(",").map((value) => value.trim())),
+        rule.selector,
+      ).toEqual(new Set(["var(--ease-standard)"]));
     }
   });
 

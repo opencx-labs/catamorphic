@@ -271,18 +271,29 @@ describe("a project's actions menu", () => {
     await listOpen();
   });
 
-  it("closes on a press outside the card, which the page never receives", async () => {
+  it("closes on a press in the page, which the page never receives; a second press closes the card", async () => {
     await openActions();
     const before = await inPage<number>("window.__presses");
-    await press(await pagePoint("#blank"));
+    const blank = await pagePoint("#blank");
+    await press(blank);
     await menuClosed();
     expect(await inPage<number>("window.__presses")).toBe(before);
-    // The press only closed the menu: the list and its card stay.
+    // The press only closed the menu: the list stays.
     await listOpen();
-    expect(await app.eval<boolean>(`!!${card}`)).toBe(true);
+    // The next press reaches the page and closes what is left. The window
+    // routes the pointer to the page a frame or more after the shield goes.
+    await pointerOnPage(app, { view, selector: "#blank", point: blank });
+    await press(blank);
+    await app.waitFor(
+      `${view}.executeJavaScript('window.__presses', true).then(count => count === ${before + 1})`,
+      { label: "page pressed" },
+    );
+    await cardClosed();
+    await listClosed();
   });
 
   it("closes on Escape before its card does", async () => {
+    await hoverFixture();
     await openActions();
     await app.press("Escape");
     await menuClosed();

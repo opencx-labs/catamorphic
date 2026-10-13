@@ -4,10 +4,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PageDialog } from "../shared/page-dialogs.js";
 import {
   type BrowserDialogsHost,
+  pageClosing,
   pageDialogs,
   registerBrowserDialogs,
   scriptAnswer,
 } from "./browser-dialogs.js";
+import { PAGE_DIALOG_QUEUE_LIMIT } from "./page-dialogs.js";
 
 const electron = vi.hoisted(() => ({
   handlers: new Map<string, (...args: unknown[]) => unknown>(),
@@ -33,10 +35,35 @@ class Window extends EventEmitter {
   isDestroyed = () => false;
 }
 
+/** A frame as main sees it (WebFrameMain). */
+class Frame {
+  detached = false;
+  destroyed = false;
+  processId = 1;
+  frameToken: string;
+  constructor(
+    public origin: string,
+    public parent: Frame | null,
+    public frameTreeNodeId: number,
+  ) {
+    this.frameToken = `token-${frameTreeNodeId}`;
+  }
+  isDestroyed = () => this.destroyed;
+}
+
 class Page extends EventEmitter {
   destroyed = false;
   url = "https://example.com/form";
-  mainFrame = { origin: "https://example.com", parent: null };
+  top = new Frame("https://example.com", null, 1);
+  /** The frames of the page the tab shows now. */
+  frames: Frame[] = [this.top];
+  get mainFrame() {
+    return {
+      origin: this.top.origin,
+      parent: null,
+      framesInSubtree: this.frames,
+    };
+  }
   reload = vi.fn();
   reloadIgnoringCache = vi.fn();
   loadURL = vi.fn(async () => {});
@@ -58,18 +85,15 @@ class Page extends EventEmitter {
   getURL = () => this.url;
 }
 
-const frame = (origin: string, parent: unknown = null, id = 1) => ({
-  origin,
-  parent,
-  frameTreeNodeId: id,
-});
+/** An embedded frame of the page. */
+const embed = (target: Page, origin: string, id = 2) => {
+  const frame = new Frame(origin, target.top, id);
+  target.frames.push(frame);
+  return frame;
+};
 
 /** A synchronous IPC as the page's preload sends it. */
-const ask = (
-  page: Page,
-  payload: unknown,
-  senderFrame = frame("https://example.com"),
-) => {
+const ask = (page: Page, payload: unknown, senderFrame: Frame = page.top) => {
   const event: { sender: Page; senderFrame: unknown; returnValue?: unknown } = {
     sender: page,
     senderFrame,
@@ -154,7 +178,7 @@ describe("script dialogs", () => {
     ask(
       page,
       { kind: "alert", message: "From the frame" },
-      frame("https://ads.example.net", {}, 2),
+      embed(page, "https://ads.example.net"),
     );
     expect(shown(page)).toMatchObject({
       origin: "https://ads.example.net",
@@ -170,6 +194,59 @@ describe("script dialogs", () => {
     const bogus = ask(page, { kind: "auth", message: "spoof" });
     expect(bogus.returnValue).toBeNull();
     expect(pageDialogs()?.has(page.id)).toBe(false);
+  });
+
+  it("refuse a frame that is no longer the tab's page, or one without an origin", () => {
+    // The page left; its frame unloads after the next one committed.
+    const gone = new Frame("https://evil.test", null, 1);
+    gone.frameToken = "old-page";
+    expect(
+      ask(page, { kind: "prompt", message: "Bank password?" }, gone),
+    ).toHaveProperty("returnValue", null);
+    const detached = embed(page, "https://example.com", 3);
+    detached.detached = true;
+    expect(
+      ask(page, { kind: "confirm", message: "?" }, detached),
+    ).toHaveProperty("returnValue", false);
+    // A sandboxed (opaque) frame, as Chrome without allow-modals.
+    const sandboxed = embed(page, "null", 4);
+    expect(
+      ask(page, { kind: "alert", message: "Hi" }, sandboxed),
+    ).toHaveProperty("returnValue", null);
+    expect(pageDialogs()?.has(page.id)).toBe(false);
+  });
+
+  it("are cancelled when their frame goes", async () => {
+    const frame = embed(page, "https://ads.example.net");
+    const event = ask(page, { kind: "confirm", message: "Still here?" }, frame);
+    expect(pageDialogs()?.has(page.id)).toBe(true);
+    frame.destroyed = true;
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    expect(event.returnValue).toBe(false);
+    expect(pageDialogs()?.has(page.id)).toBe(false);
+  });
+
+  it("are cancelled by the tab going somewhere else", async () => {
+    const event = ask(page, { kind: "prompt", message: "Name?" });
+    ipcMain.emit(
+      "catamorphic:browser-unload-intent",
+      { sender: window },
+      { guestId: 7, intent: { kind: "navigate", url: "https://next.test/" } },
+    );
+    await flush();
+    expect(event.returnValue).toBeNull();
+  });
+
+  it("keep a dialog whose answer main refuses", () => {
+    ask(page, { kind: "prompt", message: "Long?" });
+    expect(
+      invoke("catamorphic:page-dialog-answer", window, {
+        id: shown(page).id,
+        accept: true,
+        text: "x".repeat(20_001),
+      }),
+    ).toBe(false);
+    expect(pageDialogs()?.has(page.id)).toBe(true);
   });
 
   it("are cancelled when the page navigates or its tab closes", async () => {
@@ -243,10 +320,11 @@ describe("Leave site?", () => {
     expect(page.loadURL).toHaveBeenCalledWith("https://next.test/");
 
     page.emit("did-navigate", {}, "https://next.test/", 200);
-    ipcMain.emit("catamorphic:page-navigating", {
-      sender: page,
-      senderFrame: frame("https://example.com"),
-    });
+    ipcMain.emit(
+      "catamorphic:page-navigating",
+      { sender: page, senderFrame: page.top },
+      { reload: false },
+    );
     page.emit("will-prevent-unload", { preventDefault: vi.fn() });
     invoke("catamorphic:page-dialog-answer", window, {
       id: shown(page).id,
@@ -274,6 +352,61 @@ describe("Leave site?", () => {
     expect(next.preventDefault).not.toHaveBeenCalled();
   });
 
+  it("asks again about the latest attempt, and Leave does what the title says", async () => {
+    const now = vi.spyOn(Date, "now");
+    try {
+      now.mockReturnValue(10_000);
+      ipcMain.emit(
+        "catamorphic:page-navigating",
+        { sender: page, senderFrame: page.top },
+        { reload: false },
+      );
+      page.emit("will-prevent-unload", { preventDefault: vi.fn() });
+      expect(shown(page).reload).toBe(false);
+      // Two seconds on, the person reloads instead.
+      now.mockReturnValue(12_000);
+      ipcMain.emit(
+        "catamorphic:browser-unload-intent",
+        { sender: window },
+        { guestId: 7, intent: { kind: "reload" } },
+      );
+      page.emit("will-prevent-unload", { preventDefault: vi.fn() });
+      expect(pageDialogs()?.list(page.id)).toHaveLength(1);
+      expect(shown(page).reload).toBe(true);
+      invoke("catamorphic:page-dialog-answer", window, {
+        id: shown(page).id,
+        accept: true,
+      });
+      await flush();
+      expect(page.reload).toHaveBeenCalled();
+      expect(page.send).not.toHaveBeenCalledWith("catamorphic:page-proceed");
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it("forgets what a navigation that went ahead was for", async () => {
+    ipcMain.emit(
+      "catamorphic:browser-unload-intent",
+      { sender: window },
+      { guestId: 7, intent: { kind: "reload" } },
+    );
+    page.emit("did-start-navigation", {
+      isSameDocument: false,
+      isMainFrame: true,
+      url: "https://example.com/form",
+      frame: null,
+    });
+    page.emit("will-prevent-unload", { preventDefault: vi.fn() });
+    expect(shown(page).reload).toBe(false);
+    invoke("catamorphic:page-dialog-answer", window, {
+      id: shown(page).id,
+      accept: true,
+    });
+    await flush();
+    expect(page.reload).not.toHaveBeenCalled();
+  });
+
   it("asks before a tab the person touched closes, and tells the window the answer", async () => {
     page.touched = false;
     await expect(
@@ -286,8 +419,14 @@ describe("Leave site?", () => {
       invoke("catamorphic:browser-close-ask", window, { guestId: 7 }),
     ).resolves.toBe("asking");
     expect(page.close).toHaveBeenCalledWith({ waitForBeforeUnload: true });
+    expect(pageClosing(7)).toBe(true);
     page.emit("will-prevent-unload", { preventDefault: vi.fn() });
     expect(shown(page)).toMatchObject({ kind: "beforeunload", reload: false });
+    // A tab closed in the background comes forward to ask.
+    expect(window.send).toHaveBeenCalledWith(
+      "catamorphic:browser-reveal-guest",
+      { guestId: 7 },
+    );
     invoke("catamorphic:page-dialog-answer", window, {
       id: shown(page).id,
       accept: true,
@@ -297,18 +436,28 @@ describe("Leave site?", () => {
       "catamorphic:browser-close-answer",
       { guestId: 7, leave: true },
     );
+    expect(pageClosing(7)).toBe(false);
   });
 
-  it("keeps a tab whose page holds its close, which Electron would close anyway", async () => {
+  it("keeps the page loaded while its tab closes, whatever Electron would do", async () => {
     await invoke("catamorphic:browser-close-ask", window, { guestId: 7 });
+    // Held: the page stays, and "Leave site?" decides.
     const held = { preventDefault: vi.fn() };
     page.emit("-before-unload-fired", held, false);
     expect(held.preventDefault).toHaveBeenCalled();
-    // A page that lets go closes; a page not being closed is not touched.
+    expect(window.send).not.toHaveBeenCalledWith(
+      "catamorphic:browser-close-answer",
+      expect.anything(),
+    );
+    // Let go: still not unloaded here; the tab leaves with its own exit.
     const letGo = { preventDefault: vi.fn() };
     page.emit("-before-unload-fired", letGo, true);
-    expect(letGo.preventDefault).not.toHaveBeenCalled();
-    page.emit("did-navigate", {}, "https://example.com/next", 200);
+    expect(letGo.preventDefault).toHaveBeenCalled();
+    expect(window.send).toHaveBeenCalledWith(
+      "catamorphic:browser-close-answer",
+      { guestId: 7, leave: true },
+    );
+    // A page not being closed is left to Electron.
     const navigating = { preventDefault: vi.fn() };
     page.emit("-before-unload-fired", navigating, false);
     expect(navigating.preventDefault).not.toHaveBeenCalled();
@@ -335,14 +484,25 @@ describe("sign-ins", () => {
     pid: 0,
     isRequestForNavigation: true,
     firstAuthAttempt: true,
-    isMainFrame: true,
   };
-  const login = (overrides: Partial<typeof details> = {}) => {
+  const login = (
+    overrides: Partial<typeof details> = {},
+    info: typeof authInfo = authInfo,
+  ) => {
     const event = { preventDefault: vi.fn() };
     const callback = vi.fn();
-    page.emit("login", event, { ...details, ...overrides }, authInfo, callback);
+    page.emit("login", event, { ...details, ...overrides }, info, callback);
     return { event, callback };
   };
+  // The tab's own navigation to the page that asks.
+  beforeEach(() => {
+    page.emit("did-start-navigation", {
+      isSameDocument: false,
+      isMainFrame: true,
+      url: details.url,
+      frame: null,
+    });
+  });
 
   it("ask in the tab, sign in with what was typed, and offer to save it once it lands", async () => {
     const { event, callback } = login();
@@ -449,6 +609,54 @@ describe("sign-ins", () => {
     expect(callback).toHaveBeenCalledWith("me", "proxy-secret");
     page.emit("did-navigate", {}, "https://example.com/private", 200);
     expect(host.offerToSave).not.toHaveBeenCalled();
+  });
+
+  it("ask once for many requests of one sign-in, and answer them all", async () => {
+    const requests = Array.from({ length: PAGE_DIALOG_QUEUE_LIMIT * 3 }, () =>
+      login({ url: "https://example.com/api", isRequestForNavigation: false }),
+    );
+    await flush();
+    expect(pageDialogs()?.list(page.id)).toHaveLength(1);
+    expect(host.vault.list).toHaveBeenCalledTimes(1);
+    invoke("catamorphic:page-dialog-answer", window, {
+      id: shown(page).id,
+      accept: true,
+      username: "grace",
+      password: "hopper",
+    });
+    await flush();
+    for (const { callback } of requests)
+      expect(callback).toHaveBeenCalledWith("grace", "hopper");
+  });
+
+  it("say when an embedded page of another site asks, and save nothing for it", async () => {
+    const { callback } = login({ url: "https://bank.test/frame" });
+    await flush();
+    expect(shown(page)).toMatchObject({
+      origin: "https://bank.test",
+      embedded: true,
+    });
+    invoke("catamorphic:page-dialog-answer", window, {
+      id: shown(page).id,
+      accept: true,
+      username: "grace",
+      password: "hopper",
+    });
+    await flush();
+    expect(callback).toHaveBeenCalledWith("grace", "hopper");
+    page.emit("did-navigate", {}, "https://example.com/private", 200);
+    expect(host.offerToSave).not.toHaveBeenCalled();
+  });
+
+  it("refuse other sites' subresources for a page without an origin", async () => {
+    page.top.origin = "null";
+    const { callback } = login({
+      url: "https://elsewhere.test/pixel.png",
+      isRequestForNavigation: false,
+    });
+    await flush();
+    expect(pageDialogs()?.has(page.id)).toBe(false);
+    expect(callback).toHaveBeenCalledWith();
   });
 
   it("never ask for another site's subresource", async () => {

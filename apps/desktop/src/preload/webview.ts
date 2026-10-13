@@ -27,6 +27,17 @@ import { installPageDialogs } from "./page-dialogs.js";
 
 const topFrame = window.top === window;
 installPageDialogs({ top: topFrame });
+// The host sees no input inside the page, so every frame tells it of the
+// person's presses: a press in the page, an embedded frame's included, is a
+// press outside the floating chat, a popover or a hover card. Presses the
+// page's own scripts synthesize are not the person's.
+window.addEventListener(
+  "pointerdown",
+  (event) => {
+    if (event.isTrusted) ipcRenderer.sendToHost("catamorphic:page-press");
+  },
+  { capture: true, passive: true },
+);
 if (topFrame) installTopFrame();
 
 function installTopFrame(): void {
@@ -180,17 +191,6 @@ function installTopFrame(): void {
       args: [],
     });
   }
-
-  // The host sees no input inside the page, so it learns of the person's
-  // presses here: a press in the page is a press outside the floating chat.
-  // Presses the page's own scripts synthesize are not the person's.
-  window.addEventListener(
-    "pointerdown",
-    (event) => {
-      if (event.isTrusted) ipcRenderer.sendToHost("catamorphic:page-press");
-    },
-    { capture: true, passive: true },
-  );
 
   // Electron's BrowserWindow `app-command` event covers browser mouse buttons
   // on Windows/Linux. macOS delivers the auxiliary buttons to the guest page,

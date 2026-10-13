@@ -23,6 +23,8 @@ export function isScriptDialog(kind: PageDialogKind): kind is ScriptDialogKind {
 
 /** A message longer than this is cut; nobody reads further in a dialog. */
 export const PAGE_DIALOG_MESSAGE_LIMIT = 20_000;
+/** The longest username or password a sign-in takes. */
+export const PAGE_DIALOG_CREDENTIAL_LIMIT = 4096;
 
 /** What leaving the page would do, for "Leave site?" and its answer. */
 export type UnloadIntent =
@@ -83,8 +85,8 @@ export const pageDialogAnswerSchema = z.object({
   /** "Don't let this page show more dialogs" was checked. */
   suppress: z.boolean().optional(),
   /** auth: what the person typed. */
-  username: z.string().max(4096).optional(),
-  password: z.string().max(4096).optional(),
+  username: z.string().max(PAGE_DIALOG_CREDENTIAL_LIMIT).optional(),
+  password: z.string().max(PAGE_DIALOG_CREDENTIAL_LIMIT).optional(),
   /** auth: sign in with this saved login instead; main reads its secret. */
   credentialId: z.string().max(256).optional(),
 });

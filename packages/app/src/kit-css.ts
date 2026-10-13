@@ -721,14 +721,15 @@ export const APP_KIT_CSS = `
 [role="treeitem"][data-drop="inside"]>*,[role="tree"][data-drop-root="inside"]{border-radius:var(--radius-md);box-shadow:inset 0 0 0 1px var(--color-accent);background:color-mix(in srgb,var(--color-accent) 10%,transparent)}
 [role="tree"] [role="treeitem"]>*{transition-property:box-shadow,background-color,color,opacity;transition-duration:var(--cat-motion-fast);transition-timing-function:var(--ease-standard)}
 /* A paginated branch's end: still placeholder bars at row height (the rows
-   move in when the page lands), or the failed read with Retry. */
+   arrive where they stood), the failed read with Retry, or Show more where
+   the tree stopped reading on its own. */
 [data-tree-more]{display:flex;align-items:center;gap:8px;padding-inline-end:8px;box-sizing:border-box}
 [data-tree-more="placeholder"]>span{border-radius:var(--radius-sm);background:color-mix(in srgb,var(--color-fg) 7%,transparent)}
 [data-tree-more="placeholder"]>span:first-child{flex:none;width:12px;height:12px}
 [data-tree-more="placeholder"]>span:last-child{height:8px}
-[data-tree-more="error"]{justify-content:center;font-size:var(--cat-font-size-sm);color:var(--color-fg-muted)}
+[data-tree-more="error"],[data-tree-more="paused"]{justify-content:center;font-size:var(--cat-font-size-sm);color:var(--color-fg-muted)}
 [data-tree-more="error"]>span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-[data-tree-more="error"]>button{flex:none;padding:0;border:0;background:none;font:inherit;color:var(--color-accent);cursor:pointer}
+[data-tree-end]>button{flex:none;padding:0;border:0;background:none;font:inherit;color:var(--color-accent);cursor:pointer}
 
 /* ------------------------------------------------------ popover growth */
 .cat-popover[data-settled]{transition:height var(--cat-motion-base) var(--ease-standard),top var(--cat-motion-base) var(--ease-standard)}

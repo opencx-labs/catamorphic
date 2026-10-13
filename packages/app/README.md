@@ -36,12 +36,17 @@ implements `load({ parentId, cursor, signal })` and optionally
 `{ type: "upsert", items }`, `{ type: "remove", ids }`, or
 `{ type: "invalidate", parentId?, pages? }`. Removal includes descendants. Refresh
 retains loaded pages, push changes win over older in-flight snapshots, and
-concurrent invalidations coalesce (the widest wins). `pages: "first"` suits a
-newest-first poll: it reads from the start only until its rows meet the loaded
-ones and keeps the rest, so a poll costs one page at any depth; the default,
-`"loaded"`, reads every loaded page again. A branch reports `paging` while its next
-page is read and `pageError` when that read failed, leaving its rows ready; a next
-page asked for during a refresh runs after it. Release the function returned by `acquire()` when done.
+concurrent invalidations coalesce (the widest wins); a `load()` asked for during
+IO runs after it and resolves when it lands. The default refresh, `"loaded"`,
+reads every loaded page again, never more reads than built them plus one, so a
+filtering source cannot turn it into a read of the whole history.
+`pages: "first"` suits a newest-first poll: it reads from the start only until
+its rows meet the loaded ones and keeps the rest, so a poll costs one page at any
+depth. Rows past the meeting point are not read again: pair it with a periodic
+`"loaded"` refresh. It needs pages in one stable order, so filter in the source
+and sort in the view (`project`). A branch reports `paging` while its next page is
+read and `pageError` when that read failed, leaving its rows ready; a next page
+asked for during a refresh runs after it. Release the function returned by `acquire()` when done.
 The last release detaches the source and aborts IO, retaining its snapshot.
 
 The React exports from `@catamorphic/app/ui` are composable:
@@ -50,11 +55,18 @@ The React exports from `@catamorphic/app/ui` are composable:
   lazy disclosure, explicit row height and viewport size, arbitrary row renderer.
 - `CollectionTree`: paged roots and lazy children over a collection, retry states,
   grouping and projection. A branch with more rows ends with three still
-  placeholder rows; its next page is read once the person scrolls or moves focus
-  within a viewport of them, new rows arrive with the row motion, a polite status
-  announces the load, and a failed page ends the branch with its error and Retry.
-  `Tree` takes the same through `more` (a map of branch to `{ load, loading,
-  error }`). Only expanded descendants are traversed. Its `active`
+  placeholder rows; its next page is read once the person moves within a
+  viewport of them. Each gesture (wheel, touch, a press, keyboard movement)
+  allows three reads while each one moves the end down; a read that shows
+  nothing new (a filter, a closed group) or a spent gesture leaves Show more
+  instead, so a list never reads its whole history on its own. New rows arrive
+  with the row motion, reads the person caused are announced politely, and a
+  failed page ends the branch with its error and Retry (beside the tree, which
+  owns only its items; Retry leaves focus on the last loaded row). Rows set as
+  more than loaded say so (`aria-setsize="-1"`). `tail` shows root items known to
+  come after the unloaded rows (an open item) past the end without reading up to
+  them. `Tree` takes the same through `more` (a map of branch to `{ load,
+  loading, error, next }`) and `tail`. Only expanded descendants are traversed. Its `active`
   prop owns the root and visible child leases; set it to the surface visibility.
 - `useCollection`: topology subscription and acquisition; set `active: false`
   when the tree owns the lease. Set `projected: true` for observers whose counts

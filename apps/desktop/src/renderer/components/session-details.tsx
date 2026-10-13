@@ -1,10 +1,18 @@
+import {
+  type SessionPullRequest,
+  type SessionPullRequestState,
+  sessionPullRequests,
+} from "@catamorphic/agent-protocol";
 import { useAgentSessionFields } from "@catamorphic/react";
-import { useCallback, useState } from "react";
+import { type ReactNode, useCallback, useState } from "react";
 import type { OpenMode } from "../../shared/open-mode.js";
 import { desktopApi, type SidebarMenuEntry } from "../lib/desktop-api.js";
 import { useSessionCheckout } from "../lib/use-session-checkout.js";
 import { chatFolderView } from "./chat-folder.js";
-import { useRemoteProject } from "./project-authority-provider.js";
+import {
+  ProjectAuthorityProvider,
+  useRemoteAuthority,
+} from "./project-authority-provider.js";
 import {
   useSidebarContent,
   useSidebarContribution,
@@ -14,65 +22,6 @@ import { SidebarItemRow } from "./sidebar-item-row.js";
 import { SidebarStatusBody } from "./sidebar-status.js";
 import { SidebarSubsection } from "./sidebar-subsection.js";
 import { SidebarTree } from "./sidebar-tree.js";
-
-/** The states a recorded pull request can say it is in (ADR 0225). */
-export type SessionPullRequestState = "open" | "draft" | "merged" | "closed";
-
-export interface SessionPullRequest {
-  url: string;
-  number?: number;
-  title?: string;
-  state?: SessionPullRequestState;
-}
-
-const STATES: readonly SessionPullRequestState[] = [
-  "open",
-  "draft",
-  "merged",
-  "closed",
-];
-
-/**
- * The pull requests an agent recorded on its session under the
- * `pull_requests` key (ADR 0225): an array of `{ url, number?, title?,
- * state? }`. Metadata is written by agents, so anything else in it is left
- * out: entries without a web address, repeated addresses, unknown fields.
- */
-export function sessionPullRequests(metadata: unknown): SessionPullRequest[] {
-  const value =
-    typeof metadata === "object" && metadata !== null
-      ? Object.entries(metadata).find(([key]) => key === "pull_requests")?.[1]
-      : undefined;
-  if (!Array.isArray(value)) return [];
-  const seen = new Set<string>();
-  return value.flatMap((entry): SessionPullRequest[] => {
-    if (typeof entry !== "object" || entry === null || Array.isArray(entry))
-      return [];
-    const record = Object.fromEntries(Object.entries(entry));
-    const url = typeof record.url === "string" ? record.url.trim() : "";
-    if (!/^https?:\/\//i.test(url) || seen.has(url)) return [];
-    seen.add(url);
-    const number =
-      typeof record.number === "number" &&
-      Number.isInteger(record.number) &&
-      record.number > 0
-        ? record.number
-        : undefined;
-    const title =
-      typeof record.title === "string" && record.title.trim()
-        ? record.title.trim()
-        : undefined;
-    const state = STATES.find((candidate) => candidate === record.state);
-    return [
-      {
-        url,
-        ...(number !== undefined ? { number } : {}),
-        ...(title ? { title } : {}),
-        ...(state ? { state } : {}),
-      },
-    ];
-  });
-}
 
 const STATE_ICONS: Record<SessionPullRequestState, string> = {
   open: "GitPullRequest",
@@ -118,22 +67,65 @@ const FOLDER_MENU: SidebarMenuEntry[] = [
 /** What "No pull requests yet." says unless workspace.js says otherwise. */
 const EMPTY = "No pull requests yet.";
 
+/** The project's access, while it is read or when it fails, as section status. */
+function AccessStatus({ error }: { error: Error | null }) {
+  useSidebarContent(
+    error ? { state: "error", error: error.message } : { state: "loading" },
+  );
+  return null;
+}
+
+interface SessionDetailsProps {
+  projectId: string;
+  /** The chat in front; undefined while none is (the section is leaving). */
+  sessionId: string | undefined;
+  /** Open a page as a link in the chat opens (a tab the chat owns). */
+  onOpenUrl: (url: string, mode: OpenMode) => void;
+}
+
 /**
  * The "session" section (ADR 0225): the chat in front, where it works (its
  * folder or worktree, as its status popup says, ADR 0215) and the pull
  * requests its agent recorded in the session's metadata. Rows only; the
- * section chrome draws loading, empty and errors (ADR 0147).
+ * section chrome draws loading, empty and errors (ADR 0147). A connected
+ * project's chat is read where the chat reads it, the project's own cache
+ * on its server, so what its stream brings shows here too.
  */
-export function SessionDetails({
+export function SessionDetails(props: SessionDetailsProps) {
+  return (
+    <SessionAccess projectId={props.projectId}>
+      <SessionRows {...props} />
+    </SessionAccess>
+  );
+}
+
+/**
+ * Where a sidebar section reads a chat's session: the project's own access
+ * (its server's cache for a connected project, shared with the chat), its
+ * reading and failing shown as the section's status.
+ */
+export function SessionAccess({
+  projectId,
+  children,
+}: {
+  projectId: string;
+  children: ReactNode;
+}) {
+  return (
+    <ProjectAuthorityProvider
+      projectId={projectId}
+      fallback={(error) => <AccessStatus error={error} />}
+    >
+      {children}
+    </ProjectAuthorityProvider>
+  );
+}
+
+function SessionRows({
   projectId,
   sessionId: current,
   onOpenUrl,
-}: {
-  projectId: string;
-  /** The chat in front; undefined while none is (the section is leaving). */
-  sessionId: string | undefined;
-  onOpenUrl: (url: string, mode: OpenMode) => void;
-}) {
+}: SessionDetailsProps) {
   const contribution = useSidebarContribution();
   const section = contribution?.section;
   const relevant = contribution?.relevant ?? true;
@@ -141,7 +133,7 @@ export function SessionDetails({
   const [shown, setShown] = useState(current);
   if (current && current !== shown) setShown(current);
   const sessionId = current ?? shown;
-  const remote = useRemoteProject(projectId);
+  const remote = useRemoteAuthority() !== null;
   const session = useAgentSessionFields(projectId, sessionId);
   const checkout = useSessionCheckout(projectId, sessionId, {
     enabled: !remote && relevant,
@@ -166,24 +158,24 @@ export function SessionDetails({
     !sessionId ||
     session.isLoading ||
     (!remote && checkout.isLoading && !checkout.error);
-  const error = session.error?.message ?? checkout.error?.message;
+  // A failed read is news only when it leaves nothing to show: a refresh
+  // that fails keeps the rows it had (ADR 0147).
+  const nothing = !folder && pullRequests.length === 0;
+  const failed = !session.fields
+    ? session.error
+    : nothing && !remote && !checkout.data
+      ? checkout.error
+      : null;
   const empty = section?.empty ?? EMPTY;
   useSidebarContent({
-    state: error
-      ? "error"
-      : loading
-        ? "loading"
-        : folder || pullRequests.length > 0
-          ? "ready"
-          : "empty",
+    state: failed ? "error" : loading ? "loading" : nothing ? "empty" : "ready",
     refreshing: !loading && checkout.isFetching && !checkout.isLoading,
     idle: !session.isLoading && !checkout.isFetching,
-    error: error ? "Could not read this chat." : undefined,
+    error: failed ? "Could not read this chat." : undefined,
     retry: refresh,
     empty: EMPTY,
   });
-  if (error || loading) return null;
-  if (!folder && pullRequests.length === 0) return null;
+  if (failed || loading || nothing) return null;
   const folderPath = checkout.data?.path;
   const revealable = Boolean(
     folderPath && checkout.data?.present && checkout.data.available,

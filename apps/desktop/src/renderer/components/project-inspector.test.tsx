@@ -36,18 +36,16 @@ vi.mock("../lib/desktop-api.js", () => ({
     remoteStatus: api.remoteStatus,
   },
 }));
-vi.mock("@catamorphic/react", async () => {
-  const { useQuery } = await import("@tanstack/react-query");
-  return {
-    useAgentSessions: (projectId: string | undefined) =>
-      useQuery({
-        queryKey: ["sessions", projectId],
-        queryFn: () => api.sessions(projectId),
-        enabled: Boolean(projectId),
-        retry: false,
-      }),
-  };
-});
+vi.mock("@catamorphic/react", () => ({
+  useCatamorphic: () => ({
+    apiClient: {
+      GET: async (
+        _path: string,
+        init: { params: { path: { projectId: string } } },
+      ) => ({ data: await api.sessions(init.params.path.projectId) }),
+    },
+  }),
+}));
 
 const project = {
   id: "alpha",
@@ -213,10 +211,33 @@ describe("ProjectInspectorView", () => {
 
   it("says None for a project without a Git remote or a Work server", async () => {
     await render(loaded);
-    const values = [...container.querySelectorAll("dd")].map(
-      (value) => value.textContent,
-    );
-    expect(values).toEqual(["/projects/alpha", "None", "None"]);
+    const values = () =>
+      [...container.querySelectorAll("dd")].map((value) => value.textContent);
+    expect(values()).toEqual(["/projects/alpha", "None", "None"]);
+    // No folder is an answer too; only a failed read is Unavailable.
+    await render({ ...loaded, root: null });
+    expect(values()).toEqual(["None", "None", "None"]);
+    await render({ ...loaded, root: "unavailable" });
+    expect(values()).toEqual(["Unavailable", "None", "None"]);
+  });
+
+  it("offers deleting only once the project is known to be this person's", async () => {
+    for (const server of [undefined, "unavailable" as const]) {
+      await render({ ...loaded, server });
+      await openMenu();
+      expect(menu()?.textContent).toBe("Remove from this device…");
+      await act(async () => {
+        document
+          .querySelector("[data-menu-shield]")
+          ?.dispatchEvent(
+            new MouseEvent("mousedown", { bubbles: true, cancelable: true }),
+          );
+        await new Promise((resolve) => setTimeout(resolve, 220));
+      });
+    }
+    await render({ ...loaded, server: null });
+    await openMenu();
+    expect(menu()?.textContent).toBe("Delete project…");
   });
 
   it("names a connected server and its state, and offers removal to a member", async () => {
@@ -247,16 +268,33 @@ describe("ProjectInspectorView", () => {
     expect(container.querySelector("[title]")).toBeNull();
   });
 
-  it("keeps credentials out of an https remote it shows and copies", () => {
-    expect(displayRemote("https://ada:secret@github.com/example/a.git")).toBe(
-      "https://github.com/example/a.git",
-    );
-    expect(displayRemote("ssh://git@github.com/example/a.git")).toBe(
-      "ssh://git@github.com/example/a.git",
-    );
-    expect(displayRemote("git@github.com:example/a.git")).toBe(
-      "git@github.com:example/a.git",
-    );
+  it("keeps a remote's secrets out of what it shows and copies", () => {
+    const cases: Array<[string, string]> = [
+      // http(s): the user is often a token, so all userinfo goes.
+      [
+        "https://ada:secret@github.com/example/a.git",
+        "https://github.com/example/a.git",
+      ],
+      ["https://user:pa#ss@github.com/o/r.git", "https://github.com/o/r.git"],
+      ["https://tok@github.com:o/r.git", "https://github.com:o/r.git"],
+      ["https://tok:123#x@github.com/o/r", "https://github.com/o/r"],
+      ["git+https://user:tok@host/x.git", "git+https://host/x.git"],
+      // Unparseable: everything up to its last @ goes.
+      ["https://u:a/b@host/x", "https://host/x"],
+      // ssh keeps its user and loses a password.
+      ["ssh://user:secret@host/x.git", "ssh://user@host/x.git"],
+      ["ssh://user:pa/ss@host/x", "ssh://user@host/x"],
+      // Nothing secret: unchanged.
+      [
+        "ssh://git@github.com/example/a.git",
+        "ssh://git@github.com/example/a.git",
+      ],
+      ["ssh://git@host:22/x", "ssh://git@host:22/x"],
+      ["git@github.com:example/a.git", "git@github.com:example/a.git"],
+      ["https://github.com/o/r", "https://github.com/o/r"],
+    ];
+    for (const [remote, shown] of cases)
+      expect(displayRemote(remote), remote).toBe(shown);
   });
 
   it("opens its actions in the app's menu and deletes from there", async () => {
@@ -279,6 +317,29 @@ describe("ProjectInspectorView", () => {
     // The action runs once the menu has left.
     await act(() => new Promise((resolve) => setTimeout(resolve, 220)));
     expect(onDelete).toHaveBeenCalledOnce();
+  });
+
+  it("forgets a pick once its menu opens again", async () => {
+    const onDelete = vi.fn();
+    await render(loaded, { onDelete });
+    const shown = await openMenu();
+    await act(async () =>
+      [...shown.querySelectorAll("button")]
+        .find((button) => button.textContent === "Delete project…")
+        ?.click(),
+    );
+    // Opened again before the picked menu had left, then dismissed.
+    await openMenu();
+    await act(async () => {
+      document
+        .querySelector("[data-menu-shield]")
+        ?.dispatchEvent(
+          new MouseEvent("mousedown", { bubbles: true, cancelable: true }),
+        );
+      await new Promise((resolve) => setTimeout(resolve, 220));
+    });
+    expect(menu()).toBeNull();
+    expect(onDelete).not.toHaveBeenCalled();
   });
 
   it("closes its menu on a press anywhere else, which does nothing more", async () => {

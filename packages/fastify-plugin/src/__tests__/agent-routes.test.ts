@@ -2,6 +2,7 @@ import {
   AccessDeniedError,
   AgentHarnessFixedError,
   AgentNotConfiguredError,
+  AgentSessionAuthorityRequiredError,
   EnvironmentPolicyInvalidError,
 } from "@catamorphic/core";
 import { describe, expect, it, vi } from "vitest";
@@ -167,10 +168,15 @@ describe("agent routes", () => {
     it("sets session metadata by key through core, with core's refusals", async () => {
       const setMetadata = vi.fn(async ({ values }) => {
         if ("forbidden" in values) throw new AccessDeniedError();
+        if ("elsewhere" in values)
+          throw new AgentSessionAuthorityRequiredError(SESSION_ID, "laptop", 4);
         return { pull_requests: values.pull_requests };
       });
+      const setActivity = vi.fn(async () => {
+        throw new AgentSessionAuthorityRequiredError(SESSION_ID, "laptop", 4);
+      });
       const app = createTestApp({
-        core: { agentSessions: { setMetadata } } as never,
+        core: { agentSessions: { setMetadata, setActivity } } as never,
       });
       await app.ready();
       const url = `/api/projects/${PROJECT_ID}/agent/sessions/${SESSION_ID}/metadata`;
@@ -196,6 +202,25 @@ describe("agent routes", () => {
         payload: { metadata: { forbidden: true } },
       });
       expect(denied.statusCode).toBe(403);
+      // A copy of a session another host holds is not written here (it
+      // would fork the person's chat), and neither is its activity.
+      const elsewhere = await app.inject({
+        method: "PATCH",
+        url,
+        payload: { metadata: { elsewhere: true } },
+      });
+      expect(elsewhere.statusCode).toBe(409);
+      expect(elsewhere.json()).toMatchObject({
+        code: "authority_required",
+        authorityRevision: 4,
+      });
+      const activity = await app.inject({
+        method: "PATCH",
+        url: url.replace(/metadata$/, "activity"),
+        payload: { activity: "Reviewing" },
+      });
+      expect(activity.statusCode).toBe(409);
+      expect(activity.json()).toMatchObject({ code: "authority_required" });
       // Keys are checked before core is asked.
       const malformed = await app.inject({
         method: "PATCH",
@@ -203,7 +228,7 @@ describe("agent routes", () => {
         payload: { metadata: { "Pull Requests": [] } },
       });
       expect(malformed.statusCode).toBe(400);
-      expect(setMetadata).toHaveBeenCalledTimes(2);
+      expect(setMetadata).toHaveBeenCalledTimes(3);
       await app.close();
       const unconfigured = await buildApp();
       const response = await unconfigured.inject({

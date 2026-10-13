@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { nativeGit } from "@catamorphic/git";
 import { afterAll, beforeAll, expect, it } from "vitest";
+import { DEFAULT_WORKSPACE_CONFIG } from "../src/main/workspace-config.js";
 import { type AppHandle, launchApp } from "./harness.js";
 
 /**
@@ -19,7 +20,11 @@ const visible = '[data-workspace-visible="true"]';
 const right = `${visible} [data-sidebar="right"]`;
 const thisSessionTab = `${right} [role="tab"][aria-label="This session"]`;
 const details = `${right} [data-sidebar-widget="session"] [data-session-details]`;
-const pullRequest = "https://github.com/acme/web/pull/42";
+const pullRequest = "https://git.invalid/acme/web/pull/42";
+const selectedRightTab = () =>
+  app.eval<string | null>(
+    `document.querySelector('${right} [role="tab"][aria-selected="true"]')?.getAttribute('aria-label') ?? null`,
+  );
 
 const send = async (text: string) => {
   const response = await fetch(`${base}/${sessionId}/commands`, {
@@ -57,7 +62,8 @@ beforeAll(async () => {
     "Initial",
   ]);
   const project = await app.eval<{ id: string }>(
-    `window.catamorphicDesktop.createProject({name:'Session sidebar',rootPath:${JSON.stringify(root)}})`,
+    // The folder already holds the repository: open it as it is.
+    `window.catamorphicDesktop.createProject({name:'Session sidebar',rootPath:${JSON.stringify(root)},importExisting:true})`,
   );
   projectId = project.id;
   const server = await app.eval<{ url: string }>(
@@ -105,25 +111,43 @@ it("offers This session only beside a chat, without taking the panel", async () 
   expect(await app.eval(`!!document.querySelector('${thisSessionTab}')`)).toBe(
     false,
   );
-  const before = await app.eval<string | null>(
-    `document.querySelector('${right} [role="tab"][aria-selected="true"]')?.getAttribute('aria-label') ?? null`,
-  );
+  const before = await selectedRightTab();
   await openChat();
   await app.waitFor(`!!document.querySelector('${thisSessionTab}')`, {
     label: "This session arrives with the chat",
   });
   // Arriving never changes the tab the person was looking at.
-  expect(
-    await app.eval(
-      `document.querySelector('${right} [role="tab"][aria-selected="true"]')?.getAttribute('aria-label') ?? null`,
-    ),
-  ).toBe(before);
+  expect(await selectedRightTab()).toBe(before);
   // It leads the strip.
   expect(
     await app.eval(
       `document.querySelector('${right} [role="tab"]')?.getAttribute('aria-label')`,
     ),
   ).toBe("This session");
+  // With no choice of the person's on offer while a chat is in front (the
+  // tab they chose is gone from the file), the panel still opens on a tab
+  // that stays, not on This session at the head of the strip.
+  const file = await app.eval<string>(
+    "window.catamorphicDesktop.workspaceConfigFile()",
+  );
+  const config = structuredClone(DEFAULT_WORKSPACE_CONFIG);
+  const activity = config.sidebars.right.find((tab) => tab.id === "companion");
+  if (!activity) throw new Error("The default right sidebar has no Activity");
+  activity.id = "companion-renamed";
+  await fs.writeFile(file, `module.exports = ${JSON.stringify(config)};\n`);
+  await app.waitFor(
+    `!document.querySelector('${right} [data-sidebar-widget="activity"]')?.closest('[role="tabpanel"]')?.hidden`,
+    { label: "the renamed Activity tab shown" },
+  );
+  expect(await selectedRightTab()).toBe("Activity");
+  await fs.writeFile(
+    file,
+    `module.exports = ${JSON.stringify(DEFAULT_WORKSPACE_CONFIG)};\n`,
+  );
+  await app.waitFor(
+    `!!document.querySelector('${right} [aria-controls$="-panel-companion"]')`,
+    { label: "the default layout back" },
+  );
 });
 
 it("shows the chat's worktree and a pull request its agent records, live", async () => {
@@ -170,6 +194,37 @@ it("shows the chat's worktree and a pull request its agent records, live", async
   });
 });
 
+it("stays while the person looks at a pull request the chat opened", async () => {
+  const browserTabs = () =>
+    app.eval<number>(
+      `document.querySelectorAll('${visible} [data-point-key^="browser:"]').length`,
+    );
+  const before = await browserTabs();
+  await app.eval(
+    `document.querySelector('${details} [data-sidebar-item-id="${pullRequest}"] [data-tree-primary]').click()`,
+  );
+  // The page opens in a tab of the chat's: the chat's session stays beside
+  // it, so This session and the row the person clicked stay where they were.
+  await app.waitFor(
+    `document.querySelectorAll('${visible} [data-point-key^="browser:"]').length > ${before}`,
+    { label: "the pull request's page opened", timeoutMs: 30_000 },
+  );
+  expect(
+    await app.eval(
+      `document.querySelector('${thisSessionTab}')?.getAttribute('aria-selected')`,
+    ),
+  ).toBe("true");
+  expect(
+    await app.eval(
+      `!!document.querySelector('${details} [data-sidebar-item-id="${pullRequest}"]') && !document.querySelector('${right} [data-sidebar-tab-leaving]')`,
+    ),
+  ).toBe(true);
+  await openChat();
+  await app.waitFor(
+    `document.querySelector('${thisSessionTab}')?.getAttribute('aria-selected') === 'true'`,
+  );
+});
+
 it("leaves with the chat, and comes back to the person's choice", async () => {
   await app.eval(
     `document.querySelector('${visible} [aria-label="New tab"]').click()`,
@@ -181,11 +236,7 @@ it("leaves with the chat, and comes back to the person's choice", async () => {
   await app.waitFor(
     `!!document.querySelector('${right} [role="tab"][aria-selected="true"]')`,
   );
-  expect(
-    await app.eval(
-      `document.querySelector('${right} [role="tab"][aria-selected="true"]').getAttribute('aria-label')`,
-    ),
-  ).not.toBe("This session");
+  expect(await selectedRightTab()).not.toBe("This session");
   await app.waitFor(
     `!document.querySelector('${right} [data-sidebar-tab-leaving]')`,
     { label: "the leaving tab is gone" },
@@ -197,6 +248,24 @@ it("leaves with the chat, and comes back to the person's choice", async () => {
   );
   await app.waitFor(
     `!!document.querySelector('${details} [data-sidebar-item-id="${pullRequest}"]')`,
+  );
+});
+
+it("turns back from a quick change on the same tab", async () => {
+  // Away and straight back, inside one motion: the tab that was leaving
+  // returns as the same element, and nothing is left leaving.
+  await app.eval(`(() => {
+    window.__thisSessionTab = document.querySelector('${thisSessionTab}');
+    document.querySelector('${visible} [aria-label="New tab"]').click();
+  })()`);
+  await app.waitFor(
+    `!!document.querySelector('${right} [data-sidebar-tab-leaving]')`,
+    { label: "This session leaving" },
+  );
+  await openChat();
+  await app.waitFor(
+    `document.querySelector('${thisSessionTab}') === window.__thisSessionTab && !document.querySelector('${right} [data-sidebar-tab-leaving]') && !document.querySelector('${right} .sidebar-tab-slot-leaving, ${right} .sidebar-strip-folding')`,
+    { label: "the same tab back, settled" },
   );
   expect(app.getRendererErrors()).toEqual([]);
 });

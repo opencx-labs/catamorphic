@@ -122,7 +122,6 @@ export async function projectToolCapabilities(args: {
             !taken.has(definition.name) &&
             [
               "session_artifact",
-              "set_session_metadata",
               "create_watcher",
               "list_watchers",
               "stop_watcher",

@@ -4,12 +4,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import type {
-  AgentAttachment,
-  AgentQuestion,
-  JsonValue,
-  NativeRef,
-  RuntimeRequestResponse,
+import {
+  type AgentAttachment,
+  type AgentQuestion,
+  type JsonValue,
+  type NativeRef,
+  type RuntimeRequestResponse,
+  sessionPullRequests,
 } from "@catamorphic/agent-protocol";
 import {
   type AttemptControl,
@@ -1840,18 +1841,27 @@ export const catalog = defineWorkflow(({ defineBoundary }) => ({
   }
 
   // "record pr: <number> <state>" → the REAL set_session_metadata tool,
-  // as the desktop-workspace skill teaches (ADR 0225): the chat's whole
-  // pull_requests list, this one's state updated in place.
+  // as the desktop-workspace skill teaches (ADR 0225): read the chat's
+  // pull_requests, then write the list back with this one in it. The
+  // address never resolves (.invalid), so opening it stays offline.
   const recordPr = /^record pr:\s*(\d+)\s+(open|draft|merged|closed)$/.exec(
     message.trim(),
   );
   if (recordPr?.[1] && recordPr[2]) {
     const number = Number(recordPr[1]);
+    const url = `https://git.invalid/acme/web/pull/${number}`;
+    const read = z
+      .object({ metadata: z.record(z.string(), z.unknown()) })
+      .parse(await turn.tool("set_session_metadata", { key: "pull_requests" }));
+    const listed = sessionPullRequests(read.metadata).filter(
+      (entry) => entry.url !== url,
+    );
     const recorded = await turn.tool("set_session_metadata", {
       key: "pull_requests",
       value: [
+        ...listed,
         {
-          url: `https://github.com/acme/web/pull/${number}`,
+          url,
           number,
           title: "Show this session beside the chat",
           state: recordPr[2],

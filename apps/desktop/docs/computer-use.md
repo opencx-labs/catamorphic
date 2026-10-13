@@ -20,7 +20,8 @@ screenshots are pictures of the page and are not a redaction boundary.
 A page waiting on a dialog (its `alert`, `confirm` or `prompt`, "Leave site?",
 or an HTTP sign-in, ADR 0226) runs nothing else. `browser_snapshot`, `read` and
 every other action report the dialog instead (its kind, who asks, its text),
-and an action that opens one returns that report rather than hanging. Agents
+and an action that opens one returns that report rather than hanging (and
+goes no further once the page answers). Agents
 answer as the person would: `press` Enter for OK or Leave, Escape for Cancel or
 Stay, and `fill` on uid `dialog` for a prompt's answer, which the person sees
 go in. A sign-in is the person's alone: the report says to ask them. `navigate`
