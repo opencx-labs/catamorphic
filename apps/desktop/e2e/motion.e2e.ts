@@ -322,10 +322,18 @@ describe("paired motion (enter/exit mirrors)", () => {
     for (const rule of transitions) {
       // One duration and the standard curve both ways: leaving reverses
       // arriving from wherever it is.
+      // The production build writes 200ms as 0.2s.
       expect(
-        new Set(rule.durations.split(",").map((value) => value.trim())),
+        new Set(
+          rule.durations.split(",").map((value) => {
+            const duration = value.trim();
+            return duration.endsWith("ms")
+              ? Number.parseFloat(duration)
+              : Number.parseFloat(duration) * 1000;
+          }),
+        ),
         rule.selector,
-      ).toEqual(new Set(["200ms"]));
+      ).toEqual(new Set([200]));
       expect(
         new Set(rule.easing.split(",").map((value) => value.trim())),
         rule.selector,
