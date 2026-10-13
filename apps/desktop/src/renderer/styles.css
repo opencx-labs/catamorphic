@@ -2018,8 +2018,10 @@ kbd {
   -webkit-app-region: drag;
 }
 
-/* A detached rail sizes to its contents rather than a workspace viewport. */
-[data-dock-native] [data-bubble-items][aria-hidden="false"] {
+/* A detached rail sizes to its contents rather than a workspace viewport.
+   The ceiling holds folded too: folding animates the width, and a ceiling
+   that changed with the fold would cut the strip short in its first frame. */
+[data-dock-native] [data-bubble-items] {
   max-width: calc(100vw - 60px);
 }
 

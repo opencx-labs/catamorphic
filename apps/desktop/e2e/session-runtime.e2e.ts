@@ -622,3 +622,200 @@ it("keeps the person's fold of the strip through a chat tab, beside an open chat
   await app.reload();
   await collapsed(false);
 });
+
+it("folds the strip into its corner in one motion, beside a leaving chat or alone", async () => {
+  const idle = `!document.getAnimations().some(a=>a.playState==='running' && a.effect?.getTiming().iterations!==Infinity)`;
+  await run(
+    `await window.catamorphicDesktop.setPrefs({dockSide:'right',dockPlacement:'center',dockCollapsed:false});`,
+  );
+  await wait(
+    `return $('[data-dock-host]')?.dataset.dockPlacement==='center' && $('[data-dock-rail]')?.dataset.dockCollapsed==='false' && ${idle};`,
+  );
+  // A floating chat with a message, so folding minimizes it.
+  if (!(await run(`return dock()?.dataset.floatingChat === 'true';`))) {
+    await run(
+      `window.dispatchEvent(new KeyboardEvent('keydown', {key:'n',metaKey:/Mac/.test(navigator.platform),ctrlKey:!/Mac/.test(navigator.platform),bubbles:true}));`,
+    );
+    await wait(`return dock()?.dataset.floatingChat === 'true';`);
+  }
+  await run(`const composer = dock().querySelector('[data-composer-input]');
+    setReactValue(composer, 'fold beside me');
+    composer.closest('form').requestSubmit();`);
+  await wait(
+    `return dock()?.textContent.includes('You said: fold beside me') && ${idle};`,
+  );
+  const read = <T>(body: string) =>
+    app.eval<T>(`(async () => { ${helpers} ${body} })()`);
+  type Frame = {
+    t: number;
+    folded: boolean;
+    left: number;
+    right: number;
+    width: number;
+    chat: number | null;
+  };
+  /** Every frame of the strip from the press until it rests. */
+  const record = async (folded: boolean, act: () => Promise<unknown>) => {
+    await run(`window.__fold = [];
+      const tick = (t) => {
+        if (!window.__fold) return;
+        const rail = $('[data-dock-rail]').getBoundingClientRect();
+        const chat = $('section[data-floating-chat="true"]');
+        window.__fold.push({ t, folded: $('[data-dock-rail]').dataset.dockCollapsed === 'true', left: rail.left, right: rail.right, width: rail.width, chat: chat ? Number(getComputedStyle(chat).opacity) : null });
+        requestAnimationFrame(tick);
+      };
+      requestAnimationFrame(tick);`);
+    await wait(`return window.__fold.length >= 2;`);
+    await act();
+    await wait(
+      `return window.__fold.at(-1)?.folded === ${folded} && (${!folded} || !$('section[data-floating-chat="true"]')) && ${idle};`,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    return read<Frame[]>(
+      `const frames = window.__fold; window.__fold = null; return frames;`,
+    );
+  };
+  const corner = () =>
+    read<number>(
+      `return $('[data-dock-host]').getBoundingClientRect().right - 32;`,
+    );
+  /**
+   * The strip moves between its spot and its corner as one motion: its
+   * edge toward where it goes and its width both make steady progress from
+   * the first frame that moves, in step with each other, with no frame
+   * where it stops short of where it lands or snaps on landing.
+   */
+  const oneMotion = (frames: Frame[]) => {
+    const start = frames.findIndex(
+      (frame) => frame.folded !== frames[0]?.folded,
+    );
+    expect(start).toBeGreaterThan(0);
+    const from = frames[start - 1];
+    const to = frames.at(-1);
+    if (!from || !to) throw new Error("no frames");
+    const travel = to.right - from.right;
+    const narrowing = from.width - to.width;
+    expect(Math.abs(travel)).toBeGreaterThan(40);
+    expect(Math.abs(narrowing)).toBeGreaterThan(40);
+    let still = 0;
+    let moved = false;
+    for (const [index, frame] of frames.slice(start).entries()) {
+      const previous = frames[start + index - 1] ?? from;
+      // Never back the way it came, never a width it has left behind.
+      expect(
+        (frame.right - previous.right) * Math.sign(travel),
+      ).toBeGreaterThan(-1);
+      expect(
+        (previous.width - frame.width) * Math.sign(narrowing),
+      ).toBeGreaterThan(-1);
+      const slid = (frame.right - from.right) / travel;
+      const narrowed = (from.width - frame.width) / narrowing;
+      // The width changes as the strip slides, not once it has landed.
+      expect(narrowed).toBeGreaterThan(slid - 0.35);
+      const step = Math.max(
+        Math.abs(frame.right - previous.right),
+        Math.abs(frame.width - previous.width),
+      );
+      const remaining = Math.max(
+        Math.abs(to.right - frame.right),
+        Math.abs(frame.width - to.width),
+      );
+      if (step > 0.5) moved = true;
+      if (moved && remaining > 3) {
+        still = step < 0.5 ? still + 1 : 0;
+        expect(still).toBeLessThan(3);
+      }
+    }
+    // It lands within its motion, not long after.
+    const landed = frames.findIndex(
+      (frame, index) =>
+        index >= start &&
+        Math.abs(frame.right - to.right) < 1 &&
+        Math.abs(frame.width - to.width) < 1,
+    );
+    expect(landed).toBeGreaterThanOrEqual(start);
+    expect((frames[landed]?.t ?? Infinity) - from.t).toBeLessThan(700);
+  };
+
+  // Folded beside an open chat: the strip folds as the chat leaves, not
+  // after it has gone.
+  const arrows = await app.eval<{ x: number; y: number }>(
+    `(() => { const b = document.querySelector('[data-dock-arrows]').getBoundingClientRect(); return { x: b.left + b.width / 2, y: b.top + b.height / 2 }; })()`,
+  );
+  const withChat = await record(true, () => app.clickPointer(arrows));
+  oneMotion(withChat);
+  const firstFolded = withChat.find((frame) => frame.folded);
+  expect(firstFolded?.chat ?? 0).toBeGreaterThan(0.5);
+  expect(withChat.at(-1)?.chat).toBeNull();
+  expect(
+    Math.abs((withChat.at(-1)?.right ?? 0) - (await corner())),
+  ).toBeLessThan(1);
+  expect(
+    await run(`return $('[data-bubble-items]').getBoundingClientRect().width;`),
+  ).toBe(0);
+
+  // Opened again, it comes back to the centre the same way.
+  oneMotion(
+    await record(false, () =>
+      run(`$('[aria-label="Expand chat bubbles"]').click();`),
+    ),
+  );
+  const open = await read<{ center: number; width: number }>(
+    `const host = $('[data-dock-host]').getBoundingClientRect(), rail = $('[data-dock-rail]').getBoundingClientRect();
+      return { center: rail.left + rail.width / 2 - (host.left + host.width / 2), width: rail.width };`,
+  );
+  expect(Math.abs(open.center)).toBeLessThan(1);
+
+  // Alone, the same.
+  oneMotion(
+    await record(true, () =>
+      run(`$('[aria-label="Collapse chat bubbles"]').click();`),
+    ),
+  );
+
+  // Opened again before the fold lands, it turns back from where it is
+  // and rests open, as wide as it was.
+  await record(false, () =>
+    run(`$('[aria-label="Expand chat bubbles"]').click();`),
+  );
+  await record(false, async () => {
+    await run(`$('[aria-label="Collapse chat bubbles"]').click();`);
+    await run(
+      `await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(resolve)))); $('[aria-label="Expand chat bubbles"]').click();`,
+    );
+  });
+  const reopened = await read<{ center: number; width: number }>(
+    `const host = $('[data-dock-host]').getBoundingClientRect(), rail = $('[data-dock-rail]').getBoundingClientRect();
+      return { center: rail.left + rail.width / 2 - (host.left + host.width / 2), width: rail.width };`,
+  );
+  expect(Math.abs(reopened.center)).toBeLessThan(1);
+  expect(Math.abs(reopened.width - open.width)).toBeLessThan(1);
+
+  // Without motion, it is in its corner at once: a frame or two for the
+  // change to show, where the fold takes about fifteen.
+  await app.cdp("Emulation.setEmulatedMedia", {
+    features: [{ name: "prefers-reduced-motion", value: "reduce" }],
+  });
+  try {
+    // The page has taken the preference: its transitions are instant.
+    await wait(
+      `return matchMedia('(prefers-reduced-motion: reduce)').matches && parseFloat(getComputedStyle($('[data-bubble-items]')).transitionDuration) < 0.001;`,
+    );
+    const instant = await record(true, () =>
+      run(`$('[aria-label="Collapse chat bubbles"]').click();`),
+    );
+    const start = instant.findIndex((frame) => frame.folded);
+    const settledAt = instant.findIndex(
+      (frame, index) =>
+        index >= start &&
+        Math.abs(frame.right - (instant.at(-1)?.right ?? 0)) < 1 &&
+        Math.abs(frame.width - (instant.at(-1)?.width ?? 0)) < 1,
+    );
+    expect(settledAt - start).toBeLessThanOrEqual(4);
+    await record(false, () =>
+      run(`$('[aria-label="Expand chat bubbles"]').click();`),
+    );
+  } finally {
+    await app.cdp("Emulation.setEmulatedMedia", { features: [] });
+  }
+});

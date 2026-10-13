@@ -127,7 +127,9 @@ left/right, never coordinates. Dragging must not trigger expansion; Escape
 cancels and arrow keys select a corner. Settling respects reduced motion.
 Folding the strip (its arrows) is the person's choice, saved with the profile
 (`dockCollapsed`) and shown in every window and the detached dock until they
-open it again from the collapsed bubble. A focused chat tab folds the strip and
+open it again from the collapsed bubble. Folded beside an open chat, the strip
+folds while that chat minimizes, as one motion (the detached window waits for
+the chat, since its size follows it). A focused chat tab folds the strip and
 an open chat opens it beside the chat, each only for as long as it lasts; neither
 changes the choice.
 A detached dock stays above other apps and follows macOS desktops. Chat cards
