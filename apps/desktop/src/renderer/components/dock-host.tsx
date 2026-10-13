@@ -26,7 +26,7 @@ import {
   themeStyle,
   useProjectTheme,
 } from "../lib/theme.js";
-import { useAppPreferences } from "../lib/use-app-preferences.js";
+import { useAppPreference } from "../lib/use-app-preferences.js";
 import { chatTabKey } from "../lib/workspace-state.js";
 import { ChatBubbles } from "./chat-bubbles.js";
 import { ChatDock } from "./chat-dock.js";
@@ -115,7 +115,7 @@ export function DockHost({
   const showing = useRef(new Set<string>());
   const currentProjectId = activeProjectId ?? snapshot.activeProjectId;
   const voiceStatus = useVoiceStatus();
-  const { prefs: voicePrefs, update: updatePrefs } = useAppPreferences();
+  const [voiceInDock, setVoiceInDock] = useAppPreference("voiceInDock");
   // The downloads bubble opens things in the workspace: through the
   // workspaces service when this is the detached dock window, straight
   // to this window's app otherwise (it needs no project for that).
@@ -148,12 +148,21 @@ export function DockHost({
     ? snapshot.detached
     : !snapshot.detached;
   useEffect(() => {
-    void desktopApi.dockSnapshot().then(setSnapshot);
-    return desktopApi.onDockSnapshot(setSnapshot);
+    // A broadcast that repeats what the dock shows (the echo of its own
+    // fold or corner, saved as the motion starts) keeps the state it has:
+    // rendering every chat again for it would land mid-motion.
+    const receive = (next: DockSnapshot) =>
+      setSnapshot((current) =>
+        current !== EMPTY && JSON.stringify(current) === JSON.stringify(next)
+          ? current
+          : next,
+      );
+    void desktopApi.dockSnapshot().then(receive);
+    return desktopApi.onDockSnapshot(receive);
   }, []);
   // The strip waits for the real snapshot: drawn from the placeholder, a
   // folded strip would show open, then slide shut, on every launch.
-  const snapshotLoaded = snapshot !== EMPTY;
+  const snapshotLoaded = remoteSnapshot !== EMPTY;
   // In the window, the dock rests on the visible workspace's chat region by
   // CSS anchoring (styles.css), so it moves in the same frame as the region
   // (a sidebar settling, a split) without measuring. While the dock floats
@@ -973,14 +982,12 @@ export function DockHost({
               // Kept out of the dock, the assistant's microphone still
               // shows while voice talks to it, started by its shortcut.
               voiceShown={
-                voicePrefs.voiceInDock ||
+                voiceInDock ||
                 (voiceStatus.phase !== "off" &&
                   voiceStatus.target?.kind === "assistant")
               }
-              voiceInDock={voicePrefs.voiceInDock}
-              onVoiceInDockChange={(inDock) =>
-                void updatePrefs({ voiceInDock: inDock })
-              }
+              voiceInDock={voiceInDock}
+              onVoiceInDockChange={(inDock) => void setVoiceInDock(inDock)}
               voice={
                 <VoiceButton
                   projectId={currentProjectId}

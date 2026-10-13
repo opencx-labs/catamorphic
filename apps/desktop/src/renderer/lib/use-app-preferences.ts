@@ -61,3 +61,59 @@ export function useAppPreferences() {
   };
   return { prefs, loaded, update, error };
 }
+
+/**
+ * One profile choice, kept live, and its setter. A change to any other
+ * choice leaves the caller alone: the dock renders every chat, and a
+ * re-render for an unrelated preference (its own fold, saved as it starts)
+ * would land in the middle of that fold's motion.
+ */
+export function useAppPreference<K extends keyof AppPrefs>(
+  key: K,
+): [AppPrefs[K], (value: AppPrefs[K]) => Promise<void>] {
+  const [value, setValue] = useState<AppPrefs[K]>(DEFAULT_PREFS[key]);
+  const revision = useRef(0);
+  useEffect(() => {
+    let active = true;
+    const unsubscribe = desktopApi.onPrefsChanged((next) => {
+      revision.current++;
+      setValue(normalizePrefs(next)[key]);
+    });
+    const load = (request: number) =>
+      void desktopApi
+        .getPrefs()
+        .then((next) => {
+          if (active && request === revision.current)
+            setValue(normalizePrefs(next)[key]);
+        })
+        .catch(() => {
+          // The default stands until the next change says otherwise.
+        });
+    load(revision.current);
+    // Another profile in this window: its preferences.
+    const reload = () => load(++revision.current);
+    window.addEventListener("catamorphic:profile-refetch", reload);
+    return () => {
+      active = false;
+      unsubscribe();
+      window.removeEventListener("catamorphic:profile-refetch", reload);
+    };
+  }, [key]);
+  const update = async (next: AppPrefs[K]) => {
+    const request = ++revision.current;
+    setValue(next);
+    const patch: Partial<AppPrefs> = {};
+    patch[key] = next;
+    try {
+      const saved = await desktopApi.setPrefs(patch);
+      if (request === revision.current) setValue(normalizePrefs(saved)[key]);
+    } catch {
+      if (request === revision.current) {
+        const current = await desktopApi.getPrefs().catch(() => null);
+        if (current && request === revision.current)
+          setValue(normalizePrefs(current)[key]);
+      }
+    }
+  };
+  return [value, update];
+}

@@ -370,6 +370,7 @@ screen, or under reduced motion.
 |---|---|---|
 | `dock-in` / `dock-out` | 250ms | each other |
 | `bubble-in` / `bubble-out` | 200ms | each other |
+| Bubble strip fold (the chats' `width` from their own size, the rail's gap and padding, its slide between resting spots) | 250ms | itself: one motion both ways, reversing from where it is; folded beside an open chat it runs with that chat's `dock-out` |
 | `tab-in` / `tab-out` | 200ms / 180ms | each other (exit snappier) |
 | `.sidebar-tab-slot` transition (a sidebar tab's place growing in or shrinking out of its strip: This session beside a chat; `@starting-style` for arrival) | 200ms | itself: one transition both ways on one element, so a quick change back reverses from where it is; at no width the place gives back its flex gap |
 | `.sidebar-strip` transition (a sidebar's tab strip opening as a second tab arrives, folding as the count drops to one; never for the sidebar's own opening) | 200ms | itself, reversing the same way; the panel below follows its height |
@@ -645,6 +646,30 @@ the historical log explains how it arrived here.
 - [Performance](docs/performance.md): idle lifecycle checks and sustained measurement.
 
 ## Design log
+### 2026-10-13: The strip folds in one motion
+
+Folding the bubble strip stopped halfway. Its chats gave up their width
+through a `max-width` falling from 60vw, far above what they used, so the
+strip kept its full width for most of the fold and only shrank once its
+slide into the corner had landed. Since the microphone came to the dock
+(#215) the arrows and the collapsed bubble swap in one place, so nothing
+else changes its width meanwhile: the strip slid over at full width, sat
+there, then shrank.
+It also started each fold from where it last changed spots rather than
+where it was, so after chats came or went it first jumped toward the
+middle. Folded beside an open chat, it waited for the chat to finish
+leaving before it began. Each change it saved came back as a broadcast a
+tenth of a second later and rendered every chat again mid-fold.
+
+Now the chats' width goes from what it is to nothing (and back, with
+`interpolate-size`), with the rail's gap, so the strip narrows from the
+first frame as it slides; the slide starts from where the strip is drawn
+and takes the fold's 250 ms; beside an open chat it folds while the chat
+leaves (the detached window still waits, as its size follows the chat).
+A broadcast that repeats what the dock shows, and a preference other than
+the dock's own, no longer render the dock. A folded strip also stays
+folded through launch instead of showing open and folding.
+
 ### 2026-10-13: Pages ask, over their own tab
 
 A page could not ask anything. `alert` and `confirm` came up in a native
