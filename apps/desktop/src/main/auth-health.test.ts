@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { claudeOauthHealth } from "./auth-health.js";
+import {
+  claudeOauthHealth,
+  signInRefreshable,
+  signInUsable,
+} from "./auth-health.js";
 
 const NOW = 1_800_000_000_000;
 
@@ -45,5 +49,99 @@ describe("claudeOauthHealth", () => {
     expect(claudeOauthHealth(null, NOW)).toBe("missing");
     expect(claudeOauthHealth("not json", NOW)).toBe("missing");
     expect(claudeOauthHealth(creds({}), NOW)).toBe("missing");
+  });
+});
+
+describe("signInRefreshable (ADR 0227)", () => {
+  it("holds for a Claude sign-in with a live refresh token, its access token expired or not", () => {
+    for (const expiresAt of [NOW - 6 * 60_000, NOW + 60_000])
+      expect(
+        signInRefreshable({
+          harness: "claude-code",
+          raw: creds({
+            accessToken: "access",
+            refreshToken: "refresh",
+            expiresAt,
+            refreshTokenExpiresAt: NOW + 4 * 86_400_000,
+          }),
+          now: NOW,
+        }),
+      ).toBe(true);
+  });
+
+  it("fails for a Claude sign-in whose refresh token expired, is gone, or is absent", () => {
+    expect(
+      signInRefreshable({
+        harness: "claude-code",
+        raw: creds({
+          accessToken: "access",
+          refreshToken: "refresh",
+          refreshTokenExpiresAt: NOW - 1,
+        }),
+        now: NOW,
+      }),
+    ).toBe(false);
+    expect(
+      signInRefreshable({
+        harness: "claude-code",
+        raw: creds({ accessToken: "access" }),
+        now: NOW,
+      }),
+    ).toBe(false);
+    expect(
+      signInRefreshable({ harness: "claude-code", raw: null, now: NOW }),
+    ).toBe(false);
+    expect(
+      signInRefreshable({ harness: "claude-code", raw: "garbage", now: NOW }),
+    ).toBe(false);
+  });
+
+  it("holds for a Codex ChatGPT sign-in with a refresh token, never for a key", () => {
+    expect(
+      signInRefreshable({
+        harness: "codex",
+        raw: JSON.stringify({
+          OPENAI_API_KEY: null,
+          tokens: { access_token: "a", refresh_token: "r" },
+        }),
+        now: NOW,
+      }),
+    ).toBe(true);
+    expect(
+      signInRefreshable({
+        harness: "codex",
+        raw: JSON.stringify({ OPENAI_API_KEY: "key" }),
+        now: NOW,
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("signInUsable", () => {
+  it("is Claude's health, and a Codex key or sign-in", () => {
+    expect(
+      signInUsable({
+        harness: "claude-code",
+        raw: creds({ accessToken: "x", refreshTokenExpiresAt: NOW + 1 }),
+        now: NOW,
+      }),
+    ).toBe(true);
+    expect(
+      signInUsable({
+        harness: "claude-code",
+        raw: creds({ accessToken: "x", refreshTokenExpiresAt: NOW - 1 }),
+        now: NOW,
+      }),
+    ).toBe(false);
+    expect(
+      signInUsable({
+        harness: "codex",
+        raw: JSON.stringify({ OPENAI_API_KEY: "key" }),
+        now: NOW,
+      }),
+    ).toBe(true);
+    expect(
+      signInUsable({ harness: "codex", raw: JSON.stringify({}), now: NOW }),
+    ).toBe(false);
   });
 });

@@ -2411,3 +2411,25 @@ The switcher's list spans the sidebar's content, whatever the project's
 name and the sidebar's width, and a project's card sits beside the whole
 list (`ResourceInspector`'s `anchorRef`), clear of its edge and each row's
 window button, level with the row it describes.
+
+### 2026-10-13: A sign-in that is not really lost does not stop the chat
+
+A person returned to a chat after an hour and its first turn failed in
+three seconds with "OAuth access token has expired", and the sign-in card.
+The login was healthy: Claude Code refreshes an expired token under a lock
+all its processes share, and a CLI that finds it busy (a terminal session
+refreshing at the same moment) goes on with the old token. A turn turned
+away like that, before any work, on a sign-in whose refresh token is
+still good, now waits three seconds saying "Reconnecting to Claude…" and
+runs once more on a fresh CLI; the card shows only if that fails too. That
+retry's Claude Code writes a debug log under Work's logs (`sign-in/`,
+readable by the person alone, five kept) for the next time it happens.
+
+The card's "your message retries by itself once you're back" was true
+only after Work's own re-login. Main now runs the failed turn again
+whenever the sign-in comes back, however: Work's re-login, a new key in
+Settings, `/login` in a terminal or another process refreshing the login,
+which main notices by the credentials changing (every few seconds for ten
+minutes after the failure, then on focus and wake). It does so for chats
+that are not on screen too, once per change, only for the chat's latest
+turn. See ADR 0227.

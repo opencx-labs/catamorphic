@@ -820,6 +820,8 @@ app.whenReady().then(async () => {
     app.on("browser-window-focus", () => {
       server?.syncSessionMailboxes();
       server?.personalEnvironment.nudge();
+      // A sign-in renewed outside Work runs its failed chats again.
+      void server?.signInRecovery.probe();
     });
     // OAuth-backed connections hand their token to harnesses as a plain
     // header, so the app keeps it fresh: at boot, after sleep, and on a
@@ -833,9 +835,10 @@ app.whenReady().then(async () => {
     powerMonitor.on("resume", refreshConnectionTokens);
     // A wake is when sessions turn out to have expired — nudge every
     // window to re-probe its agents' auth health.
-    powerMonitor.on("resume", () =>
-      state.broadcast("catamorphic:agent-auth-maybe-changed", {}),
-    );
+    powerMonitor.on("resume", () => {
+      state.broadcast("catamorphic:agent-auth-maybe-changed", {});
+      void server?.signInRecovery.probe();
+    });
     setInterval(refreshConnectionTokens, 4 * 60_000).unref();
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

@@ -1,10 +1,13 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import type {
   AttemptHost,
   AttemptStart,
   HarnessEvent,
 } from "@catamorphic/agent-protocol/runner";
 import { NO_CAPABILITIES } from "@catamorphic/agent-protocol/runner";
-import { expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 const starts = vi.hoisted(() => [] as AttemptStart[]);
 vi.mock("@catamorphic/claude-code", () => ({
@@ -32,6 +35,8 @@ vi.mock("electron", () => ({ safeStorage: {} }));
 import {
   DesktopAgentRegistry,
   type DesktopAgentRegistryDeps,
+  SIGN_IN_RETRY_MS,
+  signInOf,
 } from "./agent-registry.js";
 
 function registryWith(
@@ -182,4 +187,109 @@ it("fails an unapproved project agent's turns with the fix", () => {
   expect(() =>
     blocked.harness.adapter.start({} as AttemptStart, {} as AttemptHost),
   ).toThrow("Approve it first.");
+});
+
+describe("a sign-in that can still refresh (ADR 0227)", () => {
+  const localClaude = { ...claudeAgent, auth: "local" };
+  const auth = {
+    message: "Claude Code rejected the credentials",
+    kind: "auth" as const,
+    retrySafe: true,
+  };
+  const turn = { projectId: "p", sessionId: "s", turnId: "t" };
+
+  it("retries an auth failure once, after a pause, while the sign-in can refresh", async () => {
+    const asked: unknown[] = [];
+    const { agent } = hostOf(
+      registryWith(localClaude, {
+        signInRefreshable: async (signIn: unknown) => {
+          asked.push(signIn);
+          return true;
+        },
+      }),
+      "claude",
+    );
+    expect(await agent.retryFailure?.({ error: auth, ...turn })).toEqual({
+      afterMs: SIGN_IN_RETRY_MS,
+      activity: "Reconnecting to Claude…",
+    });
+    expect(asked).toEqual([
+      { harness: "claude-code", auth: "local", id: "claude" },
+    ]);
+  });
+
+  it("lets the turn fail when the sign-in cannot refresh, or the failure is not about it", async () => {
+    const refreshable = vi.fn(async () => false);
+    const { agent } = hostOf(
+      registryWith(localClaude, { signInRefreshable: refreshable }),
+      "claude",
+    );
+    expect(
+      await agent.retryFailure?.({ error: auth, ...turn }),
+    ).toBeUndefined();
+    refreshable.mockResolvedValue(true);
+    expect(
+      await agent.retryFailure?.({
+        error: { message: "Overloaded", kind: "unavailable", retrySafe: true },
+        ...turn,
+      }),
+    ).toBeUndefined();
+    expect(
+      await agent.retryFailure?.({
+        error: { message: "Something else", retrySafe: true },
+        ...turn,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("asks nothing of agents on keys", () => {
+    const { agent } = hostOf(
+      registryWith(
+        { ...claudeAgent, auth: "api-key", apiKey: "key" },
+        { signInRefreshable: async () => true },
+      ),
+      "claude",
+    );
+    expect(agent.retryFailure).toBeUndefined();
+    expect(signInOf({ id: "claude", harness: "ai-sdk", auth: "account" })).toBe(
+      undefined,
+    );
+  });
+
+  it("gives the retry's Claude Code a debug log only this user can read", async () => {
+    const logsDir = fs.mkdtempSync(path.join(os.tmpdir(), "sign-in-logs-"));
+    try {
+      const registry = registryWith(localClaude, {
+        signInRefreshable: async () => true,
+        logsDir,
+      });
+      const { agent, harness } = hostOf(registry, "claude");
+      await agent.retryFailure?.({ error: auth, ...turn });
+      const start = (reason: string) =>
+        harness.adapter.start(
+          {
+            turnId: "t",
+            reason,
+            options: {},
+            env: {},
+          } as unknown as AttemptStart,
+          { emit: () => {} } as unknown as AttemptHost,
+        ).finished;
+      await start("retry");
+      const debugFile = starts.at(-1)?.options.debugFile;
+      expect(typeof debugFile).toBe("string");
+      expect(String(debugFile).startsWith(path.join(logsDir, "sign-in"))).toBe(
+        true,
+      );
+      expect(fs.statSync(String(debugFile)).mode & 0o777).toBe(0o600);
+      expect(fs.statSync(path.join(logsDir, "sign-in")).mode & 0o777).toBe(
+        0o700,
+      );
+      // Only that retry: the next attempt runs without one.
+      await start("retry");
+      expect(starts.at(-1)?.options.debugFile).toBeUndefined();
+    } finally {
+      fs.rmSync(logsDir, { recursive: true, force: true });
+    }
+  });
 });

@@ -49,6 +49,7 @@ import type { SettingsPatch, SettingsScope } from "../shared/settings.js";
 import type { UsageSummary, UsageWindowDays } from "../shared/usage.js";
 import { rosterAgentId } from "../shared/voice.js";
 import type { BindingAuth } from "./agent-bindings-store.js";
+import { readAgentCredentials } from "./agent-credentials.js";
 import {
   type AgentsStore,
   type CreateAgentInput,
@@ -96,7 +97,6 @@ import {
   type HarnessExecutable,
   harnessPathEnvironment,
 } from "./harness-components.js";
-import { readClaudeKeychain } from "./harness-logins.js";
 import type { IncognitoSessionsStore } from "./incognito-sessions.js";
 import type { WindowProfileRegistry } from "./index.js";
 import { type Keybindings, normalizeKeybindings } from "./keybindings.js";
@@ -708,9 +708,35 @@ export function registerIpcHandlers(
     "catamorphic:agents-update",
     (event, id: string, patch: UpdateAgentInput) => {
       const store = storesFor(event).agents;
+      const before = store.get(id);
       const agent = store.update(id, patch);
       agentsChanged(event, store);
+      // A new key or sign-in mode: chats that failed on the old one run
+      // again, as the auth card promises (ADR 0227).
+      if (
+        agent &&
+        before &&
+        (agent.apiKey !== before.apiKey || agent.auth !== before.auth)
+      )
+        void state.current?.signInRecovery.signedIn(id);
       return agent ? toPublicAgent(agent) : null;
+    },
+  );
+
+  // A chat shows a turn that failed on its agent's sign-in (one from before
+  // this run, say): it runs again once the sign-in works (ADR 0227).
+  ipcMain.handle(
+    "catamorphic:agent-auth-failure-shown",
+    (
+      _event,
+      failure: {
+        projectId: string;
+        sessionId: string;
+        turnId: string;
+        agentId: string;
+      },
+    ) => {
+      state.current?.signInRecovery.failed(failure);
     },
   );
 
@@ -1240,70 +1266,19 @@ export function registerIpcHandlers(
   };
 
   /**
-   * On macOS, Claude Code's default (~/.claude) login stores its OAuth
-   * credentials in the KEYCHAIN — there is no .credentials.json to stat.
-   * The fingerprint doubles as a change detector: the terminal /login flow
+   * Where an agent's CLI credentials live (`agent-credentials.ts`). The
+   * fingerprint doubles as a change detector: the terminal /login flow
    * gives no exit signal, so completion is "the credentials changed".
    */
-  const claudeKeychainRaw = readClaudeKeychain;
-
-  const claudeKeychainFingerprint = (raw: string): string => {
-    try {
-      const oauth = (
-        JSON.parse(raw) as { claudeAiOauth?: { expiresAt?: number } }
-      ).claudeAiOauth;
-      return `keychain:${oauth?.expiresAt ?? raw.length}`;
-    } catch {
-      return `keychain:${raw.length}`;
-    }
-  };
-
-  /**
-   * Where an agent's CLI credentials live: presence, a change
-   * fingerprint, and the raw credential content (for the health probe).
-   */
-  const agentCredentials = async (agent: {
+  const agentCredentials = (agent: {
     harness: string;
     auth: string;
     id: string;
-  }): Promise<{
-    present: boolean;
-    fingerprint: string;
-    raw: string | null;
-  }> => {
-    const home =
-      agent.auth === "local"
-        ? agent.harness === "codex"
-          ? path.join(app.getPath("home"), ".codex")
-          : path.join(app.getPath("home"), ".claude")
-        : path.join(paths.agentHomesDir, agent.id);
-    const file =
-      agent.harness === "codex"
-        ? path.join(home, "auth.json")
-        : path.join(home, ".credentials.json");
-    try {
-      const stat = fs.statSync(file);
-      return {
-        present: true,
-        fingerprint: `file:${stat.mtimeMs}:${stat.size}`,
-        raw: fs.readFileSync(file, "utf-8"),
-      };
-    } catch {
-      // No file — the macOS keychain is the other place Claude Code keeps
-      // the default account's session.
-      if (agent.harness !== "codex" && agent.auth === "local") {
-        const raw = await claudeKeychainRaw();
-        if (raw !== null) {
-          return {
-            present: true,
-            fingerprint: claudeKeychainFingerprint(raw),
-            raw,
-          };
-        }
-      }
-      return { present: false, fingerprint: "absent", raw: null };
-    }
-  };
+  }) =>
+    readAgentCredentials(agent, {
+      homeDir: app.getPath("home"),
+      agentHomesDir: paths.agentHomesDir,
+    });
 
   ipcMain.handle(
     "catamorphic:agent-login-status",
@@ -1438,6 +1413,15 @@ export function registerIpcHandlers(
     },
   );
 
+  /**
+   * A sign-in Work ran finished: windows hear it, and on success the chats
+   * that failed on that agent's sign-in run again (ADR 0227).
+   */
+  const loginFinished = (agentId: string, ok: boolean) => {
+    state.broadcast("catamorphic:agent-login-finished", { agentId, ok });
+    if (ok) void state.current?.signInRecovery.signedIn(agentId);
+  };
+
   // One watcher per agent: a repeated login replaces the previous poll.
   const loginWatchers = new Map<string, ReturnType<typeof setInterval>>();
   const watchForLoginCompletion = (agent: {
@@ -1470,10 +1454,7 @@ export function registerIpcHandlers(
         if (!now.present || now.fingerprint === (await before)) return;
         clearInterval(timer);
         loginWatchers.delete(agent.id);
-        state.broadcast("catamorphic:agent-login-finished", {
-          agentId: agent.id,
-          ok: true,
-        });
+        loginFinished(agent.id, true);
       })().finally(() => {
         probing = false;
       });
@@ -1527,10 +1508,7 @@ export function registerIpcHandlers(
       // wizard registers the pending agent) before completion lands —
       // real logins always take longer than the invoke round-trip.
       setTimeout(() => {
-        state.broadcast("catamorphic:agent-login-finished", {
-          agentId: id,
-          ok: true,
-        });
+        loginFinished(id, true);
       }, 50);
       return { started: true };
     }
@@ -1549,17 +1527,11 @@ export function registerIpcHandlers(
         .then((key) => {
           store.update(id, { apiKey: key });
           agentsChanged(event, store);
-          state.broadcast("catamorphic:agent-login-finished", {
-            agentId: id,
-            ok: true,
-          });
+          loginFinished(id, true);
         })
         .catch((cause) => {
           console.warn("[desktop] OpenRouter sign-in failed:", cause);
-          state.broadcast("catamorphic:agent-login-finished", {
-            agentId: id,
-            ok: false,
-          });
+          loginFinished(id, false);
         });
       return { started: true };
     }
@@ -1601,10 +1573,7 @@ export function registerIpcHandlers(
       child.stdout.on("data", watchForUrl);
       child.stderr.on("data", watchForUrl);
       child.on("exit", (code) => {
-        state.broadcast("catamorphic:agent-login-finished", {
-          agentId: id,
-          ok: code === 0,
-        });
+        loginFinished(id, code === 0);
       });
       return { started: true };
     }

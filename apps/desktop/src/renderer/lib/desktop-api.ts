@@ -1273,6 +1273,16 @@ export interface CatamorphicDesktopApi {
   agentAuthHealth: (
     id: string,
   ) => Promise<{ health: "ok" | "expired" | "missing"; reauth: boolean }>;
+  /**
+   * A chat shows a turn that failed on its agent's sign-in: main runs it
+   * again once the sign-in works, however it comes back (ADR 0227).
+   */
+  agentAuthFailureShown: (failure: {
+    projectId: string;
+    sessionId: string;
+    turnId: string;
+    agentId: string;
+  }) => Promise<void>;
   usageSummary: (days: number) => Promise<UsageSummary>;
   agentCommands: (input: {
     projectId: string;

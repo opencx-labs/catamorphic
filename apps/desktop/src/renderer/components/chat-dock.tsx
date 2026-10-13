@@ -1060,27 +1060,30 @@ function ChatDockContent({
   );
   // Auth failures offer a one-click re-login only for account-auth agents
   // (OpenRouter PKCE, Claude Code / Codex logins); API-key agents are
-  // pointed at Settings by the error text itself. A successful reconnect
-  // retries the failed turn on its own — the user already said what they
-  // wanted; fixing the credentials shouldn't cost them a re-send.
-  // The agent being reconnected and the turn its failure stopped: that
-  // turn is the one to run again, whatever else arrived meanwhile.
-  const awaitingReauthRef = useRef<{
-    agentId: string;
-    turnId: string | undefined;
-  } | null>(null);
-  const retryRef = useRef(chat.retry);
-  retryRef.current = chat.retry;
-  useEffect(
-    () =>
-      desktopApi.onAgentLoginFinished((result) => {
-        const awaiting = awaitingReauthRef.current;
-        if (result.agentId !== awaiting?.agentId) return;
-        awaitingReauthRef.current = null;
-        if (result.ok) void retryRef.current(awaiting.turnId);
-      }),
-    [],
-  );
+  // pointed at Settings by the error text itself. Main runs the failed
+  // turn again once the sign-in works, however it came back (a re-login
+  // here, `/login` in a terminal, a new key): the person already said what
+  // they wanted (ADR 0227). It hears of a failure shown here too, for one
+  // from before this run.
+  const latestTurn = chat.timeline.at(-1)?.turn;
+  const authFailure =
+    !authority &&
+    latestTurn?.status === "failed" &&
+    latestTurn.error?.kind === "auth"
+      ? latestTurn.id
+      : undefined;
+  const authFailureAgentId = sessionAgentId ?? activeAgent?.id;
+  useEffect(() => {
+    if (!authFailure || !chat.sessionId || !authFailureAgentId) return;
+    void desktopApi
+      .agentAuthFailureShown({
+        projectId,
+        sessionId: chat.sessionId,
+        turnId: authFailure,
+        agentId: authFailureAgentId,
+      })
+      .catch(() => {});
+  }, [authFailure, chat.sessionId, authFailureAgentId, projectId]);
 
   // Lurk mode: while the agent works and a tab is visible behind the
   // floating dock, the dock shrinks VERTICALLY to a strip — header, the
@@ -1371,16 +1374,7 @@ function ChatDockContent({
             activeAgent.provider === "openrouter"
               ? "Reconnect OpenRouter"
               : `Re-login ${activeAgent.name}`,
-          run: () => {
-            awaitingReauthRef.current = {
-              agentId: activeAgent.id,
-              turnId: latestAuthFailure(chat.timeline),
-            };
-            void desktopApi.agentLogin(activeAgent.id).then((result) => {
-              // Login never started (e.g. key-auth agent): stop waiting.
-              if (!result.started) awaitingReauthRef.current = null;
-            });
-          },
+          run: () => void desktopApi.agentLogin(activeAgent.id),
         }
       : undefined;
 
@@ -3331,18 +3325,6 @@ function lastReplyText(
       if (entry?.kind === "reply" && entry.item.text.trim())
         return entry.item.text;
     }
-  }
-  return undefined;
-}
-
-/** The latest turn that failed on the agent's sign-in. */
-function latestAuthFailure(
-  turns: ReturnType<typeof useAgentChat>["timeline"],
-): string | undefined {
-  for (let index = turns.length - 1; index >= 0; index -= 1) {
-    const turn = turns[index]?.turn;
-    if (turn?.status === "failed" && turn.error?.kind === "auth")
-      return turn.id;
   }
   return undefined;
 }

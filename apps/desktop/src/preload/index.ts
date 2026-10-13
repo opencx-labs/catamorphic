@@ -278,6 +278,13 @@ const api = {
     id: string,
   ): Promise<{ health: "ok" | "expired" | "missing"; reauth: boolean }> =>
     invoke("catamorphic:agent-auth-health", id),
+  /** A shown sign-in failure, which main runs again once it is fixed. */
+  agentAuthFailureShown: (failure: {
+    projectId: string;
+    sessionId: string;
+    turnId: string;
+    agentId: string;
+  }): Promise<void> => invoke("catamorphic:agent-auth-failure-shown", failure),
   /** Whole-machine transcript scan for the usage page (ADR 0057). */
   usageSummary: (days: number): Promise<unknown> =>
     invoke("catamorphic:usage-summary", days),

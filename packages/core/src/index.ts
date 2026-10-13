@@ -203,6 +203,7 @@ export {
 } from "./services/code-hosts-service.js";
 export {
   type AgentHarness,
+  type AgentRetry,
   type AgentTurnContext,
   type CodingAgentRegistry,
   harnessIdOf,

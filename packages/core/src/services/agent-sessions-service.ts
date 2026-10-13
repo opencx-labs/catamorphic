@@ -3,6 +3,7 @@ import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import {
   ACTIVE_TURN_STATUSES,
+  type AgentErrorKind,
   type Attempt,
   type CommandReceipt,
   type DispatchMode,
@@ -775,6 +776,10 @@ export interface AgentTurnSettledEvent {
   messageId: string;
   turnId?: string;
   status: "completed" | "failed" | "awaiting_input";
+  /** The session's agent, for a host that reacts to its failures. */
+  agentId: string | null;
+  /** What a failed turn's error was classified as (`auth`, `rate_limit`). */
+  errorKind?: AgentErrorKind;
   interrupted?: boolean;
   retrying?: boolean;
   /** Present only when a workflow asked the host to surface this turn. */
@@ -4313,6 +4318,19 @@ export class AgentSessionsService {
       finalize: (input) => this.finalizeTurn(input),
       settled: (input) => this.afterTurn(input),
       approvalsOpened: (input) => this.notifyApprovers(input),
+      // Whether a failure is passing is the agent's host's to say (ADR 0227).
+      retryFailure: async ({ session, turn, error }) => {
+        const agent = await this.resolveAgent(
+          session.agent_id,
+          session.project_id,
+        );
+        return agent.retryFailure?.({
+          error,
+          projectId: session.project_id,
+          sessionId: session.id,
+          turnId: turn.id,
+        });
+      },
       released: ({ sessionId, turnId }) => {
         this.stopGrantRenewal(sessionId);
         this.workingDirectories.delete(turnId);
@@ -5247,6 +5265,10 @@ export class AgentSessionsService {
       turnId: turn.id,
       messageId: input.reply?.id ?? turn.inputItemId ?? turn.id,
       status: turn.status === "completed" ? "completed" : "failed",
+      agentId: input.session.agent_id,
+      ...(turn.status === "failed" && turn.error?.kind
+        ? { errorKind: turn.error.kind }
+        : {}),
       interrupted: turn.status === "interrupted",
       retrying: input.retrying,
       ...(turn.outcome?.notification

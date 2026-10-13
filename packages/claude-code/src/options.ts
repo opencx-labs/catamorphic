@@ -49,6 +49,12 @@ export interface ClaudeCodeAttemptOptions {
   hostOwnsBackground?: boolean;
   /** Permission mode when the attempt's permissions name none. */
   permissionMode?: PermissionMode;
+  /**
+   * Where the CLI writes its debug log for this attempt (`--debug-file`):
+   * a host diagnosing a failure it retries (a sign-in that did not
+   * refresh) names a file only it can read.
+   */
+  debugFile?: string;
 }
 
 const PERMISSION_MODES: readonly PermissionMode[] = [
@@ -79,6 +85,7 @@ export function readAttemptOptions(
   const executable = options.executable;
   const executableArgs = options.executableArgs;
   const permissionMode = options.permissionMode;
+  const debugFile = options.debugFile;
   const flags = {
     memory: bool(options, "memory"),
     disableNativeMonitors: bool(options, "disableNativeMonitors"),
@@ -102,6 +109,7 @@ export function readAttemptOptions(
       Object.entries(flags).filter(([, value]) => value !== undefined),
     ),
     ...(isPermissionMode(permissionMode) ? { permissionMode } : {}),
+    ...(typeof debugFile === "string" && debugFile ? { debugFile } : {}),
   };
 }
 
@@ -621,6 +629,7 @@ export function buildQueryOptions(input: QueryOptionInputs): Options {
     sessionStoreFlush: "eager",
     abortController: input.abortController,
     stderr: input.stderr,
+    ...(options.debugFile ? { debugFile: options.debugFile } : {}),
     ...threadOptions(attempt),
   };
 }

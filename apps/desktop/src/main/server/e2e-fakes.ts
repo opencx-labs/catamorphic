@@ -222,6 +222,8 @@ export class E2eLocalSandboxProvider implements SandboxProvider {
  * message fails again.
  */
 const oneShotFailures = new Set<string>();
+/** How often each "expired sign-in" message was turned away so far. */
+const signInFailures = new Map<string, number>();
 const pdfArtifactSource =
   "%PDF-1.4\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>\nendobj\n4 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n5 0 obj\n<< /Length 51 >>\nstream\nBT /F1 18 Tf 30 100 Td (Linked PDF artifact) Tj ET\nendstream\nendobj\nxref\n0 6\n0000000000 65535 f \n0000000009 00000 n \n0000000058 00000 n \n0000000115 00000 n \n0000000241 00000 n \n0000000311 00000 n \ntrailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n411\n%%EOF\n";
 
@@ -346,6 +348,8 @@ interface FakeTurn {
  * - "slowly" → a ~4s turn (mid-turn UI: spinners, queueing, interrupts).
  * - "narrate" / "step by step" → paced notes and commands.
  * - "auth error" / "rate limit" → a provider failure once per message.
+ * - "expired sign-in" / "expired sign-in xN" → a Claude Code sign-in that
+ *   did not refresh, safe to retry, on the first (N) attempts.
  * - "permission: <server>/<tool>" → a tool approval request.
  * - "elicitation: queue|cancel|app" → MCP elicitation requests.
  * - anything else → a title and one reply echoing the message.
@@ -2055,6 +2059,27 @@ export const catalog = defineWorkflow(({ defineBoundary }) => ({
       return;
     }
     yield { type: "text", content: "Recovered after reconnecting." };
+    return;
+  }
+
+  // "expired sign-in" (or "expired sign-in xN") → Claude Code turned away
+  // on an access token it did not refresh, before any work, on the
+  // message's first attempt (or first N): what a refresh lost to another
+  // Claude Code holding the shared lock looks like (ADR 0227).
+  const expired = /expired sign-in(?: x(\d+))?/.exec(prompt);
+  if (expired) {
+    const failures = signInFailures.get(prompt) ?? 0;
+    if (failures < Number(expired[1] ?? 1)) {
+      signInFailures.set(prompt, failures + 1);
+      yield {
+        type: "error",
+        content:
+          "Failed to authenticate. API Error: 401 OAuth access token has expired. Re-authenticate to continue.",
+        retrySafe: true,
+      };
+      return;
+    }
+    yield { type: "text", content: "Signed in again." };
     return;
   }
 

@@ -75,6 +75,11 @@ describe("session log", () => {
   const bindings: ThreadBinding[] = [];
   /** What the lingering harness's tool call after its turn ended got. */
   const lateTools: string[] = [];
+  /**
+   * The sign-in agent's host (ADR 0227): whether the sign-in can still
+   * refresh, how long its retry waits, and how often it was asked.
+   */
+  const signIn = { refreshable: true, afterMs: 50, asked: 0 };
 
   beforeAll(async () => {
     await migrateToLatest({ db, schema });
@@ -139,6 +144,49 @@ describe("session log", () => {
       ...echo,
       id: "flaky",
       harness: { placement: "host", adapter: flakyAdapter },
+    };
+    // Turned away by its provider on a turn's first N attempts ("sign-in
+    // N"), before any work, as an access token the CLI could not refresh;
+    // "sign-in N refused" is a failure that is not safe to send again.
+    const signInStarts = new Map<string, number>();
+    const signInAdapter: HarnessAdapter = {
+      id: "echo",
+      capabilities: () => inner.capabilities(),
+      start: (attempt, host) => {
+        const starts = (signInStarts.get(attempt.turnId) ?? 0) + 1;
+        signInStarts.set(attempt.turnId, starts);
+        const text = attempt.input?.text ?? "";
+        const failing = Number(/sign-in (\d+)/.exec(text)?.[1] ?? 0);
+        if (starts > failing) return inner.start(attempt, host);
+        const rejected: typeof host = Object.create(host);
+        rejected.emit = (event) =>
+          host.emit(
+            event.type === "turn.completed"
+              ? {
+                  type: "turn.completed",
+                  status: "failed",
+                  error: {
+                    message:
+                      "Failed to authenticate. API Error: 401 OAuth access token has expired.",
+                    kind: "auth",
+                    ...(text.includes("refused") ? {} : { retrySafe: true }),
+                  },
+                }
+              : event,
+          );
+        return inner.start(attempt, rejected);
+      },
+    };
+    const signedIn: RegisteredCodingAgent = {
+      ...echo,
+      id: "signed-in",
+      harness: { placement: "host", adapter: signInAdapter },
+      retryFailure: async ({ error }) => {
+        signIn.asked += 1;
+        return error.kind === "auth" && signIn.refreshable
+          ? { afterMs: signIn.afterMs, activity: "Reconnecting to Claude…" }
+          : undefined;
+      },
     };
     // Tries to write a person's message over the turn's input, then
     // answers like the echo harness.
@@ -267,6 +315,7 @@ describe("session log", () => {
               guarded,
               stubborn,
               flaky,
+              signedIn,
               forger,
               lingering,
               elsewhere,
@@ -278,6 +327,7 @@ describe("session log", () => {
             guarded,
             stubborn,
             flaky,
+            signedIn,
             forger,
             lingering,
             elsewhere,
@@ -1164,6 +1214,186 @@ describe("session log", () => {
     );
     expect(turn.status).toBe("failed");
     expect(turn.error?.message).toContain("Credentials revoked");
+  });
+
+  describe("a sign-in that can still refresh (ADR 0227)", () => {
+    async function signInChat(name: string) {
+      const project = await projects.create(identity, { name });
+      const session = await sessions.create(identity, project.id, {
+        agentId: "signed-in",
+      });
+      return { projectId: project.id, sessionId: session.id };
+    }
+    async function attemptsOf(turnId: string) {
+      return db
+        .selectFrom("agent_turn_attempts")
+        .select(["reason", "status", "error"])
+        .where("turn_id", "=", turnId)
+        .orderBy("ordinal")
+        .execute();
+    }
+
+    it("retries once, quietly, and the turn reads as if nothing failed", async () => {
+      signIn.refreshable = true;
+      signIn.afterMs = 50;
+      signIn.asked = 0;
+      const { projectId, sessionId } = await signInChat("Sign-in passing");
+      const { turn, reply } = await sessions.sendMessage(
+        identity,
+        projectId,
+        sessionId,
+        "sign-in 1",
+      );
+      expect(turn.status).toBe("completed");
+      expect(turn.error).toBeNull();
+      expect(reply?.kind === "assistant_message" && reply.text).toContain(
+        "Echo: sign-in 1",
+      );
+      expect(signIn.asked).toBe(1);
+      const attempts = await attemptsOf(turn.id);
+      expect(attempts.map(({ reason, status }) => [reason, status])).toEqual([
+        ["initial", "failed"],
+        ["retry", "completed"],
+      ]);
+      // Meanwhile the turn stayed active, saying what it did; it never
+      // showed the failure.
+      const events = await db
+        .selectFrom("agent_session_events")
+        .select("payload")
+        .where("session_id", "=", sessionId)
+        .orderBy("sequence")
+        .execute();
+      const turnStates = events
+        .map((row) => row.payload as unknown as SessionEvent)
+        .flatMap((event) =>
+          event.type === "turn.changed" ? [event.turn] : [],
+        );
+      expect(
+        turnStates.some(
+          (state) =>
+            state.status === "preparing" &&
+            state.activity === "Reconnecting to Claude…",
+        ),
+      ).toBe(true);
+      expect(turnStates.some((state) => state.error !== null)).toBe(false);
+    });
+
+    it("fails with the sign-in error when the one retry fails too, and a retry by hand is not retried again", async () => {
+      signIn.refreshable = true;
+      signIn.afterMs = 50;
+      signIn.asked = 0;
+      const { projectId, sessionId } = await signInChat("Sign-in stuck");
+      const { turn } = await sessions.sendMessage(
+        identity,
+        projectId,
+        sessionId,
+        "sign-in 3",
+      );
+      expect(turn.status).toBe("failed");
+      expect(turn.error).toMatchObject({ kind: "auth", retrySafe: true });
+      expect(signIn.asked).toBe(1);
+      expect((await attemptsOf(turn.id)).map(({ reason }) => reason)).toEqual([
+        "initial",
+        "retry",
+      ]);
+      // The person's own retry runs once more, without a quiet one.
+      await sessions.command(identity, projectId, sessionId, {
+        type: "retry",
+        commandId: randomUUID(),
+        turnId: turn.id,
+      });
+      await vi.waitFor(
+        async () => {
+          const detail = await sessions.get(identity, projectId, sessionId);
+          const [settled] = orderedTurns(
+            sessionStateFromSnapshot(detail.snapshot),
+          );
+          expect(settled?.status).toBe("failed");
+          expect(settled?.attemptCount).toBe(3);
+        },
+        { timeout: 10_000 },
+      );
+      expect(signIn.asked).toBe(1);
+      expect((await attemptsOf(turn.id)).map(({ status }) => status)).toEqual([
+        "failed",
+        "failed",
+        "failed",
+      ]);
+    });
+
+    it("fails at once when the host says the sign-in cannot refresh", async () => {
+      signIn.refreshable = false;
+      signIn.asked = 0;
+      const { projectId, sessionId } = await signInChat("Sign-in expired");
+      const { turn } = await sessions.sendMessage(
+        identity,
+        projectId,
+        sessionId,
+        "sign-in 1",
+      );
+      expect(turn.status).toBe("failed");
+      expect(turn.error?.kind).toBe("auth");
+      expect(signIn.asked).toBe(1);
+      expect(await attemptsOf(turn.id)).toHaveLength(1);
+      signIn.refreshable = true;
+    });
+
+    it("never asks about a failure that is not safe to send again", async () => {
+      signIn.refreshable = true;
+      signIn.asked = 0;
+      const { projectId, sessionId } = await signInChat("Sign-in refused");
+      const { turn } = await sessions.sendMessage(
+        identity,
+        projectId,
+        sessionId,
+        "sign-in 1 refused",
+      );
+      expect(turn.status).toBe("failed");
+      expect(signIn.asked).toBe(0);
+      expect(await attemptsOf(turn.id)).toHaveLength(1);
+    });
+
+    it("ends the turn interrupted when the person stops it during the pause", async () => {
+      signIn.refreshable = true;
+      signIn.afterMs = 30_000;
+      const { projectId, sessionId } = await signInChat("Sign-in stopped");
+      await sessions.command(identity, projectId, sessionId, {
+        type: "send",
+        commandId: randomUUID(),
+        text: "sign-in 1",
+      });
+      const pausing = await vi.waitFor(
+        async () => {
+          const detail = await sessions.get(identity, projectId, sessionId);
+          const [turn] = orderedTurns(
+            sessionStateFromSnapshot(detail.snapshot),
+          );
+          expect(turn?.status).toBe("preparing");
+          expect(turn?.activity).toBe("Reconnecting to Claude…");
+          return turn;
+        },
+        { timeout: 10_000 },
+      );
+      await sessions.command(identity, projectId, sessionId, {
+        type: "interrupt",
+        commandId: randomUUID(),
+      });
+      await vi.waitFor(
+        async () => {
+          const detail = await sessions.get(identity, projectId, sessionId);
+          const [turn] = orderedTurns(
+            sessionStateFromSnapshot(detail.snapshot),
+          );
+          expect(turn).toMatchObject({
+            id: pausing?.id,
+            status: "interrupted",
+          });
+        },
+        { timeout: 5_000 },
+      );
+      expect(await attemptsOf(pausing?.id ?? "")).toHaveLength(1);
+      signIn.afterMs = 50;
+    });
   });
 
   it("continues a turn whose runner went away with its holder", async () => {

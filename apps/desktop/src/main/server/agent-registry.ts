@@ -36,6 +36,7 @@ import {
 } from "../../shared/agent-permissions.js";
 import { parseAssistantAgentId } from "../../shared/voice.js";
 import type { WorkspaceBridge } from "../agent-bridge.js";
+import type { AgentSignIn } from "../agent-credentials.js";
 import type { AgentConfig } from "../agents-store.js";
 import { readableAttachments } from "../composer-files.js";
 import type { ConnectorsService } from "../connectors.js";
@@ -72,6 +73,7 @@ import {
 import { composeSkillsNote, type HostSkillsRuntime } from "./host-skills.js";
 import { localAgentWorkspace } from "./local-agent-workspace.js";
 import { parseProjectAgentId } from "./project-agents.js";
+import { signInDebugLog } from "./sign-in-diagnostics.js";
 import {
   type ProjectSessionContext,
   workspaceInstructions,
@@ -88,9 +90,29 @@ import {
 type HostHarness = Extract<RegisteredHarness, { placement: "host" }>;
 
 /** What one agent config builds: its harness and per-attempt settings. */
-type BuiltAgent = Pick<RegisteredCodingAgent, "options" | "defaults"> & {
+type BuiltAgent = Pick<
+  RegisteredCodingAgent,
+  "options" | "defaults" | "retryFailure"
+> & {
   harness: HostHarness;
 };
+
+/**
+ * How long a turn whose sign-in can still refresh waits before its one
+ * quiet retry (ADR 0227): long enough for another Claude Code holding the
+ * shared refresh lock to finish with it.
+ */
+export const SIGN_IN_RETRY_MS = 3_000;
+
+/** The harness's own sign-in an agent config runs on, if any (ADR 0199). */
+export function signInOf(
+  config: Pick<AgentConfig, "id" | "harness" | "auth">,
+): AgentSignIn | undefined {
+  if (config.harness !== "claude-code" && config.harness !== "codex")
+    return undefined;
+  if (config.auth !== "local" && config.auth !== "account") return undefined;
+  return { harness: config.harness, auth: config.auth, id: config.id };
+}
 
 export interface DesktopAgentRegistryDeps {
   profiles: ProfilesStore;
@@ -154,6 +176,14 @@ export interface DesktopAgentRegistryDeps {
   ) => Promise<string | null>;
   /** E2E: every configured agent resolves to the scripted fake. */
   e2eFake?: boolean;
+  /**
+   * Whether an agent's own harness sign-in can still refresh itself
+   * (ADR 0227), read from this machine's credentials when a turn on it
+   * fails on auth. Without it, such a turn fails at once.
+   */
+  signInRefreshable?: (signIn: AgentSignIn) => Promise<boolean>;
+  /** Work's logs directory: a sign-in retry's CLI writes its debug log there. */
+  logsDir?: string;
 }
 
 function resolveProjectDelegation(
@@ -232,6 +262,11 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     warm: DESKTOP_WARM_HARNESSES,
   });
   private readonly codex = createCodexAdapter({ warm: DESKTOP_WARM_HARNESSES });
+  /**
+   * Turns whose next attempt is a sign-in retry, until when: its Claude
+   * Code writes a debug log (ADR 0227).
+   */
+  private readonly signInRetries = new Map<string, number>();
 
   constructor(private readonly deps: DesktopAgentRegistryDeps) {
     this.mcp = new DesktopAgentMcp(deps);
@@ -928,6 +963,9 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     assistant?: boolean;
   }): BuiltAgent | undefined {
     const errors = this.errorLabels(config);
+    const signIn = signInOf(config);
+    const retry = signIn ? this.signInRetry(signIn) : undefined;
+    const retryFailure = retry ? { retryFailure: retry } : {};
     const live = () => this.mcp.live({ config, profileId });
     const workspace = this.workspaceTools(config, "native") ?? [];
     const served = {
@@ -960,6 +998,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
           ...served,
         },
         defaults: { effort: config.effort },
+        ...retryFailure,
       };
     }
 
@@ -1075,6 +1114,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
             ...(config.model ? { model: config.model } : {}),
             harnessPermissions: permissions,
           },
+          ...retryFailure,
         };
       }
       case "codex": {
@@ -1123,6 +1163,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
             ...(config.model ? { model: config.model } : {}),
             harnessPermissions: permissions,
           },
+          ...retryFailure,
         };
       }
     }
@@ -1160,9 +1201,14 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
       },
     );
     const key = input.keyEnv ? await input.keyEnv() : {};
+    const debugFile =
+      input.harness === "claude-code"
+        ? this.signInRetryLog(input.attempt)
+        : undefined;
     const options: JsonObject = {
       ...input.attempt.options,
       command: component.executablePath,
+      ...(debugFile ? { debugFile } : {}),
     };
     return {
       adapter: input.adapter,
@@ -1244,6 +1290,77 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
    * Who failed, for errors the person can act on: raw provider bodies
    * (OpenRouter's 401 is literally "User not found.") become a reconnect.
    */
+  /**
+   * One quiet retry for an auth failure on a sign-in that can still
+   * refresh (ADR 0227). Claude Code refreshes an expired access token
+   * under a lock every Claude Code on the machine shares; a CLI that finds
+   * it busy too long, or loses the refresh to the network, goes on with the
+   * expired token and is turned away. A fresh CLI a few seconds later
+   * refreshes it. A sign-in that cannot refresh fails the turn at once.
+   */
+  private signInRetry(
+    signIn: AgentSignIn,
+  ): RegisteredCodingAgent["retryFailure"] {
+    const refreshable = this.deps.signInRefreshable;
+    if (!refreshable) return undefined;
+    return async ({ error, turnId }) => {
+      if (error.kind !== "auth") return undefined;
+      if (!(await refreshable(signIn).catch(() => false))) return undefined;
+      // Only the retry that follows writes its CLI's debug log; one that
+      // never started is forgotten at the next.
+      if (signIn.harness === "claude-code") {
+        const now = Date.now();
+        for (const [turn, until] of this.signInRetries)
+          if (until < now) this.signInRetries.delete(turn);
+        this.signInRetries.set(turnId, now + 60_000);
+      }
+      console.warn(
+        `[desktop] ${signIn.harness} was turned away on a sign-in that can still refresh; retrying once`,
+      );
+      return {
+        afterMs: SIGN_IN_RETRY_MS,
+        activity: `Reconnecting to ${signIn.harness === "codex" ? "Codex" : "Claude"}…`,
+      };
+    };
+  }
+
+  /** A sign-in retry's debug log file, for that attempt only. */
+  private signInRetryLog(attempt: AttemptStart): string | undefined {
+    const until = this.signInRetries.get(attempt.turnId);
+    if (until === undefined || attempt.reason !== "retry") return undefined;
+    this.signInRetries.delete(attempt.turnId);
+    if (until < Date.now() || !this.deps.logsDir) return undefined;
+    const file = signInDebugLog({
+      logsDir: this.deps.logsDir,
+      harness: "claude-code",
+    });
+    if (file)
+      console.warn(
+        `[desktop] Claude Code writes this retry's debug log to ${file}`,
+      );
+    return file;
+  }
+
+  /**
+   * The harness sign-in an agent's turns run on (ADR 0199): a profile
+   * agent's, the assistant's agent's, or a project agent's binding.
+   * Undefined for agents on keys or the built-in agent.
+   */
+  signInFor(agentId: string): AgentSignIn | undefined {
+    const projectRef = parseProjectAgentId(agentId);
+    if (projectRef) {
+      const resolved = this.resolveProjectConfig(
+        agentId,
+        projectRef.projectId,
+        projectRef.slug,
+      );
+      return "error" in resolved ? undefined : signInOf(resolved.config);
+    }
+    const assistant = parseAssistantAgentId(agentId);
+    const found = this.findConfig(assistant?.agentId ?? agentId);
+    return found ? signInOf(found.config) : undefined;
+  }
+
   private errorLabels(config: AgentConfig): AgentErrorLabels {
     const labels: Record<string, string> = {
       anthropic: "Anthropic",

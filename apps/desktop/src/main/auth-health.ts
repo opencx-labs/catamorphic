@@ -54,3 +54,67 @@ export function claudeOauthHealth(
     return "missing";
   }
 }
+
+/** The harnesses whose own sign-in Work reads on this machine. */
+export type SignInHarness = "claude-code" | "codex";
+
+function record(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? Object.fromEntries(Object.entries(value))
+    : undefined;
+}
+
+function filled(value: unknown): boolean {
+  return typeof value === "string" && value.length > 0;
+}
+
+/**
+ * Whether a harness's sign-in can still get itself a working access token
+ * (ADR 0227): Claude Code's while it holds a refresh token that has not
+ * expired, Codex's ChatGPT sign-in while it holds its refresh token. A
+ * failure on such a sign-in may be passing (a refresh lost to another
+ * process holding the lock, a network hiccup); without one, only signing
+ * in again helps. Values are only checked for presence, never read out.
+ */
+export function signInRefreshable(input: {
+  harness: SignInHarness;
+  raw: string | null;
+  now: number;
+}): boolean {
+  if (!input.raw) return false;
+  try {
+    const parsed = record(JSON.parse(input.raw));
+    if (input.harness === "codex")
+      return filled(record(parsed?.tokens)?.refresh_token);
+    return (
+      claudeOauthHealth(input.raw, input.now) === "ok" &&
+      filled(record(parsed?.claudeAiOauth)?.refreshToken)
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Whether a harness's sign-in can run a turn now: Claude Code's while its
+ * refresh token lives, Codex's while it holds a key or its sign-in tokens.
+ */
+export function signInUsable(input: {
+  harness: SignInHarness;
+  raw: string | null;
+  now: number;
+}): boolean {
+  if (input.harness === "claude-code")
+    return claudeOauthHealth(input.raw, input.now) === "ok";
+  if (!input.raw) return false;
+  try {
+    const parsed = record(JSON.parse(input.raw));
+    return (
+      filled(parsed?.OPENAI_API_KEY) ||
+      filled(record(parsed?.tokens)?.access_token) ||
+      filled(record(parsed?.tokens)?.refresh_token)
+    );
+  } catch {
+    return false;
+  }
+}
