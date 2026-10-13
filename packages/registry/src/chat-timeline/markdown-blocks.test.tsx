@@ -25,6 +25,13 @@ const samples: Record<string, string> = {
   references: "See [the docs][d].\n\nMore.\n\n[d]: https://example.test",
   "a rule": "Above.\n\n---\n\nBelow.",
   "an indented block": "Para.\n\n    indented code\n\nAfter.",
+  "HTML pre over blank lines": "Before.\n\n<pre>\none\n\ntwo\n</pre>\n\nAfter.",
+  "an HTML comment over blank lines":
+    "Before.\n\n<!-- one\n\ntwo -->\n\nAfter.",
+  "a style block": "<style>\na {}\n\nb {}\n</style>\n\nAfter.",
+  "a script block": "<script>\nlet a;\n\nlet b;\n</script>\n\nAfter.",
+  "a comment not closed yet": "Before.\n\n<!-- still\n\nopen",
+  "a comment closed on its line": "Before.\n\n<!-- done -->\n\nAfter.",
 };
 
 describe("markdownBlocks", () => {
@@ -43,6 +50,12 @@ describe("markdownBlocks", () => {
     expect(markdownBlocks("Intro.\n\n- a\n\n- b")).toHaveLength(1);
     expect(markdownBlocks("Intro.\n\n> quoted")).toHaveLength(1);
     expect(markdownBlocks("Intro.\n\n| a |\n| - |")).toHaveLength(1);
+  });
+
+  it("keeps an HTML block that runs past blank lines whole", () => {
+    expect(markdownBlocks("A.\n\n<pre>\nx\n\ny\n</pre>\n\nB.")).toHaveLength(3);
+    // Still open while it streams: nothing after its opener splits off.
+    expect(markdownBlocks("A.\n\n<!-- x\n\ny\n\nz")).toHaveLength(2);
   });
 
   it("leaves text with references whole", () => {

@@ -257,6 +257,11 @@ describe("design lint", () => {
         reason:
           "Escape sets an agent's questions aside before the chat takes it",
       },
+      "components/catamorphic/chat-timeline.tsx": {
+        count: 2,
+        reason:
+          "a press in the conversation holds it still, and a key that scrolls it up lets go of the latest message, also when the press left nothing focused",
+      },
       "components/catamorphic/todo-progress.tsx": {
         count: 2,
         reason:

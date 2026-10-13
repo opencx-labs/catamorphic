@@ -99,9 +99,12 @@ the copy: `renderAttachment` (the `ContextPill` with its previews), `Hint`
 `workDisplay`. Rows are memoized: keep render-affecting slots stable
 (`useCallback` or module-level functions); action callbacks may change every
 render. The timeline's motion classes (`cat-fade-in`, `cat-fold-away`,
-`cat-step-in`, `cat-swap-*`, `cat-reveal`, `cat-grow`), its scroll pinning
-(`cat-scroll-anchor` with `data-pinned`) and `cat-settled` live in
-`@catamorphic/ui/styles.css`, which the renderer stylesheet imports.
+`cat-step-in`, `cat-swap-*`, `cat-reveal` with its `data-entering` and
+`data-moving`, `cat-grow`), its scroll pinning (`cat-scroll-anchor` with
+`data-pinned`, set only while the chat follows and nothing in it is pressed
+or selected) and `cat-settled` live in `@catamorphic/ui/styles.css`, which
+the renderer stylesheet imports. The timeline's press and key listeners on
+the document are listed in the desktop's design lint.
 
 Registry build emits the installable JSON; source edits alone do not update that
 output. Build the React package first because consumers resolve its declarations
