@@ -373,6 +373,13 @@ const api = {
     invoke("catamorphic:workspace-state-get", projectId),
   workspaceStateSet: (projectId: string, snapshot: unknown): Promise<void> =>
     invoke("catamorphic:workspace-state-set", projectId, snapshot),
+  /** This computer's chats may have changed (ADR 0228). */
+  onSessionsChanged: (listener: () => void): (() => void) => {
+    const handler = () => listener();
+    ipcRenderer.on("catamorphic:sessions-changed", handler);
+    return () =>
+      ipcRenderer.removeListener("catamorphic:sessions-changed", handler);
+  },
   onGitChanged: (listener: (data: unknown) => void): (() => void) => {
     const handler = (_event: unknown, data: unknown) => listener(data);
     ipcRenderer.on("catamorphic:git-changed", handler);

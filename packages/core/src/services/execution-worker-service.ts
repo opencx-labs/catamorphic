@@ -14,6 +14,7 @@ import type {
   ExecutionJobsService,
 } from "./execution-jobs-service.js";
 import type { RetentionService } from "./retention-service.js";
+import { PollPacer, type WorkWakeups } from "./work-wakeups.js";
 
 const tracer = getTracer("@catamorphic/core");
 
@@ -28,6 +29,12 @@ export interface ExecutionWorkerOptions {
   claimLimit?: number;
   leaseSeconds?: number;
   pollIntervalMs?: number;
+  /**
+   * How often a loop with nothing to do polls when no job is due sooner and
+   * no hint from this process came (ADR 0228). Defaults to the host's
+   * `idlePollMs`; without either it polls every `pollIntervalMs`.
+   */
+  idlePollIntervalMs?: number;
   kinds?: readonly ExecutionJobKind[];
 }
 
@@ -114,6 +121,11 @@ export class ExecutionWorkerService {
     private readonly retention?: RetentionService,
     /** The Kysely instance behind {@link jobs}, for the pool-size check. */
     private readonly db?: object,
+    /** Idle pacing and this process's job hints (ADR 0228). */
+    private readonly pacing: {
+      wakeups?: WorkWakeups;
+      idlePollMs?: number;
+    } = {},
   ) {}
 
   registerHandler(args: {
@@ -163,6 +175,8 @@ export class ExecutionWorkerService {
         claimLimit,
         leaseSeconds: options.leaseSeconds ?? 60,
         pollIntervalMs: options.pollIntervalMs ?? 500,
+        idlePollIntervalMs:
+          options.idlePollIntervalMs ?? this.pacing.idlePollMs,
         kinds: options.kinds ?? ALL_JOB_KINDS,
       }),
     );
@@ -197,14 +211,21 @@ export class ExecutionWorkerService {
     claimLimit: number;
     leaseSeconds: number;
     pollIntervalMs: number;
+    idlePollIntervalMs?: number;
     kinds: readonly ExecutionJobKind[];
   }): Promise<void> {
     const { signal } = args.controller;
     const swept = { at: 0 };
+    const pacer = new PollPacer({
+      quickMs: args.pollIntervalMs,
+      idleMs: args.idlePollIntervalMs,
+      wakeups: this.pacing.wakeups,
+      topic: "execution",
+    });
     let consecutiveFailures = 0;
     while (!signal.aborted) {
       try {
-        await this.pollOnce({ ...args, swept });
+        await this.pollOnce({ ...args, swept, pacer });
         consecutiveFailures = 0;
       } catch (error) {
         // The database is reachable only intermittently during a failover or
@@ -310,6 +331,7 @@ export class ExecutionWorkerService {
     pollIntervalMs: number;
     kinds: readonly ExecutionJobKind[];
     swept: { at: number };
+    pacer: PollPacer;
   }): Promise<void> {
     const { signal } = args.controller;
     await this.sweepMaintenance({ swept: args.swept });
@@ -321,9 +343,17 @@ export class ExecutionWorkerService {
       leaseSeconds: args.leaseSeconds,
     });
     if (claimed.length === 0) {
-      await abortableDelay({ milliseconds: args.pollIntervalMs, signal });
+      // Idle: sleep until the soonest pending job is due, a hint from
+      // this process, or the idle poll, whichever comes first.
+      const due = args.pacer.quick
+        ? undefined
+        : await this.jobs
+            .nextAvailableAt({ kinds: args.kinds })
+            .catch(() => undefined);
+      await args.pacer.wait(signal, { until: due?.getTime() });
       return;
     }
+    args.pacer.busy();
     for (const job of claimed) {
       if (signal.aborted) {
         await this.jobs.release({

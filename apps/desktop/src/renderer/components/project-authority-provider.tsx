@@ -14,6 +14,10 @@ import {
   useMemo,
 } from "react";
 import { desktopApi } from "../lib/desktop-api.js";
+import {
+  remoteQueryClients,
+  remoteQueryClientUsers,
+} from "../lib/remote-query-clients.js";
 
 const RemoteAuthority = createContext<{
   remoteProjectId: string;
@@ -38,8 +42,8 @@ export function useRemoteProject(projectId: string | undefined): boolean {
   });
   return Boolean(authority.data);
 }
-const authorityCaches = new Map<string, QueryClient>();
-const authorityUsers = new Map<QueryClient, number>();
+const authorityCaches = remoteQueryClients;
+const authorityUsers = remoteQueryClientUsers;
 
 /**
  * Fetch a remote project's agent catalog again wherever it is shown, as

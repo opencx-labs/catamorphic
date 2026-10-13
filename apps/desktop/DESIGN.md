@@ -390,7 +390,10 @@ screen, or under reduced motion.
 
 ### Sanctioned exceptions
 
-- `animate-spin` / `animate-pulse`: indeterminate progress may loop.
+- `animate-spin` / `animate-pulse`: indeterminate progress may loop, only
+  while it shows: a loop keeps the compositor and GPU drawing every frame,
+  so a mounted but invisible alternative (an inactive cross-fade, the
+  open strip's folded bubble) does not run one.
 - `voice-spin` (900ms) and `voice-ripple` (1200ms) on a microphone: live
   states that last as long as they are true, the speech models loading and
   the person being heard; still under reduced motion.
@@ -639,6 +642,25 @@ the historical log explains how it arrived here.
 - [Performance](docs/performance.md): idle lifecycle checks and sustained measurement.
 
 ## Design log
+### 2026-10-13: An idle Work does nothing
+
+Work used a tenth of a core with nothing happening and much more while a
+chat answered. Most of it was polling: the embedded server's workers,
+the chat stream feed and every discarded artifact looked for work on
+short timers, and the window read its chat lists every two seconds,
+flashing a refreshing spinner each time. Now idle means idle (ADR 0228).
+The server's pollers slow down when nothing is queued and the writes that
+queue work wake them. The window's chat lists, attention and watchers
+read again when the main process says chats changed, backed by a
+30-second poll; a remote project's lists keep their short polls. A
+streamed answer is recorded in 100 ms batches.
+
+The rule: nothing runs on a short timer unless something it shows is
+changing. A routine read never changes the screen: no refreshing
+spinner, no render unless its rows changed (a Refresh press shows on its
+own button). Before adding a timer, a poll or an infinite animation,
+measure an idle app with the method in [Performance](docs/performance.md).
+
 ### 2026-10-13: Pages ask, over their own tab
 
 A page could not ask anything. `alert` and `confirm` came up in a native

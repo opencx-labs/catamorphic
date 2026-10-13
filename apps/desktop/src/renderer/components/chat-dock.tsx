@@ -79,6 +79,7 @@ import {
   selectionFromClipboard,
 } from "../lib/editor-selection";
 import { ipcErrorText } from "../lib/remote-workspace.js";
+import { LOCAL_CHATS_POLL_MS } from "../lib/session-change-hints.js";
 import { skillsForAgent, useProjectSkillCatalog } from "../lib/skills";
 import {
   matchSlashEntries,
@@ -582,7 +583,15 @@ function ChatDockContent({
   const watcherQuery = useWatchers(
     projectId,
     chat.sessionId ?? entry.sessionId ?? undefined,
-    { refetchInterval: refreshWhileIdle || chat.isSending ? 5_000 : false },
+    {
+      // This computer's chats follow its hints (ADR 0228).
+      refetchInterval:
+        refreshWhileIdle || chat.isSending
+          ? authority
+            ? 5_000
+            : LOCAL_CHATS_POLL_MS
+          : false,
+    },
   );
   const visibleWatchers = watcherQuery.data?.items ?? [];
   const activeEnvironment = chat.session?.environment ?? selectedEnvironment;

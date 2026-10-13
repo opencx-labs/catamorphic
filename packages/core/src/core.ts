@@ -133,6 +133,7 @@ import {
 } from "./services/user-notifications-service.js";
 import { WatchersService } from "./services/watchers-service.js";
 import { WebhooksService } from "./services/webhooks-service.js";
+import { WorkWakeups } from "./services/work-wakeups.js";
 import { WorkflowEnablementsService } from "./services/workflow-enablements-service.js";
 import { WorkflowsService } from "./services/workflows-service.js";
 
@@ -146,6 +147,16 @@ export interface CatamorphicCoreConfig {
    * any host of the authority (ADR 0192).
    */
   workerNode?: { id: string; token: string };
+  /**
+   * How often this process's pollers (workflow and agent workers, event
+   * delivery, live session streams) look for work while none was found or
+   * hinted (ADR 0228). Writes made in this process hint them at once, so
+   * only work written elsewhere waits for an idle poll. Default: they never
+   * slow down. A single-process host, where every write is its own, can
+   * raise it freely; a host with several replicas trades that much
+   * latency for work another replica writes.
+   */
+  idlePollMs?: number;
   /**
    * Where project-store bytes live when a document is not text (ADR 0055):
    * inline in Postgres by default; a filesystem or S3-compatible store
@@ -378,6 +389,10 @@ export interface CatamorphicCoreConfig {
  */
 export class CatamorphicCore {
   readonly db: Kysely<DB>;
+  /** This process's hints that durable work may be waiting (ADR 0228). */
+  readonly wakeups = new WorkWakeups();
+  /** See {@link CatamorphicCoreConfig.idlePollMs}. */
+  readonly idlePollMs?: number;
   readonly projectManager: ProjectManager;
   readonly sandboxProvider?: SandboxProvider;
   readonly pluginResolver?: PluginResolver;
@@ -476,6 +491,7 @@ export class CatamorphicCore {
     // Every parameter reaches Postgres as a value it stores, on every
     // host's database.
     this.db = withStorableParameters(config.db);
+    this.idlePollMs = config.idlePollMs;
     this.notifications = new UserNotificationsService(
       this.db,
       config.pushNotifications,
@@ -710,7 +726,7 @@ export class CatamorphicCore {
       config.projectHooks,
       { seedFiles: this.seedFiles },
     );
-    this.projectEvents = new ProjectEventsService(this.db);
+    this.projectEvents = new ProjectEventsService(this.db, this.wakeups);
     this.webhooks = new WebhooksService(this.db, {
       events: this.projectEvents,
       ...(config.webhooks?.maxBodyBytes !== undefined
@@ -731,7 +747,10 @@ export class CatamorphicCore {
           : undefined;
       },
     });
-    this.projectEventMonitors = new ProjectEventMonitorsService(this.db);
+    this.projectEventMonitors = new ProjectEventMonitorsService(
+      this.db,
+      this.wakeups,
+    );
     this.appStorage = new AppStorageService(this.db);
     this.projectEventSources = config.projectEventSources ?? [];
     this.workflows = new WorkflowsService(this.projectManager, this.projects);
@@ -945,12 +964,17 @@ export class CatamorphicCore {
     this.resolveMember =
       config.resolveMemberIdentity ??
       ((args) => this.memberships.identityFor(args));
-    const executionJobs = new ExecutionJobsService(this.db, config.workerNode);
+    const executionJobs = new ExecutionJobsService(
+      this.db,
+      config.workerNode,
+      this.wakeups,
+    );
     this.retention = new RetentionService(this.db, config.retention);
     const executionWorker = new ExecutionWorkerService(
       executionJobs,
       this.retention,
       this.db,
+      { wakeups: this.wakeups, idlePollMs: config.idlePollMs },
     );
     const runtimeEvents = new RuntimeEventsService(this.db);
     const rateReservations = new RateReservationsService(this.db);
@@ -1177,6 +1201,8 @@ export class CatamorphicCore {
         agentCapabilities: this.agentCapabilities,
         hostId: config.hostId,
         workerNode: config.workerNode,
+        wakeups: this.wakeups,
+        idlePollMs: config.idlePollMs,
         projectManager: this.projectManager,
         codingAgents,
         nativeAgentCheckout: config.nativeAgentCheckout,

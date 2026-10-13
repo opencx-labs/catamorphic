@@ -29,6 +29,8 @@ import { ShortcutHint } from "./shortcut-hint";
 /** Bubbles identify themselves on hover without delay (unlike buttons,
     whose labels are usually inferable — a bubble is just an icon). */
 const BUBBLE_HINT_DELAY_MS = 100;
+/** What a bubble that is not shown signals: nothing. */
+const NO_SIGNALS: ChatSignals = {};
 
 export interface ChatBubblesProps {
   dragLeft?: number | null;
@@ -702,9 +704,12 @@ export function ChatBubbles({
       aria-hidden={!collapsed}
       inert={!collapsed ? true : undefined}
     >
+      {/* Signals only while shown: the open strip keeps this bubble mounted
+          but invisible, and a spinner or pulse there would keep the
+          compositor drawing for nothing. */}
       <SignalGlyph
-        working={aggregate.working}
-        awaitingInput={aggregate.awaitingInput}
+        working={collapsed && aggregate.working}
+        awaitingInput={collapsed && aggregate.awaitingInput}
         className="size-4"
       >
         <MessageSquare className="size-4" />
@@ -715,7 +720,7 @@ export function ChatBubbles({
         </span>
       )}
       <span className="absolute -right-0.5 -top-0.5">
-        <SignalBadge signals={aggregate} size="md" />
+        <SignalBadge signals={collapsed ? aggregate : NO_SIGNALS} size="md" />
       </span>
     </button>
   );

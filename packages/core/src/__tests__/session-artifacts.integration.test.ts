@@ -12,7 +12,10 @@ import {
 } from "@catamorphic/git";
 import { sql } from "kysely";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { SessionArtifactsService } from "../services/session-artifacts-service.js";
+import {
+  RECLAIMED_REVISIT_SECONDS,
+  SessionArtifactsService,
+} from "../services/session-artifacts-service.js";
 
 const connectionString = process.env.DATABASE_URL ?? "";
 const suite = connectionString ? describe : describe.skip;
@@ -385,7 +388,23 @@ suite("session artifact source lifecycle", () => {
         );
       const prefix = `refs/heads/work/artifacts/${artifact.id}`;
       const before = await inventory();
-      expect(before.some(({ ref }) => ref === `${prefix}-late`)).toBe(true);
+      // The late writer's own candidate went when it found the discard.
+      expect(
+        before
+          .filter(({ ref }) => ref.startsWith(prefix))
+          .map(({ ref }) => ref),
+      ).toEqual([`${prefix}-late`]);
+      // A reclaimed artifact is not looked at again on every sweep...
+      await artifacts.cleanup();
+      expect(await inventory()).toEqual(before);
+      // ...but once its revisit is due.
+      await db
+        .updateTable("session_artifacts")
+        .set({
+          ref_deleted_at: sql<Date>`now() - make_interval(secs => ${RECLAIMED_REVISIT_SECONDS + 1})`,
+        })
+        .where("id", "=", artifact.id)
+        .execute();
       await artifacts.cleanup();
       const refs = await inventory();
       expect(refs.filter(({ ref }) => ref.startsWith(prefix))).toEqual([]);

@@ -14,6 +14,7 @@ import {
 } from "@catamorphic/agent-protocol";
 import type { DB, Json } from "@catamorphic/db";
 import { type Kysely, sql, type Transaction } from "kysely";
+import type { WorkWakeups } from "../work-wakeups.js";
 
 type Executor = Kysely<DB> | Transaction<DB>;
 
@@ -58,7 +59,11 @@ export const REPLAY_MAX_BYTES = 1024 * 1024;
  * per session, gapless, allocated under the session row lock.
  */
 export class SessionLog {
-  constructor(private readonly db: Kysely<DB>) {}
+  constructor(
+    private readonly db: Kysely<DB>,
+    /** Tells this process's streams and agent worker what it wrote (ADR 0228). */
+    private readonly wakeups?: WorkWakeups,
+  ) {}
 
   /**
    * Append events and project them. Must run inside the caller's
@@ -310,6 +315,23 @@ export class SessionLog {
       )
       .execute();
     for (const event of stored) await project(trx, event);
+    // Hints may come before the caller commits; a woken poller stays quick
+    // long enough to read the commit.
+    this.wakeups?.notify("sessions");
+    if (
+      stored.some(
+        ({ event }) =>
+          event.type !== "item.text_appended" && event.type !== "item.changed",
+      )
+    )
+      this.wakeups?.notify("chats");
+    if (
+      stored.some(
+        ({ event }) =>
+          event.type === "turn.changed" && event.turn.status === "queued",
+      )
+    )
+      this.wakeups?.notify("agent");
   }
 
   /**

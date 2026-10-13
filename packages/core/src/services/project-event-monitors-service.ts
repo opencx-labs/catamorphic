@@ -5,6 +5,7 @@ import { type Kysely, type Selectable, sql } from "kysely";
 import type { Identity } from "../identity.js";
 import { requireTenantProject } from "./projects-service.js";
 import { jsonColumn } from "./run-coordinator.js";
+import { PollPacer, type WorkWakeups } from "./work-wakeups.js";
 
 /**
  * A source's cursor as jsonb. A host's cursor may be a bare string (a Slack
@@ -66,7 +67,11 @@ export interface ProjectEventSourceProvider {
 }
 
 export class ProjectEventMonitorsService {
-  constructor(private readonly db: Kysely<DB>) {}
+  constructor(
+    private readonly db: Kysely<DB>,
+    /** Tells this process's monitor worker a monitor may be due (ADR 0228). */
+    private readonly wakeups?: WorkWakeups,
+  ) {}
 
   async ensure(input: {
     identity: Identity;
@@ -113,6 +118,7 @@ export class ProjectEventMonitorsService {
       )
       .returningAll()
       .executeTakeFirstOrThrow();
+    this.wakeups?.notify("events");
     return mapMonitor(row);
   }
 
@@ -226,6 +232,12 @@ export function startProjectEventMonitorWorker(input: {
   providers: readonly ProjectEventSourceProvider[];
   placement: Exclude<EventSourcePlacement, "any">;
   pollEveryMs?: number;
+  /**
+   * How often it polls while no monitor is due (ADR 0228); this process's
+   * event hints wake it. Without one it polls every `pollEveryMs`.
+   */
+  idlePollMs?: number;
+  wakeups?: WorkWakeups;
 }): { stop: () => Promise<void> } {
   const providers = new Map(
     input.providers.map((provider) => [provider.kind, provider]),
@@ -233,7 +245,12 @@ export function startProjectEventMonitorWorker(input: {
   const workerId = `project-events:${input.placement}:${randomUUID()}`;
   let stopped = false;
   const controller = new AbortController();
-  let timer: ReturnType<typeof setTimeout> | undefined;
+  const pacer = new PollPacer({
+    quickMs: input.pollEveryMs ?? 1_000,
+    idleMs: input.idlePollMs,
+    wakeups: input.wakeups,
+    topic: "events",
+  });
   const tick = async () => {
     if (stopped) return;
     try {
@@ -241,6 +258,7 @@ export function startProjectEventMonitorWorker(input: {
         workerId,
         placement: input.placement,
       });
+      if (monitor) pacer.busy();
       if (monitor?.leaseToken && monitor.tenantId) {
         const provider = providers.get(monitor.sourceKind);
         const tenantId = monitor.tenantId;
@@ -287,18 +305,19 @@ export function startProjectEventMonitorWorker(input: {
       if (!stopped)
         console.warn("[catamorphic] Event monitor poll failed", error);
     }
-    if (stopped) return;
-    timer = setTimeout(() => {
-      pending = tick();
-    }, input.pollEveryMs ?? 1_000);
-    timer.unref?.();
   };
-  let pending = tick();
+  const loop = async () => {
+    while (!stopped) {
+      await tick();
+      if (stopped) return;
+      await pacer.wait(controller.signal);
+    }
+  };
+  const pending = loop();
   return {
     stop: async () => {
       stopped = true;
       controller.abort();
-      if (timer) clearTimeout(timer);
       await pending;
     },
   };
