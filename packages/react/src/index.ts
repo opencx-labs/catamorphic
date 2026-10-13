@@ -103,6 +103,7 @@ export {
   type AgentSessionInfo,
   agentSessionQueryKey,
   reconnectDelayMs,
+  type UseAgentSessionFieldsOptions,
   type UseAgentSessionFieldsResult,
   type UseAgentSessionOptions,
   type UseAgentSessionResult,

@@ -7533,7 +7533,7 @@
                       "properties": {
                         "session": {
                           "type": "number",
-                          "enum": [1]
+                          "enum": [2]
                         },
                         "runner": {
                           "type": "number",

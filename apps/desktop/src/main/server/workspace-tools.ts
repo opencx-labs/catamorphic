@@ -5,6 +5,7 @@ import {
   SESSION_PULL_REQUESTS_CONTRACT,
   SET_SESSION_METADATA_DESCRIPTION,
   type SessionMetadata,
+  sessionMetadataToolWrite,
   setSessionMetadataInputSchema,
 } from "@catamorphic/agent-protocol";
 import type { ExtraTool, ExtraToolContext } from "@catamorphic/sandbox";
@@ -530,19 +531,18 @@ export function buildWorkspaceToolkit(
         if (!sessionCoordination) {
           throw new Error("Session coordination is not available yet.");
         }
-        const { key, value } = setSessionMetadataInputSchema.parse(input);
+        const values = sessionMetadataToolWrite(input);
         return {
-          metadata:
-            value === undefined
-              ? await sessionCoordination.readMetadata(
-                  ctx.projectId,
-                  ctx.sessionId,
-                )
-              : await sessionCoordination.setMetadata(
-                  ctx.projectId,
-                  ctx.sessionId,
-                  { [key]: value },
-                ),
+          metadata: values
+            ? await sessionCoordination.setMetadata(
+                ctx.projectId,
+                ctx.sessionId,
+                values,
+              )
+            : await sessionCoordination.readMetadata(
+                ctx.projectId,
+                ctx.sessionId,
+              ),
         };
       },
     },

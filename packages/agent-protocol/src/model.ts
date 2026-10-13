@@ -7,6 +7,14 @@
  * log, shared by the server's projections and every client's reducer.
  */
 
+/**
+ * The session protocol (ADR 0197) a server reports in `GET /me` and a
+ * client speaks: bumped on any change to snapshots, events, commands or
+ * {@link SessionFields} that a client or mirror of the previous version
+ * cannot read or would be refused (2: `metadata`, ADR 0225).
+ */
+export const SESSION_PROTOCOL_VERSION = 2;
+
 export type JsonPrimitive = string | number | boolean | null;
 export type JsonValue =
   | JsonPrimitive

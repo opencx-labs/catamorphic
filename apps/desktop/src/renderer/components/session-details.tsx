@@ -134,7 +134,11 @@ function SessionRows({
   if (current && current !== shown) setShown(current);
   const sessionId = current ?? shown;
   const remote = useRemoteAuthority() !== null;
-  const session = useAgentSessionFields(projectId, sessionId);
+  // On screen it follows the chat, so what is set outside a turn (another
+  // client, a workflow) shows while a page the chat opened is in front.
+  const session = useAgentSessionFields(projectId, sessionId, {
+    live: relevant && (contribution?.visible ?? true),
+  });
   const checkout = useSessionCheckout(projectId, sessionId, {
     enabled: !remote && relevant,
   });

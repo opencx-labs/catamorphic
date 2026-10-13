@@ -176,16 +176,18 @@ function sameJson(left: JsonValue, right: JsonValue): boolean {
     if (!Array.isArray(left) || !Array.isArray(right)) return false;
     return (
       left.length === right.length &&
-      left.every((entry, index) => sameJson(entry, right[index] as JsonValue))
+      left.every((entry, index) => {
+        const other = right[index];
+        return other !== undefined && sameJson(entry, other);
+      })
     );
   }
-  const keys = Object.keys(left);
-  if (keys.length !== Object.keys(right).length) return false;
-  return keys.every(
-    (key) =>
-      Object.hasOwn(right, key) &&
-      sameJson(left[key] as JsonValue, right[key] as JsonValue),
-  );
+  const entries = Object.entries(left);
+  if (entries.length !== Object.keys(right).length) return false;
+  return entries.every(([key, entry]) => {
+    const other = Object.hasOwn(right, key) ? right[key] : undefined;
+    return other !== undefined && sameJson(entry, other);
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -217,19 +219,63 @@ export const SESSION_PULL_REQUESTS_CONTRACT =
  * own chat's metadata: its description and input, so each projection
  * (Work's workspace tools, the project MCP) says the same thing.
  */
-export const SET_SESSION_METADATA_DESCRIPTION = `Set one named value on this chat's session, replacing what the key held, or remove the key with null; omit value to read the session's metadata. Work shows these values beside the chat. ${SESSION_PULL_REQUESTS_CONTRACT} Read a list before writing it again and keep what it holds. Returns the session's metadata.`;
+export const SET_SESSION_METADATA_DESCRIPTION = `Set one named value on this chat's session, replacing what the key held; remove: true removes the key, and a call with neither reads the session's metadata. Work shows these values beside the chat. ${SESSION_PULL_REQUESTS_CONTRACT} Read a list before writing it again and keep what it holds. Returns the session's metadata.`;
 
-export const setSessionMetadataInputSchema = z.object({
-  key: z
-    .string()
-    .max(SESSION_METADATA_LIMITS.keyLength)
-    .regex(SESSION_METADATA_KEY_PATTERN)
-    .describe("Lowercase words joined by _, - or ., e.g. pull_requests"),
-  value: z
-    .json()
-    .optional()
-    .describe("Any JSON; null removes the key, omitted reads"),
-});
+/**
+ * A value a key can hold through the tool: any JSON but null. A model that
+ * fills an unused parameter with null meant to read, so null is refused
+ * rather than taken as a removal (the HTTP route, a JSON merge patch,
+ * keeps null as removal).
+ */
+const anyJson = z.json();
+const toolMetadataValue = z.union(
+  [
+    z.string(),
+    z.number(),
+    z.boolean(),
+    z.array(anyJson),
+    z.record(z.string(), anyJson),
+  ],
+  {
+    error:
+      "value is never null: omit it to read, or pass remove: true to remove the key.",
+  },
+);
+
+/** The tool's input: a key, and a value to set or `remove: true`, or neither to read. */
+export const setSessionMetadataInputSchema = z
+  .object({
+    key: z
+      .string()
+      .max(SESSION_METADATA_LIMITS.keyLength)
+      .regex(SESSION_METADATA_KEY_PATTERN)
+      .describe("Lowercase words joined by _, - or ., e.g. pull_requests"),
+    value: toolMetadataValue
+      .optional()
+      .describe("The key's new value, any JSON but null; omit to read"),
+    remove: z.boolean().optional().describe("true removes the key"),
+  })
+  .superRefine((input, context) => {
+    if (input.value !== undefined && input.remove)
+      context.addIssue({
+        code: "custom",
+        path: ["remove"],
+        message: "Pass value to set the key or remove: true, not both.",
+      });
+  });
+
+/**
+ * What a `set_session_metadata` call asks of the session: the write a
+ * host hands `AgentSessionsService.setMetadata` (null removes its key), or
+ * null to read. Throws a ZodError for input the tool refuses.
+ */
+export function sessionMetadataToolWrite(
+  input: unknown,
+): Record<string, JsonValue> | null {
+  const { key, value, remove } = setSessionMetadataInputSchema.parse(input);
+  if (remove) return { [key]: null };
+  return value === undefined ? null : { [key]: value };
+}
 
 const PULL_REQUEST_STATES: readonly SessionPullRequestState[] = [
   "open",

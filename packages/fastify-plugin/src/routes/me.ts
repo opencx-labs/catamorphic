@@ -1,3 +1,4 @@
+import { SESSION_PROTOCOL_VERSION } from "@catamorphic/agent-protocol";
 import { RUNNER_PROTOCOL_VERSION } from "@catamorphic/agent-protocol/runner";
 import {
   type ControlPlanePermission,
@@ -14,7 +15,10 @@ import { MeSchema } from "../schemas.js";
  * The agent protocols this server speaks: the session log and its commands
  * (ADR 0197) and the runner protocol its machines run (ADR 0198).
  */
-const AGENT_PROTOCOL = { session: 1, runner: RUNNER_PROTOCOL_VERSION } as const;
+const AGENT_PROTOCOL = {
+  session: SESSION_PROTOCOL_VERSION,
+  runner: RUNNER_PROTOCOL_VERSION,
+} as const;
 
 const CONTROL_PLANE_PERMISSIONS: readonly ControlPlanePermission[] = [
   "connections:read",

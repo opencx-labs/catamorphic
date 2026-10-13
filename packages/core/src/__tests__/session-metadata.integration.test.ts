@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import {
   applySessionEvents,
+  type JsonValue,
   SessionMetadataError,
   type StoredSessionEvent,
   sessionStateFromSnapshot,
@@ -20,6 +21,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { Identity } from "../identity.js";
 import {
   AgentSessionAuthorityRequiredError,
+  AgentSessionHandoffPendingError,
   AgentSessionsService,
 } from "../services/agent-sessions-service.js";
 import { AccessDeniedError } from "../services/artifact-scope.js";
@@ -271,6 +273,27 @@ describe("session metadata", () => {
     });
   });
 
+  it("reads a nested __proto__ key back as a key", async () => {
+    const project = await projects.create(identity, { name: "Proto" });
+    const session = await sessions.create(identity, project.id);
+    const deploy: JsonValue = JSON.parse('{"__proto__":{"polluted":true}}');
+    await sessions.setMetadata({
+      identity,
+      projectId: project.id,
+      sessionId: session.id,
+      values: { deploy },
+    });
+    const read = await sessions.metadata({
+      identity,
+      projectId: project.id,
+      sessionId: session.id,
+    });
+    expect(JSON.stringify(read)).toBe(
+      '{"deploy":{"__proto__":{"polluted":true}}}',
+    );
+    expect(Object.getPrototypeOf(read.deploy)).toBe(Object.prototype);
+  });
+
   it("takes the authority that changes the session, as activity does", async () => {
     const project = await projects.create(identity, { name: "Authority" });
     const session = await sessions.create(identity, project.id);
@@ -469,5 +492,58 @@ describe("session metadata", () => {
         sessionId: session.id,
       }),
     ).toEqual({ note: "here" });
+  });
+
+  it("refuses writes while the session moves to another host, as messages are", async () => {
+    const project = await projects.create(identity, { name: "Moving" });
+    const session = await sessions.create(identity, project.id);
+    await db
+      .updateTable("agent_sessions")
+      .set({ authority_host_id: "metadata-test-host" })
+      .where("id", "=", session.id)
+      .execute();
+    await sessions.setMetadata({
+      identity,
+      projectId: project.id,
+      sessionId: session.id,
+      values: { note: "before" },
+    });
+    // The desktop pushed the log and is handing the chat to the server: a
+    // change logged now would never reach its new holder.
+    await sessions.beginHandoff(identity, project.id, session.id, {
+      destinationHostId: "server-host",
+    });
+    const { sequence } = (await sessions.get(identity, project.id, session.id))
+      .snapshot;
+    await expect(
+      sessions.setMetadata({
+        identity,
+        projectId: project.id,
+        sessionId: session.id,
+        values: { note: "during" },
+      }),
+    ).rejects.toThrow(AgentSessionHandoffPendingError);
+    await expect(
+      sessions.setActivity(identity, project.id, session.id, "Reviewing"),
+    ).rejects.toThrow(AgentSessionHandoffPendingError);
+    expect(await eventsAfter(session.id, sequence)).toEqual([]);
+    // Reading needs no barrier.
+    expect(
+      await sessions.metadata({
+        identity,
+        projectId: project.id,
+        sessionId: session.id,
+      }),
+    ).toEqual({ note: "before" });
+    // A move called off takes writes again.
+    await sessions.cancelHandoff(identity, project.id, session.id);
+    await expect(
+      sessions.setMetadata({
+        identity,
+        projectId: project.id,
+        sessionId: session.id,
+        values: { note: "after" },
+      }),
+    ).resolves.toEqual({ note: "after" });
   });
 });

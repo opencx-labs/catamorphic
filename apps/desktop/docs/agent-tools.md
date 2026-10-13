@@ -210,8 +210,9 @@ A chat's details beside it (its pull requests, or any key a person's own
 sidebar section reads) had no home: `create_pull_request` stored nothing and
 pull requests opened with `gh` or a connector left no trace. One operation
 sets one key of the session's metadata, `set_session_metadata { key, value }`
-(null removes the key, no value reads the metadata, since a key's value is
-replaced whole), on every harness through the session coordination bridge to
+(`remove: true` removes the key and neither reads the metadata, since a key's
+value is replaced whole; a null value is refused, so a model filling unused
+parameters with null never deletes), on every harness through the session coordination bridge to
 core. Its description and input are one shared contract
 (`@catamorphic/agent-protocol`). It is deferred: a chat writes it a few times, when something
 worth showing happens, so it costs no schema on ordinary turns (about 1.1 KB

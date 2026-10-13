@@ -76,7 +76,7 @@ describe("useAgentSessionFields (ADR 0225)", () => {
     expect(served.streams).toHaveLength(1);
   });
 
-  it("loads once on its own and never streams", async () => {
+  it("loads once on its own and never streams unless live", async () => {
     const served = serve();
     const { result } = renderHookWithProviders(() =>
       useAgentSessionFields(PROJECT_ID, SESSION_ID),
@@ -87,6 +87,53 @@ describe("useAgentSessionFields (ADR 0225)", () => {
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(served.snapshots()).toBe(1);
     expect(served.streams).toHaveLength(0);
+  });
+
+  it("follows the session itself while live, as a section on screen does", async () => {
+    const served = serve();
+    const { result, rerender } = renderHookWithProviders(
+      ({ live }: { live: boolean }) =>
+        useAgentSessionFields(PROJECT_ID, SESSION_ID, { live }),
+      { initialProps: { live: true } },
+    );
+    // No conversation reader is mounted: a change made outside any turn
+    // (another client's PATCH, a workflow) still arrives.
+    await waitFor(() => expect(served.streams).toHaveLength(1));
+    act(() =>
+      served.streams[0]?.send({
+        type: "events",
+        events: [
+          stored(4, {
+            type: "session.changed",
+            session: { metadata: { pull_requests: pullRequests } },
+          }),
+        ],
+      }),
+    );
+    await waitFor(() =>
+      expect(result.current.fields?.metadata).toEqual({
+        pull_requests: pullRequests,
+      }),
+    );
+    // Off screen it lets the stream go and opens no other.
+    rerender({ live: false });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    act(() =>
+      served.streams[0]?.send({
+        type: "events",
+        events: [
+          stored(5, {
+            type: "session.changed",
+            session: { metadata: { note: "unseen" } },
+          }),
+        ],
+      }),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(served.streams).toHaveLength(1);
+    expect(result.current.fields?.metadata).toEqual({
+      pull_requests: pullRequests,
+    });
   });
 
   it("reads nothing without a session", () => {

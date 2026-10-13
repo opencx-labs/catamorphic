@@ -3,6 +3,7 @@ import {
   assertSessionMetadata,
   SESSION_METADATA_LIMITS,
   SessionMetadataError,
+  sessionMetadataToolWrite,
   sessionPullRequests,
   withSessionMetadata,
 } from "../metadata.js";
@@ -127,6 +128,32 @@ describe("session metadata writes (ADR 0225)", () => {
         { part0: "x".repeat(2_000) },
       ),
     ).toThrow(/at most 65536 bytes/);
+  });
+});
+
+describe("set_session_metadata's input", () => {
+  it("reads with neither value nor remove, removes only with remove: true", () => {
+    expect(sessionMetadataToolWrite({ key: "pull_requests" })).toBeNull();
+    expect(
+      sessionMetadataToolWrite({ key: "pull_requests", remove: false }),
+    ).toBeNull();
+    expect(
+      sessionMetadataToolWrite({ key: "pull_requests", remove: true }),
+    ).toEqual({ pull_requests: null });
+    expect(
+      sessionMetadataToolWrite({ key: "deploy", value: { ok: null } }),
+    ).toEqual({ deploy: { ok: null } });
+  });
+
+  it("refuses a null value instead of taking it as a removal", () => {
+    // A model filling an unused parameter with null meant to read.
+    expect(() =>
+      sessionMetadataToolWrite({ key: "pull_requests", value: null }),
+    ).toThrow(/omit it to read, or pass remove: true/);
+    expect(() =>
+      sessionMetadataToolWrite({ key: "note", value: "x", remove: true }),
+    ).toThrow(/not both/);
+    expect(() => sessionMetadataToolWrite({ key: "Not A Key" })).toThrow();
   });
 });
 

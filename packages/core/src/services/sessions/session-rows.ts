@@ -5,6 +5,7 @@ import type {
   AttemptReason,
   AttemptStatus,
   Item,
+  JsonValue,
   NativeRef,
   ProviderThread,
   RuntimeRequest,
@@ -222,9 +223,28 @@ export function sessionFieldsFromRow(row: SessionRow): SessionFields {
 
 /** The metadata column (ADR 0225): an object, as its constraint keeps it. */
 export function sessionMetadataFromRow(value: Json): SessionMetadata {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as unknown as SessionMetadata)
+  const metadata = protocolJsonValue(value);
+  return typeof metadata === "object" &&
+    metadata !== null &&
+    !Array.isArray(metadata)
+    ? metadata
     : {};
+}
+
+/**
+ * A stored JSON value in the protocol's terms: an object member read back
+ * as undefined is left out, as JSON text leaves it out. Members are defined,
+ * never assigned, so a nested `__proto__` key stays a key.
+ */
+function protocolJsonValue(value: Json): JsonValue {
+  if (value === null || typeof value !== "object") return value;
+  if (Array.isArray(value)) return value.map(protocolJsonValue);
+  return Object.fromEntries(
+    Object.entries(value).flatMap(
+      ([key, member]): Array<[string, JsonValue]> =>
+        member === undefined ? [] : [[key, protocolJsonValue(member)]],
+    ),
+  );
 }
 
 /**

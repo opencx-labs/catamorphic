@@ -25,19 +25,28 @@ every client read it like the title. Core sets it by key
 the key, an unchanged value logs nothing. A write is a `session.changed`
 event, so a viewer's state follows live; a mirror copies it as it copies the
 title, its base included, and a fork starts without it. Whoever may change
-the session may set it (the authority of `setActivity`), and only on the host
-holding the session's authority (or on any host while none does): a copy
-elsewhere refuses the write (`AgentSessionAuthorityRequiredError`, 409),
-since an event logged on a mirror would fork the person's chat at the next
-push. The same now holds for `setActivity`. Closed and archived sessions
-still take writes: a pull request merges after its chat is done. Agents set
-it with `set_session_metadata { key, value }` and read it with the same tool
-without a value (a key's value is replaced whole, so a list is read before
-it is written again): a deferred desktop workspace tool (written a few times
-in a chat, ADR 0133), the same operation in the project MCP surface, offered
-only on a session's own connection and bound to it, and a discovered
-capability for the Work server's agents. People and other clients read it
-from the session's fields and write it with `PATCH …/sessions/:id/metadata`.
+the session may set it (the authority of `setActivity`), and only on the
+host holding the session's authority (or on any host while none does): a
+copy elsewhere refuses the write (`AgentSessionAuthorityRequiredError`,
+409), since an event logged on a mirror would fork the person's chat at the
+next push, and so does the holder while the session moves to another host
+(`AgentSessionHandoffPendingError`, 409 `handoff_pending`, as for messages),
+since its log was pushed before the move. The same now holds for
+`setActivity`. Closed and archived sessions still take writes: a pull
+request merges after its chat is done. Agents set it with
+`set_session_metadata { key, value }`, remove a key with
+`{ key, remove: true }`, and read it with neither (a key's value is replaced
+whole, so a list is read before it is written again). The tool refuses a
+null value instead of taking it as a removal: a model that fills an unused
+parameter with null meant to read. It is a deferred desktop workspace tool (written a
+few times in a chat, ADR 0133), the same operation in the project MCP
+surface, offered only on a session's own connection and bound to it, and a
+discovered capability for the Work server's agents. People and other clients
+read it from the session's fields and write it with
+`PATCH …/sessions/:id/metadata`, a JSON merge patch (null removes a key).
+A sidebar section on screen follows its session live (its stream, or a poll
+past the stream limit), so a change made outside any turn shows while a page
+the chat opened is in front.
 
 **Bounds keep it a few facts, not a store.** Keys are lowercase words joined
 by `_`, `-` or `.` (64 characters); at most 32 keys, 16 KB a value and 64 KB
@@ -99,5 +108,8 @@ can build their own session sections without app code. Nothing guarantees an
 agent records its PRs: a model that skips the instruction leaves the section
 showing only the folder ("No pull requests yet"). Existing profiles keep
 their `workspace.js` until they reset it or add the tab themselves. Desktop
-and server ship together: a desktop from before this change pushing mirrors
-to an updated server is refused (its snapshot lacks `metadata`).
+and server ship together: the session protocol is 2
+(`SESSION_PROTOCOL_VERSION`, reported by `GET /me`), so a client of the
+other version asks to update Work, and a desktop from before this change
+pushing mirrors to an updated server is refused (its snapshot lacks
+`metadata`).

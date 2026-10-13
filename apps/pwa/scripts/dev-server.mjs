@@ -24,7 +24,7 @@ import http from "node:http";
 
 const PORT = Number(process.env.PORT ?? 8788);
 const THEME = process.env.THEME;
-const AGENT_PROTOCOL = { session: 1, runner: 1 };
+const AGENT_PROTOCOL = { session: 2, runner: 1 };
 const QUESTIONS_DISMISSED_MESSAGE =
   "The user dismissed these questions without answering them. Continue without their input, using your best judgment.";
 

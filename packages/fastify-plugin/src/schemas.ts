@@ -20,6 +20,7 @@ import {
   type RuntimeRequestResponse,
   SESSION_METADATA_KEY_PATTERN,
   SESSION_METADATA_LIMITS,
+  SESSION_PROTOCOL_VERSION,
   type SessionCommand,
   type SessionEvent,
   type SessionFields,
@@ -2433,7 +2434,7 @@ export const MeSchema = z.object({
    * server whose session or runner protocol it does not know.
    */
   agentProtocol: z.object({
-    session: z.literal(1),
+    session: z.literal(SESSION_PROTOCOL_VERSION),
     runner: z.literal(RUNNER_PROTOCOL_VERSION),
   }),
 });

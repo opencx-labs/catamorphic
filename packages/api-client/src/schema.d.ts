@@ -65,7 +65,7 @@ export interface paths {
                             };
                             agentProtocol: {
                                 /** @enum {number} */
-                                session: 1;
+                                session: 2;
                                 /** @enum {number} */
                                 runner: 1;
                             };

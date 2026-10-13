@@ -616,6 +616,7 @@ describe("project MCP surface (ADR 0055): documents, skills, ask_agent", () => {
     // Bound to the calling session: no session to name.
     expect(Object.keys(tool?.inputSchema.properties ?? {}).sort()).toEqual([
       "key",
+      "remove",
       "value",
     ]);
     const set = await rpc(
@@ -661,19 +662,36 @@ describe("project MCP surface (ADR 0055): documents, skills, ask_agent", () => {
       op: "sessions.metadata",
       args: { sessionId: "session-1", projectId: PROJECT_ID },
     });
-    const malformed = await rpc(
+    // Removing is said with remove: true; a null value is refused, never
+    // taken as a removal (a model filling unused parameters meant to read).
+    await rpc(
       app,
       "tools/call",
       {
         name: "set_session_metadata",
-        arguments: { key: "Pull Requests", value: 1 },
+        arguments: { key: "pull_requests", remove: true },
       },
       sessionUrl,
     );
-    expect(malformed.result?.isError).toBe(true);
+    expect(calls.at(-1)).toMatchObject({
+      op: "sessions.setMetadata",
+      args: { sessionId: "session-1", values: { pull_requests: null } },
+    });
+    for (const refused of [
+      { key: "Pull Requests", value: 1 },
+      { key: "pull_requests", value: null },
+    ]) {
+      const result = await rpc(
+        app,
+        "tools/call",
+        { name: "set_session_metadata", arguments: refused },
+        sessionUrl,
+      );
+      expect(result.result?.isError).toBe(true);
+    }
     expect(
       calls.filter((call) => call.op === "sessions.setMetadata"),
-    ).toHaveLength(1);
+    ).toHaveLength(2);
   });
 
   it("offers watcher tools that start a host's polled event sources (ADR 0177)", async () => {

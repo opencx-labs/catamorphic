@@ -268,12 +268,25 @@ function toolStepLabel(
       return { label: "Stopped pointing", mono: false };
     if (toolName === "use_worktree" && "path" in input && input.path === null)
       return { label: "Switched to the project checkout", mono: false };
-    if (
-      toolName === "set_session_metadata" &&
-      "key" in input &&
-      input.key === "pull_requests"
-    )
-      return { label: "Updated pull requests", mono: false };
+    if (toolName === "set_session_metadata") {
+      // Without a value or remove: true, the call only reads.
+      const writes =
+        ("value" in input &&
+          input.value !== undefined &&
+          input.value !== null) ||
+        ("remove" in input && input.remove === true);
+      const pullRequests = "key" in input && input.key === "pull_requests";
+      return {
+        label: writes
+          ? pullRequests
+            ? "Updated pull requests"
+            : "Updated session details"
+          : pullRequests
+            ? "Checked pull requests"
+            : "Read session details",
+        mono: false,
+      };
+    }
   }
   const known = TOOL_STEP_LABELS[toolName];
   if (known) return { label: known, mono: false };

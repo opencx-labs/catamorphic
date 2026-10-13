@@ -1,5 +1,6 @@
 import {
   SET_SESSION_METADATA_DESCRIPTION,
+  sessionMetadataToolWrite,
   setSessionMetadataInputSchema,
 } from "@catamorphic/agent-protocol";
 import type { CatamorphicCore, Identity } from "@catamorphic/core";
@@ -608,17 +609,16 @@ export function surfaceTools(
           inputSchema: z.toJSONSchema(setSessionMetadataInputSchema),
         },
         call: guarded(async (args) => {
-          const { key, value } = setSessionMetadataInputSchema.parse(args);
+          const values = sessionMetadataToolWrite(args);
           return {
-            metadata:
-              value === undefined
-                ? await sessions.metadata({ identity, projectId, sessionId })
-                : await sessions.setMetadata({
-                    identity,
-                    projectId,
-                    sessionId,
-                    values: { [key]: value },
-                  }),
+            metadata: values
+              ? await sessions.setMetadata({
+                  identity,
+                  projectId,
+                  sessionId,
+                  values,
+                })
+              : await sessions.metadata({ identity, projectId, sessionId }),
           };
         }),
       });

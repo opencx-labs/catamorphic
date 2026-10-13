@@ -342,11 +342,15 @@ describe("workspace coordination tools", () => {
         context,
       ),
     ).toEqual({ metadata: { pull_requests: pullRequests } });
-    await tool.execute({ key: "note", value: null }, context);
+    await tool.execute({ key: "note", remove: true }, context);
     // No value reads: an agent keeps what a list already holds.
     expect(await tool.execute({ key: "pull_requests" }, context)).toEqual({
       metadata: { note: "kept" },
     });
+    // A null value is refused, never taken as a removal.
+    await expect(
+      tool.execute({ key: "pull_requests", value: null }, context),
+    ).rejects.toThrow(/remove: true/);
     expect(calls).toEqual([
       ["project", "session", { pull_requests: pullRequests }],
       ["project", "session", { note: null }],

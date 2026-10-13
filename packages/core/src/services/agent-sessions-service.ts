@@ -1835,7 +1835,10 @@ export class AgentSessionsService {
   /**
    * Refuse a change to a session another host holds (ADR 0197): the copy
    * here is a mirror, and an event logged on it would fork the person's
-   * chat when its holder next pushes. Call under the session's lock.
+   * chat when its holder next pushes. A session moving to another host
+   * refuses it too, as it refuses messages: its log was pushed before the
+   * move, and a change logged now would never reach its new holder. Call
+   * under the session's lock.
    */
   private async assertLocalAuthority(
     trx: Transaction<DB>,
@@ -1843,9 +1846,11 @@ export class AgentSessionsService {
   ): Promise<void> {
     const session = await trx
       .selectFrom("agent_sessions")
-      .select(["authority_host_id", "authority_revision"])
+      .select(["authority_host_id", "authority_revision", "handoff_status"])
       .where("id", "=", sessionId)
       .executeTakeFirstOrThrow();
+    if (session.handoff_status === "pending")
+      throw new AgentSessionHandoffPendingError(sessionId);
     if (
       session.authority_host_id !== "unassigned" &&
       session.authority_host_id !== this.hostId
@@ -1879,9 +1884,10 @@ export class AgentSessionsService {
    * Set named values on a session (ADR 0225): each key of `values` takes
    * its value, and null removes the key. Whoever may change the session
    * may set them, as for its activity, on the host holding its authority
-   * (`AgentSessionAuthorityRequiredError` elsewhere), closed or archived
-   * included; the change is logged, so every viewer's snapshot and stream
-   * follow it. Returns the session's metadata. Throws
+   * (`AgentSessionAuthorityRequiredError` elsewhere, and
+   * `AgentSessionHandoffPendingError` while it moves to another host),
+   * closed or archived included; the change is logged, so every viewer's
+   * snapshot and stream follow it. Returns the session's metadata. Throws
    * `SessionMetadataError` for a malformed key or value, or past the
    * limits (`SESSION_METADATA_LIMITS`).
    */
@@ -1891,30 +1897,50 @@ export class AgentSessionsService {
     sessionId: string;
     values: Readonly<Record<string, JsonValue>>;
   }): Promise<SessionMetadata> {
-    await this.requireSession(args.identity, args.projectId, args.sessionId);
-    // What is not JSON is refused as given (JSON text would turn a NaN
-    // into null, a removal); then each value is taken as the database will
-    // hold it (U+FFFD for what jsonb refuses), so the logged change and the
-    // projection read back the same.
-    withSessionMetadata({}, args.values);
-    const values = storedJson(args.values);
-    return this.db.transaction().execute(async (trx) => {
-      await this.log.lock(trx, args.sessionId);
-      await this.assertLocalAuthority(trx, args.sessionId);
-      const row = await trx
-        .selectFrom("agent_sessions")
-        .select("metadata")
-        .where("id", "=", args.sessionId)
-        .executeTakeFirstOrThrow();
-      const current = sessionMetadataFromRow(row.metadata);
-      const metadata = withSessionMetadata(current, values);
-      if (metadata === current) return current;
-      await this.log.append(trx, {
-        sessionId: args.sessionId,
-        events: [{ type: "session.changed", session: { metadata } }],
-      });
-      return metadata;
-    });
+    return withSpan(
+      {
+        tracer,
+        name: "agent.session.set_metadata",
+        attributes: {
+          "catamorphic.tenant.id": args.identity.tenantId,
+          "user.id": args.identity.externalUserId,
+          "catamorphic.project.id": args.projectId,
+          "catamorphic.agent.session.id": args.sessionId,
+          "catamorphic.agent.session.metadata.keys": Object.keys(args.values)
+            .length,
+        },
+      },
+      async () => {
+        await this.requireSession(
+          args.identity,
+          args.projectId,
+          args.sessionId,
+        );
+        // What is not JSON is refused as given (JSON text would turn a NaN
+        // into null, a removal); then each value is taken as the database
+        // will hold it (U+FFFD for what jsonb refuses), so the logged
+        // change and the projection read back the same.
+        withSessionMetadata({}, args.values);
+        const values = storedJson(args.values);
+        return this.db.transaction().execute(async (trx) => {
+          await this.log.lock(trx, args.sessionId);
+          await this.assertLocalAuthority(trx, args.sessionId);
+          const row = await trx
+            .selectFrom("agent_sessions")
+            .select("metadata")
+            .where("id", "=", args.sessionId)
+            .executeTakeFirstOrThrow();
+          const current = sessionMetadataFromRow(row.metadata);
+          const metadata = withSessionMetadata(current, values);
+          if (metadata === current) return current;
+          await this.log.append(trx, {
+            sessionId: args.sessionId,
+            events: [{ type: "session.changed", session: { metadata } }],
+          });
+          return metadata;
+        });
+      },
+    );
   }
 
   /**

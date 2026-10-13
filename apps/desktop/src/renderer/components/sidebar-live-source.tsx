@@ -79,10 +79,16 @@ function LiveSourceRows({ projectId }: { projectId: string }) {
   const [sessionId, setSessionId] = useState(surfaceSessionId);
   if (surfaceSessionId && surfaceSessionId !== sessionId)
     setSessionId(surfaceSessionId);
-  const { fields } = useAgentSessionFields(
-    projectId,
-    sessionScoped ? sessionId : undefined,
-  );
+  const shown =
+    (contribution?.relevant ?? true) && (contribution?.visible ?? true);
+  // On screen it follows the chat, so what is set outside a turn shows.
+  const {
+    fields,
+    error: sessionError,
+    refetch: refetchSession,
+  } = useAgentSessionFields(projectId, sessionScoped ? sessionId : undefined, {
+    live: sessionScoped && shown,
+  });
   const session = useMemo<SidebarSourceSession | undefined>(
     () =>
       fields
@@ -168,12 +174,17 @@ function LiveSourceRows({ projectId }: { projectId: string }) {
       sessionScoped ? sessionId : undefined,
     ],
   );
+  // A session-scoped module runs only with its chat (ADR 0225): until the
+  // chat is read nothing loads it, a refresh reads the chat, and a failed
+  // read is the section's error.
+  const awaitingSession = sessionScoped && session === undefined;
+  const sessionFailed = awaitingSession && sessionError !== null;
   // A relevant hidden section keeps only a root availability lease. The native
   // tree owns expanded branch leases while visible, matching built-in sources.
   const active =
     (contribution?.relevant ?? true) &&
     ((contribution?.visible ?? true) || section?.hideEmpty === true) &&
-    (!sessionScoped || session !== undefined);
+    !awaitingSession;
   const { root } = useCollection({
     collection,
     active,
@@ -221,12 +232,13 @@ function LiveSourceRows({ projectId }: { projectId: string }) {
   useSidebarItemCount(count);
   const refresh = useCallback(() => {
     setSubscriptionError(undefined);
-    return collection.load();
-  }, [collection]);
+    if (!awaitingSession) return collection.load();
+    return sessionId ? refetchSession() : undefined;
+  }, [collection, awaitingSession, sessionId, refetchSession]);
   useSidebarRefresh(refresh);
   useSidebarContent({
     state:
-      root.status === "error" || subscriptionError
+      sessionFailed || root.status === "error" || subscriptionError
         ? "error"
         : root.status === "idle" || root.status === "loading"
           ? "loading"
@@ -234,8 +246,10 @@ function LiveSourceRows({ projectId }: { projectId: string }) {
             ? "ready"
             : "empty",
     refreshing: root.fetching && root.ids.length > 0,
-    idle: !root.fetching,
-    error: subscriptionError ?? root.error,
+    idle: awaitingSession ? !sessionId : !root.fetching,
+    error: sessionFailed
+      ? "Could not read this chat."
+      : (subscriptionError ?? root.error),
     retry: refresh,
     empty: "No items yet.",
   });
@@ -280,7 +294,7 @@ function LiveSourceRows({ projectId }: { projectId: string }) {
     >
       <CollectionTree
         collection={collection}
-        active={contribution?.visible ?? true}
+        active={(contribution?.visible ?? true) && !awaitingSession}
         label={title}
         height={section?.height}
         rowHeight={section?.rowHeight}

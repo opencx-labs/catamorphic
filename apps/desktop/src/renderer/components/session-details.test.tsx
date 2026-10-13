@@ -15,6 +15,8 @@ const session = vi.hoisted(() => ({
   isLoading: false,
   error: null as Error | null,
   asked: [] as Array<string | undefined>,
+  /** Whether the section asked to follow the chat live. */
+  live: [] as boolean[],
 }));
 const checkout = vi.hoisted(() => ({
   data: undefined as SessionCheckoutDetail | undefined,
@@ -26,8 +28,13 @@ const checkout = vi.hoisted(() => ({
 }));
 
 vi.mock("@catamorphic/react", () => ({
-  useAgentSessionFields: (_projectId: string, sessionId?: string) => {
+  useAgentSessionFields: (
+    _projectId: string,
+    sessionId?: string,
+    options: { live?: boolean } = {},
+  ) => {
     session.asked.push(sessionId);
+    session.live.push(options.live ?? false);
     return {
       fields: session.fields,
       isLoading: session.isLoading,
@@ -109,6 +116,7 @@ afterEach(() => {
   session.isLoading = false;
   session.error = null;
   session.asked = [];
+  session.live = [];
   checkout.data = undefined;
   checkout.error = null;
   checkout.remote = false;
@@ -218,6 +226,9 @@ describe("the session section (ADR 0225)", () => {
       );
       expect(hint?.textContent).toBe("No pull requests yet.");
       expect(view.reports.at(-1)?.state).toBe("ready");
+      // On screen it follows the chat itself: a change made outside a
+      // turn shows while a page the chat opened is in front.
+      expect(session.live.at(-1)).toBe(true);
       session.fields = { metadata: { pull_requests: [pullRequests[0]] } };
       await view.render("s1");
       expect(view.node.querySelector(".sidebar-empty-state")).toBeNull();
@@ -313,6 +324,8 @@ describe("the session section (ADR 0225)", () => {
       await view.render("s1");
       await view.render(undefined);
       expect(session.asked.at(-1)).toBe("s1");
+      // Leaving, it shows what it had and stops following.
+      expect(session.live.at(-1)).toBe(false);
       expect(view.rows()).toHaveLength(2);
     } finally {
       await view.cleanup();
