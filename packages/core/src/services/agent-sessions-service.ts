@@ -1136,9 +1136,10 @@ export class AgentSessionsService {
     }) => Promise<Identity | null>;
     pollIntervalMs?: number;
     /**
-     * How often it polls while nothing is queued, due or hinted in this
-     * process (ADR 0228). Defaults to the host's `idlePollMs`; without
-     * either it polls every `pollIntervalMs`.
+     * How long it waits after a poll while nothing is queued, due or
+     * hinted in this process (ADR 0228). Defaults to the host's
+     * `idlePollMs`; without either it waits `pollIntervalMs` after each
+     * poll.
      */
     idlePollIntervalMs?: number;
     /** How often idle chats' workspaces are checked (ADR 0173). */
@@ -1151,6 +1152,7 @@ export class AgentSessionsService {
     const pacer = new PollPacer({
       quickMs: input.pollIntervalMs ?? 1_000,
       idleMs: input.idlePollIntervalMs ?? this.idlePollMs,
+      signal: controller.signal,
       wakeups: this.wakeups,
       topic: "agent",
     });
@@ -1253,12 +1255,13 @@ export class AgentSessionsService {
           console.warn("[catamorphic] Agent queue recovery failed", error),
         );
         if (stopped) return;
-        // Idle: sleep until a queued turn falls due (a retry's backoff),
-        // a hint from this process, or the idle poll.
+        // Idle: sleep until something falls due (a retry's backoff, a
+        // lapsing lease, a request's deadline), a hint from this process,
+        // or the idle poll.
         const due = pacer.quick
           ? undefined
-          : await this.nextQueuedTurnAt().catch(() => undefined);
-        await pacer.wait(controller.signal, { until: due?.getTime() });
+          : await this.nextAgentWorkAt().catch(() => undefined);
+        await pacer.wait({ until: due?.getTime() });
       }
     };
     const running = loop();
@@ -1274,20 +1277,58 @@ export class AgentSessionsService {
     };
   }
 
-  /** When this host's soonest queued turn falls due, or null with none queued. */
-  private async nextQueuedTurnAt(): Promise<Date | null> {
+  /**
+   * When this host's agent worker next has something due (ADR 0228): a
+   * queued turn's `available_at` (a retry's backoff), an active turn's
+   * lease running out, or a pending request's deadline. Null with none.
+   */
+  private async nextAgentWorkAt(): Promise<Date | null> {
     const row = await this.db
-      .selectFrom("agent_turns")
-      .innerJoin(
-        "agent_sessions",
-        "agent_sessions.id",
-        "agent_turns.session_id",
-      )
-      .select((eb) => eb.fn.min("agent_turns.available_at").as("at"))
-      .where("agent_sessions.authority_host_id", "=", this.hostId)
-      .where("agent_turns.status", "=", "queued")
+      .selectNoFrom((eb) => [
+        eb
+          .selectFrom("agent_turns")
+          .innerJoin(
+            "agent_sessions",
+            "agent_sessions.id",
+            "agent_turns.session_id",
+          )
+          .select(({ fn }) => fn.min("agent_turns.available_at").as("at"))
+          .where("agent_sessions.authority_host_id", "=", this.hostId)
+          .where("agent_turns.status", "=", "queued")
+          .as("queued"),
+        eb
+          .selectFrom("agent_turns")
+          .innerJoin(
+            "agent_sessions",
+            "agent_sessions.id",
+            "agent_turns.session_id",
+          )
+          .select(({ fn }) => fn.min("agent_turns.lease_expires_at").as("at"))
+          .where("agent_sessions.authority_host_id", "=", this.hostId)
+          .where("agent_turns.status", "in", [...ACTIVE_TURN_STATUSES])
+          .as("lapses"),
+        eb
+          .selectFrom("agent_runtime_requests")
+          .innerJoin(
+            "agent_sessions",
+            "agent_sessions.id",
+            "agent_runtime_requests.session_id",
+          )
+          .select(({ fn }) =>
+            fn.min("agent_runtime_requests.expires_at").as("at"),
+          )
+          .where("agent_sessions.authority_host_id", "in", [
+            this.hostId,
+            "unassigned",
+          ])
+          .where("agent_runtime_requests.status", "=", "pending")
+          .as("expires"),
+      ])
       .executeTakeFirst();
-    return row?.at ? new Date(row.at) : null;
+    const times = [row?.queued, row?.lapses, row?.expires]
+      .filter((at) => at !== null && at !== undefined)
+      .map((at) => new Date(at).getTime());
+    return times.length > 0 ? new Date(Math.min(...times)) : null;
   }
 
   /**
@@ -3570,6 +3611,8 @@ export class AgentSessionsService {
           collapseKey: `approval:${request.id}`,
         });
       }
+    if (input.requests.some((request) => request.approvers.length > 0))
+      this.chatsChanged();
   }
 
   /**
@@ -5417,6 +5460,7 @@ export class AgentSessionsService {
     const row = input.transaction
       ? await insert(input.transaction)
       : await this.db.transaction().execute(insert);
+    this.chatsChanged();
 
     return mapSession(row, false, this.hostId, this.authorityLeaseMs, {
       visibility: prepared.visibility,
@@ -6768,7 +6812,7 @@ export class AgentSessionsService {
    */
   private async restoreArchived(sessionIds: readonly string[]): Promise<void> {
     if (sessionIds.length === 0) return;
-    await this.db
+    const restored = await this.db
       .updateTable("agent_session_views")
       .set(({ ref }) => ({
         visibility: ref("previous_visibility"),
@@ -6777,7 +6821,8 @@ export class AgentSessionsService {
       }))
       .where("session_id", "in", [...sessionIds])
       .where("visibility", "=", "archived")
-      .execute();
+      .executeTakeFirst();
+    if (restored.numUpdatedRows > 0n) this.chatsChanged();
   }
 
   /** Acknowledgement-by-interaction shared by desktop and PWA clients. */
@@ -6799,6 +6844,7 @@ export class AgentSessionsService {
       .where("id", "=", sessionId)
       .returningAll()
       .executeTakeFirstOrThrow();
+    this.chatsChanged();
     return mapSession(
       row,
       (await this.sessionsWithRunningTurns({ sessionIds: [sessionId] })).has(
@@ -7324,6 +7370,7 @@ export class AgentSessionsService {
       .where("id", "=", sessionId)
       .returningAll()
       .executeTakeFirstOrThrow();
+    this.chatsChanged();
     return mapSession(row, false, this.hostId, this.authorityLeaseMs);
   }
 
@@ -9403,6 +9450,7 @@ export class AgentSessionsService {
           resourceRows: resources.filter((row) => !busy.has(row.id)),
         };
       });
+    this.chatsChanged();
 
     // A watcher may finish admission while the first cleanup is stopping work.
     // Admission locks the session row and rechecks visibility, so after this
@@ -9515,6 +9563,7 @@ export class AgentSessionsService {
         .where("session_id", "in", sessionIds)
         .execute();
     });
+    this.chatsChanged();
     const rows = await this.db
       .selectFrom("agent_sessions")
       .selectAll()
@@ -10703,6 +10752,7 @@ export class AgentSessionsService {
         )
         .execute();
     });
+    this.chatsChanged();
     const row = await this.db
       .selectFrom("agent_sessions")
       .selectAll()
@@ -11011,6 +11061,16 @@ export class AgentSessionsService {
           })),
       )
       .execute();
+    this.chatsChanged();
+  }
+
+  /**
+   * Tell this process's chat lists a chat changed outside the session log
+   * (its visibility, attention or icon), once the change is committed
+   * (ADR 0228). What the log records hints by itself.
+   */
+  private chatsChanged(): void {
+    this.wakeups?.notify("chats");
   }
 }
 

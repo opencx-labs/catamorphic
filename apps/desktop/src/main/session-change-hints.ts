@@ -6,12 +6,52 @@ const QUIET_MS = 250;
 const MAX_WAIT_MS = 1_500;
 
 /**
+ * The API routes that change what chat lists, attention and watchers show:
+ * creating, changing, closing, archiving or forking a chat, its attention,
+ * its watchers. Core hints these changes itself; a request on one of them
+ * hints as well, whoever made it. Other project requests (an app's
+ * workflow calls and storage, a terminal's input, MCP) never do.
+ */
+const CHAT_LIST_ROUTES = new Set(
+  [
+    "chats/:key",
+    "sessions",
+    "sessions/:sessionId",
+    "sessions/:sessionId/activity",
+    "sessions/:sessionId/archive",
+    "sessions/:sessionId/attention",
+    "sessions/:sessionId/attention/acknowledge",
+    "sessions/:sessionId/fork",
+    "sessions/:sessionId/metadata",
+    "sessions/:sessionId/subsessions",
+    "sessions/:sessionId/unarchive",
+    "sessions/:sessionId/watchers",
+    "sessions/:sessionId/watchers/:watcherId",
+  ].map((route) => `/api/projects/:projectId/agent/${route}`),
+);
+
+/** Whether a request this server served may have changed its chat lists. */
+export function changesChatLists(request: {
+  method: string;
+  /** The matched route's pattern (Fastify's `routeOptions.url`). */
+  route: string | undefined;
+}): boolean {
+  return (
+    request.method !== "GET" &&
+    request.method !== "HEAD" &&
+    request.route !== undefined &&
+    CHAT_LIST_ROUTES.has(request.route)
+  );
+}
+
+/**
  * Tells the app's windows when its chats may have changed, so their chat
  * lists, attention and watchers read again then rather than on a short
- * poll (ADR 0228): whenever this process logs a change chat lists show
- * (not streamed text), and whenever it serves a request that changes a
- * project (`hint`). A burst of changes goes out as one hint: after
- * `quietMs` without another, or `maxWaitMs` after the first.
+ * poll (ADR 0228): whenever core hints `chats` (a session event lists
+ * show, a chat's visibility, attention or watchers), and whenever this
+ * server serves a request on a route that changes them (`hint`). A burst
+ * of changes goes out as one hint: after `quietMs` without another, or
+ * `maxWaitMs` after the first.
  */
 export function startSessionChangeHints(input: {
   wakeups: Pick<WorkWakeups, "subscribe">;

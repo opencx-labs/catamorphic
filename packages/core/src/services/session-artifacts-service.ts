@@ -79,6 +79,8 @@ const NAME = /^[a-zA-Z][a-zA-Z0-9_-]{0,99}$/;
  * refs published after it was reclaimed (a writer that finished late).
  */
 export const RECLAIMED_REVISIT_SECONDS = 10 * 60;
+/** How long a sweep leaves an artifact whose reclaim failed before retrying. */
+export const RECLAIM_RETRY_SECONDS = 60;
 
 /** One retained source lifecycle for temporary apps and workflows. */
 export class SessionArtifactsService {
@@ -414,8 +416,9 @@ export class SessionArtifactsService {
   /**
    * Reclaim retired source only after all runs at its retained ref settle.
    * Hosts call it about once a second; an artifact already reclaimed is
-   * looked at again only every {@link RECLAIMED_REVISIT_SECONDS}, so a
-   * sweep with nothing new to reclaim costs one query.
+   * looked at again only every {@link RECLAIMED_REVISIT_SECONDS}, and one
+   * whose reclaim failed after {@link RECLAIM_RETRY_SECONDS}, so a sweep
+   * with nothing new to reclaim costs one query.
    */
   async cleanup(): Promise<void> {
     const rows = await this.db
@@ -437,6 +440,18 @@ export class SessionArtifactsService {
             "artifact.ref_deleted_at",
             "<=",
             sql<Date>`now() - make_interval(secs => ${RECLAIMED_REVISIT_SECONDS})`,
+          ),
+        ]),
+      )
+      // A failed reclaim (storage unavailable, a ref that will not delete)
+      // waits before it is tried again; its failure stamped `updated_at`.
+      .where(({ or, eb }) =>
+        or([
+          eb("artifact.last_error", "is", null),
+          eb(
+            "artifact.updated_at",
+            "<=",
+            sql<Date>`now() - make_interval(secs => ${RECLAIM_RETRY_SECONDS})`,
           ),
         ]),
       )
@@ -482,7 +497,8 @@ export class SessionArtifactsService {
           .select("id")
           .where("session_artifact_id", "=", row.id)
           .execute();
-        if (apps.length && !this.bundleStore) continue;
+        if (apps.length && !this.bundleStore)
+          throw new Error("App bundle storage is unavailable");
         for (const app of apps)
           await this.bundleStore?.deletePrefix(
             `apps/${row.tenant_id}/${row.project_id}/${app.id}/`,
@@ -522,6 +538,7 @@ export class SessionArtifactsService {
           .updateTable("session_artifacts")
           .set({
             last_error: error instanceof Error ? error.message : String(error),
+            updated_at: sql<Date>`now()`,
           })
           .where("id", "=", row.id)
           .execute();

@@ -663,7 +663,8 @@ The server's pollers slow down when nothing is queued and the writes that
 queue work wake them. The window's chat lists, attention and watchers
 read again when the main process says chats changed, backed by a
 30-second poll; a remote project's lists keep their short polls. A
-streamed answer is recorded in 100 ms batches.
+streamed answer shows its first words at once and is recorded in 100 ms
+batches after them.
 
 The rule: nothing runs on a short timer unless something it shows is
 changing. A routine read never changes the screen: no refreshing

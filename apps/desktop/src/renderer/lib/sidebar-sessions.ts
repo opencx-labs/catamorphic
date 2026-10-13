@@ -214,6 +214,12 @@ export function subscribeSidebarSessions({
       : desktopApi.onSessionsChanged(() => refresh("first"));
     const refreshLoaded = () => refresh("loaded");
     window.addEventListener("focus", refreshLoaded);
+    // A hidden window drops its wakeups: it catches up once it shows
+    // again, which need not give it focus.
+    const shown = () => {
+      if (!document.hidden) refresh("loaded");
+    };
+    document.addEventListener("visibilitychange", shown);
     const explicitRefresh = (event: Event) => {
       if (event instanceof CustomEvent && event.detail === projectId)
         refresh("loaded", true);
@@ -235,6 +241,7 @@ export function subscribeSidebarSessions({
         clearInterval(timer);
         hinted();
         window.removeEventListener("focus", refreshLoaded);
+        document.removeEventListener("visibilitychange", shown);
         window.removeEventListener(
           "catamorphic:sidebar-refresh",
           explicitRefresh,

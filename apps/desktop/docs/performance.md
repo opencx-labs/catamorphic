@@ -29,13 +29,14 @@ suite for hidden loops, browser visibility and guest cleanup.
 ## Idle work and live chats
 
 ADR 0228 records the measurements. An idle Work does nothing on a short
-timer: the embedded server's pollers slow to `idlePollMs` (5 s) while
-nothing is found and are woken by the writes that queue work; the
-window's chat lists, attention and watchers read again on main's
-"chats changed" hint, with a 30 s safety poll (remote projects keep their
+timer: the embedded server's pollers wait `idlePollMs` (5 s) after a poll
+that found nothing, unless known work falls due sooner, and are woken by
+the writes that queue work; the window's chat lists, attention and
+watchers read again on main's "chats changed" hint and when a hidden
+window shows again, with a 30 s safety poll (remote projects keep their
 2 s polls); a routine read never shows a refreshing state, and a view
-renders only when its rows changed. Streamed deltas are recorded in
-100 ms batches. Rules that follow:
+renders only when its rows changed. Streamed deltas after an item's first
+are recorded in 100 ms batches. Rules that follow:
 
 - **A timer needs a reason on screen.** Before adding a poll, interval or
   infinite animation, measure an idle app (below). Prefer a hint from the

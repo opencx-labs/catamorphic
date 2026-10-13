@@ -147,20 +147,34 @@ export class ExecutionJobsService {
   ) {}
 
   /**
-   * When the soonest pending job of these kinds becomes claimable, or null
-   * when none is pending. An idle worker sleeps no longer than this.
+   * When the soonest job of these kinds becomes claimable: a pending job's
+   * `available_at`, or a running job's lease running out (a lapsed lease is
+   * requeued by the next maintenance sweep). Null when there is none. An
+   * idle worker sleeps no longer than this (ADR 0228).
    */
-  async nextAvailableAt(args: {
+  async nextDueAt(args: {
     kinds: readonly ExecutionJobKind[];
   }): Promise<Date | null> {
     if (args.kinds.length === 0) return null;
     const row = await this.db
       .selectFrom("execution_jobs")
-      .select((eb) => eb.fn.min("available_at").as("at"))
-      .where("status", "=", "pending")
+      .select(({ fn }) => [
+        fn
+          .min("available_at")
+          .filterWhere("status", "=", "pending")
+          .as("available"),
+        fn
+          .min("lease_expires_at")
+          .filterWhere("status", "=", "running")
+          .as("lapses"),
+      ])
+      .where("status", "in", ["pending", "running"])
       .where("kind", "in", [...args.kinds])
       .executeTakeFirst();
-    return row?.at ? new Date(row.at) : null;
+    const times = [row?.available, row?.lapses]
+      .filter((at) => at !== null && at !== undefined)
+      .map((at) => new Date(at).getTime());
+    return times.length > 0 ? new Date(Math.min(...times)) : null;
   }
 
   async enqueue(args: {
@@ -720,14 +734,16 @@ export class ExecutionJobsService {
    * Work deferred while a run was paused is parked far in the future rather
    * than re-polled, so nothing spins against a paused run. That trades polling
    * for an explicit wake: whoever makes the run runnable again must call this,
-   * or its jobs wait out the parking interval.
+   * or its jobs wait out the parking interval. Pass the transaction that
+   * makes the run runnable, so a commit always leaves its work claimable.
    */
   async makeRunAvailable(args: {
     runId: string;
     availableAt?: Date;
+    trx?: Transaction<DB>;
   }): Promise<number> {
     const availableAt = args.availableAt ?? sql<Date>`clock_timestamp()`;
-    const result = await this.db
+    const result = await (args.trx ?? this.db)
       .updateTable("execution_jobs")
       .set({
         available_at: availableAt,
@@ -736,6 +752,32 @@ export class ExecutionJobsService {
       .where("workflow_run_id", "=", args.runId)
       .where("status", "=", "pending")
       .where("available_at", ">", availableAt)
+      .executeTakeFirst();
+    const moved = Number(result.numUpdatedRows);
+    if (moved > 0) this.wakeups?.notify("execution");
+    return moved;
+  }
+
+  /**
+   * Make these pending jobs claimable now: what they waited for (a
+   * connection a person authorized) arrived. Pass the transaction that
+   * records the arrival.
+   */
+  async makeJobsAvailable(args: {
+    jobIds: readonly string[];
+    availableAt?: Date;
+    trx?: Transaction<DB>;
+  }): Promise<number> {
+    if (args.jobIds.length === 0) return 0;
+    const availableAt = args.availableAt ?? sql<Date>`clock_timestamp()`;
+    const result = await (args.trx ?? this.db)
+      .updateTable("execution_jobs")
+      .set({
+        available_at: availableAt,
+        updated_at: new Date(),
+      })
+      .where("id", "in", [...args.jobIds])
+      .where("status", "=", "pending")
       .executeTakeFirst();
     const moved = Number(result.numUpdatedRows);
     if (moved > 0) this.wakeups?.notify("execution");
