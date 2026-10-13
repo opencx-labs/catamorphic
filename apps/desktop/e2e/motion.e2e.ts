@@ -303,6 +303,22 @@ describe("paired motion (enter/exit mirrors)", () => {
     ).toBeLessThanOrEqual(50);
   });
 
+  it("a sidebar tab and its strip arrive and leave as mirrors (ADR 0225)", async () => {
+    const rules = await collectAnimationRules();
+    for (const name of ["sidebar-tab-icon", "sidebar-strip"]) {
+      const enter = rules.find(
+        (rule) => rule.selector === `animate-${name}-in`,
+      );
+      const exit = rules.find(
+        (rule) => rule.selector === `animate-${name}-out`,
+      );
+      expect(enter, name).toBeDefined();
+      expect(exit, name).toBeDefined();
+      expect(exit?.durationMs, name).toBe(enter?.durationMs);
+      expect(exit?.easing, name).toBe(enter?.easing);
+    }
+  });
+
   it("dock-in and dock-out match in duration and easing", async () => {
     const rules = await collectAnimationRules();
     const enter = rules.find((rule) => rule.selector === "animate-dock-in");

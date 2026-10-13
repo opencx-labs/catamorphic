@@ -45,3 +45,17 @@ There is one implementation path for built-ins and customizations. Changes are
 breaking where needed; no legacy renderer or config merge layer is retained.
 Agent guidance documents the real validated contract. Native visual verification,
 large-tree/lifecycle tests and real Codex customization exercises verify parity.
+
+## Amendment (2026-10-13): paginated collections load as they scroll
+
+A long list (a project's chats) used to load its first 50 rows, end in a
+"Load more" button, and re-read every loaded page on each poll. Now the
+shared `Tree` loads a branch's next page itself once scrolling or keyboard
+focus comes within a viewport of its end (`more: { load, loading, error }`
+per branch), holds the end with still placeholder rows while it loads,
+ends in an inline Retry when a page fails, and announces both politely. A
+collection reports a page load (`paging`, `pageError`) apart from a
+refresh, so the section header never spins for one, and can refresh from
+the start only (`pages: "first"`) until the new rows meet the loaded ones.
+The chats source starts at 30 rows, polls one page, re-reads the rest
+every half minute or so, and always brings the open chat into the list.

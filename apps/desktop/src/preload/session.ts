@@ -169,17 +169,24 @@ function attempt(job: () => void): void {
   }
 }
 
-attempt(alignClientHintBrands);
-if (process.type === "service-worker") {
-  attempt(installForExtension);
-} else {
+// A tab's embedded frames run the session's preloads too, for the tab
+// preload's page dialogs (ADR 0226). They get nothing of this one, as
+// before: everything here is for a top frame or a service worker.
+if (process.type === "service-worker" || window.top === window)
+  installForContext();
+
+function installForContext(): void {
+  attempt(alignClientHintBrands);
+  if (process.type === "service-worker") {
+    attempt(installForExtension);
+    return;
+  }
   attempt(reportPresses);
   if (location.protocol === "chrome-extension:") {
     attempt(installForExtension);
-    if (window.top === window) attempt(watchPopupMode);
-  } else {
-    if (window.top === window) attempt(installPasskeys);
-    if (location.origin === webStoreOrigin() && window.top === window)
-      attempt(installForWebStore);
+    attempt(watchPopupMode);
+    return;
   }
+  attempt(installPasskeys);
+  if (location.origin === webStoreOrigin()) attempt(installForWebStore);
 }

@@ -16,7 +16,8 @@
   grid-area: 1 / 1;
   white-space: nowrap;
   opacity: 1;
-  visibility: visible;
+  /* Inherited, so a label in a hidden surface (a background tab) stays hidden. */
+  visibility: inherit;
   transition:
     opacity 150ms ease-out,
     visibility 150ms;

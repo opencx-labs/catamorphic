@@ -96,6 +96,51 @@ it("reads files, serializes simultaneous writes, watches changes, and keeps cons
   release();
 });
 
+it("hands a session-scoped section's chat to load and actions, and nothing elsewhere (ADR 0225)", async () => {
+  const { root, runtime, load } = setup(`
+    import { writeFile } from 'node:fs/promises';
+    export default {
+      async load({ session }) {
+        if (!session) return { items: [{ id: 'none', label: 'No chat' }] };
+        const deploys = session.metadata.deploys ?? [];
+        return { items: deploys.map((deploy) => ({ id: deploy.url, label: deploy.name, url: deploy.url, description: session.title })) };
+      },
+      async action({ session, itemId }) {
+        await writeFile('acted.json', JSON.stringify({ session: session?.id, itemId }));
+      },
+    };
+  `);
+  const session = {
+    id: "session-1",
+    title: "Ship the preview",
+    metadata: {
+      deploys: [{ name: "Preview", url: "https://preview.example" }],
+    },
+  };
+  expect(await load({ session })).toMatchObject({
+    items: [
+      {
+        id: "https://preview.example",
+        label: "Preview",
+        description: "Ship the preview",
+      },
+    ],
+  });
+  expect(await load()).toMatchObject({ items: [{ id: "none" }] });
+  await runtime.request({
+    projectId: "p",
+    sectionId: "s",
+    requestId: crypto.randomUUID(),
+    method: "action",
+    itemId: "https://preview.example",
+    action: "open",
+    session,
+  });
+  expect(
+    JSON.parse(fs.readFileSync(path.join(root, "acted.json"), "utf8")),
+  ).toEqual({ session: "session-1", itemId: "https://preview.example" });
+});
+
 it("loads paged HTTP data, propagates HTTP failures and recovers on retry", async () => {
   let fail = false;
   const server = http.createServer((req, res) => {

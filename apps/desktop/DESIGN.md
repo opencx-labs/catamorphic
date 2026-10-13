@@ -231,6 +231,33 @@ It moves the moment it is toggled and stays enabled meanwhile; if the change
 fails it moves back and its card or row says why. Verify both themes, keyboard
 toggling, a disabled switch with its reason, and a failing change.
 
+## Menus and popovers
+
+A **menu** is a list of commands: an overflow (⋯) button's, a right-click's,
+a page's. It is always `MenuPortal` (`components/menu.tsx`, ADR 0221) with
+its entries as data (`shared/menu.ts`), or a native menu main builds
+(`desktopApi.*Menu`). Open it with `menuAtControl` under its control or
+`menuAtPointer` at a right-click, pass `anchor` so it leaves with its row,
+and run the picked action from `onExited`. While open it holds the window: a
+press anywhere else, a web page or an app's frame included, only closes it;
+Escape, focus or the window leaving, and its anchor going close it too, and
+focus goes back. A menu opened inside a hover card holds the card
+(`useHoldInspector`) from opening until it has exited, so the card neither
+closes under the menu's shield nor takes Escape before it.
+
+A **popover** is anything else that drops from a control: a switcher whose
+rows preview on hover, a bubble with toggles or a field. It closes through
+`usePopoverDismiss` (`lib/popover-dismiss.ts`): a press outside it (which
+goes on to what it lands on), a press inside a page, the window losing
+focus, and Escape once nothing above it took the key. Presses on its rows'
+cards and menus are its own. No menu or popover keeps press or Escape
+listeners of its own.
+
+Design lint fails a file with a menu's semantics (`role="menu"`,
+`aria-haspopup="menu"`) or an overflow icon that draws no `MenuPortal` and
+asks main for no native menu, and ratchets window and document press
+listeners outside the dismissal primitives.
+
 ## Shape & spacing
 
 - Radii: `--radius-sm` 4px (inputs, chips), `--radius-md` 6px (buttons, list
@@ -331,6 +358,8 @@ screen, or under reduced motion.
 | `dock-in` / `dock-out` | 250ms | each other |
 | `bubble-in` / `bubble-out` | 200ms | each other |
 | `tab-in` / `tab-out` | 200ms / 180ms | each other (exit snappier) |
+| `sidebar-tab-icon-in` / `sidebar-tab-icon-out` (a sidebar tab joining or leaving its strip: This session beside a chat) | 200ms | each other (exact mirror; at no width the tab gives back its flex gap) |
+| `sidebar-strip-in` / `sidebar-strip-out` (a sidebar's tab strip opening as a second tab arrives, folding as the count drops to one) | 200ms | each other (exact mirror; the panel below follows its height) |
 | `fade-in` / `fade-out` (modal section swap; agent-control overlay) | 200ms | each other (exact mirror; `fade-out` holds its final frame for removal on animationend) |
 | `modal-in` / `modal-out` (dialog panel: opacity + scale 0.96↔1) | 200ms in, 160ms out | the backdrop's `fade-in`/`fade-out`; `modal-out` holds its final frame until the backdrop unmounts both |
 | `pairing-qr-in` (QR readiness reveal) | 200ms | — (one-shot content-ready signal inside a fixed stage) |
@@ -454,6 +483,17 @@ rows inside shared chrome. The chrome owns status; sections own rows.
   re-expanding never discards what was already loaded.
 - **No private loading text.** "Loading…", spinners, skeletons, empty copy and
   error paragraphs inside a section component are defects.
+- **Long lists load as they are read.** The shared tree reads a branch's next
+  page once the person scrolls or moves focus within a viewport of its end;
+  there is no Load more button. Until it lands, three still placeholder rows
+  (the chrome's skeleton, at the list's end) hold the place, the header stays
+  still, and a polite status tells screen readers. The rows arrive with the row
+  motion while the placeholders slide down, or fade where they stood after the
+  last page. A failed page ends the list with its error and Retry in the
+  chrome's voice; the loaded rows stay. Chats read 30 at a time, polls read the
+  first page only (every loaded page about every 30 seconds, on focus and on
+  Refresh), and the open chat is always in the list: older pages load until it
+  arrives.
 - **One drag-and-drop model.** The shared `Tree` owns pointer math, the accent
   insertion line between rows and the accent outline on the row (or tree) that
   becomes the parent. A section only declares what a row offers when dragged and
@@ -500,10 +540,16 @@ rows inside shared chrome. The chrome owns status; sections own rows.
   any pointer movement elsewhere, a drag or scroll start, or the pointer
   leaving the window; one of those always fires even when the anchor
   re-renders or turns inert under the pointer.
-- **Popovers grow, never jump.** Hover inspectors measure their content and
-  transition height and position, so a section that loads after the popover
-  opens expands it smoothly. A popover that shifts its layout on load is a
-  defect.
+- **Popovers open at their size.** A hover inspector's reads start while the
+  pointer rests on its trigger (`ResourceInspector`'s `warmup`), so it opens
+  with what it shows. A value still loading holds its line with a still
+  skeleton bar of the line's height, never "Loading…" or "…" text of another
+  height; a read that fails or finds nothing says so quietly on its own line
+  ("Unavailable", "None"), never in a warning banner, and a state that is
+  simply not set up (no Git remote, no server, the GitHub CLI off) is not a
+  failure. Inspectors still measure their content and transition height and
+  position, for content that is genuinely longer than its placeholder (a
+  list). A popover that shifts its layout on load is a defect.
 - **Pointer and focus hold an inspector independently.** A hover inspector
   stays open while the pointer or keyboard focus rests on its trigger or its
   panel, so the pointer passing over and away never closes what focus holds.
@@ -514,6 +560,16 @@ rows inside shared chrome. The chrome owns status; sections own rows.
   `itemOverrides`, `height`, `rowHeight`, and a source that exports `load`,
   `subscribe`, `action`, `move`, `drop`. A sidebar an agent writes looks like a
   built-in one without extra effort, and cannot break the chrome.
+- **Tabs follow the chat in front, and never take the panel.** A tab whose
+  sections need what is in front (This session, `when.session`) exists only
+  while it is there (ADR 0225). It is never the default choice: arriving never
+  changes the tab shown, and the person's choice of it comes back with the
+  next chat. It grows into the strip while its neighbours slide and shrinks
+  away the way it came; the strip opens and folds as the count crosses one;
+  when the tab in front leaves, the panels cross-fade to the one that stays.
+  A section built in (`session`) or written (`when.session`, its source given
+  `session`) shows the chat's metadata the same way; a part of a section that
+  is empty says so with the chrome's own sentence ("No pull requests yet.").
 
 ## Registry component rules
 
@@ -557,6 +613,63 @@ the historical log explains how it arrived here.
 - [Performance](docs/performance.md): idle lifecycle checks and sustained measurement.
 
 ## Design log
+### 2026-10-13: Pages ask, over their own tab
+
+A page could not ask anything. `alert` and `confirm` came up in a native
+message box that looked nothing like Work and belonged to no tab, `prompt`
+threw, a page holding its changes with `beforeunload` silently kept every
+reload, address and link from happening, and HTTP sign-ins failed with the
+401 page. Now a page asks through Work's own dialog, drawn over its tab's page
+as Chrome's tab-modal dialogs are (ADR 0226): the page dims and waits,
+while the toolbar, other tabs, the chat and the window carry on. It is
+centered in the page like every Work dialog, with the shared buttons,
+fields, checkbox and focus ring, and the modal's paired motion (200 ms in,
+160 ms out, nothing under reduced motion). A heading names who asks (the
+site, or "An embedded page at …" for another site's frame), and the page's
+words sit under it as plain text that scrolls when long, so a page cannot
+pass them off as Work's. Enter answers OK, Escape Cancel; focus moves into
+the dialog from the page and goes back to it.
+
+One dialog shows at a time, in the order the page asked. A tab out of
+sight keeps its dialog and wears the waiting question's badge until it is
+brought forward, and a page waiting on one does not sleep. From a page's
+second dialog on, "Don't let this page show more dialogs" stops them until
+it loads again. Going elsewhere or closing the tab answers Cancel.
+"Leave site?" (or "Reload site?") holds a reload, a typed address, Back,
+the page's own link or form, and closing the tab; Leave goes on with it.
+A sign-in names the site and its realm, offers the profile's saved
+sign-ins for it, asks again with the username kept when refused, and
+offers to save one that worked on the usual password card. Agents read a
+waiting dialog in their snapshot and answer it with Enter and Escape, as
+a person would; a sign-in is always the person's.
+
+### 2026-10-13: This session, beside the chat
+
+A chat's worktree lived in its status popup and its pull requests nowhere.
+Now the right sidebar leads, while a chat is in front, with a "This session"
+tab: where the chat works (as the popup says it; a click shows the folder)
+and the pull requests its agent recorded, each opening in Work's browser.
+Nothing records them natively. A chat's session holds metadata (ADR 0225),
+named values agents set with `set_session_metadata`, and the skills tell
+agents to keep `pull_requests` there; the same values reach sections a person
+writes, whose sources get the chat in front. The tab is a section like any
+other in `workspace.js`. It arrives without taking the panel: the default
+choice is always a tab that stays, and only the person's own choice brings
+it to the front again. It grows into the strip, the strip itself opens when
+it makes a second tab, and when it leaves while shown the panels cross-fade
+to the one that stays; reduced motion settles at once.
+
+### 2026-10-13: Chats load as you scroll
+
+The Chats section read 50 chats and offered a Load more button, and every
+two-second poll read every page loaded so far, so scrolling made each poll
+dearer. It now reads 30 (two and a half of its viewports) and the next page
+as the person nears the end, in the shared tree, so any paginated section or
+widget does the same: still placeholder rows hold the end, rows arrive with
+the list motion, a failed page offers Retry in place. A poll reads the first
+page and keeps the rows below where they meet; everything loaded is read
+again on a slower beat. The open chat is never missing from the list.
+
 ### 2026-10-12: Menus hold the window; pages get Work's menus
 
 A menu now holds the window while it is open, as a native one does: a
@@ -2232,3 +2345,24 @@ rewrites the pointed element's classes (a tab turning active) puts the
 ring back steady instead of dropping it. Pointing at something in a closed
 sidebar (a row, or a tab while tabs live there) now says the sidebar is
 closed instead of glowing off screen.
+
+### 2026-10-13: A project's card says where it lives; every menu closes the same way
+
+Hovering a project in the switcher showed a card of worktrees, pull
+requests, change counts and a warning that pull requests could not load.
+That warning was the GitHub CLI being off, which it is by default: the
+card reported an expected state as a failure. Worktrees and pull requests
+belong to a chat now ("This session"), so the card says only where the
+project lives: its folder and Git remote, each copyable, its Work server,
+and another project's ongoing sessions. It opens at its size: its reads
+start while the pointer rests on the project, values still loading hold
+their line with a still bar, and a read that fails says "Unavailable" on
+its own line. It no longer swaps "…" and "Loading…" for text of another
+height while the card resizes. A long path or address keeps its end in
+view and shows in full in a hint, never a native tooltip.
+
+The card's ⋯ was a dropdown of its own that nothing closed. It is the app's
+menu now, holding the card open under it, and every remaining popover
+(project and profile switchers, the extensions and downloads bubbles, a
+chat's surface groups) closes through one hook that also hears presses
+inside pages, which those missed. Design lint fails a hand-rolled menu.

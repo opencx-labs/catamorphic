@@ -145,7 +145,10 @@ issues, data loss, broken tests), \`COMMENT\` otherwise; never approve. Then
 report a check run named "Work review" on the head commit with
 \`create_check_run\`: conclusion \`success\` when nothing blocks, \`failure\` when
 you requested changes, \`neutral\` when you could not verify; the summary names
-the verdict, what you verified, and open questions.
+the verdict, what you verified, and open questions. Where the host offers
+\`set_session_metadata\`, the pull request goes in this chat's \`pull_requests\`
+({ url, number, title, state }), so people opening the chat see what it
+reviews.
 
 Be specific and brief: cite files and lines, say what is wrong and what would
 fix it, and skip style preferences the project's linters do not enforce. After

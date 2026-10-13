@@ -1839,6 +1839,33 @@ export const catalog = defineWorkflow(({ defineBoundary }) => ({
     return;
   }
 
+  // "record pr: <number> <state>" → the REAL set_session_metadata tool,
+  // as the desktop-workspace skill teaches (ADR 0225): the chat's whole
+  // pull_requests list, this one's state updated in place.
+  const recordPr = /^record pr:\s*(\d+)\s+(open|draft|merged|closed)$/.exec(
+    message.trim(),
+  );
+  if (recordPr?.[1] && recordPr[2]) {
+    const number = Number(recordPr[1]);
+    const recorded = await turn.tool("set_session_metadata", {
+      key: "pull_requests",
+      value: [
+        {
+          url: `https://github.com/acme/web/pull/${number}`,
+          number,
+          title: "Show this session beside the chat",
+          state: recordPr[2],
+        },
+      ],
+    });
+    yield { type: "title", content: "Pull request" };
+    yield {
+      type: "text",
+      content: `Recorded pull request #${number}: ${JSON.stringify(recorded)}`,
+    };
+    return;
+  }
+
   // "point: <target>" / "point keep: <target>" → the REAL point_at
   // workspace tool (glow + scroll); "unpoint" → point_at { target: null }.
   const pointRun = /^point(\s+keep)?:\s*(.+)$/s.exec(message.trim());

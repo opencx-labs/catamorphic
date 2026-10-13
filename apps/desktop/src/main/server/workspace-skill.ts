@@ -1,7 +1,7 @@
 /** Replaceable desktop doctrine. Mechanics live in the existing host services. */
 export const DESKTOP_WORKSPACE_SKILL = `---
 name: desktop-workspace
-description: Work with the user's browser, terminals, background commands and watches, chats, worktrees, connections and shared project state in Work. Load for desktop interaction or session coordination.
+description: Work with the user's browser, terminals, background commands and watches, chats, worktrees, pull requests a chat records, connections and shared project state in Work. Load for desktop interaction or session coordination.
 ---
 
 # Desktop workspace
@@ -172,6 +172,18 @@ away and the next turn checks it out again, so keep nothing there that Git
 ignores and the task cannot recreate. Shared checkouts share commits and
 rollback. Activity publication is optional when it adds useful peer context.
 
+## What a chat shows beside it
+
+A chat has metadata: named values its session holds, which Work's sidebar
+reads. Discover set_session_metadata to set one key; each call replaces that
+key's whole value, and null removes it. The chat's This session section lists
+pull_requests, an array of { url, number, title, state } with state open,
+draft, merged or closed: the pull requests this chat opened or works on. A
+pull request you open, or are asked to work on, belongs there with the ones
+already listed, and its state changes when you see it merged or closed. A
+person's own sidebar sections can read other keys; keep the ones they ask
+for.
+
 ## Apps, workflows, sharing and connections
 
 Use session-artifacts for temporary apps/reviews; building-apps for project apps;
@@ -182,7 +194,8 @@ host preview. Publishing requires publish: true and is separate from preview.
 Attached checkouts follow the user's/project's commit instructions. Managed
 projects may checkpoint and sync automatically. Do not commit just to save work.
 Discover sync_project and create_pull_request for managed linked-remote operations;
-they preserve the host's sync, checkout and conflict policies. Work never pushes
+they preserve the host's sync, checkout and conflict policies. A pull request
+they open is not recorded on the chat by itself; record it in pull_requests. Work never pushes
 to a repository it did not create: sync only pulls there, and local commits are
 shared as a work/ branch with create_pull_request. Do not substitute raw push/pull
 for managed sync. Unrelated repository tasks may use ordinary git.

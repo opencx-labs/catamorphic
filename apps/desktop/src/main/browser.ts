@@ -74,6 +74,7 @@ import {
 } from "../shared/site-settings.js";
 import type { TerminalMacro } from "../shared/terminal-macros.js";
 import { isCaretKey, TEXT_FIELD_PROBE } from "../shared/text-field.js";
+import { registerBrowserDialogs } from "./browser-dialogs.js";
 import { HistoryStore } from "./browser-history.js";
 import {
   importBrowserCookies,
@@ -711,6 +712,17 @@ export function registerBrowserSupport(
         if (page && !guest.isDestroyed()) void guest.loadURL(page.url);
       });
     };
+    // A tab's page runs its preload in every frame, so an embedded frame
+    // asks through Work's dialogs too (ADR 0226); the preload keeps the
+    // rest of its work to the top frame. Extension views keep theirs.
+    const framesPreload = (
+      _attach: Electron.Event,
+      preferences: Electron.WebPreferences,
+    ) => {
+      if (path.basename(preferences.preload ?? "") === "webview.cjs")
+        preferences.nodeIntegrationInSubFrames = true;
+    };
+    window.webContents.on("will-attach-webview", framesPreload);
     window.webContents.on("will-attach-webview", takeHistory);
     window.webContents.on("did-attach-webview", restoreHistory);
     window.on("swipe", onSwipe);
@@ -1039,6 +1051,28 @@ export function registerBrowserSupport(
     onSubmittedCredentials,
   );
   ipcMain.on("catamorphic:browser-username-submitted", onSubmittedUsername);
+
+  // --- page dialogs: alert, confirm, prompt, Leave site?, sign-ins (ADR 0226) ---
+  const disposeDialogs = registerBrowserDialogs({
+    isTab: (guest) =>
+      guest.getType() === "webview" && !extensions.isView(guest),
+    profileFor: (host) => windows.profileFor(host),
+    vault: {
+      list: (profileId, origin) => vault.list(profileId, origin),
+      reveal: (profileId, id) => vault.reveal(profileId, id),
+    },
+    // A sign-in the site accepted: the tab's password card offers to save
+    // it, as after a form's.
+    offerToSave: ({ guest, host, profileId, origin, username, password }) =>
+      void offerToSave(guest, host, profileId, {
+        origin,
+        username,
+        password,
+        generated: false,
+      }).catch((error: unknown) =>
+        console.warn("[browser] Password offer failed:", error),
+      ),
+  });
 
   const broadcast = (channel: string, payload: unknown) => {
     for (const window of BrowserWindow.getAllWindows()) {
@@ -3009,6 +3043,7 @@ export function registerBrowserSupport(
       disposeSidebarSources();
       disposePasskeys();
       disposeSleep();
+      disposeDialogs();
       app.removeListener("browser-window-created", attachBrowserCommands);
       for (const [window, listener] of appCommandListeners) {
         if (!window.isDestroyed())

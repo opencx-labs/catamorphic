@@ -3066,6 +3066,12 @@
           "updatedAt"
         ]
       },
+      "SessionMetadataInput": {
+        "type": "object",
+        "additionalProperties": {
+          "$ref": "#/components/schemas/JsonValueInput"
+        }
+      },
       "SessionFieldsInput": {
         "type": "object",
         "properties": {
@@ -3144,6 +3150,9 @@
               "required": ["id", "title", "description", "status"]
             }
           },
+          "metadata": {
+            "$ref": "#/components/schemas/SessionMetadataInput"
+          },
           "parentSessionId": {
             "nullable": true,
             "type": "string"
@@ -3190,6 +3199,7 @@
           "workStatus",
           "activity",
           "todos",
+          "metadata",
           "parentSessionId",
           "forkedFromSessionId",
           "attentionRevision",
@@ -3286,6 +3296,13 @@
                       },
                       "required": ["id", "title", "description", "status"]
                     }
+                  },
+                  "metadata": {
+                    "allOf": [
+                      {
+                        "$ref": "#/components/schemas/SessionMetadataInput"
+                      }
+                    ]
                   },
                   "parentSessionId": {
                     "nullable": true,
@@ -6764,6 +6781,12 @@
         ],
         "additionalProperties": false
       },
+      "SessionMetadata": {
+        "type": "object",
+        "additionalProperties": {
+          "$ref": "#/components/schemas/JsonValue"
+        }
+      },
       "SessionFields": {
         "type": "object",
         "properties": {
@@ -6843,6 +6866,9 @@
               "additionalProperties": false
             }
           },
+          "metadata": {
+            "$ref": "#/components/schemas/SessionMetadata"
+          },
           "parentSessionId": {
             "nullable": true,
             "type": "string"
@@ -6889,6 +6915,7 @@
           "workStatus",
           "activity",
           "todos",
+          "metadata",
           "parentSessionId",
           "forkedFromSessionId",
           "attentionRevision",
@@ -6987,6 +7014,13 @@
                       "required": ["id", "title", "description", "status"],
                       "additionalProperties": false
                     }
+                  },
+                  "metadata": {
+                    "allOf": [
+                      {
+                        "$ref": "#/components/schemas/SessionMetadata"
+                      }
+                    ]
                   },
                   "parentSessionId": {
                     "nullable": true,
@@ -27748,6 +27782,139 @@
                     }
                   },
                   "required": ["ok"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/projects/{projectId}/agent/sessions/{sessionId}/metadata": {
+      "patch": {
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "metadata": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "$ref": "#/components/schemas/JsonValueInput"
+                    },
+                    "description": "Values by key; null removes a key"
+                  }
+                },
+                "required": ["metadata"]
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            },
+            "in": "path",
+            "name": "projectId",
+            "required": true
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            },
+            "in": "path",
+            "name": "sessionId",
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "metadata": {
+                      "$ref": "#/components/schemas/SessionMetadata"
+                    }
+                  },
+                  "required": ["metadata"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Default Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["error"],
                   "additionalProperties": false
                 }
               }

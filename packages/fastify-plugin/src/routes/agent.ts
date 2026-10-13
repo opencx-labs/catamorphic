@@ -1,4 +1,8 @@
-import type { JsonObject, JsonValue } from "@catamorphic/agent-protocol";
+import {
+  type JsonObject,
+  type JsonValue,
+  SessionMetadataError,
+} from "@catamorphic/agent-protocol";
 import {
   AccessDeniedError,
   AgentDelegationDeniedError,
@@ -38,6 +42,7 @@ import {
   AgentSessionArchiveResultSchema,
   AgentSessionDetailSchema,
   AgentSessionIdParamsSchema,
+  AgentSessionMetadataSchema,
   AgentSessionPeerSchema,
   AgentSessionSchema,
   AgentSessionsQuerySchema,
@@ -74,6 +79,7 @@ import {
   SessionStreamMessageSchema,
   SkillSchema,
   UpdateAgentSessionActivitySchema,
+  UpdateAgentSessionMetadataSchema,
   UpdateAgentSessionSchema,
   WaitForAgentSubsessionsSchema,
 } from "../schemas.js";
@@ -1009,6 +1015,50 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
         );
         return reply.send({ ok: true });
       } catch (error) {
+        if (
+          error instanceof ProjectNotFoundError ||
+          error instanceof AgentSessionNotFoundError
+        ) {
+          return reply.status(404).send({ error: "Session not found" });
+        }
+        throw error;
+      }
+    },
+  });
+
+  // Named values on a session (ADR 0225): each key takes its value, null
+  // removes it. Agents set them through their tools; any client may.
+  typed.route({
+    method: "PATCH",
+    url: "/projects/:projectId/agent/sessions/:sessionId/metadata",
+    schema: {
+      params: AgentSessionIdParamsSchema,
+      body: UpdateAgentSessionMetadataSchema,
+      response: {
+        200: AgentSessionMetadataSchema,
+        400: ErrorSchema,
+        403: ErrorSchema,
+        404: ErrorSchema,
+        503: ErrorSchema,
+      },
+    },
+    handler: async (request, reply) => {
+      const agentSessions = ctx.core?.agentSessions;
+      if (!agentSessions) {
+        return reply.status(503).send({ error: "Coding agent not configured" });
+      }
+      try {
+        const metadata = await agentSessions.setMetadata({
+          identity: resolveIdentity(request),
+          projectId: request.params.projectId,
+          sessionId: request.params.sessionId,
+          values: request.body.metadata,
+        });
+        return reply.send({ metadata });
+      } catch (error) {
+        if (error instanceof SessionMetadataError) {
+          return reply.status(400).send({ error: error.message });
+        }
         if (
           error instanceof ProjectNotFoundError ||
           error instanceof AgentSessionNotFoundError

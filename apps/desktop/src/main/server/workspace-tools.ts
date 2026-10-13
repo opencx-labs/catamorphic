@@ -1,5 +1,11 @@
 import { stat } from "node:fs/promises";
 import path from "node:path";
+import {
+  type JsonValue,
+  SESSION_METADATA_KEY_PATTERN,
+  SESSION_METADATA_LIMITS,
+  type SessionMetadata,
+} from "@catamorphic/agent-protocol";
 import type { ExtraTool, ExtraToolContext } from "@catamorphic/sandbox";
 import { z } from "zod";
 import {
@@ -131,6 +137,12 @@ export interface SessionCoordinationBridge {
     sessionId: string,
     activity: string | null,
   ): Promise<void>;
+  /** Set keys of the session's metadata, null removing one (ADR 0225). */
+  setMetadata(
+    projectId: string,
+    sessionId: string,
+    values: Record<string, JsonValue>,
+  ): Promise<SessionMetadata>;
 }
 
 export type AgentTodoStatus = "pending" | "in_progress" | "completed";
@@ -250,6 +262,9 @@ export const WORKSPACE_TOOL_POLICY: Readonly<
   interrupt_subsession: write,
   request_user_attention: presentation,
   set_session_activity: presentation,
+  // Recorded a few times in a chat, when something worth showing happens
+  // (a pull request opened): discovered, not on every turn (ADR 0225).
+  set_session_metadata: presentation,
   read_todo_list: read,
   update_todo_list: { ...presentation, eager: true },
   list_worktrees: { ...read, nativeOnly: true },
@@ -501,6 +516,35 @@ export function buildWorkspaceToolkit(
           typeof input.activity === "string" ? input.activity : null,
         );
         return { ok: true };
+      },
+    },
+    {
+      name: "set_session_metadata",
+      description:
+        "Set one named value on this chat's session, replacing what the key held, or remove the key with null. Work's sidebar reads these values, including sections the person adds. pull_requests lists the pull requests this chat opened or works on, shown in its This session section: an array of { url, number?, title?, state? } with state open, draft, merged or closed. Returns the session's metadata.",
+      parameters: {
+        key: z
+          .string()
+          .max(SESSION_METADATA_LIMITS.keyLength)
+          .regex(SESSION_METADATA_KEY_PATTERN)
+          .describe("Lowercase words joined by _, - or ., e.g. pull_requests"),
+        value: z.json().describe("Any JSON value; null removes the key"),
+      },
+      execute: async (input, ctx) => {
+        if (!ctx.sessionId) throw new Error("This turn has no chat session.");
+        if (!sessionCoordination) {
+          throw new Error("Session coordination is not available yet.");
+        }
+        const { key, value } = z
+          .object({ key: z.string(), value: z.json() })
+          .parse(input);
+        return {
+          metadata: await sessionCoordination.setMetadata(
+            ctx.projectId,
+            ctx.sessionId,
+            { [key]: value },
+          ),
+        };
       },
     },
     {
@@ -1091,7 +1135,7 @@ export function buildWorkspaceToolkit(
     {
       name: "create_pull_request",
       description:
-        "Propose the project's current changes for review: pushes the recorded commits to a new work/ branch on the linked remote (e.g. GitHub) and opens a pull request. This is how local work reaches a repository that existed before Work, and the right choice whenever sync_project reports `ahead` or `diverged`, the change is risky, collaborators are active, or the user asks for review. Returns the PR URL; share it with the user (open_surface can open it).",
+        "Propose the project's current changes for review: pushes the recorded commits to a new work/ branch on the linked remote (e.g. GitHub) and opens a pull request. This is how local work reaches a repository that existed before Work, and the right choice whenever sync_project reports `ahead` or `diverged`, the change is risky, collaborators are active, or the user asks for review. Returns the PR URL; share it with the user (open_surface can open it). The chat lists it once you add it to its pull_requests with set_session_metadata.",
       parameters: {
         title: z
           .string()

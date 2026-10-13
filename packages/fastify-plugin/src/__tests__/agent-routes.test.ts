@@ -164,6 +164,57 @@ describe("agent routes", () => {
       await app.close();
     });
 
+    it("sets session metadata by key through core, with core's refusals", async () => {
+      const setMetadata = vi.fn(async ({ values }) => {
+        if ("forbidden" in values) throw new AccessDeniedError();
+        return { pull_requests: values.pull_requests };
+      });
+      const app = createTestApp({
+        core: { agentSessions: { setMetadata } } as never,
+      });
+      await app.ready();
+      const url = `/api/projects/${PROJECT_ID}/agent/sessions/${SESSION_ID}/metadata`;
+      const set = await app.inject({
+        method: "PATCH",
+        url,
+        payload: { metadata: { pull_requests: [{ url: "https://x/pull/1" }] } },
+      });
+      expect(set.statusCode).toBe(200);
+      expect(set.json()).toEqual({
+        metadata: { pull_requests: [{ url: "https://x/pull/1" }] },
+      });
+      expect(setMetadata).toHaveBeenCalledWith(
+        expect.objectContaining({
+          projectId: PROJECT_ID,
+          sessionId: SESSION_ID,
+          values: { pull_requests: [{ url: "https://x/pull/1" }] },
+        }),
+      );
+      const denied = await app.inject({
+        method: "PATCH",
+        url,
+        payload: { metadata: { forbidden: true } },
+      });
+      expect(denied.statusCode).toBe(403);
+      // Keys are checked before core is asked.
+      const malformed = await app.inject({
+        method: "PATCH",
+        url,
+        payload: { metadata: { "Pull Requests": [] } },
+      });
+      expect(malformed.statusCode).toBe(400);
+      expect(setMetadata).toHaveBeenCalledTimes(2);
+      await app.close();
+      const unconfigured = await buildApp();
+      const response = await unconfigured.inject({
+        method: "PATCH",
+        url,
+        payload: { metadata: { note: "x" } },
+      });
+      expect(response.statusCode).toBe(503);
+      await unconfigured.close();
+    });
+
     it("reports an unavailable subsession agent as a client error", async () => {
       const app = createTestApp({
         core: {
@@ -427,10 +478,8 @@ describe("personal environments (ADR 0199)", () => {
       url,
       payload: { logins: { codex: { auth: "{}" } }, files: [] },
     });
+    // Only files and setup: anything else is refused, as any unknown key is.
     expect(refused.statusCode).toBe(400);
-    expect(refused.json().message).toContain(
-      "Sign-ins stay on the machine they were made on",
-    );
     expect(replace).not.toHaveBeenCalled();
     const kept = await server.inject({
       method: "PUT",

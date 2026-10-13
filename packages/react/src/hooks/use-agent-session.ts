@@ -5,12 +5,14 @@ import {
   type Item,
   isSettledTurnStatus,
   isWorking,
+  type SessionFields,
   type SessionSnapshot,
   type SessionState,
   type SessionStreamMessage,
   sessionStateFromSnapshot,
   withOlderItems,
 } from "@catamorphic/agent-protocol";
+import type { CatamorphicApiClient } from "@catamorphic/api-client";
 import {
   type QueryClient,
   useQuery,
@@ -129,35 +131,12 @@ export function useAgentSession(
   const query = useQuery<AgentSessionData, CatamorphicError>({
     queryKey,
     queryFn: ({ signal }) =>
-      runWithCatamorphicError(async () => {
-        const detail: AgentSessionInfo & { snapshot: SessionSnapshot } =
-          JSON.parse(
-            assertApiOk(
-              await apiClient.GET(
-                "/api/projects/{projectId}/agent/sessions/{sessionId}",
-                {
-                  signal: AbortSignal.any([
-                    signal,
-                    AbortSignal.timeout(15_000),
-                  ]),
-                  params: {
-                    path: {
-                      projectId: projectId ?? "",
-                      sessionId: sessionId ?? "",
-                    },
-                  },
-                  // The log's JSON is the protocol's own shape (the server
-                  // validates it against the same types).
-                  parseAs: "text",
-                },
-              ),
-              "Agent session response empty",
-            ),
-          );
-        const { snapshot, ...info } = detail;
-        const fresh = sessionStateFromSnapshot(snapshot);
-        const current = queryClient.getQueryData<AgentSessionData>(queryKey);
-        return { info, state: mergeFresh(current?.state, fresh) };
+      loadAgentSession({
+        apiClient,
+        queryClient,
+        projectId: projectId ?? "",
+        sessionId: sessionId ?? "",
+        signal,
       }),
     enabled,
     // The stream keeps it current; a refetch is a resync, not a poll.
@@ -361,6 +340,93 @@ export function useAgentSession(
     hasOlder: data ? data.state.olderBefore !== null : false,
     isLoadingOlder,
     loadOlder,
+  };
+}
+
+/**
+ * The session's row and snapshot, folded into what the cache holds: the
+ * newer of this and what the cache already has wins.
+ */
+function loadAgentSession({
+  apiClient,
+  queryClient,
+  projectId,
+  sessionId,
+  signal,
+}: {
+  apiClient: CatamorphicApiClient;
+  queryClient: QueryClient;
+  projectId: string;
+  sessionId: string;
+  signal: AbortSignal;
+}): Promise<AgentSessionData> {
+  return runWithCatamorphicError(async () => {
+    const detail: AgentSessionInfo & { snapshot: SessionSnapshot } = JSON.parse(
+      assertApiOk(
+        await apiClient.GET(
+          "/api/projects/{projectId}/agent/sessions/{sessionId}",
+          {
+            signal: AbortSignal.any([signal, AbortSignal.timeout(15_000)]),
+            params: { path: { projectId, sessionId } },
+            // The log's JSON is the protocol's own shape (the server
+            // validates it against the same types).
+            parseAs: "text",
+          },
+        ),
+        "Agent session response empty",
+      ),
+    );
+    const { snapshot, ...info } = detail;
+    const fresh = sessionStateFromSnapshot(snapshot);
+    const current = queryClient.getQueryData<AgentSessionData>(
+      agentSessionQueryKey(projectId, sessionId),
+    );
+    return { info, state: mergeFresh(current?.state, fresh) };
+  });
+}
+
+export interface UseAgentSessionFieldsResult {
+  /** The session's shared fields: title, todos, metadata and the rest. */
+  fields: SessionFields | null;
+  isLoading: boolean;
+  error: CatamorphicError | null;
+  /** Load the snapshot again (a Retry). */
+  refetch: () => Promise<unknown>;
+}
+
+/**
+ * A session's shared fields for a view beside its conversation, such as a
+ * sidebar (ADR 0225). It reads the session's one cache entry: it loads the
+ * snapshot only when no other reader has, and never streams or polls, so
+ * it shows what the conversation's own live reader keeps current (the
+ * chat on screen streams; {@link useAgentSession}).
+ */
+export function useAgentSessionFields(
+  projectId: string | undefined,
+  sessionId: string | undefined,
+): UseAgentSessionFieldsResult {
+  const { apiClient } = useCatamorphic();
+  const queryClient = useQueryClient();
+  const query = useQuery<AgentSessionData, CatamorphicError, SessionFields>({
+    queryKey: agentSessionQueryKey(projectId, sessionId),
+    queryFn: ({ signal }) =>
+      loadAgentSession({
+        apiClient,
+        queryClient,
+        projectId: projectId ?? "",
+        sessionId: sessionId ?? "",
+        signal,
+      }),
+    enabled: Boolean(projectId && sessionId),
+    staleTime: Number.POSITIVE_INFINITY,
+    refetchOnWindowFocus: false,
+    select: (data) => data.state.session,
+  });
+  return {
+    fields: query.data ?? null,
+    isLoading: query.isLoading,
+    error: query.error,
+    refetch: query.refetch,
   };
 }
 

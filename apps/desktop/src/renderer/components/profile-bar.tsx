@@ -2,6 +2,7 @@ import { Check, ChevronDown, Plus, Star } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { Profile, ProfilesData } from "../lib/desktop-api.js";
 import { desktopApi } from "../lib/desktop-api.js";
+import { usePopoverDismiss } from "../lib/popover-dismiss.js";
 import { ProfileAvatar } from "./profile-avatar";
 import { ProfileInspector } from "./profile-inspector";
 import { ResourceInspector } from "./resource-inspector";
@@ -34,34 +35,15 @@ export function ProfileBar({
     data.profiles.find((profile) => profile.id === activeProfileId) ??
     data.profiles[0];
 
-  useEffect(() => {
-    if (!open) return;
-    const onPointerDown = (event: PointerEvent) => {
-      const target = event.target;
-      const insideRoot =
-        target instanceof Node &&
-        Boolean(containerRef.current?.contains(target));
-      const insideInspector =
-        target instanceof Element &&
-        Boolean(target.closest("[data-resource-inspector]"));
-      if (!insideRoot && !insideInspector) {
-        setOpen(false);
-        setCreating(false);
-      }
-    };
-    window.addEventListener("pointerdown", onPointerDown);
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
-      event.preventDefault();
-      setOpen(false);
-      triggerRef.current?.focus();
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => {
-      window.removeEventListener("pointerdown", onPointerDown);
-      window.removeEventListener("keydown", onKeyDown);
-    };
-  }, [open]);
+  // A press anywhere else, a web page or an app's frame included, closes
+  // it; a press on a profile's card does not. Closing drops the inline
+  // create field (below).
+  usePopoverDismiss({
+    open,
+    within: [containerRef],
+    onDismiss: () => setOpen(false),
+    returnFocus: triggerRef,
+  });
 
   useEffect(() => {
     if (creating) createInputRef.current?.focus();
@@ -98,6 +80,10 @@ export function ProfileBar({
             ? "translate-y-0 scale-100 opacity-100"
             : "pointer-events-none translate-y-1 scale-[0.98] opacity-0"
         }`}
+        // Profiles with their previews and a create field: a popover, not
+        // a menu of commands (menus are MenuPortal's).
+        role="dialog"
+        aria-label="Profiles"
         aria-hidden={!open}
         inert={!open ? true : undefined}
       >
@@ -213,7 +199,7 @@ export function ProfileBar({
                 : "text-fg-muted hover:bg-bg-overlay hover:text-fg"
             }`}
             aria-label={`Switch profile: ${active.name}`}
-            aria-haspopup="menu"
+            aria-haspopup="dialog"
             aria-expanded={open}
           >
             <ProfileAvatar profile={active} />

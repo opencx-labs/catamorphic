@@ -906,6 +906,28 @@ const api = {
     return () =>
       ipcRenderer.removeListener("catamorphic:extensions-installed", handler);
   },
+  // Page dialogs in browser tabs (ADR 0226).
+  pageDialogs: (input: { guestId: number }): Promise<unknown[]> =>
+    invoke("catamorphic:page-dialogs", input),
+  pageDialogAnswer: (input: unknown): Promise<boolean> =>
+    invoke("catamorphic:page-dialog-answer", input),
+  onPageDialogs: (listener: (change: unknown) => void) => {
+    const handler = (_event: unknown, change: unknown) => listener(change);
+    ipcRenderer.on("catamorphic:page-dialogs-changed", handler);
+    return () =>
+      ipcRenderer.removeListener("catamorphic:page-dialogs-changed", handler);
+  },
+  // Sent, not invoked: it must reach main before the navigation it names.
+  browserUnloadIntent: (input: { guestId: number; intent: unknown }): void =>
+    ipcRenderer.send("catamorphic:browser-unload-intent", input),
+  browserCloseAsk: (input: { guestId: number }): Promise<string> =>
+    invoke("catamorphic:browser-close-ask", input),
+  onBrowserCloseAnswer: (listener: (answer: unknown) => void) => {
+    const handler = (_event: unknown, answer: unknown) => listener(answer);
+    ipcRenderer.on("catamorphic:browser-close-answer", handler);
+    return () =>
+      ipcRenderer.removeListener("catamorphic:browser-close-answer", handler);
+  },
   sitePermissionAnswer: (input: {
     id: string;
     decision: string;

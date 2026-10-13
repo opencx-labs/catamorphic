@@ -203,6 +203,7 @@ const TOOL_STEP_LABELS: Record<string, string> = {
   interrupt_subsession: "Stopped a subsession",
   request_user_attention: "Requested your attention",
   set_session_activity: "Updated activity",
+  set_session_metadata: "Updated session details",
   list_worktrees: "Listed worktrees",
   create_worktree: "Created a worktree",
   use_worktree: "Switched worktrees",
@@ -224,6 +225,7 @@ const WORKSPACE_STEP_TOOLS = new Set([
   "interrupt_subsession",
   "request_user_attention",
   "set_session_activity",
+  "set_session_metadata",
   "read_todo_list",
   "update_todo_list",
   "list_worktrees",
@@ -266,6 +268,12 @@ function toolStepLabel(
       return { label: "Stopped pointing", mono: false };
     if (toolName === "use_worktree" && "path" in input && input.path === null)
       return { label: "Switched to the project checkout", mono: false };
+    if (
+      toolName === "set_session_metadata" &&
+      "key" in input &&
+      input.key === "pull_requests"
+    )
+      return { label: "Updated pull requests", mono: false };
   }
   const known = TOOL_STEP_LABELS[toolName];
   if (known) return { label: known, mono: false };

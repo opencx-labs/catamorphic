@@ -398,6 +398,15 @@ describe("ChatTimeline for embedders", () => {
             tool: "mcp__linear__create_issue",
             server: "linear",
           }),
+          toolCall("prs", "t1", {
+            tool: "mcp__workspace__set_session_metadata",
+            server: "workspace",
+            input: { key: "pull_requests", value: [] },
+          }),
+          toolCall("meta", "t1", {
+            tool: "set_session_metadata",
+            input: { key: "deploy.preview", value: null },
+          }),
           reply("a1", "t1", "Done."),
         ],
       }),
@@ -407,6 +416,8 @@ describe("ChatTimeline for embedders", () => {
       "Read a tab",
       "Closed its questions",
       "create_issue (linear)",
+      "Updated pull requests",
+      "Updated session details",
     ]);
   });
 

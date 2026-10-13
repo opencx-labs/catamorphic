@@ -49,11 +49,11 @@ Availability also depends on identity, services, agent sandboxing and topology.
 | `list_project_sessions`, `read_project_session`, `send_project_session_message` | Deferred, authorized peer coordination; `children_only` filters the listing |
 | `spawn_subsession`, `wait_for_subsessions` | Eager, the agent's subagents: host-owned child sessions whose results steer into the parent's working turn (ADR 0202) |
 | `interrupt_subsession` | Deferred, stops a direct child |
-| `request_user_attention`, `set_session_activity`, `read_todo_list` | Deferred, session state |
+| `request_user_attention`, `set_session_activity`, `set_session_metadata`, `read_todo_list` | Deferred, session state; `set_session_metadata` sets one named value the sidebar reads (ADR 0225) |
 | `list_worktrees`, `create_worktree`, `use_worktree` | Deferred and native-only; `path: null` returns to primary. Git facts use shell; assignment uses the host |
 | `point_at`, `set_chat_icon` | Deferred, optional presentation; `target: null` clears highlighting |
 | `desktop_settings` | Deferred, the owning profile's settings files, scopes and validation errors for the configuration skill |
-| `open_browser`, `browser_snapshot`, `browser_act` | Eager, the signed-in browser: real input, uploads, downloads, and the page's console, network and JavaScript (ADR 0202) |
+| `open_browser`, `browser_snapshot`, `browser_act` | Eager, the signed-in browser: real input, uploads, downloads, and the page's console, network and JavaScript (ADR 0202); a page's dialogs are reported and answered with `press` and `fill`, never a sign-in (ADR 0226) |
 | `surface_control` | Deferred, release, reclaim or close a browser tab or terminal. A browser tab the agent drives goes back to the person by itself when the turn ends |
 | `run_background_command`, `read_background_output`, `stop_background_command` | Eager, long-running processes in their own agent terminals; they outlive the turn and wake the chat when they finish (ADR 0155). Foreground commands use each harness's native shell |
 | `watch_command` | Eager. A quick check re-run on an interval in the chat's working directory; wakes the chat once on success or on every output change. Durable across restarts, missed checks coalesce, `stop_background_command` ends it (ADR 0156) |
@@ -203,3 +203,20 @@ never rules, so the agent's own instructions decide how it talks.
 the microphone closes at once, the turn's replies are still read aloud, and
 then voice turns off. Its description says what it does and never when, so
 the person teaches their agents when to call it.
+
+## Session metadata (ADR 0225)
+
+A chat's details beside it (its pull requests, or any key a person's own
+sidebar section reads) had no home: `create_pull_request` stored nothing and
+pull requests opened with `gh` or a connector left no trace. One operation
+sets one key of the session's metadata, `set_session_metadata { key, value }`
+(null removes the key), on every harness through the session coordination
+bridge to core. It is deferred: a chat writes it a few times, when something
+worth showing happens, so it costs no schema on ordinary turns (about 1.1 KB
+in a discovery result). The project MCP surface offers the same operation to
+members' own agents, bound to the calling session, and the Work server's
+agents discover it; the desktop's internal projection leaves that copy out.
+Nothing records metadata by itself: the desktop-workspace skill and the
+pull request skills say, in a sentence, to keep `pull_requests`. Scenario
+coverage: the fake agent's `record pr:` turn calls it through discovery and
+`e2e/session-sidebar.e2e.ts` sees the row arrive and change state live.

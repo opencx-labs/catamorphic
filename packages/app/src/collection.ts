@@ -13,15 +13,39 @@ export interface CollectionPage<T> {
 export interface CollectionBranch {
   ids: readonly string[];
   status: CollectionStatus;
-  /** Initial, refresh, or next-page IO without discarding the current snapshot. */
+  /**
+   * The loaded rows are being read (first load or refresh) without
+   * discarding the current snapshot. A next page is `paging` instead, shown
+   * at the branch's end rather than as a refresh.
+   */
   fetching?: boolean;
+  /** Rows exist past the loaded ones; `load({ more: true })` reads them. */
   cursor?: string;
   error?: string;
+  /** The next page is being read, or waits for a refresh in flight. */
+  paging?: boolean;
+  /**
+   * The last next-page read failed. The loaded rows stay ready; reading the
+   * next page again clears it.
+   */
+  pageError?: string;
 }
+/**
+ * How much of a branch a refresh reads again. `loaded` reads every loaded
+ * page. `first` reads from the start only until its rows meet the rows
+ * already loaded, keeping the rest: a cheap poll for sources whose new rows
+ * arrive at the start (newest first), at any loaded depth.
+ */
+export type CollectionRefresh = "first" | "loaded";
 export type CollectionChange<T> =
   | { type: "upsert"; items: readonly T[] }
   | { type: "remove"; ids: readonly string[] }
-  | { type: "invalidate"; parentId?: string | null };
+  | {
+      type: "invalidate";
+      parentId?: string | null;
+      /** Defaults to `loaded`. */
+      pages?: CollectionRefresh;
+    };
 
 export interface CollectionSource<T extends CollectionItem> {
   load: (request: {
@@ -55,6 +79,8 @@ export function createCollection<T extends CollectionItem>({
   let previewReferences = 0;
   const retainedCounts = new Map<string | null, number>();
   const requests = new Map<string | null, AbortController>();
+  /** Next pages asked for while a refresh of the branch was in flight. */
+  const wantMore = new Set<string | null>();
   const dirty = new Set<string>();
   let structural = false;
   let scheduled = false;
@@ -64,7 +90,7 @@ export function createCollection<T extends CollectionItem>({
   let snapshotRevision = 0;
   let mutation = 0;
   const changedAt = new Map<string, number>();
-  const invalidated = new Set<string | null>();
+  const invalidated = new Map<string | null, CollectionRefresh>();
 
   const notify = ({
     id,
@@ -105,6 +131,8 @@ export function createCollection<T extends CollectionItem>({
       previous.fetching === next.fetching &&
       previous.cursor === next.cursor &&
       previous.error === next.error &&
+      previous.paging === next.paging &&
+      previous.pageError === next.pageError &&
       previous.ids.length === next.ids.length &&
       previous.ids.every((id, index) => id === next.ids[index])
     )
@@ -131,16 +159,39 @@ export function createCollection<T extends CollectionItem>({
     });
   };
 
+  /** The position in `ids` of the last loaded row it already holds. */
+  const meeting = (loaded: readonly T[], ids: readonly string[]) => {
+    const positions = new Map(ids.map((id, index) => [id, index]));
+    for (let index = loaded.length - 1; index >= 0; index -= 1) {
+      const position = positions.get(loaded[index]?.id ?? "");
+      if (position !== undefined) return position;
+    }
+    return -1;
+  };
   const load = async ({
     parentId = null,
     more = false,
+    pages = "loaded",
   }: {
     parentId?: string | null;
+    /** Read the page after the loaded rows. */
     more?: boolean;
+    /** What a refresh reads again (ignored with `more`). */
+    pages?: CollectionRefresh;
   } = {}) => {
-    if (requests.has(parentId)) return;
     const before = branch(parentId);
-    if (more && !before.cursor) return;
+    if (more && !before.cursor) {
+      if (before.paging) setBranch(parentId, { ...before, paging: undefined });
+      return;
+    }
+    if (requests.has(parentId)) {
+      // The next page follows a refresh in flight instead of being lost.
+      if (more && !before.paging) {
+        wantMore.add(parentId);
+        setBranch(parentId, { ...before, paging: true, pageError: undefined });
+      }
+      return;
+    }
     const preview =
       parentId === null &&
       previewReferences > 0 &&
@@ -151,16 +202,23 @@ export function createCollection<T extends CollectionItem>({
     const startedAt = mutation;
     const controller = new AbortController();
     requests.set(parentId, controller);
-    setBranch(parentId, {
-      ...before,
-      fetching: true,
-      status: before.status === "idle" ? "loading" : before.status,
-      error: undefined,
-    });
+    setBranch(
+      parentId,
+      more
+        ? { ...before, paging: true, pageError: undefined }
+        : {
+            ...before,
+            fetching: true,
+            status: before.status === "idle" ? "loading" : before.status,
+            error: undefined,
+          },
+    );
     try {
       const loaded: T[] = [];
+      const pageIds = new Set<string>();
       let cursor = more ? before.cursor : undefined;
       const seenCursors = new Set<string>(cursor ? [cursor] : []);
+      let met = false;
       do {
         const part = await source.load({
           parentId,
@@ -168,28 +226,46 @@ export function createCollection<T extends CollectionItem>({
           signal: controller.signal,
         });
         if (controller.signal.aborted) return;
-        loaded.push(...part.items);
+        const partIds = new Set<string>();
+        for (const item of part.items) {
+          if (!item.id || item.id === parentId || partIds.has(item.id))
+            throw new Error(
+              "Collection pages require unique IDs and cannot contain their parent.",
+            );
+          partIds.add(item.id);
+        }
+        // Offset pages repeat a row that moved across their boundary while
+        // they were read (or that a source re-reads on purpose): the first
+        // read of it wins.
+        for (const item of part.items) {
+          if (pageIds.has(item.id)) continue;
+          pageIds.add(item.id);
+          loaded.push(item);
+        }
         cursor = part.cursor;
         if (cursor && seenCursors.has(cursor))
           throw new Error("Collection source repeated a cursor");
         if (cursor) seenCursors.add(cursor);
-      } while (!more && cursor && loaded.length < retainedCount);
+        // A first-page refresh stops where its rows meet the loaded ones.
+        met =
+          !more &&
+          pages === "first" &&
+          Boolean(cursor) &&
+          loaded.length < retainedCount &&
+          meeting(loaded, branch(parentId).ids) >= 0;
+      } while (!met && !more && cursor && loaded.length < retainedCount);
       const page = { items: loaded, cursor };
       if (controller.signal.aborted || requests.get(parentId) !== controller)
         return;
-      const pageIds = new Set<string>();
-      for (const item of page.items) {
-        if (!item.id || item.id === parentId || pageIds.has(item.id))
-          throw new Error(
-            "Collection pages require unique IDs and cannot contain their parent.",
-          );
-        pageIds.add(item.id);
-      }
       for (const item of page.items) {
         if ((changedAt.get(item.id) ?? 0) <= startedAt) put(item);
       }
       // Push updates received during IO win over an older page snapshot.
       const current = branch(parentId);
+      // Rows past the meeting point stay as loaded, with their cursor.
+      const kept = met
+        ? current.ids.slice(meeting(page.items, current.ids) + 1)
+        : [];
       const ids = [
         ...new Set([
           ...(more ? current.ids : []),
@@ -198,41 +274,78 @@ export function createCollection<T extends CollectionItem>({
               (changedAt.get(id) ?? 0) <= startedAt ||
               (items.has(id) && (items.get(id)?.parentId ?? null) === parentId),
           ),
+          ...kept,
           ...current.ids.filter((id) => (changedAt.get(id) ?? 0) > startedAt),
         ]),
       ];
+      const nextCursor = met ? current.cursor : page.cursor;
       if (!preview) retainedCounts.set(parentId, ids.length);
-      setBranch(parentId, { ids, status: "ready", cursor: page.cursor });
+      setBranch(parentId, {
+        ids,
+        status: "ready",
+        cursor: nextCursor,
+        // A refresh keeps a waiting next page and a failed one's Retry.
+        ...(!more && wantMore.has(parentId) ? { paging: true } : {}),
+        ...(!more && nextCursor && current.pageError
+          ? { pageError: current.pageError }
+          : {}),
+      });
     } catch (cause) {
-      if (!controller.signal.aborted)
-        setBranch(parentId, {
-          ...branch(parentId),
-          status: "error",
-          fetching: false,
-          error: cause instanceof Error ? cause.message : String(cause),
-        });
+      if (!controller.signal.aborted) {
+        const message = cause instanceof Error ? cause.message : String(cause);
+        // A failed next page leaves the loaded rows ready with a Retry.
+        setBranch(
+          parentId,
+          more
+            ? {
+                ...branch(parentId),
+                paging: undefined,
+                pageError: message,
+              }
+            : {
+                ...branch(parentId),
+                status: "error",
+                fetching: false,
+                error: message,
+              },
+        );
+      }
     } finally {
       if (requests.get(parentId) === controller) {
         requests.delete(parentId);
-        if (invalidated.delete(parentId) && branchReferences.has(parentId))
-          void load({ parentId });
+        const pending = invalidated.get(parentId);
+        if (wantMore.delete(parentId)) void load({ parentId, more: true });
+        else if (pending) {
+          invalidated.delete(parentId);
+          if (branchReferences.has(parentId))
+            void load({ parentId, pages: pending });
+        }
       }
     }
   };
   const abort = (parentId: string | null) => {
     requests.get(parentId)?.abort();
     requests.delete(parentId);
+    wantMore.delete(parentId);
     const current = branch(parentId);
-    if (current.fetching) setBranch(parentId, { ...current, fetching: false });
+    if (current.fetching || current.paging)
+      setBranch(parentId, {
+        ...current,
+        fetching: false,
+        paging: undefined,
+      });
   };
   const publish = (change: CollectionChange<T>) => {
     if (change.type === "invalidate") {
       const parentId = change.parentId ?? null;
+      const pages = change.pages ?? "loaded";
       if (requests.has(parentId)) {
-        invalidated.add(parentId);
+        // Coalesced: the widest refresh asked for runs once the IO settles.
+        if (invalidated.get(parentId) !== "loaded")
+          invalidated.set(parentId, pages);
         return;
       }
-      if (branchReferences.has(parentId)) void load({ parentId });
+      if (branchReferences.has(parentId)) void load({ parentId, pages });
       else setBranch(parentId, { ...branch(parentId), status: "idle" });
       return;
     }

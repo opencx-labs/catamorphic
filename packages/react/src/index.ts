@@ -103,9 +103,11 @@ export {
   type AgentSessionInfo,
   agentSessionQueryKey,
   reconnectDelayMs,
+  type UseAgentSessionFieldsResult,
   type UseAgentSessionOptions,
   type UseAgentSessionResult,
   useAgentSession,
+  useAgentSessionFields,
 } from "./hooks/use-agent-session.js";
 // Agent (Track A)
 export {

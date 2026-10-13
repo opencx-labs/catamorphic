@@ -940,6 +940,83 @@ kbd {
   overflow: hidden;
 }
 
+/* A sidebar tab joining or leaving its strip (a contextual tab such as This
+   session, ADR 0225): it grows from nothing while its neighbours slide, and
+   leaves the way it came. At no width it gives back its flex gap. */
+@keyframes sidebar-tab-icon-in {
+  from {
+    width: 0;
+    margin-inline-end: -4px;
+    opacity: 0;
+    scale: 0.6;
+  }
+  to {
+    width: 28px;
+    margin-inline-end: 0;
+    opacity: 1;
+    scale: 1;
+  }
+}
+
+@keyframes sidebar-tab-icon-out {
+  from {
+    width: 28px;
+    margin-inline-end: 0;
+    opacity: 1;
+    scale: 1;
+  }
+  to {
+    width: 0;
+    margin-inline-end: -4px;
+    opacity: 0;
+    scale: 0.6;
+  }
+}
+
+.animate-sidebar-tab-icon-in {
+  animation: sidebar-tab-icon-in 200ms cubic-bezier(0.2, 0, 0, 1);
+  overflow: hidden;
+}
+
+.animate-sidebar-tab-icon-out {
+  animation: sidebar-tab-icon-out 200ms cubic-bezier(0.2, 0, 0, 1) forwards;
+  overflow: hidden;
+}
+
+/* The tab strip opening as a second tab arrives, and folding as the count
+   drops to one: the panel below follows its height. */
+@keyframes sidebar-strip-in {
+  from {
+    height: 0;
+    opacity: 0;
+  }
+  to {
+    height: 40px;
+    opacity: 1;
+  }
+}
+
+@keyframes sidebar-strip-out {
+  from {
+    height: 40px;
+    opacity: 1;
+  }
+  to {
+    height: 0;
+    opacity: 0;
+  }
+}
+
+.animate-sidebar-strip-in {
+  animation: sidebar-strip-in 200ms cubic-bezier(0.2, 0, 0, 1);
+  overflow: hidden;
+}
+
+.animate-sidebar-strip-out {
+  animation: sidebar-strip-out 200ms cubic-bezier(0.2, 0, 0, 1) forwards;
+  overflow: hidden;
+}
+
 @keyframes tab-in {
   from {
     max-width: 0;
@@ -1011,6 +1088,48 @@ kbd {
 }
 .sidebar-skeleton-bar {
   height: 8px;
+}
+/* A paginated tree branch's end (the shared Tree's next page): the same
+   still bars, or the failed page with Retry in the chrome's error voice. */
+[data-tree-more] {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-inline-end: 8px;
+  box-sizing: border-box;
+}
+[data-tree-more="placeholder"] > span {
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--color-fg) 7%, transparent);
+}
+[data-tree-more="placeholder"] > span:first-child {
+  flex: none;
+  width: 12px;
+  height: 12px;
+}
+[data-tree-more="placeholder"] > span:last-child {
+  height: 8px;
+}
+[data-tree-more="error"] {
+  justify-content: center;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--color-fg-muted);
+}
+[data-tree-more="error"] > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+[data-tree-more="error"] > button {
+  flex: none;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: var(--color-accent);
+  cursor: pointer;
 }
 
 /* Controls that belong to a hovered row (overflow dots, close, open-in-window)
@@ -1554,7 +1673,8 @@ kbd {
 .sidebar-tab:hover {
   color: var(--color-fg);
 }
-.sidebar-tab[aria-selected="true"] {
+.sidebar-tab[aria-selected="true"],
+.sidebar-tab[data-selected="true"] {
   color: var(--color-accent);
 }
 .sidebar-tab:active {
@@ -1594,7 +1714,8 @@ kbd {
     translate: 0 6px;
   }
 }
-/* First paint stays still. User tab changes enable the paired transition. */
+/* First paint stays still. Any later change of the tab in front (a click,
+   or the tab in front leaving) enables the paired transition. */
 .tabbed-sidebar[data-tab-motion="false"] .sidebar-tab-panel {
   transition: none;
 }

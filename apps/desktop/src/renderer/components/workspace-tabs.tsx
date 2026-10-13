@@ -34,10 +34,11 @@ import {
   Workflow as WorkflowIcon,
   X,
 } from "lucide-react";
-import { Fragment, useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { OpenMode } from "../../shared/open-mode.js";
 import { formatBinding, useKeybindings } from "../lib/keybindings";
+import { usePageDialogsWaiting } from "../lib/page-dialogs.js";
 import { TAB_DRAG_TYPE, type TabDragPayload } from "../lib/tab-drag";
 import { AnimatedTitle } from "./animated-title";
 import { AppGlyph } from "./app-icon";
@@ -48,6 +49,8 @@ import { ShortcutHint } from "./shortcut-hint";
 
 /** The card's status line — most urgent signal first. */
 function tabStatusLine(tab: WorkspaceTab): string | null {
+  if (tab.kind === "browser" && tab.pageDialog)
+    return "The page is waiting for your answer";
   if (tab.awaitingInput) return "The agent is waiting for your answer";
   if (tab.working) return "Agent is working…";
   if (tab.attention) return "Ready for you";
@@ -238,10 +241,31 @@ export interface TabGroup {
 }
 
 export function WorkspaceTabBar(props: Parameters<typeof TabStrip>[0]) {
+  // A tab whose page waits on its dialog says so (ADR 0226); one out of
+  // sight also wears the waiting question's badge. A tab on screen shows
+  // the dialog itself.
+  const waiting = usePageDialogsWaiting();
+  const { activeKey, secondaryKey } = props;
+  const tabs = useMemo(
+    () =>
+      waiting.size === 0
+        ? props.tabs
+        : props.tabs.map((tab) => {
+            const key = tabKey(tab);
+            if (tab.kind !== "browser" || !waiting.has(key)) return tab;
+            const onScreen = key === activeKey || key === secondaryKey;
+            return {
+              ...tab,
+              pageDialog: true,
+              ...(onScreen ? {} : { awaitingInput: true }),
+            };
+          }),
+    [props.tabs, waiting, activeKey, secondaryKey],
+  );
   return props.orientation === "vertical" ? (
-    <SidebarWorkspaceTabs {...props} />
+    <SidebarWorkspaceTabs {...props} tabs={tabs} />
   ) : (
-    <TabStrip {...props} />
+    <TabStrip {...props} tabs={tabs} />
   );
 }
 
@@ -680,6 +704,9 @@ function TabStrip({
             <div
               data-palette-target={highlighted || undefined}
               data-point-key={key}
+              data-page-dialog={
+                (tab.kind === "browser" && tab.pageDialog) || undefined
+              }
               draggable={Boolean(onReorder) && !exiting}
               onDragStart={(event) => {
                 event.dataTransfer.setData("text/plain", key);

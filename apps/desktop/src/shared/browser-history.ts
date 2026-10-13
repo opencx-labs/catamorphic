@@ -122,8 +122,8 @@ export function wakeFromSource(
  * What keeps a hidden tab's page awake: sound playing or just played, the
  * camera, microphone or a screen share in use, the page being shown
  * elsewhere (a tab share), its DevTools open, an extension driving it or
- * showing its side panel beside it, or text typed into a field and not yet
- * sent.
+ * showing its side panel beside it, text typed into a field and not yet
+ * sent, or a dialog the page waits on (ADR 0226).
  */
 export type BrowserSleepBlocker =
   | "audio"
@@ -131,4 +131,5 @@ export type BrowserSleepBlocker =
   | "shared"
   | "devtools"
   | "extension"
-  | "typing";
+  | "typing"
+  | "dialog";

@@ -42,7 +42,10 @@ import {
   type SidebarSectionConfig,
 } from "../lib/desktop-api.js";
 import { sessionLabel } from "../lib/session-label.js";
-import { useSidebarSessions } from "../lib/sidebar-sessions.js";
+import {
+  useRevealSidebarSession,
+  useSidebarSessions,
+} from "../lib/sidebar-sessions.js";
 import { TAB_DRAG_TYPE, type TabDragPayload } from "../lib/tab-drag.js";
 import {
   grantSources,
@@ -62,6 +65,7 @@ import { GitNav } from "./git-nav.js";
 import { useRemoteProject } from "./project-authority-provider.js";
 import { PrsNav } from "./prs-nav.js";
 import { type RemoteFeatures, RemoteNav } from "./remote-nav.js";
+import { SessionDetails } from "./session-details.js";
 import { ShortcutHint } from "./shortcut-hint.js";
 import {
   projectSidebarItems,
@@ -236,7 +240,11 @@ export function ConfiguredSection({
     ...(!memberShell ? ["new-workflow"] : []),
     // Every list section is searchable in the palette; header buttons stay
     // where configured (headerActions) or built in (files, changes, PRs).
-    ...(section.type !== "app" && section.type !== "note" ? ["search"] : []),
+    ...(section.type !== "app" &&
+    section.type !== "note" &&
+    section.type !== "session"
+      ? ["search"]
+      : []),
     ...([
       "chats",
       "subsessions",
@@ -249,6 +257,7 @@ export function ConfiguredSection({
       "remote",
       "note",
       "activity",
+      "session",
     ].includes(section.type)
       ? ["refresh"]
       : []),
@@ -533,6 +542,19 @@ export function ConfiguredSection({
               searchItems={searchItems}
               projectId={projectId}
               onOpenDiff={onOpenTab}
+              onOpenUrl={onOpenUrl}
+            />
+          </SidebarSection>
+        );
+      case "session":
+        return (
+          <SidebarSection
+            title={section.title ?? "This session"}
+            defaultOpen={defaultOpen}
+          >
+            <SessionDetails
+              projectId={projectId}
+              sessionId={surface.sessionId}
               onOpenUrl={onOpenUrl}
             />
           </SidebarSection>
@@ -1011,12 +1033,21 @@ function SessionsNav({
   const visible = contribution?.visible ?? true;
   // A server's chats open their workspaces to terminals and previews.
   const remote = useRemoteProject(projectId);
+  const section = contribution?.section ?? { id: "chats", type: "chats" };
   const { collection, root } = useSidebarSessions({
     projectId,
     sessionId: contribution?.surface.sessionId,
-    section: contribution?.section ?? { id: "chats", type: "chats" },
+    section,
     visible,
     relevant: contribution?.relevant ?? true,
+  });
+  useRevealSidebarSession({
+    collection,
+    root,
+    projectId,
+    sessionId: activeSessionId,
+    section,
+    active: visible,
   });
   useSidebarRefresh(collection.load);
   const contentStatus = root.status;

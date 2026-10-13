@@ -31,7 +31,6 @@ import {
   validateThemeConfig,
 } from "./theme.js";
 import {
-  legacySidebarFiles,
   projectLocalWorkspaceFile,
   projectWorkspaceFile,
   type ResolvedWorkspaceConfig,
@@ -382,14 +381,6 @@ export class ProfileConfigManager {
         stores.keybindings.error,
         this.bookmarks.error,
         workspace.error ? `${workspace.file}: ${workspace.error}` : undefined,
-        ...legacySidebarFiles({
-          profileDir: this.profileDir(profileId),
-          projectId: project?.id,
-          projectRoot: project?.rootPath ?? undefined,
-        }).map(
-          (file) =>
-            `${file} is no longer read: move its left and right under sidebars in workspace.js beside it.`,
-        ),
       ].filter((error): error is string => Boolean(error)),
     );
     return result;

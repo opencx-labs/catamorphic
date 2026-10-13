@@ -34,9 +34,14 @@ implements `load({ parentId, cursor, signal })` and optionally
 `subscribe(publish)`. Pages return `{ items, cursor? }`; each item has a stable
 `id`, optional `parentId`, and `hasChildren` for unloaded branches. Changes are
 `{ type: "upsert", items }`, `{ type: "remove", ids }`, or
-`{ type: "invalidate", parentId? }`. Removal includes descendants. Refresh retains
-loaded pages, push changes win over older in-flight snapshots, and concurrent
-invalidations coalesce. Release the function returned by `acquire()` when done.
+`{ type: "invalidate", parentId?, pages? }`. Removal includes descendants. Refresh
+retains loaded pages, push changes win over older in-flight snapshots, and
+concurrent invalidations coalesce (the widest wins). `pages: "first"` suits a
+newest-first poll: it reads from the start only until its rows meet the loaded
+ones and keeps the rest, so a poll costs one page at any depth; the default,
+`"loaded"`, reads every loaded page again. A branch reports `paging` while its next
+page is read and `pageError` when that read failed, leaving its rows ready; a next
+page asked for during a refresh runs after it. Release the function returned by `acquire()` when done.
 The last release detaches the source and aborts IO, retaining its snapshot.
 
 The React exports from `@catamorphic/app/ui` are composable:
@@ -44,7 +49,12 @@ The React exports from `@catamorphic/app/ui` are composable:
 - `Tree`: virtual list/tree, stable expansion, keyboard navigation, selection,
   lazy disclosure, explicit row height and viewport size, arbitrary row renderer.
 - `CollectionTree`: paged roots and lazy children over a collection, retry states,
-  grouping and projection. Only expanded descendants are traversed. Its `active`
+  grouping and projection. A branch with more rows ends with three still
+  placeholder rows; its next page is read once the person scrolls or moves focus
+  within a viewport of them, new rows arrive with the row motion, a polite status
+  announces the load, and a failed page ends the branch with its error and Retry.
+  `Tree` takes the same through `more` (a map of branch to `{ load, loading,
+  error }`). Only expanded descendants are traversed. Its `active`
   prop owns the root and visible child leases; set it to the surface visibility.
 - `useCollection`: topology subscription and acquisition; set `active: false`
   when the tree owns the lease. Set `projected: true` for observers whose counts

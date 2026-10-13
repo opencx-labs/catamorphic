@@ -442,6 +442,9 @@ describe("project MCP surface (ADR 0055): documents, skills, ask_agent", () => {
         sendMessage: record("sessions.sendMessage", {
           reply: { kind: "assistant_message", text: "Here is your brief." },
         }),
+        setMetadata: record("sessions.setMetadata", {
+          pull_requests: [{ url: "https://github.com/acme/web/pull/3" }],
+        }),
       },
       ...overrides,
     };
@@ -472,6 +475,7 @@ describe("project MCP surface (ADR 0055): documents, skills, ask_agent", () => {
       "revoke_publication",
       "list_publications",
       "ask_agent",
+      "set_session_metadata",
       "send_agent_message",
       ...PROGRAM_TOOLS,
     ]);
@@ -572,6 +576,50 @@ describe("project MCP surface (ADR 0055): documents, skills, ask_agent", () => {
         }),
       ]),
     });
+  });
+
+  it("sets one key of a session's metadata (ADR 0225)", async () => {
+    const { core, calls } = surfaceCore();
+    const app = createTestApp({ core: core as never });
+    apps.push(app);
+    const set = await rpc(app, "tools/call", {
+      name: "set_session_metadata",
+      arguments: {
+        sessionId: "session-1",
+        key: "pull_requests",
+        value: [{ url: "https://github.com/acme/web/pull/3" }],
+      },
+    });
+    expect(set.result?.structuredContent).toEqual({
+      metadata: {
+        pull_requests: [{ url: "https://github.com/acme/web/pull/3" }],
+      },
+    });
+    expect(calls.at(-1)).toMatchObject({
+      op: "sessions.setMetadata",
+      args: {
+        sessionId: "session-1",
+        projectId: PROJECT_ID,
+        values: {
+          pull_requests: [{ url: "https://github.com/acme/web/pull/3" }],
+        },
+        identity: { externalUserId: "user-1" },
+      },
+    });
+    const malformed = await rpc(app, "tools/call", {
+      name: "set_session_metadata",
+      arguments: { sessionId: "session-1", key: "Pull Requests", value: 1 },
+    });
+    expect(malformed.result?.isError).toBe(true);
+    // Without a session to name, nothing is set.
+    const unnamed = await rpc(app, "tools/call", {
+      name: "set_session_metadata",
+      arguments: { key: "note", value: "x" },
+    });
+    expect(unnamed.result?.isError).toBe(true);
+    expect(
+      calls.filter((call) => call.op === "sessions.setMetadata"),
+    ).toHaveLength(1);
   });
 
   it("offers watcher tools that start a host's polled event sources (ADR 0177)", async () => {

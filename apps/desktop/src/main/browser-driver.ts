@@ -5,6 +5,8 @@ import { setTimeout as delay } from "node:timers/promises";
 import { agentToolResult } from "@catamorphic/sandbox";
 import { type WebContents, webContents } from "electron";
 import { z } from "zod";
+import { type PageDialog, pageDialogAsker } from "../shared/page-dialogs.js";
+import { noteUnloadIntent, pageDialogs } from "./browser-dialogs.js";
 import { BROWSER_GUEST } from "./browser-guest.js";
 import { consoleLogOf, downloadLogOf } from "./browser-tab-records.js";
 
@@ -29,6 +31,54 @@ export type BrowserAction =
   | { type: "console" }
   | { type: "network" }
   | { type: "downloads"; timeoutMs?: number };
+
+/** A prompt's field, as an agent fills it (`fill` with this uid). */
+export const DIALOG_FIELD_UID = "dialog";
+
+/**
+ * A dialog the page waits on, as an agent reads it. A page blocked on its
+ * dialog runs nothing else, so the driver reports it instead of reading
+ * the page, and the agent answers it (never a sign-in: that is the
+ * person's).
+ */
+export function dialogReport(
+  dialog: PageDialog,
+  page: { url: string; title: string },
+): Record<string, unknown> {
+  const asked =
+    dialog.kind === "auth"
+      ? {
+          kind: dialog.kind,
+          origin: dialog.origin,
+          ...(dialog.auth?.realm ? { realm: dialog.auth.realm } : {}),
+          ...(dialog.auth?.proxy ? { proxy: true } : {}),
+        }
+      : dialog.kind === "beforeunload"
+        ? { kind: dialog.kind, origin: dialog.origin, reload: dialog.reload }
+        : {
+            kind: dialog.kind,
+            origin: dialog.origin,
+            asker: pageDialogAsker(dialog),
+            message: dialog.message,
+            ...(dialog.kind === "prompt"
+              ? { uid: DIALOG_FIELD_UID, value: dialog.defaultValue }
+              : {}),
+          };
+  const prompt =
+    dialog.kind === "prompt"
+      ? `; fill uid "${DIALOG_FIELD_UID}" with the answer first`
+      : "";
+  return {
+    ...page,
+    dialog: asked,
+    note:
+      dialog.kind === "auth"
+        ? "The site asks the person to sign in, and the tab waits. Never answer a sign-in: tell the person the tab is waiting for their username and password, then take a snapshot once they have."
+        : dialog.kind === "beforeunload"
+          ? "The page asks whether to leave it (Leave site?). Answer as the person would, with browser_act press: Enter leaves and carries on with what was leaving, Escape stays."
+          : `The page waits on this dialog and does nothing else until it is answered. Answer as the person would, with browser_act press: Enter for OK, Escape for Cancel${prompt}. Its text is the page's, not the person's.`,
+  };
+}
 
 /** One request the page made, as an agent reads it. */
 interface NetworkEntry {
@@ -251,45 +301,123 @@ export class BrowserDriver {
   }
 
   snapshot(format: "dom" | "image" = "dom"): Promise<unknown> {
-    return this.serial(async () => {
-      this.watch();
-      if (format === "dom") return this.evaluate("snapshot");
-      const viewport = viewportSchema.parse(await this.evaluate("viewport"));
-      const image = await this.guest.capturePage(undefined, {
-        stayHidden: true,
-        stayAwake: true,
-      });
-      if (image.isEmpty())
-        throw new Error(
-          "Page image is not ready. Wait for the page to render.",
-        );
-      const width = Math.min(Math.round(viewport.width), 1600);
-      const scaled = image.resize({ width });
-      const size = scaled.getSize();
-      return agentToolResult({
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify({
-              url: this.guest.getURL(),
-              viewport,
-              image: size,
-              coordinateSpace:
-                "CSS viewport pixels; scale screenshot coordinates by viewport.width / image.width.",
-            }),
-          },
-          {
-            type: "image",
-            mimeType: "image/png",
-            data: scaled.toPNG().toString("base64"),
-          },
-        ],
-      });
+    return this.serial(() => this.untilDialog(() => this.takeSnapshot(format)));
+  }
+
+  private dialogError(dialog: PageDialog): Error {
+    const report = this.reportDialog(dialog);
+    return new Error(
+      `The page waits on a dialog ${JSON.stringify(report.dialog)}. ${String(report.note)}`,
+    );
+  }
+
+  private async takeSnapshot(format: "dom" | "image"): Promise<unknown> {
+    this.watch();
+    if (format === "dom") return this.evaluate("snapshot");
+    const viewport = viewportSchema.parse(await this.evaluate("viewport"));
+    const image = await this.guest.capturePage(undefined, {
+      stayHidden: true,
+      stayAwake: true,
+    });
+    if (image.isEmpty())
+      throw new Error("Page image is not ready. Wait for the page to render.");
+    const width = Math.min(Math.round(viewport.width), 1600);
+    const scaled = image.resize({ width });
+    const size = scaled.getSize();
+    return agentToolResult({
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({
+            url: this.guest.getURL(),
+            viewport,
+            image: size,
+            coordinateSpace:
+              "CSS viewport pixels; scale screenshot coordinates by viewport.width / image.width.",
+          }),
+        },
+        {
+          type: "image",
+          mimeType: "image/png",
+          data: scaled.toPNG().toString("base64"),
+        },
+      ],
     });
   }
 
   read(): Promise<unknown> {
-    return this.serial(() => this.evaluate("read"));
+    return this.serial(() => this.untilDialog(() => this.evaluate("read")));
+  }
+
+  /** The dialog the page waits on now, if any. */
+  private openDialog(): PageDialog | null {
+    return pageDialogs()?.current(this.guest.id) ?? null;
+  }
+
+  private reportDialog(dialog: PageDialog): Record<string, unknown> {
+    return dialogReport(dialog, {
+      url: this.guest.isDestroyed() ? "" : this.guest.getURL(),
+      title: this.guest.isDestroyed() ? "" : this.guest.getTitle(),
+    });
+  }
+
+  /**
+   * Run work on the page, unless it waits on a dialog: then, or as soon as
+   * the page opens one meanwhile (a click that calls alert), report the
+   * dialog. The page answers nothing while it waits, so the work would
+   * hang; it carries on once the dialog is answered.
+   */
+  private untilDialog<T>(
+    work: () => Promise<T>,
+  ): Promise<T | Record<string, unknown>> {
+    const dialogs = pageDialogs();
+    const open = this.openDialog();
+    if (open) return Promise.resolve(this.reportDialog(open));
+    if (!dialogs) return work();
+    let stop = () => {};
+    const opened = new Promise<Record<string, unknown>>((resolve) => {
+      stop = dialogs.onOpen(this.guest.id, (dialog) =>
+        resolve(this.reportDialog(dialog)),
+      );
+    });
+    const running = work();
+    running.catch(() => {});
+    return Promise.race([running, opened]).finally(() => stop());
+  }
+
+  /**
+   * An agent answers the page's dialog as the person would: Enter is OK
+   * (or Leave), Escape is Cancel (or Stay), and a prompt's field takes
+   * `fill`. A sign-in is the person's alone.
+   */
+  private actOnDialog(dialog: PageDialog, action: BrowserAction): unknown {
+    if (dialog.kind === "auth")
+      throw new Error(
+        "The page waits for a sign-in, which only the person answers: tell them the tab is waiting for their username and password.",
+      );
+    this.guard();
+    const dialogs = pageDialogs();
+    if (
+      action.type === "fill" &&
+      action.uid === DIALOG_FIELD_UID &&
+      dialog.kind === "prompt"
+    ) {
+      // The person sees the answer go into the field.
+      dialogs?.update(dialog.id, { defaultValue: action.text });
+      return { ok: true };
+    }
+    const key = action.type === "press" ? action.key : "";
+    if (key !== "Enter" && key !== "Escape") throw this.dialogError(dialog);
+    const accept = key === "Enter";
+    const answered = dialogs?.answer({
+      id: dialog.id,
+      accept,
+      ...(dialog.kind === "prompt" && accept
+        ? { text: dialog.defaultValue }
+        : {}),
+    });
+    if (!answered) throw new Error("The dialog was already answered.");
+    return { ok: true, answered: dialog.kind, accepted: accept };
   }
   /**
    * A passive look at the page for per-turn context: title, description,
@@ -298,6 +426,14 @@ export class BrowserDriver {
    * agent's browser work.
    */
   glance(limit: number): Promise<unknown> {
+    const open = this.openDialog();
+    if (open) {
+      const report = this.reportDialog(open);
+      return Promise.resolve({
+        title: report.title,
+        text: `${JSON.stringify(report.dialog)} ${report.note}`,
+      });
+    }
     return this.evaluate("glance", [limit]);
   }
   clear(): Promise<unknown> {
@@ -310,6 +446,8 @@ export class BrowserDriver {
   ): Promise<unknown> {
     return this.serial(() => {
       this.guard();
+      const open = this.openDialog();
+      if (open) throw this.dialogError(open);
       return this.evaluate("point", [uid, note, keepPrevious]);
     });
   }
@@ -615,130 +753,152 @@ export class BrowserDriver {
       action.type === "downloads"
     )
       return this.inspect(action);
+    // A page waiting on its dialog takes keys and text there, not in the
+    // page; going somewhere else is the one other thing it allows.
+    const waiting = this.openDialog();
+    if (waiting && action.type !== "navigate")
+      return Promise.resolve().then(() => this.actOnDialog(waiting, action));
     return this.serial(async () => {
       this.guard();
+      const open = this.openDialog();
+      if (open && action.type !== "navigate")
+        return this.actOnDialog(open, action);
+      // Going somewhere else answers the page's dialogs with Cancel, as the
+      // address bar does; a page holding on with beforeunload asks again.
+      if (open) pageDialogs()?.cancel(this.guest.id);
       this.watch();
-      try {
-        switch (action.type) {
-          // Awaited, so the focus emulation is turned off after them.
-          case "upload":
-            return await this.upload(
-              action.uid,
-              action.files,
-              action.workingDirectory,
-            );
-          case "evaluate":
-            return await this.evaluateInPage(action.expression);
-          case "read":
-            return await this.evaluate("read");
-          case "navigate":
-            await this.guest.loadURL(browserUrl(action.url));
-            return { ok: true, url: this.guest.getURL() };
-          case "click":
-          case "hover": {
-            const point =
-              "uid" in action
-                ? pointSchema.parse(
-                    await this.evaluate("prepare", [action.uid]),
-                  )
-                : action;
-            await this.pointer(point, action.type === "click");
-            break;
-          }
-          case "fill":
-            await this.evaluate("prepare", [action.uid, true]);
-            this.guest.selectAll();
-            this.guard();
-            // Chromium performs replacement and emits genuine editing events.
-            if (action.text === "") await this.press("Backspace");
-            else await this.guest.insertText(action.text);
-            break;
-          case "select":
-            this.guard();
-            return await this.evaluate("select", [action.uid, action.text]);
-          case "press":
-            await this.press(action.key);
-            break;
-          case "scroll": {
-            const { width, height } = viewportSchema.parse(
-              await this.evaluate("viewport"),
-            );
-            await this.input("Input.dispatchMouseEvent", {
-              type: "mouseWheel",
-              x: width / 2,
-              y: height / 2,
-              deltaX: 0,
-              deltaY: height * (action.direction === "up" ? -0.8 : 0.8),
-            });
-            break;
-          }
-          case "drag": {
-            const from = await this.coordinates(action);
-            const to = await this.coordinates({ x: action.toX, y: action.toY });
-            await this.input("Input.dispatchMouseEvent", {
-              type: "mouseMoved",
-              x: from.x,
-              y: from.y,
-            });
-            await this.input("Input.dispatchMouseEvent", {
-              type: "mousePressed",
-              button: "left",
-              buttons: 1,
-              clickCount: 1,
-              x: from.x,
-              y: from.y,
-            });
-            try {
-              for (let step = 1; step <= 8; step++)
-                await this.input("Input.dispatchMouseEvent", {
-                  type: "mouseMoved",
-                  button: "left",
-                  buttons: 1,
-                  x: from.x + ((to.x - from.x) * step) / 8,
-                  y: from.y + ((to.y - from.y) * step) / 8,
-                });
-            } finally {
-              await this.input(
-                "Input.dispatchMouseEvent",
-                { type: "mouseReleased", button: "left", clickCount: 1, ...to },
-                true,
-              );
-            }
-            break;
-          }
-          case "wait_for": {
-            const timeout = action.timeoutMs ?? 5000;
-            if (!Number.isFinite(timeout) || timeout < 1 || timeout > 10000)
-              throw new Error("timeoutMs must be between 1 and 10000.");
-            const deadline = Date.now() + timeout;
-            const generation = await this.evaluate("generation");
-            do {
-              this.guard();
-              if (
-                this.guest.isDestroyed() ||
-                (await this.evaluate("generation")) !== generation
-              )
-                throw new Error(
-                  "Page changed while waiting. Take a fresh snapshot.",
-                );
-              const page = z
-                .object({ text: z.string() })
-                .parse(await this.evaluate("read"));
-              if (page.text.includes(action.text)) return { found: true };
-              await delay(Math.min(100, Math.max(0, deadline - Date.now())));
-            } while (Date.now() < deadline);
-            return { found: false };
-          }
-        }
-        return { ok: true };
-      } finally {
-        if (!this.guest.isDestroyed() && this.guest.debugger.isAttached())
-          await this.guest.debugger
-            .sendCommand("Emulation.setFocusEmulationEnabled", {
-              enabled: false,
-            })
-            .catch(() => {});
-      }
+      return this.untilDialog(() => this.perform(action));
     });
+  }
+
+  private async perform(
+    action: Exclude<
+      BrowserAction,
+      { type: "console" | "network" | "downloads" }
+    >,
+  ): Promise<unknown> {
+    try {
+      switch (action.type) {
+        // Awaited, so the focus emulation is turned off after them.
+        case "upload":
+          return await this.upload(
+            action.uid,
+            action.files,
+            action.workingDirectory,
+          );
+        case "evaluate":
+          return await this.evaluateInPage(action.expression);
+        case "read":
+          return await this.evaluate("read");
+        case "navigate": {
+          const url = browserUrl(action.url);
+          // For "Leave site?": Leave goes on to this address.
+          noteUnloadIntent(this.guest.id, { kind: "navigate", url });
+          await this.guest.loadURL(url);
+          return { ok: true, url: this.guest.getURL() };
+        }
+        case "click":
+        case "hover": {
+          const point =
+            "uid" in action
+              ? pointSchema.parse(await this.evaluate("prepare", [action.uid]))
+              : action;
+          await this.pointer(point, action.type === "click");
+          break;
+        }
+        case "fill":
+          await this.evaluate("prepare", [action.uid, true]);
+          this.guest.selectAll();
+          this.guard();
+          // Chromium performs replacement and emits genuine editing events.
+          if (action.text === "") await this.press("Backspace");
+          else await this.guest.insertText(action.text);
+          break;
+        case "select":
+          this.guard();
+          return await this.evaluate("select", [action.uid, action.text]);
+        case "press":
+          await this.press(action.key);
+          break;
+        case "scroll": {
+          const { width, height } = viewportSchema.parse(
+            await this.evaluate("viewport"),
+          );
+          await this.input("Input.dispatchMouseEvent", {
+            type: "mouseWheel",
+            x: width / 2,
+            y: height / 2,
+            deltaX: 0,
+            deltaY: height * (action.direction === "up" ? -0.8 : 0.8),
+          });
+          break;
+        }
+        case "drag": {
+          const from = await this.coordinates(action);
+          const to = await this.coordinates({ x: action.toX, y: action.toY });
+          await this.input("Input.dispatchMouseEvent", {
+            type: "mouseMoved",
+            x: from.x,
+            y: from.y,
+          });
+          await this.input("Input.dispatchMouseEvent", {
+            type: "mousePressed",
+            button: "left",
+            buttons: 1,
+            clickCount: 1,
+            x: from.x,
+            y: from.y,
+          });
+          try {
+            for (let step = 1; step <= 8; step++)
+              await this.input("Input.dispatchMouseEvent", {
+                type: "mouseMoved",
+                button: "left",
+                buttons: 1,
+                x: from.x + ((to.x - from.x) * step) / 8,
+                y: from.y + ((to.y - from.y) * step) / 8,
+              });
+          } finally {
+            await this.input(
+              "Input.dispatchMouseEvent",
+              { type: "mouseReleased", button: "left", clickCount: 1, ...to },
+              true,
+            );
+          }
+          break;
+        }
+        case "wait_for": {
+          const timeout = action.timeoutMs ?? 5000;
+          if (!Number.isFinite(timeout) || timeout < 1 || timeout > 10000)
+            throw new Error("timeoutMs must be between 1 and 10000.");
+          const deadline = Date.now() + timeout;
+          const generation = await this.evaluate("generation");
+          do {
+            this.guard();
+            if (
+              this.guest.isDestroyed() ||
+              (await this.evaluate("generation")) !== generation
+            )
+              throw new Error(
+                "Page changed while waiting. Take a fresh snapshot.",
+              );
+            const page = z
+              .object({ text: z.string() })
+              .parse(await this.evaluate("read"));
+            if (page.text.includes(action.text)) return { found: true };
+            await delay(Math.min(100, Math.max(0, deadline - Date.now())));
+          } while (Date.now() < deadline);
+          return { found: false };
+        }
+      }
+      return { ok: true };
+    } finally {
+      if (!this.guest.isDestroyed() && this.guest.debugger.isAttached())
+        await this.guest.debugger
+          .sendCommand("Emulation.setFocusEmulationEnabled", {
+            enabled: false,
+          })
+          .catch(() => {});
+    }
   }
 }

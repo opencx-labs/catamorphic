@@ -211,6 +211,15 @@ export async function writeSessionMirror({
           providerThreads: input.base.providerThreads.map(away),
         },
       });
+      // What was set on the session before this copy existed (ADR 0225);
+      // later changes arrive as its events.
+      await trx
+        .updateTable("agent_sessions")
+        .set({
+          metadata: sql<Json>`${jsonbText(input.base.session.metadata)}::jsonb`,
+        })
+        .where("id", "=", sessionId)
+        .execute();
     }
     const events = input.events.map((stored) =>
       stored.event.type === "provider_thread.changed"

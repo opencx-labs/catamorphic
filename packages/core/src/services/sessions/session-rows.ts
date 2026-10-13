@@ -9,6 +9,7 @@ import type {
   ProviderThread,
   RuntimeRequest,
   SessionFields,
+  SessionMetadata,
   Turn,
   TurnError,
   TurnOutcome,
@@ -207,6 +208,7 @@ export function sessionFieldsFromRow(row: SessionRow): SessionFields {
     todos: Array.isArray(row.todos)
       ? (row.todos as unknown as AgentTodo[])
       : [],
+    metadata: sessionMetadataFromRow(row.metadata),
     parentSessionId: row.parent_session_id,
     forkedFromSessionId: row.forked_from_session_id,
     attentionRevision: Number(row.attention_revision),
@@ -216,6 +218,13 @@ export function sessionFieldsFromRow(row: SessionRow): SessionFields {
     handoffStatus: row.handoff_status === "pending" ? "pending" : "none",
     updatedAt: row.updated_at.toISOString(),
   };
+}
+
+/** The metadata column (ADR 0225): an object, as its constraint keeps it. */
+export function sessionMetadataFromRow(value: Json): SessionMetadata {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as unknown as SessionMetadata)
+    : {};
 }
 
 /**

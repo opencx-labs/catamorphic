@@ -71,6 +71,11 @@ import type {
 import type { MenuItem, PageContextMenu } from "../../shared/menu.js";
 import type { OpenMode } from "../../shared/open-mode.js";
 import type {
+  PageDialog,
+  PageDialogAnswer,
+  UnloadIntent,
+} from "../../shared/page-dialogs.js";
+import type {
   PasskeyChoice,
   PasskeyRequest,
   PasskeyUseResult,
@@ -1625,6 +1630,25 @@ export interface CatamorphicDesktopApi {
   onExtensionInstalled: (
     listener: (installed: ExtensionInstalled) => void,
   ) => () => void;
+  /** The dialogs a browser tab's page waits on (ADR 0226). */
+  pageDialogs: (input: { guestId: number }) => Promise<PageDialog[]>;
+  pageDialogAnswer: (answer: PageDialogAnswer) => Promise<boolean>;
+  onPageDialogs: (
+    listener: (change: { guestId: number; dialogs: PageDialog[] }) => void,
+  ) => () => void;
+  /** What is about to leave a page, for its "Leave site?" to redo. */
+  browserUnloadIntent: (input: {
+    guestId: number;
+    intent: UnloadIntent;
+  }) => void;
+  /**
+   * Closing a tab asks its page first: "close" now, or "asking" while its
+   * beforeunload runs (the page closes, or "Leave site?" answers).
+   */
+  browserCloseAsk: (input: { guestId: number }) => Promise<"close" | "asking">;
+  onBrowserCloseAnswer: (
+    listener: (answer: { guestId: number; leave: boolean }) => void,
+  ) => () => void;
   sitePermissionAnswer: (answer: SitePermissionAnswer) => Promise<boolean>;
   onSitePermissionRequest: (
     listener: (request: SitePermissionRequest) => void,
@@ -2020,4 +2044,9 @@ export const desktopApi: CatamorphicDesktopApi = {
   onVoiceLevels: shareEvent((publish) => nativeApi.onVoiceLevels(publish)),
   // Every chat's microphone and settings view reads prefs.
   onPrefsChanged: shareEvent((publish) => nativeApi.onPrefsChanged(publish)),
+  // Every browser tab follows its page's dialogs and its close answers.
+  onPageDialogs: shareEvent((publish) => nativeApi.onPageDialogs(publish)),
+  onBrowserCloseAnswer: shareEvent((publish) =>
+    nativeApi.onBrowserCloseAnswer(publish),
+  ),
 };

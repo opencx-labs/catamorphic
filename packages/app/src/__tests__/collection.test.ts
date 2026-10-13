@@ -204,11 +204,14 @@ describe("shared collections", () => {
     });
     await collection.load();
     await collection.load({ more: true });
+    // A failed next page leaves the loaded rows ready, with its error.
     expect(collection.getBranch(null)).toMatchObject({
       ids: ["first"],
-      status: "error",
-      error: "Collection source repeated a cursor",
+      status: "ready",
+      cursor: "next",
+      pageError: "Collection source repeated a cursor",
     });
+    expect(collection.getBranch(null).paging).toBeUndefined();
     expect(collection.getItem("second")).toBeUndefined();
   });
 
@@ -388,4 +391,219 @@ it("exposes initial and background IO activity while preserving the ready snapsh
   await refresh;
   expect(collection.getBranch(null).fetching).toBeFalsy();
   expect(collection.getItem("one")?.label).toBe("Updated");
+});
+
+describe("paged branches", () => {
+  /** An offset-paged, newest-first list whose rows a test can change. */
+  const offsetSource = (rows: string[], size: number) => {
+    const load = vi.fn(async ({ cursor }: { cursor?: string }) => {
+      const offset = cursor ? Number(cursor) : 0;
+      const next = offset + size;
+      return {
+        items: rows
+          .slice(offset, next)
+          .map((id) => ({ id, label: id.toUpperCase() })),
+        cursor: next < rows.length ? String(next) : undefined,
+      };
+    });
+    return load;
+  };
+
+  it("keeps the loaded rows ready when a next page fails, and retries it", async () => {
+    let fail = true;
+    const collection = createCollection<Item>({
+      source: {
+        load: async ({ cursor }) => {
+          if (cursor && fail) throw new Error("Offline");
+          return cursor
+            ? { items: [{ id: "b", label: "B" }] }
+            : { items: [{ id: "a", label: "A" }], cursor: "1" };
+        },
+      },
+    });
+    await collection.load();
+    const paging = collection.load({ more: true });
+    expect(collection.getBranch(null)).toMatchObject({
+      status: "ready",
+      paging: true,
+    });
+    await paging;
+    expect(collection.getBranch(null)).toMatchObject({
+      ids: ["a"],
+      status: "ready",
+      cursor: "1",
+      pageError: "Offline",
+    });
+    expect(collection.getBranch(null).error).toBeUndefined();
+    // A refresh keeps the failed page's Retry.
+    await collection.load();
+    expect(collection.getBranch(null).pageError).toBe("Offline");
+    fail = false;
+    await collection.load({ more: true });
+    expect(collection.getBranch(null)).toEqual({
+      ids: ["a", "b"],
+      status: "ready",
+      cursor: undefined,
+    });
+  });
+
+  it("reads a next page asked for during a refresh once the refresh lands", async () => {
+    const pending: Array<{
+      cursor?: string;
+      resolve: (page: CollectionPage<Item>) => void;
+    }> = [];
+    const collection = createCollection<Item>({
+      source: {
+        load: ({ cursor }) =>
+          new Promise((resolve) => pending.push({ cursor, resolve })),
+      },
+    });
+    const first = collection.load();
+    pending[0]?.resolve({ items: [{ id: "a", label: "A" }], cursor: "1" });
+    await first;
+    const refresh = collection.load();
+    void collection.load({ more: true });
+    // Not lost and not doubled: it waits, and says so.
+    void collection.load({ more: true });
+    expect(collection.getBranch(null).paging).toBe(true);
+    expect(pending).toHaveLength(2);
+    pending[1]?.resolve({ items: [{ id: "a", label: "A" }], cursor: "1" });
+    await refresh;
+    expect(pending).toHaveLength(3);
+    expect(pending[2]?.cursor).toBe("1");
+    expect(collection.getBranch(null).paging).toBe(true);
+    pending[2]?.resolve({ items: [{ id: "b", label: "B" }] });
+    await vi.waitFor(() =>
+      expect(collection.getBranch(null).ids).toEqual(["a", "b"]),
+    );
+    expect(collection.getBranch(null).paging).toBeUndefined();
+  });
+
+  it("refreshes a deep list from its first page and keeps the rest", async () => {
+    const rows = ["a", "b", "c", "d", "e", "f", "g"];
+    const load = offsetSource(rows, 3);
+    const collection = createCollection<Item>({ source: { load } });
+    const release = collection.acquire();
+    await flush();
+    await collection.load({ more: true });
+    expect(collection.getBranch(null)).toMatchObject({
+      ids: ["a", "b", "c", "d", "e", "f"],
+      cursor: "6",
+    });
+    // A new row arrives first and one on the first page goes away.
+    rows.splice(0, 2, "new", "a");
+    load.mockClear();
+    collection.publish({ type: "invalidate", pages: "first" });
+    await vi.waitFor(() =>
+      expect(collection.getBranch(null).fetching).toBeFalsy(),
+    );
+    expect(load).toHaveBeenCalledTimes(1);
+    expect(load.mock.calls[0]?.[0].cursor).toBeUndefined();
+    expect(collection.getBranch(null)).toMatchObject({
+      ids: ["new", "a", "c", "d", "e", "f"],
+      cursor: "6",
+      status: "ready",
+    });
+    expect(collection.getItem("new")?.label).toBe("NEW");
+    // Every loaded page is still read by an ordinary invalidation.
+    load.mockClear();
+    collection.publish({ type: "invalidate" });
+    await vi.waitFor(() =>
+      expect(collection.getBranch(null).fetching).toBeFalsy(),
+    );
+    expect(load).toHaveBeenCalledTimes(2);
+    expect(collection.getBranch(null)).toMatchObject({
+      ids: ["new", "a", "c", "d", "e", "f"],
+      cursor: "6",
+    });
+    release();
+  });
+
+  it("reads further when the first page no longer meets the loaded rows", async () => {
+    const rows = ["a", "b", "c", "d"];
+    const load = offsetSource(rows, 2);
+    const collection = createCollection<Item>({ source: { load } });
+    const release = collection.acquire();
+    await flush();
+    await collection.load({ more: true });
+    // A whole page of new rows: nothing to stitch to on the first page.
+    rows.unshift("n1", "n2");
+    load.mockClear();
+    collection.publish({ type: "invalidate", pages: "first" });
+    await vi.waitFor(() =>
+      expect(collection.getBranch(null).fetching).toBeFalsy(),
+    );
+    expect(load.mock.calls.map(([request]) => request.cursor)).toEqual([
+      undefined,
+      "2",
+    ]);
+    expect(collection.getBranch(null)).toMatchObject({
+      ids: ["n1", "n2", "a", "b"],
+      cursor: "4",
+    });
+    release();
+  });
+
+  it("merges a row repeated across the pages of one refresh", async () => {
+    const collection = createCollection<Item>({
+      source: {
+        load: async ({ cursor }) =>
+          cursor
+            ? {
+                items: [
+                  { id: "b", label: "B again" },
+                  { id: "c", label: "C" },
+                ],
+              }
+            : {
+                items: [
+                  { id: "a", label: "A" },
+                  { id: "b", label: "B" },
+                ],
+                cursor: "1",
+              },
+      },
+    });
+    await collection.load();
+    await collection.load({ more: true });
+    await collection.load();
+    expect(collection.getBranch(null)).toMatchObject({
+      ids: ["a", "b", "c"],
+      status: "ready",
+    });
+    expect(collection.getItem("b")?.label).toBe("B");
+  });
+
+  it("runs the widest refresh asked for while one is in flight", async () => {
+    const pending: Array<(page: CollectionPage<Item>) => void> = [];
+    const cursors: Array<string | undefined> = [];
+    const collection = createCollection<Item>({
+      source: {
+        load: ({ cursor }) => {
+          cursors.push(cursor);
+          return new Promise((resolve) => pending.push(resolve));
+        },
+      },
+    });
+    const release = collection.acquire();
+    pending[0]?.({ items: [{ id: "a", label: "A" }], cursor: "1" });
+    await flush();
+    void collection.load({ more: true });
+    pending[1]?.({ items: [{ id: "b", label: "B" }], cursor: "2" });
+    await flush();
+    void collection.load();
+    collection.publish({ type: "invalidate", pages: "first" });
+    collection.publish({ type: "invalidate" });
+    collection.publish({ type: "invalidate", pages: "first" });
+    pending[2]?.({ items: [{ id: "a", label: "A" }], cursor: "1" });
+    await flush();
+    pending[3]?.({ items: [{ id: "b", label: "B" }], cursor: "2" });
+    await flush();
+    // One more full read (two pages), not a first-page one.
+    expect(cursors.slice(4)).toEqual([undefined]);
+    pending[4]?.({ items: [{ id: "a", label: "A" }], cursor: "1" });
+    await flush();
+    expect(cursors.slice(5)).toEqual(["1"]);
+    release();
+  });
 });

@@ -1,0 +1,659 @@
+import http from "node:http";
+import path from "node:path";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
+
+/**
+ * Pages ask through Work's dialogs (ADR 0226): alert, confirm and prompt
+ * from the page and its frames, "Leave site?" when a beforeunload holds a
+ * reload, a navigation or a close, and HTTP sign-ins. Each dialog sits
+ * over its own tab, which waits while the rest of Work carries on.
+ */
+let app: AppHandle;
+let origin: string;
+let otherOrigin: string;
+const AUTH = `Basic ${Buffer.from("work:secret").toString("base64")}`;
+
+const server = http.createServer((request, response) => {
+  const url = request.url ?? "/";
+  response.setHeader("Content-Type", "text/html");
+  if (url.startsWith("/auth")) {
+    if (request.headers.authorization !== AUTH) {
+      response.statusCode = 401;
+      response.setHeader("WWW-Authenticate", 'Basic realm="Work test"');
+      response.end("<title>Unauthorized</title><p>Sign-in required</p>");
+      return;
+    }
+    response.end("<title>Signed in</title><p>Welcome</p>");
+    return;
+  }
+  if (url.startsWith("/frame")) {
+    // A frame that asks when its parent tells it to.
+    response.end(`<title>Frame</title><script>
+      addEventListener('message', (event) => {
+        if (event.data === 'alert') alert('From the frame');
+      });
+    </script>`);
+    return;
+  }
+  if (url.startsWith("/unload")) {
+    response.end(`<title>Unload</title>
+      <a id="away" href="/plain?from=link">Away</a>
+      <script>
+        addEventListener('beforeunload', (event) => {
+          event.preventDefault();
+          event.returnValue = '';
+        });
+      </script>`);
+    return;
+  }
+  if (url.startsWith("/leaving-alert")) {
+    // Chrome refuses dialogs from a page that is unloading.
+    response.end(`<title>Leaving alert</title><script>
+      addEventListener('beforeunload', () => { alert('Leaving'); });
+    </script>`);
+    return;
+  }
+  if (url.startsWith("/dialogs")) {
+    response.end(`<title>Dialogs</title><p>Dialogs lab</p>
+      <iframe id="same" src="/frame"></iframe>
+      <iframe id="other" src="${otherOrigin}/frame"></iframe>`);
+    return;
+  }
+  response.end("<title>Plain</title><p>Plain page</p>");
+});
+
+const artifacts = process.env.CATAMORPHIC_E2E_ARTIFACTS_DIR;
+/** A picture for review, once the dialog's entrance has settled. */
+const shot = async (name: string) => {
+  if (!artifacts) return;
+  await new Promise((resolve) => setTimeout(resolve, 400));
+  await app.screenshot(path.join(artifacts, `${name}.png`));
+};
+
+/** Hidden tabs stay laid out (invisible), so "on screen" asks visibility. */
+const SHOWN = `((element) => element.checkVisibility({ visibilityProperty: true }))`;
+/** The page on screen. */
+const VIEW = `[...document.querySelectorAll('webview')].find(${SHOWN})`;
+/** Its dialog, if it shows one. */
+const DIALOG = `${VIEW}?.parentElement.querySelector('[data-testid="page-dialog"]:not([inert])')`;
+const ACTIVE_KEY = `document.querySelector('[data-point-key] [aria-current="true"]')?.closest('[data-point-key]')?.dataset.pointKey`;
+const ADDRESS = `[...document.querySelectorAll('input[aria-label="Address and search bar"]')].find(${SHOWN})`;
+const host = (url: string) => url.slice("http://".length);
+
+/** Run script in the page with a user gesture, without waiting for it. */
+const start = (code: string, gesture = true) =>
+  app.eval<string>(`(() => {
+    const id = Math.random().toString(36).slice(2);
+    window.__runs ??= {};
+    window.__runs[id] = { done: false };
+    ${VIEW}.executeJavaScript(${JSON.stringify(code)}, ${gesture}).then(
+      (value) => { window.__runs[id] = { done: true, value }; },
+      (error) => { window.__runs[id] = { done: true, error: String(error) }; },
+    );
+    return id;
+  })()`);
+/** What a started script returned, once it did. */
+const finished = async (id: string) =>
+  JSON.parse(
+    await app.waitFor<string>(
+      `window.__runs[${JSON.stringify(id)}].done && JSON.stringify(window.__runs[${JSON.stringify(id)}])`,
+      { label: "the page's script returned" },
+    ),
+  ) as { done: true; value?: unknown; error?: string };
+const running = (id: string) =>
+  app.eval<boolean>(`!window.__runs[${JSON.stringify(id)}].done`);
+const inPage = <T>(code: string) =>
+  app.eval<T>(`${VIEW}.executeJavaScript(${JSON.stringify(code)})`);
+
+const dialogShows = (kind: string) =>
+  app.waitFor(`${DIALOG}?.dataset.kind === ${JSON.stringify(kind)}`, {
+    label: `${kind} dialog shows`,
+  });
+const dialogGone = () => app.waitFor(`!${DIALOG}`, { label: "dialog gone" });
+const text = (testId: string) =>
+  app.eval<string>(
+    `${DIALOG}?.querySelector('[data-testid="${testId}"]')?.textContent ?? ''`,
+  );
+const click = (testId: string) =>
+  app.eval(
+    `${DIALOG}.querySelector('[data-testid="${testId}"]').click(); true`,
+  );
+const focusInDialog = () =>
+  app.waitFor(`!!${DIALOG}?.contains(document.activeElement)`, {
+    label: "focus in the dialog",
+  });
+const title = () =>
+  app.eval<string>(
+    `(() => { try { return ${VIEW}.getTitle(); } catch { return ''; } })()`,
+  );
+const loaded = (expected: string) =>
+  app.waitFor(
+    `(() => { try { const page = ${VIEW}; return page.getTitle() === ${JSON.stringify(expected)} && !page.isLoading(); } catch { return false; } })()`,
+    { label: `${expected} loaded` },
+  );
+/** Type an address and press Enter, as the person does. */
+const go = async (url: string) => {
+  await app.eval(`(() => {
+    ${setReactValueJs}
+    const input = ${ADDRESS};
+    input.focus();
+    setReactValue(input, ${JSON.stringify(url)});
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+    return true;
+  })()`);
+};
+const newTab = async () => {
+  await app.eval(`window.dispatchEvent(new KeyboardEvent('keydown', {
+    key: 't', altKey: true, bubbles: true, cancelable: true,
+    ...(/Mac/.test(navigator.platform) ? { metaKey: true } : { ctrlKey: true }),
+  })); true`);
+  await app.waitFor(`!!${ADDRESS} && document.activeElement === ${ADDRESS}`, {
+    label: "new tab's address bar",
+  });
+};
+
+beforeAll(async () => {
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  if (!address || typeof address === "string")
+    throw new Error("Missing server address");
+  origin = `http://127.0.0.1:${address.port}`;
+  otherOrigin = `http://localhost:${address.port}`;
+  app = await launchApp();
+  await app.eval(`window.catamorphicDesktop.createProject({
+    name: 'Dialog lab',
+    rootPath: ${JSON.stringify(`${app.userDataDir}/dialog-lab`)}
+  })`);
+  await app.reload();
+  await app.waitFor(`document.body?.innerText.includes('Dialog lab')`, {
+    timeoutMs: 30_000,
+    label: "project workspace",
+  });
+  await app.waitFor("!!document.querySelector('[data-workspace-ready]')", {
+    label: "workspace ready for shortcuts",
+  });
+  await newTab();
+  await go(`${origin}/dialogs`);
+  await loaded("Dialogs");
+});
+afterAll(async () => {
+  await app?.stop();
+  server.close();
+});
+
+describe("page dialogs", () => {
+  it("a confirm waits over its tab: Escape cancels, Enter accepts", async () => {
+    const run = await start("confirm('Delete this draft?')");
+    await dialogShows("confirm");
+    expect(await text("page-dialog-title")).toBe(`${host(origin)} says`);
+    expect(await text("page-dialog-message")).toBe("Delete this draft?");
+    // Over this tab's page, not the window.
+    expect(
+      await app.eval<boolean>(`${VIEW}.parentElement.contains(${DIALOG})`),
+    ).toBe(true);
+    await focusInDialog();
+    // The page waits.
+    expect(await running(run)).toBe(true);
+    await shot("page-dialog-confirm");
+    await app.press("Escape");
+    await dialogGone();
+    expect((await finished(run)).value).toBe(false);
+
+    const again = await start("confirm('Keep going?')");
+    await dialogShows("confirm");
+    await focusInDialog();
+    await app.press("Enter");
+    await dialogGone();
+    expect((await finished(again)).value).toBe(true);
+    // Focus is back on the page.
+    await app.waitFor(`document.activeElement === ${VIEW}`, {
+      label: "focus back on the page",
+    });
+  });
+
+  it("an alert's text stays text, and a long one scrolls", async () => {
+    const message = `<b>bold</b>\n${"word ".repeat(3000).trim()}`;
+    const run = await start(`alert(${JSON.stringify(message)})`);
+    await dialogShows("alert");
+    expect(await text("page-dialog-message")).toBe(message);
+    expect(
+      await app.eval<boolean>(
+        `!${DIALOG}.querySelector('[data-testid="page-dialog-message"] b')`,
+      ),
+    ).toBe(true);
+    expect(
+      await app.eval<boolean>(`(() => {
+        const box = ${DIALOG}.querySelector('[data-testid="page-dialog-message"]');
+        return box.scrollHeight > box.clientHeight;
+      })()`),
+    ).toBe(true);
+    // An alert has only OK.
+    expect(
+      await app.eval<boolean>(
+        `!${DIALOG}.querySelector('[data-testid="page-dialog-cancel"]')`,
+      ),
+    ).toBe(true);
+    await shot("page-dialog-long-alert");
+    await click("page-dialog-accept");
+    await dialogGone();
+    expect(await finished(run)).toEqual({ done: true });
+  });
+
+  it("a prompt offers its default and returns what was typed, or null", async () => {
+    const run = await start("prompt('Your name?', 'Ada')");
+    await dialogShows("prompt");
+    const input = `${DIALOG}.querySelector('[data-testid="page-dialog-input"]')`;
+    await app.waitFor(`document.activeElement === ${input}`, {
+      label: "prompt field focused",
+    });
+    expect(await app.eval<string>(`${input}.value`)).toBe("Ada");
+    expect(
+      await app.eval<boolean>(
+        `${input}.selectionStart === 0 && ${input}.selectionEnd === 3`,
+      ),
+    ).toBe(true);
+    await app.insertText("Grace");
+    await shot("page-dialog-prompt");
+    await app.press("Enter");
+    await dialogGone();
+    expect((await finished(run)).value).toBe("Grace");
+
+    const cancelled = await start("prompt('Your name?')");
+    await dialogShows("prompt");
+    await click("page-dialog-cancel");
+    await dialogGone();
+    expect((await finished(cancelled)).value).toBeNull();
+  });
+
+  it("an embedded frame of another site is named, and a frame of the page's own is the page", async () => {
+    await start(
+      "document.getElementById('other').contentWindow.postMessage('alert', '*')",
+    );
+    await dialogShows("alert");
+    expect(await text("page-dialog-title")).toBe(
+      `An embedded page at ${host(otherOrigin)} says`,
+    );
+    expect(await text("page-dialog-message")).toBe("From the frame");
+    await shot("page-dialog-embedded");
+    await click("page-dialog-accept");
+    await dialogGone();
+    await start(
+      "document.getElementById('same').contentWindow.postMessage('alert', '*')",
+    );
+    await dialogShows("alert");
+    expect(await text("page-dialog-title")).toBe(`${host(origin)} says`);
+    await click("page-dialog-accept");
+    await dialogGone();
+  });
+
+  it("a page that keeps asking can be told to stop, until it loads again", async () => {
+    // This page load has asked before: the next dialog offers the stop.
+    const run = await start("confirm('Again?')");
+    await dialogShows("confirm");
+    await app.eval(
+      `${DIALOG}.querySelector('[data-testid="page-dialog-suppress"]').click(); true`,
+    );
+    await shot("page-dialog-suppress");
+    await click("page-dialog-accept");
+    await dialogGone();
+    expect((await finished(run)).value).toBe(true);
+    // Stopped: answered at once, as Chrome does.
+    expect(await finished(await start("confirm('More?')"))).toEqual({
+      done: true,
+      value: false,
+    });
+    expect(await finished(await start("prompt('More?')"))).toEqual({
+      done: true,
+      value: null,
+    });
+    expect(await app.eval<boolean>(`!${DIALOG}`)).toBe(true);
+    await app.eval(`${VIEW}.reload(); true`);
+    await loaded("Dialogs");
+    const fresh = await start("confirm('Fresh page?')");
+    await dialogShows("confirm");
+    expect(
+      await app.eval<boolean>(
+        `!${DIALOG}.querySelector('[data-testid="page-dialog-suppress"]')`,
+      ),
+    ).toBe(true);
+    await click("page-dialog-accept");
+    expect((await finished(fresh)).value).toBe(true);
+  });
+
+  it("the dialog stays with its tab while another tab works, and its tab says it waits", async () => {
+    const dialogsKey = await app.eval<string>(ACTIVE_KEY);
+    const run = await start("prompt('Still there?', 'yes')");
+    await dialogShows("prompt");
+    await newTab();
+    await go(`${origin}/plain`);
+    await loaded("Plain");
+    // The other tab answers while the first waits.
+    expect(await inPage<string>("document.title")).toBe("Plain");
+    expect(await app.eval<boolean>(`!${DIALOG}`)).toBe(true);
+    await app.waitFor(
+      `!!document.querySelector('[data-point-key=${JSON.stringify(dialogsKey)}][data-page-dialog]')`,
+      { label: "the waiting tab shows it waits" },
+    );
+    await shot("page-dialog-waiting-tab");
+    expect(await running(run)).toBe(true);
+    // Back to it: the dialog is there and takes focus.
+    await app.eval(
+      `document.querySelector('[data-point-key=${JSON.stringify(dialogsKey)}] button').click(); true`,
+    );
+    await dialogShows("prompt");
+    await focusInDialog();
+    await app.press("Enter");
+    expect((await finished(run)).value).toBe("yes");
+    await app.waitFor(
+      `!document.querySelector('[data-point-key=${JSON.stringify(dialogsKey)}][data-page-dialog]')`,
+      { label: "the tab no longer waits" },
+    );
+  });
+
+  it("a navigation cancels the page's dialog", async () => {
+    await start(
+      "sessionStorage.setItem('answer', String(prompt('Before you go?')))",
+    );
+    await dialogShows("prompt");
+    await go(`${origin}/plain?after=prompt`);
+    await loaded("Plain");
+    expect(await app.eval<boolean>(`!${DIALOG}`)).toBe(true);
+    expect(await inPage<string>("sessionStorage.getItem('answer')")).toBe(
+      "null",
+    );
+  });
+
+  it("a page that is unloading shows no dialog", async () => {
+    await go(`${origin}/leaving-alert`);
+    await loaded("Leaving alert");
+    await finished(await start("document.body.click()"));
+    await go(`${origin}/plain?after=leaving-alert`);
+    await loaded("Plain");
+    expect(await app.eval<boolean>(`!${DIALOG}`)).toBe(true);
+  });
+
+  it("Leave site? holds a reload, an address and a link, and Leave goes on", async () => {
+    await go(`${origin}/unload`);
+    await loaded("Unload");
+    // A page the person used: Chrome asks only then.
+    await finished(await start("document.body.click()"));
+    await app.eval(
+      `[...document.querySelectorAll('button[aria-label="Reload"]')].find(${SHOWN}).click(); true`,
+    );
+    await dialogShows("beforeunload");
+    expect(await text("page-dialog-title")).toBe("Reload site?");
+    await click("page-dialog-cancel");
+    await dialogGone();
+    expect(await title()).toBe("Unload");
+
+    await go(`${origin}/plain?from=address`);
+    await dialogShows("beforeunload");
+    expect(await text("page-dialog-title")).toBe("Leave site?");
+    await shot("page-dialog-leave-site");
+    await focusInDialog();
+    await app.press("Escape");
+    await dialogGone();
+    expect(await title()).toBe("Unload");
+    // The address shows the page that stayed.
+    await app.waitFor(`${ADDRESS}.value.includes('/unload')`, {
+      label: "address back on the page",
+    });
+    await go(`${origin}/plain?from=address`);
+    await dialogShows("beforeunload");
+    await click("page-dialog-accept");
+    await loaded("Plain");
+    expect(await inPage<string>("location.search")).toBe("?from=address");
+
+    // The page's own link: Leave follows it.
+    await go(`${origin}/unload`);
+    await loaded("Unload");
+    await start("document.getElementById('away').click()");
+    await dialogShows("beforeunload");
+    await click("page-dialog-accept");
+    await loaded("Plain");
+    expect(await inPage<string>("location.search")).toBe("?from=link");
+  });
+
+  it("closing a tab asks its page, and Cancel keeps the tab", async () => {
+    await go(`${origin}/unload`);
+    await loaded("Unload");
+    await finished(await start("document.body.click()"));
+    const key = await app.eval<string>(ACTIVE_KEY);
+    const close = `document.querySelector('[data-point-key=${JSON.stringify(key)}] button[aria-label^="Close"]').click(); true`;
+    await app.eval(close);
+    await dialogShows("beforeunload");
+    expect(await text("page-dialog-title")).toBe("Leave site?");
+    await click("page-dialog-cancel");
+    await dialogGone();
+    expect(
+      await app.eval<boolean>(
+        `!!document.querySelector('[data-point-key=${JSON.stringify(key)}]')`,
+      ),
+    ).toBe(true);
+    await app.eval(close);
+    await dialogShows("beforeunload");
+    await click("page-dialog-accept");
+    await app.waitFor(
+      `!document.querySelector('[data-point-key=${JSON.stringify(key)}]')`,
+      { label: "the tab closed" },
+    );
+  });
+
+  it("a sign-in asks in the tab: Cancel shows the 401 page, a wrong password asks again, the right one signs in", async () => {
+    await go(`${origin}/auth`);
+    await dialogShows("auth");
+    expect(await text("page-dialog-title")).toBe("Sign in");
+    expect(await text("page-dialog-origin")).toBe(host(origin));
+    expect(await text("page-dialog-realm")).toContain("Work test");
+    await focusInDialog();
+    await shot("page-dialog-sign-in");
+    await click("page-dialog-cancel");
+    await loaded("Unauthorized");
+    expect(await inPage<string>("document.body.innerText")).toContain(
+      "Sign-in required",
+    );
+
+    await go(`${origin}/auth?again`);
+    await dialogShows("auth");
+    const field = (id: string) =>
+      `${DIALOG}?.querySelector('[data-testid="${id}"]')`;
+    await app.eval(`(() => {
+      ${setReactValueJs}
+      setReactValue(${field("page-dialog-username")}, 'work');
+      setReactValue(${field("page-dialog-password")}, 'wrong');
+      return true;
+    })()`);
+    await click("page-dialog-accept");
+    // Refused: asked again, with the username kept.
+    await app.waitFor(
+      `${DIALOG}?.dataset.kind === 'auth' && ${field("page-dialog-username")}?.value === 'work' && !!${DIALOG}.querySelector('[role="alert"]')`,
+      { label: "asked again" },
+    );
+    await focusInDialog();
+    await shot("page-dialog-sign-in-retry");
+    await app.insertText("secret");
+    // Clicked: an Enter's key-up would follow focus back into a page that
+    // is loading, and the test's key input waits for it.
+    await click("page-dialog-accept");
+    await loaded("Signed in");
+    // The sign-in that worked is offered for saving.
+    await app.waitFor(
+      `document.querySelector('[data-testid="password-prompt"]')?.dataset.kind === 'save'`,
+      { label: "save offer" },
+    );
+  });
+});
+
+describe("agents and page dialogs", () => {
+  let serial = 0;
+  const helpers = `${setReactValueJs}
+const composer=()=>[...document.querySelectorAll('section[aria-label]')].find(el=>!el.closest('[inert]') && el.querySelector('[data-composer-input]'))?.querySelector('[data-composer-input]');
+const logs=()=>[...document.querySelectorAll('[role="log"]')].map(el=>el.textContent).join('\\n');`;
+  /** A workspace tool, called by the fake agent as a model would. */
+  const tool = async (
+    name: string,
+    input: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> => {
+    serial++;
+    const prefix = `E2E result ${serial}: `;
+    const prompt = `E2E workspace tool ${JSON.stringify({ name, input, serial })}`;
+    await app.eval(
+      `(()=>{${helpers};setReactValue(composer(),${JSON.stringify(prompt)});composer().closest('form').requestSubmit();})()`,
+    );
+    const result = await app.waitFor<string>(
+      `(()=>{${helpers};const text=logs();const start=text.lastIndexOf(${JSON.stringify(prefix)});return start<0?false:text.slice(start+${prefix.length}).split('E2E end')[0];})()`,
+      { label: `${name} result` },
+    );
+    return JSON.parse(result);
+  };
+
+  const openChat = async () => {
+    await app.eval(
+      `window.dispatchEvent(new KeyboardEvent('keydown',{key:'n',metaKey:/Mac/.test(navigator.platform),ctrlKey:!/Mac/.test(navigator.platform),bubbles:true})); true`,
+    );
+    await app.waitFor(`(()=>{${helpers};return !!composer();})()`, {
+      label: "chat composer",
+    });
+  };
+
+  it("an agent reads the page's dialog and answers as a person would, but a sign-in is the person's", async () => {
+    await openChat();
+    const { key } = await tool("open_browser", { url: `${origin}/dialogs` });
+    expect(
+      await tool("browser_act", {
+        key,
+        action: "wait_for",
+        text: "Dialogs lab",
+      }),
+    ).toEqual({ found: true });
+
+    // What opens a dialog reports it instead of hanging on the page.
+    const opened = await tool("browser_act", {
+      key,
+      action: "evaluate",
+      expression: "window.answer = confirm('Proceed?')",
+    });
+    expect(opened.dialog).toMatchObject({
+      kind: "confirm",
+      message: "Proceed?",
+      origin,
+    });
+    expect(String(opened.note)).toContain("press");
+    expect((await tool("browser_snapshot", { key })).dialog).toMatchObject({
+      kind: "confirm",
+    });
+    expect(
+      String((await tool("browser_act", { key, action: "read" })).error ?? ""),
+    ).toContain("waits on a dialog");
+    expect(
+      await tool("browser_act", { key, action: "press", press_key: "Enter" }),
+    ).toEqual({ ok: true, answered: "confirm", accepted: true });
+    expect(
+      await tool("browser_act", {
+        key,
+        action: "evaluate",
+        expression: "window.answer",
+      }),
+    ).toMatchObject({ value: true });
+
+    // A prompt's field takes fill, and Enter sends it.
+    const prompt = await tool("browser_act", {
+      key,
+      action: "evaluate",
+      expression: "window.named = prompt('Name?', 'Ada')",
+    });
+    expect(prompt.dialog).toMatchObject({
+      kind: "prompt",
+      uid: "dialog",
+      value: "Ada",
+    });
+    expect(
+      await tool("browser_act", {
+        key,
+        action: "fill",
+        uid: "dialog",
+        text: "Grace",
+      }),
+    ).toEqual({ ok: true });
+    await tool("browser_act", { key, action: "press", press_key: "Enter" });
+    expect(
+      await tool("browser_act", {
+        key,
+        action: "evaluate",
+        expression: "window.named",
+      }),
+    ).toMatchObject({ value: "Grace" });
+
+    // A sign-in is the person's. (Another origin: the profile remembers
+    // the sign-in the person made above, as Chrome does.) They have one
+    // saved for it.
+    await app.eval(`window.catamorphicDesktop.profilesList().then((data) =>
+      window.catamorphicDesktop.vaultSave({
+        profileId: data.defaultProfileId,
+        origin: ${JSON.stringify(otherOrigin)},
+        username: 'work',
+        password: 'secret',
+      })).then(() => true)`);
+    const signIn = await tool("browser_act", {
+      key,
+      action: "navigate",
+      url: `${otherOrigin}/auth?agent`,
+    });
+    expect(signIn.dialog).toMatchObject({
+      kind: "auth",
+      origin: otherOrigin,
+      realm: "Work test",
+    });
+    expect(String(signIn.note)).toContain("Never answer a sign-in");
+    expect(
+      String(
+        (
+          await tool("browser_act", {
+            key,
+            action: "press",
+            press_key: "Enter",
+          })
+        ).error ?? "",
+      ),
+    ).toContain("only the person answers");
+    // The person comes to the tab and signs in with the saved sign-in,
+    // whose password main reads from the vault.
+    await app.eval(
+      `document.querySelector('[data-point-key=${JSON.stringify(key)}] button').click(); true`,
+    );
+    await dialogShows("auth");
+    expect(await text("page-dialog-saved")).toContain("work");
+    // The chat floating over the page stays in reach, above the dialog.
+    expect(
+      await app.eval<boolean>(`(()=>{${helpers};
+        const input = composer();
+        const box = input.getBoundingClientRect();
+        const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+        return !!hit && input.closest('section').contains(hit);
+      })()`),
+    ).toBe(true);
+    await shot("page-dialog-under-chat");
+    // Out of the chat's way, for a look at the sign-in itself.
+    await app.eval(
+      `document.querySelector('button[aria-label="Minimize chat to bubble"]').click(); true`,
+    );
+    await app.waitFor(`(()=>{${helpers};return !composer();})()`, {
+      label: "chat minimized",
+    });
+    await shot("page-dialog-saved-sign-in");
+    await app.eval(
+      `${DIALOG}.querySelector('[data-testid="page-dialog-saved"] button').click(); true`,
+    );
+    await loaded("Signed in");
+    await openChat();
+    // Going elsewhere still works for the agent.
+    expect(
+      await tool("browser_act", {
+        key,
+        action: "navigate",
+        url: `${origin}/plain?from=agent`,
+      }),
+    ).toMatchObject({ ok: true });
+  });
+});

@@ -4,8 +4,11 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
+import type { SidebarSectionConfig } from "../../shared/sidebar.js";
 import {
   readSidebarSessionPage,
+  SIDEBAR_SESSION_PAGE,
+  useRevealSidebarSession,
   useSidebarSessions,
 } from "./sidebar-sessions.js";
 
@@ -191,4 +194,243 @@ it("keeps a hidden empty section empty while its availability request is pending
     await act(async () => root.unmount());
     client.clear();
   }
+});
+
+/** A newest-first project of `count` promoted chats, `c0` the newest. */
+function chatList(count: number) {
+  const created = (index: number) =>
+    new Date(Date.UTC(2026, 0, 1) - index * 60_000).toISOString();
+  const chats = Array.from({ length: count }, (_, index) => ({
+    id: `c${index}`,
+    title: `Chat ${index}`,
+    visibility: "promoted",
+    parentSessionId: null,
+    childCount: 0,
+    createdAt: created(index),
+  }));
+  const pages: URL[] = [];
+  const reads: string[] = [];
+  mocks.fetch.mockImplementation(async (request: Request) => {
+    const url = new URL(request.url);
+    const single = url.pathname.match(/\/agent\/sessions\/([^/]+)$/);
+    if (single) {
+      reads.push(single[1] ?? "");
+      return Response.json(
+        chats.find((chat) => chat.id === single[1]) ?? {
+          id: single[1],
+          title: "Elsewhere",
+          visibility: "promoted",
+          parentSessionId: null,
+          createdAt: new Date(
+            Date.UTC(2026, 0, 1) - 4.5 * 60_000,
+          ).toISOString(),
+        },
+      );
+    }
+    pages.push(url);
+    const offset = Number(url.searchParams.get("offset"));
+    const limit = Number(url.searchParams.get("limit"));
+    return Response.json({
+      items: chats.slice(offset, offset + limit),
+      total: chats.length,
+    });
+  });
+  return { chats, pages, reads };
+}
+
+function mountSessions({
+  section,
+  activeSessionId,
+}: {
+  section: SidebarSectionConfig;
+  activeSessionId?: string;
+}) {
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", true);
+  const root = createRoot(document.createElement("div"));
+  const state: { current?: ReturnType<typeof useSidebarSessions> } = {};
+  function Probe() {
+    const sessions = useSidebarSessions({
+      projectId: "paged",
+      section,
+      visible: true,
+      relevant: true,
+    });
+    state.current = sessions;
+    useRevealSidebarSession({
+      ...sessions,
+      projectId: "paged",
+      sessionId: activeSessionId,
+      section,
+      active: true,
+    });
+    return null;
+  }
+  return {
+    state,
+    mount: () =>
+      act(async () =>
+        root.render(
+          <QueryClientProvider client={client}>
+            <Probe />
+          </QueryClientProvider>,
+        ),
+      ),
+    unmount: async () => {
+      await act(async () => root.unmount());
+      client.clear();
+    },
+  };
+}
+
+it("polls only the first page and reads every loaded page every 30 seconds", async () => {
+  vi.useFakeTimers();
+  const { pages } = chatList(10);
+  const view = mountSessions({
+    section: {
+      id: "polled",
+      type: "chats",
+      source: { type: "chats", pageSize: 3 },
+    },
+  });
+  await view.mount();
+  const collection = view.state.current?.collection;
+  if (!collection) throw new Error("Missing session store");
+  let release = () => {};
+  await act(async () => {
+    release = collection.acquire();
+  });
+  await vi.waitFor(() =>
+    expect(collection.getBranch(null).status).toBe("ready"),
+  );
+  await act(async () => {
+    await collection.load({ more: true });
+    await collection.load({ more: true });
+  });
+  expect(collection.getBranch(null).ids).toHaveLength(9);
+  pages.length = 0;
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(2_000);
+  });
+  // However deep the list is loaded, a poll reads one page.
+  expect(pages.map((url) => url.searchParams.get("offset"))).toEqual(["0"]);
+  pages.length = 0;
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(2_000 * 13);
+  });
+  expect(pages).toHaveLength(13);
+  pages.length = 0;
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(2_000);
+  });
+  expect(pages.map((url) => url.searchParams.get("offset"))).toEqual([
+    "0",
+    "3",
+    "6",
+  ]);
+  expect(collection.getBranch(null).ids).toHaveLength(9);
+  // Coming back to the window reads everything loaded, too.
+  pages.length = 0;
+  await act(async () => {
+    window.dispatchEvent(new Event("focus"));
+    await vi.advanceTimersByTimeAsync(1);
+  });
+  expect(pages).toHaveLength(3);
+  act(() => release());
+  await view.unmount();
+});
+
+it("starts a next page a few rows early and merges the repeats", async () => {
+  const { pages } = chatList(SIDEBAR_SESSION_PAGE * 2 + 4);
+  const view = mountSessions({ section: { id: "chats", type: "chats" } });
+  await view.mount();
+  const collection = view.state.current?.collection;
+  if (!collection) throw new Error("Missing session store");
+  let release = () => {};
+  await act(async () => {
+    release = collection.acquire();
+  });
+  await vi.waitFor(() =>
+    expect(collection.getBranch(null).ids).toHaveLength(SIDEBAR_SESSION_PAGE),
+  );
+  expect(pages[0]?.searchParams.get("limit")).toBe(
+    String(SIDEBAR_SESSION_PAGE),
+  );
+  await act(async () => {
+    await collection.load({ more: true });
+  });
+  expect(pages.at(-1)?.searchParams.get("offset")).toBe(
+    String(SIDEBAR_SESSION_PAGE - 3),
+  );
+  // Three rows read again, merged: the next page adds the rest.
+  const ids = collection.getBranch(null).ids;
+  expect(ids).toHaveLength(SIDEBAR_SESSION_PAGE * 2 - 3);
+  expect(new Set(ids).size).toBe(ids.length);
+  expect(collection.getBranch(null).cursor).toBe(
+    String(SIDEBAR_SESSION_PAGE * 2 - 3),
+  );
+  act(() => release());
+  await view.unmount();
+});
+
+it("loads pages until the open chat is in the list", async () => {
+  const { pages } = chatList(12);
+  const view = mountSessions({
+    section: {
+      id: "reveal",
+      type: "chats",
+      source: { type: "chats", pageSize: 3 },
+    },
+    activeSessionId: "c7",
+  });
+  await view.mount();
+  const collection = view.state.current?.collection;
+  if (!collection) throw new Error("Missing session store");
+  let release = () => {};
+  await act(async () => {
+    release = collection.acquire();
+  });
+  await vi.waitFor(() =>
+    expect(collection.getBranch(null).ids).toContain("c7"),
+  );
+  await act(async () => {});
+  expect(collection.getBranch(null).ids).toHaveLength(9);
+  expect(
+    pages.map((url) => url.searchParams.get("offset")).filter(Boolean),
+  ).toEqual(["0", "3", "6"]);
+  act(() => release());
+  await view.unmount();
+});
+
+it("stops looking once the loaded chats are older than the open one", async () => {
+  const { pages, reads } = chatList(12);
+  const view = mountSessions({
+    section: {
+      id: "elsewhere",
+      type: "chats",
+      source: { type: "chats", pageSize: 3 },
+    },
+    // Not in this list: made between c4 and c5.
+    activeSessionId: "elsewhere",
+  });
+  await view.mount();
+  const collection = view.state.current?.collection;
+  if (!collection) throw new Error("Missing session store");
+  let release = () => {};
+  await act(async () => {
+    release = collection.acquire();
+  });
+  await vi.waitFor(() => expect(reads).toEqual(["elsewhere"]));
+  await vi.waitFor(() =>
+    expect(collection.getBranch(null).ids).toHaveLength(6),
+  );
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  });
+  expect(collection.getBranch(null).ids).toHaveLength(6);
+  expect(pages).toHaveLength(2);
+  act(() => release());
+  await view.unmount();
 });

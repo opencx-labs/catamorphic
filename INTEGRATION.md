@@ -495,8 +495,12 @@ lost and a continuation turn resumes the native thread (`recovery:
 ### Agent session lifecycle and delegation
 
 Agent sessions carry source provenance, hierarchy, fork lineage, presentation,
-archive, attention, activity, todo, and authority state in one generated
-schema. `parentSessionId` is immediate hierarchy;
+archive, attention, activity, todo, metadata, and authority state in one
+generated schema. Metadata (ADR 0225) is named JSON values agents and clients
+set on a session by key (`PATCH .../sessions/:sessionId/metadata`, the
+`set_session_metadata` MCP tool; null removes a key) and every client reads
+from the session's fields, live; core bounds its keys and size and never
+reads it. `parentSessionId` is immediate hierarchy;
 `forkedFromSessionId` is transcript lineage. First-class subsessions are
 ordinary child sessions created through explicit delegation routes, with
 create/list/wait/interrupt endpoints under the parent session. A native
@@ -512,7 +516,7 @@ necessary. Unarchive restores navigation. React hosts use `useArchiveAgentSessio
 
 ### The project MCP endpoint: bring your own agent
 
-`POST /api/projects/:id/mcp` serves the caller's whole scope as one MCP server: the project's `mcpToolKinds` workflow tools (roster filtered to the caller's workflow refs), `documents_list/read/search/write/delete/history` (the documents surface, per the caller's document refs; `documents_write` takes `text` or `base64` for binaries), `publish_document/revoke_publication/list_publications`, `propose_change`, `list_skills/read_skill`, and `ask_agent` (a synchronous turn with a project agent the caller may open sessions on). Claude Code, Cursor, or the host's own assistant connect with a host-issued token through `identityFromBearer`; the desktop's harnesses mount the same URL on every turn through their harness's `mcpServers(context)` hook. Being invited *is* receiving this URL.
+`POST /api/projects/:id/mcp` serves the caller's whole scope as one MCP server: the project's `mcpToolKinds` workflow tools (roster filtered to the caller's workflow refs), `documents_list/read/search/write/delete/history` (the documents surface, per the caller's document refs; `documents_write` takes `text` or `base64` for binaries), `publish_document/revoke_publication/list_publications`, `propose_change`, `list_skills/read_skill`, `ask_agent` (a synchronous turn with a project agent the caller may open sessions on), and `set_session_metadata` (a key of the calling session's metadata). Claude Code, Cursor, or the host's own assistant connect with a host-issued token through `identityFromBearer`; the desktop's harnesses mount the same URL on every turn through their harness's `mcpServers(context)` hook. Being invited *is* receiving this URL.
 
 The generated HTTP client lives in `@catamorphic/api-client`; construct it with `createApiClient({ baseUrl, fetch })`.
 

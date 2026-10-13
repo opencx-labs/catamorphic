@@ -1067,6 +1067,16 @@ export async function startEmbeddedServer(
         activity,
       );
     },
+    setMetadata: async (projectId, sessionId, values) => {
+      const service = catamorphic.core.agentSessions;
+      if (!service) throw new Error("Agent sessions are not configured");
+      return service.setMetadata({
+        identity: desktopIdentity,
+        projectId,
+        sessionId,
+        values,
+      });
+    },
   });
   agentRegistry.workspaceToolkit?.setTodoListBridge({
     read: async (projectId, sessionId) => {

@@ -17,6 +17,15 @@ its UID when it has one), usually a dialog or banner to close first. A label ove
 its own control is not a cover. Password values are omitted from DOM snapshots;
 screenshots are pictures of the page and are not a redaction boundary.
 
+A page waiting on a dialog (its `alert`, `confirm` or `prompt`, "Leave site?",
+or an HTTP sign-in, ADR 0226) runs nothing else. `browser_snapshot`, `read` and
+every other action report the dialog instead (its kind, who asks, its text),
+and an action that opens one returns that report rather than hanging. Agents
+answer as the person would: `press` Enter for OK or Leave, Escape for Cancel or
+Stay, and `fill` on uid `dialog` for a prompt's answer, which the person sees
+go in. A sign-in is the person's alone: the report says to ask them. `navigate`
+still works and cancels the dialog, as the address bar does.
+
 `upload` takes the UID of a file input or of the button that opens one, and
 absolute file paths: the driver intercepts the page's own file chooser over CDP
 and sets the files. Folder pickers and `showOpenFilePicker` are not intercepted;
@@ -78,7 +87,8 @@ claim every private feature of Codex's desktop UI.
 
 `e2e/browser-control.e2e.ts` drives real workspace tools and guest input against a
 local fixture, including media, pointing, lasting and stale refs, covers, uploads
-through a hidden file input, console, network, evaluate, downloads and takeover. Both desktop
+through a hidden file input, console, network, evaluate, downloads and takeover;
+`e2e/page-dialogs.e2e.ts` covers an agent answering a page's dialogs. Both desktop
 E2E modes remain required. Codex's native protocol tests run the exact pinned CLI
 against loopback model/MCP fixtures, including media, elicitation acceptance and
 denial, cancellation and resume. They use disposable homes and no model credentials.

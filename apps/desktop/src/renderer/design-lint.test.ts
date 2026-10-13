@@ -74,7 +74,7 @@ describe("design lint", () => {
   it("private loading copy only shrinks", () => {
     // Debt: screens that still print their own "Loading…" instead of the
     // shared status language. Lower this when you remove one.
-    expect(count(/"Loading…"|>Loading…</g).length).toBeLessThanOrEqual(12);
+    expect(count(/"Loading…"|>Loading…</g).length).toBeLessThanOrEqual(11);
   });
   it("native title tooltips only shrink", () => {
     // Debt: DESIGN.md wants ShortcutHint everywhere. Lower when you convert one.
@@ -85,7 +85,57 @@ describe("design lint", () => {
       .flatMap(({ file, text }) =>
         [...text.matchAll(/\stitle=\{|\stitle="/g)].map(() => file),
       );
-    expect(titles.length).toBeLessThanOrEqual(61);
+    expect(titles.length).toBeLessThanOrEqual(56);
+  });
+  it("menus open through MenuPortal, never a hand-rolled dropdown", () => {
+    // DESIGN.md "Menus and popovers" (ADR 0221): MenuPortal owns placement,
+    // keys and dismissal, presses inside pages and app frames included. A
+    // file with a menu's semantics or an overflow (⋯) button that draws no
+    // MenuPortal and asks main for no native menu (desktopApi.*Menu) holds
+    // a hand-rolled dropdown that nothing closes. Registry mirrors under
+    // components/catamorphic are their hosts' to dismiss.
+    // Attributes, not selectors such as '[role="menu"]' that find menus.
+    const menuSignals =
+      /\srole(?:=|: )"menu"|\s"?aria-haspopup"?(?:=|: )"menu"|\b(?:MoreHorizontal|MoreVertical|Ellipsis|EllipsisVertical)\b/;
+    const handRolled = sources()
+      .filter(
+        ({ file }) =>
+          !file.startsWith("components/catamorphic/") &&
+          file !== "components/menu.tsx",
+      )
+      .filter(
+        ({ text }) =>
+          menuSignals.test(text) &&
+          !/<MenuPortal\b|desktopApi\.\w+Menu\(/.test(text),
+      )
+      .map(({ file }) => file);
+    expect(handRolled).toEqual([]);
+  });
+  it("popovers close through usePopoverDismiss; their own press listeners only shrink", () => {
+    // DESIGN.md "Menus and popovers": a popover's own window or document
+    // press listener misses presses inside pages, which run in their own
+    // process. Primitives (menu, hover inspector, tooltip, lib/) are the
+    // dismissal's owners. Debt: lower this when you convert one.
+    const primitives = new Set([
+      "components/menu.tsx",
+      "components/resource-inspector.tsx",
+      "components/shortcut-hint.tsx",
+    ]);
+    const listeners = sources()
+      .filter(
+        ({ file }) =>
+          !primitives.has(file) &&
+          !file.startsWith("lib/") &&
+          !file.startsWith("components/catamorphic/"),
+      )
+      .flatMap(({ file, text }) =>
+        [
+          ...text.matchAll(
+            /(?:window|document)\.addEventListener\(\s*"(?:pointerdown|mousedown)"/g,
+          ),
+        ].map(() => file),
+      );
+    expect(listeners.length).toBeLessThanOrEqual(6);
   });
   it("focus rings come from the ring tokens, never a private recipe", () => {
     // One ring (DESIGN.md "Focus rings"): the global :focus-visible rule or

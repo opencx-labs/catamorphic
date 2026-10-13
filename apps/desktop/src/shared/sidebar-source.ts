@@ -1,5 +1,17 @@
+import type { SessionMetadata } from "@catamorphic/agent-protocol";
 import type { CollectionPage, CollectionSource } from "@catamorphic/app";
 import type { SidebarItem } from "./sidebar.js";
+
+/**
+ * The chat a session-scoped section (`when.session`) sits beside, given to
+ * its source (ADR 0225): what agents record on the session reaches a
+ * section the person wrote. The section loads again when it changes.
+ */
+export interface SidebarSourceSession {
+  id: string;
+  title: string | null;
+  metadata: SessionMetadata;
+}
 
 /** Ordinary local code. Bun supplies filesystem, fetch, subprocesses and packages. */
 export interface SidebarSourceItem extends SidebarItem {
@@ -22,6 +34,8 @@ export interface SidebarSourceModule {
        * (ADR 0186). Absent for sidebar loads and palette-ranked modes.
        */
       query?: string;
+      /** The chat beside a session-scoped section; absent elsewhere. */
+      session?: SidebarSourceSession;
     },
   ) => Promise<CollectionPage<SidebarSourceItem>>;
   subscribe?: (context: {
@@ -32,6 +46,7 @@ export interface SidebarSourceModule {
     projectRoot: string;
     itemId: string;
     action: string;
+    session?: SidebarSourceSession;
     signal: AbortSignal;
   }) => unknown | Promise<unknown>;
   /**
@@ -44,6 +59,7 @@ export interface SidebarSourceModule {
     itemId: string;
     parentId: string | null;
     beforeId?: string;
+    session?: SidebarSourceSession;
     signal: AbortSignal;
   }) => unknown | Promise<unknown>;
   /**
@@ -55,6 +71,7 @@ export interface SidebarSourceModule {
     parentId: string | null;
     beforeId?: string;
     payload: SidebarDropPayload;
+    session?: SidebarSourceSession;
     signal: AbortSignal;
   }) => unknown | Promise<unknown>;
 }
@@ -76,4 +93,6 @@ export interface SidebarSourceRequest {
   action?: string;
   beforeId?: string;
   payload?: SidebarDropPayload;
+  /** A session-scoped section's chat (ADR 0225). */
+  session?: SidebarSourceSession;
 }

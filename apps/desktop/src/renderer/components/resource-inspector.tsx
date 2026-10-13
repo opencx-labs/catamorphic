@@ -1,7 +1,9 @@
 import {
+  createContext,
   type ReactNode,
   type RefObject,
   useCallback,
+  useContext,
   useEffect,
   useId,
   useLayoutEffect,
@@ -15,7 +17,10 @@ export const RESOURCE_INSPECTOR_DELAY_MS = 400;
 const CLOSE_GRACE_MS = 120;
 
 type InspectorInput = "pointer" | "focus";
-type InspectorHold = `${"trigger" | "panel"}-${InspectorInput}`;
+type InspectorHold =
+  | `${"trigger" | "panel"}-${InspectorInput}`
+  // Something the panel opened over itself, such as its overflow menu.
+  | "panel-child";
 const VIEWPORT_MARGIN = 8;
 const GAP = 8;
 
@@ -81,6 +86,31 @@ export function computeInspectorPosition({
   };
 }
 
+/** Elements a press on which belongs to an open menu, not to the panel. */
+const MENU_PRESS = "[data-sidebar-menu], [data-menu-shield]";
+
+const InspectorHoldContext = createContext<((held: boolean) => void) | null>(
+  null,
+);
+
+/**
+ * Keeps the inspector this renders in open while `held`: for a menu the
+ * panel opens over itself (MenuPortal), from opening until it has exited,
+ * so a picked action runs while the panel is still there. The menu's
+ * shield covers the panel, so the pointer leaves it, and the press that
+ * closes the menu lands on the shield; neither closes the panel, and
+ * Escape closes the menu first. When the menu has gone, the panel stays
+ * only if the pointer or focus rests on it again.
+ */
+export function useHoldInspector(held: boolean): void {
+  const hold = useContext(InspectorHoldContext);
+  useEffect(() => {
+    if (!held || !hold) return;
+    hold(true);
+    return () => hold(false);
+  }, [held, hold]);
+}
+
 export interface ResourceInspectorTriggerProps<
   T extends HTMLElement = HTMLButtonElement,
 > {
@@ -110,8 +140,15 @@ export function ResourceInspector<T extends HTMLElement = HTMLButtonElement>({
   disabled = false,
   testId,
   placement = "side",
+  warmup,
 }: {
   label: string;
+  /**
+   * Rendered, unseen, while the pointer rests on the trigger before the
+   * panel opens: a component that only starts the panel's data loading, so
+   * the panel opens with what it shows instead of filling in.
+   */
+  warmup?: ReactNode;
   disabled?: boolean;
   testId?: string;
   /** Where the panel sits relative to its trigger; see computeInspectorPosition. */
@@ -143,6 +180,11 @@ export function ResourceInspector<T extends HTMLElement = HTMLButtonElement>({
   const [anchor, setAnchor] = useState<InspectorAnchor | null>(null);
   const [open, setOpen] = useState(false);
   const [mounted, setMounted] = useState(false);
+  const [warming, setWarming] = useState(false);
+  const openRef = useRef(open);
+  openRef.current = open;
+  // Where the pointer last was while the panel showed, in window terms.
+  const pointer = useRef<{ x: number; y: number } | null>(null);
   const onOpenRef = useRef(onOpen);
   onOpenRef.current = onOpen;
   useEffect(() => {
@@ -161,6 +203,7 @@ export function ResourceInspector<T extends HTMLElement = HTMLButtonElement>({
     });
     setMounted(true);
     setOpen(true);
+    setWarming(false);
   }, [disabled]);
   useEffect(() => {
     if (!disabled) return;
@@ -168,6 +211,7 @@ export function ResourceInspector<T extends HTMLElement = HTMLButtonElement>({
     clearTimeout(closeTimer.current);
     setOpen(false);
     setMounted(false);
+    setWarming(false);
   }, [disabled]);
   useEffect(() => {
     const start = () => {
@@ -178,6 +222,7 @@ export function ResourceInspector<T extends HTMLElement = HTMLButtonElement>({
       holds.current.clear();
       setOpen(false);
       setMounted(false);
+      setWarming(false);
     };
     const end = () => {
       dragging.current = false;
@@ -195,20 +240,55 @@ export function ResourceInspector<T extends HTMLElement = HTMLButtonElement>({
     clearTimeout(closeTimer.current);
     clearTimeout(openTimer.current);
     if (immediate) show();
-    else openTimer.current = setTimeout(show, delayMs);
+    else {
+      if (warmup) setWarming(true);
+      openTimer.current = setTimeout(show, delayMs);
+    }
   };
   const scheduleClose = () => {
     clearTimeout(openTimer.current);
     clearTimeout(closeTimer.current);
     closeTimer.current = setTimeout(() => {
-      if (!pinned.current && holds.current.size === 0) setOpen(false);
+      if (!pinned.current && holds.current.size === 0) {
+        setOpen(false);
+        setWarming(false);
+      }
     }, CLOSE_GRACE_MS);
   };
+  const scheduleCloseRef = useRef(scheduleClose);
+  scheduleCloseRef.current = scheduleClose;
+  const holdForChild = useCallback(
+    (held: boolean) => {
+      if (held) {
+        holds.current.add("panel-child");
+        clearTimeout(closeTimer.current);
+        return;
+      }
+      holds.current.delete("panel-child");
+      // A picked action may have closed the panel already.
+      if (!openRef.current) return;
+      // The menu and its shield are gone and the pointer may rest on the
+      // panel or trigger again, which no enter event reports until it moves.
+      const at = pointer.current;
+      const under =
+        at && typeof document.elementFromPoint === "function"
+          ? document.elementFromPoint(at.x, at.y)
+          : null;
+      if (under && triggerRef.current?.contains(under))
+        holds.current.add("trigger-pointer");
+      else if (under?.closest("[data-resource-inspector]")?.id === id)
+        holds.current.add("panel-pointer");
+      scheduleCloseRef.current();
+    },
+    [id],
+  );
 
   useEffect(() => {
     if (!open) return;
     const dismiss = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
+      // An open menu holds the window and takes Escape first (ADR 0221).
+      if (document.querySelector("[data-menu-shield]")) return;
       event.preventDefault();
       event.stopPropagation();
       pinned.current = false;
@@ -249,7 +329,9 @@ export function ResourceInspector<T extends HTMLElement = HTMLButtonElement>({
         (event.target instanceof Node &&
           triggerRef.current?.contains(event.target)) ||
         (event.target instanceof Element &&
-          event.target.closest("[data-resource-inspector]"))
+          // A press on a menu, or on the shield under it, is the menu's:
+          // it only closes the menu (ADR 0221).
+          event.target.closest(`[data-resource-inspector], ${MENU_PRESS}`))
       ) {
         return;
       }
@@ -257,13 +339,23 @@ export function ResourceInspector<T extends HTMLElement = HTMLButtonElement>({
       holds.current.clear();
       setOpen(false);
     };
+    const trackPointer = (event: PointerEvent) => {
+      pointer.current = { x: event.clientX, y: event.clientY };
+    };
     window.addEventListener("keydown", dismiss, true);
     window.addEventListener("scroll", dismissForScroll, true);
     window.addEventListener("pointerdown", dismissForPointer);
+    window.addEventListener("pointermove", trackPointer, {
+      capture: true,
+      passive: true,
+    });
+    window.addEventListener("pointerdown", trackPointer, true);
     return () => {
       window.removeEventListener("keydown", dismiss, true);
       window.removeEventListener("scroll", dismissForScroll, true);
       window.removeEventListener("pointerdown", dismissForPointer);
+      window.removeEventListener("pointermove", trackPointer, true);
+      window.removeEventListener("pointerdown", trackPointer, true);
     };
   }, [open, show]);
 
@@ -330,6 +422,7 @@ export function ResourceInspector<T extends HTMLElement = HTMLButtonElement>({
         },
         "aria-details": open ? id : undefined,
       })}
+      {warming && !mounted && warmup}
       {mounted && anchor && (
         <InspectorPortal
           testId={testId}
@@ -348,15 +441,17 @@ export function ResourceInspector<T extends HTMLElement = HTMLButtonElement>({
           }}
           onExited={() => setMounted(false)}
         >
-          {typeof content === "function"
-            ? content(() => {
-                clearTimeout(openTimer.current);
-                clearTimeout(closeTimer.current);
-                pinned.current = false;
-                holds.current.clear();
-                setOpen(false);
-              })
-            : content}
+          <InspectorHoldContext.Provider value={holdForChild}>
+            {typeof content === "function"
+              ? content(() => {
+                  clearTimeout(openTimer.current);
+                  clearTimeout(closeTimer.current);
+                  pinned.current = false;
+                  holds.current.clear();
+                  setOpen(false);
+                })
+              : content}
+          </InspectorHoldContext.Provider>
         </InspectorPortal>
       )}
     </>

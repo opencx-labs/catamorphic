@@ -740,6 +740,12 @@ export interface ProviderThread {
 // ---------------------------------------------------------------------------
 // Session
 
+/**
+ * A session's metadata (ADR 0225): values by key, each any JSON. Keys and
+ * sizes are bounded ({@link SESSION_METADATA_LIMITS}).
+ */
+export type SessionMetadata = { [key: string]: JsonValue };
+
 /** A session's shared fields: what every viewer sees alike. */
 export interface SessionFields {
   id: string;
@@ -758,6 +764,12 @@ export interface SessionFields {
   workStatus: "open" | "completed";
   activity: string | null;
   todos: AgentTodo[];
+  /**
+   * Named JSON values agents and people set on the session, read by
+   * clients (ADR 0225): a sidebar section shows `pull_requests`, a
+   * person's own section shows the keys their agent sets.
+   */
+  metadata: SessionMetadata;
   parentSessionId: string | null;
   forkedFromSessionId: string | null;
   attentionRevision: number;

@@ -55,7 +55,7 @@ describe("ProfileBar", () => {
     });
     await act(async () =>
       container
-        .querySelector<HTMLButtonElement>('[aria-haspopup="menu"]')
+        .querySelector<HTMLButtonElement>('[aria-haspopup="dialog"]')
         ?.click(),
     );
     expect(container.querySelector('[aria-label^="Rename"]')).toBeNull();

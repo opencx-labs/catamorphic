@@ -803,6 +803,7 @@ async function projectSession(
   if ("workStatus" in fields) set.work_status = fields.workStatus;
   if ("activity" in fields) set.activity = fields.activity;
   if ("todos" in fields) set.todos = json(fields.todos ?? []);
+  if ("metadata" in fields) set.metadata = json(fields.metadata ?? {});
   if ("attentionRevision" in fields)
     set.attention_revision = fields.attentionRevision;
   if ("environment" in fields) set.environment_name = fields.environment;
@@ -887,6 +888,7 @@ const COPIED_SESSION_FIELDS = new Set([
   "title",
   "icon",
   "todos",
+  "metadata",
   "workStatus",
   "activity",
   "updatedAt",

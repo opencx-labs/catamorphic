@@ -133,16 +133,154 @@ function indexTree({
 }
 
 /**
+ * A branch with rows past the loaded ones (`null` is the tree's root). The
+ * tree reserves still placeholder rows at the branch's end and asks for the
+ * next page once the person nears them; a failed read ends the branch with
+ * its error and Retry instead.
+ */
+export interface TreeMore {
+  /** Read the branch's next page. */
+  load: () => void;
+  /** The next page is being read. */
+  loading?: boolean;
+  /** The last read failed. */
+  error?: string;
+}
+
+/** Placeholder rows a branch with more pages ends with. */
+const PLACEHOLDER_ROWS = 3;
+/** Placeholder bar widths, the section chrome's skeleton rhythm. */
+const PLACEHOLDER_WIDTHS = [62, 84, 48];
+
+type TreeSlot =
+  | { kind: "row"; key: string; row: ReturnType<typeof indexTree>["rows"][0] }
+  | {
+      kind: "placeholder";
+      key: string;
+      parentId: string | null;
+      depth: number;
+      position: number;
+    }
+  | {
+      kind: "error";
+      key: string;
+      parentId: string | null;
+      depth: number;
+      error: string;
+    };
+type TreePseudoSlot = Exclude<TreeSlot, { kind: "row" }>;
+
+/**
+ * The tree's rows in viewport order with each paginated branch's end
+ * (placeholders, or its error) after its last loaded descendant.
+ */
+function layoutTree({
+  rows,
+  more,
+  expanded,
+}: {
+  rows: ReturnType<typeof indexTree>["rows"];
+  more?: ReadonlyMap<string | null, TreeMore>;
+  expanded: ReadonlySet<string>;
+}) {
+  const ends: { parentId: string | null; at: number; depth: number }[] = [];
+  const rowIndex = new Map(rows.map((row, index) => [row.id, index]));
+  for (const parentId of more?.keys() ?? []) {
+    if (parentId === null) {
+      ends.push({ parentId, at: rows.length, depth: 0 });
+      continue;
+    }
+    const index = rowIndex.get(parentId);
+    const parent = index === undefined ? undefined : rows[index];
+    if (index === undefined || !parent || !expanded.has(parentId)) continue;
+    let at = index + 1;
+    while (at < rows.length && (rows[at]?.depth ?? 0) > parent.depth) at += 1;
+    ends.push({ parentId, at, depth: parent.depth + 1 });
+  }
+  // A nested branch ends inside its parent's, so it comes first.
+  ends.sort((a, b) => a.at - b.at || b.depth - a.depth);
+  const slots: TreeSlot[] = [];
+  const firstSlot = new Map<string | null, number>();
+  const pseudo = (end: (typeof ends)[number]) => {
+    const page = more?.get(end.parentId);
+    if (!page) return;
+    const scope = `\u0000more\u0000${end.parentId ?? ""}\u0000`;
+    firstSlot.set(end.parentId, slots.length);
+    if (page.error)
+      slots.push({
+        kind: "error",
+        key: `${scope}error`,
+        parentId: end.parentId,
+        depth: end.depth,
+        error: page.error,
+      });
+    else
+      for (let position = 0; position < PLACEHOLDER_ROWS; position += 1)
+        slots.push({
+          kind: "placeholder",
+          // Named by where the branch ends: when a page lands they fade
+          // where they stood as its rows arrive, rather than sliding
+          // across them to the new end.
+          key: `${scope}${end.at}\u0000${position}`,
+          parentId: end.parentId,
+          depth: end.depth,
+          position,
+        });
+  };
+  const pending = [...ends].reverse();
+  const endsAt = (at: number) => {
+    for (let end = pending.at(-1); end && end.at <= at; end = pending.at(-1)) {
+      pending.pop();
+      pseudo(end);
+    }
+  };
+  rows.forEach((row, index) => {
+    endsAt(index);
+    slots.push({ kind: "row", key: row.id, row });
+  });
+  endsAt(rows.length);
+  return {
+    slots,
+    /** Each real row's viewport index. */
+    indexById: new Map(
+      slots.flatMap((slot, index): [string, number][] =>
+        slot.kind === "row" ? [[slot.row.id, index]] : [],
+      ),
+    ),
+    /** Where each paginated branch's end begins. */
+    ends: [...firstSlot].map(([parentId, index]) => ({ parentId, index })),
+    /** The root's last loaded row ends here; drops on the root land there. */
+    rootEnd: firstSlot.get(null) ?? slots.length,
+  };
+}
+
+/** Visually hidden but read by assistive technology. */
+const VISUALLY_HIDDEN: CSSProperties = {
+  position: "absolute",
+  width: 1,
+  height: 1,
+  margin: -1,
+  padding: 0,
+  overflow: "hidden",
+  clip: "rect(0 0 0 0)",
+  whiteSpace: "nowrap",
+  border: 0,
+};
+
+/**
  * One virtual viewport for a whole tree. Source items can be paginated and have
  * unloaded children. Identity, focus and expansion survive reordering and updates.
  * Row height is explicit so custom presentations can choose a larger density.
+ * A paginated branch (`more`) loads its next page as the person scrolls or
+ * moves focus within one viewport of its end, and says so to assistive
+ * technology.
  */
 export function Tree<T extends TreeItem>({
   items: sourceItems,
   label,
   renderItem,
   loadChildren,
-  onLoadMore,
+  more,
   selectedId,
   rowHeight = 28,
   height = 336,
@@ -160,7 +298,8 @@ export function Tree<T extends TreeItem>({
   renderItem: (item: T, context: TreeRenderContext) => ReactNode;
   dragAndDrop?: TreeDragAndDrop<T>;
   loadChildren?: (id: string) => void;
-  onLoadMore?: () => void;
+  /** Branches with rows past the loaded ones, by parent (`null`: the root). */
+  more?: ReadonlyMap<string | null, TreeMore>;
   selectedId?: string;
   rowHeight?: number;
   height?: number;
@@ -248,7 +387,36 @@ export function Tree<T extends TreeItem>({
     [controlled, items, overrides, defaultExpanded],
   );
   const tree = useMemo(() => indexTree({ items, expanded }), [items, expanded]);
-  const settledIndex = settling ? tree.indexById.get(settling.id) : undefined;
+  const layout = useMemo(
+    () => layoutTree({ rows: tree.rows, more, expanded }),
+    [tree.rows, more, expanded],
+  );
+  const pseudoList = layout.slots.filter(
+    (slot): slot is TreePseudoSlot => slot.kind !== "row",
+  );
+  const pseudoSignature = pseudoList
+    .map(
+      (slot) =>
+        `${slot.key}\u0001${slot.depth}\u0001${slot.kind === "error" ? slot.error : ""}`,
+    )
+    .join("\u0002");
+  // One list per set of placeholders, so row changes alone never restart
+  // their motion bookkeeping.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the signature versions the list.
+  const pseudoSlots = useMemo(() => pseudoList, [pseudoSignature]);
+  // Placeholders come and go like rows: in with the enter motion, out
+  // fading where they stood while the rows that replace them arrive.
+  const { entries: pseudoMotion } = useAnimatedItems({
+    items: pseudoSlots,
+    getKey: (slot) => slot.key,
+  });
+  const pseudoPlacements = useRef(new Map<string, number>());
+  useEffect(() => {
+    const live = new Set(pseudoMotion.map((entry) => entry.key));
+    for (const key of pseudoPlacements.current.keys())
+      if (!live.has(key)) pseudoPlacements.current.delete(key);
+  }, [pseudoMotion]);
+  const settledIndex = settling ? layout.indexById.get(settling.id) : undefined;
   const settleMoved =
     settling !== null &&
     settledIndex !== undefined &&
@@ -276,7 +444,8 @@ export function Tree<T extends TreeItem>({
     if (controlled) onExpandedChange?.(next);
     else setOverrides((current) => new Map(current).set(id, next.has(id)));
   };
-  const actualHeight = Math.min(height, tree.rows.length * rowHeight);
+  const contentHeight = layout.slots.length * rowHeight;
+  const actualHeight = Math.min(height, contentHeight);
   // Expanding or collapsing a folder moves every row below it. Rows are
   // absolutely placed, so without this they (and the tree's own height)
   // jump while only the folder's children fade: the rest must slide.
@@ -292,7 +461,7 @@ export function Tree<T extends TreeItem>({
   );
   const reveal = useCallback(
     (id: string) => {
-      const index = tree.rows.findIndex((row) => row.id === id);
+      const index = layout.indexById.get(id) ?? -1;
       const node = viewport.current;
       if (index < 0 || !node) return;
       const top = index * rowHeight;
@@ -301,7 +470,7 @@ export function Tree<T extends TreeItem>({
         node.scrollTop = top + rowHeight - actualHeight;
       setScrollTop(node.scrollTop);
     },
-    [tree.rows, rowHeight, actualHeight],
+    [layout, rowHeight, actualHeight],
   );
   const previousAnchor = useRef<{ id: string; offset: number } | undefined>(
     undefined,
@@ -310,19 +479,19 @@ export function Tree<T extends TreeItem>({
     const anchor = previousAnchor.current;
     const node = viewport.current;
     if (node && anchor) {
-      const index = tree.rows.findIndex((row) => row.id === anchor.id);
-      if (index >= 0) {
+      const index = layout.indexById.get(anchor.id);
+      if (index !== undefined) {
         node.scrollTop = index * rowHeight + anchor.offset;
         setScrollTop(node.scrollTop);
       }
     }
-    if (focusedId && !tree.rows.some((row) => row.id === focusedId)) {
+    if (focusedId && !tree.indexById.has(focusedId)) {
       const previous = byId.get(focusedId)?.parentId;
       setFocusedId(
         previous && byId.has(previous) ? previous : tree.rows[0]?.id,
       );
     }
-  }, [tree.rows, rowHeight, byId, focusedId]);
+  }, [layout, tree, rowHeight, byId, focusedId]);
   const lastFocused = useRef<string | undefined>(undefined);
   useLayoutEffect(() => {
     if (!focusedId || focusedId === lastFocused.current) return;
@@ -369,13 +538,58 @@ export function Tree<T extends TreeItem>({
     0,
     Math.min(
       Math.floor(scrollTop / rowHeight) - overscan,
-      tree.rows.length - 1,
+      layout.slots.length - 1,
     ),
   );
   const end = Math.min(
-    tree.rows.length,
+    layout.slots.length,
     start + Math.ceil(height / rowHeight) + overscan * 2,
   );
+  // Within one viewport of a branch's end, its next page is read: by the
+  // time the person gets there it has usually arrived. Moving focus scrolls
+  // too, so arrow keys load like the wheel does.
+  const firstVisible = Math.floor(scrollTop / rowHeight);
+  const lastVisible = Math.floor(
+    (scrollTop + Math.max(actualHeight, rowHeight) - 1) / rowHeight,
+  );
+  const ahead = Math.ceil(height / rowHeight);
+  const near = layout.ends
+    .filter(({ parentId, index }) => {
+      const page = more?.get(parentId);
+      return (
+        page &&
+        !page.loading &&
+        !page.error &&
+        index >= firstVisible - ahead &&
+        index <= lastVisible + ahead
+      );
+    })
+    .map(({ parentId }) => parentId);
+  // The root is "\u0001" here; item ids never hold that control character.
+  const nearKey = near.map((id) => id ?? "\u0001").join("\u0000");
+  const latestMore = useRef({ more, near });
+  latestMore.current = { more, near };
+  // biome-ignore lint/correctness/useExhaustiveDependencies: nearKey names exactly the branches to read; the ref holds their current loaders.
+  useEffect(() => {
+    const { more: pages, near: branches } = latestMore.current;
+    for (const parentId of branches) pages?.get(parentId)?.load();
+  }, [nearKey]);
+  // Screen readers hear a page start and land; a failed page is an alert.
+  const paging = [...(more?.values() ?? [])].some((page) => page.loading);
+  const pagingFrom = useRef<number | null>(null);
+  const [announcement, setAnnouncement] = useState("");
+  useEffect(() => {
+    if (paging) {
+      if (pagingFrom.current !== null) return;
+      pagingFrom.current = tree.rows.length;
+      setAnnouncement(`Loading more in ${label}`);
+      return;
+    }
+    if (pagingFrom.current === null) return;
+    const added = tree.rows.length - pagingFrom.current;
+    pagingFrom.current = null;
+    setAnnouncement(added > 0 ? `${added} more in ${label}` : "");
+  }, [paging, tree.rows.length, label]);
   const retainedIds = new Set(
     [
       ...(viewport.current?.querySelectorAll<HTMLElement>(
@@ -398,7 +612,7 @@ export function Tree<T extends TreeItem>({
     setDraggingId(null);
   };
   const settleDropped = () => {
-    const index = draggingId ? tree.indexById.get(draggingId) : undefined;
+    const index = draggingId ? layout.indexById.get(draggingId) : undefined;
     if (draggingId && index !== undefined)
       setSettling({ id: draggingId, index });
   };
@@ -521,12 +735,12 @@ export function Tree<T extends TreeItem>({
   };
   const dropLineIndex =
     drop && drop.id !== null && drop.position !== "inside"
-      ? tree.indexById.get(drop.id)
+      ? layout.indexById.get(drop.id)
       : undefined;
   const slotTop =
     dropLineIndex === undefined
       ? drop?.id === null
-        ? tree.rows.length * rowHeight
+        ? layout.rootEnd * rowHeight
         : undefined
       : dropLineIndex * rowHeight +
         (drop?.position === "after" ? rowHeight : 0);
@@ -535,7 +749,7 @@ export function Tree<T extends TreeItem>({
   const dropLineTop =
     slotTop === undefined
       ? undefined
-      : Math.max(3, Math.min(slotTop, tree.rows.length * rowHeight - 5));
+      : Math.max(3, Math.min(slotTop, contentHeight - 5));
   return (
     <>
       <div
@@ -549,22 +763,22 @@ export function Tree<T extends TreeItem>({
         style={{
           // Rows that fit never scroll: while the height tweens to fit new
           // rows, an auto overflow flashed a scrollbar.
-          overflow: tree.rows.length * rowHeight > height ? "auto" : "hidden",
+          overflow: contentHeight > height ? "auto" : "hidden",
           // A tree that fits its rows must not trap the wheel: containment
           // on a scroller with nothing to scroll blocks the surrounding
           // sidebar section from scrolling at all.
-          overscrollBehavior:
-            actualHeight < tree.rows.length * rowHeight ? "contain" : "auto",
+          overscrollBehavior: actualHeight < contentHeight ? "contain" : "auto",
           height: actualHeight,
           transition: slide && `height ${slide}`,
           ...style,
         }}
         onScroll={(event) => {
           const top = event.currentTarget.scrollTop;
-          const row = tree.rows[Math.floor(top / rowHeight)];
-          previousAnchor.current = row
-            ? { id: row.id, offset: top % rowHeight }
-            : undefined;
+          const slot = layout.slots[Math.floor(top / rowHeight)];
+          previousAnchor.current =
+            slot?.kind === "row"
+              ? { id: slot.row.id, offset: top % rowHeight }
+              : undefined;
           setScrollTop(top);
         }}
         onKeyDown={(event) => {
@@ -647,7 +861,7 @@ export function Tree<T extends TreeItem>({
         <div
           role="presentation"
           style={{
-            height: tree.rows.length * rowHeight,
+            height: contentHeight,
             position: "relative",
             transition: slide && `height ${slide}`,
           }}
@@ -672,15 +886,40 @@ export function Tree<T extends TreeItem>({
                 (_, offset) => start + offset,
               ),
               ...[...retainedIds, focusedId].flatMap((id) => {
-                const index = id ? tree.indexById.get(id) : undefined;
+                const index = id ? layout.indexById.get(id) : undefined;
                 return index === undefined ? [] : [index];
               }),
+              // A failed page's Retry stays reachable from the keyboard.
+              ...layout.slots.flatMap((slot, index) =>
+                slot.kind === "error" ? [index] : [],
+              ),
             ]),
           ]
             .sort((a, b) => a - b)
-            .map((index) => ({ row: tree.rows[index], index }))
-            .map(({ row, index }) => {
-              if (!row) return null;
+            .map((index) => ({ slot: layout.slots[index], index }))
+            .map(({ slot, index }) => {
+              if (!slot) return null;
+              if (slot.kind !== "row") {
+                renderedNow.add(slot.key);
+                pseudoPlacements.current.set(slot.key, index * rowHeight);
+                return (
+                  <TreePseudoRow
+                    key={slot.key}
+                    slot={slot}
+                    top={index * rowHeight}
+                    rowHeight={rowHeight}
+                    slide={slide}
+                    className={
+                      pseudoMotion.find((entry) => entry.key === slot.key)
+                        ?.entering
+                        ? (motionClasses?.enter ?? "cat-row-enter")
+                        : undefined
+                    }
+                    onRetry={() => more?.get(slot.parentId)?.load()}
+                  />
+                );
+              }
+              const row = slot.row;
               const item = byId.get(row.id);
               if (!item) return null;
               const hasChildren = Boolean(
@@ -750,6 +989,22 @@ export function Tree<T extends TreeItem>({
                 </div>
               );
             })}
+          {pseudoMotion.map(({ key, item: slot, exiting: leaving }) => {
+            const top = pseudoPlacements.current.get(key);
+            if (!leaving || top === undefined || !onScreen.current.has(key))
+              return null;
+            renderedNow.add(key);
+            return (
+              <TreePseudoRow
+                key={`exiting:${key}`}
+                slot={slot}
+                top={top}
+                rowHeight={rowHeight}
+                className={motionClasses?.exit ?? "cat-row-exit"}
+                leaving
+              />
+            );
+          })}
           {exiting.map(({ key, item }) => {
             const placed = placements.current.get(key);
             if (!placed || !onScreen.current.has(key)) return null;
@@ -780,12 +1035,74 @@ export function Tree<T extends TreeItem>({
           })}
         </div>
       </div>
-      {onLoadMore && (
-        <button type="button" className="cat-btn" onClick={onLoadMore}>
-          Load more
-        </button>
-      )}
+      <div role="status" aria-live="polite" style={VISUALLY_HIDDEN}>
+        {announcement}
+      </div>
     </>
+  );
+}
+
+/**
+ * A paginated branch's end: still placeholder rows shaped like the section
+ * skeleton, or the failed read with Retry.
+ */
+function TreePseudoRow({
+  slot,
+  top,
+  rowHeight,
+  slide,
+  className,
+  leaving = false,
+  onRetry,
+}: {
+  slot: TreePseudoSlot;
+  top: number;
+  rowHeight: number;
+  slide?: string;
+  className?: string;
+  leaving?: boolean;
+  onRetry?: () => void;
+}) {
+  const style: CSSProperties = {
+    position: "absolute",
+    top,
+    height: rowHeight,
+    left: 0,
+    right: 0,
+    // Placeholders slide with the rows when a branch above them opens.
+    transition: slide && !leaving ? `top ${slide}` : undefined,
+    paddingInlineStart: 8 + slot.depth * 14,
+  };
+  if (slot.kind === "error")
+    return (
+      <div
+        role={leaving ? undefined : "alert"}
+        aria-hidden={leaving || undefined}
+        inert={leaving || undefined}
+        data-tree-more="error"
+        className={className}
+        style={style}
+      >
+        <span>{slot.error}</span>
+        <button type="button" onClick={onRetry}>
+          Retry
+        </button>
+      </div>
+    );
+  return (
+    <div
+      aria-hidden="true"
+      data-tree-more="placeholder"
+      className={className}
+      style={style}
+    >
+      <span />
+      <span
+        style={{
+          width: `${PLACEHOLDER_WIDTHS[slot.position % PLACEHOLDER_WIDTHS.length]}%`,
+        }}
+      />
+    </div>
   );
 }
 
@@ -922,6 +1239,23 @@ export function CollectionTree<T extends CollectionItem>({
     },
     [branches],
   );
+  // Every loaded branch with rows past it reads them as the person nears
+  // its end; nothing reads while the view is hidden.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: revision versions every branch read here.
+  const more = useMemo(() => {
+    if (!active) return undefined;
+    const pages = new Map<string | null, TreeMore>();
+    for (const parentId of [null, ...visibleBranches]) {
+      const branch = collection.getBranch(parentId);
+      if (branch.cursor)
+        pages.set(parentId, {
+          load: () => void collection.load({ parentId, more: true }),
+          loading: branch.paging,
+          error: branch.pageError,
+        });
+    }
+    return pages.size ? pages : undefined;
+  }, [active, collection, visibleBranches, revision, root]);
   return (
     <>
       {renderStatus?.(root)}
@@ -945,9 +1279,7 @@ export function CollectionTree<T extends CollectionItem>({
         motionClasses={motionClasses}
         expanded={expanded}
         onExpandedChange={setExpanded}
-        onLoadMore={
-          root.cursor ? () => void collection.load({ more: true }) : undefined
-        }
+        more={more}
         dragAndDrop={
           dragAndDrop
             ? {
@@ -1008,14 +1340,6 @@ export function CollectionTree<T extends CollectionItem>({
               Retry children
             </button>
           </p>
-        ) : branch.cursor ? (
-          <button
-            key={id}
-            type="button"
-            onClick={() => void collection.load({ parentId: id, more: true })}
-          >
-            Load more children
-          </button>
         ) : null;
       })}
     </>

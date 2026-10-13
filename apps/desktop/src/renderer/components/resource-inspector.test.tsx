@@ -1,12 +1,31 @@
 // @vitest-environment jsdom
 
-import { act } from "react";
+import { act, useState } from "react";
+import { createPortal } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   computeInspectorPosition,
   ResourceInspector,
+  useHoldInspector,
 } from "./resource-inspector";
+
+/** Content that opens a menu over the panel, as the project card's ⋯ does. */
+function MenuOwner() {
+  const [held, setHeld] = useState(false);
+  useHoldInspector(held);
+  return (
+    <>
+      <button type="button" data-open-menu onClick={() => setHeld(true)}>
+        Open menu
+      </button>
+      <button type="button" data-close-menu onClick={() => setHeld(false)}>
+        Close menu
+      </button>
+      {held && createPortal(<div data-menu-shield />, document.body)}
+    </>
+  );
+}
 
 describe("ResourceInspector", () => {
   let container: HTMLDivElement;
@@ -289,6 +308,161 @@ describe("ResourceInspector", () => {
     expect(document.querySelector('[role="dialog"]')?.className).toContain(
       "animate-inspector-out-",
     );
+  });
+
+  it("stays open under its own menu, whose shield takes presses and Escape", async () => {
+    await act(async () => {
+      root.render(
+        <ResourceInspector label="Project details" content={<MenuOwner />}>
+          {(props) => (
+            <button type="button" {...props}>
+              Project
+            </button>
+          )}
+        </ResourceInspector>,
+      );
+    });
+    const trigger = container.querySelector("button");
+    const dialog = () => document.querySelector('[role="dialog"]');
+    const pointer = (target: Element | null | undefined, type: string) =>
+      target?.dispatchEvent(
+        new MouseEvent(type, { bubbles: true, relatedTarget: document.body }),
+      );
+    await act(async () => {
+      pointer(trigger, "pointerover");
+      vi.advanceTimersByTime(1_000);
+    });
+    expect(dialog()?.getAttribute("data-open")).toBe("true");
+    await act(async () =>
+      dialog()?.querySelector<HTMLButtonElement>("[data-open-menu]")?.click(),
+    );
+    // The shield covers the panel and the trigger: the pointer leaves both.
+    await act(async () => {
+      pointer(trigger, "pointerout");
+      pointer(dialog(), "pointerout");
+      vi.advanceTimersByTime(1_000);
+    });
+    expect(dialog()?.getAttribute("data-open")).toBe("true");
+    // A press on the shield only closes the menu; Escape is the menu's.
+    await act(async () => {
+      pointer(document.querySelector("[data-menu-shield]"), "pointerdown");
+      window.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", cancelable: true }),
+      );
+      vi.advanceTimersByTime(1_000);
+    });
+    expect(dialog()?.getAttribute("data-open")).toBe("true");
+    // With the menu gone and the pointer elsewhere, the panel goes too.
+    await act(async () =>
+      dialog()?.querySelector<HTMLButtonElement>("[data-close-menu]")?.click(),
+    );
+    await act(async () => {
+      vi.advanceTimersByTime(1_000);
+    });
+    expect(dialog()?.className).toContain("animate-inspector-out-");
+  });
+
+  it("stays open when its menu closes with the pointer resting on it", async () => {
+    await act(async () => {
+      root.render(
+        <ResourceInspector label="Project details" content={<MenuOwner />}>
+          {(props) => (
+            <button type="button" {...props}>
+              Project
+            </button>
+          )}
+        </ResourceInspector>,
+      );
+    });
+    const trigger = container.querySelector("button");
+    const dialog = () => document.querySelector('[role="dialog"]');
+    await act(async () => {
+      trigger?.dispatchEvent(
+        new MouseEvent("pointerover", {
+          bubbles: true,
+          relatedTarget: document.body,
+        }),
+      );
+      vi.advanceTimersByTime(1_000);
+    });
+    await act(async () =>
+      dialog()?.querySelector<HTMLButtonElement>("[data-open-menu]")?.click(),
+    );
+    await act(async () => {
+      trigger?.dispatchEvent(
+        new MouseEvent("pointerout", {
+          bubbles: true,
+          relatedTarget: document.body,
+        }),
+      );
+      // The press that closes the menu lands over the panel.
+      window.dispatchEvent(
+        new MouseEvent("pointermove", { clientX: 40, clientY: 40 }),
+      );
+    });
+    // jsdom lays nothing out; the window would find the panel there.
+    const inside = dialog()?.querySelector("[data-close-menu]") ?? null;
+    Object.defineProperty(document, "elementFromPoint", {
+      configurable: true,
+      value: (x: number, y: number) => (x === 40 && y === 40 ? inside : null),
+    });
+    try {
+      await act(async () =>
+        dialog()
+          ?.querySelector<HTMLButtonElement>("[data-close-menu]")
+          ?.click(),
+      );
+      await act(async () => {
+        vi.advanceTimersByTime(1_000);
+      });
+      expect(dialog()?.getAttribute("data-open")).toBe("true");
+    } finally {
+      Reflect.deleteProperty(document, "elementFromPoint");
+    }
+  });
+
+  it("starts its warmup while the pointer rests on the trigger", async () => {
+    await act(async () => {
+      root.render(
+        <ResourceInspector
+          label="Project details"
+          warmup={<span data-warmup />}
+          content={<p>Details</p>}
+        >
+          {(props) => (
+            <button type="button" {...props}>
+              Project
+            </button>
+          )}
+        </ResourceInspector>,
+      );
+    });
+    const trigger = container.querySelector("button");
+    const pointer = (type: string) =>
+      trigger?.dispatchEvent(
+        new MouseEvent(type, { bubbles: true, relatedTarget: document.body }),
+      );
+    const warm = () => container.querySelector("[data-warmup]");
+    // Passing over: warm for a moment, then nothing.
+    await act(async () => pointer("pointerover"));
+    expect(warm()).not.toBeNull();
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+    await act(async () => {
+      pointer("pointerout");
+      vi.advanceTimersByTime(1_000);
+    });
+    expect(warm()).toBeNull();
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+    // Resting: the panel takes over from the warmup.
+    await act(async () => pointer("pointerover"));
+    expect(warm()).not.toBeNull();
+    await act(async () => {
+      vi.advanceTimersByTime(1_000);
+    });
+    expect(warm()).toBeNull();
+    expect(
+      document.querySelector('[role="dialog"]')?.getAttribute("data-open"),
+    ).toBe("true");
   });
 
   it("flips left and clamps vertically at viewport edges", () => {

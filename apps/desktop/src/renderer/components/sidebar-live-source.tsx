@@ -1,9 +1,11 @@
 import { createCollection } from "@catamorphic/app";
 import { CollectionTree, useCollection } from "@catamorphic/app/ui";
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useAgentSessionFields } from "@catamorphic/react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   SidebarSourceCapabilities,
   SidebarSourceItem,
+  SidebarSourceSession,
 } from "../../shared/sidebar-source.js";
 import { readBookmarkDrop } from "../lib/bookmark-drag.js";
 import { desktopApi } from "../lib/desktop-api.js";
@@ -42,7 +44,31 @@ export function SidebarLiveSource({ projectId }: { projectId: string }) {
   const publishRef = useRef<((event: { type: "invalidate" }) => void) | null>(
     null,
   );
-  // biome-ignore lint/correctness/useExhaustiveDependencies: switching the configured module must replace its cache and release old leases.
+  // A session-scoped section (`when.session`) is given the chat in front
+  // (ADR 0225), and keeps the one it showed while it leaves.
+  const sessionScoped = section?.when?.session === true;
+  const surfaceSessionId = sessionScoped
+    ? contribution?.surface.sessionId
+    : undefined;
+  const [sessionId, setSessionId] = useState(surfaceSessionId);
+  if (surfaceSessionId && surfaceSessionId !== sessionId)
+    setSessionId(surfaceSessionId);
+  const { fields } = useAgentSessionFields(
+    projectId,
+    sessionScoped ? sessionId : undefined,
+  );
+  const session = useMemo<SidebarSourceSession | undefined>(
+    () =>
+      fields
+        ? { id: fields.id, title: fields.title, metadata: fields.metadata }
+        : undefined,
+    [fields],
+  );
+  const sessionRef = useRef(session);
+  sessionRef.current = session;
+  const withSession = () =>
+    sessionRef.current ? { session: sessionRef.current } : {};
+  // biome-ignore lint/correctness/useExhaustiveDependencies: switching the configured module, or the chat a session-scoped section shows, must replace its cache and release old leases.
   const collection = useMemo(
     () =>
       createCollection<SidebarSourceItem>({
@@ -63,6 +89,7 @@ export function SidebarLiveSource({ projectId }: { projectId: string }) {
                 method: "load",
                 parentId,
                 cursor,
+                ...withSession(),
               });
               signal.throwIfAborted();
               if (!page) throw new Error("Source returned no collection page.");
@@ -107,7 +134,13 @@ export function SidebarLiveSource({ projectId }: { projectId: string }) {
           },
         },
       }),
-    [api, projectId, sectionId, section?.source?.module],
+    [
+      api,
+      projectId,
+      sectionId,
+      section?.source?.module,
+      sessionScoped ? sessionId : undefined,
+    ],
   );
   // A relevant hidden section keeps only a root availability lease. The native
   // tree owns expanded branch leases while visible, matching built-in sources.
@@ -115,10 +148,27 @@ export function SidebarLiveSource({ projectId }: { projectId: string }) {
     collection,
     active:
       (contribution?.relevant ?? true) &&
-      ((contribution?.visible ?? true) || section?.hideEmpty === true),
+      ((contribution?.visible ?? true) || section?.hideEmpty === true) &&
+      (!sessionScoped || session !== undefined),
     mode: "preview",
     projected: true,
   });
+  // What an agent sets on the session shows at once: the section loads
+  // again whenever the chat's title or metadata changes. Another chat is a
+  // new collection, which loads by itself.
+  const sessionKey = session ? JSON.stringify(session) : undefined;
+  const loaded = useRef({ collection, sessionKey });
+  useEffect(() => {
+    const previous = loaded.current;
+    loaded.current = { collection, sessionKey };
+    if (
+      previous.collection === collection &&
+      previous.sessionKey !== undefined &&
+      sessionKey !== undefined &&
+      previous.sessionKey !== sessionKey
+    )
+      void collection.load().catch(() => undefined);
+  }, [collection, sessionKey]);
   const project = useCallback(
     (items: readonly SidebarSourceItem[]) =>
       projectSidebarItems(items, section).filter(
@@ -166,6 +216,7 @@ export function SidebarLiveSource({ projectId }: { projectId: string }) {
         projectId,
         sectionId,
         requestId: crypto.randomUUID(),
+        ...withSession(),
         ...input,
       })
       .catch((cause: unknown) => {
@@ -318,6 +369,7 @@ export function SidebarLiveSource({ projectId }: { projectId: string }) {
                   method: "action",
                   itemId: item.id,
                   action: entry.action.slice(4),
+                  ...withSession(),
                 })
                 .catch((cause: unknown) => {
                   throw sourceError(cause);

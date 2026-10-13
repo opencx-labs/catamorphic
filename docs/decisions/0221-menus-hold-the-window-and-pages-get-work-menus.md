@@ -72,3 +72,21 @@ again.
   removals take the scope (`BookmarkUpdate`, `BookmarkRemoval`), which
   also lets a pinned folder be removed.
 - The extension toolbar's own menu stays native for now.
+
+## Amendment (2026-10-13): every menu is the primitive, and popovers close the same way
+
+Menus kept appearing that a click away did not close: the project card's
+⋯ was a hand-rolled dropdown with no dismissal at all, and popovers that
+aren't menus (the project and profile lists, the extensions and downloads
+bubbles, a chat's surface groups) each wrote their own listeners and never
+heard a press inside a web page. Now:
+
+- **A menu is `MenuPortal`.** A file that renders `role="menu"`,
+  `aria-haspopup="menu"` or an overflow icon must render `MenuPortal` (or
+  open a native menu through `desktopApi`); design-lint fails anything else.
+  A menu opened from a hover card holds that card open until it has closed.
+- **A popover that isn't a menu uses `usePopoverDismiss`**
+  (`renderer/lib/popover-dismiss.ts`): it closes on a press outside it, a
+  press inside a page or app frame, the window losing focus, and Escape,
+  ignoring presses on its own hover cards and menus. Design-lint ratchets
+  window and document press listeners outside these primitives.

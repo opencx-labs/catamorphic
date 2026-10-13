@@ -25,12 +25,14 @@ import {
   type SessionEvent,
   type SessionInput,
   type SessionMessageAuthor,
+  type SessionMetadata,
   type SessionSnapshot,
   type SessionStreamMessage,
   type SettledAlert,
   sessionInputSchema,
   type Turn,
   type TurnError,
+  withSessionMetadata,
 } from "@catamorphic/agent-protocol";
 import {
   ASK_USER_TOOL,
@@ -45,6 +47,7 @@ import {
   type Json,
   type JsonObject,
   jsonbText,
+  storedJson,
 } from "@catamorphic/db";
 import { moveCheckoutBase, type ProjectManager } from "@catamorphic/git";
 import { getTracer, markSpanError, withSpan } from "@catamorphic/otel";
@@ -250,6 +253,7 @@ import {
   providerThreadFromRow,
   requestFromRow,
   type SessionRow,
+  sessionMetadataFromRow,
   turnFromRow,
   waitingNotificationTurn,
 } from "./sessions/session-rows.js";
@@ -1824,6 +1828,45 @@ export class AgentSessionsService {
         ],
       }),
     );
+  }
+
+  /**
+   * Set named values on a session (ADR 0225): each key of `values` takes
+   * its value, and null removes the key. Whoever may change the session
+   * may set them, as for its activity; the change is logged, so every
+   * viewer's snapshot and stream follow it. Returns the session's metadata.
+   * Throws `SessionMetadataError` for a malformed key or value, or past
+   * the limits (`SESSION_METADATA_LIMITS`).
+   */
+  async setMetadata(args: {
+    identity: Identity;
+    projectId: string;
+    sessionId: string;
+    values: Readonly<Record<string, JsonValue>>;
+  }): Promise<SessionMetadata> {
+    await this.requireSession(args.identity, args.projectId, args.sessionId);
+    // What is not JSON is refused as given (JSON text would turn a NaN
+    // into null, a removal); then each value is taken as the database will
+    // hold it (U+FFFD for what jsonb refuses), so the logged change and the
+    // projection read back the same.
+    withSessionMetadata({}, args.values);
+    const values = storedJson(args.values);
+    return this.db.transaction().execute(async (trx) => {
+      await this.log.lock(trx, args.sessionId);
+      const row = await trx
+        .selectFrom("agent_sessions")
+        .select("metadata")
+        .where("id", "=", args.sessionId)
+        .executeTakeFirstOrThrow();
+      const current = sessionMetadataFromRow(row.metadata);
+      const metadata = withSessionMetadata(current, values);
+      if (metadata === current) return current;
+      await this.log.append(trx, {
+        sessionId: args.sessionId,
+        events: [{ type: "session.changed", session: { metadata } }],
+      });
+      return metadata;
+    });
   }
 
   /**

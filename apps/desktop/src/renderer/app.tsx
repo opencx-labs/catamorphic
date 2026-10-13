@@ -2534,11 +2534,25 @@ export function App({
 
   const closeTab = (
     key: string,
-    opts?: { force?: boolean; discardDraft?: boolean },
+    opts?: { force?: boolean; discardDraft?: boolean; pageAsked?: boolean },
   ) => {
+    const { pageAsked, ...close } = opts ?? {};
+    // The person's close asks the page first: a beforeunload may hold it
+    // with "Leave site?" (ADR 0226). A page that closed itself has asked;
+    // a forced close (an agent's, an extension's) is final.
+    const page =
+      key.startsWith("browser:") && !pageAsked && !close.force
+        ? browserCommandsRef.current.get(key.slice("browser:".length))
+        : undefined;
+    if (page) {
+      void page.mayClose().then((leave) => {
+        if (leave) closeTab(key, { ...close, pageAsked: true });
+      });
+      return;
+    }
     if (workspaceRef.current.floatingKey === key)
-      floatingMotion.dismiss(() => closeTabImmediately(key, opts));
-    else closeTabImmediately(key, opts);
+      floatingMotion.dismiss(() => closeTabImmediately(key, close));
+    else closeTabImmediately(key, close);
   };
 
   /** Cmd+Shift+T: restore the most recently closed tab (re-tiled when
@@ -6937,7 +6951,9 @@ export function App({
                           onBrowserState(browser.localId, state)
                         }
                         onPageClose={() =>
-                          closeTab(browserTabKey(browser.localId))
+                          closeTab(browserTabKey(browser.localId), {
+                            pageAsked: true,
+                          })
                         }
                         onOpenSiteSettings={setSiteSettingsOrigin}
                         onOpenPasswords={() => openPasswords(browser.profileId)}
@@ -7495,7 +7511,9 @@ export function App({
                         onBrowserState(browser.localId, state)
                       }
                       onPageClose={() =>
-                        closeTab(browserTabKey(browser.localId))
+                        closeTab(browserTabKey(browser.localId), {
+                          pageAsked: true,
+                        })
                       }
                       onOpenSiteSettings={setSiteSettingsOrigin}
                       onOpenPasswords={() => openPasswords(browser.profileId)}
