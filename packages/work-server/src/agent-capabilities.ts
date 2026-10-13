@@ -11,6 +11,7 @@ import type { WorkAuth } from "./auth/work-auth.js";
 /**
  * Project tools the server's own agents reach through discovery: proposing
  * a change, and setting what their chat shows (its metadata, ADR 0225).
+ * Replica memory (c): a constant, the same on every replica.
  */
 const SERVER_PROJECT_TOOLS = new Set([
   "propose_change",
