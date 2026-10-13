@@ -339,4 +339,52 @@ describe("connection capability MCP gateway", () => {
       content: [{ type: "text", text: JSON.stringify(rows) }],
     });
   });
+
+  it("answers the protocol's own requests like the plugin's other MCP endpoints", async () => {
+    const { app } = appWithBroker();
+    const initialized = await rpc({
+      app,
+      token: "valid",
+      payload: { jsonrpc: "2.0", id: 1, method: "initialize", params: {} },
+    });
+    expect(initialized.json().result.protocolVersion).toBe("2025-06-18");
+    const pinged = await rpc({
+      app,
+      token: "valid",
+      payload: { jsonrpc: "2.0", id: 2, method: "ping" },
+    });
+    expect(pinged.json().result).toEqual({});
+    const notified = await rpc({
+      app,
+      token: "valid",
+      payload: { jsonrpc: "2.0", method: "notifications/initialized" },
+    });
+    expect(notified.statusCode).toBe(202);
+    // No server-initiated stream: clients that open one move on.
+    const stream = await app.inject({
+      method: "GET",
+      url: "/api/connection-mcp",
+    });
+    expect(stream.statusCode).toBe(405);
+  });
+
+  it("advertises output schemas only for an MCP server's own tools", async () => {
+    const { app } = appWithBroker({
+      actions: [
+        {
+          name: "lookup",
+          inputSchema: { type: "object" },
+          outputSchema: { type: "object" },
+        },
+      ],
+    });
+    const listed = await rpc({
+      app,
+      token: "valid",
+      payload: { jsonrpc: "2.0", id: 1, method: "tools/list" },
+    });
+    expect(listed.json().result.tools).toEqual([
+      { name: "lookup", inputSchema: { type: "object" } },
+    ]);
+  });
 });

@@ -1,6 +1,6 @@
 # 0103: Agent context and deferred capabilities
 
-- **Status:** Accepted
+- **Status:** Accepted (a harness with tool search gets each connector as its own MCP server, amended by [0225](0225-harnesses-get-connectors-as-mcp-servers-results-unchanged.md))
 - **Date:** 2026-09-08
 - **Builds on:** 0067, 0098, 0099, 0100
 

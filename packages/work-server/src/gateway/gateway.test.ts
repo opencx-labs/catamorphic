@@ -48,6 +48,10 @@ describe("gateway configuration", () => {
       "billing",
       "company",
     ]);
+    // Only the MCP server's tool results reach agents as it sent them (ADR 0225).
+    expect(
+      gatewayProviders(config).map((provider) => provider.mcp === true),
+    ).toEqual([false, false, true]);
     // Guards are host code passed as hooks, never entries in the file.
     expect(() =>
       gatewayConfigFromFile({

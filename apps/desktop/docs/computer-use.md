@@ -89,5 +89,6 @@ the imported runtime, then restore the test app's state.
 The assigned computer-use server runs directly in the initiating Codex app-server,
 not in the shared profile tool pool. Other profile connectors stay deferred:
 harnesses with tool search load them on demand, the built-in agent through the
-catalog (ADR 0225). Full-access defaults permit tools without an explicit policy; saved
-connection policies, agent restrictions and provisioner ceilings still intersect.
+catalog (ADR 0225). Full-access defaults permit tools without an explicit policy;
+saved connection policies, agent restrictions and provisioner ceilings still
+intersect.

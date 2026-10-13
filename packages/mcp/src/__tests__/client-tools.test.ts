@@ -100,7 +100,9 @@ describe("MCP tools as their server declared them (ADR 0225)", () => {
   it("lists only granted tools as connection actions, schemas included", async () => {
     const connected = await connectMcpServer({ transport: "http", url });
     try {
-      expect(mcpToolActions(connected.tools, ["lookup"])).toEqual([
+      expect(
+        mcpToolActions({ tools: connected.tools, capabilities: ["lookup"] }),
+      ).toEqual([
         {
           name: LOOKUP.name,
           title: LOOKUP.title,
@@ -110,7 +112,9 @@ describe("MCP tools as their server declared them (ADR 0225)", () => {
           annotations: LOOKUP.annotations,
         },
       ]);
-      expect(mcpToolActions(connected.tools, [])).toEqual([]);
+      expect(
+        mcpToolActions({ tools: connected.tools, capabilities: [] }),
+      ).toEqual([]);
     } finally {
       await connected.close();
     }

@@ -110,29 +110,36 @@ const probeConnection = {
   source: { kind: "custom" },
 };
 
+const connectorMcp = {
+  url: (input: { projectId: string; sessionId: string; server: string }) =>
+    `http://127.0.0.1:1/${input.projectId}/${input.sessionId}/${input.server}`,
+  token: (sessionId: string) => `token-${sessionId}`,
+};
+
 it("mounts each connector as its own MCP server for a harness that searches its tools", () => {
-  const registry = registryWith(
-    claudeAgent,
-    {
-      connectorMcpUrl: (input: {
-        projectId: string;
-        sessionId: string;
-        server: string;
-      }) =>
-        `http://127.0.0.1:1/${input.projectId}/${input.sessionId}/${input.server}`,
-    },
-    [probeConnection],
-  );
+  const registry = registryWith(claudeAgent, { connectorMcp }, [
+    probeConnection,
+  ]);
   const { harness } = hostOf(registry, "claude");
-  // Served by the host under the key its policies use; no credentials.
+  // Served by the host under the key its policies use; the chat's bearer,
+  // never the connector's credentials.
   expect(
     harness.mcpServers?.({ projectId: "p", sessionId: "s", turnId: "t" }),
   ).toEqual({
-    probe: { transport: "http", url: "http://127.0.0.1:1/p/s/probe" },
+    probe: {
+      transport: "http",
+      url: "http://127.0.0.1:1/p/s/probe",
+      headers: { Authorization: "Bearer token-s" },
+      defaultToolsApprovalMode: "approve",
+      timeouts: { startupSeconds: 60, callSeconds: 3600 },
+    },
   });
-  expect(harness.toolPolicies?.()).toHaveProperty("probe");
+  // The endpoint decides its calls, so no permission mode can skip an ask.
+  expect(harness.toolPolicies?.()).not.toHaveProperty("probe");
   // The capability catalog leaves mounted connectors out.
   expect(registry.capabilitySurface("claude")?.connectorsMounted).toBe(true);
+  // A turn outside a chat has no chat to serve.
+  expect(harness.mcpServers?.({ projectId: "p", turnId: "t" })).toEqual({});
 });
 
 it("leaves connectors in the catalog when the host cannot serve them", () => {
@@ -141,6 +148,7 @@ it("leaves connectors in the catalog when the host cannot serve them", () => {
   expect(
     harness.mcpServers?.({ projectId: "p", sessionId: "s", turnId: "t" }),
   ).toEqual({});
+  expect(harness.toolPolicies?.()).toHaveProperty("probe");
   expect(registry.capabilitySurface("claude")?.connectorsMounted).toBe(false);
 });
 

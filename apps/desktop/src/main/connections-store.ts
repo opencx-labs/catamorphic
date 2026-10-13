@@ -10,6 +10,7 @@ import {
 import {
   type AgentMcpServerConfig,
   type McpToolPolicy,
+  PROJECT_TOOLS_SERVER_KEY,
   serverKeyOf,
 } from "@catamorphic/sandbox";
 import { safeStorage } from "electron";
@@ -595,6 +596,13 @@ export function connectionServerKey(connection: McpConnection): string {
 }
 
 /**
+ * MCP server names the host's own tools take beside connectors (the
+ * workspace tools, the project's workflow tools): a connector mounted as
+ * its own server (ADR 0225) must never shadow one, or be shadowed.
+ */
+const HOST_SERVER_KEYS = new Set(["workspace", PROJECT_TOOLS_SERVER_KEY]);
+
+/**
  * Server key → connection for every ENABLED connection, with duplicate
  * names deduped deterministically. Computed over the full enabled set so
  * a key means the same connection everywhere (harness config, event
@@ -607,7 +615,7 @@ export function connectionServerKeys(
   for (const connection of connections) {
     if (!connection.enabled) continue;
     let key = connectionServerKey(connection);
-    while (keyed.has(key)) key = `${key}-2`;
+    while (keyed.has(key) || HOST_SERVER_KEYS.has(key)) key = `${key}-2`;
     keyed.set(key, connection);
   }
   return keyed;

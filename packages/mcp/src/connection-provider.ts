@@ -97,7 +97,10 @@ export function defineMcpConnectionProvider(args: {
         input.material,
       );
       try {
-        return mcpToolActions(server.tools, input.capabilities);
+        return mcpToolActions({
+          tools: server.tools,
+          capabilities: input.capabilities,
+        });
       } finally {
         await server.close().catch(() => {});
       }
@@ -137,12 +140,12 @@ export function defineMcpConnectionProvider(args: {
  * A connection action for each granted tool, as the server declared it:
  * its title, schemas and annotations reach agents unchanged (ADR 0225).
  */
-export function mcpToolActions(
-  tools: readonly McpToolInfo[],
-  capabilities: readonly string[],
-) {
-  return tools
-    .filter((tool) => capabilities.includes(tool.name))
+export function mcpToolActions(input: {
+  tools: readonly McpToolInfo[];
+  capabilities: readonly string[];
+}) {
+  return input.tools
+    .filter((tool) => input.capabilities.includes(tool.name))
     .map((tool) => ({
       name: tool.name,
       ...(tool.title ? { title: tool.title } : {}),

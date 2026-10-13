@@ -125,6 +125,8 @@ export type McpServerSpec =
       url: string;
       headers?: Record<string, string>;
       defaultToolsApprovalMode?: "auto" | "prompt" | "writes" | "approve";
+      /** How long to wait for the server's tools, and for one call (ADR 0225). */
+      timeouts?: { startupSeconds?: number; callSeconds?: number };
     }
   | {
       transport: "stdio";

@@ -1,6 +1,6 @@
 # ADR 0065: Credential connections and capability broker
 
-- **Status:** Accepted
+- **Status:** Accepted (an MCP connection's tools and results reach agents unchanged, amended by [0225](0225-harnesses-get-connectors-as-mcp-servers-results-unchanged.md))
 - **Date:** 2026-08-23
 - **Unattended ownership refined by:** 0068
 - **Bindings and service connections refined by:** 0172 (bindings are committed in `.work/project.json`; service connections are named)

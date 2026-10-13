@@ -6,24 +6,32 @@ import type { Json } from "@catamorphic/db";
 import type { FastifyInstance } from "fastify";
 import type { RouteContext } from "../app.js";
 import {
-  forwardedTool,
-  forwardedToolResult,
-  handleMcpPost,
   McpRequestError,
-  negotiateProtocolVersion,
+  serveForwardedTools,
   toolError,
   toolValue,
 } from "../mcp-shared.js";
 
 /**
  * One brokered connection as an agent's MCP server (`connection_<alias>`).
- * An MCP connection's tools and results pass through as its server sent
- * them; other connections' actions answer as JSON tool results (ADR 0225).
+ * An MCP connection's tools and results pass through as its server
+ * declared and sent them; other connections' actions answer as JSON tool
+ * results and declare no output schema (ADR 0225).
  */
 export function registerConnectionMcpRoutes(
   app: FastifyInstance,
   ctx: RouteContext,
 ): void {
+  // Stateless Streamable HTTP: no server-initiated stream, no session to end.
+  for (const method of ["GET", "DELETE"] as const) {
+    app.route({
+      method,
+      url: "/connection-mcp",
+      config: { public: true },
+      handler: async (_request, reply) =>
+        reply.status(405).header("allow", "POST").send(),
+    });
+  }
   app.post(
     "/connection-mcp",
     { config: { public: true } },
@@ -55,69 +63,61 @@ export function registerConnectionMcpRoutes(
           .status(401)
           .send({ error: "Connection grant is no longer active" });
       }
-      return handleMcpPost(reply, request.body, async (method, params) => {
-        switch (method) {
-          case "initialize":
-            return {
-              protocolVersion: negotiateProtocolVersion(params.protocolVersion),
-              capabilities: { tools: {} },
-              serverInfo: {
-                name: "catamorphic-connection-broker",
-                version: "1",
-              },
-            };
-          case "ping":
-            return {};
-          case "tools/list": {
-            try {
-              const actions = await broker.listActions({
-                identity,
-                allocationId: allocation.id,
-                alias: binding.alias,
-              });
-              return { tools: actions.map(forwardedTool) };
-            } catch {
-              throw new McpRequestError(-32_000, "Connection action failed");
-            }
+      const mcp = broker.servesMcp(binding.providerKind);
+      return serveForwardedTools({
+        reply,
+        body: request.body,
+        serverName: "catamorphic-connection-broker",
+        listTools: async () => {
+          try {
+            const actions = await broker.listActions({
+              identity,
+              allocationId: allocation.id,
+              alias: binding.alias,
+            });
+            // Only an MCP server's own results match its output schema.
+            return mcp
+              ? actions
+              : actions.map((action) => ({
+                  ...action,
+                  outputSchema: undefined,
+                }));
+          } catch {
+            throw new McpRequestError(-32_000, "Connection action failed");
           }
-          case "tools/call": {
-            const name = typeof params.name === "string" ? params.name : "";
-            if (!binding.capabilities.includes(name)) {
-              throw new McpRequestError(
-                -32602,
-                "Tool is outside the connection grant",
-              );
-            }
-            try {
-              const output = await broker.invoke({
-                identity,
-                allocationId: allocation.id,
-                alias: binding.alias,
-                action: name,
-                input: toJson(params.arguments),
-                caller: "agent",
-                ...(grant.agentSessionId
-                  ? { agentSessionId: grant.agentSessionId }
-                  : {}),
-              });
-              return broker.servesMcp(binding.providerKind)
-                ? forwardedToolResult(output)
-                : toolValue(output);
-            } catch (error) {
-              // A policy refusal is information the agent can act on (narrow
-              // the query, ask differently); other failures stay opaque.
-              if (
-                error instanceof ConnectionActionDeniedError ||
-                error instanceof ConnectionActionRefusedError
-              ) {
-                return toolError(error.message);
-              }
-              throw new McpRequestError(-32_000, "Connection action failed");
-            }
+        },
+        callTool: async (call) => {
+          if (!binding.capabilities.includes(call.name)) {
+            throw new McpRequestError(
+              -32602,
+              "Tool is outside the connection grant",
+            );
           }
-          default:
-            throw new McpRequestError(-32601, "Method not found");
-        }
+          try {
+            const output = await broker.invoke({
+              identity,
+              allocationId: allocation.id,
+              alias: binding.alias,
+              action: call.name,
+              input: toJson(call.arguments),
+              caller: "agent",
+              ...(grant.agentSessionId
+                ? { agentSessionId: grant.agentSessionId }
+                : {}),
+            });
+            return mcp ? output : toolValue(output);
+          } catch (error) {
+            // A policy refusal is information the agent can act on (narrow
+            // the query, ask differently); other failures stay opaque.
+            if (
+              error instanceof ConnectionActionDeniedError ||
+              error instanceof ConnectionActionRefusedError
+            ) {
+              return toolError(error.message);
+            }
+            throw new McpRequestError(-32_000, "Connection action failed");
+          }
+        },
       });
     },
   );

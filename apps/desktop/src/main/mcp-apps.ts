@@ -64,11 +64,19 @@ export class McpAppsService {
     return map;
   }
 
-  /** Reuse the authenticated host client without eagerly mounting its tool schemas. */
+  /**
+   * The connection's tools on the authenticated host client, listed once
+   * more on a fresh connection when the first attempt fails.
+   */
   async tools(profileId: string, serverKey: string) {
     const connection = this.keyed(profileId).get(serverKey);
     if (!connection) throw new Error(`No connection for ${serverKey}`);
-    return (await this.connect(profileId, connection)).tools;
+    try {
+      return (await this.connect(profileId, connection)).tools;
+    } catch {
+      await this.drop(profileId, connection);
+      return (await this.connect(profileId, connection)).tools;
+    }
   }
 
   /** Fetch the `ui://` template behind a tool key. */
@@ -104,9 +112,11 @@ export class McpAppsService {
   }
 
   /**
-   * A view-initiated tool call, on the host's own connection. Scoped to
-   * the SAME server the view came from — an embedded app can never reach
-   * another connection's tools.
+   * A tool call on the host's own connection: from an embedded view, the
+   * capability catalog or a mounted connector (ADR 0225). Scoped to the
+   * SAME server as `viewToolKey`, so an embedded app can never reach
+   * another connection's tools. A call that fails drops the client, so
+   * the next one connects afresh rather than reusing a dead one.
    */
   async callTool(
     profileId: string,
@@ -116,7 +126,12 @@ export class McpAppsService {
   ): Promise<Record<string, unknown>> {
     const { connection } = this.resolve(profileId, viewToolKey);
     const server = await this.connect(profileId, connection);
-    return server.callToolRaw(toolName, args);
+    try {
+      return await server.callToolRaw(toolName, args);
+    } catch (error) {
+      await this.drop(profileId, connection);
+      throw error;
+    }
   }
 
   private resolve(
@@ -170,6 +185,17 @@ export class McpAppsService {
     });
     this.pool.set(key, pending);
     return pending;
+  }
+
+  private async drop(
+    profileId: string,
+    connection: McpConnection,
+  ): Promise<void> {
+    const key = `${profileId}:${connection.id}`;
+    const pending = this.pool.get(key);
+    if (!pending) return;
+    this.pool.delete(key);
+    await pending.then((server) => server.close()).catch(() => {});
   }
 
   async releaseProfile(profileId: string): Promise<void> {

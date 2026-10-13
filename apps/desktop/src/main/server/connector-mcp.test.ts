@@ -2,6 +2,7 @@ import Fastify from "fastify";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   connectorMcpPath,
+  connectorMcpTokens,
   registerConnectorMcpRoute,
 } from "./connector-mcp.js";
 
@@ -40,18 +41,34 @@ afterEach(async () => {
   await Promise.all(apps.splice(0).map((app) => app.close()));
 });
 
-function serve(surface: { readOnly?: boolean; mounted?: boolean } = {}) {
+function serve(
+  surface: {
+    readOnly?: boolean;
+    mounted?: boolean;
+    /** The connection's own policy, e.g. rename asks. */
+    policy?: Record<string, unknown>;
+    approval?: "allow" | "deny";
+    session?: "missing";
+  } = {},
+) {
   const callTool = vi.fn(async () => RESULT);
+  const askApproval = vi.fn(async () => surface.approval ?? "allow");
+  const tokens = connectorMcpTokens();
   const app = Fastify();
   registerConnectorMcpRoute(app, {
     core: () =>
       ({
         agentSessions: {
-          toolContextForSession: async () => ({
-            agentId: "agent",
+          askApproval,
+          toolContextForSession: async () => {
+            if (surface.session === "missing")
+              throw new Error("Agent session not found");
             // The caller's role denies purge.
-            toolPolicies: { probe: [{ tools: { purge: "deny" } }] },
-          }),
+            return {
+              agentId: "agent",
+              toolPolicies: { probe: [{ tools: { purge: "deny" } }] },
+            };
+          },
         },
       }) as never,
     agents: {
@@ -61,9 +78,11 @@ function serve(surface: { readOnly?: boolean; mounted?: boolean } = {}) {
         readOnly: surface.readOnly ?? false,
         profileId: "profile",
         mcp: {
-          connectionIds: { probe: "probe-id" },
-          policies: { probe: [{ default: "allow" }] },
-          nativeServers: {},
+          connectionIds: { probe: "probe-id", computer: "computer-id" },
+          policies: {
+            probe: [{ default: "allow", ...surface.policy }],
+          },
+          nativeServers: { computer: { transport: "stdio", command: "cu" } },
         },
       }),
     } as never,
@@ -72,19 +91,32 @@ function serve(surface: { readOnly?: boolean; mounted?: boolean } = {}) {
       callTool,
     } as never,
     identity: { tenantId: "tenant", externalUserId: "person" },
+    tokens,
   });
   apps.push(app);
   const rpc = async (
     method: string,
     params: Record<string, unknown> = {},
-    server = "probe",
+    options: { server?: string; token?: string; id?: number | null } = {},
   ) =>
     app.inject({
       method: "POST",
-      url: connectorMcpPath({ projectId: "p", sessionId: "s", server }),
-      payload: { jsonrpc: "2.0", id: 1, method, params },
+      url: connectorMcpPath({
+        projectId: "p",
+        sessionId: "s",
+        server: options.server ?? "probe",
+      }),
+      headers: {
+        authorization: `Bearer ${options.token ?? tokens.token("s")}`,
+      },
+      payload: {
+        jsonrpc: "2.0",
+        ...(options.id === null ? {} : { id: options.id ?? 1 }),
+        method,
+        params,
+      },
     });
-  return { rpc, callTool };
+  return { app, rpc, callTool, askApproval };
 }
 
 describe("a chat's connector as an MCP server of its own (ADR 0225)", () => {
@@ -94,14 +126,16 @@ describe("a chat's connector as an MCP server of its own (ADR 0225)", () => {
     expect(listed.json().result.tools).toEqual([LOOKUP, RENAME]);
   });
 
-  it("lists only reads for a contained agent", async () => {
-    const { rpc } = serve({ readOnly: true });
-    const listed = await rpc("tools/list");
-    expect(listed.json().result.tools).toEqual([LOOKUP]);
+  it("lists only reads for a contained agent and refuses its writes", async () => {
+    const { rpc, callTool } = serve({ readOnly: true });
+    expect((await rpc("tools/list")).json().result.tools).toEqual([LOOKUP]);
+    const called = await rpc("tools/call", { name: "rename", arguments: {} });
+    expect(called.json()).toMatchObject({ error: { code: -32602 } });
+    expect(callTool).not.toHaveBeenCalled();
   });
 
   it("forwards a call through the host's client and its result unchanged", async () => {
-    const { rpc, callTool } = serve();
+    const { rpc, callTool, askApproval } = serve();
     const called = await rpc("tools/call", {
       name: "lookup",
       arguments: { name: "Ada" },
@@ -110,6 +144,36 @@ describe("a chat's connector as an MCP server of its own (ADR 0225)", () => {
     expect(callTool).toHaveBeenCalledWith("profile", "probe/lookup", "lookup", {
       name: "Ada",
     });
+    expect(askApproval).not.toHaveBeenCalled();
+  });
+
+  it("asks the person inside the call, whatever the harness's mode", async () => {
+    const { rpc, callTool, askApproval } = serve({
+      policy: { tools: { rename: "ask" } },
+    });
+    expect(
+      (
+        await rpc("tools/call", { name: "rename", arguments: { to: "Ada" } })
+      ).json().result,
+    ).toEqual(RESULT);
+    expect(askApproval).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "s",
+        title: "Allow rename?",
+        origin: { kind: "mcp", id: "probe", displayName: "probe" },
+      }),
+    );
+    expect(callTool).toHaveBeenCalledTimes(1);
+  });
+
+  it("answers a declined ask as a tool error, never calling the connector", async () => {
+    const { rpc, callTool } = serve({
+      policy: { tools: { rename: "ask" } },
+      approval: "deny",
+    });
+    const called = await rpc("tools/call", { name: "rename", arguments: {} });
+    expect(called.json().result).toMatchObject({ isError: true });
+    expect(callTool).not.toHaveBeenCalled();
   });
 
   it("never calls a denied tool", async () => {
@@ -119,10 +183,57 @@ describe("a chat's connector as an MCP server of its own (ADR 0225)", () => {
     expect(callTool).not.toHaveBeenCalled();
   });
 
-  it("serves no connector to a chat whose harness does not mount them", async () => {
+  it("answers the protocol's own requests", async () => {
+    const { app, rpc } = serve();
+    expect(
+      (await rpc("initialize", { protocolVersion: "2025-03-26" })).json()
+        .result,
+    ).toEqual({
+      protocolVersion: "2025-03-26",
+      capabilities: { tools: {} },
+      serverInfo: { name: "probe", version: "1" },
+    });
+    expect((await rpc("ping")).json().result).toEqual({});
+    expect(
+      (await rpc("notifications/initialized", {}, { id: null })).statusCode,
+    ).toBe(202);
+    // No server-initiated stream: clients that open one move on.
+    const stream = await app.inject({
+      method: "GET",
+      url: connectorMcpPath({
+        projectId: "p",
+        sessionId: "s",
+        server: "probe",
+      }),
+    });
+    expect(stream.statusCode).toBe(405);
+  });
+
+  it("serves only the chat that holds its bearer", async () => {
+    const { rpc, callTool } = serve();
+    expect((await rpc("tools/list", {}, { token: "guess" })).statusCode).toBe(
+      401,
+    );
+    expect(
+      (await rpc("tools/list", {}, { token: connectorMcpTokens().token("s") }))
+        .statusCode,
+    ).toBe(401);
+    expect(callTool).not.toHaveBeenCalled();
+  });
+
+  it("serves no connector the chat does not mount", async () => {
     expect((await serve({ mounted: false }).rpc("tools/list")).statusCode).toBe(
       404,
     );
-    expect((await serve().rpc("tools/list", {}, "other")).statusCode).toBe(404);
+    expect(
+      (await serve().rpc("tools/list", {}, { server: "other" })).statusCode,
+    ).toBe(404);
+    // Native computer use stays with its Codex process.
+    expect(
+      (await serve().rpc("tools/list", {}, { server: "computer" })).statusCode,
+    ).toBe(404);
+    expect(
+      (await serve({ session: "missing" }).rpc("tools/list")).statusCode,
+    ).toBe(404);
   });
 });

@@ -11225,6 +11225,7 @@ function protocolMcpServers(
             ...(server.defaultToolsApprovalMode
               ? { defaultToolsApprovalMode: server.defaultToolsApprovalMode }
               : {}),
+            ...(server.timeouts ? { timeouts: { ...server.timeouts } } : {}),
           },
     ]),
   );

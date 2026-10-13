@@ -27,16 +27,15 @@ export const desktopProfileMcpProvider: ConnectionProvider = {
   async listActions(input) {
     const server = await connectMcpServer(decodeServer(input.material));
     try {
-      return mcpToolActions(server.tools, input.capabilities).map(
-        ({ inputSchema, outputSchema, annotations, ...action }) => ({
-          ...action,
-          inputSchema: z.json().parse(inputSchema),
-          ...(outputSchema
-            ? { outputSchema: z.json().parse(outputSchema) }
-            : {}),
-          ...(annotations ? { annotations: z.json().parse(annotations) } : {}),
-        }),
-      );
+      return mcpToolActions({
+        tools: server.tools,
+        capabilities: input.capabilities,
+      }).map(({ inputSchema, outputSchema, annotations, ...action }) => ({
+        ...action,
+        inputSchema: z.json().parse(inputSchema),
+        ...(outputSchema ? { outputSchema: z.json().parse(outputSchema) } : {}),
+        ...(annotations ? { annotations: z.json().parse(annotations) } : {}),
+      }));
     } finally {
       await server.close().catch(() => {});
     }

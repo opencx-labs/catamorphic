@@ -73,6 +73,7 @@ import { assistantTools } from "./assistant-tools.js";
 import { componentRegistryCapability } from "./component-registry.js";
 import {
   connectorMcpPath,
+  connectorMcpTokens,
   registerConnectorMcpRoute,
 } from "./connector-mcp.js";
 import { validateDatabaseFiles } from "./database-files.js";
@@ -413,6 +414,7 @@ export async function startEmbeddedServer(
           )
         : Promise.reject(new Error("agent sessions unavailable")),
   });
+  const connectorTokens = connectorMcpTokens();
   const agentRegistry = new DesktopAgentRegistry({
     profiles,
     profileConfig,
@@ -429,12 +431,17 @@ export async function startEmbeddedServer(
     // an MCP server of its own, served from the host's pool (ADR 0225).
     ...(mcpApps
       ? {
-          connectorMcpUrl: (input: {
-            projectId: string;
-            sessionId: string;
-            server: string;
-          }) =>
-            apiBaseUrl ? `${apiBaseUrl}${connectorMcpPath(input)}` : undefined,
+          connectorMcp: {
+            url: (input: {
+              projectId: string;
+              sessionId: string;
+              server: string;
+            }) =>
+              apiBaseUrl
+                ? `${apiBaseUrl}${connectorMcpPath(input)}`
+                : undefined,
+            token: connectorTokens.token,
+          },
         }
       : {}),
     // Project agents (`project:<id>:<slug>`, ADR 0050): definitions are
@@ -1425,6 +1432,7 @@ export async function startEmbeddedServer(
         tenantId: DESKTOP_TENANT_ID,
         externalUserId: DESKTOP_USER_ID,
       },
+      tokens: connectorTokens,
     });
   }
 

@@ -81,10 +81,13 @@ delivery operation cover them. External project MCP consumers retain these
 public contracts.
 
 Explicit Environment Allocation connection bindings remain harness MCP servers:
-they are a caller-selected, capability-granted roster, not the entire profile's
-connector catalog. Both kinds of connector server list tools and return results
-as the connector declared and sent them (ADR 0225). Installed connector plugin projections retain skills and
-commands while stripping duplicate MCP declarations.
+a caller-selected, capability-granted roster (`connection_<alias>`). A harness
+with tool search also gets each of the agent's profile connectors as its own MCP
+server, served from the host pool by `connector-mcp.ts`; the built-in agent
+reaches them through the catalog. Both kinds of server list tools and return
+results as the connector declared and sent them (ADR 0225). Installed connector
+plugin projections retain skills and commands while stripping duplicate MCP
+declarations.
 
 ## Implementation and verification
 
@@ -94,6 +97,9 @@ native-only constraint and eager status. Missing policy fails construction.
 registry. It reloads caller/agent policies; core fences Allocation and membership,
 validates input, completes approval, then re-resolves authority before execution.
 Discovery is bounded and cursor-based. It does not grant permission.
+`connector-mcp.ts` serves mounted connectors: it lists only the tools the
+agent's layers permit and decides each call with the same gate and approval
+request as the catalog, so no harness permission mode skips an ask.
 
 `project-capabilities.ts` projects the public project implementations. Workflow
 inputs are passed unchanged; only host-owned session operations bind their owner

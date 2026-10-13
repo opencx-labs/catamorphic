@@ -77,7 +77,7 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0062](0062-session-privacy-and-fork-ux.md) | Session privacy & fork UX: incognito sessions, project policy, fork markers, admin usage | Accepted (admin-token usage route superseded by 0072) |
 | [0063](0063-agent-checkout-coordination.md) | Agent coordination and optional worktree isolation | Accepted (refined by 0215: the person chooses too) |
 | [0064](0064-execution-environments-and-allocations.md) | Execution Environments and immutable Allocations | Accepted (agent placement model superseded by 0067; missing project policy refined by 0070) |
-| [0065](0065-credential-connections-and-capability-broker.md) | Credential connections and capability broker | Accepted (refined by 0066, 0068, and 0172) |
+| [0065](0065-credential-connections-and-capability-broker.md) | Credential connections and capability broker | Accepted (refined by 0066, 0068, and 0172; MCP results pass through by 0225) |
 | [0066](0066-greenfield-environment-and-connection-cutover.md) | Greenfield Environment and connection cutover | Accepted (service-only unattended rule superseded by 0068) |
 | [0067](0067-long-lived-agent-runtimes-and-capability-gateway.md) | Long-lived agent runtimes and a unified capability gateway | Superseded by 0198 |
 | [0068](0068-personal-artifacts-and-workflow-enablement.md) | Local personal artifacts and explicit workflow enablement | Accepted |
@@ -115,7 +115,7 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0100](0100-workspace-resource-admission.md) | Workspace reservations and provider-enforced resource limits | Accepted (idle release refined by 0173; container usage by 0176) |
 | [0101](0101-harness-capabilities-and-session-monitors.md) | Harness capabilities and session monitors | Accepted |
 | [0102](0102-tabbed-sidebars-and-app-widgets.md) | Tabbed sidebars and compact app widgets | Accepted (refined by 0107) |
-| [0103](0103-agent-context-and-deferred-capabilities.md) | Agent context and deferred capabilities | Accepted |
+| [0103](0103-agent-context-and-deferred-capabilities.md) | Agent context and deferred capabilities | Accepted (connectors for harnesses with tool search by 0225) |
 | [0104](0104-local-checkouts-and-explicit-file-sharing.md) | Local checkouts and explicit file sharing | Accepted |
 | [0105](0105-configurable-desktop-browser-layout.md) | Configurable desktop browser layout, light surfaces, bookmark tiles and folders | Accepted |
 | [0106](0106-profile-terminal-macros.md) | Profile-owned terminal macros and configurable floating dismissal | Accepted |
@@ -210,7 +210,7 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0195](0195-conversation-continues-around-agent-questions.md) | The conversation continues around agent questions: replies defer, agents close, no "Other" row | Accepted (amended by 0197) |
 | [0196](0196-installed-claude-code-first.md) | The person's own Claude Code runs first; Claude Code and Codex pins move by scheduled pull request | Accepted |
 | [0197](0197-agent-sessions-are-an-event-log-of-turns.md) | Agent sessions are an event log of turns | Accepted (amends 0195: replies to a waiting question steer the turn; input item kinds by 0217) |
-| [0198](0198-agent-runners-run-harnesses-beside-their-workspace.md) | Agent runners run harnesses beside their workspace | Accepted (amended by 0214: a chat keeps its harness; by 0222: desktop harnesses stay warm) |
+| [0198](0198-agent-runners-run-harnesses-beside-their-workspace.md) | Agent runners run harnesses beside their workspace | Accepted (amended by 0214: a chat keeps its harness; by 0222: desktop harnesses stay warm; by 0225: a mounted connector's endpoint decides its calls) |
 | [0199](0199-subscription-sign-ins-stay-on-the-machine.md) | Subscription sign-ins stay on the machine they were made on | Accepted (amended by 0213: Codex only, on a member's own machine; who delivered an input is a typed field by 0219) |
 | [0200](0200-sidebars-move-first-content-settles-after.md) | Sidebars move first; the content settles after them | Accepted |
 | [0201](0201-work-keeps-passkeys-in-the-profile-vault.md) | Work keeps passkeys in the profile's vault: the sheet saves and signs in, autofill offers them, Bitwarden and KeePassXC files import | Accepted (amends 0185, 0151; browsing windows by 0220) |
@@ -237,4 +237,4 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0222](0222-desktop-harnesses-stay-warm-between-turns.md) | Desktop harnesses stay warm between turns | Accepted (amends 0198) |
 | [0223](0223-an-agent-terminal-lives-as-long-as-its-command.md) | An agent terminal lives as long as its command | Accepted (amends 0155) |
 | [0224](0224-a-voice-agent-can-stop-listening.md) | A voice conversation's agent can stop listening | Accepted (amends 0133, 0216) |
-| [0225](0225-harnesses-get-connectors-as-mcp-servers-results-unchanged.md) | Harnesses get connectors as MCP servers, results unchanged | Accepted (amends 0065, 0133) |
+| [0225](0225-harnesses-get-connectors-as-mcp-servers-results-unchanged.md) | Harnesses get connectors as MCP servers, results unchanged | Accepted (amends 0065, 0103, 0133, 0198) |
