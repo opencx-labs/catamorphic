@@ -1152,6 +1152,35 @@ export function TurnClock({ leaving = false }: { leaving?: boolean }) {
 }
 
 /**
+ * A steps line's one row: one fixed height for every steps line and for
+ * the turn line that keeps the first one's place, whatever each holds (a
+ * count, a clock, nothing yet).
+ */
+const STEPS_LINE = "flex h-4 items-center gap-2";
+
+/**
+ * The running turn's line before it has a steps line: its clock, and the
+ * silence after 30 seconds, above the activity line from the moment that
+ * line opens. It keeps the first steps line's place, the column's gap
+ * above that line included (`pb-3`, the timeline's `gap-3`), so the steps
+ * line takes it in the same frame and nothing below moves. Before the turn
+ * has started (a message still sending) it holds the place empty.
+ */
+export function TurnLine({ leaving = false }: { leaving?: boolean }) {
+  return (
+    <div className="pb-3 text-sm" data-testid="chat-turn-line">
+      <div className="pb-1.5">
+        <div className={STEPS_LINE}>
+          <span className="flex w-0 min-w-0 items-center">
+            <TurnClock leaving={leaving} />
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
  * "12 steps": the count and its word each change on a beat (the old fades
  * out, the new fades in), and their places widen smoothly, so "steps" and
  * the clock after it slide when the count gains a digit.
@@ -1184,6 +1213,10 @@ function StepCount({ count }: { count: number }) {
  * "Notes only"), the line stays closed until opened, a lone step's
  * included. MCP tool rows show the connector's icon when the host can
  * resolve one.
+ *
+ * A running turn's first steps line takes the place its turn line kept
+ * for it above the activity line (`placed`): the line is simply there, its
+ * count fading in, and only an open list below it opens its height.
  */
 export function TurnSteps({
   steps,
@@ -1191,6 +1224,7 @@ export function TurnSteps({
   fold = false,
   clock = false,
   enter = false,
+  placed = false,
   defaultExpanded = false,
   ...handlers
 }: {
@@ -1203,6 +1237,8 @@ export function TurnSteps({
   clock?: boolean;
   /** Joined a running turn on screen: opens its own height once. */
   enter?: boolean;
+  /** Took the turn line's place on screen: the line is there at once. */
+  placed?: boolean;
   defaultExpanded?: boolean;
 } & StepHandlers) {
   const [chosen, setChosen] = useState<boolean>();
@@ -1228,7 +1264,6 @@ export function TurnSteps({
   // or a later line takes it.
   const clockShown = useLinger(clock ? true : undefined, CLOCK_FADE_MS);
   const expanded = chosen ?? (live && !fold);
-  if (steps.length === 0) return null;
   // Once answered, a lone step is its own row. It keeps the list's
   // structure, so the line folds away above it rather than swapping it out.
   const lone = steps.length === 1 && !fold && !live;
@@ -1244,6 +1279,10 @@ export function TurnSteps({
   // commands still running in view, unless it carries the clock.
   const bare = !clock && (lone || folded.length === 0);
   const open = folded.length > 0 && (bare || expanded);
+  // Placed with its list open, the list opens its height under the line
+  // once (the line itself was already there).
+  const [listOpening, setListOpening] = useState(placed && open);
+  if (steps.length === 0) return null;
   return (
     // Steps are chrome around the conversation, not part of its text: a
     // drag across several replies selects the prose and skips these rows.
@@ -1255,74 +1294,80 @@ export function TurnSteps({
         if (event.target === event.currentTarget) setEntering(false);
       }}
     >
-      {/* One child: the entrance grows this box, its spacing included. */}
-      <div className="pb-1.5">
-        <div
-          className={`grid transition-[grid-template-rows,opacity] duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${
-            bare ? "grid-rows-[0fr] opacity-0" : "grid-rows-[1fr] opacity-100"
-          }`}
-          inert={bare}
-        >
-          {/* Clipped only vertically: the clock reaches past the line's end.
-              Its 3px of slack, given back by its margin, keep the toggle's
-              focus ring whole without moving the line. */}
-          <div className="-my-[3px] min-h-0 overflow-x-visible overflow-y-clip py-[3px]">
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => setChosen(!expanded)}
-                className="flex cursor-pointer items-center gap-1 text-[11px] text-fg-faint transition-colors duration-100 hover:text-fg-muted"
-                aria-expanded={expanded}
-                data-testid="chat-turn-steps-toggle"
-              >
-                <ChevronRight
-                  className={`size-3 transition-transform duration-150 ${expanded ? "rotate-90" : ""}`}
-                />
-                <StepCount count={steps.length} />
-              </button>
-              {clockShown.value && (
-                // No width of its own: the clock and the silence never widen
-                // the reply, so the rows below keep their places.
-                <span className="flex w-0 min-w-0 items-center">
-                  <TurnClock leaving={clockShown.leaving} />
-                </span>
-              )}
+      {/* One child, unpadded: the entrance grows this box from nothing, its
+          spacing included (a padded child would keep its padding). */}
+      <div>
+        <div className="pb-1.5">
+          <div
+            className={`grid transition-[grid-template-rows,opacity] duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${
+              bare ? "grid-rows-[0fr] opacity-0" : "grid-rows-[1fr] opacity-100"
+            }`}
+            inert={bare}
+          >
+            {/* Clipped only vertically: the clock reaches past the line's end.
+                Its 3px of slack, given back by its margin, keep the toggle's
+                focus ring whole without moving the line. */}
+            <div className="-my-[3px] min-h-0 overflow-x-visible overflow-y-clip py-[3px]">
+              <div className={STEPS_LINE}>
+                <button
+                  type="button"
+                  onClick={() => setChosen(!expanded)}
+                  className={`flex cursor-pointer items-center gap-1 text-[11px] text-fg-faint transition-colors duration-100 hover:text-fg-muted ${placed ? "cat-fade-in" : ""}`}
+                  aria-expanded={expanded}
+                  data-testid="chat-turn-steps-toggle"
+                >
+                  <ChevronRight
+                    className={`size-3 transition-transform duration-150 ${expanded ? "rotate-90" : ""}`}
+                  />
+                  <StepCount count={steps.length} />
+                </button>
+                {clockShown.value && (
+                  // No width of its own: the clock and the silence never widen
+                  // the reply, so the rows below keep their places.
+                  <span className="flex w-0 min-w-0 items-center">
+                    <TurnClock leaving={clockShown.leaving} />
+                  </span>
+                )}
+              </div>
             </div>
           </div>
-        </div>
-        {running.length > 0 && (
-          <div
-            className={`flex flex-col border-l transition-[border-color,padding,margin] duration-200 ${bare ? "-mt-0.5 border-transparent pl-0" : "mt-0.5 border-border pl-2.5"}`}
-          >
-            {running.map((step) => (
-              <StepRow
-                key={step.background?.ref}
-                step={step}
-                enter={rowsEnter}
-                {...handlers}
-              />
-            ))}
-          </div>
-        )}
-        {/* Grid-rows tween: the list stays mounted, so the collapse mirrors
-          the expansion exactly. */}
-        <div
-          className={`grid transition-[grid-template-rows] duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${
-            open ? "grid-rows-[1fr]" : "grid-rows-[0fr]"
-          }`}
-        >
-          <div className="overflow-hidden">
+          {running.length > 0 && (
             <div
               className={`flex flex-col border-l transition-[border-color,padding,margin] duration-200 ${bare ? "-mt-0.5 border-transparent pl-0" : "mt-0.5 border-border pl-2.5"}`}
             >
-              {folded.map((step) => (
+              {running.map((step) => (
                 <StepRow
-                  key={step.key}
+                  key={step.background?.ref}
                   step={step}
                   enter={rowsEnter}
                   {...handlers}
                 />
               ))}
+            </div>
+          )}
+          {/* Grid-rows tween: the list stays mounted, so the collapse mirrors
+            the expansion exactly. */}
+          <div
+            className={`grid transition-[grid-template-rows] duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${
+              open ? "grid-rows-[1fr]" : "grid-rows-[0fr]"
+            } ${listOpening ? "cat-step-in" : ""}`}
+            onAnimationEnd={(event) => {
+              if (event.target === event.currentTarget) setListOpening(false);
+            }}
+          >
+            <div className="overflow-hidden">
+              <div
+                className={`flex flex-col border-l transition-[border-color,padding,margin] duration-200 ${bare ? "-mt-0.5 border-transparent pl-0" : "mt-0.5 border-border pl-2.5"}`}
+              >
+                {folded.map((step) => (
+                  <StepRow
+                    key={step.key}
+                    step={step}
+                    enter={rowsEnter}
+                    {...handlers}
+                  />
+                ))}
+              </div>
             </div>
           </div>
         </div>

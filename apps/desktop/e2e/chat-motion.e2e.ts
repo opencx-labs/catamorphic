@@ -10,6 +10,9 @@ import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
  * - the activity line is a spinner and its words, nothing beside them,
  *   and a new activity fades the old words away and the new ones in
  *   without moving the spinner or the line;
+ * - the turn line keeps the first steps line's place from the turn's
+ *   start, so the steps line arriving moves nothing either, also on a
+ *   renderer slowed until its frames come late;
  * - a folded steps line changes its count on a beat, and "steps" (with
  *   the turn's clock after it) slides when the count gains a digit;
  * - the turn's clock and a long silence sit on that steps line;
@@ -23,7 +26,8 @@ import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
  *
  * Positions are sampled on every animation frame and compared within the
  * phase where nothing should move, so a slow host only means fewer
- * samples, never a different answer.
+ * samples, never a different answer. One pass throttles the renderer's CPU
+ * so late frames are tested on every host, not only on a busy one.
  */
 
 let app: AppHandle;
@@ -104,6 +108,13 @@ interface Frame {
   held: Box;
   firstChevron: Box;
   reveal: Box;
+  /** The activity line's opening or closing is under way. */
+  revealMoving: boolean;
+  /** The turn line keeping the first steps line's place. */
+  turnLine: Box;
+  /** The row of the turn's opening note, and whether a row is opening. */
+  note: Box;
+  gapping: boolean;
   /** The log's scroll position and its content's height. */
   scroll: number | null;
   content: number | null;
@@ -155,6 +166,12 @@ const RECORDER = `(() => {
       firstChevron: box(first?.querySelector('button > svg:last-child')),
       held: box(log?.querySelector('[data-e2e-held]')),
       reveal: box(row?.closest('.cat-reveal')),
+      revealMoving: !!row?.closest('.cat-reveal')?.matches('[data-moving], [data-entering], [data-closed]'),
+      turnLine: box(log?.querySelector('[data-testid="chat-turn-line"]')),
+      note: box([...(log?.querySelectorAll('article[data-message-id]') ?? [])]
+        .find((a) => a.textContent.includes('Reading the parser and its callers first.'))
+        ?.closest('.cat-row')),
+      gapping: !!log?.querySelector('.cat-gap-in'),
       scroll: log ? log.firstElementChild.scrollTop : null,
       content: log ? round(log.firstElementChild.firstElementChild.getBoundingClientRect().height) : null,
       room: log ? log.firstElementChild.scrollHeight - log.firstElementChild.clientHeight : null,
@@ -190,6 +207,26 @@ async function newChat() {
 
 /** Sends a turn, samples every frame until it settles, returns the frames. */
 async function recordTurn(
+  name: string,
+  prompt: string,
+  during?: () => Promise<void>,
+  options: { cpuSlowdown?: number } = {},
+): Promise<Frame[]> {
+  // A renderer this many times slower: frames come late, and what mounted
+  // between two of them starts its motion only at the later one.
+  if (options.cpuSlowdown)
+    await app.cdp("Emulation.setCPUThrottlingRate", {
+      rate: options.cpuSlowdown,
+    });
+  try {
+    return await sampleTurn(name, prompt, during);
+  } finally {
+    if (options.cpuSlowdown)
+      await app.cdp("Emulation.setCPUThrottlingRate", { rate: 1 });
+  }
+}
+
+async function sampleTurn(
   name: string,
   prompt: string,
   during?: () => Promise<void>,
@@ -258,6 +295,51 @@ const lineParts = (frame: Frame) =>
 
 const spread = (values: number[]) =>
   values.length ? Math.max(...values) - Math.min(...values) : 0;
+
+/**
+ * The frames from the moment the turn's line stands still to the answer:
+ * the activity line open and at rest, the turn's opening note written and
+ * done opening (its row at its full height, the gap above it open). Only
+ * steps arrive from here on, the first one taking the turn line's place,
+ * so nothing in the live chrome may move.
+ */
+function steadyPhase(frames: Frame[]): Frame[] {
+  const end = frames.findIndex((frame) => frame.answer);
+  const noteHeight = Math.max(
+    ...frames.slice(0, end).map((frame) => frame.note?.[3] ?? 0),
+  );
+  const start = frames.findIndex(
+    (frame) =>
+      frame.spinner &&
+      !frame.revealMoving &&
+      !frame.gapping &&
+      (frame.note?.[3] ?? 0) >= noteHeight - 0.1,
+  );
+  expect(start, "the activity line stood open").toBeGreaterThanOrEqual(0);
+  expect(end, "the answer arrived").toBeGreaterThan(start);
+  return frames.slice(start, end).filter((frame) => frame.spinner);
+}
+
+/** The live chrome holds still through the steady phase (see above). */
+function expectStill(frames: Frame[]) {
+  const steady = steadyPhase(frames);
+  expect(steady.length).toBeGreaterThan(20);
+  const lined = steady.filter((frame) => frame.toggle);
+  expect(lined.length, "the steps line showed").toBeGreaterThan(10);
+  expect(
+    spread(steady.map((f) => f.spinner?.[0] ?? 0)),
+    "spinner x",
+  ).toBeLessThanOrEqual(0.5);
+  expect(
+    spread(steady.map((f) => f.spinner?.[1] ?? 0)),
+    "spinner y",
+  ).toBeLessThanOrEqual(0.5);
+  expect(spread(steady.map((f) => f.text?.[0] ?? 0)), "words x").toBe(0);
+  expect(spread(steady.map((f) => f.text?.[3] ?? 0)), "words height").toBe(0);
+  expect(spread(lined.map((f) => f.toggle?.[0] ?? 0)), "line x").toBe(0);
+  expect(spread(lined.map((f) => f.toggle?.[1] ?? 0)), "line y").toBe(0);
+  return steady;
+}
 
 /** The frames while steps arrive: from a second step to the answer. */
 function workPhase(frames: Frame[]): Frame[] {
@@ -335,15 +417,14 @@ describe("chat motion", () => {
       expect(frame.rowExtras).toBe(0);
     }
 
-    // The spinner, the words' box and the steps line hold still.
-    const spinnerX = live.map((frame) => frame.spinner?.[0] ?? 0);
-    const spinnerY = live.map((frame) => frame.spinner?.[1] ?? 0);
-    expect(spread(spinnerX), "spinner x").toBeLessThanOrEqual(0.5);
-    expect(spread(spinnerY), "spinner y").toBeLessThanOrEqual(0.5);
-    expect(spread(live.map((f) => f.text?.[0] ?? 0)), "words x").toBe(0);
-    expect(spread(live.map((f) => f.text?.[3] ?? 0)), "words height").toBe(0);
-    expect(spread(live.map((f) => f.toggle?.[0] ?? 0)), "line x").toBe(0);
-    expect(spread(live.map((f) => f.toggle?.[1] ?? 0)), "line y").toBe(0);
+    // The spinner, the words' box and the steps line hold still, from
+    // before the first step: the steps line arrived where the turn line
+    // kept its place.
+    const steady = expectStill(frames);
+    expect(
+      steady.some((frame) => frame.turnLine && !frame.toggle),
+      "the turn line kept the place first",
+    ).toBe(true);
 
     // Each new activity first fades the old words away, then shows its own.
     let swaps = 0;
@@ -416,10 +497,40 @@ describe("chat motion", () => {
     ).toBe(0);
   }, 120_000);
 
+  it("holds the live chrome still on a slow renderer, whose frames come late", async () => {
+    await setDisplay("notes");
+    await newChat();
+    const frames = await recordTurn(
+      "notes-slow",
+      "pace the work quickly",
+      undefined,
+      { cpuSlowdown: 6 },
+    );
+    for (const frame of frames.filter((f) => f.rowParts.length > 0))
+      expect(lineParts(frame)).toEqual(["svg", "activity-text"]);
+    expectStill(frames);
+    expect(scrollJumps(frames).map((frame) => frame.t)).toEqual([]);
+    // An open list's first row stays under its line as the list opens.
+    await setDisplay("all");
+    await newChat();
+    expectRowsInPlace(
+      await recordTurn("all-slow", "pace the work quickly", undefined, {
+        cpuSlowdown: 6,
+      }),
+    );
+  }, 120_000);
+
   it("keeps an open list's rows in place as wider steps join it", async () => {
     await setDisplay("all");
     await newChat();
     const frames = await recordTurn("all", "pace the work quickly");
+    expectRowsInPlace(frames);
+    // Nothing beside the activity words here either.
+    for (const frame of frames.filter((f) => f.rowParts.length > 0))
+      expect(lineParts(frame)).toEqual(["svg", "activity-text"]);
+  }, 120_000);
+
+  function expectRowsInPlace(frames: Frame[]) {
     const work = workPhase(frames).filter(
       (frame) => frame.firstRow && frame.firstChevron,
     );
@@ -439,10 +550,7 @@ describe("chat motion", () => {
     expect(spread(rowToLine), "first row under its line").toBe(0);
     // Settling (notes folding into the answer) never pulls the scroll back.
     expect(scrollJumps(frames).map((frame) => frame.t)).toEqual([]);
-    // Nothing beside the activity words here either.
-    for (const frame of frames.filter((f) => f.rowParts.length > 0))
-      expect(lineParts(frame)).toEqual(["svg", "activity-text"]);
-  }, 120_000);
+  }
 
   it("holds the latest words still as an answer streams, and lets a reader scroll away", async () => {
     await setDisplay("all");
@@ -514,22 +622,7 @@ describe("chat motion", () => {
       "pace the work quickly at length",
       async () => {
         await streamingLong();
-        // A line of the answer in the middle of the view.
-        const at = await runWait<{ x: number; y: number }>(
-          `const s = logScroller();
-           const view = s.getBoundingClientRect();
-           const line = [...s.querySelectorAll('.cat-markdown:not([data-testid]) :is(p, li)')].find((el) => {
-             const r = el.getBoundingClientRect();
-             return r.width > 160 && r.top > view.top + view.height * 0.25 &&
-               r.bottom < view.top + view.height * 0.6 &&
-               el.contains(document.elementFromPoint(r.left + 6, r.top + r.height / 2));
-           });
-           if (!line) return false;
-           line.setAttribute('data-e2e-held', '');
-           const r = line.getBoundingClientRect();
-           return { x: Math.round(r.left + 6), y: Math.round(r.top + r.height / 2) };`,
-          { label: "a line in the middle of the view" },
-        );
+        let at = { x: 0, y: 0 };
         const mouse = (type: string, x: number, buttons: number) =>
           app.cdp("Input.dispatchMouseEvent", {
             type,
@@ -539,7 +632,45 @@ describe("chat motion", () => {
             buttons,
             clickCount: 1,
           });
-        await mouse("mousePressed", at.x, 1);
+        // The answer moves up as it streams until it is pressed, so a press
+        // that reaches the page a moment after the line was found can land
+        // between two blocks, where a drag selects nothing: press again.
+        for (let attempt = 1; ; attempt++) {
+          // A line of the answer in the middle of the view.
+          at = await runWait<{ x: number; y: number }>(
+            `const s = logScroller();
+             const view = s.getBoundingClientRect();
+             const line = [...s.querySelectorAll('.cat-markdown:not([data-testid]) :is(p, li)')].find((el) => {
+               const r = el.getBoundingClientRect();
+               return r.width > 160 && r.top > view.top + view.height * 0.25 &&
+                 r.bottom < view.top + view.height * 0.6 &&
+                 el.contains(document.elementFromPoint(r.left + 6, r.top + r.height / 2));
+             });
+             if (!line) return false;
+             s.querySelector('[data-e2e-held]')?.removeAttribute('data-e2e-held');
+             line.setAttribute('data-e2e-held', '');
+             window.__pressedText = undefined;
+             document.addEventListener('pointerdown', (event) => {
+               window.__pressedText = event.target instanceof Element &&
+                 !!event.target.closest('.cat-markdown :is(p, li)');
+             }, { capture: true, once: true });
+             const r = line.getBoundingClientRect();
+             return { x: Math.round(r.left + 6), y: Math.round(r.top + r.height / 2) };`,
+            { label: "a line in the middle of the view" },
+          );
+          await mouse("mousePressed", at.x, 1);
+          if (
+            (await run<boolean>("return window.__pressedText === true;")) ||
+            attempt === 3
+          )
+            break;
+          await mouse("mouseReleased", at.x, 0);
+          await run(`toLatest(); return true;`);
+          await runWait(`return following();`, {
+            label: "following again",
+            timeoutMs: 10_000,
+          });
+        }
         await mark("pressed");
         for (const dx of [20, 40, 60, 80, 100]) {
           await mouse("mouseMoved", at.x + dx, 1);
@@ -696,10 +827,12 @@ describe("chat motion", () => {
       });
     });
     const marks = await readMarks();
+    // Its height as it lurked (its steps line had taken the turn line's
+    // place by then).
     const open = frames
       .filter((frame) => frame.t < (marks.lurk ?? 0) && frame.reveal)
       .map((frame) => frame.reveal?.[3] ?? 0);
-    const full = Math.max(...open);
+    const full = open.at(-1) ?? 0;
     expect(full).toBeGreaterThan(10);
     const back = frames.filter(
       (frame) =>

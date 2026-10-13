@@ -2083,7 +2083,8 @@
 }
 
 /* The mirror of fold-away for a step joining a running turn's list (and a
-   block of steps joining the turn): the row opens its own height, and its
+   block of steps joining the turn, or the list under a steps line that
+   took the turn line's place): the row opens its own height, and its
    margins, while it fades in, so the list grows at its end instead of
    jumping. It clips only
    vertically, so a turn's clock past the line's end stays in view. The
@@ -2111,6 +2112,20 @@
   min-height: 0;
   overflow-x: visible;
   overflow-y: clip;
+}
+
+/* A row joining the conversation's column as its writing or work opens
+   (see cat-step-in and cat-grow): it opens the column's 0.75rem gap above
+   it in the same beat, so what is below slides rather than jumping by the
+   gap first. */
+@keyframes catamorphic-gap-in {
+  from {
+    margin-top: -0.75rem;
+  }
+}
+
+.cat-gap-in {
+  animation: catamorphic-gap-in 200ms cubic-bezier(0.2, 0, 0, 1);
 }
 
 /* Text that changes in place (the activity line, a step count and its
@@ -2280,6 +2295,7 @@
   .cat-fade-in,
   .cat-fold-away,
   .cat-step-in,
+  .cat-gap-in,
   .cat-swap-out,
   .cat-swap-in {
     animation-duration: 0.01ms;

@@ -63,13 +63,11 @@ import {
   OnScreen,
   type OnScreenSource,
   onScreenSource,
-  STALL_AFTER_MS,
   sameBackgroundStates,
-  TurnClock,
   TurnClockContext,
+  TurnLine,
   TurnSteps,
   turnStepsOf,
-  useNow,
 } from "./chat-steps.js";
 import {
   InboundMessageRow,
@@ -586,6 +584,17 @@ export function ChatTimeline(props: ChatTimelineProps) {
       if (row.kind !== "entry" && hasSteps(row.steps))
         clockRow = rowKey(view.group, row);
   }
+  // Before the running turn has a steps line, the turn line keeps the
+  // first one's place above the activity line, and that line takes it in
+  // the same frame: it is simply there, and nothing moves (ActivityLine).
+  const keepsLine = Boolean(activity) && clockRow === undefined;
+  const lineKept = useRef(false);
+  const lineTaker = useRef<string | undefined>(undefined);
+  if (lineKept.current && activity && clockRow !== undefined)
+    lineTaker.current = clockRow;
+  useLayoutEffect(() => {
+    lineKept.current = keepsLine;
+  }, [keepsLine]);
   const clockTimes = useMemo(
     () => ({ startedAt, updatedAt }),
     [startedAt, updatedAt],
@@ -614,7 +623,7 @@ export function ChatTimeline(props: ChatTimelineProps) {
     () => ({ onLinkClick, renderLink }),
     [onLinkClick, renderLink],
   );
-  const folding = useFoldingNotes(views);
+  const { folding, folded } = useFoldingNotes(views);
   // Work that joins the timeline on screen opens its own height, while
   // what a chat opens with, or gains while hidden, is simply there.
   const [onScreen] = useState(onScreenSource);
@@ -640,23 +649,22 @@ export function ChatTimeline(props: ChatTimelineProps) {
     for (const row of view.rows) {
       const key = rowKey(view.group, row);
       if (key.startsWith("send:")) shownSends.add(key);
+      const className = undone
+        ? "cat-row cat-settled flex flex-col gap-3 opacity-50"
+        : view.live || foldingIn(row, folding)
+          ? "cat-row flex flex-col gap-3"
+          : // A settled turn out of view is skipped by style and layout.
+            "cat-row cat-settled flex flex-col gap-3";
       conversation.push(
-        <div
-          key={key}
-          className={
-            undone
-              ? "cat-row cat-settled flex flex-col gap-3 opacity-50"
-              : view.live
-                ? "cat-row flex flex-col gap-3"
-                : // A settled turn out of view is skipped by style and layout.
-                  "cat-row cat-settled flex flex-col gap-3"
-          }
-          data-turn-id={turn?.id}
-          data-turn-undone={undone || undefined}
-        >
-          {row.kind === "entry" && row.entry.kind === "input" ? (
-            // Rendered here, not through the row view, so a pending
-            // message's node and its item's are the same element.
+        row.kind === "entry" && row.entry.kind === "input" ? (
+          // Rendered here, not through the row view, so a pending
+          // message's node and its item's are the same element.
+          <div
+            key={key}
+            className={className}
+            data-turn-id={turn?.id}
+            data-turn-undone={undone || undefined}
+          >
             <UserMessage
               item={row.entry.item}
               focused={row.entry.item.id === focusMessageId}
@@ -671,18 +679,23 @@ export function ChatTimeline(props: ChatTimelineProps) {
                   : undefined
               }
             />
-          ) : (
-            <TurnRowView
-              row={row}
-              view={view}
-              requests={requests}
-              focusMessageId={focusMessageId}
-              foldSteps={foldSteps}
-              folding={folding}
-              clock={key === clockRow}
-            />
-          )}
-        </div>,
+          </div>
+        ) : (
+          <TurnRowView
+            key={key}
+            className={className}
+            turnId={turn?.id}
+            undone={undone}
+            row={row}
+            view={view}
+            requests={requests}
+            focusMessageId={focusMessageId}
+            foldSteps={foldSteps}
+            folding={folding}
+            clock={key === clockRow}
+            placed={key === lineTaker.current}
+          />
+        ),
       );
     }
     if (turn)
@@ -716,101 +729,102 @@ export function ChatTimeline(props: ChatTimelineProps) {
   return (
     <HostContext.Provider value={host}>
       <ActionsContext.Provider value={actions}>
-        <LinkContext.Provider value={links}>
-          <BackgroundStates.Provider value={backgroundStates}>
-            <TurnClockContext.Provider value={clockTimes}>
-              <OnScreen.Provider value={onScreen}>
-                <StickToBottom
-                  className={`cat-timeline relative overflow-hidden ${className}`}
-                  initial="smooth"
-                  // The browser holds the latest message in place as the
-                  // conversation grows (see PinToBottom); script only
-                  // catches up where it cannot, at once, never by a
-                  // spring that lays the page out every frame.
-                  resize="instant"
-                  role="log"
-                >
-                  <StickToBottom.Content
-                    className={`flex min-h-full flex-col gap-3 p-5 ${contentClassName}`}
+        <FoldedContext.Provider value={folded}>
+          <LinkContext.Provider value={links}>
+            <BackgroundStates.Provider value={backgroundStates}>
+              <TurnClockContext.Provider value={clockTimes}>
+                <OnScreen.Provider value={onScreen}>
+                  <StickToBottom
+                    className={`cat-timeline relative overflow-hidden ${className}`}
+                    initial="smooth"
+                    // The browser holds the latest message in place as the
+                    // conversation grows (see PinToBottom); script only
+                    // catches up where it cannot, at once, never by a
+                    // spring that lays the page out every frame.
+                    resize="instant"
+                    role="log"
                   >
-                    {hasOlder && onLoadOlder && (
-                      <LoadOlder
-                        loading={isLoadingOlder}
-                        onLoad={onLoadOlder}
-                      />
-                    )}
-                    {empty && (
-                      <div className="m-auto max-w-sm text-center text-sm leading-6 text-fg-muted">
-                        {emptyState}
-                      </div>
-                    )}
-                    {conversation}
-                    <ActivityLine
-                      activity={activity}
-                      // With no steps line yet, a silence reads above it.
-                      turnLine={Boolean(activeId) && clockRow === undefined}
-                      startingId={
-                        starting && !activeId && onCancelQueued
-                          ? starting.id
-                          : undefined
-                      }
-                      onCancel={onCancelQueued}
-                    />
-                    {queue && queue.length > 0 && (
-                      <ChatQueue
-                        queue={queue}
-                        onEdit={onEditQueued}
+                    <StickToBottom.Content
+                      className={`flex min-h-full flex-col gap-3 p-5 ${contentClassName}`}
+                    >
+                      {hasOlder && onLoadOlder && (
+                        <LoadOlder
+                          loading={isLoadingOlder}
+                          onLoad={onLoadOlder}
+                        />
+                      )}
+                      {empty && (
+                        <div className="m-auto max-w-sm text-center text-sm leading-6 text-fg-muted">
+                          {emptyState}
+                        </div>
+                      )}
+                      {conversation}
+                      <ActivityLine
+                        activity={activity}
+                        turnLine={clockRow === undefined}
+                        startingId={
+                          starting && !activeId && onCancelQueued
+                            ? starting.id
+                            : undefined
+                        }
                         onCancel={onCancelQueued}
-                        onSendNow={onSendQueuedNow}
-                        onHold={onHoldQueued}
-                        Hint={Hint}
-                        renderContent={queuedContent}
-                        renderAttachments={queuedAttachments}
-                        renderInput={(queued) => (
-                          <QueuedInputLine
-                            queued={queued}
-                            resolveAgentName={resolveAgentName}
-                          />
-                        )}
+                      />
+                      {queue && queue.length > 0 && (
+                        <ChatQueue
+                          queue={queue}
+                          onEdit={onEditQueued}
+                          onCancel={onCancelQueued}
+                          onSendNow={onSendQueuedNow}
+                          onHold={onHoldQueued}
+                          Hint={Hint}
+                          renderContent={queuedContent}
+                          renderAttachments={queuedAttachments}
+                          renderInput={(queued) => (
+                            <QueuedInputLine
+                              queued={queued}
+                              resolveAgentName={resolveAgentName}
+                            />
+                          )}
+                        />
+                      )}
+                      {error && (
+                        <div className="rounded-lg border border-danger/50 bg-danger/10 px-3 py-2 text-xs text-danger">
+                          {error}
+                        </div>
+                      )}
+                      <div aria-hidden className="cat-scroll-anchor" />
+                    </StickToBottom.Content>
+                    {hasUserMessages && (
+                      <JumpToPreviousUserMessage
+                        register={registerJumpToPreviousUserMessage}
+                        shortcut={jumpShortcut}
                       />
                     )}
-                    {error && (
-                      <div className="rounded-lg border border-danger/50 bg-danger/10 px-3 py-2 text-xs text-danger">
-                        {error}
-                      </div>
-                    )}
-                    <div aria-hidden className="cat-scroll-anchor" />
-                  </StickToBottom.Content>
-                  {hasUserMessages && (
-                    <JumpToPreviousUserMessage
-                      register={registerJumpToPreviousUserMessage}
-                      shortcut={jumpShortcut}
-                    />
-                  )}
-                  <FocusMessage
-                    messageId={focusMessageId}
-                    ready={Boolean(
-                      focusMessageId &&
-                        timeline.some((group) =>
-                          group.entries.some((entry) =>
-                            entry.kind === "notifications"
-                              ? entry.items.some(
-                                  (item) => item.id === focusMessageId,
-                                )
-                              : entryId(entry) === focusMessageId,
+                    <FocusMessage
+                      messageId={focusMessageId}
+                      ready={Boolean(
+                        focusMessageId &&
+                          timeline.some((group) =>
+                            group.entries.some((entry) =>
+                              entry.kind === "notifications"
+                                ? entry.items.some(
+                                    (item) => item.id === focusMessageId,
+                                  )
+                                : entryId(entry) === focusMessageId,
+                            ),
                           ),
-                        ),
-                    )}
-                  />
-                  <ScrollToLatest />
-                  <FollowScrollerResize />
-                  <PinToBottom />
-                  <TrackOnScreen state={onScreen} />
-                </StickToBottom>
-              </OnScreen.Provider>
-            </TurnClockContext.Provider>
-          </BackgroundStates.Provider>
-        </LinkContext.Provider>
+                      )}
+                    />
+                    <ScrollToLatest />
+                    <FollowScrollerResize />
+                    <PinToBottom />
+                    <TrackOnScreen state={onScreen} />
+                  </StickToBottom>
+                </OnScreen.Provider>
+              </TurnClockContext.Provider>
+            </BackgroundStates.Provider>
+          </LinkContext.Provider>
+        </FoldedContext.Provider>
       </ActionsContext.Provider>
     </HostContext.Provider>
   );
@@ -902,19 +916,11 @@ function UndoneDivider() {
   );
 }
 
-/**
- * One of a turn's rows. Its inputs keep their identity while the turn is
- * unchanged (`TurnView`), so an update elsewhere in the chat skips it.
- */
-const TurnRowView = memo(function TurnRowView({
-  row,
-  view,
-  requests,
-  focusMessageId,
-  foldSteps,
-  folding,
-  clock,
-}: {
+interface TurnRowProps {
+  /** The row's place in the conversation's column. */
+  className: string;
+  turnId?: string;
+  undone: boolean;
   row: TurnRow;
   view: TurnView;
   requests: Readonly<Record<string, RuntimeRequest>>;
@@ -923,9 +929,60 @@ const TurnRowView = memo(function TurnRowView({
   folding: ReadonlyMap<string, InPlace>;
   /** Its steps line carries the running turn's clock. */
   clock: boolean;
-}) {
+  /** Its steps line takes the turn line's place (see ActivityLine). */
+  placed: boolean;
+}
+
+/**
+ * One of a turn's rows, in its place in the conversation's column. Its
+ * inputs keep their identity while the turn is unchanged (`TurnView`), so
+ * an update elsewhere in the chat skips it. Writing and work that join a
+ * running turn on screen open their own height (see AgentMessage), and
+ * the row opens the column's gap above them in the same beat, so what is
+ * below slides down rather than jumping by the gap first.
+ */
+const TurnRowView = memo(function TurnRowView({
+  className,
+  turnId,
+  undone,
+  ...props
+}: TurnRowProps) {
+  const onScreen = useContext(OnScreen);
+  // Read once, as AgentMessage reads its own entrance; dropped once played.
+  const [opening, setOpening] = useState(
+    () =>
+      props.row.kind !== "entry" &&
+      props.view.live &&
+      !props.placed &&
+      onScreen.current,
+  );
+  return (
+    <div
+      className={opening ? `${className} cat-gap-in` : className}
+      data-turn-id={turnId}
+      data-turn-undone={undone || undefined}
+      onAnimationEnd={(event) => {
+        if (event.target === event.currentTarget) setOpening(false);
+      }}
+    >
+      <TurnRowBody {...props} />
+    </div>
+  );
+});
+
+function TurnRowBody({
+  row,
+  view,
+  requests,
+  focusMessageId,
+  foldSteps,
+  folding,
+  clock,
+  placed,
+}: Omit<TurnRowProps, "className" | "turnId" | "undone">) {
   const host = useContext(HostContext);
   const actions = useContext(ActionsContext);
+  const folded = useContext(FoldedContext);
   // Live work and the reply it becomes render alike, so the node that
   // showed the steps gains the prose in place instead of remounting.
   if (row.kind === "steps" || row.kind === "reply") {
@@ -941,6 +998,9 @@ const TurnRowView = memo(function TurnRowView({
               aria-hidden
               inert
               className="cat-fold-away"
+              onAnimationEnd={(event) => {
+                if (event.target === event.currentTarget) folded(note.id);
+              }}
             >
               {/* The note as it read in place, steps and all, so the
                   whole of it closes up rather than its steps first. */}
@@ -967,6 +1027,7 @@ const TurnRowView = memo(function TurnRowView({
           requests={requests}
           foldSteps={foldSteps}
           clock={clock}
+          placed={placed}
         />
       </>
     );
@@ -1003,10 +1064,35 @@ const TurnRowView = memo(function TurnRowView({
     case "handoff":
       return <HandoffLine item={entry.item} />;
   }
-});
+}
 
 /** How long a folding note stays on screen: its fold-away animation. */
 const FOLD_AWAY_MS = 220;
+
+/**
+ * How long past its fold-away a stand-in may wait for the animation's end:
+ * a host without the keyframes (or a hidden chat) never sends one.
+ */
+const FOLD_GRACE_MS = 250;
+
+/** A stand-in's fold-away has played: it goes. */
+const FoldedContext = createContext<(noteId: string) => void>(() => undefined);
+
+/**
+ * Whether notes are still folding away in this row. It waits to settle
+ * (`cat-settled`) until they have gone: the frame a row starts skipping,
+ * before the browser finds it on screen, it keeps its last laid-out size,
+ * which stand-ins that arrived in that same commit would make short by
+ * their height, so the conversation below jumped up and back for a frame.
+ */
+function foldingIn(
+  row: TurnRow,
+  folding: ReadonlyMap<string, InPlace>,
+): boolean {
+  return (
+    row.kind === "reply" && row.folded.some((note) => folding.has(note.id))
+  );
+}
 
 /** How a note read in place: its steps, and whether its turn was running. */
 interface InPlace {
@@ -1021,7 +1107,10 @@ interface InPlace {
  * included), so settling closes them up instead of snapping the
  * conversation shorter.
  */
-function useFoldingNotes(views: TurnView[]): ReadonlyMap<string, InPlace> {
+function useFoldingNotes(views: TurnView[]): {
+  folding: ReadonlyMap<string, InPlace>;
+  folded: (noteId: string) => void;
+} {
   const inPlace = useRef<Map<string, InPlace>>(new Map());
   const [folding, setFolding] = useState<
     ReadonlyMap<string, InPlace & { until: number }>
@@ -1054,7 +1143,18 @@ function useFoldingNotes(views: TurnView[]): ReadonlyMap<string, InPlace> {
   useLayoutEffect(() => {
     inPlace.current = shown;
   });
-  // Each stand-in goes once its fold-away has played.
+  // Each stand-in goes once its fold-away has played, at its end: on a
+  // slow renderer the animation starts late, and a stand-in taken away
+  // mid-fold would snap the conversation shorter by what was left of it.
+  // The timer stands in where no animation plays.
+  const folded = useCallback((noteId: string) => {
+    setFolding((current) => {
+      if (!current.has(noteId)) return current;
+      const kept = new Map(current);
+      kept.delete(noteId);
+      return kept;
+    });
+  }, []);
   useEffect(() => {
     if (folding.size === 0) return;
     const due = Math.min(...[...folding.values()].map((note) => note.until));
@@ -1068,11 +1168,11 @@ function useFoldingNotes(views: TurnView[]): ReadonlyMap<string, InPlace> {
           return kept.size === current.size ? current : kept;
         });
       },
-      Math.max(0, due - Date.now()),
+      Math.max(0, due + FOLD_GRACE_MS - Date.now()),
     );
     return () => window.clearTimeout(timer);
   }, [folding]);
-  return folding;
+  return { folding, folded };
 }
 
 /**
@@ -1413,6 +1513,8 @@ interface AgentMessageProps {
   foldSteps: boolean;
   /** Its steps line carries the running turn's clock. */
   clock?: boolean;
+  /** Its steps line takes the turn line's place: it is there at once. */
+  placed?: boolean;
   /** A stand-in for a note on its way out: shown as it was, nothing enters. */
   still?: boolean;
 }
@@ -1427,17 +1529,23 @@ const AgentMessage = memo(function AgentMessage({
   requests,
   foldSteps,
   clock = false,
+  placed = false,
   still = false,
 }: AgentMessageProps) {
   const host = useContext(HostContext);
   const actions = useContext(ActionsContext);
-  const enterClasses = useEntered(still);
   const onScreen = useContext(OnScreen);
+  // Taking the turn line's place on screen: neither rises nor opens.
+  const [inPlace] = useState(() => !still && placed && onScreen.current);
+  const enterClasses = useEntered(still || inPlace);
   const [bornLive] = useState(
     () => !still && (!item || item.status === "in_progress"),
   );
-  // Work that joins a running turn on screen opens its own height.
-  const [joined] = useState(() => !still && live && onScreen.current);
+  // Work that joins a running turn on screen opens its own height (and its
+  // row the gap above it, see TurnRowView).
+  const [joined] = useState(
+    () => !still && !placed && live && onScreen.current,
+  );
   const built = turnStepsOf(steps, { requests, sourceHref: host.sourceHref });
   const shown = live && !item ? markRunning(built) : built;
   const text = item?.text ?? "";
@@ -1482,6 +1590,7 @@ const AgentMessage = memo(function AgentMessage({
         fold={foldSteps}
         clock={clock}
         enter={joined}
+        placed={inPlace}
         defaultExpanded={openWork}
         resolveToolIcon={host.resolveToolIcon}
         onFileClick={host.opensFiles ? actions.openFile : undefined}
@@ -1603,6 +1712,7 @@ function sameAgentMessage(
     previous.requests === next.requests &&
     previous.foldSteps === next.foldSteps &&
     previous.clock === next.clock &&
+    previous.placed === next.placed &&
     previous.still === next.still &&
     previous.steps.length === next.steps.length &&
     previous.steps.every((step, index) => step.item === next.steps[index]?.item)
@@ -1995,18 +2105,21 @@ const REVEAL_MS = 220;
  */
 function Reveal({
   closed,
+  appear = true,
   className = "",
   inert,
   children,
 }: {
   closed: boolean;
+  /** Opens from nothing as it appears on screen; otherwise it is simply there. */
+  appear?: boolean;
   className?: string;
   /** Closing: out of reach and hidden from assistive technology. */
   inert?: boolean;
   children: ReactNode;
 }) {
   const onScreen = useContext(OnScreen);
-  const [entering, setEntering] = useState(() => onScreen.current);
+  const [entering, setEntering] = useState(() => appear && onScreen.current);
   const [moving, setMoving] = useState(entering);
   const [was, setWas] = useState(closed);
   if (was !== closed) {
@@ -2053,6 +2166,12 @@ function Reveal({
  * starts and closes it when the work is done, so the conversation never
  * jumps by a line. Withdrawing a message about to start sits at the far
  * end, clear of the words.
+ *
+ * Until the running turn has a steps line (a message still on its way
+ * included), the turn line above it keeps that line's place, with the
+ * turn's clock: the two open as one, and the first steps line takes the
+ * turn line's place in the same frame, so the activity line never moves
+ * for it, however late the frames come.
  */
 function ActivityLine({
   activity,
@@ -2061,7 +2180,7 @@ function ActivityLine({
   onCancel,
 }: {
   activity?: string;
-  /** The running turn has no steps line: its silence reads here instead. */
+  /** No steps line in the running turn yet: the turn line keeps its place. */
   turnLine: boolean;
   /** The message about to start, withdrawable until the agent takes it. */
   startingId?: string;
@@ -2075,6 +2194,17 @@ function ActivityLine({
   const cancel = useLinger(startingId, REVEAL_MS);
   const line = useRef<HTMLDivElement>(null);
   const present = Boolean(shown.value && said.current);
+  const leaving = shown.leaving;
+  // Closing, it keeps the turn line as it was: the two close as one.
+  const lined = useRef(turnLine);
+  if (!leaving) lined.current = turnLine;
+  // A turn line there as the activity line opens is part of its opening;
+  // one that comes later (a next turn under a line still open) opens its
+  // own place.
+  const opened = useRef(false);
+  useEffect(() => {
+    opened.current = present;
+  }, [present]);
   // Its spinner and breathing stop while it is scrolled out of view.
   useEffect(() => {
     const element = line.current;
@@ -2087,8 +2217,7 @@ function ActivityLine({
     observer.observe(element);
     return () => observer.disconnect();
   }, [present]);
-  if (!shown.value || !said.current) return null;
-  const leaving = shown.leaving;
+  if (!present || !said.current) return null;
   return (
     <Reveal
       closed={leaving}
@@ -2096,7 +2225,17 @@ function ActivityLine({
       inert={leaving}
     >
       <div>
-        <TurnLine shown={turnLine && !leaving} />
+        {lined.current && (
+          // Gone at once when the first steps line takes its place. Its
+          // place opens from nothing (no column gap to give back).
+          <Reveal
+            closed={false}
+            appear={opened.current}
+            className="[--cat-reveal-gap:0px]"
+          >
+            <TurnLine leaving={leaving} />
+          </Reveal>
+        )}
         <div
           ref={line}
           className="flex h-5 items-center gap-2 text-xs text-fg-muted"
@@ -2111,33 +2250,6 @@ function ActivityLine({
               leaving={cancel.leaving}
             />
           )}
-        </div>
-      </div>
-    </Reveal>
-  );
-}
-
-/**
- * A running turn's clock before it has a steps line to sit on: a line of
- * its own above the activity, shown only once the turn has gone quiet, so
- * a long silence before the first step still says so. The first steps line
- * takes the clock from it.
- */
-function TurnLine({ shown }: { shown: boolean }) {
-  const { updatedAt } = useContext(TurnClockContext);
-  const updated = updatedAt ? Date.parse(updatedAt) : Number.NaN;
-  const now = useNow(shown && Number.isFinite(updated));
-  const quiet = Number.isFinite(updated) ? now - updated : 0;
-  const line = useLinger(
-    shown && quiet >= STALL_AFTER_MS ? true : undefined,
-    REVEAL_MS,
-  );
-  if (!line.value) return null;
-  return (
-    <Reveal closed={line.leaving}>
-      <div>
-        <div className="pb-1.5" data-testid="chat-turn-line">
-          <TurnClock leaving={line.leaving} />
         </div>
       </div>
     </Reveal>
@@ -2503,6 +2615,7 @@ const ENTRANCES = new Set([
   "catamorphic-fade-in",
   "catamorphic-fold-away",
   "catamorphic-step-in",
+  "catamorphic-gap-in",
   "catamorphic-swap-out",
   "catamorphic-swap-in",
 ]);
