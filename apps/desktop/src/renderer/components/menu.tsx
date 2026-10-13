@@ -14,6 +14,7 @@ import {
   type MenuEntry,
   type MenuSeparator,
 } from "../../shared/menu.js";
+import { moveFocusAsApp } from "../lib/app-focus.js";
 
 /** A menu row the app draws; `icon` and `url` serve sidebar placements. */
 export interface ContextMenuEntry extends MenuEntry {
@@ -167,7 +168,10 @@ export function MenuPortal<TEntry extends ContextMenuEntry>({
     const back = returnFocusRef.current;
     returnFocusRef.current = null;
     if (active && active !== document.body && !inMenu(active)) return;
-    if (back?.isConnected) back.focus({ preventScroll: true });
+    // The app's move, not the person's: the control it lands on (a chip,
+    // a row) opens no hover card for it.
+    if (back?.isConnected)
+      moveFocusAsApp(() => back.focus({ preventScroll: true }));
     else if (active instanceof HTMLElement && inMenu(active)) active.blur();
   }, [open]);
 

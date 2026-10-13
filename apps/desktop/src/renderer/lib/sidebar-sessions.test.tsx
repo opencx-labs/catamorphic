@@ -456,7 +456,7 @@ it("keeps every chat when a new one arrives in a sorted section", async () => {
 });
 
 it("starts a next page five rows early and merges the repeats", async () => {
-  const { pages } = chatList(SIDEBAR_SESSION_PAGE * 2 + 4);
+  const { chats, pages } = chatList(SIDEBAR_SESSION_PAGE * 2 + 4);
   const view = mountSessions({ section: { id: "chats", type: "chats" } });
   await view.mount();
   const { collection, release } = await loadRows(view, 1);
@@ -473,8 +473,9 @@ it("starts a next page five rows early and merges the repeats", async () => {
   const ids = collection.getBranch(null).ids;
   expect(ids).toHaveLength(SIDEBAR_SESSION_PAGE * 2 - 5);
   expect(new Set(ids).size).toBe(ids.length);
+  const last = chats[SIDEBAR_SESSION_PAGE * 2 - 6];
   expect(collection.getBranch(null).cursor).toBe(
-    `${SIDEBAR_SESSION_PAGE * 2 - 5}~c${SIDEBAR_SESSION_PAGE * 2 - 6}`,
+    `${SIDEBAR_SESSION_PAGE * 2 - 5}~${last?.createdAt}~${last?.id}`,
   );
   act(() => release());
   await view.unmount();
@@ -507,6 +508,54 @@ it("starts a page earlier when more chats went away than the overlap covers", as
   ]);
   // c10 now sits at offset 3: it is read, not skipped.
   expect(collection.getBranch(null).ids).toContain("c10");
+  act(() => release());
+  await view.unmount();
+});
+
+it("reads on to the last row when more chats arrived above than the overlap covers", async () => {
+  const { chats, pages } = chatList(40);
+  const view = mountSessions({
+    section: {
+      id: "arrived",
+      type: "chats",
+      source: { type: "chats", pageSize: 10 },
+    },
+  });
+  await view.mount();
+  const { collection, release } = await loadRows(view, 1);
+  expect(collection.getBranch(null).ids.at(-1)).toBe("c9");
+  // Twelve chats start before a poll reads every loaded page again: every
+  // later offset moves down by twelve, past the five-row overlap.
+  chats.unshift(
+    ...Array.from({ length: 12 }, (_, index) => ({
+      id: `n${index}`,
+      title: `New ${index}`,
+      visibility: "promoted",
+      parentSessionId: null,
+      childCount: 0,
+      createdAt: new Date(Date.UTC(2026, 0, 2) - index * 60_000).toISOString(),
+    })),
+  );
+  await view.client.invalidateQueries({ refetchType: "none" });
+  pages.length = 0;
+  await act(async () => {
+    await collection.load({ more: true });
+  });
+  // The overlap page holds rows already loaded; the next one holds c9.
+  expect(pages.map((url) => url.searchParams.get("offset"))).toEqual([
+    "5",
+    "15",
+  ]);
+  // The rows after it arrive, not the loaded ones again.
+  expect(collection.getBranch(null).ids.slice(10)).toEqual([
+    "c10",
+    "c11",
+    "c12",
+  ]);
+  const last = chats[24];
+  expect(collection.getBranch(null).cursor).toBe(
+    `25~${last?.createdAt}~${last?.id}`,
+  );
   act(() => release());
   await view.unmount();
 });

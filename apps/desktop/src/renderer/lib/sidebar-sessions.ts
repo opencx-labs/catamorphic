@@ -47,29 +47,48 @@ const EVERY_LOADED_PAGE_TICKS = 15;
 const WHOLE_POLL_PAGES = 2;
 /**
  * A next page starts up to five rows early (half a page when pages are
- * smaller): a chat archived above the loaded rows shifts every later
- * offset, and the overlap keeps that from skipping one. Its cursor also
- * names the last row read; when even the overlap misses it (more chats went
- * away), the read starts a page earlier. Repeated rows are merged by id.
+ * smaller): a chat archived or started above the loaded rows shifts every
+ * later offset, and the overlap keeps that from skipping or repeating one.
+ * Its cursor also names the last row read and when it was created (pages
+ * are newest first); when even the overlap misses that row, the read finds
+ * it again: further on when the rows read are newer (more chats arrived
+ * than the overlap covers, before a poll of every loaded page re-reads the
+ * offsets), a page earlier when they are older (more chats went away).
+ * Repeated rows are merged by id.
  */
 const pageOverlap = (limit: number) => Math.min(5, Math.floor(limit / 2));
+/**
+ * Pages a next page reads on, past the overlap, looking for the last row
+ * read. Past that it returns the rows it reached with their cursor: the
+ * tree shows Show more, and the next read starts where this one ended.
+ */
+const ANCHOR_SCAN_PAGES = 4;
 /**
  * Raw pages one read may look through for rows a section's filter keeps
  * ("Working chats"). Past that it returns what it found with its cursor,
  * and the tree waits for the person before looking further.
  */
 const FILTER_SCAN_PAGES = 4;
-/** `offset~lastRowId`: where the next page starts, and the row before it. */
-const readCursor = (cursor?: string) => {
-  if (!cursor) return { offset: 0, last: undefined };
-  const split = cursor.indexOf("~");
-  return split < 0
-    ? { offset: Number(cursor), last: undefined }
-    : {
-        offset: Number(cursor.slice(0, split)),
-        last: cursor.slice(split + 1),
-      };
+/**
+ * `offset~createdAt~lastRowId`: where the next page starts, and the row
+ * before it.
+ */
+const readCursor = (
+  cursor?: string,
+): { offset: number; last?: { id: string; createdAt: number } } => {
+  if (!cursor) return { offset: 0 };
+  const [offset = "", createdAt = "", ...id] = cursor.split("~");
+  return id.length
+    ? {
+        offset: Number(offset),
+        last: { id: id.join("~"), createdAt: Date.parse(createdAt) },
+      }
+    : { offset: Number(offset) };
 };
+const writeCursor = (
+  offset: number,
+  last?: { id: string; createdAt: string },
+) => (last ? `${offset}~${last.createdAt}~${last.id}` : String(offset));
 
 const sessionPageKey = (projectId: string) => [
   "desktop",
@@ -307,20 +326,51 @@ export function useSidebarSessions({
           },
         });
       const start = readCursor(cursor);
+      const anchor = start.last;
       let offset = Math.max(0, start.offset - pageOverlap(limit));
-      for (let scanned = 1; ; scanned += 1) {
-        let page = await read(offset);
-        if (
-          start.last &&
-          scanned === 1 &&
-          offset > 0 &&
-          pageOverlap(limit) > 0 &&
-          !page.items.some((session) => session.id === start.last)
-        ) {
+      let page = await read(offset);
+      /** Created after the last row read: the server reads newest first. */
+      const newer = (session?: { createdAt: string }) =>
+        Boolean(
+          anchor && session && Date.parse(session.createdAt) > anchor.createdAt,
+        );
+      if (
+        anchor &&
+        pageOverlap(limit) > 0 &&
+        !page.items.some((session) => session.id === anchor.id)
+      ) {
+        if (newer(page.items.at(-1))) {
+          // More chats arrived above than the overlap covers: the last row
+          // read sits further on. Read on to it and start right after it.
+          for (let step = 0; step < ANCHOR_SCAN_PAGES; step += 1) {
+            const after = offset + page.items.length;
+            if (!page.items.length || after >= page.total) break;
+            offset = after;
+            page = await read(offset);
+            const at = page.items.findIndex(
+              (session) => session.id === anchor.id,
+            );
+            if (at >= 0 && at + 1 < page.items.length) {
+              offset += at + 1;
+              page = { ...page, items: page.items.slice(at + 1) };
+              break;
+            }
+            if (at >= 0) {
+              offset += page.items.length;
+              page = await read(offset);
+              break;
+            }
+            // Past where it would be: it went away too; read on from here.
+            if (!newer(page.items.at(-1))) break;
+          }
+        } else if (offset > 0) {
           // More chats went away above than the overlap covers.
           offset = Math.max(0, start.offset - limit);
           page = await read(offset);
         }
+      }
+      for (let scanned = 1; ; scanned += 1) {
+        if (scanned > 1) page = await read(offset);
         // Pages keep the server's order: the section's sort is applied
         // across every loaded row by the view, never within one page.
         const items = projectSidebarItems(page.items, unsorted)
@@ -338,10 +388,9 @@ export function useSidebarSessions({
             hasChildren: Boolean(session.childCount),
           }));
         offset += page.items.length;
-        const last = page.items.at(-1)?.id;
         const next =
           offset < page.total
-            ? `${offset}${last ? `~${last}` : ""}`
+            ? writeCursor(offset, page.items.at(-1))
             : undefined;
         if (
           items.length ||

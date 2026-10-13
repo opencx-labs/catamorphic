@@ -352,21 +352,36 @@ export function createCollection<T extends CollectionItem>({
     } finally {
       if (requests.get(parentId) === controller) {
         requests.delete(parentId);
-        if (wantMore.delete(parentId)) void load({ parentId, more: true });
-        else {
-          const pending = invalidated.get(parentId);
-          const waiters = waiting.get(parentId) ?? [];
-          invalidated.delete(parentId);
-          waiting.delete(parentId);
-          const answer = () => {
-            for (const resolve of waiters) resolve();
-          };
-          if (pending && (branchReferences.has(parentId) || waiters.length))
-            void load({ parentId, pages: pending }).finally(answer);
-          else answer();
-        }
+        settle(parentId);
       }
     }
+  };
+  /**
+   * Runs what was asked for while a branch's IO was in flight: the next
+   * page first (its own IO settles the rest), then the widest refresh,
+   * answering everyone waiting on it.
+   */
+  const settle = (parentId: string | null) => {
+    if (wantMore.delete(parentId)) {
+      const current = branch(parentId);
+      if (current.cursor) {
+        void load({ parentId, more: true });
+        return;
+      }
+      // The refresh found no rows past the loaded ones.
+      if (current.paging)
+        setBranch(parentId, { ...current, paging: undefined });
+    }
+    const pending = invalidated.get(parentId);
+    const waiters = waiting.get(parentId) ?? [];
+    invalidated.delete(parentId);
+    waiting.delete(parentId);
+    const answer = () => {
+      for (const resolve of waiters) resolve();
+    };
+    if (pending && (branchReferences.has(parentId) || waiters.length))
+      void load({ parentId, pages: pending }).finally(answer);
+    else answer();
   };
   const abort = (parentId: string | null) => {
     requests.get(parentId)?.abort();
