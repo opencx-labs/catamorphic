@@ -99,8 +99,9 @@ the copy: `renderAttachment` (the `ContextPill` with its previews), `Hint`
 `workDisplay`. Rows are memoized: keep render-affecting slots stable
 (`useCallback` or module-level functions); action callbacks may change every
 render. The timeline's motion classes (`cat-fade-in`, `cat-fold-away`,
-`cat-step-in`, `cat-activity-*`) live in `@catamorphic/ui/styles.css`, which the
-renderer stylesheet imports.
+`cat-step-in`, `cat-swap-*`, `cat-reveal`, `cat-grow`), its scroll pinning
+(`cat-scroll-anchor` with `data-pinned`) and `cat-settled` live in
+`@catamorphic/ui/styles.css`, which the renderer stylesheet imports.
 
 Registry build emits the installable JSON; source edits alone do not update that
 output. Build the React package first because consumers resolve its declarations

@@ -2740,10 +2740,7 @@ function ChatDockContent({
                 className="size-4 shrink-0 animate-spin"
                 aria-hidden="true"
               />
-              <ActivityText
-                text={activity ?? "Working…"}
-                className="truncate"
-              />
+              <ActivityText text={activity ?? "Working…"} />
             </div>
           )}
           {runtimeSettingsError ? (
