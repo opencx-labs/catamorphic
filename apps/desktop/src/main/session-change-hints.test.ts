@@ -1,6 +1,9 @@
 import { WorkWakeups } from "@catamorphic/core";
 import { afterEach, expect, it, vi } from "vitest";
-import { startSessionChangeHints } from "./session-change-hints.js";
+import {
+  changesChatLists,
+  startSessionChangeHints,
+} from "./session-change-hints.js";
 
 afterEach(() => {
   vi.useRealTimers();
@@ -42,4 +45,29 @@ it("never holds a hint back longer than its longest wait while changes keep comi
   wakeups.notify("chats");
   await vi.advanceTimersByTimeAsync(5_000);
   expect(send).toHaveBeenCalledTimes(2);
+});
+
+it("hints for requests that change chat lists, attention or watchers, not for other project requests", () => {
+  const route = (path: string) => `/api/projects/:projectId${path}`;
+  for (const [method, path] of [
+    ["POST", "/agent/sessions"],
+    ["PATCH", "/agent/sessions/:sessionId"],
+    ["DELETE", "/agent/sessions/:sessionId"],
+    ["POST", "/agent/sessions/:sessionId/archive"],
+    ["POST", "/agent/sessions/:sessionId/attention/acknowledge"],
+    ["POST", "/agent/sessions/:sessionId/watchers"],
+    ["DELETE", "/agent/sessions/:sessionId/watchers/:watcherId"],
+    ["POST", "/agent/chats/:key"],
+  ] as const)
+    expect(changesChatLists({ method, route: route(path) })).toBe(true);
+  for (const [method, path] of [
+    ["GET", "/agent/sessions"],
+    ["POST", "/agent/sessions/:sessionId/commands"],
+    ["POST", "/agent/sessions/:sessionId/terminals/:terminalId/input"],
+    ["POST", "/apps/:appName/workflows/:workflowName/call"],
+    ["PUT", "/apps/:appName/storage"],
+    ["POST", "/mcp"],
+  ] as const)
+    expect(changesChatLists({ method, route: route(path) })).toBe(false);
+  expect(changesChatLists({ method: "POST", route: undefined })).toBe(false);
 });

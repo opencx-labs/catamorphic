@@ -148,13 +148,13 @@ export interface CatamorphicCoreConfig {
    */
   workerNode?: { id: string; token: string };
   /**
-   * How often this process's pollers (workflow and agent workers, event
-   * delivery, live session streams) look for work while none was found or
-   * hinted (ADR 0228). Writes made in this process hint them at once, so
-   * only work written elsewhere waits for an idle poll. Default: they never
-   * slow down. A single-process host, where every write is its own, can
-   * raise it freely; a host with several replicas trades that much
-   * latency for work another replica writes.
+   * How long this process's pollers (workflow and agent workers, event
+   * delivery, live session streams) wait after a poll while no work was
+   * found, hinted or due (ADR 0228). Writes made in this process hint them
+   * at once, so only work written elsewhere waits for an idle poll.
+   * Default: they always wait their short interval. A single-process host,
+   * where every write is its own, can raise it freely; a host with several
+   * replicas trades that much latency for work another replica writes.
    */
   idlePollMs?: number;
   /**
@@ -795,10 +795,16 @@ export class CatamorphicCore {
       );
     }
     const providers = new ConnectionProviderRegistry(connectionProviders);
+    const executionJobs = new ExecutionJobsService(
+      this.db,
+      config.workerNode,
+      this.wakeups,
+    );
     if (connectionProviders.length > 0 && credentialVault) {
       const hostBindings = config.connectionBindings;
       this.connections = new ConnectionsService({
         db: this.db,
+        jobs: executionJobs,
         vault: credentialVault,
         providers,
         // Committed bindings are read with the Environment they belong to
@@ -964,11 +970,6 @@ export class CatamorphicCore {
     this.resolveMember =
       config.resolveMemberIdentity ??
       ((args) => this.memberships.identityFor(args));
-    const executionJobs = new ExecutionJobsService(
-      this.db,
-      config.workerNode,
-      this.wakeups,
-    );
     this.retention = new RetentionService(this.db, config.retention);
     const executionWorker = new ExecutionWorkerService(
       executionJobs,
@@ -1304,6 +1305,7 @@ export class CatamorphicCore {
         monitors: this.projectEventMonitors,
         sessions: this.agentSessions,
         eventSources: this.projectEventSources,
+        wakeups: this.wakeups,
       });
       this.sessionActions = new SessionActionsService(
         this.db,

@@ -399,6 +399,55 @@ it("reads a deep list's first page on a hint and every loaded page every 30 seco
   await view.unmount();
 });
 
+it("catches up when a hidden window shows again, without taking focus", async () => {
+  vi.useFakeTimers();
+  const { pages } = chatList(20);
+  const view = mountSessions({
+    section: {
+      id: "hidden",
+      type: "chats",
+      source: { type: "chats", pageSize: 4 },
+    },
+  });
+  let hidden = false;
+  const visibility = vi
+    .spyOn(document, "hidden", "get")
+    .mockImplementation(() => hidden);
+  try {
+    await view.mount();
+    const { collection, release } = await loadRows(view, 8);
+    await vi.waitFor(() =>
+      expect(collection.getBranch(null).fetching).toBeFalsy(),
+    );
+    pages.length = 0;
+    hidden = true;
+    await act(async () => {
+      hint();
+      document.dispatchEvent(new Event("visibilitychange"));
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    // A hidden window reads nothing, and so missed this hint.
+    expect(pages).toHaveLength(0);
+    hidden = false;
+    await act(async () => {
+      document.dispatchEvent(new Event("visibilitychange"));
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    await vi.waitFor(() =>
+      expect(collection.getBranch(null).fetching).toBeFalsy(),
+    );
+    expect(pages.map((url) => url.searchParams.get("offset"))).toEqual([
+      "0",
+      "2",
+      "4",
+    ]);
+    act(() => release());
+  } finally {
+    visibility.mockRestore();
+    await view.unmount();
+  }
+});
+
 it("polls a remote project's list, whose server sends no hints", async () => {
   vi.useFakeTimers();
   const { pages } = chatList(20);

@@ -23,11 +23,11 @@ interface Subscriber {
  * Live session streams for this process (ADR 0197). One poller serves
  * every open stream: each tick reads the subscribed sessions' events after
  * their cursors in one query, in Postgres order, with no LISTEN/NOTIFY
- * (ADR 0193). It polls every `quickMs` while events arrive, and with an
- * `idleMs` slows down once they stop, until this process's session log
- * hints at new events (ADR 0228). A subscriber that falls behind is
- * closed; its client resumes from its cursor. Replica memory (a): the
- * streams this process serves.
+ * (ADR 0193). It waits `quickMs` between polls while events arrive, and
+ * with an `idleMs` waits that long once they stop, until this process's
+ * session log hints at new events (ADR 0228). A subscriber that falls
+ * behind is closed; its client resumes from its cursor. Replica memory
+ * (a): the streams this process serves.
  */
 export class SessionFeed {
   // Replica memory (a): the streams this replica serves.
@@ -108,6 +108,7 @@ export class SessionFeed {
     const pacer = new PollPacer({
       quickMs: this.pacing.quickMs ?? 150,
       idleMs: this.pacing.idleMs,
+      signal: stop.signal,
       wakeups: this.pacing.wakeups,
       topic: "sessions",
     });
@@ -115,7 +116,7 @@ export class SessionFeed {
     pacer.busy();
     const loop = async () => {
       while (!stop.signal.aborted) {
-        await pacer.wait(stop.signal);
+        await pacer.wait();
         if (stop.signal.aborted) return;
         if (await this.tick()) pacer.busy();
       }

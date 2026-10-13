@@ -113,3 +113,41 @@ it("polls at its quick cadence when the host sets no idle cadence", async () => 
   expect(log.eventsAfterMany.mock.calls.length).toBeGreaterThanOrEqual(90);
   unsubscribe();
 });
+
+it("reads again soon when a write is hinted while a poll is in flight", async () => {
+  vi.useFakeTimers();
+  const events: StoredSessionEvent[] = [];
+  const log = logOf(events);
+  const wakeups = new WorkWakeups();
+  const feed = new SessionFeed(db, log, { idleMs: 5_000, wakeups });
+  const received: SessionStreamMessage[] = [];
+  const unsubscribe = await feed.subscribe({
+    sessionId: "session",
+    after: 0,
+    send: (message) => {
+      received.push(message);
+      return true;
+    },
+    onClose: () => {},
+  });
+  await vi.advanceTimersByTimeAsync(QUICK_FOR_MS + 200);
+  // Idle now. The next poll reads before a writer commits, and the
+  // writer's hint arrives while that poll is in flight.
+  let release: (() => void) | undefined;
+  log.eventsAfterMany.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        release = () => resolve([]);
+      }),
+  );
+  await vi.advanceTimersByTimeAsync(5_000);
+  expect(release).toBeDefined();
+  const polls = log.eventsAfterMany.mock.calls.length;
+  wakeups.notify("sessions");
+  events.push(event(1));
+  release?.();
+  await vi.advanceTimersByTimeAsync(150);
+  expect(log.eventsAfterMany.mock.calls.length).toBe(polls + 1);
+  expect(received).toEqual([{ type: "events", events: [event(1)] }]);
+  unsubscribe();
+});

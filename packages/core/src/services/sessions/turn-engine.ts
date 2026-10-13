@@ -53,7 +53,6 @@ import {
 import {
   type RunnerChannel,
   type RunnerLocation,
-  type RunnerRead,
   reattachInProcessRunner,
 } from "./runner-channels.js";
 import { SecretMask } from "./secret-mask.js";
@@ -67,6 +66,7 @@ import {
   turnFromRow,
   waitingNotificationTurn,
 } from "./session-rows.js";
+import { batchStreamedRead } from "./stream-batch.js";
 import { derivedId, ingestHarnessEvents } from "./turn-ingest.js";
 import type { ClaimedTurn, TurnCommandKind, TurnQueue } from "./turn-queue.js";
 
@@ -310,14 +310,6 @@ const RESULT_RESEND_MS = 2_000;
 const RUNNER_EXIT_GRACE_MS = 15_000;
 /** What a stopping process keeps of its stop's time to settle its turns. */
 const STOP_SETTLE_MS = 1_000;
-/**
- * How long streamed deltas (an answer, a command's output) gather before
- * they are recorded: harnesses write in many small pieces, and each read
- * becomes a transaction, session events and a stream message. Streams
- * deliver no faster than the session feed polls (150 ms), so readers see
- * no difference.
- */
-const STREAM_BATCH_MS = 100;
 /** What a tool call answers when an earlier holder may have run it. */
 const TAKEN_OVER_TOOL =
   "The machine running this turn stopped while this tool ran. It may or may not have completed: check its effects before trying again.";
@@ -1530,6 +1522,8 @@ export class TurnEngine {
     await sendCommands();
 
     let commandsInFlight: Promise<void> | undefined;
+    /** Items whose streamed deltas were recorded already (stream-batch.ts). */
+    const streaming = new Set<string>();
     for (;;) {
       if (local.abort.signal.aborted) return { kind: "aborted", channel };
       await this.resendResults(local, attempt.id, channel);
@@ -1545,25 +1539,21 @@ export class TurnEngine {
               ),
             );
         });
-      let read = await channel.read({
+      const first = await channel.read({
         cursor: runner.cursor,
         waitMs: runner.location.kind === "in_process" ? 500 : 2_000,
       });
       if (local.abort.signal.aborted) return { kind: "aborted", channel };
-      if (onlyDeltas(read)) {
-        // Streamed text or output: record what arrives over the next
-        // moment as one batch, which the ingest folds into one append per
-        // item.
-        await abortableSleep(STREAM_BATCH_MS, local.abort.signal);
-        if (local.abort.signal.aborted) return { kind: "aborted", channel };
-        const more = await channel.read({ cursor: read.cursor, waitMs: 0 });
-        read = {
-          frames: [...read.frames, ...more.frames],
-          diagnostics: [...read.diagnostics, ...more.diagnostics],
-          cursor: more.cursor,
-          exited: more.exited,
-        };
-      }
+      // Streamed text or output is recorded in batches, which the ingest
+      // folds into one append per item; an item's first words go at once.
+      const read = await batchStreamedRead({
+        channel,
+        read: first,
+        streaming,
+        signal: local.abort.signal,
+      });
+      if (!read || local.abort.signal.aborted)
+        return { kind: "aborted", channel };
       for (const line of read.diagnostics)
         console.warn(
           `[catamorphic] agent runner (turn ${turn.id}): ${local.mask?.text(line) ?? line}`,
@@ -3386,17 +3376,6 @@ async function closeOpenWork(
 }
 
 export type { JsonObject };
-
-/** Whether a read carried only streamed text or output, mid-item. */
-function onlyDeltas(read: RunnerRead): boolean {
-  return (
-    !read.exited &&
-    read.frames.length > 0 &&
-    read.frames.every(
-      (frame) => frame.type === "event" && frame.event.type === "item.delta",
-    )
-  );
-}
 
 /** Sleep, ending early when `signal` aborts or `wake` resolves. */
 function abortableSleep(

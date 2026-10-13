@@ -30,9 +30,9 @@ export interface ExecutionWorkerOptions {
   leaseSeconds?: number;
   pollIntervalMs?: number;
   /**
-   * How often a loop with nothing to do polls when no job is due sooner and
-   * no hint from this process came (ADR 0228). Defaults to the host's
-   * `idlePollMs`; without either it polls every `pollIntervalMs`.
+   * How long a loop with nothing to do waits after a poll when no job is
+   * due sooner and no hint from this process came (ADR 0228). Defaults to
+   * the host's `idlePollMs`; without either it waits `pollIntervalMs`.
    */
   idlePollIntervalMs?: number;
   kinds?: readonly ExecutionJobKind[];
@@ -219,6 +219,7 @@ export class ExecutionWorkerService {
     const pacer = new PollPacer({
       quickMs: args.pollIntervalMs,
       idleMs: args.idlePollIntervalMs,
+      signal,
       wakeups: this.pacing.wakeups,
       topic: "execution",
     });
@@ -343,14 +344,14 @@ export class ExecutionWorkerService {
       leaseSeconds: args.leaseSeconds,
     });
     if (claimed.length === 0) {
-      // Idle: sleep until the soonest pending job is due, a hint from
-      // this process, or the idle poll, whichever comes first.
+      // Idle: sleep until the soonest job is due (or its lease lapses), a
+      // hint from this process, or the idle poll, whichever comes first.
       const due = args.pacer.quick
         ? undefined
         : await this.jobs
-            .nextAvailableAt({ kinds: args.kinds })
+            .nextDueAt({ kinds: args.kinds })
             .catch(() => undefined);
-      await args.pacer.wait(signal, { until: due?.getTime() });
+      await args.pacer.wait({ until: due?.getTime() });
       return;
     }
     args.pacer.busy();

@@ -34,11 +34,13 @@ import { ExecutionAllocationsService } from "../services/execution-allocations-s
 import { ExecutionEnvironmentsService } from "../services/execution-environments-service.js";
 import { ProjectEnvironmentsService } from "../services/project-environments-service.js";
 import { ProjectsService } from "../services/projects-service.js";
+import { SessionLog } from "../services/sessions/session-log.js";
 import { readFullSnapshot } from "../services/sessions/session-reads.js";
 import {
   hostRetryDelay,
   TurnEngine,
 } from "../services/sessions/turn-engine.js";
+import { type WorkTopic, WorkWakeups } from "../services/work-wakeups.js";
 import { testEnvironmentProvider } from "./test-environment.js";
 
 /*
@@ -72,7 +74,7 @@ describe("session log", () => {
   let tmpDir: string;
   let sessions: AgentSessionsService;
   let projects: ProjectsService;
-  let makeService: () => AgentSessionsService;
+  let makeService: (wakeups?: WorkWakeups) => AgentSessionsService;
   /** Each checkout's commit, as the host reports it. */
   const heads = new Map<string, string>();
   /** The thread each attempt of the recording agent started on. */
@@ -302,9 +304,10 @@ describe("session log", () => {
         },
       },
     };
-    makeService = () =>
+    makeService = (wakeups) =>
       new AgentSessionsService(db, {
         hostId: "session-log-host",
+        ...(wakeups ? { wakeups } : {}),
         projectManager,
         executionEnvironments: new ExecutionEnvironmentsService(
           new ProjectEnvironmentsService(db, projectManager),
@@ -433,6 +436,73 @@ describe("session log", () => {
       },
       { timeout: 10_000 },
     );
+  });
+
+  it("hints what a command wrote once it commits, and other appends at once", async () => {
+    const { sessionId } = await chat("Hints");
+    const wakeups = new WorkWakeups();
+    const heard: WorkTopic[] = [];
+    for (const topic of ["sessions", "chats", "agent"] as const)
+      wakeups.subscribe(topic, () => heard.push(topic));
+    const log = new SessionLog(db, wakeups);
+    const renamed = (title: string): SessionEvent[] => [
+      { type: "session.changed", session: { title } },
+    ];
+    let beforeCommit: WorkTopic[] | undefined;
+    await log.command({
+      sessionId,
+      commandId: randomUUID(),
+      type: "rename",
+      run: async (trx) => {
+        await log.append(trx, { sessionId, events: renamed("Hinted") });
+        beforeCommit = [...heard];
+        return null;
+      },
+    });
+    expect(beforeCommit).toEqual([]);
+    expect(heard).toEqual(["sessions", "chats"]);
+    // A command that rolls back hints nothing.
+    heard.length = 0;
+    await expect(
+      log.command({
+        sessionId,
+        commandId: randomUUID(),
+        type: "rename",
+        run: async (trx) => {
+          await log.append(trx, { sessionId, events: renamed("Lost") });
+          throw new Error("Rolled back");
+        },
+      }),
+    ).rejects.toThrow("Rolled back");
+    expect(heard).toEqual([]);
+    // Another writer's transaction hints as it appends.
+    await db.transaction().execute(async (trx) => {
+      await log.append(trx, { sessionId, events: renamed("Direct") });
+      expect(heard).toEqual(["sessions", "chats"]);
+    });
+  });
+
+  it("tells this process's chat lists when a chat changes outside its log", async () => {
+    const { projectId, sessionId } = await chat("Lists");
+    const wakeups = new WorkWakeups();
+    const service = makeService(wakeups);
+    const heard = vi.fn();
+    wakeups.subscribe("chats", heard);
+    await service.setIcon(identity, projectId, sessionId, "star:blue");
+    expect(heard).toHaveBeenCalledTimes(1);
+    await service.requestAttention(identity, projectId, sessionId);
+    expect(heard).toHaveBeenCalledTimes(2);
+    await service.acknowledgeAttention(identity, projectId, sessionId);
+    expect(heard).toHaveBeenCalledTimes(3);
+    heard.mockClear();
+    await service.archive(identity, projectId, sessionId);
+    expect(heard).toHaveBeenCalled();
+    heard.mockClear();
+    await service.unarchive(identity, projectId, sessionId);
+    expect(heard).toHaveBeenCalled();
+    heard.mockClear();
+    await service.create(identity, projectId);
+    expect(heard).toHaveBeenCalledTimes(1);
   });
 
   it("waits on a question and goes on with the person's answer", async () => {

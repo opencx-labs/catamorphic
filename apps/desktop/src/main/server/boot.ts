@@ -69,7 +69,10 @@ import { RemoteClientRunners } from "../remote-client-runner.js";
 import { RemoteSessionMirror } from "../remote-mirror.js";
 import { RemotePreviewOrigins } from "../remote-previews.js";
 import type { RemoteTerminalRequest } from "../remote-terminal.js";
-import { startSessionChangeHints } from "../session-change-hints.js";
+import {
+  changesChatLists,
+  startSessionChangeHints,
+} from "../session-change-hints.js";
 import { shutdownDesktopServices } from "../shutdown.js";
 import { userSkillFiles, userSkillInfos } from "../user-skills.js";
 import {
@@ -1455,9 +1458,14 @@ export async function startEmbeddedServer(
     },
   });
   app.addHook("onResponse", (request, _reply, done) => {
-    // A change to a project through the API (an agent's tool, a workflow,
-    // another window) may change its chats without a session event.
-    if (request.method !== "GET" && request.url.startsWith("/api/projects/"))
+    // A request that changes chats (from any window, tool or client) hints
+    // beside core's own hints; other project requests never do.
+    if (
+      changesChatLists({
+        method: request.method,
+        route: request.routeOptions.url,
+      })
+    )
       sessionHints.hint();
     done();
   });

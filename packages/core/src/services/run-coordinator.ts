@@ -691,14 +691,13 @@ export class RunCoordinator {
         .execute();
       // Jobs deferred while this run was paused are parked an hour out rather
       // than polling for it. Pull them forward in the same transaction, so a
-      // resume that commits always leaves its work runnable.
-      await trx
-        .updateTable("execution_jobs")
-        .set({ available_at: now, updated_at: now })
-        .where("workflow_run_id", "=", args.runId)
-        .where("status", "=", "pending")
-        .where("available_at", ">", now)
-        .execute();
+      // resume that commits always leaves its work runnable, and wake this
+      // process's workers (ADR 0228).
+      await this.jobs.makeRunAvailable({
+        runId: args.runId,
+        availableAt: now,
+        trx,
+      });
       return "resumed";
     });
   }

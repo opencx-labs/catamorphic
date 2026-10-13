@@ -1,7 +1,12 @@
 import { randomUUID } from "node:crypto";
 import type { DB, Json, JsonObject } from "@catamorphic/db";
 import { getTracer, withSpan } from "@catamorphic/otel";
-import { type Kysely, type Selectable, sql } from "kysely";
+import {
+  type ExpressionBuilder,
+  type Kysely,
+  type Selectable,
+  sql,
+} from "kysely";
 import type { Identity } from "../identity.js";
 import { requireTenantProject } from "./projects-service.js";
 import { jsonColumn } from "./run-coordinator.js";
@@ -19,6 +24,39 @@ export type EventSourcePlacement = "local" | "remote" | "any";
 
 type MonitorRow = Selectable<DB["project_event_monitors"]>;
 const tracer = getTracer("@catamorphic/core");
+
+/**
+ * A monitor a worker of this placement polls once it is due: active,
+ * observed by a live watcher.
+ */
+function watchedFor(placement: Exclude<EventSourcePlacement, "any">) {
+  return (
+    eb: ExpressionBuilder<
+      DB & { monitor: DB["project_event_monitors"] },
+      "monitor"
+    >,
+  ) =>
+    eb.and([
+      eb("monitor.status", "=", "active"),
+      eb.exists(
+        eb
+          .selectFrom("watchers as watcher")
+          .select("watcher.id")
+          .whereRef("watcher.monitor_id", "=", "monitor.id")
+          .where("watcher.status", "=", "active")
+          .where(({ or, eb }) =>
+            or([
+              eb("watcher.expires_at", "is", null),
+              eb("watcher.expires_at", ">", sql<Date>`now()`),
+            ]),
+          ),
+      ),
+      eb.or([
+        eb("monitor.placement", "=", placement),
+        eb("monitor.placement", "=", "any"),
+      ]),
+    ]);
+}
 
 export interface ProjectEventMonitor {
   id: string;
@@ -135,28 +173,8 @@ export class ProjectEventMonitorsService {
         .innerJoin("projects", "projects.id", "monitor.project_id")
         .selectAll("monitor")
         .select("projects.tenant_id")
-        .where("monitor.status", "=", "active")
-        .where(({ exists, selectFrom }) =>
-          exists(
-            selectFrom("watchers as watcher")
-              .select("watcher.id")
-              .whereRef("watcher.monitor_id", "=", "monitor.id")
-              .where("watcher.status", "=", "active")
-              .where(({ or, eb }) =>
-                or([
-                  eb("watcher.expires_at", "is", null),
-                  eb("watcher.expires_at", ">", sql<Date>`now()`),
-                ]),
-              ),
-          ),
-        )
+        .where(watchedFor(input.placement))
         .where("monitor.next_poll_at", "<=", sql<Date>`now()`)
-        .where((expression) =>
-          expression.or([
-            expression("monitor.placement", "=", input.placement),
-            expression("monitor.placement", "=", "any"),
-          ]),
-        )
         .where((expression) =>
           expression.or([
             expression("monitor.lease_expires_at", "is", null),
@@ -181,6 +199,28 @@ export class ProjectEventMonitorsService {
         .executeTakeFirstOrThrow();
       return { ...mapMonitor(claimed), tenantId: candidate.tenant_id };
     });
+  }
+
+  /**
+   * When the soonest monitor a worker of this placement claims falls due
+   * (its next poll, or the end of another worker's lease), or null when
+   * none is watched. An idle worker sleeps no longer than this (ADR 0228).
+   */
+  async nextDueAt(input: {
+    placement: Exclude<EventSourcePlacement, "any">;
+  }): Promise<Date | null> {
+    const row = await this.db
+      .selectFrom("project_event_monitors as monitor")
+      .select(({ fn, ref }) =>
+        fn
+          .min(
+            sql<Date>`greatest(${ref("monitor.next_poll_at")}, ${ref("monitor.lease_expires_at")})`,
+          )
+          .as("at"),
+      )
+      .where(watchedFor(input.placement))
+      .executeTakeFirst();
+    return row?.at ? new Date(row.at) : null;
   }
 
   async complete(input: {
@@ -228,13 +268,15 @@ export class ProjectEventMonitorsService {
 }
 
 export function startProjectEventMonitorWorker(input: {
-  monitors: Pick<ProjectEventMonitorsService, "claim" | "complete" | "fail">;
+  monitors: Pick<ProjectEventMonitorsService, "claim" | "complete" | "fail"> &
+    Partial<Pick<ProjectEventMonitorsService, "nextDueAt">>;
   providers: readonly ProjectEventSourceProvider[];
   placement: Exclude<EventSourcePlacement, "any">;
   pollEveryMs?: number;
   /**
-   * How often it polls while no monitor is due (ADR 0228); this process's
-   * event hints wake it. Without one it polls every `pollEveryMs`.
+   * How long it waits while no monitor is due (ADR 0228), ending at the
+   * next due monitor or this process's event hints. Without one it waits
+   * `pollEveryMs` between polls.
    */
   idlePollMs?: number;
   wakeups?: WorkWakeups;
@@ -248,6 +290,7 @@ export function startProjectEventMonitorWorker(input: {
   const pacer = new PollPacer({
     quickMs: input.pollEveryMs ?? 1_000,
     idleMs: input.idlePollMs,
+    signal: controller.signal,
     wakeups: input.wakeups,
     topic: "events",
   });
@@ -310,7 +353,14 @@ export function startProjectEventMonitorWorker(input: {
     while (!stopped) {
       await tick();
       if (stopped) return;
-      await pacer.wait(controller.signal);
+      // Idle: sleep until the next watched monitor falls due, a hint from
+      // this process, or the idle poll.
+      const due = pacer.quick
+        ? undefined
+        : await input.monitors
+            .nextDueAt?.({ placement: input.placement })
+            .catch(() => undefined);
+      await pacer.wait({ until: due?.getTime() });
     }
   };
   const pending = loop();
