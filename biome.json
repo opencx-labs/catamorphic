@@ -42,6 +42,7 @@
       "!**/.turbo",
       "!**/.wrangler",
       "!**/.data",
+      "!**/test-results",
       "!.claude",
       "!**/*.d.ts",
       "!**/packages/api-client/src/schema.d.ts",
