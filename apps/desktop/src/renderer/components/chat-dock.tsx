@@ -470,6 +470,7 @@ function ChatDockContent({
   onEscapeToFloating,
   onClose,
   onCloseStarted,
+  onLeaveStarted,
   registerClose,
   registerMinimize,
   registerSend,
@@ -1508,6 +1509,7 @@ function ChatDockContent({
     if (minimizingRef.current) return;
     minimizingRef.current = true;
     setMinimizing(true);
+    onLeaveStarted?.();
   };
 
   // The mode flip travels through the entry owner and lands a frame or
@@ -1546,6 +1548,7 @@ function ChatDockContent({
     if (closingRef.current) return;
     closingRef.current = true;
     onCloseStarted?.();
+    onLeaveStarted?.();
     setClosing(true);
   };
   const finishClose = () => {

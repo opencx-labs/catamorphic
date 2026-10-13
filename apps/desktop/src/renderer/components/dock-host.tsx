@@ -28,7 +28,7 @@ import {
 } from "../lib/theme.js";
 import { useAppPreference } from "../lib/use-app-preferences.js";
 import { chatTabKey } from "../lib/workspace-state.js";
-import { ChatBubbles } from "./chat-bubbles.js";
+import { ChatBubbles, useStripFold } from "./chat-bubbles.js";
 import { ChatDock } from "./chat-dock.js";
 import { DockDialogs } from "./dock-dialogs.js";
 import { DownloadsBubble } from "./downloads-bubble.js";
@@ -99,7 +99,6 @@ export function DockHost({
   >(null);
   const positionRevision = useRef(0);
   const [positionError, setPositionError] = useState<string | null>(null);
-  const [collapsed, setCollapsed] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [downloadsOpen, setDownloadsOpen] = useState(false);
   const actions = useRef(
@@ -115,7 +114,8 @@ export function DockHost({
   const showing = useRef(new Set<string>());
   const currentProjectId = activeProjectId ?? snapshot.activeProjectId;
   const voiceStatus = useVoiceStatus();
-  const [voiceInDock, setVoiceInDock] = useAppPreference("voiceInDock");
+  const [voiceInDock, setVoiceInDock, voiceInDockLoaded] =
+    useAppPreference("voiceInDock");
   // The downloads bubble opens things in the workspace: through the
   // workspaces service when this is the detached dock window, straight
   // to this window's app otherwise (it needs no project for that).
@@ -147,22 +147,28 @@ export function DockHost({
   const isPresentation = detachedWindow
     ? snapshot.detached
     : !snapshot.detached;
+  // What the dock shows, for the broadcasts below to compare against.
+  const shownSnapshot = useRef(remoteSnapshot);
+  shownSnapshot.current = remoteSnapshot;
   useEffect(() => {
     // A broadcast that repeats what the dock shows (the echo of its own
-    // fold or corner, saved as the motion starts) keeps the state it has:
-    // rendering every chat again for it would land mid-motion.
-    const receive = (next: DockSnapshot) =>
-      setSnapshot((current) =>
-        current !== EMPTY && JSON.stringify(current) === JSON.stringify(next)
-          ? current
-          : next,
-      );
+    // fold or corner, saved as the motion starts) sets nothing: rendering
+    // every chat again for it would land mid-motion, and React may call the
+    // dock for an unchanged state before it skips the chats.
+    const same = (current: DockSnapshot, next: DockSnapshot) =>
+      current !== EMPTY && JSON.stringify(current) === JSON.stringify(next);
+    const receive = (next: DockSnapshot) => {
+      if (same(shownSnapshot.current, next)) return;
+      setSnapshot((current) => (same(current, next) ? current : next));
+    };
     void desktopApi.dockSnapshot().then(receive);
     return desktopApi.onDockSnapshot(receive);
   }, []);
-  // The strip waits for the real snapshot: drawn from the placeholder, a
-  // folded strip would show open, then slide shut, on every launch.
-  const snapshotLoaded = remoteSnapshot !== EMPTY;
+  // The strip waits for the real snapshot and its microphone choice: drawn
+  // from the placeholder or the default, a folded strip would show open,
+  // then slide shut, and a microphone kept out would shrink away, on every
+  // launch, whichever answer came back first.
+  const snapshotLoaded = remoteSnapshot !== EMPTY && voiceInDockLoaded;
   // In the window, the dock rests on the visible workspace's chat region by
   // CSS anchoring (styles.css), so it moves in the same frame as the region
   // (a sidebar settling, a split) without measuring. While the dock floats
@@ -259,6 +265,25 @@ export function DockHost({
       chat.tabActive,
   );
   const expanded = isPresentation && active && active.entry.mode === "partial";
+  // A chat on its way out, minimizing or closing however it was asked (the
+  // strip's arrows, Escape, its own controls, its bubble, a shortcut): the
+  // strip folds while it leaves, one motion, never after it has gone. The
+  // detached window keeps its open size until the chat has gone, so there
+  // the strip still waits for it.
+  const [leavingId, setLeavingId] = useState<string | null>(null);
+  const openChatId = expanded ? active.entry.localId : undefined;
+  if (leavingId !== null && leavingId !== openChatId) setLeavingId(null);
+  const strip = useStripFold({
+    // A detached dock is its own window; the main window's tab focus must
+    // not fold it and move it between corner and spot.
+    autoCollapse: !detachedWindow && Boolean(tabbed),
+    folded: snapshot.collapsed,
+    chatOpen:
+      openChatId !== undefined && (detachedWindow || openChatId !== leavingId),
+  });
+  // Only where the strip shows: a workspace whose dock floats in its own
+  // window keeps its chat tabs clear of an open strip.
+  const collapsed = isPresentation && strip.collapsed;
   // The trailing microphone and downloads buttons sit beside the strip.
   const railWidth = collapsed
     ? 142
@@ -826,6 +851,11 @@ export function DockHost({
                 }}
                 onClose={() => invoke(chat, { kind: "close" })}
                 onCloseStarted={() => invoke(chat, { kind: "closing" })}
+                onLeaveStarted={
+                  entry.mode === "partial"
+                    ? () => setLeavingId(entry.localId)
+                    : undefined
+                }
                 onSessionCreated={(_id, sessionId) =>
                   invoke(chat, { kind: "session", sessionId })
                 }
@@ -955,12 +985,11 @@ export function DockHost({
               )}
               side={snapshot.side}
               activeLocalId={active?.entry.localId}
-              // A detached dock is its own window; the main window's tab
-              // focus must not fold it and move it between corner and spot.
-              autoCollapse={!detachedWindow && Boolean(tabbed)}
-              folded={snapshot.collapsed}
-              onFoldedChange={saveFolded}
-              onCollapsedChange={setCollapsed}
+              collapsed={collapsed}
+              onFoldedChange={(folded) => {
+                strip.choose(folded);
+                saveFolded(folded);
+              }}
               onToggle={toggle}
               onOpenAs={(id, mode) => {
                 const chat = scoped.find((chat) => chat.entry.localId === id);

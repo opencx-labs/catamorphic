@@ -646,22 +646,58 @@ it("folds the strip into its corner in one motion, beside a leaving chat or alon
   );
   const read = <T>(body: string) =>
     app.eval<T>(`(async () => { ${helpers} ${body} })()`);
+  const chatId = await read<string>(`return dock().dataset.chatLocalId;`);
+  const chatSection = `$('section[data-chat-local-id=${JSON.stringify(chatId)}]')`;
   type Frame = {
     t: number;
     folded: boolean;
     left: number;
     right: number;
     width: number;
+    /** The chat's opacity, as it leaves. */
     chat: number | null;
+    /** The chats whose dock rendered since the frame before. */
+    rendered: string[];
+    /** Renders of the dock host since the frame before (for the log). */
+    host: number;
   };
-  /** Every frame of the strip from the press until it rests. */
+  /**
+   * Every frame of the strip from the press until it rests, with the
+   * renders of every chat's dock (its content component, read from React's
+   * fibers: each render gives it a new first hook; a skipped one keeps it).
+   */
   const record = async (folded: boolean, act: () => Promise<unknown>) => {
+    // Its own loop only: a loop from the recording before, still waiting
+    // for its next frame, stops instead of joining this one.
     await run(`window.__fold = [];
+      const recording = window.__foldRecording = (window.__foldRecording ?? 0) + 1;
+      const fiberOf = (element) => element[Object.keys(element).find((key) => key.startsWith('__reactFiber$'))];
+      const heads = (element) => {
+        let fiber = fiberOf(element);
+        while (fiber && typeof fiber.type !== 'function') fiber = fiber.return;
+        return fiber ? [fiber.memoizedState, fiber.alternate?.memoizedState].filter(Boolean) : [];
+      };
+      const docks = () => $$('section[data-chat-local-id]').map((section) => ({ id: section.dataset.chatLocalId, heads: heads(section) }));
+      const seen = new Set([...docks().flatMap((dock) => dock.heads), ...heads($('[data-dock-host]'))]);
       const tick = (t) => {
-        if (!window.__fold) return;
+        if (!window.__fold || window.__foldRecording !== recording) return;
+        const rendered = [];
+        for (const dock of docks()) {
+          for (const head of dock.heads) {
+            if (seen.has(head)) continue;
+            seen.add(head);
+            rendered.push(dock.id);
+          }
+        }
+        let host = 0;
+        for (const head of heads($('[data-dock-host]'))) {
+          if (seen.has(head)) continue;
+          seen.add(head);
+          host++;
+        }
         const rail = $('[data-dock-rail]').getBoundingClientRect();
-        const chat = $('section[data-floating-chat="true"]');
-        window.__fold.push({ t, folded: $('[data-dock-rail]').dataset.dockCollapsed === 'true', left: rail.left, right: rail.right, width: rail.width, chat: chat ? Number(getComputedStyle(chat).opacity) : null });
+        const chat = ${chatSection};
+        window.__fold.push({ t, folded: $('[data-dock-rail]').dataset.dockCollapsed === 'true', left: rail.left, right: rail.right, width: rail.width, chat: chat ? Number(getComputedStyle(chat).opacity) : null, rendered, host });
         requestAnimationFrame(tick);
       };
       requestAnimationFrame(tick);`);
@@ -674,6 +710,31 @@ it("folds the strip into its corner in one motion, beside a leaving chat or alon
     return read<Frame[]>(
       `const frames = window.__fold; window.__fold = null; return frames;`,
     );
+  };
+  /**
+   * Each chat's dock renders at most once, for the press that starts the
+   * motion, and never while the strip moves: a render there stalls the
+   * width and padding transitions while the slide goes on.
+   */
+  const rendersOnce = (frames: Frame[]) => {
+    const counts = new Map<string, number>();
+    for (const frame of frames)
+      for (const id of frame.rendered)
+        counts.set(id, (counts.get(id) ?? 0) + 1);
+    // When each frame came and which docks had rendered by it, should one
+    // render more than once.
+    const start = frames[0]?.t ?? 0;
+    const log = JSON.stringify(
+      frames.map((frame) => [
+        Math.round(frame.t - start),
+        frame.folded,
+        frame.host,
+        frame.rendered,
+      ]),
+    );
+    // The count is read (the press re-renders the docks once).
+    expect(counts.size, log).toBeGreaterThan(0);
+    expect(Math.max(...counts.values()), log).toBe(1);
   };
   const corner = () =>
     read<number>(
@@ -736,6 +797,20 @@ it("folds the strip into its corner in one motion, beside a leaving chat or alon
     expect(landed).toBeGreaterThanOrEqual(start);
     expect((frames[landed]?.t ?? Infinity) - from.t).toBeLessThan(700);
   };
+  /** Folded beside a chat that leaves: it folds while the chat goes. */
+  const foldsWithChat = async (frames: Frame[]) => {
+    oneMotion(frames);
+    const firstFolded = frames.find((frame) => frame.folded);
+    expect(firstFolded?.chat ?? 0).toBeGreaterThan(0.5);
+    expect(
+      Math.abs((frames.at(-1)?.right ?? 0) - (await corner())),
+    ).toBeLessThan(1);
+    expect(
+      await run(
+        `return $('[data-bubble-items]').getBoundingClientRect().width;`,
+      ),
+    ).toBe(0);
+  };
 
   // Folded beside an open chat: the strip folds as the chat leaves, not
   // after it has gone.
@@ -743,23 +818,41 @@ it("folds the strip into its corner in one motion, beside a leaving chat or alon
     `(() => { const b = document.querySelector('[data-dock-arrows]').getBoundingClientRect(); return { x: b.left + b.width / 2, y: b.top + b.height / 2 }; })()`,
   );
   const withChat = await record(true, () => app.clickPointer(arrows));
-  oneMotion(withChat);
-  const firstFolded = withChat.find((frame) => frame.folded);
-  expect(firstFolded?.chat ?? 0).toBeGreaterThan(0.5);
-  expect(withChat.at(-1)?.chat).toBeNull();
-  expect(
-    Math.abs((withChat.at(-1)?.right ?? 0) - (await corner())),
-  ).toBeLessThan(1);
-  expect(
-    await run(`return $('[data-bubble-items]').getBoundingClientRect().width;`),
-  ).toBe(0);
+  await foldsWithChat(withChat);
+  expect(withChat.at(-1)?.chat).toBe(0);
 
-  // Opened again, it comes back to the centre the same way.
-  oneMotion(
-    await record(false, () =>
-      run(`$('[aria-label="Expand chat bubbles"]').click();`),
-    ),
+  // However the open chat leaves while the strip is folded, the strip
+  // folds with it: Escape, its own minimize button, its bubble, the
+  // shortcut.
+  const routes: Record<string, string> = {
+    Escape: `window.dispatchEvent(new KeyboardEvent('keydown', {key:'Escape', bubbles:true, cancelable:true}));`,
+    "its minimize button": `${chatSection}.querySelector('[aria-label="Minimize chat to bubble"]').click();`,
+    "its bubble": `$('[data-chat-bubble=${JSON.stringify(chatId)}] button[aria-label^="Minimize"]').click();`,
+    "the shortcut": `window.dispatchEvent(new KeyboardEvent('keydown', {key:'m',metaKey:/Mac/.test(navigator.platform),ctrlKey:!/Mac/.test(navigator.platform),bubbles:true,cancelable:true}));`,
+  };
+  for (const [route, leave] of Object.entries(routes)) {
+    // The chat opens again, and the strip with it beside it.
+    await run(
+      `window.dispatchEvent(new KeyboardEvent('keydown', {key:'m',metaKey:/Mac/.test(navigator.platform),ctrlKey:!/Mac/.test(navigator.platform),bubbles:true,cancelable:true}));`,
+    );
+    await wait(
+      `return ${chatSection}?.dataset.floatingChat === 'true' && $('[data-dock-rail]')?.dataset.dockCollapsed === 'false' && ${idle};`,
+    );
+    const frames = await record(true, () => run(leave));
+    try {
+      await foldsWithChat(frames);
+    } catch (error) {
+      throw new Error(`Leaving by ${route}: ${String(error)}`);
+    }
+  }
+
+  // Opened again, it comes back to the centre the same way, rendering
+  // no chat while it moves.
+  const opening = await record(false, () =>
+    run(`$('[aria-label="Expand chat bubbles"]').click();`),
   );
+  oneMotion(opening);
+  rendersOnce(opening);
   const open = await read<{ center: number; width: number }>(
     `const host = $('[data-dock-host]').getBoundingClientRect(), rail = $('[data-dock-rail]').getBoundingClientRect();
       return { center: rail.left + rail.width / 2 - (host.left + host.width / 2), width: rail.width };`,
@@ -767,29 +860,76 @@ it("folds the strip into its corner in one motion, beside a leaving chat or alon
   expect(Math.abs(open.center)).toBeLessThan(1);
 
   // Alone, the same.
-  oneMotion(
-    await record(true, () =>
-      run(`$('[aria-label="Collapse chat bubbles"]').click();`),
-    ),
+  const alone = await record(true, () =>
+    run(`$('[aria-label="Collapse chat bubbles"]').click();`),
   );
+  oneMotion(alone);
+  rendersOnce(alone);
+  const host = await read<{ center: number }>(
+    `const host = $('[data-dock-host]').getBoundingClientRect(); return { center: host.left + host.width / 2 };`,
+  );
+  const offset = (frame: Frame) => (frame.left + frame.right) / 2 - host.center;
+  const inCorner = alone.at(-1);
+  if (!inCorner) throw new Error("no frames");
+  const cornerOffset = offset(inCorner);
 
-  // Opened again before the fold lands, it turns back from where it is
-  // and rests open, as wide as it was.
+  // Opened again before the fold lands, it turns back from where it is:
+  // the slide and the width take the same way back and land together,
+  // and it rests open, as wide as it was.
   await record(false, () =>
     run(`$('[aria-label="Expand chat bubbles"]').click();`),
   );
-  await record(false, async () => {
-    await run(`$('[aria-label="Collapse chat bubbles"]').click();`);
-    await run(
-      `await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(resolve)))); $('[aria-label="Expand chat bubbles"]').click();`,
+  const reversed = await record(false, () =>
+    run(`$('[aria-label="Collapse chat bubbles"]').click();
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+      $('[aria-label="Expand chat bubbles"]').click();`),
+  );
+  const farthest = Math.max(
+    ...reversed.map((frame) => Math.abs(offset(frame))),
+  );
+  // It turned back part-way, not from its corner.
+  expect(farthest).toBeGreaterThan(5);
+  expect(farthest).toBeLessThan(Math.abs(cornerOffset) - 5);
+  const turned = reversed.findIndex(
+    (frame) => Math.abs(offset(frame)) === farthest,
+  );
+  const back = (near: (frame: Frame) => boolean) =>
+    reversed.findIndex(
+      (_frame, index) => index > turned && reversed.slice(index).every(near),
     );
-  });
+  const slidBack = back((frame) => Math.abs(offset(frame)) < 1);
+  const widenedBack = back((frame) => Math.abs(frame.width - open.width) < 1);
+  expect(slidBack).toBeGreaterThan(turned);
+  expect(widenedBack).toBeGreaterThan(turned);
+  expect(
+    Math.abs(
+      (reversed[slidBack]?.t ?? Infinity) -
+        (reversed[widenedBack]?.t ?? -Infinity),
+    ),
+  ).toBeLessThan(50);
   const reopened = await read<{ center: number; width: number }>(
     `const host = $('[data-dock-host]').getBoundingClientRect(), rail = $('[data-dock-rail]').getBoundingClientRect();
       return { center: rail.left + rail.width / 2 - (host.left + host.width / 2), width: rail.width };`,
   );
   expect(Math.abs(reopened.center)).toBeLessThan(1);
   expect(Math.abs(reopened.width - open.width)).toBeLessThan(1);
+
+  // Folded from the keyboard, focus moves from the arrows to the bubble
+  // that takes their place, and back, instead of falling to the page.
+  await run(`$('[aria-label="Collapse chat bubbles"]').focus();`);
+  await app.press("Enter");
+  await wait(
+    `return $('[data-dock-rail]')?.dataset.dockCollapsed === 'true' && document.activeElement === $('[aria-label="Expand chat bubbles"]') && ${idle};`,
+  );
+  expect(
+    await run(
+      `return $('[aria-label="Expand chat bubbles"]').getAttribute('aria-expanded');`,
+    ),
+  ).toBe("false");
+  await app.press("Enter");
+  await wait(
+    `return $('[data-dock-rail]')?.dataset.dockCollapsed === 'false' && document.activeElement === $('[aria-label="Collapse chat bubbles"]') && ${idle};`,
+  );
 
   // Without motion, it is in its corner at once: a frame or two for the
   // change to show, where the fold takes about fifteen.

@@ -6580,8 +6580,10 @@ export function App({
                   className={`app-drag flex h-10 shrink-0 items-center justify-end gap-1 pr-3 ${windowButtons ? "pl-[86px]" : "pl-3"} ${projectInSidebarHeader ? "mb-2" : ""}`}
                 >
                   {/* The project heads the sidebar across its width, as
-                      it does below the buttons' row; the tab strip drags
-                      the window. */}
+                      it does below the buttons' row. This row keeps only
+                      slivers to drag the window by; the chrome's empty
+                      room does that (the tab strip's spare end, or the
+                      title row), as Chrome's tab strip does. */}
                   {projectInSidebarHeader && (
                     <div
                       className="app-no-drag flex min-w-0 flex-1 items-center gap-1"
