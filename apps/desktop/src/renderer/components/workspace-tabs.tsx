@@ -627,10 +627,24 @@ function TabStrip({
         : [],
     ),
   );
+  // The strip's spare room drags the window, as Chrome's does: the strip
+  // takes presses for its tabs and their drops, so its empty ends hand
+  // them back to the chrome. Centred tabs sit between two such ends, which
+  // share the room equally; with no room left they have no width. While a
+  // tab is dragged they are part of the drop target (the end of the strip),
+  // never a window handle.
+  const windowHandle = (end: "start" | "end") =>
+    vertical ? null : (
+      <div
+        aria-hidden="true"
+        data-tab-strip-room={end}
+        className={`min-w-0 flex-1 self-stretch ${end === "start" ? "-me-1" : "-ms-1"} ${dragKey ? "" : "app-drag"}`}
+      />
+    );
   return (
     // biome-ignore lint/a11y/noStaticElementInteractions: drag-and-drop target for tab reordering; tabs themselves are buttons
     <div
-      className={`app-no-drag flex min-w-0 gap-1 ${vertical ? "flex-col" : `flex-1 items-center ${alignment === "center" ? "[justify-content:safe_center]" : "justify-start"} self-stretch overflow-x-auto overflow-y-hidden`}`}
+      className={`app-no-drag flex min-w-0 gap-1 ${vertical ? "flex-col" : "flex-1 items-center self-stretch overflow-x-auto overflow-y-hidden"}`}
       data-tab-orientation={orientation}
       data-tab-alignment={alignment}
       onDragOver={(event) => {
@@ -648,6 +662,7 @@ function TabStrip({
         onDragStateChange?.(null);
       }}
     >
+      {alignment === "center" && windowHandle("start")}
       {rendered.map(({ tab, exiting }, index) => {
         const key = tabKey(tab);
         const active = !exiting && key === activeKey;
@@ -986,6 +1001,7 @@ function TabStrip({
           </ShortcutHint>
         </div>
       )}
+      {windowHandle("end")}
     </div>
   );
 }

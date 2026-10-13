@@ -370,7 +370,7 @@ screen, or under reduced motion.
 |---|---|---|
 | `dock-in` / `dock-out` | 250ms | each other |
 | `bubble-in` / `bubble-out` | 200ms | each other |
-| Bubble strip fold (the chats' `width` from their own size, the rail's gap and padding, its slide between resting spots) | 250ms | itself: one motion both ways, reversing from where it is; folded beside an open chat it runs with that chat's `dock-out` |
+| Bubble strip fold (the chats' `width` from their own size, capped by `calc-size`, never a `max-width`; the rail's gap and padding; its slide between resting spots) | 250ms | itself: one motion both ways, reversing from where it is (the slide shortened as CSS shortens the reversed transitions, so both land together); folded beside a leaving chat, however it leaves, it runs with that chat's exit |
 | `tab-in` / `tab-out` | 200ms / 180ms | each other (exit snappier) |
 | `.sidebar-tab-slot` transition (a sidebar tab's place growing in or shrinking out of its strip: This session beside a chat; `@starting-style` for arrival) | 200ms | itself: one transition both ways on one element, so a quick change back reverses from where it is; at no width the place gives back its flex gap |
 | `.sidebar-strip` transition (a sidebar's tab strip opening as a second tab arrives, folding as the count drops to one; never for the sidebar's own opening) | 200ms | itself, reversing the same way; the panel below follows its height |
@@ -439,7 +439,11 @@ that friction is intentional.
   `.app-drag`), sidebar toggle, and the workspace tab strip share the top
   40px. No dead space above tabs. The window buttons are a profile choice
   (`windowButtons`); hidden, the corner kept for them goes too and the
-  project switcher moves up into the sidebar's top row.
+  project switcher moves up into the sidebar's top row, across it. The
+  chrome's empty room drags the window, as in Chrome: the tab strip's
+  spare end (both ends when tabs are centred), or the title row with tabs
+  in the sidebar. Tabs, the + and toggles take presses; while a tab is
+  dragged, the strip's end is its drop target.
 - Workspace tabs host workflows, apps, and chats alike; minimized chats live
   in the bottom bubble strip (see the design log for collapse behavior).
 - Empty states are quiet: one sentence of `--color-fg-faint` + one action. Errors stay `--color-fg-muted`.
@@ -652,6 +656,36 @@ the historical log explains how it arrived here.
 - [Performance](docs/performance.md): idle lifecycle checks and sustained measurement.
 
 ## Design log
+### 2026-10-13: The window drags by the tab strip's empty end; every way out folds the strip
+
+With the macOS window buttons hidden, the project switcher spans the
+sidebar's top row, which left only slivers to drag the window by: the tab
+strip took presses across the whole chrome row for its tabs and their
+drops. Its spare room now drags the window, as Chrome's does: past the
+last tab and its +, and before the first too when tabs are centred, with
+no width once the tabs fill the strip. While a tab is dragged that room
+is the strip's drop target again, so a tab still lands at the end. The
+title row drags as before with tabs in the sidebar. The current project's
+own card opens beside the sidebar instead of over its toggle.
+
+The strip folded beside a leaving chat in one motion only from its
+arrows: Escape, the chat's minimize or close, its bubble and a shortcut
+played the chat's exit, then folded. A chat now says when it starts to
+leave, so every way out folds the strip while the chat goes. The fold is
+worked out where the dock renders, so it no longer renders every chat a
+second time a frame into the motion, which stalled the width and padding
+while the slide went on; the fold's own preference broadcast no longer
+calls each chat either (setting an unchanged state still calls a
+component before React skips its children, so an unchanged choice now
+sets nothing). Turned back mid-way, the slide takes only the
+way back, as CSS shortens the reversed transitions, so both land
+together; the chats' ceiling is part of their width, so a wide strip
+narrows from the first frame. A drag stops a slide under way, folding
+from the keyboard hands focus to the bubble that replaces the arrows (and
+back), and both say whether the strip is open. The dock's microphone
+choice waits for its preference, like the fold, instead of showing the
+default at launch.
+
 ### 2026-10-13: An idle Work does nothing
 
 Work used a tenth of a core with nothing happening and much more while a
@@ -2460,7 +2494,8 @@ inside pages, which those missed. Design lint fails a hand-rolled menu.
 The switcher's list spans the sidebar's content, whatever the project's
 name and the sidebar's width, and a project's card sits beside the whole
 list (`ResourceInspector`'s `anchorRef`), clear of its edge and each row's
-window button, level with the row it describes.
+window button, level with the row it describes. The current project's own
+card, from the switcher, sits beside the sidebar, clear of its toggle.
 
 ### 2026-10-13: A sign-in that is not really lost does not stop the chat
 

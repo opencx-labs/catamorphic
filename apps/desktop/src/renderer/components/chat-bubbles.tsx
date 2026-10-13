@@ -11,6 +11,7 @@ import {
   type MouseEvent,
   type ReactNode,
   useEffect,
+  useId,
   useLayoutEffect,
   useRef,
   useState,
@@ -42,6 +43,44 @@ const NO_SIGNALS: ChatSignals = {};
  * the folding parts) run together, so it lands as one motion.
  */
 const FOLD_MS = 250;
+
+type Spot = "left" | "center" | "right";
+
+/**
+ * Whether the strip shows folded, derived where the dock renders so the
+ * fold and what it moves (a chat tab's clearance, the detached window's
+ * size) change in one render, never a second one a frame into the motion.
+ *
+ * A focused chat tab folds it (`autoCollapse`); opened by hand meanwhile,
+ * it stays open until such a tab gains focus again. Otherwise it is the
+ * person's fold (`folded`), shown open beside an open chat (a closed
+ * bubble beside a visible chat reads wrong); a chat on its way out no
+ * longer counts, so the strip folds while it leaves.
+ */
+export function useStripFold({
+  autoCollapse,
+  folded,
+  chatOpen,
+}: {
+  autoCollapse: boolean;
+  folded: boolean;
+  chatOpen: boolean;
+}): {
+  collapsed: boolean;
+  /** The person's own controls folded (true) or opened (false) it. */
+  choose: (folded: boolean) => void;
+} {
+  const [peeked, setPeeked] = useState(false);
+  const [wasAuto, setWasAuto] = useState(autoCollapse);
+  if (wasAuto !== autoCollapse) {
+    setWasAuto(autoCollapse);
+    if (autoCollapse) setPeeked(false);
+  }
+  return {
+    collapsed: autoCollapse ? !peeked : folded && !chatOpen,
+    choose: (next) => setPeeked(!next),
+  };
+}
 
 export interface ChatBubblesProps {
   dragLeft?: number | null;
@@ -77,20 +116,14 @@ export interface ChatBubblesProps {
   /** Session actions shared verbatim with the matching sidebar row. */
   menus: Record<string, ChatSessionMenuEntry[]>;
   activeLocalId?: string;
+  /** Whether the strip shows folded into one bubble (`useStripFold`). */
+  collapsed: boolean;
   /**
-   * The focused workspace tab wants the bottom edge clear (e.g. a chat tab):
-   * the strip folds into one bubble docked at the right. The user can still
-   * pull it back open; the fold re-applies next time such a tab gains focus.
+   * The person's own fold (the arrows) or open (the folded bubble), kept
+   * across windows and launches (prefs `dockCollapsed`). Nothing else
+   * calls it.
    */
-  autoCollapse: boolean;
-  /**
-   * The person's own fold (the arrows), kept across windows and launches
-   * (prefs `dockCollapsed`); only they change it, through `onFoldedChange`.
-   */
-  folded: boolean;
   onFoldedChange: (folded: boolean) => void;
-  /** Reports the effective collapsed state so hosts can clear the bottom. */
-  onCollapsedChange?: (collapsed: boolean) => void;
   /** Rendered beside the chat strip, inside the arrows: the downloads bubble. */
   trailing?: ReactNode;
   /**
@@ -306,10 +339,8 @@ export function ChatBubbles({
   attention,
   menus,
   activeLocalId,
-  autoCollapse,
-  folded,
+  collapsed,
   onFoldedChange,
-  onCollapsedChange,
   trailing,
   voice,
   voiceShown = true,
@@ -365,38 +396,10 @@ export function ChatBubbles({
           setDockMenuOpen(true);
         }
       : undefined;
-  // Opened by hand while a chat tab folds it: until such a tab gains focus
-  // again. Only the person's choice outlasts a tab.
-  const [peeked, setPeeked] = useState(false);
-  const prevAutoRef = useRef(autoCollapse);
-  if (prevAutoRef.current !== autoCollapse) {
-    prevAutoRef.current = autoCollapse;
-    if (autoCollapse) setPeeked(false);
-  }
-  // Folded by hand with a chat open, the strip folds while that chat
-  // leaves, not after it has gone: one motion, never two with a stop in
-  // between. The detached window keeps its open size until the chat has
-  // gone, so there the strip still waits for it.
-  const [leaving, setLeaving] = useState<string | null>(null);
-  const openChat = entries.find(
-    (entry) => entry.mode === "partial" && entry.localId === activeLocalId,
-  );
-  if (leaving !== null && openChat?.localId !== leaving) setLeaving(null);
-  // An open chat keeps the strip open beside it (a closed bubble beside a
-  // visible chat reads wrong); minimized again, the person's fold returns.
-  const chatOpen = openChat !== undefined && openChat.localId !== leaving;
-  const collapsed = autoCollapse ? !peeked : folded && !chatOpen;
-
   // Tab-mode chats live in the tab bar; only docked/minimized chats get a
   // bubble in the strip. The pill itself always renders so chats never
   // silently vanish from the screen.
   const stripEntries = entries.filter((entry) => entry.mode !== "tab");
-
-  const onCollapsedChangeRef = useRef(onCollapsedChange);
-  onCollapsedChangeRef.current = onCollapsedChange;
-  useEffect(() => {
-    onCollapsedChangeRef.current?.(collapsed);
-  }, [collapsed]);
 
   // Bubbles present on mount appear statically; bubbles added later pop in.
   // Once an id qualifies, the animation class sticks — removing it mid-run
@@ -494,11 +497,17 @@ export function ChatBubbles({
     observer.observe(rail);
     return () => observer.disconnect();
   }, []);
-  const spot = collapsed ? side : placement;
+  const spot: Spot = collapsed ? side : placement;
   // The spot and drag the DOM shows: what this render may move it from.
   const shownSpot = useRef(spot);
   const shownDragged = useRef(false);
-  const slide = useRef<Animation | null>(null);
+  // The slide under way: the spot it left, and how much of a whole fold's
+  // time it was given.
+  const slide = useRef<{
+    animation: Animation;
+    from: Spot;
+    shortening: number;
+  } | null>(null);
   // A dropped strip slides to its spot from where it was let go, the spot
   // it started from included; a strip changing spots, from where it is
   // drawn. Read before this render reaches the DOM, so it is where the
@@ -510,11 +519,34 @@ export function ChatBubbles({
       : null;
   useLayoutEffect(() => {
     const rail = railRef.current;
+    const previous = shownSpot.current;
     shownSpot.current = spot;
     shownDragged.current = dragLeft !== null;
+    // A drag moves the strip from where the slide had drawn it (where the
+    // press measured it), so the slide stops rather than carry the dragged
+    // strip away from the pointer.
+    if (dragLeft !== null) {
+      slide.current?.animation.cancel();
+      slide.current = null;
+      return;
+    }
     if (!rail || !slideFrom || prefersReducedMotion()) return;
     // The slide under way, if any, is part of where the strip is drawn.
-    slide.current?.cancel();
+    const running = slide.current;
+    slide.current = null;
+    // Turned back mid-way, the fold's transitions take only as long as the
+    // way back (CSS shortens a reversed transition by how far it had got,
+    // in eased progress); the slide back takes the same, so both land
+    // together. Anything else starts a whole fold from where it is drawn.
+    const progress = running?.animation.effect?.getComputedTiming().progress;
+    const shortening =
+      running && running.from === spot && progress != null
+        ? Math.min(
+            1,
+            Math.abs(progress * running.shortening + 1 - running.shortening),
+          )
+        : 1;
+    running?.animation.cancel();
     const rect = rail.getBoundingClientRect();
     // Compare the edge that anchors the new spot so a width change during
     // the same commit does not read as travel.
@@ -525,11 +557,38 @@ export function ChatBubbles({
           ? slideFrom.left - rect.left
           : (slideFrom.left + slideFrom.right - rect.left - rect.right) / 2;
     if (Math.abs(delta) < 1) return;
-    slide.current = rail.animate(
-      [{ transform: `translateX(${delta}px)` }, { transform: "translateX(0)" }],
-      { duration: motionMs(FOLD_MS), easing: EASE_STANDARD },
-    );
+    slide.current = {
+      animation: rail.animate(
+        [
+          { transform: `translateX(${delta}px)` },
+          { transform: "translateX(0)" },
+        ],
+        { duration: motionMs(FOLD_MS) * shortening, easing: EASE_STANDARD },
+      ),
+      from: previous,
+      shortening,
+    };
   }, [spot, dragLeft, slideFrom]);
+  // Folding or opening makes the control pressed go inert. Read before this
+  // render reaches the DOM: when it held focus, the control that takes its
+  // place takes focus, so the keyboard keeps its place instead of falling
+  // to the page.
+  const arrowsRef = useRef<HTMLButtonElement>(null);
+  const expandRef = useRef<HTMLButtonElement>(null);
+  const focusedControl =
+    arrowsRef.current !== null && document.activeElement === arrowsRef.current
+      ? "arrows"
+      : expandRef.current !== null &&
+          document.activeElement === expandRef.current
+        ? "expand"
+        : null;
+  useLayoutEffect(() => {
+    if (collapsed && focusedControl === "arrows")
+      expandRef.current?.focus({ preventScroll: true });
+    else if (!collapsed && focusedControl === "expand")
+      arrowsRef.current?.focus({ preventScroll: true });
+  }, [collapsed, focusedControl]);
+  const itemsId = useId();
   const spotClass =
     spot === "left"
       ? "left-8"
@@ -541,17 +600,18 @@ export function ChatBubbles({
   const Arrows = side === "left" ? ChevronsLeft : ChevronsRight;
   const arrows = (
     <button
+      ref={arrowsRef}
       type="button"
       {...placementDragHandlers}
       onClick={() => {
-        setPeeked(false);
-        if (!detached && openChat) setLeaving(openChat.localId);
         onFoldedChange(true);
         onCollapse?.();
       }}
       onContextMenu={openDockMenu}
       className="grid size-9 touch-none cursor-grab place-items-center rounded-full text-fg-faint transition-colors duration-150 hover:text-fg active:cursor-grabbing"
       aria-label="Collapse chat bubbles"
+      aria-expanded={!collapsed}
+      aria-controls={itemsId}
       aria-description="Drag to place open chats left, center or right. Arrow keys move them."
       aria-keyshortcuts="ArrowLeft ArrowRight"
       data-dock-arrows={side}
@@ -591,14 +651,13 @@ export function ChatBubbles({
     </>
   );
   // Expanded strip content folds its width away when collapsed: from the
-  // width it has to none and back (interpolating `auto`), so the
-  // strip narrows from the first frame as it slides into its corner. A
-  // ceiling far above its chats held it at full width for most of the
-  // fold, then shrank it once the slide had landed.
+  // width it shows to none and back (styles.css), so the strip narrows
+  // from the first frame as it slides into its corner.
   const items = (
     <div
-      className={`flex max-w-[60vw] items-center gap-1.5 overflow-hidden [interpolate-size:allow-keywords] transition-[width,opacity] duration-250 ease-[cubic-bezier(0.2,0,0,1)] ${
-        collapsed ? "pointer-events-none w-0 opacity-0" : "w-auto opacity-100"
+      id={itemsId}
+      className={`flex items-center gap-1.5 overflow-hidden transition-[width,opacity] duration-250 ease-[cubic-bezier(0.2,0,0,1)] ${
+        collapsed ? "pointer-events-none opacity-0" : "opacity-100"
       }`}
       data-bubble-items
       aria-hidden={collapsed}
@@ -705,12 +764,10 @@ export function ChatBubbles({
   );
   const collapsedBubble = (
     <button
+      ref={expandRef}
       type="button"
       {...dragHandlers}
-      onClick={() => {
-        setPeeked(true);
-        onFoldedChange(false);
-      }}
+      onClick={() => onFoldedChange(false)}
       onContextMenu={openDockMenu}
       // Its edge is a ring, not a border: a border is never thinner than a
       // pixel, so the strip would snap 2px as the bubble comes and goes.
@@ -720,6 +777,8 @@ export function ChatBubbles({
           : "pointer-events-none size-9 max-w-0 opacity-0"
       }`}
       aria-label="Expand chat bubbles"
+      aria-expanded={!collapsed}
+      aria-controls={itemsId}
       aria-description="Drag to either bottom corner. Arrow keys move left or right."
       aria-keyshortcuts="ArrowLeft ArrowRight"
       aria-hidden={!collapsed}

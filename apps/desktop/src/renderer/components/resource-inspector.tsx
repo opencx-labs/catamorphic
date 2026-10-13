@@ -198,9 +198,9 @@ export function ResourceInspector<T extends HTMLElement = HTMLButtonElement>({
   placement?: "side" | "above";
   /**
    * What the panel sits beside, when more than the trigger: the list the
-   * trigger is a row of, so the panel clears the list's edge and the row's
-   * other buttons instead of covering them. Its top still follows the
-   * trigger.
+   * trigger is a row of, or the sidebar it heads, so the panel clears that
+   * edge and the buttons beside the trigger instead of covering them. Its
+   * top still follows the trigger.
    */
   anchorRef?: RefObject<Element | null>;
   children: (props: ResourceInspectorTriggerProps<T>) => ReactNode;

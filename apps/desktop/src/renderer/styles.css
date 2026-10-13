@@ -2018,11 +2018,20 @@ kbd {
   -webkit-app-region: drag;
 }
 
-/* A detached rail sizes to its contents rather than a workspace viewport.
-   The ceiling holds folded too: folding animates the width, and a ceiling
-   that changed with the fold would cut the strip short in its first frame. */
+/* The strip's chats are as wide as they are, up to a ceiling: most of the
+   window, or the detached window less the strip's own controls. Folded,
+   none. The ceiling is part of the width, never a max-width: folding
+   interpolates from the width shown, so even a strip held at its ceiling
+   narrows from the fold's first frame instead of after the interpolated
+   width has fallen below the ceiling. */
+[data-bubble-items] {
+  width: calc-size(auto, min(size, 60vw));
+}
 [data-dock-native] [data-bubble-items] {
-  max-width: calc(100vw - 60px);
+  width: calc-size(auto, min(size, 100vw - 60px));
+}
+[data-bubble-items][aria-hidden="true"] {
+  width: 0;
 }
 
 html[data-surface="dock"] body,

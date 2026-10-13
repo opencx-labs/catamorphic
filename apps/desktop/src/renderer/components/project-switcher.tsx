@@ -7,7 +7,7 @@ import {
   Link2,
   PanelsTopLeft,
 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { usePopoverDismiss } from "../lib/popover-dismiss.js";
 import { useWorkspace } from "../lib/workspace-context.js";
 import { ProjectInspector, ProjectInspectorWarmup } from "./project-inspector";
@@ -43,6 +43,14 @@ export function ProjectSwitcher({
   // A project's card sits beside the whole list, clear of its edge and of
   // each row's window button.
   const listRef = useRef<HTMLDivElement>(null);
+  // The current project's own card sits beside the sidebar, not beside the
+  // button: across the sidebar's top row the button reaches its toggle,
+  // and a card at the button's edge would cover it.
+  const sidebarRef = useRef<Element | null>(null);
+  useLayoutEffect(() => {
+    sidebarRef.current =
+      rootRef.current?.closest(".sidebar-inner") ?? rootRef.current;
+  }, []);
   const active = projects.find((project) => project.id === activeProjectId);
   // A press anywhere else, a web page or an app's frame included, closes
   // the list; a press on a project's card or its menu does not.
@@ -57,6 +65,7 @@ export function ProjectSwitcher({
     <div ref={rootRef} className="relative min-w-0 flex-1">
       <ResourceInspector
         label={`${active?.name ?? "Project"} details`}
+        anchorRef={sidebarRef}
         warmup={
           active ? (
             <ProjectInspectorWarmup projectId={active.id} current />
