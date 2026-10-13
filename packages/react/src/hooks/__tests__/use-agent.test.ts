@@ -139,5 +139,21 @@ describe("snapshotRefetchInterval", () => {
     expect(
       snapshotRefetchInterval({ ...input, onScreen: true, streaming: true }),
     ).toBe(false);
+    // Off screen, a sent message the snapshot does not show yet keeps it
+    // loading: that snapshot may predate the message.
+    expect(
+      snapshotRefetchInterval({
+        ...input,
+        onScreen: false,
+        awaitingChange: true,
+      }),
+    ).toBe(1_500);
+    expect(
+      snapshotRefetchInterval({
+        ...input,
+        awaitingChange: true,
+        streaming: true,
+      }),
+    ).toBe(false);
   });
 });

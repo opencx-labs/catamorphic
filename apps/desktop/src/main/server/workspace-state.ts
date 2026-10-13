@@ -1,3 +1,4 @@
+import { jsonbText } from "@catamorphic/db";
 import type { PGlite } from "@electric-sql/pglite";
 
 /**
@@ -30,13 +31,17 @@ export class WorkspaceStateStore {
     return result.rows[0]?.state ?? null;
   }
 
+  /**
+   * Titles a page cut through an emoji or that carry a NUL arrive as
+   * U+FFFD: jsonb refuses either, and with it the whole save.
+   */
   async set(projectId: string, state: unknown): Promise<void> {
     await this.pglite.query(
       `INSERT INTO desktop.workspace_states (project_id, state, updated_at)
        VALUES ($1, $2, now())
        ON CONFLICT (project_id)
        DO UPDATE SET state = EXCLUDED.state, updated_at = now()`,
-      [projectId, JSON.stringify(state)],
+      [projectId, jsonbText(state)],
     );
   }
 

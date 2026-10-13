@@ -222,18 +222,21 @@ export function useAgentChat(
   const { apiClient } = useCatamorphic();
   const queryClient = useQueryClient();
   const createSession = useCreateAgentSession(projectId);
-  const live = useAgentSession(projectId, sessionId ?? undefined, {
-    live: options.live ?? true,
-  });
-  const optionsRef = useRef(options);
-  optionsRef.current = options;
-
   const [pendingByScope, setPending] = useState<{
     token: object;
     items: PendingAgentMessage[];
   }>({ token: scope.token, items: [] });
   const pending =
     pendingByScope.token === scope.token ? pendingByScope.items : [];
+  const live = useAgentSession(projectId, sessionId ?? undefined, {
+    live: options.live ?? true,
+    // The refresh after a send can be a load already under way, read before
+    // the message was accepted: off screen, keep loading until it shows.
+    awaitingChange: pending.some((message) => message.status === "sent"),
+  });
+  const optionsRef = useRef(options);
+  optionsRef.current = options;
+
   const updatePending = useCallback(
     (
       token: object,

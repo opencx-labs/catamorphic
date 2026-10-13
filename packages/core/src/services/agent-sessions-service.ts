@@ -5525,7 +5525,7 @@ export class AgentSessionsService {
         .updateTable("agent_sessions")
         .set({
           ...(workspace ? { workspace: workspaceJson(workspace) } : {}),
-          workspace_move: sql<Json>`case when workspace_move = ${JSON.stringify(
+          workspace_move: sql<Json>`case when workspace_move = ${jsonbText(
             workspaceMoveJson(move),
           )}::jsonb then null else workspace_move end`,
         })
@@ -10444,7 +10444,7 @@ export class AgentSessionsService {
     await this.requireSession(args.identity, args.projectId, args.sessionId);
     await this.db
       .updateTable("agent_sessions")
-      .set({ approvers: JSON.stringify(args.approvers) })
+      .set({ approvers: args.approvers })
       .where("id", "=", args.sessionId)
       .execute();
   }

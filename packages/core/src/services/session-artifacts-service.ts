@@ -153,7 +153,7 @@ export class SessionArtifactsService {
                 name: input.name,
                 title: input.title ?? input.name,
                 source_path: sourcePath,
-                source_paths: JSON.stringify(snapshot.paths),
+                source_paths: snapshot.paths,
                 remote_branch: remoteBranch,
                 commit_sha: snapshot.commitSha,
               })
@@ -164,7 +164,7 @@ export class SessionArtifactsService {
               .values({
                 artifact_id: id,
                 commit_sha: snapshot.commitSha,
-                source_paths: JSON.stringify(snapshot.paths),
+                source_paths: snapshot.paths,
               })
               .execute();
             return present(row);
@@ -312,7 +312,7 @@ export class SessionArtifactsService {
             .values({
               artifact_id: row.id,
               commit_sha: snapshot.commitSha,
-              source_paths: JSON.stringify(paths),
+              source_paths: paths,
             })
             .onConflict((conflict) => conflict.doNothing())
             .execute();
@@ -322,7 +322,7 @@ export class SessionArtifactsService {
               commit_sha: snapshot.commitSha,
               remote_branch: remoteBranch,
               revision: row.revision + 1,
-              source_paths: JSON.stringify(paths),
+              source_paths: paths,
               title: input.title ?? row.title,
               updated_at: new Date(),
             })

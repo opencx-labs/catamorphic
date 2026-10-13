@@ -17,12 +17,7 @@ import {
 import type { Span } from "@opentelemetry/api";
 import { type Kysely, sql, type Transaction } from "kysely";
 import { z } from "zod";
-import {
-  jsonColumn,
-  storableJson,
-  toJson,
-  withoutNul,
-} from "./run-coordinator.js";
+import { jsonColumn, toJson } from "./run-coordinator.js";
 
 const tracer = getTracer("@catamorphic/core");
 
@@ -1121,9 +1116,7 @@ export class RemoteOperationQueue {
   ): Promise<void> {
     const status = args.error === undefined ? "completed" : "failed";
     const error =
-      args.error === undefined
-        ? null
-        : withoutNul(redactUrlCredentials(args.error));
+      args.error === undefined ? null : redactUrlCredentials(args.error);
     const pending = await this.db
       .selectFrom("remote_operations")
       .select("reply_key")
@@ -1142,7 +1135,7 @@ export class RemoteOperationQueue {
                 ? jsonColumn(
                     toJson({
                       sealed: sealOperation({
-                        plaintext: JSON.stringify(storableJson(args.response)),
+                        plaintext: JSON.stringify(args.response ?? null),
                         recipientPublicKey: pending.reply_key,
                         aad: receiptAad(args),
                       }),

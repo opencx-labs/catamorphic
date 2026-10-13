@@ -700,6 +700,66 @@ describe("useAgentChat commands", () => {
     expect(events.filter((event) => event.startsWith("send:"))).toHaveLength(2);
   });
 
+  it("off screen, keeps loading until a sent message shows, even past a snapshot read before it", async () => {
+    // The first snapshot of a new session is read before the message is
+    // accepted and answered after its receipt, so the refresh the receipt
+    // asks for is that same load. It shows nothing running.
+    let current = snapshot();
+    let snapshots = 0;
+    let getRead = () => {};
+    const readBeforeSend = new Promise<void>((resolve) => {
+      getRead = resolve;
+    });
+    let sendAnswered = () => {};
+    const answered = new Promise<void>((resolve) => {
+      sendAnswered = resolve;
+    });
+    server.use(
+      http.post(apiUrl(`/api/projects/${PROJECT_ID}/agent/sessions`), () =>
+        HttpResponse.json(sessionDetail(snapshot()), { status: 201 }),
+      ),
+      http.get(apiUrl(BASE), async () => {
+        snapshots += 1;
+        const read = current;
+        if (snapshots === 1) {
+          getRead();
+          await answered;
+          await new Promise((resolve) => setTimeout(resolve, 50));
+        }
+        return HttpResponse.json(sessionDetail(read));
+      }),
+      http.post(apiUrl(`${BASE}/commands`), async ({ request }) => {
+        const body = (await request.json()) as Record<string, unknown>;
+        await readBeforeSend;
+        current = snapshot({
+          sequence: 3,
+          turns: [turn("t1", 1, { status: "running", inputItemId: "m1" })],
+          items: [userMessage("m1", 2, "t1", "Work slowly")],
+        });
+        setTimeout(sendAnswered, 0);
+        return HttpResponse.json({
+          commandId: body.commandId,
+          status: "accepted",
+          sequence: 3,
+          result: { itemId: "m1", turnId: "t1", mode: "queue" },
+          error: null,
+        });
+      }),
+    );
+    const { result } = renderHookWithProviders(() =>
+      useAgentChat(PROJECT_ID, { live: false }),
+    );
+    await act(async () => {
+      await result.current.send("Work slowly");
+    });
+    expect(result.current.pending[0]?.status).toBe("sent");
+    await waitFor(() => expect(result.current.isWorking).toBe(true), {
+      timeout: 4_000,
+    });
+    expect(snapshots).toBeGreaterThan(1);
+    await waitFor(() => expect(result.current.pending).toEqual([]));
+  });
+
   it("keeps a failed send with its command id for resending", async () => {
     serveSession(settledSnapshot());
     const ids: unknown[] = [];

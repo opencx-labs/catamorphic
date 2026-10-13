@@ -31,6 +31,7 @@ import {
 import { PROJECT_CHECK_SCRIPT } from "../seeds.js";
 import { assertProjectPermission, resolveScope } from "./artifact-scope.js";
 import { requireTenantProject } from "./projects-service.js";
+import { jsonColumn, toJson } from "./run-coordinator.js";
 import type {
   EnrollmentConflictPolicy,
   RunSuspensionReason,
@@ -988,9 +989,7 @@ export class TriggersService {
           inputParameters: workflow.graph.input.parameters,
           inputSchema: (workflow.graph.inputSchema ?? {}) as Json,
           outputSchema: (workflow.graph.outputSchema ?? {}) as Json,
-          connectionRequirements: JSON.parse(
-            JSON.stringify(workflow.graph.connections),
-          ) as Json,
+          connectionRequirements: toJson(workflow.graph.connections),
           bindingIndex,
         });
       }
@@ -1055,19 +1054,17 @@ export class TriggersService {
               commit_sha: args.commitSha,
               trigger_kind: binding.kind,
               workflow_name: binding.workflowName,
-              // Stringified so array-valued JSON is not mistaken for a
-              // Postgres array literal by the driver.
-              config: JSON.stringify(binding.config),
-              where_filters: JSON.stringify(binding.where),
+              // Config and schemas are whatever JSON the source wrote, a
+              // bare string included.
+              config: jsonColumn(binding.config),
+              where_filters: binding.where,
               project_kind: binding.projectKind ?? null,
               binding_index: binding.bindingIndex,
               can_suspend: binding.canSuspend,
-              input_parameters: JSON.stringify(binding.inputParameters),
-              input_schema: JSON.stringify(binding.inputSchema),
-              output_schema: JSON.stringify(binding.outputSchema),
-              connection_requirements: JSON.stringify(
-                binding.connectionRequirements,
-              ),
+              input_parameters: toJson(binding.inputParameters),
+              input_schema: jsonColumn(binding.inputSchema),
+              output_schema: jsonColumn(binding.outputSchema),
+              connection_requirements: binding.connectionRequirements,
             })),
           )
           .onConflict((oc) =>
