@@ -99,8 +99,8 @@ the copy: `renderAttachment` (the `ContextPill` with its previews), `Hint`
 `workDisplay`. Rows are memoized: keep render-affecting slots stable
 (`useCallback` or module-level functions); action callbacks may change every
 render. The timeline's motion classes (`cat-fade-in`, `cat-fold-away`,
-`cat-step-in`, `cat-swap-*`, `cat-reveal` with its `data-entering` and
-`data-moving`, `cat-grow`), its scroll pinning (`cat-scroll-anchor` with
+`cat-step-in`, `cat-gap-in`, `cat-swap-*`, `cat-reveal` with its
+`data-entering` and `data-moving`, `cat-grow`), its scroll pinning (`cat-scroll-anchor` with
 `data-pinned`, set only while the chat follows and nothing in it is pressed
 or selected) and `cat-settled` live in `@catamorphic/ui/styles.css`, which
 the renderer stylesheet imports. The timeline's press and key listeners on

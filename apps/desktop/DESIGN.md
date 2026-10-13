@@ -2548,19 +2548,34 @@ duration and chevron, and settling dropped the notes' steps in one frame
   grows a line above the first; once answered, a lone step is its own row
   again. The clock holds the width of its longest reading in seconds or
   minutes (widening smoothly into minutes) and lends the reply none, so
-  nothing after it or below it moves. A turn quiet before
-  its first step says so on a line of its own above the activity line. An
-  open list longer than the view can scroll the line away; the running
-  step's own time stays in view.
+  nothing after it or below it moves. Every steps line is one fixed
+  height. An open list longer than the view can scroll the line away; the
+  running step's own time stays in view.
+- **The first steps line has its place before it comes.** From the moment
+  the activity line opens (a message still on its way included) until the
+  turn's first steps line, the turn line above it keeps that line's place,
+  the column's gap included, with the turn's clock (and, after 30 seconds,
+  its silence). The two open as one, and the first steps line takes the
+  turn line's place in the same frame: its count fades in, an open list
+  opens below it, and the activity line does not move. Entrances start on
+  the frame that shows them, so on a slow renderer whatever was still
+  opening when the steps line came used to push the activity line down
+  while its count already read two or three.
 - **Counts change on a beat.** A count and its word fade out and in, and
   their places widen or narrow over 200 ms, so "steps" and the clock slide
   when the count gains a digit.
 - **What arrives opens its place, and what leaves closes it.** Work and
-  prose joining a running turn grow in, and prose being written follows
-  its height on a short transition. A note folding into its answer closes
-  up whole, its steps with it, in the same frame its steps join the
-  answer. A row carries its own spacing, which opens with it, and its
-  duration and chevron follow its label, not the reply's right edge.
+  prose joining a running turn grow in, the column's gap above their row
+  opening with them (it used to appear at once, a 12 px jump), and prose
+  being written follows its height on a short transition. A note folding
+  into its answer closes up whole, its steps with it, in the same frame
+  its steps join the answer, and leaves when its closing has played, not
+  at a fixed time. Its row starts skipping layout out of view only after
+  that: the first frame a row skips, it keeps its last size, which the
+  folding note would make short (the conversation jumped up and back by
+  the note's height for a frame as every such turn settled). A row
+  carries its own spacing, which opens with it, and its duration and
+  chevron follow its label, not the reply's right edge.
 - **The browser holds the latest message still.** While the chat follows
   it, everything but an anchor at the conversation's end opts out of
   scroll anchoring, so whatever grows or shrinks above (a streamed line, a
@@ -2591,7 +2606,9 @@ duration and chevron, and settling dropped the notes' steps in one frame
   and nothing it held enters again.
 
 `e2e/chat-motion.e2e.ts` samples every frame of a paced turn: the spinner,
-the words' box and a folded steps line hold still, the clock and the
+the words' box and a folded steps line hold still from before the first
+step to the answer, also on a renderer slowed sixfold (as a busy macOS
+runner showed, late frames are where entrances overlap), the clock and the
 silence sit on the steps line, rows keep their places, the activity line
 closes before it goes, selected text holds still under the pointer,
 PageUp and the scrollbar take the view from a streaming answer, and an

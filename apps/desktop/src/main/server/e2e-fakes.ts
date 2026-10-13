@@ -353,9 +353,9 @@ interface FakeTurn {
  * - "perf turn [steps=N] [quiet=S] [stream=S]" → many short steps, one
  *   long quiet step, then a long Markdown answer streamed in small chunks
  *   (resource measurements); "perf answer" → that answer at once.
- * - "pace the work" → a dozen commands, each changing the live line, then
- *   an answer streamed a few words at a time ("quickly", "with notes",
- *   "then go quiet" and "at length" vary it).
+ * - "pace the work" → a note, a beat, a dozen commands, each changing the
+ *   live line, then an answer streamed a few words at a time ("quickly",
+ *   "with notes", "then go quiet" and "at length" vary it).
  * - "auth error" / "rate limit" → a provider failure once per message.
  * - "expired sign-in" / "expired sign-in xN" → a Claude Code sign-in that
  *   did not refresh, safe to retry, on the first (N) attempts.
@@ -1599,8 +1599,8 @@ export const catalog = defineWorkflow(({ defineBoundary }) => ({
   }
 
   // "pace the work" → an even, longer turn for watching the chat move: a
-  // note, then a dozen commands whose programs each change the live line
-  // (and carry the step count past ten), optionally a note every four
+  // note, a beat, then a dozen commands whose programs each change the live
+  // line (and carry the step count past ten), optionally a note every four
   // ("with notes") and a silence past the stall notice ("then go quiet"),
   // then an answer streamed a few words at a time.
   if (prompt.includes("pace the work")) {
@@ -1609,6 +1609,9 @@ export const catalog = defineWorkflow(({ defineBoundary }) => ({
       type: "text",
       content: "Reading the parser and its callers first.",
     };
+    // A beat: the note settles before the first step takes the turn
+    // line's place.
+    await turn.pause(1_000);
     const commands: Array<[string, string]> = [
       ["cat src/parser.ts", "Read the parser"],
       ["rg -n 'parse(' src", "Find the parser's callers"],

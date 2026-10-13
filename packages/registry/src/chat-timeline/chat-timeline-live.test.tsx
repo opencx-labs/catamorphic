@@ -155,21 +155,21 @@ describe("ChatTimeline live chrome", () => {
     );
   });
 
-  it("says a silence before the first step on a line of its own", async () => {
-    const quiet = timelineOf({
-      turns: [running({ startedAt: iso(-40_000), activityAt: null })],
-      items: [input("t1", "Fix the parser")],
+  it("keeps the first steps line's place from the start, the clock on it", async () => {
+    // A message on its way: the place is kept, empty, as the line opens.
+    await render({
+      timeline: timelineOf({ turns: [], items: [] }),
+      activity: "Sending message",
     });
-    await render({ timeline: quiet, activity: "Working" });
-    const line = $('[data-testid="chat-turn-line"]');
-    expect(line?.textContent).toContain("No updates for 40s");
-    // Above the activity line, which is still only the spinner and words.
-    expect(
-      line?.compareDocumentPosition(
-        $('[data-testid="chat-activity"]') ?? document.body,
-      ),
-    ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
-    // A turn that is not quiet has no such line.
+    const line = () => $('[data-testid="chat-turn-line"]');
+    expect(line()).not.toBeNull();
+    expect(clocks()).toHaveLength(0);
+    // It opens with the activity line, as one, not on its own.
+    expect(line()?.closest(".cat-reveal")?.hasAttribute("data-entering")).toBe(
+      false,
+    );
+    // The turn starts: the clock reads on it, above the activity line,
+    // which is still only the spinner and its words.
     await render({
       timeline: timelineOf({
         turns: [running({ startedAt: iso(-4_000), activityAt: null })],
@@ -177,9 +177,96 @@ describe("ChatTimeline live chrome", () => {
       }),
       activity: "Working",
     });
-    await wait(250);
+    expect(clockRows()).toEqual(["elsewhere"]);
+    expect(
+      line()?.querySelector('[data-testid="chat-activity-elapsed"]')
+        ?.textContent,
+    ).toBe("4s");
+    expect(
+      line()?.compareDocumentPosition(
+        $('[data-testid="chat-activity"]') ?? document.body,
+      ),
+    ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    // And a long silence before the first step says so there.
+    await render({
+      timeline: timelineOf({
+        turns: [running({ startedAt: iso(-40_000), activityAt: null })],
+        items: [input("t1", "Fix the parser")],
+      }),
+      activity: "Working",
+    });
+    // (The clock last ticked as the turn started, a moment ago.)
+    expect(line()?.textContent).toMatch(/No updates for (39|40)s/);
+  });
+
+  for (const live of ["all", "notes"] as const)
+    it(`puts the first steps line in the turn line's place at once (${live})`, async () => {
+      const workDisplay: WorkDisplay = { live, settled: "collapse" };
+      const items: Item[] = [
+        input("t1", "Fix the parser"),
+        reply("n1", "t1", "Reading the parser first."),
+      ];
+      await render({
+        timeline: timelineOf({ turns: [running()], items }),
+        activity: "Working",
+        workDisplay,
+      });
+      expect($('[data-testid="chat-turn-line"]')).not.toBeNull();
+      await render({
+        timeline: timelineOf({
+          turns: [running()],
+          items: [...items, command("c1", "t1", { status: "in_progress" })],
+        }),
+        activity: "Reading files",
+        workDisplay,
+      });
+      // The turn line is gone in the same render the steps line arrives.
+      expect($('[data-testid="chat-turn-line"]')).toBeNull();
+      const block = $('[data-live-work] [data-testid="chat-turn-steps"]');
+      expect(clockRows()).toEqual(["live work"]);
+      // The line neither opens nor rises: its count only fades in.
+      expect(block?.className).not.toContain("cat-step-in");
+      expect(block?.closest("article")?.className).not.toContain(
+        "translate-y-1",
+      );
+      expect(block?.closest(".cat-row")?.className).not.toContain("cat-gap-in");
+      expect(
+        $('[data-live-work] [data-testid="chat-turn-steps-toggle"]')?.className,
+      ).toContain("cat-fade-in");
+      // Every step in view: the list opens its height under the line.
+      const list = $('[data-live-work] [data-testid="chat-step"]')?.closest(
+        ".grid",
+      );
+      if (live === "all") expect(list?.className).toContain("cat-step-in");
+      else expect(list?.className).not.toContain("cat-step-in");
+    });
+
+  it("opens a row's gap with the work that joins the turn", async () => {
+    const items: Item[] = [
+      input("t1", "Fix the parser"),
+      command("c1", "t1"),
+      reply("n1", "t1", "The lexer drops empty input."),
+    ];
+    await render({
+      timeline: timelineOf({ turns: [running()], items }),
+      activity: "Writing",
+    });
     expect($('[data-testid="chat-turn-line"]')).toBeNull();
-    expect(clocks()).toHaveLength(0);
+    await render({
+      timeline: timelineOf({
+        turns: [running()],
+        items: [...items, command("c2", "t1", { status: "in_progress" })],
+      }),
+      activity: "Running tests",
+    });
+    // A block after a note opens its height, the gap above it included.
+    const block = $('[data-live-work] [data-testid="chat-turn-steps"]');
+    expect(block?.className).toContain("cat-step-in");
+    expect(block?.closest(".cat-row")?.className).toContain("cat-gap-in");
+    // The rows already there keep still.
+    expect(
+      $('[data-message-id="n1"]')?.closest(".cat-row")?.className,
+    ).not.toContain("cat-gap-in");
   });
 
   it("lets the clock go when the turn settles, and a lone step is its own row again", async () => {
