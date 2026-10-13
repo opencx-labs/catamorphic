@@ -994,6 +994,9 @@ kbd {
   }
 }
 
+/* Workspace tab arrival: its width grows from nothing to the widest a tab
+   gets (a 160px title, its icon and padding; the close button takes no
+   room), so the neighbours slide aside. */
 @keyframes tab-in {
   from {
     max-width: 0;
@@ -1001,7 +1004,7 @@ kbd {
     transform: translateY(3px);
   }
   to {
-    max-width: 220px;
+    max-width: 202px;
     opacity: 1;
     transform: translateY(0);
   }
@@ -1017,7 +1020,7 @@ kbd {
    fully instead of leaving a 4px hole. */
 @keyframes tab-out {
   from {
-    max-width: 220px;
+    max-width: 202px;
     opacity: 1;
     transform: translateY(0);
     margin-left: 0;
@@ -1149,6 +1152,73 @@ kbd {
   .row-reveal,
   .copy-reveal {
     transition: none;
+  }
+}
+
+/* A workspace tab's close button takes no room in the strip, so the tab is
+   only as wide as its icon and title. The button rides over the end of the
+   label, where the title's padding was: its X covers the title's last 12px,
+   which clear, and the 16px before them fade, so the title runs on under it
+   instead of moving. It shows while the tab is hovered or holds keyboard
+   focus (the row reveal's rule, led by the keyboard as rings are), on one
+   reversible transition of opacity and scale, so a pointer crossing the
+   strip turns each back from where it is and nothing beside it moves.
+   Hidden, it lets presses through to the tab; a dragged tab hides them all.
+   Without hover the tab in front keeps its button. */
+@property --tab-title-end {
+  syntax: "<color>";
+  inherits: false;
+  initial-value: #000;
+}
+.workspace-tab-close {
+  position: absolute;
+  inset-block: 0;
+  inset-inline-end: 2px;
+  height: 20px;
+  margin-block: auto;
+  opacity: 0;
+  scale: 0.8;
+  pointer-events: none;
+  transition:
+    opacity 150ms var(--ease-standard),
+    scale 150ms var(--ease-standard);
+}
+.workspace-tab-title {
+  mask-image: linear-gradient(to left, var(--tab-title-end) 12px, #000 28px);
+  transition: --tab-title-end 150ms var(--ease-standard);
+}
+[data-tab-orientation="horizontal"]:not([data-tab-dragging])
+  .workspace-tab:hover
+  .workspace-tab-close,
+:root:not([data-focus-modality="pointer"])
+  [data-tab-orientation="horizontal"]:not([data-tab-dragging])
+  .workspace-tab:has(:focus-visible)
+  .workspace-tab-close {
+  opacity: 1;
+  scale: 1;
+  pointer-events: auto;
+}
+[data-tab-orientation="horizontal"]:not([data-tab-dragging])
+  .workspace-tab:hover
+  .workspace-tab-title,
+:root:not([data-focus-modality="pointer"])
+  [data-tab-orientation="horizontal"]:not([data-tab-dragging])
+  .workspace-tab:has(:focus-visible)
+  .workspace-tab-title {
+  --tab-title-end: transparent;
+}
+@media (hover: none) {
+  [data-tab-orientation="horizontal"]:not([data-tab-dragging])
+    .workspace-tab[data-tab-active]
+    .workspace-tab-close {
+    opacity: 1;
+    scale: 1;
+    pointer-events: auto;
+  }
+  [data-tab-orientation="horizontal"]:not([data-tab-dragging])
+    .workspace-tab[data-tab-active]
+    .workspace-tab-title {
+    --tab-title-end: transparent;
   }
 }
 
