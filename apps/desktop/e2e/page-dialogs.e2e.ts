@@ -48,14 +48,32 @@ const server = http.createServer((request, response) => {
     return;
   }
   if (url.startsWith("/leaving-alert")) {
-    // Chrome refuses dialogs from a page that is being left.
+    // Chrome refuses dialogs from a page that is being left, even one that
+    // takes apart what the check reads first.
     response.end(`<title>Leaving alert</title><script>
-      addEventListener('beforeunload', () => { alert('Leaving'); });
+      addEventListener('beforeunload', () => {
+        Function.prototype.call = function () {};
+        Reflect.apply = function () {};
+        Object.defineProperty(Event.prototype, 'type', { get: () => 'click' });
+        alert('Leaving');
+      });
       addEventListener('pagehide', () => { alert('Hiding'); });
       document.addEventListener('visibilitychange', () => {
         if (document.visibilityState === 'hidden') confirm('Hidden?');
       });
     </script>`);
+    return;
+  }
+  if (url.startsWith("/sandboxed")) {
+    // A sandboxed frame calling alert in a loop, with long text.
+    const frame = `<script>
+      for (let i = 0; i < 100000; i++) alert('x'.repeat(20000));
+      parent.postMessage('done', '*');
+    </script>`;
+    response.end(`<title>Sandboxed</title><script>
+      addEventListener('message', () => { document.title = 'Sandboxed done'; });
+    </script>
+    <iframe sandbox="allow-scripts" srcdoc="${frame.replaceAll('"', "&quot;")}"></iframe>`);
     return;
   }
   if (url.startsWith("/dialogs")) {
@@ -394,6 +412,16 @@ describe("page dialogs", () => {
     ).toEqual([]);
   });
 
+  it("a sandboxed frame calling alert in a loop asks nothing and holds nothing up", async () => {
+    const mark = await markDialogs();
+    await go(`${origin}/sandboxed`);
+    // Each call is refused in the frame itself, without a trip to main.
+    await loaded("Sandboxed done");
+    expect(
+      (await dialogsSince(mark)).filter((kinds) => kinds.length > 0),
+    ).toEqual([]);
+  });
+
   it("Leave site? holds a reload, an address and a link, and Leave goes on", async () => {
     await go(`${origin}/unload`);
     await loaded("Unload");
@@ -422,6 +450,13 @@ describe("page dialogs", () => {
     });
     await go(`${origin}/plain?from=address`);
     await dialogShows("beforeunload");
+    // While the person reads it, the page tries to go elsewhere: Leave
+    // still goes where they asked.
+    await finished(await start("location.href = '/plain?from=page'", false));
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(await app.eval<string>(`${DIALOG}?.dataset.kind`)).toBe(
+      "beforeunload",
+    );
     await click("page-dialog-accept");
     await loaded("Plain");
     expect(await inPage<string>("location.search")).toBe("?from=address");

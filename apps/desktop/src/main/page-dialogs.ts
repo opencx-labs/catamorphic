@@ -19,8 +19,12 @@ export type PageDialogRequest = Omit<PageDialog, "id" | "canSuppress">;
 /**
  * A page asking more than this at once (frames, sign-ins for different
  * realms) gets the rest cancelled: nobody answers dozens of dialogs.
+ * "Leave site?" is never refused: it answers the person's own navigation.
  */
 export const PAGE_DIALOG_QUEUE_LIMIT = 20;
+
+/** Why a page's dialog is answered at once, without asking anyone. */
+export type PageDialogRefusal = "suppressed" | "full";
 
 interface Entry {
   dialog: PageDialog;
@@ -48,11 +52,24 @@ export class PageDialogs {
   ) {}
 
   /**
+   * Whether the page's dialog of this kind would be answered at once: the
+   * page was told to show no more dialogs, or it already waits on too many.
+   */
+  refusal(guestId: number, kind: PageDialogKind): PageDialogRefusal | null {
+    const page = this.pages.get(guestId);
+    if (!page) return null;
+    if (isScriptDialog(kind) && page.suppressed) return "suppressed";
+    if (kind !== "beforeunload" && page.queue.length >= PAGE_DIALOG_QUEUE_LIMIT)
+      return "full";
+    return null;
+  }
+
+  /**
    * Ask the person, in the page's tab. Resolves with the answer, or null
-   * when nobody will answer: the page was told to show no more dialogs, it
-   * navigated, or its tab closed, or it already waits on too many. Script
-   * dialogs from the second on offer to stop the page's dialogs, as Chrome
-   * does.
+   * when nobody will answer: the dialog is refused (`refusal`), the page
+   * navigated, or its tab closed. Script dialogs from the second on offer
+   * to stop the page's dialogs, as Chrome does. "Leave site?" comes before
+   * whatever else the page waits on: it answers the person's own going.
    */
   ask(
     request: PageDialogRequest,
@@ -62,20 +79,21 @@ export class PageDialogs {
       queued?: (dialog: PageDialog) => void;
     } = {},
   ): Promise<PageDialogAnswer | null> {
+    if (this.refusal(request.guestId, request.kind))
+      return Promise.resolve(null);
     const page = this.page(request.guestId);
     const script = isScriptDialog(request.kind);
-    if (script && page.suppressed) return Promise.resolve(null);
-    if (page.queue.length >= PAGE_DIALOG_QUEUE_LIMIT)
-      return Promise.resolve(null);
     const canSuppress = script && page.asked > 0;
     if (script) page.asked += 1;
     return new Promise((resolve) => {
       const dialog: PageDialog = { ...request, id: randomUUID(), canSuppress };
-      page.queue.push({
+      const entry: Entry = {
         dialog,
         frame: options.frame ?? null,
         settle: resolve,
-      });
+      };
+      if (request.kind === "beforeunload") page.queue.unshift(entry);
+      else page.queue.push(entry);
       this.byId.set(dialog.id, request.guestId);
       options.queued?.(dialog);
       this.changed(request.guestId);
@@ -158,7 +176,7 @@ export class PageDialogs {
     return this.pages.get(guestId)?.queue.map((entry) => entry.dialog) ?? [];
   }
 
-  /** The dialog the page shows now: the first one it asked. */
+  /** The dialog the page shows now: "Leave site?", or the first it asked. */
   current(guestId: number): PageDialog | null {
     return this.pages.get(guestId)?.queue[0]?.dialog ?? null;
   }

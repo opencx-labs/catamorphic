@@ -1690,6 +1690,8 @@ export function registerBrowserSupport(
       const host = guest?.hostWebContents;
       if (
         guest?.getType() !== "webview" ||
+        // The activation a tab's close granted shares no screen (ADR 0226).
+        pageClosing(guest.id) ||
         !origin ||
         !host ||
         host.isDestroyed() ||

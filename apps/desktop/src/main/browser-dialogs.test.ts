@@ -93,14 +93,23 @@ const embed = (target: Page, origin: string, id = 2) => {
 };
 
 /** A synchronous IPC as the page's preload sends it. */
-const ask = (page: Page, payload: unknown, senderFrame: Frame = page.top) => {
+const ask = (
+  page: Page,
+  payload: { kind: string; message: string; defaultValue?: string },
+  senderFrame: Frame = page.top,
+) => {
   const event: { sender: Page; senderFrame: unknown; returnValue?: unknown } = {
     sender: page,
     senderFrame,
   };
-  ipcMain.emit("catamorphic:page-dialog", event, payload);
+  ipcMain.emit("catamorphic:page-dialog", event, {
+    defaultValue: "",
+    ...payload,
+  });
   return event;
 };
+/** Main refused without asking: the frame stops asking for good. */
+const refusedForGood = { refused: "document" };
 const invoke = (channel: string, sender: Window, input: unknown) =>
   electron.handlers.get(channel)?.({ sender }, input);
 const flush = () => new Promise((resolve) => setImmediate(resolve));
@@ -160,7 +169,7 @@ describe("script dialogs", () => {
       }),
     ).toBe(true);
     await flush();
-    expect(event.returnValue).toBe(true);
+    expect(event.returnValue).toEqual({ answer: true });
   });
 
   it("return what the page expects for each kind and answer", () => {
@@ -190,9 +199,12 @@ describe("script dialogs", () => {
     const other = new Page(8, window);
     host.isTab = (guest) => guest.id !== 8;
     const event = ask(other, { kind: "prompt", message: "?" });
-    expect(event.returnValue).toBeNull();
+    expect(event.returnValue).toEqual({ refused: "busy" });
     const bogus = ask(page, { kind: "auth", message: "spoof" });
-    expect(bogus.returnValue).toBeNull();
+    expect(bogus.returnValue).toEqual(refusedForGood);
+    // Text the preload did not cut is not a dialog it sent.
+    const long = ask(page, { kind: "alert", message: "x".repeat(20_001) });
+    expect(long.returnValue).toEqual(refusedForGood);
     expect(pageDialogs()?.has(page.id)).toBe(false);
   });
 
@@ -201,18 +213,19 @@ describe("script dialogs", () => {
     const gone = new Frame("https://evil.test", null, 1);
     gone.frameToken = "old-page";
     expect(
-      ask(page, { kind: "prompt", message: "Bank password?" }, gone),
-    ).toHaveProperty("returnValue", null);
+      ask(page, { kind: "prompt", message: "Bank password?" }, gone)
+        .returnValue,
+    ).toEqual(refusedForGood);
     const detached = embed(page, "https://example.com", 3);
     detached.detached = true;
     expect(
-      ask(page, { kind: "confirm", message: "?" }, detached),
-    ).toHaveProperty("returnValue", false);
+      ask(page, { kind: "confirm", message: "?" }, detached).returnValue,
+    ).toEqual(refusedForGood);
     // A sandboxed (opaque) frame, as Chrome without allow-modals.
     const sandboxed = embed(page, "null", 4);
     expect(
-      ask(page, { kind: "alert", message: "Hi" }, sandboxed),
-    ).toHaveProperty("returnValue", null);
+      ask(page, { kind: "alert", message: "Hi" }, sandboxed).returnValue,
+    ).toEqual(refusedForGood);
     expect(pageDialogs()?.has(page.id)).toBe(false);
   });
 
@@ -222,7 +235,7 @@ describe("script dialogs", () => {
     expect(pageDialogs()?.has(page.id)).toBe(true);
     frame.destroyed = true;
     await new Promise((resolve) => setTimeout(resolve, 600));
-    expect(event.returnValue).toBe(false);
+    expect(event.returnValue).toEqual({ answer: false });
     expect(pageDialogs()?.has(page.id)).toBe(false);
   });
 
@@ -234,7 +247,7 @@ describe("script dialogs", () => {
       { guestId: 7, intent: { kind: "navigate", url: "https://next.test/" } },
     );
     await flush();
-    expect(event.returnValue).toBeNull();
+    expect(event.returnValue).toEqual({ answer: null });
   });
 
   it("keep a dialog whose answer main refuses", () => {
@@ -257,12 +270,40 @@ describe("script dialogs", () => {
       frame: null,
     });
     await flush();
-    expect(confirm.returnValue).toBe(false);
+    expect(confirm.returnValue).toEqual({ answer: false });
     const prompt = ask(page, { kind: "prompt", message: "Name?" });
     page.destroyed = true;
     page.emit("destroyed");
     await flush();
-    expect(prompt.returnValue).toBeNull();
+    expect(prompt.returnValue).toEqual({ answer: null });
+  });
+
+  it("tell the frame to stop asking when the page shows no more dialogs, and to wait while it waits on too many", async () => {
+    ask(page, { kind: "confirm", message: "One?" });
+    invoke("catamorphic:page-dialog-answer", window, {
+      id: shown(page).id,
+      accept: true,
+      suppress: true,
+    });
+    await flush();
+    expect(ask(page, { kind: "alert", message: "More" }).returnValue).toEqual(
+      refusedForGood,
+    );
+    page.emit("did-navigate", {}, "https://example.com/next", 200);
+    for (let index = 0; index < PAGE_DIALOG_QUEUE_LIMIT; index++)
+      void pageDialogs()?.ask({
+        guestId: page.id,
+        kind: "auth",
+        origin: "https://example.com",
+        embedded: false,
+        message: "",
+        defaultValue: "",
+        reload: false,
+      });
+    expect(ask(page, { kind: "alert", message: "Busy" }).returnValue).toEqual({
+      refused: "busy",
+    });
+    expect(pageDialogs()?.list(page.id)).toHaveLength(PAGE_DIALOG_QUEUE_LIMIT);
   });
 
   it("only answer a dialog to the window that shows it", () => {
@@ -407,6 +448,144 @@ describe("Leave site?", () => {
     expect(page.reload).not.toHaveBeenCalled();
   });
 
+  describe("what Leave does is the person's", () => {
+    const intent = (value: unknown) =>
+      ipcMain.emit(
+        "catamorphic:browser-unload-intent",
+        { sender: window },
+        { guestId: 7, intent: value },
+      );
+    const pageNavigates = (user = false) =>
+      ipcMain.emit(
+        "catamorphic:page-navigating",
+        { sender: page, senderFrame: page.top },
+        { reload: false, user },
+      );
+    const leave = async () => {
+      invoke("catamorphic:page-dialog-answer", window, {
+        id: shown(page).id,
+        accept: true,
+      });
+      await flush();
+    };
+
+    it("the page's own script cannot take over the person's attempt, before or after it asks", async () => {
+      const now = vi.spyOn(Date, "now");
+      try {
+        now.mockReturnValue(10_000);
+        intent({ kind: "navigate", url: "https://bank.test/" });
+        // The page keeps starting navigations of its own, then holds.
+        now.mockReturnValue(10_050);
+        pageNavigates();
+        page.emit("will-prevent-unload", { preventDefault: vi.fn() });
+        expect(shown(page)).toMatchObject({
+          kind: "beforeunload",
+          reload: false,
+        });
+        // While the person reads "Leave site?", it tries a lookalike.
+        now.mockReturnValue(14_000);
+        pageNavigates();
+        page.emit("will-prevent-unload", { preventDefault: vi.fn() });
+        await leave();
+        expect(page.loadURL).toHaveBeenCalledWith("https://bank.test/");
+        expect(page.send).not.toHaveBeenCalledWith("catamorphic:page-proceed");
+        // The redone navigation, and anything the page tries before it,
+        // goes without asking again.
+        const again = { preventDefault: vi.fn() };
+        page.emit("will-prevent-unload", again);
+        expect(again.preventDefault).toHaveBeenCalled();
+      } finally {
+        now.mockRestore();
+      }
+    });
+
+    it("only another attempt of theirs changes it", async () => {
+      const now = vi.spyOn(Date, "now");
+      try {
+        now.mockReturnValue(10_000);
+        intent({ kind: "navigate", url: "https://next.test/" });
+        page.emit("will-prevent-unload", { preventDefault: vi.fn() });
+        now.mockReturnValue(15_000);
+        intent({ kind: "reload" });
+        page.emit("will-prevent-unload", { preventDefault: vi.fn() });
+        expect(shown(page).reload).toBe(true);
+        await leave();
+        expect(page.reload).toHaveBeenCalled();
+        expect(page.loadURL).not.toHaveBeenCalled();
+      } finally {
+        now.mockRestore();
+      }
+    });
+
+    it("the person's own press in the page after it leaves instead, and Stay is done with both", async () => {
+      const now = vi.spyOn(Date, "now");
+      try {
+        now.mockReturnValue(10_000);
+        // Back to an entry of the same page: nothing unloads.
+        intent({ kind: "back" });
+        now.mockReturnValue(11_000);
+        pageNavigates(true);
+        page.emit("will-prevent-unload", { preventDefault: vi.fn() });
+        invoke("catamorphic:page-dialog-answer", window, {
+          id: shown(page).id,
+          accept: false,
+        });
+        await flush();
+        // Stayed: the next "Leave site?" knows of neither.
+        now.mockReturnValue(11_500);
+        page.emit("will-prevent-unload", { preventDefault: vi.fn() });
+        await leave();
+        expect(page.navigationHistory.goBack).not.toHaveBeenCalled();
+        expect(page.send).not.toHaveBeenCalledWith("catamorphic:page-proceed");
+
+        now.mockReturnValue(20_000);
+        page.emit("did-navigate", {}, "https://example.com/form", 200);
+        intent({ kind: "back" });
+        now.mockReturnValue(21_000);
+        pageNavigates(true);
+        page.emit("will-prevent-unload", { preventDefault: vi.fn() });
+        await leave();
+        expect(page.send).toHaveBeenCalledWith("catamorphic:page-proceed");
+        expect(page.navigationHistory.goBack).not.toHaveBeenCalled();
+      } finally {
+        now.mockRestore();
+      }
+    });
+
+    it("the person's going takes back the page's sign-ins, and Leave site? comes first, however much the page asked", async () => {
+      const signIns = Array.from({ length: PAGE_DIALOG_QUEUE_LIMIT }, () =>
+        pageDialogs()?.ask({
+          guestId: page.id,
+          kind: "auth",
+          origin: "https://example.com",
+          embedded: false,
+          message: "",
+          defaultValue: "",
+          reload: false,
+        }),
+      );
+      // The page's own navigation, held, with the queue full.
+      pageNavigates();
+      page.emit("will-prevent-unload", { preventDefault: vi.fn() });
+      expect(shown(page).kind).toBe("beforeunload");
+      expect(pageDialogs()?.list(page.id)).toHaveLength(
+        PAGE_DIALOG_QUEUE_LIMIT + 1,
+      );
+      // The person goes elsewhere: the sign-ins are cancelled, and
+      // "Leave site?" asks about where they go.
+      intent({ kind: "navigate", url: "https://next.test/" });
+      page.emit("will-prevent-unload", { preventDefault: vi.fn() });
+      for (const signIn of signIns) await expect(signIn).resolves.toBeNull();
+      expect(
+        pageDialogs()
+          ?.list(page.id)
+          .map((dialog) => dialog.kind),
+      ).toEqual(["beforeunload"]);
+      await leave();
+      expect(page.loadURL).toHaveBeenCalledWith("https://next.test/");
+    });
+  });
+
   it("asks before a tab the person touched closes, and tells the window the answer", async () => {
     page.touched = false;
     await expect(
@@ -436,7 +615,48 @@ describe("Leave site?", () => {
       "catamorphic:browser-close-answer",
       { guestId: 7, leave: true },
     );
+    // Leaving with its tab, it opens nothing until it is gone.
+    expect(pageClosing(7)).toBe(true);
+    page.destroyed = true;
+    page.emit("destroyed");
     expect(pageClosing(7)).toBe(false);
+  });
+
+  it("keeps a page that stays from using the close's activation while it lasts", async () => {
+    const now = vi.spyOn(Date, "now");
+    try {
+      now.mockReturnValue(10_000);
+      await invoke("catamorphic:browser-close-ask", window, { guestId: 7 });
+      page.emit("will-prevent-unload", { preventDefault: vi.fn() });
+      now.mockReturnValue(11_000);
+      invoke("catamorphic:page-dialog-answer", window, {
+        id: shown(page).id,
+        accept: false,
+      });
+      await flush();
+      expect(window.send).toHaveBeenCalledWith(
+        "catamorphic:browser-close-answer",
+        { guestId: 7, leave: false },
+      );
+      // Stayed, but still holding the activation the close granted.
+      expect(pageClosing(7)).toBe(true);
+      now.mockReturnValue(14_999);
+      expect(pageClosing(7)).toBe(true);
+      now.mockReturnValue(15_000);
+      expect(pageClosing(7)).toBe(false);
+
+      // A page that lets go leaves with its tab: guarded until it is gone.
+      now.mockReturnValue(20_000);
+      await invoke("catamorphic:browser-close-ask", window, { guestId: 7 });
+      page.emit("-before-unload-fired", { preventDefault: vi.fn() }, true);
+      now.mockReturnValue(60_000);
+      expect(pageClosing(7)).toBe(true);
+      page.destroyed = true;
+      page.emit("destroyed");
+      expect(pageClosing(7)).toBe(false);
+    } finally {
+      now.mockRestore();
+    }
   });
 
   it("keeps the page loaded while its tab closes, whatever Electron would do", async () => {
@@ -657,6 +877,37 @@ describe("sign-ins", () => {
     await flush();
     expect(pageDialogs()?.has(page.id)).toBe(false);
     expect(callback).toHaveBeenCalledWith();
+  });
+
+  it("never show a sign-in over the page the tab went to meanwhile", async () => {
+    const listed: Array<(logins: []) => void> = [];
+    host.vault.list = vi.fn(
+      () => new Promise<[]>((resolve) => listed.push(resolve)),
+    );
+    // The page's own request asks; the person goes elsewhere meanwhile.
+    const first = login(
+      { url: "https://example.com/api", isRequestForNavigation: false },
+      { ...authInfo, realm: "API" },
+    );
+    ipcMain.emit(
+      "catamorphic:browser-unload-intent",
+      { sender: window },
+      { guestId: 7, intent: { kind: "navigate", url: "https://next.test/" } },
+    );
+    // A navigation's own sign-in; another navigation starts meanwhile.
+    const second = login();
+    page.emit("did-start-navigation", {
+      isSameDocument: false,
+      isMainFrame: true,
+      url: "https://elsewhere.test/",
+      frame: null,
+    });
+    expect(listed).toHaveLength(2);
+    for (const resolve of listed) resolve([]);
+    await flush();
+    expect(pageDialogs()?.has(page.id)).toBe(false);
+    expect(first.callback).toHaveBeenCalledWith();
+    expect(second.callback).toHaveBeenCalledWith();
   });
 
   it("never ask for another site's subresource", async () => {

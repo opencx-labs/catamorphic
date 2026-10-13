@@ -1,4 +1,9 @@
 import { z } from "zod";
+import {
+  PAGE_DIALOG_MESSAGE_LIMIT,
+  SCRIPT_DIALOG_KINDS,
+  type ScriptDialogKind,
+} from "./script-dialogs.js";
 
 /**
  * What a page in a browser tab asks through Work's own dialogs (ADR 0226):
@@ -13,16 +18,10 @@ export type PageDialogKind =
   | "beforeunload"
   | "auth";
 
-/** The page's own dialogs, which it asks from script and waits on. */
-export const SCRIPT_DIALOG_KINDS = ["alert", "confirm", "prompt"] as const;
-export type ScriptDialogKind = (typeof SCRIPT_DIALOG_KINDS)[number];
-
 export function isScriptDialog(kind: PageDialogKind): kind is ScriptDialogKind {
   return kind === "alert" || kind === "confirm" || kind === "prompt";
 }
 
-/** A message longer than this is cut; nobody reads further in a dialog. */
-export const PAGE_DIALOG_MESSAGE_LIMIT = 20_000;
 /** The longest username or password a sign-in takes. */
 export const PAGE_DIALOG_CREDENTIAL_LIMIT = 4096;
 
@@ -92,11 +91,14 @@ export const pageDialogAnswerSchema = z.object({
 });
 export type PageDialogAnswer = z.infer<typeof pageDialogAnswerSchema>;
 
-/** A script dialog as the page's preload asks for it. */
+/**
+ * A script dialog as the page's preload asks for it (ScriptDialogRequest),
+ * its text already cut there.
+ */
 export const scriptDialogRequestSchema = z.object({
   kind: z.enum(SCRIPT_DIALOG_KINDS),
-  message: z.string(),
-  defaultValue: z.string().optional(),
+  message: z.string().max(PAGE_DIALOG_MESSAGE_LIMIT),
+  defaultValue: z.string().max(PAGE_DIALOG_MESSAGE_LIMIT),
 });
 
 /** "127.0.0.1:8080" from "http://127.0.0.1:8080"; empty for none. */

@@ -25,7 +25,10 @@ goes no further once the page answers). Agents
 answer as the person would: `press` Enter for OK or Leave, Escape for Cancel or
 Stay, and `fill` on uid `dialog` for a prompt's answer, which the person sees
 go in. A sign-in is the person's alone: the report says to ask them. `navigate`
-still works and cancels the dialog, as the address bar does.
+still works and cancels the dialog, as the address bar does. An agent answers
+or cancels only a dialog it has been shown: a press or `navigate` while one it
+has not seen is open (the person's own "Leave site?" as they close the tab)
+returns that dialog's report instead.
 
 `upload` takes the UID of a file input or of the button that opens one, and
 absolute file paths: the driver intercepts the page's own file chooser over CDP
