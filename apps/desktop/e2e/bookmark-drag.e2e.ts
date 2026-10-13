@@ -1,5 +1,10 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
+import {
+  type AppHandle,
+  launchApp,
+  NEW_TAB_INPUT,
+  setReactValueJs,
+} from "./harness.js";
 
 let app: AppHandle;
 let folderId: string;
@@ -49,7 +54,7 @@ beforeAll(async () => {
   );
   await run("$('[data-testid=project-submit]').click()");
   await app.waitFor(
-    "!!document.querySelector('textarea[placeholder*=\"Search or ask\"]')",
+    `!!document.querySelector(${JSON.stringify(NEW_TAB_INPUT)})`,
   );
   // The palette can mount before project selection persists its preference.
   // Wait for that selection before creating project-scoped fixtures.
@@ -67,7 +72,7 @@ afterAll(async () => {
 describe("drag tabs and chats into bookmarks", () => {
   it("pins the dragged browser page into a folder", async () => {
     await run(
-      "const input=$('textarea[placeholder*=\"Search or ask\"]');input.focus();setReactValue(input,'https://example.test/reference')",
+      `const input=$(${JSON.stringify(NEW_TAB_INPUT)});input.focus();setReactValue(input,'https://example.test/reference')`,
     );
     await app.waitFor(
       "document.activeElement?.matches('textarea[aria-label=\"Search commands, pages, and more\"]') && document.activeElement.closest('[role=dialog]').querySelector('[data-item-id=web]')?.getAttribute('aria-selected')==='true'",

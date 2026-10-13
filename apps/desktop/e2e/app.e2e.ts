@@ -2010,14 +2010,16 @@ describe("news from a background command (ADR 0217)", () => {
         "task-notification-step.png",
       ),
     );
-    // Its end is news too: a row of its own once nothing works, or a step
-    // of a turn still working when it lands (a loaded host can stretch the
-    // turn it woke past it). Never the person's bubble.
-    const ended = `[...floatingDock().querySelectorAll('[data-testid="chat-task-notification"], [data-step-kind="notification"]')]
+    // Its end is news too, never the person's bubble: a row of its own,
+    // since the shell marks the command's end exactly (OSC 133, zsh and
+    // bash alike) and it ends long after the turn it woke settled. An end
+    // read from a passing idle moment in its loop would land early, as a
+    // step of that turn, and kill the command with its terminal.
+    const ended = `[...floatingDock().querySelectorAll('[data-testid="chat-task-notification"]')]
       .find((el) => el.textContent.includes('Start the worker finished'))`;
     await runWait(`return !!${ended};`, {
       timeoutMs: 45_000,
-      label: "the command's end reads as news",
+      label: "the command's end reads as a row",
     });
     const news = await run<{ printed: number; bubbles: number }>(
       `return {

@@ -1,6 +1,6 @@
 # 0223 — An agent terminal lives as long as its command
 
-- **Status:** Accepted (amends [0155](0155-shells-background-commands-and-live-status.md))
+- **Status:** Accepted (amends [0155](0155-shells-background-commands-and-live-status.md); bash marks its commands and a guessed end must last, amended by [0226](0226-agent-terminals-mark-commands-in-bash-too.md))
 - **Date:** 2026-10-12
 
 ## Context

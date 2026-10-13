@@ -20,8 +20,15 @@ function setup() {
   const shutdown = vi.fn(async () => {});
   const onError = vi.fn();
   const signals = new EventEmitter();
-  registerDesktopShutdown({ app, shutdown, onError, signals });
-  return { app, events, signals, shutdown, onError, finalQuit };
+  const pending = { requests: [] as string[] };
+  registerDesktopShutdown({
+    app,
+    shutdown,
+    onError,
+    signals,
+    pendingRequests: () => pending.requests,
+  });
+  return { app, events, signals, shutdown, onError, finalQuit, pending };
 }
 
 describe("desktop shutdown", () => {
@@ -56,6 +63,20 @@ describe("desktop shutdown", () => {
     expect(finalQuit).not.toHaveBeenCalled();
     finish();
     await vi.waitFor(() => expect(finalQuit).toHaveBeenCalledOnce());
+  });
+
+  it("names native requests still in flight when shutdown completes", async () => {
+    const { app, finalQuit, pending } = setup();
+    pending.requests = ["GetAddrInfoReqWrap×1"];
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+    app.quit();
+    await vi.waitFor(() => expect(finalQuit).toHaveBeenCalledWith(0));
+    expect(info).toHaveBeenCalledWith(
+      expect.stringMatching(
+        /^\[desktop\] Shutdown complete in \d+ms; still in flight: GetAddrInfoReqWrap×1$/,
+      ),
+    );
+    info.mockRestore();
   });
 
   it("reports a cleanup failure and still completes quit", async () => {

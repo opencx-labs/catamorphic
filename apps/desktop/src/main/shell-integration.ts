@@ -3,21 +3,23 @@ import os from "node:os";
 import path from "node:path";
 
 /**
- * Shell integration for agent-driven terminals: a ZDOTDIR shim that
- * sources the user's own zsh config and then adds OSC 133 semantic-prompt
- * hooks (preexec → `133;C`, precmd → `133;D;<exit>`), the same technique
- * VS Code and iTerm2 use. The markers are invisible in the emulator but
- * give the PTY side exact command boundaries and exit codes — no more
- * guessing "busy" from the foreground process name, and run_terminal can
- * report whether a command actually succeeded.
+ * Shell integration for agent-driven terminals: a shim that sources the
+ * user's own shell config and then adds OSC 133 semantic-prompt hooks
+ * (`133;C` when a command starts, `133;D;<exit>` at the prompt), the same
+ * technique VS Code and iTerm2 use. zsh gets a ZDOTDIR shim (preexec and
+ * precmd); bash an init file (PS0 and PROMPT_COMMAND). The markers are
+ * invisible in the emulator but give the PTY side exact command
+ * boundaries and exit codes — no more guessing "busy" from the foreground
+ * process name, which a loop between two `sleep`s fools, and run_terminal
+ * can report whether a command actually succeeded.
  *
  * Only agent-created terminals get the shim. The user's own terminals
  * stay exactly as their dotfiles configure them — an agent borrowing one
  * falls back to the foreground-process heuristic rather than us silently
  * rewriting the user's shell environment.
  *
- * Shells other than zsh (and any write failure) return null and fall
- * back to the heuristic; the terminal still works, just without markers.
+ * Other shells, bash before 4.4 (no PS0), and any write failure fall back
+ * to the heuristic; the terminal still works, just without markers.
  */
 
 /**
@@ -119,6 +121,44 @@ export function shellBinShimDir(): Promise<string | null> {
   return binDir;
 }
 
+/**
+ * The bash init file: a login shell's startup files, as `bash -l` reads
+ * them (bash reads no init file in a login shell, so this one starts
+ * non-login and does it itself), then the same PATH shims and markers as
+ * zsh: `PS0` prints `133;C` as a command starts (bash 4.4+) and the first
+ * `PROMPT_COMMAND` entry `133;D;<exit>` at each prompt.
+ */
+const BASH_INIT = `
+[ -f /etc/profile ] && . /etc/profile
+for __catamorphic_profile in "$HOME/.bash_profile" "$HOME/.bash_login" "$HOME/.profile"; do
+  if [ -f "$__catamorphic_profile" ]; then
+    . "$__catamorphic_profile"
+    break
+  fi
+done
+unset __catamorphic_profile
+if [[ -n "$CATAMORPHIC_BIN" && -d "$CATAMORPHIC_BIN" ]]; then
+  export PATH="$CATAMORPHIC_BIN:$PATH"
+fi
+if [[ -n "$CATAMORPHIC_TOOLCHAIN_BIN" && -d "$CATAMORPHIC_TOOLCHAIN_BIN" ]]; then
+  export PATH="$CATAMORPHIC_TOOLCHAIN_BIN:$PATH"
+fi
+# --- Work shell integration (OSC 133 semantic prompts) ---
+if (( BASH_VERSINFO[0] > 4 || (BASH_VERSINFO[0] == 4 && BASH_VERSINFO[1] >= 4) )); then
+  __catamorphic_precmd() {
+    local status=$?
+    builtin printf '\\e]133;D;%s\\a' "$status"
+    return "$status"
+  }
+  PS0="\${PS0}"$'\\e]133;C\\a'
+  if [[ "$(declare -p PROMPT_COMMAND 2>/dev/null)" == "declare -a"* ]]; then
+    PROMPT_COMMAND=(__catamorphic_precmd "\${PROMPT_COMMAND[@]}")
+  else
+    PROMPT_COMMAND="__catamorphic_precmd\${PROMPT_COMMAND:+;$PROMPT_COMMAND}"
+  fi
+fi
+`;
+
 let shimDir: Promise<string | null> | null = null;
 
 async function ensureShim(): Promise<string | null> {
@@ -137,19 +177,47 @@ async function ensureShim(): Promise<string | null> {
   }
 }
 
+let bashInit: Promise<string | null> | null = null;
+
+async function ensureBashInit(): Promise<string | null> {
+  const dir = path.join(os.tmpdir(), "catamorphic-shell-integration", "bash");
+  try {
+    await fs.mkdir(dir, { recursive: true });
+    const file = path.join(dir, "init.bash");
+    await fs.writeFile(file, BASH_INIT);
+    return file;
+  } catch {
+    return null;
+  }
+}
+
 /**
- * Extra environment for an agent terminal's PTY spawn, or null when the
- * shell can't be integrated (non-zsh, or the shim failed to write).
+ * How an agent terminal's shell starts with integration: its arguments
+ * and extra environment, or null when the shell can't be integrated
+ * (another shell, or the shim failed to write).
  */
-export async function shellIntegrationEnv(
+export async function shellIntegration(
   shell: string,
-): Promise<Record<string, string> | null> {
-  if (path.basename(shell) !== "zsh") return null;
-  shimDir ??= ensureShim();
-  const dir = await shimDir;
-  if (!dir) return null;
-  return {
-    ZDOTDIR: dir,
-    USER_ZDOTDIR: process.env.ZDOTDIR ?? os.homedir(),
-  };
+): Promise<{ args: string[]; env: Record<string, string> } | null> {
+  const name = path.basename(shell);
+  if (name === "zsh") {
+    shimDir ??= ensureShim();
+    const dir = await shimDir;
+    if (!dir) return null;
+    return {
+      // A login shell, like Terminal.app; the shim reads the user's files.
+      args: ["-l"],
+      env: {
+        ZDOTDIR: dir,
+        USER_ZDOTDIR: process.env.ZDOTDIR ?? os.homedir(),
+      },
+    };
+  }
+  if (name === "bash") {
+    bashInit ??= ensureBashInit();
+    const file = await bashInit;
+    if (!file) return null;
+    return { args: ["--init-file", file], env: {} };
+  }
+  return null;
 }

@@ -625,6 +625,14 @@ const KEY_CODES = {
  * contenteditable (inline pills), so that branch keeps [data-pill-id]
  * children, sets the text, and lets the input handler read the DOM back.
  */
+/**
+ * The New Tab page's palette input. The overlay palette (Cmd+P) is always
+ * mounted, closed and inert, with the same "Search or ask" placeholder, so
+ * a test that types into the New Tab page waits for this one: typing into
+ * the overlay's before the New Tab page mounts goes nowhere.
+ */
+export const NEW_TAB_INPUT = '[data-palette="tab"] textarea';
+
 export const setReactValueJs = `const setReactValue = (el, value) => {
     if (el.isContentEditable) {
       const pills = [...el.querySelectorAll('[data-pill-id]')];

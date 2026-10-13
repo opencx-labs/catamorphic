@@ -27,7 +27,9 @@ const IMAGE = process.env.WORK_TEST_CONTAINER_IMAGE ?? "oven/bun:1.3.14-alpine";
 // Pinned, as every image these tests pull: an upstream release never
 // changes a run.
 const DIND_IMAGE = "docker:29.8.2-dind";
-const NESTED_IMAGE = "alpine:3.22.2";
+// The daemon inside the sandbox has no mirror of its own: pull through
+// Google's public one, as Docker Hub rate-limits shared runner addresses.
+const NESTED_IMAGE = "mirror.gcr.io/library/alpine:3.22.2";
 const MINUTES = 60_000;
 
 describe.skipIf(!enabled)("container sandboxes (ADR 0204)", () => {

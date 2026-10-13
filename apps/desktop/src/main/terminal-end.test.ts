@@ -34,7 +34,7 @@ vi.mock("electron", () => ({
   },
 }));
 vi.mock("./shell-integration.js", () => ({
-  shellIntegrationEnv: async () => ({}),
+  shellIntegration: async () => null,
   shellBinShimDir: async () => null,
 }));
 vi.mock("@lydell/node-pty", () => ({

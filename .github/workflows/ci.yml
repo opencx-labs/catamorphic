@@ -283,7 +283,9 @@ jobs:
         run: |
           sudo mkdir -p /etc/docker
           current=$(sudo cat /etc/docker/daemon.json 2>/dev/null || echo '{}')
-          echo "$current" | jq --arg path "$(command -v runsc)" '.runtimes.runsc = {path: $path, runtimeArgs: ["--host-uds=open", "--net-raw"]}' | sudo tee /etc/docker/daemon.json
+          # Docker Hub rate-limits shared runner addresses; Google's public
+          # mirror needs no token and falls back to Docker Hub itself.
+          echo "$current" | jq --arg path "$(command -v runsc)" '.runtimes.runsc = {path: $path, runtimeArgs: ["--host-uds=open", "--net-raw"]} | .["registry-mirrors"] = ["https://mirror.gcr.io"]' | sudo tee /etc/docker/daemon.json
           sudo systemctl restart docker
           for i in $(seq 1 60); do docker info >/dev/null 2>&1 && break; sleep 1; done
           docker info --format '{{json .Runtimes.runsc}}'

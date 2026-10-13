@@ -1,6 +1,11 @@
 import http from "node:http";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
+import {
+  type AppHandle,
+  launchApp,
+  NEW_TAB_INPUT,
+  setReactValueJs,
+} from "./harness.js";
 
 /**
  * A page that failed to load keeps its error in place while the person
@@ -59,13 +64,11 @@ beforeAll(async () => {
   );
   await run("$('[data-testid=project-submit]').click()");
   await app.waitFor(
-    "window.catamorphicDesktop.getPrefs().then(prefs => Boolean(prefs.lastProjectId))",
-  );
-  await app.waitFor(
-    "!!document.querySelector('textarea[placeholder*=\"Search or ask\"]')",
+    `!!document.querySelector(${JSON.stringify(NEW_TAB_INPUT)})`,
+    { label: "New Tab palette" },
   );
   await run(
-    `const input = $('textarea[placeholder*="Search or ask"]'); input.focus(); setReactValue(input, ${JSON.stringify(`${origin}/flaky`)})`,
+    `const input = $(${JSON.stringify(NEW_TAB_INPUT)}); input.focus(); setReactValue(input, ${JSON.stringify(`${origin}/flaky`)})`,
   );
   await app.waitFor(
     "document.activeElement?.matches('textarea[aria-label=\"Search commands, pages, and more\"]') && document.activeElement.closest('[role=dialog]').querySelector('[data-item-id=web]')?.getAttribute('aria-selected') === 'true'",

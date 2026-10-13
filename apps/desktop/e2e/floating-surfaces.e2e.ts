@@ -2,7 +2,12 @@ import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
+import {
+  type AppHandle,
+  launchApp,
+  NEW_TAB_INPUT,
+  setReactValueJs,
+} from "./harness.js";
 
 let app: AppHandle;
 let origin: string;
@@ -58,19 +63,20 @@ beforeAll(async () => {
   );
   await run("$('[data-testid=project-submit]').click()");
   await app.waitFor(
-    "!!document.querySelector('textarea[placeholder*=\"Search or ask\"]')",
+    `!!document.querySelector(${JSON.stringify(NEW_TAB_INPUT)})`,
+    { label: "New Tab palette" },
   );
   await prefs({ tabPlacement: "sidebar", headerPlacement: "sidebar" });
   await app.waitFor(
     "!!document.querySelector('aside [data-tab-orientation=vertical]') && !document.querySelector('.workspace-chrome')",
   );
   await run(
-    `setReactValue($('textarea[placeholder*="Search or ask"]'),${JSON.stringify(`${origin}/anchor`)})`,
+    `setReactValue($(${JSON.stringify(NEW_TAB_INPUT)}),${JSON.stringify(`${origin}/anchor`)})`,
   );
   await app.waitFor(
     "document.querySelector('[data-item-id=web]')?.getAttribute('aria-selected') === 'true'",
   );
-  await run("$('textarea[placeholder*=\"Search or ask\"]').focus()");
+  await run(`$(${JSON.stringify(NEW_TAB_INPUT)}).focus()`);
   await app.press("Enter");
   await app.waitFor(
     "[...document.querySelectorAll('webview')].some(v=>{try{return v.getTitle()==='Anchor page'}catch{return false}})",

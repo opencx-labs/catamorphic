@@ -653,6 +653,11 @@ app.whenReady().then(async () => {
       path.join(paths.profilesDir, profileId, "connectors"),
     connectionsFor: (profileId) =>
       profileConfig.forProfile(profileId).connections,
+    // E2E runs never reach the public catalogs: no test reads them, and a
+    // request still out when the app quits can hold its exit.
+    ...(e2eDataDir
+      ? { catalogFetch: async () => new Response(null, { status: 404 }) }
+      : {}),
   });
   // MCP Apps host: which connection tools carry a ui:// view, their
   // templates, and the view-initiated tool calls. Elicitation from those
@@ -672,6 +677,7 @@ app.whenReady().then(async () => {
   });
   disposeProfileResources = async () => {
     unsubscribeProfileRemoved();
+    connectors.dispose();
     await mcpApps.dispose();
   };
 
