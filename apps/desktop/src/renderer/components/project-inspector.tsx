@@ -187,8 +187,13 @@ export function ProjectInspectorView({
       </header>
 
       <dl className="grid grid-cols-[auto_minmax(0,1fr)] items-center gap-x-3 gap-y-1.5 py-2.5 text-[11px]">
-        <dt className="text-fg-faint">Folder</dt>
-        <dd className="min-w-0" aria-busy={data.root === undefined}>
+        <Row
+          term="Folder"
+          busy={data.root === undefined}
+          copyable={
+            typeof data.root === "string" && data.root !== "unavailable"
+          }
+        >
           {data.root === undefined ? (
             <Pending width="70%" />
           ) : data.root === "unavailable" ? (
@@ -198,17 +203,15 @@ export function ProjectInspectorView({
           ) : (
             <CopyableValue value={data.root} copyLabel="Copy folder path" />
           )}
-        </dd>
-        <dt className="text-fg-faint">Git remote</dt>
-        <dd className="min-w-0">
+        </Row>
+        <Row term="Git remote" copyable={Boolean(remote)}>
           {remote ? (
             <CopyableValue value={remote} copyLabel="Copy Git remote" />
           ) : (
             <Absent>None</Absent>
           )}
-        </dd>
-        <dt className="text-fg-faint">Work server</dt>
-        <dd className="min-w-0" aria-busy={server === undefined}>
+        </Row>
+        <Row term="Work server" busy={server === undefined}>
           {server === undefined ? (
             <Pending width="55%" />
           ) : server === "unavailable" ? (
@@ -218,7 +221,7 @@ export function ProjectInspectorView({
           ) : (
             <ServerValue status={server} />
           )}
-        </dd>
+        </Row>
       </dl>
 
       {!current && <SessionsSection sessions={data.sessions} />}
@@ -344,6 +347,35 @@ function ServerValue({ status }: { status: RemoteProjectStatus }) {
         {SERVER_STATE[status.connection.state]}
       </span>
     </Line>
+  );
+}
+
+/**
+ * One row of the card's list: its label and value on the card's two
+ * columns, as one box the pointer can rest on. A copyable row shows its
+ * copy button while it is hovered or holds keyboard focus.
+ */
+function Row({
+  term,
+  busy,
+  copyable,
+  children,
+}: {
+  term: string;
+  busy?: boolean;
+  copyable?: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <div
+      data-copyable={copyable || undefined}
+      className="col-span-2 grid grid-cols-subgrid items-center"
+    >
+      <dt className="text-fg-faint">{term}</dt>
+      <dd className="min-w-0" aria-busy={busy || undefined}>
+        {children}
+      </dd>
+    </div>
   );
 }
 

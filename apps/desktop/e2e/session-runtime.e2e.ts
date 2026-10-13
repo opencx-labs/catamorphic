@@ -56,12 +56,17 @@ const inspector = async () => {
   });
   await wait(`return !!$('[data-testid="session-inspector-content"]');`);
 };
-const pick = async (name: string) => {
-  await wait(`const row = $$('[role="option"]').find(el => !el.closest('[inert]') && el.textContent.includes(${JSON.stringify(name)}));
+const pickRow = async (match: string) => {
+  await wait(`const row = $$('[role="option"]').find(el => !el.closest('[inert]') && ${match});
     if (!row) return false;
     row.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true }));
     row.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true })); return true;`);
 };
+const pick = (name: string) =>
+  pickRow(`el.textContent.includes(${JSON.stringify(name)})`);
+/** An effort row, by the harness's name for the level ("high", not "xhigh"). */
+const pickEffort = (level: string) =>
+  pickRow(`el.dataset.itemId === ${JSON.stringify(`pick:effort:${level}`)}`);
 
 describe("session runtime controls", () => {
   it("edits only the current conversation and preserves the setting on reload", async () => {
@@ -99,7 +104,7 @@ describe("session runtime controls", () => {
       `const model = $('[aria-label="Change model"]'); return !!model && model.textContent.trim() === 'fake-model-b';`,
     );
     await run(`$('[aria-label="Change reasoning"]').click();`);
-    await pick("High effort");
+    await pickEffort("high");
     expect(
       await run(
         `return JSON.stringify(await window.catamorphicDesktop.agentsList()) === JSON.stringify(window.__draftAgentDefaults);`,
@@ -129,7 +134,7 @@ describe("session runtime controls", () => {
       `return $('[data-testid="session-inspector-content"]').textContent.includes('fake-model-b');`,
     );
     await run(`$('[aria-label="Change reasoning"]').click();`);
-    await pick("High effort");
+    await pickEffort("high");
     await wait(
       `const {base, id} = window.__runtimeTest; const session = await fetch(base + '/' + id).then(r => r.json()); return session.modelEffort === 'high';`,
     );
@@ -147,7 +152,7 @@ describe("session runtime controls", () => {
     );
     await inspector();
     await wait(
-      `const text = $('[data-testid="session-inspector-content"]').textContent; return text.includes('fake-model-b') && text.includes('High');`,
+      `const text = $('[data-testid="session-inspector-content"]').textContent; return text.includes('fake-model-b') && $('[aria-label="Change reasoning"]')?.textContent.trim() === 'high';`,
     );
     if (process.env.CATAMORPHIC_INSPECTOR_SCREENSHOT) {
       await wait(

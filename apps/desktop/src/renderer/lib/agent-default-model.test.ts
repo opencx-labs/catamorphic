@@ -4,6 +4,8 @@ import { describe, expect, it } from "vitest";
 import {
   defaultModelLabel,
   modelId,
+  modelLabel,
+  modelSearchText,
   sameModel,
 } from "./agent-default-model.js";
 import type { AgentInfo } from "./desktop-api.js";
@@ -66,5 +68,69 @@ describe("modelId", () => {
     expect(modelId("gpt-5.5", catalog)).toBe("gpt-5.5");
     expect(modelId("claude-fable-5-1", catalog)).toBe("claude-fable-5-1");
     expect(modelId("opus", undefined)).toBe("opus");
+  });
+});
+
+describe("modelLabel", () => {
+  const catalog = [
+    {
+      id: "default",
+      name: "Default (recommended)",
+      resolvedId: "claude-opus-5",
+    },
+    { id: "sonnet", name: "Sonnet", resolvedId: "claude-sonnet-5" },
+    { id: "haiku", resolvedId: "claude-haiku-5" },
+    { id: "gpt-5.5-codex", name: "gpt-5.5-codex" },
+    { id: "gpt-5.5" },
+  ];
+  const label = (id: string) =>
+    modelLabel(catalog.find((model) => model.id === id) ?? { id }, catalog);
+  it("titles a model by its display name, the id it sends beside it", () => {
+    expect(label("sonnet")).toEqual({
+      title: "Sonnet",
+      detail: "claude-sonnet-5",
+    });
+    expect(label("default")).toEqual({
+      title: "Default (recommended)",
+      detail: "claude-opus-5",
+    });
+    expect(
+      modelLabel({ id: "anthropic/claude-sonnet-5", name: "Claude Sonnet 5" }),
+    ).toEqual({
+      title: "Claude Sonnet 5",
+      detail: "anthropic/claude-sonnet-5",
+    });
+  });
+  it("titles a model without a name of its own by its id, once", () => {
+    expect(label("gpt-5.5")).toEqual({ title: "gpt-5.5" });
+    expect(label("gpt-5.5-codex")).toEqual({ title: "gpt-5.5-codex" });
+    expect(modelLabel({ id: "gpt-5.5", name: "GPT-5.5" })).toEqual({
+      title: "gpt-5.5",
+    });
+    expect(modelLabel({ id: "sonnet", name: "Sonnet" })).toEqual({
+      title: "sonnet",
+    });
+    expect(modelLabel({ id: "custom", name: "  " })).toEqual({
+      title: "custom",
+    });
+  });
+  it("keeps the versioned id beside an unnamed alias", () => {
+    expect(label("haiku")).toEqual({
+      title: "haiku",
+      detail: "claude-haiku-5",
+    });
+  });
+});
+
+describe("modelSearchText", () => {
+  it("matches a model by its name and every id it shows", () => {
+    expect(
+      modelSearchText({
+        id: "sonnet",
+        name: "Sonnet",
+        resolvedId: "claude-sonnet-5",
+      }),
+    ).toBe("Sonnet sonnet claude-sonnet-5");
+    expect(modelSearchText({ id: "gpt-5.5" })).toBe("gpt-5.5");
   });
 });

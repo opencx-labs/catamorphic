@@ -277,29 +277,30 @@ describe("agents and profiles", () => {
 
   it("changes the default agent's effort through the effort picker", async () => {
     await openPicker("Change model effort", "Effort");
-    // The current level carries the check chip; the five rows (ADR 0056:
-    // low → max) keep their order (marked, never reordered).
+    // Each level by the harness's own name and nothing else; the current
+    // one carries the check chip, and the five rows (ADR 0056: low → max)
+    // keep their order (marked, never reordered).
+    const levels = `paletteRows().filter((el) => el.dataset.itemId?.startsWith('pick:effort:'))`;
+    const named = (name: string) =>
+      `(${levels}).find((el) => el.dataset.itemId === 'pick:effort:${name}')`;
     await runWait(
-      `const rows = paletteRows();
-       return rows.some((el) => el.textContent.includes('Medium effort') &&
-                                el.querySelector('[data-testid="palette-current"]')) &&
-              rows.some((el) => el.textContent.includes('High effort'));`,
+      `return !!${named("medium")}?.querySelector('[data-testid="palette-current"]') &&
+              !${named("high")}?.querySelector('[data-testid="palette-current"]');`,
       { label: "effort rows with current marker" },
     );
     await runWait(
-      `const rows = paletteRows().filter((el) => el.textContent.includes('effort'));
-       return rows.length === 5 &&
-              rows[0].textContent.includes('Low effort') &&
-              rows[3].textContent.includes('Extra-high effort') &&
-              rows[4].textContent.includes('Max effort');`,
-      { label: "effort rows keep low→max order" },
+      `const rows = ${levels};
+       const names = rows.map((el) => el.querySelector('span.truncate')?.textContent);
+       return JSON.stringify(names) === JSON.stringify(['low', 'medium', 'high', 'xhigh', 'max']) &&
+              rows.every((el) => el.querySelectorAll('span.truncate').length === 1);`,
+      { label: "effort rows keep low→max order, names only" },
     );
-    await run(pickOption("High effort"));
+    await run(
+      `const opt = ${named("high")}; opt.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true })); return true;`,
+    );
     await openPicker("Change model effort", "Effort");
     await runWait(
-      `return paletteRows()
-        .some((el) => el.textContent.includes('High effort') &&
-                      el.querySelector('[data-testid="palette-current"]'));`,
+      `return !!${named("high")}?.querySelector('[data-testid="palette-current"]');`,
       { label: "current effort moved to high" },
     );
     await run(paletteEscape);
@@ -414,11 +415,31 @@ describe("agents and profiles", () => {
               paletteRows().some((el) => el.textContent.includes('Fake Model B'));`,
       { label: "harness-supplied model rows" },
     );
-    // Aliased ids surface their resolved, versioned id in the faded detail.
+    // Each row is titled by the harness's display name, with the id it
+    // sends beside it: an alias shows its resolved, versioned id.
     await runWait(
-      `return paletteRows().some((el) => el.textContent.includes('fake-model-a-2.1'));`,
-      { label: "resolved id in the model row detail" },
+      `const parts = (id) => {
+         const row = paletteRows().find((el) => el.dataset.itemId === 'pick:model:' + id);
+         return row ? [...row.querySelectorAll('span.truncate')].map((el) => el.textContent) : null;
+       };
+       return JSON.stringify(parts('fake-model-a')) === JSON.stringify(['Fake Model A', 'fake-model-a-2.1']) &&
+              JSON.stringify(parts('fake-model-b')) === JSON.stringify(['Fake Model B', 'fake-model-b']);`,
+      { label: "display name titles, ids beside them" },
     );
+    // Typing finds a model by its name or by an id it shows.
+    for (const query of ["model b", "fake-model-a-2.1"]) {
+      await run(
+        `setReactValue(paletteInput(), ${JSON.stringify(query)}); return true;`,
+      );
+      await runWait(
+        `return paletteRows()[0]?.dataset.itemId === ${JSON.stringify(
+          query === "model b"
+            ? "pick:model:fake-model-b"
+            : "pick:model:fake-model-a",
+        )};`,
+        { label: `search "${query}" finds its model first` },
+      );
+    }
     await run(`setReactValue(paletteInput(), 'my-custom-model'); return true;`);
     await runWait(pickOption('Use "my-custom-model"'), {
       label: "typed model row",
