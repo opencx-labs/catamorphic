@@ -63,11 +63,6 @@ describe("shell integration for agent terminals", () => {
       const integrated = await shellIntegration(bash ?? "");
       if (!integrated) throw new Error("bash was not integrated");
       const home = fs.mkdtempSync(path.join(os.tmpdir(), "bash-home-"));
-      // The person's own prompt hook keeps running beside Work's.
-      fs.writeFileSync(
-        path.join(home, ".bash_profile"),
-        "PROMPT_COMMAND='printf \"[own hook]\"'\n",
-      );
       const pty = spawn(bash ?? "", integrated.args, {
         name: "xterm-256color",
         cols: 80,
@@ -78,6 +73,10 @@ describe("shell integration for agent terminals", () => {
           HOME: home,
           TERM: "xterm",
           HISTFILE: "/dev/null",
+          // The person's own prompt hook keeps running beside Work's. It
+          // rides the environment: a machine's own profile (a CI runner's
+          // resets HOME) decides which ~/.bash_profile a login reads.
+          PROMPT_COMMAND: 'printf "[own hook]"',
         },
       });
       const exited = new Promise<void>((resolve) =>
