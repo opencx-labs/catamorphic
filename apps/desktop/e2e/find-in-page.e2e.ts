@@ -47,14 +47,20 @@ const mac = process.platform === "darwin";
 const view = `document.querySelector('webview')`;
 const findInput = `document.querySelector('input[aria-label="Find in page"]')`;
 const count = `document.querySelector('[data-testid="find-count"]')?.textContent`;
-/** A key pressed inside the page, through the guest's real input path. */
-// A key pressed in the page, through its real input path, which needs the
-// window focused.
+/**
+ * A key pressed in the page, through its real input path. That needs the
+ * window focused, and the page's own document: focusing the <webview>
+ * hands focus over a frame or more later, and a key sent before then lands
+ * nowhere (the first Cmd+F on macOS CI).
+ */
 const pageKey = async (keyCode: string, modifiers: string[] = []) => {
   await focusWindow(app);
+  await app.waitFor(
+    `(() => { const page = ${view}; page.focus(); return page.executeJavaScript('document.hasFocus()', true); })()`,
+    { label: "the page has focus" },
+  );
   return app.eval(`(() => {
     const page = ${view};
-    page.focus();
     page.sendInputEvent({ type: 'keyDown', keyCode: ${JSON.stringify(keyCode)}, modifiers: ${JSON.stringify(modifiers)} });
     page.sendInputEvent({ type: 'keyUp', keyCode: ${JSON.stringify(keyCode)}, modifiers: ${JSON.stringify(modifiers)} });
     return true;

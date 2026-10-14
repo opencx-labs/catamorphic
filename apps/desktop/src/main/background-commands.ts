@@ -42,6 +42,11 @@ interface Tracked extends Omit<BackgroundCommandView, "kind" | "key"> {
    * its next read returns (then nothing).
    */
   unread: string | null;
+  /**
+   * When a shell without markers was first seen idle in a row of idle
+   * samples: only an idle that lasts ends its command.
+   */
+  idleSince: number | null;
 }
 
 export interface BackgroundCommandsDeps {
@@ -107,6 +112,8 @@ const START_SETTLE_MS = 3_000;
 const READ_MAX_WAIT_MS = 600_000;
 /** Raw characters sliced before sanitizing. */
 const RAW_READ_CAP = 150_000;
+/** How long a shell without markers stays idle before its command ended. */
+const UNMARKED_IDLE_MS = 1_000;
 
 const sleep = (ms: number) =>
   new Promise<void>((resolve) => setTimeout(resolve, ms));
@@ -186,6 +193,7 @@ export class BackgroundCommands {
       reading: 0,
       stopping: false,
       unread: null,
+      idleSince: null,
     };
     this.commands.set(id, tracked);
     terminals.writeAny(id, this.deps.encode(command));
@@ -396,9 +404,18 @@ export class BackgroundCommands {
           exitCode = tracking.lastExitCode;
         }
       } else {
+        // Without markers the end is read from the foreground process,
+        // which a command passes through between its steps (the shell
+        // forking the next `sleep` of a loop): one idle sample is no end,
+        // and ending kills the terminal (ADR 0223).
+        const now = Date.now();
+        tracked.idleSince = terminals.isBusy(tracked.id)
+          ? null
+          : (tracked.idleSince ?? now);
         finished =
-          Date.now() - tracked.startedAt > 1_200 &&
-          !terminals.isBusy(tracked.id);
+          now - tracked.startedAt > 1_200 &&
+          tracked.idleSince !== null &&
+          now - tracked.idleSince >= UNMARKED_IDLE_MS;
       }
     }
     if (!finished) return;

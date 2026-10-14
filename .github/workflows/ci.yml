@@ -112,6 +112,7 @@ jobs:
         id: setup
         with:
           cache-suffix: workspace-${{ matrix.shard }}
+          electron: "true"
       - run: bun run check --lane=workspace --shard=${{ matrix.shard }}/${{ matrix.total }}
       - uses: ./.github/actions/test-cache-save
         if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
@@ -170,6 +171,7 @@ jobs:
         id: setup
         with:
           cache-suffix: desktop-linux-${{ matrix.shard }}
+          electron: "true"
       - name: Install private desktop
         run: |
           sudo apt-get update
@@ -219,6 +221,7 @@ jobs:
         id: setup
         with:
           cache-suffix: desktop-macos-${{ matrix.shard }}
+          electron: "true"
       - name: Test native macOS desktop
         env:
           # The runner inherits Bash; desktop terminals on macOS use Zsh,
@@ -283,7 +286,9 @@ jobs:
         run: |
           sudo mkdir -p /etc/docker
           current=$(sudo cat /etc/docker/daemon.json 2>/dev/null || echo '{}')
-          echo "$current" | jq --arg path "$(command -v runsc)" '.runtimes.runsc = {path: $path, runtimeArgs: ["--host-uds=open", "--net-raw"]}' | sudo tee /etc/docker/daemon.json
+          # Docker Hub rate-limits shared runner addresses; Google's public
+          # mirror needs no token and falls back to Docker Hub itself.
+          echo "$current" | jq --arg path "$(command -v runsc)" '.runtimes.runsc = {path: $path, runtimeArgs: ["--host-uds=open", "--net-raw"]} | .["registry-mirrors"] = ["https://mirror.gcr.io"]' | sudo tee /etc/docker/daemon.json
           sudo systemctl restart docker
           for i in $(seq 1 60); do docker info >/dev/null 2>&1 && break; sleep 1; done
           docker info --format '{{json .Runtimes.runsc}}'
@@ -329,6 +334,7 @@ jobs:
         if: env.MODEL_EVAL_AVAILABLE == '1'
         with:
           cache-suffix: eval
+          electron: "true"
       - name: Prepare eval desktop
         if: env.MODEL_EVAL_AVAILABLE == '1'
         run: |

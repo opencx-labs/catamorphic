@@ -7,7 +7,7 @@ import { BrowserWindow, ipcMain, type WebContents } from "electron";
 import { scanOsc133 } from "../shared/terminal-text.js";
 import type { ServerState } from "./ipc.js";
 import { openRemoteTerminal, type TerminalBackend } from "./remote-terminal.js";
-import { shellBinShimDir, shellIntegrationEnv } from "./shell-integration.js";
+import { shellBinShimDir, shellIntegration } from "./shell-integration.js";
 import { readGhosttyAppearance } from "./terminal-appearance.js";
 import { TerminalLifecycle } from "./terminal-lifecycle.js";
 
@@ -341,12 +341,10 @@ export function registerTerminalSupport(
     // busy/exit tracking; user terminals stay exactly as the user's
     // dotfiles configure them (their sessions fall back to the
     // foreground-process heuristic when an agent borrows one).
-    const integrationEnv = input.agent
-      ? await shellIntegrationEnv(shell)
-      : null;
+    const integration = input.agent ? await shellIntegration(shell) : null;
     // The `open` shim (URLs land as in-app tabs) rides the same
-    // agent-only integration: the zsh hooks put CATAMORPHIC_BIN first on
-    // PATH after the user's profiles ran.
+    // agent-only integration: the zsh and bash hooks put CATAMORPHIC_BIN
+    // first on PATH after the user's profiles ran.
     const shimBin = input.agent ? await shellBinShimDir() : null;
     const agentExtraEnv = input.agent
       ? ((await agentEnv?.(input.agent.projectId)) ?? {})
@@ -357,7 +355,9 @@ export function registerTerminalSupport(
       shell,
       // A login shell, like Terminal.app — the user's PATH and prompt
       // come from their profile, not from how Electron was launched.
-      process.platform === "win32" ? [] : ["-l"],
+      // An integrated shell starts as its shim says (it reads the same
+      // profile files).
+      integration?.args ?? (process.platform === "win32" ? [] : ["-l"]),
       {
         name: "xterm-256color",
         cols: input.cols ?? 80,
@@ -367,7 +367,7 @@ export function registerTerminalSupport(
           ...process.env,
           TERM: "xterm-256color",
           COLORTERM: "truecolor",
-          ...integrationEnv,
+          ...integration?.env,
           ...(shimBin ? { CATAMORPHIC_BIN: shimBin } : {}),
           ...agentExtraEnv,
         },

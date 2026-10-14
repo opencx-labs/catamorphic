@@ -48,8 +48,9 @@ describe("ChatTimeline live chrome", () => {
   afterEach(() => {
     act(() => root.unmount());
     container.remove();
-    vi.unstubAllGlobals();
+    // Fake timers first: they put back the stubs they replaced.
     vi.useRealTimers();
+    vi.unstubAllGlobals();
     Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", false);
   });
 
@@ -201,6 +202,12 @@ describe("ChatTimeline live chrome", () => {
 
   for (const live of ["all", "notes"] as const)
     it(`puts the first steps line in the turn line's place at once (${live})`, async () => {
+      // Frames run when the test says: React's async act yields to the
+      // event loop, so on a busy machine a message's entrance could play
+      // out before its first pose is read.
+      vi.useFakeTimers({
+        toFake: ["requestAnimationFrame", "cancelAnimationFrame"],
+      });
       const workDisplay: WorkDisplay = { live, settled: "collapse" };
       const items: Item[] = [
         input("t1", "Fix the parser"),
@@ -231,6 +238,11 @@ describe("ChatTimeline live chrome", () => {
       expect(message).not.toContain("translate-y");
       expect(message).toContain("opacity-0");
       expect(block?.closest(".cat-row")?.className).not.toContain("cat-gap-in");
+      // Two frames: the hidden pose resolves, then the message fades in.
+      await act(async () => {
+        vi.advanceTimersToNextFrame();
+        vi.advanceTimersToNextFrame();
+      });
       await wait(50);
       expect(block?.closest("article")?.className).toContain("opacity-100");
       // Every step in view: the list opens its height under the line.

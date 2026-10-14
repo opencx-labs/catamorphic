@@ -107,13 +107,40 @@ export class ConnectorsService {
     { entries: McpRegistryEntry[]; at: number }
   >();
 
+  /** Ends catalog requests still in flight when the app quits. */
+  private readonly quitting = new AbortController();
+
   constructor(
     private readonly deps: {
       /** Directory holding installed plugin dirs for a profile. */
       connectorsDirFor(profileId: string): string;
       connectionsFor(profileId: string): ConnectionsStore;
+      /**
+       * How the public catalogs (the MCP registry, plugin marketplaces)
+       * are fetched; E2E runs answer them offline.
+       */
+      catalogFetch?: typeof fetch;
     },
   ) {}
+
+  /**
+   * A catalog request, cancelled at quit: one still resolving its host
+   * when Electron tears Node down holds the app's exit.
+   */
+  private readonly fetchCatalog = (
+    input: string | URL | Request,
+    init?: RequestInit,
+  ): Promise<Response> =>
+    (this.deps.catalogFetch ?? fetch)(input, {
+      ...init,
+      signal: init?.signal
+        ? AbortSignal.any([init.signal, this.quitting.signal])
+        : this.quitting.signal,
+    });
+
+  dispose(): void {
+    this.quitting.abort();
+  }
 
   private file(profileId: string): string {
     return path.join(this.deps.connectorsDirFor(profileId), "connectors.json");
@@ -188,7 +215,10 @@ export class ConnectorsService {
     const registry =
       cached && Date.now() - cached.at < REGISTRY_CACHE_MS
         ? cached.entries
-        : await searchMcpRegistry(query, { limit: 20 })
+        : await searchMcpRegistry(query, {
+            limit: 20,
+            fetchImpl: this.fetchCatalog,
+          })
             .then((entries) => {
               this.registryQueryCache.set(key, { entries, at: Date.now() });
               trimCatalogCache(this.registryQueryCache, 64);
@@ -244,7 +274,7 @@ export class ConnectorsService {
     if (cached && Date.now() - cached.at < MARKETPLACE_CACHE_MS) {
       return cached.entries;
     }
-    const entries = fetchMarketplace(ref)
+    const entries = fetchMarketplace(ref, { fetchImpl: this.fetchCatalog })
       .catch(() => [] as MarketplacePluginEntry[])
       .then((list) => {
         // Failures aren't cached for long — the next search retries.

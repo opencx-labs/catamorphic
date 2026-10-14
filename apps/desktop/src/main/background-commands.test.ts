@@ -18,6 +18,8 @@ function fakeTerminals() {
       /** How long the shell takes to show an interrupt ended its command. */
       interruptMs?: number;
       busyUntil?: number;
+      /** A shell without markers: only its foreground process tells busy. */
+      unmarked?: { busy: boolean };
     }
   >();
   let next = 0;
@@ -44,6 +46,11 @@ function fakeTerminals() {
     close(id: string) {
       const terminal = state.get(id);
       if (terminal) terminal.running = false;
+    },
+    /** A shell without OSC 133 markers, its foreground process busy or not. */
+    unmarked(id: string, busy: boolean) {
+      const terminal = state.get(id);
+      if (terminal) terminal.unmarked = { busy };
     },
     /** The command ran `exit`: the shell ends by itself with this code. */
     exitShell(id: string, code: number) {
@@ -79,6 +86,7 @@ function fakeTerminals() {
       exitCode: (id: string) => state.get(id)?.shellExit,
       isBusy: (id: string) => {
         const terminal = state.get(id);
+        if (terminal?.unmarked) return terminal.unmarked.busy;
         return Boolean(
           terminal?.running &&
             (terminal.completions === 0 ||
@@ -89,7 +97,7 @@ function fakeTerminals() {
         const terminal = state.get(id);
         return terminal
           ? {
-              seen: true,
+              seen: !terminal.unmarked,
               completions: terminal.completions,
               prompts: terminal.completions + 1,
               lastExitCode: terminal.exit,
@@ -135,6 +143,32 @@ const until = async (check: () => boolean, ms = 2_000) => {
 };
 
 describe("BackgroundCommands", () => {
+  it("never ends a command on a shell without markers for one idle moment", async () => {
+    const { fake, commands, wakes } = setup();
+    const started = commands.start({
+      projectId: "p",
+      sessionId: "chat",
+      command: "sleep 5; for i in 1 2; do sleep 1; done",
+      description: "Loop",
+    });
+    await until(() => fake.written.length > 0);
+    fake.unmarked("t1", true);
+    expect(await started).toMatchObject({ status: "running" });
+    // The shell forks the next `sleep`: idle for a moment, then busy.
+    fake.unmarked("t1", false);
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    fake.unmarked("t1", true);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(commands.list({ sessionId: "chat" })[0]?.status).toBe("running");
+    expect(fake.killed).toEqual([]);
+    // Back at the prompt for good: its end, once the idle lasts.
+    fake.unmarked("t1", false);
+    await until(() => wakes.length > 0);
+    expect(commands.list({ sessionId: "chat" })[0]?.status).toBe("finished");
+    expect(fake.killed).toEqual(["t1"]);
+    commands.dispose();
+  }, 10_000);
+
   it("keeps running past the call and wakes the chat when it finishes", async () => {
     const { fake, commands, wakes } = setup();
     const started = commands.start({
