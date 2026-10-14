@@ -149,3 +149,69 @@ it("loads the next page of chats as the person scrolls to the end", async () => 
   );
   expect(app.getRendererErrors()).toEqual([]);
 });
+
+it("shows where a list is scrolled on the window's edge only while it moves", async () => {
+  const side = `[data-workspace-visible="true"] [data-sidebar="left"]`;
+  const thumb = `${side} .overlay-scrollbar`;
+  // No list in the sidebar keeps a scrollbar, or a column for one.
+  expect(
+    await app.eval<
+      string[]
+    >(`[...document.querySelectorAll('${side} .sidebar-tab-panel, ${side} .sidebar-tab-panel *')]
+      .filter((element) => getComputedStyle(element).scrollbarWidth !== 'none')
+      .map((element) => element.className)`),
+  ).toEqual([]);
+  expect(
+    await app.eval<boolean>(`(() => {
+      const panel = document.querySelector('${side} .sidebar-tab-panel:not([hidden])');
+      return panel.offsetWidth === panel.clientWidth;
+    })()`),
+  ).toBe(true);
+  await app.waitFor(
+    `document.querySelector('${thumb}')?.dataset.shown === 'false' && getComputedStyle(document.querySelector('${thumb}')).opacity === '0'`,
+    {
+      label: "nothing shows at rest",
+    },
+  );
+  const point = await app.eval<{ x: number; y: number }>(`(() => {
+    const rect = document.querySelector('${tree}').getBoundingClientRect();
+    return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+  })()`);
+  await app.cdp("Input.dispatchMouseEvent", {
+    type: "mouseWheel",
+    ...point,
+    deltaX: 0,
+    deltaY: -200,
+  });
+  // On the outer edge, beside the list that moved and no taller than it.
+  const shown = await app.waitFor<{
+    left: number;
+    edge: number;
+    top: number;
+    bottom: number;
+    listTop: number;
+    listBottom: number;
+  }>(
+    `document.querySelector('${thumb}').dataset.shown === 'true' && (() => {
+      const bar = document.querySelector('${thumb}').getBoundingClientRect();
+      const list = document.querySelector('${tree}').getBoundingClientRect();
+      const side = document.querySelector('${side} .sidebar-inner').getBoundingClientRect();
+      return { left: bar.left, edge: side.left, top: bar.top, bottom: bar.bottom, listTop: list.top, listBottom: list.bottom };
+    })()`,
+    { label: "the thumb beside the scrolled list" },
+  );
+  expect(shown.left - shown.edge).toBeLessThanOrEqual(2);
+  expect(shown.top).toBeGreaterThanOrEqual(shown.listTop);
+  expect(shown.bottom).toBeLessThanOrEqual(shown.listBottom);
+  // A moment after the list is still, it fades away.
+  await app.cdp("Input.dispatchMouseEvent", {
+    type: "mouseMoved",
+    x: 900,
+    y: 400,
+  });
+  await app.waitFor(
+    `document.querySelector('${thumb}').dataset.shown === 'false' && getComputedStyle(document.querySelector('${thumb}')).opacity === '0'`,
+    { label: "the thumb faded once the list was still" },
+  );
+  expect(app.getRendererErrors()).toEqual([]);
+});

@@ -91,3 +91,28 @@ export async function clickNativePointer(point: { x: number; y: number }) {
     );
   }
 }
+
+/** macOS virtual key codes the native tests press. */
+export const MAC_KEY_CODES = { grave: 50 } as const;
+
+/**
+ * A real key press on the macOS test desktop, through AppKit and the
+ * system's shortcuts (Cmd+` going between windows), not the web page.
+ */
+export async function pressNativeMacKey(
+  key: keyof typeof MAC_KEY_CODES,
+  modifiers: readonly ("command" | "shift" | "option" | "control")[] = [],
+) {
+  assertIsolatedDesktopTestHost();
+  if (process.platform !== "darwin")
+    throw new Error("Native key presses run on the macOS test desktop only");
+  await promisify(execFile)(
+    "python3",
+    [
+      path.join(import.meta.dirname, "native-keys-macos.py"),
+      String(MAC_KEY_CODES[key]),
+      ...modifiers,
+    ],
+    { timeout: 10_000 },
+  );
+}

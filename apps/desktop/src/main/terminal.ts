@@ -459,17 +459,21 @@ export function registerTerminalSupport(
         sessions.delete(sessionId);
       }
     });
-    if (input.sender) {
-      // A closed window can't kill its tabs' sessions itself.
-      const sender = input.sender;
-      const onDestroyed = () => reapFor(sender);
-      sender.once("destroyed", onDestroyed);
-      session.releaseSender = () => {
-        sender.removeListener("destroyed", onDestroyed);
-        session.releaseSender = undefined;
-      };
-    }
+    if (input.sender) streamTo(session, input.sender);
     return sessionId;
+  };
+
+  /** A user session streams to its window, and ends should it close. */
+  const streamTo = (session: TerminalSession, sender: WebContents) => {
+    session.releaseSender?.();
+    session.sender = sender;
+    // A closed window can't kill its tabs' sessions itself.
+    const onDestroyed = () => reapFor(sender);
+    sender.once("destroyed", onDestroyed);
+    session.releaseSender = () => {
+      sender.removeListener("destroyed", onDestroyed);
+      session.releaseSender = undefined;
+    };
   };
 
   ipcMain.handle("catamorphic:terminal-ghostty-appearance", () =>
@@ -513,6 +517,30 @@ export function registerTerminalSupport(
       if (session?.running && cols > 0 && rows > 0) {
         session.pty.resize(cols, rows);
       }
+    },
+  );
+
+  /**
+   * A project moving to a window of its own takes its shells with it: the
+   * new window's tab takes over a running one (renderer/lib/project-move.ts)
+   * and gets what it printed so far. Not an agent's (every window shares
+   * those) and not another project's.
+   */
+  ipcMain.handle(
+    "catamorphic:terminal-adopt",
+    (event, sessionId: unknown, projectId: unknown) => {
+      if (typeof sessionId !== "string" || typeof projectId !== "string")
+        return null;
+      const session = sessions.get(sessionId);
+      if (
+        !session?.running ||
+        session.agent ||
+        !session.sender ||
+        session.projectId !== projectId
+      )
+        return null;
+      streamTo(session, event.sender);
+      return { buffer: bufferText(session) };
     },
   );
 

@@ -115,8 +115,15 @@ Check native hit targets and resting geometry, not just DOM presence.
 
 Each project has one live workspace owner. Switching projects preserves mounted
 editors, terminals, browser pages and agent tool handlers. Opening a project in a
-new window focuses its existing owner when already open. Closing an occupied
-window hides it; explicit Quit owns shutdown.
+new window (its card's last line in the project switcher, or a Cmd-click on its
+row) focuses the window showing it when one is. A project a window only keeps
+behind the one it shows moves to the new window instead: its workspace, unsent
+chats and running shells go with it (the shells are taken over, not restarted),
+and its pages load again. Unsaved edits in a file keep the project where it is
+until they are saved or discarded; that window says so. A new window cascades
+from the one it came from and carries its project's name, so the macOS Window
+menu lists it and Cmd+` reaches it. Closing an occupied window hides it;
+explicit Quit owns shutdown.
 
 The profile can show chats from the current project or all its projects, attach
 or detach the dock, and choose edge or centered expansion. Drag the collapsed

@@ -41,8 +41,12 @@ vi.mock("@catamorphic/react", () => ({
     apiClient: {
       GET: async (
         _path: string,
-        init: { params: { path: { projectId: string } } },
-      ) => ({ data: await api.sessions(init.params.path.projectId) }),
+        init: {
+          params: { path: { projectId: string }; query: unknown };
+        },
+      ) => ({
+        data: await api.sessions(init.params.path.projectId, init.params.query),
+      }),
     },
   }),
 }));
@@ -374,18 +378,85 @@ describe("ProjectInspectorView", () => {
     expect(menuClosing()).toBe(true);
   });
 
-  it("lists another project's ongoing sessions with their state", async () => {
+  it("names another project's latest chats, three at most, with their state", async () => {
     const sessions: ProjectInspectorSession[] = [
       { id: "session-1", title: "Working chat", running: true },
       { id: "session-2", title: "Asking chat", attentionRequired: true },
       { id: "session-3", title: "Closed chat", status: "closed" },
+      { id: "session-4", title: "Older chat" },
     ];
     await render({ ...loaded, sessions }, { current: false });
-    expect(text()).toContain("Sessions");
-    expect(text()).toContain("Working chatWorking");
-    expect(text()).toContain("Asking chatNeeds attention");
-    expect(text()).not.toContain("Closed chat");
+    expect(text()).toContain("Latest chats");
+    expect(
+      [...container.querySelectorAll('[aria-label="Latest chats"] li')].map(
+        (row) => row.textContent,
+      ),
+    ).toEqual([
+      "Working chatWorking",
+      "Asking chatNeeds attention",
+      "Closed chatClosed",
+    ]);
+    expect(text()).not.toContain("Older chat");
     expect(text()).not.toContain("Current");
+  });
+
+  it("asks for only the newest of the person's chats", async () => {
+    api.projectRoot.mockResolvedValue("/projects/alpha");
+    api.remoteStatus.mockResolvedValue(null);
+    api.sessions.mockResolvedValue({ items: [] });
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={client}>
+          <ProjectInspector
+            project={project}
+            current={false}
+            onDelete={() => undefined}
+          />
+        </QueryClientProvider>,
+      );
+    });
+    await act(() => new Promise((resolve) => setTimeout(resolve, 5)));
+    expect(api.sessions).toHaveBeenCalledWith("alpha", {
+      limit: 3,
+      visibility: "promoted",
+      rootsOnly: "true",
+    });
+    expect(text()).toContain("No chats yet");
+  });
+
+  it("opens another project in a new window from its last line", async () => {
+    const onOpenWindow = vi.fn();
+    await act(async () => {
+      root.render(
+        <ProjectInspectorView
+          project={project}
+          current={false}
+          data={loaded}
+          onDelete={() => undefined}
+          onOpenWindow={onOpenWindow}
+        />,
+      );
+    });
+    const card = container.querySelector('[data-testid="project-inspector"]');
+    const button = card?.lastElementChild?.querySelector("button");
+    expect(button?.textContent).toContain("Open in new window");
+    act(() => button?.click());
+    expect(onOpenWindow).toHaveBeenCalledTimes(1);
+  });
+
+  it("offers no new window for the project this window shows", async () => {
+    await act(async () => {
+      root.render(
+        <ProjectInspectorView
+          project={project}
+          current
+          data={loaded}
+          onDelete={() => undefined}
+          onOpenWindow={() => undefined}
+        />,
+      );
+    });
+    expect(text()).not.toContain("Open in new window");
   });
 
   it("holds every line while values load, at the height the values take", async () => {

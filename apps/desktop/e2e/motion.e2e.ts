@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -802,15 +803,44 @@ describe("animate-before-unmount", () => {
   });
 });
 
+const sidebarSettled = (open: boolean) =>
+  runWait(
+    `const side = $('[data-workspace-visible="true"] [data-sidebar="left"]');
+     return side?.getAttribute('aria-hidden') === '${!open}' && side.dataset.settled === 'true' &&
+       !document.getAnimations().some((a) => a.effect?.pseudoElement?.startsWith('::view-transition')) &&
+       !('contentSettling' in document.documentElement.dataset);`,
+    { label: `left sidebar ${open ? "open" : "closed"} and settled` },
+  );
+
 describe("chats over a settling sidebar", () => {
-  const settled = (open: boolean) =>
-    runWait(
-      `const side = $('[data-workspace-visible="true"] [data-sidebar="left"]');
-       return side?.getAttribute('aria-hidden') === '${!open}' && side.dataset.settled === 'true' &&
-         !document.getAnimations().some((a) => a.effect?.pseudoElement?.startsWith('::view-transition')) &&
-         !('contentSettling' in document.documentElement.dataset);`,
-      { label: `left sidebar ${open ? "open" : "closed"} and settled` },
+  const settled = sidebarSettled;
+  // A web page lays out in its own process, so its content settles once
+  // the panel is still (ADR 0200); content Work draws moves with the
+  // panel instead (below).
+  const page = http.createServer((_request, response) => {
+    response.setHeader("Content-Type", "text/html");
+    response.end("<title>Motion page</title><p>A page beside the sidebar</p>");
+  });
+  afterAll(() => {
+    page.close();
+  });
+
+  it("puts a web page in front", async () => {
+    await new Promise<void>((resolve) => page.listen(0, "127.0.0.1", resolve));
+    const address = page.address();
+    if (!address || typeof address === "string") throw new Error("No address");
+    await run(`
+      window.catamorphicDesktop.workspaceNavigate({
+        projectId: $('[data-workspace-visible="true"]').dataset.projectRuntime,
+        surface: { url: 'http://127.0.0.1:${address.port}/', title: 'Motion page', mode: 'tab', nonce: 'motion-page', open: 'browser' },
+      });
+      return true;
+    `);
+    await app.waitFor(
+      `[...document.querySelectorAll('[data-workspace-visible="true"] webview')].some((view) => { try { return view.checkVisibility() && view.getTitle() === 'Motion page' && !view.isLoading(); } catch { return false; } })`,
+      { label: "web page in front", timeoutMs: 30_000 },
     );
+  });
 
   it("a floating chat glides with the content instead of vanishing under it", async () => {
     await run(`$('button[aria-label="New chat"]').click(); return true;`);
@@ -948,6 +978,89 @@ describe("chats over a settling sidebar", () => {
     await settled(false);
     expect(check(await toggle("Expand sidebar"), closed)).toBe(open);
     await settled(true);
+    expect(app.getRendererErrors()).toEqual([]);
+  });
+});
+
+describe("content Work draws moves with the sidebar", () => {
+  it("rides the panel's edge every frame, the tabs with it, and lands without a jump", async () => {
+    await run(`$('[data-workspace-visible="true"] [aria-label="Settings"]').click(); return true;`);
+    await runWait(
+      `return [...document.querySelectorAll('[data-workspace-visible="true"] webview')].every((view) => !view.checkVisibility()) &&
+        !!$('[data-workspace-visible="true"] [data-settings-scroll]');`,
+      { label: "Settings in front" },
+    );
+    await sidebarSettled(true);
+    // The Settings tab grows into the strip first (tab-in).
+    await runWait(
+      `return document.getAnimations().every((animation) => animation.playState !== 'running' || animation.effect?.getTiming().iterations === Infinity);`,
+      { label: "the window at rest" },
+    );
+    type Frame = {
+      edge: number;
+      content: number;
+      plus: number;
+      push: boolean;
+      settling: boolean;
+    };
+    const toggle = (label: string) =>
+      run<Frame[]>(`
+        const side = () => $('[data-workspace-visible="true"] [data-sidebar="left"]');
+        const frames = [];
+        [...document.querySelectorAll('[aria-label="${label}"]')]
+          .find((b) => !b.closest('[inert]') && b.getBoundingClientRect().width > 0)
+          .click();
+        return new Promise((resolve) => {
+          const started = performance.now();
+          const tick = () => {
+            frames.push({
+              edge: Math.round(side().querySelector('.sidebar-inner').getBoundingClientRect().right),
+              content: Math.round($('[data-workspace-visible="true"] .workspace-surface').getBoundingClientRect().left),
+              plus: Math.round($('[data-workspace-visible="true"] .workspace-chrome [aria-label="New tab"]').getBoundingClientRect().left),
+              push: side().hasAttribute('data-push'),
+              settling: 'contentSettling' in document.documentElement.dataset,
+            });
+            if ((side().dataset.settled === 'true' && performance.now() - started > 200) || performance.now() - started > 5000) resolve(frames);
+            else requestAnimationFrame(tick);
+          };
+          requestAnimationFrame(tick);
+        });
+      `);
+    const check = (frames: Frame[]) => {
+      // No settle after the slide: the content was where it belongs all
+      // along, its edge on the panel's.
+      expect(frames.some((frame) => frame.push)).toBe(true);
+      expect(frames.some((frame) => frame.settling)).toBe(false);
+      for (const frame of frames)
+        expect(
+          Math.abs(Math.max(frame.edge, 0) - frame.content),
+          JSON.stringify(frame),
+        ).toBeLessThanOrEqual(1);
+      // The + travels one way only and is still once the panel is.
+      const plus = frames.map((frame) => frame.plus);
+      const rising = (plus.at(-1) ?? 0) >= (plus[0] ?? 0);
+      for (let index = 1; index < plus.length; index += 1)
+        expect(
+          rising
+            ? (plus[index] ?? 0) >= (plus[index - 1] ?? 0)
+            : (plus[index] ?? 0) <= (plus[index - 1] ?? 0),
+          JSON.stringify(plus),
+        ).toBe(true);
+      const width = Math.max(...frames.map((frame) => frame.edge));
+      const midway = frames.filter(
+        (frame) => frame.edge > width * 0.25 && frame.edge < width * 0.75,
+      );
+      expect(midway.length, JSON.stringify(frames)).toBeGreaterThan(0);
+      return plus.at(-1) ?? 0;
+    };
+    const open = await run<number>(
+      `return Math.round($('[data-workspace-visible="true"] .workspace-chrome [aria-label="New tab"]').getBoundingClientRect().left);`,
+    );
+    const closed = check(await toggle("Collapse sidebar"));
+    expect(closed).toBeLessThan(open);
+    await sidebarSettled(false);
+    expect(check(await toggle("Expand sidebar"))).toBe(open);
+    await sidebarSettled(true);
     expect(app.getRendererErrors()).toEqual([]);
   });
 });

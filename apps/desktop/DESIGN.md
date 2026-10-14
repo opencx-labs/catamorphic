@@ -351,8 +351,13 @@ Framed content previews transition the workspace margins and corner radius over
 A sidebar slides with a 200 ms transform the moment it is toggled (closing
 from open, 100 ms after its items start to leave), and the
 content beside it settles after it stops: a 300 ms linear view-transition
-fade in place from its old layout to its new one (ADR 0200). The content resizes once per
-toggle, never while anything moves. New motion beside a page, terminal,
+fade in place from its old layout to its new one (ADR 0200). Beside a page,
+terminal, code editor or app frame the content resizes once per toggle,
+never while anything moves. Content Work draws and lays out cheaply (a
+chat, a note, Settings) moves with the panel instead: the sidebar's place
+grows or shrinks on the slide's own transition, so the content's edge
+rides the panel's, and the chrome's sidebar toggle folds and unfolds in
+step so the tabs after it never jump. New motion beside a page, terminal,
 editor or app frame moves over it rather than animating its size.
 
 What an agent does to the workspace moves as what a person does: its opens
@@ -385,6 +390,9 @@ screen, or under reduced motion.
 | `content-fade-out` / `content-fade-in` (content settling beside a still sidebar, view transition: the old snapshot fades where it was, the new one fades in) | 300ms, linear (a sanctioned exception) | each other (the old snapshot leaves as the new one arrives) |
 | `dock-float` / `dock-rail` / `workspace-tabs` groups (a floating chat, the bubble strip and the tab strip gliding while the content settles, view transition) | 200ms | within the content's 300ms fade; a chat tab (`dock-tab`) fades in place with `content-fade-out` / `content-fade-in` from its own place |
 | Tab strip `translate` (the horizontal strip slides with the left sidebar's panel, to where the settle puts it) | 200ms, the panel's easing and item wait | the panel's own slide; dropped without a transition when the content settles |
+| `.tabbed-sidebar[data-push]` width (the sidebar's place growing or shrinking with its panel beside content Work draws, so that content rides the panel's edge) | 200ms, the panel's easing and item wait | the panel's own slide, reversing with it |
+| `.chrome-toggle-slot` fold (the chrome's sidebar toggle folding away as a pushing panel arrives and unfolding as it leaves, its gap with it; `@starting-style` for arrival) | 200ms, the panel's easing and item wait | the panel's own slide; gone or at its own width once the panel is still |
+| `.overlay-scrollbar` fade (a sidebar list's scroll position on the window's edge while it scrolls or the pointer nears that edge) | 150ms | itself: one transition both ways, fading 900ms after the last scroll |
 | `bubble-ask` (agent question arrival) | 280ms | — (one-shot nudge on a persistent bubble; no exit to pair) |
 | `input-recall-{up,down}-{a,b}` (composer ↑/↓ history) | 150ms | — (transform-only directional content signal; paired names replay rapid same-direction recalls without a classless frame) |
 | `cat-swap-out` / `cat-swap-in` (text changing in place: the agent's activity line, a steps line's count and word; shared from `@catamorphic/ui/styles.css` with `cat-fade-in`, `cat-fold-away` and `cat-step-in`) | 200ms / 200ms | each other (opacity only: the old text fades out from the opacity it had, the activity line's breath included, then the new fades in; the activity line resumes `animate-pulse`) |
@@ -547,6 +555,13 @@ rows inside shared chrome. The chrome owns status; sections own rows.
   neighbours slide. The insertion line glides between slots and never leaves
   the viewport. A tree whose rows fit never scrolls, so no scrollbar flashes
   while it grows.
+- **A list shows where it is scrolled only while that helps.** No sidebar
+  list keeps a scrollbar or a column for one. One thin thumb on the
+  sidebar's outer edge (the window's edge) stands for whichever list is
+  moving, the sidebar itself or a section's own list, spanning that list's
+  height: it fades in as the list scrolls or the pointer nears the edge
+  beside it, can be dragged, and fades out a moment after
+  (`components/overlay-scrollbar.tsx`).
 - **Drags reveal only what accepts them.** The pinned area opens for drags it
   could pin and stays open until a pin dropped into it arrives. Hover
   previews close when a drag starts.

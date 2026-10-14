@@ -1192,6 +1192,8 @@ export interface CatamorphicDesktopApi {
   onDockDraft: (listener: (update: ChatDraftUpdate) => void) => () => void;
   workspaceClaim: (projectId: string) => Promise<boolean>;
   workspaceNavigate: (input: WorkspaceNavigation) => Promise<void>;
+  /** Answers a `release` workspace event: whether the project was let go. */
+  workspaceRelease: (projectId: string, released: boolean) => Promise<void>;
   workspaceActive: (projectId: string) => Promise<void>;
   dockPublish: (data: DockData) => Promise<void>;
   dockRemove: (projectId: string, localId: string) => Promise<void>;
@@ -1501,6 +1503,14 @@ export interface CatamorphicDesktopApi {
   ) => Promise<{ buffer: string; running: boolean } | null>;
   terminalRestoreBuffer: (
     sessionId: string,
+  ) => Promise<{ buffer: string } | null>;
+  /**
+   * Takes over a shell another window of this profile started (its project
+   * moved here): it streams to this window from now on. Null once ended.
+   */
+  terminalAdopt: (
+    sessionId: string,
+    projectId: string,
   ) => Promise<{ buffer: string } | null>;
   backgroundCommands: () => Promise<BackgroundCommandView[]>;
   onBackgroundCommands: (

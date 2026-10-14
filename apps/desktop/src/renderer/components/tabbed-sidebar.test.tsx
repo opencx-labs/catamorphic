@@ -2,11 +2,21 @@
 
 import { act, useEffect } from "react";
 import { createRoot } from "react-dom/client";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { SidebarSurface, SidebarTabConfig } from "../../shared/sidebar.js";
 import type { WorkspaceConfig } from "../../shared/workspace-config.js";
 import type { SidebarContentState } from "./sidebar-contribution.js";
 import { TabbedSidebar } from "./tabbed-sidebar.js";
+
+// The panel's scroll position (overlay-scrollbar.tsx) follows its size.
+vi.stubGlobal(
+  "ResizeObserver",
+  class {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  },
+);
 
 it("reports an empty section as invisible even when another section keeps its tab selected", async () => {
   function Empty({

@@ -103,6 +103,8 @@ const api = {
     invoke("catamorphic:workspace-claim", projectId),
   workspaceNavigate: (input: WorkspaceNavigation): Promise<void> =>
     invoke("catamorphic:workspace-navigate", input),
+  workspaceRelease: (projectId: string, released: boolean): Promise<void> =>
+    invoke("catamorphic:workspace-release", projectId, released),
   workspaceActive: (projectId: string): Promise<void> =>
     invoke("catamorphic:workspace-active", projectId),
   dockPublish: (data: DockData): Promise<void> =>
@@ -1221,6 +1223,11 @@ const api = {
     sessionId: string,
   ): Promise<{ buffer: string } | null> =>
     invoke("catamorphic:terminal-restore-buffer", sessionId),
+  terminalAdopt: (
+    sessionId: string,
+    projectId: string,
+  ): Promise<{ buffer: string } | null> =>
+    invoke("catamorphic:terminal-adopt", sessionId, projectId),
   backgroundCommands: (): Promise<BackgroundCommandView[]> =>
     invoke("catamorphic:background-commands"),
   onBackgroundCommands: (

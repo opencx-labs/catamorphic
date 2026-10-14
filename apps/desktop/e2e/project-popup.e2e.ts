@@ -21,6 +21,7 @@ import {
 let app: AppHandle;
 let origin: string;
 let temp: string;
+let fixtureId: string;
 const REMOTE = "https://github.com/example/popup-fixture.git";
 const LONG_NAME = "A project whose name runs well past the sidebar's edge";
 const server = http.createServer((_request, response) => {
@@ -168,13 +169,15 @@ beforeAll(async () => {
       rootPath: path.join(app.userDataDir, "popup-home"),
     })})`,
   );
-  await app.eval(
-    `window.catamorphicDesktop.createProject(${JSON.stringify({
-      name: "Popup fixture",
-      rootPath: fixture,
-      importExisting: true,
-    })})`,
-  );
+  fixtureId = (
+    await app.eval<{ id: string }>(
+      `window.catamorphicDesktop.createProject(${JSON.stringify({
+        name: "Popup fixture",
+        rootPath: fixture,
+        importExisting: true,
+      })})`,
+    )
+  ).id;
   await app.eval(
     `window.catamorphicDesktop.createProject(${JSON.stringify({
       name: LONG_NAME,
@@ -247,7 +250,14 @@ describe("a project's card", () => {
     ).toEqual(["Folder", "Git remote", "Work server"]);
     const text = await app.eval<string>(`${card}.textContent`);
     expect(text).toContain(REMOTE);
-    expect(text).toContain("No ongoing sessions");
+    expect(text).toContain("Latest chats");
+    expect(text).toContain("No chats yet");
+    // Opening it in a window of its own is the card's last line.
+    expect(
+      await app.eval<string | undefined>(
+        `${card}.lastElementChild?.querySelector('button')?.textContent`,
+      ),
+    ).toContain("Open in new window");
     for (const gone of ["Worktrees", "pull request", "could not load"])
       expect(text).not.toContain(gone);
     expect(await app.eval<boolean>(`!!${card}.querySelector('[title]')`)).toBe(
@@ -527,6 +537,31 @@ describe("the project list", () => {
     await app.screenshot(path.join(artifacts, "project-list-long-name.png"));
     await app.press("Escape");
     await listClosed();
+    expect(app.getRendererErrors()).toEqual([]);
+  });
+
+  it("opens another project in a window of its own from the bottom of its card", async () => {
+    const front = await app.eval<string>(`${trigger}.textContent`);
+    await hoverFixture();
+    await press(
+      await centerOf(
+        `[...${card}.querySelectorAll('button')].find(b => b.textContent.includes('Open in new window'))`,
+        "Open in new window",
+      ),
+    );
+    await cardClosed();
+    await listClosed();
+    const other = await app.connectToFrame(`project=${fixtureId}`);
+    try {
+      await other.waitFor(
+        `document.querySelector('[data-workspace-visible="true"]')?.dataset.projectRuntime === ${JSON.stringify(fixtureId)} && document.title === 'Popup fixture'`,
+        { label: "the fixture in its own window" },
+      );
+    } finally {
+      other.close();
+    }
+    // This window keeps the project it showed.
+    expect(await app.eval<string>(`${trigger}.textContent`)).toBe(front);
     expect(app.getRendererErrors()).toEqual([]);
   });
 });

@@ -9,7 +9,7 @@ import { TabbedSidebar } from "./tabbed-sidebar.js";
 /** The panel's phase, as the motion hook would report it. */
 let phase: SidebarPhase = "open";
 vi.mock("../lib/sidebar-motion.js", () => ({
-  useSidebarMotion: () => ({ phase, docked: true, settled: true }),
+  useSidebarMotion: () => ({ phase, docked: true, push: false, settled: true }),
 }));
 /** What the sidebar asked of its leave, in order. */
 const calls: string[] = [];
@@ -50,6 +50,15 @@ const leads = () =>
 
 beforeEach(() => {
   Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", true);
+  // The panel's scroll position (overlay-scrollbar.tsx) follows its size.
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    },
+  );
   calls.length = 0;
   phase = "open";
   node = document.createElement("div");

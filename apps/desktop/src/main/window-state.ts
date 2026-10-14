@@ -75,6 +75,36 @@ export function fitToDisplays(
   return rest;
 }
 
+/** How far each new window steps from the one it opened from. */
+export const CASCADE_STEP = 24;
+
+/**
+ * Where a window opened from another lands: as large as that window was
+ * (never its maximized or full screen size), a step down and to the right,
+ * as macOS cascades document windows. A step that would leave the display's
+ * work area starts again from its top left corner.
+ */
+export function cascadeWindowState(
+  from: { x: number; y: number; width: number; height: number },
+  workArea: { x: number; y: number; width: number; height: number },
+): WindowState {
+  const width = Math.min(from.width, workArea.width);
+  const height = Math.min(from.height, workArea.height);
+  const x = from.x + CASCADE_STEP;
+  const y = from.y + CASCADE_STEP;
+  const fits =
+    x + width <= workArea.x + workArea.width &&
+    y + height <= workArea.y + workArea.height;
+  return {
+    x: fits ? x : workArea.x,
+    y: fits ? y : workArea.y,
+    width,
+    height,
+    maximized: false,
+    fullscreen: false,
+  };
+}
+
 export class WindowStateStore {
   private debounce: ReturnType<typeof setTimeout> | undefined;
 

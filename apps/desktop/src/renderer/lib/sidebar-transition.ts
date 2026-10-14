@@ -29,6 +29,40 @@ export function transitionSidebarUpdate(update: () => void) {
 const CHAT_TABS = "[data-dock-host]:not([data-dock-native]) [data-chat-tab]";
 
 /**
+ * What cannot lay out on every frame of a slide: a web page or an app's
+ * frame (another process, which holds the window until it repaints), a
+ * terminal and anything else drawing to a canvas, and the code editor.
+ */
+const HEAVY_CONTENT =
+  "webview, iframe, embed, object, canvas, .monaco-editor, [data-terminal-appearance]";
+
+/**
+ * Whether the content beside `sidebar` may move with its panel as it slides
+ * (useSidebarMotion's push) rather than settle once it is still: only in
+ * the visible workspace, with motion allowed, and with nothing heavy
+ * showing in the content or in a chat tab over it.
+ */
+export function contentMovesWithSidebar(sidebar: Element | null): boolean {
+  const content = sidebar?.parentElement?.querySelector<HTMLElement>(
+    ":scope > .workspace-surface",
+  );
+  if (
+    !animate() ||
+    !content ||
+    sidebar?.closest('[data-workspace-visible="false"]')
+  )
+    return false;
+  const showing = (element: Element) =>
+    element.checkVisibility({
+      opacityProperty: true,
+      visibilityProperty: true,
+    }) && element.getBoundingClientRect().width > 0;
+  return ![content, ...document.querySelectorAll(CHAT_TABS)].some((area) =>
+    [...area.querySelectorAll(HEAVY_CONTENT)].some(showing),
+  );
+}
+
+/**
  * The content beside a still sidebar takes or gives back its space with a
  * cross-fade in place: the content (a web page in its own process, a
  * terminal, the editor) lays out at its new size once, behind snapshots;

@@ -44,6 +44,12 @@ const dockShapeSchema = z
 /** How long focus may be in no window while it passes between two. */
 const FOCUS_SETTLE_MS = 150;
 
+/**
+ * How long a window may take to let a project go before the move gives up
+ * and brings that window forward instead.
+ */
+const RELEASE_TIMEOUT_MS = 3_000;
+
 /** One owner per project. Presentation can be hidden without disposing resources. */
 export class DesktopWorkspaces {
   private readonly owners = new Map<string, WebContents>();
@@ -75,6 +81,11 @@ export class DesktopWorkspaces {
   private readonly dockRegions = new Map<number, DockRegion>();
   private readonly drafts = new Map<string, ChatDraft>();
   private readonly initialProjects = new Map<number, string>();
+  /** Projects on their way to a window of their own, by project id. */
+  private readonly releases = new Map<
+    string,
+    { owner: WebContents; settle: (released: boolean) => void }
+  >();
 
   constructor(
     private readonly options: {
@@ -85,6 +96,7 @@ export class DesktopWorkspaces {
         profileId: string,
         dock?: boolean,
         projectId?: string,
+        placement?: { cascadeFrom?: BrowserWindow },
       ) => BrowserWindow;
     },
   ) {
@@ -221,6 +233,15 @@ export class DesktopWorkspaces {
       this.navigate({ ...input, sender: event.sender });
     });
     ipcMain.handle(
+      "catamorphic:workspace-release",
+      (event, projectId: unknown, released: unknown) => {
+        if (typeof projectId !== "string") return;
+        const pending = this.releases.get(projectId);
+        if (pending?.owner !== event.sender) return;
+        pending.settle(released === true);
+      },
+    );
+    ipcMain.handle(
       "catamorphic:workspace-active",
       (event, projectId: string) => {
         if (this.owner(projectId) !== event.sender) return;
@@ -257,7 +278,9 @@ export class DesktopWorkspaces {
       (event, projectId: string, localId: string) => {
         if (this.owner(projectId) !== event.sender) return;
         this.chats.delete(localId);
-        this.drafts.delete(localId);
+        // A chat leaving with its project for another window keeps what
+        // was typed in it.
+        if (!this.releases.has(projectId)) this.drafts.delete(localId);
         const profileId = options.windows.profileFor(event.sender);
         if (this.activeChats.get(profileId) === localId)
           this.activeChats.delete(profileId);
@@ -660,12 +683,99 @@ export class DesktopWorkspaces {
     const source =
       this.lastWindows.get(profileId) ??
       BrowserWindow.fromWebContents(input.sender);
+    // A window keeps every project it has shown alive behind the one in
+    // front. Asked for a window of its own, such a project moves to one; a
+    // project in front of a window is already in one, which comes forward.
+    if (
+      owner &&
+      input.newWindow &&
+      this.activeProjects.get(owner.id) !== input.projectId
+    ) {
+      void this.moveToNewWindow({ ...input, owner, profileId });
+      return;
+    }
     const target = owner
       ? BrowserWindow.fromWebContents(owner)
       : input.newWindow || !source
-        ? this.options.createWindow(profileId, false, input.projectId)
+        ? this.newWindow(profileId, input.projectId, source)
         : source;
     if (!target) return;
+    this.present(target, input);
+  }
+
+  /**
+   * A new window for one project, owned by it from the start: the window
+   * it came from, should it reach for the project in the meantime (its
+   * chats needing attention), finds it taken. It opens a step down and to
+   * the right of that window, as macOS cascades a new document window, so
+   * it reads as another window rather than the same one changing.
+   */
+  private newWindow(
+    profileId: string,
+    projectId: string,
+    from: BrowserWindow | null | undefined,
+  ) {
+    const window = this.options.createWindow(profileId, false, projectId, {
+      cascadeFrom: from && !from.isDestroyed() ? from : undefined,
+    });
+    this.owners.set(projectId, window.webContents);
+    return window;
+  }
+
+  /**
+   * The owner lets the project go once nothing of it is mounted (its
+   * workspace saved, its shells left running, its chats off the dock),
+   * then the project opens in a window of its own, which takes them over.
+   * A window that keeps it (showing it, or holding unsaved edits of it,
+   * which it explains) or that does not answer comes forward instead.
+   */
+  private async moveToNewWindow(
+    input: WorkspaceNavigation & {
+      sender: WebContents;
+      owner: WebContents;
+      profileId: string;
+    },
+  ) {
+    const { owner, projectId } = input;
+    const released = await new Promise<boolean>((resolve) => {
+      this.releases.get(projectId)?.settle(false);
+      const timer = setTimeout(() => settle(false), RELEASE_TIMEOUT_MS);
+      const settle = (released: boolean) => {
+        clearTimeout(timer);
+        if (this.releases.get(projectId)?.settle === settle)
+          this.releases.delete(projectId);
+        resolve(released);
+      };
+      this.releases.set(projectId, { owner, settle });
+      owner.send("catamorphic:workspace-event", {
+        kind: "release",
+        projectId,
+      } satisfies WorkspaceEvent);
+    });
+    if (owner.isDestroyed()) return;
+    const from = BrowserWindow.fromWebContents(owner);
+    if (!released || this.owner(projectId) !== owner) {
+      const keeper = BrowserWindow.fromWebContents(
+        this.owner(projectId) ?? owner,
+      );
+      if (keeper?.isMinimized()) keeper.restore();
+      keeper?.show();
+      keeper?.focus();
+      return;
+    }
+    this.owners.delete(projectId);
+    // Its chats leave this window's dock; what was typed in them waits
+    // for the new window (`drafts`, by chat).
+    for (const [localId, chat] of this.chats)
+      if (chat.owner === owner && chat.data.projectId === projectId)
+        this.chats.delete(localId);
+    this.broadcast(input.profileId);
+    this.present(this.newWindow(input.profileId, projectId, from), input);
+  }
+
+  /** Shows `projectId` in `target` and brings that window forward. */
+  private present(target: BrowserWindow, input: WorkspaceNavigation) {
+    const profileId = this.options.windows.profileFor(target.webContents);
     this.initialProjects.set(target.webContents.id, input.projectId);
     const send = () =>
       target.webContents.send("catamorphic:workspace-event", {

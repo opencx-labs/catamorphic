@@ -44,6 +44,12 @@ export interface TerminalEntry {
    * replays above the fresh shell.
    */
   restoreSessionId?: string;
+  /**
+   * A shell still running that this tab takes over: its project moved here
+   * from another window (lib/project-move.ts). One that ended meanwhile
+   * starts fresh beneath its output instead.
+   */
+  adoptSessionId?: string;
   /** A foreground command is running right now (chip spinner). */
   busy?: boolean;
   /** The agent is driving this terminal; input waits on Take over. */
@@ -194,10 +200,18 @@ export const editorTabKey = (localId: string) => `editor:${localId}`;
  * results are runtime data). Editor tabs lose unsaved buffers; browser
  * tabs reopen on their last URL. Workflow tabs retain their draft source and
  * baseline so returning to a project can detect external conflicts.
+ *
+ * `moving`: the project is moving to a window of its own while the app runs
+ * (lib/project-move.ts), so what lives on in the main process goes with it:
+ * its shells (taken over there, `adoptSessionId`) and its chats not sent
+ * yet (their drafts wait in the main process).
  */
-export const serializeWorkspace = (ws: Workspace): Workspace => {
+export const serializeWorkspace = (
+  ws: Workspace,
+  { moving = false }: { moving?: boolean } = {},
+): Workspace => {
   const chats = ws.chats
-    .filter((chat) => chat.sessionId)
+    .filter((chat) => moving || chat.sessionId)
     .map(
       ({ pendingMessage: _pending, focusMessageId: _focus, ...chat }) => chat,
     );
@@ -222,6 +236,29 @@ export const serializeWorkspace = (ws: Workspace): Workspace => {
     ...chatRef(editor.chatLocalId),
     ...(editor.background ? { background: true } : {}),
   }));
+  // An agent's terminal is shared by every window; a shell on a remote
+  // chat's server opens again there; a shell here is taken over.
+  const terminals: TerminalEntry[] = moving
+    ? ws.terminals.flatMap((terminal) => {
+        const kept = terminal.attachSessionId
+          ? { attachSessionId: terminal.attachSessionId }
+          : terminal.remoteSessionId
+            ? { remoteSessionId: terminal.remoteSessionId }
+            : terminal.ptySessionId
+              ? { adoptSessionId: terminal.ptySessionId }
+              : null;
+        if (!kept) return [];
+        return [
+          {
+            localId: terminal.localId,
+            title: terminal.title,
+            ...chatRef(terminal.chatLocalId),
+            ...kept,
+            ...(terminal.background ? { background: true } : {}),
+          },
+        ];
+      })
+    : [];
   const tabs = ws.tabs
     .filter((tab) => tab.kind !== "agent-setup" && tab.kind !== "mcpapp")
     // A New Tab's input is not restored, so neither is its typed mark.
@@ -241,6 +278,9 @@ export const serializeWorkspace = (ws: Workspace): Workspace => {
     ...editors
       .filter((editor) => !editor.background)
       .map((editor) => editorTabKey(editor.localId)),
+    ...terminals
+      .filter((terminal) => !terminal.background)
+      .map((terminal) => terminalTabKey(terminal.localId)),
   ]);
   return {
     tabs,
@@ -255,7 +295,7 @@ export const serializeWorkspace = (ws: Workspace): Workspace => {
       ? { activeChatId: ws.activeChatId }
       : {}),
     browsers,
-    terminals: [],
+    terminals,
     editors,
     split:
       ws.split && keys.has(ws.split.leftKey) && keys.has(ws.split.rightKey)
@@ -278,7 +318,15 @@ export const hydrateWorkspace = (raw: unknown): Workspace | null => {
       : [],
     chats: Array.isArray(snapshot.chats) ? snapshot.chats : [],
     browsers: Array.isArray(snapshot.browsers) ? snapshot.browsers : [],
-    terminals: [],
+    // Only a move keeps shells (serializeWorkspace's `moving`).
+    terminals: Array.isArray(snapshot.terminals)
+      ? snapshot.terminals.filter(
+          (terminal) =>
+            terminal.adoptSessionId ||
+            terminal.attachSessionId ||
+            terminal.remoteSessionId,
+        )
+      : [],
     editors: Array.isArray(snapshot.editors) ? snapshot.editors : [],
     split: snapshot.split ?? null,
     tabOrder: Array.isArray(snapshot.tabOrder) ? snapshot.tabOrder : [],
@@ -297,6 +345,7 @@ export const hydrateWorkspace = (raw: unknown): Workspace | null => {
     ws.tabs.length > 0 ||
     ws.chats.length > 0 ||
     ws.browsers.length > 0 ||
+    ws.terminals.length > 0 ||
     ws.editors.length > 0;
   if (!anything) return null;
   if (!ws.activeTabKey && ws.tabs[0]) ws.activeTabKey = tabKey(ws.tabs[0]);

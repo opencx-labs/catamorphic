@@ -2,6 +2,7 @@ import { expect, it } from "vitest";
 import {
   agentOpenInFront,
   emptyUtilityWorkspace,
+  hydrateWorkspace,
   reconcileWorkspace,
   serializeWorkspace,
   stripTravel,
@@ -337,4 +338,46 @@ it("an agent terminal lives as long as its command: its chip leaves, its tab sta
   });
   expect(ws.terminals).toEqual([]);
   expect(ws.closedTabs).toEqual([]);
+});
+
+it("keeps shells and unsent chats only for a move to another window", () => {
+  const ws: Workspace = {
+    ...emptyUtilityWorkspace(),
+    chats: [
+      { localId: "sent", mode: "min", sessionId: "session" },
+      { localId: "draft", mode: "partial" },
+    ],
+    terminals: [
+      { localId: "shell", title: "zsh", ptySessionId: "pty-1", busy: true },
+      { localId: "agent", title: "build", attachSessionId: "pty-2" },
+      { localId: "remote", title: "server", remoteSessionId: "chat-9" },
+      { localId: "starting", title: "" },
+    ],
+    activeTabKey: "terminal:shell",
+  };
+  // A restart keeps neither: the shells end with the app.
+  const restart = serializeWorkspace(ws);
+  expect(restart.terminals).toEqual([]);
+  expect(restart.chats.map((chat) => chat.localId)).toEqual(["sent"]);
+  expect(restart.activeTabKey).toBeUndefined();
+  // A move takes a shell here over, keeps an agent's terminal and opens a
+  // remote chat's shell again; the chat not sent yet goes too.
+  const moving = serializeWorkspace(ws, { moving: true });
+  expect(moving.terminals).toEqual([
+    { localId: "shell", title: "zsh", adoptSessionId: "pty-1" },
+    { localId: "agent", title: "build", attachSessionId: "pty-2" },
+    { localId: "remote", title: "server", remoteSessionId: "chat-9" },
+  ]);
+  expect(moving.chats.map((chat) => chat.localId)).toEqual(["sent", "draft"]);
+  expect(moving.activeTabKey).toBe("terminal:shell");
+  const opened = hydrateWorkspace(JSON.parse(JSON.stringify(moving)));
+  expect(opened?.terminals).toEqual(moving.terminals);
+  expect(opened?.activeTabKey).toBe("terminal:shell");
+  // A saved restart never brings a shell back.
+  expect(
+    hydrateWorkspace({
+      ...restart,
+      terminals: [{ localId: "old", title: "", ptySessionId: "pty-0" }],
+    })?.terminals ?? [],
+  ).toEqual([]);
 });
