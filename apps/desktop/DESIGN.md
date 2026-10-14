@@ -674,6 +674,58 @@ the historical log explains how it arrived here.
 - [Performance](docs/performance.md): idle lifecycle checks and sustained measurement.
 
 ## Design log
+### 2026-10-15: The activity line says what the agent is doing, in its own words
+
+The line beside the spinner said "Thinking...", "Working..." and "Running
+code..." through whole turns: a person's chats since early October showed
+nothing else. The agent had said more. Claude Code describes every command
+it runs ("Read the VAD options and their history"), its summarized
+thinking ends on what it does next, and Codex titles each part of its
+reasoning, but a title reached the line only until the next step replaced
+it with a verb, and a description never did.
+
+The line now says the best a harness gives, as Codex's and Claude Code's
+own apps do:
+
+- **The agent's own words**, held through the steps they lead to: Codex's
+  latest reasoning title (as Codex keeps it on its status line), and
+  Claude Code's thinking title, or its last sentence once the thinking is
+  whole, for the steps of that response. A harness hands them to Core with
+  each step it starts (`item.started.activity`), so no later step takes
+  the line from them; Core follows the batch's events in order. A
+  response whose thinking says nothing hands the line back to its steps,
+  and a subagent's words and launch ("Delegating: ...") are its own. Only
+  a line that is a bold title counts, never a bold lead-in or word.
+- **Else the running step's own description**, the words its row shows,
+  when it is short and one line (a long one is a tool's data, such as an
+  issue's body).
+- **Else Work's verb** for the step ("Working with git...").
+
+Notes and steps are unchanged. The agent's messages still say "Writing...",
+so a note never shows twice.
+
+### 2026-10-15: A tab in the strip opens wherever it is pressed
+
+Many tabs in the top strip did nothing when clicked. Two causes:
+
+- **A background project dragged the window from under them.** A window
+  keeps every project it showed mounted, the others transparent and inert
+  under the one in front, and Chromium takes the window's drag areas from
+  every element whatever its opacity, inertness or pointer events, each
+  over the ones before it. Since the strip's spare room drags the window
+  (2026-10-13), a project laid out after the visible one covered every
+  visible tab past where its own tabs ended: a press there moved the
+  window, middle of the title included. Only the visible project draws
+  drag areas now (`-webkit-app-region: initial` on the others; Blink reads
+  `none` as `no-drag`, which would cancel the visible ones too).
+- **Only the title took a press.** A tab is a 32px pill that lights up
+  under the pointer, but only its label, a 16px band around the title,
+  opened it. The label now fills the tab inside its border, as a Chrome
+  tab does: the tab's padding became the label's, the close button and a
+  folded group's expand button sit where they were, and the keyboard ring
+  is drawn on the tab with its corners. The hover card, anchored to the
+  label, now sits 8px below the whole tab.
+
 ### 2026-10-14: A sidebar pushes what Work draws; its lists show their scroll only while it helps
 
 Opening or closing a sidebar beside a chat, a note or Settings slid the

@@ -223,6 +223,8 @@ class AiSdkAttempt {
   private readonly announced = new Map<string, Deferred>();
   private text: OpenSegment | undefined;
   private readonly reasoning = new Map<string, OpenSegment>();
+  /** The agent's latest reasoning heading: its own words for its work. */
+  private heading?: string;
   private readonly toolItems = new Map<
     string,
     { key: string | null; meta: ToolMeta | undefined }
@@ -776,9 +778,13 @@ class AiSdkAttempt {
       status: "completed",
       item: { text: segment.text },
     });
-    // Reasoning summaries open with a bold heading: the live status.
+    // Reasoning summaries open with a bold heading: the live status, held
+    // through the steps it leads to.
     const heading = reasoningHeading(segment.text);
-    if (heading) this.emit({ type: "status", text: heading });
+    if (heading) {
+      this.heading = heading;
+      this.emit({ type: "status", text: heading });
+    }
   }
 
   private toolCall(call: {
@@ -816,6 +822,7 @@ class AiSdkAttempt {
           output: "",
           exitCode: null,
         },
+        ...this.said(),
       });
       return;
     }
@@ -830,6 +837,7 @@ class AiSdkAttempt {
           change: meta.change,
           previousPath: null,
         },
+        ...this.said(),
       });
       return;
     }
@@ -845,7 +853,13 @@ class AiSdkAttempt {
         result: null,
         error: null,
       },
+      ...this.said(),
     });
+  }
+
+  /** The agent's latest reasoning heading, for the steps it leads to. */
+  private said(): { activity?: string } {
+    return this.heading ? { activity: this.heading } : {};
   }
 
   private projectRelative(filePath: string): string {

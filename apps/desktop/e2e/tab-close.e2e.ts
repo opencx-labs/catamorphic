@@ -184,10 +184,10 @@ describe("a tab's close button", () => {
     for (const tab of tabs) {
       expect(tab.position).toBe("absolute");
       expect(tab.button).toBe(20);
-      // The tab is its label plus its border and padding (2 + 8px); a
-      // reserved button made it 20px wider.
-      expect(tab.width - tab.label).toBeCloseTo(10, 1);
-      // After the title: the label's padding, the tab's and its border.
+      // The label fills the tab inside its border, so a press anywhere on
+      // the tab opens it; a reserved button made the tab 20px wider.
+      expect(tab.width - tab.label).toBeCloseTo(2, 1);
+      // After the title: the label's padding and the tab's border.
       expect(tab.trailing).toBeCloseTo(11, 1);
     }
     // The longest title stops at 160px, so the widest tab is 202px.
@@ -447,6 +447,49 @@ describe("a tab's close button", () => {
       `return tabs().length === 2 && !tabByTitle(${JSON.stringify(title)});`,
       { label: "tab closed" },
     );
+    expect(app.getRendererErrors()).toEqual([]);
+  });
+});
+
+describe("a tab in the strip", () => {
+  /**
+   * The whole tab is its press target, as in Chrome: a real click near any
+   * edge of a tab, inside its border, brings it to the front. Only the
+   * middle of the label used to take one, so a click on most of the tab,
+   * which lit up on hover, did nothing.
+   */
+  it("opens with a real click anywhere inside its border", async () => {
+    const titles = ["Launch plan", "Inbox"];
+    // The closed tab has left the strip, so nothing in it still slides.
+    await runWait(
+      "return strip().querySelectorAll('[data-point-key]').length === 2;",
+      { label: "the closed tab gone" },
+    );
+    const spots: Record<string, string> = {
+      top: "{ x: rect.left + rect.width / 2, y: rect.top + 3 }",
+      bottom: "{ x: rect.left + rect.width / 2, y: rect.bottom - 3 }",
+      start: "{ x: rect.left + 3, y: rect.top + rect.height / 2 }",
+      end: "{ x: rect.right - 3, y: rect.top + rect.height / 2 }",
+    };
+    for (const [spot, point] of Object.entries(spots)) {
+      for (const [index, title] of titles.entries()) {
+        const other = JSON.stringify(titles[1 - index]);
+        await run(`labelOf(tabByTitle(${other})).click(); return true;`);
+        await runWait(
+          `return tabByTitle(${other}).hasAttribute('data-tab-active');`,
+          { label: `${titles[1 - index]} in front` },
+        );
+        const at = await run<{ x: number; y: number }>(`
+          const rect = tabByTitle(${JSON.stringify(title)}).getBoundingClientRect();
+          return ${point};
+        `);
+        await app.clickPointer(at);
+        await runWait(
+          `return tabByTitle(${JSON.stringify(title)}).hasAttribute('data-tab-active');`,
+          { label: `${title} opened by a click at its ${spot}` },
+        );
+      }
+    }
     expect(app.getRendererErrors()).toEqual([]);
   });
 });

@@ -248,6 +248,12 @@ const FAKE_CAPABILITIES: HarnessCapabilities = {
 /** One scripted step, the way the e2e scenarios are written. */
 type FakeStep =
   | { type: "title"; content: string }
+  /**
+   * The agent's reasoning, and the words a harness takes from it for its
+   * live line (`said`, as Claude Code's and Codex's adapters do): they hold
+   * the line through the steps that follow until the next thinking.
+   */
+  | { type: "thinking"; content: string; said?: string }
   | { type: "text"; content: string }
   /** More of the text being written, as a model streams it. */
   | { type: "text_delta"; content: string }
@@ -584,6 +590,8 @@ function toolValue(result: HostToolResult): unknown {
 class FakeTranscript {
   private openText: string | undefined;
   private counter = 0;
+  /** The agent's own words for its work, from its latest thinking. */
+  private said: string | undefined;
 
   constructor(private readonly host: AttemptHost) {}
 
@@ -621,6 +629,21 @@ class FakeTranscript {
       return;
     }
     this.close();
+    if (step.type === "thinking") {
+      this.host.emit({
+        type: "item.started",
+        key: this.key("thinking"),
+        status: "completed",
+        item: { kind: "reasoning", text: step.content },
+      });
+      this.said = step.said;
+      if (step.said) this.host.emit({ type: "status", text: step.said });
+      return;
+    }
+    const activity =
+      this.said && !("subagentId" in step && step.subagentId)
+        ? { activity: this.said }
+        : {};
     switch (step.type) {
       case "tool_call": {
         if (step.status === "ended" && step.toolUseId) {
@@ -638,6 +661,7 @@ class FakeTranscript {
           Boolean(step.toolUseId) && step.toolResult === undefined;
         this.host.emit({
           type: "item.started",
+          ...activity,
           key: step.toolUseId ?? this.key("tool"),
           status: pending ? "in_progress" : "completed",
           item: {
@@ -666,6 +690,7 @@ class FakeTranscript {
         }
         this.host.emit({
           type: "item.started",
+          ...activity,
           key: step.toolUseId ?? this.key("command"),
           status: step.toolUseId ? "in_progress" : "completed",
           item: {
@@ -682,6 +707,7 @@ class FakeTranscript {
       case "file_edit":
         this.host.emit({
           type: "item.started",
+          ...activity,
           key: this.key("file"),
           status: "completed",
           item: {
@@ -1519,6 +1545,56 @@ export const catalog = defineWorkflow(({ defineBoundary }) => ({
       type: "text",
       content:
         "[Read linked notes](file:linked-notes.md) [Inspect linked source](file:linked-source.ts:3) [Open linked graph](workflow:linkedWorkflow) [Open linked app](app:linked-app) [Read linked PDF](file:artifact.pdf)",
+    };
+    return;
+  }
+
+  // The live line (e2e/chat-live-line.e2e.ts): the agent's own words from
+  // its thinking hold it through their steps, a step's description fills it
+  // when the agent said nothing, and a bare command gets Work's verb.
+  if (prompt.includes("live line")) {
+    yield { type: "title", content: "Parser fix" };
+    const step = async function* (
+      id: string,
+      command: string,
+      description?: string,
+    ): AsyncGenerator<FakeStep> {
+      yield { type: "command", content: command, description, toolUseId: id };
+      await turn.pause(1400);
+      yield {
+        type: "command",
+        status: "ended",
+        toolUseId: id,
+        toolResult: "ok",
+      };
+    };
+    yield {
+      type: "thinking",
+      content: "**Reading the parser**\n\nThe walk may skip nested scopes.",
+      said: "Reading the parser",
+    };
+    yield {
+      type: "text",
+      content: "I'll start with how the parser walks nested scopes.",
+    };
+    yield* step(
+      "live-1",
+      "rg -n walk src/parser",
+      "Find where the parser walks scopes",
+    );
+    yield* step("live-2", "sed -n 1,80p src/parser/walk.ts", "Read the walker");
+    yield { type: "thinking", content: "" };
+    yield {
+      type: "text",
+      content:
+        "Found it: the walker never descends into nested scopes. Fixing it now.",
+    };
+    yield* step("live-3", "bun test parser", "Run the parser tests");
+    yield* step("live-4", "git diff --stat");
+    yield {
+      type: "text",
+      content:
+        "Fixed: the walker now descends into nested scopes, and the parser tests pass.",
     };
     return;
   }

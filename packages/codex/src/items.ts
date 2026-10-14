@@ -35,6 +35,8 @@ export class CodexItems {
     { server: string; tool: string; input: JsonValue }
   >();
   private status?: string;
+  /** The main thread's latest reasoning title: its words for its work. */
+  private said?: string;
   private planKey?: string;
   /** Native subagent threads → the item that spawned them. */
   readonly childThreads = new Map<string, string>();
@@ -75,6 +77,15 @@ export class CodexItems {
         ...(options.parentKey ? { parentKey: options.parentKey } : {}),
       } as ItemDraft,
       ...(options.status ? { status: options.status } : {}),
+      // Its latest reasoning title holds the live line through its work,
+      // as Codex shows it; its own messages say they are being written,
+      // and a subagent says what it was delegated.
+      ...(this.said &&
+      !options.parentKey &&
+      item.kind !== "assistant_message" &&
+      item.kind !== "subagent"
+        ? { activity: this.said }
+        : {}),
     });
   }
 
@@ -226,10 +237,10 @@ export class CodexItems {
             { kind: "reasoning", text },
             { parentKey, status: "completed" },
           );
-          this.statusFrom(text);
+          this.statusFrom(text, parentKey);
           return;
         }
-        this.statusFrom(text);
+        this.statusFrom(text, parentKey);
         this.completed(id, "completed", { text });
         return;
       }
@@ -343,7 +354,7 @@ export class CodexItems {
     }
     state.text += text;
     this.input.emit({ type: "item.delta", key: itemId, field: "text", text });
-    this.statusFrom(state.text);
+    this.statusFrom(state.text, state.parentKey);
   }
 
   /** The turn's plan: one item, updated as the agent revises it. */
@@ -430,8 +441,10 @@ export class CodexItems {
     );
   }
 
-  private statusFrom(text: string): void {
+  private statusFrom(text: string, parentKey?: string): void {
     const heading = reasoningHeading(text);
+    // A subagent's title is its own: the main thread's work keeps its own.
+    if (heading && !parentKey) this.said = heading;
     if (!heading || heading === this.status) return;
     this.status = heading;
     this.input.emit({ type: "status", text: heading });

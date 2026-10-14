@@ -12,7 +12,7 @@ import type {
   Turn,
   TurnError,
 } from "@catamorphic/agent-protocol";
-import { itemActivity } from "@catamorphic/agent-protocol";
+import { activityLine, itemActivity } from "@catamorphic/agent-protocol";
 import type {
   HarnessEvent,
   ItemDraft,
@@ -63,9 +63,6 @@ export interface IngestResult {
   /** Steered inputs the harness took into its context in this batch. */
   consumed: string[];
 }
-
-/** Live lines are bounded; long tool output is cut by the runner already. */
-const STATUS_MAX = 200;
 
 /** The fields a harness streams into. */
 const STREAMED_FIELDS = ["text", "output"] as const;
@@ -154,9 +151,10 @@ export async function ingestHarnessEvents(input: {
     pendingDelta = { ...key, text: rest };
     flushDelta();
   };
-  // The agent's own status line wins over one derived from its work.
-  let status: string | undefined;
-  let derived: string | undefined;
+  // The live line, as the batch's events left it, in their order: the
+  // agent's own words (a status, or those it started a step with), else
+  // what Work derives from the step.
+  let line: string | undefined;
 
   const emitTurn = (next: Turn) => {
     turn = { ...next, updatedAt: at };
@@ -202,7 +200,13 @@ export async function ingestHarnessEvents(input: {
         });
         items.set(id, item);
         out.push({ type: "item.added", item });
-        derived = itemActivity(item) ?? derived;
+        // The harness's own words for the work hold the line through it.
+        line =
+          activityLine(
+            mask && event.activity ? mask.text(event.activity) : event.activity,
+          ) ??
+          itemActivity(item) ??
+          line;
         break;
       }
       case "item.delta": {
@@ -319,10 +323,7 @@ export async function ingestHarnessEvents(input: {
         break;
       }
       case "status":
-        status = (mask ? mask.text(event.text) : event.text)
-          .replace(/\s+/g, " ")
-          .trim()
-          .slice(0, STATUS_MAX);
+        line = activityLine(mask ? mask.text(event.text) : event.text) ?? line;
         break;
       case "title":
         result.title = (mask ? mask.text(event.text) : event.text)
@@ -369,7 +370,6 @@ export async function ingestHarnessEvents(input: {
       .executeTakeFirst();
     if (!open) emitTurn({ ...turn, status: "running" });
   }
-  const line = status ?? derived;
   if (line && line !== turn.activity && turn.status === "running")
     emitTurn({ ...turn, activity: line, activityAt: at });
   return { ...result, events: out, turn, attempt, thread };

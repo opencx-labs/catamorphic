@@ -198,7 +198,10 @@ export class ClaudeTranscript {
   /** Host tool calls the model made and the host has not run yet, FIFO per tool. */
   private readonly pendingHostCalls = new Map<string, string[]>();
   private plan?: { key: string; done: boolean };
-  private heading?: string;
+  /** The agent's own words for its work, from its latest thinking. */
+  private line?: string;
+  /** The main thread's response those words came with. */
+  private response?: string;
   private thinking = "";
   /** A retry's line is up; the next response from the API replaces it. */
   private retrying = false;
@@ -308,6 +311,7 @@ export class ClaudeTranscript {
     switch (event.type) {
       case "message_start":
         this.current = { messageId: event.message.id, blocks: new Map() };
+        this.respond(event.message.id);
         return;
       case "content_block_start": {
         const current = this.current;
@@ -353,7 +357,7 @@ export class ClaudeTranscript {
         this.emit({ type: "item.delta", key: block.key, field: "text", text });
         if (block.type === "thinking") {
           this.thinking += text;
-          this.status(this.thinking);
+          this.think(this.thinking, false);
         }
         return;
       }
@@ -373,12 +377,34 @@ export class ClaudeTranscript {
     this.emit({ type: "status", text: "Working" });
   }
 
-  /** The agent's own heading for what it is thinking about, as its live line. */
-  private status(thinking: string): void {
-    const heading = reasoningHeading(thinking);
-    if (!heading || heading === this.heading) return;
-    this.heading = heading;
-    this.emit({ type: "status", text: heading });
+  /**
+   * A new response from the API: the words of the one before were about
+   * its steps, and one without thinking says nothing of its own.
+   */
+  private respond(id: string): void {
+    if (id === this.response) return;
+    this.response = id;
+    this.line = undefined;
+  }
+
+  /**
+   * The agent's own words for what it is doing, from its thinking, as its
+   * live line: a title as soon as one streams, else, once the thinking is
+   * whole, its last sentence (the API's summarized thinking ends on what
+   * comes next: "Now checking the end-of-call workflows."). Its steps keep
+   * them; a whole thinking that says neither leaves the steps to speak.
+   */
+  private think(thinking: string, whole: boolean): void {
+    const line =
+      reasoningHeading(thinking) ??
+      (whole ? lastSentence(thinking) : undefined);
+    if (!line) {
+      if (whole) this.line = undefined;
+      return;
+    }
+    if (line === this.line) return;
+    this.line = line;
+    this.emit({ type: "status", text: line });
   }
 
   /** The streamed block an assistant message's block completes, if any. */
@@ -407,6 +433,7 @@ export class ClaudeTranscript {
       }
       this.lastAssistantUuid = message.uuid;
       this.lastMainUsage = api.usage;
+      this.respond(api.id);
     }
     for (const [index, block] of api.content.entries()) {
       if (block.type === "tool_use") {
@@ -447,7 +474,8 @@ export class ClaudeTranscript {
         if (status === "cancelled")
           this.emit({ type: "item.completed", key, status });
       }
-      if (block.type === "thinking") this.status(text);
+      // Thinking an interrupt cut short ends mid-thought.
+      if (block.type === "thinking" && !message.aborted) this.think(text, true);
     }
   }
 
@@ -530,6 +558,10 @@ export class ClaudeTranscript {
       key,
       ref: { id: input.id, strength: "strong" },
       item: parentKey ? { ...item, parentKey } : item,
+      // A subagent says what it was delegated, and its own work its own.
+      ...(this.line && !parentKey && kind !== "subagent"
+        ? { activity: this.line }
+        : {}),
     });
   }
 
@@ -636,7 +668,7 @@ export class ClaudeTranscript {
         });
         // The CLI backs off for minutes before it gives up; the activity
         // line says so instead of sitting on "Working".
-        this.heading = undefined;
+        this.line = undefined;
         this.retrying = true;
         this.emit({ type: "status", text: apiRetryLine(message) });
         return;
@@ -670,4 +702,26 @@ export class ClaudeTranscript {
         return;
     }
   }
+}
+
+/**
+ * The last sentence of thinking's last paragraph, as one plain line: what
+ * the agent says it does next. Undefined for thinking with no words.
+ */
+export function lastSentence(text: string): string | undefined {
+  const paragraph = text
+    .trim()
+    .split(/\n\s*\n/)
+    .at(-1)
+    ?.trim();
+  // A closing code block, list, quote or table is not a sentence.
+  if (!paragraph || /^(```|~~~|[-*+] |\d+[.)] |>|\|)/.test(paragraph))
+    return undefined;
+  const sentence = paragraph
+    .replace(/\s+/g, " ")
+    .split(/(?<=[.!?])\s+(?=[^\s\p{Ll}])|(?<=[。！？])/u)
+    .filter((part) => part.trim())
+    .at(-1);
+  // Markdown's paired marks go; underscores and stars in names stay.
+  return sentence?.replace(/(\*\*|__|`)(.+?)\1/g, "$2").trim() || undefined;
 }
