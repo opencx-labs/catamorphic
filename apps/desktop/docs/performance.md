@@ -26,6 +26,77 @@ an overnight leak is fixed from a brief flat trace. Keep long runs outside the
 normal merge gate. `e2e/runtime-idle.e2e.ts` remains the fast lifecycle regression
 suite for hidden loops, browser visibility and guest cleanup.
 
+## Idle work and live chats
+
+ADR 0229 records the measurements. An idle Work does nothing on a short
+timer: the embedded server's pollers wait `idlePollMs` (5 s) after a poll
+that found nothing, unless known work falls due sooner, and are woken by
+the writes that queue work; the window's chat lists, attention and
+watchers read again on main's "chats changed" hint and when a hidden
+window shows again, with a 30 s safety poll (remote projects keep their
+2 s polls); a routine read never shows a refreshing state, and a view
+renders only when its rows changed. Streamed deltas after an item's first
+are recorded in 100 ms batches. Rules that follow:
+
+- **A timer needs a reason on screen.** Before adding a poll, interval or
+  infinite animation, measure an idle app (below). Prefer a hint from the
+  process that makes the change, and keep a slow poll only as a backstop.
+- **Routine reads are invisible.** A poll must not read a query's
+  fetching state or report `refreshing`; collections take
+  `{ type: "invalidate", quiet: true }`.
+- **Infinite animations cost frames for as long as they run.** Each one
+  keeps the compositor and GPU drawing at the display's rate. In the
+  test desktop, a working chat's five spinners and two pulses cost about
+  18% of a core in the GPU process and 4% in the window over an
+  otherwise quiet step (paused: 1.6% and 2.8%).
+
+**Method.** Measurements run in the isolated test desktop with the fake
+agent's `perf turn` and `perf answer` scenarios (`e2e-fakes.ts`): many
+short steps with changing activity, a long quiet step, then a long
+Markdown answer streamed in 40 ms chunks. A temporary suite (never
+committed) launches the built app with `--inspect` for main, then over
+fixed windows reads per-process CPU (`app.getAppMetrics()` cumulative
+CPU), per-thread CPU (`/proc/<pid>/task`), renderer `Performance.getMetrics`
+deltas, CPU profiles of main and the window (`Profiler` over CDP and the
+inspector), React commits and render roots (a
+`__REACT_DEVTOOLS_GLOBAL_HOOK__` installed before React loads, walking
+fibers with the PerformedWork flag), timers, `requestAnimationFrame`,
+observers and fetches (wrapped in an init script), main-side fs, HTTP,
+IPC and PGlite statements (wrapped from the inspector), and frames from a
+CDP trace. Build the renderer unminified for readable profiles. Scenarios:
+idle without a project; idle with a project, three tabs and a settled
+floating chat; the right sidebar open; a live turn; 120 settled turns
+while a turn streams; a hidden chat working; ten discarded session
+artifacts. `e2e/runtime-idle.e2e.ts` keeps the fast guard: an idle chat's
+window makes no chat-list reads on a short timer and never shows a
+refreshing spinner.
+
+### Before and after, 2026-10-13
+
+Measured in the Linux test desktop (Docker on an Apple M-series Mac,
+software compositing, other work on the host), 20 s idle windows and one
+28 s scripted turn, against `bfe84d6c` plus this change. Percent of one
+core; statements are PGlite statements per second on the main thread.
+Host load moves single runs by about a fifth, more for the window and
+GPU during a turn; counts do not move.
+
+| Scenario | Main | Window | Statements/s | React commits/s |
+| --- | ---: | ---: | ---: | ---: |
+| Idle, no project | 8.4 → 2–4 | 0.6 → 0.7 | 18.8 → 5.0 | 0 → 0 |
+| Idle, project, three tabs, settled chat | 10.7 → 2.4 | 3.4 → 2.5 | 36.7 → 5.8 | 6.0 → 0 |
+| Idle, right sidebar open | 9.2 → 1.9 | 2.8 → 0.7 | 35.5 → 5.8 | 6.1 → 0.1 |
+| Idle, ten discarded session artifacts | 9.7 → 2.3 | 1.6 → 0 | 67.7 → 6.6 | 4.8 → 0.3 |
+| Idle after a hidden chat's turn | 5.3 → 1.7 | 1.9 → 0 | not measured | 0 → 0 |
+| Live turn (steps, quiet step, streamed answer) | 13.6 → 8–10 | 26 → 24–29 | 171 → 80 | 21 → 16 |
+| Live turn after 120 settled turns | 14.2 → 10.0 | 40 → 41–48 | 171 → 80 | 20 → 16 |
+| A hidden chat's turn | 16.4 → 11–13 | 6.7 → 7–11 | 159 → 73 | 5.3 → 1.6 |
+
+The window at idle keeps the composer caret's two frames a second. During
+a turn the window and GPU process are spent in the chat timeline (its
+scroll-following spring, Markdown parsed again per update, every turn
+rendered per update, and its loops, see above), which this change does not
+touch.
+
 ## Web page loading and sleeping tabs
 
 ADR 0194 records the measurements. Three rules keep pages loading as they

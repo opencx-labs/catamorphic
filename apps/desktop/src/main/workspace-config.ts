@@ -1,10 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import vm from "node:vm";
-import {
-  PROJECT_WORKSPACE_CONFIG_PATH,
-  PROJECT_WORKSPACE_ROOT,
-} from "@catamorphic/workflow/project-layout";
+import { PROJECT_WORKSPACE_CONFIG_PATH } from "@catamorphic/workflow/project-layout";
 import type { OpenMode } from "../shared/open-mode.js";
 import {
   normalizePaletteTrigger,
@@ -71,6 +68,15 @@ export const DEFAULT_WORKSPACE_CONFIG: WorkspaceConfig = {
       },
     ],
     right: [
+      // Exists only beside a chat, or what it opened (ADR 0226): its
+      // worktree and the pull requests its agent recorded in the session's
+      // metadata.
+      {
+        id: "this-session",
+        title: "This session",
+        icon: "MessageSquareText",
+        sections: [{ id: "session", type: "session", when: { session: true } }],
+      },
       {
         id: "companion",
         title: "Activity",
@@ -118,6 +124,7 @@ const VALID_TYPES = new Set([
   "activity",
   "note",
   "app",
+  "session",
 ]);
 
 const VALID_ACTIONS = new Set<SidebarAction>([
@@ -677,6 +684,11 @@ function sanitizePaletteModes({
         : undefined;
     if (mode.section !== undefined) {
       if (!section) throw new Error(`${where}: no section ${mode.section}.`);
+      // Its rows are one chat's; the palette has no chat beside it.
+      if (section.when?.session === true)
+        throw new Error(
+          `${where}: section ${mode.section} lists the chat in front (when.session); the palette has none.`,
+        );
       const type = resolveSidebarSection(section).type;
       if (
         type === "custom"
@@ -806,26 +818,6 @@ export function projectLocalWorkspaceFile(
 /** The project's shared, git-tracked workspace file (layer 2). */
 export function projectWorkspaceFile(projectRoot: string): string {
   return path.join(projectRoot, PROJECT_WORKSPACE_CONFIG_PATH);
-}
-
-/**
- * sidebar.js files from before workspace.js (ADR 0186) that still exist.
- * Never read: they only produce a diagnostic saying where the layout went.
- */
-export function legacySidebarFiles(opts: {
-  profileDir: string;
-  projectId?: string;
-  projectRoot?: string;
-}): string[] {
-  return [
-    path.join(opts.profileDir, "sidebar.js"),
-    ...(opts.projectId
-      ? [path.join(opts.profileDir, "sidebar-projects", `${opts.projectId}.js`)]
-      : []),
-    ...(opts.projectRoot
-      ? [path.join(opts.projectRoot, PROJECT_WORKSPACE_ROOT, "sidebar.js")]
-      : []),
-  ].filter((file) => fs.existsSync(file));
 }
 
 /** The candidate files for a resolution, most specific first. */

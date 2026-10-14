@@ -64,15 +64,6 @@ it("identifies the owning profile and primary project paths, with live file erro
     personal: `${root}/profiles/${one.id}/workspace-projects/${project.id}.js`,
     project: `${project.rootPath}/.work/workspace.js`,
   });
-  // A sidebar.js from before workspace.js is named, never read.
-  fs.writeFileSync(
-    `${root}/profiles/${one.id}/sidebar.js`,
-    "module.exports={}",
-  );
-  expect(desktopSettingsContext(input).errors).toContainEqual(
-    expect.stringContaining("sidebar.js is no longer read"),
-  );
-  fs.rmSync(`${root}/profiles/${one.id}/sidebar.js`);
   fs.writeFileSync(config.forProfile(one.id).theme.file, "broken");
   expect(desktopSettingsContext(input).errors?.[0]).toContain("theme.json");
   expect(JSON.stringify(context)).not.toContain(two.id);

@@ -303,6 +303,44 @@ describe("paired motion (enter/exit mirrors)", () => {
     ).toBeLessThanOrEqual(50);
   });
 
+  it("a sidebar tab and its strip arrive and leave on one reversible transition (ADR 0226)", async () => {
+    const transitions = await run<
+      Array<{ selector: string; durations: string; easing: string }>
+    >(`
+      return allStyleRules()
+        .filter((rule) => rule.selectorText === '.sidebar-tab-slot' || rule.selectorText === '.sidebar-strip')
+        .map((rule) => ({
+          selector: rule.selectorText,
+          durations: rule.style.transitionDuration,
+          easing: rule.style.transitionTimingFunction,
+        }));
+    `);
+    expect(transitions.map((rule) => rule.selector).sort()).toEqual([
+      ".sidebar-strip",
+      ".sidebar-tab-slot",
+    ]);
+    for (const rule of transitions) {
+      // One duration and the standard curve both ways: leaving reverses
+      // arriving from wherever it is.
+      // The production build writes 200ms as 0.2s.
+      expect(
+        new Set(
+          rule.durations.split(",").map((value) => {
+            const duration = value.trim();
+            return duration.endsWith("ms")
+              ? Number.parseFloat(duration)
+              : Number.parseFloat(duration) * 1000;
+          }),
+        ),
+        rule.selector,
+      ).toEqual(new Set([200]));
+      expect(
+        new Set(rule.easing.split(",").map((value) => value.trim())),
+        rule.selector,
+      ).toEqual(new Set(["var(--ease-standard)"]));
+    }
+  });
+
   it("dock-in and dock-out match in duration and easing", async () => {
     const rules = await collectAnimationRules();
     const enter = rules.find((rule) => rule.selector === "animate-dock-in");
@@ -634,39 +672,106 @@ describe("animate-before-unmount", () => {
     await run(
       `return window.catamorphicDesktop.setPrefs({ chatWorkLive: 'all', chatWorkSettled: 'keep' }).then(() => true);`,
     );
-    await run(`
-      const log = visibleDock().querySelector('[role="log"]');
-      window.__mounts = [];
-      window.__mountEls = [];
-      window.__mountsObs = new MutationObserver((muts) => {
-        for (const m of muts) for (const n of m.addedNodes) {
-          if (!(n instanceof HTMLElement)) continue;
-          const articles = n.matches('article') ? [n] : [...n.querySelectorAll('article')];
-          for (const a of articles) {
-            window.__mounts.push({ atInsert: getComputedStyle(a).opacity });
-            window.__mountEls.push(a);
+    // Then again on a renderer slowed fourfold, as on a busy CI runner:
+    // events arrive between late frames, and the turn's first steps line
+    // comes with work and prose that joined it in the same frame, taking
+    // the place the turn line kept for it (it fades in there, unmoved).
+    // And on one that stalls for 600 ms in the frame that first shows the
+    // turn and again in the one that first shows the agent's words, as a
+    // macOS runner did: the rest of the turn lands in one late frame.
+    for (const { rate, stalls } of [
+      { rate: 1, stalls: false },
+      { rate: 4, stalls: false },
+      { rate: 1, stalls: true },
+    ]) {
+      const pass = stalls ? "stalled" : `${rate}x slower`;
+      await app.cdp("Emulation.setCPUThrottlingRate", { rate });
+      try {
+        await run(`
+          const log = visibleDock().querySelector('[role="log"]');
+          if (${stalls}) {
+            // A long task after the frame's styles, before its motion.
+            window.__stalls = 0;
+            const stalled = new ResizeObserver((entries) => {
+              for (const { target } of entries) {
+                stalled.unobserve(target);
+                const end = performance.now() + 600;
+                while (performance.now() < end);
+                window.__stalls++;
+              }
+            });
+            // The first of each to arrive in this turn.
+            const firsts = ['[data-testid="chat-activity"]', 'article:not([data-user-message])'];
+            window.__stallObs = new MutationObserver((muts) => {
+              for (const m of muts) for (const n of m.addedNodes) {
+                if (!(n instanceof HTMLElement)) continue;
+                for (const [i, selector] of firsts.entries()) {
+                  const el = selector && (n.matches(selector) ? n : n.querySelector(selector));
+                  if (!el) continue;
+                  firsts[i] = undefined;
+                  stalled.observe(el);
+                }
+              }
+            });
+            window.__stallObs.observe(log, { childList: true, subtree: true });
           }
-        }
-      });
-      window.__mountsObs.observe(log, { childList: true, subtree: true });
-      const ta = visibleDock().querySelector('[data-composer-input]');
-      setReactValue(ta, 'preamble entrance check');
-      ta.closest('form').requestSubmit();
-      return true;
-    `);
-    // 1 user echo + 2 flushed preambles + 1 final reply — each must have
-    // mounted hidden and (eventually) settled fully visible.
-    const mounts = await runWait<{ atInsert: string }[]>(
-      `if (window.__mounts.length < 4) return false;
-       const settled = window.__mountEls.every((el) =>
-         el.isConnected && getComputedStyle(el).opacity === '1');
-       if (!settled) return false;
-       window.__mountsObs.disconnect();
-       return window.__mounts;`,
-      { timeoutMs: 30_000, label: "all arrival paths mounted and settled" },
-    );
-    for (const mount of mounts) {
-      expect(Number(mount.atInsert)).toBeLessThan(1);
+          window.__mounts = [];
+          window.__mountEls = [];
+          window.__mountsObs = new MutationObserver((muts) => {
+            for (const m of muts) for (const n of m.addedNodes) {
+              if (!(n instanceof HTMLElement)) continue;
+              const articles = n.matches('article') ? [n] : [...n.querySelectorAll('article')];
+              for (const a of articles) {
+                window.__mounts.push({
+                  atInsert: getComputedStyle(a).opacity,
+                  // What arrived, for a failure to name.
+                  what: a.hasAttribute('data-user-message') ? 'user echo'
+                    : a.hasAttribute('data-live-work') ? 'live work' : 'reply',
+                  text: a.textContent.slice(0, 60),
+                });
+                window.__mountEls.push(a);
+              }
+            }
+          });
+          window.__mountsObs.observe(log, { childList: true, subtree: true });
+          const ta = visibleDock().querySelector('[data-composer-input]');
+          setReactValue(ta, 'preamble entrance check');
+          ta.closest('form').requestSubmit();
+          return true;
+        `);
+        // 1 user echo + 2 flushed preambles + 1 final reply — each must
+        // have mounted hidden and (eventually) settled fully visible.
+        const mounts = await runWait<{ atInsert: string }[]>(
+          `if (window.__mounts.length < 4) return false;
+           const settled = window.__mountEls.every((el) =>
+             el.isConnected && getComputedStyle(el).opacity === '1');
+           if (!settled) return false;
+           window.__mountsObs.disconnect();
+           window.__stallObs?.disconnect();
+           return window.__mounts;`,
+          {
+            timeoutMs: 30_000,
+            label: `all arrival paths mounted and settled (${pass})`,
+          },
+        );
+        for (const mount of mounts)
+          expect(
+            Number(mount.atInsert),
+            `${pass}: ${JSON.stringify(mount)}`,
+          ).toBeLessThan(1);
+        if (stalls)
+          expect(
+            await run<number>("return window.__stalls;"),
+            "the renderer stalled as the turn and the agent's words came",
+          ).toBe(2);
+        // The turn has ended before the next one starts.
+        await runWait(
+          `return !visibleDock().querySelector('[data-testid="chat-activity"]');`,
+          { timeoutMs: 30_000, label: "turn settled" },
+        );
+      } finally {
+        await app.cdp("Emulation.setCPUThrottlingRate", { rate: 1 });
+      }
     }
     await run(
       `return window.catamorphicDesktop.setPrefs({ chatWorkLive: 'latest', chatWorkSettled: 'collapse' }).then(() => true);`,

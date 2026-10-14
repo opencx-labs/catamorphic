@@ -207,9 +207,19 @@ describe("ChatTimeline work display", () => {
     });
     expect(toggles()).toEqual(["false"]);
     expect(container.querySelectorAll(".cat-fold-away")).toHaveLength(2);
-    await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 300));
-    });
+    // Each note closes up whole, with the step it showed in place, so the
+    // conversation never loses those rows' height in one frame.
+    expect(
+      container.querySelectorAll('.cat-fold-away [data-testid="chat-step"]'),
+    ).toHaveLength(2);
+    // They leave as their fold-away ends (jsdom plays no CSS: end it as the
+    // browser would), however late it started.
+    for (const standIn of container.querySelectorAll(".cat-fold-away"))
+      act(() => {
+        const event = new Event("webkitAnimationEnd", { bubbles: true });
+        Object.assign(event, { animationName: "catamorphic-fold-away" });
+        standIn.dispatchEvent(event);
+      });
     expect(container.querySelectorAll(".cat-fold-away")).toHaveLength(0);
     expect(container.querySelectorAll("article")).toHaveLength(2);
   });
@@ -242,10 +252,11 @@ describe("ChatTimeline work display", () => {
     );
     await act(async () => first?.click());
     expect(toggles()).toEqual(["true", "false", "false"]);
-    // Answered, the notes fold into the closed line above the answer.
+    // Answered, the notes fold into the closed line above the answer (and
+    // leave on a timer where no animation plays).
     await render({ timeline: settled(), workDisplay });
     await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 300));
+      await new Promise((resolve) => setTimeout(resolve, 520));
     });
     expect(container.querySelectorAll("article")).toHaveLength(2);
     expect(toggles()).toEqual(["false"]);

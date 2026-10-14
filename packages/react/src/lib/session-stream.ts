@@ -1,4 +1,7 @@
-import type { SessionStreamMessage } from "@catamorphic/agent-protocol";
+import {
+  SESSION_PROTOCOL_VERSION,
+  type SessionStreamMessage,
+} from "@catamorphic/agent-protocol";
 import type { CatamorphicApiClient } from "@catamorphic/api-client";
 import { CatamorphicError, toCatamorphicError } from "./errors.js";
 
@@ -6,7 +9,7 @@ import { CatamorphicError, toCatamorphicError } from "./errors.js";
  * The session protocol this client speaks (ADR 0197). A server whose
  * `GET /me` reports another `agentProtocol.session` cannot be talked to.
  */
-export const AGENT_SESSION_PROTOCOL = 1;
+export const AGENT_SESSION_PROTOCOL = SESSION_PROTOCOL_VERSION;
 
 /** Whether a server's `/me` speaks this client's session protocol. */
 export function speaksSessionProtocol(me: {

@@ -12,7 +12,8 @@ const API_BASE = "https://openrouter.ai/api/v1";
 
 export interface OpenRouterModel {
   id: string;
-  name: string;
+  /** OpenRouter's display name for the model, when it gives one. */
+  name?: string;
   contextLength: number;
   /** Prompt+completion priced at zero (the ":free" variants). */
   free: boolean;
@@ -41,7 +42,7 @@ export async function fetchOpenRouterModels(): Promise<OpenRouterModel[]> {
   };
   const models = payload.data.map((model) => ({
     id: model.id,
-    name: model.name ?? model.id,
+    ...(model.name ? { name: model.name } : {}),
     contextLength: model.context_length ?? 0,
     free:
       Number.parseFloat(model.pricing?.prompt ?? "1") === 0 &&

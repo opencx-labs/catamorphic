@@ -75,14 +75,6 @@ describe("parsePersonalEnvironmentConfig", () => {
     });
   });
 
-  it("refuses a logins list: sign-ins stay on the machine", () => {
-    for (const text of ['{"logins": []}', '{"logins": ["codex"], "files": []}'])
-      expect(parsePersonalEnvironmentConfig(text)).toEqual({
-        ok: false,
-        error: expect.stringContaining('Remove "logins"'),
-      });
-  });
-
   it.each([
     ["not json", "is not valid JSON"],
     ["[]", "must be a JSON object"],
@@ -115,12 +107,7 @@ describe("parsePersonalEnvironmentConfig", () => {
   });
 
   it("uses no dashes in its messages", () => {
-    for (const text of [
-      "x",
-      '{"a":1}',
-      '{"logins":["x"]}',
-      '{"files":[".."]}',
-    ]) {
+    for (const text of ["x", '{"a":1}', '{"setup":1}', '{"files":[".."]}']) {
       const parsed = parsePersonalEnvironmentConfig(text);
       if (!parsed.ok) expect(parsed.error).not.toMatch(/[\u2013\u2014]/);
     }

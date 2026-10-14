@@ -13,6 +13,7 @@ import {
   useRemoteAuthority,
 } from "./components/project-authority-provider.js";
 import { desktopApi } from "./lib/desktop-api.js";
+import { LOCAL_CHATS_POLL_MS } from "./lib/session-change-hints.js";
 import { ProjectTheme } from "./lib/theme.js";
 import { WorkspaceContext } from "./lib/workspace-context.js";
 
@@ -219,7 +220,10 @@ function AttentionMonitor({
   onAttention: (projectId: string, sessions: AgentSession[]) => void;
 }) {
   const authority = useRemoteAuthority();
-  const attention = useAgentAttention();
+  const attention = useAgentAttention({
+    // This computer's attention follows its hints (ADR 0229).
+    refetchInterval: authority ? 5_000 : LOCAL_CHATS_POLL_MS,
+  });
   const remoteProjectId = authority?.remoteProjectId ?? projectId;
   useEffect(() => {
     if (!attention.data) return;

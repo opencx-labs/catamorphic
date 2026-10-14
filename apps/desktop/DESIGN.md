@@ -231,6 +231,46 @@ It moves the moment it is toggled and stays enabled meanwhile; if the change
 fails it moves back and its card or row says why. Verify both themes, keyboard
 toggling, a disabled switch with its reason, and a failing change.
 
+## Menus and popovers
+
+A **menu** is a list of commands: an overflow (⋯) button's, a right-click's,
+a page's. It is always `MenuPortal` (`components/menu.tsx`, ADR 0221) with
+its entries as data (`shared/menu.ts`), or a native menu main builds
+(`desktopApi.*Menu`). Open it with `menuAtControl` under its control or
+`menuAtPointer` at a right-click, pass `anchor` so it leaves with its row,
+and run the picked action from `onExited`. While open it holds the window: a
+press anywhere else, a web page or an app's frame included, only closes it;
+Escape, focus or the window leaving, and its anchor going close it too, and
+focus goes back as the app's move (`moveFocusAsApp`), so the control it
+lands on opens no hover card. A menu opened inside a hover card holds the card
+(`useHoldInspector`) from opening until it has exited, so the card neither
+closes under the menu's shield nor takes Escape before it; once the menu
+has gone, the card stays only if the pointer is on it (or the keyboard
+leads and focus is in it), wherever the press that closed the menu landed.
+
+A **popover** is anything else that drops from a control: a switcher whose
+rows preview on hover, a bubble with toggles or a field. It closes through
+`usePopoverDismiss` (`lib/popover-dismiss.ts`): a press outside it (which
+goes on to what it lands on), a press inside a page, the window losing
+focus, and Escape once nothing above it took the key (an open menu takes
+it first). Presses on its rows' cards and menus are its own. Focus it hands
+back is the app's move (`moveFocusAsApp`), which opens no hover card. A
+popover that is a dialog takes focus as it opens and hands it back as it
+closes. No menu or popover keeps press or Escape listeners of its own; a
+hover card closes on a press in a page too, and when its control turns
+inert or hidden (its list or sidebar closed).
+
+Design lint fails a file with more menu controls (`aria-haspopup` "menu"
+or "true", an overflow icon) than menus it draws (`MenuPortal`) or asks
+main for (`desktopApi.*Menu`), a `role="menu"` outside the primitive, and
+a file with more other popups (a `dialog` or `listbox` control or role,
+the control and its popup counted once) than `usePopoverDismiss` calls,
+unless it is listed with how it closes. A registry component that pops up
+(`components/catamorphic/`) takes its host's dismissal as a `useDismiss`
+hook, and the desktop passes `usePopoverDismiss` wherever it draws one.
+Window, document and body listeners for presses and keys are listed per
+file with their job, registry copies included.
+
 ## Shape & spacing
 
 - Radii: `--radius-sm` 4px (inputs, chips), `--radius-md` 6px (buttons, list
@@ -330,7 +370,11 @@ screen, or under reduced motion.
 |---|---|---|
 | `dock-in` / `dock-out` | 250ms | each other |
 | `bubble-in` / `bubble-out` | 200ms | each other |
+| Bubble strip fold (the chats' `width` from their own size, capped by `calc-size`, never a `max-width`; the rail's gap and padding; its slide between resting spots) | 250ms | itself: one motion both ways, reversing from where it is (the slide shortened as CSS shortens the reversed transitions, so both land together); folded beside a leaving chat, however it leaves, it runs with that chat's exit |
 | `tab-in` / `tab-out` | 200ms / 180ms | each other (exit snappier) |
+| `.workspace-tab-close` transition (a strip tab's close button showing on hover or keyboard focus: opacity and scale 0.8 to 1, over the label's end; the title's end fades under it through `--tab-title-end`) | 150ms | itself: one transition both ways, so a pointer crossing the strip turns each back from where it is; nothing beside it moves |
+| `.sidebar-tab-slot` transition (a sidebar tab's place growing in or shrinking out of its strip: This session beside a chat; `@starting-style` for arrival) | 200ms | itself: one transition both ways on one element, so a quick change back reverses from where it is; at no width the place gives back its flex gap |
+| `.sidebar-strip` transition (a sidebar's tab strip opening as a second tab arrives, folding as the count drops to one; never for the sidebar's own opening) | 200ms | itself, reversing the same way; the panel below follows its height |
 | `fade-in` / `fade-out` (modal section swap; agent-control overlay) | 200ms | each other (exact mirror; `fade-out` holds its final frame for removal on animationend) |
 | `modal-in` / `modal-out` (dialog panel: opacity + scale 0.96↔1) | 200ms in, 160ms out | the backdrop's `fade-in`/`fade-out`; `modal-out` holds its final frame until the backdrop unmounts both |
 | `pairing-qr-in` (QR readiness reveal) | 200ms | — (one-shot content-ready signal inside a fixed stage) |
@@ -343,7 +387,10 @@ screen, or under reduced motion.
 | Tab strip `translate` (the horizontal strip slides with the left sidebar's panel, to where the settle puts it) | 200ms, the panel's easing and item wait | the panel's own slide; dropped without a transition when the content settles |
 | `bubble-ask` (agent question arrival) | 280ms | — (one-shot nudge on a persistent bubble; no exit to pair) |
 | `input-recall-{up,down}-{a,b}` (composer ↑/↓ history) | 150ms | — (transform-only directional content signal; paired names replay rapid same-direction recalls without a classless frame) |
-| `cat-activity-leave` / `cat-activity-arrive` (agent activity line swap; shared from `@catamorphic/ui/styles.css` with `cat-fade-in`, `cat-fold-away` and `cat-step-in`) | 150ms / 200ms | — (one beat of the working pulse carries a content swap on a persistent line: the old text dims up and away, the new rises in, then `animate-pulse` resumes) |
+| `cat-swap-out` / `cat-swap-in` (text changing in place: the agent's activity line, a steps line's count and word; shared from `@catamorphic/ui/styles.css` with `cat-fade-in`, `cat-fold-away` and `cat-step-in`) | 200ms / 200ms | each other (opacity only: the old text fades out from the opacity it had, the activity line's breath included, then the new fades in; the activity line resumes `animate-pulse`) |
+| `.cat-swap-slot` transition (a changing label's place, so what follows it slides to the new width) | 200ms | itself, only while a swap plays |
+| `.cat-reveal` transition (the activity line and the turn line above it opening and closing their height; `@starting-style` for arrival) | 200ms | itself: one transition both ways, giving back the column's gap when closed |
+| `.cat-grow` transition (prose being written follows its own height) | 180ms | — (only while the text streams; the box lets go once written) |
 | sidebar leave (Web Animations in `lib/sidebar-leave.ts`: a closing sidebar's rows leave, each drawing a thread behind it; the panel's slide waits 100ms for them) | 160ms | its own reverse when the sidebar opens mid-close; opening shows the items in place as before (a sanctioned exception) |
 | `title-change` (rename flash) | 1200ms | **sanctioned exception** — the
   one decorative-adjacent signal (see design log 2026-07-31); allowlisted in
@@ -352,7 +399,10 @@ screen, or under reduced motion.
 
 ### Sanctioned exceptions
 
-- `animate-spin` / `animate-pulse`: indeterminate progress may loop.
+- `animate-spin` / `animate-pulse`: indeterminate progress may loop, only
+  while it shows: a loop keeps the compositor and GPU drawing every frame,
+  so a mounted but invisible alternative (an inactive cross-fade, the
+  open strip's folded bubble) does not run one.
 - `voice-spin` (900ms) and `voice-ripple` (1200ms) on a microphone: live
   states that last as long as they are true, the speech models loading and
   the person being heard; still under reduced motion.
@@ -390,7 +440,11 @@ that friction is intentional.
   `.app-drag`), sidebar toggle, and the workspace tab strip share the top
   40px. No dead space above tabs. The window buttons are a profile choice
   (`windowButtons`); hidden, the corner kept for them goes too and the
-  project switcher moves up into the sidebar's top row.
+  project switcher moves up into the sidebar's top row, across it. The
+  chrome's empty room drags the window, as in Chrome: the tab strip's
+  spare end (both ends when tabs are centred), or the title row with tabs
+  in the sidebar. Tabs, the + and toggles take presses; while a tab is
+  dragged, the strip's end is its drop target.
 - Workspace tabs host workflows, apps, and chats alike; minimized chats live
   in the bottom bubble strip (see the design log for collapse behavior).
 - Empty states are quiet: one sentence of `--color-fg-faint` + one action. Errors stay `--color-fg-muted`.
@@ -454,6 +508,22 @@ rows inside shared chrome. The chrome owns status; sections own rows.
   re-expanding never discards what was already loaded.
 - **No private loading text.** "Loading…", spinners, skeletons, empty copy and
   error paragraphs inside a section component are defects.
+- **Long lists load as they are read.** The shared tree reads a branch's next
+  page once the person moves within a viewport of its end: each gesture
+  (wheel, touch, a press, keyboard movement) allows three reads while each
+  moves the end down. Until a page lands, three still placeholder rows (the
+  chrome's skeleton, at the list's end) hold the place, the header stays
+  still, and a polite status tells screen readers. The rows arrive with the
+  row motion where the placeholders stood, which wait again at the new end;
+  after the last page they fade where they stood. A page that showed nothing
+  new (a filter, a closed group) or a spent gesture leaves Show more at the
+  end until the person moves again, so no list reads its whole history on its
+  own. A failed page ends the list with its error and Retry in the chrome's
+  voice, beside the tree; the loaded rows stay and focus stays on the last
+  one. Chats read 30 at a time. Polls read a list of two pages or fewer whole
+  and only the first page of a deeper one (every loaded page about every 30
+  seconds, on focus and on Refresh). The open chat is always in the list: an
+  older one shows past the end, without reading every page above it.
 - **One drag-and-drop model.** The shared `Tree` owns pointer math, the accent
   insertion line between rows and the accent outline on the row (or tree) that
   becomes the parent. A section only declares what a row offers when dragged and
@@ -500,20 +570,50 @@ rows inside shared chrome. The chrome owns status; sections own rows.
   any pointer movement elsewhere, a drag or scroll start, or the pointer
   leaving the window; one of those always fires even when the anchor
   re-renders or turns inert under the pointer.
-- **Popovers grow, never jump.** Hover inspectors measure their content and
-  transition height and position, so a section that loads after the popover
-  opens expands it smoothly. A popover that shifts its layout on load is a
-  defect.
+- **Popovers open at their size.** A hover inspector's reads start once the
+  pointer has rested on its trigger a moment (`ResourceInspector`'s
+  `warmup`; a pointer passing over reads nothing), and the panel waits,
+  unseen, for those its content reports pending (`useInspectorPending`) at
+  most 250ms, on every path it opens by (hover, keyboard focus, a request),
+  so it opens with what it shows. It appears only while it is still open:
+  one closed before it was seen (the pointer or Tab moved on) goes at once,
+  with no exit motion to flash it. A value still loading holds its line with
+  a still skeleton bar of the line's height, never "Loading…" or "…" text of
+  another height; a read that fails or finds nothing says so quietly on its
+  own line ("Unavailable", "None"), never in a warning banner, and a state
+  that is simply not set up (no Git remote, no server, the GitHub CLI off)
+  is not a failure. Inspectors still measure their content and transition height and
+  position, for content that is genuinely longer than its placeholder (a
+  list). A popover that shifts its layout on load is a defect.
 - **Pointer and focus hold an inspector independently.** A hover inspector
   stays open while the pointer or keyboard focus rests on its trigger or its
   panel, so the pointer passing over and away never closes what focus holds.
-  Focus from a click, or returning to the trigger after Escape, leaves the
-  inspector to the pointer.
+  Focus from a click (a pressed button in the panel included), returning to
+  the trigger after Escape, or moved by the app leaves the inspector to the
+  pointer.
 - **Primitives, not presets.** Anything a built-in section can do, a `workspace.js`
   section can do with the same fields: `empty`, `headerActions`, `itemDefaults`,
   `itemOverrides`, `height`, `rowHeight`, and a source that exports `load`,
   `subscribe`, `action`, `move`, `drop`. A sidebar an agent writes looks like a
   built-in one without extra effort, and cannot break the chrome.
+- **Tabs follow the chat in front, and never take the panel.** A tab whose
+  sections need a chat's session (This session, `when.session`) exists only
+  beside the chat, or a page, file or terminal it opened, whose session the
+  sidebar keeps (ADR 0226); its links open as the chat's, in a tab it owns,
+  so a click never takes the tab away under the pointer. It is never the
+  default choice: arriving never changes the tab shown, and the person's
+  choice of it comes back with the next chat. Its place grows into the strip
+  while its neighbours slide and shrinks away the way it came, on one
+  element, so a quick change back reverses; the strip opens and folds as the
+  tab count crosses one. Only changes to tabs already shown move: never the
+  first list, nor the sidebar's own opening. When the tab in front leaves,
+  the panels cross-fade to the one that stays, and the leaving panel's
+  sections keep their shape as it fades. Focus in what leaves moves to the
+  tab or panel in front. A section built in (`session`) or written
+  (`when.session`, its source given `session`) shows the chat's metadata the
+  same way, read where the chat reads it (a connected project's own access);
+  a part of a section that is empty says so with the chrome's own sentence
+  ("No pull requests yet."), and a failed refresh keeps the rows it had.
 
 ## Registry component rules
 
@@ -557,6 +657,182 @@ the historical log explains how it arrived here.
 - [Performance](docs/performance.md): idle lifecycle checks and sustained measurement.
 
 ## Design log
+### 2026-10-14: Values read as values; efforts and models go by their own names
+
+A project's card showed a copy button on every row, so it read as a row
+of buttons. A copy button beside a value (a folder, a remote, a sign-in
+command, a published link, a webhook URL) now rests hidden in its place
+until its row is hovered or holds keyboard focus (`.copy-reveal` inside a
+`[data-copyable]` row), and stays while it says the copy landed. Nothing
+moves when it shows. Labelled buttons that are a flow's next step (a
+device code's Copy, Copy invite link) stay visible.
+
+The effort pickers named levels "Extra-high effort" with descriptions
+the harnesses never gave ("Extended reasoning"). Every picker and the
+chat's status now show the level as Claude Code and Codex name it, as is:
+low, medium, high, xhigh, max. Model pickers title a row by the display
+name the harness or provider gives the model and put the id it sends
+beside it (an alias, its versioned id). A model without a name of its
+own, or whose name only repeats its id (OpenAI's catalog names none),
+shows the id once. No name is made up from an id.
+
+### 2026-10-14: A tab's close button shows on hover
+
+Every tab in the top strip kept 20px for its close button, shown or not,
+so tabs were wider than their titles and the strip held fewer. Now a tab
+is as wide as its icon and title (a short title's tab is 20px narrower;
+the widest, a 160px title, is 202px instead of 222px, and `tab-in` /
+`tab-out` grow to that). The close button takes no room: it rides over
+the end of the label, where the title's padding was, and shows while the
+tab is hovered or holds keyboard focus (led by the keyboard, as rings
+are), the tab in front included. It fades and grows from 0.8 in 150 ms on
+one transition both ways, so a pointer sweeping the strip turns each back
+from where it is and nothing beside it moves; the title runs on under it,
+its last 12px clearing and the 16px before them fading, instead of
+reflowing. Hidden, it lets presses through to the tab; shown, it takes
+them at once. A dragged tab hides them all. Where nothing can hover, the
+tab in front keeps its button. Tabs in the sidebar keep their row's
+close action.
+
+### 2026-10-13: The window drags by the tab strip's empty end; every way out folds the strip
+
+With the macOS window buttons hidden, the project switcher spans the
+sidebar's top row, which left only slivers to drag the window by: the tab
+strip took presses across the whole chrome row for its tabs and their
+drops. Its spare room now drags the window, as Chrome's does: past the
+last tab and its +, and before the first too when tabs are centred, with
+no width once the tabs fill the strip. While a tab is dragged that room
+is the strip's drop target again, so a tab still lands at the end. The
+title row drags as before with tabs in the sidebar. The current project's
+own card opens beside the sidebar instead of over its toggle.
+
+The strip folded beside a leaving chat in one motion only from its
+arrows: Escape, the chat's minimize or close, its bubble and a shortcut
+played the chat's exit, then folded. A chat now says when it starts to
+leave, so every way out folds the strip while the chat goes. The fold is
+worked out where the dock renders, so it no longer renders every chat a
+second time a frame into the motion, which stalled the width and padding
+while the slide went on; the fold's own preference broadcast no longer
+calls each chat either (setting an unchanged state still calls a
+component before React skips its children, so an unchanged choice now
+sets nothing). Turned back mid-way, the slide takes only the
+way back, as CSS shortens the reversed transitions, so both land
+together; the chats' ceiling is part of their width, so a wide strip
+narrows from the first frame. A drag stops a slide under way, folding
+from the keyboard hands focus to the bubble that replaces the arrows (and
+back), and both say whether the strip is open. The dock's microphone
+choice waits for its preference, like the fold, instead of showing the
+default at launch.
+
+### 2026-10-13: An idle Work does nothing
+
+Work used a tenth of a core with nothing happening and much more while a
+chat answered. Most of it was polling: the embedded server's workers,
+the chat stream feed and every discarded artifact looked for work on
+short timers, and the window read its chat lists every two seconds,
+flashing a refreshing spinner each time. Now idle means idle (ADR 0229).
+The server's pollers slow down when nothing is queued and the writes that
+queue work wake them. The window's chat lists, attention and watchers
+read again when the main process says chats changed, backed by a
+30-second poll; a remote project's lists keep their short polls. A
+streamed answer shows its first words at once and is recorded in 100 ms
+batches after them.
+
+The rule: nothing runs on a short timer unless something it shows is
+changing. A routine read never changes the screen: no refreshing
+spinner, no render unless its rows changed (a Refresh press shows on its
+own button). Before adding a timer, a poll or an infinite animation,
+measure an idle app with the method in [Performance](docs/performance.md).
+
+### 2026-10-13: The strip folds in one motion
+
+Folding the bubble strip stopped halfway. Its chats gave up their width
+through a `max-width` falling from 60vw, far above what they used, so the
+strip kept its full width for most of the fold and only shrank once its
+slide into the corner had landed. Since the microphone came to the dock
+(#215) the arrows and the collapsed bubble swap in one place, so nothing
+else changes its width meanwhile: the strip slid over at full width, sat
+there, then shrank.
+It also started each fold from where it last changed spots rather than
+where it was, so after chats came or went it first jumped toward the
+middle. Folded beside an open chat, it waited for the chat to finish
+leaving before it began. Each change it saved came back as a broadcast a
+tenth of a second later and rendered every chat again mid-fold.
+
+Now the chats' width goes from what it is to nothing (and back, with
+`interpolate-size`), with the rail's gap, so the strip narrows from the
+first frame as it slides; the slide starts from where the strip is drawn
+and takes the fold's 250 ms; beside an open chat it folds while the chat
+leaves (the detached window still waits, as its size follows the chat).
+A broadcast that repeats what the dock shows, and a preference other than
+the dock's own, no longer render the dock. A folded strip also stays
+folded through launch instead of showing open and folding.
+
+### 2026-10-13: Pages ask, over their own tab
+
+A page could not ask anything. `alert` and `confirm` came up in a native
+message box that looked nothing like Work and belonged to no tab, `prompt`
+threw, a page holding its changes with `beforeunload` silently kept every
+reload, address and link from happening, and HTTP sign-ins failed with the
+401 page. Now a page asks through Work's own dialog, drawn over its tab's page
+as Chrome's tab-modal dialogs are (ADR 0227): the page dims and waits,
+while the toolbar, other tabs, the chat and the window carry on. It is
+centered in the page like every Work dialog, with the shared buttons,
+fields, checkbox and focus ring, and the modal's paired motion (200 ms in,
+160 ms out, nothing under reduced motion). A heading names who asks (the
+site, or "An embedded page at …" for another site's frame), and the page's
+words sit under it as plain text that scrolls when long, so a page cannot
+pass them off as Work's. Enter answers OK, Escape Cancel; focus moves into
+the dialog from the page and goes back to it.
+
+One dialog shows at a time, in the order the page asked. A tab out of
+sight keeps its dialog and wears the waiting question's badge until it is
+brought forward, and a page waiting on one does not sleep. From a page's
+second dialog on, "Don't let this page show more dialogs" stops them until
+it loads again. Going elsewhere or closing the tab answers Cancel.
+"Leave site?" (or "Reload site?") holds a reload, a typed address, Back,
+the page's own link or form, and closing the tab; Leave goes on with it.
+A sign-in names the site and its realm, offers the profile's saved
+sign-ins for it, asks again with the username kept when refused, and
+offers to save one that worked on the usual password card. Agents read a
+waiting dialog in their snapshot and answer it with Enter and Escape, as
+a person would; a sign-in is always the person's.
+
+### 2026-10-13: This session, beside the chat
+
+A chat's worktree lived in its status popup and its pull requests nowhere.
+Now the right sidebar leads, while a chat is in front, with a "This session"
+tab: where the chat works (as the popup says it; a click shows the folder)
+and the pull requests its agent recorded, each opening in Work's browser.
+Nothing records them natively. A chat's session holds metadata (ADR 0226),
+named values agents set with `set_session_metadata`, and the skills tell
+agents to keep `pull_requests` there; the same values reach sections a person
+writes, whose sources get the chat in front. The tab is a section like any
+other in `workspace.js`. It arrives without taking the panel: the default
+choice is always a tab that stays, and only the person's own choice brings
+it to the front again. A pull request opens as a link in the chat does, in a
+tab the chat owns, and the sidebar keeps the chat's session beside what it
+opened, so This session stays while the person reads it. The tab's place
+grows into the strip, the strip itself opens when it makes a second tab, a
+quick change back reverses where it is, and when it leaves while shown the
+panels cross-fade to the one that stays; reduced motion settles at once.
+Stable tabs slide 16px aside as it arrives, since the strip stays centred:
+the slide is the cue that a tab made room, as workspace tabs do.
+
+### 2026-10-13: Chats load as you scroll
+
+The Chats section read 50 chats and offered a Load more button, and every
+two-second poll read every page loaded so far, so scrolling made each poll
+dearer. It now reads 30 (two and a half of its viewports) and the next page
+as the person nears the end, in the shared tree, so any paginated section or
+widget does the same: still placeholder rows hold the end, rows arrive with
+the list motion, a failed page offers Retry in place. Reading on its own is
+bounded by the person's gestures and stops at a page that shows nothing new,
+so filtered, sorted and grouped sections never walk the whole history. A
+poll of a deep list reads the first page and keeps the rows below where they
+meet; everything loaded is read again on a slower beat. The open chat is
+never missing from the list: an older one waits past the end.
+
 ### 2026-10-12: Menus hold the window; pages get Work's menus
 
 A menu now holds the window while it is open, as a native one does: a
@@ -2232,3 +2508,168 @@ rewrites the pointed element's classes (a tab turning active) puts the
 ring back steady instead of dropping it. Pointing at something in a closed
 sidebar (a row, or a tab while tabs live there) now says the sidebar is
 closed instead of glowing off screen.
+
+### 2026-10-13: A project's card says where it lives; every menu closes the same way
+
+Hovering a project in the switcher showed a card of worktrees, pull
+requests, change counts and a warning that pull requests could not load.
+That warning was the GitHub CLI being off, which it is by default: the
+card reported an expected state as a failure. Worktrees and pull requests
+belong to a chat now ("This session"), so the card says only where the
+project lives: its folder and Git remote, each copyable, its Work server,
+and another project's ongoing sessions. It opens at its size: its reads
+start while the pointer rests on the project, values still loading hold
+their line with a still bar, and a read that fails says "Unavailable" on
+its own line. It no longer swaps "…" and "Loading…" for text of another
+height while the card resizes. A long path or address keeps its end in
+view and shows in full in a hint, never a native tooltip.
+
+The card's ⋯ was a dropdown of its own that nothing closed. It is the app's
+menu now, holding the card open under it, and every remaining popover
+(project and profile switchers, the extensions and downloads bubbles, a
+chat's surface groups) closes through one hook that also hears presses
+inside pages, which those missed. Design lint fails a hand-rolled menu.
+
+The switcher's list spans the sidebar's content, whatever the project's
+name and the sidebar's width, and a project's card sits beside the whole
+list (`ResourceInspector`'s `anchorRef`), clear of its edge and each row's
+window button, level with the row it describes. The current project's own
+card, from the switcher, sits beside the sidebar, clear of its toggle.
+
+### 2026-10-13: A sign-in that is not really lost does not stop the chat
+
+A person returned to a chat after an hour and its first turn failed in
+three seconds with "OAuth access token has expired", and the sign-in card.
+The login was healthy: Claude Code refreshes an expired token under a lock
+all its processes share, and a CLI that finds it busy (a terminal session
+refreshing at the same moment) goes on with the old token. A turn turned
+away like that, before any work, on a sign-in whose refresh token is
+still good, now waits three seconds saying "Reconnecting to Claude…" and
+runs once more on a fresh CLI; the card shows only if that fails too. That
+retry's Claude Code writes a debug log under Work's logs (`sign-in/`,
+readable by the person alone, five kept) for the next time it happens.
+
+The card's "your message retries by itself once you're back" was true
+only after Work's own re-login. Main now runs the failed turn again
+whenever the sign-in comes back, however: Work's re-login, a new key in
+Settings, `/login` in a terminal or another process refreshing the login,
+which main notices by the credentials changing (every few seconds for ten
+minutes after the failure, then on focus and wake, for half an hour), or,
+for a turn that just failed, by an access token fresh enough that
+something refreshed it meanwhile. It does so for chats that are not on
+screen too, once per change, three times at most, only for the chat's
+latest turn, and only for a person's own message in a top-level chat they
+keep: a chat put away, a subsession, or a workflow's turn waits for a
+person. See ADR 0228.
+
+### 2026-10-13: The activity line says what the agent does; the steps line keeps time
+
+The turn's clock and "No updates for 45s" sat right after the activity
+line's words, so every new activity moved them (by up to 40 px), and a new
+activity slid its words up through a blur. A streamed answer pushed the
+activity line down a line at a time, a wider step shifted every row's
+duration and chevron, and settling dropped the notes' steps in one frame
+(the whole conversation jumped by their height).
+
+- **One line, one job.** The activity line is the spinner and what the
+  agent does, on one line that never wraps. Nothing sits beside the words
+  (withdrawing a message about to start waits at the far end). A new
+  activity rides one strong beat of the breathing: the old words fade all
+  the way out from wherever their breath was, then the new ones fade in,
+  opacity only. The line opens its height when work starts and closes it
+  when the turn ends.
+- **The steps line keeps time.** The clock, and the silence after 30
+  seconds, follow the count on the running turn's latest steps line: the
+  work in progress, or the latest note's steps until more work follows.
+  While a turn runs, each block of its work shows its line, a lone step's
+  included, so the clock always has a home and a second step no longer
+  grows a line above the first; once answered, a lone step is its own row
+  again. The clock holds the width of its longest reading in seconds or
+  minutes (widening smoothly into minutes) and lends the reply none, so
+  nothing after it or below it moves. Every steps line is one fixed
+  height. An open list longer than the view can scroll the line away; the
+  running step's own time stays in view.
+- **The first steps line has its place before it comes.** From the moment
+  the activity line opens (a message still on its way included) until the
+  turn's first steps line, the turn line above it keeps that line's place,
+  the column's gap included, with the turn's clock (and, after 30 seconds,
+  its silence). The two open as one, and the first steps line takes the
+  turn line's place in the same frame: its message fades in where it is,
+  without the rise every other message arrives with (a message is never
+  simply there, also when work and a note come with it in one late
+  frame), an open list opens below it, and the activity line does not
+  move. Entrances start on
+  the frame that shows them, so on a slow renderer whatever was still
+  opening when the steps line came used to push the activity line down
+  while its count already read two or three. An opening of the two still
+  under way when the steps line comes ends in that frame: a renderer that
+  stalls as the turn starts begins the opening only after the stall
+  (macOS CI showed it unopened 600 ms on, the first step already there),
+  and playing it then slid the activity line 12 px from the steps line
+  and moved the conversation with it.
+- **Counts change on a beat.** A count and its word fade out and in, and
+  their places widen or narrow over 200 ms, so "steps" and the clock slide
+  when the count gains a digit.
+- **What arrives opens its place, and what leaves closes it.** Work and
+  prose joining a running turn grow in, the column's gap above their row
+  opening with them (it used to appear at once, a 12 px jump), and prose
+  being written follows its height on a short transition. A note folding
+  into its answer closes up whole, its steps with it, in the same frame
+  its steps join the answer, and leaves when its closing has played, not
+  at a fixed time. Its row starts skipping layout out of view only after
+  that: the first frame a row skips, it keeps its last size, which the
+  folding note would make short (the conversation jumped up and back by
+  the note's height for a frame as every such turn settled). The
+  activity line closing, its opening settling, and a reply letting go of
+  the height it grew by likewise wait for their transitions, which a slow
+  renderer starts only with its next frame: a timer alone cut them short
+  (a runner stalled for half a second dropped the activity line's height
+  in one frame). A row carries its own spacing, which opens with it, and
+  its duration and chevron follow its label, not the reply's right edge.
+- **The browser holds the latest message still.** While the chat follows
+  it, everything but an anchor at the conversation's end opts out of
+  scroll anchoring, so whatever grows or shrinks above (a streamed line, a
+  step, a fold) keeps the bottom where it is in the same frame, without a
+  scroll spring laying the page out every frame. Scrolled up, anchoring
+  keeps what the person reads in place. It holds the end only while the
+  chat follows: a reader who let go a few pixels short of the end stays
+  let go; a press in the conversation, and text selected in it, hold what
+  is under the pointer still (a drag that selects lets go); and a touch
+  drag, a key that scrolls up, a press on the scrollbar, a jump to an
+  earlier message, and a wheel over a code block (which scrolls sideways,
+  so the scroll library never took that wheel for the log's) let go even
+  mid-stream, where the library's own reading of scroll events is drowned
+  out by the growing answer.
+- **Only what changes renders.** The clock is the one part that renders
+  every second; a beat renders only the text it changes; a turn handed
+  back unchanged keeps its rows; a streaming reply parses only its last
+  block; a step row renders only when its step reads otherwise, and the
+  steps' background commands are handed down again only when a process
+  changes. A settled turn out of view skips style and layout, keeping its
+  last size, where the browser anchors scrolling (not Safari, where its
+  placeholders would move what the person reads). Loops stop where nobody
+  sees them (a hidden chat, an activity line scrolled away), clocks wait
+  in a hidden chat and catch up as it shows, and the running step no
+  longer pulses beside the breathing activity line; a command running in
+  the background still does.
+- **A chat shown again is as it was.** A lurking chat shown again
+  mid-turn, or a chat opened mid-turn, has its activity line open and its
+  reply at its height; what arrived while it was hidden is simply there,
+  and nothing it held enters again.
+
+`e2e/chat-motion.e2e.ts` samples every frame of a paced turn: the spinner,
+the words' box and a folded steps line hold still from before the first
+step to the answer, also on a renderer slowed sixfold (as a busy macOS
+runner showed, late frames are where entrances overlap), the first steps
+line lands where the turn line was, measured from the spinner (a runner
+that stalls through the beat before the first step leaves no frame at
+rest to compare), also on a renderer that stalls in the turn's first
+frames while its motion holds until the first step has landed, the
+clock and the silence sit on the steps line, rows
+keep their places, the activity line closes before it goes, selected
+text holds still under the pointer, a wheel over a code block, PageUp and
+the scrollbar take the view from a streaming answer, and an un-lurked
+chat's activity line is open from its first frame. `e2e/motion.e2e.ts`
+checks every message mounts hidden, also on a renderer slowed fourfold,
+where a turn's events land between frames, and on one that stalls as the
+turn and the agent's words first show.

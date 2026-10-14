@@ -123,6 +123,8 @@ export interface CatamorphicHostConfig {
   agentCapabilities?: AgentCapabilityOptions;
   /** Optional leased execution instance. The host owns registration/heartbeat. */
   workerNode?: CatamorphicCoreConfig["workerNode"];
+  /** How often idle pollers look for work (ADR 0229); see the core option. */
+  idlePollMs?: CatamorphicCoreConfig["idlePollMs"];
   database: DatabaseConfig;
   storage: StorageConfig;
   /**
@@ -364,6 +366,7 @@ export class Catamorphic {
       hostId: config.hostId,
       agentCapabilities: config.agentCapabilities,
       workerNode: config.workerNode,
+      idlePollMs: config.idlePollMs,
       db,
       projectManager: resolveStorage(config.storage),
       sandboxProvider: config.sandboxProvider,

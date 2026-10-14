@@ -244,6 +244,7 @@ export function timelineOf(input: {
         workStatus: "open",
         activity: null,
         todos: [],
+        metadata: {},
         parentSessionId: null,
         forkedFromSessionId: null,
         attentionRevision: 0,

@@ -92,7 +92,7 @@ describe("ProjectAuthorityProvider", () => {
               fetch: async () =>
                 Response.json({
                   projects: [],
-                  agentProtocol: { session: 2, runner: 1 },
+                  agentProtocol: { session: 1, runner: 1 },
                 }),
             })}
             queryClient={queries}

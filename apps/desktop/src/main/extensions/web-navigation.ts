@@ -65,8 +65,14 @@ export class WebNavigationEvents {
         ...extra,
       });
     };
-    const lookup = (processId: number, routingId: number) =>
-      webFrameMain.fromId(processId, routingId);
+    // Electron reports a load it refused before starting (an invalid
+    // address, or one asked for while another navigation is on the stack)
+    // as a failure of the main frame without the frame's ids, and
+    // `fromId` throws on those: a throw here is uncaught in main.
+    const lookup = (processId: unknown, routingId: unknown) =>
+      typeof processId === "number" && typeof routingId === "number"
+        ? webFrameMain.fromId(processId, routingId)
+        : null;
     // Each frame's last committed address tells a fragment change from a
     // history.pushState.
     const committed = new Map<number, string>();

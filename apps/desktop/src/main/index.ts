@@ -50,7 +50,7 @@ import {
   registerDesktopShutdown,
   shutdownDesktopServices,
 } from "./shutdown.js";
-import { projectTelemetrySettings } from "./telemetry-settings.js";
+import { cachedProjectTelemetrySettings } from "./telemetry-settings.js";
 import { registerTerminalSupport } from "./terminal.js";
 import { windowBackgroundColor } from "./theme.js";
 import { consumeUpdateRestart } from "./update-restart.js";
@@ -788,9 +788,10 @@ app.whenReady().then(async () => {
     // profiles' sessions) carry this run's token to the embedded API, which
     // refuses web pages without it.
     allowDesktopWindowsApi({ url: server.url, token: server.apiToken });
+    const telemetrySettings = cachedProjectTelemetrySettings();
     telemetry.configureProjects({
       resolve: (projectId) =>
-        projectTelemetrySettings({
+        telemetrySettings({
           projectId,
           rootPath: server?.projectRoots.getSync(projectId),
           userDataPath: app.getPath("userData"),
@@ -807,6 +808,9 @@ app.whenReady().then(async () => {
     server.personalEnvironment.subscribe((change) =>
       state.broadcast("catamorphic:personal-environment-changed", change),
     );
+    server.onSessionsChanged(() =>
+      state.broadcast("catamorphic:sessions-changed", {}),
+    );
     // Don't hold job leases through OS sleep. A lease held by a frozen
     // process expires on the wall clock, so the step's work is discarded on
     // wake; releasing before the freeze parks the job cleanly and resume
@@ -820,6 +824,8 @@ app.whenReady().then(async () => {
     app.on("browser-window-focus", () => {
       server?.syncSessionMailboxes();
       server?.personalEnvironment.nudge();
+      // A sign-in renewed outside Work runs its failed chats again.
+      void server?.signInRecovery.probe();
     });
     // OAuth-backed connections hand their token to harnesses as a plain
     // header, so the app keeps it fresh: at boot, after sleep, and on a
@@ -833,9 +839,10 @@ app.whenReady().then(async () => {
     powerMonitor.on("resume", refreshConnectionTokens);
     // A wake is when sessions turn out to have expired — nudge every
     // window to re-probe its agents' auth health.
-    powerMonitor.on("resume", () =>
-      state.broadcast("catamorphic:agent-auth-maybe-changed", {}),
-    );
+    powerMonitor.on("resume", () => {
+      state.broadcast("catamorphic:agent-auth-maybe-changed", {});
+      void server?.signInRecovery.probe();
+    });
     setInterval(refreshConnectionTokens, 4 * 60_000).unref();
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

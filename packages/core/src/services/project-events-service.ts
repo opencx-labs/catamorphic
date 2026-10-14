@@ -1,6 +1,7 @@
 import type { DB, Json, JsonObject } from "@catamorphic/db";
 import { getTracer, withSpan } from "@catamorphic/otel";
 import { type Kysely, type Selectable, sql, type Transaction } from "kysely";
+import type { WorkWakeups } from "./work-wakeups.js";
 
 type ProjectEventRow = Selectable<DB["project_events"]>;
 
@@ -19,7 +20,11 @@ export interface ProjectEvent {
 const tracer = getTracer("@catamorphic/core");
 
 export class ProjectEventsService {
-  constructor(private readonly db: Kysely<DB>) {}
+  constructor(
+    private readonly db: Kysely<DB>,
+    /** Tells this process's dispatcher an event may be waiting (ADR 0229). */
+    private readonly wakeups?: WorkWakeups,
+  ) {}
 
   /**
    * Record one event for a project, once per `externalId`. Pass the
@@ -73,6 +78,7 @@ export class ProjectEventsService {
             .where("source", "=", input.source)
             .where("external_id", "=", input.externalId)
             .executeTakeFirstOrThrow());
+        if (inserted) this.wakeups?.notify("events");
         return { event: mapProjectEvent(row), created: Boolean(inserted) };
       },
     );

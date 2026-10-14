@@ -1,3 +1,8 @@
+import {
+  SET_SESSION_METADATA_DESCRIPTION,
+  sessionMetadataToolWrite,
+  setSessionMetadataInputSchema,
+} from "@catamorphic/agent-protocol";
 import type { CatamorphicCore, Identity } from "@catamorphic/core";
 import {
   AccessDeniedError,
@@ -592,6 +597,32 @@ export function surfaceTools(
         }
       }),
     });
+
+    // A key of the calling chat's metadata (ADR 0226): bound to the
+    // session this connection serves, so there is none without one.
+    if (currentSessionId) {
+      const sessionId = currentSessionId;
+      tools.push({
+        definition: {
+          name: "set_session_metadata",
+          description: SET_SESSION_METADATA_DESCRIPTION,
+          inputSchema: z.toJSONSchema(setSessionMetadataInputSchema),
+        },
+        call: guarded(async (args) => {
+          const values = sessionMetadataToolWrite(args);
+          return {
+            metadata: values
+              ? await sessions.setMetadata({
+                  identity,
+                  projectId,
+                  sessionId,
+                  values,
+                })
+              : await sessions.metadata({ identity, projectId, sessionId }),
+          };
+        }),
+      });
+    }
 
     tools.push({
       definition: {

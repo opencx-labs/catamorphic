@@ -1,7 +1,7 @@
 "use client";
 
 import { Check, ChevronRight, Circle, CircleDot } from "lucide-react";
-import { useEffect, useId, useRef, useState } from "react";
+import { type RefObject, useEffect, useId, useRef, useState } from "react";
 
 export interface AgentTodoItem {
   id: string;
@@ -10,12 +10,69 @@ export interface AgentTodoItem {
   status: "pending" | "in_progress" | "completed";
 }
 
+/**
+ * How an open popover closes: a hook a host passes in, the same one on
+ * every render. A host whose window does not see every press (web pages or
+ * frames running in their own processes) passes its own.
+ */
+export type PopoverDismiss = (options: {
+  open: boolean;
+  /** The popover and the control that opens it. */
+  within: readonly RefObject<Element | null>[];
+  onDismiss: () => void;
+  /** Where focus goes when Escape closes it with focus inside. */
+  returnFocus?: RefObject<HTMLElement | null>;
+}) => void;
+
+/**
+ * The default: a press outside it, Escape, and the window losing focus,
+ * as the page's own window sees them.
+ */
+export const useWindowDismiss: PopoverDismiss = ({
+  open,
+  within,
+  onDismiss,
+  returnFocus,
+}) => {
+  const latest = useRef({ within, onDismiss, returnFocus });
+  latest.current = { within, onDismiss, returnFocus };
+  useEffect(() => {
+    if (!open) return;
+    const contains = (node: unknown) =>
+      node instanceof Node &&
+      latest.current.within.some((ref) => ref.current?.contains(node));
+    const dismiss = () => latest.current.onDismiss();
+    const press = (event: PointerEvent) => {
+      if (!contains(event.target)) dismiss();
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopPropagation();
+      const focusInside = contains(document.activeElement);
+      dismiss();
+      if (focusInside) latest.current.returnFocus?.current?.focus();
+    };
+    window.addEventListener("pointerdown", press);
+    window.addEventListener("keydown", onKeyDown, true);
+    window.addEventListener("blur", dismiss);
+    return () => {
+      window.removeEventListener("pointerdown", press);
+      window.removeEventListener("keydown", onKeyDown, true);
+      window.removeEventListener("blur", dismiss);
+    };
+  }, [open]);
+};
+
 export function TodoProgress({
   todos,
   className = "",
+  useDismiss = useWindowDismiss,
 }: {
   todos: readonly AgentTodoItem[];
   className?: string;
+  /** How the open list closes; see {@link PopoverDismiss}. */
+  useDismiss?: PopoverDismiss;
 }) {
   const [open, setOpen] = useState(false);
   const [panelMounted, setPanelMounted] = useState(false);
@@ -25,6 +82,7 @@ export function TodoProgress({
   const [renderedTodos, setRenderedTodos] = useState(todos);
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const rootRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
   const panelId = useId();
   const panelFrameRef = useRef(0);
   const barFrameRef = useRef(0);
@@ -62,29 +120,12 @@ export function TodoProgress({
     return () => cancelAnimationFrame(barFrameRef.current);
   }, [hasTodos]);
 
-  useEffect(() => {
-    if (!open) return;
-    const dismiss = (event: PointerEvent) => {
-      if (
-        event.target instanceof Node &&
-        !rootRef.current?.contains(event.target)
-      ) {
-        setOpen(false);
-      }
-    };
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
-      event.preventDefault();
-      event.stopPropagation();
-      setOpen(false);
-    };
-    window.addEventListener("pointerdown", dismiss);
-    window.addEventListener("keydown", onKeyDown, true);
-    return () => {
-      window.removeEventListener("pointerdown", dismiss);
-      window.removeEventListener("keydown", onKeyDown, true);
-    };
-  }, [open]);
+  useDismiss({
+    open,
+    within: [rootRef],
+    onDismiss: () => setOpen(false),
+    returnFocus: triggerRef,
+  });
 
   useEffect(() => {
     const ids = new Set(renderedTodos.map((todo) => todo.id));
@@ -125,6 +166,7 @@ export function TodoProgress({
     >
       <div className="overflow-hidden rounded-lg">
         <button
+          ref={triggerRef}
           type="button"
           onClick={() => setOpen((value) => !value)}
           className={`flex h-8 cursor-pointer items-center gap-1.5 rounded-lg border px-2 text-[11px] font-medium transition-colors duration-150 ${

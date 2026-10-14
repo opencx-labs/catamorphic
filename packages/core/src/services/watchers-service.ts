@@ -14,6 +14,7 @@ import type { RunsService } from "./runs-service.js";
 import { nextScheduledTime } from "./schedules-service.js";
 import { SessionArtifactsService } from "./session-artifacts-service.js";
 import type { TriggersService } from "./triggers-service.js";
+import type { WorkWakeups } from "./work-wakeups.js";
 import type { WorkflowEnablementsService } from "./workflow-enablements-service.js";
 
 type WatcherRow = Selectable<DB["watchers"]>;
@@ -50,6 +51,11 @@ interface WatchersDeps {
   sessions: AgentSessionsService;
   /** Host-registered polled event sources a watcher may start (ADR 0177). */
   eventSources?: readonly ProjectEventSourceProvider[];
+  /**
+   * Tells this process a session's watchers changed, and that a monitor a
+   * new watcher observes may be due (ADR 0229).
+   */
+  wakeups?: WorkWakeups;
 }
 
 const tracer = getTracer("@catamorphic/core");
@@ -299,6 +305,8 @@ export class WatchersService {
         },
       });
       if (!row) throw new Error("Watcher ownership was not recorded");
+      this.deps.wakeups?.notify("chats");
+      if (row.monitor_id) this.deps.wakeups?.notify("events");
       return mapWatcher(row, triggerKinds);
     } catch (error) {
       await this.artifacts.discard({
@@ -440,6 +448,7 @@ export class WatchersService {
       .where("session_id", "=", input.sessionId)
       .where("status", "in", ["active", "paused"])
       .executeTakeFirst();
+    if (result.numUpdatedRows > 0n) this.deps.wakeups?.notify("chats");
     await this.cleanupRetired();
     return result.numUpdatedRows === 1n;
   }
@@ -476,6 +485,7 @@ export class WatchersService {
         .where("id", "=", row.id)
         .execute();
     }
+    if (discarded.length > 0) this.deps.wakeups?.notify("chats");
     await this.artifacts.cleanup();
   }
 
@@ -542,6 +552,7 @@ export class WatchersService {
             .set({ status: "expired", updated_at: new Date() })
             .where("id", "=", row.id)
             .execute();
+          this.deps.wakeups?.notify("chats");
         }
       } catch (error) {
         await this.recordFailure(

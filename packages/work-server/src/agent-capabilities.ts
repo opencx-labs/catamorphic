@@ -8,6 +8,16 @@ import { projectToolCapabilities } from "@catamorphic/fastify-plugin";
 import { z } from "zod";
 import type { WorkAuth } from "./auth/work-auth.js";
 
+/**
+ * Project tools the server's own agents reach through discovery: proposing
+ * a change, and setting what their chat shows (its metadata, ADR 0226).
+ * Replica memory (c): a constant, the same on every replica.
+ */
+const SERVER_PROJECT_TOOLS = new Set([
+  "propose_change",
+  "set_session_metadata",
+]);
+
 /** Work server profile and directory; no framework-owned identity model. */
 export function workAgentCapabilities(args: {
   core(): CatamorphicCore;
@@ -72,12 +82,15 @@ export function workAgentCapabilities(args: {
       }),
     sources: [
       async (context, selection) => {
-        if (selection.name && selection.name !== "project.propose_change")
+        if (
+          selection.name &&
+          !SERVER_PROJECT_TOOLS.has(selection.name.replace(/^project\./, ""))
+        )
           return [];
         return projectToolCapabilities({
           core: args.core(),
           context,
-          allow: ({ name }) => name === "propose_change",
+          allow: ({ name }) => SERVER_PROJECT_TOOLS.has(name),
         });
       },
       ...(args.custom?.sources ?? []),

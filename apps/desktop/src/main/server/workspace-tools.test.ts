@@ -1,6 +1,7 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { SET_SESSION_METADATA_DESCRIPTION } from "@catamorphic/agent-protocol";
 import {
   agentCapabilityTools,
   type ExtraToolContext,
@@ -212,6 +213,8 @@ describe("workspace coordination tools", () => {
       interruptSubsession: async () => {},
       requestAttention: async () => ({}),
       setActivity: async () => {},
+      setMetadata: async () => ({}),
+      readMetadata: async () => ({}),
     });
     const list = toolkit.tools.find(
       (tool) => tool.name === "list_project_sessions",
@@ -257,6 +260,8 @@ describe("workspace coordination tools", () => {
         return { attentionRequired: true };
       },
       setActivity: async () => {},
+      setMetadata: async () => ({}),
+      readMetadata: async () => ({}),
     });
 
     const execute = (name: string, input: Record<string, unknown> = {}) =>
@@ -300,6 +305,75 @@ describe("workspace coordination tools", () => {
       ["interrupt", "project", "session", "child"],
       ["attention", "project", "session"],
     ]);
+  });
+
+  it("reads and sets one key of this chat's metadata through the coordination bridge (ADR 0226)", async () => {
+    const toolkit = buildWorkspaceToolkit({} as WorkspaceBridge);
+    const tool = toolkit.tools.find(
+      (entry) => entry.name === "set_session_metadata",
+    );
+    if (!tool) throw new Error("Missing set_session_metadata");
+    // Infrequent: discovered, never on every turn's surface (ADR 0133).
+    expect(tool).toMatchObject({ eager: false, effect: "write" });
+    const calls: unknown[] = [];
+    toolkit.setSessionCoordinationBridge({
+      list: async () => [],
+      read: async () => null,
+      send: async () => ({}),
+      spawn: async () => ({}),
+      listSubsessions: async () => [],
+      waitForSubsessions: async () => [],
+      interruptSubsession: async () => {},
+      requestAttention: async () => ({}),
+      setActivity: async () => {},
+      setMetadata: async (...args) => {
+        calls.push(args);
+        return { pull_requests: [{ url: "https://x/pull/1", number: 1 }] };
+      },
+      readMetadata: async (...args) => {
+        calls.push(["read", ...args]);
+        return { note: "kept" };
+      },
+    });
+    const pullRequests = [{ url: "https://x/pull/1", number: 1 }];
+    expect(
+      await tool.execute(
+        { key: "pull_requests", value: pullRequests },
+        context,
+      ),
+    ).toEqual({ metadata: { pull_requests: pullRequests } });
+    await tool.execute({ key: "note", remove: true }, context);
+    // No value reads: an agent keeps what a list already holds.
+    expect(await tool.execute({ key: "pull_requests" }, context)).toEqual({
+      metadata: { note: "kept" },
+    });
+    // A null value is refused, never taken as a removal.
+    await expect(
+      tool.execute({ key: "pull_requests", value: null }, context),
+    ).rejects.toThrow(/remove: true/);
+    expect(calls).toEqual([
+      ["project", "session", { pull_requests: pullRequests }],
+      ["project", "session", { note: null }],
+      ["read", "project", "session"],
+    ]);
+    // One contract wherever the tool is offered.
+    expect(tool.description).toBe(SET_SESSION_METADATA_DESCRIPTION);
+    // The schema the agent sees refuses keys outside the convention.
+    const schema = z.object(
+      z.record(z.string(), z.instanceof(z.ZodType)).parse(tool.parameters),
+    );
+    expect(schema.safeParse({ key: "Pull Requests", value: 1 }).success).toBe(
+      false,
+    );
+    expect(schema.safeParse({ key: "deploy.preview", value: 1 }).success).toBe(
+      true,
+    );
+    await expect(
+      tool.execute(
+        { key: "pull_requests", value: [] },
+        { ...context, sessionId: undefined },
+      ),
+    ).rejects.toThrow("no chat session");
   });
 
   it("stops listening only in the chat the person is talking with by voice", async () => {

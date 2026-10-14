@@ -21,6 +21,7 @@ import {
   type OpenExtensionPopupDetail,
   useExtensionActions,
 } from "../../lib/extensions.js";
+import { usePopoverDismiss } from "../../lib/popover-dismiss.js";
 import { themeStyle, useTheme } from "../../lib/theme.js";
 import { ShortcutHint } from "../shortcut-hint.js";
 import {
@@ -357,6 +358,16 @@ function ExtensionsMenu({
   }, [open]);
   const panelRef = useRef<HTMLDivElement>(null);
   const place = useAnchoredPlace(anchorRef, open, 300);
+  // A press in the page below closes it too, as Chrome's bubble closes.
+  // Its rows open an extension's native menu, which can take the window's
+  // focus while the bubble stays under it.
+  usePopoverDismiss({
+    open,
+    within: [panelRef, anchorRef],
+    onDismiss: onClose,
+    returnFocus: anchorRef,
+    closeOnBlur: false,
+  });
   useEffect(() => {
     if (!open) return;
     // Portaled to the end of the page: keys reach its items only once
@@ -364,30 +375,8 @@ function ExtensionsMenu({
     const frame = requestAnimationFrame(() =>
       panelRef.current?.querySelector<HTMLElement>("button")?.focus(),
     );
-    const onPointerDown = (event: PointerEvent) => {
-      const target = event.target instanceof Node ? event.target : null;
-      if (
-        panelRef.current?.contains(target) ||
-        anchorRef.current?.contains(target)
-      )
-        return;
-      onClose();
-    };
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        event.stopPropagation();
-        onClose();
-        anchorRef.current?.focus();
-      }
-    };
-    window.addEventListener("pointerdown", onPointerDown, true);
-    window.addEventListener("keydown", onKeyDown, true);
-    return () => {
-      cancelAnimationFrame(frame);
-      window.removeEventListener("pointerdown", onPointerDown, true);
-      window.removeEventListener("keydown", onKeyDown, true);
-    };
-  }, [open, anchorRef, onClose]);
+    return () => cancelAnimationFrame(frame);
+  }, [open]);
   if (!mounted) return null;
   return createPortal(
     <div

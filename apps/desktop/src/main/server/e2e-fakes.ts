@@ -4,12 +4,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import type {
-  AgentAttachment,
-  AgentQuestion,
-  JsonValue,
-  NativeRef,
-  RuntimeRequestResponse,
+import {
+  type AgentAttachment,
+  type AgentQuestion,
+  type JsonValue,
+  type NativeRef,
+  type RuntimeRequestResponse,
+  sessionPullRequests,
 } from "@catamorphic/agent-protocol";
 import {
   type AttemptControl,
@@ -221,6 +222,8 @@ export class E2eLocalSandboxProvider implements SandboxProvider {
  * message fails again.
  */
 const oneShotFailures = new Set<string>();
+/** How often each "expired sign-in" message was turned away so far. */
+const signInFailures = new Map<string, number>();
 const pdfArtifactSource =
   "%PDF-1.4\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>\nendobj\n4 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n5 0 obj\n<< /Length 51 >>\nstream\nBT /F1 18 Tf 30 100 Td (Linked PDF artifact) Tj ET\nendstream\nendobj\nxref\n0 6\n0000000000 65535 f \n0000000009 00000 n \n0000000058 00000 n \n0000000115 00000 n \n0000000241 00000 n \n0000000311 00000 n \ntrailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n411\n%%EOF\n";
 
@@ -246,6 +249,8 @@ const FAKE_CAPABILITIES: HarnessCapabilities = {
 type FakeStep =
   | { type: "title"; content: string }
   | { type: "text"; content: string }
+  /** More of the text being written, as a model streams it. */
+  | { type: "text_delta"; content: string }
   /** Ends the turn failed, with the provider's own words. */
   | { type: "error"; content: string; retrySafe?: boolean }
   | {
@@ -345,7 +350,15 @@ interface FakeTurn {
  * - "show: <target>" → open_surface.
  * - "slowly" → a ~4s turn (mid-turn UI: spinners, queueing, interrupts).
  * - "narrate" / "step by step" → paced notes and commands.
+ * - "perf turn [steps=N] [quiet=S] [stream=S]" → many short steps, one
+ *   long quiet step, then a long Markdown answer streamed in small chunks
+ *   (resource measurements); "perf answer" → that answer at once.
+ * - "pace the work" → a note, a beat, a dozen commands, each changing the
+ *   live line, then an answer streamed a few words at a time ("quickly",
+ *   "with notes", "then go quiet" and "at length" vary it).
  * - "auth error" / "rate limit" → a provider failure once per message.
+ * - "expired sign-in" / "expired sign-in xN" → a Claude Code sign-in that
+ *   did not refresh, safe to retry, on the first (N) attempts.
  * - "permission: <server>/<tool>" → a tool approval request.
  * - "elicitation: queue|cancel|app" → MCP elicitation requests.
  * - anything else → a title and one reply echoing the message.
@@ -575,13 +588,23 @@ class FakeTranscript {
   constructor(private readonly host: AttemptHost) {}
 
   apply(step: FakeStep): void {
-    if (step.type === "text") {
+    if (step.type === "text_delta" && this.openText) {
+      this.host.emit({
+        type: "item.delta",
+        key: this.openText,
+        field: "text",
+        text: step.content,
+      });
+      return;
+    }
+    if (step.type === "text" || step.type === "text_delta") {
       if (this.openText) {
         this.host.emit({
           type: "item.delta",
           key: this.openText,
           field: "text",
-          text: `\n\n${step.content}`,
+          text:
+            step.type === "text_delta" ? step.content : `\n\n${step.content}`,
         });
         return;
       }
@@ -743,6 +766,37 @@ function withoutEarlierDeliveries(text: string): string {
     "",
   );
 }
+
+/** A long Markdown answer: prose, lists, a table and code blocks. */
+const PERF_ANSWER = Array.from(
+  { length: 6 },
+  (_, part) => `## Part ${part + 1}: what changed
+
+The parser now treats **empty input** as an empty program instead of an
+error, and the lexer keeps \`line\` and \`column\` for every token so the
+editor can point at the exact place a problem starts.
+
+- Tokens carry their source range.
+- Empty input parses to \`[]\`.
+- Errors name the token they stopped at, with [a link](file:src/parser.ts).
+
+| Case | Before | After |
+| --- | --- | --- |
+| \`""\` | throws | \`[]\` |
+| \`"a b"\` | 2 tokens | 2 tokens with ranges |
+
+\`\`\`ts
+export function parse(input = ""): Token[] {
+  const tokens: Token[] = [];
+  for (const match of input.matchAll(/\\S+/g)) {
+    tokens.push({ text: match[0], at: match.index ?? 0 });
+  }
+  return tokens;
+}
+\`\`\`
+
+`,
+).join("");
 
 async function* fakeScript(turn: FakeTurn): AsyncGenerator<FakeStep> {
   const message = turn.message;
@@ -1480,6 +1534,140 @@ export const catalog = defineWorkflow(({ defineBoundary }) => ({
     return;
   }
 
+  // Resource measurements: a turn shaped like a real one — many short
+  // steps with changing activity, a long quiet step, then a long answer
+  // streamed in small chunks, as a model writes it.
+  if (prompt.includes("perf turn")) {
+    const setting = (name: string, fallback: number) =>
+      Number(new RegExp(`${name}=(\\d+)`).exec(prompt)?.[1] ?? fallback);
+    yield { type: "title", content: "Performance turn" };
+    const steps = setting("steps", 24);
+    for (let index = 0; index < steps && !turn.interrupted(); index += 1) {
+      if (index % 4 === 0)
+        yield {
+          type: "text",
+          content: `Checking part ${index / 4 + 1} of the parser before changing it.`,
+        };
+      const toolUseId = `perf-${index}`;
+      yield {
+        type: "command",
+        content: `rg -n 'token${index}' src`,
+        description: `Search for token ${index}`,
+        toolUseId,
+      };
+      await turn.pause(250);
+      yield {
+        type: "command",
+        toolUseId,
+        status: "ended",
+        toolResult: `src/parser.ts:${index}: token${index}`,
+      };
+    }
+    if (turn.interrupted()) return;
+    yield {
+      type: "command",
+      content: "bun test",
+      description: "Run every test",
+      toolUseId: "perf-quiet",
+    };
+    await turn.pause(setting("quiet", 8) * 1000);
+    if (turn.interrupted()) return;
+    yield {
+      type: "command",
+      toolUseId: "perf-quiet",
+      status: "ended",
+      toolResult: "120 passed",
+    };
+    const answer = PERF_ANSWER;
+    const chunkMs = 40;
+    const chunks = Math.max(
+      1,
+      Math.floor((setting("stream", 12) * 1000) / chunkMs),
+    );
+    const size = Math.ceil(answer.length / chunks);
+    for (let at = 0; at < answer.length; at += size) {
+      if (turn.interrupted()) return;
+      yield { type: "text_delta", content: answer.slice(at, at + size) };
+      await turn.pause(chunkMs);
+    }
+    return;
+  }
+  if (prompt.includes("perf answer")) {
+    yield { type: "title", content: "Performance history" };
+    yield { type: "text", content: PERF_ANSWER.slice(0, 1_800) };
+    return;
+  }
+
+  // "pace the work" → an even, longer turn for watching the chat move: a
+  // note, a beat, then a dozen commands whose programs each change the live
+  // line (and carry the step count past ten), optionally a note every four
+  // ("with notes") and a silence past the stall notice ("then go quiet"),
+  // then an answer streamed a few words at a time.
+  if (prompt.includes("pace the work")) {
+    yield { type: "title", content: "Paced work" };
+    yield {
+      type: "text",
+      content: "Reading the parser and its callers first.",
+    };
+    // A beat: the note settles before the first step takes the turn
+    // line's place.
+    await turn.pause(1_000);
+    const commands: Array<[string, string]> = [
+      ["cat src/parser.ts", "Read the parser"],
+      ["rg -n 'parse(' src", "Find the parser's callers"],
+      ["ls src/fixtures", "List the fixtures"],
+      ["git log -5 --oneline src/parser.ts", "Read the parser's history"],
+      ["bun test src/parser.test.ts", "Run the parser tests"],
+      ["cat src/lexer.ts", "Read the lexer"],
+      ["make lint", "Lint the sources"],
+      ["curl -s localhost:4100/health", "Check the dev server"],
+      ["vitest run src/lexer.test.ts", "Run the lexer tests"],
+      ["node scripts/check-fixtures.js", "Check the fixtures"],
+      ["find src -name '*.test.ts'", "Find every test"],
+      ["python3 tools/coverage.py", "Measure the coverage"],
+    ];
+    const notes = [
+      "The parser is fine. The lexer drops empty input.",
+      "Fixed the lexer. Checking the fixtures and coverage.",
+    ];
+    const pace = prompt.includes("quickly") ? 350 : 800;
+    for (const [index, [command, description]] of commands.entries()) {
+      if (turn.interrupted()) return;
+      if (prompt.includes("with notes") && index > 0 && index % 4 === 0)
+        yield { type: "text", content: notes[index / 4 - 1] ?? "Still going." };
+      const toolUseId = `pace-${index}`;
+      yield { type: "command", content: command, description, toolUseId };
+      await turn.pause(pace);
+      yield { type: "command", toolUseId, status: "ended", toolResult: "ok" };
+    }
+    if (prompt.includes("then go quiet")) await turn.pause(33_000);
+    if (turn.interrupted()) return;
+    const answer = [
+      "Fixed: the lexer now keeps empty input, so the parser returns an empty list instead of throwing.\n\n",
+      "What changed:\n\n",
+      "- `src/lexer.ts` returns no tokens for an empty string.\n",
+      "- `src/parser.ts` treats no tokens as an empty program.\n",
+      "- A fixture covers both, and the coverage report is back above ninety percent.\n\n",
+      "Every test passes, and the dev server answers its health check.",
+      // "at length" → a long Markdown answer, for the cost of streaming one.
+      ...(prompt.includes("at length")
+        ? Array.from(
+            { length: 12 },
+            (_, n) =>
+              `\n\n## Part ${n + 1}\n\nThe lexer reads part ${n + 1} of the input one token at a time, and the parser builds a node for each statement it finds.\n\n- Tokens keep their offsets.\n- Errors name the line.\n\n\`\`\`ts\nconst part${n + 1} = parse(lex(input));\n\`\`\``,
+          )
+        : []),
+    ]
+      .join("")
+      .split(/(?<= )/);
+    for (let at = 0; at < answer.length; at += 3) {
+      if (turn.interrupted()) return;
+      yield { type: "text_delta", content: answer.slice(at, at + 3).join("") };
+      await turn.pause(45);
+    }
+    return;
+  }
+
   if (prompt.includes("narrate")) {
     yield { type: "title", content: "Narrated fix" };
     yield { type: "text", content: "First, I will read the parser." };
@@ -1840,6 +2028,42 @@ export const catalog = defineWorkflow(({ defineBoundary }) => ({
     return;
   }
 
+  // "record pr: <number> <state>" → the REAL set_session_metadata tool,
+  // as the desktop-workspace skill teaches (ADR 0226): read the chat's
+  // pull_requests, then write the list back with this one in it. The
+  // address never resolves (.invalid), so opening it stays offline.
+  const recordPr = /^record pr:\s*(\d+)\s+(open|draft|merged|closed)$/.exec(
+    message.trim(),
+  );
+  if (recordPr?.[1] && recordPr[2]) {
+    const number = Number(recordPr[1]);
+    const url = `https://git.invalid/acme/web/pull/${number}`;
+    const read = z
+      .object({ metadata: z.record(z.string(), z.unknown()) })
+      .parse(await turn.tool("set_session_metadata", { key: "pull_requests" }));
+    const listed = sessionPullRequests(read.metadata).filter(
+      (entry) => entry.url !== url,
+    );
+    const recorded = await turn.tool("set_session_metadata", {
+      key: "pull_requests",
+      value: [
+        ...listed,
+        {
+          url,
+          number,
+          title: "Show this session beside the chat",
+          state: recordPr[2],
+        },
+      ],
+    });
+    yield { type: "title", content: "Pull request" };
+    yield {
+      type: "text",
+      content: `Recorded pull request #${number}: ${JSON.stringify(recorded)}`,
+    };
+    return;
+  }
+
   // "point: <target>" / "point keep: <target>" → the REAL point_at
   // workspace tool (glow + scroll); "unpoint" → point_at { target: null }.
   const pointRun = /^point(\s+keep)?:\s*(.+)$/s.exec(message.trim());
@@ -2019,6 +2243,27 @@ export const catalog = defineWorkflow(({ defineBoundary }) => ({
       return;
     }
     yield { type: "text", content: "Recovered after reconnecting." };
+    return;
+  }
+
+  // "expired sign-in" (or "expired sign-in xN") → Claude Code turned away
+  // on an access token it did not refresh, before any work, on the
+  // message's first attempt (or first N): what a refresh lost to another
+  // Claude Code holding the shared lock looks like (ADR 0228).
+  const expired = /expired sign-in(?: x(\d+))?/.exec(prompt);
+  if (expired) {
+    const failures = signInFailures.get(prompt) ?? 0;
+    if (failures < Number(expired[1] ?? 1)) {
+      signInFailures.set(prompt, failures + 1);
+      yield {
+        type: "error",
+        content:
+          "Failed to authenticate. API Error: 401 OAuth access token has expired. Re-authenticate to continue.",
+        retrySafe: true,
+      };
+      return;
+    }
+    yield { type: "text", content: "Signed in again." };
     return;
   }
 

@@ -34,10 +34,11 @@ import {
   Workflow as WorkflowIcon,
   X,
 } from "lucide-react";
-import { Fragment, useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { OpenMode } from "../../shared/open-mode.js";
 import { formatBinding, useKeybindings } from "../lib/keybindings";
+import { usePageDialogsWaiting } from "../lib/page-dialogs.js";
 import { TAB_DRAG_TYPE, type TabDragPayload } from "../lib/tab-drag";
 import { AnimatedTitle } from "./animated-title";
 import { AppGlyph } from "./app-icon";
@@ -48,6 +49,8 @@ import { ShortcutHint } from "./shortcut-hint";
 
 /** The card's status line — most urgent signal first. */
 function tabStatusLine(tab: WorkspaceTab): string | null {
+  if (tab.kind === "browser" && tab.pageDialog)
+    return "The page is waiting for your answer";
   if (tab.awaitingInput) return "The agent is waiting for your answer";
   if (tab.working) return "Agent is working…";
   if (tab.attention) return "Ready for you";
@@ -188,15 +191,18 @@ function mergeRendered(
   return merged;
 }
 
+/**
+ * A tab's close button takes no room in the strip: it rides over the end of
+ * the tab's label (`.workspace-tab-close` in styles.css), showing while the
+ * tab is hovered or holds keyboard focus, as the title's end fades under it.
+ */
 function CloseButton({
   hint,
   label,
-  className,
   onClick,
 }: {
   hint: boolean;
   label: string;
-  className: string;
   onClick: () => void;
 }) {
   const keybindings = useKeybindings();
@@ -204,21 +210,25 @@ function CloseButton({
     <button
       type="button"
       onClick={onClick}
-      className={`grid size-5 cursor-pointer place-items-center rounded text-fg-faint transition-opacity duration-150 hover:text-fg ${className}`}
+      className="grid size-5 cursor-pointer place-items-center rounded text-fg-faint transition-colors duration-150 hover:text-fg"
       aria-label={label}
     >
       <X className="size-3" />
     </button>
   );
+  const className = "workspace-tab-close";
   return hint ? (
     <ShortcutHint
       label="Close tab"
       shortcut={formatBinding(keybindings["close-tab"])}
+      className={className}
     >
       {button}
     </ShortcutHint>
   ) : (
-    <ShortcutHint label={label}>{button}</ShortcutHint>
+    <ShortcutHint label={label} className={className}>
+      {button}
+    </ShortcutHint>
   );
 }
 
@@ -238,10 +248,31 @@ export interface TabGroup {
 }
 
 export function WorkspaceTabBar(props: Parameters<typeof TabStrip>[0]) {
+  // A tab whose page waits on its dialog says so (ADR 0227); one out of
+  // sight also wears the waiting question's badge. A tab on screen shows
+  // the dialog itself.
+  const waiting = usePageDialogsWaiting();
+  const { activeKey, secondaryKey } = props;
+  const tabs = useMemo(
+    () =>
+      waiting.size === 0
+        ? props.tabs
+        : props.tabs.map((tab) => {
+            const key = tabKey(tab);
+            if (tab.kind !== "browser" || !waiting.has(key)) return tab;
+            const onScreen = key === activeKey || key === secondaryKey;
+            return {
+              ...tab,
+              pageDialog: true,
+              ...(onScreen ? {} : { awaitingInput: true }),
+            };
+          }),
+    [props.tabs, waiting, activeKey, secondaryKey],
+  );
   return props.orientation === "vertical" ? (
-    <SidebarWorkspaceTabs {...props} />
+    <SidebarWorkspaceTabs {...props} tabs={tabs} />
   ) : (
-    <TabStrip {...props} />
+    <TabStrip {...props} tabs={tabs} />
   );
 }
 
@@ -603,12 +634,28 @@ function TabStrip({
         : [],
     ),
   );
+  // The strip's spare room drags the window, as Chrome's does: the strip
+  // takes presses for its tabs and their drops, so its empty ends hand
+  // them back to the chrome. Centred tabs sit between two such ends, which
+  // share the room equally; with no room left they have no width. While a
+  // tab is dragged they are part of the drop target (the end of the strip),
+  // never a window handle.
+  const windowHandle = (end: "start" | "end") =>
+    vertical ? null : (
+      <div
+        aria-hidden="true"
+        data-tab-strip-room={end}
+        className={`min-w-0 flex-1 self-stretch ${end === "start" ? "-me-1" : "-ms-1"} ${dragKey ? "" : "app-drag"}`}
+      />
+    );
   return (
     // biome-ignore lint/a11y/noStaticElementInteractions: drag-and-drop target for tab reordering; tabs themselves are buttons
     <div
-      className={`app-no-drag flex min-w-0 gap-1 ${vertical ? "flex-col" : `flex-1 items-center ${alignment === "center" ? "[justify-content:safe_center]" : "justify-start"} self-stretch overflow-x-auto overflow-y-hidden`}`}
+      className={`app-no-drag flex min-w-0 gap-1 ${vertical ? "flex-col" : "flex-1 items-center self-stretch overflow-x-auto overflow-y-hidden"}`}
       data-tab-orientation={orientation}
       data-tab-alignment={alignment}
+      // A dragged tab hides every close button until it lands.
+      data-tab-dragging={dragKey ? "" : undefined}
       onDragOver={(event) => {
         if (dragKey) {
           event.preventDefault();
@@ -624,6 +671,7 @@ function TabStrip({
         onDragStateChange?.(null);
       }}
     >
+      {alignment === "center" && windowHandle("start")}
       {rendered.map(({ tab, exiting }, index) => {
         const key = tabKey(tab);
         const active = !exiting && key === activeKey;
@@ -680,6 +728,9 @@ function TabStrip({
             <div
               data-palette-target={highlighted || undefined}
               data-point-key={key}
+              data-page-dialog={
+                (tab.kind === "browser" && tab.pageDialog) || undefined
+              }
               draggable={Boolean(onReorder) && !exiting}
               onDragStart={(event) => {
                 event.dataTransfer.setData("text/plain", key);
@@ -737,7 +788,8 @@ function TabStrip({
                     previous.has(key) ? previous : new Set(previous).add(key),
                   );
               }}
-              className={`group relative flex h-8 shrink-0 items-center border px-1 text-xs transition-[margin,border-radius,color,background-color,border-color] duration-150 ${vertical ? "min-w-0 rounded-lg" : "rounded-lg"} ${
+              data-tab-active={active || undefined}
+              className={`workspace-tab group relative flex h-8 shrink-0 items-center border px-1 text-xs transition-[margin,border-radius,color,background-color,border-color] duration-150 ${vertical ? "min-w-0 rounded-lg" : "rounded-lg"} ${
                 mergeRight ? "rounded-r-none border-r-0 " : ""
               }${mergeLeft ? "-ml-1 rounded-l-none border-l-0 " : ""}${
                 tab.groupId && vertical
@@ -798,79 +850,94 @@ function TabStrip({
                   }`}
                 />
               )}
-              <OpenResourceButton
-                type="button"
-                onOpen={(mode) => {
-                  disarmHoverCard();
-                  onSelect(key, mode);
-                }}
-                onMouseEnter={(event) => {
-                  if (!exiting && !dragKey) {
-                    armHoverCard(key, event.currentTarget);
-                  }
-                }}
-                onMouseLeave={disarmHoverCard}
-                className={`flex min-w-0 cursor-pointer items-center gap-1.5 px-1.5 ${vertical ? "h-full flex-1 text-left" : ""}`}
-                aria-current={active || undefined}
+              {/* The label and the close button riding over its end. */}
+              <span
+                className={`relative flex min-w-0 items-center ${vertical ? "h-full flex-1" : ""}`}
               >
-                {/* Same signal vocabulary as the chat bubbles: spinner
+                <OpenResourceButton
+                  type="button"
+                  onOpen={(mode) => {
+                    disarmHoverCard();
+                    onSelect(key, mode);
+                  }}
+                  onMouseEnter={(event) => {
+                    if (!exiting && !dragKey) {
+                      armHoverCard(key, event.currentTarget);
+                    }
+                  }}
+                  onMouseLeave={disarmHoverCard}
+                  className={`flex min-w-0 cursor-pointer items-center gap-1.5 px-1.5 ${vertical ? "h-full flex-1 text-left" : ""}`}
+                  aria-current={active || undefined}
+                >
+                  {/* Same signal vocabulary as the chat bubbles: spinner
                   while working; unread/draft/question land as badges. */}
-                <span className="relative grid size-3.5 shrink-0 place-items-center">
-                  <SignalGlyph
-                    working={tab.working ?? false}
-                    awaitingInput={tab.awaitingInput}
-                    className="size-3.5"
-                  >
-                    {tab.kind === "browser" && tab.faviconUrl ? (
-                      <img
-                        src={tab.faviconUrl}
-                        alt=""
-                        className={`size-3.5 rounded-[3px] ${sleepingGlyph(tab)}`}
-                      />
-                    ) : tab.kind === "browser" ? (
-                      <Icon className={`size-3.5 ${sleepingGlyph(tab)}`} />
-                    ) : tab.kind === "app" ? (
-                      <AppGlyph icon={tab.appIcon} className="size-3.5" />
-                    ) : tab.kind === "chat" ? (
-                      <ChatGlyph
-                        icon={tab.chatIcon}
-                        fork={tab.fork}
-                        className="size-3.5"
-                      />
-                    ) : (
-                      <Icon className="size-3.5" />
-                    )}
-                  </SignalGlyph>
-                  <SleepRing tab={tab} />
-                  {/* A custom conversation icon still reads as a chat: a
-                      tiny chat marker rides the glyph's corner. */}
-                  {tab.kind === "chat" && hasCustomChatIcon(tab.chatIcon) && (
-                    <span className="absolute -bottom-1 -right-1 grid size-2.5 place-items-center rounded-full bg-bg-raised">
-                      {tab.fork ? (
-                        <GitFork className="size-1.5 text-fg-muted" />
+                  <span className="relative grid size-3.5 shrink-0 place-items-center">
+                    <SignalGlyph
+                      working={tab.working ?? false}
+                      awaitingInput={tab.awaitingInput}
+                      className="size-3.5"
+                    >
+                      {tab.kind === "browser" && tab.faviconUrl ? (
+                        <img
+                          src={tab.faviconUrl}
+                          alt=""
+                          className={`size-3.5 rounded-[3px] ${sleepingGlyph(tab)}`}
+                        />
+                      ) : tab.kind === "browser" ? (
+                        <Icon className={`size-3.5 ${sleepingGlyph(tab)}`} />
+                      ) : tab.kind === "app" ? (
+                        <AppGlyph icon={tab.appIcon} className="size-3.5" />
+                      ) : tab.kind === "chat" ? (
+                        <ChatGlyph
+                          icon={tab.chatIcon}
+                          fork={tab.fork}
+                          className="size-3.5"
+                        />
                       ) : (
-                        <MessageSquare className="size-1.5 text-fg-muted" />
+                        <Icon className="size-3.5" />
                       )}
+                    </SignalGlyph>
+                    <SleepRing tab={tab} />
+                    {/* A custom conversation icon still reads as a chat: a
+                      tiny chat marker rides the glyph's corner. */}
+                    {tab.kind === "chat" && hasCustomChatIcon(tab.chatIcon) && (
+                      <span className="absolute -bottom-1 -right-1 grid size-2.5 place-items-center rounded-full bg-bg-raised">
+                        {tab.fork ? (
+                          <GitFork className="size-1.5 text-fg-muted" />
+                        ) : (
+                          <MessageSquare className="size-1.5 text-fg-muted" />
+                        )}
+                      </span>
+                    )}
+                    <span className="absolute -right-1 -top-1">
+                      <SignalBadge
+                        signals={{
+                          working: tab.working,
+                          unread: tab.unread,
+                          attention: tab.attention,
+                          draft: tab.draft,
+                          awaitingInput: tab.awaitingInput,
+                        }}
+                        size="sm"
+                      />
                     </span>
-                  )}
-                  <span className="absolute -right-1 -top-1">
-                    <SignalBadge
-                      signals={{
-                        working: tab.working,
-                        unread: tab.unread,
-                        attention: tab.attention,
-                        draft: tab.draft,
-                        awaitingInput: tab.awaitingInput,
-                      }}
-                      size="sm"
-                    />
                   </span>
-                </span>
-                <AnimatedTitle
-                  text={tab.label ?? tab.name}
-                  className={vertical ? "min-w-0 flex-1" : "max-w-40"}
+                  <AnimatedTitle
+                    text={tab.label ?? tab.name}
+                    className={
+                      vertical
+                        ? "min-w-0 flex-1"
+                        : "workspace-tab-title min-w-3 max-w-40"
+                    }
+                  />
+                </OpenResourceButton>
+                {/* ⌘W closes the ACTIVE tab, so only its X advertises it. */}
+                <CloseButton
+                  hint={active}
+                  label={`Close ${tab.label ?? tab.name}`}
+                  onClick={() => onClose(key)}
                 />
-              </OpenResourceButton>
+              </span>
               {/* Collapsed group parent: expand its folded surfaces. */}
               {parentGroup?.collapsed && onToggleGroup && (
                 <ShortcutHint label="Expand grouped tabs">
@@ -887,13 +954,6 @@ function TabStrip({
                   </button>
                 </ShortcutHint>
               )}
-              {/* ⌘W closes the ACTIVE tab, so only its X advertises it. */}
-              <CloseButton
-                hint={active}
-                label={`Close ${tab.label ?? tab.name}`}
-                className={active ? "" : "row-reveal"}
-                onClick={() => onClose(key)}
-              />
             </div>
             {/* Last member of an expanded group: fold the group away. */}
             {closesGroup && onToggleGroup && (
@@ -959,6 +1019,7 @@ function TabStrip({
           </ShortcutHint>
         </div>
       )}
+      {windowHandle("end")}
     </div>
   );
 }

@@ -7,9 +7,10 @@ import {
   Link2,
   PanelsTopLeft,
 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { usePopoverDismiss } from "../lib/popover-dismiss.js";
 import { useWorkspace } from "../lib/workspace-context.js";
-import { ProjectInspector } from "./project-inspector";
+import { ProjectInspector, ProjectInspectorWarmup } from "./project-inspector";
 import { ResourceInspector } from "./resource-inspector";
 import { ShortcutHint } from "./shortcut-hint";
 
@@ -38,46 +39,47 @@ export function ProjectSwitcher({
   }, [visible]);
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  // A project's card sits beside the whole list, clear of its edge and of
+  // each row's window button.
+  const listRef = useRef<HTMLDivElement>(null);
+  // The current project's own card sits beside the sidebar, not beside the
+  // button: across the sidebar's top row the button reaches its toggle,
+  // and a card at the button's edge would cover it.
+  const sidebarRef = useRef<Element | null>(null);
+  useLayoutEffect(() => {
+    sidebarRef.current =
+      rootRef.current?.closest(".sidebar-inner") ?? rootRef.current;
+  }, []);
   const active = projects.find((project) => project.id === activeProjectId);
-
-  useEffect(() => {
-    if (!open) return;
-    const onPointerDown = (event: MouseEvent) => {
-      const target = event.target;
-      const insideRoot =
-        target instanceof Node && Boolean(rootRef.current?.contains(target));
-      const insideInspector =
-        target instanceof Element &&
-        Boolean(target.closest("[data-resource-inspector]"));
-      if (!insideRoot && !insideInspector) {
-        setOpen(false);
-      }
-    };
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        // Claim the key so the expanded chat's window listener ignores it.
-        event.preventDefault();
-        setOpen(false);
-      }
-    };
-    document.addEventListener("mousedown", onPointerDown);
-    document.addEventListener("keydown", onKeyDown);
-    return () => {
-      document.removeEventListener("mousedown", onPointerDown);
-      document.removeEventListener("keydown", onKeyDown);
-    };
-  }, [open]);
+  // A press anywhere else, a web page or an app's frame included, closes
+  // the list; a press on a project's card or its menu does not.
+  usePopoverDismiss({
+    open,
+    within: [rootRef],
+    onDismiss: () => setOpen(false),
+    returnFocus: triggerRef,
+  });
 
   return (
     <div ref={rootRef} className="relative min-w-0 flex-1">
       <ResourceInspector
         label={`${active?.name ?? "Project"} details`}
-        content={
+        anchorRef={sidebarRef}
+        warmup={
+          active ? (
+            <ProjectInspectorWarmup projectId={active.id} current />
+          ) : null
+        }
+        content={(dismiss) =>
           active ? (
             <ProjectInspector
               project={active}
               current
-              onDelete={() => onDeleteProject(active)}
+              onDelete={() => {
+                dismiss();
+                onDeleteProject(active);
+              }}
             />
           ) : null
         }
@@ -85,6 +87,10 @@ export function ProjectSwitcher({
         {(inspectorProps) => (
           <button
             {...inspectorProps}
+            ref={(node) => {
+              inspectorProps.ref.current = node;
+              triggerRef.current = node;
+            }}
             type="button"
             onClick={() => setOpen((value) => !value)}
             className="app-no-drag flex h-8 w-full cursor-pointer items-center gap-2 rounded-md px-2.5 text-left transition-colors duration-150 hover:bg-bg-overlay/60"
@@ -102,6 +108,7 @@ export function ProjectSwitcher({
       </ResourceInspector>
 
       <div
+        ref={listRef}
         // As wide as the sidebar's content, however wide the button is.
         className={`absolute left-0 top-full z-50 mt-1 w-[calc(var(--left-sidebar-width,16rem)_-_1.5rem)] origin-top rounded-lg border border-border bg-bg-overlay p-1 shadow-2xl transition-[opacity,scale] duration-150 ease-[cubic-bezier(0.2,0,0,1)] ${
           open
@@ -119,16 +126,24 @@ export function ProjectSwitcher({
               <ResourceInspector
                 key={project.id}
                 label={`${project.name} details`}
-                content={
+                anchorRef={listRef}
+                warmup={
+                  <ProjectInspectorWarmup
+                    projectId={project.id}
+                    current={isActive}
+                  />
+                }
+                content={(dismiss) => (
                   <ProjectInspector
                     project={project}
                     current={isActive}
                     onDelete={() => {
+                      dismiss();
                       onDeleteProject(project);
                       setOpen(false);
                     }}
                   />
-                }
+                )}
               >
                 {(inspectorProps) => (
                   <div className="group flex items-center">
@@ -143,7 +158,9 @@ export function ProjectSwitcher({
                         else onSelect(project.id);
                         setOpen(false);
                       }}
-                      className={`flex h-8 w-full cursor-pointer items-center gap-2 rounded-md px-2 text-left text-[13px] transition-colors duration-150 ${isActive ? "text-fg" : "text-fg-muted hover:bg-bg-raised hover:text-fg"}`}
+                      // Shrinks beside the window button, so a long name
+                      // truncates instead of scrolling the list sideways.
+                      className={`flex h-8 min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-md px-2 text-left text-[13px] transition-colors duration-150 ${isActive ? "text-fg" : "text-fg-muted hover:bg-bg-raised hover:text-fg"}`}
                     >
                       <span className="min-w-0 flex-1 truncate">
                         {project.name}

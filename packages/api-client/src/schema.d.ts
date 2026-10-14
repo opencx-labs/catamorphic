@@ -65,7 +65,7 @@ export interface paths {
                             };
                             agentProtocol: {
                                 /** @enum {number} */
-                                session: 1;
+                                session: 2;
                                 /** @enum {number} */
                                 runner: 1;
                             };
@@ -8853,6 +8853,127 @@ export interface paths {
                     content: {
                         "application/json": {
                             error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            /** @enum {string} */
+                            code: "session_closed" | "authority_required" | "handoff_pending";
+                            authorityRevision?: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        trace?: never;
+    };
+    "/api/projects/{projectId}/agent/sessions/{sessionId}/metadata": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    projectId: string;
+                    sessionId: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        /** @description Values by key; null removes a key */
+                        metadata: {
+                            [key: string]: components["schemas"]["JsonValueInput"];
+                        };
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            metadata: components["schemas"]["SessionMetadata"];
+                        };
+                    };
+                };
+                /** @description Default Response */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            /** @enum {string} */
+                            code: "session_closed" | "authority_required" | "handoff_pending";
+                            authorityRevision?: number;
                         };
                     };
                 };
@@ -18009,6 +18130,9 @@ export interface components {
             createdAt: string;
             updatedAt: string;
         };
+        SessionMetadataInput: {
+            [key: string]: components["schemas"]["JsonValueInput"];
+        };
         SessionFieldsInput: {
             id: string;
             projectId: string;
@@ -18033,6 +18157,7 @@ export interface components {
                 status: "pending" | "in_progress" | "completed";
                 activeForm?: string;
             }[];
+            metadata: components["schemas"]["SessionMetadataInput"];
             parentSessionId: string | null;
             forkedFromSessionId: string | null;
             attentionRevision: number;
@@ -18070,6 +18195,7 @@ export interface components {
                     status: "pending" | "in_progress" | "completed";
                     activeForm?: string;
                 }[];
+                metadata?: components["schemas"]["SessionMetadataInput"];
                 parentSessionId?: string | null;
                 forkedFromSessionId?: string | null;
                 attentionRevision?: number;
@@ -18977,6 +19103,9 @@ export interface components {
             createdAt: string;
             updatedAt: string;
         };
+        SessionMetadata: {
+            [key: string]: components["schemas"]["JsonValue"];
+        };
         SessionFields: {
             id: string;
             projectId: string;
@@ -19001,6 +19130,7 @@ export interface components {
                 status: "pending" | "in_progress" | "completed";
                 activeForm?: string;
             }[];
+            metadata: components["schemas"]["SessionMetadata"];
             parentSessionId: string | null;
             forkedFromSessionId: string | null;
             attentionRevision: number;
@@ -19038,6 +19168,7 @@ export interface components {
                     status: "pending" | "in_progress" | "completed";
                     activeForm?: string;
                 }[];
+                metadata?: components["schemas"]["SessionMetadata"];
                 parentSessionId?: string | null;
                 forkedFromSessionId?: string | null;
                 attentionRevision?: number;

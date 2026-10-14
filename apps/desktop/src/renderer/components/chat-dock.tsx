@@ -78,7 +78,9 @@ import {
   readEditorSelection,
   selectionFromClipboard,
 } from "../lib/editor-selection";
+import { usePopoverDismiss } from "../lib/popover-dismiss.js";
 import { ipcErrorText } from "../lib/remote-workspace.js";
+import { LOCAL_CHATS_POLL_MS } from "../lib/session-change-hints.js";
 import { skillsForAgent, useProjectSkillCatalog } from "../lib/skills";
 import {
   matchSlashEntries,
@@ -468,6 +470,7 @@ function ChatDockContent({
   onEscapeToFloating,
   onClose,
   onCloseStarted,
+  onLeaveStarted,
   registerClose,
   registerMinimize,
   registerSend,
@@ -582,7 +585,15 @@ function ChatDockContent({
   const watcherQuery = useWatchers(
     projectId,
     chat.sessionId ?? entry.sessionId ?? undefined,
-    { refetchInterval: refreshWhileIdle || chat.isSending ? 5_000 : false },
+    {
+      // This computer's chats follow its hints (ADR 0229).
+      refetchInterval:
+        refreshWhileIdle || chat.isSending
+          ? authority
+            ? 5_000
+            : LOCAL_CHATS_POLL_MS
+          : false,
+    },
   );
   const visibleWatchers = watcherQuery.data?.items ?? [];
   const activeEnvironment = chat.session?.environment ?? selectedEnvironment;
@@ -1059,27 +1070,34 @@ function ChatDockContent({
   );
   // Auth failures offer a one-click re-login only for account-auth agents
   // (OpenRouter PKCE, Claude Code / Codex logins); API-key agents are
-  // pointed at Settings by the error text itself. A successful reconnect
-  // retries the failed turn on its own — the user already said what they
-  // wanted; fixing the credentials shouldn't cost them a re-send.
-  // The agent being reconnected and the turn its failure stopped: that
-  // turn is the one to run again, whatever else arrived meanwhile.
-  const awaitingReauthRef = useRef<{
-    agentId: string;
-    turnId: string | undefined;
-  } | null>(null);
-  const retryRef = useRef(chat.retry);
-  retryRef.current = chat.retry;
-  useEffect(
-    () =>
-      desktopApi.onAgentLoginFinished((result) => {
-        const awaiting = awaitingReauthRef.current;
-        if (result.agentId !== awaiting?.agentId) return;
-        awaitingReauthRef.current = null;
-        if (result.ok) void retryRef.current(awaiting.turnId);
-      }),
-    [],
-  );
+  // pointed at Settings by the error text itself. Main runs the failed
+  // turn again once the sign-in works, however it came back (a re-login
+  // here, `/login` in a terminal, a new key): the person already said what
+  // they wanted (ADR 0228). It hears of a failure shown here too (one from
+  // before this run, or one it has forgotten), and again on a re-login.
+  const latestTurn = chat.timeline.at(-1)?.turn;
+  const authFailure =
+    !authority &&
+    latestTurn?.status === "failed" &&
+    latestTurn.error?.kind === "auth"
+      ? latestTurn.id
+      : undefined;
+  const authFailureAgentId = sessionAgentId ?? activeAgent?.id;
+  const authFailureSessionId = chat.sessionId;
+  const reportAuthFailure = useCallback(() => {
+    if (!authFailure || !authFailureSessionId || !authFailureAgentId) return;
+    void desktopApi
+      .agentAuthFailureShown({
+        projectId,
+        sessionId: authFailureSessionId,
+        turnId: authFailure,
+        agentId: authFailureAgentId,
+      })
+      .catch(() => {});
+  }, [authFailure, authFailureSessionId, authFailureAgentId, projectId]);
+  useEffect(() => {
+    reportAuthFailure();
+  }, [reportAuthFailure]);
 
   // Lurk mode: while the agent works and a tab is visible behind the
   // floating dock, the dock shrinks VERTICALLY to a strip — header, the
@@ -1371,14 +1389,10 @@ function ChatDockContent({
               ? "Reconnect OpenRouter"
               : `Re-login ${activeAgent.name}`,
           run: () => {
-            awaitingReauthRef.current = {
-              agentId: activeAgent.id,
-              turnId: latestAuthFailure(chat.timeline),
-            };
-            void desktopApi.agentLogin(activeAgent.id).then((result) => {
-              // Login never started (e.g. key-auth agent): stop waiting.
-              if (!result.started) awaitingReauthRef.current = null;
-            });
+            // Main forgets a failure after a while: the one shown here
+            // runs again once this re-login finishes, however old it is.
+            reportAuthFailure();
+            void desktopApi.agentLogin(activeAgent.id);
           },
         }
       : undefined;
@@ -1495,6 +1509,7 @@ function ChatDockContent({
     if (minimizingRef.current) return;
     minimizingRef.current = true;
     setMinimizing(true);
+    onLeaveStarted?.();
   };
 
   // The mode flip travels through the entry owner and lands a frame or
@@ -1533,6 +1548,7 @@ function ChatDockContent({
     if (closingRef.current) return;
     closingRef.current = true;
     onCloseStarted?.();
+    onLeaveStarted?.();
     setClosing(true);
   };
   const finishClose = () => {
@@ -2308,7 +2324,10 @@ function ChatDockContent({
             data-testid="chat-status-controls"
             className={`z-10 flex shrink-0 items-center gap-1 ${presentsAsTab ? "absolute right-2 top-2" : "relative"}`}
           >
-            <TodoProgress todos={chat.session?.todos ?? []} />
+            <TodoProgress
+              todos={chat.session?.todos ?? []}
+              useDismiss={usePopoverDismiss}
+            />
             <span className="flex items-center gap-0.5 rounded-lg border border-border bg-bg-raised p-0.5">
               <SessionInspector
                 projectId={projectId}
@@ -2740,10 +2759,7 @@ function ChatDockContent({
                 className="size-4 shrink-0 animate-spin"
                 aria-hidden="true"
               />
-              <ActivityText
-                text={activity ?? "Working…"}
-                className="truncate"
-              />
+              <ActivityText text={activity ?? "Working…"} />
             </div>
           )}
           {runtimeSettingsError ? (
@@ -3327,18 +3343,6 @@ function lastReplyText(
       if (entry?.kind === "reply" && entry.item.text.trim())
         return entry.item.text;
     }
-  }
-  return undefined;
-}
-
-/** The latest turn that failed on the agent's sign-in. */
-function latestAuthFailure(
-  turns: ReturnType<typeof useAgentChat>["timeline"],
-): string | undefined {
-  for (let index = turns.length - 1; index >= 0; index -= 1) {
-    const turn = turns[index]?.turn;
-    if (turn?.status === "failed" && turn.error?.kind === "auth")
-      return turn.id;
   }
   return undefined;
 }

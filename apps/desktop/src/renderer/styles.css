@@ -940,6 +940,63 @@ kbd {
   overflow: hidden;
 }
 
+/* A sidebar tab joining or leaving its strip (a contextual tab such as This
+   session, ADR 0226): its place grows from nothing while its neighbours
+   slide, and shrinks away the way it came. Transitions, not keyframes: a
+   quick change back reverses from wherever it is. At no width the place
+   gives back its flex gap. */
+.sidebar-tab-slot {
+  width: 28px;
+  flex-shrink: 0;
+  transition-property: width, margin-inline-end, opacity, scale;
+  transition-duration: 200ms;
+  transition-timing-function: var(--ease-standard);
+}
+.sidebar-tab-slot.sidebar-tab-slot-leaving {
+  width: 0;
+  margin-inline-end: -4px;
+  opacity: 0;
+  scale: 0.6;
+  pointer-events: none;
+}
+.sidebar-tab-slot-arriving,
+.sidebar-tab-slot-leaving {
+  overflow: hidden;
+}
+@starting-style {
+  .sidebar-tab-slot.sidebar-tab-slot-arriving {
+    width: 0;
+    margin-inline-end: -4px;
+    opacity: 0;
+    scale: 0.6;
+  }
+}
+
+/* The tab strip opening as a second tab arrives, and folding as the count
+   drops to one: the panel below follows its height. */
+.sidebar-strip {
+  transition-property: height, opacity;
+  transition-duration: 200ms;
+  transition-timing-function: var(--ease-standard);
+}
+.sidebar-strip.sidebar-strip-folding {
+  height: 0;
+  opacity: 0;
+}
+.sidebar-strip-arriving,
+.sidebar-strip-folding {
+  overflow: hidden;
+}
+@starting-style {
+  .sidebar-strip.sidebar-strip-arriving {
+    height: 0;
+    opacity: 0;
+  }
+}
+
+/* Workspace tab arrival: its width grows from nothing to the widest a tab
+   gets (a 160px title, its icon and padding; the close button takes no
+   room), so the neighbours slide aside. */
 @keyframes tab-in {
   from {
     max-width: 0;
@@ -947,7 +1004,7 @@ kbd {
     transform: translateY(3px);
   }
   to {
-    max-width: 220px;
+    max-width: 202px;
     opacity: 1;
     transform: translateY(0);
   }
@@ -963,7 +1020,7 @@ kbd {
    fully instead of leaving a 4px hole. */
 @keyframes tab-out {
   from {
-    max-width: 220px;
+    max-width: 202px;
     opacity: 1;
     transform: translateY(0);
     margin-left: 0;
@@ -1012,6 +1069,50 @@ kbd {
 .sidebar-skeleton-bar {
   height: 8px;
 }
+/* A paginated tree branch's end (the shared Tree's next page): the same
+   still bars, the failed page with Retry in the chrome's error voice, or
+   Show more where the tree stopped reading on its own. */
+[data-tree-more] {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-inline-end: 8px;
+  box-sizing: border-box;
+}
+[data-tree-more="placeholder"] > span {
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--color-fg) 7%, transparent);
+}
+[data-tree-more="placeholder"] > span:first-child {
+  flex: none;
+  width: 12px;
+  height: 12px;
+}
+[data-tree-more="placeholder"] > span:last-child {
+  height: 8px;
+}
+[data-tree-more="error"],
+[data-tree-more="paused"] {
+  justify-content: center;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--color-fg-muted);
+}
+[data-tree-more="error"] > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+[data-tree-end] > button {
+  flex: none;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: var(--color-accent);
+  cursor: pointer;
+}
 
 /* Controls that belong to a hovered row (overflow dots, close, open-in-window)
    share one reveal: hidden until the row is hovered or holds keyboard focus,
@@ -1027,9 +1128,97 @@ kbd {
 .row-reveal[aria-expanded="true"] {
   opacity: 1;
 }
+/* A copy button beside a value (a path, an address, a command) rests
+   hidden in its place until its copyable item, the nearest
+   [data-copyable], is hovered or holds keyboard focus, so a card of values
+   reads as values. It stays while it says how the copy went, so the
+   outcome is not cut off when the pointer leaves. Its place is kept:
+   nothing moves when it shows. */
+.copy-reveal {
+  opacity: 0;
+  transition:
+    opacity 150ms var(--ease-standard),
+    color 150ms var(--ease-standard),
+    background-color 150ms var(--ease-standard);
+}
+[data-copyable]:hover .copy-reveal,
+[data-copyable]:has(:focus-visible) .copy-reveal,
+.copy-reveal:focus-visible,
+.copy-reveal[data-copied],
+.copy-reveal[data-copy-failed] {
+  opacity: 1;
+}
 @media (prefers-reduced-motion: reduce) {
-  .row-reveal {
+  .row-reveal,
+  .copy-reveal {
     transition: none;
+  }
+}
+
+/* A workspace tab's close button takes no room in the strip, so the tab is
+   only as wide as its icon and title. The button rides over the end of the
+   label, where the title's padding was: its X covers the title's last 12px,
+   which clear, and the 16px before them fade, so the title runs on under it
+   instead of moving. It shows while the tab is hovered or holds keyboard
+   focus (the row reveal's rule, led by the keyboard as rings are), on one
+   reversible transition of opacity and scale, so a pointer crossing the
+   strip turns each back from where it is and nothing beside it moves.
+   Hidden, it lets presses through to the tab; a dragged tab hides them all.
+   Without hover the tab in front keeps its button. */
+@property --tab-title-end {
+  syntax: "<color>";
+  inherits: false;
+  initial-value: #000;
+}
+.workspace-tab-close {
+  position: absolute;
+  inset-block: 0;
+  inset-inline-end: 2px;
+  height: 20px;
+  margin-block: auto;
+  opacity: 0;
+  scale: 0.8;
+  pointer-events: none;
+  transition:
+    opacity 150ms var(--ease-standard),
+    scale 150ms var(--ease-standard);
+}
+.workspace-tab-title {
+  mask-image: linear-gradient(to left, var(--tab-title-end) 12px, #000 28px);
+  transition: --tab-title-end 150ms var(--ease-standard);
+}
+[data-tab-orientation="horizontal"]:not([data-tab-dragging])
+  .workspace-tab:hover
+  .workspace-tab-close,
+:root:not([data-focus-modality="pointer"])
+  [data-tab-orientation="horizontal"]:not([data-tab-dragging])
+  .workspace-tab:has(:focus-visible)
+  .workspace-tab-close {
+  opacity: 1;
+  scale: 1;
+  pointer-events: auto;
+}
+[data-tab-orientation="horizontal"]:not([data-tab-dragging])
+  .workspace-tab:hover
+  .workspace-tab-title,
+:root:not([data-focus-modality="pointer"])
+  [data-tab-orientation="horizontal"]:not([data-tab-dragging])
+  .workspace-tab:has(:focus-visible)
+  .workspace-tab-title {
+  --tab-title-end: transparent;
+}
+@media (hover: none) {
+  [data-tab-orientation="horizontal"]:not([data-tab-dragging])
+    .workspace-tab[data-tab-active]
+    .workspace-tab-close {
+    opacity: 1;
+    scale: 1;
+    pointer-events: auto;
+  }
+  [data-tab-orientation="horizontal"]:not([data-tab-dragging])
+    .workspace-tab[data-tab-active]
+    .workspace-tab-title {
+    --tab-title-end: transparent;
   }
 }
 
@@ -1554,7 +1743,8 @@ kbd {
 .sidebar-tab:hover {
   color: var(--color-fg);
 }
-.sidebar-tab[aria-selected="true"] {
+.sidebar-tab[aria-selected="true"],
+.sidebar-tab[data-selected="true"] {
   color: var(--color-accent);
 }
 .sidebar-tab:active {
@@ -1594,7 +1784,8 @@ kbd {
     translate: 0 6px;
   }
 }
-/* First paint stays still. User tab changes enable the paired transition. */
+/* First paint stays still. Any later change of the tab in front (a click,
+   or the tab in front leaving) enables the paired transition. */
 .tabbed-sidebar[data-tab-motion="false"] .sidebar-tab-panel {
   transition: none;
 }
@@ -1918,9 +2109,20 @@ kbd {
   -webkit-app-region: drag;
 }
 
-/* A detached rail sizes to its contents rather than a workspace viewport. */
-[data-dock-native] [data-bubble-items][aria-hidden="false"] {
-  max-width: calc(100vw - 60px);
+/* The strip's chats are as wide as they are, up to a ceiling: most of the
+   window, or the detached window less the strip's own controls. Folded,
+   none. The ceiling is part of the width, never a max-width: folding
+   interpolates from the width shown, so even a strip held at its ceiling
+   narrows from the fold's first frame instead of after the interpolated
+   width has fallen below the ceiling. */
+[data-bubble-items] {
+  width: calc-size(auto, min(size, 60vw));
+}
+[data-dock-native] [data-bubble-items] {
+  width: calc-size(auto, min(size, 100vw - 60px));
+}
+[data-bubble-items][aria-hidden="true"] {
+  width: 0;
 }
 
 html[data-surface="dock"] body,

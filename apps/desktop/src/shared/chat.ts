@@ -239,6 +239,12 @@ export interface ChatDockProps {
    */
   registerMinimize?: (minimize: () => void) => void;
   /**
+   * The chat starts leaving: its minimize or close plays its exit, however
+   * it was asked for (Escape, its own controls, its bubble, a shortcut).
+   * The bubble strip folds while it leaves instead of after.
+   */
+  onLeaveStarted?: () => void;
+  /**
    * Hands the host this chat's live sender (palette skill rows, post-auth
    * continuations). Sends queue behind an in-flight turn like composer
    * sends do.

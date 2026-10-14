@@ -2,8 +2,8 @@
 
 import { act, useEffect } from "react";
 import { createRoot } from "react-dom/client";
-import { expect, it } from "vitest";
-import type { SidebarSurface } from "../../shared/sidebar.js";
+import { describe, expect, it } from "vitest";
+import type { SidebarSurface, SidebarTabConfig } from "../../shared/sidebar.js";
 import type { WorkspaceConfig } from "../../shared/workspace-config.js";
 import type { SidebarContentState } from "./sidebar-contribution.js";
 import { TabbedSidebar } from "./tabbed-sidebar.js";
@@ -181,23 +181,28 @@ it("separates relevance and content states while preserving a hidden widget and 
     );
   try {
     await render({ kind: "chat", sessionId: "a" }, "loading");
-    expect(
-      node.querySelector('[role="tab"][aria-label="Chat tools"]'),
-    ).toBeTruthy();
+    // The person picks the contextual tab: the choice outlives its absence.
+    const chatTools = node.querySelector<HTMLButtonElement>(
+      '[role="tab"][aria-label="Chat tools"]',
+    );
+    expect(chatTools).toBeTruthy();
+    await act(async () => chatTools?.click());
     const input = node.querySelector<HTMLInputElement>("input");
     if (!input) throw new Error("Missing widget");
     input.value = "Preserved";
     await render({ kind: "chat", sessionId: "a" }, "empty");
     const widget = node.querySelector('[data-sidebar-widget="children"]');
-    // It collapses first (inert at once), then hides once the motion ends.
+    // Its only section emptied, so the tab leaves: the panel fades out as it
+    // was, the section inert at once but not folding while it goes (ADR 0226).
     expect(widget?.hasAttribute("inert")).toBe(true);
     expect(
       widget
         ?.querySelector("[data-collapsible]")
         ?.getAttribute("data-collapsible"),
-    ).toBe("closed");
-    await act(() => new Promise((resolve) => setTimeout(resolve, 250)));
-    expect(widget?.hasAttribute("hidden")).toBe(true);
+    ).toBe("open");
+    expect(widget?.closest('[role="tabpanel"]')?.hasAttribute("hidden")).toBe(
+      true,
+    );
     await render({ kind: "chat", sessionId: "a" }, "error");
     expect(
       node.querySelector(
@@ -303,4 +308,249 @@ it("keeps its sections live while the panel slides away, on either side", async 
     Reflect.deleteProperty(globalThis, "CSSTransition");
     Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", false);
   }
+});
+
+describe("contextual tabs (ADR 0226)", () => {
+  const tabs: SidebarTabConfig[] = [
+    {
+      id: "this-session",
+      title: "This session",
+      icon: "MessageSquareText",
+      sections: [{ id: "session", type: "session", when: { session: true } }],
+    },
+    {
+      id: "companion",
+      title: "Activity",
+      sections: [{ id: "links", type: "custom" }],
+    },
+  ];
+  const chat: SidebarSurface = { kind: "chat", sessionId: "s1" };
+  const page: SidebarSurface = { kind: "browser" };
+  // A page the chat opened: the chat's session stays beside it.
+  const chatsPage: SidebarSurface = { kind: "browser", sessionId: "s1" };
+
+  async function mount(scope: string) {
+    Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", true);
+    const node = document.createElement("div");
+    document.body.append(node);
+    const root = createRoot(node);
+    const render = (
+      surface: SidebarSurface,
+      opts: { tabs?: SidebarTabConfig[]; headerActions?: boolean } = {},
+    ) =>
+      act(async () =>
+        root.render(
+          <TabbedSidebar
+            side="right"
+            scope={scope}
+            open
+            tabs={opts.tabs ?? tabs}
+            surface={surface}
+            headerActions={
+              opts.headerActions ? <button type="button">Toggle</button> : false
+            }
+            onCustomize={() => {}}
+            renderSection={(section) => (
+              <button type="button">{section.id} rows</button>
+            )}
+          />,
+        ),
+      );
+    const tab = (title: string) =>
+      node.querySelector<HTMLButtonElement>(
+        `[role="tab"][aria-label="${title}"]`,
+      );
+    const selected = () =>
+      node
+        .querySelector('[role="tab"][aria-selected="true"]')
+        ?.getAttribute("aria-label");
+    const strip = () => node.querySelector(".sidebar-strip");
+    const moving = () =>
+      [
+        ...node.querySelectorAll(
+          ".sidebar-tab-slot-arriving, .sidebar-tab-slot-leaving, .sidebar-strip-arriving, .sidebar-strip-folding",
+        ),
+      ].length;
+    const settle = () =>
+      act(() => new Promise((resolve) => setTimeout(resolve, 250)));
+    const cleanup = async () => {
+      await act(async () => root.unmount());
+      node.remove();
+    };
+    return { node, render, tab, selected, strip, moving, settle, cleanup };
+  }
+
+  it("arrives beside a chat without taking the panel, and leaves the way it came", async () => {
+    localStorage.clear();
+    const view = await mount("arrive");
+    try {
+      // A chat in front at first sight still opens on the tab that stays,
+      // and the first list shown does not move.
+      await view.render(chat);
+      expect(view.tab("This session")).toBeTruthy();
+      expect(view.selected()).toBe("Activity");
+      expect(view.moving()).toBe(0);
+      // Leaving: no longer a tab at once, while its place and the strip
+      // fold away; nothing in them takes focus or reads as tabs.
+      await view.render(page);
+      expect(view.tab("This session")).toBeNull();
+      const folding = view.strip();
+      expect(folding?.className).toContain("sidebar-strip-folding");
+      expect(folding?.getAttribute("aria-hidden")).toBe("true");
+      expect(
+        view.node.querySelector('[data-sidebar-tab-leaving="this-session"]')
+          ?.parentElement?.className,
+      ).toContain("sidebar-tab-slot-leaving");
+      await view.settle();
+      expect(view.strip()).toBeNull();
+      // Arriving: the strip opens and the tab grows into its place; the
+      // panel stays where it was.
+      await view.render(chat);
+      expect(view.strip()?.className).toContain("sidebar-strip-arriving");
+      expect(view.tab("This session")?.parentElement?.className).toContain(
+        "sidebar-tab-slot-arriving",
+      );
+      expect(view.tab("Activity")?.parentElement?.className).not.toContain(
+        "sidebar-tab-slot-arriving",
+      );
+      expect(view.selected()).toBe("Activity");
+      await view.settle();
+      expect(view.moving()).toBe(0);
+      // A page the chat opened keeps it.
+      await view.render(chatsPage);
+      expect(view.tab("This session")).toBeTruthy();
+      expect(view.moving()).toBe(0);
+    } finally {
+      await view.cleanup();
+    }
+  });
+
+  it("reverses a quick change back on the same elements", async () => {
+    localStorage.clear();
+    const view = await mount("reverse");
+    try {
+      await view.render(chat);
+      await view.settle();
+      const button = view.tab("This session");
+      const strip = view.strip();
+      await view.render(page);
+      // Still the same elements, now leaving and folding.
+      expect(view.node.querySelector("[data-sidebar-tab-leaving]")).toBe(
+        button,
+      );
+      expect(view.strip()).toBe(strip);
+      await view.render(chat);
+      expect(view.tab("This session")).toBe(button);
+      expect(view.strip()).toBe(strip);
+      expect(button?.parentElement?.className).not.toContain(
+        "sidebar-tab-slot-leaving",
+      );
+      expect(strip?.className).not.toContain("sidebar-strip-folding");
+      await view.settle();
+      expect(view.tab("This session")).toBe(button);
+      expect(view.moving()).toBe(0);
+    } finally {
+      await view.cleanup();
+    }
+  });
+
+  it("moves only for a change to tabs already shown, never on load or the sidebar's own opening", async () => {
+    localStorage.clear();
+    const view = await mount("load");
+    try {
+      // The workspace file arriving: the first tabs shown do not grow in.
+      await view.render(chat, { tabs: [] });
+      await view.render(chat);
+      expect(view.moving()).toBe(0);
+      // One tab, its strip held up by the sidebar's own controls (as the
+      // right sidebar's toggle comes with its opening): no strip motion.
+      const one = [tabs[1] as SidebarTabConfig];
+      await view.render(page, { tabs: one });
+      await view.settle();
+      await view.render(page, { tabs: one, headerActions: true });
+      expect(view.strip()).toBeTruthy();
+      expect(view.moving()).toBe(0);
+      await view.render(page, { tabs: one });
+      expect(view.strip()).toBeNull();
+    } finally {
+      await view.cleanup();
+    }
+  });
+
+  it("falls back with the panels cross-fading when the tab in front leaves, and returns to it", async () => {
+    localStorage.clear();
+    localStorage.setItem(
+      "catamorphic:sidebar:fallback:right",
+      JSON.stringify({ width: 320, selected: "this-session" }),
+    );
+    const view = await mount("fallback");
+    try {
+      await view.render(chat);
+      expect(view.selected()).toBe("This session");
+      const aside = view.node.querySelector("aside");
+      // First paint stays still.
+      expect(aside?.getAttribute("data-tab-motion")).toBe("false");
+      await view.render(page);
+      expect(view.selected()).toBeUndefined();
+      // One tab left: its panel shown, and the swap cross-fades.
+      expect(aside?.getAttribute("data-tab-motion")).toBe("true");
+      const panels = [...view.node.querySelectorAll('[role="tabpanel"]')];
+      expect(panels.map((panel) => panel.hasAttribute("hidden"))).toEqual([
+        true,
+        false,
+      ]);
+      // The leaving panel fades as it was: its section does not fold too.
+      expect(
+        view.node
+          .querySelector('[data-sidebar-widget="session"] [data-collapsible]')
+          ?.getAttribute("data-collapsible"),
+      ).toBe("open");
+      // The person's choice comes back with the chat.
+      await view.render(chat);
+      expect(view.selected()).toBe("This session");
+    } finally {
+      await view.cleanup();
+    }
+  });
+
+  it("keeps focus in the sidebar when the strip folds", async () => {
+    localStorage.clear();
+    const view = await mount("focus");
+    try {
+      await view.render(chat);
+      await view.settle();
+      view.tab("Activity")?.focus();
+      expect(document.activeElement?.getAttribute("aria-label")).toBe(
+        "Activity",
+      );
+      await view.render(page);
+      // The tab folds away with its strip; focus goes to the panel shown.
+      expect(document.activeElement?.getAttribute("role")).toBe("tabpanel");
+      expect(document.activeElement?.hasAttribute("hidden")).toBe(false);
+    } finally {
+      await view.cleanup();
+    }
+  });
+
+  it("changes at once under reduced motion", async () => {
+    localStorage.clear();
+    const original = window.matchMedia;
+    window.matchMedia = ((query: string) => ({
+      matches: query.includes("reduce"),
+      media: query,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    })) as unknown as typeof window.matchMedia;
+    const view = await mount("reduced");
+    try {
+      await view.render(chat);
+      await act(async () => {});
+      await view.render(page);
+      await act(() => new Promise((resolve) => setTimeout(resolve, 10)));
+      expect(view.strip()).toBeNull();
+    } finally {
+      window.matchMedia = original;
+      await view.cleanup();
+    }
+  });
 });

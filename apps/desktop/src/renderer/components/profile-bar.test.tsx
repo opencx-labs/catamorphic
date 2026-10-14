@@ -55,7 +55,7 @@ describe("ProfileBar", () => {
     });
     await act(async () =>
       container
-        .querySelector<HTMLButtonElement>('[aria-haspopup="menu"]')
+        .querySelector<HTMLButtonElement>('[aria-haspopup="dialog"]')
         ?.click(),
     );
     expect(container.querySelector('[aria-label^="Rename"]')).toBeNull();
@@ -106,5 +106,118 @@ describe("ProfileBar", () => {
       trigger?.focus();
     });
     expect(preview()).toBeNull();
+  });
+
+  it("takes focus into its dialog as it opens and gives it back as it closes", async () => {
+    const data = {
+      defaultProfileId: "profile-1",
+      profiles: [
+        {
+          id: "profile-1",
+          name: "Default Profile",
+          color: "#8b5cf6",
+          projectIds: ["project-1"],
+          defaultProjectId: "project-1",
+        },
+        {
+          id: "profile-2",
+          name: "Work",
+          color: "#22c55e",
+          projectIds: [],
+        },
+      ],
+    };
+    await act(async () => {
+      root.render(
+        <ProfileBar
+          data={data}
+          activeProfileId="profile-2"
+          onSwitch={() => undefined}
+          onOpenSettings={() => undefined}
+        />,
+      );
+    });
+    const trigger = container.querySelector<HTMLButtonElement>(
+      '[aria-label^="Switch profile"]',
+    );
+    const preview = () =>
+      document.querySelector("[data-resource-inspector][data-open]");
+    await act(async () => {
+      trigger?.focus();
+      trigger?.click();
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+    });
+    // On the profile in use, without opening its preview.
+    expect(document.activeElement?.getAttribute("aria-current")).toBe("true");
+    expect(document.activeElement?.textContent).toContain("Work");
+    expect(preview()).toBeNull();
+    await act(async () => {
+      document.activeElement?.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Escape",
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    });
+    expect(trigger?.getAttribute("aria-expanded")).toBe("false");
+    expect(document.activeElement).toBe(trigger);
+    expect(preview()).toBeNull();
+    // Closed by picking a profile, focus goes back to the control too.
+    await act(async () => {
+      trigger?.click();
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+    });
+    await act(async () =>
+      (document.activeElement as HTMLButtonElement | null)?.click(),
+    );
+    expect(trigger?.getAttribute("aria-expanded")).toBe("false");
+    expect(document.activeElement).toBe(trigger);
+  });
+
+  it("keeps a New profile field opened before its focus frame", async () => {
+    await act(async () => {
+      root.render(
+        <ProfileBar
+          data={{
+            defaultProfileId: "profile-1",
+            profiles: [
+              {
+                id: "profile-1",
+                name: "Default Profile",
+                color: "#8b5cf6",
+                projectIds: ["project-1"],
+                defaultProjectId: "project-1",
+              },
+            ],
+          }}
+          activeProfileId="profile-1"
+          onSwitch={() => undefined}
+          onOpenSettings={() => undefined}
+        />,
+      );
+    });
+    const trigger = container.querySelector<HTMLButtonElement>(
+      '[aria-label^="Switch profile"]',
+    );
+    // A quick press on New profile lands before the frame that moves
+    // focus into the opened dialog.
+    await act(async () => {
+      trigger?.click();
+      [...container.querySelectorAll("button")]
+        .find((button) => button.textContent?.includes("New profile"))
+        ?.click();
+    });
+    const field = () =>
+      container.querySelector<HTMLInputElement>(
+        'input[placeholder="Profile name"]',
+      );
+    expect(document.activeElement).toBe(field());
+    await act(
+      () =>
+        new Promise((resolve) => requestAnimationFrame(() => resolve(null))),
+    );
+    expect(field()).not.toBeNull();
+    expect(document.activeElement).toBe(field());
   });
 });

@@ -397,6 +397,16 @@ describe("tools", () => {
   });
 });
 
+describe("diagnostics", () => {
+  it("writes the CLI's debug log where the host asked, only when asked", () => {
+    expect(options(attempt()).debugFile).toBeUndefined();
+    expect(
+      options(attempt({ options: { debugFile: "/logs/sign-in/1.log" } }))
+        .debugFile,
+    ).toBe("/logs/sign-in/1.log");
+  });
+});
+
 describe("threads", () => {
   it("creates, resumes and forks by the attempt's binding", () => {
     expect(options(attempt()).sessionId).toBe(

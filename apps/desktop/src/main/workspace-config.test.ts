@@ -467,7 +467,8 @@ describe("palette modes", () => {
     `module.exports = { sidebars: {left: [{ id: "project", title: "Project", sections: [
       { id: "todos", type: "custom", title: "Todos", source: { type: "custom", module: ".work/todos.ts" } },
       { id: "links", type: "custom", title: "Links", items: [{ label: "Docs", url: "https://example.com/docs" }] },
-      { id: "chats", type: "chats" }
+      { id: "chats", type: "chats" },
+      { id: "deploys", type: "custom", title: "Deploys", when: { session: true }, source: { type: "custom", module: ".work/deploys.ts" } }
     ] }], right: [] }, palette: ${palette} };\n`;
   const resolve = (palette: string) =>
     resolveWorkspaceConfig(makeLayers({ profile: layout(palette) }));
@@ -547,6 +548,11 @@ describe("palette modes", () => {
       "a duplicate name",
       `{ modes: [{ id: "a", trigger: "x", title: "A", section: "todos" }, { id: "b", trigger: "y", aliases: ["x"], title: "B", section: "links" }] }`,
       "already another mode",
+    ],
+    [
+      "a section of the chat in front",
+      `{ modes: [{ id: "m", trigger: "m", title: "M", section: "deploys" }] }`,
+      "the palette has none",
     ],
     [
       "surface relevance",

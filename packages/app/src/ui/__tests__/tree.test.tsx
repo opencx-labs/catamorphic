@@ -260,3 +260,350 @@ it("releases descendants of a collapsed group and resumes them when reopened", a
   });
   expect(children).toHaveLength(2);
 });
+
+describe("paged trees", () => {
+  type Row = { id: string; label: string };
+  const rowsOf = (offset: number, count: number) =>
+    Array.from({ length: Math.max(0, count) }, (_, index) => ({
+      id: `r${offset + index}`,
+      label: `Row ${offset + index}`,
+    }));
+  /** `total` rows, `size` per page; each read waits for the test. */
+  const pagedSource = (total: number, size: number) => {
+    const reads: Array<{
+      cursor?: string;
+      resolve: () => void;
+      reject: (error: Error) => void;
+    }> = [];
+    const load = vi.fn(
+      ({ cursor }: { cursor?: string }) =>
+        new Promise<CollectionPage<Row>>((resolve, reject) => {
+          const offset = cursor ? Number(cursor) : 0;
+          const next = offset + size;
+          const page = {
+            items: rowsOf(offset, Math.min(size, total - offset)),
+            cursor: next < total ? String(next) : undefined,
+          };
+          reads.push({ cursor, resolve: () => resolve(page), reject });
+        }),
+    );
+    return { collection: createCollection<Row>({ source: { load } }), reads };
+  };
+  /** The same pages, answered at once (a cached read). */
+  const instantSource = (total: number, size: number) => {
+    const load = vi.fn(async ({ cursor }: { cursor?: string }) => {
+      const offset = cursor ? Number(cursor) : 0;
+      const next = offset + size;
+      return {
+        items: rowsOf(offset, Math.min(size, total - offset)),
+        cursor: next < total ? String(next) : undefined,
+      };
+    });
+    return { collection: createCollection<Row>({ source: { load } }), load };
+  };
+  const view = (
+    collection: ReturnType<typeof pagedSource>["collection"],
+    options: {
+      active?: boolean;
+      height?: number;
+      tail?: Row[];
+      project?: (items: readonly Row[]) => readonly Row[];
+      groupBy?: (item: Row) => string;
+    } = {},
+  ) => (
+    <CollectionTree
+      collection={collection}
+      active={options.active ?? true}
+      label="Chats"
+      height={options.height ?? 140}
+      rowHeight={28}
+      tail={options.tail}
+      project={options.project}
+      groupBy={options.groupBy}
+      renderItem={(item) => <button type="button">{item.label}</button>}
+    />
+  );
+  /** Placeholders holding the end, not ones fading out. */
+  const placeholders = (container: HTMLElement) =>
+    container.querySelectorAll(
+      '[data-tree-more="placeholder"]:not(.cat-row-exit)',
+    ).length;
+  const viewport = (container: HTMLElement) =>
+    container.querySelector<HTMLElement>("[data-tree-viewport]") ??
+    document.body;
+  /** A wheel turn that scrolls the list to `top`. */
+  const wheelTo = (container: HTMLElement, top: number) => {
+    const element = viewport(container);
+    fireEvent.wheel(element);
+    element.scrollTop = top;
+    fireEvent.scroll(element);
+  };
+  const showMore = () =>
+    screen.queryByRole("button", { name: "Show more in Chats" });
+
+  it("reads the next page as the person nears the end and says so", async () => {
+    const { collection, reads } = pagedSource(25, 10);
+    const { container } = render(view(collection));
+    await act(async () => reads[0]?.resolve());
+    expect(await screen.findByRole("button", { name: "Row 0" })).toBeTruthy();
+    // The end waits as still placeholders, out of reach for now; the
+    // tree says more rows exist than are loaded.
+    expect(placeholders(container)).toBe(3);
+    expect(
+      screen.getAllByRole("treeitem")[0]?.getAttribute("aria-setsize"),
+    ).toBe("-1");
+    expect(reads).toHaveLength(1);
+    // Within one viewport (five rows) of the end, the next page is read.
+    await act(async () => wheelTo(container, 56));
+    expect(reads.map((read) => read.cursor)).toEqual([undefined, "10"]);
+    expect(screen.getByRole("status").textContent).toBe(
+      "Loading more in Chats",
+    );
+    await act(async () => reads[1]?.resolve());
+    expect(await screen.findByRole("button", { name: "Row 10" })).toBeTruthy();
+    expect(screen.getByRole("status").textContent).toBe("10 more in Chats");
+    // New rows arrive with the list motion where the placeholders stood;
+    // the placeholders moved to the new end without sweeping across them.
+    expect(
+      screen
+        .getByRole("button", { name: "Row 10" })
+        .closest('[role="treeitem"]')?.className,
+    ).toBe("cat-row-enter");
+    expect(
+      container.querySelectorAll('[data-tree-more="placeholder"]'),
+    ).toHaveLength(0);
+    expect(viewport(container).firstElementChild).toHaveProperty(
+      "style.height",
+      `${23 * 28}px`,
+    );
+    expect(reads).toHaveLength(2);
+    await act(async () => wheelTo(container, 28 * 18));
+    expect(reads.map((read) => read.cursor)).toEqual([undefined, "10", "20"]);
+    await act(async () => reads[2]?.resolve());
+    await screen.findByRole("button", { name: "Row 24" });
+    // The last page: the placeholders leave, fading where they stood.
+    expect(placeholders(container)).toBe(0);
+    expect(
+      container.querySelectorAll('[data-tree-more="placeholder"].cat-row-exit')
+        .length,
+    ).toBeGreaterThan(0);
+    await waitFor(() =>
+      expect(
+        container.querySelectorAll('[data-tree-more="placeholder"]'),
+      ).toHaveLength(0),
+    );
+    expect(
+      screen.getAllByRole("treeitem")[0]?.getAttribute("aria-setsize"),
+    ).toBe("25");
+    expect(reads).toHaveLength(3);
+  });
+
+  it("keeps reading when a page lands before the tree sees it loading", async () => {
+    const { collection, load } = instantSource(100, 2);
+    const { container } = render(view(collection, { height: 280 }));
+    await screen.findByRole("button", { name: "Row 1" });
+    // The whole list fits: nothing reads before the person moves it.
+    await act(async () => {});
+    expect(load).toHaveBeenCalledTimes(1);
+    expect(showMore()).toBeTruthy();
+    await act(async () => {
+      fireEvent.wheel(viewport(container));
+    });
+    // Three reads per gesture, each one landing at once.
+    await waitFor(() => expect(load).toHaveBeenCalledTimes(4));
+    await screen.findByRole("button", { name: "Row 7" });
+    await act(async () => {});
+    expect(load).toHaveBeenCalledTimes(4);
+    expect(screen.getAllByRole("treeitem")).toHaveLength(8);
+    expect(placeholders(container)).toBe(0);
+    expect(showMore()).toBeTruthy();
+    // Show more is a gesture of its own: it reads now, and on while the
+    // pages keep moving the end.
+    await act(async () => {
+      showMore()?.click();
+    });
+    await waitFor(() => expect(load).toHaveBeenCalledTimes(7));
+    await act(async () => {});
+    expect(load).toHaveBeenCalledTimes(7);
+  });
+
+  it("stops after a page that shows nothing new, until the person moves", async () => {
+    const { collection, reads } = pagedSource(40, 10);
+    const { container } = render(
+      view(collection, {
+        // A display filter that shows two rows of forty.
+        project: (items) =>
+          items.filter((item) => item.id === "r0" || item.id === "r35"),
+      }),
+    );
+    await act(async () => reads[0]?.resolve());
+    await screen.findByRole("button", { name: "Row 0" });
+    expect(showMore()).toBeTruthy();
+    await act(async () => wheelTo(container, 0));
+    expect(reads).toHaveLength(2);
+    // Rows 10 to 19 show nothing: the end did not move, so it stops.
+    await act(async () => reads[1]?.resolve());
+    await act(async () => {});
+    expect(reads).toHaveLength(2);
+    expect(showMore()).toBeTruthy();
+    expect(placeholders(container)).toBe(0);
+    // Each gesture reads one more page while nothing shows.
+    await act(async () => wheelTo(container, 0));
+    expect(reads).toHaveLength(3);
+    await act(async () => reads[2]?.resolve());
+    await act(async () => {});
+    expect(reads).toHaveLength(3);
+    // A press on Show more reads on its click, once, and keeps it there
+    // until then.
+    const button = showMore();
+    if (!button) throw new Error("Show more is missing");
+    await act(async () => {
+      fireEvent.pointerDown(button);
+    });
+    expect(reads).toHaveLength(3);
+    expect(showMore()).toBe(button);
+    await act(async () => {
+      fireEvent.click(button);
+    });
+    expect(reads).toHaveLength(4);
+    await act(async () => reads[3]?.resolve());
+    expect(await screen.findByRole("button", { name: "Row 35" })).toBeTruthy();
+    expect(showMore()).toBeNull();
+  });
+
+  it("does not read on into collapsed groups", async () => {
+    const { collection, reads } = pagedSource(300, 30);
+    const { container } = render(
+      view(collection, { groupBy: () => "Earlier" }),
+    );
+    await act(async () => reads[0]?.resolve());
+    await screen.findByRole("button", { name: "Expand Earlier" });
+    // The end shows at open, but nothing reads on its own.
+    await act(async () => {});
+    expect(reads).toHaveLength(1);
+    expect(showMore()).toBeTruthy();
+    await act(async () => wheelTo(container, 0));
+    expect(reads).toHaveLength(2);
+    // Its rows went into the closed group: the end did not move.
+    await act(async () => reads[1]?.resolve());
+    await act(async () => {});
+    expect(reads).toHaveLength(2);
+    expect(showMore()).toBeTruthy();
+  });
+
+  it("ends a branch with its error and Retry, beside the tree", async () => {
+    const { collection, reads } = pagedSource(15, 10);
+    const { container } = render(view(collection));
+    await act(async () => reads[0]?.resolve());
+    await screen.findByRole("button", { name: "Row 0" });
+    await act(async () => wheelTo(container, 56));
+    await act(async () => reads[1]?.reject(new Error("Offline")));
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("Offline");
+    // A tree owns only its items; the alert sits beside it.
+    expect(screen.getByRole("tree").contains(alert)).toBe(false);
+    expect(placeholders(container)).toBe(0);
+    // A failed page is not read again on its own as the person scrolls.
+    await act(async () => wheelTo(container, 84));
+    expect(reads).toHaveLength(2);
+    // Retry keeps keyboard focus in the list, on the last loaded row.
+    const retry = screen.getByRole("button", { name: "Retry" });
+    retry.focus();
+    await act(async () => {
+      fireEvent.click(retry);
+    });
+    expect(document.activeElement?.getAttribute("data-tree-id")).toBe("r9");
+    expect(reads.map((read) => read.cursor)).toEqual([undefined, "10", "10"]);
+    await act(async () => reads[2]?.resolve());
+    expect(await screen.findByRole("button", { name: "Row 14" })).toBeTruthy();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("reads the next page when keyboard focus reaches the end", async () => {
+    const { collection, reads } = pagedSource(25, 10);
+    render(view(collection));
+    await act(async () => reads[0]?.resolve());
+    await screen.findByRole("button", { name: "Row 0" });
+    expect(reads).toHaveLength(1);
+    await act(async () => {
+      fireEvent.keyDown(screen.getAllByRole("treeitem")[0] as HTMLElement, {
+        key: "End",
+      });
+    });
+    expect(reads.map((read) => read.cursor)).toEqual([undefined, "10"]);
+  });
+
+  it("reads nothing more while the view is hidden", async () => {
+    const { collection, reads } = pagedSource(25, 10);
+    const pending = collection.load();
+    reads[0]?.resolve();
+    await pending;
+    const { container } = render(view(collection, { active: false }));
+    await screen.findByRole("button", { name: "Row 0" });
+    await act(async () => wheelTo(container, 28 * 8));
+    expect(placeholders(container)).toBe(0);
+    expect(showMore()).toBeNull();
+    expect(reads).toHaveLength(1);
+  });
+
+  it("shows a known later row past the end without reading up to it", async () => {
+    const { collection, reads } = pagedSource(15, 10);
+    const { container } = render(
+      view(collection, { tail: [{ id: "r14", label: "Row 14" }] }),
+    );
+    await act(async () => reads[0]?.resolve());
+    const tailRow = await screen.findByRole("button", { name: "Row 14" });
+    // After the loaded rows and the placeholders holding the end.
+    expect(tailRow.closest<HTMLElement>('[role="treeitem"]')?.style.top).toBe(
+      `${13 * 28}px`,
+    );
+    expect(reads).toHaveLength(1);
+    await act(async () => wheelTo(container, 56));
+    await act(async () => reads[1]?.resolve());
+    await screen.findByRole("button", { name: "Row 10" });
+    // Its page brought it in: one row, in its place.
+    expect(screen.getAllByRole("button", { name: "Row 14" })).toHaveLength(1);
+    expect(
+      screen
+        .getByRole("button", { name: "Row 14" })
+        .closest<HTMLElement>('[role="treeitem"]')?.style.top,
+    ).toBe(`${14 * 28}px`);
+  });
+
+  it("ends a nested branch after its loaded children", async () => {
+    const load = vi.fn();
+    const { container } = render(
+      <Tree
+        items={[
+          { id: "a", hasChildren: true },
+          { id: "a1", parentId: "a" },
+          { id: "a2", parentId: "a" },
+          { id: "b" },
+        ]}
+        label="Nested"
+        more={new Map([["a", { load }]])}
+        renderItem={(item) => <span>{item.id}</span>}
+      />,
+    );
+    const top = (selector: string) =>
+      container.querySelector<HTMLElement>(selector)?.style.top;
+    // Nothing reads before the person touches the list: Show more waits.
+    expect(load).not.toHaveBeenCalled();
+    expect(top('[data-tree-more="paused"]')).toBe("84px");
+    expect(top('[data-tree-id="b"]')).toBe("112px");
+    await act(async () => {
+      fireEvent.pointerDown(viewport(container));
+    });
+    expect([top('[data-tree-id="a"]'), top('[data-tree-id="a1"]')]).toEqual([
+      "0px",
+      "28px",
+    ]);
+    const first = container.querySelector<HTMLElement>(
+      '[data-tree-more="placeholder"]',
+    );
+    expect(first?.style.top).toBe("84px");
+    expect(first?.style.paddingInlineStart).toBe("22px");
+    expect(top('[data-tree-id="b"]')).toBe("168px");
+    expect(load).toHaveBeenCalledTimes(1);
+  });
+});

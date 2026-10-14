@@ -133,16 +133,186 @@ function indexTree({
 }
 
 /**
+ * A branch with rows past the loaded ones (`null` is the tree's root). The
+ * tree holds the branch's end with still placeholder rows and reads the next
+ * page as the person moves toward it (see `Tree`); a failed read ends the
+ * branch with its error and Retry instead.
+ */
+export interface TreeMore {
+  /** Read the branch's next page. */
+  load: () => void;
+  /** The next page is being read. */
+  loading?: boolean;
+  /** The last read failed. */
+  error?: string;
+  /**
+   * Names the next page (a cursor), so the tree can tell a read landed even
+   * when it lands before the tree sees it loading.
+   */
+  next?: string;
+}
+
+/** Placeholder rows a branch with more pages ends with. */
+const PLACEHOLDER_ROWS = 3;
+/** Placeholder bar widths, the section chrome's skeleton rhythm. */
+const PLACEHOLDER_WIDTHS = [62, 84, 48];
+/** Pages the tree reads on its own per gesture before it waits for another. */
+const READS_PER_GESTURE = 3;
+const NO_BRANCHES: ReadonlySet<string | null> = new Set();
+
+type TreeRow = ReturnType<typeof indexTree>["rows"][number];
+type TreeSlot =
+  | { kind: "row"; key: string; row: TreeRow }
+  | {
+      kind: "placeholder";
+      key: string;
+      parentId: string | null;
+      depth: number;
+      position: number;
+    }
+  /** The branch's last read failed: its error and Retry. */
+  | {
+      kind: "error";
+      key: string;
+      parentId: string | null;
+      depth: number;
+      error: string;
+    }
+  /** The tree stopped reading on its own here: Show more. */
+  | { kind: "paused"; key: string; parentId: string | null; depth: number };
+type TreePseudoSlot = Exclude<TreeSlot, { kind: "row" }>;
+
+/**
+ * The tree's rows in viewport order with each paginated branch's end
+ * (placeholders, its error, or Show more) after its last loaded descendant.
+ * The root's end comes before its tail rows, which belong past it.
+ */
+function layoutTree({
+  rows,
+  more,
+  expanded,
+  paused,
+  tailIds,
+}: {
+  rows: readonly TreeRow[];
+  more?: ReadonlyMap<string | null, TreeMore>;
+  expanded: ReadonlySet<string>;
+  paused: ReadonlySet<string | null>;
+  tailIds: ReadonlySet<string>;
+}) {
+  const ends: { parentId: string | null; at: number; depth: number }[] = [];
+  const rowIndex = new Map(rows.map((row, index) => [row.id, index]));
+  for (const parentId of more?.keys() ?? []) {
+    if (parentId === null) {
+      const tail = rows.findIndex(
+        (row) => row.depth === 0 && tailIds.has(row.id),
+      );
+      ends.push({ parentId, at: tail < 0 ? rows.length : tail, depth: 0 });
+      continue;
+    }
+    const index = rowIndex.get(parentId);
+    const parent = index === undefined ? undefined : rows[index];
+    if (index === undefined || !parent || !expanded.has(parentId)) continue;
+    let at = index + 1;
+    while (at < rows.length && (rows[at]?.depth ?? 0) > parent.depth) at += 1;
+    ends.push({ parentId, at, depth: parent.depth + 1 });
+  }
+  // A nested branch ends inside its parent's, so it comes first.
+  ends.sort((a, b) => a.at - b.at || b.depth - a.depth);
+  const slots: TreeSlot[] = [];
+  const firstSlot = new Map<string | null, number>();
+  const lastRow = new Map<string | null, string>();
+  const pseudo = (end: (typeof ends)[number]) => {
+    const page = more?.get(end.parentId);
+    if (!page) return;
+    // Keys name the branch, not where it ends: a page landing above them
+    // or a row added at the top moves them, never re-creates them.
+    const scope = `\u0000more\u0000${end.parentId ?? ""}\u0000`;
+    const previous = rows[end.at - 1];
+    if (previous && end.at > (rowIndex.get(end.parentId ?? "") ?? -1) + 1)
+      lastRow.set(end.parentId, previous.id);
+    firstSlot.set(end.parentId, slots.length);
+    const base = { parentId: end.parentId, depth: end.depth };
+    if (page.error)
+      slots.push({
+        ...base,
+        kind: "error",
+        key: `${scope}error`,
+        error: page.error,
+      });
+    else if (paused.has(end.parentId) && !page.loading)
+      slots.push({ ...base, kind: "paused", key: `${scope}paused` });
+    else
+      for (let position = 0; position < PLACEHOLDER_ROWS; position += 1)
+        slots.push({
+          ...base,
+          kind: "placeholder",
+          key: `${scope}${position}`,
+          position,
+        });
+  };
+  const pending = [...ends].reverse();
+  const endsAt = (at: number) => {
+    for (let end = pending.at(-1); end && end.at <= at; end = pending.at(-1)) {
+      pending.pop();
+      pseudo(end);
+    }
+  };
+  rows.forEach((row, index) => {
+    endsAt(index);
+    slots.push({ kind: "row", key: row.id, row });
+  });
+  endsAt(rows.length);
+  return {
+    slots,
+    /** Each real row's viewport index. */
+    indexById: new Map(
+      slots.flatMap((slot, index): [string, number][] =>
+        slot.kind === "row" ? [[slot.row.id, index]] : [],
+      ),
+    ),
+    /** Where each paginated branch's end begins. */
+    ends: [...firstSlot].map(([parentId, index]) => ({ parentId, index })),
+    /** Each paginated branch's last loaded row, where Retry leaves focus. */
+    lastRow,
+    /** The root's last loaded row ends here; drops on the root land there. */
+    rootEnd: firstSlot.get(null) ?? slots.length,
+  };
+}
+
+/** Visually hidden but read by assistive technology. */
+const VISUALLY_HIDDEN: CSSProperties = {
+  position: "absolute",
+  width: 1,
+  height: 1,
+  margin: -1,
+  padding: 0,
+  overflow: "hidden",
+  clip: "rect(0 0 0 0)",
+  whiteSpace: "nowrap",
+  border: 0,
+};
+
+/**
  * One virtual viewport for a whole tree. Source items can be paginated and have
  * unloaded children. Identity, focus and expansion survive reordering and updates.
  * Row height is explicit so custom presentations can choose a larger density.
+ *
+ * A paginated branch (`more`) reads its next page when the person moves
+ * within one viewport of its end: each gesture (wheel, touch, a press on the
+ * scrollbar, keyboard movement) allows up to three reads while each one
+ * moves the branch's end down. A read that adds no visible row (a filter, a
+ * closed group) or a spent gesture leaves Show more at the end until the
+ * next gesture, so a list never reads its whole history on its own. Reads
+ * the person caused are announced to assistive technology.
  */
 export function Tree<T extends TreeItem>({
   items: sourceItems,
   label,
   renderItem,
   loadChildren,
-  onLoadMore,
+  more,
+  tail,
   selectedId,
   rowHeight = 28,
   height = 336,
@@ -160,7 +330,15 @@ export function Tree<T extends TreeItem>({
   renderItem: (item: T, context: TreeRenderContext) => ReactNode;
   dragAndDrop?: TreeDragAndDrop<T>;
   loadChildren?: (id: string) => void;
-  onLoadMore?: () => void;
+  /** Branches with rows past the loaded ones, by parent (`null`: the root). */
+  more?: ReadonlyMap<string | null, TreeMore>;
+  /**
+   * Root rows that belong past the root's unloaded rows (an open item older
+   * than every loaded one): shown after the root's end, without reading
+   * everything above them. A tail row that arrives in `items` leaves the
+   * tail.
+   */
+  tail?: readonly T[];
   selectedId?: string;
   rowHeight?: number;
   height?: number;
@@ -172,8 +350,18 @@ export function Tree<T extends TreeItem>({
   style?: CSSProperties;
   motionClasses?: { enter: string; exit: string };
 }) {
+  const withTail = useMemo(() => {
+    if (!tail?.length) return sourceItems;
+    const known = new Set(sourceItems.map((item) => item.id));
+    const extra = tail.filter((item) => !known.has(item.id));
+    return extra.length ? [...sourceItems, ...extra] : sourceItems;
+  }, [sourceItems, tail]);
+  const tailIds = useMemo(
+    () => new Set((tail ?? []).map((item) => item.id)),
+    [tail],
+  );
   const { entries: animated } = useAnimatedItems({
-    items: sourceItems,
+    items: withTail,
     getKey: (item) => item.id,
   });
   // A removed row leaves the layout at once, so the rows below start sliding
@@ -248,7 +436,38 @@ export function Tree<T extends TreeItem>({
     [controlled, items, overrides, defaultExpanded],
   );
   const tree = useMemo(() => indexTree({ items, expanded }), [items, expanded]);
-  const settledIndex = settling ? tree.indexById.get(settling.id) : undefined;
+  // Branches where the tree stopped reading on its own (Show more).
+  const [paused, setPaused] = useState(NO_BRANCHES);
+  const layout = useMemo(
+    () => layoutTree({ rows: tree.rows, more, expanded, paused, tailIds }),
+    [tree.rows, more, expanded, paused, tailIds],
+  );
+  const pseudoList = layout.slots.filter(
+    (slot): slot is TreePseudoSlot => slot.kind !== "row",
+  );
+  const pseudoSignature = pseudoList
+    .map(
+      (slot) =>
+        `${slot.key}\u0001${slot.depth}\u0001${slot.kind === "error" ? slot.error : ""}`,
+    )
+    .join("\u0002");
+  // One list per set of placeholders, so row changes alone never restart
+  // their motion bookkeeping.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the signature versions the list.
+  const pseudoSlots = useMemo(() => pseudoList, [pseudoSignature]);
+  // Placeholders come and go like rows: in with the enter motion, out
+  // fading where they stood while the rows that replace them arrive.
+  const { entries: pseudoMotion } = useAnimatedItems({
+    items: pseudoSlots,
+    getKey: (slot) => slot.key,
+  });
+  const pseudoPlacements = useRef(new Map<string, number>());
+  useEffect(() => {
+    const live = new Set(pseudoMotion.map((entry) => entry.key));
+    for (const key of pseudoPlacements.current.keys())
+      if (!live.has(key)) pseudoPlacements.current.delete(key);
+  }, [pseudoMotion]);
+  const settledIndex = settling ? layout.indexById.get(settling.id) : undefined;
   const settleMoved =
     settling !== null &&
     settledIndex !== undefined &&
@@ -272,11 +491,14 @@ export function Tree<T extends TreeItem>({
     else {
       next.add(id);
       loadChildren?.(id);
+      // Opening a branch is the person moving the list.
+      allowReads();
     }
     if (controlled) onExpandedChange?.(next);
     else setOverrides((current) => new Map(current).set(id, next.has(id)));
   };
-  const actualHeight = Math.min(height, tree.rows.length * rowHeight);
+  const contentHeight = layout.slots.length * rowHeight;
+  const actualHeight = Math.min(height, contentHeight);
   // Expanding or collapsing a folder moves every row below it. Rows are
   // absolutely placed, so without this they (and the tree's own height)
   // jump while only the folder's children fade: the rest must slide.
@@ -292,7 +514,7 @@ export function Tree<T extends TreeItem>({
   );
   const reveal = useCallback(
     (id: string) => {
-      const index = tree.rows.findIndex((row) => row.id === id);
+      const index = layout.indexById.get(id) ?? -1;
       const node = viewport.current;
       if (index < 0 || !node) return;
       const top = index * rowHeight;
@@ -301,7 +523,7 @@ export function Tree<T extends TreeItem>({
         node.scrollTop = top + rowHeight - actualHeight;
       setScrollTop(node.scrollTop);
     },
-    [tree.rows, rowHeight, actualHeight],
+    [layout, rowHeight, actualHeight],
   );
   const previousAnchor = useRef<{ id: string; offset: number } | undefined>(
     undefined,
@@ -310,19 +532,19 @@ export function Tree<T extends TreeItem>({
     const anchor = previousAnchor.current;
     const node = viewport.current;
     if (node && anchor) {
-      const index = tree.rows.findIndex((row) => row.id === anchor.id);
-      if (index >= 0) {
+      const index = layout.indexById.get(anchor.id);
+      if (index !== undefined) {
         node.scrollTop = index * rowHeight + anchor.offset;
         setScrollTop(node.scrollTop);
       }
     }
-    if (focusedId && !tree.rows.some((row) => row.id === focusedId)) {
+    if (focusedId && !tree.indexById.has(focusedId)) {
       const previous = byId.get(focusedId)?.parentId;
       setFocusedId(
         previous && byId.has(previous) ? previous : tree.rows[0]?.id,
       );
     }
-  }, [tree.rows, rowHeight, byId, focusedId]);
+  }, [layout, tree, rowHeight, byId, focusedId]);
   const lastFocused = useRef<string | undefined>(undefined);
   useLayoutEffect(() => {
     if (!focusedId || focusedId === lastFocused.current) return;
@@ -369,13 +591,168 @@ export function Tree<T extends TreeItem>({
     0,
     Math.min(
       Math.floor(scrollTop / rowHeight) - overscan,
-      tree.rows.length - 1,
+      layout.slots.length - 1,
     ),
   );
   const end = Math.min(
-    tree.rows.length,
+    layout.slots.length,
     start + Math.ceil(height / rowHeight) + overscan * 2,
   );
+  // Within one viewport of a branch's end, its next page is read: by the
+  // time the person gets there it has usually arrived. Moving focus scrolls
+  // too, so arrow keys load like the wheel does.
+  const firstVisible = Math.floor(scrollTop / rowHeight);
+  const lastVisible = Math.floor(
+    (scrollTop + Math.max(actualHeight, rowHeight) - 1) / rowHeight,
+  );
+  const ahead = Math.ceil(height / rowHeight);
+  const ends = layout.ends.map(({ parentId, index }) => ({
+    parentId,
+    index,
+    near: index >= firstVisible - ahead && index <= lastVisible + ahead,
+  }));
+  const auto = useRef<{
+    /** Reads left before the tree waits for the person again. */
+    budget: number;
+    /** Where each branch ended, and its next page, when the tree asked. */
+    asked: Map<string | null, { at: number; next?: string }>;
+    /** Branches whose last read showed nothing new. */
+    stalled: Set<string | null>;
+    /** Row count when the person's reads began, for one announcement. */
+    from: number | null;
+    /** The gesture the last pass saw. */
+    gesture: number;
+  }>({
+    budget: 0,
+    asked: new Map(),
+    stalled: new Set(),
+    from: null,
+    gesture: 0,
+  });
+  const [gesture, setGesture] = useState(0);
+  const [announcement, setAnnouncement] = useState("");
+  /** The person moved the list: the tree may read on its own again. */
+  const allowReads = () => {
+    const state = auto.current;
+    if (
+      state.budget === READS_PER_GESTURE &&
+      !state.stalled.size &&
+      !state.asked.size
+    )
+      return;
+    state.budget = READS_PER_GESTURE;
+    state.stalled.clear();
+    setGesture((value) => value + 1);
+  };
+  const latest = useRef({ more, ends, rows: tree.rows.length, gesture });
+  latest.current = { more, ends, rows: tree.rows.length, gesture };
+  const autoKey = [
+    gesture,
+    ...ends.map(({ parentId, index, near }) => {
+      const page = more?.get(parentId);
+      return [
+        parentId ?? "\u0001",
+        index,
+        near,
+        page?.next ?? "",
+        Boolean(page?.loading),
+        page?.error ?? "",
+      ].join("\u0001");
+    }),
+  ].join("\u0000");
+  // biome-ignore lint/correctness/useExhaustiveDependencies: autoKey names every input; the ref holds their current values.
+  useEffect(() => {
+    const state = auto.current;
+    const { more: pages, ends: current, rows, gesture: moved } = latest.current;
+    for (const [parentId, ask] of state.asked) {
+      const page = pages?.get(parentId);
+      // Gone, or (once the person moves again) an ask that never went
+      // anywhere: a host whose load did nothing must not block the branch.
+      if (
+        !page ||
+        (moved !== state.gesture && !page.loading && page.next === ask.next)
+      )
+        state.asked.delete(parentId);
+    }
+    state.gesture = moved;
+    const waiting = new Set<string | null>();
+    for (const { parentId, index, near: isNear } of current) {
+      const page = pages?.get(parentId);
+      if (!page || page.loading) continue;
+      const asked = state.asked.get(parentId);
+      if (page.error) {
+        state.asked.delete(parentId);
+        continue;
+      }
+      if (asked) {
+        // Not landed yet (or never started): leave it be.
+        if (asked.next === page.next) continue;
+        state.asked.delete(parentId);
+        // A page that moved nothing on screen (filtered out, in a closed
+        // group) stops the reading until the person moves again.
+        if (index <= asked.at) state.stalled.add(parentId);
+      }
+      if (!isNear) continue;
+      if (state.stalled.has(parentId) || state.budget <= 0) {
+        waiting.add(parentId);
+        continue;
+      }
+      state.budget -= 1;
+      state.asked.set(parentId, { at: index, next: page.next });
+      if (state.from === null) {
+        state.from = rows;
+        setAnnouncement(`Loading more in ${label}`);
+      }
+      page.load();
+    }
+    const busy =
+      state.asked.size > 0 ||
+      [...(pages?.values() ?? [])].some((page) => page.loading);
+    if (!busy && state.from !== null) {
+      const added = rows - state.from;
+      state.from = null;
+      setAnnouncement(added > 0 ? `${added} more in ${label}` : "");
+    }
+    setPaused((previous) =>
+      previous.size === waiting.size &&
+      [...waiting].every((parentId) => previous.has(parentId))
+        ? previous
+        : waiting,
+    );
+  }, [autoKey]);
+  /** Retry or Show more: read now, leaving focus on the last loaded row. */
+  const readNow = (parentId: string | null) => {
+    const page = more?.get(parentId);
+    const end = layout.ends.find((entry) => entry.parentId === parentId);
+    if (!page || !end) return;
+    const last = layout.lastRow.get(parentId);
+    if (
+      last &&
+      viewport.current?.contains(document.activeElement) &&
+      document.activeElement?.closest("[data-tree-end]")
+    ) {
+      const row = [
+        ...viewport.current.querySelectorAll<HTMLElement>("[data-tree-id]"),
+      ].find((entry) => entry.dataset.treeId === last);
+      if (row) row.focus({ preventScroll: true });
+      setFocusedId(last);
+    }
+    const state = auto.current;
+    state.budget = READS_PER_GESTURE - 1;
+    state.stalled.delete(parentId);
+    state.asked.set(parentId, { at: end.index, next: page.next });
+    if (state.from === null) {
+      state.from = tree.rows.length;
+      setAnnouncement(`Loading more in ${label}`);
+    }
+    setPaused((previous) => {
+      if (!previous.has(parentId)) return previous;
+      const next = new Set(previous);
+      next.delete(parentId);
+      return next;
+    });
+    page.load();
+  };
   const retainedIds = new Set(
     [
       ...(viewport.current?.querySelectorAll<HTMLElement>(
@@ -398,7 +775,7 @@ export function Tree<T extends TreeItem>({
     setDraggingId(null);
   };
   const settleDropped = () => {
-    const index = draggingId ? tree.indexById.get(draggingId) : undefined;
+    const index = draggingId ? layout.indexById.get(draggingId) : undefined;
     if (draggingId && index !== undefined)
       setSettling({ id: draggingId, index });
   };
@@ -521,12 +898,12 @@ export function Tree<T extends TreeItem>({
   };
   const dropLineIndex =
     drop && drop.id !== null && drop.position !== "inside"
-      ? tree.indexById.get(drop.id)
+      ? layout.indexById.get(drop.id)
       : undefined;
   const slotTop =
     dropLineIndex === undefined
       ? drop?.id === null
-        ? tree.rows.length * rowHeight
+        ? layout.rootEnd * rowHeight
         : undefined
       : dropLineIndex * rowHeight +
         (drop?.position === "after" ? rowHeight : 0);
@@ -535,37 +912,49 @@ export function Tree<T extends TreeItem>({
   const dropLineTop =
     slotTop === undefined
       ? undefined
-      : Math.max(3, Math.min(slotTop, tree.rows.length * rowHeight - 5));
+      : Math.max(3, Math.min(slotTop, contentHeight - 5));
   return (
     <>
+      {/* The scroller holds the tree and, beside it rather than inside it,
+          each branch end's controls (Retry, Show more): a tree owns only
+          its items. */}
+      {/* biome-ignore lint/a11y/noStaticElementInteractions: the scroller only listens; keys act on the focused treeitem inside, and wheel or presses only allow reads. */}
       <div
         ref={viewport}
-        role="tree"
-        aria-label={label}
+        data-tree-viewport=""
         className={className}
-        data-drop-root={drop?.id === null ? drop.position : undefined}
-        data-dragging={draggingId ? "true" : undefined}
         {...rootDropHandlers}
         style={{
           // Rows that fit never scroll: while the height tweens to fit new
           // rows, an auto overflow flashed a scrollbar.
-          overflow: tree.rows.length * rowHeight > height ? "auto" : "hidden",
+          overflow: contentHeight > height ? "auto" : "hidden",
           // A tree that fits its rows must not trap the wheel: containment
           // on a scroller with nothing to scroll blocks the surrounding
           // sidebar section from scrolling at all.
-          overscrollBehavior:
-            actualHeight < tree.rows.length * rowHeight ? "contain" : "auto",
+          overscrollBehavior: actualHeight < contentHeight ? "contain" : "auto",
           height: actualHeight,
           transition: slide && `height ${slide}`,
           ...style,
         }}
         onScroll={(event) => {
           const top = event.currentTarget.scrollTop;
-          const row = tree.rows[Math.floor(top / rowHeight)];
-          previousAnchor.current = row
-            ? { id: row.id, offset: top % rowHeight }
-            : undefined;
+          const slot = layout.slots[Math.floor(top / rowHeight)];
+          previousAnchor.current =
+            slot?.kind === "row"
+              ? { id: slot.row.id, offset: top % rowHeight }
+              : undefined;
           setScrollTop(top);
+        }}
+        onWheel={allowReads}
+        onTouchMove={allowReads}
+        onPointerDown={(event) => {
+          // Show more and Retry read on their click; their press must not
+          // swap them away from under the pointer first.
+          if (
+            !(event.target instanceof Element) ||
+            !event.target.closest("[data-tree-end]")
+          )
+            allowReads();
         }}
         onKeyDown={(event) => {
           if (
@@ -641,151 +1030,361 @@ export function Tree<T extends TreeItem>({
           }
           event.preventDefault();
           event.stopPropagation();
-          if (next) setFocusedId(next);
+          if (next) {
+            setFocusedId(next);
+            allowReads();
+          }
         }}
       >
         <div
-          role="presentation"
           style={{
-            height: tree.rows.length * rowHeight,
+            height: contentHeight,
             position: "relative",
             transition: slide && `height ${slide}`,
           }}
         >
-          {dropLineTop !== undefined && (
-            <div
-              aria-hidden="true"
-              data-tree-drop-line
-              style={{
-                position: "absolute",
-                left: 0,
-                right: 0,
-                top: dropLineTop,
-                pointerEvents: "none",
-              }}
-            />
-          )}
-          {[
-            ...new Set([
-              ...Array.from(
-                { length: end - start },
-                (_, offset) => start + offset,
-              ),
-              ...[...retainedIds, focusedId].flatMap((id) => {
-                const index = id ? tree.indexById.get(id) : undefined;
-                return index === undefined ? [] : [index];
-              }),
-            ]),
-          ]
-            .sort((a, b) => a - b)
-            .map((index) => ({ row: tree.rows[index], index }))
-            .map(({ row, index }) => {
-              if (!row) return null;
-              const item = byId.get(row.id);
-              if (!item) return null;
-              const hasChildren = Boolean(
-                item.hasChildren || tree.children.get(row.id)?.length,
+          <div
+            role="tree"
+            aria-label={label}
+            data-drop-root={drop?.id === null ? drop.position : undefined}
+            data-dragging={draggingId ? "true" : undefined}
+            style={{ position: "absolute", inset: 0 }}
+          >
+            {dropLineTop !== undefined && (
+              <div
+                aria-hidden="true"
+                data-tree-drop-line
+                style={{
+                  position: "absolute",
+                  left: 0,
+                  right: 0,
+                  top: dropLineTop,
+                  pointerEvents: "none",
+                }}
+              />
+            )}
+            {[
+              ...new Set([
+                ...Array.from(
+                  { length: end - start },
+                  (_, offset) => start + offset,
+                ),
+                ...[...retainedIds, focusedId].flatMap((id) => {
+                  const index = id ? layout.indexById.get(id) : undefined;
+                  return index === undefined ? [] : [index];
+                }),
+              ]),
+            ]
+              .sort((a, b) => a - b)
+              .map((index) => ({ slot: layout.slots[index], index }))
+              .map(({ slot, index }) => {
+                if (!slot) return null;
+                // Retry and Show more sit beside the tree (below).
+                if (slot.kind === "error" || slot.kind === "paused")
+                  return null;
+                if (slot.kind === "placeholder") {
+                  renderedNow.add(slot.key);
+                  pseudoPlacements.current.set(slot.key, index * rowHeight);
+                  return (
+                    <TreePseudoRow
+                      key={slot.key}
+                      slot={slot}
+                      top={index * rowHeight}
+                      rowHeight={rowHeight}
+                      slide={slide}
+                      className={
+                        pseudoMotion.find((entry) => entry.key === slot.key)
+                          ?.entering
+                          ? (motionClasses?.enter ?? "cat-row-enter")
+                          : undefined
+                      }
+                    />
+                  );
+                }
+                const row = slot.row;
+                const item = byId.get(row.id);
+                if (!item) return null;
+                const hasChildren = Boolean(
+                  item.hasChildren || tree.children.get(row.id)?.length,
+                );
+                renderedNow.add(row.id);
+                placements.current.set(row.id, {
+                  top: index * rowHeight,
+                  depth: row.depth,
+                  expanded: expanded.has(row.id),
+                  hasChildren,
+                });
+                return (
+                  <div
+                    key={row.id}
+                    role="treeitem"
+                    className={
+                      motion.get(row.id)?.entering
+                        ? (motionClasses?.enter ?? "cat-row-enter")
+                        : undefined
+                    }
+                    data-tree-id={row.id}
+                    data-tree-dragging={
+                      row.id === draggingId ||
+                      (row.id === settling?.id && !settleMoved)
+                        ? ""
+                        : undefined
+                    }
+                    data-tree-settling={
+                      settleMoved && row.id === settling?.id ? "" : undefined
+                    }
+                    data-drop={
+                      drop?.id === row.id && drop.position === "inside"
+                        ? "inside"
+                        : undefined
+                    }
+                    {...dragHandlers(item)}
+                    {...rowDropHandlers(item, hasChildren)}
+                    aria-level={row.depth + 1}
+                    aria-posinset={row.position}
+                    // -1: more siblings exist than are loaded (ARIA 1.2).
+                    aria-setsize={more?.has(row.parentId) ? -1 : row.siblings}
+                    aria-expanded={
+                      hasChildren ? expanded.has(row.id) : undefined
+                    }
+                    aria-selected={
+                      selectedId ? selectedId === row.id : undefined
+                    }
+                    tabIndex={
+                      row.id === (focusedId ?? selectedId ?? tree.rows[0]?.id)
+                        ? 0
+                        : -1
+                    }
+                    style={{
+                      position: "absolute",
+                      top: index * rowHeight,
+                      height: rowHeight,
+                      left: 0,
+                      right: 0,
+                      transition:
+                        settleMoved && row.id === settling?.id
+                          ? "none"
+                          : slide && `top ${slide}`,
+                    }}
+                  >
+                    {renderItem(item, {
+                      depth: row.depth,
+                      expanded: expanded.has(row.id),
+                      hasChildren,
+                      toggle: () => toggle(row.id),
+                    })}
+                  </div>
+                );
+              })}
+            {pseudoMotion.map(({ key, item: slot, exiting: leaving }) => {
+              const top = pseudoPlacements.current.get(key);
+              if (
+                !leaving ||
+                slot.kind !== "placeholder" ||
+                top === undefined ||
+                !onScreen.current.has(key)
+              )
+                return null;
+              renderedNow.add(key);
+              return (
+                <TreePseudoRow
+                  key={`exiting:${key}`}
+                  slot={slot}
+                  top={top}
+                  rowHeight={rowHeight}
+                  className={motionClasses?.exit ?? "cat-row-exit"}
+                  leaving
+                />
               );
-              renderedNow.add(row.id);
-              placements.current.set(row.id, {
-                top: index * rowHeight,
-                depth: row.depth,
-                expanded: expanded.has(row.id),
-                hasChildren,
-              });
+            })}
+            {exiting.map(({ key, item }) => {
+              const placed = placements.current.get(key);
+              if (!placed || !onScreen.current.has(key)) return null;
+              renderedNow.add(key);
               return (
                 <div
-                  key={row.id}
-                  role="treeitem"
-                  className={
-                    motion.get(row.id)?.entering
-                      ? (motionClasses?.enter ?? "cat-row-enter")
-                      : undefined
-                  }
-                  data-tree-id={row.id}
-                  data-tree-dragging={
-                    row.id === draggingId ||
-                    (row.id === settling?.id && !settleMoved)
-                      ? ""
-                      : undefined
-                  }
-                  data-tree-settling={
-                    settleMoved && row.id === settling?.id ? "" : undefined
-                  }
-                  data-drop={
-                    drop?.id === row.id && drop.position === "inside"
-                      ? "inside"
-                      : undefined
-                  }
-                  {...dragHandlers(item)}
-                  {...rowDropHandlers(item, hasChildren)}
-                  aria-level={row.depth + 1}
-                  aria-posinset={row.position}
-                  aria-setsize={row.siblings}
-                  aria-expanded={hasChildren ? expanded.has(row.id) : undefined}
-                  aria-selected={selectedId ? selectedId === row.id : undefined}
-                  tabIndex={
-                    row.id === (focusedId ?? selectedId ?? tree.rows[0]?.id)
-                      ? 0
-                      : -1
-                  }
+                  key={`exiting:${key}`}
+                  aria-hidden="true"
+                  inert
+                  data-tree-exiting={key}
+                  className={motionClasses?.exit ?? "cat-row-exit"}
                   style={{
                     position: "absolute",
-                    top: index * rowHeight,
+                    top: placed.top,
                     height: rowHeight,
                     left: 0,
                     right: 0,
-                    transition:
-                      settleMoved && row.id === settling?.id
-                        ? "none"
-                        : slide && `top ${slide}`,
                   }}
                 >
                   {renderItem(item, {
-                    depth: row.depth,
-                    expanded: expanded.has(row.id),
-                    hasChildren,
-                    toggle: () => toggle(row.id),
+                    depth: placed.depth,
+                    expanded: placed.expanded,
+                    hasChildren: placed.hasChildren,
+                    toggle: () => {},
                   })}
                 </div>
               );
             })}
-          {exiting.map(({ key, item }) => {
-            const placed = placements.current.get(key);
-            if (!placed || !onScreen.current.has(key)) return null;
-            renderedNow.add(key);
+          </div>
+          {layout.slots.map((slot, index) => {
+            if (slot.kind !== "error" && slot.kind !== "paused") return null;
+            pseudoPlacements.current.set(slot.key, index * rowHeight);
             return (
-              <div
+              <TreeEnd
+                key={slot.key}
+                slot={slot}
+                label={label}
+                top={index * rowHeight}
+                rowHeight={rowHeight}
+                slide={slide}
+                className={
+                  pseudoMotion.find((entry) => entry.key === slot.key)?.entering
+                    ? (motionClasses?.enter ?? "cat-row-enter")
+                    : undefined
+                }
+                onRead={() => readNow(slot.parentId)}
+              />
+            );
+          })}
+          {pseudoMotion.map(({ key, item: slot, exiting: leaving }) => {
+            const top = pseudoPlacements.current.get(key);
+            if (
+              !leaving ||
+              (slot.kind !== "error" && slot.kind !== "paused") ||
+              top === undefined
+            )
+              return null;
+            return (
+              <TreeEnd
                 key={`exiting:${key}`}
-                aria-hidden="true"
-                inert
-                data-tree-exiting={key}
+                slot={slot}
+                label={label}
+                top={top}
+                rowHeight={rowHeight}
                 className={motionClasses?.exit ?? "cat-row-exit"}
-                style={{
-                  position: "absolute",
-                  top: placed.top,
-                  height: rowHeight,
-                  left: 0,
-                  right: 0,
-                }}
-              >
-                {renderItem(item, {
-                  depth: placed.depth,
-                  expanded: placed.expanded,
-                  hasChildren: placed.hasChildren,
-                  toggle: () => {},
-                })}
-              </div>
+                leaving
+              />
             );
           })}
         </div>
       </div>
-      {onLoadMore && (
-        <button type="button" className="cat-btn" onClick={onLoadMore}>
-          Load more
+      <div role="status" aria-live="polite" style={VISUALLY_HIDDEN}>
+        {announcement}
+      </div>
+    </>
+  );
+}
+
+/**
+ * A still placeholder row, shaped like the section skeleton, holding a
+ * paginated branch's end. It slides with the rows when a branch above it
+ * opens or a row arrives at the top; when a page lands above it, it jumps
+ * to the new end at once, so it never sweeps across the arriving rows.
+ */
+function TreePseudoRow({
+  slot,
+  top,
+  rowHeight,
+  slide,
+  className,
+  leaving = false,
+}: {
+  slot: Extract<TreePseudoSlot, { kind: "placeholder" }>;
+  top: number;
+  rowHeight: number;
+  slide?: string;
+  className?: string;
+  leaving?: boolean;
+}) {
+  const previous = useRef(top);
+  const jumped =
+    Math.abs(top - previous.current) > rowHeight * PLACEHOLDER_ROWS;
+  useEffect(() => {
+    previous.current = top;
+  });
+  return (
+    <div
+      aria-hidden="true"
+      data-tree-more="placeholder"
+      className={className}
+      style={{
+        position: "absolute",
+        top,
+        height: rowHeight,
+        left: 0,
+        right: 0,
+        transition: slide && !leaving && !jumped ? `top ${slide}` : undefined,
+        paddingInlineStart: 8 + slot.depth * 14,
+      }}
+    >
+      <span />
+      <span
+        style={{
+          width: `${PLACEHOLDER_WIDTHS[slot.position % PLACEHOLDER_WIDTHS.length]}%`,
+        }}
+      />
+    </div>
+  );
+}
+
+/**
+ * A branch end the person acts on, beside the tree: the failed read with
+ * Retry, or Show more where the tree stopped reading on its own.
+ */
+function TreeEnd({
+  slot,
+  label,
+  top,
+  rowHeight,
+  slide,
+  className,
+  leaving = false,
+  onRead,
+}: {
+  slot: Extract<TreePseudoSlot, { kind: "error" | "paused" }>;
+  label: string;
+  top: number;
+  rowHeight: number;
+  slide?: string;
+  className?: string;
+  leaving?: boolean;
+  onRead?: () => void;
+}) {
+  return (
+    <div
+      role={slot.kind === "error" && !leaving ? "alert" : undefined}
+      aria-hidden={leaving || undefined}
+      inert={leaving || undefined}
+      data-tree-more={slot.kind}
+      data-tree-end=""
+      className={className}
+      style={{
+        position: "absolute",
+        top,
+        height: rowHeight,
+        left: 0,
+        right: 0,
+        transition: slide && !leaving ? `top ${slide}` : undefined,
+        paddingInlineStart: 8 + slot.depth * 14,
+      }}
+    >
+      {slot.kind === "error" ? (
+        <>
+          <span>{slot.error}</span>
+          <button type="button" onClick={onRead}>
+            Retry
+          </button>
+        </>
+      ) : (
+        <button
+          type="button"
+          aria-label={`Show more in ${label}`}
+          onClick={onRead}
+        >
+          Show more
         </button>
       )}
-    </>
+    </div>
   );
 }
 
@@ -840,9 +1439,16 @@ export function CollectionTree<T extends CollectionItem>({
   motionClasses,
   groupBy,
   project,
+  tail,
   dragAndDrop,
 }: {
   dragAndDrop?: TreeDragAndDrop<T>;
+  /**
+   * Root items known to come after the unloaded rows (an open item older
+   * than everything loaded), shown past the root's end until a page brings
+   * them in. See `Tree`'s `tail`.
+   */
+  tail?: readonly T[];
   renderStatus?: (
     branch: import("../collection.js").CollectionBranch,
   ) => ReactNode;
@@ -893,6 +1499,22 @@ export function CollectionTree<T extends CollectionItem>({
     });
     return [...groups.values(), ...rows];
   }, [items, groupBy, project, collection]);
+  const tailById = useMemo(
+    () => new Map((tail ?? []).map((item) => [item.id, item])),
+    [tail],
+  );
+  const tailEntries = useMemo(() => {
+    const roots = new Set(root.ids);
+    return (tail ?? [])
+      .filter((item) => !roots.has(item.id))
+      .map((item) => ({
+        ...item,
+        parentId: null,
+        hasChildren: false,
+        itemId: item.id,
+      }));
+  }, [tail, root]);
+  const itemFor = (id: string) => collection.getItem(id) ?? tailById.get(id);
   const visibleBranches = useMemo(
     () =>
       indexTree({ items: entries, expanded })
@@ -922,6 +1544,24 @@ export function CollectionTree<T extends CollectionItem>({
     },
     [branches],
   );
+  // Every loaded branch with rows past it reads them as the person nears
+  // its end; nothing reads while the view is hidden.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: revision versions every branch read here.
+  const more = useMemo(() => {
+    if (!active) return undefined;
+    const pages = new Map<string | null, TreeMore>();
+    for (const parentId of [null, ...visibleBranches]) {
+      const branch = collection.getBranch(parentId);
+      if (branch.cursor)
+        pages.set(parentId, {
+          load: () => void collection.load({ parentId, more: true }),
+          loading: branch.paging,
+          error: branch.pageError,
+          next: branch.cursor,
+        });
+    }
+    return pages.size ? pages : undefined;
+  }, [active, collection, visibleBranches, revision, root]);
   return (
     <>
       {renderStatus?.(root)}
@@ -945,24 +1585,20 @@ export function CollectionTree<T extends CollectionItem>({
         motionClasses={motionClasses}
         expanded={expanded}
         onExpandedChange={setExpanded}
-        onLoadMore={
-          root.cursor ? () => void collection.load({ more: true }) : undefined
-        }
+        more={more}
+        tail={tailEntries}
         dragAndDrop={
           dragAndDrop
             ? {
-                drag: (entry) =>
-                  "itemId" in entry
-                    ? (dragAndDrop.drag?.(
-                        collection.getItem(entry.itemId) as T,
-                      ) ?? null)
-                    : null,
+                drag: (entry) => {
+                  const source = "itemId" in entry && itemFor(entry.itemId);
+                  return source ? (dragAndDrop.drag?.(source) ?? null) : null;
+                },
                 accept: (types, target) =>
                   dragAndDrop.accept(types, {
                     item:
                       target.item && "itemId" in target.item
-                        ? ((collection.getItem(target.item.itemId) as T) ??
-                          null)
+                        ? (itemFor(target.item.itemId) ?? null)
                         : null,
                     position: target.position,
                   }),
@@ -970,8 +1606,7 @@ export function CollectionTree<T extends CollectionItem>({
                   dragAndDrop.onDrop(transfer, {
                     item:
                       target.item && "itemId" in target.item
-                        ? ((collection.getItem(target.item.itemId) as T) ??
-                          null)
+                        ? (itemFor(target.item.itemId) ?? null)
                         : null,
                     position: target.position,
                   }),
@@ -983,6 +1618,7 @@ export function CollectionTree<T extends CollectionItem>({
             <CollectionRow
               collection={collection}
               id={item.itemId}
+              fallback={tailById.get(item.itemId)}
               context={context}
               renderItem={renderItem}
             />
@@ -1008,14 +1644,6 @@ export function CollectionTree<T extends CollectionItem>({
               Retry children
             </button>
           </p>
-        ) : branch.cursor ? (
-          <button
-            key={id}
-            type="button"
-            onClick={() => void collection.load({ parentId: id, more: true })}
-          >
-            Load more children
-          </button>
         ) : null;
       })}
     </>
@@ -1024,15 +1652,18 @@ export function CollectionTree<T extends CollectionItem>({
 function CollectionRow<T extends CollectionItem>({
   collection,
   id,
+  fallback,
   context,
   renderItem,
 }: {
   collection: Collection<T>;
   id: string;
+  /** A tail row, not in the collection (yet). */
+  fallback?: T;
   context: TreeRenderContext;
   renderItem: (item: T, context: TreeRenderContext) => ReactNode;
 }) {
-  const item = useCollectionItem({ collection, id });
+  const item = useCollectionItem({ collection, id }) ?? fallback;
   const last = useRef(item);
   if (item) last.current = item;
   return last.current ? renderItem(last.current, context) : null;

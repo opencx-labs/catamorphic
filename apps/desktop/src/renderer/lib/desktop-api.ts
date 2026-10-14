@@ -71,6 +71,11 @@ import type {
 import type { MenuItem, PageContextMenu } from "../../shared/menu.js";
 import type { OpenMode } from "../../shared/open-mode.js";
 import type {
+  PageDialog,
+  PageDialogAnswer,
+  UnloadIntent,
+} from "../../shared/page-dialogs.js";
+import type {
   PasskeyChoice,
   PasskeyRequest,
   PasskeyUseResult,
@@ -497,7 +502,8 @@ export interface McpAppViewData {
 
 export interface HarnessModelInfo {
   id: string;
-  name: string;
+  /** The harness's or provider's display name; absent when it gives none. */
+  name?: string;
   description?: string;
   /** Versioned model id an alias resolves to (e.g. "sonnet" → "claude-sonnet-5"). */
   resolvedId?: string;
@@ -507,7 +513,8 @@ export interface HarnessModelInfo {
 
 export interface OpenRouterModelInfo {
   id: string;
-  name: string;
+  /** OpenRouter's display name, when it gives one. */
+  name?: string;
   contextLength: number;
   free: boolean;
   created: number;
@@ -1268,6 +1275,16 @@ export interface CatamorphicDesktopApi {
   agentAuthHealth: (
     id: string,
   ) => Promise<{ health: "ok" | "expired" | "missing"; reauth: boolean }>;
+  /**
+   * A chat shows a turn that failed on its agent's sign-in: main runs it
+   * again once the sign-in works, however it comes back (ADR 0228).
+   */
+  agentAuthFailureShown: (failure: {
+    projectId: string;
+    sessionId: string;
+    turnId: string;
+    agentId: string;
+  }) => Promise<void>;
   usageSummary: (days: number) => Promise<UsageSummary>;
   agentCommands: (input: {
     projectId: string;
@@ -1340,6 +1357,11 @@ export interface CatamorphicDesktopApi {
   onConnectionsChanged: (
     listener: (connections: ConnectionInfo[]) => void,
   ) => () => void;
+  /**
+   * This computer's chats may have changed: logged session events or a
+   * change through its API, a burst arriving as one (ADR 0229).
+   */
+  onSessionsChanged: (listener: () => void) => () => void;
   /** Fired after a turn checkpoint moves a project's git state. */
   onGitChanged: (
     listener: (change: { projectId: string }) => void,
@@ -1624,6 +1646,25 @@ export interface CatamorphicDesktopApi {
   ) => () => void;
   onExtensionInstalled: (
     listener: (installed: ExtensionInstalled) => void,
+  ) => () => void;
+  /** The dialogs a browser tab's page waits on (ADR 0227). */
+  pageDialogs: (input: { guestId: number }) => Promise<PageDialog[]>;
+  pageDialogAnswer: (answer: PageDialogAnswer) => Promise<boolean>;
+  onPageDialogs: (
+    listener: (change: { guestId: number; dialogs: PageDialog[] }) => void,
+  ) => () => void;
+  /** What is about to leave a page, for its "Leave site?" to redo. */
+  browserUnloadIntent: (input: {
+    guestId: number;
+    intent: UnloadIntent;
+  }) => void;
+  /**
+   * Closing a tab asks its page first: "close" now, or "asking" while its
+   * beforeunload runs (the page closes, or "Leave site?" answers).
+   */
+  browserCloseAsk: (input: { guestId: number }) => Promise<"close" | "asking">;
+  onBrowserCloseAnswer: (
+    listener: (answer: { guestId: number; leave: boolean }) => void,
   ) => () => void;
   sitePermissionAnswer: (answer: SitePermissionAnswer) => Promise<boolean>;
   onSitePermissionRequest: (
@@ -2009,6 +2050,9 @@ export const desktopApi: CatamorphicDesktopApi = {
   onExtensionDebuggingChanged: shareEvent((publish) =>
     nativeApi.onExtensionDebuggingChanged(publish),
   ),
+  onSessionsChanged: shareEvent((publish) =>
+    nativeApi.onSessionsChanged(() => publish(undefined)),
+  ),
   onGitChanged: shareEvent((publish) => nativeApi.onGitChanged(publish)),
   onBookmarksChanged: shareEvent((publish) =>
     nativeApi.onBookmarksChanged(publish),
@@ -2020,4 +2064,9 @@ export const desktopApi: CatamorphicDesktopApi = {
   onVoiceLevels: shareEvent((publish) => nativeApi.onVoiceLevels(publish)),
   // Every chat's microphone and settings view reads prefs.
   onPrefsChanged: shareEvent((publish) => nativeApi.onPrefsChanged(publish)),
+  // Every browser tab follows its page's dialogs and its close answers.
+  onPageDialogs: shareEvent((publish) => nativeApi.onPageDialogs(publish)),
+  onBrowserCloseAnswer: shareEvent((publish) =>
+    nativeApi.onBrowserCloseAnswer(publish),
+  ),
 };

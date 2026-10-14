@@ -20,6 +20,11 @@ import {
 } from "../../shared/browser-history.js";
 import type { HistoryProject } from "../../shared/history.js";
 import type { OpenMode } from "../../shared/open-mode.js";
+import type {
+  PageDialog,
+  PageDialogAnswer,
+  UnloadIntent,
+} from "../../shared/page-dialogs.js";
 import { samePage } from "../../shared/page-url.js";
 import { siteOrigin } from "../../shared/site-settings.js";
 import { AuthorizationInspector } from "../components/authorization-inspector.js";
@@ -31,6 +36,7 @@ import {
 } from "../components/extensions/extension-side-panel.js";
 import { ExtensionToolbar } from "../components/extensions/extension-toolbar.js";
 import { FindBar, type FindResult } from "../components/find-bar.js";
+import { PageDialogLayer } from "../components/page-dialog.js";
 import { PageMenu } from "../components/page-menu.js";
 import { usePasswordAutofill } from "../components/password-autofill.js";
 import {
@@ -55,6 +61,7 @@ import {
   desktopApi,
 } from "../lib/desktop-api.js";
 import { formatBinding, useKeybindings } from "../lib/keybindings.js";
+import { setPageDialogWaiting } from "../lib/page-dialogs.js";
 import { pageThemeCss } from "../lib/page-theme.js";
 import { pointerMoved } from "../lib/pointer-moved.js";
 import { useTheme } from "../lib/theme.js";
@@ -103,6 +110,11 @@ export interface BrowserCommands {
   findPrevious: () => void;
   /** What keeps the page awake, or null when it may sleep (ADR 0194). */
   sleepBlocker: () => Promise<BrowserSleepBlocker | null>;
+  /**
+   * Ask the page whether its tab may close: its beforeunload may hold it
+   * with "Leave site?" (ADR 0227). Resolves false when the person stays.
+   */
+  mayClose: () => Promise<boolean>;
 }
 
 export interface BrowserPageState {
@@ -142,6 +154,32 @@ interface Suggestion {
 
 /** Matches the `tab-in` keyframe duration in styles.css. */
 const TAB_OPEN_ANIMATION_MS = 200;
+/** A page that neither closes nor asks within this is stuck: it closes. */
+const CLOSE_ASK_MS = 2_000;
+
+/**
+ * Tell main what is about to leave the page, before it does: a page whose
+ * beforeunload holds it asks "Leave site?", and Leave does it again (ADR
+ * 0227).
+ */
+function announceLeaving(view: WebviewElement, intent: UnloadIntent): void {
+  try {
+    desktopApi.browserUnloadIntent({
+      guestId: view.getWebContentsId(),
+      intent,
+    });
+  } catch {
+    // Not attached yet: there is no page to leave.
+  }
+}
+
+/** Step the page back or forward through its history, as the tab asks. */
+function stepHistory(view: WebviewElement, direction: "back" | "forward") {
+  if (direction === "back" ? !view.canGoBack() : !view.canGoForward()) return;
+  announceLeaving(view, { kind: direction });
+  if (direction === "back") view.goBack();
+  else view.goForward();
+}
 
 export function BrowserScreen({
   profileId,
@@ -323,6 +361,23 @@ export function BrowserScreen({
   );
   const [passwordEditorOpen, setPasswordEditorOpen] = useState(false);
   const pageAreaRef = useRef<HTMLDivElement | null>(null);
+  // What the page waits on (ADR 0227): alert, confirm, prompt, Leave site?
+  // and sign-ins, shown over the page one at a time.
+  const [dialogs, setShownDialogs] = useState<PageDialog[]>([]);
+  const dialogsRef = useRef(dialogs);
+  dialogsRef.current = dialogs;
+  // Answered here and on their way to main: a list main sent meanwhile
+  // must not bring them back.
+  const answeredRef = useRef(new Set<string>());
+  const setDialogs = useCallback((list: PageDialog[]) => {
+    const answered = answeredRef.current;
+    for (const id of answered)
+      if (!list.some((dialog) => dialog.id === id)) answered.delete(id);
+    setShownDialogs(list.filter((dialog) => !answered.has(dialog.id)));
+  }, []);
+  const [dialogFocus, setDialogFocus] = useState(0);
+  /** Closing the tab, waiting on the page's beforeunload. */
+  const closeWaitRef = useRef<((leave: boolean) => void) | null>(null);
 
   // Find in page, as Chrome's find bar does it. The query stays with the
   // tab for the next opening; a count belongs to the latest request only.
@@ -601,6 +656,9 @@ export function BrowserScreen({
         guestReadyRef.current = false;
         registerGuestRef.current?.(null);
         setGuestId(null);
+        // A page's dialogs go with it.
+        setDialogs([]);
+        closeWaitRef.current?.(true);
         // A find belongs to the guest it searched.
         setFindOpen(false);
         setFindResult(null);
@@ -620,6 +678,22 @@ export function BrowserScreen({
         window.clearTimeout(attachWatchdogRef.current);
       };
       listen("did-attach", markAlive);
+      // What the page already waits on (it may ask before it is ready).
+      const readDialogs = () => {
+        let id: number;
+        try {
+          id = view.getWebContentsId();
+        } catch {
+          return;
+        }
+        void desktopApi
+          .pageDialogs({ guestId: id })
+          .then((list) => {
+            if (!listeners.signal.aborted) setDialogs(list);
+          })
+          .catch(() => {});
+      };
+      listen("did-attach", readDialogs);
       listen("did-start-loading", markAlive);
       // A navigation ends any swipe cue, whichever page started it.
       listen("did-start-loading", () => setSwipe(null));
@@ -633,7 +707,11 @@ export function BrowserScreen({
       // done) leaves a dead guest behind: a blank view that keeps focus
       // and swallows every shortcut, Cmd+W included. Chrome closes the
       // tab; so do we.
-      listen("close", () => onPageCloseRef.current?.());
+      listen("close", () => {
+        // Asked to close (Cmd+W), the page let its tab go.
+        if (closeWaitRef.current) closeWaitRef.current(true);
+        else onPageCloseRef.current?.();
+      });
       listen("did-fail-load", ((event: CustomEvent) => {
         const { errorCode, errorDescription, validatedURL, isMainFrame } =
           event as unknown as {
@@ -729,9 +807,8 @@ export function BrowserScreen({
           if (action === "find-next") findCommandsRef.current.stepFind("next");
           if (action === "find-previous")
             findCommandsRef.current.stepFind("previous");
-          if (action === "browser-back" && view.canGoBack()) view.goBack();
-          if (action === "browser-forward" && view.canGoForward())
-            view.goForward();
+          if (action === "browser-back") stepHistory(view, "back");
+          if (action === "browser-forward") stepHistory(view, "forward");
           return;
         }
         if (message.channel === "catamorphic:browser-swipe") {
@@ -755,8 +832,8 @@ export function BrowserScreen({
           payload && typeof payload === "object" && "direction" in payload
             ? payload.direction
             : undefined;
-        if (direction === "back" && view.canGoBack()) view.goBack();
-        if (direction === "forward" && view.canGoForward()) view.goForward();
+        if (direction === "back" || direction === "forward")
+          stepHistory(view, direction);
       }) as EventListener);
 
       const sync = () => {
@@ -876,7 +953,7 @@ export function BrowserScreen({
         }
       }) as EventListener);
     },
-    [remountWebview],
+    [remountWebview, setDialogs],
   );
 
   useEffect(() => {
@@ -905,6 +982,114 @@ export function BrowserScreen({
       stopOffer();
       stopSaved();
     };
+  }, []);
+
+  // The page's dialogs, as main changes them.
+  useEffect(
+    () =>
+      desktopApi.onPageDialogs((change) => {
+        let own = false;
+        try {
+          own = webviewRef.current?.getWebContentsId() === change.guestId;
+        } catch {
+          own = false;
+        }
+        if (own) setDialogs(change.dialogs);
+      }),
+    [setDialogs],
+  );
+  // A tab out of sight still shows that its page waits.
+  const waiting = dialogs.length > 0;
+  useEffect(() => {
+    setPageDialogWaiting(surfaceKey, waiting);
+  }, [surfaceKey, waiting]);
+  useEffect(() => () => setPageDialogWaiting(surfaceKey, false), [surfaceKey]);
+  // "Leave site?" gone without leaving (Cancel, an agent's answer, taken
+  // back): the address shows the page that stayed, not where it was going.
+  const holding = dialogs.some((dialog) => dialog.kind === "beforeunload");
+  const heldRef = useRef(false);
+  useEffect(() => {
+    if (heldRef.current && !holding) {
+      try {
+        const url = webviewRef.current?.getURL();
+        if (url) setPageUrl(url);
+      } catch {
+        // The page went with its tab.
+      }
+    }
+    heldRef.current = holding;
+  }, [holding]);
+  const answerDialog = useCallback(
+    (answer: PageDialogAnswer, hadFocus: boolean) => {
+      const rest = dialogsRef.current.filter(
+        (dialog) => dialog.id !== answer.id,
+      );
+      answeredRef.current.add(answer.id);
+      setShownDialogs(rest);
+      // Main refused the answer (or never got it): the dialog comes back
+      // as main has it, rather than staying hidden over a waiting page.
+      const reread = () => {
+        answeredRef.current.delete(answer.id);
+        let guestId: number;
+        try {
+          guestId = webviewRef.current?.getWebContentsId() ?? -1;
+        } catch {
+          return;
+        }
+        void desktopApi
+          .pageDialogs({ guestId })
+          .then(setDialogs)
+          .catch(() => {});
+      };
+      void desktopApi.pageDialogAnswer(answer).then((taken) => {
+        if (!taken) reread();
+      }, reread);
+      // Focus goes back to the page, unless another dialog takes it.
+      if (hadFocus && rest.length === 0) webviewRef.current?.focus();
+    },
+    [setDialogs],
+  );
+  const mayClose = useCallback(async (): Promise<boolean> => {
+    const view = webviewRef.current;
+    if (!view || !guestReadyRef.current) return true;
+    let id: number;
+    try {
+      id = view.getWebContentsId();
+    } catch {
+      return true;
+    }
+    // Already asking: that question decides.
+    if (closeWaitRef.current) return false;
+    return new Promise<boolean>((resolve) => {
+      let timer: number | undefined;
+      let stopAnswers = () => {};
+      const finish = (leave: boolean) => {
+        if (closeWaitRef.current !== finish) return;
+        closeWaitRef.current = null;
+        window.clearTimeout(timer);
+        stopAnswers();
+        resolve(leave);
+      };
+      closeWaitRef.current = finish;
+      stopAnswers = desktopApi.onBrowserCloseAnswer((answer) => {
+        if (answer.guestId === id) finish(answer.leave);
+      });
+      desktopApi.browserCloseAsk({ guestId: id }).then(
+        (ask) => {
+          if (ask === "close") {
+            finish(true);
+            return;
+          }
+          // A page that neither lets go nor asks in time is stuck, and
+          // its tab closes, as in Chrome.
+          timer = window.setTimeout(() => {
+            if (!dialogsRef.current.some((d) => d.kind === "beforeunload"))
+              finish(true);
+          }, CLOSE_ASK_MS);
+        },
+        () => finish(true),
+      );
+    });
   }, []);
 
   const sidePanel = useExtensionSidePanel(guestId);
@@ -1007,7 +1192,11 @@ export function BrowserScreen({
         pendingUrlRef.current = url;
         return;
       }
-      void view.loadURL(url).catch(() => {
+      announceLeaving(view, { kind: "navigate", url });
+      void view.loadURL(url).catch((error: unknown) => {
+        // A page that held on (beforeunload) keeps the tab: "Leave site?"
+        // goes on to the address if the person leaves, never later.
+        if (guestReadyRef.current && /ERR_ABORTED/.test(String(error))) return;
         pendingUrlRef.current = url;
       });
       view.focus();
@@ -1056,6 +1245,7 @@ export function BrowserScreen({
     recoveriesRef.current = 0;
     const view = webviewRef.current;
     if (!view) return;
+    announceLeaving(view, { kind: hard ? "reload-hard" : "reload" });
     if (hard) view.reloadIgnoringCache();
     else view.reload();
   }, []);
@@ -1064,9 +1254,7 @@ export function BrowserScreen({
   registerCommandsRef.current = registerCommands;
   const navigateHistory = useCallback((direction: "back" | "forward") => {
     const view = webviewRef.current;
-    if (!view) return;
-    if (direction === "back" && view.canGoBack()) view.goBack();
-    if (direction === "forward" && view.canGoForward()) view.goForward();
+    if (view) stepHistory(view, direction);
   }, []);
 
   const registerHistoryNavigateRef = useRef(registerHistoryNavigate);
@@ -1096,17 +1284,12 @@ export function BrowserScreen({
       focusAddress,
       reload: () => reload(false),
       reloadIgnoringCache: () => reload(true),
-      back: () => {
-        const view = webviewRef.current;
-        if (view?.canGoBack()) view.goBack();
-      },
-      forward: () => {
-        const view = webviewRef.current;
-        if (view?.canGoForward()) view.goForward();
-      },
+      back: () => navigateHistory("back"),
+      forward: () => navigateHistory("forward"),
       find: openFind,
       findNext: () => stepFind("next"),
       findPrevious: () => stepFind("previous"),
+      mayClose,
       sleepBlocker: async () => {
         const view = webviewRef.current;
         if (!view || !guestReadyRef.current) return null;
@@ -1120,7 +1303,7 @@ export function BrowserScreen({
       },
     });
     return () => registerCommandsRef.current?.(null);
-  }, [focusAddress, reload, openFind, stepFind]);
+  }, [focusAddress, reload, openFind, stepFind, navigateHistory, mayClose]);
 
   // A fresh New Tab greets with the address bar focused (Chrome behavior);
   // a page takes focus as its tab comes forward. Both answer what brought
@@ -1135,6 +1318,9 @@ export function BrowserScreen({
     if (!active || personMovedOn(cameForwardAt.current)) return;
     if (firstUrlRef.current === null)
       focusAddress({ greetingSince: cameForwardAt.current });
+    // A page waiting on its dialog hands focus to the dialog.
+    else if (dialogsRef.current.length > 0)
+      setDialogFocus((request) => request + 1);
     else moveFocusAsApp(() => webviewRef.current?.focus());
   }, [active, focusAddress]);
   // A New Tab's first address hands focus to its page, as Enter does.
@@ -1331,7 +1517,7 @@ export function BrowserScreen({
       >
         <button
           type="button"
-          onClick={() => webviewRef.current?.goBack()}
+          onClick={() => navigateHistory("back")}
           disabled={!canGoBack}
           data-disabled-reason="No previous page in this tab"
           className="grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg disabled:cursor-default disabled:opacity-35 disabled:hover:bg-transparent"
@@ -1346,7 +1532,7 @@ export function BrowserScreen({
       >
         <button
           type="button"
-          onClick={() => webviewRef.current?.goForward()}
+          onClick={() => navigateHistory("forward")}
           disabled={!canGoForward}
           data-disabled-reason="No next page in this tab"
           className="grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg disabled:cursor-default disabled:opacity-35 disabled:hover:bg-transparent"
@@ -1358,9 +1544,7 @@ export function BrowserScreen({
       <ShortcutHint label={loading ? "Stop loading" : "Reload"}>
         <button
           type="button"
-          onClick={() =>
-            loading ? webviewRef.current?.stop() : webviewRef.current?.reload()
-          }
+          onClick={() => (loading ? webviewRef.current?.stop() : reload(false))}
           className="grid size-7 shrink-0 cursor-pointer place-items-center rounded-md text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
           aria-label={loading ? "Stop" : "Reload"}
         >
@@ -1626,6 +1810,13 @@ export function BrowserScreen({
           )}
           {autofill.overlay}
           <PageMenu guest={webviewRef} visible={visible} />
+          <PageDialogLayer
+            dialogs={dialogs}
+            page={webviewRef}
+            active={active}
+            focusRequest={dialogFocus}
+            onAnswer={answerDialog}
+          />
           {/* The page's own cards at its top right: the find bar above a
             password offer, never over it. */}
           <div className="pointer-events-none absolute right-3 top-3 z-30 flex w-[340px] max-w-[calc(100%-24px)] flex-col items-end gap-2">

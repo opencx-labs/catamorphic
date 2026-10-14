@@ -11,6 +11,7 @@ import {
   type MouseEvent,
   type ReactNode,
   useEffect,
+  useId,
   useLayoutEffect,
   useRef,
   useState,
@@ -19,7 +20,11 @@ import { openModeFromEvent } from "../../shared/open-mode.js";
 import type { ChatSessionMenuEntry } from "../lib/chat-session-actions.js";
 import { desktopApi } from "../lib/desktop-api.js";
 import { formatBinding, useKeybindings } from "../lib/keybindings";
-import { EASE_STANDARD, motionMs } from "../lib/motion.js";
+import {
+  EASE_STANDARD,
+  motionMs,
+  prefersReducedMotion,
+} from "../lib/motion.js";
 import type { ChatDockEntry } from "./chat-dock";
 import { ChatGlyph } from "./chat-icon";
 import { type ChatSignals, SignalBadge, SignalGlyph } from "./chat-signals";
@@ -29,6 +34,53 @@ import { ShortcutHint } from "./shortcut-hint";
 /** Bubbles identify themselves on hover without delay (unlike buttons,
     whose labels are usually inferable — a bubble is just an icon). */
 const BUBBLE_HINT_DELAY_MS = 100;
+/** What a bubble that is not shown signals: nothing. */
+const NO_SIGNALS: ChatSignals = {};
+
+/**
+ * The strip folding into its corner and opening again: its slide between
+ * resting spots and the width its chats give up or take (duration-250 on
+ * the folding parts) run together, so it lands as one motion.
+ */
+const FOLD_MS = 250;
+
+type Spot = "left" | "center" | "right";
+
+/**
+ * Whether the strip shows folded, derived where the dock renders so the
+ * fold and what it moves (a chat tab's clearance, the detached window's
+ * size) change in one render, never a second one a frame into the motion.
+ *
+ * A focused chat tab folds it (`autoCollapse`); opened by hand meanwhile,
+ * it stays open until such a tab gains focus again. Otherwise it is the
+ * person's fold (`folded`), shown open beside an open chat (a closed
+ * bubble beside a visible chat reads wrong); a chat on its way out no
+ * longer counts, so the strip folds while it leaves.
+ */
+export function useStripFold({
+  autoCollapse,
+  folded,
+  chatOpen,
+}: {
+  autoCollapse: boolean;
+  folded: boolean;
+  chatOpen: boolean;
+}): {
+  collapsed: boolean;
+  /** The person's own controls folded (true) or opened (false) it. */
+  choose: (folded: boolean) => void;
+} {
+  const [peeked, setPeeked] = useState(false);
+  const [wasAuto, setWasAuto] = useState(autoCollapse);
+  if (wasAuto !== autoCollapse) {
+    setWasAuto(autoCollapse);
+    if (autoCollapse) setPeeked(false);
+  }
+  return {
+    collapsed: autoCollapse ? !peeked : folded && !chatOpen,
+    choose: (next) => setPeeked(!next),
+  };
+}
 
 export interface ChatBubblesProps {
   dragLeft?: number | null;
@@ -64,20 +116,14 @@ export interface ChatBubblesProps {
   /** Session actions shared verbatim with the matching sidebar row. */
   menus: Record<string, ChatSessionMenuEntry[]>;
   activeLocalId?: string;
+  /** Whether the strip shows folded into one bubble (`useStripFold`). */
+  collapsed: boolean;
   /**
-   * The focused workspace tab wants the bottom edge clear (e.g. a chat tab):
-   * the strip folds into one bubble docked at the right. The user can still
-   * pull it back open; the fold re-applies next time such a tab gains focus.
+   * The person's own fold (the arrows) or open (the folded bubble), kept
+   * across windows and launches (prefs `dockCollapsed`). Nothing else
+   * calls it.
    */
-  autoCollapse: boolean;
-  /**
-   * The person's own fold (the arrows), kept across windows and launches
-   * (prefs `dockCollapsed`); only they change it, through `onFoldedChange`.
-   */
-  folded: boolean;
   onFoldedChange: (folded: boolean) => void;
-  /** Reports the effective collapsed state so hosts can clear the bottom. */
-  onCollapsedChange?: (collapsed: boolean) => void;
   /** Rendered beside the chat strip, inside the arrows: the downloads bubble. */
   trailing?: ReactNode;
   /**
@@ -293,10 +339,8 @@ export function ChatBubbles({
   attention,
   menus,
   activeLocalId,
-  autoCollapse,
-  folded,
+  collapsed,
   onFoldedChange,
-  onCollapsedChange,
   trailing,
   voice,
   voiceShown = true,
@@ -352,31 +396,10 @@ export function ChatBubbles({
           setDockMenuOpen(true);
         }
       : undefined;
-  // Opened by hand while a chat tab folds it: until such a tab gains focus
-  // again. Only the person's choice outlasts a tab.
-  const [peeked, setPeeked] = useState(false);
-  const prevAutoRef = useRef(autoCollapse);
-  if (prevAutoRef.current !== autoCollapse) {
-    prevAutoRef.current = autoCollapse;
-    if (autoCollapse) setPeeked(false);
-  }
-  // An open chat keeps the strip open beside it (a closed bubble beside a
-  // visible chat reads wrong); minimized again, the person's fold returns.
-  const chatOpen = entries.some(
-    (entry) => entry.mode === "partial" && entry.localId === activeLocalId,
-  );
-  const collapsed = autoCollapse ? !peeked : folded && !chatOpen;
-
   // Tab-mode chats live in the tab bar; only docked/minimized chats get a
   // bubble in the strip. The pill itself always renders so chats never
   // silently vanish from the screen.
   const stripEntries = entries.filter((entry) => entry.mode !== "tab");
-
-  const onCollapsedChangeRef = useRef(onCollapsedChange);
-  onCollapsedChangeRef.current = onCollapsedChange;
-  useEffect(() => {
-    onCollapsedChangeRef.current?.(collapsed);
-  }, [collapsed]);
 
   // Bubbles present on mount appear statically; bubbles added later pop in.
   // Once an id qualifies, the animation class sticks — removing it mid-run
@@ -474,44 +497,98 @@ export function ChatBubbles({
     observer.observe(rail);
     return () => observer.disconnect();
   }, []);
-  const spot = collapsed ? side : placement;
-  const lastRect = useRef<DOMRect | null>(null);
-  const lastSpot = useRef(spot);
-  const wasDragged = useRef(false);
+  const spot: Spot = collapsed ? side : placement;
+  // The spot and drag the DOM shows: what this render may move it from.
+  const shownSpot = useRef(spot);
+  const shownDragged = useRef(false);
+  // The slide under way: the spot it left, and how much of a whole fold's
+  // time it was given.
+  const slide = useRef<{
+    animation: Animation;
+    from: Spot;
+    shortening: number;
+  } | null>(null);
+  // A dropped strip slides to its spot from where it was let go, the spot
+  // it started from included; a strip changing spots, from where it is
+  // drawn. Read before this render reaches the DOM, so it is where the
+  // strip is on screen now (mid-slide, mid-fold, after chats came and went
+  // or the region moved), never where it was when it last changed spots.
+  const slideFrom =
+    dragLeft === null && (shownSpot.current !== spot || shownDragged.current)
+      ? (railRef.current?.getBoundingClientRect() ?? null)
+      : null;
   useLayoutEffect(() => {
     const rail = railRef.current;
-    if (!rail) return;
-    const previous = lastRect.current;
-    const rect = rail.getBoundingClientRect();
-    lastRect.current = rect;
-    // A dropped strip slides to its spot from where it was let go, the
-    // spot it started from included.
-    const dropped = wasDragged.current && dragLeft === null;
-    wasDragged.current = dragLeft !== null;
-    if ((lastSpot.current === spot && !dropped) || dragLeft !== null) {
-      lastSpot.current = spot;
+    const previous = shownSpot.current;
+    shownSpot.current = spot;
+    shownDragged.current = dragLeft !== null;
+    // A drag moves the strip from where the slide had drawn it (where the
+    // press measured it), so the slide stops rather than carry the dragged
+    // strip away from the pointer.
+    if (dragLeft !== null) {
+      slide.current?.animation.cancel();
+      slide.current = null;
       return;
     }
-    lastSpot.current = spot;
-    if (
-      !previous ||
-      window.matchMedia("(prefers-reduced-motion: reduce)").matches
-    )
-      return;
+    if (!rail || !slideFrom || prefersReducedMotion()) return;
+    // The slide under way, if any, is part of where the strip is drawn.
+    const running = slide.current;
+    slide.current = null;
+    // Turned back mid-way, the fold's transitions take only as long as the
+    // way back (CSS shortens a reversed transition by how far it had got,
+    // in eased progress); the slide back takes the same, so both land
+    // together. Anything else starts a whole fold from where it is drawn.
+    const progress = running?.animation.effect?.getComputedTiming().progress;
+    const shortening =
+      running && running.from === spot && progress != null
+        ? Math.min(
+            1,
+            Math.abs(progress * running.shortening + 1 - running.shortening),
+          )
+        : 1;
+    running?.animation.cancel();
+    const rect = rail.getBoundingClientRect();
     // Compare the edge that anchors the new spot so a width change during
     // the same commit does not read as travel.
     const delta =
       spot === "right"
-        ? previous.right - rect.right
+        ? slideFrom.right - rect.right
         : spot === "left"
-          ? previous.left - rect.left
-          : (previous.left + previous.right - rect.left - rect.right) / 2;
+          ? slideFrom.left - rect.left
+          : (slideFrom.left + slideFrom.right - rect.left - rect.right) / 2;
     if (Math.abs(delta) < 1) return;
-    rail.animate(
-      [{ transform: `translateX(${delta}px)` }, { transform: "translateX(0)" }],
-      { duration: motionMs(200), easing: EASE_STANDARD, composite: "add" },
-    );
-  }, [spot, dragLeft]);
+    slide.current = {
+      animation: rail.animate(
+        [
+          { transform: `translateX(${delta}px)` },
+          { transform: "translateX(0)" },
+        ],
+        { duration: motionMs(FOLD_MS) * shortening, easing: EASE_STANDARD },
+      ),
+      from: previous,
+      shortening,
+    };
+  }, [spot, dragLeft, slideFrom]);
+  // Folding or opening makes the control pressed go inert. Read before this
+  // render reaches the DOM: when it held focus, the control that takes its
+  // place takes focus, so the keyboard keeps its place instead of falling
+  // to the page.
+  const arrowsRef = useRef<HTMLButtonElement>(null);
+  const expandRef = useRef<HTMLButtonElement>(null);
+  const focusedControl =
+    arrowsRef.current !== null && document.activeElement === arrowsRef.current
+      ? "arrows"
+      : expandRef.current !== null &&
+          document.activeElement === expandRef.current
+        ? "expand"
+        : null;
+  useLayoutEffect(() => {
+    if (collapsed && focusedControl === "arrows")
+      expandRef.current?.focus({ preventScroll: true });
+    else if (!collapsed && focusedControl === "expand")
+      arrowsRef.current?.focus({ preventScroll: true });
+  }, [collapsed, focusedControl]);
+  const itemsId = useId();
   const spotClass =
     spot === "left"
       ? "left-8"
@@ -523,16 +600,18 @@ export function ChatBubbles({
   const Arrows = side === "left" ? ChevronsLeft : ChevronsRight;
   const arrows = (
     <button
+      ref={arrowsRef}
       type="button"
       {...placementDragHandlers}
       onClick={() => {
-        setPeeked(false);
         onFoldedChange(true);
         onCollapse?.();
       }}
       onContextMenu={openDockMenu}
       className="grid size-9 touch-none cursor-grab place-items-center rounded-full text-fg-faint transition-colors duration-150 hover:text-fg active:cursor-grabbing"
       aria-label="Collapse chat bubbles"
+      aria-expanded={!collapsed}
+      aria-controls={itemsId}
       aria-description="Drag to place open chats left, center or right. Arrow keys move them."
       aria-keyshortcuts="ArrowLeft ArrowRight"
       data-dock-arrows={side}
@@ -571,13 +650,14 @@ export function ChatBubbles({
         ))}
     </>
   );
-  // Expanded strip content folds its width away when collapsed.
+  // Expanded strip content folds its width away when collapsed: from the
+  // width it shows to none and back (styles.css), so the strip narrows
+  // from the first frame as it slides into its corner.
   const items = (
     <div
-      className={`flex items-center overflow-hidden transition-[max-width,opacity] duration-250 ease-[cubic-bezier(0.2,0,0,1)] ${
-        collapsed
-          ? "pointer-events-none max-w-0 opacity-0"
-          : "max-w-[60vw] gap-1.5 opacity-100"
+      id={itemsId}
+      className={`flex items-center gap-1.5 overflow-hidden transition-[width,opacity] duration-250 ease-[cubic-bezier(0.2,0,0,1)] ${
+        collapsed ? "pointer-events-none opacity-0" : "opacity-100"
       }`}
       data-bubble-items
       aria-hidden={collapsed}
@@ -684,27 +764,32 @@ export function ChatBubbles({
   );
   const collapsedBubble = (
     <button
+      ref={expandRef}
       type="button"
       {...dragHandlers}
-      onClick={() => {
-        setPeeked(true);
-        onFoldedChange(false);
-      }}
+      onClick={() => onFoldedChange(false)}
       onContextMenu={openDockMenu}
-      className={`relative grid touch-none cursor-grab active:cursor-grabbing place-items-center overflow-visible rounded-full border border-border bg-bg-overlay text-fg-muted transition-[max-width,opacity,background-color,border-color] duration-250 ease-[cubic-bezier(0.2,0,0,1)] hover:border-border-strong hover:text-fg ${
+      // Its edge is a ring, not a border: a border is never thinner than a
+      // pixel, so the strip would snap 2px as the bubble comes and goes.
+      className={`relative grid touch-none cursor-grab active:cursor-grabbing place-items-center overflow-visible rounded-full bg-bg-overlay text-fg-muted inset-ring inset-ring-border transition-[max-width,opacity,background-color,box-shadow] duration-250 ease-[cubic-bezier(0.2,0,0,1)] hover:text-fg hover:inset-ring-border-strong ${
         collapsed
           ? "size-9 max-w-9 opacity-100"
-          : "pointer-events-none size-9 max-w-0 border-0 opacity-0"
+          : "pointer-events-none size-9 max-w-0 opacity-0"
       }`}
       aria-label="Expand chat bubbles"
+      aria-expanded={!collapsed}
+      aria-controls={itemsId}
       aria-description="Drag to either bottom corner. Arrow keys move left or right."
       aria-keyshortcuts="ArrowLeft ArrowRight"
       aria-hidden={!collapsed}
       inert={!collapsed ? true : undefined}
     >
+      {/* Signals only while shown: the open strip keeps this bubble mounted
+          but invisible, and a spinner or pulse there would keep the
+          compositor drawing for nothing. */}
       <SignalGlyph
-        working={aggregate.working}
-        awaitingInput={aggregate.awaitingInput}
+        working={collapsed && aggregate.working}
+        awaitingInput={collapsed && aggregate.awaitingInput}
         className="size-4"
       >
         <MessageSquare className="size-4" />
@@ -715,7 +800,7 @@ export function ChatBubbles({
         </span>
       )}
       <span className="absolute -right-0.5 -top-0.5">
-        <SignalBadge signals={aggregate} size="md" />
+        <SignalBadge signals={collapsed ? aggregate : NO_SIGNALS} size="md" />
       </span>
     </button>
   );
@@ -732,8 +817,8 @@ export function ChatBubbles({
             ? undefined
             : { left: dragLeft, right: "auto", translate: "0" }
         }
-        className={`pointer-events-auto absolute bottom-3 flex items-center rounded-full border border-border bg-bg-raised shadow-2xl transition-[padding] duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${spotClass} ${
-          collapsed ? "p-1" : "gap-1.5 p-1.5"
+        className={`pointer-events-auto absolute bottom-3 flex items-center rounded-full border border-border bg-bg-raised shadow-2xl transition-[padding,gap] duration-250 ease-[cubic-bezier(0.2,0,0,1)] ${spotClass} ${
+          collapsed ? "gap-0 p-1" : "gap-1.5 p-1.5"
         }`}
       >
         {/* The outer edge is one slot the arrows and the collapsed bubble

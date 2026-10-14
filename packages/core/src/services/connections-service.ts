@@ -27,6 +27,7 @@ import {
   GIT_CAPABILITIES,
 } from "./connection-types.js";
 import type { CredentialVault } from "./credential-vault.js";
+import { ExecutionJobsService } from "./execution-jobs-service.js";
 import { requireTenantProject } from "./projects-service.js";
 import { toJson } from "./run-coordinator.js";
 
@@ -132,6 +133,7 @@ export class ConnectionsService {
     identity: Identity;
     connectionId: string;
   }) => Promise<void>;
+  private readonly jobs: Pick<ExecutionJobsService, "makeJobsAvailable">;
 
   constructor(args: {
     db: Kysely<DB>;
@@ -144,6 +146,11 @@ export class ConnectionsService {
       identity: Identity;
       connectionId: string;
     }) => Promise<void>;
+    /**
+     * Wakes the workflow jobs a connection was waiting for (ADR 0229); by
+     * default they are found at the workers' next poll.
+     */
+    jobs?: Pick<ExecutionJobsService, "makeJobsAvailable">;
   }) {
     this.db = args.db;
     this.vault = args.vault;
@@ -151,6 +158,7 @@ export class ConnectionsService {
     this.bindings = args.bindings;
     this.onMemberConnectionReady = args.onMemberConnectionReady;
     this.onConnectionUnavailable = args.onConnectionUnavailable;
+    this.jobs = args.jobs ?? new ExecutionJobsService(args.db);
   }
 
   providerCatalog(): Array<{ kind: string; displayName: string }> {
@@ -1885,17 +1893,11 @@ export class ConnectionsService {
         query = query.where("external_user_id", "=", args.externalUserId);
       }
       const resolved = await query.returning("execution_job_id").execute();
-      if (resolved.length === 0) return;
-      await transaction
-        .updateTable("execution_jobs")
-        .set({ available_at: now, updated_at: now })
-        .where(
-          "id",
-          "in",
-          resolved.map((item) => item.execution_job_id),
-        )
-        .where("status", "=", "pending")
-        .execute();
+      await this.jobs.makeJobsAvailable({
+        jobIds: resolved.map((item) => item.execution_job_id),
+        availableAt: now,
+        trx: transaction,
+      });
     });
   }
 
@@ -1913,17 +1915,11 @@ export class ConnectionsService {
         .where("status", "=", "pending")
         .returning("execution_job_id")
         .execute();
-      if (resolved.length === 0) return;
-      await transaction
-        .updateTable("execution_jobs")
-        .set({ available_at: now, updated_at: now })
-        .where(
-          "id",
-          "in",
-          resolved.map((item) => item.execution_job_id),
-        )
-        .where("status", "=", "pending")
-        .execute();
+      await this.jobs.makeJobsAvailable({
+        jobIds: resolved.map((item) => item.execution_job_id),
+        availableAt: now,
+        trx: transaction,
+      });
     });
   }
 

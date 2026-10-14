@@ -24,7 +24,11 @@ const PUBLISHING_TOOLS = new Set([
   "publish_document",
   "revoke_publication",
 ]);
-const OWN_CHAT_TOOLS = new Set(["session_artifact", "set_app_presentation"]);
+const OWN_CHAT_TOOLS = new Set([
+  "session_artifact",
+  "set_app_presentation",
+  "set_session_metadata",
+]);
 
 const Definition = z.object({
   name: z.string(),

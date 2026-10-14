@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { app, ipcMain, type Session, type WebContents } from "electron";
 import type { BrowserSleepBlocker } from "../shared/browser-history.js";
+import { pageDialogs } from "./browser-dialogs.js";
 
 /**
  * Sleeping tabs (ADR 0194), the main-process half. The renderer decides
@@ -170,6 +171,8 @@ export function registerBrowserSleep({
       if (guest.isBeingCaptured()) return "shared";
       if (guest.isDevToolsOpened()) return "devtools";
       if (keepsAwake(guest.id)) return "extension";
+      // A page waiting on its dialog cannot answer the probe either.
+      if (pageDialogs()?.has(guest.id)) return "dialog";
       if (await typing(guest)) return "typing";
       return null;
     },

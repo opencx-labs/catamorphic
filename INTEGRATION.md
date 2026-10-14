@@ -495,8 +495,16 @@ lost and a continuation turn resumes the native thread (`recovery:
 ### Agent session lifecycle and delegation
 
 Agent sessions carry source provenance, hierarchy, fork lineage, presentation,
-archive, attention, activity, todo, and authority state in one generated
-schema. `parentSessionId` is immediate hierarchy;
+archive, attention, activity, todo, metadata, and authority state in one
+generated schema. Metadata (ADR 0226) is named JSON values agents and clients
+set on a session by key (`PATCH .../sessions/:sessionId/metadata`, where
+null removes a key, or the `set_session_metadata` MCP tool, where
+`remove: true` does and a null value is refused) and every client reads from
+the session's fields, live; core bounds its keys and size, never reads it,
+and refuses writes (409) on a host that does not hold the session's
+authority, or while the session moves to another host, as it does for
+activity. Session protocol 2 (`GET /me` `agentProtocol.session`) is the
+first with metadata. `parentSessionId` is immediate hierarchy;
 `forkedFromSessionId` is transcript lineage. First-class subsessions are
 ordinary child sessions created through explicit delegation routes, with
 create/list/wait/interrupt endpoints under the parent session. A native
@@ -512,7 +520,7 @@ necessary. Unarchive restores navigation. React hosts use `useArchiveAgentSessio
 
 ### The project MCP endpoint: bring your own agent
 
-`POST /api/projects/:id/mcp` serves the caller's whole scope as one MCP server: the project's `mcpToolKinds` workflow tools (roster filtered to the caller's workflow refs), `documents_list/read/search/write/delete/history` (the documents surface, per the caller's document refs; `documents_write` takes `text` or `base64` for binaries), `publish_document/revoke_publication/list_publications`, `propose_change`, `list_skills/read_skill`, and `ask_agent` (a synchronous turn with a project agent the caller may open sessions on). Claude Code, Cursor, or the host's own assistant connect with a host-issued token through `identityFromBearer`; the desktop's harnesses mount the same URL on every turn through their harness's `mcpServers(context)` hook. Being invited *is* receiving this URL.
+`POST /api/projects/:id/mcp` serves the caller's whole scope as one MCP server: the project's `mcpToolKinds` workflow tools (roster filtered to the caller's workflow refs), `documents_list/read/search/write/delete/history` (the documents surface, per the caller's document refs; `documents_write` takes `text` or `base64` for binaries), `publish_document/revoke_publication/list_publications`, `propose_change`, `list_skills/read_skill`, `ask_agent` (a synchronous turn with a project agent the caller may open sessions on), and, on a session's own connection (`?sessionId=`), `set_session_metadata` (one key of that session's metadata; `remove: true` removes it, no value reads it). Claude Code, Cursor, or the host's own assistant connect with a host-issued token through `identityFromBearer`; the desktop's harnesses mount the same URL on every turn through their harness's `mcpServers(context)` hook. Being invited *is* receiving this URL.
 
 The generated HTTP client lives in `@catamorphic/api-client`; construct it with `createApiClient({ baseUrl, fetch })`.
 
@@ -935,6 +943,7 @@ retry, rate limit, batch, or child call settles inline) and `.start(input)`
 - Host-owned pools and Kysely instances are never destroyed by catamorphic; `catamorphic.close()` only closes what catamorphic created.
 - Stop handles returned by `catamorphic.startExecutionWorker(...)` during host shutdown. Constructing the SDK or Fastify plugin never starts workers implicitly.
 - Start `catamorphic.startAgentWorker({ resolveIdentity? })` after migrations when using coding agents. It restores due queue entries and persisted retries only for this host. Resolve current user authority through your auth model; the default uses Catamorphic memberships. `catamorphic.close()` stops both kinds of worker. Expired agent executions with uncertain outcomes require an explicit retry, not automatic side-effect replay (ADR 0094).
+- Pollers (workflow and agent workers, event delivery, live session streams) wait their short interval after each poll by default. A host whose database only it writes, such as a single-process embed, can pass `createCatamorphic({ idlePollMs })`: pollers then wait that long while nothing is found or due, and writes made through the same `catamorphic` wake the poller they concern at once (ADR 0229). Work another process writes waits up to `idlePollMs`, so a host with several replicas keeps the default or measures first.
 - Client reconnection does not restart execution. Automatic turn retries require a provider-confirmed rejection before execution began. Reconnecting to the same native provider attempt after an ambiguous disconnect is not yet implemented; the long-lived runtime cutover in ADR 0067 remains separate from this durable queue and progress model.
 
 ## Execution Environments and credential connections

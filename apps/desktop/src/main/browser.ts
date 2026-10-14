@@ -74,6 +74,7 @@ import {
 } from "../shared/site-settings.js";
 import type { TerminalMacro } from "../shared/terminal-macros.js";
 import { isCaretKey, TEXT_FIELD_PROBE } from "../shared/text-field.js";
+import { pageClosing, registerBrowserDialogs } from "./browser-dialogs.js";
 import { HistoryStore } from "./browser-history.js";
 import {
   importBrowserCookies,
@@ -108,6 +109,7 @@ import { recordDownload, trackConsole } from "./browser-tab-records.js";
 import { PasswordVault } from "./browser-vault.js";
 import { DownloadsManager, DownloadsStore } from "./downloads.js";
 import { ExtensionsHost } from "./extensions/host.js";
+import { restoreGuestHistory } from "./history-restore.js";
 import type { WindowProfileRegistry } from "./index.js";
 import { LoginCapture, type LoginSubmission } from "./login-capture.js";
 import { popupNativeMenu } from "./native-menu.js";
@@ -705,12 +707,19 @@ export function registerBrowserSupport(
       const history = historyForGuest.get(guest);
       if (!history) return;
       historyForGuest.delete(guest);
-      void guest.navigationHistory.restore(history).catch(() => {
-        // Restored or not, the tab shows its page.
-        const page = history.entries[history.index];
-        if (page && !guest.isDestroyed()) void guest.loadURL(page.url);
-      });
+      void restoreGuestHistory({ guest, history });
     };
+    // A tab's page runs its preload in every frame, so an embedded frame
+    // asks through Work's dialogs too (ADR 0227); the preload keeps the
+    // rest of its work to the top frame. Extension views keep theirs.
+    const framesPreload = (
+      _attach: Electron.Event,
+      preferences: Electron.WebPreferences,
+    ) => {
+      if (path.basename(preferences.preload ?? "") === "webview.cjs")
+        preferences.nodeIntegrationInSubFrames = true;
+    };
+    window.webContents.on("will-attach-webview", framesPreload);
     window.webContents.on("will-attach-webview", takeHistory);
     window.webContents.on("did-attach-webview", restoreHistory);
     window.on("swipe", onSwipe);
@@ -1040,6 +1049,28 @@ export function registerBrowserSupport(
   );
   ipcMain.on("catamorphic:browser-username-submitted", onSubmittedUsername);
 
+  // --- page dialogs: alert, confirm, prompt, Leave site?, sign-ins (ADR 0227) ---
+  const disposeDialogs = registerBrowserDialogs({
+    isTab: (guest) =>
+      guest.getType() === "webview" && !extensions.isView(guest),
+    profileFor: (host) => windows.profileFor(host),
+    vault: {
+      list: (profileId, origin) => vault.list(profileId, origin),
+      reveal: (profileId, id) => vault.reveal(profileId, id),
+    },
+    // A sign-in the site accepted: the tab's password card offers to save
+    // it, as after a form's.
+    offerToSave: ({ guest, host, profileId, origin, username, password }) =>
+      void offerToSave(guest, host, profileId, {
+        origin,
+        username,
+        password,
+        generated: false,
+      }).catch((error: unknown) =>
+        console.warn("[browser] Password offer failed:", error),
+      ),
+  });
+
   const broadcast = (channel: string, payload: unknown) => {
     for (const window of BrowserWindow.getAllWindows()) {
       if (!window.isDestroyed()) window.webContents.send(channel, payload);
@@ -1259,6 +1290,9 @@ export function registerBrowserSupport(
         host.send("catamorphic:browser-open-url", { url });
     };
     contents.setWindowOpenHandler(({ url, disposition }) => {
+      // Asked whether its tab may close, a page holds a user activation
+      // Electron grants for the question; it opens nothing with it.
+      if (pageClosing(contents.id)) return { action: "deny" };
       const action = guestWindowOpenAction({ url, disposition });
       if (action === "popup") {
         const host = contents.hostWebContents;
@@ -1580,6 +1614,10 @@ export function registerBrowserSupport(
 
   sitePermissionPolicy = {
     request: async (guest, profileId, permission, details) => {
+      // Asked whether its tab may close, a page holds a user activation
+      // Electron grants for the question; it asks for nothing with it
+      // (fullscreen, devices) while the question is open (ADR 0227).
+      if (pageClosing(guest.id)) return false;
       const origin = siteOrigin(details.requestingUrl ?? guest.getURL());
       if (!origin) return ALWAYS_GRANTED_PERMISSIONS.has(permission);
       const decision = decideSitePermission(
@@ -1652,6 +1690,8 @@ export function registerBrowserSupport(
       const host = guest?.hostWebContents;
       if (
         guest?.getType() !== "webview" ||
+        // The activation a tab's close granted shares no screen (ADR 0227).
+        pageClosing(guest.id) ||
         !origin ||
         !host ||
         host.isDestroyed() ||
@@ -3009,6 +3049,7 @@ export function registerBrowserSupport(
       disposeSidebarSources();
       disposePasskeys();
       disposeSleep();
+      disposeDialogs();
       app.removeListener("browser-window-created", attachBrowserCommands);
       for (const [window, listener] of appCommandListeners) {
         if (!window.isDestroyed())

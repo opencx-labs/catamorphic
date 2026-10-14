@@ -396,11 +396,9 @@ export function SessionInspectorContent({
         ) : null}
         <InspectorRow
           label="Reasoning"
-          value={
-            effort === "Unavailable"
-              ? effort
-              : effort.charAt(0).toUpperCase() + effort.slice(1)
-          }
+          // The harness's own name for the level ("high", "xhigh"), as the
+          // effort picker lists it.
+          value={effort}
           onEdit={onEditEffort}
           disabledReason={effortDisabledReason}
         />

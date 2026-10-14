@@ -200,6 +200,8 @@ describe("project events", () => {
     expect(
       await monitors.claim({ workerId: "desktop", placement: "local" }),
     ).toBeNull();
+    // Nothing watches it yet: an idle worker has nothing to wake for.
+    expect(await monitors.nextDueAt({ placement: "local" })).toBeNull();
     const sessionId = crypto.randomUUID();
     const artifactId = crypto.randomUUID();
     await db
@@ -240,10 +242,18 @@ describe("project events", () => {
       .returning("id")
       .executeTakeFirstOrThrow();
 
+    expect(
+      (await monitors.nextDueAt({ placement: "local" }))?.getTime(),
+    ).toBeLessThanOrEqual(Date.now());
+    expect(await monitors.nextDueAt({ placement: "remote" })).toBeNull();
     const claim = await monitors.claim({
       workerId: "desktop",
       placement: "local",
     });
+    // Leased: due no sooner than the lease ends.
+    expect(
+      (await monitors.nextDueAt({ placement: "local" }))?.getTime(),
+    ).toBeGreaterThan(Date.now() + 50_000);
     expect(claim).toMatchObject({
       id: monitor.id,
       tenantId,
@@ -258,6 +268,10 @@ describe("project events", () => {
     expect(
       await monitors.claim({ workerId: "desktop", placement: "local" }),
     ).toBeNull();
+    // Its next poll, thirty seconds out.
+    const due = (await monitors.nextDueAt({ placement: "local" }))?.getTime();
+    expect(due).toBeGreaterThan(Date.now() + 20_000);
+    expect(due).toBeLessThanOrEqual(Date.now() + 30_000);
     await db
       .updateTable("project_event_monitors")
       .set({ next_poll_at: new Date(0) })

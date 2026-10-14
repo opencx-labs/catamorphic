@@ -56,7 +56,12 @@ export function useAgentSessions(
 }
 
 /** Durable attention is independent of open tabs and session-list pagination. */
-export function useAgentAttention() {
+export function useAgentAttention(
+  options: {
+    /** Polling cadence; a host told of changes can poll less. */
+    refetchInterval?: number | false;
+  } = {},
+) {
   const { apiClient } = useCatamorphic();
   return useQuery({
     queryKey: ["cat", "agent", "attention"],
@@ -67,7 +72,7 @@ export function useAgentAttention() {
           "Attention response empty",
         ),
       ),
-    refetchInterval: 5_000,
+    refetchInterval: options.refetchInterval ?? 5_000,
     refetchIntervalInBackground: true,
   });
 }

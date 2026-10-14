@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { SESSION_METADATA_LIMITS } from "@catamorphic/agent-protocol";
 import { app, ipcMain } from "electron";
 import { z } from "zod";
 import { executableSourceModule } from "../shared/workspace-config.js";
@@ -29,6 +30,21 @@ const requestSchema = identity
         kind: z.string().min(1),
         label: z.string(),
         url: z.string().optional(),
+      })
+      .optional(),
+    // A session-scoped section's chat (ADR 0226), as the renderer holds it.
+    session: z
+      .object({
+        id: z.string().min(1),
+        title: z.string().nullable(),
+        metadata: z
+          .record(z.string(), z.json())
+          .refine(
+            (metadata) =>
+              JSON.stringify(metadata).length <=
+              SESSION_METADATA_LIMITS.totalBytes,
+            "Session metadata is too large.",
+          ),
       })
       .optional(),
   })

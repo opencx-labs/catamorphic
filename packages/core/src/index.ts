@@ -203,6 +203,7 @@ export {
 } from "./services/code-hosts-service.js";
 export {
   type AgentHarness,
+  type AgentRetry,
   type AgentTurnContext,
   type CodingAgentRegistry,
   harnessIdOf,
@@ -822,6 +823,11 @@ export {
   WebhooksService,
   WebhookTooLargeError,
 } from "./services/webhooks-service.js";
+export {
+  PollPacer,
+  type WorkTopic,
+  WorkWakeups,
+} from "./services/work-wakeups.js";
 export type { WorkerCapacity } from "./services/worker-capacity.js";
 export {
   capacityFits,

@@ -4,12 +4,19 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
+import type { SidebarSectionConfig } from "../../shared/sidebar.js";
+import { remoteQueryClients } from "./remote-query-clients.js";
 import {
   readSidebarSessionPage,
+  SIDEBAR_SESSION_PAGE,
+  useOpenSidebarSession,
   useSidebarSessions,
 } from "./sidebar-sessions.js";
 
-const mocks = vi.hoisted(() => ({ fetch: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  fetch: vi.fn(),
+  hints: new Set<() => void>(),
+}));
 const apiClient = createApiClient({
   baseUrl: "http://sidebar.test",
   fetch: mocks.fetch,
@@ -17,6 +24,18 @@ const apiClient = createApiClient({
 vi.mock("@catamorphic/react", () => ({
   useCatamorphic: () => ({ apiClient }),
 }));
+vi.mock("./desktop-api.js", () => ({
+  desktopApi: {
+    onSessionsChanged: (listener: () => void) => {
+      mocks.hints.add(listener);
+      return () => mocks.hints.delete(listener);
+    },
+  },
+}));
+/** This computer says its chats may have changed (ADR 0229). */
+const hint = () => {
+  for (const listener of mocks.hints) listener();
+};
 afterEach(() => {
   vi.useRealTimers();
   mocks.fetch.mockReset();
@@ -134,7 +153,8 @@ it("refreshes one hidden page and restores the visible loaded depth", async () =
   expect(collection.getItem("second")).toBeDefined();
   requests.length = 0;
   await act(async () => {
-    await vi.advanceTimersByTimeAsync(2_001);
+    hint();
+    await vi.advanceTimersByTimeAsync(1);
   });
   expect(requests).toHaveLength(1);
   expect(requests[0]?.searchParams.get("offset")).toBe("0");
@@ -191,4 +211,499 @@ it("keeps a hidden empty section empty while its availability request is pending
     await act(async () => root.unmount());
     client.clear();
   }
+});
+
+/** A newest-first project of `count` promoted chats, `c0` the newest. */
+function chatList(
+  count: number,
+  extra: Array<{
+    id: string;
+    title?: string;
+    visibility?: string;
+    parentSessionId?: string | null;
+    /** Its age in chats: 4.5 sits between c4 and c5. */
+    age: number;
+  }> = [],
+) {
+  const created = (index: number) =>
+    new Date(Date.UTC(2026, 0, 1) - index * 60_000).toISOString();
+  const chats = Array.from({ length: count }, (_, index) => ({
+    id: `c${index}`,
+    title: `Chat ${index}`,
+    visibility: "promoted",
+    parentSessionId: null as string | null,
+    childCount: 0,
+    createdAt: created(index),
+  }));
+  const others = extra.map((chat) => ({
+    id: chat.id,
+    title: chat.title ?? chat.id,
+    visibility: chat.visibility ?? "promoted",
+    parentSessionId: chat.parentSessionId ?? null,
+    childCount: 0,
+    createdAt: created(chat.age),
+  }));
+  const pages: URL[] = [];
+  const reads: string[] = [];
+  mocks.fetch.mockImplementation(async (request: Request) => {
+    const url = new URL(request.url);
+    const single = url.pathname.match(/\/agent\/sessions\/([^/]+)$/);
+    if (single) {
+      reads.push(single[1] ?? "");
+      const chat = [...chats, ...others].find(({ id }) => id === single[1]);
+      return chat
+        ? Response.json(chat)
+        : Response.json({ error: "Not found" }, { status: 404 });
+    }
+    pages.push(url);
+    const offset = Number(url.searchParams.get("offset"));
+    const limit = Number(url.searchParams.get("limit"));
+    return Response.json({
+      items: chats.slice(offset, offset + limit),
+      total: chats.length,
+    });
+  });
+  return { chats, pages, reads };
+}
+
+function mountSessions({
+  section,
+  activeSessionId,
+}: {
+  section: SidebarSectionConfig;
+  activeSessionId?: string;
+}) {
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", true);
+  const root = createRoot(document.createElement("div"));
+  const state: {
+    current?: ReturnType<typeof useSidebarSessions>;
+    open?: ReturnType<typeof useOpenSidebarSession>;
+  } = {};
+  function Probe() {
+    const sessions = useSidebarSessions({
+      projectId: "paged",
+      section,
+      visible: true,
+      relevant: true,
+    });
+    state.current = sessions;
+    state.open = useOpenSidebarSession({
+      ...sessions,
+      projectId: "paged",
+      sessionId: activeSessionId,
+      section,
+      active: true,
+    });
+    return null;
+  }
+  return {
+    state,
+    client,
+    mount: () =>
+      act(async () =>
+        root.render(
+          <QueryClientProvider client={client}>
+            <Probe />
+          </QueryClientProvider>,
+        ),
+      ),
+    unmount: async () => {
+      await act(async () => root.unmount());
+      client.clear();
+    },
+  };
+}
+
+/** Acquire the root as the tree does and read until `rows` are loaded. */
+async function loadRows(view: ReturnType<typeof mountSessions>, rows: number) {
+  const collection = view.state.current?.collection;
+  if (!collection) throw new Error("Missing session store");
+  let release = () => {};
+  await act(async () => {
+    release = collection.acquire();
+  });
+  await vi.waitFor(() =>
+    expect(collection.getBranch(null).status).toBe("ready"),
+  );
+  while (
+    collection.getBranch(null).ids.length < rows &&
+    collection.getBranch(null).cursor
+  )
+    await act(async () => {
+      await collection.load({ more: true });
+    });
+  return { collection, release };
+}
+
+it("reads a deep list's first page on a hint and every loaded page every 30 seconds", async () => {
+  vi.useFakeTimers();
+  const { pages } = chatList(20);
+  const view = mountSessions({
+    section: {
+      id: "polled",
+      type: "chats",
+      source: { type: "chats", pageSize: 4 },
+    },
+  });
+  await view.mount();
+  // Pages of four start two rows early: 4, then 2 new rows per page.
+  const { collection, release } = await loadRows(view, 12);
+  expect(collection.getBranch(null).ids).toHaveLength(12);
+  pages.length = 0;
+  await act(async () => {
+    hint();
+    await vi.advanceTimersByTimeAsync(1);
+  });
+  // However deep the list is loaded, a hint reads one page.
+  expect(pages.map((url) => url.searchParams.get("offset"))).toEqual(["0"]);
+  pages.length = 0;
+  // Nothing more until the timer: hints say when chats change.
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(29_000);
+  });
+  expect(pages).toHaveLength(0);
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(1_000);
+  });
+  expect(pages.map((url) => url.searchParams.get("offset"))).toEqual([
+    "0",
+    "2",
+    "4",
+    "6",
+    "8",
+  ]);
+  expect(collection.getBranch(null).ids).toHaveLength(12);
+  // Coming back to the window reads everything loaded, too.
+  await vi.waitFor(() =>
+    expect(collection.getBranch(null).fetching).toBeFalsy(),
+  );
+  pages.length = 0;
+  await act(async () => {
+    window.dispatchEvent(new Event("focus"));
+    await vi.advanceTimersByTimeAsync(1);
+  });
+  await vi.waitFor(() =>
+    expect(collection.getBranch(null).fetching).toBeFalsy(),
+  );
+  expect(pages.map((url) => url.searchParams.get("offset"))).toEqual([
+    "0",
+    "2",
+    "4",
+    "6",
+    "8",
+  ]);
+  act(() => release());
+  await view.unmount();
+});
+
+it("catches up when a hidden window shows again, without taking focus", async () => {
+  vi.useFakeTimers();
+  const { pages } = chatList(20);
+  const view = mountSessions({
+    section: {
+      id: "hidden",
+      type: "chats",
+      source: { type: "chats", pageSize: 4 },
+    },
+  });
+  let hidden = false;
+  const visibility = vi
+    .spyOn(document, "hidden", "get")
+    .mockImplementation(() => hidden);
+  try {
+    await view.mount();
+    const { collection, release } = await loadRows(view, 8);
+    await vi.waitFor(() =>
+      expect(collection.getBranch(null).fetching).toBeFalsy(),
+    );
+    pages.length = 0;
+    hidden = true;
+    await act(async () => {
+      hint();
+      document.dispatchEvent(new Event("visibilitychange"));
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    // A hidden window reads nothing, and so missed this hint.
+    expect(pages).toHaveLength(0);
+    hidden = false;
+    await act(async () => {
+      document.dispatchEvent(new Event("visibilitychange"));
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    await vi.waitFor(() =>
+      expect(collection.getBranch(null).fetching).toBeFalsy(),
+    );
+    expect(pages.map((url) => url.searchParams.get("offset"))).toEqual([
+      "0",
+      "2",
+      "4",
+    ]);
+    act(() => release());
+  } finally {
+    visibility.mockRestore();
+    await view.unmount();
+  }
+});
+
+it("polls a remote project's list, whose server sends no hints", async () => {
+  vi.useFakeTimers();
+  const { pages } = chatList(20);
+  const view = mountSessions({
+    section: {
+      id: "remote",
+      type: "chats",
+      source: { type: "chats", pageSize: 4 },
+    },
+  });
+  remoteQueryClients.set("connection:1", view.client);
+  try {
+    await view.mount();
+    const { release } = await loadRows(view, 12);
+    pages.length = 0;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_000);
+    });
+    expect(pages.map((url) => url.searchParams.get("offset"))).toEqual(["0"]);
+    act(() => release());
+  } finally {
+    remoteQueryClients.delete("connection:1");
+    await view.unmount();
+  }
+});
+
+it("reads a short list whole on every hint, so no loaded row lags", async () => {
+  vi.useFakeTimers();
+  const { pages } = chatList(20);
+  const view = mountSessions({
+    section: {
+      id: "short",
+      type: "chats",
+      source: { type: "chats", pageSize: 4 },
+    },
+  });
+  await view.mount();
+  const { collection, release } = await loadRows(view, 6);
+  expect(collection.getBranch(null).ids).toHaveLength(6);
+  pages.length = 0;
+  await act(async () => {
+    hint();
+    await vi.advanceTimersByTimeAsync(1);
+  });
+  expect(pages.map((url) => url.searchParams.get("offset"))).toEqual([
+    "0",
+    "2",
+  ]);
+  act(() => release());
+  await view.unmount();
+});
+
+it("keeps every chat when a new one arrives in a sorted section", async () => {
+  vi.useFakeTimers();
+  const { chats } = chatList(9);
+  // Titles that a per-page sort would reorder: c1 and c2 before c0.
+  for (const [index, title] of [
+    "c",
+    "a",
+    "b",
+    "e",
+    "d",
+    "f",
+    "h",
+    "g",
+    "i",
+  ].entries())
+    if (chats[index]) chats[index].title = title;
+  const view = mountSessions({
+    section: {
+      id: "sorted",
+      type: "chats",
+      source: {
+        type: "chats",
+        pageSize: 3,
+        sort: { field: "title", direction: "asc" },
+      },
+    },
+  });
+  await view.mount();
+  const { collection, release } = await loadRows(view, 9);
+  const before = [...collection.getBranch(null).ids];
+  expect(before).toHaveLength(9);
+  // Pages keep the server's order; the view sorts.
+  expect(before).toEqual(chats.map((chat) => chat.id));
+  chats.unshift({
+    id: "new",
+    title: "z",
+    visibility: "promoted",
+    parentSessionId: null,
+    childCount: 0,
+    createdAt: new Date(Date.UTC(2026, 0, 2)).toISOString(),
+  });
+  await act(async () => {
+    hint();
+    await vi.advanceTimersByTimeAsync(1);
+  });
+  expect(collection.getBranch(null).ids).toEqual(["new", ...before]);
+  act(() => release());
+  await view.unmount();
+});
+
+it("starts a next page five rows early and merges the repeats", async () => {
+  const { chats, pages } = chatList(SIDEBAR_SESSION_PAGE * 2 + 4);
+  const view = mountSessions({ section: { id: "chats", type: "chats" } });
+  await view.mount();
+  const { collection, release } = await loadRows(view, 1);
+  expect(collection.getBranch(null).ids).toHaveLength(SIDEBAR_SESSION_PAGE);
+  expect(pages[0]?.searchParams.get("limit")).toBe(
+    String(SIDEBAR_SESSION_PAGE),
+  );
+  await act(async () => {
+    await collection.load({ more: true });
+  });
+  expect(pages.at(-1)?.searchParams.get("offset")).toBe(
+    String(SIDEBAR_SESSION_PAGE - 5),
+  );
+  const ids = collection.getBranch(null).ids;
+  expect(ids).toHaveLength(SIDEBAR_SESSION_PAGE * 2 - 5);
+  expect(new Set(ids).size).toBe(ids.length);
+  const last = chats[SIDEBAR_SESSION_PAGE * 2 - 6];
+  expect(collection.getBranch(null).cursor).toBe(
+    `${SIDEBAR_SESSION_PAGE * 2 - 5}~${last?.createdAt}~${last?.id}`,
+  );
+  act(() => release());
+  await view.unmount();
+});
+
+it("starts a page earlier when more chats went away than the overlap covers", async () => {
+  const { chats, pages } = chatList(30);
+  const view = mountSessions({
+    section: {
+      id: "archived",
+      type: "chats",
+      source: { type: "chats", pageSize: 10 },
+    },
+  });
+  await view.mount();
+  const { collection, release } = await loadRows(view, 1);
+  expect(collection.getBranch(null).ids).toHaveLength(10);
+  // Seven chats on the first page are archived elsewhere: every later
+  // offset moves up by seven, past the five-row overlap.
+  chats.splice(1, 7);
+  // As the archive's own refresh does: the cached pages are stale now.
+  await view.client.invalidateQueries({ refetchType: "none" });
+  pages.length = 0;
+  await act(async () => {
+    await collection.load({ more: true });
+  });
+  expect(pages.map((url) => url.searchParams.get("offset"))).toEqual([
+    "5",
+    "0",
+  ]);
+  // c10 now sits at offset 3: it is read, not skipped.
+  expect(collection.getBranch(null).ids).toContain("c10");
+  act(() => release());
+  await view.unmount();
+});
+
+it("reads on to the last row when more chats arrived above than the overlap covers", async () => {
+  const { chats, pages } = chatList(40);
+  const view = mountSessions({
+    section: {
+      id: "arrived",
+      type: "chats",
+      source: { type: "chats", pageSize: 10 },
+    },
+  });
+  await view.mount();
+  const { collection, release } = await loadRows(view, 1);
+  expect(collection.getBranch(null).ids.at(-1)).toBe("c9");
+  // Twelve chats start before a poll reads every loaded page again: every
+  // later offset moves down by twelve, past the five-row overlap.
+  chats.unshift(
+    ...Array.from({ length: 12 }, (_, index) => ({
+      id: `n${index}`,
+      title: `New ${index}`,
+      visibility: "promoted",
+      parentSessionId: null,
+      childCount: 0,
+      createdAt: new Date(Date.UTC(2026, 0, 2) - index * 60_000).toISOString(),
+    })),
+  );
+  await view.client.invalidateQueries({ refetchType: "none" });
+  pages.length = 0;
+  await act(async () => {
+    await collection.load({ more: true });
+  });
+  // The overlap page holds rows already loaded; the next one holds c9.
+  expect(pages.map((url) => url.searchParams.get("offset"))).toEqual([
+    "5",
+    "15",
+  ]);
+  // The rows after it arrive, not the loaded ones again.
+  expect(collection.getBranch(null).ids.slice(10)).toEqual([
+    "c10",
+    "c11",
+    "c12",
+  ]);
+  const last = chats[24];
+  expect(collection.getBranch(null).cursor).toBe(
+    `25~${last?.createdAt}~${last?.id}`,
+  );
+  act(() => release());
+  await view.unmount();
+});
+
+it("shows an older open chat past the loaded rows without reading up to it", async () => {
+  const { pages, reads } = chatList(12);
+  const view = mountSessions({
+    section: {
+      id: "open",
+      type: "chats",
+      source: { type: "chats", pageSize: 3 },
+    },
+    activeSessionId: "c7",
+  });
+  await view.mount();
+  const { collection, release } = await loadRows(view, 1);
+  await vi.waitFor(() => expect(view.state.open?.id).toBe("c7"));
+  expect(view.state.open).toMatchObject({ parentId: null, hasChildren: false });
+  expect(reads).toEqual(["c7"]);
+  expect(pages).toHaveLength(1);
+  expect(collection.getBranch(null).ids).toHaveLength(3);
+  act(() => release());
+  await view.unmount();
+});
+
+it("shows a fork's family row, and nothing for chats the list does not hold", async () => {
+  const { reads } = chatList(12, [
+    { id: "fork", parentSessionId: "c9", age: 9.5 },
+    { id: "gone", visibility: "archived", age: 8.5 },
+    { id: "fresh", age: 0.5 },
+  ]);
+  const shown = async (activeSessionId: string) => {
+    const view = mountSessions({
+      section: {
+        id: `open-${activeSessionId}`,
+        type: "chats",
+        source: { type: "chats", pageSize: 3 },
+      },
+      activeSessionId,
+    });
+    await view.mount();
+    const { release } = await loadRows(view, 1);
+    await vi.waitFor(() => expect(reads).toContain(activeSessionId));
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    });
+    const open = view.state.open?.id;
+    act(() => release());
+    await view.unmount();
+    return open;
+  };
+  expect(await shown("fork")).toBe("c9");
+  // Archived: not in this list. Newer than the loaded rows: the next poll.
+  expect(await shown("gone")).toBeUndefined();
+  expect(await shown("fresh")).toBeUndefined();
 });

@@ -3,7 +3,8 @@ import { createInterface } from "node:readline";
 
 export interface CodexModel {
   id: string;
-  name: string;
+  /** The catalog's display name; absent when it gives none. */
+  name?: string;
   description?: string;
   supportsEffort: boolean;
   supportedEffortLevels: ("low" | "medium" | "high" | "xhigh" | "max")[];
@@ -61,7 +62,8 @@ export async function resolveCodexModel({
       : catalog.find((candidate) => candidate.isDefault);
     const id = configured ?? entry?.model.id;
     if (!id) return null;
-    return { id, ...(entry ? { name: entry.model.name } : {}) };
+    const name = entry?.model.name;
+    return { id, ...(name ? { name } : {}) };
   });
 }
 
@@ -104,10 +106,9 @@ async function readCatalog(
       models.set(entry.model, {
         model: {
           id: entry.model,
-          name:
-            typeof entry.displayName === "string"
-              ? entry.displayName
-              : entry.model,
+          ...(typeof entry.displayName === "string" && entry.displayName
+            ? { name: entry.displayName }
+            : {}),
           ...(typeof entry.description === "string"
             ? { description: entry.description }
             : {}),

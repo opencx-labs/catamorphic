@@ -2,6 +2,10 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import {
+  orderedTurns,
+  sessionStateFromSnapshot,
+} from "@catamorphic/agent-protocol";
+import {
   type ConnectionProvider,
   formatProjectAgentId,
   projectDataDirectory,
@@ -31,10 +35,17 @@ import { createPushTransport } from "@catamorphic/server-sdk/web-push";
 import { PGlite } from "@electric-sql/pglite";
 import { pgcrypto } from "@electric-sql/pglite/contrib/pgcrypto";
 import cors from "@fastify/cors";
-import { BrowserWindow } from "electron";
+import { BrowserWindow, app as electronApp } from "electron";
 import Fastify, { type FastifyInstance } from "fastify";
 import { Kysely, PGliteDialect, sql, WithSchemaPlugin } from "kysely";
+import { rosterAgentId } from "../../shared/voice.js";
 import type { WorkspaceBridge } from "../agent-bridge.js";
+import { readAgentCredentials } from "../agent-credentials.js";
+import {
+  accessTokenFresh,
+  signInRefreshable,
+  signInUsable,
+} from "../auth-health.js";
 import type { ConnectorsService } from "../connectors.js";
 import { DesktopCredentialVault } from "../credential-vault.js";
 import {
@@ -58,6 +69,10 @@ import { RemoteClientRunners } from "../remote-client-runner.js";
 import { RemoteSessionMirror } from "../remote-mirror.js";
 import { RemotePreviewOrigins } from "../remote-previews.js";
 import type { RemoteTerminalRequest } from "../remote-terminal.js";
+import {
+  changesChatLists,
+  startSessionChangeHints,
+} from "../session-change-hints.js";
 import { shutdownDesktopServices } from "../shutdown.js";
 import { userSkillFiles, userSkillInfos } from "../user-skills.js";
 import {
@@ -92,6 +107,7 @@ import { ProjectRootsStore } from "./project-roots.js";
 import { REMOTE_ENVIRONMENT_SKILL } from "./remote-environment-skill.js";
 import { SessionCheckouts } from "./session-checkouts.js";
 import { SessionNotes } from "./session-notes.js";
+import { mayRunAgain, SignInRecovery } from "./sign-in-recovery.js";
 import { syncReport } from "./sync-report.js";
 import {
   DESKTOP_MCP_TOOL_KINDS,
@@ -108,6 +124,12 @@ import { WorkspaceStateStore } from "./workspace-state.js";
 /** The desktop app is single-tenant: one fixed identity for the machine. */
 export const DESKTOP_TENANT_ID = "00000000-0000-4000-8000-00000000d001";
 export const DESKTOP_USER_ID = "desktop-user";
+/**
+ * How often the embedded server's idle pollers look for work no write in
+ * this process announced (ADR 0229): scheduled retries and timers carry
+ * their own due time, so this bounds only what nothing hinted.
+ */
+const DESKTOP_IDLE_POLL_MS = 5_000;
 
 export interface EmbeddedServer {
   url: string;
@@ -134,6 +156,8 @@ export interface EmbeddedServer {
   workspaceStates: WorkspaceStateStore;
   /** Dynamic roster of configured agents (per-profile agents.json files). */
   agentRegistry: DesktopAgentRegistry;
+  /** Runs chats failed on a sign-in again once it works (ADR 0228). */
+  signInRecovery: SignInRecovery;
   /** Desktop trigger kinds: firing helpers for chat/terminal event sources. */
   triggers: DesktopTriggers;
   hasCodingAgent: boolean;
@@ -152,6 +176,11 @@ export interface EmbeddedServer {
   syncSessionMailboxes: () => void;
   /** The member's remote environment per linked project (ADR 0184). */
   personalEnvironment: PersonalEnvironmentSync;
+  /**
+   * Hear when this server's chats may have changed (ADR 0229): it logged
+   * session events or served a change to a project. Bursts arrive as one.
+   */
+  onSessionsChanged: (listener: () => void) => () => void;
   sessionMoveEligibility: (
     projectId: string,
     sessionId: string,
@@ -414,6 +443,11 @@ export async function startEmbeddedServer(
           )
         : Promise.reject(new Error("agent sessions unavailable")),
   });
+  // Where agents' own harness sign-ins live on this machine (ADR 0199).
+  const credentialPlaces = {
+    homeDir: electronApp.getPath("home"),
+    agentHomesDir: paths.agentHomesDir,
+  };
   const connectorTokens = connectorMcpTokens();
   const agentRegistry = new DesktopAgentRegistry({
     profiles,
@@ -458,6 +492,62 @@ export async function startEmbeddedServer(
     // Where the chat works, when it is not the project folder (ADR 0215).
     checkoutNotice: (projectId, sessionId) =>
       sessionCheckouts.notice({ projectId, sessionId }),
+    // A turn turned away on a sign-in that can still refresh retries once
+    // (ADR 0228); its CLI writes a debug log under Work's logs.
+    signInRefreshable: async (signIn) =>
+      signInRefreshable({
+        harness: signIn.harness,
+        raw: (await readAgentCredentials(signIn, credentialPlaces)).raw,
+        now: Date.now(),
+      }),
+    logsDir: electronApp.getPath("logs"),
+  });
+  // A chat that failed on its agent's sign-in runs again once the sign-in
+  // works, however it came back (ADR 0228).
+  const signInRecovery = new SignInRecovery({
+    credentialAgentId: rosterAgentId,
+    signInFor: (agentId) => agentRegistry.signInFor(agentId),
+    readSignIn: async (signIn) => {
+      const credentials = await readAgentCredentials(signIn, credentialPlaces);
+      const read = {
+        harness: signIn.harness,
+        raw: credentials.raw,
+        now: Date.now(),
+      };
+      return {
+        fingerprint: credentials.fingerprint,
+        usable: signInUsable(read),
+        fresh: accessTokenFresh(read),
+      };
+    },
+    mayRunAgain: async ({ projectId, sessionId, turnId }) => {
+      const service = catamorphic.core.agentSessions;
+      if (!service) return false;
+      const detail = await service.get(desktopIdentity, projectId, sessionId);
+      const state = sessionStateFromSnapshot(detail.snapshot);
+      return mayRunAgain({
+        turnId,
+        session: detail,
+        turns: orderedTurns(state),
+        items: state.items,
+      });
+    },
+    retry: async ({ projectId, sessionId, turnId }) => {
+      const service = catamorphic.core.agentSessions;
+      if (!service) return;
+      // A message the person sent since comes first: the retry is refused.
+      const receipt = await service.command(
+        desktopIdentity,
+        projectId,
+        sessionId,
+        { type: "retry", commandId: randomUUID(), turnId },
+        { ifLatestTurnId: turnId },
+      );
+      if (receipt.status === "rejected" && receipt.error?.code !== "not_latest")
+        console.warn(
+          `[desktop] A chat's turn did not run again after its agent signed in: ${receipt.error?.message ?? "rejected"}`,
+        );
+    },
   });
   if (e2eFakeAgent) {
     const agents = profileConfig.forDefaultProfile().agents;
@@ -471,6 +561,10 @@ export async function startEmbeddedServer(
   // and it backs import, sync, pull requests, and the event poller.
   const github = desktopGithubProvider();
   const catamorphic = createCatamorphic({
+    // Every write to this database is this process's own, and each one
+    // wakes the poller it concerns at once, so idle pollers look rarely
+    // (ADR 0229).
+    idlePollMs: DESKTOP_IDLE_POLL_MS,
     hostSkills: (defaults) => ({
       ...defaults,
       "configuring-catamorphic-desktop/SKILL.md": DESKTOP_SETTINGS_SKILL,
@@ -594,6 +688,7 @@ export async function startEmbeddedServer(
     // settle later, once a chat message round-trips.
     onToolAlwaysAllowed: (event) => agentRegistry.rememberToolAllowed(event),
     onAgentTurnSettled: (event) => {
+      signInRecovery.settled(event);
       // The browser tabs the turn drove go back to the person.
       void workspaceBridge
         ?.releaseTurn(event.projectId, {
@@ -1090,6 +1185,25 @@ export async function startEmbeddedServer(
         activity,
       );
     },
+    setMetadata: async (projectId, sessionId, values) => {
+      const service = catamorphic.core.agentSessions;
+      if (!service) throw new Error("Agent sessions are not configured");
+      return service.setMetadata({
+        identity: desktopIdentity,
+        projectId,
+        sessionId,
+        values,
+      });
+    },
+    readMetadata: async (projectId, sessionId) => {
+      const service = catamorphic.core.agentSessions;
+      if (!service) throw new Error("Agent sessions are not configured");
+      return service.metadata({
+        identity: desktopIdentity,
+        projectId,
+        sessionId,
+      });
+    },
   });
   agentRegistry.workspaceToolkit?.setTodoListBridge({
     read: async (projectId, sessionId) => {
@@ -1357,6 +1471,27 @@ export async function startEmbeddedServer(
           .send({ error: "Project has no remote authority" });
     },
   });
+  // Chat lists in the app's windows refresh on these hints rather than on
+  // a short poll (ADR 0229).
+  const sessionsListeners = new Set<() => void>();
+  const sessionHints = startSessionChangeHints({
+    wakeups: catamorphic.core.wakeups,
+    send: () => {
+      for (const listener of sessionsListeners) listener();
+    },
+  });
+  app.addHook("onResponse", (request, _reply, done) => {
+    // A request that changes chats (from any window, tool or client) hints
+    // beside core's own hints; other project requests never do.
+    if (
+      changesChatLists({
+        method: request.method,
+        route: request.routeOptions.url,
+      })
+    )
+      sessionHints.hint();
+    done();
+  });
   app.addHook("onSend", (request, reply, payload, done) => {
     if (
       request.method === "GET" &&
@@ -1489,6 +1624,8 @@ export async function startEmbeddedServer(
     monitors: catamorphic.core.projectEventMonitors,
     providers: catamorphic.core.projectEventSources,
     placement: "local",
+    idlePollMs: DESKTOP_IDLE_POLL_MS,
+    wakeups: catamorphic.core.wakeups,
   });
   const eventDispatcher = startEventDispatcher({ core: catamorphic.core });
   const suspendExecution = async () => {
@@ -1590,8 +1727,11 @@ export async function startEmbeddedServer(
       clearInterval(notificationTimer);
       clearInterval(sessionMailboxTimer);
       clearInterval(sessionMirrorTimer);
+      sessionHints.dispose();
+      sessionsListeners.clear();
       clearInterval(scheduleTimer);
       sessionNotes.dispose();
+      signInRecovery.dispose();
       await shutdownDesktopServices({
         steps: [
           { name: "schedules", dispose: () => scheduleTick?.catch(() => {}) },
@@ -1632,6 +1772,7 @@ export async function startEmbeddedServer(
     returnSessionToProjectFolder,
     workspaceStates,
     agentRegistry,
+    signInRecovery,
     triggers,
     get hasCodingAgent() {
       return agentRegistry.hasAgents();
@@ -1640,6 +1781,10 @@ export async function startEmbeddedServer(
     resumeExecution,
     syncSessionMailboxes: () => sessionMirror.syncMailboxesInBackground(),
     personalEnvironment,
+    onSessionsChanged: (listener) => {
+      sessionsListeners.add(listener);
+      return () => sessionsListeners.delete(listener);
+    },
     sessionMoveEligibility: (projectId, sessionId) =>
       sessionMirror.eligibility(projectId, sessionId),
     moveSessionToServer: (projectId, sessionId) =>
