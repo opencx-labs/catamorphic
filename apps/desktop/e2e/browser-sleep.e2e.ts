@@ -117,8 +117,14 @@ describe("sleeping tabs", () => {
     await app.waitFor(asleep("Sleep fixture b"), {
       label: "hidden tab asleep",
     });
-    expect(await app.eval(`!!${pageWith("Sleep fixture b")}`)).toBe(false);
-    expect(await pageTargets()).not.toContain(`${origin}/long/b`);
+    // The tab reads asleep as soon as it is put to sleep; its guest goes
+    // once main has kept the page's state, an IPC round trip later.
+    await app.waitFor(`!${pageWith("Sleep fixture b")}`, {
+      label: "hidden tab's guest gone",
+    });
+    await expect
+      .poll(pageTargets, { timeout: 10_000 })
+      .not.toContain(`${origin}/long/b`);
 
     await showTab("Sleep fixture b");
     await pageReady("Sleep fixture b");
