@@ -20,7 +20,7 @@ export default defineConfig({
   },
   server: {
     watch: {
-      // Un-ignore workspace dists so a `tsup --watch` rebuild reloads the app.
+      // Un-ignore workspace dists so a package watcher's rebuild reloads the app.
       ignored: ["!**/node_modules/@catamorphic/**"],
     },
   },

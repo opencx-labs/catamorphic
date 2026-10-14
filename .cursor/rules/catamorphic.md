@@ -9,7 +9,7 @@ alwaysApply: false
 `AGENTS.md` is the source of truth. This is a digest; when they differ, follow `AGENTS.md`.
 
 - **Embed first.** Catamorphic is libraries a host mounts in-process. The host supplies auth, identity, database, storage, sandbox and LLM credentials. Never add a standalone boot, default tenant, default user, or hard-coded path, port, or env layout. `apps/desktop` is the reference host.
-- **Every dependency is an axis.** Hosts construct providers explicitly at boot: Postgres or PGlite; Cloudflare, Daytona, microsandbox, or local-process execution; S3-compatible or filesystem storage. Libraries never sniff env to pick one.
+- **Every dependency is an axis.** Hosts construct providers explicitly at boot: Postgres or PGlite; Cloudflare, microsandbox, container, or local-process execution; S3-compatible or filesystem storage. Libraries never sniff env to pick one.
 - **Postgres for state.** Queues, retries, pauses, batch state and schedules live in the host's Postgres (`SKIP LOCKED`), not new infrastructure.
 - **Code is the source of truth.** Workflows and apps are TypeScript. Never invent a JSON format or DSL for workflow logic.
 - **One Workflow model (ADR 0040).** Every workflow is an exported `defineWorkflow(({ defineBoundary, defineBatch }) => ({ steps: [...] }))`. IO lives in `"use step"` functions called from boundary bodies. Every run executes a deployed commit or session artifact. Do not add a public `stage`, a workflow category, or a separate Run family.

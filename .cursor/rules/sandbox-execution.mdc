@@ -1,6 +1,6 @@
 ---
 description: Workflow execution - sandbox providers, run lifecycle, execution placement, step instrumentation, and coding-agent harnesses
-globs: packages/sandbox/**,packages/runtime/**,packages/microsandbox/**,packages/local-process/**,packages/cloudflare/**,packages/daytona/**,packages/core/src/services/run*.ts,packages/core/src/services/*execution*.ts,packages/core/src/services/deployment*.ts,packages/core/src/services/*sandbox*.ts,packages/parser/src/execution-transform.ts
+globs: packages/sandbox/**,packages/runtime/**,packages/microsandbox/**,packages/local-process/**,packages/cloudflare/**,packages/container/**,packages/core/src/services/run*.ts,packages/core/src/services/*execution*.ts,packages/core/src/services/deployment*.ts,packages/core/src/services/*sandbox*.ts,packages/parser/src/execution-transform.ts
 alwaysApply: false
 ---
 
@@ -9,7 +9,7 @@ alwaysApply: false
 ## Providers are chosen by the host
 
 - Execution sits behind `SandboxProvider` / `SandboxManager` in `@catamorphic/sandbox`, which holds only vendor-neutral contracts and never depends on a vendor SDK.
-- Implementations are separate packages (ADR 0008): `@catamorphic/cloudflare` (default cloud provider, `CLOUDFLARE.md`), `@catamorphic/daytona`, `@catamorphic/microsandbox` (local microVMs; the desktop default), and `@catamorphic/local-process` (plain subprocesses, trusted single-tenant hosts only, ADR 0047; the stock server default).
+- Implementations are separate packages (ADR 0008): `@catamorphic/cloudflare` (the cloud provider, `CLOUDFLARE.md`), `@catamorphic/microsandbox` (local microVMs; the desktop default), `@catamorphic/container` (OCI containers under gVisor or runc, ADR 0204), and `@catamorphic/local-process` (plain subprocesses, trusted single-tenant hosts only, ADR 0047; the stock server default).
 - Hosts construct one at boot and pass `createCatamorphic({ sandboxProvider, environmentProvider })`. Libraries never pick a provider from env. Environments and allocations (ADR 0064, 0099) decide where work runs.
 - Routes never call vendor SDKs; they go through core services.
 - `CatamorphicCore` wraps the provider with `instrumentSandboxProvider`. Do not wrap it again, and keep the wrapper's passthrough of optional methods such as `hydrateWorkspace` when extending the contract.

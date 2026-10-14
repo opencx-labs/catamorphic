@@ -10,7 +10,7 @@
     "dev": "bun --watch src/index.ts",
     "start": "bun src/index.ts",
     "build": "tsc --project tsconfig.json --noEmit",
-    "typecheck": "tsgo --project ./tsconfig.json",
+    "typecheck": "bun check --project ./tsconfig.json",
     "test": "bun ../../scripts/tool-runtime.ts vitest --tool-cwd apps/server --config ../../vitest.config.ts"
   },
   "dependencies": {

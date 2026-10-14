@@ -197,17 +197,13 @@ function elicitationContent(
 }
 
 /** The server policies govern for a tool, longest key first (`a__b` before `a`). */
-function policedServer(
+export function policedServer(
   toolName: string,
   policies: AttemptStart["toolPolicies"],
 ): { server: string; tool: string } | undefined {
-  if (!toolName.startsWith("mcp__")) return undefined;
-  const server = Object.keys(policies)
-    .filter((name) => toolName.startsWith(`mcp__${name}__`))
-    .sort((a, b) => b.length - a.length)[0];
-  return server
-    ? { server, tool: toolName.slice(`mcp__${server}__`.length) }
-    : undefined;
+  const mcp = parseMcpToolName(toolName, Object.keys(policies));
+  // Own keys only: a server named `toString` has no policy.
+  return mcp && Object.hasOwn(policies, mcp.server) ? mcp : undefined;
 }
 
 /** A host tool call's tool-use id, when the CLI names it in the call's `_meta`. */
@@ -336,6 +332,8 @@ class ClaudeAttempt {
   private readonly interruptGraceMs: number;
   private readonly exitGraceMs: number;
   private readonly sessions?: WarmSessions<ClaudeSession>;
+  /** Every MCP server name the attempt configured, host servers included. */
+  private readonly servers: readonly string[];
   readonly transcript: ClaudeTranscript;
   private session?: ClaudeSession;
   /** Where the session's stderr stood when this attempt began. */
@@ -373,9 +371,12 @@ class ClaudeAttempt {
     this.interruptGraceMs = input.interruptGraceMs;
     this.exitGraceMs = input.exitGraceMs;
     this.sessions = input.sessions;
+    const hostServers = new Set(this.attempt.hostTools.map(hostToolServer));
+    this.servers = [...Object.keys(this.attempt.mcpServers), ...hostServers];
     this.transcript = new ClaudeTranscript(
       (event) => this.host.emit(event),
-      new Set(this.attempt.hostTools.map(hostToolServer)),
+      hostServers,
+      this.servers,
     );
   }
 
@@ -850,7 +851,7 @@ class ClaudeAttempt {
         ? { behavior: "allow", updatedInput: toolInput }
         : { behavior: "deny", message: verdict.message };
     }
-    const mcp = parseMcpToolName(toolName);
+    const mcp = parseMcpToolName(toolName, this.servers);
     return {
       behavior: "deny",
       message: mcp

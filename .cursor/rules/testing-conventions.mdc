@@ -11,7 +11,7 @@ alwaysApply: false
 - `bun run test` runs the deterministic root and workspace tests. It creates one disposable Postgres database per invocation, so **Docker must be running**. It prints `test-postgres container=<name> published-port=<port>` when ready.
 - `bun run check` is the merge gate (lint, typechecks, tests, PWA and desktop checks). Run it before finishing.
 - `bun run test:file <path>` runs one unit test file with Vitest while iterating (it provides no database).
-- `bun run test:external` is the only way to contact Daytona, Cloudflare, S3, Codex, or another credentialed service. Run it only with explicit authority; credentials in the environment are not permission.
+- `bun run test:external` is the only way to contact Cloudflare, S3, Codex, or another credentialed service. Run it only with explicit authority; credentials in the environment are not permission.
 - `bun run dev:infra` is observability and sandbox-bridge infrastructure, not test infrastructure. Tests must never need it.
 - Desktop E2E suites have their own commands and rules in `apps/desktop/AGENTS.md`.
 
@@ -23,9 +23,9 @@ alwaysApply: false
 ```typescript
 const EXTERNAL_INTEGRATIONS =
   process.env.CATAMORPHIC_EXTERNAL_INTEGRATIONS === "1";
-const DAYTONA_API_KEY = process.env.DAYTONA_API_KEY;
+const S3_BUCKET = process.env.S3_BUCKET;
 const describeIf =
-  EXTERNAL_INTEGRATIONS && DAYTONA_API_KEY ? describe : describe.skip;
+  EXTERNAL_INTEGRATIONS && S3_BUCKET ? describe : describe.skip;
 ```
 
 ## Isolation

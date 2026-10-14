@@ -133,7 +133,10 @@ describe("sign-ins on a machine", () => {
     const version = spawnSync(carried.command, [...carried.args, "--version"], {
       encoding: "utf8",
     });
-    expect(version.stdout).toContain("0.160.0");
+    const manifest: { dependencies: Record<string, string> } = JSON.parse(
+      fs.readFileSync(new URL("../../package.json", import.meta.url), "utf8"),
+    );
+    expect(version.stdout).toContain(manifest.dependencies["@openai/codex"]);
   });
 
   it("refuses member ids that are not one path segment", () => {

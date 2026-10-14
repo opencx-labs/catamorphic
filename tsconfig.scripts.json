@@ -4,7 +4,7 @@
     "declaration": false,
     "declarationMap": false,
     "sourceMap": false,
-    "types": ["node"],
+    "types": ["node", "bun"],
     "paths": {
       "@catamorphic/workflow/project-layout": [
         "./packages/workflow/src/project-layout.ts"

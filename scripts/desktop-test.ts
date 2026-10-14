@@ -42,6 +42,20 @@ export function includeDesktopTestSource(file: string): boolean {
     );
 }
 
+/**
+ * What `bun install` reads: the image's dependency layer holds only these,
+ * so it stays cached across source edits. `vendor/` holds the stand-ins the
+ * root overrides install (`file:./vendor/...`).
+ */
+export function isInstallInput(file: string): boolean {
+  return (
+    file === "bun.lock" ||
+    file === "package.json" ||
+    /^(packages|apps)\/[^/]+\/package.json$/.test(file) ||
+    file.startsWith("vendor/")
+  );
+}
+
 export function desktopVitestArguments(input: {
   args: readonly string[];
   artifacts: string;
@@ -138,11 +152,7 @@ async function main(): Promise<void> {
         const destination = path.join(context, "source", file);
         await mkdir(path.dirname(destination), { recursive: true });
         await cp(source, destination);
-        if (
-          file === "bun.lock" ||
-          file === "package.json" ||
-          /^(packages|apps)\/[^/]+\/package.json$/.test(file)
-        ) {
+        if (isInstallInput(file)) {
           const manifest = path.join(context, "manifests", file);
           await mkdir(path.dirname(manifest), { recursive: true });
           await cp(source, manifest);

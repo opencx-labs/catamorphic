@@ -13,15 +13,25 @@
     },
     "./attachments": {
       "bun": "./src/coding-agent/text-attachments.ts",
-      "import": "./dist/attachments.js",
+      "import": "./dist/coding-agent/text-attachments.js",
       "types": "./dist/coding-agent/text-attachments.d.ts"
     }
   },
   "scripts": {
-    "build": "tsup && tsc --project tsconfig.json --noEmit false --emitDeclarationOnly",
-    "dev": "tsup --watch --no-clean",
+    "build": "bun ../../scripts/build-package.ts && tsc --project tsconfig.json --noEmit false --emitDeclarationOnly",
+    "dev": "bun ../../scripts/build-package.ts --watch",
     "test": "bun ../../scripts/tool-runtime.ts vitest --tool-cwd packages/sandbox --config ../../vitest.config.ts",
-    "typecheck": "tsgo --project ./tsconfig.json"
+    "typecheck": "bun check --project ./tsconfig.json"
+  },
+  "bundle": {
+    "entry": [
+      "src/index.ts",
+      "src/coding-agent/text-attachments.ts"
+    ],
+    "external": [
+      "@catamorphic/sandbox"
+    ],
+    "splitting": false
   },
   "dependencies": {
     "@catamorphic/otel": "workspace:*",

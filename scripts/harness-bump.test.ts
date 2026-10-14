@@ -5,6 +5,7 @@ import {
   applyRelease,
   componentTargets,
   HARNESSES,
+  pinDependency,
   pinnedSdkVersion,
 } from "./harness-bump.js";
 
@@ -42,13 +43,30 @@ describe("harness pins", () => {
     );
   });
 
-  it("keep Codex's SDK and the desktop download in step", () => {
+  it("keep Codex's SDK, the desktop download and the Work server's CLI in step", () => {
     const harness = HARNESSES.codex;
     const sdk = pinnedSdkVersion(harness, read(harness.packageJson));
     const manifest = installed("packages/codex", harness.sdk);
     expect(manifest.version).toBe(sdk);
-    expect(constant("CODEX_VERSION")).toBe(
-      manifest.dependencies?.["@openai/codex"],
+    const cli = manifest.dependencies?.["@openai/codex"];
+    expect(constant("CODEX_VERSION")).toBe(cli);
+    expect(harness.cliPackageJsons).not.toHaveLength(0);
+    for (const pin of harness.cliPackageJsons ?? []) {
+      const pinned: { dependencies?: Record<string, string> } = JSON.parse(
+        read(pin.packageJson),
+      );
+      expect(pinned.dependencies?.[pin.name]).toBe(cli);
+    }
+  });
+
+  it("rewrites one dependency's pin and refuses a manifest without it", () => {
+    const manifest =
+      '{\n  "dependencies": {\n    "@openai/codex": "1.0.0",\n    "fastify": "^5.0.0"\n  }\n}\n';
+    expect(pinDependency(manifest, "@openai/codex", "2.0.0")).toBe(
+      manifest.replace('"1.0.0"', '"2.0.0"'),
+    );
+    expect(() => pinDependency(manifest, "@openai/codex-sdk", "2.0.0")).toThrow(
+      "No @openai/codex-sdk dependency",
     );
   });
 

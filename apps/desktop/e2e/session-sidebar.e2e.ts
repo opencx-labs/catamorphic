@@ -261,16 +261,24 @@ it("leaves with the chat, and comes back to the person's choice", async () => {
 
 it("turns back from a quick change on the same tab", async () => {
   // Away and straight back, inside one motion: the tab that was leaving
-  // returns as the same element, and nothing is left leaving.
-  await app.eval(`(() => {
+  // returns as the same element, and nothing is left leaving. The way back
+  // is clicked in the page the moment the tab starts leaving: the round
+  // trips of a wait and another eval could outlast the 200 ms leave on a
+  // slow runner, and a tab that finished leaving comes back as a new one.
+  await app.eval(`(async () => {
     window.__thisSessionTab = document.querySelector('${thisSessionTab}');
+    const leaving = () => document.querySelector('${right} [data-sidebar-tab-leaving]');
+    const started = new Promise((resolve, reject) => {
+      const observer = new MutationObserver(() => {
+        if (leaving()) { observer.disconnect(); resolve(); }
+      });
+      observer.observe(document.body, { subtree: true, childList: true, attributes: true });
+      setTimeout(() => { observer.disconnect(); reject(new Error("This session never started leaving")); }, 5000);
+    });
     document.querySelector('${visible} [aria-label="New tab"]').click();
+    await started;
+    document.querySelector('${visible} [data-sidebar="left"] [data-sidebar-item-id="${sessionId}"] [data-tree-primary]').click();
   })()`);
-  await app.waitFor(
-    `!!document.querySelector('${right} [data-sidebar-tab-leaving]')`,
-    { label: "This session leaving" },
-  );
-  await openChat();
   await app.waitFor(
     `document.querySelector('${thisSessionTab}') === window.__thisSessionTab && !document.querySelector('${right} [data-sidebar-tab-leaving]') && !document.querySelector('${right} .sidebar-tab-slot-leaving, ${right} .sidebar-strip-folding')`,
     { label: "the same tab back, settled" },

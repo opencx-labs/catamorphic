@@ -53,7 +53,7 @@ function fixture() {
     JSON.stringify({
       name: "cache-fixture",
       private: true,
-      packageManager: "bun@1.3.14",
+      packageManager: "bun@1.4.3",
       workspaces: ["packages/*"],
     }),
   );

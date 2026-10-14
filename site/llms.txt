@@ -15,9 +15,10 @@
 > deployment. The framework is embedded in-process; the stock server is a
 > reference host, not a required hosted service.
 > Every dependency is an axis: network Postgres or embedded pglite; cloud
-> sandboxes (Cloudflare, Daytona), local sandboxes (microsandbox), plain
-> local processes for trusted single-tenant hosts, or none; S3-compatible
-> storage or plain directories; multi-tenant identity or one fixed user.
+> sandboxes (Cloudflare), local sandboxes (microsandbox, gVisor
+> containers), plain local processes for trusted single-tenant hosts, or
+> none; S3-compatible storage or plain directories; multi-tenant identity
+> or one fixed user.
 > The desktop app runs the lightest column (pglite, local sandboxes, no
 > server) as proof.
 

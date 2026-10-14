@@ -1,6 +1,6 @@
 FROM node:24.13.0-bookworm-slim@sha256:4660b1ca8b28d6d1906fd644abe34b2ed81d15434d26d845ef0aced307cf4b6f AS node
 # Debian 13 supplies the glibc >= 2.39 required by microsandbox's ARM binding.
-FROM oven/bun:1.3.14-debian@sha256:9dba1a1b43ce28c9d7931bfc4eb00feb63b0114720a0277a8f939ae4dfc9db6f
+FROM oven/bun:1.4.3-debian@sha256:923bedb355f7746666659f71e724998159a5c8c54bd1cb1030e1975a0698415b
 
 RUN apt-get update && apt-get install --yes --no-install-recommends \
     ca-certificates git openssh-client python3 make g++ \

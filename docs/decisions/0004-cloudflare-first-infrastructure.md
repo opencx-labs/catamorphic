@@ -1,6 +1,6 @@
 # 0004 — Cloudflare-first infrastructure (Sandbox now, Artifacts next)
 
-- **Status:** Accepted (updated by [0008](0008-vendor-plugin-packages.md) for vendor packages and [0012](0012-s3-compatible-origin-backend.md) for generally available code storage)
+- **Status:** Accepted (updated by [0008](0008-vendor-plugin-packages.md) for vendor packages and [0012](0012-s3-compatible-origin-backend.md) for generally available code storage; the Daytona fallback was removed by [0231](0231-daytona-support-is-removed.md))
 - **Date:** 2026-07-02
 
 ## Context

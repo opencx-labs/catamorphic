@@ -36,7 +36,7 @@ alwaysApply: false
 
 Two contracts in `packages/git/src/types.ts`:
 
-- **`StorageBackend`** (working copies): `FsBackend` (a host-resolved project root folder, or `<basePath>/<tenantId>/<projectId>/dev/<externalUserId>/`) and `DaytonaBackend` (`@catamorphic/daytona`, experimental).
+- **`StorageBackend`** (working copies): `FsBackend` (a host-resolved project root folder, or `<basePath>/<tenantId>/<projectId>/dev/<externalUserId>/`).
 - **`RemoteBackend`** (bare origins): `FsRemoteBackend`, `ObjectRemoteBackend` over any object store (`S3ObjectStore` from `@catamorphic/s3`, ADR 0012), `ArtifactsRemoteBackend` (`@catamorphic/cloudflare`), and `CheckoutRemoteBackend` for attached local checkouts. Remote sync (`syncWithNetworkRemote`, ADR 0044) fetches, merges, pushes, and keeps rescue branches.
 
 Working-copy file APIs reject absolute paths, `..`, and `.git` access. Remote backends isolate by tenant and project key and update refs with compare-and-swap.

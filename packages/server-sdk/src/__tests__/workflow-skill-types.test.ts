@@ -89,7 +89,7 @@ async function typecheck(files: Record<string, string>): Promise<void> {
       }),
     );
     const result = await promisify(execFile)(
-      path.join(root, "node_modules/.bin/tsgo"),
+      path.join(root, "node_modules/.bin/tsc"),
       ["--project", path.join(sources, "tsconfig.json")],
       { timeout: 30000 },
     );

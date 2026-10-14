@@ -30,7 +30,7 @@ RUN set -e; \
   chmod a+rx /usr/local/bin/runsc /usr/local/bin/containerd-shim-runsc-v1; \
   rm -f gvisor.tar.bz2; \
   runsc --version
-RUN npm install -g bun@1.3.14 && bun --version
+RUN npm install -g bun@1.4.3 && bun --version
 # Work's runtime arguments (ADR 0204): host sockets for the egress proxy,
 # raw sockets for nested Docker.
 RUN mkdir -p /etc/docker && printf '%s\n' \

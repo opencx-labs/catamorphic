@@ -51,8 +51,9 @@ export const catamorphic = createCatamorphic({
     remotesPath: process.env.CATAMORPHIC_REMOTES_PATH!,
   },
 
-  // Backends are vendor plugin packages: @catamorphic/cloudflare (default)
-  // or @catamorphic/daytona. Omit for read-only embeds.
+  // Backends are packages the host constructs: @catamorphic/cloudflare,
+  // @catamorphic/microsandbox, @catamorphic/container, or
+  // @catamorphic/local-process. Omit for read-only embeds.
   sandboxProvider,
   environmentProvider,
 });

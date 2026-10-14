@@ -320,7 +320,7 @@ Every dependency is an axis with a heavy and a light end. Pick per axis:
 | Axis | Heavy end | Light end |
 | --- | --- | --- |
 | Database | Network Postgres (`{ pool }` / `{ connectionString }`) | **Embedded pglite** (Kysely `PGliteDialect` via `database: { db }`; migrations run statement-by-statement so single-connection dialects just work) |
-| Execution | Cloud sandboxes: `@catamorphic/cloudflare`, `@catamorphic/daytona` | **Local sandboxes** (`@catamorphic/microsandbox`, or `@catamorphic/container` under gVisor on any Linux machine with Docker and gVisor), plain local processes (`@catamorphic/local-process`, trusted single-tenant hosts only), or none (read-only embed) |
+| Execution | Cloud sandboxes: `@catamorphic/cloudflare` | **Local sandboxes** (`@catamorphic/microsandbox`, or `@catamorphic/container` under gVisor on any Linux machine with Docker and gVisor), plain local processes (`@catamorphic/local-process`, trusted single-tenant hosts only), or none (read-only embed) |
 | Code storage | S3-compatible bucket (`@catamorphic/s3`) or Cloudflare Artifacts | Two writable directories |
 | Identity | Host org/user per request | One fixed tenant/user |
 | Surface | HTTP API + React UI | In-process SDK calls, or migrations-only |
@@ -382,7 +382,6 @@ Supporting packages (consumed through the surface above, importable directly for
 | `@catamorphic/local-process` | Sandboxless execution as plain subprocesses with an explicit env. Trusted single-tenant hosts only (ADR 0047). |
 | `@catamorphic/cloudflare` | Cloudflare backend plugin: `CloudflareSandboxProvider` (execution via Bridge Worker) + `ArtifactsRemoteBackend` (Cloudflare-native code storage when available). |
 | `@catamorphic/s3` | S3-compatible git origin backend for Cloudflare R2, AWS S3, MinIO, and similar stores. |
-| `@catamorphic/daytona` | Daytona backend plugin: `DaytonaSandboxProvider` + experimental Daytona git storage. |
 | `@catamorphic/hetzner` | Hetzner Cloud client and machine provisioner behind the Work server's `hetzner-cloud` machine classes (ADR 0205). |
 | `@catamorphic/ai-sdk` | Built-in harness adapter: Vercel AI SDK tool loop on any API model, running in the host and driving the session's sandbox through its tools. |
 | `@catamorphic/claude-code` | Harness adapter backed by the Claude Code (Claude Agent SDK) CLI, with per-turn MCP servers, portable native state and full settings-source fidelity. |
@@ -441,8 +440,8 @@ const catamorphic = createCatamorphic({
     projectsPath: process.env.CATAMORPHIC_PROJECTS_PATH!,
     remotesPath: process.env.CATAMORPHIC_REMOTES_PATH!,
   },
-  // Backend plugins: @catamorphic/cloudflare, @catamorphic/daytona,
-  // @catamorphic/microsandbox, or @catamorphic/local-process
+  // Backend plugins: @catamorphic/cloudflare, @catamorphic/microsandbox,
+  // @catamorphic/container, or @catamorphic/local-process
   sandboxProvider,
   environmentProvider,
 });
@@ -750,7 +749,7 @@ bun run build       # Build all packages
 bun run test        # Deterministic root and Postgres-complete workspace tests
 bun run test:external # Explicit opt-in for credentialed external integrations
 bun run check       # 11-phase merge gate
-bun run typecheck   # Typecheck all packages with tsgo
+bun run typecheck   # Typecheck all packages with bun check
 bun run lint        # Lint with Biome
 bun run lint:fix    # Auto-fix lint issues
 bun run db:migrate  # Apply migrations to the DB pointed at by DATABASE_URL
@@ -793,7 +792,6 @@ They require the explicit `bun run test:external` authority, which sets
 `CATAMORPHIC_EXTERNAL_INTEGRATIONS=1`, and skip when their service-specific
 configuration is absent:
 
-- **Daytona** (`packages/daytona`): needs `DAYTONA_API_KEY`.
 - **Cloudflare Sandbox** (`packages/cloudflare`, `packages/core`): needs `CLOUDFLARE_SANDBOX_API_URL`, `CLOUDFLARE_SANDBOX_API_KEY`, and `CF_SANDBOX_INTEGRATION=1`. Start the sandbox bridge separately if the test needs it.
 - **Cloudflare Artifacts** (`packages/cloudflare`): needs `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN`, and `CLOUDFLARE_ARTIFACTS_NAMESPACE`; it skips with a warning while feature-gated.
 - **S3-compatible storage** (`packages/s3`): needs `S3_BUCKET`, `S3_ACCESS_KEY_ID`, and `S3_SECRET_ACCESS_KEY`. Set `S3_REGION` when the provider requires it, `S3_ENDPOINT` for R2, MinIO, or another non-AWS endpoint, and `S3_FORCE_PATH_STYLE=true` when that endpoint requires path-style requests.
@@ -818,7 +816,7 @@ Linux. Windows development orchestration is not supported.
 ## Tech stack
 
 - **Bun**: runtime, package manager, bundler (also inside sandboxes)
-- **TypeScript**: tsgo for typechecking
+- **TypeScript**: `bun check` for typechecking, `tsc` for declarations
 - **Postgres**: all state, schema-scoped; run queues, retries, pauses, and scheduling use the same DB
 - **Electron + electron-vite**: the desktop reference implementation
 - **Fastify**: HTTP surface with Zod + OpenAPI (mounted by the host)

@@ -26,7 +26,7 @@ and local sandboxes, no server, no network Postgres, by design.
 | Axis | Heavy end | Light end |
 | --- | --- | --- |
 | Database | Network Postgres (`{ pool }` / `{ connectionString }`) | **Embedded pglite**: build a Kysely instance on `PGliteDialect` and pass `database: { db }`. Migrations run statement-by-statement specifically so single-connection dialects work. |
-| Execution | Cloud sandboxes (`@catamorphic/cloudflare`, `@catamorphic/daytona`) | **Local sandboxes** (`@catamorphic/microsandbox`), **plain local processes** (`@catamorphic/local-process`, trusted single-tenant hosts only — ADR 0047), or omit `sandboxProvider` entirely for read-only embeds |
+| Execution | Cloud sandboxes (`@catamorphic/cloudflare`) | **Local sandboxes** (`@catamorphic/microsandbox`, or `@catamorphic/container` under gVisor), **plain local processes** (`@catamorphic/local-process`, trusted single-tenant hosts only — ADR 0047), or omit `sandboxProvider` entirely for read-only embeds |
 | Code storage | S3-compatible bucket (`@catamorphic/s3`: R2, S3, MinIO) or Cloudflare Artifacts | Two writable directories (`projectsPath`, `remotesPath`) |
 | Identity | Host org/user per request (`forTenant({ tenantId }).forUser({ externalUserId })`) | A single fixed tenant/user for single-user apps |
 | Surface | HTTP API + React UI | In-process SDK calls only, or migrations-only (`@catamorphic/db`) |
@@ -102,7 +102,7 @@ export const catamorphic = createCatamorphic({
     remotesPath: process.env.CATAMORPHIC_REMOTES_PATH!,
   },
   // Sandbox backends are packages the host constructs: @catamorphic/cloudflare
-  // or @catamorphic/daytona in the cloud, @catamorphic/microsandbox locally,
+  // in the cloud, @catamorphic/microsandbox or @catamorphic/container locally,
   // or @catamorphic/local-process (trusted single tenant). Omit for read-only
   // embeds.
   sandboxProvider,

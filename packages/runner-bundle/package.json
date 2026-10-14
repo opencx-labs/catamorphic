@@ -12,8 +12,13 @@
     }
   },
   "scripts": {
-    "build": "tsup && tsc --project tsconfig.json --noEmit false --emitDeclarationOnly && bun scripts/build-bundle.ts",
-    "typecheck": "tsgo --project ./tsconfig.json"
+    "build": "bun ../../scripts/build-package.ts && tsc --project tsconfig.json --noEmit false --emitDeclarationOnly && bun scripts/build-bundle.ts",
+    "typecheck": "bun check --project ./tsconfig.json"
+  },
+  "bundle": {
+    "entry": [
+      "src/index.ts"
+    ]
   },
   "dependencies": {
     "@catamorphic/agent-protocol": "workspace:*",
