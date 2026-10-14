@@ -1,18 +1,20 @@
 import type { Item } from "./model.js";
 
 /**
- * The live line for an item a harness is working on: a calm verb, never a
- * raw command, a tool's technical name or the prose being written (that
- * belongs to the message). Undefined for items that say nothing live.
+ * The live line for an item a harness is working on: the step's own
+ * description where the harness gave one (what its row says), else a calm
+ * verb, never a raw command, a tool's technical name or the prose being
+ * written (that belongs to the message). Undefined for items that say
+ * nothing live.
  */
 export function itemActivity(item: Item): string | undefined {
   switch (item.kind) {
     case "file_change":
       return "Editing files...";
     case "command":
-      return commandActivity(item.command);
+      return described(item.description) ?? commandActivity(item.command);
     case "tool_call":
-      return "Working...";
+      return described(item.description) ?? "Working...";
     case "subagent":
       return item.status === "in_progress"
         ? item.title
@@ -26,6 +28,11 @@ export function itemActivity(item: Item): string | undefined {
     default:
       return undefined;
   }
+}
+
+/** A description as one line, or undefined when it says nothing. */
+function described(text: string | null): string | undefined {
+  return text?.replace(/\s+/g, " ").trim() || undefined;
 }
 
 /** Friendly verbs for well-known programs; anything else is "Working...". */

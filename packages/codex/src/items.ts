@@ -75,6 +75,11 @@ export class CodexItems {
         ...(options.parentKey ? { parentKey: options.parentKey } : {}),
       } as ItemDraft,
       ...(options.status ? { status: options.status } : {}),
+      // Its latest reasoning title holds the live line through its work,
+      // as Codex shows it; its own messages say they are being written.
+      ...(this.status && !options.parentKey && item.kind !== "assistant_message"
+        ? { activity: this.status }
+        : {}),
     });
   }
 

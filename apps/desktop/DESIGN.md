@@ -674,6 +674,32 @@ the historical log explains how it arrived here.
 - [Performance](docs/performance.md): idle lifecycle checks and sustained measurement.
 
 ## Design log
+### 2026-10-15: The activity line says what the agent is doing, in its own words
+
+The line beside the spinner said "Thinking...", "Working..." and "Running
+code..." through whole turns: a person's chats since early October showed
+nothing else. The agent had said more. Claude Code describes every command
+it runs ("Read the VAD options and their history"), its summarized
+thinking ends on what it does next, and Codex titles each part of its
+reasoning, but a title reached the line only until the next step replaced
+it with a verb, and a description never did.
+
+The line now says the best a harness gives, as Codex's and Claude Code's
+own apps do:
+
+- **The agent's own words**, held through the steps they lead to: Codex's
+  latest reasoning title (as Codex keeps it on its status line), and
+  Claude Code's thinking title, or its last sentence once the thinking is
+  whole. A harness hands them to Core with each step it starts
+  (`item.started.activity`), so no later step takes the line from them.
+  Thinking that says nothing hands the line back to the steps. Only a
+  bold title opening a line counts, never a word bolded mid-sentence.
+- **Else the running step's own description**, the words its row shows.
+- **Else Work's verb** for the step ("Working with git...").
+
+Notes and steps are unchanged. The agent's messages still say "Writing...",
+so a note never shows twice.
+
 ### 2026-10-15: A tab in the strip opens wherever it is pressed
 
 Many tabs in the top strip did nothing when clicked. Two causes:

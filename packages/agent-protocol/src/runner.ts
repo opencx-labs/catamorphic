@@ -287,6 +287,12 @@ export type HarnessEvent =
       item: ItemDraft;
       /** Already finished when first reported. */
       status?: "in_progress" | "completed" | "failed";
+      /**
+       * The harness's own words for the work this item is part of (its
+       * latest reasoning title): the turn's live line keeps them through
+       * that work instead of what Work would derive from the item.
+       */
+      activity?: string;
     }
   | { type: "item.delta"; key: string; field: "text" | "output"; text: string }
   | { type: "item.updated"; key: string; item: Partial<ItemPayload> }

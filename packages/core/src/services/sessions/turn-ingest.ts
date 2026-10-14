@@ -67,6 +67,11 @@ export interface IngestResult {
 /** Live lines are bounded; long tool output is cut by the runner already. */
 const STATUS_MAX = 200;
 
+/** A live line as one bounded line, or undefined when it says nothing. */
+function liveLine(text: string | undefined): string | undefined {
+  return text?.replace(/\s+/g, " ").trim().slice(0, STATUS_MAX) || undefined;
+}
+
 /** The fields a harness streams into. */
 const STREAMED_FIELDS = ["text", "output"] as const;
 
@@ -202,7 +207,13 @@ export async function ingestHarnessEvents(input: {
         });
         items.set(id, item);
         out.push({ type: "item.added", item });
-        derived = itemActivity(item) ?? derived;
+        // The harness's own words for the work hold the line through it.
+        derived =
+          liveLine(
+            mask && event.activity ? mask.text(event.activity) : event.activity,
+          ) ??
+          itemActivity(item) ??
+          derived;
         break;
       }
       case "item.delta": {
@@ -319,10 +330,7 @@ export async function ingestHarnessEvents(input: {
         break;
       }
       case "status":
-        status = (mask ? mask.text(event.text) : event.text)
-          .replace(/\s+/g, " ")
-          .trim()
-          .slice(0, STATUS_MAX);
+        status = liveLine(mask ? mask.text(event.text) : event.text) ?? "";
         break;
       case "title":
         result.title = (mask ? mask.text(event.text) : event.text)

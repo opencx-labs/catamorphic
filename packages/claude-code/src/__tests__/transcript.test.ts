@@ -5,6 +5,7 @@ import { policedServer } from "../adapter.js";
 import {
   apiRetryLine,
   ClaudeTranscript,
+  lastSentence,
   parseMcpToolName,
 } from "../transcript.js";
 
@@ -155,5 +156,114 @@ describe("policed servers", () => {
     expect(policedServer("mcp__fix__lookup", policies)).toBeUndefined();
     for (const name of ["toString", "constructor", "valueOf", "__proto__"])
       expect(policedServer(`mcp__${name}__x`, policies), name).toBeUndefined();
+  });
+});
+
+type Block = Extract<
+  SDKMessage,
+  { type: "assistant" }
+>["message"]["content"][number];
+
+/** One main-thread response from the API, as the SDK reports it whole. */
+const response = (id: string, content: Block[]): SDKMessage => ({
+  type: "assistant",
+  message: {
+    id,
+    type: "message",
+    role: "assistant",
+    model: "claude",
+    content,
+    container: null,
+    context_management: null,
+    diagnostics: null,
+    stop_details: null,
+    stop_reason: "tool_use",
+    stop_sequence: null,
+    usage: {
+      cache_creation: null,
+      cache_creation_input_tokens: null,
+      cache_read_input_tokens: null,
+      fallback_credit: null,
+      inference_geo: null,
+      input_tokens: 1,
+      iterations: null,
+      output_tokens: 1,
+      output_tokens_details: null,
+      server_tool_use: null,
+      service_tier: null,
+      speed: null,
+    },
+  },
+  parent_tool_use_id: null,
+  uuid: `00000000-0000-4000-8000-0000000000${id.slice(-2)}`,
+  session_id: "session",
+});
+const thinking = (text: string): Block => ({
+  type: "thinking",
+  thinking: text,
+  signature: "signature",
+});
+const bash = (id: string, description: string): Block => ({
+  type: "tool_use",
+  id,
+  name: "Bash",
+  input: { command: "rg -n vad src", description },
+});
+
+describe("the agent's own words", () => {
+  // Claude's summarized thinking is plain prose that ends on what it does
+  // next; its own UI shows none of it, so the live line said "Thinking..."
+  // and generic verbs while the agent had said what it was doing.
+  it("come from its thinking and hold through the steps it leads to", () => {
+    const events: HarnessEvent[] = [];
+    const transcript = new ClaudeTranscript(
+      (event) => events.push(event),
+      new Set(),
+      [],
+    );
+    transcript.handle(
+      response("message-01", [
+        thinking(
+          "Found it: the caller did say yes. Now checking the end-of-call workflows.",
+        ),
+        bash("tool-1", "Read the VAD options"),
+      ]),
+    );
+    transcript.handle(
+      response("message-02", [
+        thinking("**Reading the parser**\n\nIt walks the AST."),
+        bash("tool-2", "Show the parser"),
+      ]),
+    );
+    // Thinking that says nothing hands the line back to the steps.
+    transcript.handle(
+      response("message-03", [thinking(""), bash("tool-3", "Run the tests")]),
+    );
+    expect(events.filter((event) => event.type === "status")).toEqual([
+      { type: "status", text: "Now checking the end-of-call workflows." },
+      { type: "status", text: "Reading the parser" },
+    ]);
+    const steps = events.flatMap((event) =>
+      event.type === "item.started" && event.item.kind === "command"
+        ? [[event.key, event.activity]]
+        : [],
+    );
+    expect(steps).toEqual([
+      ["tool-1", "Now checking the end-of-call workflows."],
+      ["tool-2", "Reading the parser"],
+      ["tool-3", undefined],
+    ]);
+  });
+
+  it("are the last sentence of the last paragraph, as plain text", () => {
+    expect(
+      lastSentence(
+        'Noted the **Ñ** guidance. The bot asked "¿Puede repetirlo?", then spoke over 9.2% of callers.\n\nNow I\'ll locate the `spelling` script.',
+      ),
+    ).toBe("Now I'll locate the spelling script.");
+    expect(lastSentence("e.g. the parser. it fails")).toBe(
+      "e.g. the parser. it fails",
+    );
+    expect(lastSentence("  \n ")).toBeUndefined();
   });
 });
