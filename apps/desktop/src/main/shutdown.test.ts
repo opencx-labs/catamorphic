@@ -7,10 +7,11 @@ function setup() {
   const finalQuit = vi.fn();
   const app = {
     on: (
-      name: "will-quit",
+      name: "before-quit" | "will-quit",
       listener: (event: { preventDefault(): void }) => void,
     ) => events.on(name, listener),
     quit: () => {
+      events.emit("before-quit", { preventDefault: vi.fn() });
       const event = { preventDefault: vi.fn() };
       events.emit("will-quit", event);
       if (event.preventDefault.mock.calls.length === 0) finalQuit();
@@ -27,6 +28,8 @@ function setup() {
     onError,
     signals,
     pendingRequests: () => pending.requests,
+    openWindows: () => ["window 2 (?surface=dock) hidden"],
+    quitWaitMs: 50,
   });
   return { app, events, signals, shutdown, onError, finalQuit, pending };
 }
@@ -46,6 +49,39 @@ describe("desktop shutdown", () => {
     await Promise.resolve();
     expect(shutdown).not.toHaveBeenCalled();
     expect(finalQuit).not.toHaveBeenCalled();
+  });
+
+  it("names the windows still open when closing them holds Quit", async () => {
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+    try {
+      const { events, shutdown } = setup();
+      events.emit("before-quit", { preventDefault: vi.fn() });
+      await vi.waitFor(() =>
+        expect(info).toHaveBeenCalledWith(
+          "[desktop] Quit still waiting on windows after 50ms: window 2 (?surface=dock) hidden",
+        ),
+      );
+      expect(shutdown).not.toHaveBeenCalled();
+    } finally {
+      info.mockRestore();
+    }
+  });
+
+  it("names nothing when the windows close in time", async () => {
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+    try {
+      const { app, finalQuit } = setup();
+      app.quit();
+      await vi.waitFor(() => expect(finalQuit).toHaveBeenCalledWith(0));
+      await new Promise((resolve) => setTimeout(resolve, 80));
+      expect(
+        info.mock.calls.some(([line]) =>
+          String(line).includes("still waiting"),
+        ),
+      ).toBe(false);
+    } finally {
+      info.mockRestore();
+    }
   });
 
   it("waits for one shutdown before allowing the final quit", async () => {

@@ -16,6 +16,7 @@ import {
   safeStorage,
   session,
   type WebContents,
+  webContents,
 } from "electron";
 import type { DesktopUpdateChannel } from "../shared/update.js";
 import { registerAgentBridge } from "./agent-bridge.js";
@@ -905,6 +906,25 @@ registerDesktopShutdown({
     server = null;
   },
   onError: (error) => console.error("[desktop] shutdown failed:", error),
+  openWindows: () =>
+    BrowserWindow.getAllWindows().map((window) => {
+      const contents = window.webContents;
+      const pages = webContents
+        .getAllWebContents()
+        .filter((page) => page.hostWebContents === contents);
+      return [
+        `window ${window.id} (${new URL(contents.getURL() || "about:blank").search || "main"})`,
+        window.isVisible() ? "shown" : "hidden",
+        contents.isCrashed() ? "crashed" : "",
+        contents.isLoading() ? "loading" : "",
+        pages.length ? `${pages.length} pages` : "",
+        ...pages
+          .filter((page) => page.isCrashed() || page.isLoading())
+          .map((page) => `a page ${page.isCrashed() ? "crashed" : "loading"}`),
+      ]
+        .filter(Boolean)
+        .join(", ");
+    }),
 });
 
 app.on("window-all-closed", () => {

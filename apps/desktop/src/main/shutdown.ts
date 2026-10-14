@@ -3,7 +3,10 @@ interface QuitEvent {
 }
 
 interface ShutdownApp {
-  on(event: "will-quit", listener: (event: QuitEvent) => void): unknown;
+  on(
+    event: "before-quit" | "will-quit",
+    listener: (event: QuitEvent) => void,
+  ): unknown;
   exit(code: number): void;
   quit(): void;
 }
@@ -15,6 +18,8 @@ export function registerDesktopShutdown({
   onError,
   signals = process,
   pendingRequests = nativeRequestsInFlight,
+  openWindows = () => [],
+  quitWaitMs = 5_000,
 }: {
   app: ShutdownApp;
   shutdown: () => Promise<void>;
@@ -22,6 +27,10 @@ export function registerDesktopShutdown({
   signals?: { on(event: "SIGTERM" | "SIGINT", listener: () => void): unknown };
   /** Native requests still in flight (a DNS lookup, a file read). */
   pendingRequests?: () => readonly string[];
+  /** The windows still open, described for the log. */
+  openWindows?: () => readonly string[];
+  /** How long Quit may wait on windows closing before they are named. */
+  quitWaitMs?: number;
 }): void {
   // Development runners and test harnesses must use the same cleanup as Quit.
   const requestQuit = (signal: string) => {
@@ -31,7 +40,23 @@ export function registerDesktopShutdown({
   signals.on("SIGTERM", () => requestQuit("SIGTERM"));
   signals.on("SIGINT", () => requestQuit("SIGINT"));
   let started = false;
+  // A window that never accepts closing holds Quit before any service
+  // stops: name what is still open, for a test that times out.
+  let waiting: ReturnType<typeof setTimeout> | undefined;
+  app.on("before-quit", () => {
+    if (started || waiting) return;
+    waiting = setTimeout(() => {
+      waiting = undefined;
+      if (started) return;
+      const open = diagnose(openWindows);
+      console.info(
+        `[desktop] Quit still waiting on windows after ${quitWaitMs}ms: ${open.join("; ") || "none"}`,
+      );
+    }, quitWaitMs);
+  });
   app.on("will-quit", (event) => {
+    clearTimeout(waiting);
+    waiting = undefined;
     event.preventDefault();
     if (started) return;
     started = true;

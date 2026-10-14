@@ -40,6 +40,8 @@ const view = `[...document.querySelectorAll('webview')].find(w => w.checkVisibil
 const inPage = <T>(code: string) =>
   app.eval<T>(`${view}.executeJavaScript(${JSON.stringify(code)}, true)`);
 const trigger = `[...document.querySelectorAll('[aria-label="Switch project"]')].find(b => !b.closest('[inert]') && b.checkVisibility())`;
+/** The visible workspace's sidebar handle: hidden workspaces keep theirs. */
+const resizer = `[...document.querySelectorAll('[role="separator"][aria-label="Resize left sidebar"]')].find(s => !s.closest('[inert]') && s.checkVisibility())`;
 const listbox = `${trigger}?.parentElement.querySelector(':scope > [role="listbox"]')`;
 const row = (name: string) =>
   `[...(${listbox}?.querySelectorAll('[role="option"]') ?? [])].find(o => o.textContent.trim() === ${JSON.stringify(name)})`;
@@ -181,6 +183,11 @@ beforeAll(async () => {
   );
   // The project list loads both on the next load.
   await app.reload();
+  // A navigation sent as the page loads, before the workspace listens and
+  // is restored, is lost (macOS CI: the lab never opened).
+  await app.waitFor("!!document.querySelector('[data-workspace-ready]')", {
+    label: "workspace restored",
+  });
   await app.eval(
     `window.catamorphicDesktop.workspaceNavigate(${JSON.stringify({
       projectId: home.id,
@@ -467,8 +474,9 @@ describe("the project list", () => {
     await listClosed();
     // A wider sidebar: the list follows it.
     const resize = async (key: "ArrowLeft" | "ArrowRight") => {
-      await app.eval(
-        `document.querySelector('[role="separator"][aria-label="Resize left sidebar"]').focus(); true`,
+      await app.waitFor(
+        `(() => { const handle = ${resizer}; handle?.focus(); return !!handle && document.activeElement === handle; })()`,
+        { label: "sidebar handle focused" },
       );
       for (let step = 0; step < 4; step += 1) await app.press(key);
     };
