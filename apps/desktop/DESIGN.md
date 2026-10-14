@@ -719,6 +719,24 @@ step down and to the right of the one it came from, is named for its
 project, and appears in the macOS Window menu, so Cmd+` goes between them
 (ADR 0121, amended).
 
+### 2026-10-14: A message says when it was sent, when asked
+
+Hovering a person's message, or focusing it from the keyboard, shows when
+it was sent: beside it on its left, level with its last line, before
+Restore to here. It reads as the time today, "Yesterday" and the time, the
+date and time earlier this year, and the date in another year, as the
+person's locale writes them, and the time's own hint gives the whole date.
+It fades with the message's actions and moves nothing. A message still on
+its way, or one that was not sent, has no time. A chat left open overnight
+says "Yesterday" by morning.
+
+Nothing hovers on a touch screen, and a time beside every message would be
+noise, so a tap on a message shows its time until a tap elsewhere. A
+narrow column (a phone, a slim pane) has no room beside a long message for
+"Yesterday 2:14 PM", so there the time hangs under the message's corner
+like a hint. The message's row measures the room beside it, so the time
+never covers the message or leaves the conversation.
+
 ### 2026-10-14: A block's grip sits on its first line; the format bar leaves as it came
 
 In a markdown document the grip beside a hovered block lined its top up
