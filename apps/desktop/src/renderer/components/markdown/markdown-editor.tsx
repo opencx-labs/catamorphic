@@ -1,13 +1,17 @@
 import { Editor } from "@tiptap/core";
 import BubbleMenu from "@tiptap/extension-bubble-menu";
 import CodeBlockLowlight from "@tiptap/extension-code-block-lowlight";
-import type { DragHandleRule } from "@tiptap/extension-drag-handle";
+import type {
+  DragHandleOptions,
+  DragHandleRule,
+} from "@tiptap/extension-drag-handle";
 import DragHandle from "@tiptap/extension-drag-handle";
 import { TableKit } from "@tiptap/extension-table";
 import TaskItem from "@tiptap/extension-task-item";
 import TaskList from "@tiptap/extension-task-list";
 import { Markdown } from "@tiptap/markdown";
 import { DOMSerializer } from "@tiptap/pm/model";
+import type { EditorView } from "@tiptap/pm/view";
 import StarterKit from "@tiptap/starter-kit";
 import { ChevronRight } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
@@ -16,6 +20,7 @@ import { joinFrontmatter, splitFrontmatter } from "./frontmatter.js";
 import { MarkdownGuardrails } from "./guardrails.js";
 import { lowlight } from "./lowlight.js";
 import {
+  createBubbleMotion,
   installBlockEntrances,
   installDropFlip,
   installHandleMotion,
@@ -72,6 +77,69 @@ const DRAG_SCOPE_RULE: DragHandleRule = {
       : Number.MAX_SAFE_INTEGER,
 };
 
+type HandleReference = ReturnType<
+  NonNullable<DragHandleOptions["getReferencedVirtualElement"]>
+>;
+
+/**
+ * Where the drag handle points: the hovered block's left edge, at the
+ * vertical center of its first line. The extension aligns the handle's top
+ * with the block's top, which suits only a one-line paragraph; a heading's
+ * taller line, a code block's padding, a table's border and cell padding
+ * and a rule's own box all put the grip off its line. Centered on this
+ * reference (placement "left"), it rides the first line of every block.
+ * That line is the block's first textblock (a table's first cell, a list
+ * item's own paragraph, a code block); a textblock without text, or a
+ * block with none (a rule), is centered on its own box, one line tall.
+ */
+function firstLineReference(view: EditorView, pos: number): HandleReference {
+  const { doc } = view.state;
+  if (pos < 0 || pos >= doc.content.size) return null;
+  const node = doc.nodeAt(pos);
+  const block = view.nodeDOM(pos);
+  if (!node || !(block instanceof HTMLElement)) return null;
+  let textblockPos = node.isTextblock ? pos : -1;
+  node.descendants((child, offset) => {
+    if (textblockPos === -1 && child.isTextblock) {
+      textblockPos = pos + 1 + offset;
+    }
+    return textblockPos === -1;
+  });
+  const textblock = textblockPos === -1 ? null : view.nodeDOM(textblockPos);
+  const line = textblock instanceof HTMLElement ? textblock : block;
+  return {
+    getBoundingClientRect: () => {
+      const box = block.getBoundingClientRect();
+      return DOMRect.fromRect({
+        x: box.left,
+        y: firstLineCenter(line),
+        width: box.width,
+        height: 0,
+      });
+    },
+  };
+}
+
+/** The vertical center of an element's first line of text, or of its box. */
+function firstLineCenter(element: HTMLElement): number {
+  const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+  for (let text = walker.nextNode(); text; text = walker.nextNode()) {
+    const content = text.textContent ?? "";
+    const start = content.search(/\S/);
+    if (start === -1) continue;
+    const range = document.createRange();
+    range.setStart(text, start);
+    range.setEnd(
+      text,
+      start + ((content.codePointAt(start) ?? 0) > 0xffff ? 2 : 1),
+    );
+    const rect = range.getClientRects()[0];
+    if (rect && rect.height > 0) return rect.top + rect.height / 2;
+  }
+  const box = element.getBoundingClientRect();
+  return box.top + box.height / 2;
+}
+
 /** Markdown equality modulo trailing blank lines. */
 const canonical = (markdown: string) => markdown.replace(/\s+$/, "");
 
@@ -85,7 +153,9 @@ export function MarkdownEditor({
   onSelectionReader,
 }: MarkdownEditorProps) {
   const mountRef = useRef<HTMLDivElement>(null);
-  const bubbleRef = useRef<HTMLDivElement | null>(null);
+  const bubbleLayerRef = useRef<HTMLDivElement | null>(null);
+  const bubbleAnchorRef = useRef<HTMLDivElement | null>(null);
+  const bubbleBarRef = useRef<HTMLDivElement | null>(null);
   const gripRef = useRef<HTMLDivElement>(null);
   const indicatorRef = useRef<HTMLDivElement>(null);
   const tintRef = useRef<HTMLDivElement>(null);
@@ -123,14 +193,25 @@ export function MarkdownEditor({
   // biome-ignore lint/correctness/useExhaustiveDependencies: mounts the editor once; the initial value is a seed, later values flow through the baseline diff
   useEffect(() => {
     const mount = mountRef.current;
-    const bubble = bubbleRef.current;
-    if (!mount || !bubble) return;
+    const bubbleLayer = bubbleLayerRef.current;
+    const bubbleAnchor = bubbleAnchorRef.current;
+    const bubbleBar = bubbleBarRef.current;
+    if (!mount || !bubbleLayer || !bubbleAnchor || !bubbleBar) return;
 
     const initial = splitFrontmatter(value);
     frontmatterRef.current = initial.frontmatter;
     setFrontmatterState(initial.frontmatter);
 
+    const bubbleMotion = createBubbleMotion({
+      layer: bubbleLayer,
+      anchor: bubbleAnchor,
+      bar: bubbleBar,
+    });
     const handleHolder: { el: HTMLElement | null } = { el: null };
+    const hovered: { view: EditorView | null; pos: number } = {
+      view: null,
+      pos: -1,
+    };
     const instance = new Editor({
       element: mount,
       extensions: [
@@ -147,8 +228,21 @@ export function MarkdownEditor({
           defaultLanguage: "plaintext",
         }),
         BubbleMenu.configure({
-          element: bubble,
-          options: { placement: "top", offset: 8 },
+          element: bubbleAnchor,
+          appendTo: bubbleLayer,
+          // The extension's own test, but any selection without text shows
+          // no bar: a picked rule has no marks to take.
+          shouldShow: ({ editor: current, element, view, state, from, to }) =>
+            (view.hasFocus() || element.contains(document.activeElement)) &&
+            !state.selection.empty &&
+            current.isEditable &&
+            state.doc.textBetween(from, to).length > 0,
+          options: {
+            placement: "top",
+            offset: 8,
+            onShow: bubbleMotion.show,
+            onHide: bubbleMotion.hide,
+          },
         }),
         DragHandle.configure({
           nested: { rules: [DRAG_SCOPE_RULE], edgeDetection: "none" },
@@ -159,11 +253,24 @@ export function MarkdownEditor({
             handleHolder.el = el;
             return el;
           },
-          // listItem = bullet/number markers to clear; taskItem has none.
-          onNodeChange: ({ node }) => {
+          // Centered on the hovered block's first line, not top-aligned
+          // with its box (see firstLineReference).
+          computePositionConfig: { placement: "left" },
+          getReferencedVirtualElement: () =>
+            hovered.view ? firstLineReference(hovered.view, hovered.pos) : null,
+          onNodeChange: (change) => {
+            // The plugin passes the position it is about to point at, on
+            // hover and when a doc change moves it to the enclosing
+            // top-level block; the option's declared type omits it.
+            hovered.pos =
+              change.node && "pos" in change && typeof change.pos === "number"
+                ? change.pos
+                : -1;
+            hovered.view = change.editor.view;
+            // listItem = bullet/number markers to clear; taskItem has none.
             handleHolder.el?.classList.toggle(
               "for-list-item",
-              node?.type.name === "listItem",
+              change.node?.type.name === "listItem",
             );
           },
         }),
@@ -225,6 +332,7 @@ export function MarkdownEditor({
       installBlockEntrances(instance.view.dom),
       installDropFlip(instance.view.dom),
       handleHolder.el ? installHandleMotion(handleHolder.el) : () => {},
+      bubbleMotion.attach(instance.view.dom),
       installRowDrag(instance, {
         mount,
         grip: gripRef.current!,
@@ -396,7 +504,12 @@ export function MarkdownEditor({
               )}
             </div>
           )}
-          <MarkdownBubbleMenu ref={bubbleRef} editor={editor} />
+          <MarkdownBubbleMenu
+            editor={editor}
+            layerRef={bubbleLayerRef}
+            anchorRef={bubbleAnchorRef}
+            barRef={bubbleBarRef}
+          />
           <div ref={gripRef} className="cat-mdedit-rowgrip">
             <span
               // biome-ignore lint/security/noDangerouslySetInnerHtml: a constant inline SVG, no user content

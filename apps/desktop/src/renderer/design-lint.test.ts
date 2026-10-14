@@ -280,7 +280,7 @@ describe("design lint", () => {
         count: 1,
         reason: "ends the side panel's resize drag",
       },
-      "components/markdown/bubble-menu.tsx": {
+      "components/markdown/motion.ts": {
         count: 1,
         reason: "shows the format bar once a selection drag ends",
       },
