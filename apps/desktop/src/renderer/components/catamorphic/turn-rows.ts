@@ -35,7 +35,7 @@ export const DEFAULT_WORK_DISPLAY: WorkDisplay = {
 /**
  * Whether steps stay behind their line until opened, even while the turn
  * runs and even when there is only one. Otherwise a running turn's steps
- * read open, and a lone step is its own row.
+ * read open, and once it has answered a lone step is its own row.
  */
 export function foldsSteps(display: WorkDisplay): boolean {
   return display.live === "notes";

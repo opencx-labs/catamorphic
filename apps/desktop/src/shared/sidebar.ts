@@ -149,7 +149,8 @@ export interface SidebarSectionConfig {
     | "custom"
     | "activity"
     | "note"
-    | "app";
+    | "app"
+    | "session";
   /** Override the section heading. */
   title?: string;
   /** Start collapsed (default open). */

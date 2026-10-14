@@ -69,11 +69,6 @@ export function parsePersonalEnvironmentConfig(
       ok: false,
       error: `${PERSONAL_ENVIRONMENT_PATH} must be a JSON object`,
     };
-  if ("logins" in value)
-    return {
-      ok: false,
-      error: `Remove "logins": sign-ins stay on the machine they were made on and are never sent to the server`,
-    };
   const unknown = Object.keys(value).filter(
     (key) => key !== "files" && key !== "setup",
   );

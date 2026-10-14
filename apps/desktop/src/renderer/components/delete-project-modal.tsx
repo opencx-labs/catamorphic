@@ -96,7 +96,8 @@ export function DeleteProjectModal({
                 className="mt-0.5 block truncate font-mono text-fg-faint"
                 dir="rtl"
               >
-                {rootPath}
+                {/* Isolated, or the path's leading slash moves to its end. */}
+                <bdi>{rootPath}</bdi>
               </span>
             </span>
           </label>

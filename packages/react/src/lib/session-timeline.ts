@@ -199,6 +199,75 @@ export function sessionTimeline(state: SessionState): TimelineTurn[] {
   return out;
 }
 
+/**
+ * `next` with every turn that reads the same as its counterpart in
+ * `previous` (same turn, same items in the same entries) replaced by that
+ * counterpart, and `previous` itself when nothing changed. Each event of a
+ * live turn changes one turn: views that skip an unchanged turn by its
+ * identity then render that one turn, not the whole conversation.
+ */
+export function shareTimeline(
+  previous: TimelineTurn[] | undefined,
+  next: TimelineTurn[],
+): TimelineTurn[] {
+  if (!previous) return next;
+  const earlier = new Map(previous.map((turn) => [turn.key, turn]));
+  let unchanged = previous.length === next.length;
+  const shared = next.map((turn, index) => {
+    const before = earlier.get(turn.key);
+    const kept =
+      before &&
+      before.turn === turn.turn &&
+      sameItems(before.entries, turn.entries, sameEntry)
+        ? before
+        : turn;
+    if (kept !== previous[index]) unchanged = false;
+    return kept;
+  });
+  return unchanged ? previous : shared;
+}
+
+function sameItems<T>(
+  left: readonly T[],
+  right: readonly T[],
+  same: (a: T, b: T) => boolean = Object.is,
+): boolean {
+  return (
+    left.length === right.length &&
+    left.every((value, index) => same(value, right[index] as T))
+  );
+}
+
+function sameEntry(left: TimelineEntry, right: TimelineEntry): boolean {
+  switch (left.kind) {
+    case "input":
+    case "inbound":
+    case "notice":
+    case "handoff":
+      return right.kind === left.kind && right.item === left.item;
+    case "notifications":
+      return (
+        right.kind === "notifications" && sameItems(left.items, right.items)
+      );
+    case "reply":
+      return (
+        right.kind === "reply" &&
+        right.item === left.item &&
+        sameItems(left.steps, right.steps)
+      );
+    case "steps":
+      return right.kind === "steps" && sameItems(left.steps, right.steps);
+    case "answer":
+      return (
+        right.kind === "answer" &&
+        right.id === left.id &&
+        right.dismissed === left.dismissed &&
+        sameItems(left.questions, right.questions) &&
+        sameItems(left.answers, right.answers)
+      );
+  }
+}
+
 /** Queued turns in the order they will run, with their messages. */
 export function sessionQueue(state: SessionState): QueuedMessage[] {
   const starting = startingTurn(state);

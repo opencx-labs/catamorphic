@@ -135,5 +135,7 @@ says so; elsewhere the OS draws the frame and the key changes nothing.
 before a new window first shows and on every preference change, including file
 edits, so an agent can turn them off. While they are hidden the chrome gives back
 the corner it keeps for them: the sidebar's project switcher moves up into the
-row beside its toggle, unless the header shares that row. The menu bar still
+row beside its toggle, across it, unless the header shares that row. The
+window then drags by the chrome's empty room, as Chrome's does (the tab
+strip's spare end, or the title row). The menu bar still
 closes (File > Close Window), minimizes and enters full screen.

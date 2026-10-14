@@ -14,6 +14,7 @@ export {
   type CollectionChange,
   type CollectionItem,
   type CollectionPage,
+  type CollectionRefresh,
   type CollectionSource,
   type CollectionStatus,
   createCollection,

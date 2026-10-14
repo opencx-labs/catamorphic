@@ -12,7 +12,11 @@ import {
 } from "@catamorphic/git";
 import { sql } from "kysely";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { SessionArtifactsService } from "../services/session-artifacts-service.js";
+import {
+  RECLAIM_RETRY_SECONDS,
+  RECLAIMED_REVISIT_SECONDS,
+  SessionArtifactsService,
+} from "../services/session-artifacts-service.js";
 
 const connectionString = process.env.DATABASE_URL ?? "";
 const suite = connectionString ? describe : describe.skip;
@@ -385,7 +389,23 @@ suite("session artifact source lifecycle", () => {
         );
       const prefix = `refs/heads/work/artifacts/${artifact.id}`;
       const before = await inventory();
-      expect(before.some(({ ref }) => ref === `${prefix}-late`)).toBe(true);
+      // The late writer's own candidate went when it found the discard.
+      expect(
+        before
+          .filter(({ ref }) => ref.startsWith(prefix))
+          .map(({ ref }) => ref),
+      ).toEqual([`${prefix}-late`]);
+      // A reclaimed artifact is not looked at again on every sweep...
+      await artifacts.cleanup();
+      expect(await inventory()).toEqual(before);
+      // ...but once its revisit is due.
+      await db
+        .updateTable("session_artifacts")
+        .set({
+          ref_deleted_at: sql<Date>`now() - make_interval(secs => ${RECLAIMED_REVISIT_SECONDS + 1})`,
+        })
+        .where("id", "=", artifact.id)
+        .execute();
       await artifacts.cleanup();
       const refs = await inventory();
       expect(refs.filter(({ ref }) => ref.startsWith(prefix))).toEqual([]);
@@ -393,6 +413,63 @@ suite("session artifact source lifecycle", () => {
     } finally {
       afterPublication = undefined;
     }
+  });
+
+  it("tries a failed reclaim again after a pause, not on every sweep", async () => {
+    const artifact = await artifacts.create({
+      identity,
+      projectId,
+      sessionId,
+      kind: "app",
+      name: "unreclaimable",
+      source,
+    });
+    // An app's bundles go with it, and this host has no bundle store.
+    const app = await db
+      .insertInto("apps")
+      .values({
+        project_id: projectId,
+        name: `session-${artifact.id}`,
+        session_artifact_id: artifact.id,
+      })
+      .returning("id")
+      .executeTakeFirstOrThrow();
+    await artifacts.discard({ identity, projectId, artifactId: artifact.id });
+    const state = () =>
+      db
+        .selectFrom("session_artifacts")
+        .select(["ref_deleted_at", "last_error", "updated_at"])
+        .where("id", "=", artifact.id)
+        .executeTakeFirstOrThrow();
+    const due = () =>
+      db
+        .updateTable("session_artifacts")
+        .set({
+          updated_at: sql<Date>`now() - make_interval(secs => ${RECLAIM_RETRY_SECONDS + 1})`,
+        })
+        .where("id", "=", artifact.id)
+        .execute();
+    await artifacts.cleanup();
+    const failed = await state();
+    expect(failed.ref_deleted_at).toBeNull();
+    expect(failed.last_error).toBe("App bundle storage is unavailable");
+    // The next sweeps leave it alone...
+    await artifacts.cleanup();
+    expect(await state()).toEqual(failed);
+    // ...until its retry is due.
+    await due();
+    await artifacts.cleanup();
+    const retried = await state();
+    expect(retried.last_error).toBe("App bundle storage is unavailable");
+    expect(retried.updated_at.getTime()).toBeGreaterThan(
+      Date.now() - RECLAIM_RETRY_SECONDS * 1_000,
+    );
+    await db.deleteFrom("apps").where("id", "=", app.id).execute();
+    await due();
+    await artifacts.cleanup();
+    const reclaimed = await state();
+    expect(reclaimed.ref_deleted_at).not.toBeNull();
+    expect(reclaimed.last_error).toBeNull();
   });
 
   it("uses the same lifecycle for workflows and keeps closed-session results readable", async () => {

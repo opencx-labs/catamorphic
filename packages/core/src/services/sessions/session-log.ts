@@ -1,5 +1,6 @@
 import {
   ACTIVE_TURN_STATUSES,
+  assertSessionMetadata,
   type CommandReceipt,
   type Item,
   isInputItem,
@@ -13,6 +14,7 @@ import {
 } from "@catamorphic/agent-protocol";
 import type { DB, Json } from "@catamorphic/db";
 import { type Kysely, sql, type Transaction } from "kysely";
+import type { WorkTopic, WorkWakeups } from "../work-wakeups.js";
 
 type Executor = Kysely<DB> | Transaction<DB>;
 
@@ -57,7 +59,17 @@ export const REPLAY_MAX_BYTES = 1024 * 1024;
  * per session, gapless, allocated under the session row lock.
  */
 export class SessionLog {
-  constructor(private readonly db: Kysely<DB>) {}
+  /**
+   * Replica memory (a): hints for what transactions this log opened
+   * ({@link command}) wrote, held until they commit.
+   */
+  private readonly held = new WeakMap<Transaction<DB>, Set<WorkTopic>>();
+
+  constructor(
+    private readonly db: Kysely<DB>,
+    /** Tells this process's streams and agent worker what it wrote (ADR 0229). */
+    private readonly wakeups?: WorkWakeups,
+  ) {}
 
   /**
    * Append events and project them. Must run inside the caller's
@@ -309,6 +321,27 @@ export class SessionLog {
       )
       .execute();
     for (const event of stored) await project(trx, event);
+    const topics: WorkTopic[] = ["sessions"];
+    if (
+      stored.some(
+        ({ event }) =>
+          event.type !== "item.text_appended" && event.type !== "item.changed",
+      )
+    )
+      topics.push("chats");
+    if (
+      stored.some(
+        ({ event }) =>
+          event.type === "turn.changed" && event.turn.status === "queued",
+      )
+    )
+      topics.push("agent");
+    // A command's hints wait for its commit. Others may come before the
+    // caller commits: a woken poller stays quick long enough to read it.
+    const held = this.held.get(trx);
+    for (const topic of topics)
+      if (held) held.add(topic);
+      else this.wakeups?.notify(topic);
   }
 
   /**
@@ -336,7 +369,9 @@ export class SessionLog {
     if (existing) return existing;
     try {
       await input.before?.();
-      return await this.db.transaction().execute(async (trx) => {
+      const hints = new Set<WorkTopic>();
+      const receipt = await this.db.transaction().execute(async (trx) => {
+        this.held.set(trx, hints);
         // The session row lock orders concurrent commands; the receipt
         // check inside it makes a duplicate that raced the first one wait
         // and then answer with its receipt.
@@ -374,6 +409,8 @@ export class SessionLog {
           error: null,
         };
       });
+      for (const topic of hints) this.wakeups?.notify(topic);
+      return receipt;
     } catch (error) {
       if (!(error instanceof SessionCommandRejectedError)) throw error;
       const sequence = await this.latestSequence(this.db, input.sessionId);
@@ -803,6 +840,7 @@ async function projectSession(
   if ("workStatus" in fields) set.work_status = fields.workStatus;
   if ("activity" in fields) set.activity = fields.activity;
   if ("todos" in fields) set.todos = json(fields.todos ?? []);
+  if ("metadata" in fields) set.metadata = json(fields.metadata ?? {});
   if ("attentionRevision" in fields)
     set.attention_revision = fields.attentionRevision;
   if ("environment" in fields) set.environment_name = fields.environment;
@@ -887,6 +925,7 @@ const COPIED_SESSION_FIELDS = new Set([
   "title",
   "icon",
   "todos",
+  "metadata",
   "workStatus",
   "activity",
   "updatedAt",
@@ -959,6 +998,9 @@ async function ownEvents(
   const own = input.events.map((event): SessionEvent => {
     switch (event.type) {
       case "session.changed":
+        // Another copy's metadata keeps a write's limits here too (ADR 0226).
+        if ("metadata" in event.session)
+          assertSessionMetadata(event.session.metadata);
         return {
           type: "session.changed",
           session: Object.fromEntries(

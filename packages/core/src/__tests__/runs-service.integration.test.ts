@@ -20,6 +20,7 @@ import {
   describe,
   expect,
   it,
+  vi,
 } from "vitest";
 import { CatamorphicCore } from "../core.js";
 import type { Identity } from "../identity.js";
@@ -1731,7 +1732,29 @@ describeIf("unified RunsService integration", () => {
     expect((await core.runs.pause({ identity, runId: run.id })).status).toBe(
       "paused",
     );
+    // Work deferred while a run is paused is parked an hour out: resuming
+    // pulls it forward and wakes this process's workers (ADR 0229).
+    await db
+      .updateTable("execution_jobs")
+      .set({ available_at: new Date(Date.now() + 60 * 60 * 1_000) })
+      .where("workflow_run_id", "=", run.id)
+      .where("status", "=", "pending")
+      .execute();
+    const woken = vi.fn();
+    const stopHearing = core.wakeups.subscribe("execution", woken);
     await core.runs.resume({ identity, runId: run.id });
+    stopHearing();
+    expect(woken).toHaveBeenCalledTimes(1);
+    const parked = await db
+      .selectFrom("execution_jobs")
+      .select("available_at")
+      .where("workflow_run_id", "=", run.id)
+      .where("status", "=", "pending")
+      .execute();
+    expect(parked.length).toBeGreaterThan(0);
+    expect(
+      parked.every((job) => job.available_at.getTime() <= Date.now()),
+    ).toBe(true);
     await expect(core.runs.resume({ identity, runId: run.id })).rejects.toEqual(
       expect.objectContaining({
         name: "RunCapabilityError",

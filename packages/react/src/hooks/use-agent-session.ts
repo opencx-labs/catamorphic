@@ -5,12 +5,14 @@ import {
   type Item,
   isSettledTurnStatus,
   isWorking,
+  type SessionFields,
   type SessionSnapshot,
   type SessionState,
   type SessionStreamMessage,
   sessionStateFromSnapshot,
   withOlderItems,
 } from "@catamorphic/agent-protocol";
+import type { CatamorphicApiClient } from "@catamorphic/api-client";
 import {
   type QueryClient,
   useQuery,
@@ -129,35 +131,12 @@ export function useAgentSession(
   const query = useQuery<AgentSessionData, CatamorphicError>({
     queryKey,
     queryFn: ({ signal }) =>
-      runWithCatamorphicError(async () => {
-        const detail: AgentSessionInfo & { snapshot: SessionSnapshot } =
-          JSON.parse(
-            assertApiOk(
-              await apiClient.GET(
-                "/api/projects/{projectId}/agent/sessions/{sessionId}",
-                {
-                  signal: AbortSignal.any([
-                    signal,
-                    AbortSignal.timeout(15_000),
-                  ]),
-                  params: {
-                    path: {
-                      projectId: projectId ?? "",
-                      sessionId: sessionId ?? "",
-                    },
-                  },
-                  // The log's JSON is the protocol's own shape (the server
-                  // validates it against the same types).
-                  parseAs: "text",
-                },
-              ),
-              "Agent session response empty",
-            ),
-          );
-        const { snapshot, ...info } = detail;
-        const fresh = sessionStateFromSnapshot(snapshot);
-        const current = queryClient.getQueryData<AgentSessionData>(queryKey);
-        return { info, state: mergeFresh(current?.state, fresh) };
+      loadAgentSession({
+        apiClient,
+        queryClient,
+        projectId: projectId ?? "",
+        sessionId: sessionId ?? "",
+        signal,
       }),
     enabled,
     // The stream keeps it current; a refetch is a resync, not a poll.
@@ -174,7 +153,105 @@ export function useAgentSession(
       }),
   });
 
-  const loaded = query.data !== undefined;
+  const { connection, streamError } = useSessionEventStream({
+    projectId,
+    sessionId,
+    live,
+    loaded: query.data !== undefined,
+    setStreaming,
+  });
+
+  const [isLoadingOlder, setLoadingOlder] = useState(false);
+  const olderRequest = useRef<Promise<void> | null>(null);
+  const loadOlder = useCallback(async () => {
+    if (!projectId || !sessionId) return;
+    const key = agentSessionQueryKey(projectId, sessionId);
+    const before =
+      queryClient.getQueryData<AgentSessionData>(key)?.state.olderBefore;
+    if (before === null || before === undefined) return;
+    if (olderRequest.current) return olderRequest.current;
+    setLoadingOlder(true);
+    olderRequest.current = runWithCatamorphicError(async () => {
+      const page: { items: Item[]; olderBefore: number | null } = JSON.parse(
+        assertApiOk(
+          await apiClient.GET(
+            "/api/projects/{projectId}/agent/sessions/{sessionId}/items",
+            {
+              signal: AbortSignal.timeout(15_000),
+              params: { path: { projectId, sessionId }, query: { before } },
+              parseAs: "text",
+            },
+          ),
+          "Older messages response empty",
+        ),
+      );
+      queryClient.setQueryData<AgentSessionData>(key, (current) =>
+        current
+          ? { ...current, state: withOlderItems(current.state, page) }
+          : current,
+      );
+    }).finally(() => {
+      olderRequest.current = null;
+      setLoadingOlder(false);
+    });
+    return olderRequest.current;
+  }, [apiClient, queryClient, projectId, sessionId]);
+
+  const data = query.data;
+  const working = data ? isWorking(data.state) : false;
+  // Session lists show titles and running state; keep them in step.
+  const listSignature = data
+    ? `${data.state.session.title ?? ""}\u0000${working}`
+    : null;
+  const listSignatureRef = useRef<string | null>(null);
+  useEffect(() => {
+    const previous = listSignatureRef.current;
+    listSignatureRef.current = listSignature;
+    if (!projectId || previous === null || previous === listSignature) return;
+    void queryClient.invalidateQueries({
+      queryKey: ["cat", "project", projectId, "agent", "sessions"],
+    });
+  }, [listSignature, projectId, queryClient]);
+
+  return {
+    session: data
+      ? { ...data.info, ...data.state.session, running: working }
+      : null,
+    state: data?.state ?? null,
+    isLoading: query.isLoading,
+    error: query.error ?? streamError,
+    connection: enabled ? connection : "idle",
+    hasOlder: data ? data.state.olderBefore !== null : false,
+    isLoadingOlder,
+    loadOlder,
+  };
+}
+
+/**
+ * Keep a session's cache entry current from its event stream while `live`
+ * and the snapshot is loaded (ADR 0197): a dropped stream resumes from the
+ * last applied sequence with backoff, a gap reloads the snapshot first, a
+ * refusal stops it and is reported. Past the client's stream limit it
+ * waits for a slot, `setStreaming(false)` meanwhile so the caller polls.
+ */
+function useSessionEventStream({
+  projectId,
+  sessionId,
+  live,
+  loaded,
+  setStreaming,
+}: {
+  projectId: string | undefined;
+  sessionId: string | undefined;
+  live: boolean;
+  loaded: boolean;
+  setStreaming: (streaming: boolean) => void;
+}): {
+  connection: AgentSessionConnection;
+  streamError: CatamorphicError | null;
+} {
+  const { apiClient } = useCatamorphic();
+  const queryClient = useQueryClient();
   const [connection, setConnection] = useState<AgentSessionConnection>("idle");
   // Why the stream stopped for good (the session is gone, access removed).
   const [streamError, setStreamError] = useState<CatamorphicError | null>(null);
@@ -296,71 +373,137 @@ export function useAgentSession(
         void queryClient.invalidateQueries({ queryKey: key, exact: true });
       setStreaming(false);
     };
-  }, [live, loaded, projectId, sessionId, apiClient, slotKey, queryClient]);
+  }, [
+    live,
+    loaded,
+    projectId,
+    sessionId,
+    apiClient,
+    slotKey,
+    queryClient,
+    setStreaming,
+  ]);
+  return { connection, streamError };
+}
 
-  const [isLoadingOlder, setLoadingOlder] = useState(false);
-  const olderRequest = useRef<Promise<void> | null>(null);
-  const loadOlder = useCallback(async () => {
-    if (!projectId || !sessionId) return;
-    const key = agentSessionQueryKey(projectId, sessionId);
-    const before =
-      queryClient.getQueryData<AgentSessionData>(key)?.state.olderBefore;
-    if (before === null || before === undefined) return;
-    if (olderRequest.current) return olderRequest.current;
-    setLoadingOlder(true);
-    olderRequest.current = runWithCatamorphicError(async () => {
-      const page: { items: Item[]; olderBefore: number | null } = JSON.parse(
-        assertApiOk(
-          await apiClient.GET(
-            "/api/projects/{projectId}/agent/sessions/{sessionId}/items",
-            {
-              signal: AbortSignal.timeout(15_000),
-              params: { path: { projectId, sessionId }, query: { before } },
-              parseAs: "text",
-            },
-          ),
-          "Older messages response empty",
+/**
+ * The session's row and snapshot, folded into what the cache holds: the
+ * newer of this and what the cache already has wins.
+ */
+function loadAgentSession({
+  apiClient,
+  queryClient,
+  projectId,
+  sessionId,
+  signal,
+}: {
+  apiClient: CatamorphicApiClient;
+  queryClient: QueryClient;
+  projectId: string;
+  sessionId: string;
+  signal: AbortSignal;
+}): Promise<AgentSessionData> {
+  return runWithCatamorphicError(async () => {
+    const detail: AgentSessionInfo & { snapshot: SessionSnapshot } = JSON.parse(
+      assertApiOk(
+        await apiClient.GET(
+          "/api/projects/{projectId}/agent/sessions/{sessionId}",
+          {
+            signal: AbortSignal.any([signal, AbortSignal.timeout(15_000)]),
+            params: { path: { projectId, sessionId } },
+            // The log's JSON is the protocol's own shape (the server
+            // validates it against the same types).
+            parseAs: "text",
+          },
         ),
-      );
-      queryClient.setQueryData<AgentSessionData>(key, (current) =>
-        current
-          ? { ...current, state: withOlderItems(current.state, page) }
-          : current,
-      );
-    }).finally(() => {
-      olderRequest.current = null;
-      setLoadingOlder(false);
-    });
-    return olderRequest.current;
-  }, [apiClient, queryClient, projectId, sessionId]);
+        "Agent session response empty",
+      ),
+    );
+    const { snapshot, ...info } = detail;
+    const fresh = sessionStateFromSnapshot(snapshot);
+    const current = queryClient.getQueryData<AgentSessionData>(
+      agentSessionQueryKey(projectId, sessionId),
+    );
+    return { info, state: mergeFresh(current?.state, fresh) };
+  });
+}
 
-  const data = query.data;
-  const working = data ? isWorking(data.state) : false;
-  // Session lists show titles and running state; keep them in step.
-  const listSignature = data
-    ? `${data.state.session.title ?? ""}\u0000${working}`
-    : null;
-  const listSignatureRef = useRef<string | null>(null);
-  useEffect(() => {
-    const previous = listSignatureRef.current;
-    listSignatureRef.current = listSignature;
-    if (!projectId || previous === null || previous === listSignature) return;
-    void queryClient.invalidateQueries({
-      queryKey: ["cat", "project", projectId, "agent", "sessions"],
-    });
-  }, [listSignature, projectId, queryClient]);
+export interface UseAgentSessionFieldsOptions {
+  /**
+   * Follow the session while true, as a view on screen does (default
+   * false): stream its events or, past the client's stream limit, poll its
+   * snapshot every `pollIntervalMs`, so a change made outside any turn (a
+   * person's PATCH, a workflow) shows without the conversation in front.
+   * Off, the fields are what the conversation's own reader keeps current.
+   */
+  live?: boolean;
+  /** Poll cadence while following without a stream (default 1500). */
+  pollIntervalMs?: number;
+}
 
+export interface UseAgentSessionFieldsResult {
+  /** The session's shared fields: title, todos, metadata and the rest. */
+  fields: SessionFields | null;
+  isLoading: boolean;
+  error: CatamorphicError | null;
+  /** Load the snapshot again (a Retry). */
+  refetch: () => Promise<unknown>;
+}
+
+/**
+ * A session's shared fields for a view beside its conversation, such as a
+ * sidebar (ADR 0226). It reads the session's one cache entry, loading the
+ * snapshot only when no other reader has. It streams only while `live`;
+ * otherwise it shows what the conversation's own live reader keeps current
+ * (the chat on screen streams; {@link useAgentSession}). It re-renders
+ * only when the fields change, never for the transcript.
+ */
+export function useAgentSessionFields(
+  projectId: string | undefined,
+  sessionId: string | undefined,
+  options: UseAgentSessionFieldsOptions = {},
+): UseAgentSessionFieldsResult {
+  const { apiClient } = useCatamorphic();
+  const queryClient = useQueryClient();
+  const live = options.live ?? false;
+  const pollIntervalMs = options.pollIntervalMs ?? 1_500;
+  const [streaming, setStreaming] = useState(false);
+  const query = useQuery<AgentSessionData, CatamorphicError, SessionFields>({
+    queryKey: agentSessionQueryKey(projectId, sessionId),
+    queryFn: ({ signal }) =>
+      loadAgentSession({
+        apiClient,
+        queryClient,
+        projectId: projectId ?? "",
+        sessionId: sessionId ?? "",
+        signal,
+      }),
+    enabled: Boolean(projectId && sessionId),
+    staleTime: Number.POSITIVE_INFINITY,
+    refetchOnWindowFocus: false,
+    refetchInterval: (current) =>
+      live &&
+      snapshotRefetchInterval({
+        error: current.state.error,
+        data: current.state.data,
+        streaming,
+        onScreen: true,
+        pollIntervalMs,
+      }),
+    select: (data) => data.state.session,
+  });
+  const { streamError } = useSessionEventStream({
+    projectId,
+    sessionId,
+    live,
+    loaded: query.data !== undefined,
+    setStreaming,
+  });
   return {
-    session: data
-      ? { ...data.info, ...data.state.session, running: working }
-      : null,
-    state: data?.state ?? null,
+    fields: query.data ?? null,
     isLoading: query.isLoading,
     error: query.error ?? streamError,
-    connection: enabled ? connection : "idle",
-    hasOlder: data ? data.state.olderBefore !== null : false,
-    isLoadingOlder,
-    loadOlder,
+    refetch: query.refetch,
   };
 }
 

@@ -182,3 +182,48 @@ it("restores guest visibility and destroys closed browser guests across repeated
   }
   expect(app.getRendererErrors()).toEqual([]);
 });
+
+it("leaves an idle chat and its sidebar alone: chat lists wait for hints, and reads never spin", async () => {
+  const chat = `document.querySelector('[data-chat-local-id]:not([inert])')`;
+  await app.eval(
+    `window.dispatchEvent(new KeyboardEvent('keydown',{key:'n',metaKey:/Mac/.test(navigator.platform),ctrlKey:!/Mac/.test(navigator.platform),bubbles:true}))`,
+  );
+  await app.waitFor(`!!${chat}?.querySelector('[data-composer-input]')`, {
+    label: "a new chat",
+  });
+  await app.eval(
+    `(()=>{${setReactValueJs};const input=${chat}.querySelector('[data-composer-input]');input.focus();setReactValue(input,'hello from an idle test');input.closest('form').requestSubmit()})()`,
+  );
+  await app.waitFor(
+    `${chat}?.textContent.includes('You said: hello from an idle test')`,
+    { timeoutMs: 30_000, label: "the answer" },
+  );
+  // The settled turn's own follow-up reads land first.
+  await app.eval("new Promise((resolve) => setTimeout(resolve, 3000))");
+  // Chat lists read every two seconds (three of them before ADR 0229) make
+  // at least ten reads in this window; 30 s safety polls make at most one
+  // per list.
+  const idle = await app.eval<{ reads: number; spinners: number }>(`
+    new Promise((resolve) => {
+      let reads = 0;
+      let spinners = 0;
+      const requests = new PerformanceObserver((list) => {
+        for (const entry of list.getEntries())
+          if (/\\/agent\\/sessions(\\?|$)|\\/notifications\\/attention/.test(entry.name)) reads += 1;
+      });
+      requests.observe({ type: "resource" });
+      const sections = new MutationObserver(() => {
+        if (document.querySelector("[data-loading-for]")) spinners += 1;
+      });
+      sections.observe(document.body, { subtree: true, childList: true });
+      setTimeout(() => {
+        requests.disconnect();
+        sections.disconnect();
+        resolve({ reads, spinners });
+      }, 10_000);
+    })
+  `);
+  expect(idle.spinners).toBe(0);
+  expect(idle.reads).toBeLessThanOrEqual(4);
+  expect(app.getRendererErrors()).toEqual([]);
+});

@@ -71,6 +71,7 @@ export {
   type TreeDropPosition,
   type TreeDropTarget,
   type TreeItem,
+  type TreeMore,
   type TreeRenderContext,
   useCollection,
   useCollectionItem,

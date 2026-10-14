@@ -5,7 +5,6 @@ import {
   downloadOpensInWork,
   isActiveDownload,
 } from "../../shared/downloads.js";
-import { onPagePress } from "../lib/app-focus.js";
 import { desktopApi } from "../lib/desktop-api.js";
 import {
   describeDownload,
@@ -13,6 +12,7 @@ import {
   downloadProgress,
   useDownloads,
 } from "../lib/downloads.js";
+import { usePopoverDismiss } from "../lib/popover-dismiss.js";
 import { PopPanel } from "./pop-panel.js";
 import { ShortcutHint } from "./shortcut-hint.js";
 
@@ -142,32 +142,11 @@ export function DownloadsBubble({
   // Anything else the person turns to closes it, as Chrome's bubble
   // closes: a press elsewhere in this window or inside a page (pages see
   // their own presses), Escape, or another window or app.
-  useEffect(() => {
-    if (!open) return;
-    const close = () => setOpen(false);
-    const onPointerDown = (event: PointerEvent) => {
-      if (
-        !(event.target instanceof Node) ||
-        !rootRef.current?.contains(event.target)
-      )
-        close();
-    };
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") close();
-    };
-    window.addEventListener("pointerdown", onPointerDown, { capture: true });
-    window.addEventListener("keydown", onKey, { capture: true });
-    window.addEventListener("blur", close);
-    const stopPagePress = onPagePress(close);
-    return () => {
-      window.removeEventListener("pointerdown", onPointerDown, {
-        capture: true,
-      });
-      window.removeEventListener("keydown", onKey, { capture: true });
-      window.removeEventListener("blur", close);
-      stopPagePress();
-    };
-  }, [open]);
+  usePopoverDismiss({
+    open,
+    within: [rootRef],
+    onDismiss: () => setOpen(false),
+  });
 
   if (hidden) return null;
   const recent = downloads.slice(0, 5);

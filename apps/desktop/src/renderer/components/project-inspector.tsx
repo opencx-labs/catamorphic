@@ -1,43 +1,97 @@
-import { useAgentSessions } from "@catamorphic/react";
-import type { ProjectSummary } from "@catamorphic/react/types";
-import {
-  AlertCircle,
-  CheckCircle2,
-  CircleDot,
-  GitBranch,
-  GitPullRequest,
-  MoreHorizontal,
-  Radio,
-  Trash2,
-} from "lucide-react";
-import { useEffect, useState } from "react";
+import { useCatamorphic } from "@catamorphic/react";
+import type { AgentSession, ProjectSummary } from "@catamorphic/react/types";
+import { useQuery } from "@tanstack/react-query";
+import { AlertCircle, Box, CheckCircle2, MoreHorizontal } from "lucide-react";
+import { type ReactNode, useRef, useState } from "react";
 import { writesProgram } from "../../shared/project-experience.js";
-import {
-  desktopApi,
-  type GitOverview,
-  type PullRequestSummary,
-  type RemoteProjectStatus,
-  type SessionCheckoutInfo,
-} from "../lib/desktop-api";
-import { LazyList } from "./lazy-list";
+import { desktopApi, type RemoteProjectStatus } from "../lib/desktop-api.js";
+import { CopyButton } from "./copy-button.js";
+import { LazyList } from "./lazy-list.js";
+import { type MenuAt, MenuPortal, menuAtControl } from "./menu.js";
+import { useHoldInspector, useInspectorPending } from "./resource-inspector.js";
+import { ShortcutHint } from "./shortcut-hint.js";
 
-export interface ProjectInspectorSnapshot {
-  root: string | null;
-  git: GitOverview | null;
-  prs: PullRequestSummary[] | null;
-  remote: RemoteProjectStatus | null | undefined;
-  checkouts: SessionCheckoutInfo[] | null;
-  errors: string[];
+export type ProjectInspectorSession = Pick<AgentSession, "id"> &
+  Partial<
+    Pick<
+      AgentSession,
+      "title" | "running" | "status" | "attentionRequired" | "resumable"
+    >
+  >;
+
+/**
+ * What the card shows beyond the project's summary. Each value is
+ * `undefined` while it loads, so it holds its line, and "unavailable" when
+ * reading it failed; `null` is a known absence (no folder, no server).
+ */
+export interface ProjectInspectorData {
+  root: string | null | "unavailable" | undefined;
+  server: RemoteProjectStatus | null | "unavailable" | undefined;
+  /** Other projects only: the current one's chats are in the sidebar. */
+  sessions: ProjectInspectorSession[] | "unavailable" | undefined;
 }
 
-const EMPTY_SNAPSHOT: ProjectInspectorSnapshot = {
-  root: null,
-  git: null,
-  prs: null,
-  remote: undefined,
-  checkouts: null,
-  errors: [],
-};
+/** A glance, not a live view: reads within this long are reused. */
+const SESSIONS_FRESH_MS = 5_000;
+
+/**
+ * The card's reads, shared by the card and its warmup so a hover that
+ * rests on a project loads them before the card opens. Pull requests and
+ * worktrees belong to a chat ("This session"), not to this card.
+ */
+export function useProjectInspectorData(
+  projectId: string,
+  current: boolean,
+): ProjectInspectorData {
+  const root = useQuery({
+    queryKey: ["desktop", "project-root", projectId],
+    queryFn: () => desktopApi.projectRoot(projectId),
+    staleTime: 60_000,
+    retry: false,
+  });
+  // A connected project's status asks its server; a local one answers here.
+  const server = useQuery({
+    queryKey: ["desktop", "project-server-status", projectId],
+    queryFn: () => desktopApi.remoteStatus(projectId),
+    staleTime: 15_000,
+    retry: false,
+  });
+  // Another project's chats, read again only once they are a few seconds
+  // old, so the warmup's read serves the card that opens after it.
+  const { apiClient } = useCatamorphic();
+  const sessions = useQuery({
+    queryKey: ["desktop", "project-card-sessions", projectId],
+    queryFn: async () => {
+      const result = await apiClient.GET(
+        "/api/projects/{projectId}/agent/sessions",
+        { params: { path: { projectId }, query: { limit: 100 } } },
+      );
+      if (!result.data) throw new Error("Sessions are unavailable");
+      return result.data.items;
+    },
+    enabled: !current,
+    staleTime: SESSIONS_FRESH_MS,
+    refetchInterval: SESSIONS_FRESH_MS,
+    retry: false,
+  });
+  return {
+    root: root.isError ? "unavailable" : root.data,
+    server: server.isError ? "unavailable" : server.data,
+    sessions: current ? [] : sessions.isError ? "unavailable" : sessions.data,
+  };
+}
+
+/** Starts the card's reads while the pointer rests on its trigger. */
+export function ProjectInspectorWarmup({
+  projectId,
+  current,
+}: {
+  projectId: string;
+  current: boolean;
+}) {
+  useProjectInspectorData(projectId, current);
+  return null;
+}
 
 export function ProjectInspector({
   project,
@@ -48,372 +102,361 @@ export function ProjectInspector({
   current: boolean;
   onDelete: () => void;
 }) {
-  const sessionsQuery = useAgentSessions(current ? undefined : project.id, {
-    limit: 100,
-  });
-  const [snapshot, setSnapshot] = useState(EMPTY_SNAPSHOT);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    let alive = true;
-    setLoading(true);
-    setSnapshot(EMPTY_SNAPSHOT);
-    void desktopApi
-      .remoteStatus(project.id)
-      .then(async (remote) => {
-        if (!alive) return;
-        if (remote && !writesProgram(remote.capabilities)) {
-          setSnapshot({ ...EMPTY_SNAPSHOT, remote });
-          setLoading(false);
-          return;
-        }
-        const [rootResult, gitResult, prsResult, checkoutResult] =
-          await Promise.allSettled([
-            desktopApi.projectRoot(project.id),
-            desktopApi.gitOverview(project.id),
-            desktopApi.prList(project.id),
-            desktopApi.sessionCheckouts(project.id),
-          ]);
-        if (!alive) return;
-        const errors = [
-          rootResult.status === "rejected" ? "Location" : undefined,
-          gitResult.status === "rejected" ? "Worktrees" : undefined,
-          prsResult.status === "rejected" ? "Pull requests" : undefined,
-          checkoutResult.status === "rejected" ? "Checkouts" : undefined,
-        ].filter((label): label is string => label !== undefined);
-        setSnapshot({
-          root: rootResult.status === "fulfilled" ? rootResult.value : null,
-          git: gitResult.status === "fulfilled" ? gitResult.value : null,
-          prs: prsResult.status === "fulfilled" ? prsResult.value : null,
-          remote,
-          checkouts:
-            checkoutResult.status === "fulfilled" ? checkoutResult.value : null,
-          errors,
-        });
-        setLoading(false);
-      })
-      .catch(() => {
-        if (!alive) return;
-        setSnapshot({ ...EMPTY_SNAPSHOT, errors: ["Remote"] });
-        setLoading(false);
-      });
-    return () => {
-      alive = false;
-    };
-  }, [project.id]);
-
   return (
     <ProjectInspectorView
       project={project}
       current={current}
-      snapshot={snapshot}
-      sessions={current ? [] : (sessionsQuery.data?.items ?? [])}
-      sessionsLoading={!current && sessionsQuery.isLoading}
-      loading={loading}
+      data={useProjectInspectorData(project.id, current)}
       onDelete={onDelete}
     />
   );
 }
 
+/**
+ * A project's hover card: its name, where it lives (folder, Git remote,
+ * Work server), another project's ongoing sessions, and its actions behind
+ * ⋯. Every line keeps its height while its value loads, so the card opens
+ * at its size and stays there.
+ */
 export function ProjectInspectorView({
   project,
   current,
-  snapshot,
-  sessions,
-  sessionsLoading,
-  loading,
+  data,
   onDelete,
 }: {
   project: ProjectSummary;
   current: boolean;
-  snapshot: ProjectInspectorSnapshot;
-  sessions: Array<{
-    id: string;
-    title?: string | null;
-    running?: boolean;
-    status?: string;
-    activity?: string | null;
-  }>;
-  sessionsLoading: boolean;
-  loading: boolean;
+  data: ProjectInspectorData;
   onDelete: () => void;
 }) {
-  const [actionsOpen, setActionsOpen] = useState(false);
-  const worktrees = snapshot.git?.worktrees ?? [];
-  const checkoutBySession = new Map(
-    (snapshot.checkouts ?? []).map((checkout) => [
-      checkout.sessionId,
-      checkout,
-    ]),
+  const actionsRef = useRef<HTMLButtonElement>(null);
+  const [menuAt, setMenuAt] = useState<MenuAt | null>(null);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const picked = useRef(false);
+  // The menu's shield covers the card; the card stays until it has gone.
+  useHoldInspector(menuAt !== null);
+  // The card appears once what it shows has landed (or soon after).
+  useInspectorPending(
+    data.root === undefined ||
+      data.server === undefined ||
+      (!current && data.sessions === undefined),
   );
-  const changed = worktrees.reduce(
-    (count, worktree) =>
-      count + new Set(worktree.changes.map((file) => file.path)).size,
-    0,
-  );
-  const prs = snapshot.prs ?? [];
-  const ongoingSessions = sessions.filter(
-    (session) => session.running || session.status !== "closed",
-  );
-  const builder =
-    !loading &&
-    (snapshot.remote === null || writesProgram(snapshot.remote?.capabilities));
+  const server = data.server;
+  // Only a project known to be this person's to delete says Delete; until
+  // its server answers, the safe word is removing the copy here.
+  const deletes =
+    server === null ||
+    (typeof server === "object" && writesProgram(server.capabilities));
+  const remote = project.remoteUrl ? displayRemote(project.remoteUrl) : null;
 
   return (
     <div className="text-[12px] text-fg-muted" data-testid="project-inspector">
-      <header className="flex items-start gap-2 border-b border-border pb-2.5">
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-1.5">
-            <h2 className="truncate text-[13px] font-semibold text-fg">
-              {project.name}
-            </h2>
-            {current && (
-              <span className="rounded bg-accent/10 px-1.5 py-0.5 text-[10px] text-accent">
-                Current
-              </span>
-            )}
-          </div>
-          {builder ? (
-            <p
-              className="mt-0.5 truncate font-mono text-[10px] text-fg-faint"
-              title={snapshot.root ?? project.id}
-            >
-              {snapshot.root ?? project.id}
-            </p>
-          ) : (
-            <p className="mt-0.5 text-[10px] text-fg-faint">Team project</p>
+      <header className="flex items-center gap-2.5 border-b border-border pb-2.5">
+        <Box aria-hidden="true" className="size-4 shrink-0 text-accent" />
+        <div className="flex min-w-0 flex-1 items-center gap-1.5">
+          <h2 className="truncate text-[13px] font-semibold text-fg">
+            {project.name}
+          </h2>
+          {current && (
+            <span className="shrink-0 rounded bg-bg-raised px-1.5 py-px text-[10px] font-medium text-fg-muted">
+              Current
+            </span>
           )}
         </div>
-        <div className="relative">
+        <ShortcutHint label="Project actions">
           <button
+            ref={actionsRef}
             type="button"
-            aria-label={`Project actions for ${project.name}`}
-            aria-expanded={actionsOpen}
-            onClick={() => setActionsOpen((value) => !value)}
-            className="grid size-7 cursor-pointer place-items-center rounded-md text-fg-muted hover:bg-bg-raised hover:text-fg"
+            aria-label={`Actions for ${project.name}`}
+            aria-haspopup="menu"
+            aria-expanded={menuOpen}
+            onClick={() => {
+              if (!actionsRef.current) return;
+              // A pick from a menu that has since been dismissed is gone.
+              picked.current = false;
+              setMenuAt(menuAtControl(actionsRef.current));
+              setMenuOpen(true);
+            }}
+            className={`grid size-7 shrink-0 cursor-pointer place-items-center rounded-md transition-colors duration-150 hover:bg-bg-raised hover:text-fg ${
+              menuOpen ? "bg-bg-raised text-fg" : "text-fg-muted"
+            }`}
           >
-            <MoreHorizontal className="size-4" />
+            <MoreHorizontal aria-hidden="true" className="size-4" />
           </button>
-          {actionsOpen && (
-            <div className="absolute right-0 top-8 z-10 w-40 rounded-md border border-border bg-bg-overlay p-1 shadow-xl">
-              <button
-                type="button"
-                onClick={onDelete}
-                className="flex h-7 w-full cursor-pointer items-center gap-2 rounded px-2 text-left text-danger hover:bg-danger/10"
-              >
-                <Trash2 className="size-3.5" />
-                {builder ? "Delete project" : "Remove from this device"}
-              </button>
-            </div>
-          )}
-        </div>
+        </ShortcutHint>
       </header>
 
-      {builder && (
-        <div className="grid grid-cols-3 gap-1.5 py-2.5">
-          <Metric
-            label="Worktrees"
-            value={loading ? "…" : String(worktrees.length)}
-          />
-          <Metric
-            label="Changes"
-            value={loading ? "…" : String(changed)}
-            tone={changed ? "warning" : "normal"}
-          />
-          <Metric label="Open PRs" value={loading ? "…" : String(prs.length)} />
-        </div>
-      )}
-
-      {builder && (
-        <Section icon={<GitBranch className="size-3.5" />} title="Worktrees">
-          {worktrees.length === 0 ? (
-            <EmptyLine loading={loading} empty="No worktrees reported" />
-          ) : (
-            <LazyList
-              label="Project worktrees"
-              items={worktrees}
-              itemKey={(worktree) => worktree.path}
-              maxHeight={224}
-              renderItem={(worktree) => (
-                <div
-                  key={worktree.path}
-                  className="flex h-7 min-w-0 items-center gap-2"
-                >
-                  <span
-                    className={`size-1.5 shrink-0 rounded-full ${worktree.error ? "bg-danger" : worktree.changes.length ? "bg-warning" : "bg-success"}`}
-                  />
-                  <span className="min-w-0 flex-1 truncate text-fg">
-                    {worktree.branch ?? "Detached HEAD"}
-                  </span>
-                  <span className="shrink-0 text-[10px] text-fg-faint">
-                    {new Set(worktree.changes.map((file) => file.path)).size
-                      ? `${new Set(worktree.changes.map((file) => file.path)).size} changed`
-                      : worktree.error
-                        ? "Unavailable"
-                        : "Clean"}
-                  </span>
-                </div>
-              )}
-            />
-          )}
-        </Section>
-      )}
-
-      {builder && (
-        <Section
-          icon={<GitPullRequest className="size-3.5" />}
-          title="Open pull requests"
+      <dl className="grid grid-cols-[auto_minmax(0,1fr)] items-center gap-x-3 gap-y-1.5 py-2.5 text-[11px]">
+        <Row
+          term="Folder"
+          busy={data.root === undefined}
+          copyable={
+            typeof data.root === "string" && data.root !== "unavailable"
+          }
         >
-          {prs.length === 0 ? (
-            <EmptyLine loading={loading} empty="No open pull requests" />
+          {data.root === undefined ? (
+            <Pending width="70%" />
+          ) : data.root === "unavailable" ? (
+            <Absent>Unavailable</Absent>
+          ) : data.root === null ? (
+            <Absent>None</Absent>
           ) : (
-            <LazyList
-              label="Project pull requests"
-              items={prs}
-              itemKey={(pr) => String(pr.number)}
-              maxHeight={168}
-              renderItem={(pr) => (
-                <div
-                  key={pr.number}
-                  className="flex h-7 min-w-0 items-center gap-2"
-                >
-                  <span className="shrink-0 font-mono text-[10px] text-fg-faint">
-                    #{pr.number}
-                  </span>
-                  <span className="min-w-0 flex-1 truncate text-fg">
-                    {pr.title}
-                  </span>
-                  {pr.draft && (
-                    <span className="text-[10px] text-fg-faint">Draft</span>
-                  )}
-                </div>
-              )}
-            />
+            <CopyableValue value={data.root} copyLabel="Copy folder path" />
           )}
-        </Section>
-      )}
-
-      {builder && (
-        <Section icon={<GitBranch className="size-3.5" />} title="Git remote">
-          <p className="break-all text-fg-muted">
-            {project.remoteUrl ?? "No Git remote"}
-          </p>
-        </Section>
-      )}
-      <Section icon={<Radio className="size-3.5" />} title="Work server">
-        {loading ? (
-          <EmptyLine loading empty="" />
-        ) : snapshot.remote === null || snapshot.remote === undefined ? (
-          <p className="text-fg-faint">Not connected to a server</p>
-        ) : (
-          <div className="flex items-center gap-2">
-            {snapshot.remote.connection.state === "connected" ? (
-              <CheckCircle2 className="size-3.5 text-success" />
-            ) : (
-              <AlertCircle className="size-3.5 text-warning" />
-            )}
-            <span className="min-w-0 flex-1 truncate text-fg">
-              {snapshot.remote.remoteProjectName}
-            </span>
-            <span className="text-[10px] capitalize text-fg-faint">
-              {snapshot.remote.connection.state.replaceAll("_", " ")}
-            </span>
-          </div>
-        )}
-      </Section>
-
-      {!current && (
-        <Section icon={<CircleDot className="size-3.5" />} title="Sessions">
-          {ongoingSessions.length === 0 ? (
-            <EmptyLine loading={sessionsLoading} empty="No ongoing sessions" />
+        </Row>
+        <Row term="Git remote" copyable={Boolean(remote)}>
+          {remote ? (
+            <CopyableValue value={remote} copyLabel="Copy Git remote" />
           ) : (
-            <LazyList
-              label="Project sessions"
-              items={ongoingSessions}
-              itemKey={(session) => session.id}
-              maxHeight={168}
-              renderItem={(session) => {
-                const checkout = checkoutBySession.get(session.id);
-                return (
-                  <div
-                    key={session.id}
-                    className="flex h-7 min-w-0 items-center gap-2"
-                  >
-                    <span
-                      className={`size-1.5 shrink-0 rounded-full ${session.running ? "animate-pulse bg-accent" : "bg-fg-faint"}`}
-                    />
-                    <span className="min-w-0 flex-1 truncate text-fg">
-                      {session.title || "Untitled session"}
-                    </span>
-                    <span className="max-w-24 shrink-0 truncate text-[10px] text-fg-faint">
-                      {session.running
-                        ? "Working"
-                        : session.status === "closed"
-                          ? "Closed"
-                          : "Ready"}
-                      {checkout?.branch ? ` · ${checkout.branch}` : ""}
-                    </span>
-                  </div>
-                );
-              }}
-            />
+            <Absent>None</Absent>
           )}
-        </Section>
-      )}
+        </Row>
+        <Row term="Work server" busy={server === undefined}>
+          {server === undefined ? (
+            <Pending width="55%" />
+          ) : server === "unavailable" ? (
+            <Absent>Unavailable</Absent>
+          ) : server === null ? (
+            <Absent>None</Absent>
+          ) : (
+            <ServerValue status={server} />
+          )}
+        </Row>
+      </dl>
 
-      {snapshot.errors.length > 0 && (
-        <p className="mt-2 flex items-center gap-1.5 rounded-md bg-warning/10 px-2 py-1.5 text-[10px] text-warning">
-          <AlertCircle className="size-3" /> Some details could not load:{" "}
-          {snapshot.errors.join(", ")}
-        </p>
+      {!current && <SessionsSection sessions={data.sessions} />}
+
+      {menuAt && (
+        <MenuPortal
+          open={menuOpen}
+          at={menuAt}
+          anchor={actionsRef}
+          label={`Actions for ${project.name}`}
+          entries={[
+            {
+              action: "delete",
+              label: deletes ? "Delete project…" : "Remove from this device…",
+              danger: true,
+            },
+          ]}
+          onPick={() => {
+            picked.current = true;
+            setMenuOpen(false);
+          }}
+          onDismiss={() => setMenuOpen(false)}
+          onExited={() => {
+            setMenuAt(null);
+            if (!picked.current) return;
+            picked.current = false;
+            onDelete();
+          }}
+        />
       )}
     </div>
   );
 }
 
-function Metric({
-  label,
-  value,
-  tone = "normal",
+function SessionsSection({
+  sessions,
 }: {
-  label: string;
-  value: string;
-  tone?: "normal" | "warning";
+  sessions: ProjectInspectorData["sessions"];
 }) {
+  const ongoing = Array.isArray(sessions)
+    ? sessions.filter(
+        (session) => session.running || session.status !== "closed",
+      )
+    : [];
   return (
-    <div className="rounded-md bg-bg-raised px-2 py-1.5">
-      <p
-        className={`text-[14px] font-semibold ${tone === "warning" ? "text-warning" : "text-fg"}`}
-      >
-        {value}
-      </p>
-      <p className="text-[9px] uppercase tracking-wide text-fg-faint">
-        {label}
-      </p>
-    </div>
-  );
-}
-
-function Section({
-  icon,
-  title,
-  children,
-}: {
-  icon: React.ReactNode;
-  title: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <section className="border-t border-border py-2">
-      <h3 className="mb-1 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-fg-faint">
-        {icon}
-        {title}
+    <section className="border-t border-border pt-2">
+      <h3 className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-fg-faint">
+        Sessions
       </h3>
-      {children}
+      {sessions === undefined ? (
+        <div aria-busy="true" className="flex h-7 items-center gap-2">
+          <span className="size-1.5 shrink-0 rounded-full bg-fg/7" />
+          <span className="sidebar-skeleton-bar w-3/5" />
+          <span className="sr-only">Loading</span>
+        </div>
+      ) : sessions === "unavailable" ? (
+        <p className="flex h-7 items-center text-[11px] text-fg-faint">
+          Unavailable
+        </p>
+      ) : ongoing.length === 0 ? (
+        <p className="flex h-7 items-center text-[11px] text-fg-faint">
+          No ongoing sessions
+        </p>
+      ) : (
+        <LazyList
+          label="Ongoing sessions"
+          items={ongoing}
+          itemKey={(session) => session.id}
+          maxHeight={168}
+          renderItem={(session) => (
+            <div
+              key={session.id}
+              className="flex h-7 min-w-0 items-center gap-2 text-[11px]"
+            >
+              <span
+                aria-hidden="true"
+                className={`size-1.5 shrink-0 rounded-full ${session.running ? "animate-pulse bg-accent" : "bg-fg-faint"}`}
+              />
+              <span className="min-w-0 flex-1 truncate text-fg">
+                {session.title || "Untitled session"}
+              </span>
+              <span className="shrink-0 text-fg-faint">
+                {sessionState(session)}
+              </span>
+            </div>
+          )}
+        />
+      )}
     </section>
   );
 }
 
-function EmptyLine({ loading, empty }: { loading: boolean; empty: string }) {
-  return <p className="text-fg-faint">{loading ? "Loading…" : empty}</p>;
+function sessionState(session: ProjectInspectorSession): string {
+  if (session.running) return "Working";
+  if (session.attentionRequired) return "Needs attention";
+  if (session.resumable) return "Paused";
+  return "Ready";
+}
+
+const SERVER_STATE: Record<RemoteProjectStatus["connection"]["state"], string> =
+  {
+    connected: "Connected",
+    sign_in_required: "Sign in required",
+    access_removed: "Access removed",
+    unreachable: "Unreachable",
+  };
+
+function ServerValue({ status }: { status: RemoteProjectStatus }) {
+  const connected = status.connection.state === "connected";
+  const Icon = connected ? CheckCircle2 : AlertCircle;
+  return (
+    <Line>
+      <Icon
+        aria-hidden="true"
+        className={`size-3 shrink-0 ${connected ? "text-success" : "text-warning"}`}
+      />
+      <ShortcutHint label={serverHost(status.serverUrl)} className="min-w-0">
+        <span className="min-w-0 truncate text-fg">
+          {status.remoteProjectName}
+        </span>
+      </ShortcutHint>
+      <span className="shrink-0 text-fg-faint">
+        {SERVER_STATE[status.connection.state]}
+      </span>
+    </Line>
+  );
+}
+
+/**
+ * One row of the card's list: its label and value on the card's two
+ * columns, as one box the pointer can rest on. A copyable row shows its
+ * copy button while it is hovered or holds keyboard focus.
+ */
+function Row({
+  term,
+  busy,
+  copyable,
+  children,
+}: {
+  term: string;
+  busy?: boolean;
+  copyable?: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <div
+      data-copyable={copyable || undefined}
+      className="col-span-2 grid grid-cols-subgrid items-center"
+    >
+      <dt className="text-fg-faint">{term}</dt>
+      <dd className="min-w-0" aria-busy={busy || undefined}>
+        {children}
+      </dd>
+    </div>
+  );
+}
+
+/** One value line; every row of the card is this tall, loaded or not. */
+function Line({ children }: { children: ReactNode }) {
+  return (
+    <span className="flex h-5 min-w-0 items-center gap-1.5">{children}</span>
+  );
+}
+
+/** A value still loading: a still bar where its text will be. */
+function Pending({ width }: { width: string }) {
+  return (
+    <Line>
+      <span className="sidebar-skeleton-bar" style={{ width }} />
+      <span className="sr-only">Loading</span>
+    </Line>
+  );
+}
+
+function Absent({ children }: { children: ReactNode }) {
+  return (
+    <Line>
+      <span className="truncate text-fg-faint">{children}</span>
+    </Line>
+  );
+}
+
+/**
+ * A path or address on one line, its end kept when it is too long (the
+ * folder's or repository's own name), all of it in a hint and a copy.
+ */
+function CopyableValue({
+  value,
+  copyLabel,
+}: {
+  value: string;
+  copyLabel: string;
+}) {
+  return (
+    <Line>
+      <ShortcutHint label={value} className="min-w-0 flex-1">
+        <span className="min-w-0 flex-1 truncate text-left font-mono text-fg [direction:rtl]">
+          <bdi>{value}</bdi>
+        </span>
+      </ShortcutHint>
+      <CopyButton value={value} label={copyLabel} />
+    </Line>
+  );
+}
+
+/**
+ * A Git remote without the secrets a URL can carry. An http(s) remote's
+ * user is a token as often as a name, so the whole userinfo goes; other
+ * schemes (ssh) keep their user and lose only a password; scp-style
+ * `git@host:path` has none. Userinfo is what comes before an `@` ahead of
+ * the first slash; a URL that still does not parse loses everything up to
+ * its last `@`, failing closed.
+ */
+export function displayRemote(url: string): string {
+  const scheme = /^([a-z][a-z0-9+.-]*):\/\//i.exec(url)?.[1];
+  if (!scheme) return url;
+  const http = /^(?:git\+)?https?$/i.test(scheme);
+  const userinfo = http
+    ? /^([a-z][a-z0-9+.-]*:\/\/)[^/]*@/i
+    : /^([a-z][a-z0-9+.-]*:\/\/[^:@/]*):[^/]*@/i;
+  if (userinfo.test(url)) return url.replace(userinfo, http ? "$1" : "$1@");
+  try {
+    new URL(url);
+    return url;
+  } catch {
+    return http
+      ? url.replace(/^([a-z][a-z0-9+.-]*:\/\/).*@/i, "$1")
+      : url.replace(/^([a-z][a-z0-9+.-]*:\/\/[^:@/]*):.*@/i, "$1@");
+  }
+}
+
+function serverHost(serverUrl: string): string {
+  try {
+    return new URL(serverUrl).host;
+  } catch {
+    return serverUrl;
+  }
 }

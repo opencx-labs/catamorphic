@@ -94,7 +94,9 @@ describe("SessionInspectorContent", () => {
     expect(container.textContent).toContain("Slack");
     expect(container.textContent).toContain("customer-success");
     expect(container.textContent).toContain("claude-sonnet-5");
-    expect(container.textContent).toContain("High");
+    // The harness's own name for the level, as it is.
+    expect(container.textContent).toContain("high");
+    expect(container.textContent).not.toContain("High");
     const buttons = [...container.querySelectorAll("button")];
     await act(async () =>
       buttons
@@ -102,7 +104,7 @@ describe("SessionInspectorContent", () => {
         ?.click(),
     );
     await act(async () =>
-      buttons.find((button) => button.textContent === "High")?.click(),
+      buttons.find((button) => button.textContent === "high")?.click(),
     );
     await act(async () =>
       buttons.find((button) => button.textContent === "Fork")?.click(),

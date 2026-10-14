@@ -51,6 +51,8 @@ input.on("line", (line) => {
   }
   const controller = new AbortController();
   controllers.set(message.id, controller);
+  // A session-scoped section's chat (ADR 0226), for every handler.
+  const session = message.session ? { session: message.session } : {};
   const run = async () => {
     try {
       controller.signal.throwIfAborted();
@@ -63,6 +65,7 @@ input.on("line", (line) => {
               ...(typeof message.query === "string"
                 ? { query: message.query }
                 : {}),
+              ...session,
               signal: controller.signal,
             })
           : message.method === "move"
@@ -71,6 +74,7 @@ input.on("line", (line) => {
                 itemId: message.itemId,
                 parentId: message.parentId ?? null,
                 beforeId: message.beforeId,
+                ...session,
                 signal: controller.signal,
               })
             : message.method === "drop"
@@ -79,12 +83,14 @@ input.on("line", (line) => {
                   parentId: message.parentId ?? null,
                   beforeId: message.beforeId,
                   payload: message.payload,
+                  ...session,
                   signal: controller.signal,
                 })
               : await source.action?.({
                   projectRoot,
                   itemId: message.itemId,
                   action: message.action,
+                  ...session,
                   signal: controller.signal,
                 });
       if (message.method !== "load") {

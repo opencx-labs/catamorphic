@@ -9,7 +9,9 @@ import {
   localEditorPath,
   useLocalProjectFiles,
 } from "../lib/local-project-files.js";
+import { LOCAL_CHATS_POLL_MS } from "../lib/session-change-hints.js";
 import { OpenResourceButton } from "./open-resource-button.js";
+import { useRemoteProject } from "./project-authority-provider.js";
 import {
   useSidebarContent,
   useSidebarRefresh,
@@ -29,9 +31,11 @@ export function SidebarActivity({
   onOpenSession: (session: AgentSession, mode?: OpenMode) => void;
   onOpenTab: (tab: WorkspaceTab, mode?: OpenMode) => void;
 }) {
+  const remote = useRemoteProject(projectId);
   const sessions = useAgentSessions(projectId, {
     limit: 100,
-    refetchInterval: visible ? 2000 : false,
+    // This computer's chats follow its hints (ADR 0229).
+    refetchInterval: visible ? (remote ? 2000 : LOCAL_CHATS_POLL_MS) : false,
   });
   const workflows = useWorkflows(projectId);
   useSidebarRefresh(sessions.refetch);
@@ -81,9 +85,11 @@ export function SidebarActivity({
         : states.some((state) => state?.error)
           ? "Could not load workflow activity."
           : undefined,
+    // Polls are routine: reading no fetching state keeps a poll that finds
+    // nothing new from rendering this view again.
     idle: !(
-      sessions.isFetching ||
-      workflows.isFetching ||
+      sessions.isLoading ||
+      workflows.isLoading ||
       states.some((state) => state?.loading)
     ),
     retry: () => {

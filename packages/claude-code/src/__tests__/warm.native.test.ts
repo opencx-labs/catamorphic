@@ -1,4 +1,11 @@
-import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { JsonValue } from "@catamorphic/agent-protocol";
@@ -214,4 +221,24 @@ it("a failed turn's CLI does not serve the retry", async () => {
   expect(failed.completed?.status).toBe("failed");
   const retry = await run(followUp(failed));
   expect(loaded(retry)).toBe(true);
+}, 90_000);
+
+it("a CLI writing a debug log is not kept warm, so its log covers its attempt alone", async () => {
+  const debugFile = path.join(root, "sign-in-retry.log");
+  const logged = { options: { memory: false, debugFile } };
+  const first = await run(
+    scenarioAttempt({
+      context,
+      scenario,
+      turn: 1,
+      text: "Remember the word mango",
+      overrides: logged,
+    }),
+  );
+  expect(first.completed?.status).toBe("completed");
+  expect((await readFile(debugFile, "utf8")).length).toBeGreaterThan(0);
+  // Even the same launch starts a new CLI from Work's copy.
+  const second = await run(followUp(first, logged));
+  expect(loaded(second)).toBe(true);
+  expect(reply(second)).toBe("The word was mango.");
 }, 90_000);

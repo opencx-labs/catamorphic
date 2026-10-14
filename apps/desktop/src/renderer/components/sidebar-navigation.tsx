@@ -42,7 +42,10 @@ import {
   type SidebarSectionConfig,
 } from "../lib/desktop-api.js";
 import { sessionLabel } from "../lib/session-label.js";
-import { useSidebarSessions } from "../lib/sidebar-sessions.js";
+import {
+  useOpenSidebarSession,
+  useSidebarSessions,
+} from "../lib/sidebar-sessions.js";
 import { TAB_DRAG_TYPE, type TabDragPayload } from "../lib/tab-drag.js";
 import {
   grantSources,
@@ -62,6 +65,7 @@ import { GitNav } from "./git-nav.js";
 import { useRemoteProject } from "./project-authority-provider.js";
 import { PrsNav } from "./prs-nav.js";
 import { type RemoteFeatures, RemoteNav } from "./remote-nav.js";
+import { SessionDetails } from "./session-details.js";
 import { ShortcutHint } from "./shortcut-hint.js";
 import {
   projectSidebarItems,
@@ -128,6 +132,7 @@ export function ConfiguredSection({
   onSessionCommand,
   onSessionAction,
   onOpenUrl,
+  onOpenSessionLink,
   onOpenFile,
   onOpenHistory,
   onPublish,
@@ -169,6 +174,11 @@ export function ConfiguredSection({
   onSessionCommand: (session: AgentSession, command: SessionCommand) => void;
   onSessionAction: (sessionId: string, action: ChatSessionAction) => void;
   onOpenUrl: (url: string, mode: CommitMode) => void;
+  /**
+   * Open a page for the chat whose session the sidebar shows, as a link
+   * in that chat opens: in a tab the chat owns (ADR 0226).
+   */
+  onOpenSessionLink: (url: string, mode: CommitMode) => void;
   onOpenFile: (filePath: string, mode?: CommitMode) => void;
   onOpenHistory: (filePath: string) => void;
   onPublish: (filePath: string, features: RemoteFeatures | undefined) => void;
@@ -180,6 +190,11 @@ export function ConfiguredSection({
     () => resolveSidebarSection(configured),
     [configured],
   );
+  // Its rows belong to the chat beside it (ADR 0226): links open as the
+  // chat's, and the palette, which has no chat, does not search it.
+  const sessionScoped =
+    section.type === "session" || section.when?.session === true;
+  const openLink = sessionScoped ? onOpenSessionLink : onOpenUrl;
   const sources = useWorkspaceSourcesContext();
   const grantKey = JSON.stringify(section.collections ?? []);
   // biome-ignore lint/correctness/useExhaustiveDependencies: grantKey is the value identity of the grant list
@@ -236,7 +251,10 @@ export function ConfiguredSection({
     ...(!memberShell ? ["new-workflow"] : []),
     // Every list section is searchable in the palette; header buttons stay
     // where configured (headerActions) or built in (files, changes, PRs).
-    ...(section.type !== "app" && section.type !== "note" ? ["search"] : []),
+    // A session-scoped section lists one chat's rows; the palette has none.
+    ...(section.type !== "app" && section.type !== "note" && !sessionScoped
+      ? ["search"]
+      : []),
     ...([
       "chats",
       "subsessions",
@@ -249,6 +267,7 @@ export function ConfiguredSection({
       "remote",
       "note",
       "activity",
+      "session",
     ].includes(section.type)
       ? ["refresh"]
       : []),
@@ -537,6 +556,19 @@ export function ConfiguredSection({
             />
           </SidebarSection>
         );
+      case "session":
+        return (
+          <SidebarSection
+            title={section.title ?? "This session"}
+            defaultOpen={defaultOpen}
+          >
+            <SessionDetails
+              projectId={projectId}
+              sessionId={surface.sessionId}
+              onOpenUrl={onOpenSessionLink}
+            />
+          </SidebarSection>
+        );
       case "remote":
         return (
           <SidebarSection
@@ -570,7 +602,7 @@ export function ConfiguredSection({
               <CustomItems
                 section={section}
                 experienceContext={experienceContext}
-                onOpenUrl={onOpenUrl}
+                onOpenUrl={openLink}
               />
             )}
           </SidebarSection>
@@ -594,7 +626,7 @@ export function ConfiguredSection({
         status: resolvedStatus,
         report: setStatus,
         reportItems,
-        open: onOpenUrl,
+        open: openLink,
         commands,
         registerRefresh,
         command: async (action) => {
@@ -959,8 +991,10 @@ function AppsNav({
         : items.length
           ? "ready"
           : "empty",
-    refreshing: query.isFetching && !query.isLoading,
-    idle: !query.isFetching,
+    // Its polls are routine: the section shows nothing for them, and this
+    // view reads no fetching state so a poll that finds nothing new does not
+    // render it again (a Refresh press shows on its own button).
+    idle: !query.isLoading,
     error: query.isError ? "Could not load apps." : undefined,
     retry: query.refetch,
     empty: "No apps yet.",
@@ -1011,13 +1045,24 @@ function SessionsNav({
   const visible = contribution?.visible ?? true;
   // A server's chats open their workspaces to terminals and previews.
   const remote = useRemoteProject(projectId);
+  const section = contribution?.section ?? { id: "chats", type: "chats" };
   const { collection, root } = useSidebarSessions({
     projectId,
     sessionId: contribution?.surface.sessionId,
-    section: contribution?.section ?? { id: "chats", type: "chats" },
+    section,
     visible,
     relevant: contribution?.relevant ?? true,
   });
+  // The open chat, when older than every loaded row, shows past the end.
+  const openChat = useOpenSidebarSession({
+    collection,
+    root,
+    projectId,
+    sessionId: activeSessionId,
+    section,
+    active: visible,
+  });
+  const tail = useMemo(() => (openChat ? [openChat] : undefined), [openChat]);
   useSidebarRefresh(collection.load);
   const contentStatus = root.status;
   const contentIds = root.ids;
@@ -1092,6 +1137,7 @@ function SessionsNav({
         )
       }
       active={visible}
+      tail={tail}
       selectedId={activeSessionId}
       rowHeight={contribution?.section.rowHeight}
       label={contribution?.section.title ?? "Chats"}

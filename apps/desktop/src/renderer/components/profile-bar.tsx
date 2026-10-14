@@ -1,7 +1,9 @@
 import { Check, ChevronDown, Plus, Star } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { moveFocusAsApp } from "../lib/app-focus.js";
 import type { Profile, ProfilesData } from "../lib/desktop-api.js";
 import { desktopApi } from "../lib/desktop-api.js";
+import { usePopoverDismiss } from "../lib/popover-dismiss.js";
 import { ProfileAvatar } from "./profile-avatar";
 import { ProfileInspector } from "./profile-inspector";
 import { ResourceInspector } from "./resource-inspector";
@@ -28,39 +30,47 @@ export function ProfileBar({
   const [newName, setNewName] = useState("");
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const popoverRef = useRef<HTMLDivElement | null>(null);
   const createInputRef = useRef<HTMLInputElement | null>(null);
 
   const active: Profile | undefined =
     data.profiles.find((profile) => profile.id === activeProfileId) ??
     data.profiles[0];
 
+  // A press anywhere else, a web page or an app's frame included, closes
+  // it; a press on a profile's card does not. Closing drops the inline
+  // create field (below).
+  usePopoverDismiss({
+    open,
+    within: [containerRef],
+    onDismiss: () => setOpen(false),
+    returnFocus: triggerRef,
+  });
+
+  // A dialog takes focus as it opens (on the profile in use) and hands it
+  // back to its control as it closes; it comes before the control in tab
+  // order, so Tab would not reach it. These are the app's own focus moves:
+  // they open no profile's preview.
   useEffect(() => {
     if (!open) return;
-    const onPointerDown = (event: PointerEvent) => {
-      const target = event.target;
-      const insideRoot =
-        target instanceof Node &&
-        Boolean(containerRef.current?.contains(target));
-      const insideInspector =
-        target instanceof Element &&
-        Boolean(target.closest("[data-resource-inspector]"));
-      if (!insideRoot && !insideInspector) {
-        setOpen(false);
-        setCreating(false);
-      }
-    };
-    window.addEventListener("pointerdown", onPointerDown);
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
-      event.preventDefault();
-      setOpen(false);
-      triggerRef.current?.focus();
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => {
-      window.removeEventListener("pointerdown", onPointerDown);
-      window.removeEventListener("keydown", onKeyDown);
-    };
+    const frame = requestAnimationFrame(() => {
+      const popover = popoverRef.current;
+      // Already inside (a quick press on New profile focused its field):
+      // moving focus now would blur that field, which drops it.
+      if (popover?.contains(document.activeElement)) return;
+      const target =
+        popover?.querySelector<HTMLElement>("[data-profile-active]") ??
+        popover?.querySelector<HTMLElement>("button");
+      if (target) moveFocusAsApp(() => target.focus());
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [open]);
+  // Before the closed dialog turns inert and drops the focus it holds.
+  useLayoutEffect(() => {
+    if (open) return;
+    const trigger = triggerRef.current;
+    if (trigger && popoverRef.current?.contains(document.activeElement))
+      moveFocusAsApp(() => trigger.focus());
   }, [open]);
 
   useEffect(() => {
@@ -93,11 +103,16 @@ export function ProfileBar({
   return (
     <div ref={containerRef} className="relative min-w-0 flex-1">
       <div
+        ref={popoverRef}
         className={`absolute left-0 w-[244px] bottom-full z-50 mb-1 origin-bottom rounded-lg border border-border bg-bg-overlay p-1 shadow-2xl transition-[opacity,translate,scale] duration-150 ease-[cubic-bezier(0.2,0,0,1)] ${
           open
             ? "translate-y-0 scale-100 opacity-100"
             : "pointer-events-none translate-y-1 scale-[0.98] opacity-0"
         }`}
+        // Profiles with their previews and a create field: a popover, not
+        // a menu of commands (menus are MenuPortal's).
+        role="dialog"
+        aria-label="Profiles"
         aria-hidden={!open}
         inert={!open ? true : undefined}
       >
@@ -127,6 +142,8 @@ export function ProfileBar({
                 <button
                   {...inspectorProps}
                   type="button"
+                  aria-current={isActive || undefined}
+                  data-profile-active={isActive || undefined}
                   onClick={() => {
                     setOpen(false);
                     if (!isActive) onSwitch(profile);
@@ -213,7 +230,7 @@ export function ProfileBar({
                 : "text-fg-muted hover:bg-bg-overlay hover:text-fg"
             }`}
             aria-label={`Switch profile: ${active.name}`}
-            aria-haspopup="menu"
+            aria-haspopup="dialog"
             aria-expanded={open}
           >
             <ProfileAvatar profile={active} />

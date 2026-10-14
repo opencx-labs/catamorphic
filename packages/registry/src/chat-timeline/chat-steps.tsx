@@ -19,16 +19,20 @@ import {
   Pencil,
   Radio,
   SquareTerminal,
+  Timer,
   Wrench,
 } from "lucide-react";
 import {
   createContext,
+  memo,
   type ReactNode,
   useContext,
   useEffect,
   useRef,
   useState,
+  useSyncExternalStore,
 } from "react";
+import { SwapText, useLinger } from "./activity-text.js";
 import {
   hrefOf,
   type InputLinkModifiers,
@@ -52,6 +56,19 @@ export interface ChatBackgroundCommand {
   exitCode: number | null;
 }
 
+/** The widest reading of `formatElapsed`'s form for `ms`, in digits. */
+function elapsedReserve(ms: number): string {
+  const seconds = Math.max(0, Math.floor(ms / 1000));
+  return seconds < 60 ? "00s" : seconds < 3600 ? "00m 00s" : "00h 00m";
+}
+
+/**
+ * How far ahead of the reading the clock's room moves to a wider form:
+ * past the next tick (which may come late) and its widening (200 ms), so
+ * the time never reads wider than its room.
+ */
+const RESERVE_AHEAD_MS = 1_500;
+
 /** "4s", "2m 14s", "1h 5m": how long something ran, to the second. */
 export function formatElapsed(ms: number): string {
   const seconds = Math.max(0, Math.floor(ms / 1000));
@@ -61,15 +78,72 @@ export function formatElapsed(ms: number): string {
   return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
 }
 
-/** The current time, read again every second while `active`. */
+/**
+ * Whether the timeline is on screen: laid out (not in a hidden or lurking
+ * chat) in a window that shows. What enters reads it once as it mounts, so
+ * what a chat shows as it appears is simply there; clocks tick only while
+ * it holds.
+ */
+export interface OnScreenState {
+  readonly current: boolean;
+  subscribe: (listener: () => void) => () => void;
+}
+
+/** An on-screen state its owner sets (see `OnScreenState`). */
+export interface OnScreenSource extends OnScreenState {
+  set: (value: boolean) => void;
+}
+
+export function onScreenSource(): OnScreenSource {
+  const listeners = new Set<() => void>();
+  let current = false;
+  return {
+    get current() {
+      return current;
+    },
+    subscribe(listener) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    set(value) {
+      if (value === current) return;
+      current = value;
+      for (const listener of listeners) listener();
+    },
+  };
+}
+
+const ALWAYS_ON_SCREEN: OnScreenState = {
+  current: true,
+  subscribe: () => () => undefined,
+};
+
+/** The timeline's on-screen state; outside a timeline, always on screen. */
+export const OnScreen = createContext<OnScreenState>(ALWAYS_ON_SCREEN);
+
+/** Whether the timeline is on screen now, rendering again when that changes. */
+function useOnScreen(): boolean {
+  const state = useContext(OnScreen);
+  return useSyncExternalStore(
+    state.subscribe,
+    () => state.current,
+    () => state.current,
+  );
+}
+
+/**
+ * The current time, read again every second while `active` and the
+ * timeline is on screen; it catches up as the timeline comes back.
+ */
 export function useNow(active: boolean): number {
   const [now, setNow] = useState(() => Date.now());
+  const ticking = useOnScreen() && active;
   useEffect(() => {
-    if (!active) return;
+    if (!ticking) return;
     setNow(Date.now());
     const timer = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(timer);
-  }, [active]);
+  }, [ticking]);
   return now;
 }
 
@@ -203,6 +277,7 @@ const TOOL_STEP_LABELS: Record<string, string> = {
   interrupt_subsession: "Stopped a subsession",
   request_user_attention: "Requested your attention",
   set_session_activity: "Updated activity",
+  set_session_metadata: "Updated session details",
   list_worktrees: "Listed worktrees",
   create_worktree: "Created a worktree",
   use_worktree: "Switched worktrees",
@@ -224,6 +299,7 @@ const WORKSPACE_STEP_TOOLS = new Set([
   "interrupt_subsession",
   "request_user_attention",
   "set_session_activity",
+  "set_session_metadata",
   "read_todo_list",
   "update_todo_list",
   "list_worktrees",
@@ -266,6 +342,25 @@ function toolStepLabel(
       return { label: "Stopped pointing", mono: false };
     if (toolName === "use_worktree" && "path" in input && input.path === null)
       return { label: "Switched to the project checkout", mono: false };
+    if (toolName === "set_session_metadata") {
+      // Without a value or remove: true, the call only reads.
+      const writes =
+        ("value" in input &&
+          input.value !== undefined &&
+          input.value !== null) ||
+        ("remove" in input && input.remove === true);
+      const pullRequests = "key" in input && input.key === "pull_requests";
+      return {
+        label: writes
+          ? pullRequests
+            ? "Updated pull requests"
+            : "Updated session details"
+          : pullRequests
+            ? "Checked pull requests"
+            : "Read session details",
+        mono: false,
+      };
+    }
   }
   const known = TOOL_STEP_LABELS[toolName];
   if (known) return { label: known, mono: false };
@@ -497,6 +592,16 @@ function itemTiming(item: WorkItem): StepTiming {
 
 const firstLineOf = (text: string): string =>
   text.split("\n", 1)[0]?.trim() ?? "";
+
+/** Whether these sources read as at least one step (some are bookkeeping). */
+export function hasSteps(sources: StepSource[]): boolean {
+  return sources.some(
+    (source) =>
+      source.kind === "note" ||
+      (!source.item.parentItemId &&
+        stepOf(source.item, { requests: {}, nested: [] }) !== undefined),
+  );
+}
 
 /**
  * The turn's steps, from its work items. The chat keeps its prose calm:
@@ -880,6 +985,31 @@ export function assignBackgroundCommands(
   return assigned;
 }
 
+/**
+ * Whether two pairings say the same: every step paired with a process in
+ * the same state. The timeline keeps its last pairing while this holds, so
+ * the steps reading it render only when a process changes.
+ */
+export function sameBackgroundStates(
+  previous: ReadonlyMap<string, ChatBackgroundCommand>,
+  next: ReadonlyMap<string, ChatBackgroundCommand>,
+): boolean {
+  if (previous.size !== next.size) return false;
+  for (const [ref, command] of next) {
+    const was = previous.get(ref);
+    if (
+      was !== command &&
+      (was?.kind !== command.kind ||
+        was.command !== command.command ||
+        was.description !== command.description ||
+        was.status !== command.status ||
+        was.exitCode !== command.exitCode)
+    )
+      return false;
+  }
+  return true;
+}
+
 /** Each background step's process, by the step's item id. */
 export const BackgroundStates = createContext<
   ReadonlyMap<string, ChatBackgroundCommand>
@@ -924,19 +1054,178 @@ interface StepHandlers {
 }
 
 /**
+ * The running turn's clock, as `TurnClock` reads it: when the turn started,
+ * and when it last reported progress (absent while it waits on someone).
+ */
+export interface TurnClockTimes {
+  startedAt?: string | null;
+  updatedAt?: string | null;
+}
+
+/** The running turn's times, for its clock wherever that sits. */
+export const TurnClockContext = createContext<TurnClockTimes>({});
+
+/** Silence long enough to say so beside the turn's clock. */
+export const STALL_AFTER_MS = 30_000;
+
+/** How long the clock and the silence take to fade out. */
+const CLOCK_FADE_MS = 200;
+
+/**
+ * How long the running turn has taken, and a plain word when it has gone
+ * quiet: a spinner that looks the same at two seconds and at nine minutes
+ * says nothing. It sits on the turn's latest steps line, never beside the
+ * activity line, and is the only thing that re-renders as it counts. The
+ * time keeps the width of its longest reading, so the words after it hold
+ * still; leaving, it keeps the time it last showed while it fades.
+ */
+export function TurnClock({ leaving = false }: { leaving?: boolean }) {
+  const times = useContext(TurnClockContext);
+  const kept = useRef(times);
+  if (!leaving) kept.current = times;
+  const started = kept.current.startedAt
+    ? Date.parse(kept.current.startedAt)
+    : Number.NaN;
+  const updated = kept.current.updatedAt
+    ? Date.parse(kept.current.updatedAt)
+    : Number.NaN;
+  const now = useNow(
+    !leaving && (Number.isFinite(started) || Number.isFinite(updated)),
+  );
+  const quiet = Number.isFinite(updated) ? now - updated : 0;
+  const stalled = !leaving && quiet >= STALL_AFTER_MS;
+  // The silence keeps the length it last said while it fades.
+  const silent = useRef(quiet);
+  if (stalled) silent.current = quiet;
+  const silence = useLinger(stalled ? true : undefined, CLOCK_FADE_MS);
+  return (
+    <span
+      className={`flex items-center gap-2 whitespace-nowrap text-[11px] transition-opacity duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${
+        leaving ? "opacity-0" : "cat-fade-in"
+      }`}
+      data-testid="chat-turn-clock"
+    >
+      {Number.isFinite(started) && (
+        // The turn's time, not a step's: the timer glyph marks it apart
+        // from the running step's own count.
+        <span
+          className="flex items-center gap-1 tabular-nums text-fg-faint"
+          role="timer"
+          aria-label="Turn time"
+        >
+          <Timer className="size-3" />
+          {/* The time holds the width of its longest reading in its current
+              form ("00s", then "00m 00s"), widening smoothly just before it
+              moves on to minutes, so what follows it never moves as it
+              counts and the time never overruns it. */}
+          <span className="relative inline-block whitespace-nowrap">
+            <span aria-hidden className="invisible">
+              <SwapText
+                value={elapsedReserve(now - started + RESERVE_AHEAD_MS)}
+              />
+            </span>
+            <span
+              className="absolute top-0 left-0"
+              data-testid="chat-activity-elapsed"
+            >
+              {formatElapsed(now - started)}
+            </span>
+          </span>
+        </span>
+      )}
+      {silence.value && (
+        <span
+          className={`tabular-nums text-fg-muted transition-opacity duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${
+            silence.leaving ? "opacity-0" : "cat-fade-in"
+          }`}
+          data-testid="chat-activity-stalled"
+        >
+          {/* Plain words, not an alarm: a long test run is quiet too. The
+              log announces them once as they appear; the seconds that
+              follow count silently, never read out again each second. */}
+          No updates for{" "}
+          <span aria-live="off">{formatElapsed(silent.current)}</span>
+        </span>
+      )}
+    </span>
+  );
+}
+
+/**
+ * A steps line's one row: one fixed height for every steps line and for
+ * the turn line that keeps the first one's place, whatever each holds (a
+ * count, a clock, nothing yet).
+ */
+const STEPS_LINE = "flex h-4 items-center gap-2";
+
+/**
+ * The running turn's line before it has a steps line: its clock, and the
+ * silence after 30 seconds, above the activity line from the moment that
+ * line opens. It keeps the first steps line's place, the column's gap
+ * above that line included (`pb-3`, the timeline's `gap-3`), so the steps
+ * line takes it in the same frame and nothing below moves. Before the turn
+ * has started (a message still sending) it holds the place empty.
+ */
+export function TurnLine({ leaving = false }: { leaving?: boolean }) {
+  return (
+    <div className="pb-3 text-sm" data-testid="chat-turn-line">
+      <div className="pb-1.5">
+        <div className={STEPS_LINE}>
+          <span className="flex w-0 min-w-0 items-center">
+            <TurnClock leaving={leaving} />
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * "12 steps": the count and its word each change on a beat (the old fades
+ * out, the new fades in), and their places widen smoothly, so "steps" and
+ * the clock after it slide when the count gains a digit.
+ */
+function StepCount({ count }: { count: number }) {
+  return (
+    <span className="whitespace-pre">
+      <SwapText
+        value={String(count)}
+        className="tabular-nums"
+        data-testid="chat-turn-steps-count"
+      />{" "}
+      <SwapText
+        value={count === 1 ? "step" : "steps"}
+        data-testid="chat-turn-steps-word"
+      />
+    </span>
+  );
+}
+
+/**
  * The expandable event log under an assistant reply: a muted "N steps"
  * line, open while the turn runs so the work reads as it happens, closed
  * once it has answered. Opening or closing it by hand sticks. Each step is
  * a row that itself stays collapsed (payloads are long and technical)
- * until clicked; a lone step is its own row, with no line to open. Folded
- * (`fold`, the person's "Notes only"), the line stays closed until opened,
- * a lone step's included. MCP tool rows show the connector's icon when the
- * host can resolve one.
+ * until clicked. Once the turn has answered, a lone step is its own row
+ * with no line to open; while it runs, every block of work keeps its line,
+ * so a second step never grows a line above the first, and the turn's
+ * latest line carries its clock (`clock`). Folded (`fold`, the person's
+ * "Notes only"), the line stays closed until opened, a lone step's
+ * included. MCP tool rows show the connector's icon when the host can
+ * resolve one.
+ *
+ * A running turn's first steps line takes the place its turn line kept
+ * for it above the activity line (`placed`): the line is simply there,
+ * fading in with its message, and only an open list below it opens its
+ * height.
  */
 export function TurnSteps({
   steps,
   live = false,
   fold = false,
+  clock = false,
+  enter = false,
+  placed = false,
   defaultExpanded = false,
   ...handlers
 }: {
@@ -945,10 +1234,19 @@ export function TurnSteps({
   live?: boolean;
   /** Keep the steps behind their line until opened. */
   fold?: boolean;
+  /** This is the running turn's latest steps line: it shows the turn's clock. */
+  clock?: boolean;
+  /** Joined a running turn on screen: opens its own height once. */
+  enter?: boolean;
+  /** Took the turn line's place on screen: the line is there at once. */
+  placed?: boolean;
   defaultExpanded?: boolean;
 } & StepHandlers) {
   const [chosen, setChosen] = useState<boolean>();
+  // Read once; dropped after it played, so the block never clips again.
+  const [entering, setEntering] = useState(enter);
   const backgroundStates = useContext(BackgroundStates);
+  const onScreen = useContext(OnScreen);
   useEffect(() => {
     if (defaultExpanded) setChosen(true);
   }, [defaultExpanded]);
@@ -957,15 +1255,19 @@ export function TurnSteps({
   // nodes: a new step at the end, earlier work folding in above, or a
   // background command that ended moving from the running rows into the
   // list.
+  // A row that arrives in a hidden chat is simply there when it shows.
   const shown = useRef(false);
   useEffect(() => {
     shown.current = true;
   }, []);
+  const rowsEnter = shown.current && onScreen.current;
+  // The clock fades out where it was before it goes, when the turn ends
+  // or a later line takes it.
+  const clockShown = useLinger(clock ? true : undefined, CLOCK_FADE_MS);
   const expanded = chosen ?? (live && !fold);
-  if (steps.length === 0) return null;
-  // A lone step is its own row. It keeps the list's structure, so a second
-  // step grows the line to open it in, rather than swapping the row out.
-  const lone = steps.length === 1 && !fold;
+  // Once answered, a lone step is its own row. It keeps the list's
+  // structure, so the line folds away above it rather than swapping it out.
+  const lone = steps.length === 1 && !fold && !live;
   // A command still running in the background stays in view, outside the
   // fold, until it ends; then it folds in with the rest.
   const running = steps.filter(
@@ -975,68 +1277,99 @@ export function TurnSteps({
   );
   const folded = steps.filter((step) => !running.includes(step));
   // No line when it would open onto nothing: a lone step, or only
-  // commands still running in view.
-  const bare = lone || folded.length === 0;
-  const open = bare || expanded;
+  // commands still running in view, unless it carries the clock.
+  const bare = !clock && (lone || folded.length === 0);
+  const open = folded.length > 0 && (bare || expanded);
+  // Placed with its list open, the list opens its height under the line
+  // once (the line itself was already there).
+  const [listOpening, setListOpening] = useState(placed && open);
+  if (steps.length === 0) return null;
   return (
     // Steps are chrome around the conversation, not part of its text: a
     // drag across several replies selects the prose and skips these rows.
     // An opened payload is content again, and selectable.
-    <div className="mb-1.5 select-none" data-testid="chat-turn-steps">
-      <div
-        className={`grid transition-[grid-template-rows,opacity] duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${
-          bare ? "grid-rows-[0fr] opacity-0" : "grid-rows-[1fr] opacity-100"
-        }`}
-        inert={bare}
-      >
-        <div className="overflow-hidden">
-          <button
-            type="button"
-            onClick={() => setChosen(!expanded)}
-            className="flex cursor-pointer items-center gap-1 text-[11px] text-fg-faint transition-colors duration-100 hover:text-fg-muted"
-            aria-expanded={expanded}
-            data-testid="chat-turn-steps-toggle"
-          >
-            <ChevronRight
-              className={`size-3 transition-transform duration-150 ${expanded ? "rotate-90" : ""}`}
-            />
-            {`${steps.length} ${steps.length === 1 ? "step" : "steps"}`}
-          </button>
-        </div>
-      </div>
-      {running.length > 0 && (
-        <div
-          className={`flex flex-col gap-0.5 border-l transition-[border-color,padding,margin] duration-200 ${bare ? "border-transparent pl-0" : "mt-1 border-border pl-2.5"}`}
-        >
-          {running.map((step) => (
-            <StepRow
-              key={step.background?.ref}
-              step={step}
-              enter={shown.current}
-              {...handlers}
-            />
-          ))}
-        </div>
-      )}
-      {/* Grid-rows tween: the list stays mounted, so the collapse mirrors
-          the expansion exactly. */}
-      <div
-        className={`grid transition-[grid-template-rows] duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${
-          open ? "grid-rows-[1fr]" : "grid-rows-[0fr]"
-        }`}
-      >
-        <div className="overflow-hidden">
+    <div
+      className={`select-none ${entering ? "cat-step-in" : ""}`}
+      data-testid="chat-turn-steps"
+      onAnimationEnd={(event) => {
+        if (event.target === event.currentTarget) setEntering(false);
+      }}
+    >
+      {/* One child, unpadded: the entrance grows this box from nothing, its
+          spacing included (a padded child would keep its padding). */}
+      <div>
+        <div className="pb-1.5">
           <div
-            className={`flex flex-col gap-0.5 border-l transition-[border-color,padding,margin] duration-200 ${bare ? "border-transparent pl-0" : "mt-1 border-border pl-2.5"}`}
+            className={`grid transition-[grid-template-rows,opacity] duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${
+              bare ? "grid-rows-[0fr] opacity-0" : "grid-rows-[1fr] opacity-100"
+            }`}
+            inert={bare}
           >
-            {folded.map((step) => (
-              <StepRow
-                key={step.key}
-                step={step}
-                enter={shown.current}
-                {...handlers}
-              />
-            ))}
+            {/* Clipped only vertically: the clock reaches past the line's end.
+                Its 3px of slack, given back by its margin, keep the toggle's
+                focus ring whole without moving the line. */}
+            <div className="-my-[3px] min-h-0 overflow-x-visible overflow-y-clip py-[3px]">
+              <div className={STEPS_LINE}>
+                <button
+                  type="button"
+                  onClick={() => setChosen(!expanded)}
+                  className="flex cursor-pointer items-center gap-1 text-[11px] text-fg-faint transition-colors duration-100 hover:text-fg-muted"
+                  aria-expanded={expanded}
+                  data-testid="chat-turn-steps-toggle"
+                >
+                  <ChevronRight
+                    className={`size-3 transition-transform duration-150 ${expanded ? "rotate-90" : ""}`}
+                  />
+                  <StepCount count={steps.length} />
+                </button>
+                {clockShown.value && (
+                  // No width of its own: the clock and the silence never widen
+                  // the reply, so the rows below keep their places.
+                  <span className="flex w-0 min-w-0 items-center">
+                    <TurnClock leaving={clockShown.leaving} />
+                  </span>
+                )}
+              </div>
+            </div>
+          </div>
+          {running.length > 0 && (
+            <div
+              className={`flex flex-col border-l transition-[border-color,padding,margin] duration-200 ${bare ? "-mt-0.5 border-transparent pl-0" : "mt-0.5 border-border pl-2.5"}`}
+            >
+              {running.map((step) => (
+                <StepRow
+                  key={step.background?.ref}
+                  step={step}
+                  enter={rowsEnter}
+                  {...handlers}
+                />
+              ))}
+            </div>
+          )}
+          {/* Grid-rows tween: the list stays mounted, so the collapse mirrors
+            the expansion exactly. */}
+          <div
+            className={`grid transition-[grid-template-rows] duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${
+              open ? "grid-rows-[1fr]" : "grid-rows-[0fr]"
+            } ${listOpening ? "cat-step-in" : ""}`}
+            onAnimationEnd={(event) => {
+              if (event.target === event.currentTarget) setListOpening(false);
+            }}
+          >
+            <div className="overflow-hidden">
+              <div
+                className={`flex flex-col border-l transition-[border-color,padding,margin] duration-200 ${bare ? "-mt-0.5 border-transparent pl-0" : "mt-0.5 border-border pl-2.5"}`}
+              >
+                {folded.map((step) => (
+                  <StepRow
+                    key={step.key}
+                    step={step}
+                    enter={rowsEnter}
+                    {...handlers}
+                  />
+                ))}
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -1044,18 +1377,25 @@ export function TurnSteps({
   );
 }
 
-function StepRow({
+interface StepRowProps extends StepHandlers {
+  step: TurnStep;
+  /** Joined a list already on screen: plays its entrance once. */
+  enter?: boolean;
+}
+
+/**
+ * One step's row. Its list builds its steps afresh whenever its message
+ * changes, so a row renders again only when its own step reads otherwise
+ * (`sameStepRow`), and a growing list renders only its new rows.
+ */
+const StepRow = memo(function StepRow({
   step,
   enter = false,
   resolveToolIcon,
   onFileClick,
   onLinkClick,
   renderMarkdown,
-}: {
-  step: TurnStep;
-  /** Joined a list already on screen: plays its entrance once. */
-  enter?: boolean;
-} & StepHandlers) {
+}: StepRowProps) {
   const [open, setOpen] = useState(false);
   // Read once: a row that was already there never gains the entrance.
   const [entering, setEntering] = useState(enter);
@@ -1078,7 +1418,10 @@ function StepRow({
       data-step-status={step.status}
       data-running={pulsing || undefined}
       data-file-path={step.filePath}
-      className={`${note ? "my-0.5" : ""} ${entering ? "cat-step-in" : ""}`}
+      // The space above each row is its own margin (the list takes the
+      // first one back), not the list's gap, so a row that joins, at either
+      // end, opens its spacing with it and no other row moves.
+      className={`${note ? "mt-1 mb-0.5" : "mt-0.5"} ${entering ? "cat-step-in" : ""}`}
       data-message-id={step.messageId}
       onAnimationEnd={(event) => {
         if (event.target === event.currentTarget) setEntering(false);
@@ -1118,12 +1461,21 @@ function StepRow({
               className="size-3.5 shrink-0 rounded-sm"
             />
           ) : (
+            // A command running in the background breathes: nothing else
+            // says it still runs. The turn's running step only takes the
+            // accent; the activity line already breathes for it.
             <Icon
-              className={`size-3.5 shrink-0 transition-colors duration-200 ${pulsing ? "animate-pulse text-accent" : (step.icon?.className ?? "text-fg-faint")}`}
+              className={`size-3.5 shrink-0 transition-colors duration-200 ${
+                background?.status === "running"
+                  ? "animate-pulse text-accent"
+                  : pulsing
+                    ? "text-accent"
+                    : (step.icon?.className ?? "text-fg-faint")
+              }`}
             />
           )}
           {step.background ? (
-            <span className="flex min-w-0 flex-1 items-baseline gap-1.5 truncate">
+            <span className="flex min-w-0 items-baseline gap-1.5 truncate">
               <span
                 className={pulsing ? "animate-pulse text-fg" : undefined}
                 data-testid="chat-background-status"
@@ -1134,7 +1486,7 @@ function StepRow({
             </span>
           ) : (
             <span
-              className={`min-w-0 flex-1 truncate transition-colors duration-200 ${step.mono ? "font-mono" : ""} ${step.running ? "text-fg" : ""}`}
+              className={`min-w-0 truncate transition-colors duration-200 ${step.mono ? "font-mono" : ""} ${step.running ? "text-fg" : ""}`}
             >
               {step.label}
             </span>
@@ -1198,6 +1550,54 @@ function StepRow({
       </div>
     </div>
   );
+}, sameStepRow);
+
+/** Compares a step's field; a field TurnStep gains must say how here. */
+const sameField =
+  <K extends keyof TurnStep>(field: K) =>
+  (a: TurnStep, b: TurnStep) =>
+    a[field] === b[field];
+
+const SAME_STEP: {
+  [K in keyof TurnStep]-?: (a: TurnStep, b: TurnStep) => boolean;
+} = {
+  key: sameField("key"),
+  kind: sameField("kind"),
+  icon: (a, b) =>
+    a.icon?.Icon === b.icon?.Icon && a.icon?.className === b.icon?.className,
+  link: (a, b) =>
+    a.link?.href === b.link?.href && a.link?.label === b.link?.label,
+  messageId: sameField("messageId"),
+  markdown: sameField("markdown"),
+  label: sameField("label"),
+  mono: sameField("mono"),
+  filePath: sameField("filePath"),
+  toolName: sameField("toolName"),
+  detail: sameField("detail"),
+  detailMono: sameField("detailMono"),
+  background: (a, b) =>
+    a.background?.ref === b.background?.ref &&
+    a.background?.kind === b.background?.kind &&
+    a.background?.description === b.background?.description,
+  status: sameField("status"),
+  startedAt: sameField("startedAt"),
+  endedAt: sameField("endedAt"),
+  finished: sameField("finished"),
+  awaitsEnd: sameField("awaitsEnd"),
+  running: sameField("running"),
+};
+const STEP_COMPARISONS = Object.values(SAME_STEP);
+
+/** `enter` is read once, as the row mounts: it never renders a row again. */
+function sameStepRow(previous: StepRowProps, next: StepRowProps): boolean {
+  return (
+    (previous.step === next.step ||
+      STEP_COMPARISONS.every((same) => same(previous.step, next.step))) &&
+    previous.resolveToolIcon === next.resolveToolIcon &&
+    previous.onFileClick === next.onFileClick &&
+    previous.onLinkClick === next.onLinkClick &&
+    previous.renderMarkdown === next.renderMarkdown
+  );
 }
 
 /**
@@ -1217,6 +1617,8 @@ function StepDuration({ step }: { step: TurnStep }) {
     <span
       className="cat-fade-in shrink-0 tabular-nums text-fg-faint"
       data-testid="chat-step-duration"
+      // A running step counts silently: the log never reads it each second.
+      aria-live="off"
     >
       {formatElapsed(ms)}
     </span>

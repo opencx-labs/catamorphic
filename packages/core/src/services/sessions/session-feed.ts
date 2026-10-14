@@ -4,6 +4,7 @@ import type {
 } from "@catamorphic/agent-protocol";
 import type { DB } from "@catamorphic/db";
 import type { Kysely } from "kysely";
+import { PollPacer, type WorkWakeups } from "../work-wakeups.js";
 import type { SessionLog } from "./session-log.js";
 import { readSnapshot } from "./session-reads.js";
 
@@ -22,19 +23,25 @@ interface Subscriber {
  * Live session streams for this process (ADR 0197). One poller serves
  * every open stream: each tick reads the subscribed sessions' events after
  * their cursors in one query, in Postgres order, with no LISTEN/NOTIFY
- * (ADR 0193). A subscriber that falls behind is closed; its client resumes
- * from its cursor. Replica memory (a): the streams this process serves.
+ * (ADR 0193). It waits `quickMs` between polls while events arrive, and
+ * with an `idleMs` waits that long once they stop, until this process's
+ * session log hints at new events (ADR 0229). A subscriber that falls
+ * behind is closed; its client resumes from its cursor. Replica memory
+ * (a): the streams this process serves.
  */
 export class SessionFeed {
   // Replica memory (a): the streams this replica serves.
   private readonly subscribers = new Set<Subscriber>();
-  private timer: ReturnType<typeof setInterval> | undefined;
-  private polling = false;
+  private polling: { stop: AbortController; done: Promise<void> } | undefined;
 
   constructor(
     private readonly db: Kysely<DB>,
-    private readonly log: SessionLog,
-    private readonly intervalMs = 150,
+    private readonly log: Pick<SessionLog, "eventsAfter" | "eventsAfterMany">,
+    private readonly pacing: {
+      quickMs?: number;
+      idleMs?: number;
+      wakeups?: WorkWakeups;
+    } = {},
   ) {}
 
   /**
@@ -96,15 +103,31 @@ export class SessionFeed {
   }
 
   private ensureTimer(): void {
-    if (this.timer) return;
-    this.timer = setInterval(() => void this.tick(), this.intervalMs);
-    this.timer.unref?.();
+    if (this.polling) return;
+    const stop = new AbortController();
+    const pacer = new PollPacer({
+      quickMs: this.pacing.quickMs ?? 150,
+      idleMs: this.pacing.idleMs,
+      signal: stop.signal,
+      wakeups: this.pacing.wakeups,
+      topic: "sessions",
+    });
+    // A new stream is usually opened beside activity: start quick.
+    pacer.busy();
+    const loop = async () => {
+      while (!stop.signal.aborted) {
+        await pacer.wait();
+        if (stop.signal.aborted) return;
+        if (await this.tick()) pacer.busy();
+      }
+    };
+    this.polling = { stop, done: loop() };
   }
 
   private stopIfIdle(): void {
-    if (this.subscribers.size > 0 || !this.timer) return;
-    clearInterval(this.timer);
-    this.timer = undefined;
+    if (this.subscribers.size > 0 || !this.polling) return;
+    this.polling.stop.abort();
+    this.polling = undefined;
   }
 
   private deliver(subscriber: Subscriber, message: SessionStreamMessage): void {
@@ -125,9 +148,9 @@ export class SessionFeed {
     this.deliver(subscriber, { type: "events", events: fresh });
   }
 
-  private async tick(): Promise<void> {
-    if (this.polling || this.subscribers.size === 0) return;
-    this.polling = true;
+  /** Deliver what was logged since each cursor; true when anything was. */
+  private async tick(): Promise<boolean> {
+    if (this.subscribers.size === 0) return false;
     try {
       const cursors = new Map<string, number>();
       for (const subscriber of this.subscribers) {
@@ -146,7 +169,7 @@ export class SessionFeed {
         })),
         limit: 2_000,
       });
-      if (events.length === 0) return;
+      if (events.length === 0) return false;
       const bySession = new Map<string, StoredSessionEvent[]>();
       for (const event of events) {
         const list = bySession.get(event.sessionId) ?? [];
@@ -157,10 +180,10 @@ export class SessionFeed {
         const list = bySession.get(subscriber.sessionId);
         if (list) this.deliverEvents(subscriber, list);
       }
+      return true;
     } catch (error) {
       console.warn("[catamorphic] Session feed poll failed", error);
-    } finally {
-      this.polling = false;
+      return false;
     }
   }
 

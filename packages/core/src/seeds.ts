@@ -1,3 +1,4 @@
+import { SESSION_PULL_REQUESTS_CONTRACT } from "@catamorphic/agent-protocol";
 import { APP_THEME_COLOR_TOKENS } from "@catamorphic/app";
 import { PARSER_PACKAGE_VERSION } from "@catamorphic/parser";
 import { WORKFLOW_PACKAGE_VERSION } from "@catamorphic/workflow";
@@ -709,7 +710,13 @@ For hierarchies and large lists, import \`createCollection\` from
 \`useCollection\`, and \`useCollectionItem\` from \`@catamorphic/app/ui\`.
 Sources load paged roots and lazy children with stable IDs, cursors and an
 AbortSignal. Publish item patches for label/status changes and invalidate only
-changed branches. Use per-item subscriptions instead of one timer per row.
+changed branches; a newest-first poll invalidates with \`pages: "first"\`, which
+reads only until its rows meet the loaded ones, so pair it with a periodic
+\`pages: "loaded"\` refresh for the rows past that point, and keep pages in the
+source's order (filter in the source, sort in \`project\`). \`CollectionTree\`
+reads each next page as the person nears its end, with placeholder rows, a
+Retry, and Show more when a page showed nothing new; never add your own Load
+more button. Use per-item subscriptions instead of one timer per row.
 Acquire a collection while it is needed and release it on cleanup; shared
 collections refcount upstream listeners. Tree row height is explicit and only
 the visible window is mounted. Keep large inspectors outside row geometry.
@@ -1296,7 +1303,10 @@ already shows an origin, or the project was imported from GitHub, the
 repository is shared with other people: Work never pushes to its default
 branch or to branches it did not create. Share changes with
 create_pull_request (a \`work/\` branch plus a pull request), pull with
-sync_project, and never replace an existing remote without asking.
+sync_project, and never replace an existing remote without asking. A pull
+request you open belongs in the chat's metadata, which Work shows beside it:
+discover set_session_metadata, read the list (no value), and write it back with
+the new one. ${SESSION_PULL_REQUESTS_CONTRACT}
 
 Run everything below with your shell at the project root.
 

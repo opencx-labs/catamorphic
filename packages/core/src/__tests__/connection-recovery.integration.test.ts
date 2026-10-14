@@ -13,6 +13,7 @@ import { ConnectionsService } from "../services/connections-service.js";
 import { MemoryCredentialVault } from "../services/credential-vault.js";
 import { ExecutionAllocationsService } from "../services/execution-allocations-service.js";
 import { ExecutionJobsService } from "../services/execution-jobs-service.js";
+import { WorkWakeups } from "../services/work-wakeups.js";
 
 const pglite = new PGlite({ extensions: { pgcrypto } });
 const db = new Kysely<DB>({
@@ -52,6 +53,8 @@ const provider: ConnectionProvider = {
 };
 
 describe("connection action recovery", () => {
+  const wakeups = new WorkWakeups();
+  const jobs = new ExecutionJobsService(db, undefined, wakeups);
   const connections = new ConnectionsService({
     db,
     vault: new MemoryCredentialVault(),
@@ -63,9 +66,9 @@ describe("connection action recovery", () => {
         capabilities: ["users.list"],
       },
     }),
+    jobs,
   });
   const allocations = new ExecutionAllocationsService(db);
-  const jobs = new ExecutionJobsService(db);
 
   beforeAll(async () => {
     await migrateToLatest({ db, schema: DEFAULT_SCHEMA });
@@ -83,19 +86,26 @@ describe("connection action recovery", () => {
     await db.destroy();
   });
 
-  it("reauthorizes the same connection and wakes the same durable job", async () => {
-    const first = await connections.beginAuthorization({
+  async function authorize(code: string) {
+    const started = await connections.beginAuthorization({
       identity,
       projectId,
       environment: "company",
       alias: "directory",
       redirectUri: "https://app.test/callback",
     });
-    const connection = await connections.completeAuthorization({
+    return connections.completeAuthorization({
       identity,
-      state: first.authorizationId,
-      callback: { code: "first" },
+      state: started.authorizationId,
+      callback: { code },
     });
+  }
+
+  /** A workflow job waiting for the member's directory connection. */
+  async function waitingJob(input: {
+    connection: { id: string };
+    status: "running" | "pending";
+  }) {
     const [resolved] = await connections.resolve({
       identity,
       projectId,
@@ -160,13 +170,20 @@ describe("connection action recovery", () => {
         workflow_step_attempt_id: stepAttemptId,
         kind: "durable_boundary",
         payload: {},
-        status: "running",
-        attempt: 1,
-        leased_by: "worker",
-        lease_token: leaseToken,
-        lease_generation: 1,
-        heartbeat_at: new Date(),
-        lease_expires_at: new Date(Date.now() + 60_000),
+        ...(input.status === "running"
+          ? {
+              status: "running",
+              attempt: 1,
+              leased_by: "worker",
+              lease_token: leaseToken,
+              lease_generation: 1,
+              heartbeat_at: new Date(),
+              lease_expires_at: new Date(Date.now() + 60_000),
+            }
+          : {
+              status: "pending",
+              available_at: new Date(Date.now() + 60 * 60 * 1_000),
+            }),
       })
       .execute();
     const requirementId = await connections.parkWorkflowRequirement({
@@ -177,21 +194,19 @@ describe("connection action recovery", () => {
       executionJobId: jobId,
       allocationId: allocation.id,
       alias: "directory",
-      connectionId: connection.id,
+      connectionId: input.connection.id,
+    });
+    return { jobId, leaseToken, requirementId };
+  }
+
+  it("reauthorizes the same connection and wakes the same durable job", async () => {
+    const connection = await authorize("first");
+    const { jobId, leaseToken, requirementId } = await waitingJob({
+      connection,
+      status: "running",
     });
 
-    const second = await connections.beginAuthorization({
-      identity,
-      projectId,
-      environment: "company",
-      alias: "directory",
-      redirectUri: "https://app.test/callback",
-    });
-    const reauthorized = await connections.completeAuthorization({
-      identity,
-      state: second.authorizationId,
-      callback: { code: "second" },
-    });
+    const reauthorized = await authorize("second");
     expect(reauthorized.id).toBe(connection.id);
     expect(reauthorized.revision).toBe(connection.revision + 1);
     expect(
@@ -220,5 +235,25 @@ describe("connection action recovery", () => {
     expect(released.status).toBe("pending");
     expect(released.attempt).toBe(0);
     expect(released.available_at.getTime()).toBeLessThanOrEqual(Date.now());
+  });
+
+  it("makes a parked job claimable when its connection arrives, and wakes this process's workers", async () => {
+    const connection = await authorize("third");
+    const { jobId } = await waitingJob({ connection, status: "pending" });
+    const heard: number[] = [];
+    const stop = wakeups.subscribe("execution", () => heard.push(Date.now()));
+    try {
+      await authorize("fourth");
+      const job = await db
+        .selectFrom("execution_jobs")
+        .where("id", "=", jobId)
+        .select(["status", "available_at"])
+        .executeTakeFirstOrThrow();
+      expect(job.status).toBe("pending");
+      expect(job.available_at.getTime()).toBeLessThanOrEqual(Date.now());
+      expect(heard).toHaveLength(1);
+    } finally {
+      stop();
+    }
   });
 });

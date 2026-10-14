@@ -23,6 +23,7 @@ import {
   toJson,
   withoutNul,
 } from "./run-coordinator.js";
+import { type Wakeup, WorkWakeups } from "./work-wakeups.js";
 
 const tracer = getTracer("@catamorphic/core");
 
@@ -441,77 +442,42 @@ export class ExecutorNotConnectedError extends Error {
   }
 }
 
-/** One wait for a local wakeup; cancelled once it no longer waits. */
-interface Wakeup {
-  readonly woken: Promise<void>;
-  cancel(): void;
-}
-
 /**
  * Local wakeups (ADR 0207): a replica that queues an operation wakes its own
  * polls waiting for that executor at once, and one that records a receipt
- * wakes its own controller waiting for that operation. A wakeup is only a
- * hint: whoever wakes reads Postgres again, and every waiter still polls, so
- * an operation queued or settled on another replica is found by polling and
- * correctness never depends on a wakeup. Subscribe before reading Postgres,
- * so a wakeup between the read and the wait is not missed.
+ * wakes its own controller waiting for that operation. They are this
+ * process's {@link WorkWakeups}, keyed by executor and by operation: a
+ * wakeup is only a hint, whoever wakes reads Postgres again, and every
+ * waiter still polls, so an operation queued or settled on another replica
+ * is found by polling and correctness never depends on a wakeup. Subscribe
+ * before reading Postgres, so a wakeup between the read and the wait is not
+ * missed.
  */
 export class OperationWakeups {
-  /**
-   * Replica memory (a): the polls this process is serving (executors'
-   * requests in flight), by executor.
-   */
-  private readonly work = new Map<string, Set<() => void>>();
-  /**
-   * Replica memory (a): this process's controllers waiting for a receipt,
-   * by operation id.
-   */
-  private readonly receipts = new Map<string, Set<() => void>>();
+  /** The polls this process is serving (executors' requests in flight). */
+  private readonly work = new WorkWakeups<string>();
+  /** This process's controllers waiting for a receipt. */
+  private readonly receipts = new WorkWakeups<string>();
 
   /** Wait until an operation is queued here for `executor`. */
   forWork(executor: string): Wakeup {
-    return subscribe(this.work, executor);
+    return this.work.next(executor);
   }
 
   /** An operation was queued for `executor`; returns how many polls woke. */
   workQueued(executor: string): number {
-    return notify(this.work, executor);
+    return this.work.notify(executor);
   }
 
   /** Wait until a receipt for `operationId` is recorded here. */
   forReceipt(operationId: string): Wakeup {
-    return subscribe(this.receipts, operationId);
+    return this.receipts.next(operationId);
   }
 
   /** A receipt was recorded; returns how many controllers woke. */
   receiptRecorded(operationId: string): number {
-    return notify(this.receipts, operationId);
+    return this.receipts.notify(operationId);
   }
-}
-
-function subscribe(waiters: Map<string, Set<() => void>>, key: string): Wakeup {
-  const set = waiters.get(key) ?? new Set<() => void>();
-  waiters.set(key, set);
-  let wake = () => {};
-  const woken = new Promise<void>((resolve) => {
-    wake = resolve;
-  });
-  set.add(wake);
-  return {
-    woken,
-    cancel: () => {
-      set.delete(wake);
-      if (set.size === 0 && waiters.get(key) === set) waiters.delete(key);
-    },
-  };
-}
-
-function notify(waiters: Map<string, Set<() => void>>, key: string): number {
-  const set = waiters.get(key);
-  if (!set) return 0;
-  waiters.delete(key);
-  for (const wake of set) wake();
-  return set.size;
 }
 
 /** Resolves when woken, after `ms`, or once `signal` aborts. */

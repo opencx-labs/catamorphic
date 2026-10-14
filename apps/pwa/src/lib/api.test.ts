@@ -231,7 +231,7 @@ describe("session protocol check", () => {
       expect(new Headers(init?.headers).get("authorization")).toBe(
         "Bearer device-token",
       );
-      return Response.json({ agentProtocol: { session: 1, runner: 1 } });
+      return Response.json({ agentProtocol: { session: 2, runner: 1 } });
     });
     await expect(
       verifySessionProtocol({
@@ -246,7 +246,7 @@ describe("session protocol check", () => {
     const { assertSessionProtocol } = await import("./api.js");
     expect(() => assertSessionProtocol({})).toThrow("Update Work to continue");
     expect(() =>
-      assertSessionProtocol({ agentProtocol: { session: 2 } }),
+      assertSessionProtocol({ agentProtocol: { session: 1 } }),
     ).toThrow("Update Work to continue");
   });
 });

@@ -5,10 +5,12 @@ import type {
   AttemptReason,
   AttemptStatus,
   Item,
+  JsonValue,
   NativeRef,
   ProviderThread,
   RuntimeRequest,
   SessionFields,
+  SessionMetadata,
   Turn,
   TurnError,
   TurnOutcome,
@@ -207,6 +209,7 @@ export function sessionFieldsFromRow(row: SessionRow): SessionFields {
     todos: Array.isArray(row.todos)
       ? (row.todos as unknown as AgentTodo[])
       : [],
+    metadata: sessionMetadataFromRow(row.metadata),
     parentSessionId: row.parent_session_id,
     forkedFromSessionId: row.forked_from_session_id,
     attentionRevision: Number(row.attention_revision),
@@ -216,6 +219,32 @@ export function sessionFieldsFromRow(row: SessionRow): SessionFields {
     handoffStatus: row.handoff_status === "pending" ? "pending" : "none",
     updatedAt: row.updated_at.toISOString(),
   };
+}
+
+/** The metadata column (ADR 0226): an object, as its constraint keeps it. */
+export function sessionMetadataFromRow(value: Json): SessionMetadata {
+  const metadata = protocolJsonValue(value);
+  return typeof metadata === "object" &&
+    metadata !== null &&
+    !Array.isArray(metadata)
+    ? metadata
+    : {};
+}
+
+/**
+ * A stored JSON value in the protocol's terms: an object member read back
+ * as undefined is left out, as JSON text leaves it out. Members are defined,
+ * never assigned, so a nested `__proto__` key stays a key.
+ */
+function protocolJsonValue(value: Json): JsonValue {
+  if (value === null || typeof value !== "object") return value;
+  if (Array.isArray(value)) return value.map(protocolJsonValue);
+  return Object.fromEntries(
+    Object.entries(value).flatMap(
+      ([key, member]): Array<[string, JsonValue]> =>
+        member === undefined ? [] : [[key, protocolJsonValue(member)]],
+    ),
+  );
 }
 
 /**

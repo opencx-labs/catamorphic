@@ -121,10 +121,14 @@ export function desktopCapabilitySource(deps: {
           revision,
           consent: ({ name, effect }) =>
             consent("catamorphic", name, { readOnlyHint: effect === "read" }),
+          // The workspace's own tools cover these for desktop chats.
           allow: ({ name, effect }) =>
-            !["list_skills", "read_skill", "send_agent_message"].includes(
-              name,
-            ) &&
+            ![
+              "list_skills",
+              "read_skill",
+              "send_agent_message",
+              "set_session_metadata",
+            ].includes(name) &&
             (!surface.readOnly || effect === "read") &&
             allowed("catamorphic", name, { readOnlyHint: effect === "read" }),
           beforeCall: ({ name, effect, input, invocation }) =>

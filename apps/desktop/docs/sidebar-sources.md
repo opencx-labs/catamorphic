@@ -89,7 +89,9 @@ export default {
 
 ## HTTP list
 
-The same contract supports pagination and writes to an API. Check response status,
+The same contract supports pagination and writes to an API. Return a `cursor`
+while more rows exist: the section reads the next page as the person scrolls
+near the end, with placeholder rows meanwhile and Retry if it fails. Check response status,
 use cancellation, and put any credentials in the source's normal environment or
 credential store, never in row data sent to the renderer.
 

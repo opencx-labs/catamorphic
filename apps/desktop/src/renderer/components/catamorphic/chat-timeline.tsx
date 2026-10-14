@@ -33,7 +33,6 @@ import {
   type LucideIcon,
   RotateCcw,
   TextQuote,
-  Timer,
   Undo2,
 } from "lucide-react";
 import {
@@ -52,18 +51,29 @@ import {
 import Markdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { StickToBottom, useStickToBottomContext } from "use-stick-to-bottom";
-import { ActivityText } from "./activity-text.js";
+import {
+  ActivityText,
+  afterMotion,
+  finishTransitions,
+  transitionPlaying,
+  useLinger,
+} from "./activity-text.js";
 import { ChatQueue, type HintComponent, TitleHint } from "./chat-queue.js";
 import {
   assignBackgroundCommands,
   BackgroundStates,
   type ChatBackgroundCommand,
-  formatElapsed,
+  hasSteps,
   interruptedStep,
   markRunning,
+  OnScreen,
+  type OnScreenSource,
+  onScreenSource,
+  sameBackgroundStates,
+  TurnClockContext,
+  TurnLine,
   TurnSteps,
   turnStepsOf,
-  useNow,
 } from "./chat-steps.js";
 import {
   InboundMessageRow,
@@ -330,6 +340,100 @@ const TimelineMarkdown = memo(function TimelineMarkdown({
   );
 });
 
+/**
+ * HTML blocks that run on past blank lines (CommonMark's kinds 1 to 5):
+ * how each opens, and what ends it, on its first line or a later one.
+ */
+const HTML_BLOCKS: ReadonlyArray<readonly [opens: RegExp, ends: RegExp]> = [
+  [
+    /^ {0,3}<(?:script|pre|style|textarea)(?=[\s>]|$)/i,
+    /<\/(?:script|pre|style|textarea)>/i,
+  ],
+  [/^ {0,3}<!--/, /-->/],
+  [/^ {0,3}<\?/, /\?>/],
+  [/^ {0,3}<![A-Za-z]/, />/],
+  [/^ {0,3}<!\[CDATA\[/, /\]\]>/],
+];
+
+/**
+ * A reply's Markdown as its top-level blocks, so a streaming reply parses
+ * only its last block again as words arrive, and earlier blocks keep their
+ * nodes. It splits only where a new paragraph, heading, fence or rule
+ * starts after a blank line outside a fence or an HTML block that runs past
+ * blank lines (`<pre>`, a comment; one not closed yet runs to the end),
+ * never inside a list, quote or table, and not at all when the text
+ * defines references another block could use; each block then reads
+ * exactly as it would in the whole.
+ */
+export function markdownBlocks(text: string): string[] {
+  if (/^ {0,3}\[[^\]\n]+\]:/m.test(text)) return [text];
+  const blocks: string[] = [];
+  let current: string[] = [];
+  let fence: string | undefined;
+  let html: RegExp | undefined;
+  let blank = false;
+  for (const line of text.split("\n")) {
+    const opener = /^ {0,3}(`{3,}|~{3,})/.exec(line)?.[1];
+    if (fence) {
+      // A fence closes on a bare run of its own mark, at least as long.
+      const closer = /^ {0,3}(`{3,}|~{3,})\s*$/.exec(line)?.[1];
+      if (closer && closer[0] === fence[0] && closer.length >= fence.length)
+        fence = undefined;
+      current.push(line);
+      continue;
+    }
+    if (html) {
+      if (html.test(line)) html = undefined;
+      current.push(line);
+      continue;
+    }
+    const startsBlock =
+      blank && /^\S/.test(line) && !/^([-*+]\s|\d+[.)]\s|>|\|)/.test(line);
+    if (startsBlock && current.length > 0) {
+      blocks.push(current.join("\n"));
+      current = [];
+    }
+    if (opener) fence = opener;
+    else html = htmlBlockEnd(line);
+    blank = line.trim() === "";
+    current.push(line);
+  }
+  if (current.length > 0) blocks.push(current.join("\n"));
+  return blocks;
+}
+
+/** What ends the HTML block this line opens, unless it ends on it too. */
+function htmlBlockEnd(line: string): RegExp | undefined {
+  for (const [opens, ends] of HTML_BLOCKS) {
+    const open = opens.exec(line);
+    if (open) return ends.test(line.slice(open[0].length)) ? undefined : ends;
+  }
+  return undefined;
+}
+
+/** A reply's prose, block by block (see `markdownBlocks`). */
+function ReplyMarkdown({
+  text,
+  opensLinks,
+}: {
+  text: string;
+  opensLinks: boolean;
+}) {
+  return (
+    <>
+      {markdownBlocks(text).map((block, index) => (
+        // Blocks only grow at the end: a block keeps its place. The line
+        // break between blocks is the one the whole would have.
+        // biome-ignore lint/suspicious/noArrayIndexKey: blocks are append-only
+        <Fragment key={index}>
+          {index > 0 && "\n"}
+          <TimelineMarkdown text={block} opensLinks={opensLinks} />
+        </Fragment>
+      ))}
+    </>
+  );
+}
+
 const linkedMarkdown = (text: string) => (
   <TimelineMarkdown text={text} opensLinks />
 );
@@ -338,13 +442,17 @@ const plainMarkdown = (text: string) => (
 );
 
 const NO_REQUESTS: Readonly<Record<string, RuntimeRequest>> = {};
-const NO_STEPS: StepSource[] = [];
 const NO_BACKGROUND: ReadonlyMap<string, ChatBackgroundCommand> = new Map();
 
-/** A turn's rows, worked out once per render. */
+/**
+ * A turn's rows, worked out once per turn: a turn the timeline hands back
+ * unchanged (the same object) keeps its rows, so its row views skip.
+ */
 interface TurnView {
   group: TimelineTurn;
   rows: TurnRow[];
+  /** The work display its rows were worked out for. */
+  display: WorkDisplay;
   /** The turn is still running: its work reads live. */
   live: boolean;
 }
@@ -453,14 +561,50 @@ export function ChatTimeline(props: ChatTimelineProps) {
       : activeTurn?.status === "running" && !activeTurn.cancellationRequested
         ? (activeTurn.activityAt ?? activeTurn.startedAt)
         : undefined;
+  const viewCache = useRef(new WeakMap<TimelineTurn, TurnView>());
   const views: TurnView[] = timeline.map((group) => {
     const live = Boolean(group.turn && group.turn.id === activeId);
-    return {
+    const cached = viewCache.current.get(group);
+    if (
+      cached &&
+      cached.live === live &&
+      cached.display.live === workDisplay.live &&
+      cached.display.settled === workDisplay.settled
+    )
+      return cached;
+    const view: TurnView = {
       group,
       live,
+      display: workDisplay,
       rows: turnRows(group, { live, display: workDisplay }),
     };
+    viewCache.current.set(group, view);
+    return view;
   });
+  // The running turn's clock rides its latest steps line: the work in
+  // progress, or the latest note's steps until more work follows it.
+  let clockRow: string | undefined;
+  for (const view of views) {
+    if (!view.live) continue;
+    for (const row of view.rows)
+      if (row.kind !== "entry" && hasSteps(row.steps))
+        clockRow = rowKey(view.group, row);
+  }
+  // Before the running turn has a steps line, the turn line keeps the
+  // first one's place above the activity line, and that line takes it in
+  // the same frame: it is simply there, and nothing moves (ActivityLine).
+  const keepsLine = Boolean(activity) && clockRow === undefined;
+  const lineKept = useRef(false);
+  const lineTaker = useRef<string | undefined>(undefined);
+  if (lineKept.current && activity && clockRow !== undefined)
+    lineTaker.current = clockRow;
+  useLayoutEffect(() => {
+    lineKept.current = keepsLine;
+  }, [keepsLine]);
+  const clockTimes = useMemo(
+    () => ({ startedAt, updatedAt }),
+    [startedAt, updatedAt],
+  );
   const latestTurnId = [...timeline].reverse().find((group) => group.turn)
     ?.turn?.id;
   const working = Boolean(activeId);
@@ -469,19 +613,26 @@ export function ChatTimeline(props: ChatTimelineProps) {
     timeline.some((group) =>
       group.entries.some((entry) => entry.kind === "input"),
     );
-  const backgroundStates = useMemo(
-    () =>
-      backgroundCommands?.length
-        ? assignBackgroundCommands(timeline, backgroundCommands)
-        : NO_BACKGROUND,
-    [timeline, backgroundCommands],
-  );
+  // Paired again as the timeline changes, and handed down only when a
+  // pairing differs: every step reads it, and most events change none.
+  const pairedBackground = useRef(NO_BACKGROUND);
+  const backgroundStates = useMemo(() => {
+    const next = backgroundCommands?.length
+      ? assignBackgroundCommands(timeline, backgroundCommands)
+      : NO_BACKGROUND;
+    if (!sameBackgroundStates(pairedBackground.current, next))
+      pairedBackground.current = next;
+    return pairedBackground.current;
+  }, [timeline, backgroundCommands]);
   // Links re-render with their message, unless the host's handlers change.
   const links = useMemo(
     () => ({ onLinkClick, renderLink }),
     [onLinkClick, renderLink],
   );
-  const folding = useFoldingNotes(views);
+  const { folding, folded } = useFoldingNotes(views);
+  // Work that joins the timeline on screen opens its own height, while
+  // what a chat opens with, or gains while hidden, is simply there.
+  const [onScreen] = useState(onScreenSource);
   // The message about to start reads in the conversation, still withdrawable.
   const starting = timeline.find(
     (group) => group.turn && waitsToRun(group.turn),
@@ -504,16 +655,22 @@ export function ChatTimeline(props: ChatTimelineProps) {
     for (const row of view.rows) {
       const key = rowKey(view.group, row);
       if (key.startsWith("send:")) shownSends.add(key);
+      const className = undone
+        ? "cat-row cat-settled flex flex-col gap-3 opacity-50"
+        : view.live || foldingIn(row, folding)
+          ? "cat-row flex flex-col gap-3"
+          : // A settled turn out of view is skipped by style and layout.
+            "cat-row cat-settled flex flex-col gap-3";
       conversation.push(
-        <div
-          key={key}
-          className={undone ? "flex flex-col gap-3 opacity-50" : "contents"}
-          data-turn-id={turn?.id}
-          data-turn-undone={undone || undefined}
-        >
-          {row.kind === "entry" && row.entry.kind === "input" ? (
-            // Rendered here, not through the row view, so a pending
-            // message's node and its item's are the same element.
+        row.kind === "entry" && row.entry.kind === "input" ? (
+          // Rendered here, not through the row view, so a pending
+          // message's node and its item's are the same element.
+          <div
+            key={key}
+            className={className}
+            data-turn-id={turn?.id}
+            data-turn-undone={undone || undefined}
+          >
             <UserMessage
               item={row.entry.item}
               focused={row.entry.item.id === focusMessageId}
@@ -528,17 +685,23 @@ export function ChatTimeline(props: ChatTimelineProps) {
                   : undefined
               }
             />
-          ) : (
-            <TurnRowView
-              row={row}
-              view={view}
-              requests={requests}
-              focusMessageId={focusMessageId}
-              foldSteps={foldSteps}
-              folding={folding}
-            />
-          )}
-        </div>,
+          </div>
+        ) : (
+          <TurnRowView
+            key={key}
+            className={className}
+            turnId={turn?.id}
+            undone={undone}
+            row={row}
+            view={view}
+            requests={requests}
+            focusMessageId={focusMessageId}
+            foldSteps={foldSteps}
+            folding={folding}
+            clock={key === clockRow}
+            placed={key === lineTaker.current}
+          />
+        ),
       );
     }
     if (turn)
@@ -560,7 +723,7 @@ export function ChatTimeline(props: ChatTimelineProps) {
     // Its item is already on screen: the item's row is this message now.
     if (shownSends.has(key)) continue;
     conversation.push(
-      <div key={key} className="contents">
+      <div key={key} className="cat-row flex flex-col gap-3">
         <UserMessage
           pending={message}
           resendable={Boolean(onResendFailed)}
@@ -572,92 +735,102 @@ export function ChatTimeline(props: ChatTimelineProps) {
   return (
     <HostContext.Provider value={host}>
       <ActionsContext.Provider value={actions}>
-        <LinkContext.Provider value={links}>
-          <BackgroundStates.Provider value={backgroundStates}>
-            <StickToBottom
-              className={`relative overflow-hidden ${className}`}
-              initial="smooth"
-              resize="smooth"
-              role="log"
-            >
-              <StickToBottom.Content
-                className={`flex min-h-full flex-col gap-3 p-5 ${contentClassName}`}
-              >
-                {hasOlder && onLoadOlder && (
-                  <LoadOlder loading={isLoadingOlder} onLoad={onLoadOlder} />
-                )}
-                {empty && (
-                  <div className="m-auto max-w-sm text-center text-sm leading-6 text-fg-muted">
-                    {emptyState}
-                  </div>
-                )}
-                {conversation}
-                {activity && (
-                  <div
-                    className="cat-fade-in flex items-center gap-2 text-xs text-fg-muted"
-                    data-testid="chat-activity"
+        <FoldedContext.Provider value={folded}>
+          <LinkContext.Provider value={links}>
+            <BackgroundStates.Provider value={backgroundStates}>
+              <TurnClockContext.Provider value={clockTimes}>
+                <OnScreen.Provider value={onScreen}>
+                  <StickToBottom
+                    className={`cat-timeline relative overflow-hidden ${className}`}
+                    initial="smooth"
+                    // The browser holds the latest message in place as the
+                    // conversation grows (see PinToBottom); script only
+                    // catches up where it cannot, at once, never by a
+                    // spring that lays the page out every frame.
+                    resize="instant"
+                    role="log"
                   >
-                    <LoaderCircle className="size-4 animate-spin" />
-                    <ActivityText text={activity} />
-                    <TurnClock startedAt={startedAt} updatedAt={updatedAt} />
-                    {starting && !activeId && onCancelQueued && (
-                      <CancelStarting
-                        turnId={starting.id}
+                    <StickToBottom.Content
+                      className={`flex min-h-full flex-col gap-3 p-5 ${contentClassName}`}
+                    >
+                      {hasOlder && onLoadOlder && (
+                        <LoadOlder
+                          loading={isLoadingOlder}
+                          onLoad={onLoadOlder}
+                        />
+                      )}
+                      {empty && (
+                        <div className="m-auto max-w-sm text-center text-sm leading-6 text-fg-muted">
+                          {emptyState}
+                        </div>
+                      )}
+                      {conversation}
+                      <ActivityLine
+                        activity={activity}
+                        turnLine={clockRow === undefined}
+                        startingId={
+                          starting && !activeId && onCancelQueued
+                            ? starting.id
+                            : undefined
+                        }
                         onCancel={onCancelQueued}
                       />
-                    )}
-                  </div>
-                )}
-                {queue && queue.length > 0 && (
-                  <ChatQueue
-                    queue={queue}
-                    onEdit={onEditQueued}
-                    onCancel={onCancelQueued}
-                    onSendNow={onSendQueuedNow}
-                    onHold={onHoldQueued}
-                    Hint={Hint}
-                    renderContent={queuedContent}
-                    renderAttachments={queuedAttachments}
-                    renderInput={(queued) => (
-                      <QueuedInputLine
-                        queued={queued}
-                        resolveAgentName={resolveAgentName}
+                      {queue && queue.length > 0 && (
+                        <ChatQueue
+                          queue={queue}
+                          onEdit={onEditQueued}
+                          onCancel={onCancelQueued}
+                          onSendNow={onSendQueuedNow}
+                          onHold={onHoldQueued}
+                          Hint={Hint}
+                          renderContent={queuedContent}
+                          renderAttachments={queuedAttachments}
+                          renderInput={(queued) => (
+                            <QueuedInputLine
+                              queued={queued}
+                              resolveAgentName={resolveAgentName}
+                            />
+                          )}
+                        />
+                      )}
+                      {error && (
+                        <div className="rounded-lg border border-danger/50 bg-danger/10 px-3 py-2 text-xs text-danger">
+                          {error}
+                        </div>
+                      )}
+                      <div aria-hidden className="cat-scroll-anchor" />
+                    </StickToBottom.Content>
+                    {hasUserMessages && (
+                      <JumpToPreviousUserMessage
+                        register={registerJumpToPreviousUserMessage}
+                        shortcut={jumpShortcut}
                       />
                     )}
-                  />
-                )}
-                {error && (
-                  <div className="rounded-lg border border-danger/50 bg-danger/10 px-3 py-2 text-xs text-danger">
-                    {error}
-                  </div>
-                )}
-              </StickToBottom.Content>
-              {hasUserMessages && (
-                <JumpToPreviousUserMessage
-                  register={registerJumpToPreviousUserMessage}
-                  shortcut={jumpShortcut}
-                />
-              )}
-              <FocusMessage
-                messageId={focusMessageId}
-                ready={Boolean(
-                  focusMessageId &&
-                    timeline.some((group) =>
-                      group.entries.some((entry) =>
-                        entry.kind === "notifications"
-                          ? entry.items.some(
-                              (item) => item.id === focusMessageId,
-                            )
-                          : entryId(entry) === focusMessageId,
-                      ),
-                    ),
-                )}
-              />
-              <ScrollToLatest />
-              <FollowScrollerResize />
-            </StickToBottom>
-          </BackgroundStates.Provider>
-        </LinkContext.Provider>
+                    <FocusMessage
+                      messageId={focusMessageId}
+                      ready={Boolean(
+                        focusMessageId &&
+                          timeline.some((group) =>
+                            group.entries.some((entry) =>
+                              entry.kind === "notifications"
+                                ? entry.items.some(
+                                    (item) => item.id === focusMessageId,
+                                  )
+                                : entryId(entry) === focusMessageId,
+                            ),
+                          ),
+                      )}
+                    />
+                    <ScrollToLatest />
+                    <FollowScrollerResize />
+                    <PinToBottom />
+                    <TrackOnScreen state={onScreen} />
+                  </StickToBottom>
+                </OnScreen.Provider>
+              </TurnClockContext.Provider>
+            </BackgroundStates.Provider>
+          </LinkContext.Provider>
+        </FoldedContext.Provider>
       </ActionsContext.Provider>
     </HostContext.Provider>
   );
@@ -749,46 +922,105 @@ function UndoneDivider() {
   );
 }
 
-function TurnRowView({
+interface TurnRowProps {
+  /** The row's place in the conversation's column. */
+  className: string;
+  turnId?: string;
+  undone: boolean;
+  row: TurnRow;
+  view: TurnView;
+  requests: Readonly<Record<string, RuntimeRequest>>;
+  focusMessageId?: string;
+  foldSteps: boolean;
+  folding: ReadonlyMap<string, InPlace>;
+  /** Its steps line carries the running turn's clock. */
+  clock: boolean;
+  /** Its steps line takes the turn line's place (see ActivityLine). */
+  placed: boolean;
+}
+
+/**
+ * One of a turn's rows, in its place in the conversation's column. Its
+ * inputs keep their identity while the turn is unchanged (`TurnView`), so
+ * an update elsewhere in the chat skips it. Writing and work that join a
+ * running turn on screen open their own height (see AgentMessage), and
+ * the row opens the column's gap above them in the same beat, so what is
+ * below slides down rather than jumping by the gap first.
+ */
+const TurnRowView = memo(function TurnRowView({
+  className,
+  turnId,
+  undone,
+  ...props
+}: TurnRowProps) {
+  const onScreen = useContext(OnScreen);
+  // Read once, as AgentMessage reads its own entrance; dropped once played.
+  const [opening, setOpening] = useState(
+    () =>
+      props.row.kind !== "entry" &&
+      props.view.live &&
+      !props.placed &&
+      onScreen.current,
+  );
+  return (
+    <div
+      className={opening ? `${className} cat-gap-in` : className}
+      data-turn-id={turnId}
+      data-turn-undone={undone || undefined}
+      onAnimationEnd={(event) => {
+        if (event.target === event.currentTarget) setOpening(false);
+      }}
+    >
+      <TurnRowBody {...props} />
+    </div>
+  );
+});
+
+function TurnRowBody({
   row,
   view,
   requests,
   focusMessageId,
   foldSteps,
   folding,
-}: {
-  row: TurnRow;
-  view: TurnView;
-  requests: Readonly<Record<string, RuntimeRequest>>;
-  focusMessageId?: string;
-  foldSteps: boolean;
-  folding: Set<string>;
-}) {
+  clock,
+  placed,
+}: Omit<TurnRowProps, "className" | "turnId" | "undone">) {
   const host = useContext(HostContext);
   const actions = useContext(ActionsContext);
+  const folded = useContext(FoldedContext);
   // Live work and the reply it becomes render alike, so the node that
   // showed the steps gains the prose in place instead of remounting.
   if (row.kind === "steps" || row.kind === "reply") {
     const reply = row.kind === "reply" ? row : undefined;
     return (
       <>
-        {(reply?.folded ?? [])
-          .filter((note) => folding.has(note.id))
-          .map((note) => (
+        {(reply?.folded ?? []).map((note) => {
+          const was = folding.get(note.id);
+          if (!was) return null;
+          return (
             <div
               key={`folding:${note.id}`}
               aria-hidden
               inert
               className="cat-fold-away"
+              onAnimationEnd={(event) => {
+                if (event.target === event.currentTarget) folded(note.id);
+              }}
             >
+              {/* The note as it read in place, steps and all, so the
+                  whole of it closes up rather than its steps first. */}
               <AgentMessage
                 item={note}
-                steps={NO_STEPS}
+                steps={was.steps}
+                live={was.live}
                 requests={requests}
                 foldSteps={foldSteps}
+                still
               />
             </div>
-          ))}
+          );
+        })}
         <AgentMessage
           item={reply?.item}
           steps={row.steps}
@@ -800,6 +1032,8 @@ function TurnRowView({
           focused={reply !== undefined && reply.item.id === focusMessageId}
           requests={requests}
           foldSteps={foldSteps}
+          clock={clock}
+          placed={placed}
         />
       </>
     );
@@ -808,12 +1042,8 @@ function TurnRowView({
   const onOpen = host.opensLinks ? actions.openLink : undefined;
   switch (entry.kind) {
     case "input":
-      return (
-        <UserMessage
-          item={entry.item}
-          focused={entry.item.id === focusMessageId}
-        />
-      );
+      // The timeline renders a person's message itself (see ChatTimeline).
+      return null;
     case "inbound":
       return (
         <InboundMessageRow
@@ -846,48 +1076,109 @@ function TurnRowView({
 const FOLD_AWAY_MS = 220;
 
 /**
+ * How long past its fold-away a stand-in may wait for the animation's end:
+ * a host without the keyframes (or a hidden chat) never sends one.
+ */
+const FOLD_GRACE_MS = 250;
+
+/** A stand-in's fold-away has played: it goes. */
+const FoldedContext = createContext<(noteId: string) => void>(() => undefined);
+
+/**
+ * Whether notes are still folding away in this row. It waits to settle
+ * (`cat-settled`) until they have gone: the frame a row starts skipping,
+ * before the browser finds it on screen, it keeps its last laid-out size,
+ * which stand-ins that arrived in that same commit would make short by
+ * their height, so the conversation below jumped up and back for a frame.
+ */
+function foldingIn(
+  row: TurnRow,
+  folding: ReadonlyMap<string, InPlace>,
+): boolean {
+  return (
+    row.kind === "reply" && row.folded.some((note) => folding.has(note.id))
+  );
+}
+
+/** How a note read in place: its steps, and whether its turn was running. */
+interface InPlace {
+  steps: StepSource[];
+  live: boolean;
+}
+
+/**
  * Notes that were in place a moment ago and have just folded into their
  * answer's steps (the turn settled, or the setting changed). They stay on
- * screen for the fold-away animation, so settling closes them up instead
- * of snapping the conversation shorter.
+ * screen for the fold-away animation, as they read in place (their steps
+ * included), so settling closes them up instead of snapping the
+ * conversation shorter.
  */
-function useFoldingNotes(views: TurnView[]): Set<string> {
-  const inPlace = useRef<Set<string>>(new Set());
-  const timers = useRef<Set<number>>(new Set());
-  const [folding, setFolding] = useState<Set<string>>(() => new Set());
-  const shownIds: string[] = [];
+function useFoldingNotes(views: TurnView[]): {
+  folding: ReadonlyMap<string, InPlace>;
+  folded: (noteId: string) => void;
+} {
+  const inPlace = useRef<Map<string, InPlace>>(new Map());
+  const [folding, setFolding] = useState<
+    ReadonlyMap<string, InPlace & { until: number }>
+  >(() => new Map());
+  const shown = new Map<string, InPlace>();
   const foldedIds: string[] = [];
   for (const view of views)
     for (const row of view.rows) {
       if (row.kind !== "reply") continue;
-      shownIds.push(row.item.id);
+      shown.set(row.item.id, { steps: row.steps, live: view.live });
       for (const note of row.folded) foldedIds.push(note.id);
     }
-  const signature = `${shownIds.join(",")}|${foldedIds.join(",")}`;
-  // Before paint: the notes never leave the screen for a frame.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: the signature carries the ids
+  // Notes in place at the last commit that fold now. Their stand-ins
+  // render in this same commit: the conversation is never laid out without
+  // them, even for a layout read between two commits, which would pull the
+  // scroll back by their height.
+  const arrived = foldedIds.filter(
+    (id) => !folding.has(id) && inPlace.current.has(id),
+  );
+  if (arrived.length > 0) {
+    const next = new Map(folding);
+    const until = Date.now() + FOLD_AWAY_MS;
+    for (const id of arrived) {
+      const was = inPlace.current.get(id);
+      if (was) next.set(id, { ...was, until });
+    }
+    setFolding(next);
+  }
+  // How each note reads now, for the next render to fold from.
   useLayoutEffect(() => {
-    const arrived = foldedIds.filter((id) => inPlace.current.has(id));
-    inPlace.current = new Set(shownIds);
-    if (arrived.length === 0) return;
-    setFolding((current) => new Set([...current, ...arrived]));
-    const timer = window.setTimeout(() => {
-      timers.current.delete(timer);
-      setFolding((current) => {
-        const next = new Set(current);
-        for (const id of arrived) next.delete(id);
-        return next;
-      });
-    }, FOLD_AWAY_MS);
-    timers.current.add(timer);
-  }, [signature]);
-  useEffect(() => {
-    const pending = timers.current;
-    return () => {
-      for (const timer of pending) window.clearTimeout(timer);
-    };
+    inPlace.current = shown;
+  });
+  // Each stand-in goes once its fold-away has played, at its end: on a
+  // slow renderer the animation starts late, and a stand-in taken away
+  // mid-fold would snap the conversation shorter by what was left of it.
+  // The timer stands in where no animation plays.
+  const folded = useCallback((noteId: string) => {
+    setFolding((current) => {
+      if (!current.has(noteId)) return current;
+      const kept = new Map(current);
+      kept.delete(noteId);
+      return kept;
+    });
   }, []);
-  return folding;
+  useEffect(() => {
+    if (folding.size === 0) return;
+    const due = Math.min(...[...folding.values()].map((note) => note.until));
+    const timer = window.setTimeout(
+      () => {
+        const now = Date.now() + 16;
+        setFolding((current) => {
+          const kept = new Map(
+            [...current].filter(([, note]) => note.until > now),
+          );
+          return kept.size === current.size ? current : kept;
+        });
+      },
+      Math.max(0, due + FOLD_GRACE_MS - Date.now()),
+    );
+    return () => window.clearTimeout(timer);
+  }, [folding]);
+  return { folding, folded };
 }
 
 /**
@@ -904,7 +1195,8 @@ function JumpToPreviousUserMessage({
   shortcut?: string;
 }) {
   const { Hint } = useContext(HostContext);
-  const { scrollRef, contentRef, isAtBottom } = useStickToBottomContext();
+  const { scrollRef, contentRef, isAtBottom, stopScroll } =
+    useStickToBottomContext();
   // A chat short enough to see whole needs no jump affordance; watch both
   // the scroller and its content so the button appears the moment the
   // conversation outgrows the viewport (and goes away if it shrinks).
@@ -921,6 +1213,8 @@ function JumpToPreviousUserMessage({
     observer.observe(content);
     return () => observer.disconnect();
   }, [scrollRef, contentRef]);
+  const settling = useRef<(() => void) | undefined>(undefined);
+  useEffect(() => () => settling.current?.(), []);
   const jump = useCallback(() => {
     const scroller = scrollRef.current;
     const content = contentRef.current;
@@ -939,11 +1233,42 @@ function JumpToPreviousUserMessage({
     if (!target) return;
     const offset = target.getBoundingClientRect().top - viewTop;
     if (above.length === 0 && offset <= 8) return; // already at the oldest
-    scroller.scrollTo({
-      top: scroller.scrollTop + offset - 12,
-      behavior: "smooth",
-    });
-  }, [scrollRef, contentRef]);
+    settling.current?.();
+    // Moving up lets go of the latest message, streaming or not.
+    stopScroll();
+    const off = () =>
+      target.getBoundingClientRect().top -
+      scroller.getBoundingClientRect().top -
+      12;
+    scroller.scrollTo({ top: scroller.scrollTop + off(), behavior: "smooth" });
+    // Turns skipped while out of view take their real height as the
+    // scroll brings them in, which moves the message after its place was
+    // read: once the scroll ends, finish the way there. A reader's own
+    // scroll, or the next jump, has the last word.
+    const interrupts = ["wheel", "touchstart", "pointerdown", "keydown"];
+    const stop = () => {
+      settling.current = undefined;
+      window.clearTimeout(fallback);
+      scroller.removeEventListener("scrollend", settle);
+      for (const name of interrupts)
+        scroller.removeEventListener(name, stop, true);
+    };
+    const settle = () => {
+      stop();
+      const rest = off();
+      if (Math.abs(rest) > 2)
+        scroller.scrollTo({
+          top: scroller.scrollTop + rest,
+          behavior: "smooth",
+        });
+    };
+    // Where scrollend is missing, about as long as a long smooth scroll.
+    const fallback = window.setTimeout(settle, 1_000);
+    settling.current = stop;
+    scroller.addEventListener("scrollend", settle);
+    for (const name of interrupts)
+      scroller.addEventListener(name, stop, { capture: true, passive: true });
+  }, [scrollRef, contentRef, stopScroll]);
 
   useEffect(() => {
     register?.(jump);
@@ -967,8 +1292,12 @@ function JumpToPreviousUserMessage({
   );
 }
 
-/** The entrance every message plays once: a short rise and fade. */
-function useEntered(already = false): string {
+/**
+ * The entrance every message plays once: a short rise and fade. A message
+ * taking a place already kept for it (`rise: false`) only fades in where
+ * it is, so nothing in it moves.
+ */
+function useEntered(already = false, { rise = true } = {}): string {
   const [entered, setEntered] = useState(already);
   // Double rAF: the first frame aligns with the commit, the second
   // guarantees the browser resolved the hidden pose before it flips; a
@@ -985,6 +1314,8 @@ function useEntered(already = false): string {
   }, []);
   // transition-[opacity,translate], not transform: Tailwind v4's
   // translate-y-* sets the individual `translate` property.
+  if (!rise)
+    return `motion-safe:transition-opacity motion-safe:duration-200 motion-safe:ease-[cubic-bezier(0.2,0,0,1)] ${entered ? "motion-safe:opacity-100" : "motion-safe:opacity-0"}`;
   return `motion-safe:transition-[opacity,translate] motion-safe:duration-200 motion-safe:ease-[cubic-bezier(0.2,0,0,1)] ${entered ? "motion-safe:translate-y-0 motion-safe:opacity-100" : "motion-safe:translate-y-1 motion-safe:opacity-0"}`;
 }
 
@@ -1192,6 +1523,12 @@ interface AgentMessageProps {
   requests: Readonly<Record<string, RuntimeRequest>>;
   /** Steps stay behind their line until opened (see `foldsSteps`). */
   foldSteps: boolean;
+  /** Its steps line carries the running turn's clock. */
+  clock?: boolean;
+  /** Its steps line takes the turn line's place: it is there at once. */
+  placed?: boolean;
+  /** A stand-in for a note on its way out: shown as it was, nothing enters. */
+  still?: boolean;
 }
 
 const AgentMessage = memo(function AgentMessage({
@@ -1203,11 +1540,25 @@ const AgentMessage = memo(function AgentMessage({
   focused = false,
   requests,
   foldSteps,
+  clock = false,
+  placed = false,
+  still = false,
 }: AgentMessageProps) {
   const host = useContext(HostContext);
   const actions = useContext(ActionsContext);
-  const enterClasses = useEntered();
-  const [bornLive] = useState(() => !item || item.status === "in_progress");
+  const onScreen = useContext(OnScreen);
+  // Taking the turn line's place on screen: it fades in where it is, and
+  // neither rises nor opens.
+  const [inPlace] = useState(() => !still && placed && onScreen.current);
+  const enterClasses = useEntered(still, { rise: !inPlace });
+  const [bornLive] = useState(
+    () => !still && (!item || item.status === "in_progress"),
+  );
+  // Work that joins a running turn on screen opens its own height (and its
+  // row the gap above it, see TurnRowView).
+  const [joined] = useState(
+    () => !still && !placed && live && onScreen.current,
+  );
   const built = turnStepsOf(steps, { requests, sourceHref: host.sourceHref });
   const shown = live && !item ? markRunning(built) : built;
   const text = item?.text ?? "";
@@ -1250,6 +1601,9 @@ const AgentMessage = memo(function AgentMessage({
         steps={shown}
         live={live}
         fold={foldSteps}
+        clock={clock}
+        enter={joined}
+        placed={inPlace}
         defaultExpanded={openWork}
         resolveToolIcon={host.resolveToolIcon}
         onFileClick={host.opensFiles ? actions.openFile : undefined}
@@ -1257,15 +1611,109 @@ const AgentMessage = memo(function AgentMessage({
         renderMarkdown={host.opensLinks ? linkedMarkdown : plainMarkdown}
       />
       {text.trim() && (
-        <div
-          className={`cat-markdown min-w-0 break-words leading-6 ${bornLive ? "cat-fade-in" : ""}`}
-        >
-          <TimelineMarkdown text={text} opensLinks={host.opensLinks} />
-        </div>
+        <Growing active={writing} enter={joined || (live && !still)}>
+          <div
+            className={`cat-markdown min-w-0 break-words leading-6 ${bornLive ? "cat-fade-in" : ""}`}
+          >
+            <ReplyMarkdown text={text} opensLinks={host.opensLinks} />
+          </div>
+        </Growing>
       )}
     </article>
   );
 }, sameAgentMessage);
+
+/** How long a growing reply takes to open each new line's place. */
+const GROW_MS = 180;
+/** How long past its last growth a reply's box holds its height. */
+const GROW_SETTLE_MS = GROW_MS + 60;
+
+/**
+ * Prose being written: while `active`, its box follows the text's height
+ * on a short transition, so each new line opens its place instead of
+ * pushing everything below it down at once. Prose that appears in a chat
+ * on screen while its turn runs (`enter`) opens from nothing, written or
+ * not. Once written, the box lets go of its height. A hidden chat lays out
+ * nothing: the box keeps its height meanwhile and, shown again, takes the
+ * text's at once, so what was written while away never opens again.
+ */
+function Growing({
+  active,
+  enter,
+  children,
+}: {
+  active: boolean;
+  enter: boolean;
+  children: ReactNode;
+}) {
+  const box = useRef<HTMLDivElement>(null);
+  const content = useRef<HTMLDivElement>(null);
+  const onScreen = useContext(OnScreen);
+  const [fromNothing] = useState(() => (active || enter) && onScreen.current);
+  const [opening, setOpening] = useState(fromNothing);
+  // Its height lets go once the last line it opened has played out,
+  // however late the renderer started it: released mid-way, the box would
+  // snap to the text's height.
+  const lineOpening = useCallback(
+    () => transitionPlaying(box.current, "height"),
+    [],
+  );
+  useEffect(() => {
+    if (!opening) return;
+    return afterMotion(GROW_SETTLE_MS, lineOpening, () => setOpening(false));
+  }, [opening, lineOpening]);
+  // It keeps growing a moment past the last words, so the line they
+  // opened plays out rather than snapping when the reply completes.
+  const writing = useLinger(
+    active ? true : undefined,
+    GROW_SETTLE_MS,
+    lineOpening,
+  );
+  const growing = Boolean(writing.value) || opening;
+  useLayoutEffect(() => {
+    const outer = box.current;
+    const inner = content.current;
+    if (!outer || !inner) return;
+    if (!growing) {
+      outer.style.height = "";
+      return;
+    }
+    if (typeof ResizeObserver === "undefined") return;
+    if (fromNothing && !outer.style.height) {
+      outer.style.height = "0px";
+      // Read back, so the empty start is styled before the text's height.
+      outer.getBoundingClientRect();
+    }
+    let away = false;
+    const follow = () => {
+      // Not laid out: its height reads 0, which is not the text's.
+      if (inner.getClientRects().length === 0) {
+        away = true;
+        return;
+      }
+      const height = `${inner.getBoundingClientRect().height}px`;
+      if (!away) {
+        outer.style.height = height;
+        return;
+      }
+      away = false;
+      outer.style.transition = "none";
+      outer.style.height = height;
+      // Read back, so the height applies before the transition returns.
+      outer.getBoundingClientRect();
+      outer.style.transition = "";
+    };
+    follow();
+    const observer = new ResizeObserver(follow);
+    observer.observe(inner);
+    return () => observer.disconnect();
+  }, [growing, fromNothing]);
+  return (
+    <div ref={box} className="cat-grow" data-growing={growing || undefined}>
+      <div ref={content}>{children}</div>
+    </div>
+  );
+}
 
 /**
  * Re-render a message only when what it shows changed: items keep their
@@ -1286,6 +1734,9 @@ function sameAgentMessage(
     previous.focused === next.focused &&
     previous.requests === next.requests &&
     previous.foldSteps === next.foldSteps &&
+    previous.clock === next.clock &&
+    previous.placed === next.placed &&
+    previous.still === next.still &&
     previous.steps.length === next.steps.length &&
     previous.steps.every((step, index) => step.item === next.steps[index]?.item)
   );
@@ -1635,9 +2086,11 @@ function CopyMessageButton({ content }: { content: string }) {
 function CancelStarting({
   turnId,
   onCancel,
+  leaving,
 }: {
   turnId: string;
   onCancel: (turnId: string) => ActionResult;
+  leaving: boolean;
 }) {
   const [cancelling, setCancelling] = useState(false);
   return (
@@ -1651,8 +2104,10 @@ function CancelStarting({
           setCancelling(false);
         }
       }}
-      disabled={cancelling}
-      className="cursor-pointer rounded-md px-2 py-0.5 text-xs text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg disabled:cursor-default disabled:opacity-50"
+      disabled={cancelling || leaving}
+      className={`ml-auto shrink-0 cursor-pointer rounded-md px-2 py-0.5 text-xs text-fg-muted transition-[color,background-color,opacity] duration-150 hover:bg-bg-overlay hover:text-fg disabled:cursor-default ${
+        leaving ? "opacity-0" : "cat-fade-in disabled:opacity-50"
+      }`}
       data-testid="chat-cancel-starting"
     >
       Cancel
@@ -1660,53 +2115,193 @@ function CancelStarting({
   );
 }
 
+/** How long the activity line and the turn line take to open or close. */
+const REVEAL_MS = 220;
+
 /**
- * How long the running turn has taken, and a plain word when it has gone
- * quiet: a spinner that looks the same at two seconds and at nine minutes
- * says nothing.
+ * A line that opens its own height in the timeline's column and closes it
+ * again (`cat-reveal`, its one child the line). It opens from nothing only
+ * when it appears in a timeline on screen (`data-entering`, dropped once
+ * it has opened): a chat opened, or shown again, mid-turn has it open
+ * already, as it was. Its line is clipped only while it opens or closes
+ * (`data-moving`), so a focus ring in it shows whole at rest.
  */
-function TurnClock({
-  startedAt,
-  updatedAt,
+function Reveal({
+  closed,
+  appear = true,
+  className = "",
+  inert,
+  children,
 }: {
-  startedAt?: string | null;
-  updatedAt?: string | null;
+  closed: boolean;
+  /** Opens from nothing as it appears on screen; otherwise it is simply there. */
+  appear?: boolean;
+  className?: string;
+  /** Closing: out of reach and hidden from assistive technology. */
+  inert?: boolean;
+  children: ReactNode;
 }) {
-  const started = startedAt ? Date.parse(startedAt) : Number.NaN;
-  const updated = updatedAt ? Date.parse(updatedAt) : Number.NaN;
-  const now = useNow(Number.isFinite(started) || Number.isFinite(updated));
-  const quiet = Number.isFinite(updated) ? now - updated : 0;
+  const onScreen = useContext(OnScreen);
+  const [entering, setEntering] = useState(() => appear && onScreen.current);
+  const [moving, setMoving] = useState(entering);
+  const [was, setWas] = useState(closed);
+  if (was !== closed) {
+    setWas(closed);
+    setMoving(true);
+  }
+  const rest = useRef(() => {
+    setMoving(false);
+    setEntering(false);
+  });
+  const box = useRef<HTMLDivElement>(null);
+  // Its transition's end settles it; the timer stands in where none plays,
+  // and waits on while it does (on a slow renderer it starts late).
+  // Closed, it stays clipped until it goes.
+  useEffect(() => {
+    if (!moving || closed) return;
+    return afterMotion(
+      REVEAL_MS + 80,
+      () => transitionPlaying(box.current, "grid-template-rows"),
+      () => rest.current(),
+    );
+  }, [moving, closed]);
   return (
-    <>
-      {Number.isFinite(started) && (
-        // The turn's time, not the step's: the timer marks it apart from
-        // the running step's own count just above.
-        <span
-          className="cat-fade-in flex items-center gap-1 tabular-nums text-fg-faint"
-          role="timer"
-          aria-label="Turn time"
-        >
-          <Timer className="size-3" />
-          <span data-testid="chat-activity-elapsed">
-            {formatElapsed(now - started)}
-          </span>
-        </span>
-      )}
-      {quiet >= STALL_AFTER_MS && (
-        // Plain words, not an alarm: a long test run is quiet too.
-        <span
-          className="cat-fade-in text-fg-muted"
-          data-testid="chat-activity-stalled"
-        >
-          {`No updates for ${formatElapsed(quiet)}`}
-        </span>
-      )}
-    </>
+    <div
+      ref={box}
+      className={`cat-reveal ${className}`}
+      data-entering={entering || undefined}
+      data-moving={moving || undefined}
+      data-closed={closed || undefined}
+      inert={inert}
+      aria-hidden={inert || undefined}
+      onTransitionEnd={(event) => {
+        if (
+          event.target === event.currentTarget &&
+          event.propertyName === "grid-template-rows"
+        )
+          rest.current();
+      }}
+    >
+      {children}
+    </div>
   );
 }
 
-/** Silence long enough to say so on the activity line. */
-const STALL_AFTER_MS = 30_000;
+/**
+ * The agent's live line under the conversation: the spinner and what the
+ * agent is doing, and nothing beside the words (the turn's clock sits on
+ * its steps line). One fixed height, so neither the spinner nor anything
+ * below it moves as the words change. It opens its own height when work
+ * starts and closes it when the work is done, so the conversation never
+ * jumps by a line. Withdrawing a message about to start sits at the far
+ * end, clear of the words.
+ *
+ * Until the running turn has a steps line (a message still on its way
+ * included), the turn line above it keeps that line's place, with the
+ * turn's clock: the two open as one, and the first steps line takes the
+ * turn line's place in the same frame, so the activity line never moves
+ * for it, however late the frames come.
+ */
+function ActivityLine({
+  activity,
+  turnLine,
+  startingId,
+  onCancel,
+}: {
+  activity?: string;
+  /** No steps line in the running turn yet: the turn line keeps its place. */
+  turnLine: boolean;
+  /** The message about to start, withdrawable until the agent takes it. */
+  startingId?: string;
+  onCancel?: (turnId: string) => ActionResult;
+}) {
+  const line = useRef<HTMLDivElement>(null);
+  // It stays for its exit once the work it named is done, with the words
+  // it last said, until its closing has played (however late the renderer
+  // starts it: gone before, the conversation would jump by its height);
+  // the timeline itself never renders again for that.
+  const shown = useLinger(activity ? true : undefined, REVEAL_MS, () =>
+    transitionPlaying(
+      line.current?.closest(".cat-reveal"),
+      "grid-template-rows",
+    ),
+  );
+  const said = useRef(activity);
+  if (activity) said.current = activity;
+  const cancel = useLinger(startingId, REVEAL_MS);
+  const present = Boolean(shown.value && said.current);
+  const leaving = shown.leaving;
+  // Closing, it keeps the turn line as it was: the two close as one.
+  const lined = useRef(turnLine);
+  if (!leaving) lined.current = turnLine;
+  // The first steps line takes the turn line's place in this commit: an
+  // opening still under way ends in it, so the frame that shows the steps
+  // line shows the activity line where it stays. A renderer that stalls
+  // as the turn starts begins the opening only after the stall, and the
+  // first step, arrived meanwhile, would show above a line still opening.
+  const handing = useRef(lined.current);
+  useLayoutEffect(() => {
+    if (handing.current && !lined.current)
+      finishTransitions(line.current?.closest(".cat-reveal"));
+    handing.current = lined.current;
+  });
+  // A turn line there as the activity line opens is part of its opening;
+  // one that comes later (a next turn under a line still open) opens its
+  // own place.
+  const opened = useRef(false);
+  useEffect(() => {
+    opened.current = present;
+  }, [present]);
+  // Its spinner and breathing stop while it is scrolled out of view.
+  useEffect(() => {
+    const element = line.current;
+    if (!present || !element || typeof IntersectionObserver === "undefined")
+      return;
+    const observer = new IntersectionObserver(([entry]) => {
+      if (entry?.isIntersecting) delete element.dataset.offscreen;
+      else element.dataset.offscreen = "";
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [present]);
+  if (!present || !said.current) return null;
+  return (
+    <Reveal
+      closed={leaving}
+      className="[--cat-reveal-gap:-0.75rem]"
+      inert={leaving}
+    >
+      <div>
+        {lined.current && (
+          // Gone at once when the first steps line takes its place. Its
+          // place opens from nothing (no column gap to give back).
+          <Reveal
+            closed={false}
+            appear={opened.current}
+            className="[--cat-reveal-gap:0px]"
+          >
+            <TurnLine leaving={leaving} />
+          </Reveal>
+        )}
+        <div
+          ref={line}
+          className="flex h-5 items-center gap-2 text-xs text-fg-muted"
+          data-testid="chat-activity"
+        >
+          <LoaderCircle className="size-4 shrink-0 animate-spin" />
+          <ActivityText text={said.current} />
+          {cancel.value && onCancel && (
+            <CancelStarting
+              turnId={cancel.value}
+              onCancel={onCancel}
+              leaving={cancel.leaving}
+            />
+          )}
+        </div>
+      </div>
+    </Reveal>
+  );
+}
 
 /** How many of the attachments the prose references inline. */
 function inlineMarkerCount(
@@ -1862,9 +2457,7 @@ function ScrollToLatest() {
  * scrolling up, and the chat would stop following new messages.
  */
 function FollowScrollerResize() {
-  const { scrollRef, scrollToBottom, isAtBottom } = useStickToBottomContext();
-  const following = useRef(isAtBottom);
-  following.current = isAtBottom;
+  const { scrollRef, scrollToBottom, state } = useStickToBottomContext();
   useEffect(() => {
     const scroller = scrollRef.current;
     if (!scroller) return;
@@ -1881,7 +2474,9 @@ function FollowScrollerResize() {
     const observer = new ResizeObserver(() => {
       if (scroller.clientHeight === height) return;
       height = scroller.clientHeight;
-      if (!following.current) return;
+      // Only a chat that follows (see PinToBottom), not one a reader let go
+      // of a few pixels short of the end.
+      if (!state.isAtBottom) return;
       resized = true;
       // A shrink fires no scroll event; a taller scroller's does next frame.
       follow(100);
@@ -1897,8 +2492,254 @@ function FollowScrollerResize() {
       scroller.removeEventListener("scroll", onScroll);
       clearTimeout(timer);
     };
-  }, [scrollRef, scrollToBottom]);
+  }, [scrollRef, scrollToBottom, state]);
   return null;
+}
+
+/**
+ * While the chat follows its latest message, the browser keeps it there:
+ * everything in the conversation but the anchor at its end opts out of
+ * scroll anchoring (`data-pinned`), so content growing or shrinking above
+ * the anchor moves the scroll with it in the same frame, with no script
+ * per frame. Scrolled up, anchoring keeps what the person reads in place
+ * instead.
+ *
+ * It pins only while use-stick-to-bottom itself follows: its own
+ * `state.isAtBottom`, which every let-go clears. The context's `isAtBottom`
+ * also counts "near the end", which would go on following a reader who
+ * let go a few pixels short of it, and `escapedFromLock` stays set after
+ * "Scroll to latest" until the person scrolls down, which would leave a
+ * followed chat to script. A press in the conversation unpins until it is
+ * released, and so does text selected in it, so what the person presses
+ * or selects holds still under the pointer; a drag that selects text lets
+ * go, as the library means it to.
+ *
+ * The library reads scrolls from scroll events, which it ignores while
+ * the content resizes, as it does nearly every frame of a streaming
+ * answer, and hears the wheel only when the first box under the pointer
+ * that may scroll is the log (not over a code block, which scrolls
+ * sideways). So a wheel or a touch drag that scrolls the log up, a key
+ * that scrolls up and a press on the scrollbar let go here, before the
+ * next growth pulls the view back down.
+ */
+function PinToBottom() {
+  const { contentRef, scrollRef, state, stopScroll } =
+    useStickToBottomContext();
+  const update = useRef<() => void>(() => undefined);
+  useLayoutEffect(() => {
+    const scroller = scrollRef.current;
+    const content = contentRef.current;
+    if (!scroller || !content) return;
+    let pressed = false;
+    // Where the last press was: keys scroll the log after a press in it
+    // left nothing focused.
+    let pressedIn = false;
+    let selected = false;
+    let touchY: number | undefined;
+    let recheck: ReturnType<typeof setTimeout> | undefined;
+    const pin = () => {
+      const pinned = state.isAtBottom && !pressed && !selected;
+      if (pinned === "pinned" in content.dataset) return;
+      if (pinned) content.dataset.pinned = "";
+      else delete content.dataset.pinned;
+    };
+    update.current = pin;
+    pin();
+    const letGo = () => {
+      if (!state.isAtBottom) return;
+      // Nothing above to scroll to: following goes on.
+      if (scroller.scrollTop <= 0) return;
+      stopScroll();
+      pin();
+    };
+    const inLog = (node: EventTarget | Node | null) =>
+      node instanceof Node && scroller.contains(node);
+    const onPointerDown = (event: PointerEvent) => {
+      pressedIn = inLog(event.target);
+      if (!pressedIn) return;
+      // The scroller itself, outside the conversation's column: its
+      // scrollbar (or the gutter beside it).
+      if (event.target === scroller) {
+        letGo();
+        return;
+      }
+      pressed = true;
+      pin();
+    };
+    const onPointerUp = () => {
+      if (!pressed) return;
+      pressed = false;
+      pin();
+    };
+    const onSelectionChange = () => {
+      const selection = document.getSelection();
+      const now = Boolean(
+        selection &&
+          !selection.isCollapsed &&
+          (inLog(selection.anchorNode) || inLog(selection.focusNode)),
+      );
+      if (now && pressed) letGo();
+      if (now === selected) return;
+      selected = now;
+      pin();
+    };
+    const onWheel = (event: WheelEvent) => {
+      // A pinch zooms; it scrolls nothing.
+      if (event.deltaY < 0 && !event.ctrlKey && !scrollsWithin(event, scroller))
+        letGo();
+      pin();
+    };
+    const onTouchStart = (event: TouchEvent) => {
+      touchY = event.touches[0]?.clientY;
+    };
+    const onTouchMove = (event: TouchEvent) => {
+      const y = event.touches[0]?.clientY;
+      if (y === undefined || touchY === undefined) return;
+      // A finger moving down from the highest it reached scrolls the
+      // conversation up; a tap's jitter does not.
+      if (y > touchY + 8) letGo();
+      touchY = Math.min(touchY, y);
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || !scrollsUp(event) || editable(event.target))
+        return;
+      const focused = document.activeElement;
+      const here =
+        focused && focused !== document.body ? inLog(focused) : pressedIn;
+      if (here) letGo();
+    };
+    // The library may follow again, or let go, without a change it renders
+    // (its "near the end" already showed): read it once its own handler
+    // has run, after the scroll's, or at once after the wheel's.
+    const onScroll = () => {
+      clearTimeout(recheck);
+      recheck = setTimeout(pin, 2);
+    };
+    document.addEventListener("pointerdown", onPointerDown, true);
+    window.addEventListener("pointerup", onPointerUp, true);
+    window.addEventListener("pointercancel", onPointerUp, true);
+    document.addEventListener("selectionchange", onSelectionChange);
+    document.addEventListener("keydown", onKeyDown);
+    scroller.addEventListener("touchstart", onTouchStart, { passive: true });
+    scroller.addEventListener("touchmove", onTouchMove, { passive: true });
+    scroller.addEventListener("scroll", onScroll, { passive: true });
+    scroller.addEventListener("wheel", onWheel, { passive: true });
+    return () => {
+      update.current = () => undefined;
+      clearTimeout(recheck);
+      document.removeEventListener("pointerdown", onPointerDown, true);
+      window.removeEventListener("pointerup", onPointerUp, true);
+      window.removeEventListener("pointercancel", onPointerUp, true);
+      document.removeEventListener("selectionchange", onSelectionChange);
+      document.removeEventListener("keydown", onKeyDown);
+      scroller.removeEventListener("touchstart", onTouchStart);
+      scroller.removeEventListener("touchmove", onTouchMove);
+      scroller.removeEventListener("scroll", onScroll);
+      scroller.removeEventListener("wheel", onWheel);
+    };
+  }, [contentRef, scrollRef, state, stopScroll]);
+  // It renders again as the library lets go or returns to the end, which
+  // pins anew.
+  useLayoutEffect(() => update.current());
+  return null;
+}
+
+/**
+ * Whether a wheel going up scrolls a box inside the log rather than the
+ * log: one between the pointer and the log that scrolls vertically and is
+ * not at its top yet (an opened step's long output).
+ */
+function scrollsWithin(event: WheelEvent, scroller: HTMLElement): boolean {
+  for (
+    let node = event.target instanceof Element ? event.target : null;
+    node && node !== scroller;
+    node = node.parentElement
+  ) {
+    if (node.scrollTop <= 0 || node.scrollHeight <= node.clientHeight) continue;
+    const { overflowY } = getComputedStyle(node);
+    if (overflowY === "auto" || overflowY === "scroll") return true;
+  }
+  return false;
+}
+
+/** A key that scrolls the focused scroller up. */
+function scrollsUp(event: KeyboardEvent): boolean {
+  return (
+    event.key === "PageUp" ||
+    event.key === "Home" ||
+    event.key === "ArrowUp" ||
+    (event.key === " " && event.shiftKey)
+  );
+}
+
+/** Where keys edit text instead of scrolling. */
+function editable(target: EventTarget | null): boolean {
+  return (
+    target instanceof HTMLElement &&
+    (target.isContentEditable ||
+      target instanceof HTMLInputElement ||
+      target instanceof HTMLTextAreaElement ||
+      target instanceof HTMLSelectElement)
+  );
+}
+
+/** One-shot keyframes a chat shown again would otherwise play again. */
+const ENTRANCES = new Set([
+  "catamorphic-fade-in",
+  "catamorphic-fold-away",
+  "catamorphic-step-in",
+  "catamorphic-gap-in",
+  "catamorphic-swap-out",
+  "catamorphic-swap-in",
+]);
+
+/**
+ * Keeps the timeline's on-screen state (see `OnScreenState`): laid out (a
+ * lurking chat, or one in a tab behind, is not) in a window that shows.
+ * The browser drops the animations of what is not laid out and starts them
+ * again as it shows: those finish here, before the first frame shown, so
+ * nothing the chat already held, or gained while hidden, enters again.
+ */
+function TrackOnScreen({ state }: { state: OnScreenSource }) {
+  const { scrollRef, contentRef } = useStickToBottomContext();
+  useLayoutEffect(() => {
+    const scroller = scrollRef.current;
+    if (!scroller) return;
+    const laidOut = () =>
+      typeof scroller.checkVisibility === "function"
+        ? scroller.checkVisibility()
+        : true;
+    let shown = laidOut();
+    const update = () =>
+      state.set(shown && document.visibilityState !== "hidden");
+    update();
+    document.addEventListener("visibilitychange", update);
+    // Shown or hidden, the scroller's size changes; observed before paint.
+    const observer =
+      typeof ResizeObserver === "undefined"
+        ? undefined
+        : new ResizeObserver(() => {
+            const now = laidOut();
+            if (now && !shown) finishEntrances(contentRef.current);
+            shown = now;
+            update();
+          });
+    observer?.observe(scroller);
+    return () => {
+      observer?.disconnect();
+      document.removeEventListener("visibilitychange", update);
+    };
+  }, [scrollRef, contentRef, state]);
+  return null;
+}
+
+function finishEntrances(content: HTMLElement | null) {
+  if (!content || typeof content.getAnimations !== "function") return;
+  for (const animation of content.getAnimations({ subtree: true })) {
+    const name =
+      "animationName" in animation ? animation.animationName : undefined;
+    if (typeof name === "string" && ENTRANCES.has(name)) animation.finish();
+  }
 }
 
 /** Stop following new output when opening a notification's exact message. */
@@ -1912,6 +2753,7 @@ function FocusMessage({
   const { contentRef, scrollRef, stopScroll } = useStickToBottomContext();
   useEffect(() => {
     if (!messageId || !ready) return;
+    let correction: number | undefined;
     const frame = requestAnimationFrame(() => {
       const target = contentRef.current?.querySelector<HTMLElement>(
         `[data-message-id="${CSS.escape(messageId)}"]`,
@@ -1919,17 +2761,25 @@ function FocusMessage({
       const scroller = scrollRef.current;
       if (!target || !scroller) return;
       stopScroll();
-      scroller.scrollTo({
-        top:
-          scroller.scrollTop +
-          target.getBoundingClientRect().top -
-          scroller.getBoundingClientRect().top -
-          12,
-        behavior: "instant",
-      });
+      const place = () =>
+        scroller.scrollTo({
+          top:
+            scroller.scrollTop +
+            target.getBoundingClientRect().top -
+            scroller.getBoundingClientRect().top -
+            12,
+          behavior: "instant",
+        });
+      place();
       target.focus({ preventScroll: true });
+      // Turns skipped while out of view take their real height as they
+      // come into view: place the message again once they have.
+      correction = requestAnimationFrame(place);
     });
-    return () => cancelAnimationFrame(frame);
+    return () => {
+      cancelAnimationFrame(frame);
+      if (correction !== undefined) cancelAnimationFrame(correction);
+    };
   }, [messageId, ready, contentRef, scrollRef, stopScroll]);
   return null;
 }

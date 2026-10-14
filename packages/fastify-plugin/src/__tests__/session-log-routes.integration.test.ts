@@ -325,6 +325,64 @@ describe("session log routes", () => {
     expect(invalid.statusCode).toBe(400);
   });
 
+  it("sets session metadata: the stream and the snapshot follow, refusals are client errors", async () => {
+    const { base } = await chat("Metadata");
+    const stream = await open(`${base}/events?after=0`);
+    const pullRequests = [
+      { url: "https://github.com/acme/web/pull/9", number: 9, state: "open" },
+    ];
+    const set = await source.app.inject({
+      method: "PATCH",
+      url: `${base}/metadata`,
+      payload: { metadata: { pull_requests: pullRequests, note: "draft" } },
+    });
+    expect(set.statusCode).toBe(200);
+    expect(set.json()).toEqual({
+      metadata: { pull_requests: pullRequests, note: "draft" },
+    });
+    const events = await stream.until(
+      (event) => event.event.type === "session.changed",
+    );
+    expect(events.at(-1)?.event).toEqual({
+      type: "session.changed",
+      session: { metadata: { pull_requests: pullRequests, note: "draft" } },
+    });
+    await stream.close();
+
+    const removed = await source.app.inject({
+      method: "PATCH",
+      url: `${base}/metadata`,
+      payload: { metadata: { note: null } },
+    });
+    expect(removed.json()).toEqual({
+      metadata: { pull_requests: pullRequests },
+    });
+    const detail = await source.app.inject({ method: "GET", url: base });
+    expect(
+      (detail.json() as { snapshot: SessionSnapshot }).snapshot.session
+        .metadata,
+    ).toEqual({ pull_requests: pullRequests });
+
+    for (const metadata of [
+      { "Not a key": 1 },
+      { big: "x".repeat(20_000) },
+      {},
+    ]) {
+      const refused = await source.app.inject({
+        method: "PATCH",
+        url: `${base}/metadata`,
+        payload: { metadata },
+      });
+      expect(refused.statusCode, JSON.stringify(metadata)).toBe(400);
+    }
+    const missing = await source.app.inject({
+      method: "PATCH",
+      url: `${base.replace(/sessions\/[^/]+$/, "sessions")}/${randomUUID()}/metadata`,
+      payload: { metadata: { note: "x" } },
+    });
+    expect(missing.statusCode).toBe(404);
+  });
+
   it("mirrors a session to another backend, asking for what it lacks", async () => {
     const { base: sourceUrl, sessionId } = await chat("Mirrored");
     await command(sourceUrl, {
@@ -399,6 +457,17 @@ describe("session log routes", () => {
         .filter((item: { kind: string }) => item.kind === "assistant_message")
         .map((item: { text: string }) => item.text),
     ).toEqual(["Echo: first", expect.stringMatching(/^Echo: second/)]);
+
+    // The copy is the source's: writing its metadata here would fork it.
+    const written = await copy.app.inject({
+      method: "PATCH",
+      url: `${copyUrl}/metadata`,
+      payload: { metadata: { note: "from the copy" } },
+    });
+    expect([written.statusCode, written.json()]).toMatchObject([
+      409,
+      { code: "authority_required" },
+    ]);
 
     // Another authority than the copy's own is a fork: stop pushing.
     const forked = await push({

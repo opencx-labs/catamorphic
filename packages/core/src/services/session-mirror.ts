@@ -1,7 +1,8 @@
-import type {
-  AgentTodo,
-  SessionSnapshot,
-  StoredSessionEvent,
+import {
+  type AgentTodo,
+  assertSessionMetadata,
+  type SessionSnapshot,
+  type StoredSessionEvent,
 } from "@catamorphic/agent-protocol";
 import {
   type DB,
@@ -211,6 +212,16 @@ export async function writeSessionMirror({
           providerThreads: input.base.providerThreads.map(away),
         },
       });
+      // What was set on the session before this copy existed (ADR 0226),
+      // held to a write's limits; later changes arrive as its events.
+      assertSessionMetadata(input.base.session.metadata);
+      await trx
+        .updateTable("agent_sessions")
+        .set({
+          metadata: sql<Json>`${jsonbText(input.base.session.metadata)}::jsonb`,
+        })
+        .where("id", "=", sessionId)
+        .execute();
     }
     const events = input.events.map((stored) =>
       stored.event.type === "provider_thread.changed"

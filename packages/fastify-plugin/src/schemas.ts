@@ -18,11 +18,15 @@ import {
   questionAnswerSchema,
   type RuntimeRequest,
   type RuntimeRequestResponse,
+  SESSION_METADATA_KEY_PATTERN,
+  SESSION_METADATA_LIMITS,
+  SESSION_PROTOCOL_VERSION,
   type SessionCommand,
   type SessionEvent,
   type SessionFields,
   type SessionInput,
   type SessionMessageAuthor,
+  type SessionMetadata,
   type SessionSnapshot,
   type SessionStreamMessage,
   type StoredSessionEvent,
@@ -1714,6 +1718,11 @@ export const ProviderThreadSchema = describes<ProviderThread>()(
     .meta({ id: "ProviderThread" }),
 );
 
+/** A session's metadata (ADR 0226): values by key, each any JSON. */
+export const SessionMetadataSchema = describes<SessionMetadata>()(
+  z.record(z.string(), JsonValueSchema).meta({ id: "SessionMetadata" }),
+);
+
 /** A session's shared fields, what every viewer sees alike. */
 export const SessionFieldsSchema = describes<SessionFields>()(
   z
@@ -1730,6 +1739,7 @@ export const SessionFieldsSchema = describes<SessionFields>()(
       workStatus: z.enum(["open", "completed"]),
       activity: z.string().nullable(),
       todos: z.array(AgentTodoSchema),
+      metadata: SessionMetadataSchema,
       parentSessionId: z.string().nullable(),
       forkedFromSessionId: z.string().nullable(),
       attentionRevision: z.number().int(),
@@ -1741,6 +1751,27 @@ export const SessionFieldsSchema = describes<SessionFields>()(
     })
     .meta({ id: "SessionFields" }),
 );
+
+/**
+ * Set named values on a session (ADR 0226): each key takes its value, and
+ * null removes the key. Keys are lowercase words of letters and digits
+ * joined by `_`, `-` or `.`; core bounds the count and sizes.
+ */
+export const UpdateAgentSessionMetadataSchema = z.object({
+  metadata: z
+    .record(
+      z
+        .string()
+        .max(SESSION_METADATA_LIMITS.keyLength)
+        .regex(SESSION_METADATA_KEY_PATTERN),
+      JsonValueSchema,
+    )
+    .describe("Values by key; null removes a key"),
+});
+
+export const AgentSessionMetadataSchema = z.object({
+  metadata: SessionMetadataSchema,
+});
 
 export const SessionEventSchema = describes<SessionEvent>()(
   z
@@ -2403,7 +2434,7 @@ export const MeSchema = z.object({
    * server whose session or runner protocol it does not know.
    */
   agentProtocol: z.object({
-    session: z.literal(1),
+    session: z.literal(SESSION_PROTOCOL_VERSION),
     runner: z.literal(RUNNER_PROTOCOL_VERSION),
   }),
 });
@@ -2617,41 +2648,29 @@ export const AgentCatalogSchema = z.object({
 
 // --- Personal environments (ADRs 0184, 0199) ---
 
-/** Why a body naming sign-ins is refused: they never leave their machine. */
-export const PERSONAL_SIGN_INS_REFUSED =
-  "Sign-ins stay on the machine they were made on (ADR 0199): sign in to the harness there, and send only files here.";
-
 export const PutPersonalEnvironmentSchema = z
-  .strictObject(
-    {
-      files: z
-        .array(
-          z.object({
-            path: z
-              .string()
-              .min(1)
-              .max(512)
-              .describe("Repository-relative path, / separated"),
-            content: z.string().describe("The file's bytes, base64"),
-          }),
-        )
-        .max(50)
-        .default([]),
-      setup: z
-        .string()
-        .max(16_384)
-        .optional()
-        .describe(
-          "The caller's own setup command, run after the Environment's in each new workspace of their own chats (ADR 0208); absent or blank for none",
-        ),
-    },
-    {
-      error: (issue) =>
-        issue.code === "unrecognized_keys" && issue.keys.includes("logins")
-          ? PERSONAL_SIGN_INS_REFUSED
-          : undefined,
-    },
-  )
+  .strictObject({
+    files: z
+      .array(
+        z.object({
+          path: z
+            .string()
+            .min(1)
+            .max(512)
+            .describe("Repository-relative path, / separated"),
+          content: z.string().describe("The file's bytes, base64"),
+        }),
+      )
+      .max(50)
+      .default([]),
+    setup: z
+      .string()
+      .max(16_384)
+      .optional()
+      .describe(
+        "The caller's own setup command, run after the Environment's in each new workspace of their own chats (ADR 0208); absent or blank for none",
+      ),
+  })
   .describe(
     "The caller's personal files and setup for this project; replaces what the server holds",
   );

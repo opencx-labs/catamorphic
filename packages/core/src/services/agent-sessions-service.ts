@@ -3,6 +3,7 @@ import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import {
   ACTIVE_TURN_STATUSES,
+  type AgentErrorKind,
   type Attempt,
   type CommandReceipt,
   type DispatchMode,
@@ -25,12 +26,14 @@ import {
   type SessionEvent,
   type SessionInput,
   type SessionMessageAuthor,
+  type SessionMetadata,
   type SessionSnapshot,
   type SessionStreamMessage,
   type SettledAlert,
   sessionInputSchema,
   type Turn,
   type TurnError,
+  withSessionMetadata,
 } from "@catamorphic/agent-protocol";
 import {
   ASK_USER_TOOL,
@@ -45,6 +48,7 @@ import {
   type Json,
   type JsonObject,
   jsonbText,
+  storedJson,
 } from "@catamorphic/db";
 import { moveCheckoutBase, type ProjectManager } from "@catamorphic/git";
 import { getTracer, markSpanError, withSpan } from "@catamorphic/otel";
@@ -250,6 +254,7 @@ import {
   providerThreadFromRow,
   requestFromRow,
   type SessionRow,
+  sessionMetadataFromRow,
   turnFromRow,
   waitingNotificationTurn,
 } from "./sessions/session-rows.js";
@@ -268,6 +273,7 @@ import {
 } from "./store-sync.js";
 import { UserNotificationsService } from "./user-notifications-service.js";
 import { temporaryVolumes, temporaryVolumesNote } from "./volume-holds.js";
+import { PollPacer, type WorkWakeups } from "./work-wakeups.js";
 import { EnvironmentCapacityError } from "./worker-capacity.js";
 import {
   runWorkspaceSetup,
@@ -771,6 +777,10 @@ export interface AgentTurnSettledEvent {
   messageId: string;
   turnId?: string;
   status: "completed" | "failed" | "awaiting_input";
+  /** The session's agent, for a host that reacts to its failures. */
+  agentId: string | null;
+  /** What a failed turn's error was classified as (`auth`, `rate_limit`). */
+  errorKind?: AgentErrorKind;
   interrupted?: boolean;
   retrying?: boolean;
   /** Present only when a workflow asked the host to surface this turn. */
@@ -867,6 +877,12 @@ interface AgentSessionsDeps {
   workerNode?: { id: string; token: string };
   /** Source-host presence window before a mirrored session is shown paused. */
   authorityLeaseMs?: number;
+  /**
+   * This process's hints that turns or session events may be waiting, and
+   * how often its pollers look when none came (ADR 0229).
+   */
+  wakeups?: WorkWakeups;
+  idlePollMs?: number;
   projectManager: ProjectManager;
   codingAgents: CodingAgentRegistry;
   /**
@@ -1007,6 +1023,8 @@ export class AgentSessionsService {
   readonly hostId: string;
   private readonly workerNode?: { id: string; token: string };
   readonly authorityLeaseMs: number;
+  private readonly wakeups?: WorkWakeups;
+  private readonly idlePollMs?: number;
   private readonly projectManager: ProjectManager;
   private readonly codingAgents: CodingAgentRegistry;
   private readonly nativeAgentCheckout?: NativeAgentCheckout;
@@ -1117,13 +1135,27 @@ export class AgentSessionsService {
       externalUserId: string;
     }) => Promise<Identity | null>;
     pollIntervalMs?: number;
+    /**
+     * How long it waits after a poll while nothing is queued, due or
+     * hinted in this process (ADR 0229). Defaults to the host's
+     * `idlePollMs`; without either it waits `pollIntervalMs` after each
+     * poll.
+     */
+    idlePollIntervalMs?: number;
     /** How often idle chats' workspaces are checked (ADR 0173). */
     idleReleaseIntervalMs?: number;
   }): { stop(): Promise<void> } {
     this.resolveOwner = input.resolveIdentity;
     let stopped = false;
     let nextIdleSweep = 0;
-    let polling: Promise<void> | undefined;
+    const controller = new AbortController();
+    const pacer = new PollPacer({
+      quickMs: input.pollIntervalMs ?? 1_000,
+      idleMs: input.idlePollIntervalMs ?? this.idlePollMs,
+      signal: controller.signal,
+      wakeups: this.wakeups,
+      topic: "agent",
+    });
     const poll = async () => {
       const candidates = await this.db
         .selectFrom("agent_sessions")
@@ -1194,6 +1226,7 @@ export class AgentSessionsService {
           ),
         )
         .execute();
+      if (candidates.length > 0) pacer.busy();
       for (const candidate of candidates) {
         if (stopped || this.stoppingTurns) return;
         if (this.drainers.has(candidate.id)) continue;
@@ -1216,29 +1249,86 @@ export class AgentSessionsService {
         );
       }
     };
-    const tick = () => {
-      if (stopped || polling) return;
-      polling = poll()
-        .catch((error) =>
+    const loop = async () => {
+      while (!stopped) {
+        await poll().catch((error) =>
           console.warn("[catamorphic] Agent queue recovery failed", error),
-        )
-        .finally(() => {
-          polling = undefined;
-        });
+        );
+        if (stopped) return;
+        // Idle: sleep until something falls due (a retry's backoff, a
+        // lapsing lease, a request's deadline), a hint from this process,
+        // or the idle poll.
+        const due = pacer.quick
+          ? undefined
+          : await this.nextAgentWorkAt().catch(() => undefined);
+        await pacer.wait({ until: due?.getTime() });
+      }
     };
-    const timer = setInterval(tick, input.pollIntervalMs ?? 1_000);
-    timer.unref();
-    tick();
+    const running = loop();
     return {
       stop: async () => {
         stopped = true;
-        clearInterval(timer);
-        await polling;
+        controller.abort();
+        await running;
         // The resolver belongs to this worker.
         if (this.resolveOwner === input.resolveIdentity)
           this.resolveOwner = undefined;
       },
     };
+  }
+
+  /**
+   * When this host's agent worker next has something due (ADR 0229): a
+   * queued turn's `available_at` (a retry's backoff), an active turn's
+   * lease running out, or a pending request's deadline. Null with none.
+   */
+  private async nextAgentWorkAt(): Promise<Date | null> {
+    const row = await this.db
+      .selectNoFrom((eb) => [
+        eb
+          .selectFrom("agent_turns")
+          .innerJoin(
+            "agent_sessions",
+            "agent_sessions.id",
+            "agent_turns.session_id",
+          )
+          .select(({ fn }) => fn.min("agent_turns.available_at").as("at"))
+          .where("agent_sessions.authority_host_id", "=", this.hostId)
+          .where("agent_turns.status", "=", "queued")
+          .as("queued"),
+        eb
+          .selectFrom("agent_turns")
+          .innerJoin(
+            "agent_sessions",
+            "agent_sessions.id",
+            "agent_turns.session_id",
+          )
+          .select(({ fn }) => fn.min("agent_turns.lease_expires_at").as("at"))
+          .where("agent_sessions.authority_host_id", "=", this.hostId)
+          .where("agent_turns.status", "in", [...ACTIVE_TURN_STATUSES])
+          .as("lapses"),
+        eb
+          .selectFrom("agent_runtime_requests")
+          .innerJoin(
+            "agent_sessions",
+            "agent_sessions.id",
+            "agent_runtime_requests.session_id",
+          )
+          .select(({ fn }) =>
+            fn.min("agent_runtime_requests.expires_at").as("at"),
+          )
+          .where("agent_sessions.authority_host_id", "in", [
+            this.hostId,
+            "unassigned",
+          ])
+          .where("agent_runtime_requests.status", "=", "pending")
+          .as("expires"),
+      ])
+      .executeTakeFirst();
+    const times = [row?.queued, row?.lapses, row?.expires]
+      .filter((at) => at !== null && at !== undefined)
+      .map((at) => new Date(at).getTime());
+    return times.length > 0 ? new Date(Math.min(...times)) : null;
   }
 
   /**
@@ -1321,9 +1411,14 @@ export class AgentSessionsService {
     this.workerNode = deps.workerNode;
     this.authorityLeaseMs = deps.authorityLeaseMs ?? 90_000;
     this.mailboxes = new SessionMailboxesService(db, deps.hostId);
-    this.log = new SessionLog(db);
+    this.wakeups = deps.wakeups;
+    this.idlePollMs = deps.idlePollMs;
+    this.log = new SessionLog(db, deps.wakeups);
     this.queue = new TurnQueue(db, this.log);
-    this.feed = new SessionFeed(db, this.log);
+    this.feed = new SessionFeed(db, this.log, {
+      idleMs: deps.idlePollMs,
+      wakeups: deps.wakeups,
+    });
     this.projectManager = deps.projectManager;
     this.codingAgents = deps.codingAgents;
     this.nativeAgentCheckout = deps.nativeAgentCheckout;
@@ -1816,13 +1911,126 @@ export class AgentSessionsService {
     if (normalized && normalized.length > 500) {
       throw new Error("Session activity must be 500 characters or fewer");
     }
-    await this.db.transaction().execute((trx) =>
-      this.log.append(trx, {
+    await this.db.transaction().execute(async (trx) => {
+      await this.log.lock(trx, sessionId);
+      await this.assertLocalAuthority(trx, sessionId);
+      await this.log.append(trx, {
         sessionId,
         events: [
           { type: "session.changed", session: { activity: normalized } },
         ],
-      }),
+      });
+    });
+  }
+
+  /**
+   * Refuse a change to a session another host holds (ADR 0197): the copy
+   * here is a mirror, and an event logged on it would fork the person's
+   * chat when its holder next pushes. A session moving to another host
+   * refuses it too, as it refuses messages: its log was pushed before the
+   * move, and a change logged now would never reach its new holder. Call
+   * under the session's lock.
+   */
+  private async assertLocalAuthority(
+    trx: Transaction<DB>,
+    sessionId: string,
+  ): Promise<void> {
+    const session = await trx
+      .selectFrom("agent_sessions")
+      .select(["authority_host_id", "authority_revision", "handoff_status"])
+      .where("id", "=", sessionId)
+      .executeTakeFirstOrThrow();
+    if (session.handoff_status === "pending")
+      throw new AgentSessionHandoffPendingError(sessionId);
+    if (
+      session.authority_host_id !== "unassigned" &&
+      session.authority_host_id !== this.hostId
+    )
+      throw new AgentSessionAuthorityRequiredError(
+        sessionId,
+        session.authority_host_id,
+        Number(session.authority_revision),
+      );
+  }
+
+  /**
+   * A session's metadata (ADR 0226), for whoever may read the session: an
+   * agent reads a key before writing it whole again.
+   */
+  async metadata(args: {
+    identity: Identity;
+    projectId: string;
+    sessionId: string;
+  }): Promise<SessionMetadata> {
+    const session = await this.requireSession(
+      args.identity,
+      args.projectId,
+      args.sessionId,
+      "read",
+    );
+    return sessionMetadataFromRow(session.metadata);
+  }
+
+  /**
+   * Set named values on a session (ADR 0226): each key of `values` takes
+   * its value, and null removes the key. Whoever may change the session
+   * may set them, as for its activity, on the host holding its authority
+   * (`AgentSessionAuthorityRequiredError` elsewhere, and
+   * `AgentSessionHandoffPendingError` while it moves to another host),
+   * closed or archived included; the change is logged, so every viewer's
+   * snapshot and stream follow it. Returns the session's metadata. Throws
+   * `SessionMetadataError` for a malformed key or value, or past the
+   * limits (`SESSION_METADATA_LIMITS`).
+   */
+  async setMetadata(args: {
+    identity: Identity;
+    projectId: string;
+    sessionId: string;
+    values: Readonly<Record<string, JsonValue>>;
+  }): Promise<SessionMetadata> {
+    return withSpan(
+      {
+        tracer,
+        name: "agent.session.set_metadata",
+        attributes: {
+          "catamorphic.tenant.id": args.identity.tenantId,
+          "user.id": args.identity.externalUserId,
+          "catamorphic.project.id": args.projectId,
+          "catamorphic.agent.session.id": args.sessionId,
+          "catamorphic.agent.session.metadata.keys": Object.keys(args.values)
+            .length,
+        },
+      },
+      async () => {
+        await this.requireSession(
+          args.identity,
+          args.projectId,
+          args.sessionId,
+        );
+        // What is not JSON is refused as given (JSON text would turn a NaN
+        // into null, a removal); then each value is taken as the database
+        // will hold it (U+FFFD for what jsonb refuses), so the logged
+        // change and the projection read back the same.
+        withSessionMetadata({}, args.values);
+        const values = storedJson(args.values);
+        return this.db.transaction().execute(async (trx) => {
+          await this.log.lock(trx, args.sessionId);
+          await this.assertLocalAuthority(trx, args.sessionId);
+          const row = await trx
+            .selectFrom("agent_sessions")
+            .select("metadata")
+            .where("id", "=", args.sessionId)
+            .executeTakeFirstOrThrow();
+          const current = sessionMetadataFromRow(row.metadata);
+          const metadata = withSessionMetadata(current, values);
+          if (metadata === current) return current;
+          await this.log.append(trx, {
+            sessionId: args.sessionId,
+            events: [{ type: "session.changed", session: { metadata } }],
+          });
+          return metadata;
+        });
+      },
     );
   }
 
@@ -2690,13 +2898,22 @@ export class AgentSessionsService {
   /**
    * Run a person's command on a session, at most once per `commandId`
    * (scoped to them). Returns the durable receipt: a repeat returns the
-   * first one.
+   * first one. A host running one by itself names what must still hold
+   * when it runs, checked in the command's own transaction.
    */
   async command(
     identity: Identity,
     projectId: string,
     sessionId: string,
     command: SessionCommand,
+    conditions: {
+      /**
+       * Only while this turn is still the session's latest, nothing after
+       * it: an automatic retry (ADR 0228) never overtakes a message the
+       * person sent meanwhile.
+       */
+      ifLatestTurnId?: string;
+    } = {},
   ): Promise<CommandReceipt> {
     // An answer checks its own audience (an unattended chat's approvers,
     // who may hold no other access to it); every other command changes the
@@ -2761,6 +2978,20 @@ export class AgentSessionsService {
             .selectAll()
             .where("id", "=", sessionId)
             .executeTakeFirstOrThrow();
+          if (conditions.ifLatestTurnId !== undefined) {
+            const latest = await trx
+              .selectFrom("agent_turns")
+              .select("id")
+              .where("session_id", "=", sessionId)
+              .orderBy("ordinal", "desc")
+              .limit(1)
+              .executeTakeFirst();
+            if (latest?.id !== conditions.ifLatestTurnId)
+              throw new SessionCommandRejectedError(
+                "not_latest",
+                "Something came after that turn.",
+              );
+          }
           switch (command.type) {
             case "send": {
               this.assertAcceptsInput(locked);
@@ -3403,6 +3634,8 @@ export class AgentSessionsService {
           collapseKey: `approval:${request.id}`,
         });
       }
+    if (input.requests.some((request) => request.approvers.length > 0))
+      this.chatsChanged();
   }
 
   /**
@@ -4196,6 +4429,19 @@ export class AgentSessionsService {
       finalize: (input) => this.finalizeTurn(input),
       settled: (input) => this.afterTurn(input),
       approvalsOpened: (input) => this.notifyApprovers(input),
+      // Whether a failure is passing is the agent's host's to say (ADR 0228).
+      retryFailure: async ({ session, turn, error }) => {
+        const agent = await this.resolveAgent(
+          session.agent_id,
+          session.project_id,
+        );
+        return agent.retryFailure?.({
+          error,
+          projectId: session.project_id,
+          sessionId: session.id,
+          turnId: turn.id,
+        });
+      },
       released: ({ sessionId, turnId }) => {
         this.stopGrantRenewal(sessionId);
         this.workingDirectories.delete(turnId);
@@ -5130,6 +5376,10 @@ export class AgentSessionsService {
       turnId: turn.id,
       messageId: input.reply?.id ?? turn.inputItemId ?? turn.id,
       status: turn.status === "completed" ? "completed" : "failed",
+      agentId: input.session.agent_id,
+      ...(turn.status === "failed" && turn.error?.kind
+        ? { errorKind: turn.error.kind }
+        : {}),
       interrupted: turn.status === "interrupted",
       retrying: input.retrying,
       ...(turn.outcome?.notification
@@ -5233,6 +5483,7 @@ export class AgentSessionsService {
     const row = input.transaction
       ? await insert(input.transaction)
       : await this.db.transaction().execute(insert);
+    this.chatsChanged();
 
     return mapSession(row, false, this.hostId, this.authorityLeaseMs, {
       visibility: prepared.visibility,
@@ -6584,7 +6835,7 @@ export class AgentSessionsService {
    */
   private async restoreArchived(sessionIds: readonly string[]): Promise<void> {
     if (sessionIds.length === 0) return;
-    await this.db
+    const restored = await this.db
       .updateTable("agent_session_views")
       .set(({ ref }) => ({
         visibility: ref("previous_visibility"),
@@ -6593,7 +6844,8 @@ export class AgentSessionsService {
       }))
       .where("session_id", "in", [...sessionIds])
       .where("visibility", "=", "archived")
-      .execute();
+      .executeTakeFirst();
+    if (restored.numUpdatedRows > 0n) this.chatsChanged();
   }
 
   /** Acknowledgement-by-interaction shared by desktop and PWA clients. */
@@ -6615,6 +6867,7 @@ export class AgentSessionsService {
       .where("id", "=", sessionId)
       .returningAll()
       .executeTakeFirstOrThrow();
+    this.chatsChanged();
     return mapSession(
       row,
       (await this.sessionsWithRunningTurns({ sessionIds: [sessionId] })).has(
@@ -7140,6 +7393,7 @@ export class AgentSessionsService {
       .where("id", "=", sessionId)
       .returningAll()
       .executeTakeFirstOrThrow();
+    this.chatsChanged();
     return mapSession(row, false, this.hostId, this.authorityLeaseMs);
   }
 
@@ -9219,6 +9473,7 @@ export class AgentSessionsService {
           resourceRows: resources.filter((row) => !busy.has(row.id)),
         };
       });
+    this.chatsChanged();
 
     // A watcher may finish admission while the first cleanup is stopping work.
     // Admission locks the session row and rechecks visibility, so after this
@@ -9331,6 +9586,7 @@ export class AgentSessionsService {
         .where("session_id", "in", sessionIds)
         .execute();
     });
+    this.chatsChanged();
     const rows = await this.db
       .selectFrom("agent_sessions")
       .selectAll()
@@ -10519,6 +10775,7 @@ export class AgentSessionsService {
         )
         .execute();
     });
+    this.chatsChanged();
     const row = await this.db
       .selectFrom("agent_sessions")
       .selectAll()
@@ -10827,6 +11084,16 @@ export class AgentSessionsService {
           })),
       )
       .execute();
+    this.chatsChanged();
+  }
+
+  /**
+   * Tell this process's chat lists a chat changed outside the session log
+   * (its visibility, attention or icon), once the change is committed
+   * (ADR 0229). What the log records hints by itself.
+   */
+  private chatsChanged(): void {
+    this.wakeups?.notify("chats");
   }
 }
 

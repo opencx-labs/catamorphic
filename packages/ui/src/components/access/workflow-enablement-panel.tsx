@@ -629,7 +629,9 @@ function WebhookUrl({
             : "Enable to start receiving"}
         </span>
       </div>
-      <div className="mt-2 flex items-center gap-1">
+      {/* The copy button rests hidden until the URL's row is hovered or
+          holds keyboard focus, and stays while it shows the copy landed. */}
+      <div className="group/copy mt-2 flex items-center gap-1">
         <input
           readOnly
           value={webhook.url}
@@ -641,13 +643,14 @@ function WebhookUrl({
           type="button"
           aria-label="Copy webhook URL"
           title={copied ? "Copied" : "Copy"}
+          data-copied={copied || undefined}
           onClick={() =>
             void navigator.clipboard
               .writeText(webhook.url)
               .then(() => setCopied(true))
               .catch(() => {})
           }
-          className="grid size-7 shrink-0 cursor-pointer place-items-center rounded border border-border hover:bg-bg-overlay"
+          className="grid size-7 shrink-0 cursor-pointer place-items-center rounded border border-border opacity-0 transition-[opacity,background-color] duration-150 hover:bg-bg-overlay focus-visible:opacity-100 data-[copied]:opacity-100 group-hover/copy:opacity-100 group-has-[:focus-visible]/copy:opacity-100 motion-reduce:transition-none"
         >
           {copied ? (
             <Check className="size-3.5 text-success" />

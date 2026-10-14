@@ -23,8 +23,8 @@ import {
  * Environments that allow personal credentials, and their own setup
  * command, which runs there after the Environment's (ADR 0208). Sign-ins
  * are not part of it: they stay on the machine they were made on (ADR
- * 0199), and a body naming `logins` is refused. Every route acts on the
- * caller's own set; none returns a file's value.
+ * 0199). Every route acts on the caller's own set; none returns a file's
+ * value.
  */
 export function registerPersonalEnvironmentRoutes(
   app: FastifyInstance,

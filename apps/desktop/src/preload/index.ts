@@ -278,6 +278,13 @@ const api = {
     id: string,
   ): Promise<{ health: "ok" | "expired" | "missing"; reauth: boolean }> =>
     invoke("catamorphic:agent-auth-health", id),
+  /** A shown sign-in failure, which main runs again once it is fixed. */
+  agentAuthFailureShown: (failure: {
+    projectId: string;
+    sessionId: string;
+    turnId: string;
+    agentId: string;
+  }): Promise<void> => invoke("catamorphic:agent-auth-failure-shown", failure),
   /** Whole-machine transcript scan for the usage page (ADR 0057). */
   usageSummary: (days: number): Promise<unknown> =>
     invoke("catamorphic:usage-summary", days),
@@ -373,6 +380,13 @@ const api = {
     invoke("catamorphic:workspace-state-get", projectId),
   workspaceStateSet: (projectId: string, snapshot: unknown): Promise<void> =>
     invoke("catamorphic:workspace-state-set", projectId, snapshot),
+  /** This computer's chats may have changed (ADR 0229). */
+  onSessionsChanged: (listener: () => void): (() => void) => {
+    const handler = () => listener();
+    ipcRenderer.on("catamorphic:sessions-changed", handler);
+    return () =>
+      ipcRenderer.removeListener("catamorphic:sessions-changed", handler);
+  },
   onGitChanged: (listener: (data: unknown) => void): (() => void) => {
     const handler = (_event: unknown, data: unknown) => listener(data);
     ipcRenderer.on("catamorphic:git-changed", handler);
@@ -905,6 +919,28 @@ const api = {
     ipcRenderer.on("catamorphic:extensions-installed", handler);
     return () =>
       ipcRenderer.removeListener("catamorphic:extensions-installed", handler);
+  },
+  // Page dialogs in browser tabs (ADR 0227).
+  pageDialogs: (input: { guestId: number }): Promise<unknown[]> =>
+    invoke("catamorphic:page-dialogs", input),
+  pageDialogAnswer: (input: unknown): Promise<boolean> =>
+    invoke("catamorphic:page-dialog-answer", input),
+  onPageDialogs: (listener: (change: unknown) => void) => {
+    const handler = (_event: unknown, change: unknown) => listener(change);
+    ipcRenderer.on("catamorphic:page-dialogs-changed", handler);
+    return () =>
+      ipcRenderer.removeListener("catamorphic:page-dialogs-changed", handler);
+  },
+  // Sent, not invoked: it must reach main before the navigation it names.
+  browserUnloadIntent: (input: { guestId: number; intent: unknown }): void =>
+    ipcRenderer.send("catamorphic:browser-unload-intent", input),
+  browserCloseAsk: (input: { guestId: number }): Promise<string> =>
+    invoke("catamorphic:browser-close-ask", input),
+  onBrowserCloseAnswer: (listener: (answer: unknown) => void) => {
+    const handler = (_event: unknown, answer: unknown) => listener(answer);
+    ipcRenderer.on("catamorphic:browser-close-answer", handler);
+    return () =>
+      ipcRenderer.removeListener("catamorphic:browser-close-answer", handler);
   },
   sitePermissionAnswer: (input: {
     id: string;

@@ -1,4 +1,4 @@
-import type { JsonObject } from "@catamorphic/agent-protocol";
+import type { JsonObject, TurnError } from "@catamorphic/agent-protocol";
 import type { HarnessAdapter } from "@catamorphic/agent-protocol/runner";
 import type {
   AgentEffort,
@@ -66,6 +66,14 @@ export type AgentHarness =
       id: string;
     };
 
+/** One more attempt a host asks for after a passing failure (ADR 0228). */
+export interface AgentRetry {
+  /** How long the turn waits before the attempt starts: a minute at most. */
+  afterMs: number;
+  /** The turn's activity line meanwhile ("Reconnecting to Claude…"). */
+  activity: string;
+}
+
 export interface RegisteredCodingAgent {
   /** Stable registry key persisted on sessions (`agent_sessions.agent_id`). */
   id: string;
@@ -127,6 +135,19 @@ export interface RegisteredCodingAgent {
    * harness (ADR 0214).
    */
   unavailable?: string;
+  /**
+   * A failure nothing ran in (`retrySafe`) that core does not retry by
+   * itself: whether it is passing and worth one more attempt, from what
+   * the host knows and the error cannot say, such as a sign-in the harness
+   * could not refresh in time though it still can be (ADR 0228). Asked at
+   * most once per turn; undefined lets the turn fail.
+   */
+  retryFailure?(input: {
+    error: TurnError;
+    projectId: string;
+    sessionId: string;
+    turnId: string;
+  }): Promise<AgentRetry | undefined>;
 }
 
 /** The harness id an agent runs on. */

@@ -12,6 +12,7 @@ import { PasskeyHost } from "./components/passkey-sheet.js";
 import { desktopApi, type ServerInfo } from "./lib/desktop-api.js";
 import { installFocusModality } from "./lib/focus-modality.js";
 import { KeybindingsProvider } from "./lib/keybindings.js";
+import { useSessionChangeHints } from "./lib/session-change-hints.js";
 import { TerminalAppearanceProvider } from "./lib/terminal-appearance.js";
 import { ThemeProvider } from "./lib/theme.js";
 import { WorkspaceRoot } from "./workspace-root.js";
@@ -30,6 +31,12 @@ document.documentElement.dataset.surface = detachedWindow
     ? "passkey"
     : "workspace";
 installFocusModality();
+
+/** This window's chat lists follow this computer's hints (ADR 0229). */
+function SessionChangeHints() {
+  useSessionChangeHints();
+  return null;
+}
 
 function Root() {
   const [server, setServer] = useState<ServerInfo | null>(null);
@@ -54,6 +61,7 @@ function Root() {
 
   return (
     <CatamorphicAppProvider key={server.url} baseUrl={server.url}>
+      <SessionChangeHints />
       <KeybindingsProvider>
         <TerminalAppearanceProvider>
           {detachedWindow ? <DockHost detachedWindow /> : <WorkspaceRoot />}

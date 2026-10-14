@@ -115,6 +115,7 @@ import {
 } from "./components/preview-port-dialog.js";
 import { ProfileBar } from "./components/profile-bar.js";
 import { ProjectAgentConsentDialog } from "./components/project-agent-consent.js";
+import { useRemoteProject } from "./components/project-authority-provider.js";
 import { ProjectModal } from "./components/project-modal.js";
 import { ProjectSwitcher } from "./components/project-switcher.js";
 import {
@@ -183,6 +184,7 @@ import {
   lastPreviewPort,
   rememberPreviewPort,
 } from "./lib/remote-workspace.js";
+import { LOCAL_CHATS_POLL_MS } from "./lib/session-change-hints.js";
 import { sessionLabel } from "./lib/session-label.js";
 import type { SidebarMotion } from "./lib/sidebar-motion.js";
 import { skillInvocation } from "./lib/skills.js";
@@ -1074,8 +1076,14 @@ export function App({
   }, [profileVeil]);
 
   // Shared with SessionsNav via the query cache; titles feed tab labels.
+  // This computer's chats follow its hints (ADR 0229); a remote server's
+  // are polled.
   const { apiClient } = useCatamorphic();
-  const sessionsQuery = useAgentSessions(projectId, { limit: 100 });
+  const remoteProject = useRemoteProject(projectId);
+  const sessionsQuery = useAgentSessions(projectId, {
+    limit: 100,
+    refetchInterval: remoteProject ? 2_000 : LOCAL_CHATS_POLL_MS,
+  });
   const projectAttention = runtime.attention;
   const sessionsById = new Map(
     [...(sessionsQuery.data?.items ?? []), ...(projectAttention ?? [])].map(
@@ -2534,11 +2542,36 @@ export function App({
 
   const closeTab = (
     key: string,
-    opts?: { force?: boolean; discardDraft?: boolean },
+    opts?: {
+      force?: boolean;
+      discardDraft?: boolean;
+      /** An agent's, an extension's, or a page closing itself: not asked. */
+      final?: boolean;
+    },
   ) => {
+    const { final, ...close } = opts ?? {};
+    // A close that disposes a page asks it first: a beforeunload may hold
+    // it with "Leave site?" (ADR 0227). A chat's attached page only goes
+    // back to its chip, still loaded, so nothing is asked then.
+    const localId = key.startsWith("browser:")
+      ? key.slice("browser:".length)
+      : null;
+    const browser = workspaceRef.current.browsers.find(
+      (item) => item.localId === localId,
+    );
+    const page =
+      localId && browser && (!browser.chatLocalId || close.force) && !final
+        ? browserCommandsRef.current.get(localId)
+        : undefined;
+    if (page) {
+      void page.mayClose().then((leave) => {
+        if (leave) closeTab(key, { ...close, final: true });
+      });
+      return;
+    }
     if (workspaceRef.current.floatingKey === key)
-      floatingMotion.dismiss(() => closeTabImmediately(key, opts));
-    else closeTabImmediately(key, opts);
+      floatingMotion.dismiss(() => closeTabImmediately(key, close));
+    else closeTabImmediately(key, close);
   };
 
   /** Cmd+Shift+T: restore the most recently closed tab (re-tiled when
@@ -3099,6 +3132,7 @@ export function App({
           ) {
             closeTabRef.current(browserTabKey(browser.localId), {
               force: true,
+              final: true,
             });
             closed = true;
           }
@@ -3822,6 +3856,7 @@ export function App({
       const sessionId = terminal?.attachSessionId ?? terminal?.ptySessionId;
       if (sessionId) void desktopApi.terminalKill(sessionId);
     }
+    // The person's own removal from the chat: the page is asked first.
     closeTab(key, { force: true });
   };
 
@@ -5276,7 +5311,7 @@ export function App({
           // A floating surface plays its own exit; closing the tab in
           // front brings its successor in from its side of the strip,
           // unless a workflow draft asks first.
-          closeTabRef.current(key, { force: true });
+          closeTabRef.current(key, { force: true, final: true });
           const asks = before.tabs.some(
             (tab) =>
               tab.kind === "workflow" && tabKey(tab) === key && tab.draft,
@@ -5576,7 +5611,10 @@ export function App({
         case "close-tab": {
           const localId = localIdOf(request.guestId);
           if (!localId) return;
-          closeTabRef.current(browserTabKey(localId), { force: true });
+          closeTabRef.current(browserTabKey(localId), {
+            force: true,
+            final: true,
+          });
           respond({});
           return;
         }
@@ -6120,6 +6158,20 @@ export function App({
   const sidebarEditor = workspace.editors.find(
     (editor) => editorTabKey(editor.localId) === sidebarSurfaceKey,
   );
+  // A page, file or terminal a chat opened keeps that chat's session beside
+  // it (ADR 0226): This session, the chat's checkout and its other
+  // session-scoped sections stay while the person looks at what it opened.
+  const sidebarSessionChat =
+    sidebarChat ??
+    (sidebarSurfaceKey
+      ? workspace.chats.find(
+          (chat) =>
+            chat.sessionId &&
+            attachedTabKeys(workspace, chat.localId).includes(
+              sidebarSurfaceKey,
+            ),
+        )
+      : undefined);
   const sidebarSurface: SidebarSurface = {
     kind: sidebarChat
       ? "chat"
@@ -6129,7 +6181,7 @@ export function App({
             ?.kind ?? "none"),
     key: sidebarChat ? chatTabKey(sidebarChat.localId) : sidebarSurfaceKey,
     projectId,
-    sessionId: sidebarChat?.sessionId ?? undefined,
+    sessionId: sidebarSessionChat?.sessionId ?? undefined,
     path: sidebarEditor?.filePath ?? undefined,
     selection: Boolean(sidebarEditor && sidebarHasSelection),
   };
@@ -6232,6 +6284,13 @@ export function App({
           onOpenSession={openSession}
           onSessionAction={applySessionAction}
           onOpenUrl={openUrl}
+          onOpenSessionLink={(url, mode) => {
+            // As a link in the chat opens: a tab the chat owns, so the
+            // session's sections stay beside it (ADR 0226).
+            if (sidebarSessionChat)
+              openMessageLink(url, sidebarSessionChat, mode);
+            else void openUrl(url, mode);
+          }}
           onOpenFile={openProjectFile}
           onOpenHistory={setRemoteHistoryPath}
           onPublish={(path, features) => setRemotePublish({ path, features })}
@@ -6520,11 +6579,14 @@ export function App({
                 <div
                   className={`app-drag flex h-10 shrink-0 items-center justify-end gap-1 pr-3 ${windowButtons ? "pl-[86px]" : "pl-3"} ${projectInSidebarHeader ? "mb-2" : ""}`}
                 >
-                  {/* As wide as its name: the rest of the row still
-                      drags the window. */}
+                  {/* The project heads the sidebar across its width, as
+                      it does below the buttons' row. This row keeps only
+                      slivers to drag the window by; the chrome's empty
+                      room does that (the tab strip's spare end, or the
+                      title row), as Chrome's tab strip does. */}
                   {projectInSidebarHeader && (
                     <div
-                      className="app-no-drag mr-auto flex min-w-0 items-center gap-1"
+                      className="app-no-drag flex min-w-0 flex-1 items-center gap-1"
                       data-sidebar-project
                     >
                       {projectControls}
@@ -6937,7 +6999,9 @@ export function App({
                           onBrowserState(browser.localId, state)
                         }
                         onPageClose={() =>
-                          closeTab(browserTabKey(browser.localId))
+                          closeTab(browserTabKey(browser.localId), {
+                            final: true,
+                          })
                         }
                         onOpenSiteSettings={setSiteSettingsOrigin}
                         onOpenPasswords={() => openPasswords(browser.profileId)}
@@ -7495,7 +7559,9 @@ export function App({
                         onBrowserState(browser.localId, state)
                       }
                       onPageClose={() =>
-                        closeTab(browserTabKey(browser.localId))
+                        closeTab(browserTabKey(browser.localId), {
+                          final: true,
+                        })
                       }
                       onOpenSiteSettings={setSiteSettingsOrigin}
                       onOpenPasswords={() => openPasswords(browser.profileId)}

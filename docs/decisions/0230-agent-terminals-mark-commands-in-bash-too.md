@@ -1,4 +1,4 @@
-# 0226 — Agent terminals mark commands in bash too
+# 0230 — Agent terminals mark commands in bash too
 
 - **Status:** Accepted (amends [0223](0223-an-agent-terminal-lives-as-long-as-its-command.md))
 - **Date:** 2026-10-14

@@ -66,6 +66,7 @@ import {
   turnFromRow,
   waitingNotificationTurn,
 } from "./session-rows.js";
+import { batchStreamedRead } from "./stream-batch.js";
 import { derivedId, ingestHarnessEvents } from "./turn-ingest.js";
 import type { ClaimedTurn, TurnCommandKind, TurnQueue } from "./turn-queue.js";
 
@@ -224,6 +225,17 @@ export interface TurnEngineHost {
     session: SessionRow;
     requests: RuntimeRequest[];
   }): Promise<void>;
+  /**
+   * A failed attempt nothing ran in, whose failure the engine does not
+   * retry by itself: whether the host knows it is passing and asks for one
+   * more attempt (ADR 0228). Asked at most once per turn.
+   */
+  retryFailure?(input: {
+    identity: Identity;
+    session: SessionRow;
+    turn: Turn;
+    error: TurnError;
+  }): Promise<{ afterMs: number; activity: string } | undefined>;
 }
 
 /** The model-facing text of an input item (its envelope included, ADR 0217). */
@@ -279,6 +291,11 @@ export const CONTINUATION_PROMPT =
   "Your previous turn was interrupted because the machine running it stopped. Continue where you left off. First check what was already done (files, commands, messages) so you do not repeat anything that had side effects.";
 
 const BACKOFF_MS = [5_000, 15_000, 30_000, 60_000, 120_000];
+/**
+ * The longest a host's retry of a failed attempt waits (ADR 0228): the
+ * turn holds its lease and reads as active meanwhile.
+ */
+const HOST_RETRY_MAX_MS = 60_000;
 const MAX_TRANSIENT_RETRIES = 5;
 const INTERRUPT_GRACE_MS = 30_000;
 /** How long a reattached runner that never said hello has to show it got its start. */
@@ -601,6 +618,19 @@ export class TurnEngine {
           turn = result.turn;
           continue;
         }
+        const retried = await this.retryFailure(local, rearm, {
+          identity,
+          session,
+          turn: result.turn,
+          attempt: result.attempt,
+          completion: result.completion,
+          ...(result.cursor === undefined ? {} : { cursor: result.cursor }),
+        });
+        if (retried.kind === "settled") return;
+        if (retried.kind === "retry") {
+          turn = retried.turn;
+          continue;
+        }
         await this.finalize(local, {
           identity,
           session,
@@ -613,6 +643,136 @@ export class TurnEngine {
       }
       // Settled or queued meanwhile (a close, a cancel): nothing to run.
       return;
+    }
+  }
+
+  /**
+   * One more attempt before a failed turn settles, when its host knows the
+   * failure is passing (ADR 0228): a sign-in the harness could not refresh
+   * in time, though it still can be. Only for a failure nothing ran in that
+   * the engine does not retry by itself (rate limits and outages queue
+   * their own), and once per turn: never after an earlier attempt of it
+   * failed. The turn stays active meanwhile and says so on its activity
+   * line; the failed attempt keeps its error. A stop during the pause ends
+   * the turn interrupted.
+   */
+  private async retryFailure(
+    local: LocalTurn,
+    rearm: () => void,
+    ctx: {
+      identity: Identity;
+      session: SessionRow;
+      turn: Turn;
+      attempt: Attempt;
+      completion: {
+        status: "completed" | "failed" | "interrupted";
+        error?: TurnError;
+      };
+      cursor?: number;
+    },
+  ): Promise<
+    { kind: "no" } | { kind: "settled" } | { kind: "retry"; turn: Turn }
+  > {
+    const { db, log } = this.deps;
+    const error = ctx.completion.error;
+    if (
+      ctx.completion.status !== "failed" ||
+      error?.retrySafe !== true ||
+      error.kind === "rate_limit" ||
+      error.kind === "unavailable" ||
+      !this.deps.host.retryFailure ||
+      local.abort.signal.aborted ||
+      this.stopping
+    )
+      return { kind: "no" };
+    const earlier = await db
+      .selectFrom("agent_turn_attempts")
+      .select("id")
+      .where("turn_id", "=", ctx.turn.id)
+      .where("id", "!=", ctx.attempt.id)
+      .where("status", "=", "failed")
+      .limit(1)
+      .executeTakeFirst();
+    if (earlier) return { kind: "no" };
+    const retry = await this.deps.host
+      .retryFailure({
+        identity: ctx.identity,
+        session: ctx.session,
+        turn: ctx.turn,
+        error,
+      })
+      .catch((cause: unknown) => {
+        console.warn("[catamorphic] Could not judge a failed attempt", cause);
+        return undefined;
+      });
+    if (!retry || local.abort.signal.aborted) return { kind: "no" };
+    const now = new Date().toISOString();
+    const failed: Attempt = {
+      ...ctx.attempt,
+      status: "failed",
+      completedAt: now,
+      error,
+    };
+    const waiting: Turn = {
+      ...ctx.turn,
+      status: "preparing",
+      activity: retry.activity,
+      activityAt: now,
+      updatedAt: now,
+    };
+    let stopped = false;
+    await db.transaction().execute(async (trx) => {
+      await this.assertOwned(local, trx);
+      await log.lock(trx, ctx.turn.sessionId);
+      const current = await trx
+        .selectFrom("agent_turns")
+        .select("cancellation_requested_at")
+        .where("id", "=", ctx.turn.id)
+        .executeTakeFirstOrThrow();
+      // A person's stop stands: the turn ends as it failed.
+      if (current.cancellation_requested_at !== null) {
+        stopped = true;
+        return;
+      }
+      await log.append(trx, {
+        sessionId: ctx.turn.sessionId,
+        events: [
+          { type: "attempt.changed", attempt: failed },
+          { type: "turn.changed", turn: waiting },
+        ],
+      });
+    });
+    if (stopped) return { kind: "no" };
+    // The failed harness winds down first, storing what it wrote.
+    if (local.channel && ctx.cursor !== undefined)
+      await this.drainRunner(
+        local,
+        { ...ctx, turn: waiting, attempt: failed },
+        local.channel,
+        ctx.cursor,
+      );
+    local.results.clear();
+    const due = Date.now() + hostRetryDelay(retry.afterMs);
+    for (;;) {
+      if (local.abort.signal.aborted) return { kind: "settled" };
+      const current = await this.loadTurn(ctx.turn.id);
+      // A person's stop, or this process stopping, ends it here.
+      if (current.cancellationRequested || this.stopping) {
+        await this.finalize(local, {
+          identity: ctx.identity,
+          session: ctx.session,
+          turn: current,
+          attempt: failed,
+          completion: { status: "interrupted" },
+        });
+        return { kind: "settled" };
+      }
+      const left = due - Date.now();
+      if (left <= 0) return { kind: "retry", turn: current };
+      // A stop wakes the pause early, and so do commands, which wait for
+      // the next attempt; a lost lease ends it.
+      await abortableSleep(left, local.abort.signal, local.waiter);
+      rearm();
     }
   }
 
@@ -1362,6 +1522,8 @@ export class TurnEngine {
     await sendCommands();
 
     let commandsInFlight: Promise<void> | undefined;
+    /** Items whose streamed deltas were recorded already (stream-batch.ts). */
+    const streaming = new Set<string>();
     for (;;) {
       if (local.abort.signal.aborted) return { kind: "aborted", channel };
       await this.resendResults(local, attempt.id, channel);
@@ -1377,11 +1539,21 @@ export class TurnEngine {
               ),
             );
         });
-      const read = await channel.read({
+      const first = await channel.read({
         cursor: runner.cursor,
         waitMs: runner.location.kind === "in_process" ? 500 : 2_000,
       });
       if (local.abort.signal.aborted) return { kind: "aborted", channel };
+      // Streamed text or output is recorded in batches, which the ingest
+      // folds into one append per item; an item's first words go at once.
+      const read = await batchStreamedRead({
+        channel,
+        read: first,
+        streaming,
+        signal: local.abort.signal,
+      });
+      if (!read || local.abort.signal.aborted)
+        return { kind: "aborted", channel };
       for (const line of read.diagnostics)
         console.warn(
           `[catamorphic] agent runner (turn ${turn.id}): ${local.mask?.text(line) ?? line}`,
@@ -3204,3 +3376,32 @@ async function closeOpenWork(
 }
 
 export type { JsonObject };
+
+/** Sleep, ending early when `signal` aborts or `wake` resolves. */
+function abortableSleep(
+  milliseconds: number,
+  signal: AbortSignal,
+  wake?: Promise<void>,
+) {
+  return new Promise<void>((resolve) => {
+    if (signal.aborted) return resolve();
+    const done = () => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", done);
+      resolve();
+    };
+    const timer = setTimeout(done, milliseconds);
+    signal.addEventListener("abort", done, { once: true });
+    void wake?.then(done);
+  });
+}
+
+/**
+ * How long a host's retry of a failed attempt waits, from its answer
+ * (ADR 0228): never less than nothing, never past {@link HOST_RETRY_MAX_MS},
+ * and no wait at all for an answer that is not a number.
+ */
+export function hostRetryDelay(afterMs: number): number {
+  if (Number.isNaN(afterMs)) return 0;
+  return Math.min(HOST_RETRY_MAX_MS, Math.max(0, afterMs));
+}

@@ -15,6 +15,7 @@ import {
 import { useEffect, useRef, useState } from "react";
 import type { ChatSurface, McpAppRef } from "../../shared/chat.js";
 import type { OpenMode } from "../../shared/open-mode.js";
+import { usePopoverDismiss } from "../lib/popover-dismiss.js";
 import { appGlyph } from "./app-icon.js";
 import { OpenResourceButton } from "./open-resource-button.js";
 import { PopPanel } from "./pop-panel";
@@ -368,32 +369,16 @@ export function SurfacesRail({
   const [openGroup, setOpenGroup] = useState<ChatSurface["kind"] | null>(null);
   const [openInfoKey, setOpenInfoKey] = useState<string | null>(null);
   const railRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (!openGroup && !openInfoKey) return;
-    const onDocMouseDown = (event: MouseEvent) => {
-      if (
-        event.target instanceof Element &&
-        event.target.closest("[data-resource-inspector]")
-      )
-        return;
-      if (!railRef.current?.contains(event.target as Node)) {
-        setOpenGroup(null);
-        setOpenInfoKey(null);
-      }
-    };
-    const onKeyDown = (event: globalThis.KeyboardEvent) => {
-      if (event.key === "Escape") {
-        setOpenGroup(null);
-        setOpenInfoKey(null);
-      }
-    };
-    document.addEventListener("mousedown", onDocMouseDown);
-    window.addEventListener("keydown", onKeyDown);
-    return () => {
-      document.removeEventListener("mousedown", onDocMouseDown);
-      window.removeEventListener("keydown", onKeyDown);
-    };
-  }, [openGroup, openInfoKey]);
+  // A press anywhere else (a page beside the chat included) or Escape
+  // closes the open popover; a press on a member's preview card does not.
+  usePopoverDismiss({
+    open: Boolean(openGroup || openInfoKey),
+    within: [railRef],
+    onDismiss: () => {
+      setOpenGroup(null);
+      setOpenInfoKey(null);
+    },
+  });
 
   const byKind = new Map<ChatSurface["kind"], ChatSurface[]>();
   for (const surface of surfaces) {

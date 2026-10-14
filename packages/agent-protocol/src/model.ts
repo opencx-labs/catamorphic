@@ -7,6 +7,14 @@
  * log, shared by the server's projections and every client's reducer.
  */
 
+/**
+ * The session protocol (ADR 0197) a server reports in `GET /me` and a
+ * client speaks: bumped on any change to snapshots, events, commands or
+ * {@link SessionFields} that a client or mirror of the previous version
+ * cannot read or would be refused (2: `metadata`, ADR 0226).
+ */
+export const SESSION_PROTOCOL_VERSION = 2;
+
 export type JsonPrimitive = string | number | boolean | null;
 export type JsonValue =
   | JsonPrimitive
@@ -740,6 +748,12 @@ export interface ProviderThread {
 // ---------------------------------------------------------------------------
 // Session
 
+/**
+ * A session's metadata (ADR 0226): values by key, each any JSON. Keys and
+ * sizes are bounded ({@link SESSION_METADATA_LIMITS}).
+ */
+export type SessionMetadata = { [key: string]: JsonValue };
+
 /** A session's shared fields: what every viewer sees alike. */
 export interface SessionFields {
   id: string;
@@ -758,6 +772,12 @@ export interface SessionFields {
   workStatus: "open" | "completed";
   activity: string | null;
   todos: AgentTodo[];
+  /**
+   * Named JSON values agents and people set on the session, read by
+   * clients (ADR 0226): a sidebar section shows `pull_requests`, a
+   * person's own section shows the keys their agent sets.
+   */
+  metadata: SessionMetadata;
   parentSessionId: string | null;
   forkedFromSessionId: string | null;
   attentionRevision: number;

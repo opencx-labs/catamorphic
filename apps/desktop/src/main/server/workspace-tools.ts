@@ -1,5 +1,13 @@
 import { stat } from "node:fs/promises";
 import path from "node:path";
+import {
+  type JsonValue,
+  SESSION_PULL_REQUESTS_CONTRACT,
+  SET_SESSION_METADATA_DESCRIPTION,
+  type SessionMetadata,
+  sessionMetadataToolWrite,
+  setSessionMetadataInputSchema,
+} from "@catamorphic/agent-protocol";
 import type { ExtraTool, ExtraToolContext } from "@catamorphic/sandbox";
 import { z } from "zod";
 import {
@@ -131,6 +139,14 @@ export interface SessionCoordinationBridge {
     sessionId: string,
     activity: string | null,
   ): Promise<void>;
+  /** Set keys of the session's metadata, null removing one (ADR 0226). */
+  setMetadata(
+    projectId: string,
+    sessionId: string,
+    values: Record<string, JsonValue>,
+  ): Promise<SessionMetadata>;
+  /** The session's metadata as it stands. */
+  readMetadata(projectId: string, sessionId: string): Promise<SessionMetadata>;
 }
 
 export type AgentTodoStatus = "pending" | "in_progress" | "completed";
@@ -250,6 +266,9 @@ export const WORKSPACE_TOOL_POLICY: Readonly<
   interrupt_subsession: write,
   request_user_attention: presentation,
   set_session_activity: presentation,
+  // Recorded a few times in a chat, when something worth showing happens
+  // (a pull request opened): discovered, not on every turn (ADR 0226).
+  set_session_metadata: presentation,
   read_todo_list: read,
   update_todo_list: { ...presentation, eager: true },
   list_worktrees: { ...read, nativeOnly: true },
@@ -501,6 +520,30 @@ export function buildWorkspaceToolkit(
           typeof input.activity === "string" ? input.activity : null,
         );
         return { ok: true };
+      },
+    },
+    {
+      name: "set_session_metadata",
+      description: SET_SESSION_METADATA_DESCRIPTION,
+      parameters: setSessionMetadataInputSchema.shape,
+      execute: async (input, ctx) => {
+        if (!ctx.sessionId) throw new Error("This turn has no chat session.");
+        if (!sessionCoordination) {
+          throw new Error("Session coordination is not available yet.");
+        }
+        const values = sessionMetadataToolWrite(input);
+        return {
+          metadata: values
+            ? await sessionCoordination.setMetadata(
+                ctx.projectId,
+                ctx.sessionId,
+                values,
+              )
+            : await sessionCoordination.readMetadata(
+                ctx.projectId,
+                ctx.sessionId,
+              ),
+        };
       },
     },
     {
@@ -1090,8 +1133,7 @@ export function buildWorkspaceToolkit(
     },
     {
       name: "create_pull_request",
-      description:
-        "Propose the project's current changes for review: pushes the recorded commits to a new work/ branch on the linked remote (e.g. GitHub) and opens a pull request. This is how local work reaches a repository that existed before Work, and the right choice whenever sync_project reports `ahead` or `diverged`, the change is risky, collaborators are active, or the user asks for review. Returns the PR URL; share it with the user (open_surface can open it).",
+      description: `Propose the project's current changes for review: pushes the recorded commits to a new work/ branch on the linked remote (e.g. GitHub) and opens a pull request. This is how local work reaches a repository that existed before Work, and the right choice whenever sync_project reports \`ahead\` or \`diverged\`, the change is risky, collaborators are active, or the user asks for review. Returns the PR URL; share it with the user (open_surface can open it). It is not recorded on the chat until you add it with set_session_metadata: ${SESSION_PULL_REQUESTS_CONTRACT}`,
       parameters: {
         title: z
           .string()

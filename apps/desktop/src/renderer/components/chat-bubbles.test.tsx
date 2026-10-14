@@ -3,7 +3,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatSessionMenuEntry } from "../lib/chat-session-actions.js";
-import { ChatBubbles } from "./chat-bubbles.js";
+import { ChatBubbles, useStripFold } from "./chat-bubbles.js";
 
 Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", true);
 
@@ -40,8 +40,7 @@ function mount({
         unread={{}}
         attention={{}}
         menus={menus}
-        autoCollapse={false}
-        folded={false}
+        collapsed={false}
         onFoldedChange={() => {}}
         onToggle={onToggle}
         onOpenAs={onOpenAs}
@@ -139,40 +138,56 @@ describe("ChatBubbles fold", () => {
     vi.unstubAllGlobals();
   });
 
-  /** The strip under one set of props; returns its state and a re-render. */
-  function strip(props: {
+  interface StripProps {
     folded: boolean;
     autoCollapse?: boolean;
     open?: boolean;
-  }) {
+    working?: boolean;
+  }
+  /** The strip as the dock renders it: its fold derived by the host. */
+  function Strip({
+    folded,
+    autoCollapse = false,
+    open = false,
+    working = false,
+    onFoldedChange,
+  }: StripProps & { onFoldedChange: (folded: boolean) => void }) {
+    const fold = useStripFold({ autoCollapse, folded, chatOpen: open });
+    return (
+      <ChatBubbles
+        entries={[{ localId: "a", mode: open ? "partial" : "min" }]}
+        labels={{ a: "Launch plan" }}
+        icons={{}}
+        forks={{}}
+        signals={working ? { a: { working: true } } : {}}
+        unread={{}}
+        attention={{}}
+        menus={{}}
+        activeLocalId="a"
+        collapsed={fold.collapsed}
+        onFoldedChange={(next) => {
+          fold.choose(next);
+          onFoldedChange(next);
+        }}
+        onToggle={() => {}}
+        onClose={() => {}}
+        onMenuAction={() => {}}
+        onNewChat={() => {}}
+      />
+    );
+  }
+
+  /** The strip under one set of props; returns its state and a re-render. */
+  function strip(props: StripProps) {
     const onFoldedChange = vi.fn();
     const container = document.createElement("div");
     document.body.append(container);
     containers.push(container);
     const root = createRoot(container);
     roots.push(root);
-    const render = (next: typeof props) =>
+    const render = (next: StripProps) =>
       act(() => {
-        root.render(
-          <ChatBubbles
-            entries={[{ localId: "a", mode: next.open ? "partial" : "min" }]}
-            labels={{ a: "Launch plan" }}
-            icons={{}}
-            forks={{}}
-            signals={{}}
-            unread={{}}
-            attention={{}}
-            menus={{}}
-            activeLocalId="a"
-            autoCollapse={next.autoCollapse ?? false}
-            folded={next.folded}
-            onFoldedChange={onFoldedChange}
-            onToggle={() => {}}
-            onClose={() => {}}
-            onMenuAction={() => {}}
-            onNewChat={() => {}}
-          />,
-        );
+        root.render(<Strip {...next} onFoldedChange={onFoldedChange} />);
       });
     render(props);
     const collapsed = () =>
@@ -189,6 +204,18 @@ describe("ChatBubbles fold", () => {
     expect(collapsed()).toBe("false");
     render({ folded: true, open: false });
     expect(collapsed()).toBe("true");
+  });
+
+  it("spins the folded bubble only while it shows", () => {
+    const { container, render } = strip({ folded: false, working: true });
+    const folded = () =>
+      container.querySelector(
+        'button[aria-label="Expand chat bubbles"] .animate-spin',
+      );
+    // Open, the strip keeps the folded bubble mounted but invisible.
+    expect(folded()).toBeNull();
+    render({ folded: true, working: true });
+    expect(folded()).not.toBeNull();
   });
 
   it("folds behind a chat tab and returns to the person's choice after it", () => {
@@ -228,5 +255,50 @@ describe("ChatBubbles fold", () => {
     );
     expect(onFoldedChange).toHaveBeenLastCalledWith(false);
     expect(onFoldedChange).toHaveBeenCalledTimes(2);
+  });
+
+  it("stays open by hand behind a chat tab until such a tab gains focus again", () => {
+    const { collapsed, container, render } = strip({
+      folded: false,
+      autoCollapse: true,
+    });
+    expect(collapsed()).toBe("true");
+    act(() =>
+      container
+        .querySelector<HTMLButtonElement>(
+          'button[aria-label="Expand chat bubbles"]',
+        )
+        ?.click(),
+    );
+    render({ folded: false, autoCollapse: true });
+    expect(collapsed()).toBe("false");
+    render({ folded: false });
+    render({ folded: false, autoCollapse: true });
+    expect(collapsed()).toBe("true");
+  });
+
+  it("says whether it is open, and hands focus to the control that replaces the one pressed", () => {
+    const { container, render } = strip({ folded: false });
+    const arrows = () =>
+      container.querySelector<HTMLButtonElement>(
+        'button[aria-label="Collapse chat bubbles"]',
+      );
+    const expand = () =>
+      container.querySelector<HTMLButtonElement>(
+        'button[aria-label="Expand chat bubbles"]',
+      );
+    const items = container.querySelector("[data-bubble-items]");
+    expect(arrows()?.getAttribute("aria-expanded")).toBe("true");
+    expect(arrows()?.getAttribute("aria-controls")).toBe(items?.id);
+    expect(expand()?.getAttribute("aria-controls")).toBe(items?.id);
+    act(() => arrows()?.focus());
+    act(() => arrows()?.click());
+    render({ folded: true });
+    expect(expand()?.getAttribute("aria-expanded")).toBe("false");
+    expect(document.activeElement).toBe(expand());
+    act(() => expand()?.click());
+    render({ folded: false });
+    expect(arrows()?.getAttribute("aria-expanded")).toBe("true");
+    expect(document.activeElement).toBe(arrows());
   });
 });

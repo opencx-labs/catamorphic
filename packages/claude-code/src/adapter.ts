@@ -412,16 +412,16 @@ class ClaudeAttempt {
     }
     let message: SDKUserMessage;
     let signature: string;
+    let debugging: boolean;
     try {
       const prompt = await renderPrompt({
         ...input,
         stateDirectory: this.attempt.stateDirectory,
       });
       message = this.userMessage({ itemId: input.itemId, text: prompt });
-      signature = launchSignature({
-        attempt: this.attempt,
-        options: readAttemptOptions(this.attempt.options),
-      });
+      const options = readAttemptOptions(this.attempt.options);
+      signature = launchSignature({ attempt: this.attempt, options });
+      debugging = options.debugFile !== undefined;
     } catch (error) {
       this.settle({
         status: "failed",
@@ -457,8 +457,15 @@ class ClaudeAttempt {
     await this.settledTurn;
     const thread = session.nativeId;
     // A failed turn's CLI ends: whatever failed it (an expired sign-in, a
-    // broken connection) should not meet the retry.
-    if (this.sessions && thread && session.alive && !this.failed) {
+    // broken connection) should not meet the retry. So does one writing a
+    // debug log, which covers its own attempt only.
+    if (
+      this.sessions &&
+      thread &&
+      session.alive &&
+      !this.failed &&
+      !debugging
+    ) {
       session.release(this);
       this.sessions.release(thread, session);
       return;

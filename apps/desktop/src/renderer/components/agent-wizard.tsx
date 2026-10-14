@@ -1,12 +1,4 @@
-import {
-  ArrowLeft,
-  Bot,
-  Check,
-  ChevronRight,
-  Copy,
-  KeyRound,
-  Sparkles,
-} from "lucide-react";
+import { ArrowLeft, Bot, ChevronRight, KeyRound, Sparkles } from "lucide-react";
 import { type FormEvent, useEffect, useRef, useState } from "react";
 import {
   type AgentConnectionsSetting,
@@ -14,9 +6,9 @@ import {
   desktopApi,
 } from "../lib/desktop-api.js";
 import { ConnectionsAssignmentField } from "./connections-field.js";
+import { CopyButton } from "./copy-button.js";
 import { Modal } from "./modal.js";
 import { PendingButton } from "./pending-button.js";
-import { ShortcutHint } from "./shortcut-hint.js";
 
 /**
  * Agent setup wizard — the one place agents are added. Shown as a full tab
@@ -119,7 +111,6 @@ export function AgentWizard({
   // Claude Code terminal sign-in.
   const [ccCommand, setCcCommand] = useState<string | null>(null);
   const [ccStarted, setCcStarted] = useState(false);
-  const [copied, setCopied] = useState(false);
 
   // First-use harness download behind a sign-in (0–100, null = not known).
   const [downloadPercent, setDownloadPercent] = useState<number | null>(null);
@@ -389,12 +380,6 @@ export function AgentWizard({
     }
   };
 
-  const copyCommand = (command: string) => {
-    void navigator.clipboard.writeText(command);
-    setCopied(true);
-    window.setTimeout(() => setCopied(false), 1500);
-  };
-
   /** Optional agent name, offered on every detail step. */
   const nameField = (placeholder: string) => (
     <label className="flex flex-col gap-1 text-xs text-fg-muted">
@@ -426,24 +411,11 @@ export function AgentWizard({
   /** The terminal sign-in command block (Claude Code flows). */
   const commandBlock = ccCommand && (
     <div className="mt-3 flex flex-col gap-1.5">
-      <div className="flex items-center gap-1.5">
+      <div data-copyable className="flex items-center gap-1.5">
         <code className="min-w-0 flex-1 truncate rounded-md border border-border bg-bg-inset px-2 py-1 font-mono text-[11px] text-fg-muted">
           {ccCommand}
         </code>
-        <ShortcutHint label="Copy command">
-          <button
-            type="button"
-            onClick={() => copyCommand(ccCommand)}
-            className="grid size-6 shrink-0 cursor-pointer place-items-center rounded text-fg-muted transition-colors duration-150 hover:text-fg"
-            aria-label="Copy sign-in command"
-          >
-            {copied ? (
-              <Check className="size-3 text-success" />
-            ) : (
-              <Copy className="size-3" />
-            )}
-          </button>
-        </ShortcutHint>
+        <CopyButton value={ccCommand} label="Copy sign-in command" />
       </div>
       <p className="text-[11px] text-fg-faint">
         Finish sign-in in your terminal. This closes by itself when you're

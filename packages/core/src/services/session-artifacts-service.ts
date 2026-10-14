@@ -74,6 +74,13 @@ export class SessionArtifactValidationError extends Error {
 const tracer = getTracer("@catamorphic/core");
 const author = { name: "Work", email: "system@work.software" };
 const NAME = /^[a-zA-Z][a-zA-Z0-9_-]{0,99}$/;
+/**
+ * How long a reclaimed artifact waits before a sweep looks for candidate
+ * refs published after it was reclaimed (a writer that finished late).
+ */
+export const RECLAIMED_REVISIT_SECONDS = 10 * 60;
+/** How long a sweep leaves an artifact whose reclaim failed before retrying. */
+export const RECLAIM_RETRY_SECONDS = 60;
 
 /** One retained source lifecycle for temporary apps and workflows. */
 export class SessionArtifactsService {
@@ -293,46 +300,77 @@ export class SessionArtifactsService {
         // Publication (including buffered remote writes) has finished. This
         // transaction owns only authorization, revision fencing and metadata.
         // Losing/crashed candidates are retained until artifact reclamation.
-        return this.db.transaction().execute(async (trx) => {
-          const row = await this.row(input, trx, true);
-          if (!row.session_id) throw new SessionArtifactNotFoundError();
-          await this.assertSession(
-            { ...input, sessionId: row.session_id },
-            trx,
-          );
-          if (
-            row.revision !== input.revision ||
-            row.commit_sha !== previous.commit_sha
-          )
-            throw new SessionArtifactConflictError(
-              "Artifact changed. Read the latest revision before editing.",
-            );
-          await trx
-            .insertInto("session_artifact_revisions")
-            .values({
-              artifact_id: row.id,
-              commit_sha: snapshot.commitSha,
-              source_paths: paths,
-            })
-            .onConflict((conflict) => conflict.doNothing())
-            .execute();
-          const updated = await trx
-            .updateTable("session_artifacts")
-            .set({
-              commit_sha: snapshot.commitSha,
-              remote_branch: remoteBranch,
-              revision: row.revision + 1,
-              source_paths: paths,
-              title: input.title ?? row.title,
-              updated_at: new Date(),
-            })
-            .where("id", "=", row.id)
-            .returningAll()
-            .executeTakeFirstOrThrow();
-          return present(updated);
-        });
+        try {
+          return await this.commitUpdate({
+            input,
+            previous,
+            snapshot,
+            paths,
+            remoteBranch,
+          });
+        } catch (error) {
+          // Discarded while this writer published: its candidate goes now,
+          // not at the reclaimed artifact's next revisit.
+          if (error instanceof SessionArtifactNotFoundError)
+            await this.removeRef(
+              input.identity.tenantId,
+              input.projectId,
+              remoteBranch,
+            ).catch(() => {});
+          throw error;
+        }
       },
     );
+  }
+
+  private async commitUpdate({
+    input,
+    previous,
+    snapshot,
+    paths,
+    remoteBranch,
+  }: {
+    input: SessionArtifactAddress & { revision: number; title?: string };
+    previous: ArtifactRow;
+    snapshot: { commitSha: string };
+    paths: string[];
+    remoteBranch: string;
+  }): Promise<SessionArtifact> {
+    return this.db.transaction().execute(async (trx) => {
+      const row = await this.row(input, trx, true);
+      if (!row.session_id) throw new SessionArtifactNotFoundError();
+      await this.assertSession({ ...input, sessionId: row.session_id }, trx);
+      if (
+        row.revision !== input.revision ||
+        row.commit_sha !== previous.commit_sha
+      )
+        throw new SessionArtifactConflictError(
+          "Artifact changed. Read the latest revision before editing.",
+        );
+      await trx
+        .insertInto("session_artifact_revisions")
+        .values({
+          artifact_id: row.id,
+          commit_sha: snapshot.commitSha,
+          source_paths: paths,
+        })
+        .onConflict((conflict) => conflict.doNothing())
+        .execute();
+      const updated = await trx
+        .updateTable("session_artifacts")
+        .set({
+          commit_sha: snapshot.commitSha,
+          remote_branch: remoteBranch,
+          revision: row.revision + 1,
+          source_paths: paths,
+          title: input.title ?? row.title,
+          updated_at: new Date(),
+        })
+        .where("id", "=", row.id)
+        .returningAll()
+        .executeTakeFirstOrThrow();
+      return present(updated);
+    });
   }
 
   async discard(input: SessionArtifactAddress): Promise<SessionArtifact> {
@@ -375,7 +413,13 @@ export class SessionArtifactsService {
     await this.assertSession({ ...input, sessionId: row.session_id });
   }
 
-  /** Reclaim retired source only after all runs at its retained ref settle. */
+  /**
+   * Reclaim retired source only after all runs at its retained ref settle.
+   * Hosts call it about once a second; an artifact already reclaimed is
+   * looked at again only every {@link RECLAIMED_REVISIT_SECONDS}, and one
+   * whose reclaim failed after {@link RECLAIM_RETRY_SECONDS}, so a sweep
+   * with nothing new to reclaim costs one query.
+   */
   async cleanup(): Promise<void> {
     const rows = await this.db
       .selectFrom("session_artifacts as artifact")
@@ -384,6 +428,31 @@ export class SessionArtifactsService {
         or([
           eb("artifact.status", "=", "discarded"),
           eb("artifact.session_id", "is", null),
+        ]),
+      )
+      // Revisit tombstones now and then: an update may publish after
+      // discard reclaimed its earlier refs, or die before it notices the
+      // discarded row.
+      .where(({ or, eb }) =>
+        or([
+          eb("artifact.ref_deleted_at", "is", null),
+          eb(
+            "artifact.ref_deleted_at",
+            "<=",
+            sql<Date>`now() - make_interval(secs => ${RECLAIMED_REVISIT_SECONDS})`,
+          ),
+        ]),
+      )
+      // A failed reclaim (storage unavailable, a ref that will not delete)
+      // waits before it is tried again; its failure stamped `updated_at`.
+      .where(({ or, eb }) =>
+        or([
+          eb("artifact.last_error", "is", null),
+          eb(
+            "artifact.updated_at",
+            "<=",
+            sql<Date>`now() - make_interval(secs => ${RECLAIM_RETRY_SECONDS})`,
+          ),
         ]),
       )
       .where(({ not, exists, selectFrom }) =>
@@ -417,9 +486,7 @@ export class SessionArtifactsService {
         "artifact.remote_branch",
         "projects.tenant_id",
       ])
-      // Revisit tombstones: an update may publish after discard reclaimed its
-      // earlier refs, or die before it notices the discarded row. Rotate the
-      // sweep so late candidates are reclaimed without starving new retirees.
+      // Rotate the sweep so revisits never starve new retirees.
       .orderBy(sql`artifact.ref_deleted_at asc nulls first`)
       .limit(50)
       .execute();
@@ -430,7 +497,8 @@ export class SessionArtifactsService {
           .select("id")
           .where("session_artifact_id", "=", row.id)
           .execute();
-        if (apps.length && !this.bundleStore) continue;
+        if (apps.length && !this.bundleStore)
+          throw new Error("App bundle storage is unavailable");
         for (const app of apps)
           await this.bundleStore?.deletePrefix(
             `apps/${row.tenant_id}/${row.project_id}/${app.id}/`,
@@ -470,6 +538,7 @@ export class SessionArtifactsService {
           .updateTable("session_artifacts")
           .set({
             last_error: error instanceof Error ? error.message : String(error),
+            updated_at: sql<Date>`now()`,
           })
           .where("id", "=", row.id)
           .execute();

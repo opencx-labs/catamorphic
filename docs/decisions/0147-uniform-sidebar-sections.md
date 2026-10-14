@@ -5,6 +5,9 @@
 - Supersedes parts of: [ADR 0116](0116-bookmark-library-and-pins.md) (private
   bookmark drop zones), [ADR 0132](0132-shared-contextual-sidebar-contributions.md)
   (per-section status rendering)
+- Refined by: [ADR 0226](0226-session-metadata-and-this-session.md) (the
+  `session` section; tabs that come and go with the chat in front; sources
+  of session-scoped sections receive the session)
 
 ## Context
 
