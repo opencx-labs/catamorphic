@@ -96,14 +96,20 @@ export function OverlayScrollbar({
       if (event.target instanceof HTMLElement && box.contains(event.target))
         show(event.target);
     };
+    // The lists that can scroll, read once as the pointer reaches the edge
+    // and kept while it stays there.
+    let lists: HTMLElement[] | null = null;
     /** The innermost list beside height `y`, or none. */
     const listAt = (y: number) => {
+      lists ??= [box, ...box.querySelectorAll("*")].filter(
+        (element): element is HTMLElement =>
+          scrolls(element) && element.checkVisibility(),
+      );
       let found: HTMLElement | null = null;
-      for (const element of [box, ...box.querySelectorAll("*")]) {
-        if (!scrolls(element) || !element.checkVisibility()) continue;
-        const rect = element.getBoundingClientRect();
+      for (const list of lists) {
+        const rect = list.getBoundingClientRect();
         if (y < rect.top || y > rect.bottom) continue;
-        if (!found || found.contains(element)) found = element;
+        if (!found || found.contains(list)) found = list;
       }
       return found;
     };
@@ -114,8 +120,9 @@ export function OverlayScrollbar({
         edge === "left"
           ? event.clientX - outer.left
           : outer.right - event.clientX;
-      const list =
-        reach >= 0 && reach <= EDGE_PX ? listAt(event.clientY) : null;
+      const atEdge = reach >= 0 && reach <= EDGE_PX;
+      if (!atEdge) lists = null;
+      const list = atEdge ? listAt(event.clientY) : null;
       if (list) {
         near = true;
         if (list !== active || bar.dataset.shown !== "true") show(list);
@@ -126,6 +133,7 @@ export function OverlayScrollbar({
     };
     const onPointerLeave = () => {
       near = false;
+      lists = null;
       settle();
     };
     const onThumbDown = (event: PointerEvent) => {
