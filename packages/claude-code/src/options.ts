@@ -608,11 +608,12 @@ export function buildQueryOptions(input: QueryOptionInputs): Options {
       ...attempt.hostTools.map(
         (tool) => `mcp__${hostToolServer(tool)}__${tool.name}`,
       ),
-      // A server without a policy is allowed whole; a policed one's tools
-      // each reach canUseTool.
+      // A server without a policy is allowed whole, by its whole name (a
+      // bare `mcp__a__b` would name tool `b` of server `a`); a policed
+      // one's tools each reach canUseTool.
       ...Object.keys(external)
         .filter((name) => !attempt.toolPolicies[name])
-        .map((name) => `mcp__${name}`),
+        .map((name) => `mcp__${name}__*`),
     ],
     // Removed, not merely denied: a replaced built-in leaves the model's
     // context, so the CLI's prompt cannot steer toward it.

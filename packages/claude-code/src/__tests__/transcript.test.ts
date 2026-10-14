@@ -1,7 +1,12 @@
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { HarnessEvent } from "@catamorphic/agent-protocol/runner";
 import { describe, expect, it } from "vitest";
-import { apiRetryLine, ClaudeTranscript } from "../transcript.js";
+import { policedServer } from "../adapter.js";
+import {
+  apiRetryLine,
+  ClaudeTranscript,
+  parseMcpToolName,
+} from "../transcript.js";
 
 const retry = (
   attempt: number,
@@ -27,6 +32,7 @@ describe("API retries", () => {
     const transcript = new ClaudeTranscript(
       (event) => events.push(event),
       new Set(),
+      [],
     );
     transcript.handle(retry(1, "server_error", 500));
     transcript.handle(retry(2, "server_error", 500));
@@ -49,6 +55,7 @@ describe("API retries", () => {
     const transcript = new ClaudeTranscript(
       (event) => events.push(event),
       new Set(),
+      [],
     );
     transcript.handle(retry(1, "overloaded", 529));
     transcript.handle({
@@ -113,5 +120,40 @@ describe("API retries", () => {
     expect(line("unknown", null)).toBe(
       "Can't reach the Claude API. Trying again, attempt 3 of 10",
     );
+  });
+});
+
+describe("MCP tool names", () => {
+  it("name the longest configured server, `__` in its name too", () => {
+    const servers = ["fix", "fix__ture"];
+    expect(parseMcpToolName("mcp__fix__ture__lookup", servers)).toEqual({
+      server: "fix__ture",
+      tool: "lookup",
+    });
+    expect(parseMcpToolName("mcp__fix__lookup", servers)).toEqual({
+      server: "fix",
+      tool: "lookup",
+    });
+  });
+
+  it("split an unknown server's name at the first separator", () => {
+    expect(parseMcpToolName("mcp__other__a__b", ["fix"])).toEqual({
+      server: "other",
+      tool: "a__b",
+    });
+    expect(parseMcpToolName("Bash", ["fix"])).toBeUndefined();
+  });
+});
+
+describe("policed servers", () => {
+  it("are the longest configured name, and never a prototype key", () => {
+    const policies = { fix__ture: [{ default: "ask" as const }] };
+    expect(policedServer("mcp__fix__ture__lookup", policies)).toEqual({
+      server: "fix__ture",
+      tool: "lookup",
+    });
+    expect(policedServer("mcp__fix__lookup", policies)).toBeUndefined();
+    for (const name of ["toString", "constructor", "valueOf", "__proto__"])
+      expect(policedServer(`mcp__${name}__x`, policies), name).toBeUndefined();
   });
 });

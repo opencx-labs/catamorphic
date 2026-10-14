@@ -18,16 +18,22 @@
     }
   },
   "scripts": {
-    "build": "tsup && tsc --project tsconfig.build.json --noEmit false --emitDeclarationOnly",
-    "dev": "tsup --watch --no-clean",
+    "build": "bun ../../scripts/build-package.ts && tsc --project tsconfig.build.json --noEmit false --emitDeclarationOnly",
+    "dev": "bun ../../scripts/build-package.ts --watch",
     "record:codex-replay": "bun scripts/record-codex-replay.ts",
     "test": "bun ../../scripts/tool-runtime.ts vitest --tool-cwd packages/codex --config ../../vitest.config.ts",
-    "typecheck": "tsgo --project ./tsconfig.json"
+    "typecheck": "bun check --project ./tsconfig.json"
+  },
+  "bundle": {
+    "entry": [
+      "src/index.ts",
+      "src/testing/index.ts"
+    ]
   },
   "dependencies": {
     "@catamorphic/agent-protocol": "workspace:*",
     "@catamorphic/sandbox": "workspace:*",
-    "@openai/codex-sdk": "0.160.0"
+    "@openai/codex-sdk": "0.162.1"
   },
   "devDependencies": {
     "@catamorphic/agent-runner": "workspace:*",

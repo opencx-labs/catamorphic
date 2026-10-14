@@ -371,8 +371,10 @@ describe("tools", () => {
         ],
       }),
     );
-    expect(built.allowedTools).toContain("mcp__open");
-    expect(built.allowedTools).not.toContain("mcp__guarded");
+    expect(built.allowedTools).toContain("mcp__open__*");
+    expect(
+      built.allowedTools?.filter((rule) => rule.startsWith("mcp__guarded")),
+    ).toEqual([]);
     expect(built.allowedTools).toContain("mcp__workspace__read_tab");
     expect(built.mcpServers?.open).toEqual({
       type: "http",

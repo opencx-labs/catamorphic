@@ -2,10 +2,11 @@ import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 /**
- * Moves a coding harness's desktop pins to a published SDK release (ADR
- * 0196): the SDK the app bundles, the CLI release it ships with, and every
- * platform executable's integrity, together. The scheduled workflow runs
- * this per harness and opens a pull request; CI and review decide.
+ * Moves a coding harness's pins to a published SDK release (ADR 0196): the
+ * SDK the app bundles, the CLI release it ships with, every platform
+ * executable's integrity, and any workspace that carries that CLI itself,
+ * together. The scheduled workflow runs this per harness and opens a pull
+ * request; CI and review decide.
  *
  *   bun scripts/harness-bump.ts <claude-code|codex> [version] [--output <file>]
  */
@@ -27,6 +28,8 @@ export interface HarnessPins {
   sdk: string;
   /** The workspace package that depends on it. */
   packageJson: string;
+  /** Workspace packages that pin the CLI release itself, by package name. */
+  cliPackageJsons?: readonly { packageJson: string; name: string }[];
   /** harness-components.ts constants: the SDK and the CLI version. */
   sdkConstant?: string;
   cliConstant: string;
@@ -68,6 +71,13 @@ export const HARNESSES: Record<HarnessName, HarnessPins> = {
     displayName: "Codex",
     sdk: "@openai/codex-sdk",
     packageJson: "packages/codex/package.json",
+    // The Work server signs members in with the Codex the harness speaks.
+    cliPackageJsons: [
+      {
+        packageJson: "packages/work-server/package.json",
+        name: "@openai/codex",
+      },
+    ],
     cliConstant: "CODEX_VERSION",
     integrityKey: "codexIntegrity",
     cliVersionOf: (manifest) => manifest.dependencies?.["@openai/codex"],
@@ -113,15 +123,27 @@ export function componentTargets(source: string): string[] {
 const escapeRegExp = (value: string) =>
   value.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&");
 
+/** Rewrite one manifest's pin of a dependency. */
+export function pinDependency(
+  packageJson: string,
+  name: string,
+  version: string,
+): string {
+  const pattern = new RegExp(`("${escapeRegExp(name)}": )"[^"]+"`);
+  if (!pattern.test(packageJson)) throw new Error(`No ${name} dependency`);
+  return packageJson.replace(pattern, `$1"${version}"`);
+}
+
 /** Rewrite the package manifest and harness-components.ts for one release. */
 export function applyRelease(
   harness: HarnessPins,
   files: { packageJson: string; components: string },
   release: HarnessRelease,
 ): { packageJson: string; components: string } {
-  const packageJson = files.packageJson.replace(
-    new RegExp(`("${escapeRegExp(harness.sdk)}": )"[^"]+"`),
-    `$1"${release.sdkVersion}"`,
+  const packageJson = pinDependency(
+    files.packageJson,
+    harness.sdk,
+    release.sdkVersion,
   );
   const constant = (source: string, name: string, value: string) => {
     const pattern = new RegExp(`((?:export )?const ${name} = )"[^"]+";`);
@@ -232,9 +254,24 @@ if (import.meta.main) {
     console.log(`${harness.displayName} is already pinned to ${current}`);
     if (output) appendFileSync(output, "changed=false\n");
   } else {
+    // Every rewrite first, so a missing pin leaves no file half moved.
     const next = applyRelease(harness, files, release);
-    writeFileSync(packageJsonPath, next.packageJson);
-    writeFileSync(COMPONENTS, next.components);
+    const writes = [
+      { file: packageJsonPath, source: next.packageJson },
+      { file: COMPONENTS, source: next.components },
+      ...(harness.cliPackageJsons ?? []).map((pin) => {
+        const file = path.join(ROOT, pin.packageJson);
+        return {
+          file,
+          source: pinDependency(
+            readFileSync(file, "utf8"),
+            pin.name,
+            release.cliVersion,
+          ),
+        };
+      }),
+    ];
+    for (const { file, source } of writes) writeFileSync(file, source);
     console.log(
       `${harness.displayName} ${current} → ${release.sdkVersion} (CLI ${release.cliVersion})`,
     );

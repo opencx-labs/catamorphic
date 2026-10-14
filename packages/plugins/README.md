@@ -98,7 +98,7 @@ authorization.
                            └────────┬────────────────────────────────────────┘
                                     ▼
                            ┌─────────────────────────────────────────────────┐
-                           │ Cloudflare / Daytona sandbox                    │
+                           │ Cloudflare / microsandbox / container sandbox   │
                            │   /workspace/project/                           │
                            │     harness.ts                                  │
                            │     src/untitled-workflow.ts                    │

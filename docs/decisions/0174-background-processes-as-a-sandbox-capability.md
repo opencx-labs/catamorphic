@@ -1,6 +1,6 @@
 # 0174 — Background processes are a sandbox capability
 
-- **Status:** Accepted (amended by [0198](0198-agent-runners-run-harnesses-beside-their-workspace.md))
+- **Status:** Accepted (amended by [0198](0198-agent-runners-run-harnesses-beside-their-workspace.md); the Daytona follow-up was dropped by [0231](0231-daytona-support-is-removed.md))
 - **Date:** 2026-09-27
 - **Refines:** 0155, 0164
 

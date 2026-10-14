@@ -82,8 +82,8 @@ export const catamorphic = createCatamorphic({
 - `environmentProvider` is required. The static helper covers one execution
   pool; multi-pool hosts implement `EnvironmentProvider`.
 - Execution backends are separate packages the host constructs:
-  `@catamorphic/cloudflare`, `@catamorphic/daytona`,
-  `@catamorphic/microsandbox` (`MicrosandboxSandboxProvider`), or
+  `@catamorphic/cloudflare`, `@catamorphic/microsandbox`
+  (`MicrosandboxSandboxProvider`), `@catamorphic/container`, or
   `@catamorphic/local-process` (`LocalProcessSandboxProvider`, trusted
   single-tenant hosts only, ADR 0047).
 - Agent sessions: pass `codingAgent` (one `RegisteredCodingAgent`, whose
@@ -289,8 +289,8 @@ const apiClient = createApiClient({
 | `@catamorphic/git` | `ProjectManager`, `FsBackend`, `FsRemoteBackend`, `ObjectRemoteBackend` |
 | `@catamorphic/s3` | `S3ObjectStore` (use with `ObjectRemoteBackend`) |
 | `@catamorphic/cloudflare` | `CloudflareSandboxProvider`, `ArtifactsClient`, `ArtifactsRemoteBackend` |
-| `@catamorphic/daytona` | `DaytonaSandboxProvider` (and experimental git storage) |
 | `@catamorphic/microsandbox` | `MicrosandboxSandboxProvider` |
+| `@catamorphic/container` | `ContainerSandboxProvider` |
 | `@catamorphic/local-process` | `LocalProcessSandboxProvider` |
 | `@catamorphic/sandbox` | `SandboxProvider` contract, plugin-doc staging and tool-policy helpers |
 | `@catamorphic/agent-protocol` | Session log model, events, commands and the shared reducer; `/runner`: `HarnessAdapter`, `AttemptStart`, runner frames and commands |

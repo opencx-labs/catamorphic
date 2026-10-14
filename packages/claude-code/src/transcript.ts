@@ -122,10 +122,24 @@ export function extractMcpToolResult(response: unknown): JsonValue {
   return toJson(response);
 }
 
-/** `mcp__<server>__<tool>`, split at the first separator after the prefix. */
+/**
+ * `mcp__<server>__<tool>`. A server name may hold `__`, so the longest
+ * configured server the name starts with wins (`a__b` before `a`); a name
+ * no configured server matches splits at the first separator.
+ */
 export function parseMcpToolName(
   name: string,
+  servers: Iterable<string> = [],
 ): { server: string; tool: string } | undefined {
+  let server: string | undefined;
+  for (const candidate of servers)
+    if (
+      name.startsWith(`mcp__${candidate}__`) &&
+      name.length > `mcp__${candidate}__`.length &&
+      candidate.length > (server?.length ?? 0)
+    )
+      server = candidate;
+  if (server) return { server, tool: name.slice(`mcp__${server}__`.length) };
   const match = /^mcp__(.+?)__(.+)$/.exec(name);
   return match?.[1] && match[2]
     ? { server: match[1], tool: match[2] }
@@ -210,6 +224,8 @@ export class ClaudeTranscript {
   constructor(
     private readonly emit: (event: HarnessEvent) => void,
     private readonly hostServers: ReadonlySet<string>,
+    /** Every MCP server the attempt configured, host servers included. */
+    private readonly servers: readonly string[],
   ) {}
 
   handle(message: SDKMessage): void {
@@ -490,7 +506,7 @@ export class ClaudeTranscript {
       };
     } else {
       kind = "tool_call";
-      const mcp = parseMcpToolName(name);
+      const mcp = parseMcpToolName(name, this.servers);
       if (mcp && this.hostServers.has(mcp.server)) {
         const pending = `${mcp.server}\u0000${mcp.tool}`;
         this.pendingHostCalls.set(pending, [

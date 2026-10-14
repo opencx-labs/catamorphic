@@ -128,19 +128,44 @@ const expectLinkMenu = async (group: string[]) => {
   if (!mac) expect(shown).toHaveLength(group.length + 2);
 };
 /**
+ * Starts a record of what can close a menu: the window's blur, focus
+ * moving, a press, a key, a scroll, and an element hidden or made inert.
+ * A menu that closes before it settles names what happened since.
+ */
+const recordDismissals = () =>
+  app.eval(`(() => {
+    window.__menuEvents = [];
+    window.__menuSince = performance.now();
+    if (window.__menuWatched) return true;
+    window.__menuWatched = true;
+    const name = (target) => target === window ? 'window' : !(target instanceof Element) ? String(target) : target.tagName.toLowerCase() + (target.getAttribute('aria-label') ? '[' + target.getAttribute('aria-label') + ']' : '');
+    const note = (what) => window.__menuEvents.push(Math.round(performance.now() - window.__menuSince) + 'ms ' + what);
+    addEventListener('blur', (event) => { if (event.target === window) note('blur window'); }, true);
+    for (const type of ['focusin', 'pointerdown', 'keydown', 'scroll'])
+      addEventListener(type, (event) => note(type + ' ' + name(event.target) + (event.key ? ' ' + event.key : '')), true);
+    new MutationObserver((records) => {
+      for (const record of records) note(record.attributeName + ' ' + name(record.target));
+    }).observe(document.body, { subtree: true, attributes: true, attributeFilter: ['inert', 'hidden'] });
+    return true;
+  })()`);
+/**
  * Waits for the open menu's motion to end. A menu that closes meanwhile
  * (the window lost key status, focus or a scroll moved) fails at once,
- * naming that, rather than waiting out the timeout.
+ * naming what happened, rather than waiting out the timeout.
  */
 const settled = async () => {
   const state = await app.waitFor<string>(
     `!${menu} ? 'dismissed' : ${menu}.getAnimations({ subtree: true }).every(animation => animation.playState === 'finished') && 'settled'`,
     { label: "menu settled" },
   );
-  if (state === "dismissed")
-    throw new Error(
-      "The menu closed before it settled: the window lost key status, focus left it, a scroll moved its row, or a press landed outside",
+  if (state === "dismissed") {
+    const seen = await app.eval<string[]>(
+      "(window.__menuEvents ?? []).slice(-16)",
     );
+    throw new Error(
+      `The menu closed before it settled: the window lost key status, focus left it, a scroll moved its row, or a press landed outside. Since the right-click: ${seen.join("; ")}`,
+    );
+  }
 };
 const closed = () =>
   app.waitFor(`!${menu} && !document.querySelector('[data-menu-shield]')`, {
@@ -158,6 +183,7 @@ const pageMenuAt = async (selector: string, dx = 0.5, dy = 0.5) => {
   // A window that is not key closes a menu as it opens (on blur).
   await focusWindow(app);
   await pointerOnPage(app, { view, selector, point });
+  await recordDismissals();
   await mouse(point, "right");
   await app.waitFor(`${menu}?.getAttribute('aria-label') === 'Page'`, {
     label: `page menu on ${selector}`,
@@ -239,6 +265,7 @@ const rowMenu = async (label: string) => {
   );
   // A window that is not key closes a menu as it opens (on blur).
   await focusWindow(app);
+  await recordDismissals();
   await mouse(point, "right");
   await app.waitFor(`!!${menu}`, { label: `${label} menu open` });
   await settled();

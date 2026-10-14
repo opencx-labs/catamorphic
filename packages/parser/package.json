@@ -10,16 +10,23 @@
       "types": "./dist/index.d.ts"
     },
     "./layout": {
-      "import": "./dist/layout.js",
-      "types": "./dist/layout.d.ts"
+      "import": "./dist/layout-entry.js",
+      "types": "./dist/layout-entry.d.ts"
     }
   },
   "scripts": {
-    "build": "tsup && tsc --project tsconfig.json --noEmit false --emitDeclarationOnly",
-    "dev": "tsup --watch --no-clean",
+    "build": "bun ../../scripts/build-package.ts && tsc --project tsconfig.json --noEmit false --emitDeclarationOnly",
+    "dev": "bun ../../scripts/build-package.ts --watch",
     "test": "bun ../../scripts/tool-runtime.ts vitest --tool-cwd packages/parser --config ../../vitest.config.ts",
     "test:watch": "bun ../../scripts/tool-runtime.ts vitest --tool-cwd packages/parser --watch",
-    "typecheck": "tsgo --project ./tsconfig.json"
+    "typecheck": "bun check --project ./tsconfig.json"
+  },
+  "bundle": {
+    "entry": [
+      "src/index.ts",
+      "src/layout-entry.ts"
+    ],
+    "splitting": false
   },
   "dependencies": {
     "@catamorphic/workflow": "workspace:*",

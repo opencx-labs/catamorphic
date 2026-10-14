@@ -555,7 +555,7 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
       exec = exec.args(["-lc", command]);
       if (opts?.cwd) exec = exec.cwd(opts.cwd);
       if (opts?.env) exec = exec.envs(opts.env);
-      // ExecOpts.timeout is in seconds (Daytona convention); msb wants ms.
+      // ExecOpts.timeout is in seconds; msb wants ms.
       if (opts?.timeout) exec = exec.timeout(opts.timeout * 1_000);
       return exec;
     });
