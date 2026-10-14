@@ -2,7 +2,9 @@ import http from "node:http";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   type AppHandle,
+  focusWindow,
   launchApp,
+  NEW_TAB_INPUT,
   pointerOnPage,
   setReactValueJs,
 } from "./harness.js";
@@ -125,11 +127,21 @@ const expectLinkMenu = async (group: string[]) => {
   expect(shown.at(-1)).toBe("Inspect");
   if (!mac) expect(shown).toHaveLength(group.length + 2);
 };
-const settled = () =>
-  app.waitFor(
-    `!!${menu} && ${menu}.getAnimations({ subtree: true }).every(animation => animation.playState === 'finished')`,
+/**
+ * Waits for the open menu's motion to end. A menu that closes meanwhile
+ * (the window lost key status, focus or a scroll moved) fails at once,
+ * naming that, rather than waiting out the timeout.
+ */
+const settled = async () => {
+  const state = await app.waitFor<string>(
+    `!${menu} ? 'dismissed' : ${menu}.getAnimations({ subtree: true }).every(animation => animation.playState === 'finished') && 'settled'`,
     { label: "menu settled" },
   );
+  if (state === "dismissed")
+    throw new Error(
+      "The menu closed before it settled: the window lost key status, focus left it, a scroll moved its row, or a press landed outside",
+    );
+};
 const closed = () =>
   app.waitFor(`!${menu} && !document.querySelector('[data-menu-shield]')`, {
     label: "menu closed",
@@ -143,6 +155,8 @@ const pick = async (label: string) => {
 };
 const pageMenuAt = async (selector: string, dx = 0.5, dy = 0.5) => {
   const point = await pagePoint(selector, dx, dy);
+  // A window that is not key closes a menu as it opens (on blur).
+  await focusWindow(app);
   await pointerOnPage(app, { view, selector, point });
   await mouse(point, "right");
   await app.waitFor(`${menu}?.getAttribute('aria-label') === 'Page'`, {
@@ -187,7 +201,8 @@ beforeAll(async () => {
   );
   await run("$('[data-testid=project-submit]').click()");
   await app.waitFor(
-    "!!document.querySelector('textarea[placeholder*=\"Search or ask\"]')",
+    `!!document.querySelector(${JSON.stringify(NEW_TAB_INPUT)})`,
+    { label: "New Tab palette" },
   );
   await app.waitFor(
     "window.catamorphicDesktop.getPrefs().then(prefs => Boolean(prefs.lastProjectId))",
@@ -201,7 +216,7 @@ beforeAll(async () => {
     return true;
   })()`);
   await run(
-    `const input = $('textarea[placeholder*="Search or ask"]'); input.focus(); setReactValue(input, ${JSON.stringify(`${origin}/lab`)})`,
+    `const input = $(${JSON.stringify(NEW_TAB_INPUT)}); input.focus(); setReactValue(input, ${JSON.stringify(`${origin}/lab`)})`,
   );
   await app.waitFor(
     "document.activeElement?.matches('textarea[aria-label=\"Search commands, pages, and more\"]') && document.activeElement.closest('[role=dialog]').querySelector('[data-item-id=web]')?.getAttribute('aria-selected') === 'true'",
@@ -222,6 +237,8 @@ const rowMenu = async (label: string) => {
     `(() => { const el = ${row(label)}?.querySelector('[data-tree-primary], button'); if (!el) return false; const r = el.getBoundingClientRect(); const x = Math.round(r.x + r.width / 2), y = Math.round(r.y + r.height / 2); return r.width > 0 && el.contains(document.elementFromPoint(x, y)) && { x, y }; })()`,
     { label: `${label} row reachable` },
   );
+  // A window that is not key closes a menu as it opens (on blur).
+  await focusWindow(app);
   await mouse(point, "right");
   await app.waitFor(`!!${menu}`, { label: `${label} menu open` });
   await settled();

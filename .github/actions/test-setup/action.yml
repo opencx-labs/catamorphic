@@ -4,6 +4,9 @@ inputs:
   cache-suffix:
     description: Stable lane and shard identity, shared across PR pushes.
     required: true
+  electron:
+    description: Fetch the Electron binary, for jobs whose tests load it.
+    default: "false"
 outputs:
   task-cache-key:
     description: Save this key after verification, including when another task fails.
@@ -19,10 +22,7 @@ runs:
         node-version: 24.13.0
     - uses: actions/cache@v5
       with:
-        path: |
-          ~/.bun/install/cache
-          ~/.cache/electron
-          ~/Library/Caches/electron
+        path: ~/.bun/install/cache
         key: dependencies-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('bun.lock') }}
         restore-keys: |
           dependencies-v2-${{ runner.os }}-${{ runner.arch }}-
@@ -50,3 +50,28 @@ runs:
         fi
         echo "CATAMORPHIC_TEST_RUNTIME=$(uname -smr)|node=$(node --version)|bun=$(bun --version)|image=${ImageOS:-}:${ImageVersion:-}|chrome=$chrome_version|packages=$system_packages" >> "$GITHUB_ENV"
         bun install --frozen-lockfile
+    # Bun skips Electron's install script, so its binary downloads the first
+    # time something loads it, inside whichever test does. Jobs that load it
+    # fetch it here instead: from a cache of its own, keyed by its version,
+    # and retried, so a GitHub release outage fails setup, not a test.
+    - id: electron
+      if: inputs.electron == 'true'
+      shell: bash
+      run: echo "version=$(node -p "require('./apps/desktop/node_modules/electron/package.json').version")" >> "$GITHUB_OUTPUT"
+    - if: inputs.electron == 'true'
+      uses: actions/cache@v5
+      with:
+        path: |
+          ~/.cache/electron
+          ~/Library/Caches/electron
+        key: electron-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.electron.outputs.version }}
+    - name: Install Electron
+      if: inputs.electron == 'true'
+      shell: bash
+      run: |
+        for attempt in 1 2 3; do
+          node apps/desktop/node_modules/electron/install.js && exit 0
+          echo "Electron download failed (attempt $attempt)" >&2
+          if [ "$attempt" -lt 3 ]; then sleep $((attempt * 15)); fi
+        done
+        exit 1

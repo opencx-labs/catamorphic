@@ -1,7 +1,12 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
+import {
+  type AppHandle,
+  launchApp,
+  OVERLAY_INPUT,
+  setReactValueJs,
+} from "./harness.js";
 
 /**
  * OAuth for a remote connection, end to end inside the app: a connection
@@ -98,15 +103,15 @@ describe("connector OAuth", () => {
 
   it("Test on the connection reports it needs authorization and offers Authorize", async () => {
     await run(`pressKey('p', { metaKey: true }); return true;`);
-    await runWait(`return !!$('textarea[placeholder*="Search or ask"]');`, {
+    await runWait(`return !!$(${JSON.stringify(OVERLAY_INPUT)});`, {
       label: "palette",
     });
     await run(
-      `setReactValue($('textarea[placeholder*="Search or ask"]'), 'manage connectors'); return true;`,
+      `setReactValue($(${JSON.stringify(OVERLAY_INPUT)}), 'manage connectors'); return true;`,
     );
     await runWait(
       `if (!byText('button', 'Manage connectors')) return false;
-       $('textarea[placeholder*="Search or ask"]').dispatchEvent(
+       $(${JSON.stringify(OVERLAY_INPUT)}).dispatchEvent(
          new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
        return true;`,
       { label: "run Manage connectors" },

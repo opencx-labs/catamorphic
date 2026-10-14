@@ -235,12 +235,13 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0220](0220-sign-in-popups-answer-passkeys.md) | Sign-in popups answer passkeys in a sheet of their own | Accepted (amends 0201, 0185) |
 | [0221](0221-menus-hold-the-window-and-pages-get-work-menus.md) | Menus hold the window, and pages get Work's menus | Accepted (amends 0121, 0203) |
 | [0222](0222-desktop-harnesses-stay-warm-between-turns.md) | Desktop harnesses stay warm between turns | Accepted (amends 0198) |
-| [0223](0223-an-agent-terminal-lives-as-long-as-its-command.md) | An agent terminal lives as long as its command | Accepted (amends 0155) |
+| [0223](0223-an-agent-terminal-lives-as-long-as-its-command.md) | An agent terminal lives as long as its command | Accepted (amends 0155; bash marks its commands, amended by 0230) |
 | [0224](0224-a-voice-agent-can-stop-listening.md) | A voice conversation's agent can stop listening | Accepted (amends 0133, 0216) |
 | [0225](0225-harnesses-get-connectors-as-mcp-servers-results-unchanged.md) | Harnesses get connectors as MCP servers, results unchanged | Accepted (amends 0065, 0103, 0133, 0198) |
 | [0226](0226-session-metadata-and-this-session.md) | Session metadata, and a sidebar section for the chat in front | Accepted (refines 0132, 0147, 0215) |
 | [0227](0227-pages-ask-through-works-dialogs.md) | Pages ask through Work's dialogs: alerts, Leave site? and sign-ins over their tab | Accepted (amends 0150, 0151, 0194, 0202) |
 | [0228](0228-a-sign-in-that-can-still-refresh-is-retried.md) | A sign-in that can still refresh is retried, and a fixed one runs the turn again | Accepted (amends 0222) |
 | [0229](0229-idle-pollers-wait-for-hints.md) | Idle pollers wait for hints from their own process | Accepted (refines 0193, 0197, 0207) |
+| [0230](0230-agent-terminals-mark-commands-in-bash-too.md) | Agent terminals mark commands in bash too | Accepted (amends 0223) |
 | [0231](0231-daytona-support-is-removed.md) | Daytona support is removed | Accepted (amends 0004, 0008, 0174) |
 | [0232](0232-bun-builds-and-checks-packages.md) | Bun builds and type checks the packages | Accepted |

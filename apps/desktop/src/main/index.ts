@@ -16,6 +16,7 @@ import {
   safeStorage,
   session,
   type WebContents,
+  webContents,
 } from "electron";
 import type { DesktopUpdateChannel } from "../shared/update.js";
 import { registerAgentBridge } from "./agent-bridge.js";
@@ -653,6 +654,11 @@ app.whenReady().then(async () => {
       path.join(paths.profilesDir, profileId, "connectors"),
     connectionsFor: (profileId) =>
       profileConfig.forProfile(profileId).connections,
+    // Scripted runs (E2E, demo recordings) never reach the public catalogs:
+    // none reads them, and a request still out at quit can hold the exit.
+    ...(e2eDataDir
+      ? { catalogFetch: async () => new Response(null, { status: 404 }) }
+      : {}),
   });
   // MCP Apps host: which connection tools carry a ui:// view, their
   // templates, and the view-initiated tool calls. Elicitation from those
@@ -672,6 +678,7 @@ app.whenReady().then(async () => {
   });
   disposeProfileResources = async () => {
     unsubscribeProfileRemoved();
+    connectors.dispose();
     await mcpApps.dispose();
   };
 
@@ -899,6 +906,25 @@ registerDesktopShutdown({
     server = null;
   },
   onError: (error) => console.error("[desktop] shutdown failed:", error),
+  openWindows: () =>
+    BrowserWindow.getAllWindows().map((window) => {
+      const contents = window.webContents;
+      const pages = webContents
+        .getAllWebContents()
+        .filter((page) => page.hostWebContents === contents);
+      return [
+        `window ${window.id} (${new URL(contents.getURL() || "about:blank").search || "main"})`,
+        window.isVisible() ? "shown" : "hidden",
+        contents.isCrashed() ? "crashed" : "",
+        contents.isLoading() ? "loading" : "",
+        pages.length ? `${pages.length} pages` : "",
+        ...pages
+          .filter((page) => page.isCrashed() || page.isLoading())
+          .map((page) => `a page ${page.isCrashed() ? "crashed" : "loading"}`),
+      ]
+        .filter(Boolean)
+        .join(", ");
+    }),
 });
 
 app.on("window-all-closed", () => {
