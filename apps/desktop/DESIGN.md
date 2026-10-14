@@ -674,16 +674,27 @@ the historical log explains how it arrived here.
 - [Performance](docs/performance.md): idle lifecycle checks and sustained measurement.
 
 ## Design log
-### 2026-10-14: A tab in the strip opens from anywhere on it
+### 2026-10-15: A tab in the strip opens wherever it is pressed
 
-A tab in the top strip is a 32px pill that lights up under the pointer,
-but only its label, a 16px band around the title, took a press: a click
-near the pill's top, bottom or ends did nothing, so most clicks that
-missed the title missed the tab. The label now fills the tab inside its
-border, as a Chrome tab does. The tab's padding became the label's own and
-the close button sits as far from the tab's edge as before, so nothing on
-screen moves; the hover card, anchored to the label, now sits below the
-whole tab.
+Many tabs in the top strip did nothing when clicked. Two causes:
+
+- **A background project dragged the window from under them.** A window
+  keeps every project it showed mounted, the others transparent and inert
+  under the one in front, and Chromium takes the window's drag areas from
+  every element whatever its opacity, inertness or pointer events, each
+  over the ones before it. Since the strip's spare room drags the window
+  (2026-10-13), a project laid out after the visible one covered every
+  visible tab past where its own tabs ended: a press there moved the
+  window, middle of the title included. Only the visible project draws
+  drag areas now (`-webkit-app-region: initial` on the others; Blink reads
+  `none` as `no-drag`, which would cancel the visible ones too).
+- **Only the title took a press.** A tab is a 32px pill that lights up
+  under the pointer, but only its label, a 16px band around the title,
+  opened it. The label now fills the tab inside its border, as a Chrome
+  tab does: the tab's padding became the label's, the close button and a
+  folded group's expand button sit where they were, and the keyboard ring
+  is drawn on the tab with its corners. The hover card, anchored to the
+  label, now sits 8px below the whole tab.
 
 ### 2026-10-14: A sidebar pushes what Work draws; its lists show their scroll only while it helps
 

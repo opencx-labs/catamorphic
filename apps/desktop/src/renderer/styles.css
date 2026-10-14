@@ -265,6 +265,17 @@ kbd {
 .app-drag {
   -webkit-app-region: drag;
 }
+/* A project the window keeps in the background is still laid out under
+   the visible one, only transparent and inert, and Chromium takes the
+   window's drag areas from every element whatever its opacity, inertness
+   or pointer events, each over the ones before it. Its title row and its
+   tab strip's spare room would drag the window from under the visible
+   tabs, so only the visible project draws drag areas. `initial`, not
+   `none`: Blink reads every keyword but `drag` as `no-drag`, which would
+   cancel the visible project's drag areas instead. */
+[data-workspace-visible="false"] :is(.app-drag, .app-no-drag) {
+  -webkit-app-region: initial;
+}
 
 /* New chat bubble pop-in (width reveal + scale, one shot on mount) */
 @keyframes bubble-in {
@@ -1024,7 +1035,6 @@ kbd {
     opacity: 1;
     transform: translateY(0);
     margin-left: 0;
-    padding-inline: 4px;
     border-width: 1px;
   }
   to {
@@ -1032,7 +1042,6 @@ kbd {
     opacity: 0;
     transform: translateY(3px);
     margin-left: -4px;
-    padding-inline: 0;
     border-width: 0;
   }
 }
@@ -1238,6 +1247,17 @@ kbd {
 }
 /* Outranks the global ring rule's :not() specificity. */
 [data-sidebar-item-id] :focus-visible:not([hidden]) {
+  outline: none;
+}
+
+/* A top-strip tab's label fills the tab, so the tab wears the label's ring
+   inside its border, with its own corners (a split pair's merged ones
+   included); its close button keeps its own. */
+.workspace-tab:has(> span > button:first-child:focus-visible) {
+  outline: var(--focus-ring-width) var(--focus-ring-style) var(--color-accent);
+  outline-offset: var(--focus-ring-inset);
+}
+.workspace-tab > span > button:first-child:focus-visible:not([hidden]) {
   outline: none;
 }
 

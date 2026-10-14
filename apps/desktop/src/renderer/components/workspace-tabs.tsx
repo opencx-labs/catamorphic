@@ -941,7 +941,9 @@ function TabStrip({
                   onClick={() => onClose(key)}
                 />
               </span>
-              {/* Collapsed group parent: expand its folded surfaces. */}
+              {/* Collapsed group parent: expand its folded surfaces. It
+                sits over the label's last 4px, where the tab's padding was,
+                and above the label, so all of it takes a press. */}
               {parentGroup?.collapsed && onToggleGroup && (
                 <ShortcutHint label="Expand grouped tabs">
                   <button
@@ -949,7 +951,7 @@ function TabStrip({
                     onClick={() =>
                       onToggleGroup(parentGroup.parentKey.slice("chat:".length))
                     }
-                    className={`flex h-5 cursor-pointer items-center gap-0.5 rounded px-1 text-[10px] transition-colors duration-150 hover:bg-bg-overlay hover:text-accent ${vertical ? "" : "me-1"} ${groupActive ? "text-accent/80" : "text-fg-faint"}`}
+                    className={`flex h-5 cursor-pointer items-center gap-0.5 rounded px-1 text-[10px] transition-colors duration-150 hover:bg-bg-overlay hover:text-accent ${vertical ? "" : "relative -ms-1 me-1"} ${groupActive ? "text-accent/80" : "text-fg-faint"}`}
                     aria-label={`Expand ${parentGroup.memberKeys.length} grouped tabs`}
                   >
                     <ChevronsRight className="size-3" />

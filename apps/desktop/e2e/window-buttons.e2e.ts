@@ -12,6 +12,7 @@ import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
 const mac = process.platform === "darwin";
 let app: AppHandle;
 let prefsFile: string;
+let projectId = "";
 const helpers = `
 ${setReactValueJs}
 const $ = s => document.querySelector(s);
@@ -62,6 +63,7 @@ beforeAll(async () => {
     `window.catamorphicDesktop.profilesList().then(data => data.profiles.find(profile => profile.projectIds.includes(${JSON.stringify(project.id)}))?.id ?? data.defaultProfileId)`,
   );
   prefsFile = `${app.userDataDir}/profiles/${profileId}/prefs.json`;
+  projectId = project.id;
   await app.reload();
   await app.waitFor(`document.body?.innerText.includes('Chrome corner')`);
   // Close the startup New Tab so searches use the palette overlay.
@@ -236,15 +238,59 @@ it.skipIf(mac)("offers nothing where the OS draws the frame", async () => {
 });
 
 /**
+ * The drag area as Electron works it out: the boxes of everything that says
+ * `app-region: drag` or `no-drag`, each over the ones before it in the
+ * document, whatever is drawn on top.
+ */
+const regions = `
+  const $$ = (selector) => [...document.querySelectorAll(selector)];
+  const regions = () => [...document.querySelectorAll('*')].flatMap((element) => {
+    const style = getComputedStyle(element);
+    const region = style.getPropertyValue('app-region') || style.getPropertyValue('-webkit-app-region');
+    if (region !== 'drag' && region !== 'no-drag') return [];
+    return [...element.getClientRects()].map((rect) => ({ drag: region === 'drag', rect }));
+  });
+  const drags = (list, x, y) => {
+    let drag = false;
+    for (const entry of list)
+      if (x >= entry.rect.left && x < entry.rect.right && y >= entry.rect.top && y < entry.rect.bottom) drag = entry.drag;
+    return drag;
+  };
+  /** The longest stretch along the row's middle that drags the window. */
+  const dragRun = (from = 0, to = innerWidth) => {
+    const list = regions();
+    let best = 0, run = 0;
+    for (let x = from; x < to; x += 2) {
+      run = drags(list, x, 20) ? run + 2 : 0;
+      best = Math.max(best, run);
+    }
+    return best;
+  };
+  /** Controls in the top row that must take presses, by their middles. */
+  const pressable = (selector) => {
+    const list = regions();
+    return [...document.querySelectorAll(selector)].filter((element) => element.checkVisibility() && !element.closest('[inert]')).map((element) => {
+      const rect = element.getBoundingClientRect();
+      return { label: element.getAttribute('aria-label') ?? element.textContent.trim(), drags: drags(list, rect.left + rect.width / 2, rect.top + rect.height / 2) };
+    });
+  };
+  const settled = () => !document.getAnimations().some((animation) => animation.playState === 'running' && animation.effect?.getTiming().iterations !== Infinity);
+`;
+const inPage = <T>(code: string) =>
+  app.eval<T>(`(()=>{${helpers};${regions};${code}})()`);
+const settle = (condition: string, label: string) =>
+  app.waitFor(
+    `(()=>{${helpers};${regions};return ${condition} && settled();})()`,
+    {
+      label,
+    },
+  );
+/**
  * With the buttons hidden the project switcher spans the sidebar's top row,
  * so the window drags by the chrome's empty room instead, as Chrome's tab
  * strip does: the strip's spare end, or the title row. The renderer draws
  * the hidden-buttons layout only on macOS, which it reads from the
  * navigator, so elsewhere the test asks for macOS's.
- *
- * The drag area is worked out as Electron does: the boxes of everything
- * that says `app-region: drag` or `no-drag`, each over the ones before it
- * in the document, whatever is drawn on top.
  */
 it("drags the window by the chrome's empty room with the buttons hidden", async () => {
   if (!mac) {
@@ -262,49 +308,6 @@ it("drags the window by the chrome's empty room with the buttons hidden", async 
     sidebarOpen: true,
   });
   if (!mac) await app.reload();
-  const regions = `
-    const $$ = (selector) => [...document.querySelectorAll(selector)];
-    const regions = () => [...document.querySelectorAll('*')].flatMap((element) => {
-      const style = getComputedStyle(element);
-      const region = style.getPropertyValue('app-region') || style.getPropertyValue('-webkit-app-region');
-      if (region !== 'drag' && region !== 'no-drag') return [];
-      return [...element.getClientRects()].map((rect) => ({ drag: region === 'drag', rect }));
-    });
-    const drags = (list, x, y) => {
-      let drag = false;
-      for (const entry of list)
-        if (x >= entry.rect.left && x < entry.rect.right && y >= entry.rect.top && y < entry.rect.bottom) drag = entry.drag;
-      return drag;
-    };
-    /** The longest stretch along the row's middle that drags the window. */
-    const dragRun = (from = 0, to = innerWidth) => {
-      const list = regions();
-      let best = 0, run = 0;
-      for (let x = from; x < to; x += 2) {
-        run = drags(list, x, 20) ? run + 2 : 0;
-        best = Math.max(best, run);
-      }
-      return best;
-    };
-    /** Controls in the top row that must take presses, by their middles. */
-    const pressable = (selector) => {
-      const list = regions();
-      return [...document.querySelectorAll(selector)].filter((element) => element.checkVisibility() && !element.closest('[inert]')).map((element) => {
-        const rect = element.getBoundingClientRect();
-        return { label: element.getAttribute('aria-label') ?? element.textContent.trim(), drags: drags(list, rect.left + rect.width / 2, rect.top + rect.height / 2) };
-      });
-    };
-    const settled = () => !document.getAnimations().some((animation) => animation.playState === 'running' && animation.effect?.getTiming().iterations !== Infinity);
-  `;
-  const inPage = <T>(code: string) =>
-    app.eval<T>(`(()=>{${helpers};${regions};${code}})()`);
-  const settle = (condition: string, label: string) =>
-    app.waitFor(
-      `(()=>{${helpers};${regions};return ${condition} && settled();})()`,
-      {
-        label,
-      },
-    );
   await settle(
     "$('[data-window-buttons]')?.dataset.windowButtons === 'off' && projectInHeader() && $('aside[data-sidebar=\"left\"]')?.dataset.settled === 'true'",
     "the hidden-buttons layout",
@@ -485,6 +488,76 @@ it("drags the window by the chrome's empty room with the buttons hidden", async 
   await settle(
     "$('aside[data-sidebar=\"left\"]')?.dataset.motion === 'open' && $('aside[data-sidebar=\"left\"]')?.dataset.settled === 'true'",
     "the sidebar open again",
+  );
+  expect(app.getRendererErrors()).toEqual([]);
+});
+
+/**
+ * A window keeps every project it showed mounted, the ones in the
+ * background transparent and inert under the one in front. Their title
+ * rows and tab strips still lay out where the visible one's are, so their
+ * drag areas, the strip's spare room included, would drag the window from
+ * under the visible tabs: a press on a tab past where the background
+ * project's tabs end moved the window instead of opening the tab.
+ */
+it("keeps a background project's drag areas off the visible tabs", async () => {
+  const visible = `$('[data-workspace-visible="true"]')`;
+  await app.eval(
+    "window.catamorphicDesktop.setPrefs({windowButtons:false,sidebarOpen:false})",
+  );
+  await settle(
+    `$('[data-window-buttons]')?.dataset.windowButtons === 'off' && ${visible}.querySelectorAll('[data-tab-orientation="horizontal"] [data-point-key]').length >= 2`,
+    "the visible project's tabs on top",
+  );
+  const background = await app.eval<{ id: string }>(
+    `window.catamorphicDesktop.createProject({name:'Background corner',rootPath:${JSON.stringify(`${app.userDataDir}/background-corner-project`)}})`,
+  );
+  const show = async (id: string, label: string) => {
+    await app.eval(
+      `window.catamorphicDesktop.workspaceNavigate({projectId: ${JSON.stringify(id)}})`,
+    );
+    await settle(
+      `${visible}?.dataset.projectRuntime === ${JSON.stringify(id)} && !!${visible}.querySelector('button[aria-label="New tab"]')`,
+      label,
+    );
+  };
+  // Opened second, the background project is laid out after the first.
+  await show(background.id, "the background project in front");
+  await show(projectId, "the first project in front again");
+  const layout = await inPage<{ room: number; tabs: number[] }>(`
+    const room = $('[data-workspace-visible="false"] [data-tab-strip-room="end"]').getBoundingClientRect();
+    return {
+      room: room.left,
+      tabs: [...${visible}.querySelectorAll('[data-tab-orientation="horizontal"] [data-point-key]')].map((tab) => { const rect = tab.getBoundingClientRect(); return rect.left + rect.width / 2; }),
+    };
+  `);
+  // The test means something: a visible tab lies over the background
+  // project's spare room.
+  expect(layout.tabs.some((x) => x > layout.room)).toBe(true);
+  const presses = await inPage<{ label: string; drags: boolean }[]>(
+    `return pressable('[data-workspace-visible="true"] [data-tab-orientation="horizontal"] [data-point-key] button, [data-workspace-visible="true"] button[aria-label="New tab"]')`,
+  );
+  expect(presses.length).toBeGreaterThan(1);
+  expect(presses.filter((control) => control.drags)).toEqual([]);
+  // The visible project's own spare room still drags the window.
+  expect(await inPage<number>("return dragRun()")).toBeGreaterThanOrEqual(300);
+  // A real click there opens the tab (on macOS, where the drag areas apply).
+  const covered = await inPage<{ key: string; x: number; y: number }>(`
+    const tabs = [...${visible}.querySelectorAll('[data-tab-orientation="horizontal"] [data-point-key]')];
+    const tab = tabs.find((each) => { const rect = each.getBoundingClientRect(); return rect.left + rect.width / 2 > ${layout.room}; });
+    tabs.find((each) => each !== tab).querySelector('button').click();
+    const rect = tab.getBoundingClientRect();
+    return { key: tab.dataset.pointKey, x: Math.round(rect.left + rect.width / 2), y: Math.round(rect.top + rect.height / 2) };
+  `);
+  await settle(
+    `!${visible}.querySelector('[data-point-key=${JSON.stringify(covered.key)}]').hasAttribute('data-tab-active')`,
+    "another tab in front",
+  );
+  await app.eval("window.catamorphicDesktop.devWindow('focus')");
+  await app.clickPointer({ x: covered.x, y: covered.y });
+  await settle(
+    `${visible}.querySelector('[data-point-key=${JSON.stringify(covered.key)}]').hasAttribute('data-tab-active')`,
+    "the tab over the background project's spare room opened",
   );
   expect(app.getRendererErrors()).toEqual([]);
 });
