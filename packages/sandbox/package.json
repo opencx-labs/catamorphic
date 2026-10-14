@@ -30,7 +30,8 @@
     ],
     "external": [
       "@catamorphic/sandbox"
-    ]
+    ],
+    "splitting": false
   },
   "dependencies": {
     "@catamorphic/otel": "workspace:*",

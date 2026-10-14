@@ -26,9 +26,18 @@ identically.
   integrity). One Bun builds, installs and runs, as before.
 - **`scripts/build-package.ts` replaces tsup.** A package lists its entries in
   a `bundle` field of its package.json; each lands at its path under `src/`,
-  entries of one build share chunks, dependencies (and peer and optional
-  ones) stay imports and the rest is inlined, as tsup did. `--watch` rebuilds
-  without emptying `dist/`. Two export paths follow the sources:
+  dependencies (and peer and optional ones) stay imports and the rest is
+  inlined, as tsup did. `--watch` rebuilds without emptying `dist/`.
+- **Chunks only where entries share state.** Bun renames every declaration a
+  shared chunk exports (`class AgentSessionsService2`, so its `name` changes),
+  where esbuild kept names. A build with one entry is one file, dynamic
+  imports inline; `db`, `parser` and `sandbox`, whose entries share only
+  stateless code (or run in separate processes), opt out of splitting. `codex`,
+  `fastify-plugin` and `otel` keep a shared chunk because their entries share
+  classes checked with `instanceof` or module state; their shared
+  declarations' `name` values carry the suffix, which no code reads (error
+  classes set their own `name`).
+- Two export paths follow the sources:
   `@catamorphic/parser/layout` is `dist/layout-entry.js` (its declarations had
   pointed at a different module) and `@catamorphic/sandbox/attachments` is
   `dist/coding-agent/text-attachments.js`.

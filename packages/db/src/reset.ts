@@ -6,7 +6,6 @@ import {
   resolveSchema,
 } from "./config.js";
 import { createDatabase } from "./database.js";
-import { isExecutedDirectly } from "./is-main.js";
 
 export async function runReset() {
   const connectionString = resolveDatabaseUrl();
@@ -32,8 +31,4 @@ export async function runReset() {
 
   execSync("bun run db:migrate", { stdio: "inherit" });
   execSync("bun run db:codegen", { stdio: "inherit" });
-}
-
-if (isExecutedDirectly(import.meta.url)) {
-  await runReset();
 }

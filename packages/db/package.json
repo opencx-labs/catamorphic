@@ -35,7 +35,8 @@
     "entry": [
       "src/index.ts",
       "src/cli.ts"
-    ]
+    ],
+    "splitting": false
   },
   "dependencies": {
     "kysely": "^0.29.3",

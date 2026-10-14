@@ -11,7 +11,7 @@ import path from "node:path";
  *
  * Every entry lands at its path under `src/` (`src/testing/index.ts` →
  * `dist/testing/index.js`), and the entries of one build share chunks
- * unless `splitting` is false. An array of builds keeps their outputs
+ * unless `splitting` is false; a build of one entry is one file. An array of builds keeps their outputs
  * apart, as when only one entry carries a `banner`. Dependencies, peer and
  * optional dependencies (and `external`) stay imports; anything else the
  * sources import is inlined.
@@ -70,6 +70,15 @@ export function externalsOf(
   return [...names].flatMap((name) => [name, `${name}/*`]);
 }
 
+/**
+ * Chunks only where entries share code. Bun renames every declaration a
+ * shared chunk exports (`class AgentSessionsService2`), so a single entry
+ * stays one file, with its dynamic imports inline, and keeps its names.
+ */
+export function splits(config: BundleConfig): boolean {
+  return config.splitting ?? config.entry.length > 1;
+}
+
 async function build(input: {
   directory: string;
   manifest: PackageManifest;
@@ -84,7 +93,7 @@ async function build(input: {
       outdir: path.join(input.directory, "dist"),
       target: "node",
       format: "esm",
-      splitting: config.splitting ?? true,
+      splitting: splits(config),
       sourcemap: "linked",
       external: externalsOf(input.manifest, config),
       ...(config.banner ? { banner: config.banner } : {}),

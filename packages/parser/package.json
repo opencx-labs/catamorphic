@@ -25,7 +25,8 @@
     "entry": [
       "src/index.ts",
       "src/layout-entry.ts"
-    ]
+    ],
+    "splitting": false
   },
   "dependencies": {
     "@catamorphic/workflow": "workspace:*",
