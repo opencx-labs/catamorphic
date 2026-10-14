@@ -753,7 +753,11 @@ export class DesktopWorkspaces {
       } satisfies WorkspaceEvent);
     });
     if (owner.isDestroyed()) return;
-    const from = BrowserWindow.fromWebContents(owner);
+    // It opens beside the window it was asked from.
+    const from =
+      (!input.sender.isDestroyed() &&
+        BrowserWindow.fromWebContents(input.sender)) ||
+      BrowserWindow.fromWebContents(owner);
     if (!released || this.owner(projectId) !== owner) {
       const keeper = BrowserWindow.fromWebContents(
         this.owner(projectId) ?? owner,
