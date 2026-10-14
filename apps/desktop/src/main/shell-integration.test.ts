@@ -99,10 +99,11 @@ describe("shell integration for agent terminals", () => {
           HOME: home,
           TERM: "xterm",
           HISTFILE: "/dev/null",
-          // The person's own prompt hook keeps running beside Work's. It
-          // rides the environment: a machine's own profile (a CI runner's
-          // resets HOME) decides which ~/.bash_profile a login reads.
-          PROMPT_COMMAND: 'printf "[own hook]"',
+          // The person's own prompt hook keeps running beside Work's, its
+          // trailing "; " (as history-sharing snippets leave it) included.
+          // It rides the environment: a machine's own profile (a CI
+          // runner's resets HOME) decides which ~/.bash_profile a login reads.
+          PROMPT_COMMAND: 'printf "[own hook]"; ',
         },
       });
       const exited = new Promise<void>((resolve) =>

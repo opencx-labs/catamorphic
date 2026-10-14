@@ -108,7 +108,7 @@ exec /usr/bin/open "$@"
  * never plant a file an agent terminal would run (a shared /tmp on Linux).
  * A cleaner that removes it is answered with a new one.
  */
-let root: string | null = null;
+let root: Promise<string> | null = null;
 
 async function ownedPrivately(dir: string): Promise<boolean> {
   try {
@@ -123,9 +123,13 @@ async function ownedPrivately(dir: string): Promise<boolean> {
   }
 }
 
-async function shimRoot(): Promise<string> {
-  if (root && (await ownedPrivately(root))) return root;
-  root = await fs.mkdtemp(path.join(os.tmpdir(), "catamorphic-shell-"));
+/** Each call waits for the one before, so terminals opening together share one. */
+function shimRoot(): Promise<string> {
+  root = (async (previous) => {
+    const dir = await previous?.catch(() => null);
+    if (dir && (await ownedPrivately(dir))) return dir;
+    return fs.mkdtemp(path.join(os.tmpdir(), "catamorphic-shell-"));
+  })(root);
   return root;
 }
 
@@ -201,7 +205,11 @@ if [[ "$__catamorphic_flags" != *r* ]]; then
   if [[ "$__catamorphic_flags" == *a* ]] && (( BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 1) )); then
     PROMPT_COMMAND=(__catamorphic_status "\${PROMPT_COMMAND[@]}" __catamorphic_precmd)
   else
-    PROMPT_COMMAND="__catamorphic_status\${PROMPT_COMMAND:+;$PROMPT_COMMAND};__catamorphic_precmd"
+    # Newlines, not semicolons: a person's "history -a; " or trailing
+    # comment would turn a joining ";" into a syntax error, or swallow it.
+    __catamorphic_nl=$'\\n'
+    PROMPT_COMMAND="__catamorphic_status$__catamorphic_nl\${PROMPT_COMMAND:+$PROMPT_COMMAND$__catamorphic_nl}__catamorphic_precmd"
+    unset __catamorphic_nl
   fi
   # Nested shells (a poetry shell, tmux) would inherit hook names they lack.
   export -n PROMPT_COMMAND
@@ -221,7 +229,11 @@ function bashMarksCommands(shell: string): Promise<boolean> {
       shell,
       ["-c", 'echo "$BASH_VERSION"'],
       { timeout: 2_000 },
-      (error, stdout) => resolve(!error && hasPs0(String(stdout))),
+      (error, stdout) => {
+        // A probe that failed (a slow start) is asked again next time.
+        if (error) bashVersions.delete(shell);
+        resolve(!error && hasPs0(String(stdout)));
+      },
     );
   });
   bashVersions.set(shell, marks);

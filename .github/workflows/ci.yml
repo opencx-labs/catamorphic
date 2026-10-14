@@ -334,6 +334,7 @@ jobs:
         if: env.MODEL_EVAL_AVAILABLE == '1'
         with:
           cache-suffix: eval
+          electron: "true"
       - name: Prepare eval desktop
         if: env.MODEL_EVAL_AVAILABLE == '1'
         run: |
