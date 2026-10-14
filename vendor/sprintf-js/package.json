@@ -1,0 +1,9 @@
+{
+  "name": "sprintf-js",
+  "version": "0.0.0-catamorphic",
+  "private": true,
+  "description": "The part of sprintf-js this repository's tools call.",
+  "license": "Apache-2.0",
+  "type": "commonjs",
+  "main": "index.cjs"
+}

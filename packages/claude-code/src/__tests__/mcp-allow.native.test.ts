@@ -39,7 +39,8 @@ const lookup = (index: number) => ({
 /**
  * A server with no tool policy is allowed whole, whatever its name: Claude
  * Code matches allow rules against the whole server name, so neither call
- * may reach canUseTool, which refuses tools it was not told about.
+ * may reach canUseTool, which refuses tools it was not told about. Each
+ * call is reported on the server it ran on.
  */
 const unpolicedServers: ClaudeScenario = {
   name: "mcp-unpoliced-servers",
@@ -78,8 +79,10 @@ const unpolicedServers: ClaudeScenario = {
     const calls = itemsOf(outcome).filter(
       (entry) => entry.item.kind === "tool_call",
     );
-    expect(calls.map((call) => [call.item.tool, call.status])).toEqual(
-      SERVERS.map((name) => [`mcp__${name}__lookup`, "completed"]),
+    expect(
+      calls.map((call) => [call.item.tool, call.item.server, call.status]),
+    ).toEqual(
+      SERVERS.map((name) => [`mcp__${name}__lookup`, name, "completed"]),
     );
     for (const call of calls)
       expect(call.item.result).toEqual({

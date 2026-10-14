@@ -52,6 +52,8 @@
     "@xmldom/xmldom": "^0.8.15",
     "dompurify": "^3.4.17",
     "js-yaml": "^4.3.2",
-    "rolldown": "1.2.5"
+    "micromatch": "file:./vendor/micromatch",
+    "rolldown": "1.2.5",
+    "sprintf-js": "file:./vendor/sprintf-js"
   }
 }
