@@ -30,7 +30,8 @@
     "entry": [
       "src/index.ts",
       "src/project-layout.ts"
-    ]
+    ],
+    "splitting": false
   },
   "devDependencies": {
     "@types/node": "^26.1.1"

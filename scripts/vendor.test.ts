@@ -28,7 +28,7 @@ describe("vendor stand-ins", () => {
       expect(lock).not.toMatch(new RegExp(`"${name}@\\d`));
   });
 
-  it("match kysely-codegen's table patterns the way micromatch does", () => {
+  it("match kysely-codegen's table patterns, and refuse glob syntax they never use", () => {
     // db:codegen passes --include-pattern 'catamorphic.*' with nocase.
     const tables = micromatch.matcher("catamorphic.*", { nocase: true });
     expect(tables("catamorphic.agent_sessions")).toBe(true);
@@ -41,9 +41,13 @@ describe("vendor stand-ins", () => {
       false,
     );
     expect(micromatch.matcher("a*")("a/b")).toBe(false);
-    expect(micromatch.matcher("a(b)+")("a(b)+")).toBe(true);
+    expect(micromatch.matcher("runs.v+")("runs.v+")).toBe(true);
     expect(micromatch.matcher("Runs")("runs")).toBe(false);
     expect(() => micromatch.matcher("{runs")).toThrow("Unclosed");
+    for (const pattern of ["runs[0-9]", "!runs", "@(runs)", "a\\*", "{1..3}"])
+      expect(() => micromatch.matcher(pattern), pattern).toThrow(
+        "Unsupported glob syntax",
+      );
   });
 
   it("format roarr's messages the way sprintf-js does", () => {

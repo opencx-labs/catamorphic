@@ -463,10 +463,14 @@ fresh one with an empty disk at any time.
    (`WORK_AUTH_CONFIG`), and gateway configuration (`WORK_GATEWAY_CONFIG`)
    through the secret mechanism. Boot refuses a Postgres deployment without
    `WORK_OPERATOR_SECRET`, since every replica must answer the same operator
-   credential. All replicas share one public HTTPS origin behind the load
-   balancer; set `WORK_MDNS=off`. Set `WORK_TRUSTED_PROXIES` to the balancer's
-   (and any CDN's) addresses so sign-in limits count each person's address,
-   not the balancer's; the limits are shared by every replica
+   credential. With TLS to Postgres (`sslmode=require` or stricter), the
+   server checks the certificate against the host in `DATABASE_URL`, as Node
+   does: name the host the certificate was issued for, not its IP address,
+   unless the certificate lists that address. All replicas share one public
+   HTTPS origin behind the load balancer; set `WORK_MDNS=off`. Set
+   `WORK_TRUSTED_PROXIES` to the balancer's (and any CDN's) addresses so
+   sign-in limits count each person's address, not the balancer's; the
+   limits are shared by every replica
    ([sign-in limits](stock-server.md#sign-in-limits)).
 3. Start the normal server under a restart policy. Boot migrates with
    database coordination, checks that origin, secrets, vault key id, and

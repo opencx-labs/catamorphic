@@ -1,6 +1,7 @@
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { HarnessEvent } from "@catamorphic/agent-protocol/runner";
 import { describe, expect, it } from "vitest";
+import { policedServer } from "../adapter.js";
 import {
   apiRetryLine,
   ClaudeTranscript,
@@ -141,5 +142,18 @@ describe("MCP tool names", () => {
       tool: "a__b",
     });
     expect(parseMcpToolName("Bash", ["fix"])).toBeUndefined();
+  });
+});
+
+describe("policed servers", () => {
+  it("are the longest configured name, and never a prototype key", () => {
+    const policies = { fix__ture: [{ default: "ask" as const }] };
+    expect(policedServer("mcp__fix__ture__lookup", policies)).toEqual({
+      server: "fix__ture",
+      tool: "lookup",
+    });
+    expect(policedServer("mcp__fix__lookup", policies)).toBeUndefined();
+    for (const name of ["toString", "constructor", "valueOf", "__proto__"])
+      expect(policedServer(`mcp__${name}__x`, policies), name).toBeUndefined();
   });
 });

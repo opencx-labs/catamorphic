@@ -1,7 +1,12 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { bundleConfigs, externalsOf, splits } from "./build-package.js";
+import {
+  bundleConfigs,
+  externalsOf,
+  relocateSources,
+  splits,
+} from "./build-package.js";
 
 const root = path.resolve(import.meta.dirname, "..");
 
@@ -73,6 +78,29 @@ describe("package bundles", () => {
         expect(readFileSync(file, "utf8"), file).not.toContain(
           "react/jsx-dev-runtime",
         );
+    }
+  });
+
+  it("point a nested output's map at the sources it means", () => {
+    const files = new Set(["/p/src/testing/index.ts", "/p/src/shared.ts"]);
+    expect(
+      relocateSources({
+        // Bun writes these relative to dist/, not to dist/testing/.
+        sources: ["../src/testing/index.ts", "../../src/shared.ts", "virtual"],
+        mapDirectory: "/p/dist/testing",
+        outdir: "/p/dist",
+        exists: (file) => files.has(file),
+      }),
+    ).toEqual(["../../src/testing/index.ts", "../../src/shared.ts", "virtual"]);
+  });
+
+  it("build every file that sandboxes receive one by one without chunks", () => {
+    for (const name of ["runtime", "workflow"]) {
+      const manifest = JSON.parse(
+        readFileSync(path.join(root, "packages", name, "package.json"), "utf8"),
+      );
+      for (const config of bundleConfigs(manifest))
+        expect(splits(config), name).toBe(false);
     }
   });
 });

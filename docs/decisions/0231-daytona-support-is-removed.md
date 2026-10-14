@@ -42,7 +42,9 @@ keep its advisories in every audit.
 - Every install and audit is smaller; the axios and shell-quote advisories
   are gone with it.
 - ADRs 0004 and 0008 describe Daytona as an alternate provider, and ADR 0174
-  lists Daytona support as follow-up work; this record amends all three. Dated plans and specs under `docs/superpowers/`
-  are left as the history they are.
-- The `DAYTONA_API_KEY` repository secret is no longer read by CI and can be
-  deleted.
+  lists Daytona support as follow-up work; this record amends all three.
+  Dated plans and specs under `docs/superpowers/` are left as the history
+  they are.
+- CI no longer reads `DAYTONA_API_KEY`. No such secret existed (none in the
+  repository or its environments, and none shared from the organization),
+  so the reference had resolved to an empty string.

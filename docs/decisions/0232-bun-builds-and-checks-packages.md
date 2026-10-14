@@ -15,7 +15,7 @@ pinned at 1.3.14 for installs, scripts, the runner bundle (already built with
 sandboxes.
 
 Bun 1.4.3 adds `bun check`, a port of typescript-go that reports the same
-errors as `tsc` 7.0.2. Measured here it checks a package 3 to 4.6 times faster
+errors as `tsc` 7.0.2. Measured here it checks a package 3 to 4.7 times faster
 than `tsgo` (core: 0.46 s against 2.15 s), and both report a planted error
 identically.
 
@@ -28,15 +28,20 @@ identically.
   a `bundle` field of its package.json; each lands at its path under `src/`,
   dependencies (and peer and optional ones) stay imports and the rest is
   inlined, as tsup did. `--watch` rebuilds without emptying `dist/`.
-- **Chunks only where entries share state.** Bun renames every declaration a
-  shared chunk exports (`class AgentSessionsService2`, so its `name` changes),
-  where esbuild kept names. A build with one entry is one file, dynamic
-  imports inline; `db`, `parser` and `sandbox`, whose entries share only
-  stateless code (or run in separate processes), opt out of splitting. `codex`,
-  `fastify-plugin` and `otel` keep a shared chunk because their entries share
-  classes checked with `instanceof` or module state; their shared
-  declarations' `name` values carry the suffix, which no code reads (error
-  classes set their own `name`).
+- **Builds with several entries split, unless they opt out.** Bun renames
+  every declaration a shared chunk exports (`class AgentSessionsService2`, so
+  its `name` changes), where esbuild kept names. A build with one entry is one
+  file, its dynamic imports inline. `app`, `db`, `parser`, `runtime`,
+  `sandbox` and `workflow` set `splitting: false`: their entries share only
+  stateless code, run in separate processes, or are read file by file
+  (sandboxes receive `runtime`'s and `workflow`'s `dist/` files one by one). Only `codex`, `fastify-plugin` (`index` and `mcp`) and `otel` produce
+  a shared chunk, because their entries share classes checked with
+  `instanceof` or module state; the functions and classes it exports carry
+  the suffix in `name`, which no code reads (error classes set their own).
+- **Production JSX.** Bun's bundler defaults to React's development transform
+  (`jsxDEV`), which production React builds leave undefined; builds set
+  `jsx: { development: false }`, as tsup emitted, and a test refuses
+  `react/jsx-dev-runtime` in any package's `dist/`.
 - Two export paths follow the sources:
   `@catamorphic/parser/layout` is `dist/layout-entry.js` (its declarations had
   pointed at a different module) and `@catamorphic/sandbox/attachments` is
@@ -52,8 +57,8 @@ Considered and kept:
   order, but has no task cache, and CI reuses passing suites by content hash
   through Turbo's cache (`docs/test-caching.md`).
 - **Vitest on the pinned Node.** `bun test` would run the suites on Bun, not
-  the Node that Electron and the tests deliberately share, and rewrite more
-  than 400 test files' mocks and environments.
+  the Node that Electron and the tests deliberately share, across the 698
+  test files that import Vitest.
 
 ## Consequences
 

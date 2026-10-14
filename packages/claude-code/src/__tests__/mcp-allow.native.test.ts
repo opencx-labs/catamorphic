@@ -97,7 +97,69 @@ const unpolicedServers: ClaudeScenario = {
   },
 };
 
-it("the pinned CLI runs unpoliced servers by their whole names", async () => {
+/**
+ * A policed server beside an unpoliced one whose name is its prefix: the
+ * unpoliced `fix` is allowed as `mcp__fix__*`, which must not reach
+ * `fix__ture`'s tools, so that call still asks.
+ */
+const policedBesidePrefix: ClaudeScenario = {
+  name: "mcp-policed-beside-prefix",
+  description:
+    "A policed `fix__ture` asks although an unpoliced `fix` is allowed.",
+  model: (request) => {
+    const last = lastMessage(request);
+    if (last.includes("Look up a word on each server")) return lookup(0);
+    if (last.includes("toolu_unpoliced_0")) return lookup(1);
+    if (last.includes("toolu_unpoliced_1"))
+      return { blocks: [{ type: "text", text: "Looked it up twice." }] };
+    return {
+      error: {
+        status: 400,
+        type: "invalid_request_error",
+        message: `Unexpected request ${request.index}: ${last.slice(0, 300)}`,
+      },
+    };
+  },
+  attempts: [
+    {
+      start: (context) =>
+        scenarioAttempt({
+          context,
+          scenario: "mcp-policed-beside-prefix",
+          turn: 1,
+          text: "Look up a word on each server",
+          overrides: {
+            mcpServers: Object.fromEntries(
+              SERVERS.map((name) => [name, context.fixtureServer]),
+            ),
+            toolPolicies: { fix__ture: [{ default: "ask" }] },
+          },
+        }),
+      host: {
+        answer: ({ request }) =>
+          request.kind === "approval"
+            ? { kind: "approval", decision: "approved" }
+            : undefined,
+      },
+    },
+  ],
+  check: ([outcome]) => {
+    const approvals = eventsOf(outcome, "request.opened").filter(
+      (event) => event.request.kind === "approval",
+    );
+    expect(
+      approvals.map((event) => event.request.approval?.tool?.server),
+    ).toEqual(["fix__ture"]);
+    const calls = itemsOf(outcome).filter(
+      (entry) => entry.item.kind === "tool_call",
+    );
+    expect(calls.map((call) => [call.item.server, call.status])).toEqual(
+      SERVERS.map((name) => [name, "completed"]),
+    );
+  },
+};
+
+async function runLive(scenario: ClaudeScenario) {
   const root = await realpath(
     await mkdtemp(path.join(tmpdir(), "claude-live-mcp-allow-")),
   );
@@ -115,11 +177,11 @@ it("the pinned CLI runs unpoliced servers by their whole names", async () => {
   };
   let cwd = directories.here.cwd;
   const model = await startScriptedModel({
-    reply: (request) => unpolicedServers.model(request, { cwd }),
+    reply: (request) => scenario.model(request, { cwd }),
   });
   try {
     const outcomes = await runScenario({
-      scenario: unpolicedServers,
+      scenario,
       directories,
       modelUrl: model.url,
       fixtureServer: {
@@ -137,9 +199,21 @@ it("the pinned CLI runs unpoliced servers by their whole names", async () => {
         }),
       timeoutMs: 45_000,
     });
-    unpolicedServers.check(outcomes);
+    scenario.check(outcomes);
   } finally {
     await model.close();
     await rm(root, { recursive: true, force: true });
   }
-}, 60_000);
+}
+
+it(
+  "the pinned CLI runs unpoliced servers by their whole names",
+  () => runLive(unpolicedServers),
+  60_000,
+);
+
+it(
+  "the pinned CLI asks for a policed server whose name extends an allowed one",
+  () => runLive(policedBesidePrefix),
+  60_000,
+);

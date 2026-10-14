@@ -1,18 +1,20 @@
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterAll, beforeAll, expect, it } from "vitest";
 
 const run = promisify(execFile);
 const packageRoot = path.resolve(import.meta.dirname, "../..");
-let directory: string;
+let directory: string | undefined;
 
 beforeAll(async () => {
   // Inside the package, so the bundle's external imports resolve.
   const cache = path.join(packageRoot, "node_modules", ".cache");
   await mkdir(cache, { recursive: true });
-  directory = await mkdtemp(path.join(cache, "cli-bundle-"));
+  // Real path: the guard compared `import.meta.url` with argv[1], which a
+  // symlinked path would never match.
+  directory = await realpath(await mkdtemp(path.join(cache, "cli-bundle-")));
   // One file, every command's module inlined, as `catamorphic-db` ships.
   await run(
     "bun",
@@ -33,13 +35,14 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  await rm(directory, { recursive: true, force: true });
+  if (directory) await rm(directory, { recursive: true, force: true });
 });
 
 // Each command module once ran itself when its file was the process entry;
 // bundled into the CLI, `migrate` and `reset` both ran before any command,
 // and `reset` empties the schema.
 it("runs only the command it is given, and touches no database without one", async () => {
+  if (!directory) throw new Error("The CLI was not bundled");
   const outcome = await run(
     process.execPath,
     [path.join(directory, "cli.js"), "no-such-command"],

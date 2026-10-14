@@ -1,5 +1,5 @@
-import { watch } from "node:fs";
-import { readFile, rm } from "node:fs/promises";
+import { existsSync, watch } from "node:fs";
+import { readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 /**
@@ -79,6 +79,44 @@ export function splits(config: BundleConfig): boolean {
   return config.splitting ?? config.entry.length > 1;
 }
 
+/**
+ * A nested output's map names its sources relative to `dist/`, not to the
+ * map's own directory (`dist/testing/index.js.map` lists
+ * `../src/testing/index.ts`); point each at the file it means.
+ */
+export function relocateSources(input: {
+  sources: readonly string[];
+  mapDirectory: string;
+  outdir: string;
+  exists: (file: string) => boolean;
+}): string[] {
+  return input.sources.map((source) => {
+    if (input.exists(path.resolve(input.mapDirectory, source))) return source;
+    const meant = path.resolve(input.outdir, source);
+    return input.exists(meant)
+      ? path.relative(input.mapDirectory, meant)
+      : source;
+  });
+}
+
+async function relocateMaps(outdir: string, maps: readonly string[]) {
+  for (const map of maps) {
+    const directory = path.dirname(map);
+    if (directory === outdir) continue;
+    const parsed: { sources?: string[] } = JSON.parse(
+      await readFile(map, "utf8"),
+    );
+    if (!parsed.sources) continue;
+    parsed.sources = relocateSources({
+      sources: parsed.sources,
+      mapDirectory: directory,
+      outdir,
+      exists: existsSync,
+    });
+    await writeFile(map, JSON.stringify(parsed));
+  }
+}
+
 async function build(input: {
   directory: string;
   manifest: PackageManifest;
@@ -104,6 +142,13 @@ async function build(input: {
     });
     for (const log of result.logs) console.error(log);
     ok &&= result.success;
+    if (result.success)
+      await relocateMaps(
+        path.join(input.directory, "dist"),
+        result.outputs
+          .filter((output) => output.kind === "sourcemap")
+          .map((output) => output.path),
+      );
   }
   return ok;
 }
@@ -125,14 +170,21 @@ if (import.meta.main) {
     const rebuild = () => {
       running = running.then(async () => {
         const started = performance.now();
-        const ok = await build({ directory, manifest });
+        // Bun.build can throw (an unreadable root, say); the watcher stays.
+        const ok = await build({ directory, manifest }).catch(
+          (error: unknown) => {
+            console.error(error);
+            return false;
+          },
+        );
         console.log(
           `${manifest.name} ${ok ? "built" : "failed"} in ${Math.round(performance.now() - started)} ms`,
         );
       });
     };
     rebuild();
-    watch(path.join(directory, "src"), { recursive: true }, () => {
+    watch(path.join(directory, "src"), { recursive: true }, (_event, file) => {
+      if (file && /(^|[\\/])__tests__[\\/]|\.test\.tsx?$/.test(file)) return;
       clearTimeout(timer);
       timer = setTimeout(rebuild, 50);
     });

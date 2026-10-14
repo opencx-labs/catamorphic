@@ -197,12 +197,13 @@ function elicitationContent(
 }
 
 /** The server policies govern for a tool, longest key first (`a__b` before `a`). */
-function policedServer(
+export function policedServer(
   toolName: string,
   policies: AttemptStart["toolPolicies"],
 ): { server: string; tool: string } | undefined {
   const mcp = parseMcpToolName(toolName, Object.keys(policies));
-  return mcp && policies[mcp.server] ? mcp : undefined;
+  // Own keys only: a server named `toString` has no policy.
+  return mcp && Object.hasOwn(policies, mcp.server) ? mcp : undefined;
 }
 
 /** A host tool call's tool-use id, when the CLI names it in the call's `_meta`. */
