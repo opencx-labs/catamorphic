@@ -1173,7 +1173,7 @@ kbd {
 .workspace-tab-close {
   position: absolute;
   inset-block: 0;
-  inset-inline-end: 2px;
+  inset-inline-end: 6px;
   height: 20px;
   margin-block: auto;
   opacity: 0;

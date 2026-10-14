@@ -789,7 +789,7 @@ function TabStrip({
                   );
               }}
               data-tab-active={active || undefined}
-              className={`workspace-tab group relative flex h-8 shrink-0 items-center border px-1 text-xs transition-[margin,border-radius,color,background-color,border-color] duration-150 ${vertical ? "min-w-0 rounded-lg" : "rounded-lg"} ${
+              className={`workspace-tab group relative flex h-8 shrink-0 items-center border text-xs transition-[margin,border-radius,color,background-color,border-color] duration-150 ${vertical ? "min-w-0 rounded-lg px-1" : "rounded-lg"} ${
                 mergeRight ? "rounded-r-none border-r-0 " : ""
               }${mergeLeft ? "-ml-1 rounded-l-none border-l-0 " : ""}${
                 tab.groupId && vertical
@@ -850,9 +850,12 @@ function TabStrip({
                   }`}
                 />
               )}
-              {/* The label and the close button riding over its end. */}
+              {/* The label and the close button riding over its end. The
+                label is the tab's press target, so it fills the tab inside
+                its border: the tab's padding is the label's own, and a press
+                anywhere on the tab opens it. */}
               <span
-                className={`relative flex min-w-0 items-center ${vertical ? "h-full flex-1" : ""}`}
+                className={`relative flex min-w-0 items-center ${vertical ? "h-full flex-1" : "self-stretch"}`}
               >
                 <OpenResourceButton
                   type="button"
@@ -866,7 +869,7 @@ function TabStrip({
                     }
                   }}
                   onMouseLeave={disarmHoverCard}
-                  className={`flex min-w-0 cursor-pointer items-center gap-1.5 px-1.5 ${vertical ? "h-full flex-1 text-left" : ""}`}
+                  className={`flex min-w-0 cursor-pointer items-center gap-1.5 ${vertical ? "h-full flex-1 px-1.5 text-left" : "self-stretch px-2.5"}`}
                   aria-current={active || undefined}
                 >
                   {/* Same signal vocabulary as the chat bubbles: spinner
@@ -946,7 +949,7 @@ function TabStrip({
                     onClick={() =>
                       onToggleGroup(parentGroup.parentKey.slice("chat:".length))
                     }
-                    className={`flex h-5 cursor-pointer items-center gap-0.5 rounded px-1 text-[10px] transition-colors duration-150 hover:bg-bg-overlay hover:text-accent ${groupActive ? "text-accent/80" : "text-fg-faint"}`}
+                    className={`flex h-5 cursor-pointer items-center gap-0.5 rounded px-1 text-[10px] transition-colors duration-150 hover:bg-bg-overlay hover:text-accent ${vertical ? "" : "me-1"} ${groupActive ? "text-accent/80" : "text-fg-faint"}`}
                     aria-label={`Expand ${parentGroup.memberKeys.length} grouped tabs`}
                   >
                     <ChevronsRight className="size-3" />

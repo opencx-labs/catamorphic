@@ -674,6 +674,17 @@ the historical log explains how it arrived here.
 - [Performance](docs/performance.md): idle lifecycle checks and sustained measurement.
 
 ## Design log
+### 2026-10-14: A tab in the strip opens from anywhere on it
+
+A tab in the top strip is a 32px pill that lights up under the pointer,
+but only its label, a 16px band around the title, took a press: a click
+near the pill's top, bottom or ends did nothing, so most clicks that
+missed the title missed the tab. The label now fills the tab inside its
+border, as a Chrome tab does. The tab's padding became the label's own and
+the close button sits as far from the tab's edge as before, so nothing on
+screen moves; the hover card, anchored to the label, now sits below the
+whole tab.
+
 ### 2026-10-14: A sidebar pushes what Work draws; its lists show their scroll only while it helps
 
 Opening or closing a sidebar beside a chat, a note or Settings slid the
