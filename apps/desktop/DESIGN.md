@@ -2601,7 +2601,12 @@ duration and chevron, and settling dropped the notes' steps in one frame
   move. Entrances start on
   the frame that shows them, so on a slow renderer whatever was still
   opening when the steps line came used to push the activity line down
-  while its count already read two or three.
+  while its count already read two or three. An opening of the two still
+  under way when the steps line comes ends in that frame: a renderer that
+  stalls as the turn starts begins the opening only after the stall
+  (macOS CI showed it unopened 600 ms on, the first step already there),
+  and playing it then slid the activity line 12 px from the steps line
+  and moved the conversation with it.
 - **Counts change on a beat.** A count and its word fade out and in, and
   their places widen or narrow over 200 ms, so "steps" and the clock slide
   when the count gains a digit.
@@ -2658,10 +2663,13 @@ step to the answer, also on a renderer slowed sixfold (as a busy macOS
 runner showed, late frames are where entrances overlap), the first steps
 line lands where the turn line was, measured from the spinner (a runner
 that stalls through the beat before the first step leaves no frame at
-rest to compare), the clock and the silence sit on the steps line, rows
+rest to compare), also on a renderer that stalls in the turn's first
+frames while its motion holds until the first step has landed, the
+clock and the silence sit on the steps line, rows
 keep their places, the activity line closes before it goes, selected
 text holds still under the pointer, a wheel over a code block, PageUp and
 the scrollbar take the view from a streaming answer, and an un-lurked
 chat's activity line is open from its first frame. `e2e/motion.e2e.ts`
 checks every message mounts hidden, also on a renderer slowed fourfold,
-where a turn's events land between frames.
+where a turn's events land between frames, and on one that stalls as the
+turn and the agent's words first show.

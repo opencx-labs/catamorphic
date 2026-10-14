@@ -12,7 +12,8 @@ import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
  *   without moving the spinner or the line;
  * - the turn line keeps the first steps line's place from the turn's
  *   start, so the steps line arriving moves nothing either, also on a
- *   renderer slowed until its frames come late;
+ *   renderer slowed until its frames come late, or one that stalls as
+ *   the turn opens and lets the first step land before the opening plays;
  * - a folded steps line changes its count on a beat, and "steps" (with
  *   the turn's clock after it) slides when the count gains a digit;
  * - the turn's clock and a long silence sit on that steps line;
@@ -27,7 +28,8 @@ import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
  * Positions are sampled on every animation frame and compared within the
  * phase where nothing should move, so a slow host only means fewer
  * samples, never a different answer. One pass throttles the renderer's CPU
- * so late frames are tested on every host, not only on a busy one.
+ * and one stalls it, so late frames are tested on every host, not only on
+ * a busy one.
  */
 
 let app: AppHandle;
@@ -186,6 +188,62 @@ const RECORDER = `(() => {
   return true;
 })()`;
 
+/** How long the renderer stalls in the frame that first shows the turn. */
+const TURN_STALL_MS = 600;
+/** How long it stalls again as the first steps line lands. */
+const STEP_STALL_MS = 700;
+
+/**
+ * Long main-thread tasks where a busy runner had them (macOS CI stalled
+ * for 600 ms there): one in the frame that first shows the turn, and one
+ * in the frame that first shows its steps line, each after the frame's
+ * styles are worked out and before its motion starts (a resize observer
+ * runs between the two). What arrives meanwhile lands between two late
+ * frames, and what the frame began to open starts only after the stall.
+ * Each stall is listed with its start and end.
+ */
+const STALLS = `(() => {
+  const dock = frontDock();
+  const busy = (ms) => {
+    const end = performance.now() + ms;
+    while (performance.now() < end);
+  };
+  const stalls = [];
+  const kinds = new Map();
+  const resized = new ResizeObserver((entries) => {
+    for (const entry of entries) {
+      const kind = kinds.get(entry.target);
+      if (!kind) continue;
+      kinds.delete(entry.target);
+      resized.unobserve(entry.target);
+      const at = performance.now();
+      busy(kind === 'turn' ? ${TURN_STALL_MS} : ${STEP_STALL_MS});
+      stalls.push([kind, Math.round(at), Math.round(performance.now())]);
+    }
+  });
+  let turn = false;
+  let step = false;
+  const mutated = new MutationObserver(() => {
+    const log = dock.querySelector('[role="log"]');
+    const reveal = log?.querySelector('[data-testid="chat-activity"]')?.closest('.cat-reveal');
+    if (!turn && reveal) {
+      turn = true;
+      kinds.set(reveal, 'turn');
+      resized.observe(reveal);
+    }
+    const line = log?.querySelector('[data-live-work] [data-testid="chat-turn-steps-toggle"]');
+    if (!step && line) {
+      step = true;
+      kinds.set(line, 'step');
+      resized.observe(line);
+    }
+    if (turn && step) mutated.disconnect();
+  });
+  mutated.observe(dock, { childList: true, subtree: true });
+  window.__stalls = stalls;
+  return true;
+})()`;
+
 async function setDisplay(live: "all" | "latest" | "notes") {
   await app.eval(
     `window.catamorphicDesktop.setPrefs({ chatWorkLive: ${JSON.stringify(live)}, chatWorkSettled: 'collapse' }).then(() => true)`,
@@ -210,7 +268,7 @@ async function recordTurn(
   name: string,
   prompt: string,
   during?: () => Promise<void>,
-  options: { cpuSlowdown?: number } = {},
+  options: { cpuSlowdown?: number; stalls?: boolean } = {},
 ): Promise<Frame[]> {
   // A renderer this many times slower: frames come late, and what mounted
   // between two of them starts its motion only at the later one.
@@ -218,11 +276,42 @@ async function recordTurn(
     await app.cdp("Emulation.setCPUThrottlingRate", {
       rate: options.cpuSlowdown,
     });
+  // A renderer that stalls (see STALLS) and starts motion late: on macOS CI
+  // the turn's openings were still at their first frame when the stall
+  // that followed it ended, and the first step had arrived meanwhile. Here
+  // motion holds from the send until the steps line's stall has passed, so
+  // the turn's work always lands before anything it opened has played.
+  const holding = options.stalls
+    ? async () => {
+        await runWait("return window.__stalls.length === 2;", {
+          label: "the renderer stalled as the turn and its steps line came",
+          timeoutMs: 30_000,
+        });
+        await app.cdp("Animation.setPlaybackRate", { playbackRate: 1 });
+        await during?.();
+      }
+    : during;
+  if (options.stalls) {
+    // Only the turn's motion is held: what the new chat opened with has
+    // played (held, the dock's own entrance would scale what is measured).
+    await runWait(
+      `return document.getAnimations().every((animation) =>
+         animation.playState !== 'running' ||
+         animation.effect?.getComputedTiming().iterations === Infinity);`,
+      { label: "the chat at rest" },
+    );
+    await app.cdp("Animation.enable");
+    await app.cdp("Animation.setPlaybackRate", { playbackRate: 0 });
+  }
   try {
-    return await sampleTurn(name, prompt, during);
+    return await sampleTurn(name, prompt, holding, options.stalls);
   } finally {
     if (options.cpuSlowdown)
       await app.cdp("Emulation.setCPUThrottlingRate", { rate: 1 });
+    if (options.stalls) {
+      await app.cdp("Animation.setPlaybackRate", { playbackRate: 1 });
+      await app.cdp("Animation.disable");
+    }
   }
 }
 
@@ -230,8 +319,10 @@ async function sampleTurn(
   name: string,
   prompt: string,
   during?: () => Promise<void>,
+  stalls = false,
 ): Promise<Frame[]> {
   await run(RECORDER);
+  if (stalls) await run(`return ${STALLS};`);
   await run(`
     const input = composer(); input.focus();
     setReactValue(input, ${JSON.stringify(prompt)});
@@ -551,6 +642,39 @@ describe("chat motion", () => {
         cpuSlowdown: 6,
       }),
     );
+  }, 120_000);
+
+  it("holds the turn's start still when the renderer stalls as it opens", async () => {
+    for (const live of ["notes", "all"] as const) {
+      await setDisplay(live);
+      await newChat();
+      const frames = await recordTurn(
+        `${live}-stalled`,
+        "pace the work quickly",
+        undefined,
+        { stalls: true },
+      );
+      expect(
+        (await run<[string, number, number][]>("return window.__stalls;")).map(
+          ([kind]) => kind,
+        ),
+        "where the renderer stalled",
+      ).toEqual(["turn", "step"]);
+      // The first step landed while the activity line's opening was held:
+      // in the frame before the steps line, the line had yet to open.
+      const first = frames.findIndex((frame) => frame.spinner && frame.toggle);
+      const kept = frames
+        .slice(0, first)
+        .filter((frame) => frame.spinner)
+        .at(-1);
+      expect(kept?.revealMoving, "the activity line opening").toBe(true);
+      expect(kept?.reveal?.[3], "its height then").toBeLessThan(1);
+      expect(scrollJumps(frames).map((frame) => frame.t)).toEqual([]);
+      if (live === "notes") {
+        expectStill(frames);
+        expectHandOver(frames);
+      } else expectRowsInPlace(frames);
+    }
   }, 120_000);
 
   it("keeps an open list's rows in place as wider steps join it", async () => {

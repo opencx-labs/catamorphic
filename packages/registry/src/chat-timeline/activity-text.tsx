@@ -256,6 +256,18 @@ export function afterMotion(
 }
 
 /**
+ * Ends the transitions under way on `element` itself (not its children's)
+ * at once, so what they move is in its place in the next frame. Reading
+ * its animations styles it first, so a transition the renderer has not
+ * yet started (or has yet to style) ends too.
+ */
+export function finishTransitions(element: Element | null | undefined): void {
+  if (!element || typeof element.getAnimations !== "function") return;
+  for (const animation of element.getAnimations())
+    if ("transitionProperty" in animation) animation.finish();
+}
+
+/**
  * Whether `element` has a transition of `property` under way. Reading its
  * animations styles it first, so a transition the renderer has not yet
  * started starts here, and counts.

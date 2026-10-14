@@ -54,6 +54,7 @@ import { StickToBottom, useStickToBottomContext } from "use-stick-to-bottom";
 import {
   ActivityText,
   afterMotion,
+  finishTransitions,
   transitionPlaying,
   useLinger,
 } from "./activity-text.js";
@@ -2233,6 +2234,17 @@ function ActivityLine({
   // Closing, it keeps the turn line as it was: the two close as one.
   const lined = useRef(turnLine);
   if (!leaving) lined.current = turnLine;
+  // The first steps line takes the turn line's place in this commit: an
+  // opening still under way ends in it, so the frame that shows the steps
+  // line shows the activity line where it stays. A renderer that stalls
+  // as the turn starts begins the opening only after the stall, and the
+  // first step, arrived meanwhile, would show above a line still opening.
+  const handing = useRef(lined.current);
+  useLayoutEffect(() => {
+    if (handing.current && !lined.current)
+      finishTransitions(line.current?.closest(".cat-reveal"));
+    handing.current = lined.current;
+  });
   // A turn line there as the activity line opens is part of its opening;
   // one that comes later (a next turn under a line still open) opens its
   // own place.

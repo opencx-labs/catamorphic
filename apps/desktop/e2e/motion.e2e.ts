@@ -676,11 +676,45 @@ describe("animate-before-unmount", () => {
     // events arrive between late frames, and the turn's first steps line
     // comes with work and prose that joined it in the same frame, taking
     // the place the turn line kept for it (it fades in there, unmoved).
-    for (const rate of [1, 4]) {
+    // And on one that stalls for 600 ms in the frame that first shows the
+    // turn and again in the one that first shows the agent's words, as a
+    // macOS runner did: the rest of the turn lands in one late frame.
+    for (const { rate, stalls } of [
+      { rate: 1, stalls: false },
+      { rate: 4, stalls: false },
+      { rate: 1, stalls: true },
+    ]) {
+      const pass = stalls ? "stalled" : `${rate}x slower`;
       await app.cdp("Emulation.setCPUThrottlingRate", { rate });
       try {
         await run(`
           const log = visibleDock().querySelector('[role="log"]');
+          if (${stalls}) {
+            // A long task after the frame's styles, before its motion.
+            window.__stalls = 0;
+            const stalled = new ResizeObserver((entries) => {
+              for (const { target } of entries) {
+                stalled.unobserve(target);
+                const end = performance.now() + 600;
+                while (performance.now() < end);
+                window.__stalls++;
+              }
+            });
+            // The first of each to arrive in this turn.
+            const firsts = ['[data-testid="chat-activity"]', 'article:not([data-user-message])'];
+            window.__stallObs = new MutationObserver((muts) => {
+              for (const m of muts) for (const n of m.addedNodes) {
+                if (!(n instanceof HTMLElement)) continue;
+                for (const [i, selector] of firsts.entries()) {
+                  const el = selector && (n.matches(selector) ? n : n.querySelector(selector));
+                  if (!el) continue;
+                  firsts[i] = undefined;
+                  stalled.observe(el);
+                }
+              }
+            });
+            window.__stallObs.observe(log, { childList: true, subtree: true });
+          }
           window.__mounts = [];
           window.__mountEls = [];
           window.__mountsObs = new MutationObserver((muts) => {
@@ -713,17 +747,23 @@ describe("animate-before-unmount", () => {
              el.isConnected && getComputedStyle(el).opacity === '1');
            if (!settled) return false;
            window.__mountsObs.disconnect();
+           window.__stallObs?.disconnect();
            return window.__mounts;`,
           {
             timeoutMs: 30_000,
-            label: `all arrival paths mounted and settled (${rate}x slower)`,
+            label: `all arrival paths mounted and settled (${pass})`,
           },
         );
         for (const mount of mounts)
           expect(
             Number(mount.atInsert),
-            `${rate}x slower: ${JSON.stringify(mount)}`,
+            `${pass}: ${JSON.stringify(mount)}`,
           ).toBeLessThan(1);
+        if (stalls)
+          expect(
+            await run<number>("return window.__stalls;"),
+            "the renderer stalled as the turn and the agent's words came",
+          ).toBe(2);
         // The turn has ended before the next one starts.
         await runWait(
           `return !visibleDock().querySelector('[data-testid="chat-activity"]');`,

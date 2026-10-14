@@ -241,6 +241,66 @@ describe("ChatTimeline live chrome", () => {
       else expect(list?.className).not.toContain("cat-step-in");
     });
 
+  it("ends the activity line's opening as the first steps line takes the turn line's place", async () => {
+    // Its opening transitions, as a renderer that stalled as the turn
+    // started holds them: not yet played.
+    const finished: string[] = [];
+    const prototype: { getAnimations?: unknown } = Element.prototype;
+    prototype.getAnimations = function (this: Element) {
+      if (!this.matches(".cat-reveal")) return [];
+      const owner = this.querySelector('[data-testid="chat-activity"]')
+        ? "activity line"
+        : "turn line";
+      return ["grid-template-rows", "opacity", "margin-top"].map(
+        (transitionProperty) => ({
+          transitionProperty,
+          playState: "idle",
+          finish: () => finished.push(`${owner} ${transitionProperty}`),
+        }),
+      );
+    };
+    try {
+      const items: Item[] = [
+        input("t1", "Fix the parser"),
+        reply("n1", "t1", "Reading the parser first."),
+      ];
+      await render({
+        timeline: timelineOf({ turns: [running()], items }),
+        activity: "Working",
+      });
+      await render({
+        timeline: timelineOf({ turns: [running()], items }),
+        activity: "Reading the parser",
+      });
+      expect(finished).toEqual([]);
+      const stepped = [
+        ...items,
+        command("c1", "t1", { status: "in_progress" }),
+      ];
+      await render({
+        timeline: timelineOf({ turns: [running()], items: stepped }),
+        activity: "Reading files",
+      });
+      expect($('[data-testid="chat-turn-line"]')).toBeNull();
+      expect(finished).toEqual([
+        "activity line grid-template-rows",
+        "activity line opacity",
+        "activity line margin-top",
+      ]);
+      // Once: more steps leave its motion alone.
+      await render({
+        timeline: timelineOf({
+          turns: [running()],
+          items: [...stepped, command("c2", "t1", { status: "in_progress" })],
+        }),
+        activity: "Running tests",
+      });
+      expect(finished).toHaveLength(3);
+    } finally {
+      delete prototype.getAnimations;
+    }
+  });
+
   it("opens a row's gap with the work that joins the turn", async () => {
     const items: Item[] = [
       input("t1", "Fix the parser"),
