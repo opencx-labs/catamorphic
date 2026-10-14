@@ -51,7 +51,12 @@ import {
 import Markdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { StickToBottom, useStickToBottomContext } from "use-stick-to-bottom";
-import { ActivityText, useLinger } from "./activity-text.js";
+import {
+  ActivityText,
+  afterMotion,
+  transitionPlaying,
+  useLinger,
+} from "./activity-text.js";
 import { ChatQueue, type HintComponent, TitleHint } from "./chat-queue.js";
 import {
   assignBackgroundCommands,
@@ -1286,8 +1291,12 @@ function JumpToPreviousUserMessage({
   );
 }
 
-/** The entrance every message plays once: a short rise and fade. */
-function useEntered(already = false): string {
+/**
+ * The entrance every message plays once: a short rise and fade. A message
+ * taking a place already kept for it (`rise: false`) only fades in where
+ * it is, so nothing in it moves.
+ */
+function useEntered(already = false, { rise = true } = {}): string {
   const [entered, setEntered] = useState(already);
   // Double rAF: the first frame aligns with the commit, the second
   // guarantees the browser resolved the hidden pose before it flips; a
@@ -1304,6 +1313,8 @@ function useEntered(already = false): string {
   }, []);
   // transition-[opacity,translate], not transform: Tailwind v4's
   // translate-y-* sets the individual `translate` property.
+  if (!rise)
+    return `motion-safe:transition-opacity motion-safe:duration-200 motion-safe:ease-[cubic-bezier(0.2,0,0,1)] ${entered ? "motion-safe:opacity-100" : "motion-safe:opacity-0"}`;
   return `motion-safe:transition-[opacity,translate] motion-safe:duration-200 motion-safe:ease-[cubic-bezier(0.2,0,0,1)] ${entered ? "motion-safe:translate-y-0 motion-safe:opacity-100" : "motion-safe:translate-y-1 motion-safe:opacity-0"}`;
 }
 
@@ -1535,9 +1546,10 @@ const AgentMessage = memo(function AgentMessage({
   const host = useContext(HostContext);
   const actions = useContext(ActionsContext);
   const onScreen = useContext(OnScreen);
-  // Taking the turn line's place on screen: neither rises nor opens.
+  // Taking the turn line's place on screen: it fades in where it is, and
+  // neither rises nor opens.
   const [inPlace] = useState(() => !still && placed && onScreen.current);
-  const enterClasses = useEntered(still || inPlace);
+  const enterClasses = useEntered(still, { rise: !inPlace });
   const [bornLive] = useState(
     () => !still && (!item || item.status === "in_progress"),
   );
@@ -1638,14 +1650,24 @@ function Growing({
   const onScreen = useContext(OnScreen);
   const [fromNothing] = useState(() => (active || enter) && onScreen.current);
   const [opening, setOpening] = useState(fromNothing);
+  // Its height lets go once the last line it opened has played out,
+  // however late the renderer started it: released mid-way, the box would
+  // snap to the text's height.
+  const lineOpening = useCallback(
+    () => transitionPlaying(box.current, "height"),
+    [],
+  );
   useEffect(() => {
     if (!opening) return;
-    const timer = window.setTimeout(() => setOpening(false), GROW_SETTLE_MS);
-    return () => window.clearTimeout(timer);
-  }, [opening]);
+    return afterMotion(GROW_SETTLE_MS, lineOpening, () => setOpening(false));
+  }, [opening, lineOpening]);
   // It keeps growing a moment past the last words, so the line they
   // opened plays out rather than snapping when the reply completes.
-  const writing = useLinger(active ? true : undefined, GROW_SETTLE_MS);
+  const writing = useLinger(
+    active ? true : undefined,
+    GROW_SETTLE_MS,
+    lineOpening,
+  );
   const growing = Boolean(writing.value) || opening;
   useLayoutEffect(() => {
     const outer = box.current;
@@ -2130,15 +2152,21 @@ function Reveal({
     setMoving(false);
     setEntering(false);
   });
-  // Its transition's end settles it; the timer stands in where none plays.
+  const box = useRef<HTMLDivElement>(null);
+  // Its transition's end settles it; the timer stands in where none plays,
+  // and waits on while it does (on a slow renderer it starts late).
   // Closed, it stays clipped until it goes.
   useEffect(() => {
     if (!moving || closed) return;
-    const timer = window.setTimeout(() => rest.current(), REVEAL_MS + 80);
-    return () => window.clearTimeout(timer);
+    return afterMotion(
+      REVEAL_MS + 80,
+      () => transitionPlaying(box.current, "grid-template-rows"),
+      () => rest.current(),
+    );
   }, [moving, closed]);
   return (
     <div
+      ref={box}
       className={`cat-reveal ${className}`}
       data-entering={entering || undefined}
       data-moving={moving || undefined}
@@ -2186,13 +2214,20 @@ function ActivityLine({
   startingId?: string;
   onCancel?: (turnId: string) => ActionResult;
 }) {
+  const line = useRef<HTMLDivElement>(null);
   // It stays for its exit once the work it named is done, with the words
-  // it last said; the timeline itself never renders again for that.
-  const shown = useLinger(activity ? true : undefined, REVEAL_MS);
+  // it last said, until its closing has played (however late the renderer
+  // starts it: gone before, the conversation would jump by its height);
+  // the timeline itself never renders again for that.
+  const shown = useLinger(activity ? true : undefined, REVEAL_MS, () =>
+    transitionPlaying(
+      line.current?.closest(".cat-reveal"),
+      "grid-template-rows",
+    ),
+  );
   const said = useRef(activity);
   if (activity) said.current = activity;
   const cancel = useLinger(startingId, REVEAL_MS);
-  const line = useRef<HTMLDivElement>(null);
   const present = Boolean(shown.value && said.current);
   const leaving = shown.leaving;
   // Closing, it keeps the turn line as it was: the two close as one.
@@ -2467,11 +2502,13 @@ function FollowScrollerResize() {
  * or selects holds still under the pointer; a drag that selects text lets
  * go, as the library means it to.
  *
- * The library hears the wheel itself but reads other scrolls from scroll
- * events, which it ignores while the content resizes, as it does nearly
- * every frame of a streaming answer. So a touch drag, a key that scrolls
- * up and a press on the scrollbar let go here, before the next growth
- * pulls the view back down.
+ * The library reads scrolls from scroll events, which it ignores while
+ * the content resizes, as it does nearly every frame of a streaming
+ * answer, and hears the wheel only when the first box under the pointer
+ * that may scroll is the log (not over a code block, which scrolls
+ * sideways). So a wheel or a touch drag that scrolls the log up, a key
+ * that scrolls up and a press on the scrollbar let go here, before the
+ * next growth pulls the view back down.
  */
 function PinToBottom() {
   const { contentRef, scrollRef, state, stopScroll } =
@@ -2534,6 +2571,12 @@ function PinToBottom() {
       selected = now;
       pin();
     };
+    const onWheel = (event: WheelEvent) => {
+      // A pinch zooms; it scrolls nothing.
+      if (event.deltaY < 0 && !event.ctrlKey && !scrollsWithin(event, scroller))
+        letGo();
+      pin();
+    };
     const onTouchStart = (event: TouchEvent) => {
       touchY = event.touches[0]?.clientY;
     };
@@ -2568,7 +2611,7 @@ function PinToBottom() {
     scroller.addEventListener("touchstart", onTouchStart, { passive: true });
     scroller.addEventListener("touchmove", onTouchMove, { passive: true });
     scroller.addEventListener("scroll", onScroll, { passive: true });
-    scroller.addEventListener("wheel", pin, { passive: true });
+    scroller.addEventListener("wheel", onWheel, { passive: true });
     return () => {
       update.current = () => undefined;
       clearTimeout(recheck);
@@ -2580,13 +2623,31 @@ function PinToBottom() {
       scroller.removeEventListener("touchstart", onTouchStart);
       scroller.removeEventListener("touchmove", onTouchMove);
       scroller.removeEventListener("scroll", onScroll);
-      scroller.removeEventListener("wheel", pin);
+      scroller.removeEventListener("wheel", onWheel);
     };
   }, [contentRef, scrollRef, state, stopScroll]);
   // It renders again as the library lets go or returns to the end, which
   // pins anew.
   useLayoutEffect(() => update.current());
   return null;
+}
+
+/**
+ * Whether a wheel going up scrolls a box inside the log rather than the
+ * log: one between the pointer and the log that scrolls vertically and is
+ * not at its top yet (an opened step's long output).
+ */
+function scrollsWithin(event: WheelEvent, scroller: HTMLElement): boolean {
+  for (
+    let node = event.target instanceof Element ? event.target : null;
+    node && node !== scroller;
+    node = node.parentElement
+  ) {
+    if (node.scrollTop <= 0 || node.scrollHeight <= node.clientHeight) continue;
+    const { overflowY } = getComputedStyle(node);
+    if (overflowY === "auto" || overflowY === "scroll") return true;
+  }
+  return false;
 }
 
 /** A key that scrolls the focused scroller up. */

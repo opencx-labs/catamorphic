@@ -204,19 +204,73 @@ export function SwapText({
 /**
  * A value that stays for `ms` after it goes away, marked as leaving, so
  * what shows it can play its exit before it unmounts. A value that comes
- * back meanwhile simply stays.
+ * back meanwhile simply stays. With `playing`, it stays on while its exit
+ * still plays (see `afterMotion`).
  */
 export function useLinger<T>(
   value: T | undefined,
   ms: number,
+  playing?: () => boolean,
 ): { value: T | undefined; leaving: boolean } {
   const [kept, setKept] = useState(value);
   if (value !== undefined && value !== kept) setKept(value);
   const leaving = value === undefined && kept !== undefined;
+  const exit = useRef(playing);
+  exit.current = playing;
   useEffect(() => {
     if (!leaving) return;
-    const timer = window.setTimeout(() => setKept(undefined), ms);
-    return () => window.clearTimeout(timer);
+    return afterMotion(
+      ms,
+      () => exit.current?.() ?? false,
+      () => setKept(undefined),
+    );
   }, [leaving, ms]);
   return { value: value ?? kept, leaving };
+}
+
+/** The longest a motion's end is waited for past its own length. */
+const MOTION_WAIT_MS = 2_000;
+
+/**
+ * Calls `done` once `ms` have passed and `playing` no longer says the
+ * motion it stands in for is under way. On a slow renderer a transition
+ * starts with the first frame that styles it, which can come long after
+ * the change: a timer alone would end it before it played, snapping what
+ * it moves (a line that closes would drop its height in one frame).
+ * Returns a cancel.
+ */
+export function afterMotion(
+  ms: number,
+  playing: () => boolean,
+  done: () => void,
+): () => void {
+  const deadline = performance.now() + ms + MOTION_WAIT_MS;
+  let timer: ReturnType<typeof setTimeout>;
+  const check = () => {
+    if (playing() && performance.now() < deadline)
+      timer = setTimeout(check, 50);
+    else done();
+  };
+  timer = setTimeout(check, ms);
+  return () => clearTimeout(timer);
+}
+
+/**
+ * Whether `element` has a transition of `property` under way. Reading its
+ * animations styles it first, so a transition the renderer has not yet
+ * started starts here, and counts.
+ */
+export function transitionPlaying(
+  element: Element | null | undefined,
+  property: string,
+): boolean {
+  if (!element || typeof element.getAnimations !== "function") return false;
+  return element
+    .getAnimations()
+    .some(
+      (animation) =>
+        "transitionProperty" in animation &&
+        animation.transitionProperty === property &&
+        animation.playState === "running",
+    );
 }

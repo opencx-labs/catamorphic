@@ -672,39 +672,66 @@ describe("animate-before-unmount", () => {
     await run(
       `return window.catamorphicDesktop.setPrefs({ chatWorkLive: 'all', chatWorkSettled: 'keep' }).then(() => true);`,
     );
-    await run(`
-      const log = visibleDock().querySelector('[role="log"]');
-      window.__mounts = [];
-      window.__mountEls = [];
-      window.__mountsObs = new MutationObserver((muts) => {
-        for (const m of muts) for (const n of m.addedNodes) {
-          if (!(n instanceof HTMLElement)) continue;
-          const articles = n.matches('article') ? [n] : [...n.querySelectorAll('article')];
-          for (const a of articles) {
-            window.__mounts.push({ atInsert: getComputedStyle(a).opacity });
-            window.__mountEls.push(a);
-          }
-        }
-      });
-      window.__mountsObs.observe(log, { childList: true, subtree: true });
-      const ta = visibleDock().querySelector('[data-composer-input]');
-      setReactValue(ta, 'preamble entrance check');
-      ta.closest('form').requestSubmit();
-      return true;
-    `);
-    // 1 user echo + 2 flushed preambles + 1 final reply — each must have
-    // mounted hidden and (eventually) settled fully visible.
-    const mounts = await runWait<{ atInsert: string }[]>(
-      `if (window.__mounts.length < 4) return false;
-       const settled = window.__mountEls.every((el) =>
-         el.isConnected && getComputedStyle(el).opacity === '1');
-       if (!settled) return false;
-       window.__mountsObs.disconnect();
-       return window.__mounts;`,
-      { timeoutMs: 30_000, label: "all arrival paths mounted and settled" },
-    );
-    for (const mount of mounts) {
-      expect(Number(mount.atInsert)).toBeLessThan(1);
+    // Then again on a renderer slowed fourfold, as on a busy CI runner:
+    // events arrive between late frames, and the turn's first steps line
+    // comes with work and prose that joined it in the same frame, taking
+    // the place the turn line kept for it (it fades in there, unmoved).
+    for (const rate of [1, 4]) {
+      await app.cdp("Emulation.setCPUThrottlingRate", { rate });
+      try {
+        await run(`
+          const log = visibleDock().querySelector('[role="log"]');
+          window.__mounts = [];
+          window.__mountEls = [];
+          window.__mountsObs = new MutationObserver((muts) => {
+            for (const m of muts) for (const n of m.addedNodes) {
+              if (!(n instanceof HTMLElement)) continue;
+              const articles = n.matches('article') ? [n] : [...n.querySelectorAll('article')];
+              for (const a of articles) {
+                window.__mounts.push({
+                  atInsert: getComputedStyle(a).opacity,
+                  // What arrived, for a failure to name.
+                  what: a.hasAttribute('data-user-message') ? 'user echo'
+                    : a.hasAttribute('data-live-work') ? 'live work' : 'reply',
+                  text: a.textContent.slice(0, 60),
+                });
+                window.__mountEls.push(a);
+              }
+            }
+          });
+          window.__mountsObs.observe(log, { childList: true, subtree: true });
+          const ta = visibleDock().querySelector('[data-composer-input]');
+          setReactValue(ta, 'preamble entrance check');
+          ta.closest('form').requestSubmit();
+          return true;
+        `);
+        // 1 user echo + 2 flushed preambles + 1 final reply — each must
+        // have mounted hidden and (eventually) settled fully visible.
+        const mounts = await runWait<{ atInsert: string }[]>(
+          `if (window.__mounts.length < 4) return false;
+           const settled = window.__mountEls.every((el) =>
+             el.isConnected && getComputedStyle(el).opacity === '1');
+           if (!settled) return false;
+           window.__mountsObs.disconnect();
+           return window.__mounts;`,
+          {
+            timeoutMs: 30_000,
+            label: `all arrival paths mounted and settled (${rate}x slower)`,
+          },
+        );
+        for (const mount of mounts)
+          expect(
+            Number(mount.atInsert),
+            `${rate}x slower: ${JSON.stringify(mount)}`,
+          ).toBeLessThan(1);
+        // The turn has ended before the next one starts.
+        await runWait(
+          `return !visibleDock().querySelector('[data-testid="chat-activity"]');`,
+          { timeoutMs: 30_000, label: "turn settled" },
+        );
+      } finally {
+        await app.cdp("Emulation.setCPUThrottlingRate", { rate: 1 });
+      }
     }
     await run(
       `return window.catamorphicDesktop.setPrefs({ chatWorkLive: 'latest', chatWorkSettled: 'collapse' }).then(() => true);`,

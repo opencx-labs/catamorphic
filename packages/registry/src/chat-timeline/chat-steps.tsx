@@ -1215,8 +1215,9 @@ function StepCount({ count }: { count: number }) {
  * resolve one.
  *
  * A running turn's first steps line takes the place its turn line kept
- * for it above the activity line (`placed`): the line is simply there, its
- * count fading in, and only an open list below it opens its height.
+ * for it above the activity line (`placed`): the line is simply there,
+ * fading in with its message, and only an open list below it opens its
+ * height.
  */
 export function TurnSteps({
   steps,
@@ -1312,7 +1313,7 @@ export function TurnSteps({
                 <button
                   type="button"
                   onClick={() => setChosen(!expanded)}
-                  className={`flex cursor-pointer items-center gap-1 text-[11px] text-fg-faint transition-colors duration-100 hover:text-fg-muted ${placed ? "cat-fade-in" : ""}`}
+                  className="flex cursor-pointer items-center gap-1 text-[11px] text-fg-faint transition-colors duration-100 hover:text-fg-muted"
                   aria-expanded={expanded}
                   data-testid="chat-turn-steps-toggle"
                 >

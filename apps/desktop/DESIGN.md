@@ -2594,8 +2594,11 @@ duration and chevron, and settling dropped the notes' steps in one frame
   turn's first steps line, the turn line above it keeps that line's place,
   the column's gap included, with the turn's clock (and, after 30 seconds,
   its silence). The two open as one, and the first steps line takes the
-  turn line's place in the same frame: its count fades in, an open list
-  opens below it, and the activity line does not move. Entrances start on
+  turn line's place in the same frame: its message fades in where it is,
+  without the rise every other message arrives with (a message is never
+  simply there, also when work and a note come with it in one late
+  frame), an open list opens below it, and the activity line does not
+  move. Entrances start on
   the frame that shows them, so on a slow renderer whatever was still
   opening when the steps line came used to push the activity line down
   while its count already read two or three.
@@ -2611,9 +2614,13 @@ duration and chevron, and settling dropped the notes' steps in one frame
   at a fixed time. Its row starts skipping layout out of view only after
   that: the first frame a row skips, it keeps its last size, which the
   folding note would make short (the conversation jumped up and back by
-  the note's height for a frame as every such turn settled). A row
-  carries its own spacing, which opens with it, and its duration and
-  chevron follow its label, not the reply's right edge.
+  the note's height for a frame as every such turn settled). The
+  activity line closing, its opening settling, and a reply letting go of
+  the height it grew by likewise wait for their transitions, which a slow
+  renderer starts only with its next frame: a timer alone cut them short
+  (a runner stalled for half a second dropped the activity line's height
+  in one frame). A row carries its own spacing, which opens with it, and
+  its duration and chevron follow its label, not the reply's right edge.
 - **The browser holds the latest message still.** While the chat follows
   it, everything but an anchor at the conversation's end opts out of
   scroll anchoring, so whatever grows or shrinks above (a streamed line, a
@@ -2623,9 +2630,11 @@ duration and chevron, and settling dropped the notes' steps in one frame
   chat follows: a reader who let go a few pixels short of the end stays
   let go; a press in the conversation, and text selected in it, hold what
   is under the pointer still (a drag that selects lets go); and a touch
-  drag, a key that scrolls up, a press on the scrollbar or a jump to an
-  earlier message let go even mid-stream, where the scroll library's own
-  reading of scroll events is drowned out by the growing answer.
+  drag, a key that scrolls up, a press on the scrollbar, a jump to an
+  earlier message, and a wheel over a code block (which scrolls sideways,
+  so the scroll library never took that wheel for the log's) let go even
+  mid-stream, where the library's own reading of scroll events is drowned
+  out by the growing answer.
 - **Only what changes renders.** The clock is the one part that renders
   every second; a beat renders only the text it changes; a turn handed
   back unchanged keeps its rows; a streaming reply parses only its last
@@ -2646,8 +2655,13 @@ duration and chevron, and settling dropped the notes' steps in one frame
 `e2e/chat-motion.e2e.ts` samples every frame of a paced turn: the spinner,
 the words' box and a folded steps line hold still from before the first
 step to the answer, also on a renderer slowed sixfold (as a busy macOS
-runner showed, late frames are where entrances overlap), the clock and the
-silence sit on the steps line, rows keep their places, the activity line
-closes before it goes, selected text holds still under the pointer,
-PageUp and the scrollbar take the view from a streaming answer, and an
-un-lurked chat's activity line is open from its first frame.
+runner showed, late frames are where entrances overlap), the first steps
+line lands where the turn line was, measured from the spinner (a runner
+that stalls through the beat before the first step leaves no frame at
+rest to compare), the clock and the silence sit on the steps line, rows
+keep their places, the activity line closes before it goes, selected
+text holds still under the pointer, a wheel over a code block, PageUp and
+the scrollbar take the view from a streaming answer, and an un-lurked
+chat's activity line is open from its first frame. `e2e/motion.e2e.ts`
+checks every message mounts hidden, also on a renderer slowed fourfold,
+where a turn's events land between frames.

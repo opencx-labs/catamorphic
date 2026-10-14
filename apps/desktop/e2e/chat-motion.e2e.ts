@@ -341,6 +341,41 @@ function expectStill(frames: Frame[]) {
   return steady;
 }
 
+/**
+ * The turn line kept the first steps line's place, and that line took it
+ * in one frame and kept it: in the last frame before the first steps
+ * line, the turn line sat above the activity line, as far above the
+ * spinner as the steps line then sits from its first frame to the answer
+ * (folded, nothing comes between them). Measured from the spinner, so it
+ * holds wherever the first step lands, also on a renderer that stalls
+ * through the beat before it, while something above is still opening:
+ * the steady phase (see expectStill) then starts only after it.
+ */
+function expectHandOver(frames: Frame[]) {
+  const first = frames.findIndex((frame) => frame.spinner && frame.toggle);
+  const end = frames.findIndex((frame) => frame.answer);
+  expect(first, "a steps line came").toBeGreaterThan(0);
+  expect(end, "the answer arrived").toBeGreaterThan(first);
+  const kept = frames
+    .slice(0, first)
+    .filter((frame) => frame.spinner)
+    .at(-1);
+  expect(kept?.turnLine, "the turn line kept the place first").toBeTruthy();
+  const above = (frame: Frame, box: Box) =>
+    (frame.spinner?.[1] ?? 0) - (box?.[1] ?? 0);
+  const place = kept ? above(kept, kept.turnLine) : 0;
+  const lined = frames
+    .slice(first, end)
+    .filter((frame) => frame.spinner && frame.toggle);
+  expect(lined.length).toBeGreaterThan(10);
+  expect(
+    lined
+      .filter((frame) => Math.abs(above(frame, frame.toggle) - place) > 0.5)
+      .map((frame) => [frame.t, above(frame, frame.toggle), place]),
+    "the steps line in the turn line's place",
+  ).toEqual([]);
+}
+
 /** The frames while steps arrive: from a second step to the answer. */
 function workPhase(frames: Frame[]): Frame[] {
   const start = frames.findIndex((frame) =>
@@ -417,14 +452,11 @@ describe("chat motion", () => {
       expect(frame.rowExtras).toBe(0);
     }
 
-    // The spinner, the words' box and the steps line hold still, from
-    // before the first step: the steps line arrived where the turn line
-    // kept its place.
-    const steady = expectStill(frames);
-    expect(
-      steady.some((frame) => frame.turnLine && !frame.toggle),
-      "the turn line kept the place first",
-    ).toBe(true);
+    // The spinner, the words' box and the steps line hold still once the
+    // turn's line is open and at rest, and the steps line arrived where
+    // the turn line kept its place.
+    expectStill(frames);
+    expectHandOver(frames);
 
     // Each new activity first fades the old words away, then shows its own.
     let swaps = 0;
@@ -509,6 +541,7 @@ describe("chat motion", () => {
     for (const frame of frames.filter((f) => f.rowParts.length > 0))
       expect(lineParts(frame)).toEqual(["svg", "activity-text"]);
     expectStill(frames);
+    expectHandOver(frames);
     expect(scrollJumps(frames).map((frame) => frame.t)).toEqual([]);
     // An open list's first row stays under its line as the list opens.
     await setDisplay("all");
@@ -569,18 +602,74 @@ describe("chat motion", () => {
         );
         await mark("pinned");
         await new Promise((resolve) => setTimeout(resolve, 1200));
-        // A person's wheel, which is what lets go of the latest message.
-        const at = await run<{ x: number; y: number }>(
-          `const r = frontDock().querySelector('[role="log"]').getBoundingClientRect();
-           return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) };`,
-        );
+        await mark("followed");
+        // A person's wheel, which is what lets go of the latest message,
+        // over a code block while the answer opens a new line: the block
+        // scrolls sideways, so the scroll library does not take the wheel
+        // for the log's, and it reads the scroll the wheel makes as the
+        // answer's growth, which used to pull the view back down.
+        for (let attempt = 1; ; attempt++) {
+          const wheel = await runWait<{ x: number; y: number; deltaY: number }>(
+            `const s = logScroller();
+             // Looked for on every frame: a line opens for 180 ms.
+             return new Promise((resolve) => {
+               const started = performance.now();
+               const look = () => {
+                 const view = s.getBoundingClientRect();
+                 // The latest line's last few pixels opening: the answer
+                 // grows on for a few frames, and rises only that much
+                 // before the wheel arrives.
+                 const grow = [...s.querySelectorAll('.cat-grow[data-growing]')].at(-1);
+                 const left = grow ? grow.firstElementChild.getBoundingClientRect().height -
+                   grow.getBoundingClientRect().height : 0;
+                 const blocks = [...s.querySelectorAll('.cat-markdown pre')].filter((el) => {
+                   const r = el.getBoundingClientRect();
+                   return r.top > view.top + 20 && r.bottom < view.bottom - 20 &&
+                     el.contains(document.elementFromPoint(r.left + 24, r.top + 4)) &&
+                     el.contains(document.elementFromPoint(r.left + 24, r.top + 16));
+                 });
+                 const [upper, lower] = blocks.slice(-2);
+                 if (left > 1 && left < 10 && upper && lower) {
+                   // Aimed at the lower block's top, the wheel scrolling
+                   // by the blocks' distance: what it lands on is read
+                   // before or after the scroll it makes, a block either way.
+                   window.__wheeled = undefined;
+                   window.addEventListener('wheel', (event) => {
+                     window.__wheeled = event.target instanceof Element && !!event.target.closest('.cat-markdown pre');
+                   }, { capture: true, once: true });
+                   const a = upper.getBoundingClientRect();
+                   const b = lower.getBoundingClientRect();
+                   resolve({ x: Math.round(b.left + 24), y: Math.round(b.top + 4), deltaY: -Math.round(b.top - a.top) });
+                 } else if (performance.now() - started > 2000) resolve(false);
+                 else requestAnimationFrame(look);
+               };
+               look();
+             });`,
+            { label: "code blocks in view as the answer grows" },
+          );
+          await app.cdp("Input.dispatchMouseEvent", {
+            type: "mouseWheel",
+            x: wheel.x,
+            y: wheel.y,
+            deltaX: 0,
+            deltaY: wheel.deltaY,
+          });
+          const { onCode } = await runWait<{ onCode: boolean }>(
+            "return window.__wheeled !== undefined && { onCode: window.__wheeled };",
+            { label: "the wheel reached the page" },
+          );
+          if (onCode || attempt === 3) {
+            expect(onCode, "the wheel went over a code block").toBe(true);
+            break;
+          }
+          // The answer moved it off the block: from the latest, again.
+          await run(`toLatest(); return true;`);
+          await runWait(`return following();`, {
+            label: "following again",
+            timeoutMs: 10_000,
+          });
+        }
         await mark("scrolled");
-        await app.cdp("Input.dispatchMouseEvent", {
-          type: "mouseWheel",
-          ...at,
-          deltaX: 0,
-          deltaY: -160,
-        });
         await new Promise((resolve) => setTimeout(resolve, 1200));
         await mark("back");
         await run(
@@ -592,7 +681,7 @@ describe("chat motion", () => {
     const between = (from: number, to: number) =>
       frames.filter((frame) => frame.t >= from && frame.t < to);
     // Following: the activity line holds still while the words grow above it.
-    const pinned = between(marks.pinned ?? 0, marks.scrolled ?? 0).filter(
+    const pinned = between(marks.pinned ?? 0, marks.followed ?? 0).filter(
       (frame) => frame.spinner,
     );
     expect(pinned.length).toBeGreaterThan(20);

@@ -224,15 +224,15 @@ describe("ChatTimeline live chrome", () => {
       expect($('[data-testid="chat-turn-line"]')).toBeNull();
       const block = $('[data-live-work] [data-testid="chat-turn-steps"]');
       expect(clockRows()).toEqual(["live work"]);
-      // The line neither opens nor rises: its count only fades in.
+      // The line neither opens nor rises: its message only fades in where
+      // it is, as every message arrives.
       expect(block?.className).not.toContain("cat-step-in");
-      expect(block?.closest("article")?.className).not.toContain(
-        "translate-y-1",
-      );
+      const message = block?.closest("article")?.className ?? "";
+      expect(message).not.toContain("translate-y");
+      expect(message).toContain("opacity-0");
       expect(block?.closest(".cat-row")?.className).not.toContain("cat-gap-in");
-      expect(
-        $('[data-live-work] [data-testid="chat-turn-steps-toggle"]')?.className,
-      ).toContain("cat-fade-in");
+      await wait(50);
+      expect(block?.closest("article")?.className).toContain("opacity-100");
       // Every step in view: the list opens its height under the line.
       const list = $('[data-live-work] [data-testid="chat-step"]')?.closest(
         ".grid",

@@ -252,4 +252,30 @@ describe("useLinger", () => {
       vi.useRealTimers();
     }
   });
+
+  it("stays on while its exit still plays, however late that started", () => {
+    vi.useFakeTimers();
+    try {
+      let playing = true;
+      function Held({ value }: { value?: string }) {
+        const kept = useLinger(value, 200, () => playing);
+        return <span>{kept.value ?? ""}</span>;
+      }
+      let root: Root | undefined;
+      const container = mountInto((created) => {
+        root = created;
+        created.render(<Held value="Working" />);
+      });
+      const probe = () => container.querySelector("span");
+      act(() => root?.render(<Held />));
+      // Its own length has passed, but the renderer started the exit late.
+      act(() => vi.advanceTimersByTime(600));
+      expect(probe()?.textContent).toBe("Working");
+      playing = false;
+      act(() => vi.advanceTimersByTime(50));
+      expect(probe()?.textContent).toBe("");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
