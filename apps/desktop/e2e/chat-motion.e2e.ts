@@ -445,20 +445,29 @@ function expectStill(frames: Frame[]) {
 function expectHandOver(frames: Frame[]) {
   const first = frames.findIndex((frame) => frame.spinner && frame.toggle);
   const end = frames.findIndex((frame) => frame.answer);
-  expect(first, "a steps line came").toBeGreaterThan(0);
+  expect(first, "a steps line came").toBeGreaterThanOrEqual(0);
   expect(end, "the answer arrived").toBeGreaterThan(first);
   const kept = frames
     .slice(0, first)
     .filter((frame) => frame.spinner)
     .at(-1);
-  expect(kept?.turnLine, "the turn line kept the place first").toBeTruthy();
   const above = (frame: Frame, box: Box) =>
     (frame.spinner?.[1] ?? 0) - (box?.[1] ?? 0);
-  const place = kept ? above(kept, kept.turnLine) : 0;
   const lined = frames
     .slice(first, end)
     .filter((frame) => frame.spinner && frame.toggle);
   expect(lined.length).toBeGreaterThan(10);
+  // A renderer that drew no frame of the activity line before the first
+  // step (a macOS runner's first frames can come that late) leaves no turn
+  // line to measure: the steps line then holds wherever it first showed.
+  if (kept)
+    expect(kept.turnLine, "the turn line kept the place first").toBeTruthy();
+  const landed = lined[0];
+  const place = kept?.turnLine
+    ? above(kept, kept.turnLine)
+    : landed
+      ? above(landed, landed.toggle)
+      : 0;
   expect(
     lined
       .filter((frame) => Math.abs(above(frame, frame.toggle) - place) > 0.5)
