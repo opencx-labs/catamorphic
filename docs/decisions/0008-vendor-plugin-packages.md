@@ -1,6 +1,6 @@
 # 0008 — Vendor backends live in plugin packages
 
-- **Status**: accepted
+- **Status**: accepted; the Daytona package was removed by [0230](0230-daytona-support-is-removed.md)
 - **Date**: 2026-07-02
 
 ## Context

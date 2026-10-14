@@ -28,13 +28,13 @@ Hosts construct concrete providers explicitly at boot and pass them to
 | Supervisor inside the runtime | `packages/runtime/src/` (`supervisor-http.ts`, `supervisor-stdio.ts`, `supervisor-dispatcher.ts`, `bun-worker.ts`) |
 | Core services | `packages/core/src/services/`: `deployment-runtime-service.ts`, `execution-worker-service.ts`, `dev-sandbox-service.ts`, `execution-environments-service.ts`, `execution-allocations-service.ts`, `worker-nodes-service.ts`, `client-runners-service.ts`, `coding-agent-registry.ts`, `agent-sessions-service.ts`, `sessions/` (`session-log.ts`, `turn-queue.ts`, `turn-engine.ts`, `turn-ingest.ts`, `native-state.ts`, `context-handoff.ts`), `agent-capabilities-service.ts` |
 | Harness adapters | `packages/ai-sdk` (`createAiSdkAdapter`), `packages/claude-code` (`createClaudeCodeAdapter`), `packages/codex` (`createCodexAdapter`); each has a `/testing` subpath for recorded-transcript replay |
-| Providers | `packages/microsandbox` (desktop default), `packages/local-process` (trusted single-tenant, ADR 0047), `packages/cloudflare` (+ `packages/cloudflare-sandbox-bridge` Worker), `packages/daytona` |
+| Providers | `packages/microsandbox` (desktop default), `packages/local-process` (trusted single-tenant, ADR 0047), `packages/container` (gVisor or runc, ADR 0204), `packages/cloudflare` (+ `packages/cloudflare-sandbox-bridge` Worker) |
 
 ## Sandbox providers
 
 ```typescript
 import { MicrosandboxSandboxProvider } from "@catamorphic/microsandbox";
-// or LocalProcessSandboxProvider, CloudflareSandboxProvider, DaytonaSandboxProvider
+// or LocalProcessSandboxProvider, ContainerSandboxProvider, CloudflareSandboxProvider
 
 const sandboxProvider = new MicrosandboxSandboxProvider({ image: "oven/bun" });
 createCatamorphic({ sandboxProvider, environmentProvider, /* ... */ });
@@ -45,15 +45,15 @@ createCatamorphic({ sandboxProvider, environmentProvider, /* ... */ });
   yourself. The wrapper forwards `workspaceRoot`, `isolation`,
   `resourceLimits`, `deploymentRuntime`, `processes`, and the optional `hydrateWorkspace`
   (Cloudflare tar upload); forward any new optional member the same way.
-- `deploymentRuntime` is the warm-runtime capability. Cloudflare and Daytona
-  use `CommandDeploymentRuntimeProvider`; local-process and microsandbox use
+- `deploymentRuntime` is the warm-runtime capability. Cloudflare uses
+  `CommandDeploymentRuntimeProvider`; local-process and microsandbox use
   `StdioDeploymentRuntimeProvider`.
 - `processes` is the background-process capability (ADR 0174, `src/processes.ts`):
   start, read by byte cursor (optionally blocking up to 20s), signal the
   process group, list. Output stays in the sandbox and processes die with it.
   local-process implements it natively; microsandbox uses `shellSandboxProcesses`
   over `executeCommand`; the worker and member-runner forwarders carry it as
-  `process.*` operations. Cloudflare and Daytona omit it. Follow a process with
+  `process.*` operations. Cloudflare omits it. Follow a process with
   `followProcess`, never a long-held request.
 - A new provider reports its real `isolation` (`none | process | sandbox`) and
   lists enforceable `resourceLimits`. It must reject `CreateSandboxOpts.resources`
@@ -254,6 +254,6 @@ Chosen by the host through `createCatamorphic({ storage })`: `{ projectsPath,
 remotesPath }` uses `FsBackend`/`FsRemoteBackend` from `@catamorphic/git`;
 `{ projectManager }` takes custom wiring such as `ObjectRemoteBackend` with
 `S3ObjectStore` (`@catamorphic/s3`, ADR 0012), `ArtifactsRemoteBackend`
-(`@catamorphic/cloudflare`), or the experimental `DaytonaBackend`.
+(`@catamorphic/cloudflare`).
 
 Run, session, and delegation routes are listed in `INTEGRATION.md`.

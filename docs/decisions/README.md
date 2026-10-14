@@ -16,11 +16,11 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0001](0001-code-is-the-source-of-truth.md) | Code is the source of truth for workflows and apps | Accepted (expanded by 0026) |
 | [0002](0002-embeddable-library-architecture.md) | Embeddable library architecture (server-sdk / fastify-plugin / react) | Accepted (updated by 0026) |
 | [0003](0003-postgres-schema-scoped-storage.md) | Postgres with schema-scoped tables, host-provided connection | Accepted |
-| [0004](0004-cloudflare-first-infrastructure.md) | Cloudflare-first infrastructure (Sandbox now, Artifacts next) | Accepted (updated by 0008, 0012) |
+| [0004](0004-cloudflare-first-infrastructure.md) | Cloudflare-first infrastructure (Sandbox now, Artifacts next) | Accepted (updated by 0008, 0012; Daytona fallback removed by 0230) |
 | [0005](0005-opentelemetry-api-only-instrumentation.md) | OpenTelemetry instrumentation via `@opentelemetry/api` only | Accepted |
 | [0006](0006-postgres-backed-queue-and-scheduling.md) | Postgres-backed job queue and scheduling | Accepted; execution queue implemented by 0014, 0016, 0023-0026; claim fairness updated by 0028 |
 | [0007](0007-bun-and-unrestricted-workflow-runtime.md) | Bun runtime; workflows run as regular, unrestricted code | Accepted |
-| [0008](0008-vendor-plugin-packages.md) | Vendor backends live in plugin packages (`@catamorphic/cloudflare`, `@catamorphic/daytona`) | Accepted |
+| [0008](0008-vendor-plugin-packages.md) | Vendor backends live in plugin packages (`@catamorphic/cloudflare`, `@catamorphic/daytona`) | Accepted (Daytona package removed by 0230) |
 | [0009](0009-pluggable-coding-agents.md) | Coding agents are pluggable; Flue is the flagship server-side agent | Superseded by 0018 |
 | [0010](0010-skills-in-project-repo.md) | Per-project agent skills live in the project repo | Accepted; paths superseded by 0142 |
 | [0011](0011-registry-distributed-monaco-editor.md) | Code editor ships as a registry item; linking state lives in React hooks | Accepted |
@@ -242,3 +242,4 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0227](0227-pages-ask-through-works-dialogs.md) | Pages ask through Work's dialogs: alerts, Leave site? and sign-ins over their tab | Accepted (amends 0150, 0151, 0194, 0202) |
 | [0228](0228-a-sign-in-that-can-still-refresh-is-retried.md) | A sign-in that can still refresh is retried, and a fixed one runs the turn again | Accepted (amends 0222) |
 | [0229](0229-idle-pollers-wait-for-hints.md) | Idle pollers wait for hints from their own process | Accepted (refines 0193, 0197, 0207) |
+| [0230](0230-daytona-support-is-removed.md) | Daytona support is removed | Accepted (amends 0004, 0008) |

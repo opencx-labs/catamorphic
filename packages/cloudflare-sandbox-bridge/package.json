@@ -14,10 +14,10 @@
   },
   "dependencies": {
     "@cloudflare/sandbox": "^0.12.3",
-    "hono": "^4.12.29"
+    "hono": "^4.13.13"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20260711.1",
-    "wrangler": "^4.110.0"
+    "wrangler": "^4.151.0"
   }
 }

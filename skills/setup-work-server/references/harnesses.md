@@ -216,7 +216,7 @@ Codex runs in the sandbox with its home mounted from the machine
 (microsandbox: a read-write bind mount of that one member's home;
 local-process: a link to it), so its own token refresh keeps working and
 nothing leaves the machine. It talks to OpenAI directly: no gateway, no
-organization key. Cloud sandboxes (Cloudflare, Daytona) refuse sign-ins.
+organization key. Cloud sandboxes (Cloudflare) refuse sign-ins.
 The mounted home holds Codex's refresh token, which code the agent runs can
 read, as on the member's own computer: allow sign-ins only in projects
 whose code the member would run on their own machine, and restrict the

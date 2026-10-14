@@ -25,7 +25,7 @@
     "test": "bun scripts/test.ts",
     "test:scripts": "bun scripts/tool-runtime.ts vitest --config ./vitest.config.ts --dir ./scripts",
     "test:workspace": "bun scripts/tool-runtime.ts turbo run test --no-daemon --force --concurrency=2",
-    "test:external": "CATAMORPHIC_EXTERNAL_INTEGRATIONS=1 bun scripts/tool-runtime.ts turbo run test --no-daemon --force --concurrency=2 --filter=@catamorphic/daytona --filter=@catamorphic/s3 --filter=@catamorphic/cloudflare --filter=@catamorphic/codex",
+    "test:external": "CATAMORPHIC_EXTERNAL_INTEGRATIONS=1 bun scripts/tool-runtime.ts turbo run test --no-daemon --force --concurrency=2 --filter=@catamorphic/s3 --filter=@catamorphic/cloudflare --filter=@catamorphic/codex",
     "test:file": "bun scripts/tool-runtime.ts vitest",
     "check": "bun scripts/check.ts",
     "typecheck:scripts": "tsgo --project ./tsconfig.scripts.json",
@@ -49,9 +49,9 @@
     "vitest": "^4.1.11"
   },
   "overrides": {
-    "@xmldom/xmldom": "^0.8.13",
-    "dompurify": "^3.4.13",
-    "js-yaml": "^4.3.1",
+    "@xmldom/xmldom": "^0.8.15",
+    "dompurify": "^3.4.17",
+    "js-yaml": "^4.3.2",
     "rolldown": "1.2.5"
   }
 }
