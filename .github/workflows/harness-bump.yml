@@ -104,11 +104,14 @@ jobs:
           # shellcheck disable=SC2086 # manifests is a list of paths
           git add $manifests apps/desktop/src/main/harness-components.ts bun.lock
           git commit -m "Bump $name to $CLI ($sdk_name $SDK)"
+          # shellcheck disable=SC2016,SC2086 # literal backticks; one span per path
+          manifest_list=$(printf '`%s`, ' $manifests)
+          manifest_list=${manifest_list%, }
           git push origin "$BRANCH"
           body=$(cat <<EOF
           Moves the $sdk_name from $FROM to $SDK, which ships $name $CLI. $note (ADR 0196)
 
-          Updated together by \`scripts/harness-bump.ts $HARNESS\`: \`$manifests\`, \`bun.lock\`, and the version and every platform's integrity in \`apps/desktop/src/main/harness-components.ts\`.
+          Updated together by \`scripts/harness-bump.ts $HARNESS\`: $manifest_list, \`bun.lock\`, and the version and every platform's integrity in \`apps/desktop/src/main/harness-components.ts\`.
 
           Before merging, read the release notes for protocol changes and let CI's native $name tests pass. Opened by the scheduled harness bump workflow.
           EOF

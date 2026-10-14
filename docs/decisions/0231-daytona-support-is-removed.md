@@ -1,6 +1,6 @@
-# 0230 — Daytona support is removed
+# 0231 — Daytona support is removed
 
-- **Status:** Accepted (amends [0004](0004-cloudflare-first-infrastructure.md) and [0008](0008-vendor-plugin-packages.md))
+- **Status:** Accepted (amends [0004](0004-cloudflare-first-infrastructure.md), [0008](0008-vendor-plugin-packages.md) and [0174](0174-background-processes-as-a-sandbox-capability.md))
 - **Date:** 2026-10-14
 
 ## Context
@@ -9,7 +9,7 @@
 `DaytonaBackend` storage backend and a `DaytonaProjectRepo`. No host in the
 repository constructs any of them: the desktop runs microsandbox, the Work
 server chooses microsandbox, gVisor containers or local processes, and the
-cloud path is Cloudflare. Its only tests were credentialed integrations that
+documented cloud path is Cloudflare. Its only tests were credentialed integrations that
 `bun run test:external` ran on request, and the provider offers none of the
 sandbox capabilities added since: background processes and the terminals and
 previews built on them, images and egress policy, resource limits, volumes.
@@ -41,8 +41,8 @@ keep its advisories in every audit.
 
 - Every install and audit is smaller; the axios and shell-quote advisories
   are gone with it.
-- ADRs 0004 and 0008 describe Daytona as an alternate provider; this record
-  supersedes those parts. Dated plans and specs under `docs/superpowers/`
+- ADRs 0004 and 0008 describe Daytona as an alternate provider, and ADR 0174
+  lists Daytona support as follow-up work; this record amends all three. Dated plans and specs under `docs/superpowers/`
   are left as the history they are.
 - The `DAYTONA_API_KEY` repository secret is no longer read by CI and can be
   deleted.

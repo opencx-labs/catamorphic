@@ -254,20 +254,24 @@ if (import.meta.main) {
     console.log(`${harness.displayName} is already pinned to ${current}`);
     if (output) appendFileSync(output, "changed=false\n");
   } else {
+    // Every rewrite first, so a missing pin leaves no file half moved.
     const next = applyRelease(harness, files, release);
-    writeFileSync(packageJsonPath, next.packageJson);
-    writeFileSync(COMPONENTS, next.components);
-    for (const pin of harness.cliPackageJsons ?? []) {
-      const manifest = path.join(ROOT, pin.packageJson);
-      writeFileSync(
-        manifest,
-        pinDependency(
-          readFileSync(manifest, "utf8"),
-          pin.name,
-          release.cliVersion,
-        ),
-      );
-    }
+    const writes = [
+      { file: packageJsonPath, source: next.packageJson },
+      { file: COMPONENTS, source: next.components },
+      ...(harness.cliPackageJsons ?? []).map((pin) => {
+        const file = path.join(ROOT, pin.packageJson);
+        return {
+          file,
+          source: pinDependency(
+            readFileSync(file, "utf8"),
+            pin.name,
+            release.cliVersion,
+          ),
+        };
+      }),
+    ];
+    for (const { file, source } of writes) writeFileSync(file, source);
     console.log(
       `${harness.displayName} ${current} → ${release.sdkVersion} (CLI ${release.cliVersion})`,
     );

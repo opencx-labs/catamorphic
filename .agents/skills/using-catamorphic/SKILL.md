@@ -290,6 +290,7 @@ const apiClient = createApiClient({
 | `@catamorphic/s3` | `S3ObjectStore` (use with `ObjectRemoteBackend`) |
 | `@catamorphic/cloudflare` | `CloudflareSandboxProvider`, `ArtifactsClient`, `ArtifactsRemoteBackend` |
 | `@catamorphic/microsandbox` | `MicrosandboxSandboxProvider` |
+| `@catamorphic/container` | `ContainerSandboxProvider` |
 | `@catamorphic/local-process` | `LocalProcessSandboxProvider` |
 | `@catamorphic/sandbox` | `SandboxProvider` contract, plugin-doc staging and tool-policy helpers |
 | `@catamorphic/agent-protocol` | Session log model, events, commands and the shared reducer; `/runner`: `HarnessAdapter`, `AttemptStart`, runner frames and commands |

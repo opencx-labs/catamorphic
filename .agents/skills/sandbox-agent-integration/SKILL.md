@@ -46,13 +46,13 @@ createCatamorphic({ sandboxProvider, environmentProvider, /* ... */ });
   `resourceLimits`, `deploymentRuntime`, `processes`, and the optional `hydrateWorkspace`
   (Cloudflare tar upload); forward any new optional member the same way.
 - `deploymentRuntime` is the warm-runtime capability. Cloudflare uses
-  `CommandDeploymentRuntimeProvider`; local-process and microsandbox use
-  `StdioDeploymentRuntimeProvider`.
+  `CommandDeploymentRuntimeProvider`; local-process, microsandbox and container
+  use `StdioDeploymentRuntimeProvider`.
 - `processes` is the background-process capability (ADR 0174, `src/processes.ts`):
   start, read by byte cursor (optionally blocking up to 20s), signal the
   process group, list. Output stays in the sandbox and processes die with it.
-  local-process implements it natively; microsandbox uses `shellSandboxProcesses`
-  over `executeCommand`; the worker and member-runner forwarders carry it as
+  local-process implements it natively; microsandbox and container use
+  `shellSandboxProcesses` over `executeCommand`; the worker and member-runner forwarders carry it as
   `process.*` operations. Cloudflare omits it. Follow a process with
   `followProcess`, never a long-held request.
 - A new provider reports its real `isolation` (`none | process | sandbox`) and

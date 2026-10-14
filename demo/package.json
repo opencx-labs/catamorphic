@@ -14,5 +14,8 @@
     "@revideo/ui": "0.11.0",
     "@revideo/vite-plugin": "0.11.0",
     "playwright": "^1.61.1"
+  },
+  "overrides": {
+    "@xmldom/xmldom": "^0.9.12"
   }
 }
