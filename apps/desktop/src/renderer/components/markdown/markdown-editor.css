@@ -175,10 +175,35 @@
   cursor: pointer;
 }
 
+/* A rule is a 1.5em box with its 1px line drawn through the middle: the
+   whole box is a hover and drag target (ProseMirror resolves every point
+   in it to the rule), and its center is the line, where the drag handle
+   centers. The negative margin returns the height the old 1px rule did
+   not take, so beside a paragraph, list, quote or code block the line
+   sits exactly where it did (0.75em plus half a pixel from each). */
 .cat-mdedit .ProseMirror hr {
+  height: 1.5em;
+  margin: calc(0.5px - 0.5em) 0;
   border: none;
-  border-top: 1px solid var(--color-border);
-  margin: 0.75em 0;
+  border-radius: 4px;
+  background:
+    linear-gradient(var(--color-border), var(--color-border)) center / 100% 1px
+    no-repeat;
+}
+/* A heading's top margin is larger than the old rule's 0.75em, so it alone
+   set the distance to the line; the taller box adds 3.5px there (its half
+   height plus negative margin, 0.25em + 0.5px, against the old line's half
+   pixel). Take it back. */
+.cat-mdedit .ProseMirror hr + :is(h1, h2, h3, h4) {
+  margin-top: calc(1em - 3.5px);
+}
+/* Clicked (or reached with the arrow keys) a rule is node-selected: the
+   line takes the accent and the box a faint accent wash. */
+.cat-mdedit .ProseMirror hr.ProseMirror-selectednode {
+  background:
+    linear-gradient(var(--color-accent), var(--color-accent)) center / 100% 1px
+    no-repeat,
+    color-mix(in srgb, var(--color-accent) 10%, transparent);
 }
 
 /* Tables: rounded raised card with hairline internal dividers. */
@@ -400,12 +425,22 @@
   translate: -4px 0;
 }
 
-/* --- Bubble menu: overlay surface, marks-only formatting --- */
-.cat-mdedit-bubble {
+/* --- Bubble menu: overlay surface, marks-only formatting. The extension
+       shows, places and detaches the anchor; the bar inside is what shows,
+       by its own data-state (motion.ts, createBubbleMotion), so a leaving
+       bar stays visible inside an anchor the extension already hid. --- */
+.cat-mdedit-bubble-anchor {
   position: absolute;
   top: 0;
   left: 0; /* pinned so its static position never adds overflow */
   z-index: 50;
+  pointer-events: none;
+  /* biome-ignore lint/complexity/noImportantStyles: the extension fades its element to 0 on hide, which would cut the bar's exit short */
+  opacity: 1 !important;
+}
+.cat-mdedit-bubble {
+  visibility: hidden;
+  pointer-events: none;
   display: flex;
   align-items: center;
   gap: 2px;
@@ -418,11 +453,15 @@
 [data-theme="light"] .cat-mdedit-bubble {
   box-shadow: 0 8px 24px rgb(0 0 0 / 0.15);
 }
-/* While the mouse is down (drag-selecting) the menu stays hidden even if
-   the extension shows it; it appears on mouse lift instead. */
-.cat-mdedit-bubble.suppressed {
-  /* biome-ignore lint/complexity/noImportantStyles: overrides the Tiptap bubble extension's inline visibility */
-  visibility: hidden !important;
+/* Shown: visible and pressable. Leaving: visible while its exit plays,
+   never pressable (it is also inert). Hidden otherwise, including while
+   the button is down in the editor: the bar arrives on mouse lift. */
+.cat-mdedit-bubble[data-state="shown"] {
+  visibility: visible;
+  pointer-events: auto;
+}
+.cat-mdedit-bubble[data-state="leaving"] {
+  visibility: visible;
 }
 .cat-mdedit-bubble button {
   appearance: none;

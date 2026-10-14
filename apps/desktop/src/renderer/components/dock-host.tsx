@@ -186,6 +186,7 @@ export function DockHost({
     // one lookup is not enough.
     let target: HTMLElement | null = null;
     let reported: DOMRect | null = null;
+    let afterPush = 0;
     const observer = new ResizeObserver(() => measure());
     const resolve = () => {
       if (target?.isConnected) return target;
@@ -198,6 +199,15 @@ export function DockHost({
     const measure = () => {
       const current = resolve();
       if (!current) return;
+      // A sidebar pushing the content moves the region on every frame of
+      // its slide; the dock's window moves once, where it lands.
+      cancelAnimationFrame(afterPush);
+      if (
+        document.querySelector('[data-workspace-visible="true"] [data-push]')
+      ) {
+        afterPush = requestAnimationFrame(measure);
+        return;
+      }
       const bounds = current.getBoundingClientRect();
       if (
         reported?.left === bounds.left &&
@@ -223,6 +233,7 @@ export function DockHost({
     mutations.observe(document.body, { childList: true, subtree: true });
     window.addEventListener("resize", measure);
     return () => {
+      cancelAnimationFrame(afterPush);
       observer.disconnect();
       mutations.disconnect();
       window.removeEventListener("resize", measure);

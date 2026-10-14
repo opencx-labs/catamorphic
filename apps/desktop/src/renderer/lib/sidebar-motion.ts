@@ -5,7 +5,10 @@ import {
   useRef,
   useState,
 } from "react";
-import { settleSidebarContent } from "./sidebar-transition.js";
+import {
+  contentMovesWithSidebar,
+  settleSidebarContent,
+} from "./sidebar-transition.js";
 
 /**
  * A sidebar moves the moment it is toggled and the content settles after it
@@ -27,6 +30,14 @@ import { settleSidebarContent } from "./sidebar-transition.js";
  * `docked` is whether the content makes room for the panel. It changes only
  * while the panel is still: after a docking sidebar opens or closes, and
  * when an open overlay becomes a docked sidebar.
+ *
+ * Content Work draws itself and lays out cheaply (a chat, a note, Settings)
+ * is the exception (`push`): it moves with the panel instead. A toggle from
+ * rest with nothing heavy showing beside the panel (`contentMovesWithSidebar`)
+ * docks at once, and the sidebar's place in the row grows or shrinks with
+ * the same timing as the slide, so the content's edge stays on the panel's
+ * edge the whole way and the content lays out on every frame. A toggle that
+ * turns a moving panel around keeps the motion it has.
  */
 export type SidebarPhase = "closed" | "opening" | "open" | "closing";
 
@@ -34,6 +45,8 @@ export interface SidebarMotion {
   phase: SidebarPhase;
   /** Whether the sidebar takes space beside the content, as laid out. */
   docked: boolean;
+  /** The content moves with the panel while it slides (see above). */
+  push: boolean;
 }
 
 /**
@@ -56,19 +69,37 @@ export function useSidebarMotion({
 } {
   const [phase, setPhase] = useState<SidebarPhase>(open ? "open" : "closed");
   const [docked, setDocked] = useState(open && dock);
+  const [push, setPush] = useState(false);
   const [settling, setSettling] = useState(false);
   const atRest = phase === "open" || phase === "closed";
   // Where the content belongs once the panel is still.
   const place = phase === "open" && dock;
-  const latest = useRef({ atRest, place });
-  latest.current = { atRest, place };
+  const latest = useRef({ atRest, place, push, dock, docked });
+  latest.current = { atRest, place, push, dock, docked };
 
+  const toggled = useRef(open);
   useLayoutEffect(() => {
+    if (toggled.current !== open) {
+      toggled.current = open;
+      const current = latest.current;
+      // Opening pushes when the open sidebar takes space; closing, when
+      // the content is making room for it now (a compact window's sidebar
+      // becomes an overlay as it closes, but still gives the space back).
+      const pushing = current.atRest
+        ? (open ? current.dock : current.docked) &&
+          contentMovesWithSidebar(panel.current?.parentElement ?? null)
+        : current.push;
+      setPush(pushing);
+      if (pushing) setDocked(open && current.dock);
+    }
     setPhase((current) => {
       if (open) return current === "open" ? "open" : "opening";
       return current === "closed" ? "closed" : "closing";
     });
-  }, [open]);
+  }, [open, panel]);
+  // A push lasts as long as the slide: at rest the sidebar's place changes
+  // at once again (a resize, a settle).
+  if (push && atRest) setPush(false);
 
   useLayoutEffect(() => {
     if (phase !== "opening" && phase !== "closing") return;
@@ -122,5 +153,5 @@ export function useSidebarMotion({
     });
   }, [atRest, settling, docked, place, panel]);
 
-  return { phase, docked, settled: atRest && docked === place };
+  return { phase, docked, push, settled: atRest && docked === place };
 }

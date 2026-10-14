@@ -269,6 +269,11 @@ const modelOutput = (raw: string): string =>
 export function registerAgentBridge(
   agentTerminals: AgentTerminals,
   targetFor: (projectId?: string) => Electron.WebContents | undefined,
+  /**
+   * Settles once the project shows in a window: right away, or after a
+   * move to a window of its own (desktop-workspaces.ts arrival).
+   */
+  arrival: (projectId?: string) => Promise<void>,
   watchOptions: {
     /** Where command watches are saved between runs of the app. */
     file: string;
@@ -314,7 +319,7 @@ export function registerAgentBridge(
   );
 
   /** Ask every window; the first renderer with an answer wins. */
-  const rpc = <T>(
+  const rpc = async <T>(
     method: string,
     params: unknown,
     timeoutMs = RPC_TIMEOUT_MS,
@@ -326,6 +331,8 @@ export function registerAgentBridge(
       typeof params.projectId === "string"
         ? params.projectId
         : undefined;
+    // A project moving to a window of its own is asked there.
+    await arrival(projectId);
     const target = targetFor(projectId);
     const windows = target ? [{ webContents: target }] : [];
     if (windows.length === 0) return Promise.resolve(null);
@@ -355,18 +362,19 @@ export function registerAgentBridge(
    * that open interactive UI (a broadcast would pop the same modal in
    * every window showing the project).
    */
-  const rpcToFront = <T>(
+  const rpcToFront = async <T>(
     method: string,
     params: Record<string, unknown>,
     timeoutMs = RPC_TIMEOUT_MS,
     signal?: AbortSignal,
   ): Promise<T | null> => {
+    const projectId =
+      typeof params.projectId === "string" ? params.projectId : undefined;
+    await arrival(projectId);
     const windows = BrowserWindow.getAllWindows().filter(
       (window) => !window.isDestroyed(),
     );
-    const recipient = targetFor(
-      typeof params.projectId === "string" ? params.projectId : undefined,
-    );
+    const recipient = targetFor(projectId);
     const target = recipient
       ? { webContents: recipient, isDestroyed: () => recipient.isDestroyed() }
       : (BrowserWindow.getFocusedWindow() ?? windows[0]);
@@ -638,6 +646,7 @@ export function registerAgentBridge(
     },
 
     async screenshotWindow(projectId) {
+      await arrival(projectId);
       const target = targetFor(projectId);
       if (!target || target.isDestroyed())
         throw new Error(

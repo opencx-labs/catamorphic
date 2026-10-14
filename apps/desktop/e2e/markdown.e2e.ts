@@ -35,6 +35,28 @@ const helpers = `
     window.dispatchEvent(new KeyboardEvent('keydown', {
       key, bubbles: true, cancelable: true, ...(mods.metaKey && !/Mac/.test(navigator.platform) ? { ...mods, metaKey: false, ctrlKey: true } : mods) }));
   const mdHandle = () => window.__catMarkdownEditor;
+  // The vertical center of an element's first line of text (its first
+  // non-blank character), or of its box when it has none (a rule, an
+  // empty paragraph). Independent of the editor's own computation.
+  // Text in a node view's own chrome (a task's checkbox label) is not a line.
+  const lineCenter = (el) => {
+    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      if (node.parentElement.closest('[contenteditable="false"]')) continue;
+      const at = node.textContent.search(/\\S/);
+      if (at === -1) continue;
+      const range = document.createRange();
+      range.setStart(node, at);
+      range.setEnd(node, at + 1);
+      const rect = range.getClientRects()[0];
+      if (rect && rect.height) return rect.top + rect.height / 2;
+    }
+    const box = el.getBoundingClientRect();
+    return box.top + box.height / 2;
+  };
+  // The extension detaches the menu while it is hidden, so the suite keeps
+  // the elements it found while they were in the document.
+  const bubble = () => window.__mdBubble;
   // The control remains mounted (and says "Saving…") until the write
   // succeeds and clears the draft. Its label alone cannot signal completion.
   const hasUnsavedChanges = () => visible('[data-testid="editor-save"]').length > 0;
@@ -46,6 +68,131 @@ const runWait = <T = unknown>(
   body: string,
   opts?: { timeoutMs?: number; label?: string },
 ) => app.waitFor<T>(`(() => { ${helpers}\n${body} })()`, opts);
+
+const mouse = (
+  type: "mouseMoved" | "mousePressed" | "mouseReleased",
+  point: { x: number; y: number },
+  pressed = false,
+) =>
+  app.cdp("Input.dispatchMouseEvent", {
+    type,
+    x: point.x,
+    y: point.y,
+    ...(type === "mouseMoved"
+      ? pressed
+        ? { button: "left", buttons: 1 }
+        : {}
+      : {
+          button: "left",
+          buttons: type === "mousePressed" ? 1 : 0,
+          clickCount: 1,
+        }),
+  });
+
+/** Where the drag handle settles, against the target's first line. */
+interface HandleReading {
+  handle: number;
+  line: number;
+}
+
+/**
+ * Wait for the drag handle to stop moving, fully shown, and read its
+ * vertical center beside `target`'s first-line center.
+ */
+const settledHandle = (target: string, label: string) =>
+  runWait<HandleReading>(
+    `const handle = $('.cat-mdedit-handle');
+     const rect = handle.getBoundingClientRect();
+     const style = getComputedStyle(handle);
+     const key = rect.top + ':' + rect.left;
+     const stable = window.__mdHandleLast === key;
+     window.__mdHandleLast = key;
+     if (!stable || style.visibility === 'hidden' || style.opacity !== '1') return false;
+     return { handle: rect.top + rect.height / 2, line: lineCenter(${target}) };`,
+    { label: `handle settled on ${label}` },
+  );
+
+/**
+ * Hover `target` (on its first line, shifted by `offsetY`) from outside
+ * the editor, so the handle is placed afresh, and read where it settles.
+ */
+async function hoverHandle(
+  target: string,
+  label: string,
+  offsetY = 0,
+): Promise<HandleReading> {
+  const point = await run<{ x: number; y: number }>(`
+    window.__mdHandleLast = null;
+    const el = ${target};
+    el.scrollIntoView({ block: 'center' });
+    const box = el.getBoundingClientRect();
+    return { x: Math.round(box.left + Math.min(40, box.width / 2)),
+      y: Math.round(lineCenter(el) + ${offsetY}) };
+  `);
+  await mouse("mouseMoved", { x: 4, y: 4 });
+  await mouse("mouseMoved", point);
+  await mouse("mouseMoved", { x: point.x + 1, y: point.y });
+  return settledHandle(target, label);
+}
+
+/** Every block type the drag handle can point at; the rule last, so the
+ *  editor's trailing node adds an empty paragraph after it. */
+const BLOCKS_DOC = [
+  "# Heading one",
+  "",
+  "A paragraph long enough to wrap onto a second line in the editor column, so the handle has to find its first line and not the middle of the block. It keeps going a little longer to be sure of that.",
+  "",
+  "## Heading two",
+  "",
+  "### Heading three",
+  "",
+  "- Bullet item",
+  "- Second bullet",
+  "  - Nested bullet",
+  "",
+  "1. Ordered item",
+  "2. Second ordered",
+  "",
+  "- [ ] Task item",
+  "- [x] Done task",
+  "",
+  "> A blockquote that says something.",
+  "",
+  "```ts",
+  "const a = 1;",
+  "const b = 2;",
+  "```",
+  "",
+  "| Name | Value |",
+  "| --- | --- |",
+  "| alpha | 1 |",
+  "",
+  "Before the rule.",
+  "",
+  "---",
+  "",
+  "After the rule.",
+  "",
+  "---",
+  "",
+].join("\n");
+
+/** Page expressions for each block the handle should point at. */
+const HANDLE_TARGETS = {
+  paragraph: `$$('.ProseMirror > p').find((p) => p.textContent.startsWith('A paragraph'))`,
+  "empty paragraph": `$$('.ProseMirror > p').find((p) => !p.textContent)`,
+  h1: `$('.ProseMirror > h1')`,
+  h2: `$('.ProseMirror > h2')`,
+  h3: `$('.ProseMirror > h3')`,
+  "bullet item": `$('.ProseMirror > ul:not([data-type]) > li')`,
+  "ordered item": `$('.ProseMirror > ol > li')`,
+  "nested item": `$('.ProseMirror > ul:not([data-type]) li li')`,
+  "task item": `$('.ProseMirror > ul[data-type="taskList"] > li')`,
+  blockquote: `$('.ProseMirror > blockquote')`,
+  "code block": `$('.ProseMirror > pre')`,
+  table: `$('.ProseMirror .tableWrapper')`,
+  rule: `$('.ProseMirror > hr')`,
+};
 
 const FRONTMATTER = `name: e2e-doc\ndescription: Frontmatter that must survive byte-exact\ntags:\n  - one\n  - two`;
 const DOC_BODY = `# E2E document\n\nA paragraph with **bold** text.\n\n- [ ] first task\n- [x] done task\n`;
@@ -249,4 +396,273 @@ describe("markdown editor", () => {
       { timeoutMs: 60_000, label: "tab restored with same file" },
     );
   }, 120_000);
+
+  it("the drag handle centers on the first line of every block type", async () => {
+    const status = await app.eval<number>(`(async () => {
+      const { apiUrl, projectId } = window.__mdE2e;
+      return fetch(apiUrl + '/api/projects/' + projectId + '/files/' +
+        encodeURIComponent('blocks.md'), {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ content: ${JSON.stringify(BLOCKS_DOC)} }),
+      }).then((r) => r.status);
+    })()`);
+    expect(status).toBe(200);
+    await run(
+      `$('[data-sidebar-search="search-files"]').click(); return true;`,
+    );
+    await runWait(`return !!$('textarea[placeholder="Search filenames…"]');`, {
+      label: "Files palette",
+    });
+    await run(
+      `setReactValue($('textarea[placeholder="Search filenames…"]'), 'blocks'); return true;`,
+    );
+    await runWait(
+      `const row = byText('[role="option"]', 'blocks.md');
+       if (!row) return false; row.dispatchEvent(new MouseEvent('mousedown',{button:0,bubbles:true,cancelable:true})); return true;`,
+      { timeoutMs: 30_000, label: "blocks.md in Files palette" },
+    );
+    await runWait(
+      `return $('.cat-mdedit h1')?.textContent === 'Heading one'
+        && !!${HANDLE_TARGETS["empty paragraph"]};`,
+      { timeoutMs: 60_000, label: "blocks document open" },
+    );
+
+    const offsets: Record<string, number> = {};
+    for (const [label, target] of Object.entries(HANDLE_TARGETS)) {
+      const reading = await hoverHandle(target, label);
+      offsets[label] = Math.round((reading.handle - reading.line) * 10) / 10;
+    }
+    // Anywhere on the rule's box points at the rule, and at its line.
+    for (const offsetY of [-8, 8]) {
+      const reading = await hoverHandle(
+        HANDLE_TARGETS.rule,
+        `rule, ${offsetY}px off its line`,
+        offsetY,
+      );
+      offsets[`rule ${offsetY}`] =
+        Math.round((reading.handle - reading.line) * 10) / 10;
+    }
+    // Blocks whose handle sits more than 1.5px off their first line.
+    const off = Object.entries(offsets).filter(
+      ([, offset]) => Math.abs(offset) >= 1.5,
+    );
+    expect(off, JSON.stringify(offsets)).toEqual([]);
+
+    // The rule is a comfortable target, and its line sits where the old
+    // 1px rule's did between paragraphs.
+    const rule = await run<{ height: number; above: number; below: number }>(`
+      const hr = ${HANDLE_TARGETS.rule};
+      const box = hr.getBoundingClientRect();
+      const line = box.top + box.height / 2;
+      return {
+        height: box.height,
+        above: line - hr.previousElementSibling.getBoundingClientRect().bottom,
+        below: hr.nextElementSibling.getBoundingClientRect().top - line,
+      };
+    `);
+    expect(rule.height).toBeGreaterThanOrEqual(18);
+    expect(Math.abs(rule.above - 11)).toBeLessThan(0.6);
+    expect(Math.abs(rule.below - 11)).toBeLessThan(0.6);
+  }, 180_000);
+
+  it("the handle re-centers when the document changes under it", async () => {
+    const table = HANDLE_TARGETS.table;
+    // Point at the table's last row: the table stays under the pointer as
+    // the edit below moves it, whatever hover updates that brings.
+    const lastRow = await run<number>(`
+      const rows = ${table}.querySelectorAll('tr');
+      const row = rows[rows.length - 1].getBoundingClientRect();
+      return row.top + row.height / 2 - lineCenter(${table});
+    `);
+    await hoverHandle(table, "table, last row", lastRow);
+    const top = await run<number>(
+      `return $('.cat-mdedit-handle').getBoundingClientRect().top;`,
+    );
+    // A doc change with the handle shown takes the plugin's update path,
+    // which places it again on the enclosing top-level block. The new
+    // paragraph goes right above the table, on screen, so the table moves
+    // whatever the scroller keeps anchored.
+    await run(`
+      const ed = mdHandle().editor;
+      ed.state.doc.forEach((node, offset) => {
+        if (node.type.name === 'table') window.__mdInsertAt = offset;
+      });
+      ed.commands.insertContentAt(window.__mdInsertAt, {
+        type: 'paragraph', content: [{ type: 'text', text: 'Inserted above' }],
+      }, { updateSelection: false });
+      return true;
+    `);
+    await runWait(
+      `return Math.abs($('.cat-mdedit-handle').getBoundingClientRect().top - ${top}) > 10;`,
+      { label: "handle followed the moved table" },
+    );
+    const moved = await settledHandle(table, "moved table");
+    expect(Math.abs(moved.handle - moved.line)).toBeLessThan(1.5);
+    await run(`
+      const ed = mdHandle().editor;
+      const at = window.__mdInsertAt;
+      ed.commands.deleteRange({ from: at, to: at + ed.state.doc.nodeAt(at).nodeSize });
+      return true;
+    `);
+    await runWait(
+      `return Math.abs($('.cat-mdedit-handle').getBoundingClientRect().top - ${top}) < 1;`,
+      { label: "handle followed the table back" },
+    );
+    const back = await settledHandle(table, "table moved back");
+    expect(Math.abs(back.handle - back.line)).toBeLessThan(1.5);
+    await runWait(`return !hasUnsavedChanges();`, {
+      label: "the document is unchanged again",
+    });
+    await mouse("mouseMoved", { x: 4, y: 4 });
+  }, 60_000);
+
+  it("the selection bubble leaves as it came and turns around mid-exit", async () => {
+    // Every state the bar enters, with the animation it starts there.
+    const found = await run<boolean>(`
+      window.__mdBubble = {
+        anchor: $('.cat-mdedit-bubble-anchor'),
+        bar: $('.cat-mdedit-bubble'),
+      };
+      return !!(bubble().anchor && bubble().bar);
+    `);
+    expect(found).toBe(true);
+    await run(`
+      window.__bubbleLog = [];
+      const { anchor, bar } = bubble();
+      new MutationObserver(() => {
+        const [animation] = bar.getAnimations();
+        window.__bubbleLog.push({
+          state: bar.dataset.state,
+          from: animation ? Number(animation.effect.getKeyframes()[0].opacity) : null,
+          anchored: anchor.isConnected,
+        });
+      }).observe(bar, { attributes: true, attributeFilter: ['data-state'] });
+      return true;
+    `);
+    const log = (state: string) =>
+      runWait<{ from: number | null; anchored: boolean }>(
+        `return window.__bubbleLog.find((entry) => entry.state === '${state}') ?? false;`,
+        { label: `bubble ${state}` },
+      );
+    const clearLog = () => run(`window.__bubbleLog.length = 0; return true;`);
+    const select = `
+      const ed = mdHandle().editor;
+      let from = -1;
+      ed.state.doc.forEach((node, offset) => {
+        if (from === -1 && node.textContent.startsWith('A paragraph')) from = offset + 1;
+      });
+      ed.chain().focus().setTextSelection({ from: from + 2, to: from + 20 }).run();
+      return true;`;
+    // At rest: shown in the document and visible, or hidden and taken out
+    // of it again, as the extension leaves a hidden menu.
+    const settled = (state: "shown" | "hidden") =>
+      `const { anchor, bar } = bubble();
+       if (bar.dataset.state !== '${state}' || bar.getAnimations().length) return false;
+       return ${state === "shown"}
+         ? anchor.isConnected && getComputedStyle(bar).visibility === 'visible'
+         : !anchor.isConnected;`;
+    const collapse = `
+      const ed = mdHandle().editor;
+      ed.commands.setTextSelection(ed.state.selection.from);
+      const { anchor, bar } = bubble();
+      const [exit] = bar.getAnimations();
+      const frames = exit?.effect.getKeyframes() ?? [];
+      return {
+        state: bar.dataset.state,
+        visibility: getComputedStyle(bar).visibility,
+        inert: bar.inert,
+        anchored: anchor.isConnected,
+        running: exit?.playState,
+        duration: exit?.effect.getTiming().duration,
+        easing: exit?.effect.getTiming().easing,
+        from: Number(frames[0]?.opacity),
+        to: Number(frames.at(-1)?.opacity),
+        toTransform: frames.at(-1)?.transform,
+      };`;
+
+    await run(select);
+    await runWait(settled("shown"), { label: "bubble shown" });
+    // Collapsing the selection hides the menu in the extension; the bar
+    // stays, in place and inert, and plays its entrance backwards.
+    const leaving = await run<Record<string, unknown>>(collapse);
+    expect(leaving).toMatchObject({
+      state: "leaving",
+      visibility: "visible",
+      inert: true,
+      anchored: true,
+      running: "running",
+      duration: 160,
+      easing: "cubic-bezier(0.2, 0, 0, 1)",
+      from: 1,
+      to: 0,
+      toTransform: "translateY(4px) scale(0.97)",
+    });
+    await runWait(settled("hidden"), { label: "bubble gone after its exit" });
+
+    // Shown again mid-exit (slowed, so the extension's 250ms settle lands
+    // inside it): it turns around from where it was, never leaving its place.
+    await run(select);
+    await runWait(settled("shown"), { label: "bubble shown again" });
+    await app.cdp("Animation.setPlaybackRate", { playbackRate: 0.1 });
+    try {
+      const slowExit = await run<Record<string, unknown>>(collapse);
+      expect(slowExit.state).toBe("leaving");
+      await clearLog();
+      await run(select);
+      const turned = await log("shown");
+      expect(turned.anchored).toBe(true);
+      expect(turned.from).toBeGreaterThan(0);
+      expect(turned.from).toBeLessThan(1);
+    } finally {
+      await app.cdp("Animation.setPlaybackRate", { playbackRate: 1 });
+    }
+    await runWait(settled("shown"), { label: "bubble back in place" });
+
+    // Drag-selecting with the mouse: the bar waits for the lift, and a
+    // press elsewhere sends it out the same way.
+    await run(`mdHandle().editor.commands.setTextSelection(1); return true;`);
+    await runWait(settled("hidden"), { label: "bubble out before dragging" });
+    const line = await run<{
+      x: number;
+      y: number;
+      end: number;
+      away: number;
+    }>(`
+      const p = ${HANDLE_TARGETS.paragraph};
+      p.scrollIntoView({ block: 'center' });
+      const box = p.getBoundingClientRect();
+      return { x: Math.round(box.left + 4), y: Math.round(lineCenter(p)),
+        end: Math.round(box.left + 160),
+        // Below the paragraph: the bar floats above it, over the heading.
+        away: Math.round(lineCenter($('.ProseMirror > h2'))) };
+    `);
+    await mouse("mouseMoved", { x: line.x, y: line.y });
+    await mouse("mousePressed", { x: line.x, y: line.y });
+    await mouse("mouseMoved", { x: line.x + 60, y: line.y }, true);
+    await mouse("mouseMoved", { x: line.end, y: line.y }, true);
+    // Past the extension's 250ms settle: it shows its element, the bar waits.
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    const held = await run<{
+      state: string;
+      anchored: boolean;
+      empty: boolean;
+    }>(`
+      const { anchor, bar } = bubble();
+      return { state: bar.dataset.state, anchored: anchor.isConnected,
+        empty: mdHandle().editor.state.selection.empty };
+    `);
+    expect(held).toEqual({ state: "hidden", anchored: true, empty: false });
+    await mouse("mouseReleased", { x: line.end, y: line.y });
+    await runWait(settled("shown"), { label: "bubble arrives on mouse lift" });
+    await clearLog();
+    await mouse("mouseMoved", { x: line.x + 20, y: line.away });
+    await mouse("mousePressed", { x: line.x + 20, y: line.away });
+    const pressed = await log("leaving");
+    expect(pressed).toMatchObject({ from: 1, anchored: true });
+    await mouse("mouseReleased", { x: line.x + 20, y: line.away });
+    await runWait(settled("hidden"), {
+      label: "bubble left after a press away",
+    });
+  }, 90_000);
 });

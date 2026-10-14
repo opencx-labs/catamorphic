@@ -1,18 +1,10 @@
 import type { ProjectSummary } from "@catamorphic/react/types";
-import {
-  Box,
-  Check,
-  ChevronsUpDown,
-  FolderPlus,
-  Link2,
-  PanelsTopLeft,
-} from "lucide-react";
+import { Box, Check, ChevronsUpDown, FolderPlus, Link2 } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { usePopoverDismiss } from "../lib/popover-dismiss.js";
 import { useWorkspace } from "../lib/workspace-context.js";
 import { ProjectInspector, ProjectInspectorWarmup } from "./project-inspector";
 import { ResourceInspector } from "./resource-inspector";
-import { ShortcutHint } from "./shortcut-hint";
 
 export interface ProjectSwitcherProps {
   projects: ProjectSummary[];
@@ -40,8 +32,7 @@ export function ProjectSwitcher({
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
-  // A project's card sits beside the whole list, clear of its edge and of
-  // each row's window button.
+  // A project's card sits beside the whole list, clear of its edge.
   const listRef = useRef<HTMLDivElement>(null);
   // The current project's own card sits beside the sidebar, not beside the
   // button: across the sidebar's top row the button reaches its toggle,
@@ -142,52 +133,44 @@ export function ProjectSwitcher({
                       onDeleteProject(project);
                       setOpen(false);
                     }}
+                    onOpenWindow={
+                      onOpenWindow && !isActive
+                        ? () => {
+                            dismiss();
+                            onOpenWindow(project.id);
+                            setOpen(false);
+                          }
+                        : undefined
+                    }
                   />
                 )}
               >
                 {(inspectorProps) => (
-                  <div className="group flex items-center">
-                    <button
-                      {...inspectorProps}
-                      type="button"
-                      role="option"
-                      aria-selected={isActive}
-                      onClick={(event) => {
-                        if (event.metaKey || event.ctrlKey || event.shiftKey)
-                          onOpenWindow?.(project.id);
-                        else onSelect(project.id);
-                        setOpen(false);
-                      }}
-                      // Shrinks beside the window button, so a long name
-                      // truncates instead of scrolling the list sideways.
-                      className={`flex h-8 min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-md px-2 text-left text-[13px] transition-colors duration-150 ${isActive ? "text-fg" : "text-fg-muted hover:bg-bg-raised hover:text-fg"}`}
-                    >
-                      <span className="min-w-0 flex-1 truncate">
-                        {project.name}
-                      </span>
-                      {isActive && (
-                        <Check className="size-3.5 shrink-0 text-accent" />
-                      )}
-                    </button>
-                    {onOpenWindow && (
-                      <ShortcutHint
-                        label="Open project in another window"
-                        side="top"
-                      >
-                        <button
-                          type="button"
-                          aria-label={`Open ${project.name} in another window`}
-                          className="row-reveal grid size-7 shrink-0 place-items-center rounded text-fg-faint hover:bg-bg-raised hover:text-fg"
-                          onClick={() => {
-                            onOpenWindow(project.id);
-                            setOpen(false);
-                          }}
-                        >
-                          <PanelsTopLeft className="size-3.5" />
-                        </button>
-                      </ShortcutHint>
+                  <button
+                    {...inspectorProps}
+                    type="button"
+                    role="option"
+                    aria-selected={isActive}
+                    onClick={(event) => {
+                      if (
+                        !isActive &&
+                        (event.metaKey || event.ctrlKey || event.shiftKey)
+                      )
+                        onOpenWindow?.(project.id);
+                      else onSelect(project.id);
+                      setOpen(false);
+                    }}
+                    // A long name truncates instead of scrolling the list
+                    // sideways.
+                    className={`flex h-8 w-full min-w-0 cursor-pointer items-center gap-2 rounded-md px-2 text-left text-[13px] transition-colors duration-150 ${isActive ? "text-fg" : "text-fg-muted hover:bg-bg-raised hover:text-fg"}`}
+                  >
+                    <span className="min-w-0 flex-1 truncate">
+                      {project.name}
+                    </span>
+                    {isActive && (
+                      <Check className="size-3.5 shrink-0 text-accent" />
                     )}
-                  </div>
+                  </button>
                 )}
               </ResourceInspector>
             );

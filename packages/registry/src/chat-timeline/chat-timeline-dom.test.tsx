@@ -8,7 +8,11 @@ import {
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ChatTimeline, type ChatTimelineProps } from "./chat-timeline.js";
+import {
+  ChatTimeline,
+  type ChatTimelineProps,
+  sentTime,
+} from "./chat-timeline.js";
 import {
   command,
   fileChange,
@@ -124,6 +128,53 @@ describe("ChatTimeline DOM contract", () => {
     expect($('[data-message-id="a1"]')?.hasAttribute("data-answer")).toBe(true);
     // Every row's wrapper names its turn.
     expect($('[data-turn-id="t1"]')).not.toBeNull();
+  });
+
+  it("says when the person sent a message, and nothing for a send not held yet", async () => {
+    const Hint: NonNullable<ChatTimelineProps["Hint"]> = ({
+      label,
+      children,
+    }) => <span data-hint={label}>{children}</span>;
+    await render({
+      timeline: timelineOf({ turns: [turn("t1", 1)], items: settledItems }),
+      pending: [
+        {
+          commandId: "cmd-sending",
+          text: "On its way",
+          attachments: [],
+          dispatch: "queue",
+          status: "sending",
+        },
+        {
+          commandId: "cmd-failed",
+          text: "Never arrived",
+          attachments: [],
+          dispatch: "queue",
+          status: "failed",
+        },
+      ],
+      onRollback: () => undefined,
+      Hint,
+    });
+    const sentAt = settledItems[0]?.createdAt ?? "";
+    const time = $<HTMLTimeElement>(
+      '[data-user-message]:not([data-pending-message]) [data-testid="chat-sent-time"]',
+    );
+    expect(time?.tagName).toBe("TIME");
+    expect(time?.dateTime).toBe(sentAt);
+    expect(time?.textContent).toBe(sentTime(sentAt)?.label);
+    // The whole date and time is the hint on the time itself.
+    expect(time?.querySelector("[data-hint]")?.getAttribute("data-hint")).toBe(
+      sentTime(sentAt)?.full,
+    );
+    // Hidden until the message is hovered or focused.
+    expect(time?.className).toContain("opacity-0");
+    // In the row beside the message, with Restore to here.
+    const side = $('[data-testid="chat-restore"]')?.closest("span.absolute");
+    expect(side?.contains(time ?? null)).toBe(true);
+    // A send not held yet, and one that failed, have no time of their own.
+    expect($$("[data-pending-message]")).toHaveLength(2);
+    expect($$("[data-pending-message] time")).toEqual([]);
   });
 
   it("keeps the steps' structure: toggle, rows, kinds, durations and details", async () => {

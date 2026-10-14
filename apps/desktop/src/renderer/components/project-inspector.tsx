@@ -1,12 +1,17 @@
 import { useCatamorphic } from "@catamorphic/react";
 import type { AgentSession, ProjectSummary } from "@catamorphic/react/types";
 import { useQuery } from "@tanstack/react-query";
-import { AlertCircle, Box, CheckCircle2, MoreHorizontal } from "lucide-react";
+import {
+  AlertCircle,
+  AppWindow,
+  Box,
+  CheckCircle2,
+  MoreHorizontal,
+} from "lucide-react";
 import { type ReactNode, useRef, useState } from "react";
 import { writesProgram } from "../../shared/project-experience.js";
 import { desktopApi, type RemoteProjectStatus } from "../lib/desktop-api.js";
 import { CopyButton } from "./copy-button.js";
-import { LazyList } from "./lazy-list.js";
 import { type MenuAt, MenuPortal, menuAtControl } from "./menu.js";
 import { useHoldInspector, useInspectorPending } from "./resource-inspector.js";
 import { ShortcutHint } from "./shortcut-hint.js";
@@ -27,12 +32,18 @@ export type ProjectInspectorSession = Pick<AgentSession, "id"> &
 export interface ProjectInspectorData {
   root: string | null | "unavailable" | undefined;
   server: RemoteProjectStatus | null | "unavailable" | undefined;
-  /** Other projects only: the current one's chats are in the sidebar. */
+  /**
+   * Other projects only, newest first (the current one's chats are in the
+   * sidebar): at most `LATEST_CHATS`.
+   */
   sessions: ProjectInspectorSession[] | "unavailable" | undefined;
 }
 
 /** A glance, not a live view: reads within this long are reused. */
 const SESSIONS_FRESH_MS = 5_000;
+
+/** How many of another project's chats its card names. */
+export const LATEST_CHATS = 3;
 
 /**
  * The card's reads, shared by the card and its warmup so a hover that
@@ -62,9 +73,19 @@ export function useProjectInspectorData(
   const sessions = useQuery({
     queryKey: ["desktop", "project-card-sessions", projectId],
     queryFn: async () => {
+      // The chats its sidebar lists first: the person's own, newest first.
       const result = await apiClient.GET(
         "/api/projects/{projectId}/agent/sessions",
-        { params: { path: { projectId }, query: { limit: 100 } } },
+        {
+          params: {
+            path: { projectId },
+            query: {
+              limit: LATEST_CHATS,
+              visibility: "promoted",
+              rootsOnly: "true",
+            },
+          },
+        },
       );
       if (!result.data) throw new Error("Sessions are unavailable");
       return result.data.items;
@@ -97,10 +118,12 @@ export function ProjectInspector({
   project,
   current,
   onDelete,
+  onOpenWindow,
 }: {
   project: ProjectSummary;
   current: boolean;
   onDelete: () => void;
+  onOpenWindow?: () => void;
 }) {
   return (
     <ProjectInspectorView
@@ -108,26 +131,30 @@ export function ProjectInspector({
       current={current}
       data={useProjectInspectorData(project.id, current)}
       onDelete={onDelete}
+      onOpenWindow={onOpenWindow}
     />
   );
 }
 
 /**
  * A project's hover card: its name, where it lives (folder, Git remote,
- * Work server), another project's ongoing sessions, and its actions behind
- * ⋯. Every line keeps its height while its value loads, so the card opens
- * at its size and stays there.
+ * Work server), another project's latest chats and a way to open it in a
+ * window of its own, and its actions behind ⋯. Every line keeps its height
+ * while its value loads, so the card opens at its size and stays there.
  */
 export function ProjectInspectorView({
   project,
   current,
   data,
   onDelete,
+  onOpenWindow,
 }: {
   project: ProjectSummary;
   current: boolean;
   data: ProjectInspectorData;
   onDelete: () => void;
+  /** Another project only: the current one is this window's. */
+  onOpenWindow?: () => void;
 }) {
   const actionsRef = useRef<HTMLButtonElement>(null);
   const [menuAt, setMenuAt] = useState<MenuAt | null>(null);
@@ -224,7 +251,23 @@ export function ProjectInspectorView({
         </Row>
       </dl>
 
-      {!current && <SessionsSection sessions={data.sessions} />}
+      {!current && <LatestChats sessions={data.sessions} />}
+
+      {!current && onOpenWindow && (
+        <div className="-mx-1 mt-2 border-t border-border pt-1.5">
+          <button
+            type="button"
+            onClick={onOpenWindow}
+            className="flex h-7 w-full cursor-pointer items-center gap-2 rounded-md px-1.5 text-left text-[12px] text-fg-muted transition-colors duration-150 hover:bg-bg-raised hover:text-fg"
+          >
+            <AppWindow aria-hidden="true" className="size-3.5 shrink-0" />
+            <span className="min-w-0 flex-1 truncate">Open in new window</span>
+            <span className="shrink-0 text-[11px] text-fg-faint">
+              {MODIFIER_CLICK}
+            </span>
+          </button>
+        </div>
+      )}
 
       {menuAt && (
         <MenuPortal
@@ -256,20 +299,17 @@ export function ProjectInspectorView({
   );
 }
 
-function SessionsSection({
+/** The project's newest chats, each with what it is doing. */
+function LatestChats({
   sessions,
 }: {
   sessions: ProjectInspectorData["sessions"];
 }) {
-  const ongoing = Array.isArray(sessions)
-    ? sessions.filter(
-        (session) => session.running || session.status !== "closed",
-      )
-    : [];
+  const latest = Array.isArray(sessions) ? sessions.slice(0, LATEST_CHATS) : [];
   return (
     <section className="border-t border-border pt-2">
       <h3 className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-fg-faint">
-        Sessions
+        Latest chats
       </h3>
       {sessions === undefined ? (
         <div aria-busy="true" className="flex h-7 items-center gap-2">
@@ -281,34 +321,30 @@ function SessionsSection({
         <p className="flex h-7 items-center text-[11px] text-fg-faint">
           Unavailable
         </p>
-      ) : ongoing.length === 0 ? (
+      ) : latest.length === 0 ? (
         <p className="flex h-7 items-center text-[11px] text-fg-faint">
-          No ongoing sessions
+          No chats yet
         </p>
       ) : (
-        <LazyList
-          label="Ongoing sessions"
-          items={ongoing}
-          itemKey={(session) => session.id}
-          maxHeight={168}
-          renderItem={(session) => (
-            <div
+        <ul aria-label="Latest chats">
+          {latest.map((session) => (
+            <li
               key={session.id}
               className="flex h-7 min-w-0 items-center gap-2 text-[11px]"
             >
               <span
                 aria-hidden="true"
-                className={`size-1.5 shrink-0 rounded-full ${session.running ? "animate-pulse bg-accent" : "bg-fg-faint"}`}
+                className={`size-1.5 shrink-0 rounded-full ${session.running ? "animate-pulse bg-accent" : session.attentionRequired ? "bg-warning" : "bg-fg-faint"}`}
               />
               <span className="min-w-0 flex-1 truncate text-fg">
-                {session.title || "Untitled session"}
+                {session.title || "Untitled chat"}
               </span>
               <span className="shrink-0 text-fg-faint">
                 {sessionState(session)}
               </span>
-            </div>
-          )}
-        />
+            </li>
+          ))}
+        </ul>
       )}
     </section>
   );
@@ -318,8 +354,15 @@ function sessionState(session: ProjectInspectorSession): string {
   if (session.running) return "Working";
   if (session.attentionRequired) return "Needs attention";
   if (session.resumable) return "Paused";
+  if (session.status === "closed") return "Closed";
   return "Ready";
 }
+
+/** A click on a project's row with this held opens it in a new window. */
+const MODIFIER_CLICK =
+  typeof navigator !== "undefined" && /Mac/.test(navigator.platform)
+    ? "⌘ Click"
+    : "Ctrl+Click";
 
 const SERVER_STATE: Record<RemoteProjectStatus["connection"]["state"], string> =
   {

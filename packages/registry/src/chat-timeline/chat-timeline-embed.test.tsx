@@ -664,7 +664,10 @@ describe("ChatTimeline for embedders", () => {
       "paste",
     ]);
     expect(pills[0]?.querySelector("img")).not.toBeNull();
-    expect(message?.textContent).toBe("screen.pngSee error.log here");
+    // The strip, the words, then the time it was sent beside them.
+    expect(message?.textContent).toBe(
+      `screen.pngSee error.log here${message?.querySelector("time")?.textContent}`,
+    );
 
     const places: string[] = [];
     await render({

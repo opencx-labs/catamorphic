@@ -99,6 +99,147 @@ export function installDropFlip(pmRoot: HTMLElement): () => void {
   };
 }
 
+/** The selection bubble's enter (and, reversed, exit) duration. */
+const BUBBLE_MS = 160;
+
+/** The bubble's pose at `shown` (0 = hidden, 1 = in place). */
+const bubblePose = (shown: number): Keyframe => ({
+  opacity: shown,
+  transform: `translateY(${4 * (1 - shown)}px) scale(${1 - 0.03 * (1 - shown)})`,
+});
+
+export interface BubbleMotion {
+  /** The extension's `onShow`: it has shown and placed the anchor. */
+  show: () => void;
+  /** The extension's `onHide`: it has hidden and detached the anchor. */
+  hide: () => void;
+  /** Hold the bar out while the button is down in the editor; returns cleanup. */
+  attach: (editorDom: HTMLElement) => () => void;
+}
+
+/**
+ * Selection bubble enter and exit. Tiptap's BubbleMenu shows, places and
+ * hides `anchor`, and detaches it the moment it hides; the bar inside is
+ * ours and animates. It enters rising 4px from 97% and transparent, and
+ * leaves the same way back over the same time and curve. A leaving bar
+ * keeps its place: the anchor goes back into `layer` (the extension never
+ * moves a hidden menu) and the bar alone stays visible, inert, until its
+ * exit ends, when the anchor is detached again as the extension left it.
+ * Shown again mid-exit, it turns around from where it is; repositioned
+ * while shown, it just moves. While the button is down in the editor
+ * (drag-selecting) the bar stays out and arrives on mouse lift.
+ */
+export function createBubbleMotion({
+  layer,
+  anchor,
+  bar,
+}: {
+  layer: HTMLElement;
+  anchor: HTMLElement;
+  bar: HTMLElement;
+}): BubbleMotion {
+  let extensionShown = false;
+  let held = false;
+  let presses = 0;
+  let state: "hidden" | "shown" | "leaving" = "hidden";
+  let animation: Animation | null = null;
+  let disposed = false;
+
+  const setState = (next: typeof state) => {
+    state = next;
+    bar.dataset.state = next;
+    bar.inert = next !== "shown";
+  };
+  setState("hidden");
+  /** How far in the bar is now: its live opacity, mid-animation too. */
+  const progress = () => {
+    if (state === "hidden") return 0;
+    const opacity = Number.parseFloat(getComputedStyle(bar).opacity);
+    return Number.isFinite(opacity) ? opacity : 1;
+  };
+  const animateTo = (target: 0 | 1, from: number) => {
+    animation?.cancel();
+    const run = bar.animate([bubblePose(from), bubblePose(target)], {
+      duration: motionMs(BUBBLE_MS) * Math.abs(target - from),
+      easing: EASE_STANDARD,
+      fill: "forwards",
+    });
+    animation = run;
+    run.onfinish = () => {
+      if (animation !== run) return;
+      animation = null;
+      if (target === 0) {
+        setState("hidden");
+        if (!extensionShown) anchor.remove();
+      }
+      // The end pose is the bar's own (or it is hidden now): let go.
+      run.cancel();
+    };
+  };
+  const enter = () => {
+    const from = progress();
+    setState("shown");
+    animateTo(1, from);
+  };
+  const leave = () => {
+    if (!anchor.isConnected) layer.append(anchor);
+    const from = progress();
+    setState("leaving");
+    animateTo(0, from);
+  };
+  const sync = () => {
+    if (disposed) return;
+    const wanted = extensionShown && !held;
+    if (wanted && state !== "shown") enter();
+    else if (!wanted && state === "shown") leave();
+  };
+
+  return {
+    show: () => {
+      extensionShown = true;
+      sync();
+    },
+    hide: () => {
+      extensionShown = false;
+      // Mid-exit already (held), the extension just pulled it out again.
+      if (!disposed && state === "leaving") layer.append(anchor);
+      sync();
+    },
+    attach: (editorDom) => {
+      const onEditorMouseDown = () => {
+        held = true;
+        presses += 1;
+        sync();
+      };
+      // Two frames after lift, so a click that collapses the selection
+      // hides the menu before the bar would come back.
+      const onMouseUp = () => {
+        if (!held) return;
+        const press = presses;
+        requestAnimationFrame(() =>
+          requestAnimationFrame(() => {
+            if (press !== presses) return;
+            held = false;
+            sync();
+          }),
+        );
+      };
+      // The editor's DOM node comes in now: the editor may already be
+      // destroyed when this cleanup runs (tab close), and tiptap's `view`
+      // getter THROWS post-destroy; removing a listener from a detached
+      // node is harmless.
+      editorDom.addEventListener("mousedown", onEditorMouseDown, true);
+      document.addEventListener("mouseup", onMouseUp);
+      return () => {
+        disposed = true;
+        animation?.cancel();
+        editorDom.removeEventListener("mousedown", onEditorMouseDown, true);
+        document.removeEventListener("mouseup", onMouseUp);
+      };
+    },
+  };
+}
+
 /**
  * Drag-handle appearance: hidden and slightly shrunk until the extension
  * first positions it (inline left/top on the handle element), fading in via

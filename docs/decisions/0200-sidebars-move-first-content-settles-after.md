@@ -88,6 +88,19 @@ the panel follows them 100 ms later (amended 2026-10-09, below).
   reveal closes (a peek goes at once). Opening is unchanged.
   (Amended 2026-10-09.)
 
+- Content Work draws itself and lays out cheaply moves with the panel
+  instead (amended 2026-10-14). When nothing heavy shows beside the panel
+  (no web page, app frame, terminal or other canvas, code editor;
+  `contentMovesWithSidebar` in `lib/sidebar-transition.ts`), a toggle from
+  rest docks at once and the sidebar's place in the row grows or shrinks
+  on a width transition with the slide's duration, easing and wait, so the
+  content's edge stays on the panel's edge on every frame and the content
+  lays out as it goes: a chat, a note, Settings. The chrome's sidebar
+  toggle folds and unfolds in step, so the tabs after it ride the
+  content's edge. The choice is made at the toggle from what shows then;
+  a toggle that turns a moving panel around keeps the motion it has, and
+  heavy content keeps the slide, hold and fade above.
+
 `lib/layout-transition.ts`, `data-layout-transition` and the per-screen
 width-holding wrappers are removed.
 
@@ -124,3 +137,9 @@ Alternatives considered:
   frame of that 200 ms preview.
 - Anything new that animates layout beside heavy content should move over
   it and let the content settle once, rather than animating a size.
+- Content that moves with the panel lays out on every frame of the slide.
+  Measured on the isolated test display, a 400-paragraph note re-wrapping
+  in a 960px window kept every frame under 27 ms, against 48 to 53 ms for
+  the page path's hold; Settings and chats lay out less. The two motions
+  differ by what is beside the sidebar: a page's toggle still ends in the
+  fade. (Amended 2026-10-14.)

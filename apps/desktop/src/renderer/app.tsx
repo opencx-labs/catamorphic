@@ -179,6 +179,7 @@ import {
 } from "./lib/keybindings.js";
 import { prefersReducedMotion } from "./lib/motion.js";
 import { notifyDesktop, playChime } from "./lib/notify.js";
+import { isMoving, useUnsavedFilesForMove } from "./lib/project-move.js";
 import {
   ipcErrorText,
   lastPreviewPort,
@@ -610,11 +611,13 @@ export function App({
   const [sidebarMotion, setSidebarMotion] = useState<SidebarMotion>({
     phase: "open",
     docked: true,
+    push: false,
   });
   const [savedRightSidebarOpen, setSavedRightSidebarOpen] = useState(false);
   const [rightSidebarMotion, setRightSidebarMotion] = useState<SidebarMotion>({
     phase: "closed",
     docked: false,
+    push: false,
   });
   // Opening an empty sidebar is a temporary customization affordance, scoped
   // to this profile/project. It must not replace the populated-sidebar choice.
@@ -1522,10 +1525,16 @@ export function App({
   useEffect(() => {
     if (!projectId || workspaceRestoreRef.current.has(projectId)) return;
     workspaceRestoreRef.current.add(projectId);
+    // A project that moved here from another window opens as it was left
+    // there; otherwise as it was saved.
     void desktopApi
-      .workspaceStateGet(projectId)
-      .then((raw) => {
-        const restored = hydrateWorkspace(raw);
+      .workspaceHandoffTake(projectId)
+      .then(async (handed) =>
+        handed
+          ? hydrateWorkspace(handed, { moved: true })
+          : hydrateWorkspace(await desktopApi.workspaceStateGet(projectId)),
+      )
+      .then((restored) => {
         if (restored) {
           setWorkspaces((current) =>
             current[projectId]
@@ -1541,6 +1550,10 @@ export function App({
         );
       });
   }, [projectId]);
+  // Agent calls held while the project moved here go on from now.
+  useEffect(() => {
+    if (projectId && workspaceReady) void desktopApi.workspaceReady(projectId);
+  }, [projectId, workspaceReady]);
   useEffect(() => {
     if (!projectId || !workspaceReady) return;
     const snapshot = workspaces[projectId];
@@ -1552,6 +1565,37 @@ export function App({
     }, 500);
     return () => window.clearTimeout(timer);
   }, [workspaces, projectId, workspaceReady]);
+  // Moving to a window of its own (lib/project-move.ts), the project's
+  // workspace goes to the main process as it is, its shells and unsent
+  // chats with it, for the new window to open as it was left here; what a
+  // restart opens is saved as ever.
+  const movingWorkspace = useRef<{
+    projectId: string | undefined;
+    workspace: Workspace | undefined;
+  }>({ projectId: undefined, workspace: undefined });
+  movingWorkspace.current = {
+    projectId,
+    workspace: projectId && workspaceReady ? workspaces[projectId] : undefined,
+  };
+  useEffect(
+    () => () => {
+      const { projectId: leaving, workspace: left } = movingWorkspace.current;
+      if (!leaving || !left || !isMoving(leaving)) return;
+      void desktopApi.workspaceHandoffPut(
+        leaving,
+        serializeWorkspace(left, { moving: true }),
+      );
+      void desktopApi
+        .workspaceStateSet(leaving, serializeWorkspace(left))
+        .catch(() => {});
+    },
+    [],
+  );
+  useUnsavedFilesForMove(projectId, () =>
+    (projectId ? (workspaces[projectId]?.editors ?? []) : [])
+      .filter((editor) => editor.dirty && editor.filePath)
+      .map((editor) => editor.filePath?.split("/").pop() ?? ""),
+  );
 
   // A workflow-created session is a notification surface in its own right.
   // Once its turn settles, materialize it as a minimized dock bubble without
@@ -6684,14 +6728,17 @@ export function App({
             }}
             className={`workspace-surface relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden ${tabsInSidebar ? "bg-sidebar" : "bg-bg"}`}
           >
-            {headerInSidebar && !rightSidebarMotion.docked && (
-              <span
-                inert={rightSidebarMotion.phase !== "closed"}
-                className="app-no-drag absolute right-2 top-2 z-20 flex rounded-md bg-sidebar"
-              >
-                {sidebarToggle("right")}
-              </span>
-            )}
+            {headerInSidebar &&
+              (!rightSidebarMotion.docked || rightSidebarMotion.push) && (
+                <span
+                  inert={rightSidebarMotion.phase !== "closed"}
+                  data-chrome-toggle="right-float"
+                  data-folded={rightSidebarMotion.docked || undefined}
+                  className="chrome-toggle-float app-no-drag absolute right-2 top-2 z-20 flex rounded-md bg-sidebar"
+                >
+                  {sidebarToggle("right")}
+                </span>
+              )}
             {compactWindow && (
               <button
                 type="button"
@@ -6706,14 +6753,24 @@ export function App({
             )}
             {!headerInSidebar && (
               <div className="workspace-chrome app-drag relative z-20 flex h-10 shrink-0 items-center gap-1 pl-2 pr-3">
-                {!sidebarMotion.docked && (
+                {(!sidebarMotion.docked || sidebarMotion.push) && (
                   <span
                     // Under the panel until the content makes room; the
-                    // panel's own toggle is the live one.
+                    // panel's own toggle is the live one. Moving with the
+                    // panel (push), it folds and unfolds as the panel
+                    // slides, so the tabs after it never jump.
                     inert={sidebarMotion.phase !== "closed"}
-                    className={`app-no-drag flex shrink-0 items-center ${windowButtons ? "ml-[70px]" : ""}`}
+                    data-chrome-toggle="left"
+                    data-folded={sidebarMotion.docked || undefined}
+                    // Not app-no-drag: the corner kept for the window
+                    // buttons still drags the window.
+                    className="chrome-toggle-slot flex shrink-0 items-center"
                   >
-                    {sidebarToggle("left")}
+                    <span
+                      className={`app-no-drag flex shrink-0 items-center ${windowButtons ? "ml-[70px]" : ""}`}
+                    >
+                      {sidebarToggle("left")}
+                    </span>
                   </span>
                 )}
                 {(projectId || allTabs.length > 0) &&
@@ -6723,12 +6780,14 @@ export function App({
                   tabsInSidebar &&
                   !headerInSidebar &&
                   workspaceTitle}
-                {!rightSidebarMotion.docked && (
+                {(!rightSidebarMotion.docked || rightSidebarMotion.push) && (
                   <span
                     // Under the panel until the content makes room; the
                     // panel's own toggle is the live one.
                     inert={rightSidebarMotion.phase !== "closed"}
-                    className="app-no-drag ml-auto flex shrink-0 items-center"
+                    data-chrome-toggle="right"
+                    data-folded={rightSidebarMotion.docked || undefined}
+                    className="chrome-toggle-slot app-no-drag ml-auto flex shrink-0 items-center justify-end"
                   >
                     {sidebarToggle("right")}
                   </span>
@@ -7122,6 +7181,7 @@ export function App({
                           }
                           attachSessionId={terminal.attachSessionId}
                           restoreSessionId={terminal.restoreSessionId}
+                          adoptSessionId={terminal.adoptSessionId}
                           {...(terminal.remoteSessionId
                             ? {
                                 remoteChat: {

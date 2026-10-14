@@ -23,7 +23,9 @@ import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
  *   the pointer, and a key or a press on the scrollbar takes the view
  *   away from the latest words for good;
  * - a lurking chat shown again mid-turn has its activity line open, not
- *   opening.
+ *   opening;
+ * - a person's message shows when it was sent on hover and moves nothing,
+ *   and a send not held yet shows no time.
  *
  * Positions are sampled on every animation frame and compared within the
  * phase where nothing should move, so a slow host only means fewer
@@ -1076,5 +1078,122 @@ describe("chat motion", () => {
         .filter((height) => height !== full),
       "the activity line's height from its first frame back",
     ).toEqual([]);
+  }, 120_000);
+
+  it("shows when the person sent a message on hover, moving nothing", async () => {
+    await newChat();
+    // Every look at the message before the session holds it.
+    await run(`
+      const seen = [];
+      const look = () => {
+        for (const message of frontDock().querySelectorAll('[data-pending-message]'))
+          seen.push(!!message.querySelector('[data-testid="chat-sent-time"]'));
+      };
+      const observer = new MutationObserver(look);
+      observer.observe(frontDock(), {
+        subtree: true, childList: true, attributes: true,
+        attributeFilter: ['data-pending-message'],
+      });
+      window.__pendingTimes = () => { observer.disconnect(); return seen; };
+      return true;`);
+    const before = await app.eval<number>("Date.now()");
+    await run(`
+      const input = composer(); input.focus();
+      setReactValue(input, 'note when I sent this');
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+      return true;`);
+    await runWait(
+      `const log = frontDock()?.querySelector('[role="log"]');
+       return !!log && log.textContent.includes('You said: note when I sent this') &&
+         !log.querySelector('[data-testid="chat-activity"]');`,
+      { label: "the reply settled", timeoutMs: 30_000 },
+    );
+    const after = await app.eval<number>("Date.now()");
+    const pending = await run<boolean[]>("return window.__pendingTimes();");
+    expect(
+      pending.length,
+      "the message showed before it was held",
+    ).toBeGreaterThan(0);
+    expect(pending, "a send not held yet has no time").not.toContain(true);
+    interface Look {
+      dateTime: string;
+      text: string;
+      message: [number, number, number, number];
+      time: [number, number, number, number];
+    }
+    /** The person's latest message and its time, once it shows `opacity`. */
+    const lookWhen = (opacity: string, label: string) =>
+      runWait<Look>(
+        `const message = [...frontDock().querySelectorAll('[data-user-message]')].at(-1);
+         const time = message?.querySelector('[data-testid="chat-sent-time"]');
+         if (!time || getComputedStyle(time).opacity !== ${JSON.stringify(opacity)}) return false;
+         const box = (el) => { const r = el.getBoundingClientRect(); return [r.left, r.top, r.right, r.bottom]; };
+         // Its words, without the room around them.
+         const words = document.createRange();
+         words.selectNodeContents(time);
+         return { dateTime: time.dateTime, text: time.textContent, message: box(message), time: box(words) };`,
+        { label },
+      );
+    const point = async (selector: string) =>
+      run<{ x: number; y: number }>(
+        `const r = ${selector}.getBoundingClientRect();
+         return { x: Math.round(r.x + Math.min(r.width / 2, 40)), y: Math.round(r.y + r.height / 2) };`,
+      );
+    const latest =
+      "[...frontDock().querySelectorAll('[data-user-message]')].at(-1)";
+    // At rest: the pointer on the composer.
+    await app.movePointer(await point("composer()"));
+    const rest = await lookWhen("0", "the time hidden at rest");
+    expect(Date.parse(rest.dateTime)).toBeGreaterThanOrEqual(before - 5_000);
+    expect(Date.parse(rest.dateTime)).toBeLessThanOrEqual(after + 5_000);
+    // Sent today: the time alone, as the person's locale writes it.
+    expect(rest.text).toBe(
+      await app.eval<string>(
+        `new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' }).format(new Date(${JSON.stringify(rest.dateTime)}))`,
+      ),
+    );
+    await app.movePointer(await point(latest));
+    const hovered = await lookWhen("1", "the time shown on hover");
+    expect(hovered.message, "hovering moves nothing").toEqual(rest.message);
+    expect(hovered.time, "the time shows where it waited").toEqual(rest.time);
+    // Beside the message, or under its corner in a narrow chat: never on it.
+    const [left, , , bottom] = hovered.message;
+    const [, timeTop, timeRight] = hovered.time;
+    expect(timeRight <= left || timeTop >= bottom).toBe(true);
+    // Away again, it goes.
+    await app.movePointer(await point("composer()"));
+    await lookWhen("0", "the time hidden again");
+    // A phone-narrow column: the time hangs under the message's corner,
+    // inside the conversation.
+    await run(`
+      const style = document.createElement('style');
+      style.id = 'e2e-narrow-column';
+      style.textContent = '[role="log"] > div > div { max-width: 335px !important; }';
+      document.head.append(style);
+      return true;`);
+    await app.movePointer(await point(latest));
+    const narrow = await lookWhen("1", "the time shown in a narrow column");
+    const column = await run<[number, number]>(
+      `const r = ${latest}.closest('.cat-row').getBoundingClientRect(); return [r.left, r.right];`,
+    );
+    const [, , narrowRight, narrowBottom] = narrow.message;
+    const [timeLeft, underTop, underRight] = narrow.time;
+    expect(underTop, "under the message").toBeGreaterThanOrEqual(narrowBottom);
+    expect(underRight, "at its corner").toBeLessThanOrEqual(narrowRight);
+    expect(timeLeft, "inside the conversation").toBeGreaterThanOrEqual(
+      column[0],
+    );
+    // Drawn on top where it hangs, and the pointer can reach it there.
+    expect(
+      await run<boolean>(
+        `const time = ${latest}.querySelector('[data-testid="chat-sent-time"]');
+         const r = time.firstElementChild.getBoundingClientRect();
+         return time.contains(document.elementFromPoint(r.left + r.width / 2, r.bottom - 2));`,
+      ),
+    ).toBe(true);
+    await run(
+      `document.getElementById('e2e-narrow-column').remove(); return true;`,
+    );
+    await app.movePointer(await point("composer()"));
   }, 120_000);
 });

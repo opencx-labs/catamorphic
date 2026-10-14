@@ -30,9 +30,27 @@ colors before the layer's token overrides. Settings live outside workflow code.
 Cross-project navigation reveals the target before focusing its surface, with a
 brief low-opacity theme tint and no spatial movement; reduced motion disables it.
 
+Amended 2026-10-14: a window keeps every project it has shown alive behind the
+one in front, so "open in a new window" focused that same window. Asked to open
+a project in a new window, a window that keeps it in the background now lets it
+go: the project unmounts there (its workspace saved as it was, unsent chats and
+their drafts included, handed to the new window in memory rather than saved) and
+opens in a new window that owns it from creation. Its shells on this computer keep
+running and the new window's tabs take them over with their output
+(`catamorphic:terminal-adopt`, only by that window and only for shells handed off,
+which end if nothing takes them within 30 seconds); a remote chat's shell opens
+again on its server below what it printed; web pages load again with their
+history. Agent calls for the project wait until the new window has opened it. A file's
+unsaved edits live only in its editor, so a project holding some stays where it
+is and that window says so. A project in front of a window is already in one, and
+that window comes forward. New windows cascade from the window they came from,
+are named for their project, and macOS lists them in the Window menu, where
+Cmd+` moves between them.
+
 ## Consequences
 
-Background work retains its browser and terminal resources. Explicit routing
+Background work retains its browser and terminal resources. A project moved to a
+window of its own keeps its shells and chats; its pages reload. Explicit routing
 prevents duplicate tools and conflicting workspace writers. Live workspaces
 consume resources until disposed; hiding is distinct from disposal. Native dock
 behavior is adapted to platform capabilities and never changes execution.

@@ -14,6 +14,7 @@ import {
   nativeTheme,
   powerMonitor,
   safeStorage,
+  screen,
   session,
   type WebContents,
   webContents,
@@ -61,7 +62,7 @@ import {
 } from "./updater.js";
 import { registerVoiceSupport } from "./voice/index.js";
 import { WindowButtons } from "./window-buttons.js";
-import { WindowStateStore } from "./window-state.js";
+import { cascadeWindowState, WindowStateStore } from "./window-state.js";
 import { desktopProfileMcpProvider } from "./workflow-mcp-connections.js";
 
 // Electron derives the macOS safeStorage Keychain service from the app name.
@@ -345,6 +346,7 @@ function createWindow(
   profileId?: string,
   dock = false,
   initialProjectId?: string,
+  placement: { cascadeFrom?: BrowserWindow } = {},
 ): BrowserWindow {
   const profile = profileId
     ? (profilesStore.get(profileId) ?? profilesStore.lastActiveProfile())
@@ -354,7 +356,14 @@ function createWindow(
   const windowState = new WindowStateStore(
     path.join(app.getPath("userData"), "window-state.json"),
   );
-  const saved = windowState.load();
+  // A window opened from another cascades from it instead (window-state.ts).
+  const from = placement.cascadeFrom;
+  const saved = from
+    ? cascadeWindowState(
+        from.getNormalBounds(),
+        screen.getDisplayMatching(from.getNormalBounds()).workArea,
+      )
+    : windowState.load();
   const window = new BrowserWindow({
     width: dock ? 780 : saved.width,
     height: dock ? 124 : saved.height,
@@ -391,6 +400,10 @@ function createWindow(
       webviewTag: true,
     },
   });
+  // The detached dock is not a window to switch to: the Window menu's list
+  // (and Cmd+`, which walks it) name only workspace windows.
+  if (dock && process.platform === "darwin")
+    window.excludedFromShownWindowsMenu = true;
   window.webContents.setWindowOpenHandler(({ url }) => {
     if (/^https?:/.test(url))
       window.webContents.send("catamorphic:browser-open-url", { url });
@@ -525,6 +538,9 @@ function buildMenu(bindings: Keybindings): Menu {
     },
     {
       label: "Window",
+      // macOS's Window menu: it lists the open windows, and Cmd+` moves
+      // between them.
+      role: "window",
       submenu: [
         // Not the stock minimize role: its default Cmd+M accelerator would
         // swallow the workspace's minimize/restore-chat shortcut.
@@ -741,21 +757,27 @@ app.whenReady().then(async () => {
     windows,
     incognito: incognitoSessions,
   });
-  terminalSupport = registerTerminalSupport(state, async (projectId) => ({
-    ...((await state.current?.agentRegistry.nativeToolchainEnvironment()) ??
-      {}),
-    ...(agentBridge?.openHookEnv(projectId) ?? {}),
-  }));
+  terminalSupport = registerTerminalSupport(
+    state,
+    async (projectId) => ({
+      ...((await state.current?.agentRegistry.nativeToolchainEnvironment()) ??
+        {}),
+      ...(agentBridge?.openHookEnv(projectId) ?? {}),
+    }),
+    (projectId, sender) => desktopWorkspaces?.owner(projectId) === sender,
+  );
   desktopWorkspaces = new DesktopWorkspaces({
     windows,
     config: profileConfig,
     profileForProject: (projectId) =>
       profilesStore.profileForProject(projectId).id,
     createWindow,
+    onReleased: (projectId, from) => terminalSupport?.handOff(projectId, from),
   });
   agentBridge = registerAgentBridge(
     terminalSupport.agentTerminals,
     (projectId) => desktopWorkspaces?.target(projectId),
+    (projectId) => desktopWorkspaces?.arrival(projectId) ?? Promise.resolve(),
     {
       file: path.join(paths.root, "..", "command-watches.json"),
       env: async () =>

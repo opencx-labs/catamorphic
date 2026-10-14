@@ -7,10 +7,13 @@ import { useSidebarMotion } from "./sidebar-motion.js";
 
 /** Content settles wait here until a test lets them apply. */
 const settles: Array<() => void> = [];
+/** Whether the content beside the panel can move with it. */
+let light = false;
 vi.mock("./sidebar-transition.js", () => ({
   settleSidebarContent: ({ update }: { update: () => void }) => {
     settles.push(update);
   },
+  contentMovesWithSidebar: () => light,
 }));
 
 /** The slide a real panel would run: one transform transition at a time. */
@@ -34,9 +37,18 @@ let runsSlides = true;
 
 function Sidebar({ open, dock }: { open: boolean; dock: boolean }) {
   const panel = useRef<HTMLDivElement>(null);
-  const { phase, docked, settled } = useSidebarMotion({ open, dock, panel });
+  const { phase, docked, push, settled } = useSidebarMotion({
+    open,
+    dock,
+    panel,
+  });
   return (
-    <div data-phase={phase} data-docked={docked} data-settled={settled}>
+    <div
+      data-phase={phase}
+      data-docked={docked}
+      data-push={push}
+      data-settled={settled}
+    >
       <div
         data-panel
         ref={(element) => {
@@ -96,6 +108,7 @@ describe("useSidebarMotion", () => {
     slides = [];
     settles.length = 0;
     runsSlides = true;
+    light = false;
     vi.stubGlobal("CSSTransition", FakeTransition);
     container = document.createElement("div");
     document.body.append(container);
@@ -212,6 +225,69 @@ describe("useSidebarMotion", () => {
     runsSlides = false;
     await act(async () => slides.at(-1)?.slide.cancel());
     expect(state().phase).toBe("open");
+  });
+
+  const pushing = () =>
+    container.querySelector<HTMLElement>("[data-phase]")?.dataset.push ===
+    "true";
+
+  it("moves light content with the panel, making room as it slides in", async () => {
+    render(false);
+    light = true;
+    render(true);
+    // The content takes its new place with the slide, not after it.
+    expect(state()).toEqual({ phase: "opening", docked: true });
+    expect(pushing()).toBe(true);
+    expect(settled()).toBe(false);
+    await finishSlide();
+    expect(state()).toEqual({ phase: "open", docked: true });
+    expect(pushing()).toBe(false);
+    expect(settled()).toBe(true);
+    expect(settles).toHaveLength(0);
+  });
+
+  it("gives light content the space as the panel slides away", async () => {
+    light = true;
+    render(true);
+    render(false);
+    expect(state()).toEqual({ phase: "closing", docked: false });
+    expect(pushing()).toBe(true);
+    await finishSlide();
+    expect(state()).toEqual({ phase: "closed", docked: false });
+    expect(pushing()).toBe(false);
+    expect(settles).toHaveLength(0);
+  });
+
+  it("keeps the motion it has when the panel turns around mid-slide", async () => {
+    render(false);
+    light = true;
+    render(true);
+    // Heavy content arriving mid-slide changes nothing about this one.
+    light = false;
+    render(false);
+    expect(state()).toEqual({ phase: "closing", docked: false });
+    expect(pushing()).toBe(true);
+    render(true);
+    expect(state()).toEqual({ phase: "opening", docked: true });
+    await finishSlide();
+    expect(state()).toEqual({ phase: "open", docked: true });
+    expect(settles).toHaveLength(0);
+    // From rest, heavy content settles after the slide again.
+    render(false);
+    expect(pushing()).toBe(false);
+    expect(state()).toEqual({ phase: "closing", docked: true });
+    await finishSlide();
+    applySettle();
+    expect(state()).toEqual({ phase: "closed", docked: false });
+  });
+
+  it("never pushes for an overlay", async () => {
+    light = true;
+    render(false, false);
+    render(true, false);
+    expect(pushing()).toBe(false);
+    await finishSlide();
+    expect(state()).toEqual({ phase: "open", docked: false });
   });
 
   it("ends a slide that never runs, as in a panel that is not rendered", () => {

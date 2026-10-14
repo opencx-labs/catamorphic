@@ -27,6 +27,59 @@ export function transitionSidebarUpdate(update: () => void) {
 
 /** Chat tabs over the content: each is the content where it shows. */
 const CHAT_TABS = "[data-dock-host]:not([data-dock-native]) [data-chat-tab]";
+/** Chats over the content, tabs and floating ones. */
+const CHATS = `${CHAT_TABS}, [data-dock-host]:not([data-dock-native]) [data-floating-chat]`;
+/**
+ * Pages kept laid out behind the tab in front (agents read and drive
+ * them). They hold their width through a push and take the new one once,
+ * at rest (styles.css, --push-pinned-width), as ADR 0200 has a page do.
+ */
+const HIDDEN_PAGES =
+  '[data-surface-key^="browser:"]:not([data-workspace-slot])';
+
+/**
+ * What cannot lay out on every frame of a slide: a web page or an app's
+ * frame (another process, which holds the window until it repaints), a
+ * terminal and anything else drawing to a canvas, and the code editor.
+ */
+const HEAVY_CONTENT =
+  "webview, iframe, embed, object, canvas, .monaco-editor, [data-terminal-appearance]";
+
+/**
+ * Whether the content beside `sidebar` may move with its panel as it slides
+ * (useSidebarMotion's push) rather than settle once it is still: only in
+ * the visible workspace, with motion allowed, and with nothing heavy
+ * showing in the content or in a chat tab over it.
+ */
+export function contentMovesWithSidebar(sidebar: Element | null): boolean {
+  const content = sidebar?.parentElement?.querySelector<HTMLElement>(
+    ":scope > .workspace-surface",
+  );
+  if (
+    !animate() ||
+    !content ||
+    sidebar?.closest('[data-workspace-visible="false"]')
+  )
+    return false;
+  const showing = (element: Element) =>
+    element.checkVisibility({
+      opacityProperty: true,
+      visibilityProperty: true,
+    }) && element.getBoundingClientRect().width > 0;
+  if (
+    [content, ...document.querySelectorAll(CHATS)].some((area) =>
+      [...area.querySelectorAll(HEAVY_CONTENT)].some(showing),
+    )
+  )
+    return false;
+  const hidden = content.querySelector(HIDDEN_PAGES);
+  if (hidden)
+    content.style.setProperty(
+      "--push-pinned-width",
+      `${hidden.getBoundingClientRect().width}px`,
+    );
+  return true;
+}
 
 /**
  * The content beside a still sidebar takes or gives back its space with a

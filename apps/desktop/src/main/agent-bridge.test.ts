@@ -57,10 +57,15 @@ const renderer = () => {
 
 it("holds the page a retried turn opens, and lets a settled turn's page go", async () => {
   const { controls, targetFor } = renderer();
-  const { bridge, dispose } = registerAgentBridge(terminals, targetFor, {
-    file: path.join(os.tmpdir(), "agent-bridge-test-watches.json"),
-    env: async () => ({}),
-  });
+  const { bridge, dispose } = registerAgentBridge(
+    terminals,
+    targetFor,
+    async () => {},
+    {
+      file: path.join(os.tmpdir(), "agent-bridge-test-watches.json"),
+      env: async () => ({}),
+    },
+  );
   const released = { projectId: "project", key: "browser:page" };
   try {
     const turn = { sessionId: "chat", turnId: "turn" };

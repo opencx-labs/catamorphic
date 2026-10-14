@@ -3,7 +3,7 @@
   "name": "chat-timeline",
   "type": "registry:block",
   "title": "Chat timeline",
-  "description": "Presentational conversation log over a session's turns (ADR 0197): the person's messages with their attachments, inbound messages and task notifications (ADR 0217), each reply under the timed steps that led to it (notes fold into the answer's steps once a turn settles), copy, fork and Restore to here, notices, handoffs, answered questions, failures with retry, reconnect and auto-retry, interruptions, pending sends, the editable queue, the live activity line (the running turn's clock and silence sit on its latest steps line), and stick-to-bottom scrolling. Stateless: feed it from useAgentChat. Used by agent-chat.",
+  "description": "Presentational conversation log over a session's turns (ADR 0197): the person's messages with their attachments and, on hover or a tap, when each was sent, inbound messages and task notifications (ADR 0217), each reply under the timed steps that led to it (notes fold into the answer's steps once a turn settles), copy, fork and Restore to here, notices, handoffs, answered questions, failures with retry, reconnect and auto-retry, interruptions, pending sends, the editable queue, the live activity line (the running turn's clock and silence sit on its latest steps line), and stick-to-bottom scrolling. Stateless: feed it from useAgentChat. Used by agent-chat.",
   "dependencies": [
     "@catamorphic/react",
     "@catamorphic/ui",

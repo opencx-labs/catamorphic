@@ -441,6 +441,17 @@ const plainMarkdown = (text: string) => (
   <TimelineMarkdown text={text} opensLinks={false} />
 );
 
+/**
+ * A person's message's row is a container, so what sits beside the
+ * message measures the room there, and it lets the sent time paint past
+ * its edge where a settled row would clip it (see NARROW). Hovered or
+ * focused, while its time shows, it rises over the row after it, which
+ * would otherwise paint over the time hanging below it and take the
+ * pointer from it (rows are flex items, so the raise needs no position).
+ */
+const USER_ROW =
+  "@container [overflow-clip-margin:1.5rem] hover:z-[1] focus-within:z-[1]";
+
 const NO_REQUESTS: Readonly<Record<string, RuntimeRequest>> = {};
 const NO_BACKGROUND: ReadonlyMap<string, ChatBackgroundCommand> = new Map();
 
@@ -633,6 +644,8 @@ export function ChatTimeline(props: ChatTimelineProps) {
   // Work that joins the timeline on screen opens its own height, while
   // what a chat opens with, or gains while hidden, is simply there.
   const [onScreen] = useState(onScreenSource);
+  // The day sent times read from: "Yesterday" once midnight passes.
+  const today = useToday();
   // The message about to start reads in the conversation, still withdrawable.
   const starting = timeline.find(
     (group) => group.turn && waitsToRun(group.turn),
@@ -667,7 +680,7 @@ export function ChatTimeline(props: ChatTimelineProps) {
           // message's node and its item's are the same element.
           <div
             key={key}
-            className={className}
+            className={`${className} ${USER_ROW}`}
             data-turn-id={turn?.id}
             data-turn-undone={undone || undefined}
           >
@@ -723,7 +736,7 @@ export function ChatTimeline(props: ChatTimelineProps) {
     // Its item is already on screen: the item's row is this message now.
     if (shownSends.has(key)) continue;
     conversation.push(
-      <div key={key} className="cat-row flex flex-col gap-3">
+      <div key={key} className={`cat-row flex flex-col gap-3 ${USER_ROW}`}>
         <UserMessage
           pending={message}
           resendable={Boolean(onResendFailed)}
@@ -764,7 +777,9 @@ export function ChatTimeline(props: ChatTimelineProps) {
                           {emptyState}
                         </div>
                       )}
-                      {conversation}
+                      <TodayContext.Provider value={today}>
+                        {conversation}
+                      </TodayContext.Provider>
                       <ActivityLine
                         activity={activity}
                         turnLine={clockRow === undefined}
@@ -1329,6 +1344,163 @@ const MESSAGE_ACTIONS =
 const ICON_BUTTON =
   "grid size-6 cursor-pointer place-items-center rounded-md text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg";
 
+/**
+ * When the person sent a message: shown on hover or keyboard focus, and
+ * on a touch screen while the message has focus (after a tap), never all
+ * the time: a time beside every message would be noise. On touch a tap
+ * passes through it to whatever it covers.
+ */
+const SENT_TIME =
+  "opacity-0 transition-opacity duration-150 group-hover/msg:opacity-100 group-focus-visible/msg:opacity-100 group-has-[:focus-visible]/msg:opacity-100 pointer-coarse:group-focus-within/msg:opacity-100 pointer-coarse:pointer-events-none";
+
+/**
+ * A narrow row (a phone, a slim pane) leaves no room beside a long
+ * message for "Yesterday 2:14 PM": under 26rem, the room beside a message
+ * at its widest is under 62px. There the side row lets go of its
+ * children: Restore to here keeps its place beside the message, and the
+ * time hangs under the message's corner as a hint would, over the top of
+ * what follows. The row lets it paint there (overflow-clip-margin).
+ */
+const NARROW = {
+  side: "@max-[26rem]:contents",
+  restore:
+    "@max-[26rem]:absolute @max-[26rem]:bottom-0 @max-[26rem]:right-full @max-[26rem]:pr-2",
+  time: "@max-[26rem]:absolute @max-[26rem]:top-full @max-[26rem]:right-0 @max-[26rem]:min-h-0 @max-[26rem]:pt-1",
+  label:
+    "@max-[26rem]:whitespace-nowrap @max-[26rem]:rounded-md @max-[26rem]:bg-bg-overlay @max-[26rem]:px-1.5 @max-[26rem]:py-0.5 @max-[26rem]:leading-3 @max-[26rem]:text-fg-muted @max-[26rem]:shadow-lg @max-[26rem]:ring-1 @max-[26rem]:ring-border",
+};
+
+/** When a message was sent, as the timeline says it. */
+export interface SentTime {
+  /**
+   * Beside the message: the time today ("2:14 PM"), "Yesterday" and the
+   * time, the date and time earlier this year ("Oct 12, 2:14 PM"), and the
+   * date in another year ("Oct 12, 2025").
+   */
+  label: string;
+  /** The whole date and time, for the hint. */
+  full: string;
+}
+
+const SENT_FORMATS = {
+  time: { hour: "numeric", minute: "2-digit" },
+  thisYear: {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  },
+  otherYear: { year: "numeric", month: "short", day: "numeric" },
+  full: { dateStyle: "full", timeStyle: "short" },
+} satisfies Record<string, Intl.DateTimeFormatOptions>;
+
+const sentFormatters = new Map<string, Intl.DateTimeFormat>();
+const yesterdayWords = new Map<string, string>();
+
+/** One formatter per locale and form: building them is not cheap. */
+function sentFormatter(
+  form: keyof typeof SENT_FORMATS,
+  locale: string | undefined,
+): Intl.DateTimeFormat {
+  const key = `${locale ?? ""}:${form}`;
+  const known = sentFormatters.get(key);
+  if (known) return known;
+  const made = new Intl.DateTimeFormat(locale, SENT_FORMATS[form]);
+  sentFormatters.set(key, made);
+  return made;
+}
+
+/** "Yesterday" in the person's language, as a label starts with it. */
+function yesterdayWord(locale: string | undefined): string {
+  const key = locale ?? "";
+  const known = yesterdayWords.get(key);
+  if (known) return known;
+  const word = new Intl.RelativeTimeFormat(locale, { numeric: "auto" }).format(
+    -1,
+    "day",
+  );
+  const made = `${word.charAt(0).toLocaleUpperCase(locale)}${word.slice(1)}`;
+  yesterdayWords.set(key, made);
+  return made;
+}
+
+/** The same day on the local calendar. */
+function sameDay(a: Date, b: Date): boolean {
+  return (
+    a.getFullYear() === b.getFullYear() &&
+    a.getMonth() === b.getMonth() &&
+    a.getDate() === b.getDate()
+  );
+}
+
+/**
+ * When a message was sent (`createdAt`, ISO), relative to `now` on the
+ * local calendar and in the person's locale unless `locale` names one.
+ * Undefined for a time that is not one.
+ */
+export function sentTime(
+  iso: string,
+  { now = Date.now(), locale }: { now?: number | Date; locale?: string } = {},
+): SentTime | undefined {
+  const sent = new Date(iso);
+  if (Number.isNaN(sent.getTime())) return undefined;
+  const today = new Date(now);
+  const yesterday = new Date(
+    today.getFullYear(),
+    today.getMonth(),
+    today.getDate() - 1,
+  );
+  const time = () => sentFormatter("time", locale).format(sent);
+  const label = sameDay(sent, today)
+    ? time()
+    : sameDay(sent, yesterday)
+      ? `${yesterdayWord(locale)} ${time()}`
+      : sentFormatter(
+          sent.getFullYear() === today.getFullYear() ? "thisYear" : "otherYear",
+          locale,
+        ).format(sent);
+  return { label, full: sentFormatter("full", locale).format(sent) };
+}
+
+/** The local day the timeline reads sent times from (its midnight). */
+const TodayContext = createContext<number | undefined>(undefined);
+
+function startOfToday(): number {
+  const now = new Date();
+  return new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+}
+
+/**
+ * Today's midnight, which turns over at the next one: a chat left open
+ * overnight says "Yesterday" by morning. One timer a day; a machine that
+ * slept through midnight fires it late, so coming back looks again.
+ * Undefined until mounted: a host rendering on a server would otherwise
+ * write times in the server's zone and locale, not the person's.
+ */
+function useToday(): number | undefined {
+  const [today, setToday] = useState<number | undefined>(undefined);
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const check = () => {
+      clearTimeout(timer);
+      setToday(startOfToday());
+      const midnight = new Date();
+      midnight.setHours(24, 0, 0, 0);
+      // A second past it, so the day has surely turned.
+      timer = setTimeout(check, midnight.getTime() - Date.now() + 1_000);
+    };
+    check();
+    document.addEventListener("visibilitychange", check);
+    window.addEventListener("focus", check);
+    return () => {
+      clearTimeout(timer);
+      document.removeEventListener("visibilitychange", check);
+      window.removeEventListener("focus", check);
+    };
+  }, []);
+  return today;
+}
+
 interface UserMessageProps {
   /** The message as the session holds it. */
   item?: UserMessageItem;
@@ -1405,16 +1577,24 @@ const UserMessage = memo(function UserMessage({
           )}
         </div>
       )}
-      {item && restoreTurnId && (
-        <RestoreToHere
-          onConfirm={() => actions.rollback(restoreTurnId, item)}
-        />
-      )}
+      {/* A send the session does not hold yet has no time of its own. */}
+      <MessageSide
+        sentAt={item?.createdAt}
+        onRestore={
+          item && restoreTurnId
+            ? () => actions.rollback(restoreTurnId, item)
+            : undefined
+        }
+      />
     </article>
   );
 }, sameUserMessage);
 
-/** Handlers are not compared: they reach the host through the actions. */
+/**
+ * Handlers are not compared: they reach the host through the actions. The
+ * sent time reads the item and the timeline's day, a context, so a new day
+ * re-renders the message without a prop.
+ */
 function sameUserMessage(
   previous: UserMessageProps,
   next: UserMessageProps,
@@ -1430,10 +1610,73 @@ function sameUserMessage(
 }
 
 /**
- * "Restore to here": undo this message's turn and everything after it,
- * files included. Confirms in place first: it cannot be redone.
+ * Beside the person's message: when it was sent, and "Restore to here"
+ * when that is offered.
  */
-function RestoreToHere({ onConfirm }: { onConfirm: () => ActionResult }) {
+function MessageSide({
+  sentAt,
+  onRestore,
+}: {
+  /** The item's `createdAt` (ISO); none for a send not held yet. */
+  sentAt?: string;
+  onRestore?: () => ActionResult;
+}) {
+  const { Hint } = useContext(HostContext);
+  const today = useContext(TodayContext);
+  const sent =
+    sentAt && today !== undefined
+      ? sentTime(sentAt, { now: today })
+      : undefined;
+  // The hint sits inside the time, so only the time is placed: a host's
+  // hint wrapper never lands in the message's own flow.
+  const time = sent && (
+    <time
+      dateTime={sentAt}
+      data-testid="chat-sent-time"
+      // Not part of what a copy of the conversation takes.
+      className={`flex min-h-6 min-w-0 select-none items-center justify-end text-right text-[11px] leading-4 tabular-nums text-fg-faint [overflow-wrap:anywhere] ${SENT_TIME} ${NARROW.time}`}
+    >
+      <Hint label={sent.full}>
+        <span className={NARROW.label}>{sent.label}</span>
+      </Hint>
+    </time>
+  );
+  if (onRestore)
+    return <RestoreToHere onConfirm={onRestore}>{time}</RestoreToHere>;
+  return time ? <SideRow>{time}</SideRow> : null;
+}
+
+/**
+ * The row outside the message on its left, level with its last line. It
+ * takes at most the room beside the message (the message's row is a
+ * container), so nothing in it covers the message or leaves the
+ * conversation: its first child stays against the message, what does not
+ * fit beside it goes above, and a long time wraps. The pr-2 bridges the
+ * gap to the message so the hover never blinks. A narrow row places its
+ * children itself (see NARROW).
+ */
+function SideRow({ children }: { children: ReactNode }) {
+  return (
+    <span
+      className={`absolute bottom-0 right-full flex w-max max-w-[calc(100cqw-100%)] flex-row-reverse flex-wrap-reverse items-center gap-x-1.5 pr-2 ${NARROW.side}`}
+    >
+      {children}
+    </span>
+  );
+}
+
+/**
+ * "Restore to here": undo this message's turn and everything after it,
+ * files included. Confirms in place first: it cannot be redone. Its
+ * button sits against the message, the sent time (`children`) before it.
+ */
+function RestoreToHere({
+  onConfirm,
+  children,
+}: {
+  onConfirm: () => ActionResult;
+  children?: ReactNode;
+}) {
   const { Hint } = useContext(HostContext);
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -1452,58 +1695,61 @@ function RestoreToHere({ onConfirm }: { onConfirm: () => ActionResult }) {
   };
   if (confirming)
     return (
-      <div
-        className="mt-2 flex flex-wrap items-center gap-2 border-t border-info/20 pt-2 text-xs"
-        data-testid="chat-restore-confirm"
-      >
-        <span
-          className={`min-w-0 flex-1 ${failed ? "text-danger" : "text-fg-muted"}`}
-          aria-live="polite"
+      <>
+        {children && <SideRow>{children}</SideRow>}
+        <div
+          className="mt-2 flex flex-wrap items-center gap-2 border-t border-info/20 pt-2 text-xs"
+          data-testid="chat-restore-confirm"
         >
-          {failed
-            ? "That did not work. Try again."
-            : "Undo this message and everything after it? The files it changed go back too."}
-        </span>
-        <button
-          type="button"
-          disabled={busy}
-          onClick={() => void confirm()}
-          className="flex cursor-pointer items-center gap-1 rounded-md bg-accent px-2 py-1 font-medium text-accent-fg transition-opacity duration-150 hover:opacity-90 disabled:opacity-50"
-          data-testid="chat-restore-confirm-button"
-        >
-          {busy && <LoaderCircle className="size-3 animate-spin" />}
-          Restore
-        </button>
-        <button
-          type="button"
-          disabled={busy}
-          onClick={() => {
-            setConfirming(false);
-            setFailed(false);
-          }}
-          className="cursor-pointer rounded-md px-2 py-1 text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
-        >
-          Cancel
-        </button>
-      </div>
+          <span
+            className={`min-w-0 flex-1 ${failed ? "text-danger" : "text-fg-muted"}`}
+            aria-live="polite"
+          >
+            {failed
+              ? "That did not work. Try again."
+              : "Undo this message and everything after it? The files it changed go back too."}
+          </span>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => void confirm()}
+            className="flex cursor-pointer items-center gap-1 rounded-md bg-accent px-2 py-1 font-medium text-accent-fg transition-opacity duration-150 hover:opacity-90 disabled:opacity-50"
+            data-testid="chat-restore-confirm-button"
+          >
+            {busy && <LoaderCircle className="size-3 animate-spin" />}
+            Restore
+          </button>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => {
+              setConfirming(false);
+              setFailed(false);
+            }}
+            className="cursor-pointer rounded-md px-2 py-1 text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
+          >
+            Cancel
+          </button>
+        </div>
+      </>
     );
   return (
-    // The pr-2 bridges the gap to the button so the hover never blinks.
-    <span
-      className={`absolute bottom-0 right-full flex items-center pr-2 ${MESSAGE_ACTIONS}`}
-    >
-      <Hint label="Restore to here: undo this message and everything after it">
-        <button
-          type="button"
-          onClick={() => setConfirming(true)}
-          className={ICON_BUTTON}
-          aria-label="Restore to here"
-          data-testid="chat-restore"
-        >
-          <Undo2 className="size-3" />
-        </button>
-      </Hint>
-    </span>
+    <SideRow>
+      <span className={`flex ${MESSAGE_ACTIONS} ${NARROW.restore}`}>
+        <Hint label="Restore to here: undo this message and everything after it">
+          <button
+            type="button"
+            onClick={() => setConfirming(true)}
+            className={ICON_BUTTON}
+            aria-label="Restore to here"
+            data-testid="chat-restore"
+          >
+            <Undo2 className="size-3" />
+          </button>
+        </Hint>
+      </span>
+      {children}
+    </SideRow>
   );
 }
 

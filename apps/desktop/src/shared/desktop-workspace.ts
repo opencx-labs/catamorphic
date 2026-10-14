@@ -107,6 +107,12 @@ export interface WorkspaceNavigation {
 }
 export type WorkspaceEvent =
   | ({ kind: "navigate" } & WorkspaceNavigation)
+  /**
+   * A project this window keeps in the background is moving to a window
+   * of its own: the window lets it go (`workspaceRelease`), unless it is
+   * the one showing.
+   */
+  | { kind: "release"; projectId: string }
   | { kind: "chat"; command: DockCommand }
   | { kind: "newChat"; projectId: string }
   | {

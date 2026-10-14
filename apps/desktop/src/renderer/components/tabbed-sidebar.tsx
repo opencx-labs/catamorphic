@@ -21,6 +21,7 @@ import { motionMs } from "../lib/motion.js";
 import { leaveSidebar, type SidebarLeave } from "../lib/sidebar-leave.js";
 import { type SidebarMotion, useSidebarMotion } from "../lib/sidebar-motion.js";
 import { Collapsible } from "./collapsible.js";
+import { OverlayScrollbar } from "./overlay-scrollbar.js";
 import { ShortcutHint } from "./shortcut-hint.js";
 import type { SidebarContentState } from "./sidebar-contribution.js";
 
@@ -137,6 +138,7 @@ export function TabbedSidebar({
   const root = useRef<HTMLElement>(null);
   const id = useId();
   const panel = useRef<HTMLDivElement>(null);
+  const panelArea = useRef<HTMLDivElement>(null);
   const motion = useSidebarMotion({ open, dock: !overlay, panel });
   // Sections are live while the panel is on screen, sliding included. They
   // pause once it has gone, never on the click that starts it moving, so
@@ -145,8 +147,12 @@ export function TabbedSidebar({
   // Before paint, so chrome that follows the sidebar (its toggle, the room
   // made for it) changes in the same frame as the sidebar.
   useLayoutEffect(() => {
-    onMotionChange?.({ phase: motion.phase, docked: motion.docked });
-  }, [motion.phase, motion.docked, onMotionChange]);
+    onMotionChange?.({
+      phase: motion.phase,
+      docked: motion.docked,
+      push: motion.push,
+    });
+  }, [motion.phase, motion.docked, motion.push, onMotionChange]);
   // The content beside it reads the panel's width, so what starts at the
   // sidebar's edge can slide with the panel (styles.css).
   useLayoutEffect(() => {
@@ -405,6 +411,7 @@ export function TabbedSidebar({
       data-motion={motion.phase}
       data-items-lead={itemsLead || undefined}
       data-docked={motion.docked}
+      data-push={motion.push || undefined}
       data-settled={motion.settled}
       data-tab-motion={tabMotion}
       data-resizing={resizing || undefined}
@@ -517,7 +524,10 @@ export function TabbedSidebar({
             workspace.js could not reload. {error}
           </p>
         )}
-        <div className="relative min-h-0 flex-1 overflow-hidden">
+        <div
+          ref={panelArea}
+          className="relative min-h-0 flex-1 overflow-hidden"
+        >
           {configuredTabs.map((tab) => (
             <div
               key={tab.id}
@@ -560,6 +570,7 @@ export function TabbedSidebar({
               ))}
             </div>
           ))}
+          <OverlayScrollbar edge={side} getArea={() => panelArea.current} />
           {tabs.length === 0 && (
             <div className="grid h-full place-items-center p-4">
               <button

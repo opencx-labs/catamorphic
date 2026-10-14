@@ -1192,6 +1192,17 @@ export interface CatamorphicDesktopApi {
   onDockDraft: (listener: (update: ChatDraftUpdate) => void) => () => void;
   workspaceClaim: (projectId: string) => Promise<boolean>;
   workspaceNavigate: (input: WorkspaceNavigation) => Promise<void>;
+  /** Answers a `release` workspace event: whether the project was let go. */
+  workspaceRelease: (projectId: string, released: boolean) => Promise<void>;
+  /**
+   * A moving project's workspace as its old window let it go (shells and
+   * unsent chats included), held in the main process for its new window.
+   */
+  workspaceHandoffPut: (projectId: string, snapshot: unknown) => Promise<void>;
+  /** That workspace, once, for the window the project lives in now. */
+  workspaceHandoffTake: (projectId: string) => Promise<unknown>;
+  /** This window has opened `projectId`'s workspace (restored). */
+  workspaceReady: (projectId: string) => Promise<void>;
   workspaceActive: (projectId: string) => Promise<void>;
   dockPublish: (data: DockData) => Promise<void>;
   dockRemove: (projectId: string, localId: string) => Promise<void>;
@@ -1501,6 +1512,14 @@ export interface CatamorphicDesktopApi {
   ) => Promise<{ buffer: string; running: boolean } | null>;
   terminalRestoreBuffer: (
     sessionId: string,
+  ) => Promise<{ buffer: string } | null>;
+  /**
+   * Takes over a shell another window of this profile started (its project
+   * moved here): it streams to this window from now on. Null once ended.
+   */
+  terminalAdopt: (
+    sessionId: string,
+    projectId: string,
   ) => Promise<{ buffer: string } | null>;
   backgroundCommands: () => Promise<BackgroundCommandView[]>;
   onBackgroundCommands: (
