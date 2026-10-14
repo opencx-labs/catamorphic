@@ -95,6 +95,9 @@ async function build(input: {
       format: "esm",
       splitting: splits(config),
       sourcemap: "linked",
+      // Production JSX (`react/jsx-runtime`), as tsup emitted: Bun's default
+      // `jsxDEV` is undefined in React's production builds.
+      jsx: { development: false },
       external: externalsOf(input.manifest, config),
       ...(config.banner ? { banner: config.banner } : {}),
       throw: false,

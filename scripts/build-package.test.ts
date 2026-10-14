@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { bundleConfigs, externalsOf, splits } from "./build-package.js";
@@ -55,6 +55,24 @@ describe("package bundles", () => {
       const build: string | undefined = manifest.scripts?.build;
       if (!build?.includes("scripts/build-package.ts")) continue;
       expect(() => bundleConfigs(manifest), name).not.toThrow();
+    }
+  });
+
+  it("ship React's production JSX runtime, never the development one", () => {
+    const shipped = (directory: string): string[] =>
+      readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+        const file = path.join(directory, entry.name);
+        if (entry.isDirectory())
+          return entry.name === "__tests__" ? [] : shipped(file);
+        return entry.name.endsWith(".js") ? [file] : [];
+      });
+    for (const name of readdirSync(path.join(root, "packages"))) {
+      const dist = path.join(root, "packages", name, "dist");
+      if (!existsSync(dist)) continue;
+      for (const file of shipped(dist))
+        expect(readFileSync(file, "utf8"), file).not.toContain(
+          "react/jsx-dev-runtime",
+        );
     }
   });
 });
