@@ -27,6 +27,15 @@ export function transitionSidebarUpdate(update: () => void) {
 
 /** Chat tabs over the content: each is the content where it shows. */
 const CHAT_TABS = "[data-dock-host]:not([data-dock-native]) [data-chat-tab]";
+/** Chats over the content, tabs and floating ones. */
+const CHATS = `${CHAT_TABS}, [data-dock-host]:not([data-dock-native]) [data-floating-chat]`;
+/**
+ * Pages kept laid out behind the tab in front (agents read and drive
+ * them). They hold their width through a push and take the new one once,
+ * at rest (styles.css, --push-pinned-width), as ADR 0200 has a page do.
+ */
+const HIDDEN_PAGES =
+  '[data-surface-key^="browser:"]:not([data-workspace-slot])';
 
 /**
  * What cannot lay out on every frame of a slide: a web page or an app's
@@ -57,9 +66,19 @@ export function contentMovesWithSidebar(sidebar: Element | null): boolean {
       opacityProperty: true,
       visibilityProperty: true,
     }) && element.getBoundingClientRect().width > 0;
-  return ![content, ...document.querySelectorAll(CHAT_TABS)].some((area) =>
-    [...area.querySelectorAll(HEAVY_CONTENT)].some(showing),
-  );
+  if (
+    [content, ...document.querySelectorAll(CHATS)].some((area) =>
+      [...area.querySelectorAll(HEAVY_CONTENT)].some(showing),
+    )
+  )
+    return false;
+  const hidden = content.querySelector(HIDDEN_PAGES);
+  if (hidden)
+    content.style.setProperty(
+      "--push-pinned-width",
+      `${hidden.getBoundingClientRect().width}px`,
+    );
+  return true;
 }
 
 /**

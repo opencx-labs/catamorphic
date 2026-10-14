@@ -1194,6 +1194,15 @@ export interface CatamorphicDesktopApi {
   workspaceNavigate: (input: WorkspaceNavigation) => Promise<void>;
   /** Answers a `release` workspace event: whether the project was let go. */
   workspaceRelease: (projectId: string, released: boolean) => Promise<void>;
+  /**
+   * A moving project's workspace as its old window let it go (shells and
+   * unsent chats included), held in the main process for its new window.
+   */
+  workspaceHandoffPut: (projectId: string, snapshot: unknown) => Promise<void>;
+  /** That workspace, once, for the window the project lives in now. */
+  workspaceHandoffTake: (projectId: string) => Promise<unknown>;
+  /** This window has opened `projectId`'s workspace (restored). */
+  workspaceReady: (projectId: string) => Promise<void>;
   workspaceActive: (projectId: string) => Promise<void>;
   dockPublish: (data: DockData) => Promise<void>;
   dockRemove: (projectId: string, localId: string) => Promise<void>;

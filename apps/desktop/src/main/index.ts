@@ -757,21 +757,27 @@ app.whenReady().then(async () => {
     windows,
     incognito: incognitoSessions,
   });
-  terminalSupport = registerTerminalSupport(state, async (projectId) => ({
-    ...((await state.current?.agentRegistry.nativeToolchainEnvironment()) ??
-      {}),
-    ...(agentBridge?.openHookEnv(projectId) ?? {}),
-  }));
+  terminalSupport = registerTerminalSupport(
+    state,
+    async (projectId) => ({
+      ...((await state.current?.agentRegistry.nativeToolchainEnvironment()) ??
+        {}),
+      ...(agentBridge?.openHookEnv(projectId) ?? {}),
+    }),
+    (projectId, sender) => desktopWorkspaces?.owner(projectId) === sender,
+  );
   desktopWorkspaces = new DesktopWorkspaces({
     windows,
     config: profileConfig,
     profileForProject: (projectId) =>
       profilesStore.profileForProject(projectId).id,
     createWindow,
+    onReleased: (projectId, from) => terminalSupport?.handOff(projectId, from),
   });
   agentBridge = registerAgentBridge(
     terminalSupport.agentTerminals,
     (projectId) => desktopWorkspaces?.target(projectId),
+    (projectId) => desktopWorkspaces?.arrival(projectId) ?? Promise.resolve(),
     {
       file: path.join(paths.root, "..", "command-watches.json"),
       env: async () =>

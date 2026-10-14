@@ -350,7 +350,12 @@ it("keeps shells and unsent chats only for a move to another window", () => {
     terminals: [
       { localId: "shell", title: "zsh", ptySessionId: "pty-1", busy: true },
       { localId: "agent", title: "build", attachSessionId: "pty-2" },
-      { localId: "remote", title: "server", remoteSessionId: "chat-9" },
+      {
+        localId: "remote",
+        title: "server",
+        remoteSessionId: "chat-9",
+        ptySessionId: "pty-3",
+      },
       { localId: "starting", title: "" },
     ],
     activeTabKey: "terminal:shell",
@@ -364,20 +369,30 @@ it("keeps shells and unsent chats only for a move to another window", () => {
   // remote chat's shell again; the chat not sent yet goes too.
   const moving = serializeWorkspace(ws, { moving: true });
   expect(moving.terminals).toEqual([
-    { localId: "shell", title: "zsh", adoptSessionId: "pty-1" },
+    {
+      localId: "shell",
+      title: "zsh",
+      adoptSessionId: "pty-1",
+      ptySessionId: "pty-1",
+    },
     { localId: "agent", title: "build", attachSessionId: "pty-2" },
-    { localId: "remote", title: "server", remoteSessionId: "chat-9" },
+    {
+      localId: "remote",
+      title: "server",
+      remoteSessionId: "chat-9",
+      restoreSessionId: "pty-3",
+    },
   ]);
   expect(moving.chats.map((chat) => chat.localId)).toEqual(["sent", "draft"]);
   expect(moving.activeTabKey).toBe("terminal:shell");
-  const opened = hydrateWorkspace(JSON.parse(JSON.stringify(moving)));
+  const opened = hydrateWorkspace(JSON.parse(JSON.stringify(moving)), {
+    moved: true,
+  });
   expect(opened?.terminals).toEqual(moving.terminals);
   expect(opened?.activeTabKey).toBe("terminal:shell");
-  // A saved restart never brings a shell back.
+  // Only a hand-off brings shells: a saved workspace never does, even one
+  // that holds them.
   expect(
-    hydrateWorkspace({
-      ...restart,
-      terminals: [{ localId: "old", title: "", ptySessionId: "pty-0" }],
-    })?.terminals ?? [],
+    hydrateWorkspace(JSON.parse(JSON.stringify(moving)))?.terminals,
   ).toEqual([]);
 });

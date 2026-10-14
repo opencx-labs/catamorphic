@@ -14,7 +14,12 @@ import {
   useRemoteAuthority,
 } from "./components/project-authority-provider.js";
 import { desktopApi } from "./lib/desktop-api.js";
-import { endMove, startMove, unsavedBeforeMove } from "./lib/project-move.js";
+import {
+  endMove,
+  isMoving,
+  startMove,
+  unsavedBeforeMove,
+} from "./lib/project-move.js";
 import { LOCAL_CHATS_POLL_MS } from "./lib/session-change-hints.js";
 import { ProjectTheme } from "./lib/theme.js";
 import { WorkspaceContext } from "./lib/workspace-context.js";
@@ -43,6 +48,8 @@ export function WorkspaceRoot() {
     }>
   >([{ key: "initial" }]);
   const [ready, setReady] = useState(false);
+  const readyRef = useRef(ready);
+  readyRef.current = ready;
   const [active, setActive] = useState("initial");
   const current = useRef(projects);
   current.current = projects;
@@ -65,7 +72,11 @@ export function WorkspaceRoot() {
     const ids = Object.entries(attentionByProject)
       .filter(([, sessions]) => sessions.length > 0)
       .map(([id]) => id)
-      .filter((id) => !current.current.some((item) => item.projectId === id));
+      .filter(
+        (id) =>
+          !isMoving(id) &&
+          !current.current.some((item) => item.projectId === id),
+      );
     // A project another window owns is that window's to keep alive. A
     // claim made is a project to mount, whatever arrives meanwhile.
     for (const projectId of ids)
@@ -109,6 +120,11 @@ export function WorkspaceRoot() {
       desktopApi.onWorkspaceEvent((event) => {
         if (event.kind !== "release") return;
         const { projectId } = event;
+        // Still opening what it shows: nothing is let go yet.
+        if (!readyRef.current) {
+          void desktopApi.workspaceRelease(projectId, false);
+          return;
+        }
         const item = current.current.find(
           (project) => project.projectId === projectId,
         );
@@ -128,7 +144,9 @@ export function WorkspaceRoot() {
           return;
         }
         startMove(projectId);
-        setProjects((items) => items.filter((project) => project !== item));
+        setProjects((items) =>
+          items.filter((project) => project.projectId !== projectId),
+        );
         setReleased((ids) => [...ids, projectId]);
       }),
     [],
@@ -171,6 +189,8 @@ export function WorkspaceRoot() {
       desktopApi.onWorkspaceEvent((event) => {
         if (event.kind !== "navigate") return;
         const { projectId } = event;
+        // On its way to a window of its own: it opens there.
+        if (isMoving(projectId)) return;
         void desktopApi.workspaceClaim(projectId).then(async (claimed) => {
           if (!claimed) return;
           await queryClient.invalidateQueries({

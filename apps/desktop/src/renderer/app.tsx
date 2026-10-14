@@ -1525,10 +1525,16 @@ export function App({
   useEffect(() => {
     if (!projectId || workspaceRestoreRef.current.has(projectId)) return;
     workspaceRestoreRef.current.add(projectId);
+    // A project that moved here from another window opens as it was left
+    // there; otherwise as it was saved.
     void desktopApi
-      .workspaceStateGet(projectId)
-      .then((raw) => {
-        const restored = hydrateWorkspace(raw);
+      .workspaceHandoffTake(projectId)
+      .then(async (handed) =>
+        handed
+          ? hydrateWorkspace(handed, { moved: true })
+          : hydrateWorkspace(await desktopApi.workspaceStateGet(projectId)),
+      )
+      .then((restored) => {
         if (restored) {
           setWorkspaces((current) =>
             current[projectId]
@@ -1544,6 +1550,10 @@ export function App({
         );
       });
   }, [projectId]);
+  // Agent calls held while the project moved here go on from now.
+  useEffect(() => {
+    if (projectId && workspaceReady) void desktopApi.workspaceReady(projectId);
+  }, [projectId, workspaceReady]);
   useEffect(() => {
     if (!projectId || !workspaceReady) return;
     const snapshot = workspaces[projectId];
@@ -1556,8 +1566,9 @@ export function App({
     return () => window.clearTimeout(timer);
   }, [workspaces, projectId, workspaceReady]);
   // Moving to a window of its own (lib/project-move.ts), the project's
-  // workspace is saved as it is at once, its shells and unsent chats with
-  // it, so the new window opens it as it was left here.
+  // workspace goes to the main process as it is, its shells and unsent
+  // chats with it, for the new window to open as it was left here; what a
+  // restart opens is saved as ever.
   const movingWorkspace = useRef<{
     projectId: string | undefined;
     workspace: Workspace | undefined;
@@ -1570,8 +1581,12 @@ export function App({
     () => () => {
       const { projectId: leaving, workspace: left } = movingWorkspace.current;
       if (!leaving || !left || !isMoving(leaving)) return;
+      void desktopApi.workspaceHandoffPut(
+        leaving,
+        serializeWorkspace(left, { moving: true }),
+      );
       void desktopApi
-        .workspaceStateSet(leaving, serializeWorkspace(left, { moving: true }))
+        .workspaceStateSet(leaving, serializeWorkspace(left))
         .catch(() => {});
     },
     [],
@@ -6713,14 +6728,17 @@ export function App({
             }}
             className={`workspace-surface relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden ${tabsInSidebar ? "bg-sidebar" : "bg-bg"}`}
           >
-            {headerInSidebar && !rightSidebarMotion.docked && (
-              <span
-                inert={rightSidebarMotion.phase !== "closed"}
-                className="app-no-drag absolute right-2 top-2 z-20 flex rounded-md bg-sidebar"
-              >
-                {sidebarToggle("right")}
-              </span>
-            )}
+            {headerInSidebar &&
+              (!rightSidebarMotion.docked || rightSidebarMotion.push) && (
+                <span
+                  inert={rightSidebarMotion.phase !== "closed"}
+                  data-chrome-toggle="right-float"
+                  data-folded={rightSidebarMotion.docked || undefined}
+                  className="chrome-toggle-float app-no-drag absolute right-2 top-2 z-20 flex rounded-md bg-sidebar"
+                >
+                  {sidebarToggle("right")}
+                </span>
+              )}
             {compactWindow && (
               <button
                 type="button"
@@ -6744,10 +6762,12 @@ export function App({
                     inert={sidebarMotion.phase !== "closed"}
                     data-chrome-toggle="left"
                     data-folded={sidebarMotion.docked || undefined}
-                    className="chrome-toggle-slot app-no-drag flex shrink-0 items-center"
+                    // Not app-no-drag: the corner kept for the window
+                    // buttons still drags the window.
+                    className="chrome-toggle-slot flex shrink-0 items-center"
                   >
                     <span
-                      className={`flex shrink-0 items-center ${windowButtons ? "ml-[70px]" : ""}`}
+                      className={`app-no-drag flex shrink-0 items-center ${windowButtons ? "ml-[70px]" : ""}`}
                     >
                       {sidebarToggle("left")}
                     </span>

@@ -74,16 +74,19 @@ export function useSidebarMotion({
   const atRest = phase === "open" || phase === "closed";
   // Where the content belongs once the panel is still.
   const place = phase === "open" && dock;
-  const latest = useRef({ atRest, place, push, dock });
-  latest.current = { atRest, place, push, dock };
+  const latest = useRef({ atRest, place, push, dock, docked });
+  latest.current = { atRest, place, push, dock, docked };
 
   const toggled = useRef(open);
   useLayoutEffect(() => {
     if (toggled.current !== open) {
       toggled.current = open;
       const current = latest.current;
+      // Opening pushes when the open sidebar takes space; closing, when
+      // the content is making room for it now (a compact window's sidebar
+      // becomes an overlay as it closes, but still gives the space back).
       const pushing = current.atRest
-        ? current.dock &&
+        ? (open ? current.dock : current.docked) &&
           contentMovesWithSidebar(panel.current?.parentElement ?? null)
         : current.push;
       setPush(pushing);

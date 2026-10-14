@@ -105,6 +105,12 @@ const api = {
     invoke("catamorphic:workspace-navigate", input),
   workspaceRelease: (projectId: string, released: boolean): Promise<void> =>
     invoke("catamorphic:workspace-release", projectId, released),
+  workspaceHandoffPut: (projectId: string, snapshot: unknown): Promise<void> =>
+    invoke("catamorphic:workspace-handoff-put", projectId, snapshot),
+  workspaceHandoffTake: (projectId: string): Promise<unknown> =>
+    invoke("catamorphic:workspace-handoff-take", projectId),
+  workspaceReady: (projectId: string): Promise<void> =>
+    invoke("catamorphic:workspace-ready", projectId),
   workspaceActive: (projectId: string): Promise<void> =>
     invoke("catamorphic:workspace-active", projectId),
   dockPublish: (data: DockData): Promise<void> =>

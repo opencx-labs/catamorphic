@@ -711,7 +711,8 @@ sidebar lists first; the card no longer lists every ongoing session), with
 Cmd-click on its row doing the same. A project the window only keeps in
 the background moves to the new window: its tabs, its chats (sent or not,
 with what was typed in them) and its running shells go with it, the shells
-taken over with their output rather than restarted; its pages load again.
+on this computer taken over with their output rather than restarted (a
+remote chat's shell opens again on its server); its pages load again.
 A file's unsaved edits live only in its editor, so a project holding some
 stays, and the window says which files to save first. A project in front
 of a window is already in one, which comes forward. A new window opens a

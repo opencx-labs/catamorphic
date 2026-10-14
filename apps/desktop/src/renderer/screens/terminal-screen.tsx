@@ -227,7 +227,13 @@ export function TerminalScreen({
           adoptSessionId && !attachSessionId
             ? await desktopApi.terminalAdopt(adoptSessionId, projectId)
             : null;
-        if (disposed) return;
+        if (disposed) {
+          // Taken over by a view already gone: the shell is this window's
+          // to end, as the view's own would have been.
+          if (adopted && adoptSessionId && !isMoving(projectId))
+            void desktopApi.terminalKill(adoptSessionId);
+          return;
+        }
         if (attachSessionId) {
           // Attach to the agent's live session: replay, then stream. The
           // shared PTY snaps to this view's geometry (tmux-attach style) —

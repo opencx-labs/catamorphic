@@ -45,10 +45,14 @@ const dockShapeSchema = z
 const FOCUS_SETTLE_MS = 150;
 
 /**
- * How long a window may take to let a project go before the move gives up
- * and brings that window forward instead.
+ * How long a window may take to let a project go before that window comes
+ * forward, so the request is seen to land; a later answer still moves it.
  */
-const RELEASE_TIMEOUT_MS = 3_000;
+const RELEASE_SLOW_MS = 3_000;
+/** A window that never answers keeps the project. */
+const RELEASE_ABANDON_MS = 30_000;
+/** How long agent calls for a moving project wait for its new window. */
+const ARRIVAL_TIMEOUT_MS = 15_000;
 
 /** One owner per project. Presentation can be hidden without disposing resources. */
 export class DesktopWorkspaces {
@@ -86,6 +90,17 @@ export class DesktopWorkspaces {
     string,
     { owner: WebContents; settle: (released: boolean) => void }
   >();
+  /**
+   * What a moving project's workspace was as its old window let it go,
+   * shells and unsent chats included, for its new window alone to open
+   * once. Kept here, never on disk: a restart opens the saved workspace.
+   */
+  private readonly handoffs = new Map<string, unknown>();
+  /** Moves under way, settled once the project shows somewhere again. */
+  private readonly arrivals = new Map<
+    string,
+    { promise: Promise<void>; arrive: () => void }
+  >();
 
   constructor(
     private readonly options: {
@@ -98,6 +113,11 @@ export class DesktopWorkspaces {
         projectId?: string,
         placement?: { cascadeFrom?: BrowserWindow },
       ) => BrowserWindow;
+      /**
+       * A project's old window let it go: its shells there wait for the
+       * new window to take them over (terminal.ts handOff).
+       */
+      onReleased?: (projectId: string, from: WebContents) => void;
     },
   ) {
     app.on("before-quit", () => {
@@ -210,8 +230,28 @@ export class DesktopWorkspaces {
           return false;
         const owner = this.owner(projectId);
         if (owner && owner !== event.sender) return false;
+        // On its way to a window of its own, it is nobody else's meanwhile.
+        if (this.releases.has(projectId)) return false;
         this.owners.set(projectId, event.sender);
         return true;
+      },
+    );
+    ipcMain.handle(
+      "catamorphic:workspace-handoff-put",
+      (event, projectId: unknown, snapshot: unknown) => {
+        if (typeof projectId !== "string") return;
+        if (this.releases.get(projectId)?.owner !== event.sender) return;
+        this.handoffs.set(projectId, snapshot);
+      },
+    );
+    ipcMain.handle(
+      "catamorphic:workspace-handoff-take",
+      (event, projectId: unknown) => {
+        if (typeof projectId !== "string") return null;
+        if (this.owner(projectId) !== event.sender) return null;
+        const snapshot = this.handoffs.get(projectId) ?? null;
+        this.handoffs.delete(projectId);
+        return snapshot;
       },
     );
     ipcMain.handle("catamorphic:workspace-navigate", (event, raw: unknown) => {
@@ -247,6 +287,16 @@ export class DesktopWorkspaces {
         if (this.owner(projectId) !== event.sender) return;
         this.activeProjects.set(event.sender.id, projectId);
         this.broadcast(options.windows.profileFor(event.sender));
+      },
+    );
+    // A window has opened a project's workspace (restored, a move's
+    // hand-off taken): agent calls for it can go there now.
+    ipcMain.handle(
+      "catamorphic:workspace-ready",
+      (event, projectId: unknown) => {
+        if (typeof projectId !== "string") return;
+        if (this.owner(projectId) !== event.sender) return;
+        this.arrivals.get(projectId)?.arrive();
       },
     );
     ipcMain.handle("catamorphic:dock-publish", (event, data: DockData) => {
@@ -683,13 +733,17 @@ export class DesktopWorkspaces {
     const source =
       this.lastWindows.get(profileId) ??
       BrowserWindow.fromWebContents(input.sender);
+    // Already moving: the request is under way.
+    if (input.newWindow && this.releases.has(input.projectId)) return;
     // A window keeps every project it has shown alive behind the one in
     // front. Asked for a window of its own, such a project moves to one; a
-    // project in front of a window is already in one, which comes forward.
+    // project in front of a window (or about to be, in one still loading)
+    // is already in one, which comes forward.
     if (
       owner &&
       input.newWindow &&
-      this.activeProjects.get(owner.id) !== input.projectId
+      (this.activeProjects.get(owner.id) ??
+        this.initialProjects.get(owner.id)) !== input.projectId
     ) {
       void this.moveToNewWindow({ ...input, owner, profileId });
       return;
@@ -737,37 +791,68 @@ export class DesktopWorkspaces {
     },
   ) {
     const { owner, projectId } = input;
-    const released = await new Promise<boolean>((resolve) => {
-      this.releases.get(projectId)?.settle(false);
-      const timer = setTimeout(() => settle(false), RELEASE_TIMEOUT_MS);
-      const settle = (released: boolean) => {
+    const keeper = () => {
+      const window = BrowserWindow.fromWebContents(
+        this.owner(projectId) ?? owner,
+      );
+      if (!window || window.isDestroyed()) return;
+      if (window.isMinimized()) window.restore();
+      window.show();
+      window.focus();
+    };
+    let arrive = () => {};
+    const promise = new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, ARRIVAL_TIMEOUT_MS);
+      arrive = () => {
         clearTimeout(timer);
-        if (this.releases.get(projectId)?.settle === settle)
+        resolve();
+      };
+    });
+    const arrival = { promise, arrive };
+    this.arrivals.set(projectId, arrival);
+    void promise.then(() => {
+      if (this.arrivals.get(projectId) === arrival)
+        this.arrivals.delete(projectId);
+    });
+    const released = await new Promise<boolean>((resolve) => {
+      // Slow to answer: the window comes forward so the request is seen to
+      // land, and a later answer still moves the project.
+      const slow = setTimeout(keeper, RELEASE_SLOW_MS);
+      const abandon = setTimeout(() => settle(false), RELEASE_ABANDON_MS);
+      const settle = (released: boolean) => {
+        clearTimeout(slow);
+        clearTimeout(abandon);
+        if (this.releases.get(projectId)?.owner === owner)
           this.releases.delete(projectId);
         resolve(released);
       };
-      this.releases.set(projectId, { owner, settle });
+      const gone = () => settle(false);
+      this.releases.set(projectId, {
+        owner,
+        settle: (released) => {
+          owner.removeListener("destroyed", gone);
+          settle(released);
+        },
+      });
+      owner.once("destroyed", gone);
       owner.send("catamorphic:workspace-event", {
         kind: "release",
         projectId,
       } satisfies WorkspaceEvent);
     });
-    if (owner.isDestroyed()) return;
+    if (owner.isDestroyed() || !released || this.owner(projectId) !== owner) {
+      this.handoffs.delete(projectId);
+      arrive();
+      keeper();
+      return;
+    }
     // It opens beside the window it was asked from.
     const from =
       (!input.sender.isDestroyed() &&
         BrowserWindow.fromWebContents(input.sender)) ||
       BrowserWindow.fromWebContents(owner);
-    if (!released || this.owner(projectId) !== owner) {
-      const keeper = BrowserWindow.fromWebContents(
-        this.owner(projectId) ?? owner,
-      );
-      if (keeper?.isMinimized()) keeper.restore();
-      keeper?.show();
-      keeper?.focus();
-      return;
-    }
     this.owners.delete(projectId);
+    this.options.onReleased?.(projectId, owner);
     // Its chats leave this window's dock; what was typed in them waits
     // for the new window (`drafts`, by chat).
     for (const [localId, chat] of this.chats)
@@ -775,6 +860,17 @@ export class DesktopWorkspaces {
         this.chats.delete(localId);
     this.broadcast(input.profileId);
     this.present(this.newWindow(input.profileId, projectId, from), input);
+  }
+
+  /**
+   * Agent calls for a project wait while it moves to a window of its own,
+   * until that window shows it: the old window has let it go and the new
+   * one is still loading.
+   */
+  arrival(projectId: string | undefined): Promise<void> {
+    return (
+      (projectId && this.arrivals.get(projectId)?.promise) || Promise.resolve()
+    );
   }
 
   /** Shows `projectId` in `target` and brings that window forward. */

@@ -461,5 +461,30 @@ it("drags the window by the chrome's empty room with the buttons hidden", async 
     "window.catamorphicDesktop.setPrefs({tabPlacement:'top',headerPlacement:'top'})",
   );
   await settle("!!$('main .workspace-chrome')", "tabs on top again");
+
+  // With the buttons shown and the sidebar collapsed, the corner kept for
+  // them beside the chrome's sidebar toggle drags the window too.
+  await app.eval(
+    "window.catamorphicDesktop.setPrefs({windowButtons:true,sidebarOpen:false})",
+  );
+  await settle(
+    "$('[data-window-buttons]')?.dataset.windowButtons === 'on' && $('aside[data-sidebar=\"left\"]')?.dataset.motion === 'closed' && $('aside[data-sidebar=\"left\"]')?.dataset.settled === 'true'",
+    "the buttons shown and the sidebar collapsed",
+  );
+  expect(
+    await inPage<{ corner: boolean; toggle: boolean }>(`
+      const list = regions();
+      const toggle = $('.workspace-chrome button[aria-label="Expand sidebar"]').getBoundingClientRect();
+      return {
+        corner: drags(list, 40, 20),
+        toggle: drags(list, toggle.left + toggle.width / 2, toggle.top + toggle.height / 2),
+      };
+    `),
+  ).toEqual({ corner: true, toggle: false });
+  await app.eval("window.catamorphicDesktop.setPrefs({sidebarOpen:true})");
+  await settle(
+    "$('aside[data-sidebar=\"left\"]')?.dataset.motion === 'open' && $('aside[data-sidebar=\"left\"]')?.dataset.settled === 'true'",
+    "the sidebar open again",
+  );
   expect(app.getRendererErrors()).toEqual([]);
 });

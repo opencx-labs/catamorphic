@@ -1711,6 +1711,18 @@ kbd {
 .tabbed-sidebar[data-push][data-items-lead] {
   transition-delay: 100ms;
 }
+/* Pages kept laid out behind the tab in front hold their width through a
+   push (lib/sidebar-transition.ts sets it) and take the new one once, at
+   rest: a page resizes in its own process and holds the window until it
+   has repainted. */
+[data-sidebar="left"][data-push]
+  ~ .workspace-surface
+  [data-surface-key^="browser:"]:not([data-workspace-slot]),
+.workspace-surface:has(~ [data-sidebar="right"][data-push])
+  [data-surface-key^="browser:"]:not([data-workspace-slot]) {
+  right: auto;
+  width: var(--push-pinned-width);
+}
 .sidebar-traces {
   position: absolute;
   inset: 0;
@@ -1787,6 +1799,11 @@ kbd {
 .sidebar-tab-panel,
 .sidebar-tab-panel * {
   scrollbar-width: none;
+}
+/* The thumb stands in for scrolling up and down only: a code block in a
+   note keeps its sideways scrollbar. */
+.sidebar-tab-panel :is(pre, table) {
+  scrollbar-width: thin;
 }
 .overlay-scrollbar {
   position: absolute;
@@ -2337,6 +2354,9 @@ html[data-surface="dock"] #root {
 .workspace-surface:has(~ [data-sidebar="right"][data-push])
   .chrome-toggle-slot[data-chrome-toggle="right"] {
   width: 28px;
+  /* Not auto: the strip before it fills the row, and a margin tweens from
+     a length, not from auto. */
+  margin-inline-start: 0;
 }
 [data-sidebar="left"][data-push][data-items-lead]
   ~ .workspace-surface
@@ -2358,6 +2378,24 @@ html[data-surface="dock"] #root {
   .chrome-toggle-slot[data-chrome-toggle="left"][data-folded] {
   margin-inline-end: -4px;
 }
+.workspace-surface:has(~ [data-sidebar="right"][data-push])
+  .chrome-toggle-slot[data-chrome-toggle="right"][data-folded] {
+  margin-inline-start: -4px;
+}
+/* With the header in the sidebar, the right sidebar's toggle floats over
+   the content's corner: pushing, it fades as the panel's own arrives. */
+.workspace-surface:has(~ [data-sidebar="right"][data-push])
+.chrome-toggle-float {
+  transition: opacity 200ms var(--ease-standard);
+}
+.workspace-surface:has(~ [data-sidebar="right"][data-push][data-items-lead])
+  .chrome-toggle-float {
+  transition-delay: 100ms;
+}
+.workspace-surface:has(~ [data-sidebar="right"][data-push])
+  .chrome-toggle-float[data-folded] {
+  opacity: 0;
+}
 @starting-style {
   [data-sidebar="left"][data-push]
     ~ .workspace-surface
@@ -2369,6 +2407,11 @@ html[data-surface="dock"] #root {
   .workspace-surface:has(~ [data-sidebar="right"][data-push])
     .chrome-toggle-slot[data-chrome-toggle="right"] {
     width: 0;
+    margin-inline-start: -4px;
+    opacity: 0;
+  }
+  .workspace-surface:has(~ [data-sidebar="right"][data-push])
+    .chrome-toggle-float {
     opacity: 0;
   }
 }

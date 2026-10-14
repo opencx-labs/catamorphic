@@ -984,7 +984,9 @@ describe("chats over a settling sidebar", () => {
 
 describe("content Work draws moves with the sidebar", () => {
   it("rides the panel's edge every frame, the tabs with it, and lands without a jump", async () => {
-    await run(`$('[data-workspace-visible="true"] [aria-label="Settings"]').click(); return true;`);
+    await run(
+      `$('[data-workspace-visible="true"] [aria-label="Settings"]').click(); return true;`,
+    );
     await runWait(
       `return [...document.querySelectorAll('[data-workspace-visible="true"] webview')].every((view) => !view.checkVisibility()) &&
         !!$('[data-workspace-visible="true"] [data-settings-scroll]');`,

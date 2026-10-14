@@ -243,9 +243,20 @@ export const serializeWorkspace = (
         const kept = terminal.attachSessionId
           ? { attachSessionId: terminal.attachSessionId }
           : terminal.remoteSessionId
-            ? { remoteSessionId: terminal.remoteSessionId }
+            ? {
+                remoteSessionId: terminal.remoteSessionId,
+                // Its shell ends with the old window; what it printed
+                // shows above the new one.
+                ...(terminal.ptySessionId
+                  ? { restoreSessionId: terminal.ptySessionId }
+                  : {}),
+              }
             : terminal.ptySessionId
-              ? { adoptSessionId: terminal.ptySessionId }
+              ? {
+                  adoptSessionId: terminal.ptySessionId,
+                  // Closing the tab before it is taken over ends it.
+                  ptySessionId: terminal.ptySessionId,
+                }
               : null;
         if (!kept) return [];
         return [
@@ -306,8 +317,15 @@ export const serializeWorkspace = (
   };
 };
 
-/** Rebuild a Workspace from a persisted snapshot; null = start fresh. */
-export const hydrateWorkspace = (raw: unknown): Workspace | null => {
+/**
+ * Rebuild a Workspace from a persisted snapshot; null = start fresh.
+ * `moved`: the snapshot is a project's old window handing it over
+ * (serializeWorkspace's `moving`), the only kind that brings shells.
+ */
+export const hydrateWorkspace = (
+  raw: unknown,
+  { moved = false }: { moved?: boolean } = {},
+): Workspace | null => {
   if (typeof raw !== "object" || raw === null) return null;
   const snapshot = raw as Partial<Workspace>;
   const ws: Workspace = {
@@ -318,15 +336,15 @@ export const hydrateWorkspace = (raw: unknown): Workspace | null => {
       : [],
     chats: Array.isArray(snapshot.chats) ? snapshot.chats : [],
     browsers: Array.isArray(snapshot.browsers) ? snapshot.browsers : [],
-    // Only a move keeps shells (serializeWorkspace's `moving`).
-    terminals: Array.isArray(snapshot.terminals)
-      ? snapshot.terminals.filter(
-          (terminal) =>
-            terminal.adoptSessionId ||
-            terminal.attachSessionId ||
-            terminal.remoteSessionId,
-        )
-      : [],
+    terminals:
+      moved && Array.isArray(snapshot.terminals)
+        ? snapshot.terminals.filter(
+            (terminal) =>
+              terminal.adoptSessionId ||
+              terminal.attachSessionId ||
+              terminal.remoteSessionId,
+          )
+        : [],
     editors: Array.isArray(snapshot.editors) ? snapshot.editors : [],
     split: snapshot.split ?? null,
     tabOrder: Array.isArray(snapshot.tabOrder) ? snapshot.tabOrder : [],

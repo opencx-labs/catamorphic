@@ -118,8 +118,9 @@ editors, terminals, browser pages and agent tool handlers. Opening a project in 
 new window (its card's last line in the project switcher, or a Cmd-click on its
 row) focuses the window showing it when one is. A project a window only keeps
 behind the one it shows moves to the new window instead: its workspace, unsent
-chats and running shells go with it (the shells are taken over, not restarted),
-and its pages load again. Unsaved edits in a file keep the project where it is
+chats and running shells go with it (shells on this computer are taken over, not
+restarted; a remote chat's shell opens again on its server), its pages load
+again, and agent calls for it wait until the new window has opened it. Unsaved edits in a file keep the project where it is
 until they are saved or discarded; that window says so. A new window cascades
 from the one it came from and carries its project's name, so the macOS Window
 menu lists it and Cmd+` reaches it. Closing an occupied window hides it;

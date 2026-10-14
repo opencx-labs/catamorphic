@@ -28,6 +28,9 @@ import { TerminalLifecycle } from "./terminal-lifecycle.js";
 
 const BUFFER_CAP = 200_000;
 
+/** How long a shell whose project moved waits for its new window. */
+const HANDOFF_MS = 30_000;
+
 interface TerminalSession {
   /** A local PTY, or a shell in a remote chat's workspace (ADR 0209). */
   pty: TerminalBackend;
@@ -59,6 +62,11 @@ interface TerminalSession {
   projectId?: string;
   /** Set for agent-owned sessions. */
   agent?: { projectId: string; sessionId: string };
+  /**
+   * Its project moved to another window: the shell waits there to be taken
+   * over (`catamorphic:terminal-adopt`) and ends if it is not, in time.
+   */
+  transit?: ReturnType<typeof setTimeout>;
   /**
    * OSC 133 semantic-prompt state (agent sessions spawn with shell
    * integration; see shell-integration.ts). Once markers are `seen`,
@@ -157,10 +165,17 @@ export function registerTerminalSupport(
   agentEnv?: (
     projectId: string,
   ) => Record<string, string> | Promise<Record<string, string>>,
+  /** Whether `sender`'s window is the one `projectId` lives in now. */
+  ownsProject?: (projectId: string, sender: WebContents) => boolean,
 ): {
   dispose(): Promise<void>;
   hasActiveWork(): boolean;
   agentTerminals: AgentTerminals;
+  /**
+   * `projectId` left `from` for a window of its own: its shells there
+   * wait to be taken over, and end if nothing does within a while.
+   */
+  handOff(projectId: string, from: WebContents): void;
 } {
   const sessions = new Map<string, TerminalSession>();
   const lifecycle = new TerminalLifecycle();
@@ -255,6 +270,8 @@ export function registerTerminalSupport(
    * was announced then.
    */
   const end = (sessionId: string, session: TerminalSession) => {
+    clearTimeout(session.transit);
+    session.transit = undefined;
     bury(sessionId, session);
     sessions.delete(sessionId);
     session.releaseSender?.();
@@ -523,8 +540,8 @@ export function registerTerminalSupport(
   /**
    * A project moving to a window of its own takes its shells with it: the
    * new window's tab takes over a running one (renderer/lib/project-move.ts)
-   * and gets what it printed so far. Not an agent's (every window shares
-   * those) and not another project's.
+   * and gets what it printed so far. Only a shell handed off with its
+   * project, and only by the window that project lives in now.
    */
   ipcMain.handle(
     "catamorphic:terminal-adopt",
@@ -534,11 +551,13 @@ export function registerTerminalSupport(
       const session = sessions.get(sessionId);
       if (
         !session?.running ||
-        session.agent ||
-        !session.sender ||
-        session.projectId !== projectId
+        !session.transit ||
+        session.projectId !== projectId ||
+        !ownsProject?.(projectId, event.sender)
       )
         return null;
+      clearTimeout(session.transit);
+      session.transit = undefined;
       streamTo(session, event.sender);
       return { buffer: bufferText(session) };
     },
@@ -706,6 +725,19 @@ export function registerTerminalSupport(
   return {
     // Work is a command running in a terminal, not a shell idling there.
     hasActiveWork: () => [...sessions.values()].some(computeBusy),
+    handOff(projectId, from) {
+      for (const [sessionId, session] of sessions) {
+        if (
+          session.agent ||
+          !session.running ||
+          session.projectId !== projectId ||
+          session.sender !== from
+        )
+          continue;
+        clearTimeout(session.transit);
+        session.transit = setTimeout(() => end(sessionId, session), HANDOFF_MS);
+      }
+    },
     dispose() {
       clearInterval(busyPoll);
       for (const session of sessions.values()) session.releaseSender?.();

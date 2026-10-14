@@ -81,8 +81,21 @@ export function OverlayScrollbar({
         if (!near && !drag) bar.dataset.shown = "false";
       }, IDLE_MS);
     };
+    // The list the thumb stands for, and what it holds, as they change
+    // size (a section opening, rows arriving) while the thumb shows.
+    const resize = new ResizeObserver(() => {
+      if (bar.dataset.shown === "true") place();
+    });
+    resize.observe(box);
+    const follow = (list: HTMLElement) => {
+      resize.disconnect();
+      resize.observe(box);
+      resize.observe(list);
+      for (const child of list.children) resize.observe(child);
+    };
     const show = (list: HTMLElement) => {
       if (drag) return;
+      if (list !== active) follow(list);
       active = list;
       if (!place()) return;
       bar.dataset.shown = "true";
@@ -168,11 +181,6 @@ export function OverlayScrollbar({
       event.preventDefault();
       active?.scrollBy({ top: event.deltaY, left: 0 });
     };
-    // A list that grows or shrinks while the thumb shows keeps it right.
-    const resize = new ResizeObserver(() => {
-      if (bar.dataset.shown === "true") place();
-    });
-    resize.observe(box);
 
     const listen = new AbortController();
     const { signal } = listen;
@@ -187,6 +195,7 @@ export function OverlayScrollbar({
     handle.addEventListener("pointermove", onThumbMove, { signal });
     handle.addEventListener("pointerup", onThumbUp, { signal });
     handle.addEventListener("pointercancel", onThumbUp, { signal });
+    handle.addEventListener("lostpointercapture", onThumbUp, { signal });
     handle.addEventListener("wheel", onThumbWheel, { passive: false, signal });
     return () => {
       listen.abort();
