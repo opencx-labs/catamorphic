@@ -12,9 +12,14 @@
     }
   },
   "scripts": {
-    "build": "tsup && tsc --project tsconfig.json --noEmit false --emitDeclarationOnly && cp src/schema.d.ts dist/schema.d.ts",
+    "build": "bun ../../scripts/build-package.ts && tsc --project tsconfig.json --noEmit false --emitDeclarationOnly && cp src/schema.d.ts dist/schema.d.ts",
     "generate": "openapi-typescript openapi.json -o src/schema.d.ts",
-    "typecheck": "tsgo --project ./tsconfig.json"
+    "typecheck": "bun check --project ./tsconfig.json"
+  },
+  "bundle": {
+    "entry": [
+      "src/index.ts"
+    ]
   },
   "dependencies": {
     "openapi-fetch": "^0.17.0"

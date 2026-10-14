@@ -243,3 +243,4 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0228](0228-a-sign-in-that-can-still-refresh-is-retried.md) | A sign-in that can still refresh is retried, and a fixed one runs the turn again | Accepted (amends 0222) |
 | [0229](0229-idle-pollers-wait-for-hints.md) | Idle pollers wait for hints from their own process | Accepted (refines 0193, 0197, 0207) |
 | [0231](0231-daytona-support-is-removed.md) | Daytona support is removed | Accepted (amends 0004, 0008, 0174) |
+| [0232](0232-bun-builds-and-checks-packages.md) | Bun builds and type checks the packages | Accepted |

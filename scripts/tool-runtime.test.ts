@@ -167,7 +167,7 @@ describe("toolRuntime", () => {
       "bun scripts/tool-runtime.ts vitest --config ./vitest.config.ts --dir ./scripts",
     );
     expect(scripts["typecheck:scripts"]).toBe(
-      "tsgo --project ./tsconfig.scripts.json",
+      "tsc --noEmit --project ./tsconfig.scripts.json",
     );
   });
 

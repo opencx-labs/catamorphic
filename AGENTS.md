@@ -246,7 +246,10 @@ bun run build # all packages from root via Turbo
 ```
 
 Packages resolve each other via `dist/`: rebuild changed packages before a
-desktop build or e2e run, or your changes silently don't ship.
+desktop build or e2e run, or your changes silently don't ship. Bun builds each
+package's JavaScript from the `bundle` field of its package.json
+(`scripts/build-package.ts`) and `tsc` writes its declarations; a new entry
+point goes in `bundle.entry` (ADR 0232).
 
 ### 4. Tests
 

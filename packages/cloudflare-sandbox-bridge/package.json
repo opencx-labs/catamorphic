@@ -8,7 +8,7 @@
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
     "start": "wrangler dev",
-    "typecheck": "tsgo --project ./tsconfig.json",
+    "typecheck": "bun check --project ./tsconfig.json",
     "cf-typegen": "wrangler types",
     "test": "bun ../../scripts/tool-runtime.ts vitest --tool-cwd packages/cloudflare-sandbox-bridge --config ../../vitest.config.ts"
   },

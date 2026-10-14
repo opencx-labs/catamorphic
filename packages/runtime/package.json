@@ -13,10 +13,17 @@
     "./package.json": "./package.json"
   },
   "scripts": {
-    "build": "tsup && tsc --project tsconfig.json --noEmit false --emitDeclarationOnly",
-    "dev": "tsup --watch --no-clean",
+    "build": "bun ../../scripts/build-package.ts && tsc --project tsconfig.json --noEmit false --emitDeclarationOnly",
+    "dev": "bun ../../scripts/build-package.ts --watch",
     "test": "bun ../../scripts/tool-runtime.ts vitest --tool-cwd packages/runtime --config ../../vitest.config.ts",
-    "typecheck": "tsgo --project ./tsconfig.json"
+    "typecheck": "bun check --project ./tsconfig.json"
+  },
+  "bundle": {
+    "entry": [
+      "src/index.ts",
+      "src/supervisor-worker.ts"
+    ],
+    "splitting": false
   },
   "dependencies": {
     "@catamorphic/workflow": "workspace:*"

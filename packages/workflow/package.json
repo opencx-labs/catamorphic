@@ -21,10 +21,16 @@
     "README.md"
   ],
   "scripts": {
-    "build": "tsup && tsc --project tsconfig.json --noEmit false --emitDeclarationOnly",
-    "dev": "tsup --watch --no-clean",
+    "build": "bun ../../scripts/build-package.ts && tsc --project tsconfig.json --noEmit false --emitDeclarationOnly",
+    "dev": "bun ../../scripts/build-package.ts --watch",
     "test": "bun ../../scripts/tool-runtime.ts vitest --tool-cwd packages/workflow --config ../../vitest.config.ts",
-    "typecheck": "tsgo --project ./tsconfig.json && tsgo --project ./tsconfig.type-tests.json"
+    "typecheck": "bun check --project ./tsconfig.json && bun check --project ./tsconfig.type-tests.json"
+  },
+  "bundle": {
+    "entry": [
+      "src/index.ts",
+      "src/project-layout.ts"
+    ]
   },
   "devDependencies": {
     "@types/node": "^26.1.1"

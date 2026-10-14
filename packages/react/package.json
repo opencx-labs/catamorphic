@@ -20,11 +20,44 @@
     }
   },
   "scripts": {
-    "build": "tsup && tsc --project tsconfig.json --noEmit false --emitDeclarationOnly",
-    "dev": "tsup --watch --no-clean",
+    "build": "bun ../../scripts/build-package.ts && tsc --project tsconfig.json --noEmit false --emitDeclarationOnly",
+    "dev": "bun ../../scripts/build-package.ts --watch",
     "test": "bun ../../scripts/tool-runtime.ts vitest --tool-cwd packages/react --config ./vitest.config.ts",
-    "typecheck": "tsgo --project ./tsconfig.json"
+    "typecheck": "bun check --project ./tsconfig.json"
   },
+  "bundle": [
+    {
+      "entry": [
+        "src/index.ts"
+      ],
+      "banner": "\"use client\";",
+      "external": [
+        "react",
+        "react-dom",
+        "@tanstack/react-query"
+      ]
+    },
+    {
+      "entry": [
+        "src/workflow-helpers.ts"
+      ],
+      "external": [
+        "react",
+        "react-dom",
+        "@tanstack/react-query"
+      ]
+    },
+    {
+      "entry": [
+        "src/types.ts"
+      ],
+      "external": [
+        "react",
+        "react-dom",
+        "@tanstack/react-query"
+      ]
+    }
+  ],
   "dependencies": {
     "@catamorphic/agent-protocol": "workspace:*",
     "@catamorphic/api-client": "workspace:*",

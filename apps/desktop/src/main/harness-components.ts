@@ -112,7 +112,7 @@ const CLAUDE_VERSION = "0.3.299";
  */
 export const CLAUDE_CODE_MIN_VERSION = "2.1.299";
 const CODEX_VERSION = "0.162.1";
-const BUN_VERSION = "1.3.14";
+const BUN_VERSION = "1.4.3";
 const MAX_ARCHIVE_BYTES = 512 * 1024 * 1024;
 /**
  * A download that receives nothing for this long has stalled: a slow link
@@ -128,7 +128,7 @@ const PLATFORM_RELEASES: Record<string, PlatformRelease> = {
     codexIntegrity:
       "sha512-YVXpg57itBuQxjofay3KDF5UbnZF4Y1ZmNFzUCz0ZQiQN+DndxOjN5V87rnXvPaC4qCPO2El74DzewoBP8JyPQ==",
     bunIntegrity:
-      "sha512-Omj20SuiHBOUjUBIyqtkNjSUIjOtEOJwmbix/ZyFH4BaQ6OZTaaRWIR4TjHVz0yadHgli6lLTiAh1uarnvD49A==",
+      "sha512-u2wAM9RzqyF4baO5oFVhcFUVWO1CCMLG6yC5/aPWCYGZPfL5ULMbeHt+0/3I0h3yaPx1m+PKSANO/61jPtDZcQ==",
   },
   "darwin-x64": {
     rustTarget: "x86_64-apple-darwin",
@@ -137,7 +137,7 @@ const PLATFORM_RELEASES: Record<string, PlatformRelease> = {
     codexIntegrity:
       "sha512-0/WHRhbUnM1wAjfyCO54Q8s4vQRxLVBbqW6XuQf7rZTEMTYPKRIQU9aPeRgjG653ZCSjtBrslWQ+G9urY9CksQ==",
     bunIntegrity:
-      "sha512-FFj3QdU/OhlDyZOJ8CWfN5eWLpRlT4qjZg7lMQi7jA6GuoY5ajlO1zWLP/MuHYRSbXQUvV52RejNi8DVnAp13w==",
+      "sha512-wRGeciWOyKyG/BfTHq4CAyqoOfuzj5UJkKA8FlJETW2yhtDh+Ba3EgPnsVclFyzIw7E0HJxpsonoj17g3HPK/Q==",
   },
   "linux-arm64": {
     rustTarget: "aarch64-unknown-linux-musl",
@@ -146,7 +146,7 @@ const PLATFORM_RELEASES: Record<string, PlatformRelease> = {
     codexIntegrity:
       "sha512-Ss7W/SrKtQFNaMtSojNoiykJgX+iDC8daM+YrcvgmJADtQPk0cd3w6Dna4CYH2CYvf9nQranj69fpcTzZ3sQIQ==",
     bunIntegrity:
-      "sha512-X5SsPZHs+iYO8R/efIcRtc7gT2Q2DgPfliCxEkx4cXBumwkw0c/EsHMNwH3EgGpCDaZ7IYVPhpCG/xBOQHEwZw==",
+      "sha512-ylogDFxDD+aRKO0TJauwDzCWM+rULvc85gRNZQ9CnY6rm2BU4GC2XUDi20bh67CIuB4Wt/0PL1xpsJ2hqplMww==",
   },
   "linux-x64": {
     rustTarget: "x86_64-unknown-linux-musl",
@@ -155,7 +155,7 @@ const PLATFORM_RELEASES: Record<string, PlatformRelease> = {
     codexIntegrity:
       "sha512-cjK2mdHIfEepZ1lQ1MX3aTQC+8ncIsvnacl/6vI2dIIcfP8/MrhTQ2+qRlkXFNDzJSj1d36quIszP+3/4CUJWQ==",
     bunIntegrity:
-      "sha512-7OVTAKvwfPmSbIV1HpdOoVVx5VRc427GuPPne93N6vk4eQBPId9nXmZDh9/zGaKPdbVjVtQSZafWQoUjx38Utw==",
+      "sha512-RArgnpjeXjaGzjp5h7Rs89cUYJutO8IyqR3itE8OBaBzEt8KNm2jp/YozxBHq4eFovwrQLryeSwTAcmiT+zcoA==",
   },
   "win32-arm64": {
     rustTarget: "aarch64-pc-windows-msvc",
@@ -164,7 +164,7 @@ const PLATFORM_RELEASES: Record<string, PlatformRelease> = {
     codexIntegrity:
       "sha512-teVVACnEcupkR6XSmUQKwlGg/oA15d1DQDPVSoAfilHgctPEpTi5y11jYS6JhJO+AFnYM84gyo5SOS5vlnCQSg==",
     bunIntegrity:
-      "sha512-T7s3x/BsVKQObGU6QDkZeI6wKynzqGbBH1yI77jrrj5siElclxr3DQrDIk8CV4G5/SJq2HHq4kpLyYY2DKCSmA==",
+      "sha512-a3Vyu9KI0J9vfIS+/LJMmjWI/qsBpph8u0R7d6Tm+YaSOqZeN2LRULfVqz13dgQRTvqg6aWBxOv9jE4Rl0lAAQ==",
   },
   "win32-x64": {
     rustTarget: "x86_64-pc-windows-msvc",
@@ -173,7 +173,7 @@ const PLATFORM_RELEASES: Record<string, PlatformRelease> = {
     codexIntegrity:
       "sha512-dfl4MhHuEi0ARKyNmrTxk+RQmsWNCQAoVLUtrYq+yrW1C8P2sg5ziwgHUUACHjYLKuACV7ARH5Nq5pnCz3GlaQ==",
     bunIntegrity:
-      "sha512-mUFWL3BoYkNpjd8e9PqROiFF/1Xeotq20mABJsiQH62jM1g5zqWh4khw1RZ6bX8Q8fWvlPaxG1PjofkmjUi3vg==",
+      "sha512-9pV16qXHTFvZDH61S8hpdpVBbWmvEqekczLF54zTnQHKP28D6yRCNLrD/7jVbXYR61fQYAx4FSBgzCxGCKb3rQ==",
   },
 };
 

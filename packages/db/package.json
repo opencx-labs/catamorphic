@@ -22,14 +22,20 @@
     "./package.json": "./package.json"
   },
   "scripts": {
-    "build": "tsup && tsc --project tsconfig.json --noEmit false --emitDeclarationOnly",
-    "dev": "tsup --watch --no-clean",
+    "build": "bun ../../scripts/build-package.ts && tsc --project tsconfig.json --noEmit false --emitDeclarationOnly",
+    "dev": "bun ../../scripts/build-package.ts --watch",
     "test": "bun ../../scripts/tool-runtime.ts vitest --tool-cwd packages/db --config ../../vitest.config.ts",
-    "typecheck": "tsgo --project ./tsconfig.json",
+    "typecheck": "bun check --project ./tsconfig.json",
     "db:migrate": "bun run src/cli.ts migrate",
     "db:status": "bun run src/cli.ts status",
     "db:codegen": "kysely-codegen --out-file src/generated/db.ts --include-pattern 'catamorphic.*' --default-schema=catamorphic",
     "db:reset": "bun run src/cli.ts reset"
+  },
+  "bundle": {
+    "entry": [
+      "src/index.ts",
+      "src/cli.ts"
+    ]
   },
   "dependencies": {
     "kysely": "^0.29.3",

@@ -1,6 +1,6 @@
 // Minimal, hand-written version of the file Wrangler normally generates via
 // `wrangler types`. Regenerate with `bun run cf-typegen` once you have local
-// Wrangler authenticated; until then, this keeps `tsgo` typecheck green.
+// Wrangler authenticated; until then, this keeps the typecheck green.
 //
 // Matches the bindings declared in wrangler.jsonc.
 

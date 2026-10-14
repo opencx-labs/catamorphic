@@ -16,10 +16,16 @@
     }
   },
   "scripts": {
-    "build": "tsup && tsc --project tsconfig.json --noEmit false --emitDeclarationOnly",
+    "build": "bun ../../scripts/build-package.ts && tsc --project tsconfig.json --noEmit false --emitDeclarationOnly",
     "test": "bun ../../scripts/tool-runtime.ts vitest --tool-cwd packages/fastify-plugin --config ../../vitest.config.ts",
-    "typecheck": "tsgo --project ./tsconfig.json",
+    "typecheck": "bun check --project ./tsconfig.json",
     "generate-spec": "bun run scripts/generate-spec.ts && biome format --write ../api-client/openapi.json"
+  },
+  "bundle": {
+    "entry": [
+      "src/index.ts",
+      "src/mcp.ts"
+    ]
   },
   "dependencies": {
     "@catamorphic/app": "workspace:*",

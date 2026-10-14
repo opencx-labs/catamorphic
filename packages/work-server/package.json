@@ -13,10 +13,15 @@
     }
   },
   "scripts": {
-    "build": "tsup && tsc --project tsconfig.json --noEmit false --emitDeclarationOnly",
-    "dev": "tsup --watch --no-clean",
-    "typecheck": "tsgo --project ./tsconfig.json",
+    "build": "bun ../../scripts/build-package.ts && tsc --project tsconfig.json --noEmit false --emitDeclarationOnly",
+    "dev": "bun ../../scripts/build-package.ts --watch",
+    "typecheck": "bun check --project ./tsconfig.json",
     "test": "bun ../../scripts/tool-runtime.ts vitest --tool-cwd packages/work-server --config ../../vitest.config.ts --pool=forks"
+  },
+  "bundle": {
+    "entry": [
+      "src/index.ts"
+    ]
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^4.0.52",

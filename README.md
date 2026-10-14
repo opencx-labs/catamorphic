@@ -749,7 +749,7 @@ bun run build       # Build all packages
 bun run test        # Deterministic root and Postgres-complete workspace tests
 bun run test:external # Explicit opt-in for credentialed external integrations
 bun run check       # 11-phase merge gate
-bun run typecheck   # Typecheck all packages with tsgo
+bun run typecheck   # Typecheck all packages with bun check
 bun run lint        # Lint with Biome
 bun run lint:fix    # Auto-fix lint issues
 bun run db:migrate  # Apply migrations to the DB pointed at by DATABASE_URL
@@ -816,7 +816,7 @@ Linux. Windows development orchestration is not supported.
 ## Tech stack
 
 - **Bun**: runtime, package manager, bundler (also inside sandboxes)
-- **TypeScript**: tsgo for typechecking
+- **TypeScript**: `bun check` for typechecking, `tsc` for declarations
 - **Postgres**: all state, schema-scoped; run queues, retries, pauses, and scheduling use the same DB
 - **Electron + electron-vite**: the desktop reference implementation
 - **Fastify**: HTTP surface with Zod + OpenAPI (mounted by the host)
