@@ -690,11 +690,15 @@ own apps do:
 - **The agent's own words**, held through the steps they lead to: Codex's
   latest reasoning title (as Codex keeps it on its status line), and
   Claude Code's thinking title, or its last sentence once the thinking is
-  whole. A harness hands them to Core with each step it starts
-  (`item.started.activity`), so no later step takes the line from them.
-  Thinking that says nothing hands the line back to the steps. Only a
-  bold title opening a line counts, never a word bolded mid-sentence.
-- **Else the running step's own description**, the words its row shows.
+  whole, for the steps of that response. A harness hands them to Core with
+  each step it starts (`item.started.activity`), so no later step takes
+  the line from them; Core follows the batch's events in order. A
+  response whose thinking says nothing hands the line back to its steps,
+  and a subagent's words and launch ("Delegating: ...") are its own. Only
+  a line that is a bold title counts, never a bold lead-in or word.
+- **Else the running step's own description**, the words its row shows,
+  when it is short and one line (a long one is a tool's data, such as an
+  issue's body).
 - **Else Work's verb** for the step ("Working with git...").
 
 Notes and steps are unchanged. The agent's messages still say "Writing...",

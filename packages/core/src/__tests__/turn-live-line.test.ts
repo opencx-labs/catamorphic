@@ -18,6 +18,7 @@ import {
   type QueryResult,
 } from "kysely";
 import { describe, expect, it } from "vitest";
+import { SecretMask } from "../services/sessions/secret-mask.js";
 import { ingestHarnessEvents } from "../services/sessions/turn-ingest.js";
 
 /*
@@ -145,7 +146,7 @@ describe("the turn's live line", () => {
         {
           type: "item.started",
           key: "c1",
-          item: command("Read  the VAD options\nand their history"),
+          item: command("Read  the VAD options and their history"),
         },
       ]),
     ).toBe("Read the VAD options and their history");
@@ -181,5 +182,38 @@ describe("the turn's live line", () => {
         },
       ]),
     ).toBe("Fixing the parser");
+  });
+
+  it("follows the batch's order, and never records a secret the words carry", async () => {
+    const db = emptyDatabase();
+    const mask = new SecretMask({ API_KEY: "sk-live-0123456789" });
+    const batch = mask.begin();
+    const result = await db.transaction().execute((trx) =>
+      ingestHarnessEvents({
+        trx,
+        state: {
+          sessionId: turn.sessionId,
+          agentId: null,
+          turn,
+          attempt,
+          thread,
+        },
+        events: [
+          { type: "status", text: "Reading the parser" },
+          // Thinking that said nothing: the next step speaks for itself.
+          { type: "item.started", key: "c1", item: command("Run the tests") },
+          {
+            type: "item.started",
+            key: "c2",
+            item: command(null),
+            activity: "Calling the API with sk-live-0123456789",
+          },
+        ],
+        now: new Date(),
+        mask: batch,
+      }),
+    );
+    batch.commit();
+    expect(result.turn.activity).toBe("Calling the API with [secret API_KEY]");
   });
 });

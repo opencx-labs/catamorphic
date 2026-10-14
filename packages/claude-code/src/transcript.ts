@@ -200,6 +200,8 @@ export class ClaudeTranscript {
   private plan?: { key: string; done: boolean };
   /** The agent's own words for its work, from its latest thinking. */
   private line?: string;
+  /** The main thread's response those words came with. */
+  private response?: string;
   private thinking = "";
   /** A retry's line is up; the next response from the API replaces it. */
   private retrying = false;
@@ -309,6 +311,7 @@ export class ClaudeTranscript {
     switch (event.type) {
       case "message_start":
         this.current = { messageId: event.message.id, blocks: new Map() };
+        this.respond(event.message.id);
         return;
       case "content_block_start": {
         const current = this.current;
@@ -375,6 +378,16 @@ export class ClaudeTranscript {
   }
 
   /**
+   * A new response from the API: the words of the one before were about
+   * its steps, and one without thinking says nothing of its own.
+   */
+  private respond(id: string): void {
+    if (id === this.response) return;
+    this.response = id;
+    this.line = undefined;
+  }
+
+  /**
    * The agent's own words for what it is doing, from its thinking, as its
    * live line: a title as soon as one streams, else, once the thinking is
    * whole, its last sentence (the API's summarized thinking ends on what
@@ -420,6 +433,7 @@ export class ClaudeTranscript {
       }
       this.lastAssistantUuid = message.uuid;
       this.lastMainUsage = api.usage;
+      this.respond(api.id);
     }
     for (const [index, block] of api.content.entries()) {
       if (block.type === "tool_use") {
@@ -460,7 +474,8 @@ export class ClaudeTranscript {
         if (status === "cancelled")
           this.emit({ type: "item.completed", key, status });
       }
-      if (block.type === "thinking") this.think(text, true);
+      // Thinking an interrupt cut short ends mid-thought.
+      if (block.type === "thinking" && !message.aborted) this.think(text, true);
     }
   }
 
@@ -543,7 +558,10 @@ export class ClaudeTranscript {
       key,
       ref: { id: input.id, strength: "strong" },
       item: parentKey ? { ...item, parentKey } : item,
-      ...(this.line && !parentKey ? { activity: this.line } : {}),
+      // A subagent says what it was delegated, and its own work its own.
+      ...(this.line && !parentKey && kind !== "subagent"
+        ? { activity: this.line }
+        : {}),
     });
   }
 
@@ -695,9 +713,15 @@ export function lastSentence(text: string): string | undefined {
     .trim()
     .split(/\n\s*\n/)
     .at(-1)
-    ?.replace(/\s+/g, " ")
-    .trim();
-  if (!paragraph) return undefined;
-  const sentence = paragraph.split(/(?<=[.!?])\s+(?=[^\s\p{Ll}])/u).at(-1);
-  return sentence?.replace(/[*_`]/g, "").trim() || undefined;
+    ?.trim();
+  // A closing code block, list, quote or table is not a sentence.
+  if (!paragraph || /^(```|~~~|[-*+] |\d+[.)] |>|\|)/.test(paragraph))
+    return undefined;
+  const sentence = paragraph
+    .replace(/\s+/g, " ")
+    .split(/(?<=[.!?])\s+(?=[^\s\p{Ll}])|(?<=[。！？])/u)
+    .filter((part) => part.trim())
+    .at(-1);
+  // Markdown's paired marks go; underscores and stars in names stay.
+  return sentence?.replace(/(\*\*|__|`)(.+?)\1/g, "$2").trim() || undefined;
 }

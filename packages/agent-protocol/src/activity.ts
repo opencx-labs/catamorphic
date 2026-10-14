@@ -30,9 +30,33 @@ export function itemActivity(item: Item): string | undefined {
   }
 }
 
-/** A description as one line, or undefined when it says nothing. */
+/** How long a live line may be; the UI shows one line of it. */
+export const ACTIVITY_MAX = 200;
+
+/**
+ * Text as a live line: one line, cut at a word past `max` (with an
+ * ellipsis), or undefined when it says nothing.
+ */
+export function activityLine(
+  text: string | null | undefined,
+  max = ACTIVITY_MAX,
+): string | undefined {
+  const line = text?.replace(/\s+/g, " ").trim();
+  if (!line) return undefined;
+  if (line.length <= max) return line;
+  const cut = line.lastIndexOf(" ", max - 1);
+  return `${line.slice(0, cut > max / 2 ? cut : max - 1)}…`;
+}
+
+/**
+ * A step's description as its live line: a harness's own short words for
+ * the call (Claude Code's "Read the VAD options"). A long or multi-line
+ * one is a tool's data (an issue's body), never the line.
+ */
 function described(text: string | null): string | undefined {
-  return text?.replace(/\s+/g, " ").trim() || undefined;
+  if (!text || text.trim().includes("\n") || text.length > 120)
+    return undefined;
+  return activityLine(text);
 }
 
 /** Friendly verbs for well-known programs; anything else is "Working...". */

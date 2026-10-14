@@ -1,6 +1,11 @@
 import fs from "node:fs";
 import { afterAll, beforeAll, expect, it } from "vitest";
-import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
+import {
+  type AppHandle,
+  focusWindow,
+  launchApp,
+  setReactValueJs,
+} from "./harness.js";
 
 /**
  * The macOS close, minimize and full screen buttons follow the profile's
@@ -506,7 +511,7 @@ it("keeps a background project's drag areas off the visible tabs", async () => {
     "window.catamorphicDesktop.setPrefs({windowButtons:false,sidebarOpen:false})",
   );
   await settle(
-    `$('[data-window-buttons]')?.dataset.windowButtons === 'off' && ${visible}.querySelectorAll('[data-tab-orientation="horizontal"] [data-point-key]').length >= 2`,
+    `${visible}.querySelectorAll('[data-tab-orientation="horizontal"] [data-point-key]').length >= 2`,
     "the visible project's tabs on top",
   );
   const background = await app.eval<{ id: string }>(
@@ -524,15 +529,22 @@ it("keeps a background project's drag areas off the visible tabs", async () => {
   // Opened second, the background project is laid out after the first.
   await show(background.id, "the background project in front");
   await show(projectId, "the first project in front again");
-  const layout = await inPage<{ room: number; tabs: number[] }>(`
-    const room = $('[data-workspace-visible="false"] [data-tab-strip-room="end"]').getBoundingClientRect();
+  const layout = await inPage<{
+    after: boolean;
+    room: number;
+    tabs: number[];
+  }>(`
+    const hidden = $('[data-workspace-visible="false"]');
+    const room = hidden.querySelector('[data-tab-strip-room="end"]').getBoundingClientRect();
     return {
+      after: !!(${visible}.compareDocumentPosition(hidden) & Node.DOCUMENT_POSITION_FOLLOWING),
       room: room.left,
       tabs: [...${visible}.querySelectorAll('[data-tab-orientation="horizontal"] [data-point-key]')].map((tab) => { const rect = tab.getBoundingClientRect(); return rect.left + rect.width / 2; }),
     };
   `);
-  // The test means something: a visible tab lies over the background
-  // project's spare room.
+  // The test means something: the background project comes later, and a
+  // visible tab lies over its spare room.
+  expect(layout.after).toBe(true);
   expect(layout.tabs.some((x) => x > layout.room)).toBe(true);
   const presses = await inPage<{ label: string; drags: boolean }[]>(
     `return pressable('[data-workspace-visible="true"] [data-tab-orientation="horizontal"] [data-point-key] button, [data-workspace-visible="true"] button[aria-label="New tab"]')`,
@@ -553,7 +565,7 @@ it("keeps a background project's drag areas off the visible tabs", async () => {
     `!${visible}.querySelector('[data-point-key=${JSON.stringify(covered.key)}]').hasAttribute('data-tab-active')`,
     "another tab in front",
   );
-  await app.eval("window.catamorphicDesktop.devWindow('focus')");
+  await focusWindow(app);
   await app.clickPointer({ x: covered.x, y: covered.y });
   await settle(
     `${visible}.querySelector('[data-point-key=${JSON.stringify(covered.key)}]').hasAttribute('data-tab-active')`,

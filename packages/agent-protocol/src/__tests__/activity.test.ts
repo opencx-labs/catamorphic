@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { commandActivity, itemActivity } from "../activity.js";
+import { activityLine, commandActivity, itemActivity } from "../activity.js";
 import type { Item } from "../model.js";
 
 describe("commandActivity", () => {
@@ -18,13 +18,13 @@ describe("commandActivity", () => {
 
 describe("itemActivity", () => {
   const step = (item: Partial<Item>) => ({ id: "i1", ...item }) as Item;
-  it("says a step's own description as one line, else a verb", () => {
+  it("says a step's own short description, else a verb", () => {
     expect(
       itemActivity(
         step({
           kind: "command",
           command: "rg -n vad src",
-          description: " Read the VAD options\n and their history ",
+          description: " Read the VAD options  and their history ",
         }),
       ),
     ).toBe("Read the VAD options and their history");
@@ -42,10 +42,36 @@ describe("itemActivity", () => {
         }),
       ),
     ).toBe("Count calls by day");
+  });
+
+  it("never says a tool's data: a long or multi-line description", () => {
     expect(
       itemActivity(
-        step({ kind: "tool_call", tool: "run_query", description: "  " }),
+        step({
+          kind: "tool_call",
+          tool: "create_issue",
+          description: "Steps to reproduce:\n1. Open the app",
+        }),
       ),
     ).toBe("Working...");
+    expect(
+      itemActivity(
+        step({
+          kind: "tool_call",
+          tool: "create_issue",
+          description: "x".repeat(121),
+        }),
+      ),
+    ).toBe("Working...");
+  });
+});
+
+describe("activityLine", () => {
+  it("is one line, cut at a word with an ellipsis", () => {
+    expect(activityLine("  Reading\n the   parser ")).toBe(
+      "Reading the parser",
+    );
+    expect(activityLine("one two three four", 12)).toBe("one two…");
+    expect(activityLine(" \n ")).toBeUndefined();
   });
 });

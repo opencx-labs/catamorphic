@@ -117,15 +117,15 @@ export function renderTurnContext(
  * The title of a reasoning summary's latest part ("**Reviewing database
  * migrations**"): the agent's own words for what it is doing, which hosts
  * show as its live line until it titles the next part, as Codex shows its
- * own. Only a bold title opening a line counts: a word bolded mid-sentence
- * never does, and raw reasoning never does.
+ * own. Only a line that is a bold title counts: a bold lead-in ("**Note:**
+ * ...") or a word bolded mid-sentence never does.
  */
 export function reasoningHeading(text: string): string | undefined {
   let heading: string | undefined;
   for (const line of text.split("\n")) {
     const title = line
       .trim()
-      .match(/^\*\*([^*\n]+)\*\*/)?.[1]
+      .match(/^\*\*([^*\n]+)\*\*$/)?.[1]
       ?.trim();
     if (title) heading = title;
   }

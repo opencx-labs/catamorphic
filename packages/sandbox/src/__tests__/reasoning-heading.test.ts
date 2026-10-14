@@ -8,10 +8,13 @@ describe("reasoningHeading", () => {
         "**Reading the parser**\n\nIt walks the AST.\n\n**Fixing the walk**\n\nThe visitor skips",
       ),
     ).toBe("Fixing the walk");
-    expect(reasoningHeading("**Plan:** read, then fix")).toBe("Plan:");
+    expect(
+      reasoningHeading("**Reading the parser**\n\n**Note:** the walk skips"),
+    ).toBe("Reading the parser");
   });
 
-  it("is nothing for a bold word mid-sentence, an unclosed title or prose", () => {
+  it("is nothing for a bold lead-in or word, an unclosed title or prose", () => {
+    expect(reasoningHeading("**Plan:** read, then fix")).toBeUndefined();
     expect(
       reasoningHeading("I should check **app.tsx** first."),
     ).toBeUndefined();

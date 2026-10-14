@@ -869,7 +869,7 @@ function TabStrip({
                     }
                   }}
                   onMouseLeave={disarmHoverCard}
-                  className={`flex min-w-0 cursor-pointer items-center gap-1.5 ${vertical ? "h-full flex-1 px-1.5 text-left" : "self-stretch px-2.5"}`}
+                  className={`workspace-tab-label flex min-w-0 cursor-pointer items-center gap-1.5 ${vertical ? "h-full flex-1 px-1.5 text-left" : "self-stretch px-2.5"}`}
                   aria-current={active || undefined}
                 >
                   {/* Same signal vocabulary as the chat bubbles: spinner

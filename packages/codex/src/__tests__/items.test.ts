@@ -21,10 +21,14 @@ describe("Codex's reasoning title", () => {
       summary: ["**Inspecting the parser**\n\nIt walks the AST."],
     });
     items.itemStarted({ id: "c1", type: "commandExecution", command: "rg x" });
+    // A subagent's reasoning is its own.
+    items.itemStarted({ id: "r2", type: "reasoning" }, "spawn-1");
+    items.reasoningDelta("r2", "**Scanning the child tests**", 0);
     items.itemStarted({ id: "m1", type: "agentMessage" });
     items.itemStarted({ id: "c2", type: "commandExecution", command: "ls" });
     expect(events.filter((event) => event.type === "status")).toEqual([
       { type: "status", text: "Inspecting the parser" },
+      { type: "status", text: "Scanning the child tests" },
     ]);
     expect(
       events.flatMap((event) =>
@@ -33,6 +37,7 @@ describe("Codex's reasoning title", () => {
     ).toEqual([
       ["r1", undefined],
       ["c1", "Inspecting the parser"],
+      ["r2", undefined],
       ["m1", undefined],
       ["c2", "Inspecting the parser"],
     ]);

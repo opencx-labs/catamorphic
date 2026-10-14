@@ -214,7 +214,7 @@ describe("the agent's own words", () => {
   // Claude's summarized thinking is plain prose that ends on what it does
   // next; its own UI shows none of it, so the live line said "Thinking..."
   // and generic verbs while the agent had said what it was doing.
-  it("come from its thinking and hold through the steps it leads to", () => {
+  it("come from its thinking and hold through the steps of that response", () => {
     const events: HarnessEvent[] = [];
     const transcript = new ClaudeTranscript(
       (event) => events.push(event),
@@ -227,43 +227,67 @@ describe("the agent's own words", () => {
           "Found it: the caller did say yes. Now checking the end-of-call workflows.",
         ),
         bash("tool-1", "Read the VAD options"),
+        bash("tool-2", "Show the workflows"),
       ]),
     );
     transcript.handle(
       response("message-02", [
         thinking("**Reading the parser**\n\nIt walks the AST."),
-        bash("tool-2", "Show the parser"),
+        bash("tool-3", "Show the parser"),
+        {
+          type: "tool_use",
+          id: "tool-4",
+          name: "Task",
+          input: { description: "Explore the parser", prompt: "Look around" },
+        },
       ]),
     );
-    // Thinking that says nothing hands the line back to the steps.
+    // Thinking that says nothing, or none at all, hands the line back to
+    // the steps.
     transcript.handle(
-      response("message-03", [thinking(""), bash("tool-3", "Run the tests")]),
+      response("message-03", [thinking(""), bash("tool-5", "Run the tests")]),
+    );
+    transcript.handle(
+      response("message-04", [bash("tool-6", "Run them again")]),
     );
     expect(events.filter((event) => event.type === "status")).toEqual([
       { type: "status", text: "Now checking the end-of-call workflows." },
       { type: "status", text: "Reading the parser" },
     ]);
     const steps = events.flatMap((event) =>
-      event.type === "item.started" && event.item.kind === "command"
+      event.type === "item.started" &&
+      (event.item.kind === "command" || event.item.kind === "subagent")
         ? [[event.key, event.activity]]
         : [],
     );
     expect(steps).toEqual([
       ["tool-1", "Now checking the end-of-call workflows."],
-      ["tool-2", "Reading the parser"],
-      ["tool-3", undefined],
+      ["tool-2", "Now checking the end-of-call workflows."],
+      ["tool-3", "Reading the parser"],
+      // A subagent says what it was delegated.
+      ["tool-4", undefined],
+      ["tool-5", undefined],
+      ["tool-6", undefined],
     ]);
   });
 
   it("are the last sentence of the last paragraph, as plain text", () => {
     expect(
       lastSentence(
-        'Noted the **Ñ** guidance. The bot asked "¿Puede repetirlo?", then spoke over 9.2% of callers.\n\nNow I\'ll locate the `spelling` script.',
+        'Noted the **Ñ** guidance. The bot asked "¿Puede repetirlo?", then spoke over 9.2% of callers.\n\nNow I\'ll check `end_of_call.ts` and src/**/*.ts.',
       ),
-    ).toBe("Now I'll locate the spelling script.");
+    ).toBe("Now I'll check end_of_call.ts and src/**/*.ts.");
+    expect(lastSentence("解析器を読んだ。次にテストを実行する。")).toBe(
+      "次にテストを実行する。",
+    );
     expect(lastSentence("e.g. the parser. it fails")).toBe(
       "e.g. the parser. it fails",
     );
+    // A closing list or code block is not a sentence.
+    expect(
+      lastSentence("Let me check:\n\n- the parser\n- the walker"),
+    ).toBeUndefined();
+    expect(lastSentence("Here:\n\n```ts\nconst a = 1;\n```")).toBeUndefined();
     expect(lastSentence("  \n ")).toBeUndefined();
   });
 });
