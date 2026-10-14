@@ -378,21 +378,6 @@ describe("bookmarks", () => {
       label: "dialog closed",
     });
     await app.waitFor(`!!${row("Team wiki")}`, { label: "tile renamed" });
-    // TEMPORARY: where focus goes after the dialog, on each platform.
-    for (let i = 0; i < 6; i += 1) {
-      console.log(
-        "FOCUS PROBE",
-        i * 100,
-        await app.eval(
-          "(() => { const a = document.activeElement; return [a?.tagName, a?.textContent?.slice(0, 30), 'embedder ' + document.hasFocus()].join(' | '); })()",
-        ),
-        `guest ${await inPage("document.hasFocus()")}`,
-        JSON.stringify(
-          await app.eval("window.catamorphicDesktop.devWindow('get')"),
-        ),
-      );
-      await app.eval("new Promise((resolve) => setTimeout(resolve, 100))");
-    }
     const pinned = await app.eval<{ label: string; url: string }[]>(
       `window.catamorphicDesktop.bookmarksGet(${scope}).then(data => data.pinned.bookmarks.map(({ label, url }) => ({ label, url })))`,
     );

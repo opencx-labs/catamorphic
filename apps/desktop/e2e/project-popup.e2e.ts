@@ -311,16 +311,18 @@ describe("a project's card", () => {
         "copy button",
       ),
     );
+    // The press came as the pointer arrived: the button fades in as it
+    // confirms.
     await app.waitFor(
-      `${card}?.querySelector('[aria-label="Copy Git remote"]')?.dataset.copied === 'true'`,
-      { label: "copied" },
+      `${copyButton("Copy Git remote")}?.dataset.copied === 'true' && ${shown("Copy Git remote")}`,
+      { label: "copied, shown" },
     );
-    // Its confirmation stays in view when the pointer leaves the row, then
-    // the button rests hidden again.
+    // Its confirmation stays in view when the pointer leaves the row, with
+    // nothing fading it, then the button rests hidden again.
     await move(await centerOf(`${card}?.querySelector('h2')`, "card title"));
     expect(
       await app.eval<boolean>(
-        `${copyButton("Copy Git remote")}.dataset.copied === 'true' && ${shown("Copy Git remote")}`,
+        `${copyButton("Copy Git remote")}.dataset.copied === 'true' && ${shown("Copy Git remote")} && !${copyButton("Copy Git remote")}.getAnimations().some((animation) => animation.transitionProperty === 'opacity')`,
       ),
     ).toBe(true);
     await app.waitFor(
