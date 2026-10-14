@@ -393,6 +393,8 @@ screen, or under reduced motion.
 | `.tabbed-sidebar[data-push]` width (the sidebar's place growing or shrinking with its panel beside content Work draws, so that content rides the panel's edge) | 200ms, the panel's easing and item wait | the panel's own slide, reversing with it |
 | `.chrome-toggle-slot` fold (the chrome's sidebar toggle folding away as a pushing panel arrives and unfolding as it leaves, its gap with it; `@starting-style` for arrival) | 200ms, the panel's easing and item wait | the panel's own slide; gone or at its own width once the panel is still |
 | `.overlay-scrollbar` fade (a sidebar list's scroll position on the window's edge while it scrolls or the pointer nears that edge) | 150ms | itself: one transition both ways, fading 900ms after the last scroll |
+| Markdown format bar (Web Animations in `components/markdown/motion.ts`: in, rising 4px from 97% and transparent; out, the same way back, in place and inert) | 160ms | itself: one motion both ways; shown again mid-exit, or hidden mid-entrance, it turns from where it is over the share of the 160ms left |
+| Markdown drag handle (`.cat-mdedit-handle`: appears with opacity and scale 0.9 to 1, glides `top`/`left` between blocks) | 160ms appear / 140ms glide | itself |
 | `bubble-ask` (agent question arrival) | 280ms | — (one-shot nudge on a persistent bubble; no exit to pair) |
 | `input-recall-{up,down}-{a,b}` (composer ↑/↓ history) | 150ms | — (transform-only directional content signal; paired names replay rapid same-direction recalls without a classless frame) |
 | `cat-swap-out` / `cat-swap-in` (text changing in place: the agent's activity line, a steps line's count and word; shared from `@catamorphic/ui/styles.css` with `cat-fade-in`, `cat-fold-away` and `cat-step-in`) | 200ms / 200ms | each other (opacity only: the old text fades out from the opacity it had, the activity line's breath included, then the new fades in; the activity line resumes `animate-pulse`) |
@@ -672,6 +674,78 @@ the historical log explains how it arrived here.
 - [Performance](docs/performance.md): idle lifecycle checks and sustained measurement.
 
 ## Design log
+### 2026-10-14: A sidebar pushes what Work draws; its lists show their scroll only while it helps
+
+Opening or closing a sidebar beside a chat, a note or Settings slid the
+panel over the content and then cross-faded the content into its new place
+(ADR 0200), a motion made for web pages, which cannot lay out on every
+frame. Content Work draws can, so beside it the sidebar now pushes: the
+sidebar's place in the row grows or shrinks on the slide's own transition
+(200 ms, the standard curve, the same wait for the items when closing),
+the content's edge rides the panel's on every frame, and nothing fades
+afterwards. The chrome's sidebar toggle folds away as the panel arrives
+and unfolds as it leaves, its gap with it, so the tabs after it move with
+the content and land without a jump. Beside a web page, an app's frame, a
+terminal or the code editor, the slide and fade stay as they were. The
+choice is made at the toggle from what shows; a toggle turned around
+mid-slide keeps the motion it has. On the test display a 400-paragraph
+note re-wrapping in a narrow window kept every frame under 27 ms while it
+was pushed.
+
+The sidebar kept a scrollbar column on its inner edge at all times, and a
+long section (Chats, Files) drew a second scrollbar inside it. No sidebar
+list keeps a scrollbar now. One thin thumb on the sidebar's outer edge,
+the window's edge, stands for whichever list is moving, spanning that
+list's own height: it fades in as the list scrolls or as the pointer nears
+the edge beside it, can be dragged, and fades out a moment after. Rows sit
+evenly with nothing kept for a bar.
+
+### 2026-10-14: A project opens in a window of its own
+
+"Open in another window" sat on each row of the project list, and for a
+project the window had already shown it only switched that same window to
+it: a window keeps every project it has shown alive behind the one in
+front, and a project has one window (ADR 0121). The action now ends the
+project's card, below its latest three chats ("Latest chats", the ones its
+sidebar lists first; the card no longer lists every ongoing session), with
+Cmd-click on its row doing the same. A project the window only keeps in
+the background moves to the new window: its tabs, its chats (sent or not,
+with what was typed in them) and its running shells go with it, the shells
+taken over with their output rather than restarted; its pages load again.
+A file's unsaved edits live only in its editor, so a project holding some
+stays, and the window says which files to save first. A project in front
+of a window is already in one, which comes forward. A new window opens a
+step down and to the right of the one it came from, is named for its
+project, and appears in the macOS Window menu, so Cmd+` goes between them
+(ADR 0121, amended).
+
+### 2026-10-14: A block's grip sits on its first line; the format bar leaves as it came
+
+In a markdown document the grip beside a hovered block lined its top up
+with the block's top, which suits only a one-line paragraph. On a rule the
+line ran along the grip's top edge, and on a heading, a code block, a
+table, a quote or a task the grip sat off the words it moves. That was the
+extension's placement, so one rule now covers every block: the grip
+centers on the block's first line, taken from its first line of text (a
+table's first cell, a list item's own words, a code block's first line),
+or on its own box when it has no text (a rule, an empty paragraph). It
+stays there when an edit moves the block under it.
+
+A rule was a 1px line with nothing around it to hover, and only the line
+itself found the grip. It is now a box one and a half lines tall with the
+line through its middle: anywhere on it points at the rule, the grip
+centers on the line, and the line sits as far from a paragraph, list,
+quote, code block or heading as it did. A picked rule shows it, the line
+in the accent and the box in a faint wash of it, and no format bar opens
+over it, since there is no text to format.
+
+The format bar over a selection rose into place and vanished the moment
+the selection went. It now leaves the way it came, sinking 4px and fading
+over the same 160ms and curve, in place and not pressable while it goes; a
+selection that comes back while it leaves turns it around from where it
+is. It still waits for the mouse to lift before it appears, and a press in
+the text sends it out.
+
 ### 2026-10-14: Values read as values; efforts and models go by their own names
 
 A project's card showed a copy button on every row, so it read as a row
