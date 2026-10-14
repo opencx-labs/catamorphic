@@ -444,9 +444,13 @@ const plainMarkdown = (text: string) => (
 /**
  * A person's message's row is a container, so what sits beside the
  * message measures the room there, and it lets the sent time paint past
- * its edge where a settled row would clip it (see NARROW).
+ * its edge where a settled row would clip it (see NARROW). Hovered or
+ * focused, while its time shows, it rises over the row after it, which
+ * would otherwise paint over the time hanging below it and take the
+ * pointer from it (rows are flex items, so the raise needs no position).
  */
-const USER_ROW = "@container [overflow-clip-margin:1.5rem]";
+const USER_ROW =
+  "@container [overflow-clip-margin:1.5rem] hover:z-[1] focus-within:z-[1]";
 
 const NO_REQUESTS: Readonly<Record<string, RuntimeRequest>> = {};
 const NO_BACKGROUND: ReadonlyMap<string, ChatBackgroundCommand> = new Map();
@@ -1470,9 +1474,11 @@ function startOfToday(): number {
  * Today's midnight, which turns over at the next one: a chat left open
  * overnight says "Yesterday" by morning. One timer a day; a machine that
  * slept through midnight fires it late, so coming back looks again.
+ * Undefined until mounted: a host rendering on a server would otherwise
+ * write times in the server's zone and locale, not the person's.
  */
-function useToday(): number {
-  const [today, setToday] = useState(startOfToday);
+function useToday(): number | undefined {
+  const [today, setToday] = useState<number | undefined>(undefined);
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | undefined;
     const check = () => {
@@ -1617,14 +1623,18 @@ function MessageSide({
 }) {
   const { Hint } = useContext(HostContext);
   const today = useContext(TodayContext);
-  const sent = sentAt ? sentTime(sentAt, { now: today }) : undefined;
+  const sent =
+    sentAt && today !== undefined
+      ? sentTime(sentAt, { now: today })
+      : undefined;
   // The hint sits inside the time, so only the time is placed: a host's
   // hint wrapper never lands in the message's own flow.
   const time = sent && (
     <time
       dateTime={sentAt}
       data-testid="chat-sent-time"
-      className={`flex min-h-6 min-w-0 items-center justify-end text-right text-[11px] leading-4 tabular-nums text-fg-faint [overflow-wrap:anywhere] ${SENT_TIME} ${NARROW.time}`}
+      // Not part of what a copy of the conversation takes.
+      className={`flex min-h-6 min-w-0 select-none items-center justify-end text-right text-[11px] leading-4 tabular-nums text-fg-faint [overflow-wrap:anywhere] ${SENT_TIME} ${NARROW.time}`}
     >
       <Hint label={sent.full}>
         <span className={NARROW.label}>{sent.label}</span>

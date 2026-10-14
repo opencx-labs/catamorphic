@@ -1183,6 +1183,14 @@ describe("chat motion", () => {
     expect(timeLeft, "inside the conversation").toBeGreaterThanOrEqual(
       column[0],
     );
+    // Drawn on top where it hangs, and the pointer can reach it there.
+    expect(
+      await run<boolean>(
+        `const time = ${latest}.querySelector('[data-testid="chat-sent-time"]');
+         const r = time.firstElementChild.getBoundingClientRect();
+         return time.contains(document.elementFromPoint(r.left + r.width / 2, r.bottom - 2));`,
+      ),
+    ).toBe(true);
     await run(
       `document.getElementById('e2e-narrow-column').remove(); return true;`,
     );

@@ -128,6 +128,14 @@ function firstLineCenter(element: HTMLElement): number {
     const start = content.search(/\S/);
     if (start === -1) continue;
     const range = document.createRange();
+    // A first line with nothing on it (a code block opening with a blank
+    // line): the caret's place at its start is that line.
+    if (content.slice(0, start).includes("\n")) {
+      range.setStart(text, 0);
+      range.collapse(true);
+      const caret = range.getBoundingClientRect();
+      if (caret.height > 0) return caret.top + caret.height / 2;
+    }
     range.setStart(text, start);
     range.setEnd(
       text,
