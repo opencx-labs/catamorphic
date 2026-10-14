@@ -106,6 +106,11 @@ interface Frame {
   stallOnLine: boolean;
   /** The first row of the live list's left and its chevron's. */
   firstRow: Box;
+  /**
+   * The first row's top below the steps line's, rounded once: rounded
+   * apart, two tops moving together can read 0.1 px apart.
+   */
+  rowToLine: number | null;
   /** The line of the answer a test pressed on (`data-e2e-held`). */
   held: Box;
   firstChevron: Box;
@@ -150,6 +155,7 @@ const RECORDER = `(() => {
     const clock = log?.querySelector('[data-testid="chat-activity-elapsed"]');
     const stall = log?.querySelector('[data-testid="chat-activity-stalled"]');
     const first = live?.querySelector('[data-testid="chat-step"]');
+    const firstButton = first?.querySelector('button');
     const articles = log ? [...log.querySelectorAll('article')] : [];
     frames.push({
       t: round(performance.now()),
@@ -164,7 +170,8 @@ const RECORDER = `(() => {
       word: box(word),
       clock: box(clock), clockOnLine: !!clock?.closest('[data-testid="chat-turn-steps"]'),
       stall: box(stall), stallOnLine: !!stall?.closest('[data-testid="chat-turn-steps"]'),
-      firstRow: box(first?.querySelector('button')),
+      firstRow: box(firstButton),
+      rowToLine: firstButton && toggle ? round(firstButton.getBoundingClientRect().y - toggle.getBoundingClientRect().y) : null,
       firstChevron: box(first?.querySelector('button > svg:last-child')),
       held: box(log?.querySelector('[data-e2e-held]')),
       reveal: box(row?.closest('.cat-reveal')),
@@ -291,15 +298,17 @@ async function recordTurn(
         await during?.();
       }
     : during;
+  // What the new chat opened with has played first: the dock's own
+  // entrance scales what is measured, and on a slow runner its last frames
+  // reached the turn's (the line read 0.9 px off on macOS CI).
+  await runWait(
+    `return document.getAnimations().every((animation) =>
+       animation.playState !== 'running' ||
+       animation.effect?.getComputedTiming().iterations === Infinity);`,
+    { label: "the chat at rest" },
+  );
   if (options.stalls) {
-    // Only the turn's motion is held: what the new chat opened with has
-    // played (held, the dock's own entrance would scale what is measured).
-    await runWait(
-      `return document.getAnimations().every((animation) =>
-         animation.playState !== 'running' ||
-         animation.effect?.getComputedTiming().iterations === Infinity);`,
-      { label: "the chat at rest" },
-    );
+    // Only the turn's motion is held.
     await app.cdp("Animation.enable");
     await app.cdp("Animation.setPlaybackRate", { playbackRate: 0 });
   }
@@ -710,9 +719,7 @@ describe("chat motion", () => {
     expect(spread(left), "first row x").toBe(0);
     expect(spread(chevron), "first row's chevron x").toBe(0);
     // The line was there from the first step: the row never moved under it.
-    const rowToLine = work.map(
-      (frame) => (frame.firstRow?.[1] ?? 0) - (frame.toggle?.[1] ?? 0),
-    );
+    const rowToLine = work.map((frame) => frame.rowToLine ?? 0);
     expect(spread(rowToLine), "first row under its line").toBe(0);
     // Settling (notes folding into the answer) never pulls the scroll back.
     expect(scrollJumps(frames).map((frame) => frame.t)).toEqual([]);
