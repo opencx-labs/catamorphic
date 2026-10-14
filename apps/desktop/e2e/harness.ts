@@ -1,4 +1,4 @@
-import { type ChildProcess, spawn } from "node:child_process";
+import { type ChildProcess, execFileSync, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import { createRequire } from "node:module";
@@ -330,7 +330,8 @@ export async function launchApp(opts: LaunchOpts = {}): Promise<AppHandle> {
         }
         ws.close();
         try {
-          if (!killedForRecovery) await terminate(child);
+          if (!killedForRecovery)
+            await terminate(child, { sampleTo: artifactDirectory });
         } catch (error) {
           throw new Error(
             `${String(error)}\n--- app output ---\n${output.slice(-4000)}`,
@@ -700,7 +701,10 @@ export async function pointerOnPage(
   }
 }
 
-export async function terminate(child: ChildProcess): Promise<void> {
+export async function terminate(
+  child: ChildProcess,
+  options: { sampleTo?: string } = {},
+): Promise<void> {
   if (child.exitCode === null && child.signalCode === null) {
     const exited = new Promise<void>((resolve) => {
       child.once("exit", () => resolve());
@@ -708,8 +712,9 @@ export async function terminate(child: ChildProcess): Promise<void> {
     // Main handles SIGTERM through the ordinary asynchronous Quit lifecycle.
     // SIGKILL is a bounded last resort and must fail a normal teardown.
     const timeout = setTimeout(() => {
-      if (child.exitCode === null && child.signalCode === null)
-        child.kill("SIGKILL");
+      if (child.exitCode !== null || child.signalCode !== null) return;
+      sampleHung(child, options.sampleTo);
+      child.kill("SIGKILL");
     }, 15_000);
     try {
       child.kill("SIGTERM");
@@ -722,6 +727,29 @@ export async function terminate(child: ChildProcess): Promise<void> {
     throw new Error(
       `Electron did not exit cleanly: ${child.signalCode ?? `code ${child.exitCode}`}`,
     );
+}
+
+/**
+ * What holds an app that will not quit, from its own stacks, before it is
+ * killed: macOS's `sample`, kept with the diagnostics, its main thread
+ * printed. A blocked main thread logs nothing of its own.
+ */
+function sampleHung(child: ChildProcess, directory?: string): void {
+  if (process.platform !== "darwin" || !child.pid || !directory) return;
+  const file = path.join(directory, "hung-sample.txt");
+  try {
+    execFileSync("sample", [String(child.pid), "2", "-mayDie", "-file", file], {
+      stdio: "ignore",
+      timeout: 20_000,
+    });
+    const report = fs.readFileSync(file, "utf8");
+    const start = report.indexOf("Call graph:");
+    process.stderr.write(
+      `--- ${file}: main thread ---\n${report.slice(start, start + 6000)}\n`,
+    );
+  } catch (error) {
+    process.stderr.write(`Could not sample the app: ${String(error)}\n`);
+  }
 }
 
 const sleep = (ms: number) =>

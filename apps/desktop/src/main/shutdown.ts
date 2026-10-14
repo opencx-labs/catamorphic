@@ -45,6 +45,9 @@ export function registerDesktopShutdown({
   let waiting: ReturnType<typeof setTimeout> | undefined;
   app.on("before-quit", () => {
     if (started || waiting) return;
+    console.info(
+      `[desktop] Quitting; closing windows: ${diagnose(openWindows).join("; ") || "none"}`,
+    );
     waiting = setTimeout(() => {
       waiting = undefined;
       if (started) return;
