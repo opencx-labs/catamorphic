@@ -160,16 +160,18 @@ closed palettes and modals, other projects' workspaces. Typing in a chat and
 then minimising it left the document's caret in the inert composer. Inert
 content holds no caret position, and Chromium recomputes the visible
 selection before every frame that follows a DOM or style change
-(`WidgetBase::UpdateSelectionBounds`, `FrameCaret::UpdateAppearance`,
-`WebViewImpl::SetPageFocus`). Each time, `CanonicalPositionOf` walks
-backwards through every inert element to the first usable position,
-checking each one's `content-visibility` ancestors on the way. The cost
-grows with the inert content ahead of the caret.
+(`WidgetBase::UpdateSelectionBounds`, `FrameCaret::UpdateAppearance`), and
+on focus changes (`WebViewImpl::SetPageFocus`). Each time,
+`CanonicalPositionOf` walks backwards through every inert element to the
+first usable position, checking each one's `content-visibility` ancestors on
+the way. The cost grows with the inert content ahead of the caret.
 
-Measured 2026-10-15 in an installed 0.1.0-alpha.22 (Electron 45.0.0-beta.1,
-Chromium 156) on the person's own profile: 14,356 elements, four minimised
-chats of 235 to 3,025 elements. A synthetic pointer moved across the window
-for 4 seconds per row, only the caret changing between them:
+Measured 2026-10-15 on an Apple M3 Pro, macOS 26.5.2, in an installed
+0.1.0-alpha.22 (Electron 45.0.0-beta.1, Chromium 156) with a real profile:
+14,356 elements, four minimised chats of 235 to 3,025 elements. CDP moved a
+synthetic pointer across the window every 16 ms for 4 seconds per row; a
+`toplevel` trace counted the renderer's `ScheduledActionSendBeginMainFrame`
+tasks and its main-thread task time. Only the caret changed between rows:
 
 | Caret | Frames | Average frame | Main thread busy |
 | --- | ---: | ---: | ---: |
@@ -179,9 +181,9 @@ for 4 seconds per row, only the caret changing between them:
 
 In the same state, 22 seconds of hovering a markdown document ran at
 3.8 frames a second: the drag handle's per-frame hit test forced layout, and
-each layout paid a 116 to 161 ms walk. A fresh profile with fake-agent chats
-did not show a visible stall; the walk needs the long transcripts of real
-chats ahead of the caret.
+each layout paid a 116 to 161 ms walk. A fresh profile with a few
+fake-agent chats showed no visible stall, so the walk appears to need the
+long transcripts of real chats ahead of the caret.
 
 Only the hit-test path emits `VisibleUnits::canonicalPosition`. Under
 `UpdateSelectionBounds` the walk is untraced, so a stalled frame shows a long
@@ -193,11 +195,22 @@ renderer and resolve `Electron Framework` offsets against the `.sym` file's
 `FUNC` records.
 
 `lib/inert-selection.ts` releases the selection as its container turns
-inert. The range comes back when focus next enters that container, as a
-restored chat focuses its composer, so typing continues where the person
-left off; the guard never moves focus itself, and a press inside places its
-own caret. `lib/inert-selection.test.ts` and the chat-state suite's
-minimised-draft test cover it.
+inert, or as anything places it in content already inert; a selection
+reaching in from outside keeps its part outside. What it released returns
+without taking focus from anything. A highlight returns with its container,
+one in an editor only while nothing holds focus (a project switched back
+to), since a selection set in an editable element focuses it. A caret
+returns when its editor itself takes focus, as a restored chat focuses its
+composer, so typing continues where the person left off. A press inside
+places its own caret instead. `lib/inert-selection.test.ts` covers these
+cases; the chat-state suite's minimised-draft test covers the chat, and
+`app.e2e.ts`'s "Cmd+W closes the tab behind the floating chat when the tab
+has focus" fails if a caret returns before its editor has focus.
+
+Not covered: a caret in a tab hidden with `display: none` (inactive tabs) is
+no usable position either. A microbenchmark outside Electron found the walk
+from one at least as slow as from inert content; whether it stalls frames in
+Work is unmeasured.
 
 ## Development timing retention
 

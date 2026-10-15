@@ -392,7 +392,9 @@ it("lets go of the caret in a chat it minimises, keeping the draft", async () =>
     label: "chat minimised",
   });
   // A caret left in the now-inert composer would make Chromium walk every
-  // inert element before each frame (docs/performance.md).
+  // inert element before each frame (docs/performance.md). The chat stays
+  // mounted while minimised, so the check is not met by its removal.
+  expect(await app.eval(`document.querySelector('${dock}').inert`)).toBe(true);
   expect(
     await app.eval(`(() => {
       const node = getSelection().anchorNode;

@@ -5,6 +5,7 @@ import { installInertSelectionGuard } from "./inert-selection.js";
 let uninstall: (() => void) | undefined;
 afterEach(() => {
   uninstall?.();
+  uninstall = undefined;
   document.body.replaceChildren();
   document.getSelection()?.removeAllRanges();
 });
@@ -12,28 +13,33 @@ afterEach(() => {
 /** A surface holding a focusable composer with a caret in its text. */
 function surfaceWithCaret() {
   const surface = document.createElement("section");
+  surface.tabIndex = -1;
   const composer = document.createElement("div");
-  composer.contentEditable = "true";
+  composer.setAttribute("contenteditable", "true");
   composer.tabIndex = 0;
   composer.textContent = "a draft";
-  surface.append(composer);
+  const button = document.createElement("button");
+  button.textContent = "minimise";
+  surface.append(button, composer);
   document.body.append(surface);
   const text = composer.firstChild;
   if (text) document.getSelection()?.collapse(text, 3);
-  return { surface, composer, text };
+  return { surface, composer, button, text };
 }
 
-function otherButton() {
-  const button = document.createElement("button");
-  button.textContent = "elsewhere";
-  document.body.append(button);
-  return button;
+/** A paragraph of plain text, outside any editor. */
+function paragraph(content: string, parent: Element = document.body) {
+  const element = document.createElement("p");
+  element.textContent = content;
+  parent.append(element);
+  return element;
 }
 
 /**
- * Focus an element and read the selection as its focus event arrives.
- * Chromium places a caret on focus only after the event, and only when the
- * selection is not already inside; jsdom moves it regardless.
+ * Focus an element and read the selection as its focus event arrives. The
+ * guard restores during the document's capture-phase focus listener; then
+ * Chromium keeps a selection already inside the focused editor, while jsdom
+ * moves it to the editor's start.
  */
 function focusAndRead(element: HTMLElement) {
   const seen: {
@@ -90,14 +96,13 @@ describe("inert selection guard", () => {
     expect(selection()?.rangeCount).toBe(1);
   });
 
-  it("puts the caret back when focus returns to the surface", async () => {
+  it("puts the caret back when its editor takes focus", async () => {
     uninstall = installInertSelectionGuard();
     const { surface, composer, text } = surfaceWithCaret();
     surface.setAttribute("inert", "");
     await settle();
     surface.removeAttribute("inert");
     await settle();
-    expect(selection()?.rangeCount).toBe(0);
     expect(focusAndRead(composer)).toEqual({
       rangeCount: 1,
       node: text,
@@ -105,27 +110,136 @@ describe("inert selection guard", () => {
     });
   });
 
-  it("never moves focus when the surface returns", async () => {
+  it("never returns a caret with its surface, which would take focus", async () => {
     uninstall = installInertSelectionGuard();
     const { surface } = surfaceWithCaret();
     surface.setAttribute("inert", "");
     await settle();
-    const button = otherButton();
-    button.focus();
+    const elsewhere = document.createElement("button");
+    document.body.append(elsewhere);
+    elsewhere.focus();
+    // jsdom selects a focused button; Chromium leaves the selection empty.
+    selection()?.removeAllRanges();
     surface.removeAttribute("inert");
     await settle();
-    expect(document.activeElement).toBe(button);
+    // Chromium focuses an editor a range is put into (jsdom does not), so
+    // no range may come back until the editor itself has focus.
+    expect(surface.contains(selection()?.anchorNode ?? null)).toBe(false);
+    expect(document.activeElement).toBe(elsewhere);
   });
 
-  it("lets a press inside place its own caret", async () => {
+  it("waits for the editor, not the surface or a button in it", async () => {
     uninstall = installInertSelectionGuard();
-    const { surface, composer } = surfaceWithCaret();
+    const { surface, composer, button, text } = surfaceWithCaret();
+    surface.setAttribute("inert", "");
+    await settle();
+    surface.removeAttribute("inert");
+    await settle();
+    expect(focusAndRead(surface)?.node).not.toBe(text);
+    expect(focusAndRead(button)?.node).not.toBe(text);
+    expect(focusAndRead(composer)).toEqual({
+      rangeCount: 1,
+      node: text,
+      offset: 3,
+    });
+  });
+
+  it("drops the caret when a press inside places its own", async () => {
+    uninstall = installInertSelectionGuard();
+    const { surface, composer, text } = surfaceWithCaret();
     surface.setAttribute("inert", "");
     await settle();
     surface.removeAttribute("inert");
     await settle();
     composer.dispatchEvent(new Event("pointerdown", { bubbles: true }));
-    expect(focusAndRead(composer)?.rangeCount).toBe(0);
+    expect(focusAndRead(composer)?.node).not.toBe(text);
+  });
+
+  it("returns a highlight outside any editor with its surface", async () => {
+    uninstall = installInertSelectionGuard();
+    const panel = document.createElement("section");
+    document.body.append(panel);
+    const text = paragraph("several words", panel).firstChild;
+    if (text) selection()?.setBaseAndExtent(text, 0, text, 7);
+    panel.setAttribute("inert", "");
+    await settle();
+    expect(selection()?.rangeCount).toBe(0);
+    panel.removeAttribute("inert");
+    await settle();
+    expect(selection()?.toString()).toBe("several");
+  });
+
+  it("keeps a selection made elsewhere over a returning highlight", async () => {
+    uninstall = installInertSelectionGuard();
+    const panel = document.createElement("section");
+    document.body.append(panel);
+    const text = paragraph("several words", panel).firstChild;
+    if (text) selection()?.setBaseAndExtent(text, 0, text, 7);
+    panel.setAttribute("inert", "");
+    await settle();
+    const other = paragraph("elsewhere").firstChild;
+    if (other) selection()?.setBaseAndExtent(other, 0, other, 4);
+    panel.removeAttribute("inert");
+    await settle();
+    expect(selection()?.toString()).toBe("else");
+  });
+
+  it("returns an editor's highlight with its surface while nothing has focus", async () => {
+    uninstall = installInertSelectionGuard();
+    const { surface, text } = surfaceWithCaret();
+    if (text) selection()?.setBaseAndExtent(text, 2, text, 7);
+    surface.setAttribute("inert", "");
+    await settle();
+    expect(selection()?.rangeCount).toBe(0);
+    surface.removeAttribute("inert");
+    await settle();
+    expect(selection()?.toString()).toBe("draft");
+  });
+
+  it("keeps an editor's highlight back while something has focus", async () => {
+    uninstall = installInertSelectionGuard();
+    const { surface, composer, text } = surfaceWithCaret();
+    if (text) selection()?.setBaseAndExtent(text, 2, text, 7);
+    surface.setAttribute("inert", "");
+    await settle();
+    const elsewhere = document.createElement("button");
+    document.body.append(elsewhere);
+    elsewhere.focus();
+    selection()?.removeAllRanges();
+    surface.removeAttribute("inert");
+    await settle();
+    expect(surface.contains(selection()?.anchorNode ?? null)).toBe(false);
+    expect(focusAndRead(composer)?.node).toBe(text);
+  });
+
+  it("keeps the part of a selection outside what turned inert", async () => {
+    uninstall = installInertSelectionGuard();
+    const before = paragraph("a reply").firstChild;
+    const steps = document.createElement("section");
+    document.body.append(steps);
+    const inside = paragraph("a step", steps).firstChild;
+    if (before && inside) selection()?.setBaseAndExtent(before, 2, inside, 3);
+    steps.setAttribute("inert", "");
+    await settle();
+    expect(selection()?.toString()).toBe("reply");
+  });
+
+  it("releases a caret placed into a surface already inert", async () => {
+    uninstall = installInertSelectionGuard();
+    const { surface, composer, text } = surfaceWithCaret();
+    surface.setAttribute("inert", "");
+    await settle();
+    if (text) selection()?.collapse(text, 5);
+    // jsdom does not fire selectionchange; Chromium does, as a task.
+    document.dispatchEvent(new Event("selectionchange"));
+    expect(selection()?.rangeCount).toBe(0);
+    surface.removeAttribute("inert");
+    await settle();
+    expect(focusAndRead(composer)).toEqual({
+      rangeCount: 1,
+      node: text,
+      offset: 5,
+    });
   });
 
   it("stops watching once uninstalled", async () => {
