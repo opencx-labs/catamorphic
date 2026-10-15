@@ -2697,6 +2697,7 @@ function ChatDockContent({
             </p>
           )}
           <ResourceLinkBoundary
+            projectId={projectId}
             onOpen={(url, mode) => onLinkClick?.(url, mode)}
           >
             <ChatTimeline

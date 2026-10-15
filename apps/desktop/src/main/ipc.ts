@@ -23,6 +23,8 @@ import {
   app,
   autoUpdater,
   BrowserWindow,
+  ClipboardItem,
+  clipboard,
   dialog,
   ipcMain,
   nativeImage,
@@ -78,6 +80,7 @@ import {
 import type { ConnectorsService } from "./connectors.js";
 import { defaultDesktopProjectsDir } from "./development-paths.js";
 import { readEditorFile, writeEditorFile } from "./editor-files.js";
+import { copyFileToClipboard, runAppleScript } from "./file-clipboard.js";
 import { readFilePreview } from "./file-preview.js";
 import { searchProjectFiles } from "./file-search.js";
 import { registerGitOverviewSubscriptions } from "./git-overview-ipc.js";
@@ -2874,6 +2877,21 @@ export function registerIpcHandlers(
         const error = await shell.openPath(folderPath);
         if (error) throw new Error(error);
       } else shell.showItemInFolder(folderPath);
+    },
+  );
+
+  ipcMain.handle(
+    "catamorphic:copy-file-to-clipboard",
+    async (_event, filePath: string) => {
+      if (typeof filePath !== "string") throw new Error("Choose a file");
+      await copyFileToClipboard(filePath, {
+        platform: process.platform,
+        runAppleScript,
+        writeUriList: ({ uriList, text }) =>
+          clipboard.write([
+            new ClipboardItem({ "text/uri-list": uriList, "text/plain": text }),
+          ]),
+      });
     },
   );
 

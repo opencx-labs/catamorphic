@@ -156,6 +156,51 @@ describe("ChatTimeline live chrome", () => {
     );
   });
 
+  it("counts no silence while the turn waits on work it runs in the background", async () => {
+    const items: Item[] = [
+      input("t1", "Run the suite and watch the checks"),
+      // Its call took six seconds to start the work, which runs on.
+      toolCall("b1", "t1", {
+        tool: "run_background_command",
+        input: { command: "bun run test", description: "Run the suite" },
+        startedAt: iso(-60_000),
+        endedAt: iso(-54_000),
+      }),
+    ];
+    const suite = (status: "running" | "finished") => ({
+      kind: "command" as const,
+      command: "bun run test",
+      description: "Run the suite",
+      status,
+      exitCode: status === "finished" ? 0 : null,
+    });
+    const props = {
+      timeline: timelineOf({
+        turns: [running({ activityAt: iso(-45_000) })],
+        items,
+      }),
+      activity: "Waiting",
+      workDisplay: { live: "all", settled: "keep" } as const,
+    };
+    await render({ ...props, backgroundCommands: [suite("running")] });
+    // The row says it runs, not how long its call took.
+    const row = $('[data-step-kind="background"]');
+    expect(
+      row?.querySelector('[data-testid="chat-background-status"]')?.textContent,
+    ).toBe("Running in background");
+    expect(row?.querySelector('[data-testid="chat-step-duration"]')).toBeNull();
+    // Quiet by design while it waits: the clock runs, the silence is not said.
+    expect($('[data-testid="chat-activity-elapsed"]')?.textContent).toBe(
+      "1m 15s",
+    );
+    expect($('[data-testid="chat-activity-stalled"]')).toBeNull();
+    // Once the work is done, a silence is the turn's own again.
+    await render({ ...props, backgroundCommands: [suite("finished")] });
+    expect($('[data-testid="chat-activity-stalled"]')?.textContent).toBe(
+      "No updates for 45s",
+    );
+  });
+
   it("keeps the first steps line's place from the start, the clock on it", async () => {
     // A message on its way: the place is kept, empty, as the line opens.
     await render({

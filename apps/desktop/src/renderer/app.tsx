@@ -6439,6 +6439,13 @@ export function App({
       onNew={openPaletteTab}
       onToggleGroup={toggleChatGroup}
       onReorder={reorderTab}
+      // An editor's tab acts on its file too (copy its path, show it, copy it).
+      tabFile={(key) => {
+        const filePath = workspace.editors.find(
+          (candidate) => editorTabKey(candidate.localId) === key,
+        )?.filePath;
+        return filePath && projectId ? { projectId, filePath } : undefined;
+      }}
       onDragStateChange={(key) => {
         setTabDragKey(key);
         if (!key) setDropSideHover(null);

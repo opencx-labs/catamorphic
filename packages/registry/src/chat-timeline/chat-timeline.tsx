@@ -622,10 +622,6 @@ export function ChatTimeline(props: ChatTimelineProps) {
   useLayoutEffect(() => {
     lineKept.current = keepsLine;
   }, [keepsLine]);
-  const clockTimes = useMemo(
-    () => ({ startedAt, updatedAt }),
-    [startedAt, updatedAt],
-  );
   const latestTurnId = [...timeline].reverse().find((group) => group.turn)
     ?.turn?.id;
   const working = Boolean(activeId);
@@ -645,6 +641,31 @@ export function ChatTimeline(props: ChatTimelineProps) {
       pairedBackground.current = next;
     return pairedBackground.current;
   }, [timeline, backgroundCommands]);
+  // Waiting on work it started in the background (a test run, a watch),
+  // the turn is quiet by design, as while it waits on the person: its
+  // silence says nothing, so the clock does not count it.
+  const waitsOnBackground = useMemo(
+    () =>
+      timeline.some(
+        (group) =>
+          group.turn?.id === activeId &&
+          group.entries.some(
+            (entry) =>
+              (entry.kind === "reply" || entry.kind === "steps") &&
+              entry.steps.some(
+                (item) => backgroundStates.get(item.id)?.status === "running",
+              ),
+          ),
+      ),
+    [timeline, activeId, backgroundStates],
+  );
+  const clockTimes = useMemo(
+    () => ({
+      startedAt,
+      updatedAt: waitsOnBackground ? undefined : updatedAt,
+    }),
+    [startedAt, updatedAt, waitsOnBackground],
+  );
   // Links re-render with their message, unless the host's handlers change.
   const links = useMemo(
     () => ({ onLinkClick, renderLink }),

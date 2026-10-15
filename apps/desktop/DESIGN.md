@@ -2834,7 +2834,7 @@ checks every message mounts hidden, also on a renderer slowed fourfold,
 where a turn's events land between frames, and on one that stalls as the
 turn and the agent's words first show.
 
-### 2026-10-15: The status popup opens at its size; inputs, chats and queued messages move in place; a chat its agent archives just ends; every popup's facts copy
+### 2026-10-15: The status popup opens at its size; inputs, chats and queued messages move in place; a chat its agent archives just ends; every popup's facts copy; a file's menu acts on the file
 
 The chat's status popup appeared, then grew a line when its Artifacts or
 Folder row finished loading, and while it glided taller a scrollbar showed
@@ -2906,9 +2906,29 @@ after that the rows were cached.
   full path where the row shows a name, the model without its "default",
   the environment as its picker names it. An action (Manage connections)
   has nothing to copy.
+- **A file's menu acts on the file.** Right-clicking a file's tab
+  (anywhere on it, its close button included, in the top bar or the
+  sidebar) or a link to a file in a chat's reply lists the ways to open
+  it, then Copy path, Show in Finder and Copy file. Copy file puts the
+  file itself on the clipboard, as Finder's own Copy does, for Finder,
+  Mail or Slack to paste. One menu, the resource menu every tab and link
+  already had, so a file's link keeps its ways to open. That menu's
+  leaving no longer waits on its owner to stop re-rendering: the wait
+  restarted on every render, so a busy window could keep a closed menu
+  over what was right-clicked next.
+- **Background work is not timed by its call, nor counted as silence.**
+  A background command's or watch's row showed how long the call that
+  started it took (1s, 6s) beside "Running in background", read as how
+  long the work had run; it shows no time now. While work the turn
+  started in the background runs, the turn is quiet by design, as while
+  it waits on the person, so "No updates for" is not said.
+- **A tab group's eyebrow is a pill.** Two pixels tall, its rounded ends
+  read as a cut line; it is three, a pixel above the tab's edge.
 
 `inspector-fact.test.tsx` and `session-inspector.test.tsx` cover the
-copies; `floating-motion.test.tsx` and `e2e/motion.e2e.ts` cover the chat growing
+copies; `file-menu.test.tsx`, `file-clipboard.test.ts` and
+`e2e/file-menu.e2e.ts` the file menu; `chat-timeline-live.test.tsx`
+background work's quiet; `floating-motion.test.tsx` and `e2e/motion.e2e.ts` cover the chat growing
 over what was in front; `chat-timeline.test.tsx` and `e2e/agents.e2e.ts`
 the queued message's layout, its Sending look and both hand-overs;
 `resource-inspector.test.tsx` covers StrictMode, the measured reveal and the
