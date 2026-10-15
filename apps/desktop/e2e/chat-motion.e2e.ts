@@ -648,12 +648,11 @@ describe("chat motion", () => {
   it("holds the live chrome still on a slow renderer, whose frames come late", async () => {
     await setDisplay("notes");
     await newChat();
-    const frames = await recordTurn(
-      "notes-slow",
-      "pace the work quickly",
-      undefined,
-      { cpuSlowdown: 6 },
-    );
+    // At the even pace, not quickly: a slowed renderer on a busy machine
+    // drew only 14 frames of a quick turn's work, too few to judge by.
+    const frames = await recordTurn("notes-slow", "pace the work", undefined, {
+      cpuSlowdown: 6,
+    });
     for (const frame of frames.filter((f) => f.rowParts.length > 0))
       expect(lineParts(frame)).toEqual(["svg", "activity-text"]);
     expectStill(frames);
