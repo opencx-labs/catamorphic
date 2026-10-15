@@ -2922,6 +2922,11 @@ after that the rows were cached.
   long the work had run; it shows no time now. While work the turn
   started in the background runs, the turn is quiet by design, as while
   it waits on the person, so "No updates for" is not said.
+- **Stop takes the theme's colour.** While the agent works, the
+  composer's send button becomes Stop, which was drawn in the inverted
+  foreground: white on a dark theme, whatever the theme. It keeps the
+  send button's accent now, only its glyph changing, and both use the
+  primary button role rather than a recipe of their own.
 - **A tab group's eyebrow is a pill.** Two pixels tall, its rounded ends
   read as a cut line; it is three, a pixel above the tab's edge.
 

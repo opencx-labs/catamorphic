@@ -3258,9 +3258,11 @@ function ChatDockContent({
                 !draft.trim() &&
                 pillCount === 0 ? (
                   <ShortcutHint label="Stop">
+                    {/* The send button's place and colour: the theme's
+                      accent, only its glyph changing while the agent works. */}
                     <button
                       type="button"
-                      className="grid size-8 shrink-0 place-items-center rounded-lg bg-fg text-bg transition-opacity duration-150"
+                      className="button-primary size-8 rounded-lg p-0"
                       onClick={() => void chat.interrupt()}
                       aria-label="Stop the agent"
                       data-testid="chat-stop"
@@ -3281,7 +3283,7 @@ function ChatDockContent({
                   >
                     <button
                       type="submit"
-                      className="grid size-8 shrink-0 place-items-center rounded-lg bg-accent text-accent-fg transition-opacity duration-150 disabled:opacity-35"
+                      className="button-primary size-8 rounded-lg p-0 disabled:opacity-35"
                       disabled={
                         pendingTransfers > 0 ||
                         commandResolutionBlocked ||
