@@ -18,6 +18,7 @@ import {
   fileChange,
   inbound,
   input,
+  notice,
   reply,
   timelineOf,
   toolCall,
@@ -135,6 +136,96 @@ describe("ChatTimeline for embedders", () => {
     });
     await click('[data-testid="chat-retry"]');
     expect(retry).toHaveBeenCalledWith("t1");
+  });
+
+  describe("a chat its agent archived", () => {
+    // Written once the turn has stopped (turn 1 ends at second 190).
+    const archived = (by: string) =>
+      notice(
+        `archived-by-${by}`,
+        "session_action",
+        "Archived this session",
+        {
+          actor: { kind: "agent", sessionId: by, agentId: "claude" },
+          sessionAction: {
+            id: "a1",
+            operation: "archive",
+            status: "completed",
+          },
+        },
+        195,
+      );
+    const agents = { resolveAgentName: () => "Claude" };
+
+    it("ends the turn that archived it, with no interruption or Retry", async () => {
+      await render({
+        timeline: timelineOf({
+          turns: [turn("t1", 1, { status: "interrupted" })],
+          items: [input("t1", "Archive this chat"), archived("s")],
+        }),
+        onRetry: vi.fn(),
+        ...agents,
+      });
+      expect($('[data-testid="chat-interrupted"]')).toBeNull();
+      expect($('[data-testid="chat-retry"]')).toBeNull();
+      expect($('[data-notice-code="session_action"]')?.textContent).toBe(
+        "Claude archived this session",
+      );
+    });
+
+    it("still shows a turn another chat's agent stopped as interrupted", async () => {
+      await render({
+        timeline: timelineOf({
+          turns: [turn("t1", 1, { status: "interrupted" })],
+          items: [input("t1", "Keep going"), archived("parent")],
+        }),
+        onRetry: vi.fn(),
+        ...agents,
+      });
+      expect($('[data-testid="chat-interrupted"]')).not.toBeNull();
+      expect($('[data-testid="chat-retry"]')).not.toBeNull();
+    });
+
+    it("keeps an action's failure, and words of the agent's own, as their own sentence", async () => {
+      await render({
+        timeline: timelineOf({
+          turns: [turn("t1", 1)],
+          items: [
+            input("t1", "Wrap up"),
+            notice(
+              "failed",
+              "session_action",
+              "Archived this session failed: busy",
+              {
+                actor: { kind: "agent", sessionId: "s", agentId: "claude" },
+                sessionAction: {
+                  id: "a2",
+                  operation: "archive",
+                  status: "failed",
+                },
+              },
+            ),
+            notice("done", "session_action", "Reviewed pull request 7", {
+              actor: { kind: "agent", sessionId: "s", agentId: "claude" },
+              sessionAction: {
+                id: "a3",
+                operation: "complete",
+                status: "completed",
+              },
+            }),
+          ],
+        }),
+        ...agents,
+      });
+      expect(
+        $$('[data-notice-code="session_action"]').map(
+          (line) => line.textContent,
+        ),
+      ).toEqual([
+        "Claude: Archived this session failed: busy",
+        "Claude: Reviewed pull request 7",
+      ]);
+    });
   });
 
   it("renders notices, handoffs and answered questions in place", async () => {

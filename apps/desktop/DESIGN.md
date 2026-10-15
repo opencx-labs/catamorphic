@@ -2833,3 +2833,46 @@ chat's activity line is open from its first frame. `e2e/motion.e2e.ts`
 checks every message mounts hidden, also on a renderer slowed fourfold,
 where a turn's events land between frames, and on one that stalls as the
 turn and the agent's words first show.
+
+### 2026-10-15: The status popup opens at its size; the palette's input grows like the composer; a chat its agent archives just ends
+
+The chat's status popup appeared, then grew a line when its Artifacts or
+Folder row finished loading, and while it glided taller a scrollbar showed
+down its edge wherever the system shows scroll bars. Only the first time:
+after that the rows were cached.
+
+- **What it waits for, it shows.** Both rows report their reads pending,
+  so the popup opens with them (at most 250ms later, as every inspector
+  does). A read that lands measures the panel in the same commit, instead
+  of a frame later through its ResizeObserver, so it appears at its height.
+  React's development StrictMode tears effects down and sets them up again,
+  withdrawing the content's pending reports in between; the panel no
+  longer takes that for a landing.
+- **Glides clip.** While an inspector's height glides taller, what has not
+  glided into view yet is clipped, not scrolled to. Content taller than the
+  window still scrolls once the glide ends.
+- **The palette's input glides.** Shift+Enter, a wrapped line or a longer
+  query grows the palette's input in a mode or out of one through the same
+  frame the composer uses (`lib/use-gliding-height.ts`): 150ms on the
+  standard easing.
+- **The project folder says so.** The Changes tree marked the project
+  folder's own checkout "Current" beside its branch, which read as a chat's
+  worktree when the folder had a feature branch checked out. It says
+  "Project folder", as the status popup's Folder row does (ADR 0215: chats
+  work there until the person chooses a worktree).
+- **A chat its agent archives just ends.** Archiving or closing a chat
+  stops its running turn, so a chat whose own agent archived it from
+  within that turn read "Interrupted" with Retry above the archive line.
+  That turn now ends without either: the line after it says what
+  happened. A turn another chat's agent or a person stopped still reads
+  as interrupted.
+- **An action reads as a sentence.** A session action's line names who
+  took it and goes on in the action's words: "Claude archived this
+  session", not "Claude: Archived this session". A failure, or a summary
+  in the agent's own words (a completion), keeps its own sentence after
+  the name and a colon.
+
+`resource-inspector.test.tsx` covers StrictMode, the measured reveal and the
+clipped glide; `e2e/motion.e2e.ts` samples the palette's input growing
+through the frames between one line and two; `chat-timeline-embed.test.tsx`
+covers the archived turn and the action lines.

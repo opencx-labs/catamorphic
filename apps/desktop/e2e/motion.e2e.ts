@@ -1066,3 +1066,42 @@ describe("content Work draws moves with the sidebar", () => {
     expect(app.getRendererErrors()).toEqual([]);
   });
 });
+
+describe("inputs grow by gliding", () => {
+  const paletteInput = `$$('textarea[aria-label="Search commands, pages, and more"]').find((el) => !el.closest('[inert]'))`;
+  it("the palette's input glides taller for a new line, as the composer does", async () => {
+    await run(
+      `if (!(${paletteInput})) pressKey('p', { metaKey: true }); return true;`,
+    );
+    await runWait(`return !!(${paletteInput});`, { label: "palette open" });
+    const glide = await run<{ before: number; heights: number[] }>(`
+      const input = ${paletteInput};
+      const frame = input.parentElement;
+      setReactValue(input, 'first line');
+      return new Promise((resolve) => requestAnimationFrame(() => {
+        const before = frame.getBoundingClientRect().height;
+        const heights = [];
+        const started = performance.now();
+        // Shift+Enter in a textarea is a newline.
+        setReactValue(input, 'first line\\nsecond line');
+        const tick = () => {
+          heights.push(frame.getBoundingClientRect().height);
+          if (performance.now() - started < 500) requestAnimationFrame(tick);
+          else resolve({ before, heights });
+        };
+        requestAnimationFrame(tick);
+      }));
+    `);
+    const end = glide.heights.at(-1) ?? 0;
+    expect(end, JSON.stringify(glide)).toBeGreaterThan(glide.before);
+    // Frames between one line and two: it glided rather than snapped.
+    expect(
+      glide.heights.some(
+        (height) => height > glide.before + 1 && height < end - 1,
+      ),
+      JSON.stringify(glide),
+    ).toBe(true);
+    await run(`setReactValue(${paletteInput}, ''); return true;`);
+    expect(app.getRendererErrors()).toEqual([]);
+  });
+});

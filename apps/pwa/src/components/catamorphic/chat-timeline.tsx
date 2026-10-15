@@ -76,6 +76,7 @@ import {
   turnStepsOf,
 } from "./chat-steps.js";
 import {
+  endsOwnChat,
   InboundMessageRow,
   type InputLinkModifiers,
   noticeText,
@@ -651,6 +652,10 @@ export function ChatTimeline(props: ChatTimelineProps) {
     (group) => group.turn && waitsToRun(group.turn),
   )?.turn;
   const foldSteps = foldsSteps(workDisplay);
+  const endedByTheirAgent = useMemo(
+    () => turnsEndedOwnChat(timeline),
+    [timeline],
+  );
   const empty =
     timeline.length === 0 &&
     pending.length === 0 &&
@@ -717,7 +722,8 @@ export function ChatTimeline(props: ChatTimelineProps) {
         ),
       );
     }
-    if (turn)
+    // The notice after it says why it ended.
+    if (turn && !endedByTheirAgent.has(turn.id))
       conversation.push(
         <TurnOutcome
           key={`outcome:${turn.id}`}
@@ -2088,6 +2094,27 @@ function HandoffLine({ item }: { item: ContextHandoffItem }) {
       </div>
     </div>
   );
+}
+
+/**
+ * Turns stopped because their own agent archived or closed the chat from
+ * within them: stopping was the agent's last act, so the turn shows no
+ * interruption and offers no Retry.
+ */
+function turnsEndedOwnChat(timeline: readonly TimelineTurn[]): Set<string> {
+  const ended = new Set<string>();
+  let last: Turn | null = null;
+  for (const group of timeline) {
+    last = group.turn ?? last;
+    for (const entry of group.entries)
+      if (
+        entry.kind === "notice" &&
+        last?.status === "interrupted" &&
+        endsOwnChat(entry.item)
+      )
+        ended.add(last.id);
+  }
+  return ended;
 }
 
 /**

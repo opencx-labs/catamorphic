@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { act, useRef, useState } from "react";
+import { act, StrictMode, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -761,6 +761,98 @@ describe("ResourceInspector", () => {
     await act(async () => render(false));
     expect(panel()?.getAttribute("data-open")).toBe("true");
     expect(panel()?.textContent).toBe("Loaded");
+  });
+
+  it("keeps waiting when its effects run twice, as StrictMode runs them", async () => {
+    const render = (pending: boolean) =>
+      root.render(
+        <StrictMode>
+          <ResourceInspector
+            label="Session status"
+            content={<PendingContent pending={pending} />}
+          >
+            {(props) => (
+              <button type="button" {...props}>
+                Status
+              </button>
+            )}
+          </ResourceInspector>
+        </StrictMode>,
+      );
+    await act(async () => render(true));
+    const panel = () => document.querySelector("[data-resource-inspector]");
+    await act(async () => container.querySelector("button")?.focus());
+    expect(panel()).not.toBeNull();
+    expect(panel()?.getAttribute("data-open")).toBeNull();
+    await act(async () => render(false));
+    expect(panel()?.getAttribute("data-open")).toBe("true");
+  });
+
+  it("appears at the height of what just landed, not the height before", async () => {
+    // The content is taller once loaded; jsdom resolves the panel's padding
+    // and border only from a stylesheet.
+    const sheet = document.createElement("style");
+    sheet.textContent =
+      "[data-resource-inspector] { padding: 12px; border: 1px solid; }";
+    document.head.append(sheet);
+    const offsetHeight = vi
+      .spyOn(HTMLElement.prototype, "offsetHeight", "get")
+      .mockImplementation(function (this: HTMLElement) {
+        return this.textContent === "Loaded" ? 80 : 20;
+      });
+    const render = (pending: boolean) =>
+      root.render(
+        <ResourceInspector
+          label="Session status"
+          content={<PendingContent pending={pending} />}
+        >
+          {(props) => (
+            <button type="button" {...props}>
+              Status
+            </button>
+          )}
+        </ResourceInspector>,
+      );
+    await act(async () => render(true));
+    await act(async () => container.querySelector("button")?.focus());
+    const panel = () =>
+      document.querySelector<HTMLElement>("[data-resource-inspector]");
+    // No ResizeObserver reports in between: the reveal itself measures.
+    await act(async () => render(false));
+    expect(panel()?.getAttribute("data-open")).toBe("true");
+    expect(panel()?.style.height).toBe("106px");
+    offsetHeight.mockRestore();
+    sheet.remove();
+  });
+
+  it("clips rather than scrolls while its height glides", async () => {
+    await act(async () =>
+      root.render(
+        <ResourceInspector label="Session status" content={<p>Status</p>}>
+          {(props) => (
+            <button type="button" {...props}>
+              Status
+            </button>
+          )}
+        </ResourceInspector>,
+      ),
+    );
+    await act(async () => container.querySelector("button")?.focus());
+    const panel = document.querySelector<HTMLElement>(
+      "[data-resource-inspector]",
+    );
+    const transition = (type: string, propertyName: string) => {
+      const event = new Event(type, { bubbles: true });
+      Object.defineProperty(event, "propertyName", { value: propertyName });
+      panel?.dispatchEvent(event);
+    };
+    expect(panel?.className).toContain("overflow-y-auto");
+    await act(async () => transition("transitionrun", "top"));
+    expect(panel?.className).toContain("overflow-y-auto");
+    await act(async () => transition("transitionrun", "height"));
+    expect(panel?.className).toContain("overflow-y-hidden");
+    await act(async () => transition("transitionend", "height"));
+    expect(panel?.className).toContain("overflow-y-auto");
   });
 
   it("appears anyway once its reads take too long", async () => {

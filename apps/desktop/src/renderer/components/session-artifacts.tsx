@@ -1,6 +1,7 @@
 import { useAppPresentations, useSessionArtifacts } from "@catamorphic/react";
 import { Workflow } from "lucide-react";
 import { AppGlyph } from "./app-icon.js";
+import { useInspectorPending } from "./resource-inspector.js";
 
 export function SessionArtifacts({
   projectId,
@@ -14,6 +15,9 @@ export function SessionArtifacts({
   const artifacts = useSessionArtifacts(projectId, sessionId, {
     refetchInterval: 5000,
   });
+  // Inside the status popup, it appears with the list rather than growing
+  // out of its loading line once seen.
+  useInspectorPending(artifacts.isLoading);
   const items =
     artifacts.data?.filter((artifact) => artifact.status === "active") ?? [];
   const presentations = useAppPresentations(

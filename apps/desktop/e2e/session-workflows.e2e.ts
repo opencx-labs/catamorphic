@@ -42,7 +42,8 @@ it("authors a temporary one-shot, wakes once, stops and links its retained sourc
   await send("wake");
   await wait("return !!$('.cat-markdown a[href^=\"artifact:\"]');");
   await wait(
-    "return document.body.textContent.includes('Scheduled follow-up received.') && document.body.textContent.includes('Stopped a watcher');",
+    // The action's line names the workflow and reads on: "… stopped a watcher".
+    "return document.body.textContent.includes('Scheduled follow-up received.') && [...document.querySelectorAll('[data-notice-code=session_action]')].some(el => / stopped a watcher$/.test(el.textContent));",
   );
   // The workflow's delivery is its own row (ADR 0217), never the person's
   // bubble; the session action it took is a notice naming the workflow.
@@ -102,7 +103,9 @@ it("remains quiet on ordinary turn completion and reacts to explicit work comple
   );
   expect(delivered).toBe(1);
   await send("reopen");
-  await wait("return document.body.textContent.includes('Reopened the work');");
+  await wait(
+    "return [...document.querySelectorAll('[data-notice-code=session_action]')].some(el => / reopened the work$/.test(el.textContent));",
+  );
   await app.screenshot("/tmp/catamorphic-session-monitor.png");
 });
 

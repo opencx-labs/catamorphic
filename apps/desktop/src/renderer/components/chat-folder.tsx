@@ -8,6 +8,7 @@ import {
   useWorktreesAvailable,
 } from "../lib/use-session-checkout.js";
 import { PendingButton } from "./pending-button.js";
+import { useInspectorPending } from "./resource-inspector.js";
 
 const BUSY_REASON = "Change the folder after the current turn finishes.";
 
@@ -201,6 +202,8 @@ export function ChatFolder({
   const available = useWorktreesAvailable(projectId, {
     enabled: !sessionId,
   });
+  // The status popup appears with where the chat works, not "Checking".
+  useInspectorPending(sessionId ? checkout.isPending : available.isPending);
   const [pending, setPending] = useState<ChatFolderAction | null>(null);
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   const [error, setError] = useState<string | null>(null);
