@@ -478,6 +478,10 @@ const api = {
     invoke("catamorphic:reveal-folder", folderPath),
   copyFileToClipboard: (filePath: string): Promise<void> =>
     invoke("catamorphic:copy-file-to-clipboard", filePath),
+  sayFileActionFailed: (input: {
+    message: string;
+    detail: string;
+  }): Promise<void> => invoke("catamorphic:file-action-failed", input),
   editorFileRead: (input: { filePath: string }): Promise<{ content: string }> =>
     invoke("catamorphic:editor-file-read", input),
   projectLocalFiles: (projectId: string): Promise<Array<{ path: string }>> =>

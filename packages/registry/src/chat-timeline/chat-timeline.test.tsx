@@ -542,6 +542,8 @@ describe("ChatTimeline queue sending", () => {
     container.remove();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
+    // A test's motion stub ends with it, even when it fails.
+    Reflect.deleteProperty(HTMLElement.prototype, "animate");
     Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", false);
   });
 
@@ -666,7 +668,6 @@ describe("ChatTimeline queue sending", () => {
       [{ translate: "0px 200px" }, { translate: "0px 0px" }],
       expect.objectContaining({ duration: 250 }),
     );
-    Reflect.deleteProperty(HTMLElement.prototype, "animate");
   });
 
   it("waits looking sent, with nothing to edit, when it interrupts (⌘↵)", async () => {
@@ -687,6 +688,7 @@ describe("ChatTimeline queue sending", () => {
           ]}
           onEditQueued={() => true}
           onSendQueuedNow={() => true}
+          onCancelQueued={() => true}
         />,
       );
     });
@@ -700,6 +702,14 @@ describe("ChatTimeline queue sending", () => {
     expect(
       container.querySelector('[aria-label="Edit queued message"]'),
     ).toBeNull();
+    expect(
+      container.querySelector('[aria-label="Send queued message now"]'),
+    ).toBeNull();
+    // The agent may be slow to stop: until it does, the message can still
+    // be withdrawn.
+    expect(
+      container.querySelector('[aria-label="Delete queued message"]'),
+    ).not.toBeNull();
   });
 
   it("takes over from its pending bubble when it waits behind the running turn", async () => {
@@ -787,6 +797,5 @@ describe("ChatTimeline queue sending", () => {
       [{ translate: "0px -40px" }, { translate: "0px 0px" }],
       expect.objectContaining({ duration: 250 }),
     );
-    Reflect.deleteProperty(HTMLElement.prototype, "animate");
   });
 });

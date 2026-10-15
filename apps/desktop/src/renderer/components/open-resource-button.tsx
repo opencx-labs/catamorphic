@@ -14,7 +14,12 @@ import {
   openModeFromEvent,
 } from "../../shared/open-mode.js";
 import { parseSurfaceLink } from "../../shared/surface-link.js";
-import { actOnFile, FILE_MENU, type FileTarget } from "./file-menu.js";
+import {
+  actOnFile,
+  type FileTarget,
+  fileMenuFor,
+  sayWhyFileActionFailed,
+} from "./file-menu.js";
 import {
   type ContextMenuEntry,
   type MenuAt,
@@ -24,7 +29,7 @@ import {
 
 /**
  * A resource's right-click menu: the ways to open it, then, for a file,
- * what can be done with the file itself (`FILE_MENU`).
+ * what can be done with the file itself (`fileMenuFor`).
  */
 function useResourceMenu() {
   const [menu, setMenu] = useState<{
@@ -63,15 +68,17 @@ function useResourceMenu() {
         label="Open"
         entries={menuGroups<ContextMenuEntry>(
           OPEN_ACTIONS,
-          menu.file ? FILE_MENU : [],
+          menu.file ? fileMenuFor(menu.file) : [],
         )}
         onPick={(entry) => {
           const mode = openModeForAction(entry.action);
           if (mode) pending.current = mode;
-          else if (menu.file)
-            void actOnFile(entry.action, menu.file).catch((cause: unknown) =>
-              console.warn("[file-menu] could not", entry.action, cause),
+          else if (menu.file) {
+            const file = menu.file;
+            void actOnFile(entry.action, file).catch((cause: unknown) =>
+              sayWhyFileActionFailed(entry.action, file, cause),
             );
+          }
           setOpen(false);
         }}
         onDismiss={() => setOpen(false)}

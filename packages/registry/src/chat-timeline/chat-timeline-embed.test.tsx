@@ -173,6 +173,32 @@ describe("ChatTimeline for embedders", () => {
       );
     });
 
+    it("still says what the turn left changed", async () => {
+      await render({
+        timeline: timelineOf({
+          turns: [
+            turn("t1", 1, {
+              status: "interrupted",
+              outcome: {
+                changedFiles: [
+                  { path: "docs/plan.md", kind: "modified" },
+                  { path: "notes.md", kind: "modified" },
+                ],
+              },
+            }),
+          ],
+          items: [input("t1", "Wrap up and archive"), archived("s")],
+        }),
+        onRetry: vi.fn(),
+        ...agents,
+      });
+      expect($('[data-testid="chat-interrupted"]')).toBeNull();
+      expect($('[data-testid="chat-retry"]')).toBeNull();
+      expect($('[data-testid="chat-interrupted-files"]')?.textContent).toBe(
+        "Left 2 changed files: plan.md, notes.md",
+      );
+    });
+
     it("still shows a turn another chat's agent stopped as interrupted", async () => {
       await render({
         timeline: timelineOf({

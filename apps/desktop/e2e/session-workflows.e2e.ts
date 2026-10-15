@@ -10,12 +10,11 @@ const run = <T>(body: string) =>
 const wait = (body: string) =>
   app.waitFor(`(()=>{${helpers};${body}})()`, { timeoutMs: 90000 });
 async function send(scenario: string) {
-  // A reload or a tab the last test opened can leave the chat a bubble.
-  await run(
-    `if (!composer()) document.querySelector('[data-dock-rail] button[aria-label^="Open "]')?.click();`,
-  );
+  // A reload or a tab the last test opened can leave the chat a bubble:
+  // it is opened, again on each check until it is, as the rail may not
+  // have its button yet.
   await wait(
-    `const input = composer(); return !!input && !input.closest('[data-chat-local-id]').querySelector('[aria-label="Stop response"]');`,
+    `const input = composer(); if (!input) { document.querySelector('[data-dock-rail] button[aria-label^="Open "]')?.click(); return false; } return !input.closest('[data-chat-local-id]').querySelector('[aria-label="Stop response"]');`,
   );
   await run(
     `const input=composer(); setReactValue(input, ${JSON.stringify(`session workflow ${scenario}`)}); input.closest('form').requestSubmit();`,

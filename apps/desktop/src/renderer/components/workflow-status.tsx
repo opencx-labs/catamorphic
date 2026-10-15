@@ -38,6 +38,7 @@ export function WorkflowStatus({
   graph,
   workflowName,
   filePath,
+  sourcePath,
   saving,
   dirty,
   conflict,
@@ -56,6 +57,8 @@ export function WorkflowStatus({
   graph: WorkflowGraph | null;
   workflowName: string;
   filePath: string;
+  /** The source's full path on this machine, once known: what Source copies. */
+  sourcePath?: string;
   saving: boolean;
   dirty: boolean;
   conflict: boolean;
@@ -217,7 +220,7 @@ export function WorkflowStatus({
               <Row
                 label="Source"
                 value={filePath.split("/").at(-1) ?? filePath}
-                copy={filePath}
+                copy={sourcePath ?? filePath}
                 copyLabel="Copy file path"
                 mono
                 onClick={act(onCode)}

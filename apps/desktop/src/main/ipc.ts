@@ -2896,6 +2896,21 @@ export function registerIpcHandlers(
   );
 
   ipcMain.handle(
+    "catamorphic:file-action-failed",
+    async (event, input: { message: string; detail: string }) => {
+      const options = {
+        type: "warning" as const,
+        message: String(input.message),
+        detail: String(input.detail),
+      };
+      const window = BrowserWindow.fromWebContents(event.sender);
+      await (window
+        ? dialog.showMessageBox(window, options)
+        : dialog.showMessageBox(options));
+    },
+  );
+
+  ipcMain.handle(
     "catamorphic:composer-file-save",
     async (
       _event,

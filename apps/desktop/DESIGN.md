@@ -2848,7 +2848,7 @@ after that the rows were cached.
   React's development StrictMode tears effects down and sets them up again,
   withdrawing the content's pending reports in between; the panel no
   longer takes that for a landing.
-- **Glides clip.** While an inspector's height glides taller, what has not
+- **Glides clip.** While an inspector's height glides, either way, what has not
   glided into view yet is clipped, not scrolled to. Content taller than the
   window still scrolls once the glide ends.
 - **The palette's input glides.** Shift+Enter, a wrapped line or a longer
@@ -2878,8 +2878,8 @@ after that the rows were cached.
   Sending) sits at the bubble's right edge and its controls slide out of
   it to the left on hover, each easing in a soft ground under the pointer.
   Sent now, or sent with ⌘↵ while the agent works (an interrupting turn),
-  it looks sent at once ("Sending", nothing to edit) while the agent
-  stops. Then its message takes over where the bubble was, already shown,
+  it looks sent at once ("Sending", nothing to edit; Delete still
+  withdraws it) while the agent stops. Then its message takes over where the bubble was, already shown,
   instead of rising in anew below; a ⌘↵ send's pending bubble hands its
   place to the queued one the same way.
 - **The project folder says so.** The Changes tree marked the project
@@ -2891,8 +2891,9 @@ after that the rows were cached.
   stops its running turn, so a chat whose own agent archived it from
   within that turn read "Interrupted" with Retry above the archive line.
   That turn now ends without either: the line after it says what
-  happened. A turn another chat's agent or a person stopped still reads
-  as interrupted.
+  happened, and what it left changed ("Left 2 changed files") still
+  shows. A turn another chat's agent or a person stopped still reads as
+  interrupted.
 - **An action reads as a sentence.** A session action's line names who
   took it and goes on in the action's words: "Claude archived this
   session", not "Claude: Archived this session". A failure, or a summary
@@ -2905,14 +2906,21 @@ after that the rows were cached.
   while it is hidden. It copies the whole value: a file's or workflow's
   full path where the row shows a name, the model without its "default",
   the environment as its picker names it. An action (Manage connections)
-  has nothing to copy.
+  has nothing to copy. A value the kept place truncates (a long model
+  name) shows whole in its hint, as the project popup's paths do.
 - **A file's menu acts on the file.** Right-clicking a file's tab
   (anywhere on it, its close button included, in the top bar or the
   sidebar) or a link to a file in a chat's reply lists the ways to open
   it, then Copy path, Show in Finder and Copy file. Copy file puts the
   file itself on the clipboard, as Finder's own Copy does, for Finder,
-  Mail or Slack to paste. One menu, the resource menu every tab and link
-  already had, so a file's link keeps its ways to open. That menu's
+  Mail or Slack to paste; a link to a folder (`notes/`) has no Copy
+  file. One menu, the resource menu every tab and link already had, so a
+  file's link keeps its ways to open. The menu has closed by the time a
+  pick could fail (the file is gone), so a link's or a tab's says why in
+  a sheet on the window, as Finder does; a sidebar row says it on the
+  row, as its other actions do. A right-click inside an open menu ends
+  there: it no longer reaches the tab or link that owns the menu (which
+  opened it again at the pointer). That menu's
   leaving no longer waits on its owner to stop re-rendering: the wait
   restarted on every render, so a busy window could keep a closed menu
   over what was right-clicked next.

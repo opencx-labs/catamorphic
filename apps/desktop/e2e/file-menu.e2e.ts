@@ -49,10 +49,11 @@ afterAll(async () => {
 /**
  * A real right-click at a point of `selector`'s box (a fraction across),
  * once nothing covers it there (the Files palette closing over the tabs),
- * again if the first lands while something still did.
+ * again if the first lands while something still did. Exactly on it, or
+ * anywhere on its tab.
  */
-async function rightClick(selector: string, across = 0.5) {
-  const at = `(() => { const el = document.querySelector(${JSON.stringify(selector)}); const r = el.getBoundingClientRect(); const x = r.x + r.width * ${across}; const y = r.y + r.height / 2; return el.contains(document.elementFromPoint(x, y)) || el.closest('[data-point-key]')?.contains(document.elementFromPoint(x, y)) ? { x, y } : false; })()`;
+async function rightClick(selector: string, across = 0.5, exactly = false) {
+  const at = `(() => { const el = document.querySelector(${JSON.stringify(selector)}); if (!el) return false; const r = el.getBoundingClientRect(); const x = r.x + r.width * ${across}; const y = r.y + r.height / 2; const hit = document.elementFromPoint(x, y); return el.contains(hit) || (!${exactly} && el.closest('[data-point-key]')?.contains(hit)) ? { x, y } : false; })()`;
   for (let attempt = 0; ; attempt += 1) {
     const point = await app.waitFor<{ x: number; y: number }>(at, {
       label: `${selector} under the pointer`,
@@ -142,10 +143,38 @@ it("lists a file tab's actions after its ways to open, from anywhere on the tab"
   await app.waitFor(`!!document.querySelector('${tab}')`, {
     timeoutMs: 30_000,
   });
-  // Its label, and its far end where the close button rides.
+  // Its label.
   expect(await rightClick(`${tab} .workspace-tab-label`, 0.3)).toEqual(MENU);
   expect(await copied("Copy path")).toBe(`${root}/notes/plan.md`);
-  expect(await rightClick(tab, 0.92)).toEqual(MENU);
+  // Its close button, over the label's end once the pointer is on the tab.
+  await app.waitFor(`!document.querySelector('[role="menuitem"]')`, {
+    label: "menu gone",
+  });
+  const middle = await app.eval<{ x: number; y: number }>(
+    `(() => { const r = document.querySelector('${tab}').getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()`,
+  );
+  await app.cdp("Input.dispatchMouseEvent", { type: "mouseMoved", ...middle });
+  expect(await rightClick(`${tab} .workspace-tab-close`, 0.5, true)).toEqual(
+    MENU,
+  );
+  // A right-click in the open menu does not open it again where it was.
+  // Where the menu rests, once it has popped in.
+  const menuAt = `(() => { const menu = document.querySelector('[role="menuitem"]')?.closest('[role="menu"]'); return !!menu && menu.getAnimations().every((a) => a.playState !== 'running') && JSON.stringify(menu.getBoundingClientRect()); })()`;
+  const before = await app.waitFor<string>(menuAt, { label: "menu at rest" });
+  const item = await app.eval<{ x: number; y: number }>(
+    `(() => { const r = [...document.querySelectorAll('[role="menuitem"]')].at(-1).getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()`,
+  );
+  for (const type of ["mousePressed", "mouseReleased"])
+    await app.cdp("Input.dispatchMouseEvent", {
+      type,
+      ...item,
+      button: "right",
+      clickCount: 1,
+    });
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  expect(await app.waitFor<string>(menuAt, { label: "menu at rest" })).toBe(
+    before,
+  );
   await choose("Copy file");
   await app.waitFor(`!document.querySelector('[role="menuitem"]')`, {
     label: "menu gone",

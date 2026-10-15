@@ -11,6 +11,7 @@ const api = vi.hoisted(() => ({
   projectRoot: vi.fn(async () => "/Users/ada/alpha"),
   revealFolder: vi.fn(async () => {}),
   copyFileToClipboard: vi.fn(async () => {}),
+  sayFileActionFailed: vi.fn(async () => {}),
 }));
 vi.mock("../lib/desktop-api.js", () => ({ desktopApi: api }));
 
@@ -56,7 +57,16 @@ describe("the file menu", () => {
     Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", false);
   });
 
-  const pick = async (label: string) => {
+  const ALL = [
+    "Open here",
+    "Open in new tab",
+    "Open to the side",
+    "Open floating",
+    "Copy path",
+    "Show in Finder",
+    "Copy file",
+  ];
+  const pick = async (label: string, listed = ALL) => {
     await act(async () => {
       container.querySelector("button, a")?.dispatchEvent(
         new MouseEvent("contextmenu", {
@@ -69,15 +79,7 @@ describe("the file menu", () => {
     });
     const items = [...document.querySelectorAll('[role="menuitem"]')];
     // The ways to open it first, then what can be done with the file.
-    expect(items.map((item) => item.textContent?.trim())).toEqual([
-      "Open here",
-      "Open in new tab",
-      "Open to the side",
-      "Open floating",
-      "Copy path",
-      "Show in Finder",
-      "Copy file",
-    ]);
+    expect(items.map((item) => item.textContent?.trim())).toEqual(listed);
     const item = items.find((entry) => entry.textContent?.trim() === label);
     await act(async () => {
       if (item instanceof HTMLElement) item.click();
@@ -124,5 +126,74 @@ describe("the file menu", () => {
     expect(api.copyFileToClipboard).toHaveBeenCalledWith(
       "/tmp/elsewhere/report.md",
     );
+  });
+
+  it("has no Copy file for a folder link", async () => {
+    await act(async () => root.render(<FileLink href="notes/" />));
+    await pick(
+      "Copy path",
+      ALL.filter((label) => label !== "Copy file"),
+    );
+    expect(writeText).toHaveBeenCalledWith("/Users/ada/alpha/notes/");
+  });
+
+  it("says why when it could not be done, the menu already gone", async () => {
+    api.copyFileToClipboard.mockRejectedValueOnce(
+      new Error(
+        "Error invoking remote method 'catamorphic:copy-file-to-clipboard': Error: ENOENT: no such file or directory, stat '/Users/ada/alpha/notes/plan.md'",
+      ),
+    );
+    await act(async () => root.render(<FileLink href="notes/plan.md" />));
+    await pick("Copy file");
+    expect(api.sayFileActionFailed).toHaveBeenCalledWith({
+      message: "“plan.md” could not be copied",
+      detail: "It is no longer at this location.",
+    });
+  });
+
+  it("leaves once picked, while its owner keeps re-rendering", async () => {
+    await act(async () => root.render(<FileTab filePath="notes/plan.md" />));
+    await pick("Copy path");
+    // A live tab re-renders often; the menu's exit wait does not restart.
+    for (let elapsed = 0; elapsed < 400; elapsed += 50)
+      await act(async () => {
+        root.render(<FileTab filePath="notes/plan.md" />);
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      });
+    expect(document.querySelector('[role="menuitem"]')).toBeNull();
+  });
+
+  it("keeps a right-click inside it from reaching its owner", async () => {
+    const owner = vi.fn();
+    await act(async () =>
+      root.render(
+        // biome-ignore lint/a11y/noStaticElementInteractions: a tab's catch-all right-click, as the top bar's tabs have
+        <div onContextMenu={owner}>
+          <FileTab filePath="notes/plan.md" />
+        </div>,
+      ),
+    );
+    await act(async () => {
+      container.querySelector("button")?.dispatchEvent(
+        new MouseEvent("contextmenu", {
+          bubbles: true,
+          cancelable: true,
+          clientX: 40,
+          clientY: 20,
+        }),
+      );
+    });
+    const item = document.querySelector('[role="menuitem"]');
+    const inside = new MouseEvent("contextmenu", {
+      bubbles: true,
+      cancelable: true,
+    });
+    await act(async () => {
+      item?.dispatchEvent(inside);
+    });
+    // Neither its owner nor the window's own menu takes it.
+    expect(owner).not.toHaveBeenCalled();
+    expect(inside.defaultPrevented).toBe(true);
+    expect(document.querySelectorAll('[role="menuitem"]')).toHaveLength(7);
   });
 });

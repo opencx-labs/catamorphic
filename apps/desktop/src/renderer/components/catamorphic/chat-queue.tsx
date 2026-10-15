@@ -549,9 +549,11 @@ function QueuedBubble({
           </p>
         )}
         <div className="mt-1 flex items-center justify-end gap-1.5 text-[10px] uppercase tracking-wider text-fg-faint">
-          {!sent && (
+          {/* Sending, it can still be withdrawn: the agent may take a while
+              to stop, and the turn stays queued until it does. */}
+          {(!sent || onCancel) && (
             <span className={QUEUED_ACTIONS}>
-              {!editing && onEdit && (
+              {!sent && !editing && onEdit && (
                 <Hint label="Edit before it sends">
                   <button
                     type="button"
@@ -579,7 +581,7 @@ function QueuedBubble({
                   </button>
                 </Hint>
               )}
-              {onSendNow && (
+              {!sent && onSendNow && (
                 <Hint label="Send now (stops the agent)">
                   <button
                     type="button"

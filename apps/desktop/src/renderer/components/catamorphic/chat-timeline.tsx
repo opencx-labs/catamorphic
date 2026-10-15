@@ -752,14 +752,14 @@ export function ChatTimeline(props: ChatTimelineProps) {
         ),
       );
     }
-    // The notice after it says why it ended.
-    if (turn && !endedByTheirAgent.has(turn.id))
+    if (turn)
       conversation.push(
         <TurnOutcome
           key={`outcome:${turn.id}`}
           turn={turn}
           group={view.group}
           latest={turn.id === latestTurnId}
+          endedByTheirAgent={endedByTheirAgent.has(turn.id)}
           onRetry={onRetry}
           onInterrupt={onInterrupt}
           onReauth={onReauth}
@@ -2194,6 +2194,7 @@ function TurnOutcome({
   turn,
   group,
   latest,
+  endedByTheirAgent,
   onRetry,
   onInterrupt,
   onReauth,
@@ -2202,6 +2203,8 @@ function TurnOutcome({
   turn: Turn;
   group: TimelineTurn;
   latest: boolean;
+  /** Its own agent archived or closed the chat: the notice after it says why it ended. */
+  endedByTheirAgent: boolean;
   onRetry?: (turnId: string) => void;
   onInterrupt?: (turnId?: string) => void;
   onReauth?: (turnId: string) => void;
@@ -2238,6 +2241,18 @@ function TurnOutcome({
   const changed = (turn.outcome?.changedFiles ?? []).map(
     (change) => change.path,
   );
+  const left = changed.length > 0 && (
+    <span data-testid="chat-interrupted-files">
+      {`Left ${changed.length === 1 ? "1 changed file" : `${changed.length} changed files`}: ${changedFileNames(changed)}`}
+    </span>
+  );
+  // Nothing interrupted it, so nothing to retry: only what it left changed.
+  if (endedByTheirAgent)
+    return left ? (
+      <div className="cat-fade-in text-center text-xs text-fg-faint">
+        {left}
+      </div>
+    ) : null;
   return (
     <div
       // The running steps above become this summary in place; it fades in
@@ -2257,11 +2272,7 @@ function TurnOutcome({
           {`While: ${stopped.label}${stopped.ran ? ` (${stopped.ran})` : ""}`}
         </span>
       )}
-      {changed.length > 0 && (
-        <span data-testid="chat-interrupted-files">
-          {`Left ${changed.length === 1 ? "1 changed file" : `${changed.length} changed files`}: ${changedFileNames(changed)}`}
-        </span>
-      )}
+      {left}
       {latest && onRetry && (
         <button
           type="button"
