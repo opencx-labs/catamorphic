@@ -8,81 +8,90 @@
  * position the caret can take, and Chromium recomputes the visible selection
  * before every frame: each time it walks backwards through every inert
  * element looking for one it can use. Behind a few long minimised chats that
- * walk took 60 to 130 ms a frame. The selection is released as its container
- * turns inert, or as anything places it in content already inert; a range
- * reaching in from outside loses only its inert part.
+ * walk took 60 to 130 ms a frame. A selection wholly inside content that
+ * turns inert, or that anything places in content already inert, is
+ * released; one only reaching in is left alone (an inert end's walk stops
+ * at the region it is in).
  *
- * What was released comes back without taking focus from anything. A
- * highlight returns with its container; one in an editor only while nothing
- * holds focus, since setting a selection in an editable element focuses it.
- * A caret returns when its editor itself takes focus (a restored chat
- * focusing its composer): returning it with the container took focus from
- * whatever the person focused meanwhile (app.e2e.ts, "Cmd+W closes the tab
- * behind the floating chat when the tab has focus"). A press inside places
- * its own caret, so the saved one is dropped.
+ * What was released comes back without moving focus, in its direction. A
+ * highlight outside any editor returns with its container. A caret or
+ * highlight in an editor returns only when that editor itself takes focus
+ * (a restored chat focusing its composer): a selection set in an editable
+ * element focuses it, so returning one with its container took focus from
+ * whatever the person had focused meanwhile (app.e2e.ts, "Cmd+W closes the
+ * tab behind the floating chat when the tab has focus"). A press inside
+ * places its own caret, so the saved one is dropped.
  */
 export function installInertSelectionGuard(
   doc: Document = document,
 ): () => void {
-  /** Released ranges, by the inert element that held them. */
-  const released = new Map<Element, Range>();
+  /** Released selections, by the inert element that held them. */
+  const released = new Map<Element, Saved>();
 
   const release = (container: Element) => {
     const selection = doc.getSelection();
     if (!selection || selection.rangeCount === 0) return;
-    const range = selection.getRangeAt(0).cloneRange();
-    const startInside = container.contains(range.startContainer);
-    const endInside = container.contains(range.endContainer);
-    if (!startInside && !endInside) return;
-    if (startInside && endInside) {
-      if (!range.collapsed || editingHost(range.startContainer)) {
-        released.set(container, range);
-      }
-      selection.removeAllRanges();
+    const { anchorNode, focusNode } = selection;
+    if (!anchorNode || !focusNode) return;
+    if (!container.contains(anchorNode) || !container.contains(focusNode)) {
       return;
     }
-    // A range reaching into the container keeps its part outside it.
-    if (startInside) range.setStartAfter(container);
-    else range.setEndBefore(container);
+    const anchor = doc.createRange();
+    anchor.setStart(anchorNode, selection.anchorOffset);
+    const focus = doc.createRange();
+    focus.setStart(focusNode, selection.focusOffset);
+    const editor = editingHost(anchorNode);
+    if (editor || !selection.isCollapsed) {
+      released.set(container, { anchor, focus, editor });
+    }
     selection.removeAllRanges();
-    if (!editingHost(range.startContainer) && !editingHost(range.endContainer))
-      selection.addRange(range);
   };
 
-  const returnHighlight = (container: Element) => {
-    const range = released.get(container);
-    const selection = doc.getSelection();
-    if (!range || !selection || container.closest("[inert]")) return;
-    // Returning a range in an editor focuses it: only a highlight, and only
-    // while nothing holds focus (a project switched back to).
-    const nothingFocused = !doc.activeElement || doc.activeElement === doc.body;
-    if (
-      editingHost(range.startContainer) &&
-      (range.collapsed || !nothingFocused)
-    )
-      return;
+  const putBack = (container: Element, saved: Saved) => {
     released.delete(container);
-    if (selection.rangeCount === 0) selection.addRange(range);
+    const { anchor, focus } = saved;
+    if (inInert(anchor.startContainer) || inInert(focus.startContainer)) {
+      return;
+    }
+    doc
+      .getSelection()
+      ?.setBaseAndExtent(
+        anchor.startContainer,
+        anchor.startOffset,
+        focus.startContainer,
+        focus.startOffset,
+      );
   };
 
   const observer = new MutationObserver((mutations) => {
-    for (const container of released.keys()) {
-      if (!container.isConnected) released.delete(container);
-    }
+    const returned: Element[] = [];
     for (const { target } of mutations) {
       if (!(target instanceof Element)) continue;
       if (target.hasAttribute("inert")) release(target);
-      else returnHighlight(target);
+      else returned.push(target);
+    }
+    for (const container of released.keys()) {
+      if (!container.isConnected) released.delete(container);
+    }
+    // A highlight returns with its container, or with an ancestor whose
+    // inertness held it, once the person has selected nothing else.
+    for (const target of returned) {
+      for (const [container, saved] of released) {
+        if (saved.editor || !target.contains(container)) continue;
+        if (container.closest("[inert]")) continue;
+        if ((doc.getSelection()?.rangeCount ?? 0) > 0) {
+          released.delete(container);
+          continue;
+        }
+        putBack(container, saved);
+      }
     }
   });
 
   const onSelectionChange = () => {
     const selection = doc.getSelection();
-    if (!selection || selection.rangeCount === 0) return;
-    const range = selection.getRangeAt(0);
-    const inert =
-      elementOf(range.startContainer)?.closest("[inert]") ??
-      elementOf(range.endContainer)?.closest("[inert]");
+    if (!selection?.anchorNode) return;
+    const inert = elementOf(selection.anchorNode)?.closest("[inert]");
     if (inert) release(inert);
   };
 
@@ -94,15 +103,10 @@ export function installInertSelectionGuard(
   };
 
   const onFocus = (event: FocusEvent) => {
-    const focused = event.target;
-    if (!(focused instanceof Element)) return;
-    for (const [container, range] of released) {
+    for (const [container, saved] of released) {
+      if (!saved.editor || saved.editor !== event.target) continue;
       if (!container.isConnected || container.closest("[inert]")) continue;
-      if (editingHost(range.startContainer) !== focused) continue;
-      released.delete(container);
-      const selection = doc.getSelection();
-      selection?.removeAllRanges();
-      selection?.addRange(range);
+      putBack(container, saved);
       return;
     }
   };
@@ -124,8 +128,22 @@ export function installInertSelectionGuard(
   };
 }
 
+/**
+ * A released selection: its anchor and focus as live collapsed ranges, so
+ * they follow edits made meanwhile, and the editor holding it, if any.
+ */
+interface Saved {
+  anchor: Range;
+  focus: Range;
+  editor: Element | null;
+}
+
 function elementOf(node: Node): Element | null {
   return node instanceof Element ? node : node.parentElement;
+}
+
+function inInert(node: Node): boolean {
+  return !!elementOf(node)?.closest("[inert]");
 }
 
 /**
@@ -140,9 +158,9 @@ function editingHost(node: Node): Element | null {
     element;
     element = element.parentElement
   ) {
-    const editable = element.getAttribute("contenteditable");
+    const editable = element.getAttribute("contenteditable")?.toLowerCase();
     if (editable === "false") return host;
-    if (editable !== null) host = element;
+    if (editable !== undefined) host = element;
   }
   return host;
 }

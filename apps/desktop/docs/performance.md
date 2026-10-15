@@ -194,18 +194,21 @@ apart: Electron publishes breakpad symbols for each release
 renderer and resolve `Electron Framework` offsets against the `.sym` file's
 `FUNC` records.
 
-`lib/inert-selection.ts` releases the selection as its container turns
-inert, or as anything places it in content already inert; a selection
-reaching in from outside keeps its part outside. What it released returns
-without taking focus from anything. A highlight returns with its container,
-one in an editor only while nothing holds focus (a project switched back
-to), since a selection set in an editable element focuses it. A caret
-returns when its editor itself takes focus, as a restored chat focuses its
-composer, so typing continues where the person left off. A press inside
-places its own caret instead. `lib/inert-selection.test.ts` covers these
-cases; the chat-state suite's minimised-draft test covers the chat, and
-`app.e2e.ts`'s "Cmd+W closes the tab behind the floating chat when the tab
-has focus" fails if a caret returns before its editor has focus.
+`lib/inert-selection.ts` releases a selection lying wholly in content that
+turns inert, or that anything places in content already inert; one only
+reaching in is left alone. What it released returns without moving focus,
+in its direction. A highlight outside any editor returns with its
+container. A caret or highlight in an editor returns only when that editor
+itself takes focus, as a restored chat focuses its composer, so typing
+continues where the person left off: a selection set in an editable element
+focuses it (in a focused window), so returning one with its container
+would take focus, and the next key would replace a highlight. Unlike
+before the guard, a document's highlight does not survive a project switch.
+A press inside places its own caret instead.
+`lib/inert-selection.test.ts` covers these rules; the chat-state suite's
+minimised-draft test covers the chat, and `app.e2e.ts`'s "Cmd+W closes the
+tab behind the floating chat when the tab has focus" fails if a caret
+returns before its editor has focus.
 
 Not covered: a caret in a tab hidden with `display: none` (inactive tabs) is
 no usable position either. A microbenchmark outside Electron found the walk

@@ -184,35 +184,26 @@ describe("inert selection guard", () => {
     expect(selection()?.toString()).toBe("else");
   });
 
-  it("returns an editor's highlight with its surface while nothing has focus", async () => {
+  it("returns an editor's highlight only when the editor takes focus", async () => {
     uninstall = installInertSelectionGuard();
-    const { surface, text } = surfaceWithCaret();
-    if (text) selection()?.setBaseAndExtent(text, 2, text, 7);
+    const { surface, composer, text } = surfaceWithCaret();
+    if (text) selection()?.setBaseAndExtent(text, 7, text, 2);
     surface.setAttribute("inert", "");
     await settle();
     expect(selection()?.rangeCount).toBe(0);
     surface.removeAttribute("inert");
     await settle();
-    expect(selection()?.toString()).toBe("draft");
-  });
-
-  it("keeps an editor's highlight back while something has focus", async () => {
-    uninstall = installInertSelectionGuard();
-    const { surface, composer, text } = surfaceWithCaret();
-    if (text) selection()?.setBaseAndExtent(text, 2, text, 7);
-    surface.setAttribute("inert", "");
-    await settle();
-    const elsewhere = document.createElement("button");
-    document.body.append(elsewhere);
-    elsewhere.focus();
-    selection()?.removeAllRanges();
-    surface.removeAttribute("inert");
-    await settle();
+    // Even with nothing focused: a range set in an editor focuses it, and
+    // the next key would replace the highlight.
     expect(surface.contains(selection()?.anchorNode ?? null)).toBe(false);
-    expect(focusAndRead(composer)?.node).toBe(text);
+    expect(focusAndRead(composer)).toEqual({
+      rangeCount: 1,
+      node: text,
+      offset: 7,
+    });
   });
 
-  it("keeps the part of a selection outside what turned inert", async () => {
+  it("leaves a selection only reaching into what turned inert", async () => {
     uninstall = installInertSelectionGuard();
     const before = paragraph("a reply").firstChild;
     const steps = document.createElement("section");
@@ -220,6 +211,48 @@ describe("inert selection guard", () => {
     const inside = paragraph("a step", steps).firstChild;
     if (before && inside) selection()?.setBaseAndExtent(before, 2, inside, 3);
     steps.setAttribute("inert", "");
+    await settle();
+    expect(selection()?.toString()).toBe("reply" + "a s");
+  });
+
+  it("returns a highlight, keeping its direction, as another is released", async () => {
+    uninstall = installInertSelectionGuard();
+    const alpha = document.createElement("section");
+    const beta = document.createElement("section");
+    document.body.append(alpha, beta);
+    const first = paragraph("first project", alpha).firstChild;
+    const second = paragraph("second project", beta).firstChild;
+    beta.setAttribute("inert", "");
+    if (first) selection()?.setBaseAndExtent(first, 5, first, 0);
+    alpha.setAttribute("inert", "");
+    beta.removeAttribute("inert");
+    await settle();
+    if (second) selection()?.setBaseAndExtent(second, 0, second, 6);
+    // Switching back: one batch, in page order, returns alpha's and
+    // releases beta's; the release goes first.
+    alpha.removeAttribute("inert");
+    beta.setAttribute("inert", "");
+    await settle();
+    expect(selection()?.toString()).toBe("first");
+    expect(selection()?.anchorOffset).toBe(5);
+    expect(selection()?.focusOffset).toBe(0);
+  });
+
+  it("returns a highlight held by an inert ancestor once both are back", async () => {
+    uninstall = installInertSelectionGuard();
+    const workspace = document.createElement("div");
+    const chat = document.createElement("section");
+    workspace.append(chat);
+    document.body.append(workspace);
+    const text = paragraph("a reply", chat).firstChild;
+    if (text) selection()?.setBaseAndExtent(text, 2, text, 7);
+    chat.setAttribute("inert", "");
+    workspace.setAttribute("inert", "");
+    await settle();
+    chat.removeAttribute("inert");
+    await settle();
+    expect(selection()?.rangeCount).toBe(0);
+    workspace.removeAttribute("inert");
     await settle();
     expect(selection()?.toString()).toBe("reply");
   });
