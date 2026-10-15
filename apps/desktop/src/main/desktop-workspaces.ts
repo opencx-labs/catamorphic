@@ -981,6 +981,9 @@ export class DesktopWorkspaces {
   }
 
   private syncFloating(profileId: string) {
+    // Quitting closes the dock first: a workspace taking focus after that
+    // would build a new one, which keeps the app from quitting.
+    if (this.quitting) return;
     const prefs = this.options.config.forProfile(profileId).prefs.load();
     const existing = this.floating.get(profileId);
     if (!this.detached(profileId)) {

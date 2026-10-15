@@ -339,6 +339,7 @@ export async function launchApp(opts: LaunchOpts = {}): Promise<AppHandle> {
               .join("")}\n--- app output ---\n${output.slice(-4000)}`,
           );
         }
+        if (!opts?.preserveUserData) removeE2eDirectory(userDataDir);
         // A main-process error the app printed (main/index.ts) fails the
         // run that saw it, by name, though the app quit.
         const failures = mainProcessErrors(output);
@@ -346,7 +347,6 @@ export async function launchApp(opts: LaunchOpts = {}): Promise<AppHandle> {
           throw new Error(
             `The main process failed during this run:\n${failures.join("\n")}`,
           );
-        if (!opts?.preserveUserData) removeE2eDirectory(userDataDir);
       },
       kill: async () => {
         ws.close();
