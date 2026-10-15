@@ -2260,7 +2260,11 @@ function ChatDockContent({
             ? "pointer-events-none translate-y-4 scale-[0.985] opacity-0 animate-dock-out"
             : expanded
               ? "translate-y-0 scale-100 opacity-100 animate-dock-in"
-              : "pointer-events-none translate-y-4 scale-[0.985] opacity-0"
+              : // At rest while minimized or behind another tab: kept
+                // (drafts, scroll, queued sends) but skipped by style,
+                // layout and paint, which a long transcript otherwise pays
+                // on every frame while it streams (docs/performance.md).
+                "pointer-events-none translate-y-4 scale-[0.985] opacity-0 [content-visibility:hidden]"
         }`}
         aria-label={title}
         aria-hidden={!expanded}

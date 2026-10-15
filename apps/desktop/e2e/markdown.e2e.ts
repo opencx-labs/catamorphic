@@ -517,6 +517,53 @@ describe("markdown editor", () => {
     await mouse("mouseMoved", { x: 4, y: 4 });
   }, 60_000);
 
+  it("the handle looks its block up once, and glides on the compositor", async () => {
+    // Moves on the block the handle points at cannot change its target, so
+    // the lookup (a hit test and a caret lookup, each forcing layout) runs
+    // once per block, not once per frame (handle-hover.ts).
+    await hoverHandle(HANDLE_TARGETS.paragraph, "long paragraph");
+    const box = await run<{ x: number; top: number; bottom: number }>(`
+      window.__mdLookups = 0;
+      for (const name of ['caretPositionFromPoint', 'elementsFromPoint']) {
+        const real = document[name].bind(document);
+        document[name] = (...args) => { window.__mdLookups++; return real(...args); };
+      }
+      const r = ${HANDLE_TARGETS.paragraph}.getBoundingClientRect();
+      return { x: Math.round(r.left + 40), top: Math.ceil(r.top + 2), bottom: Math.floor(r.bottom - 2) };
+    `);
+    for (let step = 0; step < 24; step++) {
+      await mouse("mouseMoved", {
+        x: box.x + (step % 8) * 12,
+        y: box.top + ((step * 7) % Math.max(1, box.bottom - box.top)),
+      });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    expect(await run<number>(`return window.__mdLookups;`)).toBe(0);
+
+    // The box jumps to the next block; the grip inside glides there on a
+    // transform, which runs on the compositor (no left/top transition).
+    await hoverHandle(HANDLE_TARGETS.h1, "heading one");
+    await run(`window.__mdLookups = 0; return true;`);
+    const next = await run<{ x: number; y: number }>(`
+      const r = ${HANDLE_TARGETS.h2}.getBoundingClientRect();
+      return { x: Math.round(r.left + 40), y: Math.round(lineCenter(${HANDLE_TARGETS.h2})) };
+    `);
+    await mouse("mouseMoved", next);
+    const glide = await runWait<{ animated: boolean; transitions: string }>(
+      `const handle = $('.cat-mdedit-handle');
+       const grip = handle.querySelector('.cat-mdedit-handle-grip');
+       const animated = grip.getAnimations().some((animation) =>
+         animation.effect?.getKeyframes().some((frame) => frame.transform));
+       return animated && { animated, transitions: getComputedStyle(handle).transitionProperty };`,
+      { label: "grip glides to the next block" },
+    );
+    expect(glide.transitions).not.toMatch(/\b(top|left)\b/);
+    expect(await run<number>(`return window.__mdLookups;`)).toBeGreaterThan(0);
+    const settledOnH2 = await settledHandle(HANDLE_TARGETS.h2, "heading two");
+    expect(Math.abs(settledOnH2.handle - settledOnH2.line)).toBeLessThan(1.5);
+    await mouse("mouseMoved", { x: 4, y: 4 });
+  }, 60_000);
+
   it("the selection bubble leaves as it came and turns around mid-exit", async () => {
     // Every state the bar enters, with the animation it starts there.
     const found = await run<boolean>(`
@@ -664,5 +711,77 @@ describe("markdown editor", () => {
     await runWait(settled("hidden"), {
       label: "bubble left after a press away",
     });
+  }, 90_000);
+  it("opens a document whose first block is an image, keeping it through an edit", async () => {
+    // Without an image node the parser left the image's alt text at the
+    // document's top level: the editor's trailing paragraph after a list
+    // then blanked the window, and a save wrote the alt text over it.
+    const doc = [
+      "![Work logo](assets/logo%20v2.png)",
+      "",
+      "Text between.",
+      "",
+      "- one",
+      "- two",
+      "",
+    ].join("\n");
+    const status = await app.eval<number>(
+      `(async () => {
+      const { apiUrl, projectId } = window.__mdE2e;
+      return fetch(apiUrl + '/api/projects/' + projectId + '/files/' +
+        encodeURIComponent('images.md'), {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ content: ${JSON.stringify("__DOC__")} }),
+      }).then((r) => r.status);
+    })()`.replace('"__DOC__"', JSON.stringify(doc)),
+    );
+    expect(status).toBe(200);
+    await run(
+      `$('[data-sidebar-search="search-files"]').click(); return true;`,
+    );
+    await runWait(`return !!$('textarea[placeholder="Search filenames…"]');`, {
+      label: "Files palette",
+    });
+    await run(
+      `setReactValue($('textarea[placeholder="Search filenames…"]'), 'images'); return true;`,
+    );
+    await runWait(
+      `const row = byText('[role="option"]', 'images.md');
+       if (!row) return false; row.dispatchEvent(new MouseEvent('mousedown',{button:0,bubbles:true,cancelable:true})); return true;`,
+      { timeoutMs: 30_000, label: "images.md in Files palette" },
+    );
+    await runWait(
+      `return $('.cat-mdedit .cat-mdedit-image')?.textContent === 'Work logo';`,
+      { timeoutMs: 60_000, label: "image shown as a chip" },
+    );
+    await hoverHandle(`$('.ProseMirror > p')`, "image paragraph");
+    await run(`
+      const h = mdHandle();
+      h.editor.commands.focus('end');
+      h.editor.commands.insertContent('Added.');
+      return true;
+    `);
+    await runWait(`return hasUnsavedChanges();`, {
+      label: "dirty after typing",
+    });
+    await run(`
+      $('.cat-mdedit-pane').dispatchEvent(new KeyboardEvent('keydown',
+        { key: 's', metaKey: /Mac/.test(navigator.platform), ctrlKey: !/Mac/.test(navigator.platform), bubbles: true, cancelable: true }));
+      return true;
+    `);
+    await runWait(`return !hasUnsavedChanges();`, {
+      timeoutMs: 30_000,
+      label: "saved",
+    });
+    const content = await app.eval<string>(`(async () => {
+      const { apiUrl, projectId } = window.__mdE2e;
+      const file = await fetch(apiUrl + '/api/projects/' + projectId +
+        '/files/' + encodeURIComponent('images.md')).then((r) => r.json());
+      return file.content;
+    })()`);
+    expect(content).toContain("![Work logo](assets/logo%20v2.png)");
+    expect(content).toContain("Added.");
+    expect(app.getRendererErrors()).toEqual([]);
   }, 90_000);
 });

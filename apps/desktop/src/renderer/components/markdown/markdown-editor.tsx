@@ -18,6 +18,8 @@ import { useEffect, useRef, useState } from "react";
 import { MarkdownBubbleMenu } from "./bubble-menu.js";
 import { joinFrontmatter, splitFrontmatter } from "./frontmatter.js";
 import { MarkdownGuardrails } from "./guardrails.js";
+import { createHandleHoverGate } from "./handle-hover.js";
+import { ImageParagraph, MarkdownImage } from "./image.js";
 import { lowlight } from "./lowlight.js";
 import {
   createBubbleMotion,
@@ -216,6 +218,7 @@ export function MarkdownEditor({
       bar: bubbleBar,
     });
     const handleHolder: { el: HTMLElement | null } = { el: null };
+    const hoverGate = createHandleHoverGate();
     const hovered: { view: EditorView | null; pos: number } = {
       view: null,
       pos: -1,
@@ -225,9 +228,12 @@ export function MarkdownEditor({
       extensions: [
         StarterKit.configure({
           codeBlock: false,
+          paragraph: false,
           dropcursor: { color: "var(--color-accent)", width: 2 },
         }),
         Markdown,
+        ImageParagraph,
+        MarkdownImage,
         TaskList,
         TaskItem.configure({ nested: true }),
         TableKit,
@@ -252,12 +258,18 @@ export function MarkdownEditor({
             onHide: bubbleMotion.hide,
           },
         }),
+        hoverGate.extension,
         DragHandle.configure({
           nested: { rules: [DRAG_SCOPE_RULE], edgeDetection: "none" },
+          // The box the extension places, and the grip that glides inside
+          // it (installHandleMotion).
           render: () => {
             const el = document.createElement("div");
             el.className = "cat-mdedit-handle";
-            el.innerHTML = GRIP_DOTS_SVG;
+            const grip = document.createElement("div");
+            grip.className = "cat-mdedit-handle-grip";
+            grip.innerHTML = GRIP_DOTS_SVG;
+            el.append(grip);
             handleHolder.el = el;
             return el;
           },
@@ -275,6 +287,7 @@ export function MarkdownEditor({
                 ? change.pos
                 : -1;
             hovered.view = change.editor.view;
+            hoverGate.track(change.editor.view, hovered.pos, change.node);
             // listItem = bullet/number markers to clear; taskItem has none.
             handleHolder.el?.classList.toggle(
               "for-list-item",

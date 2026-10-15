@@ -240,39 +240,93 @@ export function createBubbleMotion({
   };
 }
 
+/** How long the handle takes to glide to the next block. */
+const HANDLE_GLIDE_MS = 140;
+
 /**
- * Drag-handle appearance: hidden and slightly shrunk until the extension
- * first positions it (inline left/top on the handle element), fading in via
- * the base CSS transition, then gliding between blocks via the .glide class.
- * The handle and its wrapper are extension-owned chrome, not PM content, so
- * observing and classing them is safe.
+ * Drag-handle motion. The extension places the handle box with inline
+ * left/top; the box shows (opacity and scale, from .unpositioned) once it
+ * is placed and visible, and jumps to each next block, while the grip
+ * inside glides there: it starts at the box's old place and a transform
+ * animation brings it home. A transform runs on the compositor, so the
+ * glide keeps its frames while the page's main thread is busy, where a
+ * left/top transition needed layout on every frame and stuttered
+ * (docs/performance.md, "Markdown drag handle"). The handle and its
+ * wrapper are extension-owned chrome, not PM content, so observing,
+ * classing and animating them is safe. Reads only inline styles: the
+ * extension shows and hides the box through its inline visibility.
  */
 export function installHandleMotion(handle: HTMLElement): () => void {
   const wrapper = handle.parentElement;
+  const grip =
+    handle.firstElementChild instanceof HTMLElement
+      ? handle.firstElementChild
+      : null;
   handle.classList.add("unpositioned");
   let shown = false;
+  let at: { left: number; top: number } | null = null;
+  let glide: Animation | null = null;
+
+  /** The grip's offset from its box now, mid-glide too. */
+  const gripOffset = () => {
+    if (!grip || !glide) return { x: 0, y: 0 };
+    const matrix = new DOMMatrixReadOnly(getComputedStyle(grip).transform);
+    return { x: matrix.m41, y: matrix.m42 };
+  };
+  const glideFrom = (dx: number, dy: number) => {
+    const duration = motionMs(HANDLE_GLIDE_MS);
+    if (!grip || duration === 0) return;
+    const from = gripOffset();
+    glide?.cancel();
+    const run = grip.animate(
+      [
+        { transform: `translate(${from.x + dx}px, ${from.y + dy}px)` },
+        { transform: "none" },
+      ],
+      { duration, easing: EASE_STANDARD },
+    );
+    glide = run;
+    run.onfinish = () => {
+      if (glide === run) glide = null;
+    };
+  };
+
   const sync = () => {
-    const positioned = handle.style.left !== "" && handle.style.left !== "0px";
+    const left = Number.parseFloat(handle.style.left);
+    const top = Number.parseFloat(handle.style.top);
+    const placed = Number.isFinite(left) && Number.isFinite(top) && left !== 0;
     const visible =
-      positioned &&
-      getComputedStyle(handle).visibility !== "hidden" &&
-      (!wrapper || getComputedStyle(wrapper).visibility !== "hidden");
+      placed &&
+      handle.style.visibility !== "hidden" &&
+      wrapper?.style.visibility !== "hidden";
+    if (visible && shown && at && (left !== at.left || top !== at.top)) {
+      glideFrom(at.left - left, at.top - top);
+    }
     if (visible && !shown) {
       handle.classList.remove("unpositioned");
+      // Shown in place first; only later moves slide the list-item offset.
       requestAnimationFrame(() =>
-        requestAnimationFrame(() => handle.classList.add("glide")),
+        requestAnimationFrame(() => {
+          if (shown) handle.classList.add("settled");
+        }),
       );
     }
     if (!visible && shown) {
-      handle.classList.remove("glide");
+      glide?.cancel();
+      glide = null;
+      handle.classList.remove("settled");
       handle.classList.add("unpositioned");
     }
     shown = visible;
+    at = placed ? { left, top } : null;
   };
   const observer = new MutationObserver(sync);
   observer.observe(handle, { attributes: true, attributeFilter: ["style"] });
   if (wrapper) {
     observer.observe(wrapper, { attributes: true, attributeFilter: ["style"] });
   }
-  return () => observer.disconnect();
+  return () => {
+    observer.disconnect();
+    glide?.cancel();
+  };
 }
