@@ -382,13 +382,26 @@ describe("an unpacked extension", () => {
       { label: "pinned" },
     );
     // Nothing the person did asks for it yet: as in Chrome, it may not ask.
-    const worker = await app.connectToFrame(`${extensionId}/sw.js`);
     // Electron fires no runtime.onInstalled; Work does, once per version,
-    // and the managed storage area exists (empty, as without policy).
-    await worker.waitFor(
-      `chrome.storage.local.get('log').then(({ log }) => (log || []).some((entry) => entry.event === 'installed' && entry.reason === 'install'))`,
-      { label: "runtime.onInstalled delivered" },
-    );
+    // and the managed storage area exists (empty, as without policy). The
+    // worker the check first reaches can be one stopping as a new one starts
+    // (macOS CI: every call then failed "No SW"), so it reaches the worker
+    // again until the check holds.
+    let worker = await app.connectToFrame(`${extensionId}/sw.js`);
+    const installedBy = Date.now() + 30_000;
+    for (;;) {
+      try {
+        await worker.waitFor(
+          `chrome.storage.local.get('log').then(({ log }) => (log || []).some((entry) => entry.event === 'installed' && entry.reason === 'install'))`,
+          { label: "runtime.onInstalled delivered", timeoutMs: 5_000 },
+        );
+        break;
+      } catch (cause) {
+        if (Date.now() > installedBy) throw cause;
+        worker.close();
+        worker = await app.connectToFrame(`${extensionId}/sw.js`);
+      }
+    }
     expect(
       await worker.eval(
         "chrome.storage.managed.get().then((v) => JSON.stringify(v))",

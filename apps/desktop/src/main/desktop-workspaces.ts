@@ -1039,5 +1039,11 @@ export class DesktopWorkspaces {
       event.preventDefault();
       this.setDetached(profileId, false);
     });
+    // Teardown closes the dock before the workspaces: a workspace taking
+    // focus after that must not reach the destroyed window.
+    window.on("closed", () => {
+      if (this.floating.get(profileId) === window)
+        this.floating.delete(profileId);
+    });
   }
 }
