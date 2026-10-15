@@ -153,6 +153,69 @@ frames with no script and no layout time are waiting on another process.
 `Page.startScreencast` misses compositor-only motion; film with
 `Page.captureScreenshot` and `Animation.setPlaybackRate`.
 
+## Stranded selections
+
+Surfaces that hide while staying mounted become inert: minimised chats,
+closed palettes and modals, other projects' workspaces. Typing in a chat and
+then minimising it left the document's caret in the inert composer. Inert
+content holds no caret position, and Chromium recomputes the visible
+selection before every frame that follows a DOM or style change
+(`WidgetBase::UpdateSelectionBounds`, `FrameCaret::UpdateAppearance`), and
+on focus changes (`WebViewImpl::SetPageFocus`). Each time,
+`CanonicalPositionOf` walks backwards through every inert element to the
+first usable position, checking each one's `content-visibility` ancestors on
+the way. The cost grows with the inert content ahead of the caret.
+
+Measured 2026-10-15 on an Apple M3 Pro, macOS 26.5.2, in an installed
+0.1.0-alpha.22 (Electron 45.0.0-beta.1, Chromium 156) with a real profile:
+14,356 elements, four minimised chats of 235 to 3,025 elements. CDP moved a
+synthetic pointer across the window every 16 ms for 4 seconds per row; a
+`toplevel` trace counted the renderer's `ScheduledActionSendBeginMainFrame`
+tasks and its main-thread task time. Only the caret changed between rows:
+
+| Caret | Frames | Average frame | Main thread busy |
+| --- | ---: | ---: | ---: |
+| In an open chat's composer | 197 | 3 ms | 644 ms |
+| In the 3,025-element minimised chat's composer | 37, all over 50 ms | 68 ms | 3,804 ms |
+| Cleared | 192 | 3 ms | 598 ms |
+
+In the same state, 22 seconds of hovering a markdown document ran at
+3.8 frames a second: the drag handle's per-frame hit test forced layout, and
+each layout paid a 116 to 161 ms walk. A fresh profile with a few
+fake-agent chats showed no visible stall, so the walk appears to need the
+long transcripts of real chats ahead of the caret.
+
+Only the hit-test path emits `VisibleUnits::canonicalPosition`. Under
+`UpdateSelectionBounds` the walk is untraced, so a stalled frame shows a long
+`ProxyMain::BeginMainFrame` with almost no style, layout or script time,
+which reads like waiting on another process. A native sample tells them
+apart: Electron publishes breakpad symbols for each release
+(`electron-v<version>-darwin-arm64-symbols.zip`); run `sample` on the
+renderer and resolve `Electron Framework` offsets against the `.sym` file's
+`FUNC` records.
+
+`lib/inert-selection.ts` releases a selection lying within one region that
+turns inert, or that anything places in a region already inert; one only
+reaching in is left alone. What it released returns without moving focus,
+in its direction. A highlight outside any editor returns with its
+container, or the ancestor whose inertness held it, if nothing else is
+selected by then. A caret or highlight in an editor returns only when that editor
+itself takes focus, as a restored chat focuses its composer, so typing
+continues where the person left off: a selection set in an editable element
+focuses it (in a focused window), so returning one with its container
+would take focus, and the next key would replace a highlight. Unlike
+before the guard, a document's highlight does not survive a project switch.
+A press inside places its own caret instead.
+`lib/inert-selection.test.ts` covers these rules; the chat-state suite's
+minimised-draft test covers the chat, and `app.e2e.ts`'s "Cmd+W closes the
+tab behind the floating chat when the tab has focus" fails if a caret
+returns before its editor has focus.
+
+Not covered: a caret in a tab hidden with `display: none` (inactive tabs) is
+no usable position either. A microbenchmark outside Electron found the walk
+from one at least as slow as from inert content; whether it stalls frames in
+Work is unmeasured.
+
 ## Development timing retention
 
 React 19.2.8 emits User Timing measures with copied component prop details in
