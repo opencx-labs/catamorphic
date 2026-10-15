@@ -46,22 +46,37 @@ afterAll(async () => {
   expect(errors).toEqual([]);
 });
 
-/** A real right-click at a point of `selector`'s box (a fraction across). */
+/**
+ * A real right-click at a point of `selector`'s box (a fraction across),
+ * once nothing covers it there (the Files palette closing over the tabs),
+ * again if the first lands while something still did.
+ */
 async function rightClick(selector: string, across = 0.5) {
-  const point = await app.eval<{ x: number; y: number }>(
-    `(() => { const r = document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect(); return { x: r.x + r.width * ${across}, y: r.y + r.height / 2 }; })()`,
-  );
-  for (const type of ["mousePressed", "mouseReleased"])
-    await app.cdp("Input.dispatchMouseEvent", {
-      type,
-      ...point,
-      button: "right",
-      clickCount: 1,
+  const at = `(() => { const el = document.querySelector(${JSON.stringify(selector)}); const r = el.getBoundingClientRect(); const x = r.x + r.width * ${across}; const y = r.y + r.height / 2; return el.contains(document.elementFromPoint(x, y)) || el.closest('[data-point-key]')?.contains(document.elementFromPoint(x, y)) ? { x, y } : false; })()`;
+  for (let attempt = 0; ; attempt += 1) {
+    const point = await app.waitFor<{ x: number; y: number }>(at, {
+      label: `${selector} under the pointer`,
     });
-  await app.waitFor(
-    `document.querySelectorAll('[role="menuitem"]').length === ${MENU.length}`,
-    { label: `menu on ${selector}` },
-  );
+    for (const type of ["mousePressed", "mouseReleased"])
+      await app.cdp("Input.dispatchMouseEvent", {
+        type,
+        ...point,
+        button: "right",
+        clickCount: 1,
+      });
+    try {
+      await app.waitFor(
+        `document.querySelectorAll('[role="menuitem"]').length === ${MENU.length}`,
+        {
+          label: `menu on ${selector}`,
+          timeoutMs: attempt < 2 ? 3_000 : 15_000,
+        },
+      );
+      break;
+    } catch (cause) {
+      if (attempt >= 2) throw cause;
+    }
+  }
   return app.eval<string[]>(
     `[...document.querySelectorAll('[role="menuitem"]')].map((item) => item.textContent.trim())`,
   );
@@ -72,8 +87,8 @@ const choose = (label: string) =>
     `[...document.querySelectorAll('[role="menuitem"]')].find((item) => item.textContent.trim() === ${JSON.stringify(label)}).click(); true`,
   );
 
-/** What the clipboard holds as text, pasted into a field for real. */
-async function pasted(): Promise<string> {
+/** Pastes into a field for real: what the clipboard holds as text. */
+async function paste(): Promise<string> {
   await app.eval(
     `(() => { const field = document.createElement('textarea'); field.id = 'paste-check'; field.style.cssText = 'position:fixed;top:0;left:0;z-index:99999'; document.body.append(field); field.focus(); return true; })()`,
   );
@@ -86,12 +101,27 @@ async function pasted(): Promise<string> {
       windowsVirtualKeyCode: 86,
       ...(type === "keyDown" ? { commands: ["paste"] } : {}),
     });
-  const value = await app.waitFor<string>(
-    `document.getElementById('paste-check').value || false`,
-    { label: "pasted" },
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  const value = await app.eval<string>(
+    `(() => { const field = document.getElementById('paste-check'); const value = field.value; field.remove(); return value; })()`,
   );
-  await app.eval(`document.getElementById('paste-check').remove(); true`);
   return value;
+}
+
+/**
+ * Picks a copy from the open menu and returns what it put on the clipboard.
+ * The copy lands once the file's path is known, a moment after the pick:
+ * the clipboard first holds a marker, and what replaces it is the copy.
+ */
+async function copied(label: string): Promise<string> {
+  const marker = `before ${label}`;
+  await app.eval(`navigator.clipboard.writeText(${JSON.stringify(marker)})`);
+  await choose(label);
+  for (let tries = 0; tries < 40; tries += 1) {
+    const value = await paste();
+    if (value && value !== marker) return value;
+  }
+  throw new Error(`${label} put nothing on the clipboard`);
 }
 
 it("lists a file tab's actions after its ways to open, from anywhere on the tab", async () => {
@@ -114,8 +144,7 @@ it("lists a file tab's actions after its ways to open, from anywhere on the tab"
   });
   // Its label, and its far end where the close button rides.
   expect(await rightClick(`${tab} .workspace-tab-label`, 0.3)).toEqual(MENU);
-  await choose("Copy path");
-  expect(await pasted()).toBe(`${root}/notes/plan.md`);
+  expect(await copied("Copy path")).toBe(`${root}/notes/plan.md`);
   expect(await rightClick(tab, 0.92)).toEqual(MENU);
   await choose("Copy file");
   await app.waitFor(`!document.querySelector('[role="menuitem"]')`, {
@@ -139,6 +168,5 @@ it("lists the same on a file link in a chat's reply", async () => {
     label: "file link in the reply",
   });
   expect(await rightClick(link)).toEqual(MENU);
-  await choose("Copy path");
-  expect(await pasted()).toBe(`${root}/notes/plan.md`);
+  expect(await copied("Copy path")).toBe(`${root}/notes/plan.md`);
 });
