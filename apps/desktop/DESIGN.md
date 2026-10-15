@@ -2834,7 +2834,7 @@ checks every message mounts hidden, also on a renderer slowed fourfold,
 where a turn's events land between frames, and on one that stalls as the
 turn and the agent's words first show.
 
-### 2026-10-15: The status popup opens at its size; the palette's input grows like the composer; a chat its agent archives just ends
+### 2026-10-15: The status popup opens at its size; inputs, chats and queued messages move in place; a chat its agent archives just ends
 
 The chat's status popup appeared, then grew a line when its Artifacts or
 Folder row finished loading, and while it glided taller a scrollbar showed
@@ -2860,7 +2860,26 @@ after that the rows were cached.
   latest words slid under the composer (61px for four lines) and jumped
   back 100ms after the glide. A followed chat's view is now held at its
   end in the frame it shrinks, before paint, so the words move with the
-  composer's edge. A reader scrolled up is left where they are.
+  composer's edge. A reader scrolled up is left where they are. The hold
+  goes through use-stick-to-bottom's own scroll setter, so neither it nor
+  the browser's clamp of a taller view (the composer shrinking) reads as
+  the person scrolling up; on macOS a timer race let go of the latest
+  message there.
+- **A chat grows into its tab over what was in front.** Making a floating
+  chat a tab (⌘⇧M) switched the content to the chat's tab in the frame the
+  chat started to grow: the page behind vanished, leaving the bare
+  backdrop around a chat that had just lost its title, border and shadow.
+  The page in front now stays painted, and mounted, beneath the chat for
+  its 250ms (`useRecedingSurface`), and the card's edge and title ease out
+  as it grows.
+- **A queued message reads right to left.** Its state (Queued, Held,
+  Sending) sits at the bubble's right edge and its controls slide out of
+  it to the left on hover, each easing in a soft ground under the pointer.
+  Sent now, or sent with ⌘↵ while the agent works (an interrupting turn),
+  it looks sent at once ("Sending", nothing to edit) while the agent
+  stops. Then its message takes over where the bubble was, already shown,
+  instead of rising in anew below; a ⌘↵ send's pending bubble hands its
+  place to the queued one the same way.
 - **The project folder says so.** The Changes tree marked the project
   folder's own checkout "Current" beside its branch, which read as a chat's
   worktree when the folder had a feature branch checked out. It says
@@ -2878,6 +2897,9 @@ after that the rows were cached.
   in the agent's own words (a completion), keeps its own sentence after
   the name and a colon.
 
+`floating-motion.test.tsx` and `e2e/motion.e2e.ts` cover the chat growing
+over what was in front; `chat-timeline.test.tsx` and `e2e/agents.e2e.ts`
+the queued message's layout, its Sending look and both hand-overs;
 `resource-inspector.test.tsx` covers StrictMode, the measured reveal and the
 clipped glide; `e2e/motion.e2e.ts` samples the palette's input growing
 through the frames between one line and two; `e2e/chat-motion.e2e.ts`

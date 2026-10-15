@@ -193,7 +193,12 @@ const RECORDER = `(() => {
     if (on) requestAnimationFrame(sample);
   };
   requestAnimationFrame(sample);
-  window.__chatMotion = { stop() { on = false; return frames; } };
+  window.__chatMotion = {
+    stop() { on = false; return frames; },
+    // Frames sampled since a moment: a window waits for enough of them,
+    // whatever stalls the renderer meanwhile.
+    since(t) { return frames.filter((frame) => frame.t >= t).length; },
+  };
   return true;
 })()`;
 
@@ -950,6 +955,15 @@ describe("chat motion", () => {
     await setDisplay("all");
     await newChat();
     let onBar = false;
+    // At least 1.2 s after a press, and enough frames past the browser's
+    // own smooth scroll for it to judge: a renderer that stalls (CI stalled
+    // for 1.4 s once) holds the window open until it has them.
+    const sampled = (name: string) =>
+      runWait(
+        `const at = window.__marks.${name};
+         return performance.now() - at >= 1200 && window.__chatMotion.since(at + 400) > 20;`,
+        { label: `frames after the ${name} press`, timeoutMs: 15_000 },
+      );
     const frames = await recordTurn(
       "escapes",
       "pace the work quickly at length",
@@ -976,7 +990,7 @@ describe("chat motion", () => {
               clickCount: 1,
             });
           await mark("bar");
-          await sleep(1200);
+          await sampled("bar");
           await mark("barred");
           // Back to the latest.
           await run(`toLatest(); return true;`);
@@ -1004,7 +1018,7 @@ describe("chat motion", () => {
         });
         await app.cdp("Input.dispatchKeyEvent", { type: "keyUp", ...pageUp });
         await mark("key");
-        await sleep(1200);
+        await sampled("key");
         await mark("keyed");
         await run(`toLatest(); return true;`);
       },
@@ -1212,7 +1226,7 @@ describe("chat motion", () => {
     );
     /** Every painted frame while the composer glides to `text`'s height. */
     const glide = (text: string) =>
-      run<Array<{ height: number; fromEnd: number }>>(`
+      run<Array<{ height: number; fromEnd: number; pinned: boolean }>>(`
         const s = logScroller();
         const input = composer(); input.focus();
         const frames = [];
@@ -1221,7 +1235,13 @@ describe("chat motion", () => {
           const started = performance.now();
           // A task after each frame: what that frame painted.
           channel.port1.onmessage = () => {
-            frames.push({ height: s.clientHeight, fromEnd: s.scrollHeight - s.clientHeight - s.scrollTop });
+            frames.push({
+              height: s.clientHeight,
+              fromEnd: s.scrollHeight - s.clientHeight - s.scrollTop,
+              // Still following: the library never took a clamp of the
+              // taller view for the person scrolling up.
+              pinned: s.firstElementChild.hasAttribute('data-pinned'),
+            });
             if (performance.now() - started < 600)
               requestAnimationFrame(() => channel.port2.postMessage(0));
             else resolve(frames);
@@ -1254,6 +1274,10 @@ describe("chat motion", () => {
         Math.max(...frames.map((frame) => frame.fromEnd)),
         `${label}: ${JSON.stringify(frames)}`,
       ).toBeLessThan(2);
+      expect(
+        frames.every((frame) => frame.pinned),
+        `${label}: ${JSON.stringify(frames)}`,
+      ).toBe(true);
     }
     expect(await run<boolean>("return following();")).toBe(true);
   }, 120_000);

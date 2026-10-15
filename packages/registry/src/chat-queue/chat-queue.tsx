@@ -10,6 +10,7 @@ import {
   type ComponentType,
   type ReactNode,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
 } from "react";
@@ -42,6 +43,77 @@ export function TitleHint({ label, shortcut, children }: HintProps) {
 
 /** How many queued messages stay visible while collapsed. */
 const QUEUE_COLLAPSE_THRESHOLD = 2;
+
+/** How long a bubble's place waits for what takes it over. */
+const HANDOVER_MS = 1_000;
+
+/**
+ * Where a message's bubble last was as it changed hands, by key: a sent
+ * message's pending bubble (`send:<command>`) taken over by its queued
+ * bubble, and a queued bubble (`item:<id>`) taken over by the sent message
+ * once its turn starts. What takes over arrives from there, already shown,
+ * instead of rising in anew somewhere else.
+ */
+const handovers = new Map<string, { rect: DOMRect; at: number }>();
+
+/** Where the bubble with this key last was, if it just changed hands. */
+export function handoverFrom(key: string): DOMRect | undefined {
+  const entry = handovers.get(key);
+  return entry && performance.now() - entry.at <= HANDOVER_MS
+    ? entry.rect
+    : undefined;
+}
+
+/** What took over has taken the bubble's place. */
+export function forgetHandover(key: string): void {
+  handovers.delete(key);
+}
+
+/** A bubble leaving: where it was, for what takes it over. */
+export function recordHandover(key: string, rect: DOMRect): void {
+  const now = performance.now();
+  for (const [id, entry] of handovers)
+    if (now - entry.at > HANDOVER_MS) handovers.delete(id);
+  handovers.set(key, { rect, at: now });
+}
+
+/** The command a person's message was sent with, from its idempotency key. */
+export function sentWith(item: {
+  idempotencyKey: string | null;
+}): string | undefined {
+  return item.idempotencyKey?.match(/^user:[^:]*:(.+)$/)?.[1];
+}
+
+/** A hand-over's glide, on the standard easing. */
+const GLIDE_MS = 250;
+
+/**
+ * Glides `element` from where its bubble was (`from`) to where it is, for
+ * what took a bubble over. Both sit at the conversation's right edge, words
+ * at the top. Nothing moves when motion is reduced.
+ */
+export function glideFrom(element: HTMLElement, from: DOMRect): void {
+  if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return;
+  const now = element.getBoundingClientRect();
+  const dx = from.right - now.right;
+  const dy = from.top - now.top;
+  if (Math.abs(dx) < 1 && Math.abs(dy) < 1) return;
+  element.animate(
+    [{ translate: `${dx}px ${dy}px` }, { translate: "0px 0px" }],
+    { duration: GLIDE_MS, easing: "cubic-bezier(0.2, 0, 0, 1)" },
+  );
+}
+
+/**
+ * A queued message's controls: they slide out of its label on hover or
+ * focus (always shown on a touch screen, where nothing hovers).
+ */
+const QUEUED_ACTIONS =
+  "flex items-center gap-0.5 opacity-0 translate-x-1 transition-[opacity,translate] duration-150 ease-[cubic-bezier(0.2,0,0,1)] group-hover/queued:opacity-100 group-hover/queued:translate-x-0 group-focus-within/queued:opacity-100 group-focus-within/queued:translate-x-0 pointer-coarse:opacity-100 pointer-coarse:translate-x-0";
+
+/** One control: its colour and a soft ground ease in under the pointer. */
+const QUEUED_BUTTON =
+  "grid size-5 cursor-pointer place-items-center rounded-md text-fg-faint transition-[color,background-color,scale] duration-150 ease-[cubic-bezier(0.2,0,0,1)] active:scale-90 disabled:cursor-default disabled:opacity-50";
 
 /** A queued message's draft: its words, each attachment named where it sits. */
 function editableText(queued: QueuedMessage): string {
@@ -194,17 +266,14 @@ function QueuedInput({
           </span>
         )}
       </span>
-      <span className="shrink-0 text-[10px] uppercase tracking-wider text-fg-faint">
-        {queued.turn.status === "held" ? "Held" : "Queued"}
-      </span>
-      <span className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity duration-150 group-hover/queued:opacity-100 group-focus-within/queued:opacity-100 pointer-coarse:opacity-100">
+      <span className={`shrink-0 ${QUEUED_ACTIONS}`}>
         {onCancel && (
           <Hint label="Remove from queue">
             <button
               type="button"
               onClick={() => void act(onCancel)}
               disabled={busy}
-              className="grid size-5 cursor-pointer place-items-center rounded text-fg-faint hover:text-danger"
+              className={`${QUEUED_BUTTON} hover:bg-danger/10 hover:text-danger`}
               aria-label="Remove from queue"
               data-testid="chat-queued-delete"
             >
@@ -218,7 +287,7 @@ function QueuedInput({
               type="button"
               onClick={() => void act(onSendNow)}
               disabled={busy}
-              className="grid size-5 cursor-pointer place-items-center rounded text-fg-faint hover:text-accent"
+              className={`${QUEUED_BUTTON} hover:bg-accent/10 hover:text-accent`}
               aria-label="Run now"
               data-testid="chat-queued-send-now"
             >
@@ -226,6 +295,9 @@ function QueuedInput({
             </button>
           </Hint>
         )}
+      </span>
+      <span className="shrink-0 text-[10px] uppercase tracking-wider text-fg-faint">
+        {queued.turn.status === "held" ? "Held" : "Queued"}
       </span>
     </div>
   );
@@ -272,11 +344,45 @@ function QueuedBubble({
   onHoldRef.current = onHold;
   const editingRef = useRef(false);
   const mountedRef = useRef(true);
+  // Sent now, here or with ⌘↵ (an interrupting turn): it looks sent while
+  // the agent stops, then its message takes its place (handoverFrom).
+  const [sending, setSending] = useState(false);
+  const sent = sending || queued.turn.dispatch === "interrupt";
+  const bubbleRef = useRef<HTMLDivElement>(null);
+  const leavingRef = useRef(false);
+  leavingRef.current = leaving;
+  const itemId = queued.item?.id;
+  const command =
+    queued.item?.kind === "user_message" ? sentWith(queued.item) : undefined;
+  // Taking over from the message's pending bubble, it arrives from there.
+  const [takeover, setTakeover] = useState<DOMRect | null>(null);
 
   useEffect(() => {
     const frame = requestAnimationFrame(() => setEntered(true));
     return () => cancelAnimationFrame(frame);
   }, []);
+  // Mount only: read in the commit, once the pending bubble has left.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: mount only
+  useLayoutEffect(() => {
+    const from = command ? handoverFrom(`send:${command}`) : undefined;
+    if (!command || !from) return;
+    forgetHandover(`send:${command}`);
+    setTakeover(from);
+  }, []);
+  useLayoutEffect(() => {
+    if (takeover && bubbleRef.current) glideFrom(bubbleRef.current, takeover);
+  }, [takeover]);
+  // Leaving the queue because its turn started (sent now, or the queue
+  // drained), not because the person deleted it: where it was is where its
+  // message arrives from. Read before the bubble leaves the page.
+  useLayoutEffect(
+    () => () => {
+      const bubble = bubbleRef.current;
+      if (bubble && itemId && !leavingRef.current)
+        recordHandover(`item:${itemId}`, bubble.getBoundingClientRect());
+    },
+    [itemId],
+  );
   useEffect(() => {
     if (editing && !saving) editRef.current?.focus();
   }, [editing, saving]);
@@ -353,14 +459,36 @@ function QueuedBubble({
     }, 200);
   };
 
-  const shown = entered && !leaving;
+  const sendNow = async () => {
+    if (!onSendNow) return;
+    setSending(true);
+    if (!(await attempt(() => onSendNow(turnId))) && mountedRef.current)
+      setSending(false);
+  };
+
+  const shown = (entered || takeover !== null) && !leaving;
   return (
     <div
-      className={`group/queued relative max-w-[85%] motion-safe:transition-[opacity,translate,scale] motion-safe:duration-200 motion-safe:ease-[cubic-bezier(0.2,0,0,1)] ${shown ? "translate-y-0 scale-100 opacity-100" : "translate-y-1 scale-[0.98] opacity-0"}`}
+      className={`group/queued relative max-w-[85%] ${
+        // Taking over, it is already shown: no entrance to play.
+        takeover && !leaving
+          ? ""
+          : "motion-safe:transition-[opacity,translate,scale] motion-safe:duration-200 motion-safe:ease-[cubic-bezier(0.2,0,0,1)]"
+      } ${shown ? "translate-y-0 scale-100 opacity-100" : "translate-y-1 scale-[0.98] opacity-0"}`}
       data-testid="chat-queued-message"
       data-turn-id={turnId}
+      data-sending={sent || undefined}
     >
-      <div className="rounded-xl rounded-br-sm border border-dashed border-info/40 bg-info/5 px-3 py-2 text-sm text-fg-muted">
+      <div
+        ref={bubbleRef}
+        // Sending, it takes the sent message's look at once: its message
+        // then arrives looking the same, where the bubble was.
+        className={`rounded-xl rounded-br-sm border px-3 py-2 text-sm transition-[background-color,border-color,color] duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${
+          sent
+            ? "border-info/30 bg-info/10 text-fg"
+            : "border-dashed border-info/40 bg-info/5 text-fg-muted"
+        }`}
+      >
         {editing ? (
           <textarea
             ref={editRef}
@@ -420,51 +548,59 @@ function QueuedBubble({
             {actionError}
           </p>
         )}
-        <div className="mt-1 flex items-center justify-end gap-0.5 text-[10px] uppercase tracking-wider text-fg-faint">
-          {queued.turn.status === "held" && !editing ? "Held" : "Queued"}
-          <span className="ml-1 flex items-center gap-0.5 opacity-0 transition-opacity duration-150 group-hover/queued:opacity-100 group-focus-within/queued:opacity-100 pointer-coarse:opacity-100">
-            {!editing && onEdit && (
-              <Hint label="Edit before it sends">
-                <button
-                  type="button"
-                  onClick={() => void beginEdit()}
-                  disabled={saving}
-                  className="grid size-5 cursor-pointer place-items-center rounded text-fg-faint hover:text-fg"
-                  aria-label="Edit queued message"
-                  data-testid="chat-queued-edit-button"
-                >
-                  <Pencil className="size-3" />
-                </button>
-              </Hint>
-            )}
-            {onCancel && (
-              <Hint label="Delete from queue">
-                <button
-                  type="button"
-                  onClick={remove}
-                  disabled={saving || leaving}
-                  className="grid size-5 cursor-pointer place-items-center rounded text-fg-faint hover:text-danger"
-                  aria-label="Delete queued message"
-                  data-testid="chat-queued-delete"
-                >
-                  <Trash2 className="size-3" />
-                </button>
-              </Hint>
-            )}
-            {onSendNow && (
-              <Hint label="Send now (stops the agent)">
-                <button
-                  type="button"
-                  onClick={() => void attempt(() => onSendNow(turnId))}
-                  disabled={saving}
-                  className="grid size-5 cursor-pointer place-items-center rounded text-fg-faint hover:text-accent"
-                  aria-label="Send queued message now"
-                  data-testid="chat-queued-send-now"
-                >
-                  <Zap className="size-3" />
-                </button>
-              </Hint>
-            )}
+        <div className="mt-1 flex items-center justify-end gap-1.5 text-[10px] uppercase tracking-wider text-fg-faint">
+          {!sent && (
+            <span className={QUEUED_ACTIONS}>
+              {!editing && onEdit && (
+                <Hint label="Edit before it sends">
+                  <button
+                    type="button"
+                    onClick={() => void beginEdit()}
+                    disabled={saving}
+                    className={`${QUEUED_BUTTON} hover:bg-bg-overlay hover:text-fg`}
+                    aria-label="Edit queued message"
+                    data-testid="chat-queued-edit-button"
+                  >
+                    <Pencil className="size-3" />
+                  </button>
+                </Hint>
+              )}
+              {onCancel && (
+                <Hint label="Delete from queue">
+                  <button
+                    type="button"
+                    onClick={remove}
+                    disabled={saving || leaving}
+                    className={`${QUEUED_BUTTON} hover:bg-danger/10 hover:text-danger`}
+                    aria-label="Delete queued message"
+                    data-testid="chat-queued-delete"
+                  >
+                    <Trash2 className="size-3" />
+                  </button>
+                </Hint>
+              )}
+              {onSendNow && (
+                <Hint label="Send now (stops the agent)">
+                  <button
+                    type="button"
+                    onClick={() => void sendNow()}
+                    disabled={saving}
+                    className={`${QUEUED_BUTTON} hover:bg-accent/10 hover:text-accent`}
+                    aria-label="Send queued message now"
+                    data-testid="chat-queued-send-now"
+                  >
+                    <Zap className="size-3" />
+                  </button>
+                </Hint>
+              )}
+            </span>
+          )}
+          <span data-testid="chat-queued-state">
+            {sent
+              ? "Sending"
+              : queued.turn.status === "held" && !editing
+                ? "Held"
+                : "Queued"}
           </span>
         </div>
       </div>

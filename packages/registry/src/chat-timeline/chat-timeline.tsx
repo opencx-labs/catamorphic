@@ -53,7 +53,12 @@ import remarkGfm from "remark-gfm";
 import { StickToBottom, useStickToBottomContext } from "use-stick-to-bottom";
 import {
   ChatQueue,
+  forgetHandover,
+  glideFrom,
   type HintComponent,
+  handoverFrom,
+  recordHandover,
+  sentWith,
   TitleHint,
 } from "../chat-queue/chat-queue.js";
 import {
@@ -741,10 +746,21 @@ export function ChatTimeline(props: ChatTimelineProps) {
         />,
       );
   });
+  // Sends the queue holds (an interrupting one waits there while the agent
+  // stops), by the key their items were sent with.
+  const queuedSends = (queue ?? []).flatMap((queued) =>
+    queued.item?.kind === "user_message" && queued.item.idempotencyKey
+      ? [queued.item.idempotencyKey]
+      : [],
+  );
   for (const message of pending) {
     const key = `send:${message.commandId}`;
     // Its item is already on screen: the item's row is this message now.
     if (shownSends.has(key)) continue;
+    // Its queued bubble is this message now, and takes over from here in
+    // the same commit (handoverFrom).
+    if (queuedSends.some((sent) => sent.endsWith(`:${message.commandId}`)))
+      continue;
     conversation.push(
       <div key={key} className={`cat-row flex flex-col gap-3 ${USER_ROW}`}>
         <UserMessage
@@ -901,11 +917,6 @@ function rowKey(group: TimelineTurn, row: TurnRow): string {
 function userKey(item: UserMessageItem): string {
   const commandId = sentWith(item);
   return commandId ? `send:${commandId}` : `id:${item.id}`;
-}
-
-/** The command a person's message was sent with, from its idempotency key. */
-function sentWith(item: UserMessageItem): string | undefined {
-  return item.idempotencyKey?.match(/^user:[^:]*:(.+)$/)?.[1];
 }
 
 /** "Load earlier messages": pages older history in at the top. */
@@ -1536,12 +1547,44 @@ const UserMessage = memo(function UserMessage({
   dismissable = false,
 }: UserMessageProps) {
   const actions = useContext(ActionsContext);
-  const enterClasses = useEntered();
+  // A queued message whose turn just started takes over from its bubble:
+  // it arrives from where the bubble was, already shown, instead of rising
+  // in anew below it. Read in the commit, once the bubble has left the
+  // queue and said where it was.
+  const [takeover, setTakeover] = useState<DOMRect | null>(null);
+  const articleRef = useRef<HTMLElement>(null);
+  // Mount only: where it came from is read once.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: mount only
+  useLayoutEffect(() => {
+    const from = item ? handoverFrom(`item:${item.id}`) : undefined;
+    if (!item || !from) return;
+    forgetHandover(`item:${item.id}`);
+    // Before paint: it never shows the entrance's hidden pose.
+    setTakeover(from);
+  }, []);
+  // Measured without the entrance's pose, which the takeover drops.
+  useLayoutEffect(() => {
+    if (takeover && articleRef.current) glideFrom(articleRef.current, takeover);
+  }, [takeover]);
+  // A send waiting in the queue (an interrupting one, ⌘↵) leaves this
+  // pending bubble for its queued one, which arrives from here.
+  const command = pending?.commandId;
+  useLayoutEffect(
+    () => () => {
+      const article = articleRef.current;
+      if (command && article)
+        recordHandover(`send:${command}`, article.getBoundingClientRect());
+    },
+    [command],
+  );
+  const entering = useEntered();
+  const enterClasses = takeover ? "" : entering;
   const text = item?.text ?? pending?.text ?? "";
   const attachments = item?.attachments ?? pending?.attachments ?? [];
   const failed = pending?.status === "failed";
   return (
     <article
+      ref={articleRef}
       data-message-id={item?.id}
       tabIndex={-1}
       data-user-message
@@ -2734,8 +2777,8 @@ function ScrollToLatest() {
  * message below its new edge: it is held at the end in the same frame,
  * before paint, so the conversation rides the composer's glide instead of
  * catching up once it stops. A taller scroller pulls its scroll position
- * back, which use-stick-to-bottom reads as the person scrolling up, and
- * the chat would stop following new messages.
+ * back, which use-stick-to-bottom would read as the person scrolling up
+ * and stop following new messages; the hold tells it the scroll is its own.
  */
 function FollowScrollerResize() {
   const { scrollRef, scrollToBottom, state } = useStickToBottomContext();
@@ -2759,13 +2802,15 @@ function FollowScrollerResize() {
       // Only a chat that follows (see PinToBottom), not one a reader let go
       // of a few pixels short of the end.
       if (!state.isAtBottom) return;
-      if (shrank) {
-        // Scrolling down is no let-go: the library goes on following.
-        scroller.scrollTop = scroller.scrollHeight - scroller.clientHeight;
-        return;
-      }
+      // Through the library's own setter: the scroll this makes, and the
+      // browser's clamp of a taller scroller (its event comes next frame),
+      // land where the library expects, so neither reads as the person
+      // scrolling up. Without it, a clamp let go of the latest message
+      // unless a timer raced the library's to take it back.
+      state.scrollTop = scroller.scrollHeight - scroller.clientHeight;
+      if (shrank) return;
       resized = true;
-      // A taller scroller's scroll event comes next frame.
+      // What a clamp's event still made the library let go of.
       follow(100);
     });
     // Runs after the library's own listener, so this undoes its escape.

@@ -2,17 +2,23 @@ import { afterAll, beforeAll, expect, it } from "vitest";
 import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
 
 let app: AppHandle;
-const helpers = `${setReactValueJs}; const $ = s => document.querySelector(s); const button = text => [...document.querySelectorAll('button')].find(b => !b.closest('[inert]') && b.textContent.trim() === text);`;
+// The chat on screen: a minimized one stays mounted (hidden, inert), and
+// typing into its composer sends where nothing on screen shows the answer.
+const helpers = `${setReactValueJs}; const $ = s => document.querySelector(s); const button = text => [...document.querySelectorAll('button')].find(b => !b.closest('[inert]') && b.textContent.trim() === text); const composer = () => [...document.querySelectorAll('[data-chat-local-id] [data-composer-input]')].find(el => !el.closest('[inert]'));`;
 const run = <T>(body: string) =>
   app.eval<T>(`(async()=>{${helpers};${body}})()`);
 const wait = (body: string) =>
   app.waitFor(`(()=>{${helpers};${body}})()`, { timeoutMs: 90000 });
 async function send(scenario: string) {
+  // A reload or a tab the last test opened can leave the chat a bubble.
+  await run(
+    `if (!composer()) document.querySelector('[data-dock-rail] button[aria-label^="Open "]')?.click();`,
+  );
   await wait(
-    `return !!$('[data-chat-local-id] [data-composer-input]') && !$('[data-chat-local-id] [aria-label="Stop response"]');`,
+    `const input = composer(); return !!input && !input.closest('[data-chat-local-id]').querySelector('[aria-label="Stop response"]');`,
   );
   await run(
-    `const input=$('[data-chat-local-id] [data-composer-input]'); setReactValue(input, ${JSON.stringify(`session workflow ${scenario}`)}); input.closest('form').requestSubmit();`,
+    `const input=composer(); setReactValue(input, ${JSON.stringify(`session workflow ${scenario}`)}); input.closest('form').requestSubmit();`,
   );
 }
 beforeAll(async () => {

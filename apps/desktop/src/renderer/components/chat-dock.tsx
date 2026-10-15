@@ -2244,7 +2244,10 @@ function ChatDockContent({
           if (closing) finishCloseRef.current();
           else if (minimizing) finishMinimizeRef.current();
         }}
-        className={`pointer-events-auto relative flex w-full origin-bottom flex-col overflow-hidden transition-[max-width,height,opacity,translate,scale,background-color,border-radius,border-color] duration-250 ease-[cubic-bezier(0.2,0,0,1)] ${
+        // Growing into a tab, its card's edge (border, corners, shadow) and
+        // colour ease into the tab's along with its size: nothing switches
+        // off in the first frame.
+        className={`pointer-events-auto relative flex w-full origin-bottom flex-col overflow-hidden transition-[max-width,height,opacity,translate,scale,background-color,border-radius,border-color,border-width,box-shadow] duration-250 ease-[cubic-bezier(0.2,0,0,1)] ${
           presentsAsTab
             ? "h-full max-w-full rounded-none border-0 border-transparent bg-bg"
             : `${
@@ -2281,7 +2284,8 @@ function ChatDockContent({
           className={`flex shrink-0 items-center gap-2 border-b px-3 transition-[height,border-color] duration-250 ease-[cubic-bezier(0.2,0,0,1)] ${presentsAsTab ? "h-0 border-transparent" : "h-12 border-border"}`}
         >
           <header
-            className={`min-w-0 flex-1 overflow-hidden text-xs font-semibold ${presentsAsTab ? "invisible" : ""}`}
+            // Fades with the header's collapse rather than vanishing first.
+            className={`min-w-0 flex-1 overflow-hidden text-xs font-semibold transition-[opacity,visibility] duration-150 ease-[cubic-bezier(0.2,0,0,1)] ${presentsAsTab ? "invisible opacity-0" : ""}`}
             aria-hidden={presentsAsTab}
           >
             <span className="flex min-w-0 items-center gap-2">
