@@ -2776,55 +2776,50 @@ function ScrollToLatest() {
  * shorter scroller keeps its scroll position, which leaves the latest
  * message below its new edge: it is held at the end in the same frame,
  * before paint, so the conversation rides the composer's glide instead of
- * catching up once it stops. A taller scroller pulls its scroll position
- * back, which use-stick-to-bottom would read as the person scrolling up
- * and stop following new messages; the hold tells it the scroll is its own.
+ * catching up once it stops.
+ *
+ * A taller scroller pulls its scroll position back to its new end, which
+ * use-stick-to-bottom would read as the person scrolling up and stop
+ * following. That scroll is told apart where it lands: it moved up, yet the
+ * view is still at its end, so the end moved and not the person. It is
+ * marked as the library's own before the library's listener reads it,
+ * whenever the layout that pulled it back ran (a script reading layout
+ * between frames runs it before this observer sees the resize).
  */
 function FollowScrollerResize() {
-  const { scrollRef, scrollToBottom, state } = useStickToBottomContext();
+  const { scrollRef, state } = useStickToBottomContext();
   useEffect(() => {
     const scroller = scrollRef.current;
     if (!scroller) return;
     let height = scroller.clientHeight;
-    let resized = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const follow = (delay: number) => {
-      clearTimeout(timer);
-      timer = setTimeout(() => {
-        resized = false;
-        void scrollToBottom("instant");
-      }, delay);
-    };
+    let last = scroller.scrollTop;
     const observer = new ResizeObserver(() => {
       if (scroller.clientHeight === height) return;
-      const shrank = scroller.clientHeight < height;
       height = scroller.clientHeight;
       // Only a chat that follows (see PinToBottom), not one a reader let go
-      // of a few pixels short of the end.
-      if (!state.isAtBottom) return;
-      // Through the library's own setter: the scroll this makes, and the
-      // browser's clamp of a taller scroller (its event comes next frame),
-      // land where the library expects, so neither reads as the person
-      // scrolling up. Without it, a clamp let go of the latest message
-      // unless a timer raced the library's to take it back.
-      state.scrollTop = scroller.scrollHeight - scroller.clientHeight;
-      if (shrank) return;
-      resized = true;
-      // What a clamp's event still made the library let go of.
-      follow(100);
+      // of a few pixels short of the end. Through the library's own setter,
+      // so the scroll this makes reads as its own.
+      if (state.isAtBottom)
+        state.scrollTop = scroller.scrollHeight - scroller.clientHeight;
     });
-    // Runs after the library's own listener, so this undoes its escape.
+    // Capturing, it runs before the library's listener on the scroller.
     const onScroll = () => {
-      if (resized) follow(1);
+      const top = scroller.scrollTop;
+      const atEnd = top >= scroller.scrollHeight - scroller.clientHeight - 1;
+      if (state.isAtBottom && top < last && atEnd)
+        state.ignoreScrollToTop = top;
+      last = top;
     };
     observer.observe(scroller);
-    scroller.addEventListener("scroll", onScroll, { passive: true });
+    scroller.addEventListener("scroll", onScroll, {
+      capture: true,
+      passive: true,
+    });
     return () => {
       observer.disconnect();
-      scroller.removeEventListener("scroll", onScroll);
-      clearTimeout(timer);
+      scroller.removeEventListener("scroll", onScroll, { capture: true });
     };
-  }, [scrollRef, scrollToBottom, state]);
+  }, [scrollRef, state]);
   return null;
 }
 

@@ -2860,11 +2860,13 @@ after that the rows were cached.
   latest words slid under the composer (61px for four lines) and jumped
   back 100ms after the glide. A followed chat's view is now held at its
   end in the frame it shrinks, before paint, so the words move with the
-  composer's edge. A reader scrolled up is left where they are. The hold
-  goes through use-stick-to-bottom's own scroll setter, so neither it nor
-  the browser's clamp of a taller view (the composer shrinking) reads as
-  the person scrolling up; on macOS a timer race let go of the latest
-  message there.
+  composer's edge. A reader scrolled up is left where they are. As the
+  composer shrinks, the taller view pulls the scroll back to its new end,
+  which use-stick-to-bottom read as the person scrolling up: a timer took
+  following back, and on macOS it lost the race. Such a scroll is now told
+  apart where it lands (up, yet still at the end: the end moved, not the
+  person) and marked as the library's own before it reads it, with no
+  timer.
 - **A chat grows into its tab over what was in front.** Making a floating
   chat a tab (⌘⇧M) switched the content to the chat's tab in the frame the
   chat started to grow: the page behind vanished, leaving the bare
