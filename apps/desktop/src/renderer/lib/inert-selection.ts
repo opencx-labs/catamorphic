@@ -8,13 +8,15 @@
  * position the caret can take, and Chromium recomputes the visible selection
  * before every frame: each time it walks backwards through every inert
  * element looking for one it can use. Behind a few long minimised chats that
- * walk took 60 to 130 ms a frame. A selection wholly inside content that
- * turns inert, or that anything places in content already inert, is
+ * walk took 60 to 130 ms a frame. A selection lying within one region that
+ * turns inert, or that anything places in a region already inert, is
  * released; one only reaching in is left alone (an inert end's walk stops
  * at the region it is in).
  *
  * What was released comes back without moving focus, in its direction. A
- * highlight outside any editor returns with its container. A caret or
+ * highlight outside any editor returns with its container, or the ancestor
+ * whose inertness held it, if nothing else is selected by then (otherwise
+ * it is dropped). A caret or
  * highlight in an editor returns only when that editor itself takes focus
  * (a restored chat focusing its composer): a selection set in an editable
  * element focuses it, so returning one with its container took focus from

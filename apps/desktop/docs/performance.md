@@ -194,11 +194,12 @@ apart: Electron publishes breakpad symbols for each release
 renderer and resolve `Electron Framework` offsets against the `.sym` file's
 `FUNC` records.
 
-`lib/inert-selection.ts` releases a selection lying wholly in content that
-turns inert, or that anything places in content already inert; one only
+`lib/inert-selection.ts` releases a selection lying within one region that
+turns inert, or that anything places in a region already inert; one only
 reaching in is left alone. What it released returns without moving focus,
 in its direction. A highlight outside any editor returns with its
-container. A caret or highlight in an editor returns only when that editor
+container, or the ancestor whose inertness held it, if nothing else is
+selected by then. A caret or highlight in an editor returns only when that editor
 itself takes focus, as a restored chat focuses its composer, so typing
 continues where the person left off: a selection set in an editable element
 focuses it (in a focused window), so returning one with its container

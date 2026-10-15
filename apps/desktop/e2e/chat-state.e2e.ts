@@ -385,6 +385,15 @@ it("lets go of the caret in a chat it minimises, keeping the draft", async () =>
       clickCount: 1,
     });
   await app.cdp("Input.insertText", { text: "A draft to come back to" });
+  // The caret mid-draft, three characters from its end.
+  for (let step = 0; step < 3; step++)
+    for (const type of ["keyDown", "keyUp"])
+      await app.cdp("Input.dispatchKeyEvent", {
+        type,
+        key: "ArrowLeft",
+        code: "ArrowLeft",
+        windowsVirtualKeyCode: 37,
+      });
   await app.eval(
     `document.querySelector('${dock} button[aria-label="Minimize chat to bubble"]').click()`,
   );
@@ -413,16 +422,16 @@ it("lets go of the caret in a chat it minimises, keeping the draft", async () =>
       `document.querySelector('${dock} [data-composer-input]').textContent`,
     ),
   ).toBe("A draft to come back to");
-  // The caret comes back where it was, so typing continues the draft.
+  // The caret comes back where it was, so typing continues there.
   await app.waitFor(
     `document.querySelector('${dock} [data-composer-input]').contains(document.activeElement)`,
     { label: "composer focused" },
   );
-  await app.cdp("Input.insertText", { text: ", later" });
+  await app.cdp("Input.insertText", { text: " again," });
   expect(
     await app.eval(
       `document.querySelector('${dock} [data-composer-input]').textContent`,
     ),
-  ).toBe("A draft to come back to, later");
+  ).toBe("A draft to come back again, to");
   expect(app.getRendererErrors()).toEqual([]);
 });

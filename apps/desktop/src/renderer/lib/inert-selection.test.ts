@@ -215,6 +215,20 @@ describe("inert selection guard", () => {
     expect(selection()?.toString()).toBe("reply" + "a s");
   });
 
+  it("leaves a selection reaching into a region already inert", async () => {
+    uninstall = installInertSelectionGuard();
+    const before = paragraph("a reply").firstChild;
+    const steps = document.createElement("section");
+    document.body.append(steps);
+    const inside = paragraph("a step", steps).firstChild;
+    steps.setAttribute("inert", "");
+    await settle();
+    if (before && inside) selection()?.setBaseAndExtent(inside, 3, before, 2);
+    document.dispatchEvent(new Event("selectionchange"));
+    expect(selection()?.anchorNode).toBe(inside);
+    expect(selection()?.focusNode).toBe(before);
+  });
+
   it("returns a highlight, keeping its direction, as another is released", async () => {
     uninstall = installInertSelectionGuard();
     const alpha = document.createElement("section");
