@@ -2728,10 +2728,14 @@ function ScrollToLatest() {
 }
 
 /**
- * Keep following when the scroller itself resizes, as when a question or
- * approval panel below it opens or closes. A taller scroller pulls its
- * scroll position back, which use-stick-to-bottom reads as the person
- * scrolling up, and the chat would stop following new messages.
+ * Keep following when the scroller itself resizes, as when the composer
+ * grows or a question or approval panel below it opens or closes. A
+ * shorter scroller keeps its scroll position, which leaves the latest
+ * message below its new edge: it is held at the end in the same frame,
+ * before paint, so the conversation rides the composer's glide instead of
+ * catching up once it stops. A taller scroller pulls its scroll position
+ * back, which use-stick-to-bottom reads as the person scrolling up, and
+ * the chat would stop following new messages.
  */
 function FollowScrollerResize() {
   const { scrollRef, scrollToBottom, state } = useStickToBottomContext();
@@ -2750,12 +2754,18 @@ function FollowScrollerResize() {
     };
     const observer = new ResizeObserver(() => {
       if (scroller.clientHeight === height) return;
+      const shrank = scroller.clientHeight < height;
       height = scroller.clientHeight;
       // Only a chat that follows (see PinToBottom), not one a reader let go
       // of a few pixels short of the end.
       if (!state.isAtBottom) return;
+      if (shrank) {
+        // Scrolling down is no let-go: the library goes on following.
+        scroller.scrollTop = scroller.scrollHeight - scroller.clientHeight;
+        return;
+      }
       resized = true;
-      // A shrink fires no scroll event; a taller scroller's does next frame.
+      // A taller scroller's scroll event comes next frame.
       follow(100);
     });
     // Runs after the library's own listener, so this undoes its escape.

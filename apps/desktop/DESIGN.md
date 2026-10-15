@@ -2855,6 +2855,12 @@ after that the rows were cached.
   query grows the palette's input in a mode or out of one through the same
   frame the composer uses (`lib/use-gliding-height.ts`): 150ms on the
   standard easing.
+- **The conversation rides the composer.** As the composer glided taller,
+  the chat's view shrank under a scroll position that stayed put: the
+  latest words slid under the composer (61px for four lines) and jumped
+  back 100ms after the glide. A followed chat's view is now held at its
+  end in the frame it shrinks, before paint, so the words move with the
+  composer's edge. A reader scrolled up is left where they are.
 - **The project folder says so.** The Changes tree marked the project
   folder's own checkout "Current" beside its branch, which read as a chat's
   worktree when the folder had a feature branch checked out. It says
@@ -2874,5 +2880,7 @@ after that the rows were cached.
 
 `resource-inspector.test.tsx` covers StrictMode, the measured reveal and the
 clipped glide; `e2e/motion.e2e.ts` samples the palette's input growing
-through the frames between one line and two; `chat-timeline-embed.test.tsx`
-covers the archived turn and the action lines.
+through the frames between one line and two; `e2e/chat-motion.e2e.ts`
+samples every painted frame of a followed chat while the composer grows
+and shrinks; `chat-timeline-embed.test.tsx` covers the archived turn and
+the action lines.

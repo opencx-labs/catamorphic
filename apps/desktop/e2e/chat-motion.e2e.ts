@@ -1196,4 +1196,65 @@ describe("chat motion", () => {
     );
     await app.movePointer(await point("composer()"));
   }, 120_000);
+
+  it("keeps the latest words at the end of the view while the composer grows and shrinks", async () => {
+    await newChat();
+    await run(`
+      const input = composer(); input.focus();
+      setReactValue(input, 'pace the work quickly at length');
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+      return true;`);
+    await runWait(
+      `const s = logScroller();
+       return !!s && !frontDock().querySelector('[data-testid="chat-activity"]') &&
+         s.scrollHeight > s.clientHeight + 120 && following();`,
+      { label: "a long answer settled, followed", timeoutMs: 30_000 },
+    );
+    /** Every painted frame while the composer glides to `text`'s height. */
+    const glide = (text: string) =>
+      run<Array<{ height: number; fromEnd: number }>>(`
+        const s = logScroller();
+        const input = composer(); input.focus();
+        const frames = [];
+        const channel = new MessageChannel();
+        return new Promise((resolve) => {
+          const started = performance.now();
+          // A task after each frame: what that frame painted.
+          channel.port1.onmessage = () => {
+            frames.push({ height: s.clientHeight, fromEnd: s.scrollHeight - s.clientHeight - s.scrollTop });
+            if (performance.now() - started < 600)
+              requestAnimationFrame(() => channel.port2.postMessage(0));
+            else resolve(frames);
+          };
+          setReactValue(input, ${JSON.stringify(text)});
+          requestAnimationFrame(() => channel.port2.postMessage(0));
+        });`);
+    for (const [text, label] of [
+      ["one\ntwo\nthree\nfour", "growing"],
+      ["", "shrinking"],
+    ] as const) {
+      const frames = await glide(text);
+      const heights = frames.map((frame) => frame.height);
+      const [first = 0, last = 0] = [heights[0], heights.at(-1)];
+      expect(
+        Math.abs(last - first),
+        `${label}: the view resized`,
+      ).toBeGreaterThan(30);
+      expect(
+        heights.some(
+          (height) =>
+            height > Math.min(first, last) + 1 &&
+            height < Math.max(first, last) - 1,
+        ),
+        `${label}: through the frames between`,
+      ).toBe(true);
+      // The latest words ride the composer's edge on every frame, rather
+      // than slipping under it and catching up once it stops.
+      expect(
+        Math.max(...frames.map((frame) => frame.fromEnd)),
+        `${label}: ${JSON.stringify(frames)}`,
+      ).toBeLessThan(2);
+    }
+    expect(await run<boolean>("return following();")).toBe(true);
+  }, 120_000);
 });
