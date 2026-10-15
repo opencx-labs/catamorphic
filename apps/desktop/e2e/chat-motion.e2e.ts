@@ -1230,25 +1230,24 @@ describe("chat motion", () => {
         const s = logScroller();
         const input = composer(); input.focus();
         const frames = [];
-        const channel = new MessageChannel();
-        return new Promise((resolve) => {
-          const started = performance.now();
-          // A task after each frame: what that frame painted.
-          channel.port1.onmessage = () => {
-            frames.push({
-              height: s.clientHeight,
-              fromEnd: s.scrollHeight - s.clientHeight - s.scrollTop,
-              // Still following: the library never took a clamp of the
-              // taller view for the person scrolling up.
-              pinned: s.firstElementChild.hasAttribute('data-pinned'),
-            });
-            if (performance.now() - started < 600)
-              requestAnimationFrame(() => channel.port2.postMessage(0));
-            else resolve(frames);
-          };
-          setReactValue(input, ${JSON.stringify(text)});
-          requestAnimationFrame(() => channel.port2.postMessage(0));
-        });`);
+        // Each frame the view resizes, after the chat's own observer and
+        // before paint: what that frame paints. A task between frames would
+        // read a layout the glide has since moved on, one no frame paints.
+        const observer = new ResizeObserver(() => {
+          frames.push({
+            height: s.clientHeight,
+            fromEnd: s.scrollHeight - s.clientHeight - s.scrollTop,
+            // Still following: the library never took the taller view's
+            // pull back to its end for the person scrolling up.
+            pinned: s.firstElementChild.hasAttribute('data-pinned'),
+          });
+        });
+        observer.observe(s);
+        setReactValue(input, ${JSON.stringify(text)});
+        return new Promise((resolve) => setTimeout(() => {
+          observer.disconnect();
+          resolve(frames);
+        }, 600));`);
     for (const [text, label] of [
       ["one\ntwo\nthree\nfour", "growing"],
       ["", "shrinking"],
