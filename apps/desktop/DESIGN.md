@@ -2833,3 +2833,120 @@ chat's activity line is open from its first frame. `e2e/motion.e2e.ts`
 checks every message mounts hidden, also on a renderer slowed fourfold,
 where a turn's events land between frames, and on one that stalls as the
 turn and the agent's words first show.
+
+### 2026-10-15: The status popup opens at its size; inputs, chats and queued messages move in place; a chat its agent archives just ends; every popup's facts copy; a file's menu acts on the file
+
+The chat's status popup appeared, then grew a line when its Artifacts or
+Folder row finished loading, and while it glided taller a scrollbar showed
+down its edge wherever the system shows scroll bars. Only the first time:
+after that the rows were cached.
+
+- **What it waits for, it shows.** Both rows report their reads pending,
+  so the popup opens with them (at most 250ms later, as every inspector
+  does). A read that lands measures the panel in the same commit, instead
+  of a frame later through its ResizeObserver, so it appears at its height.
+  React's development StrictMode tears effects down and sets them up again,
+  withdrawing the content's pending reports in between; the panel no
+  longer takes that for a landing.
+- **Glides clip.** While an inspector's height glides, either way, what has not
+  glided into view yet is clipped, not scrolled to. Content taller than the
+  window still scrolls once the glide ends.
+- **The palette's input glides.** Shift+Enter, a wrapped line or a longer
+  query grows the palette's input in a mode or out of one through the same
+  frame the composer uses (`lib/use-gliding-height.ts`): 150ms on the
+  standard easing.
+- **The conversation rides the composer.** As the composer glided taller,
+  the chat's view shrank under a scroll position that stayed put: the
+  latest words slid under the composer (61px for four lines) and jumped
+  back 100ms after the glide. A followed chat's view is now held at its
+  end in the frame it shrinks, before paint, so the words move with the
+  composer's edge. A reader scrolled up is left where they are. As the
+  composer shrinks, the taller view pulls the scroll back to its new end,
+  which use-stick-to-bottom read as the person scrolling up: a timer took
+  following back, and on macOS it lost the race. Such a scroll is now told
+  apart where it lands (up, yet still at the end: the end moved, not the
+  person) and marked as the library's own before it reads it, with no
+  timer.
+- **A chat grows into its tab over what was in front.** Making a floating
+  chat a tab (⌘⇧M) switched the content to the chat's tab in the frame the
+  chat started to grow: the page behind vanished, leaving the bare
+  backdrop around a chat that had just lost its title, border and shadow.
+  The page in front now stays painted, and mounted, beneath the chat for
+  its 250ms (`useRecedingSurface`), and the card's edge and title ease out
+  as it grows.
+- **A queued message reads right to left.** Its state (Queued, Held,
+  Sending) sits at the bubble's right edge and its controls slide out of
+  it to the left on hover, each easing in a soft ground under the pointer.
+  Sent now, or sent with ⌘↵ while the agent works (an interrupting turn),
+  it looks sent at once ("Sending", nothing to edit; Delete still
+  withdraws it) while the agent stops. Then its message takes over where the bubble was, already shown,
+  instead of rising in anew below; a ⌘↵ send's pending bubble hands its
+  place to the queued one the same way.
+- **The project folder says so.** The Changes tree marked the project
+  folder's own checkout "Current" beside its branch, which read as a chat's
+  worktree when the folder had a feature branch checked out. It says
+  "Project folder", as the status popup's Folder row does (ADR 0215: chats
+  work there until the person chooses a worktree).
+- **A chat its agent archives just ends.** Archiving or closing a chat
+  stops its running turn, so a chat whose own agent archived it from
+  within that turn read "Interrupted" with Retry above the archive line.
+  That turn now ends without either: the line after it says what
+  happened, and what it left changed ("Left 2 changed files") still
+  shows. A turn another chat's agent or a person stopped still reads as
+  interrupted.
+- **An action reads as a sentence.** A session action's line names who
+  took it and goes on in the action's words: "Claude archived this
+  session", not "Claude: Archived this session". A failure, or a summary
+  in the agent's own words (a completion), keeps its own sentence after
+  the name and a colon.
+- **Every popup's facts copy.** A file's, a chat's and a workflow's status
+  popups list their facts as the project's popup does, in one row
+  (`InspectorFact`): the row the pointer or the keyboard is on shows a
+  copy button at its end, on the value's first line, in a place kept
+  while it is hidden. It copies the whole value: a file's or workflow's
+  full path where the row shows a name, the model without its "default",
+  the environment as its picker names it. An action (Manage connections)
+  has nothing to copy. A value the kept place truncates (a long model
+  name) shows whole in its hint, as the project popup's paths do.
+- **A file's menu acts on the file.** Right-clicking a file's tab
+  (anywhere on it, its close button included, in the top bar or the
+  sidebar) or a link to a file in a chat's reply lists the ways to open
+  it, then Copy path, Show in Finder and Copy file. Copy file puts the
+  file itself on the clipboard, as Finder's own Copy does, for Finder,
+  Mail or Slack to paste; a link to a folder (`notes/`) has no Copy
+  file. One menu, the resource menu every tab and link already had, so a
+  file's link keeps its ways to open. The menu has closed by the time a
+  pick could fail (the file is gone), so a link's or a tab's says why in
+  a sheet on the window, as Finder does; a sidebar row says it on the
+  row, as its other actions do. A right-click inside an open menu ends
+  there: it no longer reaches the tab or link that owns the menu (which
+  opened it again at the pointer). That menu's
+  leaving no longer waits on its owner to stop re-rendering: the wait
+  restarted on every render, so a busy window could keep a closed menu
+  over what was right-clicked next.
+- **Background work is not timed by its call, nor counted as silence.**
+  A background command's or watch's row showed how long the call that
+  started it took (1s, 6s) beside "Running in background", read as how
+  long the work had run; it shows no time now. While work the turn
+  started in the background runs, the turn is quiet by design, as while
+  it waits on the person, so "No updates for" is not said.
+- **Stop takes the theme's colour.** While the agent works, the
+  composer's send button becomes Stop, which was drawn in the inverted
+  foreground: white on a dark theme, whatever the theme. It keeps the
+  send button's accent now, only its glyph changing, and both use the
+  primary button role rather than a recipe of their own.
+- **A tab group's eyebrow is a pill.** Two pixels tall, its rounded ends
+  read as a cut line; it is three, a pixel above the tab's edge.
+
+`inspector-fact.test.tsx` and `session-inspector.test.tsx` cover the
+copies; `file-menu.test.tsx`, `file-clipboard.test.ts` and
+`e2e/file-menu.e2e.ts` the file menu; `chat-timeline-live.test.tsx`
+background work's quiet; `floating-motion.test.tsx` and `e2e/motion.e2e.ts` cover the chat growing
+over what was in front; `chat-timeline.test.tsx` and `e2e/agents.e2e.ts`
+the queued message's layout, its Sending look and both hand-overs;
+`resource-inspector.test.tsx` covers StrictMode, the measured reveal and the
+clipped glide; `e2e/motion.e2e.ts` samples the palette's input growing
+through the frames between one line and two; `e2e/chat-motion.e2e.ts`
+samples every painted frame of a followed chat while the composer grows
+and shrinks; `chat-timeline-embed.test.tsx` covers the archived turn and
+the action lines.

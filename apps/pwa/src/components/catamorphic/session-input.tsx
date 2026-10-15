@@ -117,8 +117,10 @@ export function senderName(
 }
 
 /**
- * A session action's notice, naming who took it: "Pr review: Archived
- * this session". Other notices read as written.
+ * A session action's notice, naming who took it: "Pr review archived this
+ * session". Words of the actor's own (a completion's summary) and a
+ * failure keep their sentence: "Pr review: Archived this session failed:
+ * …". Other notices read as written.
  */
 export function noticeText(
   item: NoticeItem,
@@ -126,6 +128,7 @@ export function noticeText(
 ): string {
   const actor = record(item.data.actor);
   if (item.code !== "session_action" || !actor) return item.text;
+  const action = record(item.data.sessionAction);
   const name =
     actor.kind === "workflow" && typeof actor.workflowName === "string"
       ? (string(actor.displayName) ?? readableName(actor.workflowName))
@@ -136,7 +139,27 @@ export function noticeText(
         : actor.kind === "assistant"
           ? "Assistant"
           : undefined;
-  return name ? `${name}: ${item.text}` : item.text;
+  if (!name) return item.text;
+  // The action's own label reads on from the name.
+  return action?.status === "completed" && action.operation !== "complete"
+    ? `${name} ${item.text.charAt(0).toLowerCase()}${item.text.slice(1)}`
+    : `${name}: ${item.text}`;
+}
+
+/**
+ * The chat's own agent archived or closed it: the turn that did it ended
+ * there, by the agent's choice, rather than being interrupted.
+ */
+export function endsOwnChat(item: NoticeItem): boolean {
+  const actor = record(item.data.actor);
+  const action = record(item.data.sessionAction);
+  return (
+    item.code === "session_action" &&
+    actor?.kind === "agent" &&
+    actor.sessionId === item.sessionId &&
+    action?.status === "completed" &&
+    (action.operation === "archive" || action.operation === "close")
+  );
 }
 
 const SENDER_ICONS: Record<InboundSender["kind"], LucideIcon> = {

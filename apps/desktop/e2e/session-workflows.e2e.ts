@@ -2,17 +2,22 @@ import { afterAll, beforeAll, expect, it } from "vitest";
 import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
 
 let app: AppHandle;
-const helpers = `${setReactValueJs}; const $ = s => document.querySelector(s); const button = text => [...document.querySelectorAll('button')].find(b => !b.closest('[inert]') && b.textContent.trim() === text);`;
+// The chat on screen: a minimized one stays mounted (hidden, inert), and
+// typing into its composer sends where nothing on screen shows the answer.
+const helpers = `${setReactValueJs}; const $ = s => document.querySelector(s); const button = text => [...document.querySelectorAll('button')].find(b => !b.closest('[inert]') && b.textContent.trim() === text); const composer = () => [...document.querySelectorAll('[data-chat-local-id] [data-composer-input]')].find(el => !el.closest('[inert]'));`;
 const run = <T>(body: string) =>
   app.eval<T>(`(async()=>{${helpers};${body}})()`);
 const wait = (body: string) =>
   app.waitFor(`(()=>{${helpers};${body}})()`, { timeoutMs: 90000 });
 async function send(scenario: string) {
+  // A reload or a tab the last test opened can leave the chat a bubble:
+  // it is opened, again on each check until it is, as the rail may not
+  // have its button yet.
   await wait(
-    `return !!$('[data-chat-local-id] [data-composer-input]') && !$('[data-chat-local-id] [aria-label="Stop response"]');`,
+    `const input = composer(); if (!input) { document.querySelector('[data-dock-rail] button[aria-label^="Open "]')?.click(); return false; } return !input.closest('[data-chat-local-id]').querySelector('[aria-label="Stop response"]');`,
   );
   await run(
-    `const input=$('[data-chat-local-id] [data-composer-input]'); setReactValue(input, ${JSON.stringify(`session workflow ${scenario}`)}); input.closest('form').requestSubmit();`,
+    `const input=composer(); setReactValue(input, ${JSON.stringify(`session workflow ${scenario}`)}); input.closest('form').requestSubmit();`,
   );
 }
 beforeAll(async () => {
@@ -42,7 +47,8 @@ it("authors a temporary one-shot, wakes once, stops and links its retained sourc
   await send("wake");
   await wait("return !!$('.cat-markdown a[href^=\"artifact:\"]');");
   await wait(
-    "return document.body.textContent.includes('Scheduled follow-up received.') && document.body.textContent.includes('Stopped a watcher');",
+    // The action's line names the workflow and reads on: "… stopped a watcher".
+    "return document.body.textContent.includes('Scheduled follow-up received.') && [...document.querySelectorAll('[data-notice-code=session_action]')].some(el => / stopped a watcher$/.test(el.textContent));",
   );
   // The workflow's delivery is its own row (ADR 0217), never the person's
   // bubble; the session action it took is a notice naming the workflow.
@@ -102,7 +108,9 @@ it("remains quiet on ordinary turn completion and reacts to explicit work comple
   );
   expect(delivered).toBe(1);
   await send("reopen");
-  await wait("return document.body.textContent.includes('Reopened the work');");
+  await wait(
+    "return [...document.querySelectorAll('[data-notice-code=session_action]')].some(el => / reopened the work$/.test(el.textContent));",
+  );
   await app.screenshot("/tmp/catamorphic-session-monitor.png");
 });
 

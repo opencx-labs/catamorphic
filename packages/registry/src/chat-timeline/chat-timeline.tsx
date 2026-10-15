@@ -53,7 +53,12 @@ import remarkGfm from "remark-gfm";
 import { StickToBottom, useStickToBottomContext } from "use-stick-to-bottom";
 import {
   ChatQueue,
+  forgetHandover,
+  glideFrom,
   type HintComponent,
+  handoverFrom,
+  recordHandover,
+  sentWith,
   TitleHint,
 } from "../chat-queue/chat-queue.js";
 import {
@@ -80,6 +85,7 @@ import {
   turnStepsOf,
 } from "./chat-steps.js";
 import {
+  endsOwnChat,
   InboundMessageRow,
   type InputLinkModifiers,
   noticeText,
@@ -616,10 +622,6 @@ export function ChatTimeline(props: ChatTimelineProps) {
   useLayoutEffect(() => {
     lineKept.current = keepsLine;
   }, [keepsLine]);
-  const clockTimes = useMemo(
-    () => ({ startedAt, updatedAt }),
-    [startedAt, updatedAt],
-  );
   const latestTurnId = [...timeline].reverse().find((group) => group.turn)
     ?.turn?.id;
   const working = Boolean(activeId);
@@ -639,6 +641,31 @@ export function ChatTimeline(props: ChatTimelineProps) {
       pairedBackground.current = next;
     return pairedBackground.current;
   }, [timeline, backgroundCommands]);
+  // Waiting on work it started in the background (a test run, a watch),
+  // the turn is quiet by design, as while it waits on the person: its
+  // silence says nothing, so the clock does not count it.
+  const waitsOnBackground = useMemo(
+    () =>
+      timeline.some(
+        (group) =>
+          group.turn?.id === activeId &&
+          group.entries.some(
+            (entry) =>
+              (entry.kind === "reply" || entry.kind === "steps") &&
+              entry.steps.some(
+                (item) => backgroundStates.get(item.id)?.status === "running",
+              ),
+          ),
+      ),
+    [timeline, activeId, backgroundStates],
+  );
+  const clockTimes = useMemo(
+    () => ({
+      startedAt,
+      updatedAt: waitsOnBackground ? undefined : updatedAt,
+    }),
+    [startedAt, updatedAt, waitsOnBackground],
+  );
   // Links re-render with their message, unless the host's handlers change.
   const links = useMemo(
     () => ({ onLinkClick, renderLink }),
@@ -655,6 +682,10 @@ export function ChatTimeline(props: ChatTimelineProps) {
     (group) => group.turn && waitsToRun(group.turn),
   )?.turn;
   const foldSteps = foldsSteps(workDisplay);
+  const endedByTheirAgent = useMemo(
+    () => turnsEndedOwnChat(timeline),
+    [timeline],
+  );
   const empty =
     timeline.length === 0 &&
     pending.length === 0 &&
@@ -728,6 +759,7 @@ export function ChatTimeline(props: ChatTimelineProps) {
           turn={turn}
           group={view.group}
           latest={turn.id === latestTurnId}
+          endedByTheirAgent={endedByTheirAgent.has(turn.id)}
           onRetry={onRetry}
           onInterrupt={onInterrupt}
           onReauth={onReauth}
@@ -735,10 +767,21 @@ export function ChatTimeline(props: ChatTimelineProps) {
         />,
       );
   });
+  // Sends the queue holds (an interrupting one waits there while the agent
+  // stops), by the key their items were sent with.
+  const queuedSends = (queue ?? []).flatMap((queued) =>
+    queued.item?.kind === "user_message" && queued.item.idempotencyKey
+      ? [queued.item.idempotencyKey]
+      : [],
+  );
   for (const message of pending) {
     const key = `send:${message.commandId}`;
     // Its item is already on screen: the item's row is this message now.
     if (shownSends.has(key)) continue;
+    // Its queued bubble is this message now, and takes over from here in
+    // the same commit (handoverFrom).
+    if (queuedSends.some((sent) => sent.endsWith(`:${message.commandId}`)))
+      continue;
     conversation.push(
       <div key={key} className={`cat-row flex flex-col gap-3 ${USER_ROW}`}>
         <UserMessage
@@ -895,11 +938,6 @@ function rowKey(group: TimelineTurn, row: TurnRow): string {
 function userKey(item: UserMessageItem): string {
   const commandId = sentWith(item);
   return commandId ? `send:${commandId}` : `id:${item.id}`;
-}
-
-/** The command a person's message was sent with, from its idempotency key. */
-function sentWith(item: UserMessageItem): string | undefined {
-  return item.idempotencyKey?.match(/^user:[^:]*:(.+)$/)?.[1];
 }
 
 /** "Load earlier messages": pages older history in at the top. */
@@ -1530,12 +1568,44 @@ const UserMessage = memo(function UserMessage({
   dismissable = false,
 }: UserMessageProps) {
   const actions = useContext(ActionsContext);
-  const enterClasses = useEntered();
+  // A queued message whose turn just started takes over from its bubble:
+  // it arrives from where the bubble was, already shown, instead of rising
+  // in anew below it. Read in the commit, once the bubble has left the
+  // queue and said where it was.
+  const [takeover, setTakeover] = useState<DOMRect | null>(null);
+  const articleRef = useRef<HTMLElement>(null);
+  // Mount only: where it came from is read once.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: mount only
+  useLayoutEffect(() => {
+    const from = item ? handoverFrom(`item:${item.id}`) : undefined;
+    if (!item || !from) return;
+    forgetHandover(`item:${item.id}`);
+    // Before paint: it never shows the entrance's hidden pose.
+    setTakeover(from);
+  }, []);
+  // Measured without the entrance's pose, which the takeover drops.
+  useLayoutEffect(() => {
+    if (takeover && articleRef.current) glideFrom(articleRef.current, takeover);
+  }, [takeover]);
+  // A send waiting in the queue (an interrupting one, ⌘↵) leaves this
+  // pending bubble for its queued one, which arrives from here.
+  const command = pending?.commandId;
+  useLayoutEffect(
+    () => () => {
+      const article = articleRef.current;
+      if (command && article)
+        recordHandover(`send:${command}`, article.getBoundingClientRect());
+    },
+    [command],
+  );
+  const entering = useEntered();
+  const enterClasses = takeover ? "" : entering;
   const text = item?.text ?? pending?.text ?? "";
   const attachments = item?.attachments ?? pending?.attachments ?? [];
   const failed = pending?.status === "failed";
   return (
     <article
+      ref={articleRef}
       data-message-id={item?.id}
       tabIndex={-1}
       data-user-message
@@ -2095,6 +2165,27 @@ function HandoffLine({ item }: { item: ContextHandoffItem }) {
 }
 
 /**
+ * Turns stopped because their own agent archived or closed the chat from
+ * within them: stopping was the agent's last act, so the turn shows no
+ * interruption and offers no Retry.
+ */
+function turnsEndedOwnChat(timeline: readonly TimelineTurn[]): Set<string> {
+  const ended = new Set<string>();
+  let last: Turn | null = null;
+  for (const group of timeline) {
+    last = group.turn ?? last;
+    for (const entry of group.entries)
+      if (
+        entry.kind === "notice" &&
+        last?.status === "interrupted" &&
+        endsOwnChat(entry.item)
+      )
+        ended.add(last.id);
+  }
+  return ended;
+}
+
+/**
  * How a turn ended, when that is worth a line: a failed turn's card with
  * what gets the person unstuck, a quiet summary for an interruption, and
  * the countdown of a turn waiting to retry.
@@ -2103,6 +2194,7 @@ function TurnOutcome({
   turn,
   group,
   latest,
+  endedByTheirAgent,
   onRetry,
   onInterrupt,
   onReauth,
@@ -2111,6 +2203,8 @@ function TurnOutcome({
   turn: Turn;
   group: TimelineTurn;
   latest: boolean;
+  /** Its own agent archived or closed the chat: the notice after it says why it ended. */
+  endedByTheirAgent: boolean;
   onRetry?: (turnId: string) => void;
   onInterrupt?: (turnId?: string) => void;
   onReauth?: (turnId: string) => void;
@@ -2147,6 +2241,18 @@ function TurnOutcome({
   const changed = (turn.outcome?.changedFiles ?? []).map(
     (change) => change.path,
   );
+  const left = changed.length > 0 && (
+    <span data-testid="chat-interrupted-files">
+      {`Left ${changed.length === 1 ? "1 changed file" : `${changed.length} changed files`}: ${changedFileNames(changed)}`}
+    </span>
+  );
+  // Nothing interrupted it, so nothing to retry: only what it left changed.
+  if (endedByTheirAgent)
+    return left ? (
+      <div className="cat-fade-in text-center text-xs text-fg-faint">
+        {left}
+      </div>
+    ) : null;
   return (
     <div
       // The running steps above become this summary in place; it fades in
@@ -2166,11 +2272,7 @@ function TurnOutcome({
           {`While: ${stopped.label}${stopped.ran ? ` (${stopped.ran})` : ""}`}
         </span>
       )}
-      {changed.length > 0 && (
-        <span data-testid="chat-interrupted-files">
-          {`Left ${changed.length === 1 ? "1 changed file" : `${changed.length} changed files`}: ${changedFileNames(changed)}`}
-        </span>
-      )}
+      {left}
       {latest && onRetry && (
         <button
           type="button"
@@ -2701,48 +2803,55 @@ function ScrollToLatest() {
 }
 
 /**
- * Keep following when the scroller itself resizes, as when a question or
- * approval panel below it opens or closes. A taller scroller pulls its
- * scroll position back, which use-stick-to-bottom reads as the person
- * scrolling up, and the chat would stop following new messages.
+ * Keep following when the scroller itself resizes, as when the composer
+ * grows or a question or approval panel below it opens or closes. A
+ * shorter scroller keeps its scroll position, which leaves the latest
+ * message below its new edge: it is held at the end in the same frame,
+ * before paint, so the conversation rides the composer's glide instead of
+ * catching up once it stops.
+ *
+ * A taller scroller pulls its scroll position back to its new end, which
+ * use-stick-to-bottom would read as the person scrolling up and stop
+ * following. That scroll is told apart where it lands: it moved up, yet the
+ * view is still at its end, so the end moved and not the person. It is
+ * marked as the library's own before the library's listener reads it,
+ * whenever the layout that pulled it back ran (a script reading layout
+ * between frames runs it before this observer sees the resize).
  */
 function FollowScrollerResize() {
-  const { scrollRef, scrollToBottom, state } = useStickToBottomContext();
+  const { scrollRef, state } = useStickToBottomContext();
   useEffect(() => {
     const scroller = scrollRef.current;
     if (!scroller) return;
     let height = scroller.clientHeight;
-    let resized = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const follow = (delay: number) => {
-      clearTimeout(timer);
-      timer = setTimeout(() => {
-        resized = false;
-        void scrollToBottom("instant");
-      }, delay);
-    };
+    let last = scroller.scrollTop;
     const observer = new ResizeObserver(() => {
       if (scroller.clientHeight === height) return;
       height = scroller.clientHeight;
       // Only a chat that follows (see PinToBottom), not one a reader let go
-      // of a few pixels short of the end.
-      if (!state.isAtBottom) return;
-      resized = true;
-      // A shrink fires no scroll event; a taller scroller's does next frame.
-      follow(100);
+      // of a few pixels short of the end. Through the library's own setter,
+      // so the scroll this makes reads as its own.
+      if (state.isAtBottom)
+        state.scrollTop = scroller.scrollHeight - scroller.clientHeight;
     });
-    // Runs after the library's own listener, so this undoes its escape.
+    // Capturing, it runs before the library's listener on the scroller.
     const onScroll = () => {
-      if (resized) follow(1);
+      const top = scroller.scrollTop;
+      const atEnd = top >= scroller.scrollHeight - scroller.clientHeight - 1;
+      if (state.isAtBottom && top < last && atEnd)
+        state.ignoreScrollToTop = top;
+      last = top;
     };
     observer.observe(scroller);
-    scroller.addEventListener("scroll", onScroll, { passive: true });
+    scroller.addEventListener("scroll", onScroll, {
+      capture: true,
+      passive: true,
+    });
     return () => {
       observer.disconnect();
-      scroller.removeEventListener("scroll", onScroll);
-      clearTimeout(timer);
+      scroller.removeEventListener("scroll", onScroll, { capture: true });
     };
-  }, [scrollRef, scrollToBottom, state]);
+  }, [scrollRef, state]);
   return null;
 }
 

@@ -27,6 +27,7 @@ import { formatBinding, useKeybindings } from "../lib/keybindings.js";
 import { useListMotion } from "../lib/list-motion.js";
 import { pointerMoved } from "../lib/pointer-moved.js";
 import { useProjectSkills } from "../lib/skills.js";
+import { GLIDING_FRAME, useGlidingHeight } from "../lib/use-gliding-height.js";
 import { usePaletteHost } from "../palette/host.js";
 import {
   isFullPaletteModeName,
@@ -206,6 +207,8 @@ export function CommandPalette({
     if (variant === "tab") onTypedChangeRef.current?.(hasInput);
   }, [variant, hasInput]);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const inputFrameRef = useRef<HTMLDivElement>(null);
+  useGlidingHeight({ content: inputRef, frame: inputFrameRef });
   const listRef = useRef<HTMLDivElement>(null);
   const sizerRef = useRef<HTMLDivElement>(null);
 
@@ -896,22 +899,26 @@ export function CommandPalette({
             {chip.label}
           </span>
         )}
-        <textarea
-          ref={inputRef}
-          value={query}
-          onChange={(event) => {
-            setQuery(event.target.value);
-            setSelection(TOP_ROW);
-            if (listRef.current) listRef.current.scrollTop = 0;
-          }}
-          onKeyDown={onInputKeyDown}
-          rows={1}
-          spellCheck={false}
-          placeholder={activeMode?.placeholder ?? "Search or ask anything…"}
-          aria-label="Search commands, pages, and more"
-          className="field-sizing-content max-h-40 w-full resize-none bg-transparent px-1 py-3 text-sm outline-none placeholder:text-fg-faint"
-          style={{ outline: "none" }}
-        />
+        {/* Grows like the chat composer: Shift+Enter or a wrapping line
+          glides the input taller instead of snapping. */}
+        <div ref={inputFrameRef} className={`${GLIDING_FRAME} min-w-0 flex-1`}>
+          <textarea
+            ref={inputRef}
+            value={query}
+            onChange={(event) => {
+              setQuery(event.target.value);
+              setSelection(TOP_ROW);
+              if (listRef.current) listRef.current.scrollTop = 0;
+            }}
+            onKeyDown={onInputKeyDown}
+            rows={1}
+            spellCheck={false}
+            placeholder={activeMode?.placeholder ?? "Search or ask anything…"}
+            aria-label="Search commands, pages, and more"
+            className="field-sizing-content block max-h-40 w-full resize-none bg-transparent px-1 py-3 text-sm outline-none placeholder:text-fg-faint"
+            style={{ outline: "none" }}
+          />
+        </div>
       </div>
       <div
         ref={listRef}

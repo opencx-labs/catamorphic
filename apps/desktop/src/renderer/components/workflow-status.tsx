@@ -12,6 +12,7 @@ import {
   Workflow,
 } from "lucide-react";
 import type { ReactNode } from "react";
+import { InspectorFact } from "./inspector-fact.js";
 import { ResourceInspector } from "./resource-inspector.js";
 import { triggerSummary } from "./workflow-details.js";
 
@@ -37,6 +38,7 @@ export function WorkflowStatus({
   graph,
   workflowName,
   filePath,
+  sourcePath,
   saving,
   dirty,
   conflict,
@@ -55,6 +57,8 @@ export function WorkflowStatus({
   graph: WorkflowGraph | null;
   workflowName: string;
   filePath: string;
+  /** The source's full path on this machine, once known: what Source copies. */
+  sourcePath?: string;
   saving: boolean;
   dirty: boolean;
   conflict: boolean;
@@ -216,6 +220,8 @@ export function WorkflowStatus({
               <Row
                 label="Source"
                 value={filePath.split("/").at(-1) ?? filePath}
+                copy={sourcePath ?? filePath}
+                copyLabel="Copy file path"
                 mono
                 onClick={act(onCode)}
                 actionLabel="View code"
@@ -286,20 +292,29 @@ export function WorkflowStatus({
 function Row({
   label,
   value,
+  copy = typeof value === "string" ? value : undefined,
+  copyLabel,
   mono,
   onClick,
   actionLabel,
 }: {
   label: string;
   value: ReactNode;
+  /** What its copy button copies: the value's text by default. */
+  copy?: string;
+  copyLabel?: string;
   mono?: boolean;
   onClick?: () => void;
   actionLabel?: string;
 }) {
   return (
-    <>
-      <dt className="text-fg-faint">{label}</dt>
-      <dd className={`min-w-0 text-fg ${mono ? "font-mono text-[10px]" : ""}`}>
+    <InspectorFact
+      term={label}
+      copy={copy}
+      copyLabel={copyLabel}
+      oneLine={Boolean(onClick)}
+    >
+      <div className={mono ? "font-mono text-[10px]" : undefined}>
         {onClick ? (
           <button
             type="button"
@@ -316,8 +331,8 @@ function Row({
         ) : (
           <span className="block break-words">{value}</span>
         )}
-      </dd>
-    </>
+      </div>
+    </InspectorFact>
   );
 }
 

@@ -53,8 +53,8 @@ describe("design lint", () => {
   it("rectangular actions use a button role, never a private accent recipe", () => {
     // Registry mirrors under components/catamorphic style through tokens
     // only: the desktop button classes do not exist for their other hosts.
-    // Debt elsewhere: icon-only send buttons and pills; lower this when you
-    // convert one to `button-primary`.
+    // Debt elsewhere: pills; lower this when you convert one to
+    // `button-primary` (the composer's send and stop buttons use it).
     const recipes = sources()
       .filter(({ file }) => !file.startsWith("components/catamorphic/"))
       .flatMap(({ file, text }) =>
@@ -64,7 +64,7 @@ describe("design lint", () => {
           ),
         ].map(() => file),
       );
-    expect(recipes.length).toBeLessThanOrEqual(3);
+    expect(recipes.length).toBeLessThanOrEqual(2);
   });
   it("destructive confirms use the danger role, never solid red with white text", () => {
     expect(count(/className="[^"]*\bbg-danger\b[^"]*\btext-white\b/g)).toEqual(

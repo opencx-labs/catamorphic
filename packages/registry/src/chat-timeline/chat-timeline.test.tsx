@@ -506,3 +506,296 @@ describe("ChatTimeline inputs that are not the person's (ADR 0217)", () => {
     ).not.toBeNull();
   });
 });
+
+describe("ChatTimeline queue sending", () => {
+  let container: HTMLDivElement;
+  let root: Root;
+  const queuedOne = () => ({
+    turn: turn("queued-1", 2, { status: "queued" as const, attemptCount: 0 }),
+    item: input("queued-1", "urgent now"),
+    joined: [],
+  });
+
+  beforeEach(() => {
+    Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", true);
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) =>
+      window.setTimeout(() => callback(performance.now()), 0),
+    );
+    vi.stubGlobal("cancelAnimationFrame", (handle: number) =>
+      window.clearTimeout(handle),
+    );
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+    container = document.createElement("div");
+    document.body.append(container);
+    root = createRoot(container);
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    container.remove();
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+    // A test's motion stub ends with it, even when it fails.
+    Reflect.deleteProperty(HTMLElement.prototype, "animate");
+    Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", false);
+  });
+
+  it("shows its controls to the left of its state, at the bubble's right edge", async () => {
+    await act(async () => {
+      root.render(
+        <ChatTimeline
+          timeline={[]}
+          activity="Working"
+          queue={[queuedOne()]}
+          onEditQueued={() => true}
+          onCancelQueued={() => true}
+          onSendQueuedNow={() => true}
+        />,
+      );
+    });
+    const state = container.querySelector('[data-testid="chat-queued-state"]');
+    const footer = state?.parentElement;
+    expect(state?.textContent).toBe("Queued");
+    expect(footer?.lastElementChild).toBe(state);
+    expect(footer?.className).toContain("justify-end");
+    for (const label of [
+      "Edit queued message",
+      "Delete queued message",
+      "Send queued message now",
+    ]) {
+      const button = container.querySelector(`[aria-label="${label}"]`);
+      expect(
+        button &&
+          state &&
+          button.compareDocumentPosition(state) &
+            Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+      // Its colour and ground ease in under the pointer.
+      expect(button?.className).toContain("transition-[color,background-color");
+      expect(button?.className).toMatch(/hover:bg-/);
+    }
+  });
+
+  it("looks sent while sending, and queued again when the send fails", async () => {
+    let finish: (sent: boolean) => void = () => undefined;
+    await act(async () => {
+      root.render(
+        <ChatTimeline
+          timeline={[]}
+          activity="Working"
+          queue={[queuedOne()]}
+          onSendQueuedNow={() =>
+            new Promise<boolean>((resolve) => {
+              finish = resolve;
+            })
+          }
+        />,
+      );
+    });
+    const bubble = () =>
+      container.querySelector<HTMLElement>(
+        '[data-testid="chat-queued-message"]',
+      );
+    await act(async () =>
+      container
+        .querySelector<HTMLButtonElement>(
+          '[aria-label="Send queued message now"]',
+        )
+        ?.click(),
+    );
+    expect(bubble()?.dataset.sending).toBe("true");
+    expect(bubble()?.textContent).toContain("Sending");
+    expect(bubble()?.firstElementChild?.className).not.toContain(
+      "border-dashed",
+    );
+    await act(async () => finish(false));
+    expect(bubble()?.dataset.sending).toBeUndefined();
+    expect(bubble()?.textContent).toContain("Queued");
+  });
+
+  it("hands its place to its message when its turn starts", async () => {
+    const at = (top: number) => ({
+      top,
+      bottom: top + 40,
+      left: 100,
+      right: 400,
+      width: 300,
+      height: 40,
+      x: 100,
+      y: top,
+      toJSON: () => ({}),
+    });
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(
+      function (this: HTMLElement) {
+        // The bubble sits lower than where its message lands.
+        return this.closest('[data-testid="chat-queued-message"]')
+          ? at(500)
+          : at(300);
+      },
+    );
+    const animate = vi.fn();
+    Reflect.set(HTMLElement.prototype, "animate", animate);
+    await act(async () => {
+      root.render(
+        <ChatTimeline timeline={[]} activity="Working" queue={[queuedOne()]} />,
+      );
+    });
+    // Its turn starts: it leaves the queue and its message joins the log.
+    await act(async () => {
+      root.render(
+        <ChatTimeline
+          timeline={timelineOf({
+            turns: [turn("queued-1", 2, { status: "running" })],
+            items: [input("queued-1", "urgent now")],
+          })}
+          activity="Working"
+          queue={[]}
+        />,
+      );
+    });
+    const message = container.querySelector("[data-user-message]");
+    // Already shown, not rising in anew.
+    expect(message?.className).not.toContain("opacity-0");
+    expect(message?.className).not.toContain("translate-y-1");
+    expect(animate).toHaveBeenCalledWith(
+      [{ translate: "0px 200px" }, { translate: "0px 0px" }],
+      expect.objectContaining({ duration: 250 }),
+    );
+  });
+
+  it("waits looking sent, with nothing to edit, when it interrupts (⌘↵)", async () => {
+    await act(async () => {
+      root.render(
+        <ChatTimeline
+          timeline={[]}
+          activity="Working"
+          queue={[
+            {
+              ...queuedOne(),
+              turn: turn("queued-1", 2, {
+                status: "queued",
+                attemptCount: 0,
+                dispatch: "interrupt",
+              }),
+            },
+          ]}
+          onEditQueued={() => true}
+          onSendQueuedNow={() => true}
+          onCancelQueued={() => true}
+        />,
+      );
+    });
+    const bubble = container.querySelector<HTMLElement>(
+      '[data-testid="chat-queued-message"]',
+    );
+    expect(bubble?.dataset.sending).toBe("true");
+    expect(
+      bubble?.querySelector('[data-testid="chat-queued-state"]')?.textContent,
+    ).toBe("Sending");
+    expect(
+      container.querySelector('[aria-label="Edit queued message"]'),
+    ).toBeNull();
+    expect(
+      container.querySelector('[aria-label="Send queued message now"]'),
+    ).toBeNull();
+    // The agent may be slow to stop: until it does, the message can still
+    // be withdrawn.
+    expect(
+      container.querySelector('[aria-label="Delete queued message"]'),
+    ).not.toBeNull();
+  });
+
+  it("takes over from its pending bubble when it waits behind the running turn", async () => {
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(
+      function (this: HTMLElement) {
+        // The pending bubble sat higher than where the queue shows it.
+        const top = this.closest('[data-testid="chat-queued-message"]')
+          ? 520
+          : 480;
+        return {
+          top,
+          bottom: top + 40,
+          left: 100,
+          right: 400,
+          width: 300,
+          height: 40,
+          x: 100,
+          y: top,
+          toJSON: () => ({}),
+        };
+      },
+    );
+    const animate = vi.fn();
+    Reflect.set(HTMLElement.prototype, "animate", animate);
+    await act(async () => {
+      root.render(
+        <ChatTimeline
+          timeline={[]}
+          activity="Working"
+          pending={[
+            {
+              commandId: "c1",
+              text: "urgent now",
+              attachments: [],
+              dispatch: "interrupt",
+              status: "sending",
+            },
+          ]}
+        />,
+      );
+    });
+    // The server holds it as an interrupting turn waiting for the agent;
+    // the send is still pending here when the queue first shows it.
+    await act(async () => {
+      root.render(
+        <ChatTimeline
+          timeline={[]}
+          activity="Working"
+          pending={[
+            {
+              commandId: "c1",
+              text: "urgent now",
+              attachments: [],
+              dispatch: "interrupt",
+              status: "sent",
+            },
+          ]}
+          queue={[
+            {
+              turn: turn("queued-1", 2, {
+                status: "queued",
+                attemptCount: 0,
+                dispatch: "interrupt",
+              }),
+              item: input("queued-1", "urgent now", {
+                idempotencyKey: "user:s:c1",
+              }),
+              joined: [],
+            },
+          ]}
+        />,
+      );
+    });
+    const bubble = container.querySelector(
+      '[data-testid="chat-queued-message"]',
+    );
+    // One bubble for the message: the pending one gave way in that render.
+    expect(container.querySelectorAll("[data-pending-message]")).toHaveLength(
+      0,
+    );
+    // Already shown, no entrance of its own.
+    expect(bubble?.className).toContain("opacity-100");
+    expect(bubble?.className).not.toContain("transition-[opacity");
+    expect(animate).toHaveBeenCalledWith(
+      [{ translate: "0px -40px" }, { translate: "0px 0px" }],
+      expect.objectContaining({ duration: 250 }),
+    );
+  });
+});

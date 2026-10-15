@@ -36,6 +36,7 @@ import {
 } from "lucide-react";
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { MENU_SEPARATOR } from "../../shared/menu.js";
 import type { OpenMode } from "../../shared/open-mode.js";
 import { formatBinding, useKeybindings } from "../lib/keybindings";
 import { usePageDialogsWaiting } from "../lib/page-dialogs.js";
@@ -44,6 +45,7 @@ import { AnimatedTitle } from "./animated-title";
 import { AppGlyph } from "./app-icon";
 import { ChatGlyph, hasCustomChatIcon } from "./chat-icon";
 import { SignalBadge, SignalGlyph } from "./chat-signals";
+import { actOnFile, FILE_MENU, type FileTarget } from "./file-menu.js";
 import { OpenResourceButton } from "./open-resource-button.js";
 import { ShortcutHint } from "./shortcut-hint";
 
@@ -288,6 +290,7 @@ function SidebarWorkspaceTabs({
   onToggleGroup,
   onReorder,
   onDragStateChange,
+  tabFile,
 }: Parameters<typeof TabStrip>[0]) {
   const [dragged, setDragged] = useState<string>();
   useSidebarContent(tabs.length ? "ready" : "empty");
@@ -386,6 +389,7 @@ function SidebarWorkspaceTabs({
         renderItem={(tab, tree) => {
           const Icon = TAB_ICONS[tab.kind];
           const group = groups.find((group) => group.parentKey === tab.id);
+          const file = tabFile?.(tab.id);
           const toggle = () => {
             if (group && onToggleGroup)
               onToggleGroup(group.parentKey.slice("chat:".length));
@@ -463,6 +467,8 @@ function SidebarWorkspaceTabs({
                   },
                 ]}
                 defaultMenu={[
+                  // A file's tab can also act on the file itself.
+                  ...(file ? [...FILE_MENU, MENU_SEPARATOR] : []),
                   {
                     action: "close",
                     label: `Close ${tab.label ?? tab.name}`,
@@ -477,7 +483,13 @@ function SidebarWorkspaceTabs({
                     : undefined,
                 }}
                 onOpen={(mode) => onSelect(tab.id, mode)}
-                onAction={() => onClose(tab.id)}
+                onAction={(entry) =>
+                  entry.action === "close"
+                    ? onClose(tab.id)
+                    : file
+                      ? actOnFile(entry.action, file)
+                      : undefined
+                }
               />
             </div>
           );
@@ -511,6 +523,7 @@ function TabStrip({
   onToggleGroup,
   onReorder,
   onDragStateChange,
+  tabFile,
 }: {
   orientation?: "horizontal" | "vertical";
   alignment?: "start" | "center";
@@ -535,6 +548,8 @@ function TabStrip({
   onReorder?: (key: string, beforeKey: string | null) => void;
   /** A tab drag started (key) or ended (null) — hosts show drop zones. */
   onDragStateChange?: (key: string | null) => void;
+  /** The file a tab shows (an editor's): its menu adds the file's actions. */
+  tabFile?: (key: string) => FileTarget | undefined;
 }) {
   const vertical = orientation === "vertical";
   const keybindings = useKeybindings();
@@ -728,6 +743,30 @@ function TabStrip({
             <div
               data-palette-target={highlighted || undefined}
               data-point-key={key}
+              // Anywhere on the tab (its close button over the label's end,
+              // its padding) opens the menu its label opens.
+              onContextMenu={(event) => {
+                const tabLabel = event.currentTarget.querySelector(
+                  ".workspace-tab-label",
+                );
+                if (
+                  exiting ||
+                  event.defaultPrevented ||
+                  !tabLabel ||
+                  (event.target instanceof Node &&
+                    tabLabel.contains(event.target))
+                )
+                  return;
+                event.preventDefault();
+                tabLabel.dispatchEvent(
+                  new MouseEvent("contextmenu", {
+                    bubbles: true,
+                    cancelable: true,
+                    clientX: event.clientX,
+                    clientY: event.clientY,
+                  }),
+                );
+              }}
               data-page-dialog={
                 (tab.kind === "browser" && tab.pageDialog) || undefined
               }
@@ -830,7 +869,9 @@ function TabStrip({
                 <span
                   aria-hidden="true"
                   data-tab-group-eyebrow={eyebrow.starts ? "start" : "rest"}
-                  className={`pointer-events-none absolute -top-[4px] h-0.5 transition-colors duration-150 ${groupActive ? "bg-accent/50" : "bg-border-strong"} ${
+                  // Three pixels tall, so its rounded ends read as a pill
+                  // rather than a cut line; a pixel above the tab's edge.
+                  className={`pointer-events-none absolute -top-[5px] h-[3px] transition-colors duration-150 ${groupActive ? "bg-accent/50" : "bg-border-strong"} ${
                     eyebrow.starts
                       ? "left-1.5 rounded-l-full"
                       : mergeLeft
@@ -859,6 +900,7 @@ function TabStrip({
               >
                 <OpenResourceButton
                   type="button"
+                  file={tabFile?.(key)}
                   onOpen={(mode) => {
                     disarmHoverCard();
                     onSelect(key, mode);
