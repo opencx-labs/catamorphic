@@ -44,3 +44,8 @@ export function HarnessIcon({
     />
   );
 }
+
+/** The tool an imported chat came from, as people name it (ADR 0233). */
+export function importedHarnessLabel(harness: "claude-code" | "codex"): string {
+  return harness === "codex" ? "Codex" : "Claude Code";
+}

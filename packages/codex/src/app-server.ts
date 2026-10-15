@@ -7,6 +7,12 @@ import {
   processTransport,
 } from "./transport.js";
 
+/**
+ * The client name Work's own Codex sessions run under: their rollouts'
+ * originator, so an import knows them (ADR 0233).
+ */
+export const CODEX_CLIENT_NAME = "catamorphic";
+
 export type JsonRpcId = number | string;
 
 /** A request the app server sent the client (an approval, a tool call). */
@@ -131,7 +137,7 @@ export class CodexAppServer {
   /** The handshake every connection starts with. */
   async initialize(): Promise<JsonObject> {
     const result = await this.request("initialize", {
-      clientInfo: { name: "catamorphic", version: "0.0.1" },
+      clientInfo: { name: CODEX_CLIENT_NAME, version: "0.0.1" },
       capabilities: { experimentalApi: true },
     });
     this.notify("initialized");

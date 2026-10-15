@@ -150,6 +150,11 @@ export class ProjectRootsStore {
   }
 
   /** Cached lookup for synchronous callers (complete once init() ran). */
+  /** Every registered project with a folder. */
+  projectIds(): string[] {
+    return [...this.cache.keys()];
+  }
+
   getSync(projectId: string): string | undefined {
     return this.cache.get(projectId);
   }

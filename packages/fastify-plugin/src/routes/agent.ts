@@ -12,6 +12,7 @@ import {
   AgentSessionAuthorityRequiredError,
   AgentSessionClosedError,
   AgentSessionHandoffPendingError,
+  AgentSessionImportedError,
   AgentSessionNotFoundError,
   AgentSessionRewindingError,
   AgentTurnInProgressError,
@@ -1479,6 +1480,8 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
 function sessionConflict(
   err: unknown,
 ): z.infer<typeof SessionConflictSchema> | null {
+  if (err instanceof AgentSessionImportedError)
+    return { error: err.message, code: "imported" };
   if (err instanceof AgentSessionClosedError)
     return { error: "Session is closed", code: "session_closed" };
   if (err instanceof AgentSessionAuthorityRequiredError)

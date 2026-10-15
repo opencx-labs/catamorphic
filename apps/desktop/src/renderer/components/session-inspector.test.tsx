@@ -24,6 +24,7 @@ const session: AgentSession = {
   title: "Prepare Acme QBR",
   icon: null,
   forkedFromSessionId: null,
+  imported: null,
   parentSessionId: null,
   visibility: "promoted",
   archivedAt: null,

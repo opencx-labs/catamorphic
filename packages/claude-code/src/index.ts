@@ -7,6 +7,10 @@ export {
 } from "./adapter.js";
 export { classifyClaudeError } from "./errors.js";
 export {
+  ClaudeCodeTranscriptReader,
+  readClaudeCodeTranscript,
+} from "./import.js";
+export {
   type ClaudeSlashCommand,
   listClaudeSlashCommands,
 } from "./list-commands.js";

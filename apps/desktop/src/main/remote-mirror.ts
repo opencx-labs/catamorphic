@@ -136,6 +136,12 @@ export class RemoteSessionMirror {
       return { canMove: false, reason: "Link this project to a server first" };
     }
     const detail = await this.deps.sessionDetail(projectId, sessionId);
+    if (detail.imported) {
+      return {
+        canMove: false,
+        reason: "Imported sessions stay on this machine",
+      };
+    }
     if (detail.status !== "active") {
       return { canMove: false, reason: "This session is closed" };
     }
@@ -362,7 +368,9 @@ export class RemoteSessionMirror {
           session.status !== "active" ||
           session.authorityHostId !== this.deps.hostId ||
           this.diverged.has(session.id) ||
-          this.deps.isIncognito(session.id)
+          this.deps.isIncognito(session.id) ||
+          // Imported from another tool: it stays here (ADR 0233).
+          session.imported
         ) {
           continue;
         }
@@ -457,6 +465,9 @@ export class RemoteSessionMirror {
       this.deps.markIncognito(sessionId);
       throw new Error("Incognito sessions are not mirrored");
     }
+    // Another tool's history stays on this machine; a continuation of it
+    // is an ordinary chat and syncs like one (ADR 0233).
+    if (detail.imported) throw new Error("Imported sessions are not mirrored");
     // A project agent's slug survives the trip: the same committed
     // definition exists on the server, so the fork can run the SAME agent.
     // Core owns the id convention; parsing it by hand here would drift.

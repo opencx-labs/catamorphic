@@ -101,6 +101,7 @@ describe("PGlite migrations", () => {
       "062_typed_deliveries.sql",
       "063_native_state_verbatim.sql",
       "064_session_metadata.sql",
+      "065_imported_sessions.sql",
     ]);
 
     const rerun = await migrateToLatest({ db });

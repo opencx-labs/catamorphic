@@ -6,6 +6,8 @@ import {
   type CommandReceipt,
   type DispatchMode,
   dispatchModeSchema,
+  IMPORTED_HARNESSES,
+  type ImportedSession,
   type InboundSender,
   type InputSource,
   type Item,
@@ -1143,6 +1145,19 @@ export const AgentSessionPlacementSchema = z.object({
   machine: z.object({ id: z.string(), label: z.string() }),
 });
 
+/** Where a session another tool ran was imported from (ADR 0233). */
+export const ImportedSessionSchema = describes<ImportedSession>()(
+  z
+    .object({
+      harness: z.enum(IMPORTED_HARNESSES),
+      nativeSessionId: z.string(),
+      sourcePath: z.string(),
+      contentSha256: z.string(),
+      sourceModifiedAt: z.string(),
+    })
+    .meta({ id: "ImportedSession" }),
+);
+
 export const AgentSessionSchema = z.object({
   workStatus: z.enum(["open", "completed"]),
   stateRevision: z.number().int().nonnegative(),
@@ -1163,6 +1178,8 @@ export const AgentSessionSchema = z.object({
   title: z.string().nullable(),
   icon: z.string().nullable(),
   forkedFromSessionId: z.string().uuid().nullable(),
+  /** Imported read-only from another tool (ADR 0233); continue it as a fork. */
+  imported: ImportedSessionSchema.nullable(),
   parentSessionId: z.string().uuid().nullable(),
   visibility: z.enum(["latent", "promoted", "archived"]),
   archivedAt: z.string().datetime().nullable(),
@@ -1740,6 +1757,7 @@ export const SessionFieldsSchema = describes<SessionFields>()(
       activity: z.string().nullable(),
       todos: z.array(AgentTodoSchema),
       metadata: SessionMetadataSchema,
+      imported: ImportedSessionSchema.nullable().optional(),
       parentSessionId: z.string().nullable(),
       forkedFromSessionId: z.string().nullable(),
       attentionRevision: z.number().int(),
@@ -2595,7 +2613,12 @@ export const ErrorSchema = z.object({
  */
 export const SessionConflictSchema = z.object({
   error: z.string(),
-  code: z.enum(["session_closed", "authority_required", "handoff_pending"]),
+  code: z.enum([
+    "session_closed",
+    "authority_required",
+    "handoff_pending",
+    "imported",
+  ]),
   authorityRevision: z.number().int().optional(),
 });
 

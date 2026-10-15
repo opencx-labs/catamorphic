@@ -7,6 +7,8 @@
  * log, shared by the server's projections and every client's reducer.
  */
 
+import type { ImportedSession } from "./imported.js";
+
 /**
  * The session protocol (ADR 0197) a server reports in `GET /me` and a
  * client speaks: bumped on any change to snapshots, events, commands or
@@ -778,6 +780,11 @@ export interface SessionFields {
    * person's own section shows the keys their agent sets.
    */
   metadata: SessionMetadata;
+  /**
+   * Where a session another tool ran was imported from (ADR 0233); it is
+   * read-only, and continues as a fork. Absent or null for Work's own.
+   */
+  imported?: ImportedSession | null;
   parentSessionId: string | null;
   forkedFromSessionId: string | null;
   attentionRevision: number;

@@ -7,6 +7,8 @@ import {
   type Attempt,
   type CommandReceipt,
   type DispatchMode,
+  type ImportedSession,
+  type ImportedTranscript,
   INPUT_ITEM_KINDS,
   type InboundSender,
   type InputItem,
@@ -223,6 +225,7 @@ import {
   workspaceMoveRefusedNote,
 } from "./session-workspaces.js";
 import { modelInputText } from "./sessions/input-text.js";
+import { NativeStateStore } from "./sessions/native-state.js";
 import {
   approvalPolicy,
   expiredApprovalReason,
@@ -238,6 +241,10 @@ import { SecretMask } from "./sessions/secret-mask.js";
 import { copySettledHistory } from "./sessions/session-copy.js";
 import { SessionFeed } from "./sessions/session-feed.js";
 import {
+  importedSessionTitle,
+  importedTranscriptEvents,
+} from "./sessions/session-import.js";
+import {
   SessionCommandRejectedError,
   SessionLog,
 } from "./sessions/session-log.js";
@@ -250,6 +257,8 @@ import {
   type TranscriptMessage,
 } from "./sessions/session-reads.js";
 import {
+  attemptFromRow,
+  importedSessionFromRow,
   itemFromRow,
   providerThreadFromRow,
   requestFromRow,
@@ -370,6 +379,11 @@ export interface AgentSession {
   icon: string | null;
   /** Session this one was forked from, if any. */
   forkedFromSessionId: string | null;
+  /**
+   * Where a session another tool ran was imported from (ADR 0233): it is
+   * read-only and continues as a fork. Null for Work's own.
+   */
+  imported: ImportedSession | null;
   /** Immediate parent in the visible session hierarchy, if any. */
   parentSessionId: string | null;
   /** Per-user navigation state. Archived sessions remain readable. */
@@ -526,6 +540,22 @@ export class AgentSessionClosedError extends Error {
   constructor(readonly sessionId: string) {
     super(`Agent session '${sessionId}' is closed`);
     this.name = "AgentSessionClosedError";
+  }
+}
+
+/**
+ * The session was imported from another tool's transcript (ADR 0233): only
+ * an agent on that tool's harness continues it.
+ */
+export class AgentSessionImportedError extends Error {
+  constructor(
+    readonly sessionId: string,
+    readonly harness: string,
+  ) {
+    super(
+      `Agent session '${sessionId}' came from ${harness}; switch it to a ${harness} agent to continue it`,
+    );
+    this.name = "AgentSessionImportedError";
   }
 }
 
@@ -2540,6 +2570,22 @@ export class AgentSessionsService {
     return { messageId: itemId, turnId, mode: dispatch, created: true };
   }
 
+  /**
+   * A chat imported from another tool (ADR 0233) takes messages only while
+   * its agent runs on that tool's harness: Claude Code's chat on a Claude
+   * Code agent, Codex's on a Codex agent.
+   */
+  private async assertContinuesImported(session: SessionRow): Promise<void> {
+    const imported = importedSessionFromRow(session.imported);
+    if (!imported) return;
+    const agent = await this.resolveAgent(
+      session.agent_id,
+      session.project_id,
+    ).catch(() => undefined);
+    if (!agent || agent.unavailable || harnessIdOf(agent) !== imported.harness)
+      throw new AgentSessionImportedError(session.id, imported.harness);
+  }
+
   /** Refuse input a session cannot take here: closed, moving, or another host's. */
   private assertAcceptsInput(session: SessionRow): void {
     if (session.status !== "active")
@@ -2668,6 +2714,7 @@ export class AgentSessionsService {
     // owner's own sign-in answers only their own doing (ADR 0199).
     const deliveredBy = identity.externalUserId;
     const session = await this.requireSession(identity, projectId, sessionId);
+    await this.assertContinuesImported(session);
     if (session.status !== "active")
       throw new AgentSessionClosedError(sessionId);
     if (
@@ -2922,6 +2969,8 @@ export class AgentSessionsService {
       command.type === "respond"
         ? await this.sessionInTenant(identity, projectId, sessionId)
         : await this.requireSession(identity, projectId, sessionId);
+    // Another tool's chat goes on only on an agent of that tool (ADR 0233).
+    if (command.type === "send") await this.assertContinuesImported(session);
     // Who may answer is settled before anything moves, authority included.
     if (command.type === "respond")
       await this.assertMayRespond({
@@ -7398,6 +7447,316 @@ export class AgentSessionsService {
   }
 
   /**
+   * Import a session another tool ran (ADR 0233): Claude Code's or Codex's
+   * transcript, as the host read it, becomes a session of the caller's
+   * bound to that tool's harness, or brings theirs up to date. An agent on
+   * that harness continues it; Claude Code's native transcript is stored
+   * with the import, so the first turn resumes the tool's own session. A
+   * content hash already imported writes nothing; once Work ran a turn in
+   * it the file is no longer read (`taken_over`); a native session one of
+   * Work's own chats holds is never imported (`own`). Workflows do not fire
+   * on the history.
+   */
+  async importTranscript(
+    identity: Identity,
+    projectId: string,
+    input: {
+      /**
+       * What the host read. Turns it leaves out stay as they are, so a
+       * host may send only the turns that changed since its last import.
+       */
+      transcript: ImportedTranscript;
+      sourcePath: string;
+      contentSha256: string;
+      sourceModifiedAt: string;
+      /**
+       * The tool's own transcript records from `offset` on (Claude Code's
+       * session lines), stored as the session's native state so its first
+       * turn here resumes the tool's session. Records already stored are
+       * skipped, so a host that reads the file again sends from 0.
+       */
+      native?: { offset: number; entries: JsonValue[] };
+      /** The agent that continues it; the default when omitted. */
+      agentId?: string | null;
+      source?: AgentSessionSource;
+    },
+  ): Promise<{
+    outcome: "created" | "updated" | "unchanged" | "own" | "taken_over";
+    sessionId: string | null;
+  }> {
+    const { transcript } = input;
+    return withSpan(
+      {
+        tracer,
+        name: "agent.session.import",
+        attributes: {
+          "catamorphic.tenant.id": identity.tenantId,
+          "user.id": identity.externalUserId,
+          "catamorphic.project.id": projectId,
+          "catamorphic.agent.harness": transcript.harness,
+        },
+      },
+      async () => {
+        await this.requireProject(identity, projectId);
+        const findExisting = (db: Kysely<DB> | Transaction<DB>) =>
+          db
+            .selectFrom("agent_sessions")
+            .selectAll()
+            .where("project_id", "=", projectId)
+            .where("external_user_id", "=", identity.externalUserId)
+            .where(sql<string>`imported ->> 'harness'`, "=", transcript.harness)
+            .where(
+              sql<string>`imported ->> 'nativeSessionId'`,
+              "=",
+              transcript.nativeSessionId,
+            );
+        const title = importedSessionTitle(transcript);
+        // A new import is created as any chat is: an Environment and its
+        // allocation, so the agent that continues it can run.
+        const prepared = (await findExisting(this.db).executeTakeFirst())
+          ? undefined
+          : await this.prepareSessionCreate(identity, projectId, {
+              ...(input.agentId ? { agentId: input.agentId } : {}),
+              source: input.source ?? "api",
+              ...(title ? { title } : {}),
+              visibility: "promoted",
+            });
+        return this.db.transaction().execute(async (trx) => {
+          // A native session Work's own chat holds is that chat's.
+          const own = await trx
+            .selectFrom("agent_provider_threads as thread")
+            .innerJoin(
+              "agent_sessions as session",
+              "session.id",
+              "thread.session_id",
+            )
+            .innerJoin(
+              "projects as project",
+              "project.id",
+              "session.project_id",
+            )
+            .select("thread.id")
+            .where("project.tenant_id", "=", identity.tenantId)
+            .where("session.imported", "is", null)
+            .where("thread.harness", "=", transcript.harness)
+            .where(
+              sql<string>`thread.native_ref ->> 'id'`,
+              "=",
+              transcript.nativeSessionId,
+            )
+            .limit(1)
+            .executeTakeFirst();
+          if (own) return { outcome: "own" as const, sessionId: null };
+          const existing = await findExisting(trx)
+            .forUpdate()
+            .executeTakeFirst();
+          if (existing) {
+            // Work ran a turn in it: the chat goes on here, and what the
+            // tool writes after that is not read into it.
+            const continued = await trx
+              .selectFrom("agent_turns")
+              .select("id")
+              .where("session_id", "=", existing.id)
+              .where("provider_thread_id", "is not", null)
+              .limit(1)
+              .executeTakeFirst();
+            if (continued)
+              return { outcome: "taken_over" as const, sessionId: existing.id };
+            if (
+              importedSessionFromRow(existing.imported)?.contentSha256 ===
+              input.contentSha256
+            )
+              return { outcome: "unchanged" as const, sessionId: existing.id };
+          }
+          if (!existing && !prepared)
+            return { outcome: "unchanged" as const, sessionId: null };
+          // The tool's history is not new activity here: no workflow fires on it.
+          await sql`select set_config('catamorphic.suppress_session_events', 'true', true)`.execute(
+            trx,
+          );
+          const created =
+            existing || !prepared ? undefined : await prepared.insert(trx);
+          const sessionId = existing?.id ?? created?.id ?? "";
+          if (created)
+            // Bound to the tool's harness from the start (ADR 0214): only
+            // its agents continue it.
+            await trx
+              .updateTable("agent_sessions")
+              .set({
+                harness: transcript.harness,
+                created_at: new Date(transcript.startedAt),
+              })
+              .where("id", "=", sessionId)
+              .execute();
+          // Only the turns this read names: a long session's update reads
+          // and rewrites its last turns, not its whole history.
+          const keys = transcript.turns.map((turn) => turn.key);
+          const attempts =
+            existing && keys.length > 0
+              ? (
+                  await trx
+                    .selectFrom("agent_turn_attempts")
+                    .selectAll()
+                    .where("session_id", "=", sessionId)
+                    .where(sql<string>`native_turn_ref ->> 'id'`, "in", keys)
+                    .execute()
+                ).map(attemptFromRow)
+              : [];
+          const turnIds = [
+            ...new Set(attempts.map((attempt) => attempt.turnId)),
+          ];
+          const lastOrdinal = async () =>
+            Number(
+              (
+                await trx
+                  .selectFrom("agent_turns")
+                  .select((eb) => eb.fn.max("ordinal").as("ordinal"))
+                  .where("session_id", "=", sessionId)
+                  .executeTakeFirst()
+              )?.ordinal ?? 0,
+            );
+          const current = {
+            turns:
+              turnIds.length > 0
+                ? (
+                    await trx
+                      .selectFrom("agent_turns")
+                      .selectAll()
+                      .where("id", "in", turnIds)
+                      .execute()
+                  ).map(turnFromRow)
+                : [],
+            attempts,
+            items:
+              turnIds.length > 0
+                ? (
+                    await trx
+                      .selectFrom("agent_items")
+                      .select("payload")
+                      .where("session_id", "=", sessionId)
+                      .where("turn_id", "in", turnIds)
+                      .execute()
+                  ).map(itemFromRow)
+                : [],
+          };
+          const events = importedTranscriptEvents({
+            sessionId,
+            owner: identity.externalUserId,
+            transcript,
+            existing: current,
+            lastOrdinal: existing ? await lastOrdinal() : 0,
+          });
+          if (
+            existing &&
+            transcript.title &&
+            transcript.title !== existing.title
+          )
+            events.push({
+              type: "session.changed",
+              session: { title: transcript.title },
+            });
+          await this.log.append(trx, { sessionId, events });
+          const stored = existing
+            ? importedNativeEntries(existing.imported)
+            : 0;
+          const native = input.native;
+          const nativeEntries =
+            native && native.offset <= stored
+              ? Math.max(stored, native.offset + native.entries.length)
+              : stored;
+          if (native && native.offset <= stored) {
+            const fresh = native.entries.slice(stored - native.offset);
+            await this.importNativeState(trx, {
+              sessionId,
+              harness: transcript.harness,
+              nativeSessionId: transcript.nativeSessionId,
+              lastTurnOrdinal: await lastOrdinal(),
+              entries: fresh,
+            });
+          }
+          const imported = {
+            harness: transcript.harness,
+            nativeSessionId: transcript.nativeSessionId,
+            sourcePath: input.sourcePath,
+            contentSha256: input.contentSha256,
+            sourceModifiedAt: input.sourceModifiedAt,
+            nativeEntries,
+          } satisfies ImportedSession & { nativeEntries: number };
+          await trx
+            .updateTable("agent_sessions")
+            .set({ imported: sql<Json>`${jsonbText(imported)}::jsonb` })
+            .where("id", "=", sessionId)
+            .execute();
+          await sql`select set_config('catamorphic.suppress_session_events', 'false', true)`.execute(
+            trx,
+          );
+          return {
+            outcome: existing ? ("updated" as const) : ("created" as const),
+            sessionId,
+          };
+        });
+      },
+    );
+  }
+
+  /**
+   * The imported session's native thread (ADR 0233): the tool's own
+   * session, its transcript stored with Work as any thread's is (ADR 0198),
+   * marked as having seen every imported turn, so the first turn here
+   * resumes it and is handed nothing.
+   */
+  private async importNativeState(
+    trx: Transaction<DB>,
+    input: {
+      sessionId: string;
+      harness: string;
+      nativeSessionId: string;
+      lastTurnOrdinal: number;
+      entries: JsonValue[];
+    },
+  ): Promise<void> {
+    const row = await trx
+      .selectFrom("agent_provider_threads")
+      .selectAll()
+      .where("session_id", "=", input.sessionId)
+      .where("harness", "=", input.harness)
+      .executeTakeFirst();
+    const now = new Date().toISOString();
+    const thread = row
+      ? providerThreadFromRow(row)
+      : {
+          id: randomUUID(),
+          sessionId: input.sessionId,
+          harness: input.harness,
+          nativeRef: { id: input.nativeSessionId, strength: "strong" as const },
+          status: "active" as const,
+          lastTurnOrdinal: null,
+          portable: true,
+          createdAt: now,
+          updatedAt: now,
+        };
+    if (!row || thread.lastTurnOrdinal !== input.lastTurnOrdinal)
+      await this.log.append(trx, {
+        sessionId: input.sessionId,
+        events: [
+          {
+            type: "provider_thread.changed",
+            thread: {
+              ...thread,
+              lastTurnOrdinal: input.lastTurnOrdinal,
+              updatedAt: now,
+            },
+          },
+        ],
+      });
+    await new NativeStateStore(this.db).append({
+      threadId: thread.id,
+      entries: input.entries,
+      executor: trx,
+    });
+  }
+
+  /**
    * Fork a conversation: a NEW session on the same agent carrying a copy
    * of the transcript up to (and including) `messageId` — or the whole
    * settled transcript when omitted. The fork records its parent, opens
@@ -7444,14 +7803,27 @@ export class AgentSessionsService {
         )
           throw new AgentSessionNotFoundError(input.messageId);
 
-        const forkTitle = session.title ? `${session.title} (fork)` : null;
+        const sourceImport = importedSessionFromRow(session.imported);
+        // Continuing an imported session is its only way on (ADR 0233): the
+        // continuation keeps its name.
+        const forkTitle = session.title
+          ? sourceImport
+            ? session.title
+            : `${session.title} (fork)`
+          : null;
         // Notices never reach the harness, so the fork's self-awareness
         // travels in its system prompt.
-        const forkNote = `This conversation is a fork of ${
-          session.title
-            ? `the conversation "${session.title}"`
-            : "another conversation"
-        }: it starts from a copy of that transcript up to the fork point. Its immediate parent is Catamorphic session ${sessionId}; use the ordinary project-session tools to read or message it. The user is exploring a tangent here; the original conversation continues separately, so don't refer to this one as if it were the original.`;
+        const forkNote = sourceImport
+          ? `This conversation continues a ${
+              sourceImport.harness === "codex" ? "Codex" : "Claude Code"
+            } session the user ran outside Work${
+              session.title ? ` ("${session.title}")` : ""
+            }, imported read-only as Catamorphic session ${sessionId}: it starts from a copy of that transcript. Pick up where it left off.`
+          : `This conversation is a fork of ${
+              session.title
+                ? `the conversation "${session.title}"`
+                : "another conversation"
+            }: it starts from a copy of that transcript up to the fork point. Its immediate parent is Catamorphic session ${sessionId}; use the ordinary project-session tools to read or message it. The user is exploring a tangent here; the original conversation continues separately, so don't refer to this one as if it were the original.`;
         const forkSystemPrompt = [session.system_prompt, forkNote]
           .filter((part): part is string => Boolean(part))
           .join("\n\n");
@@ -11150,6 +11522,7 @@ function mapSession(
     title: row.title,
     icon: row.icon,
     forkedFromSessionId: row.forked_from_session_id,
+    imported: importedSessionFromRow(row.imported),
     parentSessionId: row.parent_session_id,
     visibility: presentation?.visibility ?? "promoted",
     archivedAt: presentation?.archivedAt?.toISOString() ?? null,
@@ -11508,4 +11881,11 @@ function derivedNoticeId(sessionId: string, code: string): string {
     .update(`notice ${sessionId} ${code}`)
     .digest("hex");
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-8${hex.slice(13, 16)}-a${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
+}
+
+/** How many native records an import has stored (ADR 0233). */
+function importedNativeEntries(value: Json | null): number {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return 0;
+  const count = value.nativeEntries;
+  return typeof count === "number" && count >= 0 ? count : 0;
 }

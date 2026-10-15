@@ -5,6 +5,7 @@ export {
   createCodexAdapter,
 } from "./adapter.js";
 export {
+  CODEX_CLIENT_NAME,
   CodexAppServer,
   CodexRequestError,
   type CodexServerRequest,
@@ -17,6 +18,7 @@ export {
   gatewayProviderConfig,
   readOptions as readCodexOptions,
 } from "./config.js";
+export { CodexRolloutReader, readCodexRollout } from "./import.js";
 export {
   type CodexDefaultModel,
   type CodexModel,

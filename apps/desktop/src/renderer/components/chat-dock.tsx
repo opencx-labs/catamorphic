@@ -126,6 +126,7 @@ import {
 } from "./composer-input";
 import { ContextMeter, latestReportedModel } from "./context-meter.js";
 import { EnvironmentConnections } from "./environment-connections.js";
+import { HarnessIcon, importedHarnessLabel } from "./harness-icon.js";
 import { Modal } from "./modal.js";
 import { ResourceLinkBoundary } from "./open-resource-button.js";
 import { PendingButton } from "./pending-button.js";
@@ -1012,6 +1013,13 @@ function ChatDockContent({
               "",
           ),
       );
+  // A chat from Claude Code or Codex goes on only on an agent of that tool
+  // (ADR 0233); on any other it waits for the person to switch.
+  const importedLock =
+    chat.session?.imported &&
+    activeAgent?.harness !== chat.session.imported.harness
+      ? chat.session.imported
+      : null;
   // Another agent to pick for this chat: before it starts any, after it
   // only one on its harness, and the rest start a new chat (lib/agent-switch).
   // A connected project's chat picks its agent in the chat before it starts.
@@ -3062,234 +3070,257 @@ function ChatDockContent({
                   ),
               )}
             </div>
-            <form
-              ref={composerFormRef}
-              className="field relative m-3 mt-1 flex shrink-0 flex-col rounded-xl bg-bg-raised p-1.5"
-              onSubmit={submit}
-            >
-              {/* "/" command menu: skills (ADR 0052) merged with the
+            {importedLock ? (
+              // Another tool's chat (ADR 0233) goes on only on an agent of
+              // that tool: the agent picker above switches it.
+              <div
+                data-testid="imported-chat-bar"
+                className="m-3 mt-1 flex shrink-0 items-center gap-2 rounded-xl bg-bg-raised px-3 py-2.5 text-xs text-fg-muted"
+              >
+                <HarnessIcon
+                  harness={importedLock.harness}
+                  className="size-3.5 text-fg-faint"
+                />
+                <span className="min-w-0 flex-1">
+                  You ran this chat in{" "}
+                  {importedHarnessLabel(importedLock.harness)}. Switch it to a{" "}
+                  {importedHarnessLabel(importedLock.harness)} agent to continue
+                  it here.
+                </span>
+              </div>
+            ) : (
+              <form
+                ref={composerFormRef}
+                className="field relative m-3 mt-1 flex shrink-0 flex-col rounded-xl bg-bg-raised p-1.5"
+                onSubmit={submit}
+              >
+                {/* "/" command menu: skills (ADR 0052) merged with the
                 harness's own commands. Rows commit on mousedown like
                 the palette, so the composer never loses focus; the
                 panel pops in/out and rows glide as the filter types. */}
-              {!slashMenuOpen &&
-                slashing &&
-                (commandsLoading || commandsError) && (
-                  <div
-                    role="status"
-                    className="mb-2 flex items-center gap-2 px-3 text-xs text-fg-muted"
-                  >
-                    <span>
-                      {commandsLoading ? "Loading commands…" : commandsError}
-                    </span>
-                    {commandsError && (
-                      <button
-                        type="button"
-                        className="rounded px-2 py-1 text-fg hover:bg-bg-overlay"
-                        onClick={() => setCommandsRefresh((value) => value + 1)}
-                      >
-                        Retry
-                      </button>
-                    )}
-                  </div>
-                )}
-              <SlashMenu
-                open={slashMenuOpen}
-                id={slashListId}
-                anchorRef={composerFormRef}
-                loading={commandsLoading}
-                error={commandsError}
-                onRetry={() => {
-                  setCommandsRefresh((value) => value + 1);
-                  composerRef.current?.focus();
-                }}
-                matches={slashMatches}
-                selected={slashSelected}
-                onHover={(index) =>
-                  setSlashSelection(slashMatches[index]?.name)
-                }
-                onCommit={runSlash}
-                onDismiss={() => {
-                  setSlashDismissed(true);
-                  composerRef.current?.focus();
-                }}
-              />
-              <div className="flex items-center gap-2">
-                {/* Any file attaches — as media when the agent takes it,
+                {!slashMenuOpen &&
+                  slashing &&
+                  (commandsLoading || commandsError) && (
+                    <div
+                      role="status"
+                      className="mb-2 flex items-center gap-2 px-3 text-xs text-fg-muted"
+                    >
+                      <span>
+                        {commandsLoading ? "Loading commands…" : commandsError}
+                      </span>
+                      {commandsError && (
+                        <button
+                          type="button"
+                          className="rounded px-2 py-1 text-fg hover:bg-bg-overlay"
+                          onClick={() =>
+                            setCommandsRefresh((value) => value + 1)
+                          }
+                        >
+                          Retry
+                        </button>
+                      )}
+                    </div>
+                  )}
+                <SlashMenu
+                  open={slashMenuOpen}
+                  id={slashListId}
+                  anchorRef={composerFormRef}
+                  loading={commandsLoading}
+                  error={commandsError}
+                  onRetry={() => {
+                    setCommandsRefresh((value) => value + 1);
+                    composerRef.current?.focus();
+                  }}
+                  matches={slashMatches}
+                  selected={slashSelected}
+                  onHover={(index) =>
+                    setSlashSelection(slashMatches[index]?.name)
+                  }
+                  onCommit={runSlash}
+                  onDismiss={() => {
+                    setSlashDismissed(true);
+                    composerRef.current?.focus();
+                  }}
+                />
+                <div className="flex items-center gap-2">
+                  {/* Any file attaches — as media when the agent takes it,
                   as a path pill otherwise — so the picker never filters
                   and never hides. */}
-                {/* Preparation shows in place on the attach button: a
+                  {/* Preparation shows in place on the attach button: a
                   status row above the composer shifted the whole dock
                   (and an open question) up and back for every paste. */}
-                <ShortcutHint
-                  label={
-                    pendingTransfers > 0
-                      ? "Preparing attachments…"
-                      : "Attach files"
-                  }
-                >
-                  <button
-                    type="button"
-                    onClick={() => fileInputRef.current?.click()}
-                    className="grid size-8 shrink-0 cursor-pointer place-items-center rounded-lg text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
-                    aria-label="Attach files"
-                  >
-                    {pendingTransfers > 0 ? (
-                      <LoaderCircle className="size-4 animate-spin" />
-                    ) : (
-                      <Paperclip className="size-4" />
-                    )}
-                  </button>
-                </ShortcutHint>
-                {pendingTransfers > 0 && (
-                  <span role="status" className="sr-only">
-                    Preparing attachments…
-                  </span>
-                )}
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  multiple
-                  className="hidden"
-                  onChange={(event) => {
-                    addFiles([...(event.target.files ?? [])]);
-                    event.target.value = "";
-                  }}
-                />
-                {/* Prose and pills in one flow: pastes, selections, links,
-                  tabs, images and documents sit inline where they were
-                  dropped, enter with pill-in and leave with pill-out. */}
-                <ComposerInput
-                  ref={composerRef}
-                  suggestions={
-                    slashMenuOpen
-                      ? {
-                          listId: slashListId,
-                          activeId: slashMatches.length
-                            ? `${slashListId}-${slashSelected}`
-                            : undefined,
-                        }
-                      : undefined
-                  }
-                  onAnimationEnd={(event) => {
-                    if (event.animationName.startsWith("input-recall-")) {
-                      setRecallMotion((current) =>
-                        current &&
-                        event.animationName ===
-                          `input-recall-${current.direction}-${current.sequence % 2 === 0 ? "b" : "a"}`
-                          ? null
-                          : current,
-                      );
-                    }
-                  }}
-                  wrapperClassName="min-w-0 flex-1"
-                  className={`max-h-24 min-h-9 overflow-y-auto px-2.5 py-1.5 text-sm leading-6 ${
-                    recallMotion
-                      ? `animate-input-recall-${recallMotion.direction}-${recallMotion.sequence % 2 === 0 ? "b" : "a"}`
-                      : ""
-                  }`}
-                  onChange={(state) => {
-                    publishDraft();
-                    setPillCount(state.pillCount);
-                    setDraft(state.text);
-                    // Typing (or pasting) exits history-recall mode and
-                    // revives a dismissed slash menu; the dock's own
-                    // rewrites (recall itself) don't count.
-                    if (
-                      !rewritingRef.current &&
-                      state.text !== draftRef.current
-                    ) {
-                      setRecall(null);
-                      setSlashDismissed(false);
-                    }
-                  }}
-                  onKeyDown={onKeyDown}
-                  onPaste={onComposerPaste}
-                  onOpenTab={
-                    onOpenSurface
-                      ? (key, mode) => onOpenSurface(key, mode)
-                      : undefined
-                  }
-                  onOpenPath={
-                    onFileClick
-                      ? (path, mode) =>
-                          onFileClick(path, modifiersForMode(mode))
-                      : undefined
-                  }
-                  maxPills={MAX_ATTACHMENTS}
-                  placeholder={
-                    // An open question takes free-text answers here: the
-                    // panel has no "Other" row (ADR 0195).
-                    // A permission request is no question: typing declines it.
-                    questionRequests.length > 0
-                      ? "Answer in your own words…"
-                      : accepts.length > 0
-                        ? composerPlaceholder
-                        : `${composerPlaceholder.replace(/…$/, "")} (text only)…`
-                  }
-                  ariaLabel="Message the assistant"
-                />
-                {/* Context ring (ADR 0057): quiet until a harness reports
-                  occupancy and window size; danger red past 90%. */}
-                <ContextMeter turns={chat.timeline} />
-                {/* Voice in this chat (ADR 0216): talk to its agent, then
-                  carry on typing. Company chats live on the server. */}
-                {!authority && (
-                  <VoiceButton
-                    projectId={projectId}
-                    nativeMenus={nativeWindow}
-                    chat={{
-                      sessionId: chat.sessionId,
-                      agentId: chat.session?.agentId ?? selectedAgentId ?? null,
-                      agentName: activeAgent?.name ?? null,
-                      ensureSession: chat.ensureSession,
-                    }}
-                  />
-                )}
-                {/* Nothing to send while the agent works: the button stops
-                  the running turn instead. */}
-                {chat.isWorking &&
-                !awaitingInput &&
-                !draft.trim() &&
-                pillCount === 0 ? (
-                  <ShortcutHint label="Stop">
-                    <button
-                      type="button"
-                      className="grid size-8 shrink-0 place-items-center rounded-lg bg-fg text-bg transition-opacity duration-150"
-                      onClick={() => void chat.interrupt()}
-                      aria-label="Stop the agent"
-                      data-testid="chat-stop"
-                    >
-                      <Square className="size-3 fill-current" />
-                    </button>
-                  </ShortcutHint>
-                ) : (
                   <ShortcutHint
                     label={
-                      // A message during a blocking question reaches the
-                      // agent at once (ADR 0195); otherwise it queues.
-                      chat.isWorking && !awaitingInput
-                        ? `Queue (${/Mac/.test(navigator.platform) ? "⌘↵" : "Ctrl+Enter"} sends now)`
-                        : "Send"
+                      pendingTransfers > 0
+                        ? "Preparing attachments…"
+                        : "Attach files"
                     }
-                    shortcut="↵"
                   >
                     <button
-                      type="submit"
-                      className="grid size-8 shrink-0 place-items-center rounded-lg bg-accent text-accent-fg transition-opacity duration-150 disabled:opacity-35"
-                      disabled={
-                        pendingTransfers > 0 ||
-                        commandResolutionBlocked ||
-                        (!draft.trim() && pillCount === 0)
-                      }
-                      data-disabled-reason="Write a message or attach a file first"
-                      aria-label="Send message"
+                      type="button"
+                      onClick={() => fileInputRef.current?.click()}
+                      className="grid size-8 shrink-0 cursor-pointer place-items-center rounded-lg text-fg-muted transition-colors duration-150 hover:bg-bg-overlay hover:text-fg"
+                      aria-label="Attach files"
                     >
-                      <ArrowUp className="size-4" />
+                      {pendingTransfers > 0 ? (
+                        <LoaderCircle className="size-4 animate-spin" />
+                      ) : (
+                        <Paperclip className="size-4" />
+                      )}
                     </button>
                   </ShortcutHint>
-                )}
-              </div>
-            </form>
+                  {pendingTransfers > 0 && (
+                    <span role="status" className="sr-only">
+                      Preparing attachments…
+                    </span>
+                  )}
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    multiple
+                    className="hidden"
+                    onChange={(event) => {
+                      addFiles([...(event.target.files ?? [])]);
+                      event.target.value = "";
+                    }}
+                  />
+                  {/* Prose and pills in one flow: pastes, selections, links,
+                  tabs, images and documents sit inline where they were
+                  dropped, enter with pill-in and leave with pill-out. */}
+                  <ComposerInput
+                    ref={composerRef}
+                    suggestions={
+                      slashMenuOpen
+                        ? {
+                            listId: slashListId,
+                            activeId: slashMatches.length
+                              ? `${slashListId}-${slashSelected}`
+                              : undefined,
+                          }
+                        : undefined
+                    }
+                    onAnimationEnd={(event) => {
+                      if (event.animationName.startsWith("input-recall-")) {
+                        setRecallMotion((current) =>
+                          current &&
+                          event.animationName ===
+                            `input-recall-${current.direction}-${current.sequence % 2 === 0 ? "b" : "a"}`
+                            ? null
+                            : current,
+                        );
+                      }
+                    }}
+                    wrapperClassName="min-w-0 flex-1"
+                    className={`max-h-24 min-h-9 overflow-y-auto px-2.5 py-1.5 text-sm leading-6 ${
+                      recallMotion
+                        ? `animate-input-recall-${recallMotion.direction}-${recallMotion.sequence % 2 === 0 ? "b" : "a"}`
+                        : ""
+                    }`}
+                    onChange={(state) => {
+                      publishDraft();
+                      setPillCount(state.pillCount);
+                      setDraft(state.text);
+                      // Typing (or pasting) exits history-recall mode and
+                      // revives a dismissed slash menu; the dock's own
+                      // rewrites (recall itself) don't count.
+                      if (
+                        !rewritingRef.current &&
+                        state.text !== draftRef.current
+                      ) {
+                        setRecall(null);
+                        setSlashDismissed(false);
+                      }
+                    }}
+                    onKeyDown={onKeyDown}
+                    onPaste={onComposerPaste}
+                    onOpenTab={
+                      onOpenSurface
+                        ? (key, mode) => onOpenSurface(key, mode)
+                        : undefined
+                    }
+                    onOpenPath={
+                      onFileClick
+                        ? (path, mode) =>
+                            onFileClick(path, modifiersForMode(mode))
+                        : undefined
+                    }
+                    maxPills={MAX_ATTACHMENTS}
+                    placeholder={
+                      // An open question takes free-text answers here: the
+                      // panel has no "Other" row (ADR 0195).
+                      // A permission request is no question: typing declines it.
+                      questionRequests.length > 0
+                        ? "Answer in your own words…"
+                        : accepts.length > 0
+                          ? composerPlaceholder
+                          : `${composerPlaceholder.replace(/…$/, "")} (text only)…`
+                    }
+                    ariaLabel="Message the assistant"
+                  />
+                  {/* Context ring (ADR 0057): quiet until a harness reports
+                  occupancy and window size; danger red past 90%. */}
+                  <ContextMeter turns={chat.timeline} />
+                  {/* Voice in this chat (ADR 0216): talk to its agent, then
+                  carry on typing. Company chats live on the server. */}
+                  {!authority && (
+                    <VoiceButton
+                      projectId={projectId}
+                      nativeMenus={nativeWindow}
+                      chat={{
+                        sessionId: chat.sessionId,
+                        agentId:
+                          chat.session?.agentId ?? selectedAgentId ?? null,
+                        agentName: activeAgent?.name ?? null,
+                        ensureSession: chat.ensureSession,
+                      }}
+                    />
+                  )}
+                  {/* Nothing to send while the agent works: the button stops
+                  the running turn instead. */}
+                  {chat.isWorking &&
+                  !awaitingInput &&
+                  !draft.trim() &&
+                  pillCount === 0 ? (
+                    <ShortcutHint label="Stop">
+                      <button
+                        type="button"
+                        className="grid size-8 shrink-0 place-items-center rounded-lg bg-fg text-bg transition-opacity duration-150"
+                        onClick={() => void chat.interrupt()}
+                        aria-label="Stop the agent"
+                        data-testid="chat-stop"
+                      >
+                        <Square className="size-3 fill-current" />
+                      </button>
+                    </ShortcutHint>
+                  ) : (
+                    <ShortcutHint
+                      label={
+                        // A message during a blocking question reaches the
+                        // agent at once (ADR 0195); otherwise it queues.
+                        chat.isWorking && !awaitingInput
+                          ? `Queue (${/Mac/.test(navigator.platform) ? "⌘↵" : "Ctrl+Enter"} sends now)`
+                          : "Send"
+                      }
+                      shortcut="↵"
+                    >
+                      <button
+                        type="submit"
+                        className="grid size-8 shrink-0 place-items-center rounded-lg bg-accent text-accent-fg transition-opacity duration-150 disabled:opacity-35"
+                        disabled={
+                          pendingTransfers > 0 ||
+                          commandResolutionBlocked ||
+                          (!draft.trim() && pillCount === 0)
+                        }
+                        data-disabled-reason="Write a message or attach a file first"
+                        aria-label="Send message"
+                      >
+                        <ArrowUp className="size-4" />
+                      </button>
+                    </ShortcutHint>
+                  )}
+                </div>
+              </form>
+            )}
           </div>
         </div>
       </section>

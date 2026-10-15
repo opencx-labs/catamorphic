@@ -21,6 +21,7 @@ function agent(overrides: Partial<AgentInfo>): AgentInfo {
     harnessPermissions: { permissionMode: "bypassPermissions" },
     coordination: "shared-first",
     memory: false,
+    syncSessions: false,
     connections: { mode: "all" },
     skills: { mode: "all" },
     toolPolicies: {},

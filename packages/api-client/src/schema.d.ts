@@ -2733,7 +2733,24 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
         put?: never;
         post: {
             parameters: {
@@ -2753,7 +2770,24 @@ export interface paths {
                 };
             };
         };
-        delete?: never;
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
         options?: never;
         head?: never;
         patch?: never;
@@ -6221,6 +6255,7 @@ export interface paths {
                                 icon: string | null;
                                 /** Format: uuid */
                                 forkedFromSessionId: string | null;
+                                imported: components["schemas"]["ImportedSession"] | null;
                                 /** Format: uuid */
                                 parentSessionId: string | null;
                                 /** @enum {string} */
@@ -6364,6 +6399,7 @@ export interface paths {
                             icon: string | null;
                             /** Format: uuid */
                             forkedFromSessionId: string | null;
+                            imported: components["schemas"]["ImportedSession"] | null;
                             /** Format: uuid */
                             parentSessionId: string | null;
                             /** @enum {string} */
@@ -6579,6 +6615,7 @@ export interface paths {
                             icon: string | null;
                             /** Format: uuid */
                             forkedFromSessionId: string | null;
+                            imported: components["schemas"]["ImportedSession"] | null;
                             /** Format: uuid */
                             parentSessionId: string | null;
                             /** @enum {string} */
@@ -6713,6 +6750,7 @@ export interface paths {
                             icon: string | null;
                             /** Format: uuid */
                             forkedFromSessionId: string | null;
+                            imported: components["schemas"]["ImportedSession"] | null;
                             /** Format: uuid */
                             parentSessionId: string | null;
                             /** @enum {string} */
@@ -6856,6 +6894,7 @@ export interface paths {
                             icon: string | null;
                             /** Format: uuid */
                             forkedFromSessionId: string | null;
+                            imported: components["schemas"]["ImportedSession"] | null;
                             /** Format: uuid */
                             parentSessionId: string | null;
                             /** @enum {string} */
@@ -6963,7 +7002,7 @@ export interface paths {
                         "application/json": {
                             error: string;
                             /** @enum {string} */
-                            code: "session_closed" | "authority_required" | "handoff_pending";
+                            code: "session_closed" | "authority_required" | "handoff_pending" | "imported";
                             authorityRevision?: number;
                         } | {
                             error: string;
@@ -7313,7 +7352,7 @@ export interface paths {
                         "application/json": {
                             error: string;
                             /** @enum {string} */
-                            code: "session_closed" | "authority_required" | "handoff_pending";
+                            code: "session_closed" | "authority_required" | "handoff_pending" | "imported";
                             authorityRevision?: number;
                         };
                     };
@@ -7411,6 +7450,7 @@ export interface paths {
                             icon: string | null;
                             /** Format: uuid */
                             forkedFromSessionId: string | null;
+                            imported: components["schemas"]["ImportedSession"] | null;
                             /** Format: uuid */
                             parentSessionId: string | null;
                             /** @enum {string} */
@@ -7664,6 +7704,7 @@ export interface paths {
                                 icon: string | null;
                                 /** Format: uuid */
                                 forkedFromSessionId: string | null;
+                                imported: components["schemas"]["ImportedSession"] | null;
                                 /** Format: uuid */
                                 parentSessionId: string | null;
                                 /** @enum {string} */
@@ -7904,6 +7945,7 @@ export interface paths {
                             icon: string | null;
                             /** Format: uuid */
                             forkedFromSessionId: string | null;
+                            imported: components["schemas"]["ImportedSession"] | null;
                             /** Format: uuid */
                             parentSessionId: string | null;
                             /** @enum {string} */
@@ -8138,6 +8180,7 @@ export interface paths {
                                 icon: string | null;
                                 /** Format: uuid */
                                 forkedFromSessionId: string | null;
+                                imported: components["schemas"]["ImportedSession"] | null;
                                 /** Format: uuid */
                                 parentSessionId: string | null;
                                 /** @enum {string} */
@@ -8292,6 +8335,7 @@ export interface paths {
                                 icon: string | null;
                                 /** Format: uuid */
                                 forkedFromSessionId: string | null;
+                                imported: components["schemas"]["ImportedSession"] | null;
                                 /** Format: uuid */
                                 parentSessionId: string | null;
                                 /** @enum {string} */
@@ -8489,6 +8533,7 @@ export interface paths {
                                 icon: string | null;
                                 /** Format: uuid */
                                 forkedFromSessionId: string | null;
+                                imported: components["schemas"]["ImportedSession"] | null;
                                 /** Format: uuid */
                                 parentSessionId: string | null;
                                 /** @enum {string} */
@@ -8711,6 +8756,7 @@ export interface paths {
                             icon: string | null;
                             /** Format: uuid */
                             forkedFromSessionId: string | null;
+                            imported: components["schemas"]["ImportedSession"] | null;
                             /** Format: uuid */
                             parentSessionId: string | null;
                             /** @enum {string} */
@@ -8865,7 +8911,7 @@ export interface paths {
                         "application/json": {
                             error: string;
                             /** @enum {string} */
-                            code: "session_closed" | "authority_required" | "handoff_pending";
+                            code: "session_closed" | "authority_required" | "handoff_pending" | "imported";
                             authorityRevision?: number;
                         };
                     };
@@ -8972,7 +9018,7 @@ export interface paths {
                         "application/json": {
                             error: string;
                             /** @enum {string} */
-                            code: "session_closed" | "authority_required" | "handoff_pending";
+                            code: "session_closed" | "authority_required" | "handoff_pending" | "imported";
                             authorityRevision?: number;
                         };
                     };
@@ -9053,6 +9099,7 @@ export interface paths {
                             icon: string | null;
                             /** Format: uuid */
                             forkedFromSessionId: string | null;
+                            imported: components["schemas"]["ImportedSession"] | null;
                             /** Format: uuid */
                             parentSessionId: string | null;
                             /** @enum {string} */
@@ -9200,6 +9247,7 @@ export interface paths {
                             icon: string | null;
                             /** Format: uuid */
                             forkedFromSessionId: string | null;
+                            imported: components["schemas"]["ImportedSession"] | null;
                             /** Format: uuid */
                             parentSessionId: string | null;
                             /** @enum {string} */
@@ -9497,6 +9545,7 @@ export interface paths {
                                 icon: string | null;
                                 /** Format: uuid */
                                 forkedFromSessionId: string | null;
+                                imported: components["schemas"]["ImportedSession"] | null;
                                 /** Format: uuid */
                                 parentSessionId: string | null;
                                 /** @enum {string} */
@@ -9673,6 +9722,7 @@ export interface paths {
                             icon: string | null;
                             /** Format: uuid */
                             forkedFromSessionId: string | null;
+                            imported: components["schemas"]["ImportedSession"] | null;
                             /** Format: uuid */
                             parentSessionId: string | null;
                             /** @enum {string} */
@@ -11294,6 +11344,7 @@ export interface paths {
                             icon: string | null;
                             /** Format: uuid */
                             forkedFromSessionId: string | null;
+                            imported: components["schemas"]["ImportedSession"] | null;
                             /** Format: uuid */
                             parentSessionId: string | null;
                             /** @enum {string} */
@@ -17312,6 +17363,14 @@ export interface components {
         JsonValueInput: string | number | boolean | (null) | components["schemas"]["JsonValueInput"][] | {
             [key: string]: components["schemas"]["JsonValueInput"];
         };
+        ImportedSessionInput: {
+            /** @enum {string} */
+            harness: "claude-code" | "codex";
+            nativeSessionId: string;
+            sourcePath: string;
+            contentSha256: string;
+            sourceModifiedAt: string;
+        };
         ProtocolJsonValueInput: (string | number | boolean | components["schemas"]["ProtocolJsonValueInput"][] | {
             [key: string]: components["schemas"]["ProtocolJsonValueInput"];
         }) | null;
@@ -18158,6 +18217,7 @@ export interface components {
                 activeForm?: string;
             }[];
             metadata: components["schemas"]["SessionMetadataInput"];
+            imported?: components["schemas"]["ImportedSessionInput"] | null;
             parentSessionId: string | null;
             forkedFromSessionId: string | null;
             attentionRevision: number;
@@ -18196,6 +18256,7 @@ export interface components {
                     activeForm?: string;
                 }[];
                 metadata?: components["schemas"]["SessionMetadataInput"];
+                imported?: components["schemas"]["ImportedSessionInput"] | null;
                 parentSessionId?: string | null;
                 forkedFromSessionId?: string | null;
                 attentionRevision?: number;
@@ -18284,6 +18345,14 @@ export interface components {
         };
         JsonValue: string | number | boolean | (null) | components["schemas"]["JsonValue"][] | {
             [key: string]: components["schemas"]["JsonValue"];
+        };
+        ImportedSession: {
+            /** @enum {string} */
+            harness: "claude-code" | "codex";
+            nativeSessionId: string;
+            sourcePath: string;
+            contentSha256: string;
+            sourceModifiedAt: string;
         };
         ProtocolJsonValue: (string | number | boolean | components["schemas"]["ProtocolJsonValue"][] | {
             [key: string]: components["schemas"]["ProtocolJsonValue"];
@@ -19131,6 +19200,7 @@ export interface components {
                 activeForm?: string;
             }[];
             metadata: components["schemas"]["SessionMetadata"];
+            imported?: components["schemas"]["ImportedSession"] | null;
             parentSessionId: string | null;
             forkedFromSessionId: string | null;
             attentionRevision: number;
@@ -19169,6 +19239,7 @@ export interface components {
                     activeForm?: string;
                 }[];
                 metadata?: components["schemas"]["SessionMetadata"];
+                imported?: components["schemas"]["ImportedSession"] | null;
                 parentSessionId?: string | null;
                 forkedFromSessionId?: string | null;
                 attentionRevision?: number;

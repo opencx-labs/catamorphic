@@ -674,6 +674,41 @@ the historical log explains how it arrived here.
 - [Performance](docs/performance.md): idle lifecycle checks and sustained measurement.
 
 ## Design log
+### 2026-10-15: Chats from Claude Code and Codex sit beside Work's own
+
+People run Claude Code and Codex in terminals and other apps on the same
+repositories they open in Work, so one project's history was split across
+three apps (issue #240). With **Sync chats from Claude Code** (or Codex)
+on in that agent's settings (off by default), those chats appear in the
+project's chat list (ADR 0233):
+
+- **They are real chats, continued by their own tool.** Each one is a
+  Work session with an `imported` origin, so the chat list, palette,
+  search, the phone and agents' session tools see it with nothing of
+  their own. The row wears the tool's mark beside its title, and its card
+  says where it came from. It opens on the agent whose switch is on, and
+  only an agent of that tool continues it: on any other, the composer
+  gives way to "You ran this chat in Claude Code. Switch it to a Claude
+  Code agent to continue it here." A Claude Code chat resumes Claude
+  Code's own session (its records are stored with the import); a Codex
+  chat is handed the transcript. Once Work ran a turn in it, the tool's
+  file is no longer read into it. Archive hides one for good, even as its
+  file grows.
+- **They look like Work's own.** A Claude Code transcript runs through the
+  same translator as Work's Claude Code turns; a Codex rollout's finished
+  items map to the same commands, tool calls and file changes.
+- **New chats only, kept current.** Only sessions that start after a tool
+  is turned on are imported. Directory watches are hints: a file is read
+  once it settles, from where the last read stopped (rollouts reach a
+  gigabyte), and only the turns that changed go to core, so an open chat
+  follows a CLI that is still working. A last turn reads as open until the
+  CLI ends it or goes quiet for ten minutes.
+- **Never twice, never shared.** A session Work itself ran (its native id
+  is one of Work's threads), a Claude Code side chain, a Codex subagent and
+  Codex Desktop's own copies of Claude Code chats are skipped. Imported
+  chats stay on this computer: the mirror skips them as it skips incognito
+  chats; a continuation syncs like any chat.
+
 ### 2026-10-15: The activity line says what the agent is doing, in its own words
 
 The line beside the spinner said "Thinking...", "Working..." and "Running

@@ -683,6 +683,8 @@ export function registerIpcHandlers(
         agentsSnapshot(store),
       );
     }
+    // An agent may have turned importing chats from its tool on or off.
+    state.current?.refreshExternalSessions();
     // Chat affordances across all windows key off "any agent configured".
     state.broadcast("catamorphic:server-changed", {
       url: state.current?.url ?? null,

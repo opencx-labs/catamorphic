@@ -62,6 +62,7 @@ import { SignalBadge, SignalGlyph } from "./chat-signals.js";
 import { Collapsible } from "./collapsible.js";
 import { FilesNav } from "./files-nav.js";
 import { GitNav } from "./git-nav.js";
+import { HarnessIcon, importedHarnessLabel } from "./harness-icon.js";
 import { useRemoteProject } from "./project-authority-provider.js";
 import { PrsNav } from "./prs-nav.js";
 import { type RemoteFeatures, RemoteNav } from "./remote-nav.js";
@@ -1202,6 +1203,19 @@ function SessionsNav({
                       data-testid="sidebar-project-chat"
                     />
                   )}
+                  {session.imported && (
+                    <span
+                      className="ml-1.5 inline-flex shrink-0 text-fg-faint"
+                      role="img"
+                      aria-label={`From ${importedHarnessLabel(session.imported.harness)}`}
+                      data-testid="sidebar-imported-chat"
+                    >
+                      <HarnessIcon
+                        harness={session.imported.harness}
+                        className="size-3"
+                      />
+                    </span>
+                  )}
                   {session.attentionRequired ? (
                     <span className="sr-only">Ready for you</span>
                   ) : unreadSessionIds.has(session.id) ? (
@@ -1218,7 +1232,12 @@ function SessionsNav({
                 title: sessionLabel(session),
                 description: session.activity ?? undefined,
                 metadata: [
-                  { label: "Agent", value: agentName },
+                  session.imported
+                    ? {
+                        label: "From",
+                        value: `${importedHarnessLabel(session.imported.harness)}, read only`,
+                      }
+                    : { label: "Agent", value: agentName },
                   ...(session.owner === "project"
                     ? [{ label: "Belongs to", value: "The project" }]
                     : []),

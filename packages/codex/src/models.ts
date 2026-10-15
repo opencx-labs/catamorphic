@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
+import { CODEX_CLIENT_NAME } from "./app-server.js";
 
 export interface CodexModel {
   id: string;
@@ -200,7 +201,7 @@ async function withAppServer<T>(
   };
   try {
     await request("initialize", {
-      clientInfo: { name: "catamorphic", version: "0.0.1" },
+      clientInfo: { name: CODEX_CLIENT_NAME, version: "0.0.1" },
     });
     child.stdin.write(`${JSON.stringify({ method: "initialized" })}\n`);
     return await run(request);
