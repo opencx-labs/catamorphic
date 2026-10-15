@@ -542,25 +542,48 @@ describe("markdown editor", () => {
 
     // The box jumps to the next block; the grip inside glides there on a
     // transform, which runs on the compositor (no left/top transition).
+    // Glides are recorded as they start: a 140ms animation can begin and
+    // end between two polls.
     await hoverHandle(HANDLE_TARGETS.h1, "heading one");
-    await run(`window.__mdLookups = 0; return true;`);
+    await run(`
+      window.__mdLookups = 0;
+      window.__mdGlides = [];
+      const grip = $('.cat-mdedit-handle-grip');
+      const animate = grip.animate.bind(grip);
+      grip.animate = (keyframes, options) => {
+        window.__mdGlides.push(JSON.stringify(keyframes));
+        return animate(keyframes, options);
+      };
+      return true;
+    `);
     const next = await run<{ x: number; y: number }>(`
       const r = ${HANDLE_TARGETS.h2}.getBoundingClientRect();
       return { x: Math.round(r.left + 40), y: Math.round(lineCenter(${HANDLE_TARGETS.h2})) };
     `);
     await mouse("mouseMoved", next);
-    const glide = await runWait<{ animated: boolean; transitions: string }>(
-      `const handle = $('.cat-mdedit-handle');
-       const grip = handle.querySelector('.cat-mdedit-handle-grip');
-       const animated = grip.getAnimations().some((animation) =>
-         animation.effect?.getKeyframes().some((frame) => frame.transform));
-       return animated && { animated, transitions: getComputedStyle(handle).transitionProperty };`,
-      { label: "grip glides to the next block" },
-    );
-    expect(glide.transitions).not.toMatch(/\b(top|left)\b/);
-    expect(await run<number>(`return window.__mdLookups;`)).toBeGreaterThan(0);
     const settledOnH2 = await settledHandle(HANDLE_TARGETS.h2, "heading two");
     expect(Math.abs(settledOnH2.handle - settledOnH2.line)).toBeLessThan(1.5);
+    const glides = await run<string[]>(`return window.__mdGlides;`);
+    expect(glides.length).toBeGreaterThan(0);
+    expect(glides[0]).toContain("translate(");
+    expect(
+      await run<string>(
+        `return getComputedStyle($('.cat-mdedit-handle')).transitionProperty;`,
+      ),
+    ).not.toMatch(/\b(top|left)\b/);
+    expect(await run<number>(`return window.__mdLookups;`)).toBeGreaterThan(0);
+
+    // Hidden and shown again elsewhere, it appears there, not gliding in
+    // from where it hid.
+    await mouse("mouseMoved", { x: 4, y: 4 });
+    await runWait(
+      `return getComputedStyle($('.cat-mdedit-handle')).visibility === 'hidden';`,
+      { label: "handle hidden off the editor" },
+    );
+    await run(`window.__mdGlides = []; return true;`);
+    const far = await hoverHandle(HANDLE_TARGETS["code block"], "code block");
+    expect(Math.abs(far.handle - far.line)).toBeLessThan(1.5);
+    expect(await run<string[]>(`return window.__mdGlides;`)).toEqual([]);
     await mouse("mouseMoved", { x: 4, y: 4 });
   }, 60_000);
 

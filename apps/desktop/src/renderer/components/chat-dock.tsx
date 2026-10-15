@@ -2247,7 +2247,7 @@ function ChatDockContent({
         // Growing into a tab, its card's edge (border, corners, shadow) and
         // colour ease into the tab's along with its size: nothing switches
         // off in the first frame.
-        className={`pointer-events-auto relative flex w-full origin-bottom flex-col overflow-hidden transition-[max-width,height,opacity,translate,scale,background-color,border-radius,border-color,border-width,box-shadow] duration-250 ease-[cubic-bezier(0.2,0,0,1)] ${
+        className={`pointer-events-auto relative flex w-full origin-bottom flex-col overflow-hidden duration-250 ease-[cubic-bezier(0.2,0,0,1)] ${
           presentsAsTab
             ? "h-full max-w-full rounded-none border-0 border-transparent bg-bg"
             : `${
@@ -2257,14 +2257,19 @@ function ChatDockContent({
               }`
         } ${
           closing || minimizing
-            ? "pointer-events-none translate-y-4 scale-[0.985] opacity-0 animate-dock-out"
+            ? "pointer-events-none translate-y-4 scale-[0.985] opacity-0 transition-[max-width,height,opacity,translate,scale,background-color,border-radius,border-color,border-width,box-shadow] animate-dock-out"
             : expanded
-              ? "translate-y-0 scale-100 opacity-100 animate-dock-in"
-              : // At rest while minimized or behind another tab: kept
-                // (drafts, scroll, queued sends) but skipped by style,
-                // layout and paint, which a long transcript otherwise pays
-                // on every frame while it streams (docs/performance.md).
-                "pointer-events-none translate-y-4 scale-[0.985] opacity-0 [content-visibility:hidden]"
+              ? "translate-y-0 scale-100 opacity-100 transition-[max-width,height,opacity,translate,scale,background-color,border-radius,border-color,border-width,box-shadow] animate-dock-in"
+              : // Minimized or behind another tab: kept (drafts, scroll,
+                // queued sends) but skipped by style, layout and paint,
+                // which a long transcript otherwise pays on every frame
+                // while it streams (docs/performance.md). The skip is a
+                // discrete step at the end of the fade, so content stays
+                // drawn through it, whichever exit led here. Only this
+                // state transitions it: coming back, a transition's first
+                // frame would still skip the chat as it focuses its
+                // composer.
+                "pointer-events-none translate-y-4 scale-[0.985] opacity-0 transition-[max-width,height,opacity,translate,scale,background-color,border-radius,border-color,border-width,box-shadow,content-visibility] transition-discrete [content-visibility:hidden]"
         }`}
         aria-label={title}
         aria-hidden={!expanded}

@@ -19,11 +19,13 @@ export interface HandleHoverGate {
  * at, the answer cannot change, so this plugin, ordered before the
  * handle's, takes those moves and the handle's lookup runs only when the
  * pointer leaves the block. The block's box is read when the handle moves
- * to it, with layout fresh from the handle's own lookup, and forgotten on
- * scroll, a resize of the window or the editor, an edit or the handle
- * hiding. Blocks holding other drag targets (a list, an item with a nested
- * list) and tables are never held, so a move onto an inner target still
- * finds it.
+ * to it, with layout fresh from the handle's own lookup, and forgotten when
+ * the editor scrolls, the window, the editor or its scroller resizes, the
+ * document changes or the handle hides. Blocks holding other drag targets
+ * (a list, an item with a nested list) and tables are never held, so a
+ * move onto an inner target still finds it. A block that moves any other
+ * way (mid-entrance, a drop's reorder) keeps its old box until the pointer
+ * leaves it.
  */
 export function createHandleHoverGate(): HandleHoverGate {
   let box: DOMRect | null = null;
@@ -41,11 +43,28 @@ export function createHandleHoverGate(): HandleHoverGate {
         new Plugin({
           key: new PluginKey("handleHoverGate"),
           view: (view) => {
-            // The frontmatter panel opening above the document moves every
-            // block without an edit: the editor's container resizes.
+            // Blocks move without an edit when the editor's container
+            // resizes (the frontmatter panel opening above the document) or
+            // the scroller around it does (a line appearing above it).
             const resized = new ResizeObserver(forget);
-            if (view.dom.parentElement) resized.observe(view.dom.parentElement);
-            document.addEventListener("scroll", forget, true);
+            const container = view.dom.parentElement;
+            if (container) resized.observe(container);
+            if (container?.parentElement) {
+              resized.observe(container.parentElement);
+            }
+            // Only scrolls that move the editor: a chat streaming beside it
+            // scrolls its own log on every frame.
+            const onScroll = (event: Event) => {
+              const scrolled = event.target;
+              if (
+                scrolled === document ||
+                (scrolled instanceof globalThis.Node &&
+                  scrolled.contains(view.dom))
+              ) {
+                forget();
+              }
+            };
+            document.addEventListener("scroll", onScroll, true);
             window.addEventListener("resize", forget);
             return {
               update: (current, previous) => {
@@ -53,7 +72,7 @@ export function createHandleHoverGate(): HandleHoverGate {
               },
               destroy: () => {
                 resized.disconnect();
-                document.removeEventListener("scroll", forget, true);
+                document.removeEventListener("scroll", onScroll, true);
                 window.removeEventListener("resize", forget);
               },
             };

@@ -264,6 +264,8 @@ export function installHandleMotion(handle: HTMLElement): () => void {
       : null;
   handle.classList.add("unpositioned");
   let shown = false;
+  /** Shown this frame: the extension shows the box before placing it. */
+  let arriving = false;
   let at: { left: number; top: number } | null = null;
   let glide: Animation | null = null;
 
@@ -299,10 +301,19 @@ export function installHandleMotion(handle: HTMLElement): () => void {
       placed &&
       handle.style.visibility !== "hidden" &&
       wrapper?.style.visibility !== "hidden";
-    if (visible && shown && at && (left !== at.left || top !== at.top)) {
+    // A move between two places it was shown at glides. Shown again after
+    // hiding, the extension makes the box visible at its last place and
+    // places it a moment later, in the same frame: that placement is where
+    // it appears, not a move to glide.
+    const moved = at !== null && (left !== at.left || top !== at.top);
+    if (visible && shown && moved && at && !arriving) {
       glideFrom(at.left - left, at.top - top);
     }
     if (visible && !shown) {
+      arriving = true;
+      requestAnimationFrame(() => {
+        arriving = false;
+      });
       handle.classList.remove("unpositioned");
       // Shown in place first; only later moves slide the list-item offset.
       requestAnimationFrame(() =>

@@ -19,7 +19,7 @@ import { MarkdownBubbleMenu } from "./bubble-menu.js";
 import { joinFrontmatter, splitFrontmatter } from "./frontmatter.js";
 import { MarkdownGuardrails } from "./guardrails.js";
 import { createHandleHoverGate } from "./handle-hover.js";
-import { ImageParagraph, MarkdownImage } from "./image.js";
+import { ImageLink, ImageParagraph, MarkdownImage } from "./image.js";
 import { lowlight } from "./lowlight.js";
 import {
   createBubbleMotion,
@@ -228,10 +228,13 @@ export function MarkdownEditor({
       extensions: [
         StarterKit.configure({
           codeBlock: false,
+          // Both replaced by image-aware versions (image.ts).
+          link: false,
           paragraph: false,
           dropcursor: { color: "var(--color-accent)", width: 2 },
         }),
         Markdown,
+        ImageLink,
         ImageParagraph,
         MarkdownImage,
         TaskList,

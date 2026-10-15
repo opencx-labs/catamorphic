@@ -160,10 +160,13 @@
   border: 1px solid var(--color-border);
   border-radius: 4px;
   padding: 0.05em 0.45em;
+  user-select: none;
+}
+.cat-mdedit .ProseMirror .cat-mdedit-image-label {
+  min-width: 0;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  user-select: none;
 }
 .cat-mdedit .ProseMirror .cat-mdedit-image::before {
   content: "";

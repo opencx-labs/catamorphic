@@ -211,8 +211,8 @@ minimised-draft test covers the chat, and `app.e2e.ts`'s "Cmd+W closes the
 tab behind the floating chat when the tab has focus" fails if a caret
 returns before its editor has focus.
 
-A caret left in a tab hidden with `display: none` (inactive tabs) costs
-nothing like this. Measured 2026-10-16 in a test copy at 13,372 elements,
+A caret left in a tab hidden with `display: none` (inactive tabs) has no
+measurable cost. Measured 2026-10-16 in a test copy at 13,372 elements,
 with the caret at the end of a 1,500-paragraph document in a hidden tab
 while a chat streamed in front and the pointer moved: 299 frames in 4 s at
 2.6 ms average (worst 9.6 ms), against 301 at 2.8 ms with the caret
@@ -222,10 +222,16 @@ cleared. Hidden tabs stay out of the guard.
 
 A minimised chat, or a chat tab behind another, stays mounted at opacity 0
 so its draft, scroll and queued sends survive, and it went on paying
-style, layout and paint for its whole transcript on every frame. At rest
-(neither shown nor in its exit) it now carries `content-visibility:
-hidden` (`chat-dock.tsx`): Chromium skips its subtree while keeping its
-rendering state. Its height is explicit, so nothing about its box changes.
+style, layout and paint for its whole transcript on every frame. Hidden,
+it now carries `content-visibility: hidden` (`chat-dock.tsx`): Chromium
+skips its subtree while keeping its rendering state. The value is a
+discrete step of the panel's transition (`transition-behavior:
+allow-discrete`), so a chat leaving by its fade (Cmd+M, a tab switch,
+another chat opening) stays drawn until the fade ends; skipped at once,
+it showed as an empty card for its first frames. Only that state
+transitions the value, so a chat coming back is drawn at once, in time for
+its composer to take focus. Its height is explicit,
+so nothing about its box changes.
 
 Measured 2026-10-16 in a test copy with three minimised chats of 2,337
 elements each while a fourth streamed in front, 4 seconds per row:
@@ -237,7 +243,9 @@ elements each while a fourth streamed in front, 4 seconds per row:
 
 A chat scrolled up into its history came back at the same scroll position
 (3,120 px of 9,361), and one following its latest message came back at its
-end. Fake-agent transcripts are small; a person's real minimised chats
+end. A chat that streamed while minimised lays out what arrived in its
+first restored frame, which reviewers measured as one longer frame (about
+50 to 150 ms in noisy runs) rather than that work spread over the turn. Fake-agent transcripts are small; a person's real minimised chats
 held about 12,000 of their window's 14,356 elements.
 
 ## Markdown drag handle
@@ -251,11 +259,14 @@ a busy main thread the glide skipped frames and the handle lagged.
 `handle-hover.ts` takes pointer moves that stay on the block the handle
 already points at, before the extension sees them, so its lookup runs once
 per block; the block's box is read when the handle moves to it and
-forgotten on scroll, a resize of the window or editor, an edit or the
-handle hiding. Blocks holding other drag targets (lists, items with nested
+forgotten when the editor scrolls (not when a chat beside it does), the
+window, editor or its scroller resizes, the document changes or the handle
+hides. Blocks holding other drag targets (lists, items with nested
 lists) and tables are never held. The extension still places the handle
 box; the grip inside it glides from the box's old place on a `transform`
-animation (`installHandleMotion`), which runs on the compositor. The table
+animation (`installHandleMotion`), which runs on the compositor. Shown
+again after hiding, it appears where it lands: the extension makes the box
+visible before placing it, and that placement is not a move. The table
 row grip is placed and glides by `transform` the same way.
 
 Measured 2026-10-16 in a test copy, with screencast frames for the glide
@@ -267,6 +278,7 @@ and an injected main-thread load of 30 ms tasks every 40 ms:
 | Lookups over 48 moves crossing 12 blocks | 48 | 12 |
 | Handle glide frames under load (smooth steps / one-frame jumps) | 56 / 17 | 132 / 3 |
 | Handle glide frames idle | 133 / 3 | 134 / 3 |
+| Lookups over 60 moves inside a paragraph while a chat streams beside it (70 scroll events) | 60 | 0 |
 
 "Before" is `main` at 124f357b; the idle and loaded glide rows are from the same
 harness on the parent of #253 the day before. A lookup counts each
