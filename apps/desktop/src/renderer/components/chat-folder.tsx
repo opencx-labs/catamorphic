@@ -7,6 +7,7 @@ import {
   useSessionCheckout,
   useWorktreesAvailable,
 } from "../lib/use-session-checkout.js";
+import { InspectorFact } from "./inspector-fact.js";
 import { PendingButton } from "./pending-button.js";
 import { useInspectorPending } from "./resource-inspector.js";
 
@@ -208,7 +209,7 @@ export function ChatFolder({
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
-  const rowRef = useRef<HTMLElement>(null);
+  const rowRef = useRef<HTMLDivElement>(null);
   const keepRef = useRef<HTMLButtonElement>(null);
   const statusRef = useRef<HTMLParagraphElement>(null);
   // Focus follows the row as it changes under the keyboard.
@@ -288,114 +289,115 @@ export function ChatFolder({
     void run(action, sessionId);
   };
   const disabledReason = busy ? BUSY_REASON : undefined;
+  // Where the chat works, in full: the project folder or its worktree.
+  const path = sessionId ? checkout.data?.path : undefined;
   return (
-    <>
-      <dt className="text-fg-faint">Folder</dt>
-      <dd
-        ref={rowRef}
-        className="min-w-0 text-fg"
-        data-testid="chat-folder"
-        data-folder-kind={view.kind}
-      >
-        <span className="flex min-w-0 flex-wrap items-baseline gap-x-1.5">
-          <span
-            className={`min-w-0 break-all ${view.kind === "pending" ? "text-fg-faint" : ""}`}
-          >
-            {view.value}
-          </span>
-          {view.tag ? (
-            <span className="shrink-0 text-fg-faint">{view.tag}</span>
-          ) : null}
+    <InspectorFact
+      term="Folder"
+      copy={path}
+      copyLabel="Copy folder path"
+      valueRef={rowRef}
+      valueProps={{
+        "data-testid": "chat-folder",
+        "data-folder-kind": view.kind,
+      }}
+    >
+      <span className="flex min-w-0 flex-wrap items-baseline gap-x-1.5">
+        <span
+          className={`min-w-0 break-all ${view.kind === "pending" ? "text-fg-faint" : ""}`}
+        >
+          {view.value}
         </span>
-        {view.lines.map((line) => (
-          <p key={line} className="mt-0.5 break-all text-fg-muted">
-            {line}
+        {view.tag ? (
+          <span className="shrink-0 text-fg-faint">{view.tag}</span>
+        ) : null}
+      </span>
+      {view.lines.map((line) => (
+        <p key={line} className="mt-0.5 break-all text-fg-muted">
+          {line}
+        </p>
+      ))}
+      {confirmDiscard && sessionId ? (
+        <div className="mt-2 space-y-1" data-testid="chat-folder-confirm">
+          <p className="break-normal text-fg-muted">
+            {changed
+              ? `Discard ${changed} changed ${changed === 1 ? "file" : "files"} with this chat's worktree?`
+              : "Discard this chat's worktree?"}{" "}
+            The chat continues in the project folder.
           </p>
-        ))}
-        {confirmDiscard && sessionId ? (
-          <div className="mt-2 space-y-1" data-testid="chat-folder-confirm">
-            <p className="break-normal text-fg-muted">
-              {changed
-                ? `Discard ${changed} changed ${changed === 1 ? "file" : "files"} with this chat's worktree?`
-                : "Discard this chat's worktree?"}{" "}
-              The chat continues in the project folder.
-            </p>
-            <div className="flex gap-3">
-              <PendingButton
-                type="button"
-                pending={pending === "discard"}
-                disabled={Boolean(disabledReason)}
-                data-disabled-reason={disabledReason}
-                className="cursor-pointer text-danger hover:underline disabled:cursor-default disabled:no-underline disabled:opacity-50"
-                onClick={() => void run("discard", sessionId)}
-              >
-                Discard
-              </PendingButton>
-              <button
-                ref={keepRef}
-                type="button"
-                disabled={pending !== null}
-                data-disabled-reason={
-                  pending !== null
-                    ? "Wait for this action to finish"
-                    : undefined
-                }
-                className="cursor-pointer text-fg-muted hover:text-fg hover:underline disabled:cursor-default disabled:opacity-50"
-                onClick={() => {
-                  setConfirmDiscard(false);
-                  focusAfter.current = "discard";
-                }}
-              >
-                Keep
-              </button>
-            </div>
+          <div className="flex gap-3">
+            <PendingButton
+              type="button"
+              pending={pending === "discard"}
+              disabled={Boolean(disabledReason)}
+              data-disabled-reason={disabledReason}
+              className="cursor-pointer text-danger hover:underline disabled:cursor-default disabled:no-underline disabled:opacity-50"
+              onClick={() => void run("discard", sessionId)}
+            >
+              Discard
+            </PendingButton>
+            <button
+              ref={keepRef}
+              type="button"
+              disabled={pending !== null}
+              data-disabled-reason={
+                pending !== null ? "Wait for this action to finish" : undefined
+              }
+              className="cursor-pointer text-fg-muted hover:text-fg hover:underline disabled:cursor-default disabled:opacity-50"
+              onClick={() => {
+                setConfirmDiscard(false);
+                focusAfter.current = "discard";
+              }}
+            >
+              Keep
+            </button>
           </div>
-        ) : actions.length > 0 ? (
-          <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1">
-            {actions.map((action) => (
-              <PendingButton
-                key={action.id}
-                type="button"
-                data-folder-action={action.id}
-                pending={pending === action.id}
-                disabled={
-                  Boolean(disabledReason) ||
-                  (pending !== null && pending !== action.id)
-                }
-                data-disabled-reason={
-                  disabledReason ??
-                  (pending !== null && pending !== action.id
-                    ? "Wait for this action to finish"
-                    : undefined)
-                }
-                className={`cursor-pointer hover:underline disabled:cursor-default disabled:no-underline disabled:opacity-50 ${
-                  action.danger ? "text-danger" : "text-accent"
-                }`}
-                onClick={() => choose(action.id)}
-              >
-                {action.label}
-              </PendingButton>
-            ))}
-          </div>
-        ) : null}
-        {disabledReason && actions.length > 0 ? (
-          <p className="mt-1 break-normal text-fg-faint">{disabledReason}</p>
-        ) : null}
-        <p
-          ref={statusRef}
-          role="status"
-          tabIndex={-1}
-          className={`break-normal text-fg-faint ${status ? "mt-1.5" : ""}`}
-        >
-          {status}
-        </p>
-        <p
-          role="alert"
-          className={`break-normal text-danger ${error ? "mt-1.5" : ""}`}
-        >
-          {error}
-        </p>
-      </dd>
-    </>
+        </div>
+      ) : actions.length > 0 ? (
+        <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1">
+          {actions.map((action) => (
+            <PendingButton
+              key={action.id}
+              type="button"
+              data-folder-action={action.id}
+              pending={pending === action.id}
+              disabled={
+                Boolean(disabledReason) ||
+                (pending !== null && pending !== action.id)
+              }
+              data-disabled-reason={
+                disabledReason ??
+                (pending !== null && pending !== action.id
+                  ? "Wait for this action to finish"
+                  : undefined)
+              }
+              className={`cursor-pointer hover:underline disabled:cursor-default disabled:no-underline disabled:opacity-50 ${
+                action.danger ? "text-danger" : "text-accent"
+              }`}
+              onClick={() => choose(action.id)}
+            >
+              {action.label}
+            </PendingButton>
+          ))}
+        </div>
+      ) : null}
+      {disabledReason && actions.length > 0 ? (
+        <p className="mt-1 break-normal text-fg-faint">{disabledReason}</p>
+      ) : null}
+      <p
+        ref={statusRef}
+        role="status"
+        tabIndex={-1}
+        className={`break-normal text-fg-faint ${status ? "mt-1.5" : ""}`}
+      >
+        {status}
+      </p>
+      <p
+        role="alert"
+        className={`break-normal text-danger ${error ? "mt-1.5" : ""}`}
+      >
+        {error}
+      </p>
+    </InspectorFact>
   );
 }

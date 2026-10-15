@@ -14,6 +14,7 @@ import {
 import type { ReactNode } from "react";
 import { ChatGlyph } from "./chat-icon.js";
 import { HarnessIcon } from "./harness-icon.js";
+import { InspectorFact } from "./inspector-fact.js";
 import { ResourceInspector } from "./resource-inspector.js";
 import { SessionArtifacts } from "./session-artifacts.js";
 
@@ -36,6 +37,7 @@ export function SessionInspector({
   harness,
   provider,
   environmentControl,
+  environmentLabel,
   onManageConnections,
   folder,
   worktree = false,
@@ -74,6 +76,8 @@ export function SessionInspector({
   harness?: string;
   provider?: string;
   environmentControl?: ReactNode;
+  /** The environment's name as its control shows it, for its row's copy. */
+  environmentLabel?: string;
   onManageConnections?: () => void;
   /** The Folder row (ChatFolder), where the chat works (ADR 0215). */
   folder?: ReactNode;
@@ -146,6 +150,7 @@ export function SessionInspector({
             fallbackTitle={fallbackTitle}
             agentName={agentName}
             environmentControl={environmentControl}
+            environmentLabel={environmentLabel}
             onManageConnections={
               onManageConnections
                 ? () => {
@@ -274,6 +279,7 @@ export function SessionInspectorContent({
   fallbackTitle,
   agentName,
   environmentControl,
+  environmentLabel,
   onManageConnections,
   folder,
   incognito,
@@ -304,6 +310,8 @@ export function SessionInspectorContent({
   fallbackTitle: string;
   agentName: string;
   environmentControl?: ReactNode;
+  /** The environment's name as its control shows it, for its row's copy. */
+  environmentLabel?: string;
   onManageConnections?: () => void;
   /** The Folder row (ChatFolder), where the chat works (ADR 0215). */
   folder?: ReactNode;
@@ -392,7 +400,11 @@ export function SessionInspectorContent({
           disabledReason={modelDisabledReason}
         />
         {reportedModel && reportedModel !== model ? (
-          <InspectorRow label="Last reply" value={reportedModel} />
+          <InspectorRow
+            label="Last reply"
+            value={reportedModel}
+            copyLabel="Copy last reply's model"
+          />
         ) : null}
         <InspectorRow
           label="Reasoning"
@@ -415,25 +427,25 @@ export function SessionInspectorContent({
         ) : null}
         <InspectorRow label="Source" value={source} />
         <InspectorRow label="Status" value={state} />
-        <dt className="text-fg-faint">Environment</dt>
-        <dd className="min-w-0 text-fg">
+        <InspectorFact
+          term="Environment"
+          copy={environmentLabel ?? session?.environment ?? "Default"}
+          oneLine
+        >
           {environmentControl ?? session?.environment ?? "Default"}
-        </dd>
+        </InspectorFact>
         {onManageConnections && (
-          <>
-            <dt className="text-fg-faint">Connections</dt>
-            <dd className="min-w-0">
-              <button
-                type="button"
-                onClick={onManageConnections}
-                aria-label="Manage environment connections"
-                className="-mx-1.5 flex cursor-pointer items-center gap-1.5 rounded-md px-1.5 text-fg transition-colors hover:bg-bg-raised"
-              >
-                <KeyRound aria-hidden="true" className="size-3" />
-                Manage connections
-              </button>
-            </dd>
-          </>
+          <InspectorFact term="Connections">
+            <button
+              type="button"
+              onClick={onManageConnections}
+              aria-label="Manage environment connections"
+              className="-mx-1.5 flex cursor-pointer items-center gap-1.5 rounded-md px-1.5 text-fg transition-colors hover:bg-bg-raised"
+            >
+              <KeyRound aria-hidden="true" className="size-3" />
+              Manage connections
+            </button>
+          </InspectorFact>
         )}
         {folder}
         {incognito ? <InspectorRow label="Privacy" value="Incognito" /> : null}
@@ -448,6 +460,7 @@ export function SessionInspectorContent({
         {session ? (
           <InspectorRow
             label="Updated"
+            copyLabel="Copy update time"
             value={new Date(session.updatedAt).toLocaleString([], {
               dateStyle: "medium",
               timeStyle: "short",
@@ -504,12 +517,15 @@ export function SessionInspectorContent({
 function InspectorRow({
   label,
   value,
+  copyLabel,
   tag,
   onEdit,
   disabledReason,
 }: {
   label: string;
+  /** Shown, and what the row copies (never its tag). */
   value: string;
+  copyLabel?: string;
   /** Faint qualifier after the value (e.g. "default"); never truncated. */
   tag?: string;
   onEdit?: () => void;
@@ -519,34 +535,37 @@ function InspectorRow({
     <span className="shrink-0 text-fg-faint">{tag}</span>
   ) : null;
   return (
-    <>
-      <dt className="text-fg-faint">{label}</dt>
-      <dd className="min-w-0 text-fg" data-disabled-reason={disabledReason}>
-        {onEdit || disabledReason ? (
-          <button
-            type="button"
-            aria-label={`Change ${label.toLowerCase()}`}
-            onClick={onEdit}
-            disabled={Boolean(disabledReason)}
-            className="group -mx-1.5 flex w-[calc(100%+0.75rem)] min-w-0 cursor-pointer items-center gap-2 rounded-md px-1.5 py-0.5 text-left transition-colors duration-150 ease-[cubic-bezier(0.2,0,0,1)] hover:bg-bg-raised focus-ring-inset"
-          >
-            <span className="flex min-w-0 flex-1 items-baseline gap-1.5">
-              <span className="min-w-0 truncate">{value}</span>
-              {tagged}
-            </span>
-            <ChevronDown
-              aria-hidden="true"
-              className="size-3 shrink-0 text-fg-faint group-hover:text-fg-muted"
-            />
-          </button>
-        ) : (
-          <span className="flex min-w-0 items-baseline gap-1.5">
+    <InspectorFact
+      term={label}
+      copy={value}
+      copyLabel={copyLabel}
+      oneLine
+      valueProps={{ "data-disabled-reason": disabledReason }}
+    >
+      {onEdit || disabledReason ? (
+        <button
+          type="button"
+          aria-label={`Change ${label.toLowerCase()}`}
+          onClick={onEdit}
+          disabled={Boolean(disabledReason)}
+          className="group -mx-1.5 flex w-[calc(100%+0.75rem)] min-w-0 cursor-pointer items-center gap-2 rounded-md px-1.5 py-0.5 text-left transition-colors duration-150 ease-[cubic-bezier(0.2,0,0,1)] hover:bg-bg-raised focus-ring-inset"
+        >
+          <span className="flex min-w-0 flex-1 items-baseline gap-1.5">
             <span className="min-w-0 truncate">{value}</span>
             {tagged}
           </span>
-        )}
-      </dd>
-    </>
+          <ChevronDown
+            aria-hidden="true"
+            className="size-3 shrink-0 text-fg-faint group-hover:text-fg-muted"
+          />
+        </button>
+      ) : (
+        <span className="flex min-w-0 items-baseline gap-1.5">
+          <span className="min-w-0 truncate">{value}</span>
+          {tagged}
+        </span>
+      )}
+    </InspectorFact>
   );
 }
 

@@ -2834,7 +2834,7 @@ checks every message mounts hidden, also on a renderer slowed fourfold,
 where a turn's events land between frames, and on one that stalls as the
 turn and the agent's words first show.
 
-### 2026-10-15: The status popup opens at its size; inputs, chats and queued messages move in place; a chat its agent archives just ends
+### 2026-10-15: The status popup opens at its size; inputs, chats and queued messages move in place; a chat its agent archives just ends; every popup's facts copy
 
 The chat's status popup appeared, then grew a line when its Artifacts or
 Folder row finished loading, and while it glided taller a scrollbar showed
@@ -2898,8 +2898,17 @@ after that the rows were cached.
   session", not "Claude: Archived this session". A failure, or a summary
   in the agent's own words (a completion), keeps its own sentence after
   the name and a colon.
+- **Every popup's facts copy.** A file's, a chat's and a workflow's status
+  popups list their facts as the project's popup does, in one row
+  (`InspectorFact`): the row the pointer or the keyboard is on shows a
+  copy button at its end, on the value's first line, in a place kept
+  while it is hidden. It copies the whole value: a file's or workflow's
+  full path where the row shows a name, the model without its "default",
+  the environment as its picker names it. An action (Manage connections)
+  has nothing to copy.
 
-`floating-motion.test.tsx` and `e2e/motion.e2e.ts` cover the chat growing
+`inspector-fact.test.tsx` and `session-inspector.test.tsx` cover the
+copies; `floating-motion.test.tsx` and `e2e/motion.e2e.ts` cover the chat growing
 over what was in front; `chat-timeline.test.tsx` and `e2e/agents.e2e.ts`
 the queued message's layout, its Sending look and both hand-overs;
 `resource-inspector.test.tsx` covers StrictMode, the measured reveal and the

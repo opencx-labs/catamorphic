@@ -2341,6 +2341,7 @@ function ChatDockContent({
                 fallbackTitle={title}
                 harness={activeAgent?.harness ?? boundHarness}
                 provider={activeAgent?.provider}
+                environmentLabel={activeEnvironmentLabel}
                 environmentControl={
                   authority &&
                   chat.sessionId &&
