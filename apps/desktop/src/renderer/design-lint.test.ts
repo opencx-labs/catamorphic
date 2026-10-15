@@ -322,6 +322,10 @@ describe("design lint", () => {
         count: 2,
         reason: "keyboard or pointer leads, for focus rings",
       },
+      "lib/inert-selection.ts": {
+        count: 1,
+        reason: "a press places its own caret",
+      },
       "lib/popover-dismiss.ts": { count: 2, reason: "the popover primitive" },
     };
     const listener =
