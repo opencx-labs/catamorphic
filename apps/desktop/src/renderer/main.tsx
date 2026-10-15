@@ -11,6 +11,7 @@ import { DockHost } from "./components/dock-host.js";
 import { PasskeyHost } from "./components/passkey-sheet.js";
 import { desktopApi, type ServerInfo } from "./lib/desktop-api.js";
 import { installFocusModality } from "./lib/focus-modality.js";
+import { installInertSelectionGuard } from "./lib/inert-selection.js";
 import { KeybindingsProvider } from "./lib/keybindings.js";
 import { useSessionChangeHints } from "./lib/session-change-hints.js";
 import { TerminalAppearanceProvider } from "./lib/terminal-appearance.js";
@@ -31,6 +32,7 @@ document.documentElement.dataset.surface = detachedWindow
     ? "passkey"
     : "workspace";
 installFocusModality();
+installInertSelectionGuard();
 
 /** This window's chat lists follow this computer's hints (ADR 0229). */
 function SessionChangeHints() {

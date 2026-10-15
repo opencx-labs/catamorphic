@@ -353,3 +353,74 @@ it("opens beside a full chat and does not let an old expansion undo new navigati
   ).toBe(true);
   expect(app.getRendererErrors()).toEqual([]);
 });
+
+it("lets go of the caret in a chat it minimises, keeping the draft", async () => {
+  const before = await app.eval<string[]>(
+    "[...document.querySelectorAll('[data-chat-local-id]')].map((element) => element.dataset.chatLocalId)",
+  );
+  await app.eval(
+    "window.dispatchEvent(new KeyboardEvent('keydown',{key:'n',metaKey:/Mac/.test(navigator.platform),ctrlKey:!/Mac/.test(navigator.platform),bubbles:true}))",
+  );
+  const chat = await app.waitFor<string>(
+    `(() => {
+      const known = ${JSON.stringify(before)};
+      const opened = [...document.querySelectorAll('[data-floating-chat]')].find(
+        (element) => !known.includes(element.dataset.chatLocalId),
+      );
+      return opened?.querySelector('[data-composer-input]') &&
+        getComputedStyle(opened).opacity === '1' && opened.dataset.chatLocalId;
+    })()`,
+    { label: "a new floating chat" },
+  );
+  const dock = `[data-chat-local-id="${chat}"]`;
+  const point = await app.eval<{ x: number; y: number }>(`(() => {
+    const r = document.querySelector('${dock} [data-composer-input]').getBoundingClientRect();
+    return { x: r.x + 24, y: r.y + r.height / 2 };
+  })()`);
+  for (const type of ["mousePressed", "mouseReleased"])
+    await app.cdp("Input.dispatchMouseEvent", {
+      type,
+      ...point,
+      button: "left",
+      clickCount: 1,
+    });
+  await app.cdp("Input.insertText", { text: "A draft to come back to" });
+  await app.eval(
+    `document.querySelector('${dock} button[aria-label="Minimize chat to bubble"]').click()`,
+  );
+  await app.waitFor(`!document.querySelector('${dock}[data-floating-chat]')`, {
+    label: "chat minimised",
+  });
+  // A caret left in the now-inert composer would make Chromium walk every
+  // inert element before each frame (docs/performance.md).
+  expect(
+    await app.eval(`(() => {
+      const node = getSelection().anchorNode;
+      const element = node && (node.nodeType === 1 ? node : node.parentElement);
+      return !!element?.closest('[inert]');
+    })()`),
+  ).toBe(false);
+  await app.eval(
+    `document.querySelector('[data-chat-bubble="${chat}"] button[aria-expanded]').click()`,
+  );
+  await app.waitFor(`!!document.querySelector('${dock}[data-floating-chat]')`, {
+    label: "chat restored",
+  });
+  expect(
+    await app.eval(
+      `document.querySelector('${dock} [data-composer-input]').textContent`,
+    ),
+  ).toBe("A draft to come back to");
+  // The caret comes back where it was, so typing continues the draft.
+  await app.waitFor(
+    `document.querySelector('${dock} [data-composer-input]').contains(document.activeElement)`,
+    { label: "composer focused" },
+  );
+  await app.cdp("Input.insertText", { text: ", later" });
+  expect(
+    await app.eval(
+      `document.querySelector('${dock} [data-composer-input]').textContent`,
+    ),
+  ).toBe("A draft to come back to, later");
+  expect(app.getRendererErrors()).toEqual([]);
+});

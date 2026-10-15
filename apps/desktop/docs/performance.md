@@ -153,6 +153,52 @@ frames with no script and no layout time are waiting on another process.
 `Page.startScreencast` misses compositor-only motion; film with
 `Page.captureScreenshot` and `Animation.setPlaybackRate`.
 
+## Stranded selections
+
+Surfaces that hide while staying mounted become inert: minimised chats,
+closed palettes and modals, other projects' workspaces. Typing in a chat and
+then minimising it left the document's caret in the inert composer. Inert
+content holds no caret position, and Chromium recomputes the visible
+selection before every frame that follows a DOM or style change
+(`WidgetBase::UpdateSelectionBounds`, `FrameCaret::UpdateAppearance`,
+`WebViewImpl::SetPageFocus`). Each time, `CanonicalPositionOf` walks
+backwards through every inert element to the first usable position,
+checking each one's `content-visibility` ancestors on the way. The cost
+grows with the inert content ahead of the caret.
+
+Measured 2026-10-15 in an installed 0.1.0-alpha.22 (Electron 45.0.0-beta.1,
+Chromium 156) on the person's own profile: 14,356 elements, four minimised
+chats of 235 to 3,025 elements. A synthetic pointer moved across the window
+for 4 seconds per row, only the caret changing between them:
+
+| Caret | Frames | Average frame | Main thread busy |
+| --- | ---: | ---: | ---: |
+| In an open chat's composer | 197 | 3 ms | 644 ms |
+| In the 3,025-element minimised chat's composer | 37, all over 50 ms | 68 ms | 3,804 ms |
+| Cleared | 192 | 3 ms | 598 ms |
+
+In the same state, 22 seconds of hovering a markdown document ran at
+3.8 frames a second: the drag handle's per-frame hit test forced layout, and
+each layout paid a 116 to 161 ms walk. A fresh profile with fake-agent chats
+did not show a visible stall; the walk needs the long transcripts of real
+chats ahead of the caret.
+
+Only the hit-test path emits `VisibleUnits::canonicalPosition`. Under
+`UpdateSelectionBounds` the walk is untraced, so a stalled frame shows a long
+`ProxyMain::BeginMainFrame` with almost no style, layout or script time,
+which reads like waiting on another process. A native sample tells them
+apart: Electron publishes breakpad symbols for each release
+(`electron-v<version>-darwin-arm64-symbols.zip`); run `sample` on the
+renderer and resolve `Electron Framework` offsets against the `.sym` file's
+`FUNC` records.
+
+`lib/inert-selection.ts` releases the selection as its container turns
+inert. The range comes back when focus next enters that container, as a
+restored chat focuses its composer, so typing continues where the person
+left off; the guard never moves focus itself, and a press inside places its
+own caret. `lib/inert-selection.test.ts` and the chat-state suite's
+minimised-draft test cover it.
+
 ## Development timing retention
 
 React 19.2.8 emits User Timing measures with copied component prop details in
