@@ -291,7 +291,10 @@ export class BrowserDriver {
         return await operation();
       } finally {
         try {
-          if (focused && !focused.isDestroyed()) focused.focus();
+          // Gone to another window meanwhile (a long wait), the person
+          // keeps it: handing focus back would bring this one forward.
+          if (focused && !focused.isDestroyed() && !this.elsewhere())
+            focused.focus();
           // Not awaited: the action may have opened a dialog.
           if (elsewhere) void this.emulateFocus(false);
         } finally {

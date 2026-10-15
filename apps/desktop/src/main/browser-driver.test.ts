@@ -221,6 +221,26 @@ describe("browser driver and window focus", () => {
     expect(focusEmulation(guest)).toEqual([]);
   });
 
+  it("leaves the person in the window they went to during an action", async () => {
+    windows.front = "page";
+    const composer = { isDestroyed: () => false, focus: vi.fn() };
+    windows.focused = composer;
+    const guest = new Guest();
+    const driver = new BrowserDriver(
+      asWebContents(guest),
+      () => {},
+      async () => {},
+    );
+    // A long wait begins in the person's window; they go to another.
+    const reading = driver.read();
+    await flush();
+    windows.front = "person";
+    guest.waiting[0]?.({ value: { text: "Hello" } });
+    await reading;
+    expect(guest.focus).toHaveBeenCalledTimes(1);
+    expect(composer.focus).not.toHaveBeenCalled();
+  });
+
   it("focuses the page while no window of Work's is in front", async () => {
     const guest = new Guest();
     await read(guest);
