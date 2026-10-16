@@ -328,13 +328,14 @@ it("drags the window by the chrome's empty room with the buttons hidden", async 
     '!!$(\'[data-tab-orientation="horizontal"] [data-point-key^="settings:"]\')',
     "the Settings tab",
   );
-  await inPage("$('button[aria-label=\"New tab\"]').click()");
+  // The strip's +: a Tabs section shown earlier keeps its own, hidden.
+  await inPage("$('.workspace-chrome button[aria-label=\"New tab\"]').click()");
   await settle(
     "$$('[data-tab-orientation=\"horizontal\"] [data-point-key]').length >= 2",
     "two tabs",
   );
   const strip = `$('[data-tab-orientation="horizontal"]')`;
-  const controls = `[data-tab-orientation="horizontal"] [data-point-key] button, button[aria-label="New tab"], [data-sidebar="left"] [aria-label="Switch project"], button[aria-label$="sidebar"]`;
+  const controls = `[data-tab-orientation="horizontal"] [data-point-key] button, .workspace-chrome button[aria-label="New tab"], [data-sidebar="left"] [aria-label="Switch project"], button[aria-label$="sidebar"]`;
   const expectDragRoom = async (layout: string, min: number) => {
     const run = await inPage<number>("return dragRun()");
     expect(run, layout).toBeGreaterThanOrEqual(min);
@@ -353,7 +354,7 @@ it("drags the window by the chrome's empty room with the buttons hidden", async 
   await expectDragRoom("tabs on top", 300);
   expect(
     await inPage(
-      `const plus = $('button[aria-label="New tab"]').getBoundingClientRect(); return drags(regions(), plus.right + 24, 20);`,
+      `const plus = $('.workspace-chrome button[aria-label="New tab"]').getBoundingClientRect(); return drags(regions(), plus.right + 24, 20);`,
     ),
   ).toBe(true);
 
@@ -522,7 +523,7 @@ it("keeps a background project's drag areas off the visible tabs", async () => {
       `window.catamorphicDesktop.workspaceNavigate({projectId: ${JSON.stringify(id)}})`,
     );
     await settle(
-      `${visible}?.dataset.projectRuntime === ${JSON.stringify(id)} && !!${visible}.querySelector('button[aria-label="New tab"]')`,
+      `${visible}?.dataset.projectRuntime === ${JSON.stringify(id)} && !!${visible}.querySelector('.workspace-chrome button[aria-label="New tab"]')`,
       label,
     );
   };
@@ -547,7 +548,7 @@ it("keeps a background project's drag areas off the visible tabs", async () => {
   expect(layout.after).toBe(true);
   expect(layout.tabs.some((x) => x > layout.room)).toBe(true);
   const presses = await inPage<{ label: string; drags: boolean }[]>(
-    `return pressable('[data-workspace-visible="true"] [data-tab-orientation="horizontal"] [data-point-key] button, [data-workspace-visible="true"] button[aria-label="New tab"]')`,
+    `return pressable('[data-workspace-visible="true"] [data-tab-orientation="horizontal"] [data-point-key] button, [data-workspace-visible="true"] .workspace-chrome button[aria-label="New tab"]')`,
   );
   expect(presses.length).toBeGreaterThan(1);
   expect(presses.filter((control) => control.drags)).toEqual([]);
