@@ -2817,13 +2817,13 @@ export function App({
   };
 
   // Palette "Send to agent": a new chat born with its first message
-  // attached; ChatDock auto-sends it on mount. With a New Tab in front it
-  // opens in that tab, however it was asked for.
+  // attached; ChatDock auto-sends it on mount. Asked for from the palette
+  // (`inNewTab`), a New Tab in front takes it, however it was committed.
   const sendToAgent = (
     message: string | PendingChatMessage,
     mode: "float" | "tab",
     agentId?: string,
-    options: { watchBackdrop?: boolean } = {},
+    options: { watchBackdrop?: boolean; inNewTab?: boolean } = {},
   ) => {
     if (!requireAgents()) return;
     const entry: ChatDockEntry = {
@@ -2833,7 +2833,7 @@ export function App({
       ...(options.watchBackdrop ? { watchBackdrop: true } : {}),
     };
     updateWorkspace((ws) => {
-      const inNewTab = Boolean(newTabInFront(ws));
+      const inNewTab = options.inNewTab === true && Boolean(newTabInFront(ws));
       const placed: ChatDockEntry = inNewTab
         ? { ...entry, mode: "tab" }
         : entry;
@@ -3325,7 +3325,7 @@ export function App({
       revealChat(focusedChat.localId);
       return;
     }
-    sendToAgent(skillInvocation(name), mode);
+    sendToAgent(skillInvocation(name), mode, undefined, { inNewTab: true });
   };
 
   const updateSession = useUpdateAgentSession(projectId);
@@ -6179,7 +6179,10 @@ export function App({
     },
     onSelectProject: selectProject,
     onSwitchProfile: switchProfile,
-    onSendToAgent: sendToAgent,
+    // What the palette starts is a chat asked for there: a New Tab in
+    // front takes it.
+    onSendToAgent: (message, mode, agentId) =>
+      sendToAgent(message, mode, agentId, { inNewTab: true }),
     startingActions,
     onRunSkill: runSkill,
     actionHandlers,

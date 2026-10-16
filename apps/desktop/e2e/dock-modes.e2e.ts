@@ -219,8 +219,13 @@ describe("dock modes", () => {
       await window.catamorphicDesktop.agentsSetDefault(created.id);
       return created.id;
     })()`);
-    // A fresh chat picks up the new default through agents-changed.
-    await run(`pressKey('n', { metaKey: true }); return true;`);
+    // A fresh chat picks up the new default through agents-changed. The
+    // dock's + keeps the empty chat floating (Cmd+N would move it into the
+    // New Tab behind it).
+    await runWait(
+      `const plus = $('[data-dock-rail] button[aria-label="New chat"]'); plus?.click(); return !!plus;`,
+      { label: "the dock's +" },
+    );
     const banner = await runWait<string>(
       `const b = frontDock()?.querySelector('[data-testid="auth-health-banner"]');
        return b ? b.textContent : false;`,
