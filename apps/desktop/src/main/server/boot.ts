@@ -1488,7 +1488,7 @@ export async function startEmbeddedServer(
       for (const listener of sessionsListeners) listener();
     },
   });
-  // Chats Claude Code and Codex ran outside Work, read-only beside its own
+  // Chats Claude Code and Codex ran outside Work, imported beside its own
   // (ADR 0233); off until an agent's "Sync chats from" switch turns it on.
   const externalSessions = new ExternalSessionImporter({
     homes: externalSessionHomes(),

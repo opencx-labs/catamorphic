@@ -52,6 +52,9 @@ function json(value: unknown): Json {
 export const REPLAY_MAX_EVENTS = 256;
 export const REPLAY_MAX_BYTES = 1024 * 1024;
 
+/** Events per insert statement: six parameters each, well under the limit. */
+const PERSIST_BATCH = 1_000;
+
 /**
  * The session event log (ADR 0197): the only writer of a session's turns,
  * attempts, items, runtime requests, provider threads and visible fields.
@@ -307,19 +310,22 @@ export class SessionLog {
     trx: Transaction<DB>,
     stored: readonly StoredSessionEvent[],
   ): Promise<void> {
-    await trx
-      .insertInto("agent_session_events")
-      .values(
-        stored.map((event) => ({
-          session_id: event.sessionId,
-          sequence: event.sequence,
-          type: event.event.type,
-          payload: json(event.event),
-          command_id: event.commandId,
-          created_at: new Date(event.at),
-        })),
-      )
-      .execute();
+    // In bounded statements: one import can carry a whole transcript, and
+    // a statement takes at most 65,535 parameters (ADR 0233).
+    for (let start = 0; start < stored.length; start += PERSIST_BATCH)
+      await trx
+        .insertInto("agent_session_events")
+        .values(
+          stored.slice(start, start + PERSIST_BATCH).map((event) => ({
+            session_id: event.sessionId,
+            sequence: event.sequence,
+            type: event.event.type,
+            payload: json(event.event),
+            command_id: event.commandId,
+            created_at: new Date(event.at),
+          })),
+        )
+        .execute();
     for (const event of stored) await project(trx, event);
     const topics: WorkTopic[] = ["sessions"];
     if (

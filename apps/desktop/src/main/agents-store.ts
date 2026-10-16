@@ -117,8 +117,8 @@ export interface AgentConfig {
   memory?: boolean;
   /**
    * Show the chats the person runs in this agent's tool outside Work
-   * (Claude Code or Codex) in their projects' chat lists, read only, and
-   * continue them on this agent (ADR 0233). Absent means off.
+   * (Claude Code or Codex) in their projects' chat lists, and continue
+   * them on this agent (ADR 0233). Absent means off.
    */
   syncSessions?: boolean;
   /** MCP connection assignment; absent means `{ mode: "all" }`. */

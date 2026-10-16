@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import {
   type Attempt,
   type ImportedItem,
@@ -125,21 +126,27 @@ function push(
     events.push({ type: "item.changed", item: placed.item });
 }
 
-/** Whether two records differ in anything but the fields named. */
+/**
+ * Whether two records differ in anything but the fields named. Key order
+ * never counts: a stored record comes back from jsonb with its nested
+ * keys reordered.
+ */
 function changed<T extends object>(
   before: T,
   after: T,
   ignored: readonly (keyof T)[],
 ): boolean {
-  const strip = (value: T) =>
-    JSON.stringify(
-      Object.fromEntries(
-        Object.entries(value)
-          .filter(([key]) => !(ignored as readonly string[]).includes(key))
-          .sort(([a], [b]) => a.localeCompare(b)),
+  const strip = (value: T): unknown =>
+    JSON.parse(
+      JSON.stringify(
+        Object.fromEntries(
+          Object.entries(value).filter(
+            ([key]) => !(ignored as readonly string[]).includes(key),
+          ),
+        ),
       ),
     );
-  return strip(before) !== strip(after);
+  return !isDeepStrictEqual(strip(before), strip(after));
 }
 
 function userMessage(input: {

@@ -707,7 +707,7 @@ project's chat list (ADR 0233):
   is one of Work's threads), a Claude Code side chain, a Codex subagent and
   Codex Desktop's own copies of Claude Code chats are skipped. Imported
   chats stay on this computer: the mirror skips them as it skips incognito
-  chats; a continuation syncs like any chat.
+  chats, even once Work continued one; a fork syncs like any chat.
 
 ### 2026-10-15: The activity line says what the agent is doing, in its own words
 

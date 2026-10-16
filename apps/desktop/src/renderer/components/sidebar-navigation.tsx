@@ -1232,12 +1232,15 @@ function SessionsNav({
                 title: sessionLabel(session),
                 description: session.activity ?? undefined,
                 metadata: [
-                  session.imported
-                    ? {
-                        label: "From",
-                        value: `${importedHarnessLabel(session.imported.harness)}, read only`,
-                      }
-                    : { label: "Agent", value: agentName },
+                  ...(session.imported
+                    ? [
+                        {
+                          label: "From",
+                          value: importedHarnessLabel(session.imported.harness),
+                        },
+                      ]
+                    : []),
+                  { label: "Agent", value: agentName },
                   ...(session.owner === "project"
                     ? [{ label: "Belongs to", value: "The project" }]
                     : []),

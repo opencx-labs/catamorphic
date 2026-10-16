@@ -12,7 +12,7 @@ import { readConfigObject, writeConfigObject } from "./config-file.js";
 import { readGit } from "./git-view.js";
 
 /**
- * Chats Claude Code and Codex ran outside Work, imported read-only beside
+ * Chats Claude Code and Codex ran outside Work, imported beside
  * Work's own (ADR 0233). The stores' directory watches are hints (ADR
  * 0229): a session file is read once it settles, from where the last read
  * stopped, and core gets the turns that changed. Only sessions that start

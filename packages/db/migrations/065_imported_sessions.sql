@@ -1,7 +1,7 @@
 -- Sessions another tool ran, imported from its own transcript store
 -- (ADR 0233): Claude Code or Codex, by its own session id. Null for
--- Work's own sessions. An imported session is read-only; one person has
--- at most one per project, tool and native session.
+-- Work's own sessions. Only an agent of that tool continues one; one person
+-- has at most one per project, tool and native session.
 ALTER TABLE agent_sessions
     ADD COLUMN imported jsonb,
     ADD CONSTRAINT chk_agent_session_imported_object

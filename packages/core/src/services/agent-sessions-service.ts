@@ -7,6 +7,7 @@ import {
   type Attempt,
   type CommandReceipt,
   type DispatchMode,
+  type ImportedHarness,
   type ImportedSession,
   type ImportedTranscript,
   INPUT_ITEM_KINDS,
@@ -380,8 +381,8 @@ export interface AgentSession {
   /** Session this one was forked from, if any. */
   forkedFromSessionId: string | null;
   /**
-   * Where a session another tool ran was imported from (ADR 0233): it is
-   * read-only and continues as a fork. Null for Work's own.
+   * Where a session another tool ran was imported from (ADR 0233): only an
+   * agent of that tool continues it. Null for Work's own.
    */
   imported: ImportedSession | null;
   /** Immediate parent in the visible session hierarchy, if any. */
@@ -550,10 +551,11 @@ export class AgentSessionClosedError extends Error {
 export class AgentSessionImportedError extends Error {
   constructor(
     readonly sessionId: string,
-    readonly harness: string,
+    readonly harness: ImportedHarness,
   ) {
+    const tool = harness === "codex" ? "Codex" : "Claude Code";
     super(
-      `Agent session '${sessionId}' came from ${harness}; switch it to a ${harness} agent to continue it`,
+      `This chat came from ${tool}. Switch it to a ${tool} agent to continue it.`,
     );
     this.name = "AgentSessionImportedError";
   }
@@ -7803,27 +7805,16 @@ export class AgentSessionsService {
         )
           throw new AgentSessionNotFoundError(input.messageId);
 
-        const sourceImport = importedSessionFromRow(session.imported);
-        // Continuing an imported session is its only way on (ADR 0233): the
-        // continuation keeps its name.
-        const forkTitle = session.title
-          ? sourceImport
-            ? session.title
-            : `${session.title} (fork)`
-          : null;
+        // An imported chat (ADR 0233) continues in place on its own tool's
+        // agents, so a fork of one is an ordinary fork.
+        const forkTitle = session.title ? `${session.title} (fork)` : null;
         // Notices never reach the harness, so the fork's self-awareness
         // travels in its system prompt.
-        const forkNote = sourceImport
-          ? `This conversation continues a ${
-              sourceImport.harness === "codex" ? "Codex" : "Claude Code"
-            } session the user ran outside Work${
-              session.title ? ` ("${session.title}")` : ""
-            }, imported read-only as Catamorphic session ${sessionId}: it starts from a copy of that transcript. Pick up where it left off.`
-          : `This conversation is a fork of ${
-              session.title
-                ? `the conversation "${session.title}"`
-                : "another conversation"
-            }: it starts from a copy of that transcript up to the fork point. Its immediate parent is Catamorphic session ${sessionId}; use the ordinary project-session tools to read or message it. The user is exploring a tangent here; the original conversation continues separately, so don't refer to this one as if it were the original.`;
+        const forkNote = `This conversation is a fork of ${
+          session.title
+            ? `the conversation "${session.title}"`
+            : "another conversation"
+        }: it starts from a copy of that transcript up to the fork point. Its immediate parent is Catamorphic session ${sessionId}; use the ordinary project-session tools to read or message it. The user is exploring a tangent here; the original conversation continues separately, so don't refer to this one as if it were the original.`;
         const forkSystemPrompt = [session.system_prompt, forkNote]
           .filter((part): part is string => Boolean(part))
           .join("\n\n");

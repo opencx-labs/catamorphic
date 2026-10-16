@@ -1178,7 +1178,7 @@ export const AgentSessionSchema = z.object({
   title: z.string().nullable(),
   icon: z.string().nullable(),
   forkedFromSessionId: z.string().uuid().nullable(),
-  /** Imported read-only from another tool (ADR 0233); continue it as a fork. */
+  /** Imported from another tool (ADR 0233); only an agent of that tool continues it. */
   imported: ImportedSessionSchema.nullable(),
   parentSessionId: z.string().uuid().nullable(),
   visibility: z.enum(["latent", "promoted", "archived"]),

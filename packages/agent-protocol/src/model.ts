@@ -781,8 +781,8 @@ export interface SessionFields {
    */
   metadata: SessionMetadata;
   /**
-   * Where a session another tool ran was imported from (ADR 0233); it is
-   * read-only, and continues as a fork. Absent or null for Work's own.
+   * Where a session another tool ran was imported from (ADR 0233): only an
+   * agent of that tool continues it. Absent or null for Work's own.
    */
   imported?: ImportedSession | null;
   parentSessionId: string | null;
