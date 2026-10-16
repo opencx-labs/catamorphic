@@ -371,15 +371,18 @@ describe("remote projects (ADR 0055)", () => {
     // Files is a collapsible section, without builder-only Git controls.
     await runWait(
       `[...document.querySelectorAll('[data-sidebar="left"] [data-sidebar-widget="files"] button[aria-expanded="false"]')].find(button => button.textContent.trim() === 'Files')?.click();
-       return $('[data-testid="files-nav"]')?.textContent.includes('.work');`,
+       return $('[data-sidebar-section="files"]')?.textContent.includes('.work');`,
       {
         timeoutMs: 60_000,
         label: "member files",
       },
     );
-    await runWait(`return !!$('[data-testid="remote-sync"]');`, {
-      label: "member download control",
-    });
+    // The Server list (work:remote, ADR 0234): Download updates is its
+    // header action.
+    await runWait(
+      `return !!$('[data-sidebar-section="remote"] button[data-header-action="sync"]');`,
+      { label: "member download control" },
+    );
     projectDir = path.join(app.userDataDir, "Work", "acme-brain");
     expect(
       fs.readFileSync(path.join(projectDir, "docs/handbook.md"), "utf8"),
@@ -413,32 +416,28 @@ describe("remote projects (ADR 0055)", () => {
       "Private local draft",
     );
     await run(`window.dispatchEvent(new Event('focus')); return true;`);
-    await runWait(
-      `return !!$('input[aria-label="Upload notes.md"]') && !!$('input[aria-label="Upload brief.md"]');`,
-      { timeoutMs: 30_000, label: "local files available for selection" },
-    );
+    // Each file changed on this device is a row; Upload is on its own menu.
+    const row = (name: string) =>
+      `$('[data-sidebar-section="remote"] [data-sidebar-item-id$="/${name}"]')`;
+    await runWait(`return !!${row("notes.md")} && !!${row("brief.md")};`, {
+      timeoutMs: 30_000,
+      label: "local files listed",
+    });
     expect(writes).toHaveLength(0);
-    expect(await run(`return $('[data-testid="remote-ship"]').disabled;`)).toBe(
-      true,
-    );
-    await run(
-      `$('input[aria-label="Upload notes.md"]').click(); $('input[aria-label="Upload brief.md"]').click(); return true;`,
-    );
-    await runWait(
-      `const btn = $('[data-testid="remote-ship"]'); return !!btn && !btn.disabled;`,
-      {
-        timeoutMs: 30_000,
-        label: "ship enabled",
-      },
-    );
-    await run(`$('[data-testid="remote-ship"]').click(); return true;`);
-    await runWait(
-      `const m = $('[data-testid="remote-message"]'); return !!m && m.textContent.includes('uploaded');`,
-      {
-        timeoutMs: 30_000,
-        label: "ship message",
-      },
-    );
+    for (const name of ["notes.md", "brief.md"]) {
+      await run(
+        `${row(name)}.querySelector('[aria-haspopup="menu"]').click(); return true;`,
+      );
+      await runWait(
+        `const item = [...document.querySelectorAll('[data-sidebar-menu] [role="menuitem"]')].find(node => node.textContent.trim() === 'Upload'); if (!item || item.disabled) return false; item.click(); return true;`,
+        { label: `upload ${name}` },
+      );
+      // The source says what happened, and the file is no longer only here.
+      await runWait(
+        `return !!$('[data-sidebar-section="remote"]')?.textContent.includes('uploaded') && !${row(name)};`,
+        { timeoutMs: 30_000, label: `${name} uploaded` },
+      );
+    }
     expect(writes.map((w) => `${w.path}@${w.ifVersion}`).sort()).toEqual([
       "store/customers/acme/brief.md@0",
       "store/customers/acme/notes.md@2",
@@ -454,15 +453,15 @@ describe("remote projects (ADR 0055)", () => {
       `[...document.querySelectorAll('[data-sidebar="left"] [data-sidebar-widget="files"] button[aria-expanded="false"]')].find(button => button.textContent.trim() === 'Files')?.click(); return true;`,
     );
     await runWait(
-      `for (const name of ['.work', 'app-data', 'store', 'customers']) { const folder = byText('[data-testid="files-nav"] button', name); if (folder?.getAttribute('aria-expanded') === 'false') { folder.click(); return false; } } return !!byText('[data-testid="files-nav"] button', 'acme');`,
+      `for (const name of ['.work', 'app-data', 'store', 'customers']) { const folder = byText('[data-sidebar-section="files"] button', name); if (folder?.getAttribute('aria-expanded') === 'false') { folder.click(); return false; } } return !!byText('[data-sidebar-section="files"] button', 'acme');`,
     );
     await runWait(
-      `const folder = byText('[data-testid="files-nav"] button', 'acme');
+      `const folder = byText('[data-sidebar-section="files"] button', 'acme');
        if (!folder) return false; if (folder.getAttribute('aria-expanded') === 'false') folder.click(); return true;`,
       { label: "open customer folder" },
     );
     await runWait(
-      `const row = $('[data-testid="files-nav"] [data-sidebar-item-id=".work/app-data/store/customers/acme/brief.md"] [data-tree-primary]');
+      `const row = $('[data-sidebar-section="files"] [data-sidebar-item-id=".work/app-data/store/customers/acme/brief.md"] [data-tree-primary]');
        if (!row) return false; row.click(); return true;`,
       {
         timeoutMs: 30_000,
@@ -519,9 +518,9 @@ describe("remote projects (ADR 0055)", () => {
     expect(
       await run(
         `return {
-          handbook: !!$('[data-testid="files-nav"] [data-sidebar-item-id="docs/handbook.md"] [data-tree-primary]'),
-          sync: !!$('[data-testid="remote-sync"]'),
-          propose: !!$('[data-testid="remote-propose"]'),
+          handbook: !!$('[data-sidebar-section="files"] [data-sidebar-item-id="docs/handbook.md"] [data-tree-primary]'),
+          sync: !!$('[data-sidebar-section="remote"] button[data-header-action="sync"]'),
+          propose: !!$('[data-sidebar-section="remote"] [data-sidebar-item-id="program-edits"]'),
         };`,
       ),
     ).toEqual({ handbook: false, sync: true, propose: false });

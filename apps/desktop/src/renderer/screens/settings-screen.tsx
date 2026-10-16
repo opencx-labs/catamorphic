@@ -274,8 +274,6 @@ export function SettingsScreen({
               "diffWrap",
               "reviewStartView",
               "reviewGrouping",
-              "changesFileLayout",
-              "prDefaultView",
             ]}
           />
           <WorkspaceSection />

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { describe, expect, it } from "vitest";
-import { buildTree, isVisibleProjectFile } from "./files-nav.js";
+import { buildTree, isVisibleProjectFile } from "./project-file-tree.js";
 
 describe("buildTree", () => {
   it("groups files into stable folder-first navigation", () => {

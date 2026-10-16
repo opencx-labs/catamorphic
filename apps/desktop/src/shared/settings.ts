@@ -121,6 +121,8 @@ export const SETTINGS = {
   },
   tabPlacement: {
     label: "Open tabs",
+    description:
+      "In the sidebar, its Tabs section lists them; a sidebar without one keeps them in the top bar.",
     scopes: projectScopes,
     valid: oneOf("top", "sidebar"),
     options: { top: "Top bar", sidebar: "Sidebar" },
@@ -131,12 +133,6 @@ export const SETTINGS = {
     scopes: projectScopes,
     valid: oneOf("top", "sidebar"),
     options: { top: "Above content", sidebar: "In sidebar" },
-  },
-  pinnedBookmarks: {
-    label: "Pinned bookmarks",
-    scopes: projectScopes,
-    valid: oneOf("tiles", "list"),
-    options: { tiles: "Icon tiles", list: "List" },
   },
   linkOpenMode: {
     label: "Links requesting a new window",
@@ -215,18 +211,6 @@ export const SETTINGS = {
     scopes: profileScope,
     valid: oneOf("purpose", "directory", "flat"),
     options: { purpose: "Purpose", directory: "Directory", flat: "All files" },
-  },
-  changesFileLayout: {
-    label: "Changed file layout",
-    scopes: profileScope,
-    valid: oneOf("tree", "flat"),
-    options: { tree: "Tree", flat: "Flat" },
-  },
-  prDefaultView: {
-    label: "Pull request list",
-    scopes: profileScope,
-    valid: oneOf("for-you", "created", "all"),
-    options: { "for-you": "For you", created: "Created", all: "All" },
   },
   terminalAppearance: {
     label: "Terminal appearance",

@@ -760,11 +760,8 @@ app.whenReady().then(async () => {
     windows,
     async (projectId) =>
       (await state.current?.projectRoots.get(projectId)) ?? null,
-    async () => {
-      const env =
-        await state.current?.agentRegistry.nativeToolchainEnvironment();
-      return env?.CATAMORPHIC_BUN ?? "bun";
-    },
+    async () =>
+      (await state.current?.agentRegistry.nativeToolchainEnvironment()) ?? {},
     (window) => desktopWorkspaces?.isDock(window) ?? false,
   );
   voiceSupport = registerVoiceSupport({

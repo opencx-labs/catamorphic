@@ -77,8 +77,6 @@ export interface AppPrefs {
   windowButtons: boolean;
   contentPadding: number;
   contentRadius: number;
-  /** Profile-wide favorites can be compact tiles or labeled rows. */
-  pinnedBookmarks: "tiles" | "list";
   linkOpenMode: "tab" | "floating";
   previewLinksWithAlt: boolean;
   /**
@@ -96,8 +94,6 @@ export interface AppPrefs {
   githubCliEnabled: boolean;
   reviewStartView: "overview" | "guide" | "diff";
   reviewGrouping: "purpose" | "directory" | "flat";
-  changesFileLayout: "tree" | "flat";
-  prDefaultView: "for-you" | "created" | "all";
   rightSidebarOpen: boolean;
   /** The project the profile last worked in — where a relaunch lands. */
   lastProjectId?: string;
@@ -157,7 +153,6 @@ export const DEFAULT_PREFS: AppPrefs = {
   windowButtons: true,
   contentPadding: 6,
   contentRadius: 14,
-  pinnedBookmarks: "tiles",
   linkOpenMode: "tab",
   previewLinksWithAlt: true,
   switchToOpenTab: true,
@@ -170,8 +165,6 @@ export const DEFAULT_PREFS: AppPrefs = {
   githubCliEnabled: false,
   reviewStartView: "overview",
   reviewGrouping: "purpose",
-  changesFileLayout: "tree",
-  prDefaultView: "for-you",
   rightSidebarOpen: false,
   unreadSessionIds: [],
   appAccessApprovals: [],
@@ -268,7 +261,6 @@ export function normalizePrefs(raw: unknown): AppPrefs {
     windowButtons: record.windowButtons !== false,
     contentPadding: dimension(record.contentPadding, 6, 48),
     contentRadius: dimension(record.contentRadius, 14, 48),
-    pinnedBookmarks: record.pinnedBookmarks === "list" ? "list" : "tiles",
     codeTheme:
       CODE_THEMES.find((name) => name === record.codeTheme) ?? "github",
     diffLayout: record.diffLayout === "unified" ? "unified" : "split",
@@ -284,11 +276,6 @@ export function normalizePrefs(raw: unknown): AppPrefs {
       record.reviewGrouping === "directory" || record.reviewGrouping === "flat"
         ? record.reviewGrouping
         : "purpose",
-    changesFileLayout: record.changesFileLayout === "flat" ? "flat" : "tree",
-    prDefaultView:
-      record.prDefaultView === "created" || record.prDefaultView === "all"
-        ? record.prDefaultView
-        : "for-you",
     terminalAppearance:
       record.terminalAppearance === "ghostty" ? "ghostty" : "app",
     linkOpenMode: record.linkOpenMode === "floating" ? "floating" : "tab",

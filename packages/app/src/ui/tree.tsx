@@ -1441,8 +1441,14 @@ export function CollectionTree<T extends CollectionItem>({
   project,
   tail,
   dragAndDrop,
+  initiallyExpanded,
 }: {
   dragAndDrop?: TreeDragAndDrop<T>;
+  /**
+   * Whether a row with children starts open the first time it loads
+   * (default: closed). Later toggles are the person's.
+   */
+  initiallyExpanded?: (item: T) => boolean;
   /**
    * Root items known to come after the unloaded rows (an open item older
    * than everything loaded), shown past the root's end until a page brings
@@ -1469,6 +1475,8 @@ export function CollectionTree<T extends CollectionItem>({
     projected: Boolean(project || groupBy),
   });
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
+  // Rows already seen keep whatever the person chose for them.
+  const seen = useRef(new Set<string>());
   const branches = useMemo(
     () => ({ collection, releases: new Map<string, () => void>() }),
     [collection],
@@ -1483,6 +1491,20 @@ export function CollectionTree<T extends CollectionItem>({
       ),
     [collection, expanded, revision],
   );
+  useEffect(() => {
+    if (!initiallyExpanded) return;
+    const opened = items.filter(
+      (item) =>
+        !seen.current.has(item.id) &&
+        item.hasChildren &&
+        initiallyExpanded(item),
+    );
+    for (const item of items) seen.current.add(item.id);
+    if (opened.length)
+      setExpanded(
+        (current) => new Set([...current, ...opened.map((item) => item.id)]),
+      );
+  }, [items, initiallyExpanded]);
   const entries = useMemo(() => {
     const groups = new Map<
       string,
@@ -1610,6 +1632,11 @@ export function CollectionTree<T extends CollectionItem>({
                         : null,
                     position: target.position,
                   }),
+                onDragStart: (entry) => {
+                  const source = "itemId" in entry && itemFor(entry.itemId);
+                  if (source) dragAndDrop.onDragStart?.(source);
+                },
+                onDragEnd: () => dragAndDrop.onDragEnd?.(),
               }
             : undefined
         }

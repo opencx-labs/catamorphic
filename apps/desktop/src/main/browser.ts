@@ -394,7 +394,11 @@ export function registerBrowserSupport(
   windows: WindowProfileRegistry,
   /** Project root lookup for layered sidebar resolution (embedded server). */
   projectRootFor: (projectId: string) => Promise<string | null>,
-  sidebarExecutable: () => Promise<string>,
+  /**
+   * Work's Bun toolchain environment for sidebar modules (PATH,
+   * CATAMORPHIC_BUN), as agent terminals get it; never a credential.
+   */
+  sidebarToolchain: () => Promise<Record<string, string>>,
   /** The detached chat dock is no browser window (ADR 0203 tab reports). */
   isDock: (window: BrowserWindow) => boolean,
 ): BrowserSupport {
@@ -403,7 +407,7 @@ export function registerBrowserSupport(
     profiles,
     config: profileConfig,
     rootFor: projectRootFor,
-    executable: sidebarExecutable,
+    toolchain: sidebarToolchain,
   });
   const userData = app.getPath("userData");
   const profilesDir = path.join(userData, "profiles");

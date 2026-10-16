@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
+import { addSidebarSections, CHATS_SECTION } from "./sidebar-config.js";
 
 /**
  * Agent commands and profile switching, on their own app instance: these
@@ -145,6 +146,8 @@ describe("agents and profiles", () => {
               !byText('[role="tab"], button', 'Set up agent');`,
       { timeoutMs: 60_000, label: "palette New Tab after project creation" },
     );
+    // Chats as a sidebar list, for the session inspector below.
+    await addSidebarSections(app, [CHATS_SECTION]);
   });
 
   it("hides palette actions that cannot affect the empty workspace", async () => {

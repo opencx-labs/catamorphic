@@ -10,6 +10,7 @@ import {
   useState,
 } from "react";
 import {
+  dangerLast,
   isMenuSeparator,
   type MenuSeparator,
   menuGroups,
@@ -20,8 +21,11 @@ import {
   openModeForAction,
   openModeFromEvent,
 } from "../../shared/open-mode.js";
+import type { SidebarBadge, SidebarSignal } from "../../shared/sidebar.js";
 import type { SidebarMenuEntry, SidebarPreview } from "../lib/desktop-api.js";
 import { lucideIcon } from "../lib/lucide-icon.js";
+import { AnimatedTitle } from "./animated-title.js";
+import { SignalBadge, SignalGlyph } from "./chat-signals.js";
 import {
   type ContextMenuEntry,
   type MenuAt,
@@ -81,11 +85,13 @@ export function SidebarItemRow<
   keepDescription = false,
   badges,
   progress,
+  signal,
   presentation = "row",
   expanded,
   resource = false,
   defaultOpenMode = "replace",
   label,
+  pointKey,
   title,
   icon,
   menu,
@@ -113,13 +119,20 @@ export function SidebarItemRow<
    * gives way instead; a long description (a path) shrinks first.
    */
   keepDescription?: boolean;
-  badges?: readonly string[];
+  badges?: readonly (string | SidebarBadge)[];
   progress?: number;
+  /** What the row is doing, drawn the same everywhere (ADR 0234). */
+  signal?: SidebarSignal;
   presentation?: "row" | "tile";
   expanded?: boolean;
   resource?: boolean;
   defaultOpenMode?: OpenMode;
   label: string;
+  /**
+   * What an agent points at to reach this row: "sidebar:<label>", or the
+   * tab key of the open tab the row stands for.
+   */
+  pointKey?: string;
   /** Tooltip; usually the URL. */
   title?: string;
   /** lucide-react icon name, or a node to render directly. */
@@ -173,7 +186,7 @@ export function SidebarItemRow<
     (supportedActions
       ? supportedActions.includes(entry.action)
       : ownEntries.some((original) => original.action === entry.action)) ||
-    (["refresh", "search", "new-chat", "new-workflow"].includes(entry.action) &&
+    (["refresh", "search"].includes(entry.action) &&
       Boolean(contribution?.commands?.has(entry.action)));
   const available = (
     entries: readonly (ContextMenuEntry | MenuSeparator)[],
@@ -195,7 +208,7 @@ export function SidebarItemRow<
       (menu === undefined
         ? menuGroups<ContextMenuEntry>(
             resource ? OPEN_ACTIONS : [],
-            defaultMenu ?? [],
+            dangerLast(defaultMenu ?? []),
           )
         : menu),
   );
@@ -236,6 +249,7 @@ export function SidebarItemRow<
   description = overrides.description ?? description;
   badges = overrides.badges ?? badges;
   progress = overrides.progress ?? progress;
+  signal = overrides.signal ?? signal;
   preview = overrides.preview ?? preview;
   if (preview === false) previewContent = undefined;
   defaultOpenMode = overrides.open ?? defaultOpenMode;
@@ -344,7 +358,7 @@ export function SidebarItemRow<
       className={`group relative flex items-center rounded-md transition-colors duration-150 ${presentation === "tile" ? "h-9 border border-border bg-bg-raised" : "h-7"} ${
         active ? "bg-bg-overlay" : "hover:bg-bg-overlay/60"
       }`}
-      data-point-key={`sidebar:${label}`}
+      data-point-key={pointKey ?? `sidebar:${label}`}
       onMouseEnter={() => {
         rowHoveredRef.current = true;
         armPreview();
@@ -453,18 +467,21 @@ export function SidebarItemRow<
                 previewEnabled && previewOpen ? previewId : undefined
               }
             >
-              {IconComponent ? (
-                <IconComponent className="size-3.5 shrink-0 text-fg-faint" />
-              ) : (
-                icon
-              )}
+              <SignalGlyph working={signal === "working"} className="size-3.5">
+                {IconComponent ? (
+                  <IconComponent className="size-3.5 shrink-0 text-fg-faint" />
+                ) : (
+                  icon
+                )}
+              </SignalGlyph>
               {presentation === "tile" ? (
                 <span className="sr-only">{label}</span>
               ) : (
                 (labelContent ?? (
                   // The label is what people read: it keeps its width and the
-                  // description gives way first when the row is narrow.
-                  <span className="min-w-0 flex-auto truncate">{label}</span>
+                  // description gives way first when the row is narrow. A
+                  // renamed row says so (a chat its agent titled).
+                  <AnimatedTitle text={label} className="min-w-0 flex-auto" />
                 ))
               )}
               {description && (
@@ -478,14 +495,27 @@ export function SidebarItemRow<
                   {description}
                 </span>
               )}
-              {badges?.map((badge) => (
-                <span
-                  key={badge}
-                  className="rounded bg-bg-inset px-1 text-[10px] text-fg-muted"
-                >
-                  {badge}
-                </span>
-              ))}
+              {badges?.map((badge) => {
+                const text = typeof badge === "string" ? badge : badge.label;
+                const BadgeIcon =
+                  typeof badge === "string"
+                    ? undefined
+                    : lucideIcon(badge.icon);
+                return (
+                  <span
+                    key={text}
+                    className="flex max-w-28 shrink-0 items-center gap-1 truncate rounded bg-bg-inset px-1 text-[10px] text-fg-muted"
+                  >
+                    {BadgeIcon && (
+                      <BadgeIcon
+                        className="size-2.5 shrink-0"
+                        aria-hidden="true"
+                      />
+                    )}
+                    <span className="truncate">{text}</span>
+                  </span>
+                );
+              })}
               {progress !== undefined && (
                 <progress
                   aria-label={`${label} progress`}
@@ -493,6 +523,28 @@ export function SidebarItemRow<
                   max={1}
                   className="h-1 w-12 accent-accent"
                 />
+              )}
+              {(signal === "attention" || signal === "unread") && (
+                <span
+                  data-signal={signal}
+                  className="grid size-3 shrink-0 place-items-center"
+                >
+                  <SignalBadge
+                    signals={{
+                      attention: signal === "attention",
+                      unread: signal === "unread",
+                    }}
+                    size="sm"
+                  />
+                  <span className="sr-only">
+                    {signal === "attention" ? "Ready for you" : "Unread"}
+                  </span>
+                </span>
+              )}
+              {signal === "working" && (
+                <span data-signal="working" className="sr-only">
+                  Working
+                </span>
               )}
               {end}
             </button>
@@ -514,7 +566,10 @@ export function SidebarItemRow<
                   }
                   aria-busy={pending === entry.action}
                   onClick={() => void invoke(entry)}
-                  className="grid size-6 shrink-0 place-items-center rounded text-fg-muted hover:bg-bg-overlay disabled:opacity-40"
+                  // Row buttons show with the row's hover or focus, as ⋯ does.
+                  className={`grid size-6 shrink-0 place-items-center rounded text-fg-muted hover:bg-bg-overlay disabled:opacity-40 ${
+                    pending === entry.action ? "" : "row-reveal"
+                  }`}
                 >
                   {pending === entry.action ? (
                     <LoaderCircle

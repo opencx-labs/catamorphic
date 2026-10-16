@@ -914,43 +914,6 @@ kbd {
   animation: bubble-ask 280ms cubic-bezier(0.2, 0, 0, 1);
 }
 
-/* Workspace tab arrival (new tab opened, incl. chat promoted to a tab) */
-@keyframes sidebar-tab-in {
-  from {
-    height: 0;
-    opacity: 0;
-    margin-bottom: -4px;
-  }
-  to {
-    height: 32px;
-    opacity: 1;
-    margin-bottom: 0;
-  }
-}
-
-@keyframes sidebar-tab-out {
-  from {
-    height: 32px;
-    opacity: 1;
-    margin-bottom: 0;
-  }
-  to {
-    height: 0;
-    opacity: 0;
-    margin-bottom: -4px;
-  }
-}
-
-.animate-sidebar-tab-in {
-  animation: sidebar-tab-in 200ms cubic-bezier(0.2, 0, 0, 1);
-  overflow: hidden;
-}
-
-.animate-sidebar-tab-out {
-  animation: sidebar-tab-out 200ms cubic-bezier(0.2, 0, 0, 1) forwards;
-  overflow: hidden;
-}
-
 /* A sidebar tab joining or leaving its strip (a contextual tab such as This
    session, ADR 0226): its place grows from nothing while its neighbours
    slide, and shrinks away the way it came. Transitions, not keyframes: a

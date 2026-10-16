@@ -1,10 +1,9 @@
 import { useQuery } from "@tanstack/react-query";
 import { type FormEvent, useEffect, useState } from "react";
-import { desktopApi } from "../lib/desktop-api.js";
+import { desktopApi, type RemoteFeatures } from "../lib/desktop-api.js";
 import { CopyButton } from "./copy-button.js";
 import { Modal } from "./modal.js";
 import { PendingButton } from "./pending-button.js";
-import type { RemoteFeatures } from "./remote-nav.js";
 
 /**
  * The two members' verbs beside Ship (ADR 0055):

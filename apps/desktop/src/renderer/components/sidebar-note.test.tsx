@@ -5,7 +5,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { desktopApi } from "../lib/desktop-api.js";
-import { SidebarNote } from "./sidebar-widgets.js";
+import { SidebarNote } from "./sidebar-note.js";
 
 vi.mock("../lib/desktop-api.js", () => ({
   desktopApi: {

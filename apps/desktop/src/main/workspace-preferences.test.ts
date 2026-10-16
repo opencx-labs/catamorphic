@@ -76,7 +76,6 @@ describe("workspace preferences", () => {
       tabPlacement: "sidebar",
       headerPlacement: "sidebar",
       contentFrame: true,
-      pinnedBookmarks: "list",
       linkOpenMode: "floating",
       previewLinksWithAlt: false,
       terminalMacros: [
@@ -93,7 +92,6 @@ describe("workspace preferences", () => {
       tabPlacement: "sidebar",
       headerPlacement: "sidebar",
       contentFrame: true,
-      pinnedBookmarks: "list",
       linkOpenMode: "floating",
       previewLinksWithAlt: false,
       terminalMacros: [
@@ -113,12 +111,10 @@ describe("workspace preferences", () => {
       normalizePrefs({
         tabPlacement: "garbage",
         contentFrame: "true",
-        pinnedBookmarks: null,
       }),
     ).toMatchObject({
       tabPlacement: "top",
       contentFrame: false,
-      pinnedBookmarks: "tiles",
     });
   });
 });

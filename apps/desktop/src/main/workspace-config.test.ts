@@ -2,18 +2,24 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { executableSource } from "../shared/workspace-config.js";
 import {
   DEFAULT_WORKSPACE_CONFIG,
   DEFAULT_WORKSPACE_FILE,
   loadWorkspaceConfigFile,
   resolveWorkspaceConfig,
+  sanitizeSidebarSourcePage,
   watchConfigLayerFile,
 } from "./workspace-config.js";
 
-const CUSTOM = (title: string) =>
-  `module.exports = { sidebars: {left: [{ id: "project", title: "Project", sections: [{ id: "widget-1", type: "custom", title: ${JSON.stringify(
+const LINKS = (title: string) =>
+  `module.exports = { sidebars: {left: [{ id: "project", title: "Project", sections: [{ id: "links", title: ${JSON.stringify(
     title,
   )}, items: [] }] }], right: [] } };\n`;
+
+/** A layout whose left sidebar holds these sections (as source text). */
+const sections = (body: string) =>
+  `module.exports = { sidebars: {left: [{ id: "project", title: "Project", sections: [${body}] }], right: [] } };`;
 
 const tmpdirs: string[] = [];
 const disposers: Array<() => void> = [];
@@ -62,176 +68,188 @@ function makeLayers(files: {
   return { profileDir, projectRoot, projectId };
 }
 
+/** Resolve a profile-only layout from source text. */
+function resolveProfile(source: string) {
+  const profileDir = makeDir();
+  fs.writeFileSync(path.join(profileDir, "workspace.js"), source);
+  return resolveWorkspaceConfig({ profileDir });
+}
+
 describe("resolveWorkspaceConfig", () => {
   it("falls back to the built-in default when no layer file exists", () => {
     const { profileDir, projectRoot, projectId } = makeLayers({});
-    const resolved = resolveWorkspaceConfig({
-      profileDir,
-      projectId,
-      projectRoot,
-    });
-    expect(resolved.layer).toBe("default");
-    expect(resolved.config).toEqual(DEFAULT_WORKSPACE_CONFIG);
+    expect(
+      resolveWorkspaceConfig({ profileDir, projectId, projectRoot }),
+    ).toEqual({ config: DEFAULT_WORKSPACE_CONFIG, layer: "default" });
   });
 
-  it("uses the profile layer when it is the only file", () => {
-    const { profileDir, projectRoot, projectId } = makeLayers({
-      profile: CUSTOM("Profile"),
+  it("takes the most specific existing layer, whole", () => {
+    const layers = makeLayers({
+      projectLocal: LINKS("Mine"),
+      project: LINKS("Shared"),
+      profile: LINKS("Profile"),
     });
-    const resolved = resolveWorkspaceConfig({
-      profileDir,
-      projectId,
-      projectRoot,
-    });
-    expect(resolved.layer).toBe("profile");
-    expect(resolved.config.sidebars.left[0]!.sections[0]?.title).toBe(
-      "Profile",
-    );
-  });
-
-  it("prefers the project's shared .work/workspace.js over the profile", () => {
-    const { profileDir, projectRoot, projectId } = makeLayers({
-      project: CUSTOM("Project"),
-      profile: CUSTOM("Profile"),
-    });
-    const resolved = resolveWorkspaceConfig({
-      profileDir,
-      projectId,
-      projectRoot,
-    });
-    expect(resolved.layer).toBe("project");
-    expect(resolved.config.sidebars.left[0]!.sections[0]?.title).toBe(
-      "Project",
-    );
-  });
-
-  it("prefers the user's project-local override over everything", () => {
-    const { profileDir, projectRoot, projectId } = makeLayers({
-      projectLocal: CUSTOM("Local"),
-      project: CUSTOM("Project"),
-      profile: CUSTOM("Profile"),
-    });
-    const resolved = resolveWorkspaceConfig({
-      profileDir,
-      projectId,
-      projectRoot,
-    });
+    const resolved = resolveWorkspaceConfig(layers);
     expect(resolved.layer).toBe("project-local");
-    expect(resolved.config.sidebars.left[0]!.sections[0]?.title).toBe("Local");
-  });
-
-  it("skips project layers when no projectId/projectRoot is given", () => {
-    const { profileDir, projectRoot } = makeLayers({
-      project: CUSTOM("Project"),
-      profile: CUSTOM("Profile"),
+    expect(resolved.config.sidebars.left[0]?.sections[0]?.title).toBe("Mine");
+    const shared = makeLayers({
+      project: LINKS("Shared"),
+      profile: LINKS("Profile"),
     });
-    void projectRoot;
-    const resolved = resolveWorkspaceConfig({ profileDir });
-    expect(resolved.layer).toBe("profile");
-    expect(resolved.config.sidebars.left[0]!.sections[0]?.title).toBe(
-      "Profile",
-    );
+    expect(resolveWorkspaceConfig(shared).layer).toBe("project");
+    expect(
+      resolveWorkspaceConfig({ profileDir: shared.profileDir }).layer,
+    ).toBe("profile");
   });
 
-  it("does NOT slide past a broken winning layer — it falls to defaults", () => {
-    const { profileDir, projectRoot, projectId } = makeLayers({
+  it("does not slide past a broken winning layer: it falls to defaults", () => {
+    const layers = makeLayers({
       project: "this is not javascript {",
-      profile: CUSTOM("Profile"),
+      profile: LINKS("Profile"),
     });
-    const resolved = resolveWorkspaceConfig({
-      profileDir,
-      projectId,
-      projectRoot,
-    });
-    // The broken project file wins the resolution (it exists) but yields
-    // the defaults, exactly like a broken profile file always has.
+    const resolved = resolveWorkspaceConfig(layers);
     expect(resolved.layer).toBe("project");
     expect(resolved.config).toEqual(DEFAULT_WORKSPACE_CONFIG);
+    expect(resolved.error).toBeTruthy();
   });
 
-  it("treats a config that sanitizes to zero sections as defaults", () => {
-    const { profileDir, projectRoot, projectId } = makeLayers({
-      projectLocal: `module.exports = { sidebars: {left: [{ id: "project", title: "Project", sections: [{ id: "widget-2", type: "bogus" }] }], right: [] } };`,
-    });
-    const resolved = resolveWorkspaceConfig({
-      profileDir,
-      projectId,
-      projectRoot,
-    });
-    expect(resolved.layer).toBe("project-local");
-    expect(resolved.config).toEqual(DEFAULT_WORKSPACE_CONFIG);
+  it("refuses a committed layout from before ADR 0234 without rewriting it", () => {
+    const old = sections(`{ id: "chats", type: "chats" }`);
+    const layers = makeLayers({ project: old });
+    const resolved = resolveWorkspaceConfig(layers);
+    expect(resolved.error).toContain("sections have no type");
+    expect(resolved.error).toContain("work:chats");
+    expect(
+      fs.readFileSync(
+        path.join(layers.projectRoot, ".work", "workspace.js"),
+        "utf8",
+      ),
+    ).toBe(old);
   });
 
-  it("sanitizes the winning layer like the profile store does", () => {
-    const { profileDir, projectRoot, projectId } = makeLayers({
-      project: `module.exports = { sidebars: {left: [{ id: "project", title: "Project", sections: [
-        { id: "widget-3", type: "workflows", collapsed: true },
-        { id: "widget-4", type: "files", title: "Customer work" },
-        { id: "widget-6", type: "custom", title: "Docs", items: [
+  it("keeps sources, items and presentation", () => {
+    const resolved = resolveProfile(
+      sections(`
+        { id: "flows", source: "work:workflows", collapsed: true, hideEmpty: true },
+        { id: "pins", source: "work:pinned", title: "", presentation: "tiles" },
+        { id: "todos", source: ".work/todos.ts", collections: ["tabs"], workflows: ["listTickets"] },
+        { id: "docs", title: "Docs", items: [
           { label: "MDN", url: "https://developer.mozilla.org" },
           { label: "no url" },
         ] },
-      ] }], right: [] } };`,
-    });
-    const resolved = resolveWorkspaceConfig({
-      profileDir,
-      projectId,
-      projectRoot,
-    });
-    expect(resolved.config.sidebars.left[0]!.sections).toHaveLength(3);
-    expect(resolved.config.sidebars.left[0]!.sections[0]).toMatchObject({
-      type: "workflows",
-      collapsed: true,
-    });
-    expect(resolved.config.sidebars.left[0]!.sections[1]).toMatchObject({
-      type: "files",
-      title: "Customer work",
-    });
-    expect(resolved.config.sidebars.left[0]!.sections[2]?.items).toHaveLength(
-      1,
+        { id: "monitor", app: "monitor", height: 9999, collections: ["chats"] },
+        { id: "note", note: true },`),
     );
-    expect(
-      resolved.config.sidebars.left[0]!.sections[2]?.items?.[0],
-    ).toMatchObject({
-      label: "MDN",
-      url: "https://developer.mozilla.org",
+    expect(resolved.error).toBeUndefined();
+    const [flows, pins, todos, docs, monitor, note] =
+      resolved.config.sidebars.left[0]?.sections ?? [];
+    expect(flows).toMatchObject({
+      source: "work:workflows",
+      collapsed: true,
+      hideEmpty: true,
     });
+    expect(pins).toMatchObject({ title: "", presentation: "tiles" });
+    expect(todos).toMatchObject({
+      source: ".work/todos.ts",
+      collections: ["tabs"],
+      workflows: ["listTickets"],
+    });
+    expect(docs?.items).toEqual([
+      expect.objectContaining({
+        label: "MDN",
+        url: "https://developer.mozilla.org",
+      }),
+    ]);
+    expect(monitor).toMatchObject({ app: "monitor", height: 1200 });
+    expect(note).toMatchObject({ note: true });
   });
 
-  it("preserves valid capability predicates and drops invalid ones", () => {
-    const { profileDir, projectRoot, projectId } = makeLayers({
-      project: `module.exports = { sidebars: {left: [{ id: "project", title: "Project", sections: [
-        {
-          id: "widget-9", type: "custom",
-          title: "Brain",
-          when: { permissions: ["brain:maintain"] },
-          items: [
-            {
-              label: "Changes",
-              url: "https://example.test/changes",
-              when: { permissions: ["changes:author"] },
-            },
-            {
-              label: "Retired builder flag",
-              url: "https://example.test/builder",
-              when: { builder: true },
-            },
-            {
-              label: "Leaky",
-              url: "https://example.test/leaky",
-              when: { permissions: ["not-namespaced"] },
-            },
-          ],
-        },
-      ] }], right: [] } };`,
+  it("refuses sources, grants and kinds that do not exist", () => {
+    for (const [body, message] of [
+      [`{ id: "a", source: "work:nonsense" }`, "not one of Work's lists"],
+      [`{ id: "a", source: "https://example.com" }`, "not a module path"],
+      [`{ id: "a", source: "work:tabs", items: [] }`, "exactly one of"],
+      [`{ id: "a" }`, "exactly one of"],
+      [
+        `{ id: "a", source: "work:subsessions" }`,
+        "add when: { session: true }",
+      ],
+      [
+        `{ id: "a", source: "work:chats", collections: ["tabs"] }`,
+        "only apps and modules",
+      ],
+      [
+        `{ id: "a", source: ".work/x.ts", collections: ["work:tabs"] }`,
+        "without work:",
+      ],
+      [`{ id: "a", app: "m", workflows: ["x"] }`, "only modules"],
+      [`{ id: "a", note: "../secrets" }`, "project-relative"],
+      [`{ id: "a", source: "work:tabs", presentation: "grid" }`, "rows"],
+    ] as const) {
+      expect(resolveProfile(sections(body)).error, body).toContain(message);
+    }
+  });
+
+  it("checks actions: Work's verbs, source actions, input, no run:", () => {
+    const resolved = resolveProfile(
+      sections(`{ id: "todos", source: ".work/todos.ts",
+        headerActions: [
+          { label: "Add", action: "add", icon: "Plus",
+            input: { title: "Add todo", submit: "Add",
+              fields: [{ name: "text", label: "Todo", placeholder: "Milk" }] } },
+          { label: "New tab", action: "open", url: "command:new-tab" },
+        ],
+        itemDefaults: { actions: [{ label: "Done", action: "mark-done" }],
+          menu: [{ label: "Side", action: "open-side" }, { label: "Copy", action: "copy-url" }] } }`),
+    );
+    expect(resolved.error).toBeUndefined();
+    const todos = resolved.config.sidebars.left[0]?.sections[0];
+    expect(todos?.headerActions?.[0]?.input).toEqual({
+      title: "Add todo",
+      submit: "Add",
+      fields: [{ name: "text", label: "Todo", placeholder: "Milk" }],
     });
-    const section = resolveWorkspaceConfig({
-      profileDir,
-      projectId,
-      projectRoot,
-    }).config.sidebars.left[0]!.sections[0];
-    expect(section?.when).toEqual({ permissions: ["brain:maintain"] });
-    expect(section?.items).toEqual([
+    expect(todos?.headerActions?.[1]).toMatchObject({
+      action: "open",
+      url: "command:new-tab",
+    });
+    expect(todos?.itemDefaults?.menu?.map((entry) => entry.action)).toEqual([
+      "open-side",
+      "copy-url",
+    ]);
+    for (const [entry, message] of [
+      [`{ label: "Toggle", action: "run:toggle" }`, "without run:"],
+      [`{ label: "Bad", action: "Bad Name" }`, "not one of Work's verbs"],
+      [`{ label: "Ask", action: "ask", input: { fields: [] } }`, "one to four"],
+      [
+        `{ label: "Ask", action: "ask", input: { fields: [{ name: "a", label: "A" }, { name: "a", label: "B" }] } }`,
+        "unique name",
+      ],
+    ] as const)
+      expect(
+        resolveProfile(
+          sections(`{ id: "a", source: ".work/a.ts", menu: [${entry}] }`),
+        ).error,
+        entry,
+      ).toContain(message);
+  });
+
+  it("keeps valid conditions and drops what has an invalid one", () => {
+    const resolved = resolveProfile(
+      sections(`
+        { id: "tabs", source: "work:tabs", when: { tabPlacement: "sidebar" } },
+        { id: "gone", source: "work:files", when: { tabPlacement: "left" } },
+        { id: "brain", title: "Brain", when: { permissions: ["brain:maintain"] }, items: [
+          { label: "Changes", url: "https://example.test/changes", when: { permissions: ["changes:author"] } },
+          { label: "Retired builder flag", url: "https://example.test/builder", when: { builder: true } },
+        ] },`),
+    );
+    const [tabs, brain, extra] =
+      resolved.config.sidebars.left[0]?.sections ?? [];
+    expect(extra).toBeUndefined();
+    expect(tabs?.when).toMatchObject({ tabPlacement: "sidebar" });
+    expect(brain?.when).toEqual({ permissions: ["brain:maintain"] });
+    expect(brain?.items).toEqual([
       expect.objectContaining({
         label: "Changes",
         when: { permissions: ["changes:author"] },
@@ -239,92 +257,186 @@ describe("resolveWorkspaceConfig", () => {
     ]);
   });
 
-  it("retains recursive custom items and folder-only nodes", () => {
-    const { profileDir, projectRoot, projectId } = makeLayers({
-      project: `module.exports = { sidebars: {left: [{ id: "project", title: "Project", sections: [{
-        id: "widget-10", type: "custom",
-        title: "Knowledge",
-        items: [{
-          label: "Engineering",
-          icon: "Folder",
-          collapsed: true,
-          items: [{
-            label: "Platform",
-            items: [{ label: "Runbook", url: "https://example.test/runbook" }],
-          }],
-        }],
-      }] }], right: [] } };`,
-    });
-
-    const item = resolveWorkspaceConfig({
-      profileDir,
-      projectId,
-      projectRoot,
-    }).config.sidebars.left[0]!.sections[0]?.items?.[0];
-    expect(item).toMatchObject({
+  it("keeps recursive items, folder-only nodes and previews of up to six facts", () => {
+    const resolved = resolveProfile(
+      sections(`{ id: "knowledge", title: "Knowledge", items: [{
+        label: "Engineering", icon: "Folder", collapsed: true,
+        items: [{ label: "Platform", items: [{ label: "Runbook", url: "https://example.test/runbook",
+          preview: { title: "Runbook", metadata: [
+            { label: "1", value: "a" }, { label: "2", value: "b" }, { label: "3", value: "c" },
+            { label: "4", value: "d" }, { label: "5", value: "e" }, { label: "6", value: "f" },
+            { label: "7", value: "dropped" }, { label: "no value" }] } }] }],
+      }, { label: "Quiet", url: "https://quiet.example.test", preview: false }] }`),
+    );
+    const [engineering, quiet] =
+      resolved.config.sidebars.left[0]?.sections[0]?.items ?? [];
+    expect(engineering).toMatchObject({
       label: "Engineering",
-      icon: "Folder",
       collapsed: true,
-      items: [
-        {
-          label: "Platform",
-          items: [{ label: "Runbook", url: "https://example.test/runbook" }],
-        },
-      ],
+      items: [{ label: "Platform", items: [{ label: "Runbook" }] }],
     });
+    expect(engineering?.items?.[0]?.items?.[0]?.preview).toMatchObject({
+      metadata: ["1", "2", "3", "4", "5", "6"].map((label) => ({ label })),
+    });
+    expect(quiet?.preview).toBe(false);
+  });
+});
+
+describe("rewriting a layout from before ADR 0234", () => {
+  it("rewrites a profile file once, keeping the original beside it", () => {
+    const profileDir = makeDir();
+    const file = path.join(profileDir, "workspace.js");
+    const old = `module.exports = { sidebars: {
+      left: [{ id: "project", title: "Project", icon: "House", sections: [
+        { id: "bookmarks", type: "bookmarks" },
+        { id: "workflows", type: "workflows" },
+        { id: "chats", type: "chats" },
+        { id: "tabs", type: "tabs" },
+        { id: "todos", type: "custom", title: "Todos",
+          source: { type: "custom", module: ".work/todos.ts" },
+          headerActions: [{ label: "Refresh", action: "refresh" }],
+          itemDefaults: { actions: [{ label: "Done", action: "run:toggle" }] } },
+        { id: "running", type: "custom", title: "Running",
+          source: { type: "chats", filter: { running: true } } },
+        { id: "note", type: "note", path: "notes/today.md" },
+      ] }],
+      right: [
+        { id: "this-session", title: "This session", icon: "MessageSquareText",
+          sections: [{ id: "session", type: "session", when: { session: true } }] },
+        { id: "companion", title: "Activity", icon: "Activity", sections: [
+          { id: "activity", type: "activity" },
+          { id: "subsessions", type: "subsessions", when: { surface: ["chat"], session: true } },
+          { id: "changes", type: "git", hideEmpty: true } ] },
+        { id: "reviews", title: "Proposals", icon: "GitPullRequest",
+          sections: [{ id: "prs", type: "prs" }] },
+      ] },
+      palette: { modes: [
+        { id: "issues", trigger: "issues", title: "Issues", source: { type: "custom", module: ".work/issues.ts" } },
+        { id: "chats-mode", trigger: "chatlist", title: "Chats", source: { type: "chats", filter: { running: true } } },
+        { id: "kids", trigger: "kids", title: "Kids", source: { type: "chats", scope: "children" } },
+      ] } };`;
+    fs.writeFileSync(file, old);
+    const resolved = resolveWorkspaceConfig({ profileDir });
+    expect(resolved.error).toBeUndefined();
+    expect(fs.readFileSync(`${file}.v1`, "utf8")).toBe(old);
+    expect(fs.readFileSync(file, "utf8")).not.toContain('"type"');
+    const left = resolved.config.sidebars.left[0]?.sections ?? [];
+    expect(left.map((section) => section.id)).toEqual([
+      "pinned",
+      "library",
+      "bookmarks",
+      "workflows",
+      "chats",
+      "tabs",
+      "todos",
+      "running",
+      "note",
+    ]);
+    expect(left.find((section) => section.id === "tabs")).toMatchObject({
+      source: "work:tabs",
+      when: { tabPlacement: "sidebar" },
+    });
+    expect(left.find((section) => section.id === "chats")).toMatchObject({
+      source: "work:chats",
+      headerActions: [{ url: "command:new-floating-chat" }],
+    });
+    expect(left.find((section) => section.id === "todos")).toMatchObject({
+      source: ".work/todos.ts",
+      itemDefaults: { actions: [{ action: "toggle" }] },
+    });
+    expect(left.find((section) => section.id === "running")).toMatchObject({
+      source: "work:chats",
+      title: "Running",
+    });
+    expect(left.find((section) => section.id === "note")).toMatchObject({
+      note: "notes/today.md",
+    });
+    // The right sidebar's screens are gone; their lists stay as sources.
+    expect(resolved.config.sidebars.right).toEqual([]);
+    expect(resolved.config.palette?.modes.map((mode) => mode.id)).toEqual([
+      "issues",
+      "chats-mode",
+    ]);
+    expect(resolved.config.palette?.modes[0]?.source).toBe(".work/issues.ts");
+    expect(resolved.config.palette?.modes[1]?.source).toBe("work:chats");
+    // Once rewritten, it loads as written.
+    expect(resolveWorkspaceConfig({ profileDir }).config).toEqual(
+      resolved.config,
+    );
   });
 
-  it("sanitizes custom item previews and preserves an explicit opt-out", () => {
-    const { profileDir, projectRoot, projectId } = makeLayers({
-      project: `module.exports = { sidebars: {left: [{ id: "project", title: "Project", sections: [{
-        id: "widget-11", type: "custom",
-        items: [
-          {
-            label: "Deployments",
-            url: "https://deployments.example.test",
-            preview: {
-              title: "Production deployments",
-              description: "Release health at a glance",
-              metadata: [
-                { label: "Owner", value: "Platform" },
-                { label: "Region", value: "eu-west-1" },
-                { label: "Status", value: "Healthy" },
-                { label: "Version", value: "2026.8.24" },
-                { label: "Ignored", value: "fifth row" },
-                { label: "Missing value" },
+  it("leaves a layout it cannot make valid as it is, and keeps every original", () => {
+    const profileDir = makeDir();
+    const file = path.join(profileDir, "workspace.js");
+    // run:markDone names an action today's pattern refuses.
+    const invalid = `module.exports = { sidebars: { left: [{ id: "p", title: "P", icon: "House", sections: [
+      { id: "todos", type: "custom", source: { type: "custom", module: ".work/todos.ts" },
+        itemDefaults: { actions: [{ label: "Done", action: "run:markDone" }] } } ] }], right: [] } };`;
+    fs.writeFileSync(file, invalid);
+    const refused = resolveWorkspaceConfig({ profileDir });
+    expect(refused.error).toContain("markDone");
+    expect(fs.readFileSync(file, "utf8")).toBe(invalid);
+    expect(fs.existsSync(`${file}.v1`)).toBe(false);
+    // A second old layout after the first was rewritten keeps its own copy.
+    const first = `module.exports = { sidebars: { left: [{ id: "p", title: "P", icon: "House", sections: [{ id: "chats", type: "chats" }] }], right: [] } };`;
+    fs.writeFileSync(file, first);
+    expect(resolveWorkspaceConfig({ profileDir }).error).toBeUndefined();
+    const second = first.replace('"chats" }', '"apps" }');
+    fs.writeFileSync(file, second);
+    expect(resolveWorkspaceConfig({ profileDir }).error).toBeUndefined();
+    expect(fs.readFileSync(`${file}.v1`, "utf8")).toBe(first);
+    expect(fs.readFileSync(`${file}.v1-2`, "utf8")).toBe(second);
+    expect(
+      fs.readdirSync(profileDir).filter((name) => name.endsWith(".tmp")),
+    ).toEqual([]);
+  });
+
+  it("rewrites the untouched default copies every profile was given", () => {
+    const profileDir = makeDir();
+    fs.writeFileSync(
+      path.join(profileDir, "workspace.js"),
+      `module.exports = ${JSON.stringify({
+        sidebars: {
+          left: [
+            {
+              id: "project",
+              title: "Project",
+              icon: "House",
+              sections: [
+                { id: "bookmarks", type: "bookmarks" },
+                { id: "workflows", type: "workflows" },
+                { id: "apps", type: "apps" },
+                { id: "chats", type: "chats" },
+                { id: "tabs", type: "tabs" },
+                { id: "files", type: "files", collapsed: true },
+                { id: "remote", type: "remote", title: "Server" },
               ],
             },
-          },
-          {
-            label: "Quiet link",
-            url: "https://quiet.example.test",
-            preview: false,
-          },
-        ],
-      }] }], right: [] } };`,
-    });
-
-    const resolved = resolveWorkspaceConfig({
-      profileDir,
-      projectId,
-      projectRoot,
-    });
-
+          ],
+          right: [
+            {
+              id: "reviews",
+              title: "Proposals",
+              icon: "GitPullRequest",
+              sections: [{ id: "prs", type: "prs" }],
+            },
+          ],
+        },
+      })};`,
+    );
+    const resolved = resolveWorkspaceConfig({ profileDir });
+    expect(resolved.error).toBeUndefined();
+    expect(resolved.config.sidebars.right).toEqual([]);
     expect(
-      resolved.config.sidebars.left[0]!.sections[0]?.items?.[0]?.preview,
-    ).toEqual({
-      title: "Production deployments",
-      description: "Release health at a glance",
-      metadata: [
-        { label: "Owner", value: "Platform" },
-        { label: "Region", value: "eu-west-1" },
-        { label: "Status", value: "Healthy" },
-        { label: "Version", value: "2026.8.24" },
-      ],
+      resolved.config.sidebars.left[0]?.sections.find(
+        (section) => section.id === "remote",
+      ),
+    ).toMatchObject({
+      source: "work:remote",
+      title: "Server",
+      hideEmpty: true,
+      headerActions: [{ action: "sync" }, { action: "upload-all" }],
     });
-    expect(
-      resolved.config.sidebars.left[0]!.sections[0]?.items?.[1]?.preview,
-    ).toBe(false);
   });
 });
 
@@ -342,6 +454,23 @@ describe("loadWorkspaceConfigFile", () => {
     fs.writeFileSync(file, `require("node:fs"); module.exports = {};`);
     expect(loadWorkspaceConfigFile(file)).toEqual(DEFAULT_WORKSPACE_CONFIG);
   });
+
+  it("gives a file nothing that reaches this process, and takes back only data", () => {
+    const dir = makeDir();
+    const file = path.join(dir, "workspace.js");
+    // A host object in the context would hand over this realm's Function.
+    fs.writeFileSync(
+      file,
+      `const reach = (value) => { try { return typeof value.constructor.constructor("return process")() } catch { return "none" } };
+      if ([reach(module), reach(exports), reach(this)].some((kind) => kind === "object")) throw new Error("escaped");
+      module.exports = { sidebars: { left: [], right: [] }, get palette() { throw new Error("ran here"); } };`,
+    );
+    const resolved = resolveWorkspaceConfig({ profileDir: dir });
+    expect(resolved.config).toEqual(DEFAULT_WORKSPACE_CONFIG);
+    // Its getter ran in its own context, while it was turned into data.
+    expect(resolved.error).toContain("ran here");
+    expect(resolved.error).not.toContain("escaped");
+  });
 });
 
 describe("watchConfigLayerFile", () => {
@@ -353,11 +482,11 @@ describe("watchConfigLayerFile", () => {
   it("fires when the file changes in an existing directory", async () => {
     const dir = makeDir();
     const file = path.join(dir, "workspace.js");
-    fs.writeFileSync(file, CUSTOM("one"));
+    fs.writeFileSync(file, LINKS("one"));
     const fired = changed(file);
     // Give fs.watch a beat to attach before mutating.
     await new Promise((resolve) => setTimeout(resolve, 50));
-    fs.writeFileSync(file, CUSTOM("two"));
+    fs.writeFileSync(file, LINKS("two"));
     await fired;
   });
 
@@ -367,7 +496,7 @@ describe("watchConfigLayerFile", () => {
     const fired = changed(file);
     await new Promise((resolve) => setTimeout(resolve, 50));
     fs.mkdirSync(path.dirname(file));
-    fs.writeFileSync(file, CUSTOM("late"));
+    fs.writeFileSync(file, LINKS("late"));
     await fired;
   });
 });
@@ -376,13 +505,13 @@ describe("tabbed layout reloads", () => {
   it("retains the last valid layout across invalid saves and recovers", () => {
     const profileDir = makeDir();
     const file = path.join(profileDir, "workspace.js");
-    fs.writeFileSync(file, CUSTOM("Original"));
+    fs.writeFileSync(file, LINKS("Original"));
     const original = resolveWorkspaceConfig({ profileDir }).config;
     fs.writeFileSync(file, "module.exports = {");
     const broken = resolveWorkspaceConfig({ profileDir });
     expect(broken.config).toEqual(original);
     expect(broken.error).toBeTruthy();
-    fs.writeFileSync(file, CUSTOM("Updated"));
+    fs.writeFileSync(file, LINKS("Updated"));
     const recovered = resolveWorkspaceConfig({ profileDir });
     expect(recovered.error).toBeUndefined();
     expect(recovered.config.sidebars.left[0]?.sections[0]?.title).toBe(
@@ -408,176 +537,88 @@ describe("tabbed layout reloads", () => {
     expect(invalid.error).toContain("unique id");
     expect(invalid.config).toEqual({ sidebars: { left: [], right: [] } });
   });
-
-  it("validates app names and bounds compact heights without granting file access", () => {
-    const profileDir = makeDir();
-    const file = path.join(profileDir, "workspace.js");
-    fs.writeFileSync(
-      file,
-      `module.exports = { sidebars: {left: [], right: [{ id: 'apps', title: 'Apps', icon: 'Box', sections: [{id:'app', type:'app', app:'renewals', height:9999}]}] } }`,
-    );
-    expect(
-      resolveWorkspaceConfig({ profileDir }).config.sidebars.right[0]
-        ?.sections[0],
-    ).toMatchObject({ app: "renewals", height: 1200 });
-    fs.writeFileSync(
-      file,
-      `module.exports = { sidebars: {left: [], right: [{ id: 'notes', title: 'Notes', sections: [{id:'note', type:'note', path:'../secrets'}]}] } }`,
-    );
-    expect(resolveWorkspaceConfig({ profileDir }).error).toContain(
-      "project-relative",
-    );
-  });
-});
-
-describe("shared sidebar contributions", () => {
-  it("keeps source options, distinct action placements and sparse overrides", () => {
-    const dir = makeDir();
-    const file = path.join(dir, "workspace.js");
-    fs.writeFileSync(
-      file,
-      `module.exports = {sidebars: {left:[],right:[{id:"chat",title:"Chat",when:{surface:["chat"],session:true},sections:[{
-      id:"children",type:"custom",source:{type:"subsessions",pageSize:25,groupBy:"agentId"},
-      itemDefaults:{icon:"Bot",menu:[{label:"Open",action:"open-tab"}]},
-      itemOverrides:{abc:{label:"Renamed"}},
-      contextMenu:[],actions:[{label:"Beside",action:"open-side",icon:"Columns2"}]
-    }]}] }};`,
-    );
-    const section =
-      loadWorkspaceConfigFile(file).sidebars.right[0]?.sections[0];
-    expect(section?.source).toMatchObject({
-      type: "subsessions",
-      pageSize: 25,
-    });
-    expect(section?.contextMenu).toEqual([]);
-    expect(section?.itemOverrides?.abc).toEqual({ label: "Renamed" });
-    expect(section?.itemDefaults?.icon).toBe("Bot");
-    fs.writeFileSync(
-      file,
-      `module.exports={sidebars: {left:[],right:[{id:"chat",title:"Chat",sections:[{id:"children",type:"chats",actions:[{label:"Bad",action:"invented"}]}]}] }};`,
-    );
-    expect(
-      loadWorkspaceConfigFile(file).sidebars.right[0]?.sections[0],
-    ).toEqual(section);
-  });
 });
 
 describe("palette modes", () => {
-  const layout = (palette: string) =>
+  const withModes = (modes: string, extra = "") =>
     `module.exports = { sidebars: {left: [{ id: "project", title: "Project", sections: [
-      { id: "todos", type: "custom", title: "Todos", source: { type: "custom", module: ".work/todos.ts" } },
-      { id: "links", type: "custom", title: "Links", items: [{ label: "Docs", url: "https://example.com/docs" }] },
-      { id: "chats", type: "chats" },
-      { id: "deploys", type: "custom", title: "Deploys", when: { session: true }, source: { type: "custom", module: ".work/deploys.ts" } }
-    ] }], right: [] }, palette: ${palette} };\n`;
-  const resolve = (palette: string) =>
-    resolveWorkspaceConfig(makeLayers({ profile: layout(palette) }));
+      { id: "todos", source: ".work/todos.ts", collections: ["chats"] },
+      { id: "kids", source: "work:subsessions", when: { session: true } },
+      ${extra}
+    ] }], right: [] }, palette: { modes: [${modes}] } };`;
 
-  it("keeps modes backed by a module, a custom section or static items", () => {
-    const { config, error } = resolve(`{ modes: [
-      { id: "issues", trigger: "@Issues", aliases: ["bugs"], title: "Issues", icon: "Bug",
-        source: { type: "custom", module: ".work/issues.ts" }, search: "source" },
-      { id: "todo-mode", trigger: "todo", title: "Todos", section: "todos", topLevel: true },
-      { id: "docs", trigger: "docs", title: "Docs", items: [{ label: "Guide", url: "https://example.com/guide" }] },
-      { id: "running", trigger: "running", title: "Running chats", source: { type: "chats", filter: { running: true } }, topLevel: true },
-      { id: "all-chats", trigger: "all-chats", title: "All chats", section: "chats" }
-    ] }`);
-    expect(error).toBeUndefined();
-    expect(config.palette?.modes).toMatchObject([
-      {
-        id: "issues",
-        trigger: "issues",
-        aliases: ["bugs"],
-        search: "source",
-        topLevel: false,
-        source: { type: "custom", module: ".work/issues.ts" },
-      },
-      { id: "todo-mode", section: "todos", search: "palette", topLevel: true },
-      { id: "docs", items: [{ label: "Guide" }] },
-      {
-        id: "running",
-        source: { type: "chats", filter: { running: true } },
-        topLevel: true,
-      },
-      { id: "all-chats", section: "chats" },
-    ]);
-  });
-
-  it.each([
-    [
-      "a built-in trigger",
-      `{ modes: [{ id: "s", trigger: "settings", title: "S", items: [{ label: "A", url: "https://a.test" }] }] }`,
-      "built-in mode",
-    ],
-    [
-      "an id shared with a section",
-      `{ modes: [{ id: "todos", trigger: "t", title: "T", section: "todos" }] }`,
-      "distinct from section ids",
-    ],
-    [
-      "an app widget source",
-      `{ modes: [{ id: "m", trigger: "m", title: "M", source: { type: "app" } }] }`,
-      "workspace source",
-    ],
-    [
-      "a chat scope",
-      `{ modes: [{ id: "m", trigger: "m", title: "M", source: { type: "chats", scope: "children" } }] }`,
-      "source.scope needs a sidebar",
-    ],
-    [
-      "a custom source without a module",
-      `{ modes: [{ id: "m", trigger: "m", title: "M", source: { type: "custom" } }] }`,
-      "workspace source",
-    ],
-    [
-      "two row sources",
-      `{ modes: [{ id: "m", trigger: "m", title: "M", section: "links", items: [{ label: "A", url: "https://a.test" }] }] }`,
-      "exactly one of",
-    ],
-    [
-      "server-side search over static rows",
-      `{ modes: [{ id: "m", trigger: "m", title: "M", section: "links", search: "source" }] }`,
-      "needs an executable module",
-    ],
-    [
-      "topLevel with server-side search",
-      `{ modes: [{ id: "m", trigger: "m", title: "M", section: "todos", search: "source", topLevel: true }] }`,
-      "topLevel rows must be loaded once",
-    ],
-    [
-      "a duplicate name",
-      `{ modes: [{ id: "a", trigger: "x", title: "A", section: "todos" }, { id: "b", trigger: "y", aliases: ["x"], title: "B", section: "links" }] }`,
-      "already another mode",
-    ],
-    [
-      "a section of the chat in front",
-      `{ modes: [{ id: "m", trigger: "m", title: "M", section: "deploys" }] }`,
-      "the palette has none",
-    ],
-    [
-      "surface relevance",
-      `{ modes: [{ id: "m", trigger: "m", title: "M", section: "todos", when: { surface: ["chat"] } }] }`,
-      "permissions only",
-    ],
-  ])("rejects %s", (_name, palette, message) => {
-    const { error } = resolve(palette);
-    expect(error).toContain(message);
-  });
-
-  it("resolves executable modules for sections and modes in one namespace", async () => {
-    const { executableSourceModule } = await import(
-      "../shared/workspace-config.js"
+  it("keeps modes over a source, a section or items", () => {
+    const resolved = resolveProfile(
+      withModes(`
+        { id: "issues", trigger: "@Issues", aliases: ["bugs"], title: "Issues",
+          source: ".work/issues.ts", search: "source", workflows: ["searchIssues"] },
+        { id: "changes", trigger: "changes", title: "Changes", source: "work:git" },
+        { id: "todo", trigger: "todo", title: "Todos", section: "todos", topLevel: true },
+        { id: "runbooks", trigger: "runbook", title: "Runbooks",
+          items: [{ label: "Deploy", url: "https://wiki.example.com/deploy" }] },`),
     );
-    const { config } = resolve(`{ modes: [
-      { id: "own", trigger: "own", title: "Own", source: { type: "custom", module: ".work/own.ts" } },
-      { id: "reuse", trigger: "reuse", title: "Reuse", section: "todos" },
-      { id: "static", trigger: "static", title: "Static", section: "links" }
-    ] }`);
-    expect(executableSourceModule(config, "todos")).toBe(".work/todos.ts");
-    expect(executableSourceModule(config, "own")).toBe(".work/own.ts");
-    expect(executableSourceModule(config, "reuse")).toBe(".work/todos.ts");
-    expect(executableSourceModule(config, "static")).toBeUndefined();
-    expect(executableSourceModule(config, "missing")).toBeUndefined();
+    expect(resolved.error).toBeUndefined();
+    const modes = resolved.config.palette?.modes ?? [];
+    expect(modes[0]).toMatchObject({
+      trigger: "issues",
+      aliases: ["bugs"],
+      source: ".work/issues.ts",
+      search: "source",
+      workflows: ["searchIssues"],
+    });
+    expect(modes[1]).toMatchObject({ source: "work:git", search: "palette" });
+    expect(modes[2]).toMatchObject({ section: "todos", topLevel: true });
+    expect(modes[3]?.items?.[0]).toMatchObject({ label: "Deploy" });
+  });
+
+  it("refuses modes the palette cannot serve", () => {
+    for (const [mode, message] of [
+      [
+        `{ id: "k", trigger: "k", title: "K", source: "work:subsessions" }`,
+        "needs a chat",
+      ],
+      [
+        `{ id: "k", trigger: "k", title: "K", section: "kids" }`,
+        "lists the chat in front",
+      ],
+      [
+        `{ id: "k", trigger: "k", title: "K", source: "work:git", search: "source" }`,
+        "needs an executable module",
+      ],
+      [
+        `{ id: "k", trigger: "files", title: "K", source: "work:git" }`,
+        "built-in mode",
+      ],
+      [
+        `{ id: "todos", trigger: "k", title: "K", source: "work:git" }`,
+        "distinct from section ids",
+      ],
+      [
+        `{ id: "k", trigger: "k", title: "K", source: "work:git", section: "todos" }`,
+        "exactly one of",
+      ],
+    ] as const)
+      expect(resolveProfile(withModes(mode)).error, mode).toContain(message);
+  });
+
+  it("finds a module and its grants by section or mode id", () => {
+    const config = resolveProfile(
+      withModes(`
+        { id: "issues", trigger: "issues", title: "Issues", source: ".work/issues.ts", collections: ["tabs"] },
+        { id: "todo", trigger: "todo", title: "Todos", section: "todos" },`),
+    ).config;
+    expect(executableSource(config, "todos")).toEqual({
+      module: ".work/todos.ts",
+      collections: ["chats"],
+      workflows: [],
+    });
+    expect(executableSource(config, "issues")).toEqual({
+      module: ".work/issues.ts",
+      collections: ["tabs"],
+      workflows: [],
+    });
+    expect(executableSource(config, "todo")?.module).toBe(".work/todos.ts");
+    expect(executableSource(config, "kids")).toBeUndefined();
   });
 });
 
@@ -586,32 +627,69 @@ describe("workspace shape", () => {
     const dir = makeDir();
     const file = path.join(dir, "workspace.js");
     fs.writeFileSync(file, DEFAULT_WORKSPACE_FILE);
-    const resolved = resolveWorkspaceConfig({ profileDir: dir });
-    expect(resolved.error).toBeUndefined();
-    const ids = (config: typeof resolved.config) =>
-      (["left", "right"] as const).map((side) =>
-        config.sidebars[side].map((tab) => [
-          tab.id,
-          tab.sections.map((section) => section.id),
-        ]),
-      );
-    expect(ids(resolved.config)).toEqual(ids(DEFAULT_WORKSPACE_CONFIG));
+    expect(loadWorkspaceConfigFile(file)).toEqual(DEFAULT_WORKSPACE_CONFIG);
+  });
+
+  it("starts with an empty right sidebar and tabs, not chats, on the left", () => {
+    const left = DEFAULT_WORKSPACE_CONFIG.sidebars.left.flatMap(
+      (tab) => tab.sections,
+    );
+    expect(DEFAULT_WORKSPACE_CONFIG.sidebars.right).toEqual([]);
+    expect(left.some((section) => section.source === "work:chats")).toBe(false);
+    expect(
+      left.find((section) => section.source === "work:tabs"),
+    ).toMatchObject({
+      when: { tabPlacement: "sidebar" },
+      headerActions: [{ url: "command:new-tab" }],
+    });
+    for (const section of left) expect(section).not.toHaveProperty("type");
   });
 
   it("requires sidebars and rejects unknown top-level keys", () => {
-    for (const [source, message] of [
-      ["module.exports = { left: [], right: [] };", "sidebars"],
-      [
-        "module.exports = { sidebars: { left: [], right: [] }, starters: [] };",
-        "Unknown workspace keys: starters",
+    expect(resolveProfile("module.exports = {}").error).toContain("sidebars");
+    expect(
+      resolveProfile(
+        "module.exports = { sidebars: { left: [], right: [] }, extra: 1 }",
+      ).error,
+    ).toContain("Unknown workspace keys");
+  });
+});
+
+describe("module rows", () => {
+  it("keeps every row field and leaves out a record too large to cross", () => {
+    const page = sanitizeSidebarSourcePage({
+      items: [
+        {
+          id: "a",
+          label: "A",
+          url: "workflow:deploy",
+          icon: "rocket:blue",
+          signal: "working",
+          badges: ["Draft", { label: "main", icon: "GitBranch" }],
+          collapsed: false,
+          data: { count: 1 },
+        },
+        { id: "b", label: "B", data: { blob: "x".repeat(140_000) } },
       ],
-      [
-        "module.exports = { sidebars: { left: [], right: [], bottom: [] } };",
-        "Unknown sidebars: bottom",
-      ],
-    ]) {
-      const { error } = resolveWorkspaceConfig(makeLayers({ profile: source }));
-      expect(error).toContain(message);
-    }
+      cursor: "next",
+    });
+    expect(page.cursor).toBe("next");
+    expect(page.items[0]).toMatchObject({
+      url: "workflow:deploy",
+      icon: "rocket:blue",
+      signal: "working",
+      badges: ["Draft", { label: "main", icon: "GitBranch" }],
+      collapsed: false,
+      data: { count: 1 },
+    });
+    expect(page.items[1]).not.toHaveProperty("data");
+    expect(() =>
+      sanitizeSidebarSourcePage({
+        items: [
+          { id: "a", label: "A" },
+          { id: "a", label: "again" },
+        ],
+      }),
+    ).toThrow("unique");
   });
 });

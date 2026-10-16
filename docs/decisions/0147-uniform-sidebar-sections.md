@@ -1,6 +1,6 @@
 # ADR 0147: Uniform sidebar sections
 
-- Status: Accepted
+- Status: Accepted. Amended by [0234](0234-sidebar-sections-are-sources.md): sections name sources, Work's lists are modules on the same contract, and the right sidebar's screens are gone.
 - Date: 2026-09-18
 - Supersedes parts of: [ADR 0116](0116-bookmark-library-and-pins.md) (private
   bookmark drop zones), [ADR 0132](0132-shared-contextual-sidebar-contributions.md)

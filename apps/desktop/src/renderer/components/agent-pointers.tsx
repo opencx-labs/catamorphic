@@ -3,7 +3,8 @@ import { useEffect, useRef } from "react";
 /**
  * Agent pointers: the agent directing the user's attention. Any element
  * carrying `data-point-key` is addressable (workspace tabs by tab key,
- * sidebar items as "sidebar:<label>", app rows as "app:<name>"); a
+ * in the strip or as a sidebar list's rows, other sidebar items as
+ * "sidebar:<label>", app rows as "app:<name>"); a
  * pointed element gets a soft accent glow (`.agent-pointer` in
  * styles.css), scrolls into view, and optionally shows the agent's short
  * note. The glow fades in (`animate-agent-pointer-in`), holds steady
@@ -18,6 +19,28 @@ import { useEffect, useRef } from "react";
  * a fading one resumes its fade where the rewrite cut it (a press on a
  * pointed tab dismisses its glow, then the click makes it active).
  */
+
+/**
+ * Where a target is drawn: the first match the person can see, or the
+ * first at all (a sidebar row and a strip tab may share a tab key).
+ */
+export function pointedElement(
+  target: string,
+  root: ParentNode = document,
+): Element | null {
+  const matches = [
+    ...root.querySelectorAll(`[data-point-key="${CSS.escape(target)}"]`),
+  ];
+  return (
+    matches.find(
+      (element) =>
+        typeof element.checkVisibility !== "function" ||
+        element.checkVisibility(),
+    ) ??
+    matches[0] ??
+    null
+  );
+}
 
 export interface AgentPointer {
   target: string;
@@ -112,9 +135,7 @@ export function AgentPointers({
   useEffect(() => {
     const wanted = new Map<HTMLElement, AgentPointer>();
     for (const pointer of pointers) {
-      const element = document.querySelector(
-        `[data-point-key="${CSS.escape(pointer.target)}"]`,
-      );
+      const element = pointedElement(pointer.target);
       if (element instanceof HTMLElement) wanted.set(element, pointer);
     }
     // Targets already glowing: a new element for one (a remount) takes the

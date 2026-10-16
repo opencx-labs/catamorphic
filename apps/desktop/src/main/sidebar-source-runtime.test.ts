@@ -27,6 +27,8 @@ function setup(
     timeoutMs?: number;
     startTimeoutMs?: number;
     executable?: () => Promise<string>;
+    env?: () => Promise<Record<string, string>>;
+    work?: (requestId: string, call: unknown) => Promise<unknown>;
   } = {},
 ) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "sidebar-source-"));
@@ -342,13 +344,173 @@ it("rejects malformed pages and preserves executable actions and display fields"
           id: "x",
           label: "A",
           description: "Details",
-          actions: [{ action: "run:toggle", label: "Complete", icon: "Check" }],
+          actions: [{ action: "toggle", label: "Complete", icon: "Check" }],
         },
       ],
     }),
   ).toMatchObject({
     items: [
-      { id: "x", description: "Details", actions: [{ action: "run:toggle" }] },
+      { id: "x", description: "Details", actions: [{ action: "toggle" }] },
     ],
   });
+  // A module names its own actions; run: is from before ADR 0234.
+  expect(() =>
+    sanitizeSidebarSourcePage({
+      items: [
+        {
+          id: "x",
+          label: "A",
+          actions: [{ action: "run:toggle", label: "T" }],
+        },
+      ],
+    }),
+  ).toThrow("without run:");
+});
+
+it("answers a module's work calls for the request they serve, and gives it the toolchain environment", async () => {
+  const calls: Array<{ requestId: string; call: unknown }> = [];
+  const { load, runtime } = setup(
+    `
+    export default {
+      async load({ work }) {
+        const page = await work.read({ source: "tabs" });
+        const output = await work.call({ workflow: "count", input: { n: 2 } });
+        return { items: [
+          ...page.items,
+          { id: "env", label: process.env.CATAMORPHIC_TEST_TOOLCHAIN ?? "missing" },
+          { id: "out", label: String(output.total) },
+        ] };
+      },
+      async action({ work, itemId, action, values }) {
+        await work.execute({ source: "tabs", itemId, action, values });
+        return { message: "Closed " + itemId, open: "command:new-tab", mode: "tab" };
+      },
+    };
+  `,
+    {
+      env: async () => ({ CATAMORPHIC_TEST_TOOLCHAIN: "bun-here" }),
+      work: async (requestId, call) => {
+        calls.push({ requestId, call });
+        if (
+          typeof call === "object" &&
+          call !== null &&
+          "op" in call &&
+          call.op === "call"
+        )
+          return { total: 3 };
+        return { items: [{ id: "browser:1", label: "Docs" }] };
+      },
+    },
+  );
+  const requestId = "window-1:load-1";
+  expect(await load({ requestId })).toMatchObject({
+    items: [
+      { id: "browser:1", label: "Docs" },
+      { id: "env", label: "bun-here" },
+      { id: "out", label: "3" },
+    ],
+  });
+  expect(calls).toEqual([
+    { requestId, call: { op: "read", source: "tabs" } },
+    {
+      requestId,
+      call: { op: "call", workflow: "count", input: { n: 2 } },
+    },
+  ]);
+  calls.length = 0;
+  expect(
+    await runtime.request({
+      projectId: "p",
+      sectionId: "s",
+      method: "action",
+      requestId: "window-1:act-1",
+      itemId: "browser:1",
+      action: "close",
+      values: { reason: "done" },
+    }),
+  ).toEqual({
+    message: "Closed browser:1",
+    open: "command:new-tab",
+    mode: "tab",
+  });
+  expect(calls).toEqual([
+    {
+      requestId: "window-1:act-1",
+      call: {
+        op: "execute",
+        source: "tabs",
+        itemId: "browser:1",
+        action: "close",
+        values: { reason: "done" },
+      },
+    },
+  ]);
+});
+
+it("fails a module's work call with the reason Work refused it", async () => {
+  const { load } = setup(
+    `export default { async load({ work }) {
+      try { await work.read({ source: "chats" }); }
+      catch (error) { return { items: [{ id: "e", label: error.message }] }; }
+      return { items: [] };
+    } };`,
+    {
+      work: async () => {
+        throw new Error("This section does not grant Work's chats list.");
+      },
+    },
+  );
+  expect(await load()).toMatchObject({
+    items: [
+      { id: "e", label: "This section does not grant Work's chats list." },
+    ],
+  });
+});
+
+it("waits on Work without spending the module's own time, a few calls at once", async () => {
+  const { load } = setup(
+    `export default { async load({ work }) {
+      const page = await work.read({ source: "tabs" });
+      const many = await Promise.allSettled(
+        Array.from({ length: 9 }, () => work.read({ source: "tabs" })),
+      );
+      const refused = many.find((result) => result.status === "rejected");
+      return { items: [
+        { id: "slow", label: String(page.items.length) },
+        { id: "cap", label: refused ? refused.reason.message : "none" },
+      ] };
+    } };`,
+    {
+      timeoutMs: 300,
+      // A workflow behind work.call can take longer than the budget.
+      work: () =>
+        new Promise((resolve) =>
+          setTimeout(() => resolve({ items: [{ id: "t", label: "T" }] }), 600),
+        ),
+    },
+  );
+  expect(await load()).toMatchObject({
+    items: [
+      { id: "slow", label: "1" },
+      { id: "cap", label: expect.stringContaining("At most 8 calls") },
+    ],
+  });
+});
+
+it("answers work only for a request the worker is serving", async () => {
+  const work = vi.fn(async () => ({ items: [] }));
+  const { load } = setup(
+    `export default {
+      async load({ work }) {
+        // Called after load answered: no request is being served.
+        setTimeout(() => work.read({ source: "tabs" }).catch((error) =>
+          console.error(error.message)), 50);
+        return { items: [] };
+      },
+    };`,
+    { work },
+  );
+  await load();
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  expect(work).not.toHaveBeenCalled();
 });

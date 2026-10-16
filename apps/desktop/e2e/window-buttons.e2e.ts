@@ -442,7 +442,7 @@ it("drags the window by the chrome's empty room with the buttons hidden", async 
     "window.catamorphicDesktop.setPrefs({tabPlacement:'sidebar'})",
   );
   await settle(
-    "!!$('aside [data-tab-orientation=\"vertical\"]') && projectInHeader()",
+    "!!$('aside [data-sidebar-section=\"tabs\"]') && !$('[data-tab-orientation]') && projectInHeader()",
     "tabs in the sidebar",
   );
   await expectDragRoom("tabs in the sidebar", 300);

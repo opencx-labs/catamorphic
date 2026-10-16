@@ -24,9 +24,9 @@ it("reports an empty section as invisible even when another section keeps its ta
     report,
   }: {
     visible: boolean;
-    report: (state: SidebarContentState) => void;
+    report: (state: SidebarContentState, droppable: boolean) => void;
   }) {
-    useEffect(() => report("empty"), [report]);
+    useEffect(() => report("empty", false), [report]);
     return <span data-testid="empty-widget" data-visible={visible} />;
   }
   Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", true);
@@ -45,8 +45,8 @@ it("reports an empty section as invisible even when another section keeps its ta
               id: "shared",
               title: "Shared",
               sections: [
-                { id: "empty", type: "app", app: "widget", hideEmpty: true },
-                { id: "other", type: "custom" },
+                { id: "empty", app: "widget", hideEmpty: true },
+                { id: "other", items: [] },
               ],
             },
           ]}
@@ -82,9 +82,9 @@ it("asks a section hidden for being empty to keep observing", async () => {
   }: {
     visible: boolean;
     observeEmpty: boolean;
-    report: (state: SidebarContentState) => void;
+    report: (state: SidebarContentState, droppable: boolean) => void;
   }) {
-    useEffect(() => report("empty"), [report]);
+    useEffect(() => report("empty", false), [report]);
     seen.push({ visible, observeEmpty });
     return null;
   }
@@ -104,8 +104,8 @@ it("asks a section hidden for being empty to keep observing", async () => {
               id: "shared",
               title: "Shared",
               sections: [
-                { id: "changes", type: "git", hideEmpty: true },
-                { id: "other", type: "custom" },
+                { id: "changes", source: "work:git", hideEmpty: true },
+                { id: "other", items: [] },
               ],
             },
           ]}
@@ -140,9 +140,9 @@ function Probe({
   report,
 }: {
   state: SidebarContentState;
-  report: (state: SidebarContentState) => void;
+  report: (state: SidebarContentState, droppable: boolean) => void;
 }) {
-  useEffect(() => report(state), [state, report]);
+  useEffect(() => report(state, false), [state, report]);
   return <input aria-label="Retained widget draft" defaultValue="Draft" />;
 }
 it("separates relevance and content states while preserving a hidden widget and tab preference", async () => {
@@ -159,12 +159,19 @@ it("separates relevance and content states while preserving a hidden widget and 
           id: "chat",
           title: "Chat tools",
           when: { surface: ["chat"], session: true },
-          sections: [{ id: "children", type: "subsessions", hideEmpty: true }],
+          sections: [
+            {
+              id: "children",
+              source: "work:subsessions",
+              when: { session: true },
+              hideEmpty: true,
+            },
+          ],
         },
         {
           id: "all",
           title: "Always",
-          sections: [{ id: "links", type: "custom" }],
+          sections: [{ id: "links", items: [] }],
         },
       ],
     },
@@ -281,7 +288,7 @@ it("keeps its sections live while the panel slides away, on either side", async 
                 {
                   id: "only",
                   title: "Only",
-                  sections: [{ id: "list", type: "custom" }],
+                  sections: [{ id: "list", items: [] }],
                 },
               ]}
               onCustomize={() => {}}
@@ -326,12 +333,14 @@ describe("contextual tabs (ADR 0226)", () => {
       id: "this-session",
       title: "This session",
       icon: "MessageSquareText",
-      sections: [{ id: "session", type: "session", when: { session: true } }],
+      sections: [
+        { id: "session", source: "work:session", when: { session: true } },
+      ],
     },
     {
       id: "companion",
       title: "Activity",
-      sections: [{ id: "links", type: "custom" }],
+      sections: [{ id: "links", items: [] }],
     },
   ];
   const chat: SidebarSurface = { kind: "chat", sessionId: "s1" };
@@ -563,4 +572,85 @@ describe("contextual tabs (ADR 0226)", () => {
       await view.cleanup();
     }
   });
+});
+
+it("shows a hidden empty section that takes drops while something it takes is dragged", async () => {
+  vi.useFakeTimers();
+  function Pins({
+    report,
+  }: {
+    report: (state: SidebarContentState, droppable: boolean) => void;
+  }) {
+    useEffect(() => report("empty", true), [report]);
+    return <span>Drop a tab here</span>;
+  }
+  Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", true);
+  const node = document.createElement("div");
+  document.body.append(node);
+  const root = createRoot(node);
+  const slot = () =>
+    node.querySelector<HTMLElement>('[data-sidebar-widget="pinned"]');
+  const drag = (type: string, types: string[]) => {
+    const event = new Event(type, { bubbles: true });
+    Object.defineProperty(event, "dataTransfer", { value: { types } });
+    document.dispatchEvent(event);
+  };
+  try {
+    await act(async () =>
+      root.render(
+        <TabbedSidebar
+          side="left"
+          scope="drop-test"
+          open
+          tabs={[
+            {
+              id: "project",
+              title: "Project",
+              sections: [
+                { id: "pinned", source: "work:pinned", hideEmpty: true },
+                { id: "links", items: [] },
+              ],
+            },
+          ]}
+          onCustomize={() => {}}
+          renderSection={(section, _visible, report) =>
+            section.id === "pinned" ? <Pins report={report} /> : <span />
+          }
+        />,
+      ),
+    );
+    // It empties, then collapses away.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(300);
+    });
+    expect(slot()?.hidden).toBe(true);
+    // Something that is not a page, chat or row: nothing to take.
+    await act(async () => {
+      drag("dragstart", ["text/plain"]);
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    expect(slot()?.hidden).toBe(true);
+    await act(async () => {
+      drag("dragstart", ["application/x-catamorphic-tab"]);
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    expect(slot()?.hidden).toBe(false);
+    await act(async () => {
+      drag("dragend", []);
+      await vi.advanceTimersByTimeAsync(400);
+    });
+    // It waits a moment for what was dropped to arrive.
+    expect(slot()?.hidden).toBe(false);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(600);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(300);
+    });
+    expect(slot()?.hidden).toBe(true);
+  } finally {
+    await act(async () => root.unmount());
+    node.remove();
+    vi.useRealTimers();
+  }
 });

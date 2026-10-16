@@ -69,7 +69,7 @@ beforeAll(async () => {
   await prefs({ tabPlacement: "sidebar", headerPlacement: "sidebar" });
   // The new layout mounts the New Tab page again: wait for its input too.
   await app.waitFor(
-    `!!document.querySelector('aside [data-tab-orientation=vertical]') && !document.querySelector('.workspace-chrome') && !!document.querySelector(${JSON.stringify(NEW_TAB_INPUT)})`,
+    `!!document.querySelector('aside [data-sidebar-section=tabs]') && !document.querySelector('.workspace-chrome') && !!document.querySelector(${JSON.stringify(NEW_TAB_INPUT)})`,
     { label: "sidebar layout with its New Tab palette" },
   );
   await run(
@@ -594,10 +594,10 @@ describe("floating surfaces", () => {
       "const section=$('[data-sidebar-widget=files]');const toggle=section.querySelector('button[aria-expanded=false]');toggle?.click()",
     );
     await app.waitFor(
-      "!!document.querySelector('[data-testid=files-nav] [data-sidebar-item-id=\"placement-one.ts\"] [data-tree-primary]')",
+      "!!document.querySelector('[data-sidebar-section=files] [data-sidebar-item-id=\"placement-one.ts\"] [data-tree-primary]')",
     );
     await run(
-      "$('[data-testid=files-nav] [data-sidebar-item-id=\"placement-one.ts\"] [data-tree-primary]').dispatchEvent(new MouseEvent('click',{bubbles:true,altKey:true}))",
+      "$('[data-sidebar-section=files] [data-sidebar-item-id=\"placement-one.ts\"] [data-tree-primary]').dispatchEvent(new MouseEvent('click',{bubbles:true,altKey:true}))",
     );
     await app.waitFor(`!!${floating}?.querySelector('.monaco-editor')`);
     await app.waitFor(
@@ -607,7 +607,7 @@ describe("floating surfaces", () => {
       `${floating}.getAttribute('data-floating-surface')`,
     );
     await run(
-      "$('[data-testid=files-nav] [data-sidebar-item-id=\"placement-two.ts\"] [data-tree-primary]').click()",
+      "$('[data-sidebar-section=files] [data-sidebar-item-id=\"placement-two.ts\"] [data-tree-primary]').click()",
     );
     await app.waitFor(
       `!!${floating}?.querySelector('.view-lines')?.textContent.replace(/\\s/g,'').includes('exportconsttwo')`,

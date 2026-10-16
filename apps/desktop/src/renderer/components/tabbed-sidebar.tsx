@@ -15,11 +15,12 @@ import type {
   SidebarSurface,
   SidebarTabConfig,
 } from "../../shared/sidebar.js";
-import { matchesSidebarSurface } from "../../shared/sidebar.js";
+import { matchesSidebarSurface, sessionSection } from "../../shared/sidebar.js";
 import { lucideIcon } from "../lib/lucide-icon.js";
 import { motionMs } from "../lib/motion.js";
 import { leaveSidebar, type SidebarLeave } from "../lib/sidebar-leave.js";
 import { type SidebarMotion, useSidebarMotion } from "../lib/sidebar-motion.js";
+import { useDraggingTab } from "../lib/use-dragging-tab.js";
 import { Collapsible } from "./collapsible.js";
 import { OverlayScrollbar } from "./overlay-scrollbar.js";
 import { ShortcutHint } from "./shortcut-hint.js";
@@ -50,16 +51,6 @@ function TabIcon({ name }: { name?: string }) {
   return <Icon className="size-4" aria-hidden="true" />;
 }
 
-/** Sections that list something of the chat in front, and need one. */
-const SESSION_SECTION_TYPES = new Set(["subsessions", "session"]);
-
-function sessionScoped(section: SidebarSectionConfig): boolean {
-  return (
-    SESSION_SECTION_TYPES.has(section.source?.type ?? section.type) ||
-    Boolean(section.source?.scope && section.source.scope !== "project")
-  );
-}
-
 /** A `when` that depends on what is in front, not on who is looking. */
 function followsSurface(when: SidebarSectionConfig["when"]): boolean {
   return Boolean(
@@ -79,7 +70,7 @@ function contextualTab(tab: SidebarTabConfig): boolean {
   return (
     followsSurface(tab.when) ||
     tab.sections.every(
-      (section) => followsSurface(section.when) || sessionScoped(section),
+      (section) => followsSurface(section.when) || sessionSection(section),
     )
   );
 }
@@ -124,7 +115,7 @@ export function TabbedSidebar({
   renderSection: (
     section: SidebarSectionConfig,
     visible: boolean,
-    report: (state: SidebarContentState) => void,
+    report: (state: SidebarContentState, droppable: boolean) => void,
     relevant: boolean,
     /** Hidden only for being empty; see SidebarSlot. */
     observeEmpty: boolean,
@@ -205,25 +196,37 @@ export function TabbedSidebar({
   const [content, setContent] = useState<
     ReadonlyMap<string, SidebarContentState>
   >(new Map());
-  const report = useCallback((id: string, state: SidebarContentState) => {
-    setContent((current) =>
-      current.get(id) === state ? current : new Map(current).set(id, state),
-    );
-  }, []);
+  const [droppable, setDroppable] = useState<ReadonlySet<string>>(new Set());
+  const report = useCallback(
+    (id: string, state: SidebarContentState, takesDrops: boolean) => {
+      setContent((current) =>
+        current.get(id) === state ? current : new Map(current).set(id, state),
+      );
+      setDroppable((current) => {
+        if (current.has(id) === takesDrops) return current;
+        const next = new Set(current);
+        if (takesDrops) next.add(id);
+        else next.delete(id);
+        return next;
+      });
+    },
+    [],
+  );
+  // A section hidden for being empty that takes drops shows while something
+  // it could take is dragged (pinned pages: "Drop a tab here"), and a moment
+  // after the drop so what arrives lands in view.
+  const dragging = useDraggingTab();
   // A session-scoped section needs a chat's session: the chat in front, or
   // the chat that opened the page, file or terminal in front (ADR 0226).
   const sectionRelevant = (section: SidebarSectionConfig) =>
     matchesSidebarSurface(section.when, surface) &&
-    (!sessionScoped(section) || Boolean(surface.sessionId));
+    (!sessionSection(section) || Boolean(surface.sessionId));
   const sectionAvailable = (section: SidebarSectionConfig) => {
     if (!sectionRelevant(section)) return false;
     const state = content.get(section.id);
-    const hideEmpty =
-      section.hideEmpty ??
-      ["workflows", "apps", "git", "remote", "subsessions"].includes(
-        section.source?.type ?? section.type,
-      );
-    return state !== "unavailable" && !(hideEmpty && state === "empty");
+    if (state === "unavailable") return false;
+    if (!section.hideEmpty || state !== "empty") return true;
+    return dragging && droppable.has(section.id);
   };
   // A section hidden only because it is empty must keep observing, or it
   // can never learn that it has something to show again (Changes after a
@@ -550,7 +553,7 @@ export function TabbedSidebar({
                   mounted={
                     visited.has(tab.id) ||
                     (open && selected === tab.id) ||
-                    section.type !== "app"
+                    section.app === undefined
                   }
                   relevant={
                     matchesSidebarSurface(tab.when, surface) &&
@@ -662,14 +665,14 @@ function SidebarSlot({
   visible: boolean;
   /** Hidden only for being empty. */
   observeEmpty?: boolean;
-  report: (id: string, state: SidebarContentState) => void;
+  report: (id: string, state: SidebarContentState, droppable: boolean) => void;
   renderSection: (
     section: SidebarSectionConfig,
     visible: boolean,
-    report: (state: SidebarContentState) => void,
+    report: (state: SidebarContentState, droppable: boolean) => void,
     relevant: boolean,
     /** Hidden for being empty; a section whose emptiness can change
-     * behind its back (Changes) keeps observing. Apps stay idle. */
+     * behind its back keeps observing. Apps stay idle. */
     observeEmpty: boolean,
   ) => ReactNode;
 }) {
@@ -678,7 +681,8 @@ function SidebarSlot({
     if (mounted && relevant) setVisited(true);
   }, [mounted, relevant]);
   const onState = useCallback(
-    (state: SidebarContentState) => report(section.id, state),
+    (state: SidebarContentState, droppable: boolean) =>
+      report(section.id, state, droppable),
     [report, section.id],
   );
   // A section that empties collapses before it hides, and one that fills

@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
+import { addSidebarSections, CHATS_SECTION } from "./sidebar-config.js";
 
 let app: AppHandle;
 beforeAll(async () => {
@@ -83,6 +84,8 @@ describe("session runtime controls", () => {
     await wait(
       `return $$('[role="tab"], button').some(el => el.textContent.includes('New Tab'));`,
     );
+    // The chat reopens from a sidebar list of chats after the reload below.
+    await addSidebarSections(app, [CHATS_SECTION]);
     await run(
       `window.dispatchEvent(new KeyboardEvent('keydown', { key: 'n', metaKey:/Mac/.test(navigator.platform),ctrlKey:!/Mac/.test(navigator.platform), bubbles: true }));`,
     );

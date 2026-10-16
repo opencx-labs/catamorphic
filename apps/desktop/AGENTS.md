@@ -14,7 +14,8 @@ UI work. Every interaction matters; this is a polished product, not a demo.
   front door.
 - A **dev shell** (ADR 0045): Claude Code runs at full fidelity (preset
   system prompt, CLAUDE.md/`.claude` settings sources), worktrees are
-  discovered and diffable, Monaco diff tabs, sidebar Changes/PRs sections,
+  discovered and diffable, Monaco diff tabs, changes and pull requests as
+  sidebar sources (`work:git`, `work:prs`),
   ghostty/PTY terminals with OSC 133 shell integration.
 - An embedder like any other: it boots the server in-process
   (`src/main/server/boot.ts`) on pglite + microsandbox + filesystem
@@ -168,10 +169,15 @@ cards, and `data-disabled-reason` beside each disabled condition. Do not rely on
 native title tooltips. When editing a failure-prone picker, preserve an actionable
 error/retry state and diagnostics that distinguish request failure from no matches.
 
-Sidebar built-ins and custom sources follow ADR 0132. Keep the validated contract
-and project agent examples in `src/main/sidebar-authoring.ts` synchronized with
-changes; the settings skill and default configuration consume that single guide.
-Inline actions, overflow menus, and right-click menus are independent placements.
+Every sidebar list is a source (ADR 0234): Work's lists (`src/renderer/sources/`)
+and a person's modules implement one contract, and `source-section.tsx` draws all
+of them. Never add a section type, a renderer branch on a source's name, or a verb
+only Work's lists can use; grow the shared row, action or `work` contract instead,
+so a person's source gets it too ([sidebar sources](docs/sidebar-sources.md)).
+Keep the validated contract and examples in `src/main/workspace-authoring.ts`
+synchronized with changes; every `workspace.js`, the configuring skill and the
+default layout consume that single guide. Inline actions, overflow menus, and
+right-click menus are independent placements.
 
 ## Agent tool admission
 

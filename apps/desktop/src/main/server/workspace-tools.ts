@@ -485,7 +485,7 @@ export function buildWorkspaceToolkit(
     {
       name: "request_user_attention",
       description:
-        "Promote this session into the user's sidebar and mark it as needing attention. Use only for a result or decision the user should see, such as a merged pull request or required input.",
+        "Promote this session into the user's chats (their list of chats, and any sidebar section listing them) and mark it as needing attention. Use only for a result or decision the user should see, such as a merged pull request or required input.",
       parameters: {},
       execute: async (_input, ctx) => {
         if (!ctx.sessionId) throw new Error("This turn has no chat session.");

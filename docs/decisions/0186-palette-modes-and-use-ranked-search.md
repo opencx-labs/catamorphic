@@ -1,6 +1,6 @@
 # 0186 — Palette modes share one shape, and search ranks by use
 
-- **Status:** Accepted
+- **Status:** Accepted. Amended by [0234](0234-sidebar-sections-are-sources.md): sections name sources, Work's lists are modules on the same contract, and the right sidebar's screens are gone.
 - **Date:** 2026-09-29
 - **Refines:** 0052 (skills as commands), 0140 (executable sidebar sources), 0147 (uniform sidebar sections), 0154 (profile history)
 

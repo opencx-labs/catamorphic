@@ -93,9 +93,9 @@ export const BUILTIN_ACTIONS = [
     id: "search-changes",
     label: "Find changed files",
     icon: "GitCompare",
-    description: "focus filename search in Changes",
+    description: "search the files changed in the project's checkouts",
     defaultBinding: "Cmd+Alt+F",
-    keywords: ["changes", "files", "search"],
+    keywords: ["changes", "files", "search", "diff", "git"],
   },
   {
     id: "search-settings",
@@ -644,6 +644,41 @@ export const BUILTIN_ACTIONS = [
       "files",
       "personal",
     ],
+  },
+  {
+    id: "new-workflow",
+    label: "Create workflow",
+    icon: "Workflow",
+    description: "describe a new workflow to your agent",
+    defaultBinding: null,
+    keywords: ["new", "workflow", "automation", "build"],
+  },
+  {
+    id: "server-members",
+    label: "Members and invites",
+    icon: "Users",
+    description:
+      "see who belongs to this project on its server, change their roles and invite people",
+    defaultBinding: null,
+    keywords: ["members", "invite", "people", "roles", "server", "share"],
+  },
+  {
+    id: "server-secrets",
+    label: "Project secrets",
+    icon: "LockKeyhole",
+    description:
+      "set your own values, or the shared ones, for the secrets this project's server keeps",
+    defaultBinding: null,
+    keywords: ["secrets", "keys", "tokens", "credentials", "server", "env"],
+  },
+  {
+    id: "server-connections",
+    label: "Service connections",
+    icon: "KeyRound",
+    description:
+      "manage the organization's connections to services that this project's server brokers",
+    defaultBinding: null,
+    keywords: ["connections", "services", "oauth", "server", "organization"],
   },
   {
     id: "open-chat-terminal",

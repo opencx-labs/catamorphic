@@ -1,8 +1,5 @@
 import { Clock, Puzzle } from "lucide-react";
 import { tabKey, type WorkspaceTab } from "../lib/workspace-types.js";
-import { useSidebarContent } from "./sidebar-contribution.js";
-import { SidebarItemRow } from "./sidebar-item-row.js";
-import { SidebarTree } from "./sidebar-tree.js";
 
 export {
   type DiffSource,
@@ -36,7 +33,6 @@ import {
 } from "lucide-react";
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { MENU_SEPARATOR } from "../../shared/menu.js";
 import type { OpenMode } from "../../shared/open-mode.js";
 import { formatBinding, useKeybindings } from "../lib/keybindings";
 import { usePageDialogsWaiting } from "../lib/page-dialogs.js";
@@ -45,7 +41,7 @@ import { AnimatedTitle } from "./animated-title";
 import { AppGlyph } from "./app-icon";
 import { ChatGlyph, hasCustomChatIcon } from "./chat-icon";
 import { SignalBadge, SignalGlyph } from "./chat-signals";
-import { actOnFile, FILE_MENU, type FileTarget } from "./file-menu.js";
+import type { FileTarget } from "./file-menu.js";
 import { OpenResourceButton } from "./open-resource-button.js";
 import { ShortcutHint } from "./shortcut-hint";
 
@@ -271,246 +267,10 @@ export function WorkspaceTabBar(props: Parameters<typeof TabStrip>[0]) {
           }),
     [props.tabs, waiting, activeKey, secondaryKey],
   );
-  return props.orientation === "vertical" ? (
-    <SidebarWorkspaceTabs {...props} tabs={tabs} />
-  ) : (
-    <TabStrip {...props} tabs={tabs} />
-  );
-}
-
-function SidebarWorkspaceTabs({
-  tabs,
-  activeKey,
-  secondaryKey,
-  highlightKey,
-  groups = [],
-  onSelect,
-  onClose,
-  onNew,
-  onToggleGroup,
-  onReorder,
-  onDragStateChange,
-  tabFile,
-}: Parameters<typeof TabStrip>[0]) {
-  const [dragged, setDragged] = useState<string>();
-  useSidebarContent(tabs.length ? "ready" : "empty");
-  const parents = new Map(
-    groups.flatMap((group) =>
-      group.memberKeys.map((key) => [key, group.parentKey] as const),
-    ),
-  );
-  const items = tabs.map((tab) => ({
-    ...tab,
-    id: tabKey(tab),
-    parentId: parents.get(tabKey(tab)),
-    hasChildren: groups.some((group) => group.parentKey === tabKey(tab)),
-    collapsed: groups.find((group) => group.parentKey === tabKey(tab))
-      ?.collapsed,
-  }));
-  return (
-    <div data-tab-orientation="vertical" className="app-no-drag min-w-0">
-      <SidebarTree
-        items={items}
-        selectedId={activeKey}
-        rowHeight={32}
-        label="Workspace tabs"
-        dragAndDrop={
-          onReorder
-            ? {
-                drag: (tab) => ({
-                  data: {
-                    "text/plain": tab.id,
-                    [TAB_DRAG_TYPE]: JSON.stringify({
-                      key: tab.id,
-                      kind: tab.kind,
-                      title: tab.label ?? tab.name,
-                      detail: tab.detail,
-                      bookmarkUrl: tab.bookmarkUrl,
-                    } satisfies TabDragPayload),
-                  },
-                  effectAllowed: "copyMove",
-                }),
-                // Tabs reorder among themselves; other sections pin or
-                // bookmark them through the same payload.
-                // A chat's members always follow it, so no slot between an
-                // open chat and its first member exists for another tab.
-                accept: (types, target) => {
-                  const item = target.item;
-                  if (
-                    dragged === undefined ||
-                    !types.includes(TAB_DRAG_TYPE) ||
-                    item === null ||
-                    item.id === dragged ||
-                    target.position === "inside"
-                  )
-                    return false;
-                  const draggedParent = items.find(
-                    (tab) => tab.id === dragged,
-                  )?.parentId;
-                  if (
-                    target.position === "after" &&
-                    item.hasChildren &&
-                    !item.collapsed &&
-                    draggedParent !== item.id
-                  )
-                    return false;
-                  const firstMember =
-                    item.parentId &&
-                    items.find((tab) => tab.parentId === item.parentId)?.id ===
-                      item.id;
-                  return !(
-                    target.position === "before" &&
-                    firstMember &&
-                    draggedParent !== item.parentId
-                  );
-                },
-                onDrop: (_transfer, target) => {
-                  if (!dragged || !target.item) return;
-                  const order = items.map((item) => item.id);
-                  const beforeKey =
-                    target.position === "before"
-                      ? target.item.id
-                      : (order
-                          .slice(order.indexOf(target.item.id) + 1)
-                          .find((id) => id !== dragged) ?? null);
-                  onReorder(dragged, beforeKey);
-                },
-                onDragStart: (tab) => {
-                  setDragged(tab.id);
-                  onDragStateChange?.(tab.id);
-                },
-                onDragEnd: () => {
-                  setDragged(undefined);
-                  onDragStateChange?.(null);
-                },
-              }
-            : undefined
-        }
-        renderItem={(tab, tree) => {
-          const Icon = TAB_ICONS[tab.kind];
-          const group = groups.find((group) => group.parentKey === tab.id);
-          const file = tabFile?.(tab.id);
-          const toggle = () => {
-            if (group && onToggleGroup)
-              onToggleGroup(group.parentKey.slice("chat:".length));
-            tree.toggle();
-          };
-          return (
-            <div
-              data-point-key={tab.id}
-              data-palette-target={highlightKey === tab.id || undefined}
-            >
-              <SidebarItemRow
-                itemId={tab.id}
-                label={tab.label ?? tab.name}
-                style={{ marginLeft: tree.depth * 12 }}
-                active={activeKey === tab.id || secondaryKey === tab.id}
-                resource
-                disclosure={
-                  tree.hasChildren
-                    ? {
-                        open: group ? !group.collapsed : tree.expanded,
-                        onToggle: toggle,
-                      }
-                    : undefined
-                }
-                icon={
-                  <SignalGlyph
-                    working={tab.working ?? false}
-                    awaitingInput={tab.awaitingInput}
-                    className="size-3.5"
-                  >
-                    {tab.kind === "app" ? (
-                      <AppGlyph icon={tab.appIcon} className="size-3.5" />
-                    ) : tab.kind === "chat" ? (
-                      <ChatGlyph
-                        icon={tab.chatIcon}
-                        fork={tab.fork}
-                        className="size-3.5"
-                      />
-                    ) : tab.kind === "browser" ? (
-                      <span className="relative grid size-3.5 place-items-center">
-                        {tab.faviconUrl ? (
-                          <img
-                            src={tab.faviconUrl}
-                            alt=""
-                            className={`size-3.5 rounded ${sleepingGlyph(tab)}`}
-                          />
-                        ) : (
-                          <Icon className={`size-3.5 ${sleepingGlyph(tab)}`} />
-                        )}
-                        <SleepRing tab={tab} />
-                      </span>
-                    ) : (
-                      <Icon className="size-3.5" />
-                    )}
-                  </SignalGlyph>
-                }
-                labelContent={<AnimatedTitle text={tab.label ?? tab.name} />}
-                end={
-                  <SignalBadge
-                    signals={{
-                      working: tab.working,
-                      attention: tab.attention,
-                      unread: tab.unread,
-                      draft: tab.draft,
-                      awaitingInput: tab.awaitingInput,
-                    }}
-                    size="sm"
-                  />
-                }
-                actions={[
-                  {
-                    action: "close",
-                    label: `Close ${tab.label ?? tab.name}`,
-                    icon: "X",
-                  },
-                ]}
-                defaultMenu={[
-                  // A file's tab can also act on the file itself.
-                  ...(file ? [...FILE_MENU, MENU_SEPARATOR] : []),
-                  {
-                    action: "close",
-                    label: `Close ${tab.label ?? tab.name}`,
-                    icon: "X",
-                  },
-                ]}
-                preview={{
-                  title: tab.label ?? tab.name,
-                  description: tab.detail,
-                  metadata: tabStatusLine(tab)
-                    ? [{ label: "Status", value: tabStatusLine(tab) ?? "" }]
-                    : undefined,
-                }}
-                onOpen={(mode) => onSelect(tab.id, mode)}
-                onAction={(entry) =>
-                  entry.action === "close"
-                    ? onClose(tab.id)
-                    : file
-                      ? actOnFile(entry.action, file)
-                      : undefined
-                }
-              />
-            </div>
-          );
-        }}
-      />
-      {onNew && (
-        <button
-          type="button"
-          aria-label="New tab"
-          className="sidebar-tab"
-          onClick={onNew}
-        >
-          <Plus className="size-3.5" />
-        </button>
-      )}
-    </div>
-  );
+  return <TabStrip {...props} tabs={tabs} />;
 }
 
 function TabStrip({
-  orientation = "horizontal",
   alignment = "start",
   tabs,
   activeKey,
@@ -525,7 +285,6 @@ function TabStrip({
   onDragStateChange,
   tabFile,
 }: {
-  orientation?: "horizontal" | "vertical";
   alignment?: "start" | "center";
   tabs: WorkspaceTab[];
   activeKey?: string;
@@ -551,7 +310,6 @@ function TabStrip({
   /** The file a tab shows (an editor's): its menu adds the file's actions. */
   tabFile?: (key: string) => FileTarget | undefined;
 }) {
-  const vertical = orientation === "vertical";
   const keybindings = useKeybindings();
   const [rendered, setRendered] = useState<RenderedTab[]>(() =>
     mergeRendered([], tabs),
@@ -582,10 +340,8 @@ function TabStrip({
       setHoverCard({
         key,
         exiting: false,
-        x: vertical ? rect.right + 12 : rect.left,
-        y: vertical
-          ? Math.min(rect.top, window.innerHeight - 140)
-          : rect.bottom + 8,
+        x: rect.left,
+        y: rect.bottom + 8,
       });
     }, HOVER_CARD_DELAY_MS);
   };
@@ -655,19 +411,18 @@ function TabStrip({
   // share the room equally; with no room left they have no width. While a
   // tab is dragged they are part of the drop target (the end of the strip),
   // never a window handle.
-  const windowHandle = (end: "start" | "end") =>
-    vertical ? null : (
-      <div
-        aria-hidden="true"
-        data-tab-strip-room={end}
-        className={`min-w-0 flex-1 self-stretch ${end === "start" ? "-me-1" : "-ms-1"} ${dragKey ? "" : "app-drag"}`}
-      />
-    );
+  const windowHandle = (end: "start" | "end") => (
+    <div
+      aria-hidden="true"
+      data-tab-strip-room={end}
+      className={`min-w-0 flex-1 self-stretch ${end === "start" ? "-me-1" : "-ms-1"} ${dragKey ? "" : "app-drag"}`}
+    />
+  );
   return (
     // biome-ignore lint/a11y/noStaticElementInteractions: drag-and-drop target for tab reordering; tabs themselves are buttons
     <div
-      className={`app-no-drag flex min-w-0 gap-1 ${vertical ? "flex-col" : "flex-1 items-center self-stretch overflow-x-auto overflow-y-hidden"}`}
-      data-tab-orientation={orientation}
+      className="app-no-drag flex min-w-0 flex-1 items-center gap-1 self-stretch overflow-x-auto overflow-y-hidden"
+      data-tab-orientation="horizontal"
       data-tab-alignment={alignment}
       // A dragged tab hides every close button until it lands.
       data-tab-dragging={dragKey ? "" : undefined}
@@ -715,10 +470,8 @@ function TabStrip({
               (tabKey(neighbor.tab) === activeKey ||
                 tabKey(neighbor.tab) === secondaryKey),
           );
-        const mergeRight =
-          !vertical && inPair && neighborInPair(rendered[index + 1]);
-        const mergeLeft =
-          !vertical && inPair && neighborInPair(rendered[index - 1]);
+        const mergeRight = inPair && neighborInPair(rendered[index + 1]);
+        const mergeLeft = inPair && neighborInPair(rendered[index - 1]);
         // A group wears one eyebrow across all its tabs: each tab draws its
         // stretch of the line, bridging the gap to the next member (and the
         // fold chevron after the last), so the run reads as one.
@@ -735,7 +488,7 @@ function TabStrip({
               ? "bridge"
               : "tab";
         const eyebrow =
-          !vertical && !exiting && tab.groupId
+          !exiting && tab.groupId
             ? { starts: !sameGroup(rendered[index - 1]), end: eyebrowEnd }
             : undefined;
         return (
@@ -817,51 +570,33 @@ function TabStrip({
               }}
               onAnimationEnd={(event) => {
                 if (event.target !== event.currentTarget) return;
-                if (
-                  event.animationName === "tab-out" ||
-                  event.animationName === "sidebar-tab-out"
-                )
-                  removeExited(key);
+                if (event.animationName === "tab-out") removeExited(key);
                 if (event.animationName === "tab-in")
                   setEntered((previous) =>
                     previous.has(key) ? previous : new Set(previous).add(key),
                   );
               }}
               data-tab-active={active || undefined}
-              className={`workspace-tab group relative flex h-8 shrink-0 items-center border text-xs transition-[margin,border-radius,color,background-color,border-color] duration-150 ${vertical ? "min-w-0 rounded-lg px-1" : "rounded-lg"} ${
+              className={`workspace-tab group relative flex h-8 shrink-0 items-center border text-xs transition-[margin,border-radius,color,background-color,border-color] duration-150 rounded-lg ${
                 mergeRight ? "rounded-r-none border-r-0 " : ""
               }${mergeLeft ? "-ml-1 rounded-l-none border-l-0 " : ""}${
-                tab.groupId && vertical
-                  ? `border-l-2 ${groupActive ? "border-l-accent/40" : "border-l-border-strong"} `
-                  : ""
-              }${dragKey === key ? "opacity-50 " : ""}${
-                dropBeforeKey === key
-                  ? vertical
-                    ? "border-t-2 border-t-accent "
-                    : "border-l-2 border-l-accent "
-                  : ""
-              }${
+                dragKey === key ? "opacity-50 " : ""
+              }${dropBeforeKey === key ? "border-l-2 border-l-accent " : ""}${
                 exiting
-                  ? vertical
-                    ? "animate-sidebar-tab-out pointer-events-none"
-                    : "animate-tab-out pointer-events-none"
-                  : vertical
-                    ? "animate-sidebar-tab-in"
-                    : entered.has(key)
-                      ? ""
-                      : "animate-tab-in"
+                  ? "animate-tab-out pointer-events-none"
+                  : entered.has(key)
+                    ? ""
+                    : "animate-tab-in"
               } ${
-                vertical
-                  ? `${highlighted ? "border-accent" : active || secondary ? "border-border" : "border-transparent"} ${active ? "bg-bg-raised text-fg" : secondary ? "bg-bg-raised text-fg-muted" : "text-fg-muted hover:bg-bg-overlay/60 hover:text-fg"}`
-                  : highlighted
-                    ? active
-                      ? "border-accent bg-bg text-fg"
-                      : "border-accent text-fg"
-                    : active
-                      ? "border-border bg-bg text-fg"
-                      : secondary
-                        ? "border-border bg-bg text-fg-muted"
-                        : "border-transparent text-fg-muted hover:bg-bg-overlay/60 hover:text-fg"
+                highlighted
+                  ? active
+                    ? "border-accent bg-bg text-fg"
+                    : "border-accent text-fg"
+                  : active
+                    ? "border-border bg-bg text-fg"
+                    : secondary
+                      ? "border-border bg-bg text-fg-muted"
+                      : "border-transparent text-fg-muted hover:bg-bg-overlay/60 hover:text-fg"
               }`}
               aria-hidden={exiting || undefined}
             >
@@ -895,9 +630,7 @@ function TabStrip({
                 label is the tab's press target, so it fills the tab inside
                 its border: the tab's padding is the label's own, and a press
                 anywhere on the tab opens it. */}
-              <span
-                className={`relative flex min-w-0 items-center ${vertical ? "h-full flex-1" : "self-stretch"}`}
-              >
+              <span className="relative flex min-w-0 items-center self-stretch">
                 <OpenResourceButton
                   type="button"
                   file={tabFile?.(key)}
@@ -911,7 +644,7 @@ function TabStrip({
                     }
                   }}
                   onMouseLeave={disarmHoverCard}
-                  className={`workspace-tab-label flex min-w-0 cursor-pointer items-center gap-1.5 ${vertical ? "h-full flex-1 px-1.5 text-left" : "self-stretch px-2.5"}`}
+                  className="workspace-tab-label flex min-w-0 cursor-pointer items-center gap-1.5 self-stretch px-2.5"
                   aria-current={active || undefined}
                 >
                   {/* Same signal vocabulary as the chat bubbles: spinner
@@ -969,11 +702,7 @@ function TabStrip({
                   </span>
                   <AnimatedTitle
                     text={tab.label ?? tab.name}
-                    className={
-                      vertical
-                        ? "min-w-0 flex-1"
-                        : "workspace-tab-title min-w-3 max-w-40"
-                    }
+                    className="workspace-tab-title min-w-3 max-w-40"
                   />
                 </OpenResourceButton>
                 {/* ⌘W closes the ACTIVE tab, so only its X advertises it. */}
@@ -993,7 +722,7 @@ function TabStrip({
                     onClick={() =>
                       onToggleGroup(parentGroup.parentKey.slice("chat:".length))
                     }
-                    className={`flex h-5 cursor-pointer items-center gap-0.5 rounded px-1 text-[10px] transition-colors duration-150 hover:bg-bg-overlay hover:text-accent ${vertical ? "" : "relative -ms-1 me-1"} ${groupActive ? "text-accent/80" : "text-fg-faint"}`}
+                    className={`flex h-5 cursor-pointer items-center gap-0.5 rounded px-1 text-[10px] transition-colors duration-150 hover:bg-bg-overlay hover:text-accent relative -ms-1 me-1 ${groupActive ? "text-accent/80" : "text-fg-faint"}`}
                     aria-label={`Expand ${parentGroup.memberKeys.length} grouped tabs`}
                   >
                     <ChevronsRight className="size-3" />
@@ -1051,17 +780,15 @@ function TabStrip({
         <div className="flex shrink-0 items-center self-stretch">
           <ShortcutHint
             label="New tab"
-            className={vertical ? "w-full" : undefined}
             shortcut={formatBinding(keybindings["new-tab"])}
           >
             <button
               type="button"
               onClick={onNew}
-              className={`flex shrink-0 cursor-pointer items-center gap-2 rounded-md text-fg-muted hover:bg-bg-overlay/60 hover:text-fg ${vertical ? "h-8 w-full justify-start px-2 text-xs" : "h-7 w-7 justify-center"}`}
+              className="flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center gap-2 rounded-md text-fg-muted hover:bg-bg-overlay/60 hover:text-fg"
               aria-label="New tab"
             >
               <Plus className="size-4" />
-              {vertical && "New tab"}
             </button>
           </ShortcutHint>
         </div>

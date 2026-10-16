@@ -1,4 +1,12 @@
-/** One reference shared by the live config template and the project agent skill. */
+/**
+ * One reference for the live config template (every workspace.js starts
+ * with it, commented) and the configuring-catamorphic-desktop skill. Keep
+ * it the validated contract (workspace-config.ts) and ADR 0234: every list
+ * is a source, Work's own lists included, and nothing here may promise
+ * what the loader refuses. No backticks: it lives in a template literal.
+ */
+import { RESERVED_PALETTE_TRIGGERS } from "../shared/palette.js";
+
 export const WORKSPACE_AUTHORING_GUIDE = `## Workspace: sidebars and palette modes in workspace.js
 
 workspace.js holds what the window offers: both sidebars and your own command
@@ -9,277 +17,354 @@ higher layer, then edit only the intended parts. Preserve unrelated content. The
 profile file is the live, commented schema/example; read it before editing.
 Export with module.exports = { sidebars: { left: [...], right: [...] },
 palette: { modes: [...] } }; palette is optional and no other keys are allowed.
-Delete an override file to inherit the lower layer again.
-One left sidebar tab hides its tab strip; an empty right sidebar starts closed.
-Sidebar content and the top/sidebar placement of open workspace tabs are separate.
+Delete an override file to inherit the lower layer again. The file is data:
+no functions, no require. Code goes in source modules (below).
+One left sidebar tab hides its tab strip; an empty right sidebar starts closed
+(the built-in right sidebar is empty).
 
-Tabs and sections have stable id values. Keep an existing id through edits.
-Every section selects a preset with type: workflows, apps, files, chats,
-subsessions, tabs, bookmarks, git, prs, remote, activity, note, app, session
-or custom.
-A custom section can reuse any built-in source:
-{ id: "working", type: "custom", title: "Working chats",
-  source: { type: "chats", filter: { running: true },
-    sort: { field: "createdAt", direction: "desc" }, pageSize: 50 } }
-For chats and subsessions, source.scope is project (default), children (current chat's immediate children),
-or session (current chat). includeLatent includes unpromoted children when needed.
-Filters compare authorized source fields to literal string, number or boolean values.
-Use source.groupBy for collection grouping; sort uses {field,direction:"asc"|"desc"}.
-pageSize is 1 through 100 for paged sources. Session roots and children load independently.
-Filters and grouping apply to loaded source records; sorting orders loaded siblings.
-Use a custom collection provider when ordering requires a server-side query over all records.
+Tabs are icon tabs: { id, title, icon, sections: [...], when? }. Tabs and
+sections keep stable ids through edits (letters, digits, - and _).
 
-Relevance belongs on when, independently of permissions:
-{ surface: ["chat"], session: true } shows beside a chat with a durable session;
-{ session: true } also beside a page, file or terminal that chat opened.
-Other conditions: pathPrefix, selection (boolean), builder, permissions.
-Surface kinds include chat, editor, browser, terminal, workflow, app and diff.
-These are current-content conditions; focusing the sidebar keeps its content target.
-Subsessions defaults to current-chat children, including latent children, and hides
-when empty. This does not promote a child or change archive behavior.
-session shows the chat in front: where it works (row id folder) and the pull
-requests its agent recorded in the session's metadata under pull_requests (row
-ids are their urls; a click opens one in a tab the chat owns). It needs a
-session: the chat in front, or the chat that opened the page, file or terminal
-in front. The default "This session" tab holds it with when { session: true },
-so the tab exists only there and arriving never changes the selected tab. Move,
-retitle or remove it like any section. Agents set metadata keys with
-set_session_metadata; a key's value is any JSON.
-hideEmpty hides ready-but-empty content, not loading or errors. Parent tabs disappear
-when every section is unavailable. Contextually hidden resources remain searchable.
-Every section shares one status presentation: a header spinner while loading or
-refreshing, placeholder rows before the first result, one muted sentence when empty
-(section.empty replaces it), and the error with Retry. Sections never draw their own
-loading or empty text; rows stay on screen while a refresh runs.
+## Sections
 
-All row presentations accept label, icon (a Lucide icon name in PascalCase, e.g. Rocket;
-an unknown name shows a dot), description, badges (strings),
-progress (0 through 1), open (replace|tab|side|floating), preview and hide.
-Use section.itemDefaults to customize all rows and itemOverrides keyed by stable
-source item id for individual rows. Session ids are session UUIDs, file ids are
-paths, app/workflow ids are names, PR ids are decimal PR numbers, bookmark ids are
-store ids. Custom tree nodes should explicitly include id and may nest items.
+A section shows exactly one of:
+- source: "work:<name>", one of Work's own lists, or a module path relative to
+  the project (".work/todos.ts") for your own code;
+- items: static rows (links and folders of links);
+- app: a project app's name, drawn compact;
+- note: a project-relative document path, or true to let the person pick one.
+There is no type and no built-in section with special powers: Work's lists are
+modules on the same contract as yours, and every list draws the same way.
+Presentation: title (the heading; "" for none; absent, Work's lists use their
+own and a module section is headed Items, so give a module section a title),
+presentation ("rows" or "tiles": tiles draw root rows without children as a grid
+of icons), collapsed, hideEmpty (hide while it lists nothing; a hidden list that
+takes drops shows while something it takes is dragged), empty (its one sentence
+when empty), height, rowHeight, open (default open mode: replace, tab, side,
+floating), when, headerActions, menu, contextMenu, actions, itemDefaults and
+itemOverrides (presentation for every row, or by row id). Grants: collections
+(Work lists an app or module may read) and workflows (workflows a module may
+call).
 
-Actions are separate placements, each an array of {label,action,icon?,url?,disabledReason?,danger?}:
-- actions: inline icon buttons. Give every button a meaningful label and icon.
-- menu: overflow button entries. [] removes the overflow button.
-- contextMenu: right-click and Shift+F10 entries. Omit to inherit overflow; [] disables.
-These work at section level, itemDefaults, itemOverrides and custom item level.
-Action names include open, open-tab, open-here, open-side, open-floating, copy-url,
-pin, unpin, edit, rename, remove, archive, unarchive, mark-read, mark-unread, stop,
-fork, new-subsession, history, publish, new-chat, new-workflow, refresh and search. Only actions supported by the
-source item are enabled. On bookmarks, edit changes a bookmark's name, address and
-folder in one dialog and rename names a folder. A static custom URL does not become
-an editable bookmark; use the bookmarks source for bookmark mutations. A url on an action gives it its
-own resource destination. Never configure an action that silently does nothing.
-headerActions controls section header buttons; [] removes them. Header commands
-are new-chat, new-workflow, search and refresh, or an explicit url destination.
-rowHeight and height control collection density and viewport size.
+Work's lists (bare names in grants and work.read; work:<name> in source):
+- pinned: pages pinned across this profile's projects (pin, unpin, edit,
+  remove, rename-folder; drop and drag to reorder). The default draws it as
+  tiles with no title.
+- bookmarks: this project's bookmarks; header actions add (input url, label)
+  and new-folder (input label); a folder's add puts the page in it. library: a
+  browser's imported bookmarks.
+- workflows, apps: the project's; a row opens it (workflow:<name>, app:<name>).
+- chats: the project's chats, newest first, paged; their forks and children
+  nest. Rows carry signal and data (the session's fields: running,
+  attentionRequired, owner, createdAt, ...). Actions: new-subsession,
+  mark-read, mark-unread, archive, unarchive (open-terminal and open-preview
+  for a server's chats).
+- subsessions: the children of the chat in front; needs when: {session:true}.
+- activity: chats working or waiting for you, and workflow runs going or
+  stopped.
+- files: the project folder as a tree, folders first (members of a server
+  project: their files and the store).
+- tabs: the window's open tabs in strip order; a chat's opened tabs nest under
+  it, open. Rows carry signal and data {kind, name, active, working,
+  attention (waiting for the person included), unread, groupId?, sessionId?,
+  url?, faviconUrl?, path?}; action close; drag reorders the strip, a tab
+  among the tabs beside it.
+- remote: a connected project's server: a status row (its dialogs), a row per
+  file changed on this device (upload, history, publish), files needing a
+  proposal. Header actions sync and upload-all.
+- git: the project's checkouts and the files changed in each (people who edit
+  the program only). prs: open pull requests (or a server's proposals).
+- session: the chat in front: its folder and the pull requests its agent
+  recorded under pull_requests. Needs when: {session:true}.
+Row ids: session UUIDs for chats, paths for files, names for workflows and apps,
+tab keys for tabs, store ids for bookmarks, numbers for PRs.
 
-Example contextual source with independent menus:
-{ id: "delegated", type: "subsessions", title: "Delegated work",
-  when: { surface: ["chat"], session: true }, hideEmpty: true,
-  itemDefaults: {
-    actions: [{label:"Open beside chat", action:"open-side", icon:"Columns2"}],
-    menu: [{label:"Open in tab",action:"open-tab"}],
-    contextMenu: [{label:"Open floating",action:"open-floating"},
-                  {label:"Archive",action:"archive",danger:true}]
-  } }
+The default left sidebar: pinned, library, bookmarks, workflows, apps, tabs
+(only while the person places tabs in the sidebar: when {tabPlacement:
+"sidebar"}), files, remote. There is no chats list by default: chats are tabs,
+and the palette finds every chat. Add { id: "chats", source: "work:chats" } to
+list them.
 
-App widgets are ordinary project apps: {id:"monitor",type:"app",app:"monitor",
-height:320,collections:["chats","files"]}. Collection grants support chats, subsessions,
-activity, files, workflows, apps, git, prs, bookmarks, remote and tabs.
-collections is an explicit host source
-grant for this widget, never a permission bypass. Empty grants provide no sources.
-Use @catamorphic/app createHostCollection({source:"chats"}) and the shared
-@catamorphic/app/ui CollectionTree, CollectionItemView and useItemActions.
-Create the collection once, e.g. with useMemo. CollectionTree reads each next page
-(roots and open children) as the person nears its end, holding the end with
-placeholder rows, offering Retry when a page fails and Show more when a page
-showed nothing new; it lazily loads children,
-virtualizes rows and maintains identities. Use runCollectionAction
-({source,itemId,action}) for a row's advertised actions. subscribeDisplay provides
-live {mode,visible,surface}; unsubscribe in effect cleanup and pause expensive work
-when hidden. reportContentState("loading"|"empty"|"ready"|"error"|"unavailable")
-controls availability without unmounting the app. An app that reports empty must
-retain a lightweight subscription so it can report ready when content arrives.
-Pass display.visible to CollectionTree.active; the tree owns root and expanded
-branch leases. For hidden availability, useCollection({collection,active:!display.visible,mode:"preview"})
-refreshes only the first root page. The same hook observes content while the
-visible tree owns full-depth leases. Never expand branches in preview mode.
-For custom live data use createCollection({source:{load,subscribe}}). load receives
-{parentId,cursor,signal} and returns {items,cursor?}. subscribe publishes upsert,
-remove or invalidate changes and returns cleanup. Identity is stable; never use
-array positions or JSON.stringify(item) as keys. No IPC callbacks or privileged
-renderer JavaScript may be exported from workspace.js.
+Relevance is when, independent of permissions:
+{ surface: ["chat"], session: true } shows beside a chat with a session;
+{ session: true } also beside a page, file or terminal that chat opened (its
+source then receives that chat as session, and a tab of such sections comes and
+goes with it without ever taking the selection).
+Other conditions: pathPrefix, selection (boolean), tabPlacement ("top" or
+"sidebar", where the person placed the window's tabs), permissions. Surface
+kinds include chat, editor, browser, terminal, workflow, app and diff. Tabs
+leave the top bar only while a sidebar section lists them (work:tabs, or a
+module granted tabs); otherwise they stay on top whatever the setting says.
+An invalid when (surface: "chat" instead of ["chat"], an unknown
+tabPlacement) hides its tab, section or item without an error: after editing,
+check that it appears.
+hideEmpty hides ready-but-empty content, not loading or errors. A tab
+disappears when every section is unavailable. Every section shares one status
+presentation: a header spinner while refreshing, placeholder rows first, one
+muted sentence when empty, the error with Retry. Never draw your own.
 
-After editing: read the actual winning file, validate the layout, check both sidebars,
-try ordinary click and right-click separately, change the current surface, and
-check empty/loading/error behavior. For new data, use a local executable source below, an app, or a supported source;
-do not invent undocumented section types or fields.
+## Rows
 
-## Executable local collection sources
+Every row, whoever wrote it, is the same: { id, label, url?, icon?, description?,
+badges?, signal?, progress?, preview?, keywords?, hide?, parentId?, hasChildren?,
+collapsed?, menu?, contextMenu?, actions?, data? }.
+- url is where the row goes, opened by one resolver: a web page, a chat
+  (catamorphic://chat?project=&session=, or session:<id>), workflow:<name>,
+  app:<name>, run:<id>, file:<path>, an open tab's key (browser:<id>, chat:<id>,
+  editor:<id>, ...), or command:<id> for one of Work's commands. A row is
+  highlighted when its url is what is in front, drags as that target (a chat
+  as a chat, an open tab as itself, a page as a link), and shows what Work knows
+  about it (a chat's live details on hover). An agent points at a row as
+  sidebar:<label>, or by tab key when its url is an open tab. A row without url
+  runs its source's open action, or opens and closes its children.
+- icon: a Lucide name in PascalCase (Rocket), a chat glyph (<name>:<color>, e.g.
+  rocket:blue), or an image address. Without one the url picks it (a favicon,
+  a chat glyph).
+- badges: strings or { label, icon }. signal: working (spinner), attention
+  (needs the person), unread. progress: 0 through 1. preview: { title,
+  description, metadata: [{label, value}] up to six }. collapsed: false opens a
+  row with children the first time it loads (sources start closed; static items
+  start open unless collapsed: true).
+- data is the record behind the row (never drawn), for code that reads it.
 
-For a live JSON/file/API list, keep the native sidebar UI and use:
-{ id: "todos", type: "custom", title: "My todos",
-  source: { type: "custom", module: ".work/todos.ts" }, height: 280 }
-The module path is project-root-relative (absolute paths also work). Its default
-export is {load, subscribe?, action?, move?, drop?}. This runs in a lazy Bun process with full
-filesystem, fetch, subprocess and npm access, not inside the static layout VM.
-Use normal TypeScript, not a data-source DSL. Local projects only; remote-connected
-projects retain host-authorized app widgets. No app build or workflow is required.
+## Actions
 
-A section with when.session true is session-scoped: load, actions, move and drop
-also receive session {id,title,metadata}, the chat in front, and the section
-loads again when that chat's title or metadata changes (when shown). Its links
-open as the chat's, and the palette does not search it. Ask the chat's agent
-to keep a metadata key (it sets keys with set_session_metadata), then show it:
+Placements: actions (inline icon buttons, shown with the row's hover or focus),
+menu (the overflow button; [] removes it), contextMenu (right-click; omit to
+inherit menu, [] disables). Rows from a source carry their own; itemDefaults,
+itemOverrides and section-level menu/contextMenu/actions replace them.
+An entry is { label, action, icon?, url?, danger?, disabledReason?, input? }.
+- Work's verbs work on any row: open, open-here, open-tab, open-side,
+  open-floating, copy-url; refresh and search work on a section (search opens
+  the palette scoped to its rows).
+- Any other action is the source's own: lowercase words joined by dashes
+  (archive, pin, toggle). The source receives it in action(). There is no run:
+  prefix.
+- url opens that target instead of running anything ("command:new-tab",
+  "app:monitor"). Commands include new-tab, new-floating-chat, new-workflow,
+  search-files, search-changes, remote-environment, server-members,
+  server-secrets, server-connections (those not on offer here are hidden).
+  A module's rows and action results may name only these; a layout's own
+  header actions and items may name any of Work's commands.
+- input asks first: { title?, submit?, fields: [{ name, label, value?,
+  placeholder? }] } (one to four). The action receives values by field name;
+  throw to keep the dialog open with your message.
+- danger marks a destructive entry; a row's own danger entries come last,
+  behind a rule.
+headerActions are the section's own buttons, the same entries (itemId is "" in
+action). The defaults are ordinary header actions: Tabs has New tab
+(url "command:new-tab"), Workflows Create workflow, Files Find files
+(url "command:search-files"), Bookmarks add and new-folder. [] removes them.
+
+## Source modules
+
+A module is a TypeScript file whose default export is the same contract Work's
+own lists implement. Its path is relative to the project folder it runs in, so
+put a section that names one in a project layer, beside the module (the shared
+.work/workspace.js with the module committed, or the personal project file);
+in the profile file it shows an error in every project without that file.
+{ load, subscribe?, action?, move?, drop?, reveal? }. It runs in a lazy Bun
+process, cwd the project root, with full filesystem, fetch, subprocess and npm
+access and Work's Bun first on PATH. Local projects only; connected projects
+keep apps. Every handler receives { projectRoot, signal, work, session? }.
+- load({parentId, cursor, query?}) returns { items, cursor? }: one parent's
+  page, at most 1000 rows, ids unique and stable (never positions). Throw on
+  failure; old rows stay and Retry shows. query is set only for a palette mode
+  with search "source".
+- subscribe({projectRoot, invalidate}) returns cleanup; call invalidate when
+  your data changes (watch the directory and filter the name, so atomic
+  replacement is seen). An inactive view releases it; idle processes stop after
+  30 seconds; editing the module restarts it.
+- action({itemId, action, values?}) runs a row's or header's action; return
+  { open: "<target>", mode? } to open something afterwards and { message } to
+  say what happened in one sentence. Actions, moves and drops are serialized
+  and reload the section.
+- move({itemId, parentId, beforeId?}) makes rows draggable to reorder and
+  reparent (beforeId absent means last). drop({parentId, beforeId?,
+  payload:{kind, label, url?}}) takes pages, chats, bookmarks and other
+  sections' rows. Only rows with hasChildren take "inside" drops; a row never
+  lands inside itself.
+- reveal({url, after}) returns the row for something in front that no loaded
+  page holds (shown past the loaded rows), or null.
+
+work is Work, as the section grants it:
+- work.read({source, parentId?, cursor?}) reads a page of one of Work's lists
+  (bare name), in the same row shape, so you can filter, sort, group and pass
+  rows through; needs collections: ["<name>"]. A section that read a list reads
+  again whenever that list changes, so sorted rows follow live; rows that move
+  slide to their new place.
+- work.execute({source, itemId, action, values?}) runs a row's action as its
+  menu would (archive a chat, close a tab); same grant.
+- work.call({workflow, input?}) runs a project workflow and returns its output;
+  needs workflows: ["<name>"]. This is how a module reaches secrets, company
+  APIs through the gateway and brokered connections: the workflow holds them,
+  under its own authorization and audit, and the module never does. A workflow
+  that waits (a durable pause) is an error here.
+work answers while the module serves a load or an action (not in subscribe),
+eight calls at a time; waiting on Work does not count against the request's
+own 30 seconds.
+Modules never receive secrets or Work's server address. Committed project files
+run with the project's own authority: review a module before trusting it.
+
+Example: tabs in the sidebar, working and waiting chats first, the rest in
+strip order. In the project's layer (copied from the resolved layout), replace
+the Tabs section's source and grant tabs:
+{ id: "tabs", title: "Tabs", source: ".work/tabs.ts", collections: ["tabs"],
+  when: { tabPlacement: "sidebar" },
+  headerActions: [{ label: "New tab", action: "open", icon: "Plus",
+    url: "command:new-tab" }] }
+.work/tabs.ts:
+const rank = (row) =>
+  row.signal === "attention" ? 0 : row.signal === "working" ? 1 : 2;
 export default {
-  async load({session}) {
-    const deploys=session?.metadata.deploys ?? [];
-    return {items:deploys.map(deploy=>({id:deploy.url,label:deploy.name,
-      url:deploy.url,icon:"Rocket"}))};
-  }
+  async load({ work, parentId, cursor }) {
+    const page = await work.read({ source: "tabs", parentId, cursor });
+    if (parentId) return page;
+    return { ...page, items: page.items
+      .map((row, index) => ({ row, index }))
+      .sort((a, b) => rank(a.row) - rank(b.row) || a.index - b.index)
+      .map(({ row }) => row) };
+  },
+  action: ({ work, itemId, action, values }) =>
+    work.execute({ source: "tabs", itemId, action, values }),
 };
-with { id: "deploys", type: "custom", title: "Deploys", when: { session: true },
-  source: { type: "custom", module: ".work/deploys.ts" } }.
+Rows keep their url, so they still open, highlight and drag as tabs; close
+reaches the tabs list through action. Omit move: a sorted list does not take
+manual order. When a chat starts working its row slides up.
 
-load({projectRoot,parentId,cursor,signal}) returns {items,cursor?}. Items have unique
-stable id and label, optional parentId/hasChildren and all normal row presentation
-fields. Return one parent's page, at most 1000 items. Pass signal to fetch. Throw
-an Error on failed responses; the sidebar retains old rows and offers Retry.
-subscribe({projectRoot,invalidate}) returns cleanup. Use node:fs watch for files or
-an interval for HTTP; close watchers and timers in cleanup. Watch the directory
-and filter the filename so atomic file replacement is detected. An inactive view
-releases its subscription. hideEmpty:true retains a root availability preview;
-keep that work lightweight. Idle processes stop after 30 seconds. Entry-module
-edits restart the process. Reads should not write as a side effect of rendering.
-
-Example module:
-import {watch} from "node:fs";
-import {readFile,writeFile,rename} from "node:fs/promises";
+Example: a todo list over a file, with input and an inline action:
+{ id: "todos", source: ".work/todos.ts", title: "Todos",
+  headerActions: [{ label: "Add todo", action: "add", icon: "Plus",
+    input: { title: "Add todo", fields: [{ name: "text", label: "Todo" }] } }] }
+import { watch } from "node:fs";
+import { readFile, writeFile, rename } from "node:fs/promises";
 import path from "node:path";
-export default {
-  async load({projectRoot,parentId}) {
-    if(parentId) return {items:[]};
-    const todos=JSON.parse(await readFile(path.join(projectRoot,"todos.json"),"utf8"));
-    return {items:todos.map(todo=>({id:todo.id,label:todo.text,
-      icon:todo.done?"CircleCheck":"Circle",
-      actions:[{action:"run:toggle",label:todo.done?"Reopen":"Complete",icon:"Check"}]}))};
-  },
-  subscribe({projectRoot,invalidate}) {
-    const watcher=watch(projectRoot,(event,name)=>{
-      if(event === "rename" || !name || name.toString()==="todos.json") invalidate();
-    });
-    return ()=>watcher.close();
-  },
-  async action({projectRoot,itemId,action}) {
-    if(action!=="toggle") throw Error("Unknown action");
-    const file=path.join(projectRoot,"todos.json");
-    const todos=JSON.parse(await readFile(file,"utf8"));
-    const todo=todos.find(item=>item.id===itemId);
-    if(!todo) throw Error("Todo no longer exists");
-    todo.done=!todo.done;
-    const temporary=file+"."+crypto.randomUUID()+".tmp";
-    await writeFile(temporary,JSON.stringify(todos,null,2));
-    await rename(temporary,file);
+const file = (root) => path.join(root, "todos.json");
+const read = async (root) => {
+  try {
+    return JSON.parse(await readFile(file(root), "utf8"));
+  } catch (error) {
+    if (error.code === "ENOENT") return [];
+    throw error;
   }
 };
+const save = async (root, todos) => {
+  const temporary = file(root) + "." + crypto.randomUUID() + ".tmp";
+  await writeFile(temporary, JSON.stringify(todos, null, 2));
+  await rename(temporary, file(root));
+};
+export default {
+  async load({ projectRoot, parentId }) {
+    if (parentId) return { items: [] };
+    return { items: (await read(projectRoot)).map((todo) => ({
+      id: todo.id, label: todo.text,
+      icon: todo.done ? "CircleCheck" : "Circle",
+      actions: [{ action: "toggle", label: todo.done ? "Reopen" : "Complete",
+        icon: "Check" }] })) };
+  },
+  subscribe({ projectRoot, invalidate }) {
+    const watcher = watch(projectRoot, (event, name) => {
+      if (event === "rename" || name?.toString() === "todos.json") invalidate();
+    });
+    return () => watcher.close();
+  },
+  async action({ projectRoot, itemId, action, values }) {
+    const todos = await read(projectRoot);
+    if (action === "add") {
+      if (!values?.text?.trim()) throw Error("Write the todo first.");
+      todos.push({ id: crypto.randomUUID(), text: values.text.trim(), done: false });
+    } else if (action === "toggle") {
+      const todo = todos.find((item) => item.id === itemId);
+      if (!todo) throw Error("This todo is gone.");
+      todo.done = !todo.done;
+    } else throw Error("Unknown action");
+    await save(projectRoot, todos);
+  },
+};
 
-Drag and drop is one model for every section, built in or custom, and needs no UI
-code: export move({projectRoot,itemId,parentId,beforeId}) to let users reorder and
-reparent this source's own rows by dragging (parentId null is the root; beforeId is
-the sibling to land before, absent means last), and export drop({projectRoot,
-parentId,beforeId,payload:{kind,label,url?}}) to accept pages, chats, bookmarks and
-other sections' rows dragged in. Rows with a url can always be dragged out into
-bookmarks or a chat. Both handlers are serialized with actions and invalidate the
-view on success; throw for failures. Rows with hasChildren are the only "inside"
-targets; everything else lands before or after a sibling. The tree draws the
-insertion line and the highlighted parent the same way everywhere.
+Example: beside a chat, what its agent records (agents set keys with
+set_session_metadata):
+{ id: "deploys", source: ".work/deploys.ts", title: "Deploys",
+  when: { session: true } }
+export default {
+  async load({ session }) {
+    return { items: (session?.metadata.deploys ?? []).map((deploy) => ({
+      id: deploy.url, label: deploy.name, url: deploy.url, icon: "Rocket" })) };
+  },
+};
+The section loads again when that chat's title or metadata changes. Its links
+open as the chat's, and the palette does not search it.
 
-Initialize todos.json with an array of {id,text,done}. Agent edits and clicks now
-share that file, with no sync script. Module actions use run:<name> in actions,
-menu or contextMenu; headerActions can invoke them too (itemId is empty). Actions
-are serialized per source and invalidate its loaded views on success. Throw for
-failures; the UI shows pending and error states. For APIs, implement load with
-fetch(url,{signal}), check response.ok, map response items to stable IDs/labels,
-and return the API's next cursor. A subscribe interval must return clearInterval
-cleanup. Do not pass credentials in row data. Validate loading, refresh, empty,
-failed fetch, retry and action feedback in the app.
+Example: a company API behind the gateway, through a workflow. Write the
+workflow with writing-workflows (its steps hold the secret or brokered
+connection), save and deploy it (workflow-lifecycle), and have it return an
+array of plain records. Name it as work:workflows lists it (its row id):
+{ id: "tickets", title: "My tickets", source: ".work/tickets.ts",
+  workflows: ["listTickets"] }
+.work/tickets.ts:
+export default {
+  async load({ work, parentId }) {
+    if (parentId) return { items: [] };
+    const tickets = await work.call({ workflow: "listTickets",
+      input: { mine: true } });
+    return { items: tickets.map((ticket) => ({ id: ticket.id,
+      label: ticket.title, description: ticket.status, url: ticket.url })) };
+  },
+};
+A call waits for the workflow to finish (up to 100 seconds); one that pauses
+is an error here. For an open HTTP API, fetch(url, { signal }) directly, check
+response.ok, and return the API's next cursor. Never put credentials in rows.
+
+## App widgets
+
+{ id: "monitor", app: "monitor", height: 320, collections: ["chats", "files"] }
+draws a project app compact. collections grants Work's lists to it (bare names;
+none by default). In the app use @catamorphic/app createHostCollection({source})
+with the shared CollectionTree and runCollectionAction({source, itemId, action}),
+subscribeDisplay for {mode, visible, surface}, and reportContentState for
+availability. An app is for UI rows cannot express; prefer a module for lists.
 
 ## Palette modes
 
 A palette mode is a typed name that scopes the command palette (Cmd+P, New Tab)
-to one list: type the name then Space or Tab, or pick it from the @ list; the
-chip stays until Backspace on an empty input. Modes live beside the sidebars in
-the same file and layers, under palette.modes.
-Each mode takes exactly one row source, the same primitives sections use:
+to one list: type the name then Space or Tab, or pick it from the @ list. Modes
+live beside the sidebars, under palette.modes. Each takes exactly one of source
+(work:<name> or a module path), section (a list section's id: its source or
+items) or items:
 { id: "issues", trigger: "issues", aliases: ["bugs"], title: "Issues",
-  description: "Open issues assigned to me", icon: "Bug",
-  source: { type: "custom", module: ".work/issues.ts" } }
-{ id: "running", trigger: "running", title: "Running chats", icon: "Loader",
-  source: { type: "chats", filter: { running: true },
-    sort: { field: "updatedAt", direction: "desc" } } }
-{ id: "todo-search", trigger: "todo", title: "Todos", section: "todos" }
+  icon: "Bug", source: ".work/issues.ts", search: "source" }
+{ id: "changes", trigger: "changes", title: "Changes", source: "work:git" }
+{ id: "todo", trigger: "todo", title: "Todos", section: "todos" }
 { id: "runbooks", trigger: "runbook", title: "Runbooks",
   items: [{ label: "Deploy", url: "https://wiki.example.com/deploy" }] }
-source is a module ({ type: "custom", module }) or a workspace source: chats,
-subsessions, activity, files, workflows, apps, git, prs, bookmarks, remote or
-tabs, with the same filter and sort sections use. Chats filter on running,
-attentionRequired, owner, status, visibility, agentId, title, createdAt and
-updatedAt; files on path; workflows and apps on name; PRs on number, author and
-title; every row also on label. section reuses any list section (a workspace
-source, or a custom module or items), so one source can be a sidebar list and a
-palette mode at once. items are static rows; nested items list flat.
-A mode id shares the section id namespace. trigger and aliases are 1 to 32
-lowercase letters, digits or dashes, unique across modes, and cannot be a
-built-in mode name (history, files, file, content, grep, settings, preferences,
-sites, commands, model, effort, permissions, agent, chat, web). A full name followed by
-Space enters the mode, so pick a noun the user would not start an ordinary
-search with. when accepts permissions only.
-
-Rows use the normal row fields plus keywords (extra words the palette matches:
-synonyms, ids, owners). Enter opens a row's url. A module row without one runs
-its first run:<name> action from actions or menu, and a failure is reported;
-a module row with neither is shown disabled. Static rows need a url; folders
-list their children. A module's tree is walked up to 1000 rows and 50 pages;
-the parent label becomes the detail line when a row has no description. A
-mode over a section that when hides is hidden too.
-search: "palette" (default) loads the rows once when the mode opens and ranks
-them as the user types, learning from what the user picks. search: "source"
-passes what the user typed to load as request.query, debounced, and shows the
-first page in the order returned; use it for APIs that search server-side (an
-issue tracker, a CRM), and return the best matches first. Only module sources can
-search. topLevel: true also ranks a palette-searched mode's rows in the ordinary
-palette; reserve it for small, frequently used lists, since every open loads it.
-Connected projects run no local modules, so module-backed modes are hidden there.
-
-Every list section is searchable in the palette through the same sources:
-headerActions: [{label:"Search", action:"search", icon:"Search"}] (or a menu
-entry) opens the palette scoped to that section's rows, filter and sort
-included. Files, Changes and pull requests have the button built in and search
-what they show (the selected checkout, the review filter).
+A module mode takes collections and workflows grants like a section. Lists of
+the chat in front (subsessions, session, when.session sections) have no chat in
+the palette and are refused. A mode id shares the section id namespace. trigger
+and aliases are 1 to 32 lowercase letters, digits or dashes, unique, and not a
+built-in mode name (${[...RESERVED_PALETTE_TRIGGERS].join(", ")}). when accepts
+permissions only. Rows use the row fields plus keywords; Enter opens a row's url
+or runs its source's open action. search "palette" (default) loads rows once
+and ranks them as the user types; search "source" passes what was typed to load
+as query (debounced) for APIs that search server-side; only modules search.
+topLevel: true also ranks a palette-searched mode's rows in the ordinary
+palette; reserve it for small, frequent lists. Connected projects run no
+modules, so module modes are hidden there.
 
 ## Designing good sections and modes
 
 Choose by the question the user is asking. A section answers "what is going on"
 and stays in view: current work, status, things needing attention. A mode
-answers "take me to X" among many items that do not deserve permanent space:
-tickets, customers, runbooks, environments. When both apply, write one module
-and point a section and a mode at it with section.
-- Keep ids stable across edits: row ids feed selection, usage ranking and
-  learned picks. Never derive them from positions or display text that changes.
-- Put what the user types in label: the name, number or title they remember.
-  Put where it lives or its state in description, and synonyms in keywords.
-- One mode per kind of thing, named by that thing ("issues", not "search").
-  A mode that mixes unrelated rows ranks poorly and teaches nothing.
-- Keep load fast and bounded. Cache slow APIs in the module, page with cursor,
-  and throw a clear Error on failure; the palette shows it with Retry.
-- Give every row a destination: a url, or a run: action that does what the
-  label says. Never ship rows that silently do nothing.
-- Do not duplicate built-ins. Files, file content, history, settings, sites,
-  chats, workflows, apps and bookmarks are already searchable; a mode over a
-  built-in source earns its place with a filter ("running chats", "my PRs").
-After adding a mode, open the palette, type @ to see it listed, enter it by name,
-search, and open a row; check the empty, failed and retry states.
+answers "take me to X" among many items: tickets, customers, runbooks. When both
+apply, write one module and point a section and a mode at it.
+- To change how one of Work's lists sorts, groups or filters, wrap it in a
+  module with work.read and pass its rows through; never copy its data.
+- Keep ids stable; put what the user types in label, where it lives or its
+  state in description, synonyms in keywords.
+- Give every row a destination (url) or an action that does what the label
+  says. Never ship entries that silently do nothing.
+- Keep load fast and bounded; cache slow APIs in the module and page with
+  cursor.
+After editing: read the winning file back, check its error banner, open both
+sidebars, click and right-click rows, run each header action, change what is in
+front, and check empty, loading, failed and retry states.
 `;

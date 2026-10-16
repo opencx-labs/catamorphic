@@ -90,10 +90,17 @@ own tab instead of replacing the page in front.
 ## Sidebar defaults
 
 New profiles use top tabs and no framed content. A single sidebar tab hides its
-strip. The right sidebar leads with This session while a chat, or a page, file
-or terminal it opened, is in front (ADR 0226); a tab that comes and goes with
-the content is never the default choice, so its arrival never changes the tab
-shown. A session-scoped section's links open as the chat's links do. Left sidebar profile/settings controls remain sticky at the bottom.
+strip. Every list section is a source (ADR 0234); the default left sidebar lists
+pinned pages, the library, bookmarks, workflows, apps, the window's tabs (only
+while tabs are placed in the sidebar), files and the project's server. There is
+no chats list by default: chats are tabs, and the palette finds every chat. With
+tabs placed in the sidebar, the Tabs section (`work:tabs`) is the tab list, and
+a layout without a section listing tabs keeps them in the top bar whatever the
+setting says. The right sidebar is empty by default. A tab whose sections show
+only beside a chat (`when: { session: true }`) comes and goes with what is in
+front and is never the default choice, so its arrival never changes the tab
+shown (ADR 0226). A session-scoped section's links open as the chat's links do.
+Left sidebar profile/settings controls remain sticky at the bottom.
 The right sidebar toggle stays at the workspace header's right edge, including
 before a project is open and while the left sidebar is collapsed.
 An empty right sidebar starts closed on launch and context changes. Configured,
@@ -152,9 +159,9 @@ switches use a 180ms, low-opacity accent tint; reduced motion disables it.
 
 ## Search and resource references
 
-File discovery uses the command palette exclusively. Searchable sidebar section
-headers put a search button on the right, opening a palette scoped to that
-section's items and current filters. Do not add sidebar search inputs, a second
+File discovery uses the command palette exclusively. A section's header actions
+are its own buttons (ADR 0234): Find files runs `command:search-files`, and a
+`search` header action opens a palette scoped to that section's rows. Do not add sidebar search inputs, a second
 file-picker modal, or an editor toolbar search button. Content search remains a
 separate palette mode. The "Ask agent" action names the default agent as secondary
 text and never echoes the draft message.

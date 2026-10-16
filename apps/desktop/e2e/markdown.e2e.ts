@@ -248,7 +248,7 @@ describe("markdown editor", () => {
 
   it("opens a .md file in the rich editor, not Monaco", async () => {
     await run(
-      `$('[data-sidebar-search="search-files"]').click(); return true;`,
+      `$('[data-header-action="command:search-files"]').click(); return true;`,
     );
     await runWait(`return !!$('textarea[placeholder="Search filenames…"]');`, {
       label: "Files palette",
@@ -307,7 +307,7 @@ describe("markdown editor", () => {
 
   it("opening another file through the palette keeps documents isolated", async () => {
     await run(
-      `$('[data-sidebar-search="search-files"]').click(); return true;`,
+      `$('[data-header-action="command:search-files"]').click(); return true;`,
     );
     await runWait(`return !!$('textarea[placeholder="Search filenames…"]');`, {
       label: "Files palette",
@@ -409,7 +409,7 @@ describe("markdown editor", () => {
     })()`);
     expect(status).toBe(200);
     await run(
-      `$('[data-sidebar-search="search-files"]').click(); return true;`,
+      `$('[data-header-action="command:search-files"]').click(); return true;`,
     );
     await runWait(`return !!$('textarea[placeholder="Search filenames…"]');`, {
       label: "Files palette",
@@ -773,7 +773,7 @@ describe("markdown editor", () => {
     expect(await put("assets/logo v2.svg", logo)).toBe(200);
     expect(await put("images.md", doc)).toBe(200);
     await run(
-      `$('[data-sidebar-search="search-files"]').click(); return true;`,
+      `$('[data-header-action="command:search-files"]').click(); return true;`,
     );
     await runWait(`return !!$('textarea[placeholder="Search filenames…"]');`, {
       label: "Files palette",

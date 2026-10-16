@@ -37,7 +37,7 @@ const render = (next: SidebarPhase) =>
           {
             id: "only",
             title: "Only",
-            sections: [{ id: "a", type: "custom" }],
+            sections: [{ id: "a", items: [] }],
           },
         ]}
         onCustomize={() => {}}

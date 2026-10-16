@@ -74,20 +74,20 @@ beforeAll(async () => {
         if(query!==undefined) await appendFile('queries.log',JSON.stringify(query)+'\\n');
         const shown=query?all.filter(t=>t.title.toLowerCase().includes(query.toLowerCase())):all;
         return {items:shown.map(t=>({id:t.id,label:t.title,description:t.id.toUpperCase(),keywords:[t.owner],
-          actions:[{action:'run:claim',label:'Claim',icon:'Hand'}]}))};
+          actions:[{action:'claim',label:'Claim',icon:'Hand'}]}))};
       },
-      async action({itemId,action}){ if(action==='claim') await appendFile('claimed.log',itemId+'\\n'); }
+      async action({itemId,action}){ if(action==='claim'||action.startsWith('open')) await appendFile('claimed.log',itemId+'\\n'); }
     };`,
   );
   fs.writeFileSync(
     path.join(projectRoot, ".work/workspace.js"),
     `module.exports={sidebars: {left:[{id:'work',title:'Work',icon:'Ticket',sections:[
-        {id:'tickets',type:'custom',title:'Tickets',source:{type:'custom',module:'.work/tickets.ts'},height:160},
-        {id:'files',type:'files'}]}],
+        {id:'tickets',title:'Tickets',source:'.work/tickets.ts',height:160},
+        {id:'files',source:'work:files'}]}],
       right:[] },
       palette:{modes:[
         {id:'ticket-mode',trigger:'tickets',aliases:['tix'],title:'Tickets',description:'Find a ticket and claim it',icon:'Ticket',section:'tickets'},
-        {id:'ticket-search',trigger:'find-ticket',title:'Ticket search',source:{type:'custom',module:'.work/tickets.ts'},search:'source'},
+        {id:'ticket-search',trigger:'find-ticket',title:'Ticket search',source:'.work/tickets.ts',search:'source'},
         {id:'runbooks',trigger:'runbooks',title:'Runbooks',items:[{label:'Deploy runbook',url:'https://runbooks.test/deploy',keywords:['release']}]},
         {id:'project-files',trigger:'pf',title:'Project files',section:'files'}
       ]}
@@ -132,6 +132,7 @@ it("lists custom modes with the built-in ones and enters them by name", async ()
   await wait(
     `return labels().length===1 && labels()[0].includes('Refund emails delayed')`,
   );
+  // A row without an address opens through its source: here, it claims.
   await run(`key('Enter')`);
   await wait(`return !input()`);
   await expect
@@ -363,10 +364,15 @@ it("switches to open tabs from search and the Tabs mode, above bookmarks and his
     await type("handbook");
     await wait(
       `const ids=rows().map(row=>row.dataset.itemId);
-       return ids[0]?.startsWith('open-tab:browser:') && ids[1]==='bookmark:pinned:delta' &&
+       return ids[0]?.startsWith('open-tab:browser:') && ids[1]==='bookmark:delta' &&
          ['Beta handbook','Gamma handbook'].every(name=>labels().some(label=>label.includes(name)))`,
       "open tab, then bookmark, then history",
-    );
+    ).catch(async (error: unknown) => {
+      const ids = await run<string[]>(
+        "return rows().map(row=>row.dataset.itemId)",
+      );
+      throw new Error(`${String(error)}; rows: ${JSON.stringify(ids)}`);
+    });
     const order = await run<string[]>("return labels()");
     expect(order[0]).toContain("Alpha handbook");
     // The pinned page and its library copy are one row.

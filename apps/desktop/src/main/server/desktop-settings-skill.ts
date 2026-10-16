@@ -15,7 +15,7 @@ const tableCell = (text: string) => text.replaceAll("|", "\\|");
 export const DESKTOP_SETTINGS_SKILL = `---
 name: configuring-catamorphic-desktop
 title: Configure desktop settings
-description: Edit Work desktop configuration files to customize theme, fonts, shortcuts, sidebar sections and command palette modes (workspace.js), tabs, window buttons, notifications, terminal macros or browser bookmarks, including project overrides and reset.
+description: Edit Work desktop configuration files to customize theme, fonts, shortcuts, sidebars and command palette modes (workspace.js, including sidebar source modules that sort, filter or group Work's lists such as tabs and chats, or show any data), tabs, window buttons, notifications, terminal macros or browser bookmarks, including project overrides and reset.
 ---
 
 # Configure the desktop
@@ -126,7 +126,7 @@ ${KEYBINDING_ACTIONS.map((action) => `- ${action}: ${JSON.stringify(DEFAULT_KEYB
 ## Bookmarks: one JSON file
 
 files.bookmarks from desktop_settings holds every bookmark. byProject[projectId]
-is this project's tree (the sidebar's This project section) and
+is this project's tree (the sidebar's Bookmarks section, work:bookmarks) and
 pinnedByProfile[profileId] the bookmarks that follow the profile across projects
 (Pin across projects); use the projectId and profileId desktop_settings returns.
 libraryByProfile holds imported browser bookmarks: leave it to the import flow.

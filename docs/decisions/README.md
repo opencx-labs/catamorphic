@@ -144,7 +144,7 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0129](0129-isolated-desktop-tests-and-ci-sharding.md) | Isolated desktop tests and CI sharding | Accepted; test-cache policy superseded by 0131 |
 | [0130](0130-macos-browser-password-import.md) | Prebuilt macOS browser password import helper | Accepted |
 | [0131](0131-content-addressed-test-reuse.md) | Content-addressed test reuse | Accepted |
-| [0132](0132-shared-contextual-sidebar-contributions.md) | Shared contextual sidebar contributions | Accepted |
+| [0132](0132-shared-contextual-sidebar-contributions.md) | Shared contextual sidebar contributions | Accepted (amended by 0234) |
 | [0133](0133-lean-agent-tool-surface.md) | Lean agent tool surface | Accepted (eager surface amended by 0202; connectors for harnesses with tool search by 0225) |
 | [0134](0134-consent-and-collection-lifecycle.md) | Consent binding and collection lifecycle | Accepted |
 | [0135](0135-artifact-publication-before-admission.md) | Publish artifact candidates before admitting revisions | Accepted |
@@ -152,14 +152,14 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0137](0137-sign-in-recovery.md) | Sign-in recovery stays with the active attempt | Accepted |
 | [0138](0138-session-workflow-triggers-and-actions.md) | Session workflow triggers and actions | Accepted |
 | [0139](0139-session-reminder-lifetime-and-attention.md) | Session reminder lifetime and message attention | Accepted |
-| [0140](0140-local-agent-freedom-and-executable-sidebar-sources.md) | Local agent freedom and executable sidebar sources | Accepted |
+| [0140](0140-local-agent-freedom-and-executable-sidebar-sources.md) | Local agent freedom and executable sidebar sources | Accepted (amended by 0234) |
 | [0141](0141-open-plain-folders-without-git.md) | Open plain folders without initializing Git | Accepted |
 | [0142](0142-contained-project-workspace.md) | A contained project workspace and local app data | Accepted; folder name superseded by 0169 |
 | [0143](0143-profile-history-and-browser-import.md) | Profile history and shared browser import | Accepted |
 | [0144](0144-desktop-controls-and-default-browser.md) | App-styled controls and default browser | Accepted |
 | [0145](0145-work-product-identity.md) | Work is the home for the end-user experiences | Accepted |
 | [0146](0146-work-application-identity.md) | Work application identity | Accepted; project paths superseded by 0169 |
-| [0147](0147-uniform-sidebar-sections.md) | Uniform sidebar sections: one status language and one drag-and-drop model | Accepted |
+| [0147](0147-uniform-sidebar-sections.md) | Uniform sidebar sections: one status language and one drag-and-drop model | Accepted (amended by 0234) |
 | [0148](0148-session-access-for-apps.md) | Session access for apps | Accepted |
 | [0149](0149-observed-git-overviews.md) | Observed Git overviews | Accepted |
 | [0150](0150-site-settings.md) | Site settings: one modal per site, Chrome's permission model | Accepted |
@@ -198,7 +198,7 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0183](0183-guards-are-host-code-work-server-config-is-typed-data.md) | Guards are host code; Work server config is typed data | Accepted |
 | [0184](0184-personal-credentials-reach-a-members-own-sessions.md) | Personal credentials reach a member's own sessions | Accepted (logins superseded by 0199; amended by 0206; container sandboxes by 0204; sealed operations by 0207; setup and volumes by 0208) |
 | [0185](0185-passkey-requests-stay-answerable.md) | Passkey requests in browser tabs stay answerable | Accepted (amended by 0201, 0220) |
-| [0186](0186-palette-modes-and-use-ranked-search.md) | Palette modes share one shape, and search ranks by use | Accepted |
+| [0186](0186-palette-modes-and-use-ranked-search.md) | Palette modes share one shape, and search ranks by use | Accepted (amended by 0234) |
 | [0187](0187-remote-executors-ride-out-transient-failures.md) | Remote executors ride out transient failures on one operation queue | Accepted (sessions are worker epochs by 0192; runners by 0198; sealed operations by 0207) |
 | [0188](0188-back-and-forward-between-surfaces.md) | Back and forward move between surfaces, and tabs keep their way back | Accepted |
 | [0189](0189-sign-in-limits-shared-and-keyed-by-the-proxied-client.md) | Sign-in limits are shared in Postgres and keyed by the proxied client | Accepted |
@@ -238,7 +238,7 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0223](0223-an-agent-terminal-lives-as-long-as-its-command.md) | An agent terminal lives as long as its command | Accepted (amends 0155; bash marks its commands, amended by 0230) |
 | [0224](0224-a-voice-agent-can-stop-listening.md) | A voice conversation's agent can stop listening | Accepted (amends 0133, 0216) |
 | [0225](0225-harnesses-get-connectors-as-mcp-servers-results-unchanged.md) | Harnesses get connectors as MCP servers, results unchanged | Accepted (amends 0065, 0103, 0133, 0198) |
-| [0226](0226-session-metadata-and-this-session.md) | Session metadata, and a sidebar section for the chat in front | Accepted (refines 0132, 0147, 0215) |
+| [0226](0226-session-metadata-and-this-session.md) | Session metadata, and a sidebar section for the chat in front | Accepted (refines 0132, 0147, 0215; amended by 0234) |
 | [0227](0227-pages-ask-through-works-dialogs.md) | Pages ask through Work's dialogs: alerts, Leave site? and sign-ins over their tab | Accepted (amends 0150, 0151, 0194, 0202) |
 | [0228](0228-a-sign-in-that-can-still-refresh-is-retried.md) | A sign-in that can still refresh is retried, and a fixed one runs the turn again | Accepted (amends 0222) |
 | [0229](0229-idle-pollers-wait-for-hints.md) | Idle pollers wait for hints from their own process | Accepted (refines 0193, 0197, 0207) |
@@ -246,3 +246,4 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0231](0231-daytona-support-is-removed.md) | Daytona support is removed | Accepted (amends 0004, 0008, 0174) |
 | [0232](0232-bun-builds-and-checks-packages.md) | Bun builds and type checks the packages | Accepted |
 | [0233](0233-sessions-imported-from-claude-code-and-codex.md) | Sessions imported from Claude Code and Codex | Accepted |
+| [0234](0234-sidebar-sections-are-sources.md) | A sidebar section is a source; Work's lists are sources like any other | Accepted (amends 0132, 0140, 0147, 0186, 0226) |

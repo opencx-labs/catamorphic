@@ -73,7 +73,7 @@ the person's remote sessions use:
 Changing \`.work/project.json\` changes shared project source, unlike the
 personal config. In a repository Work did not create, commit it on a work/
 branch and open a pull request with create_pull_request; in a company brain,
-the person shares it from the Server section: members who may publish the
+the person shares it from the Server list in the sidebar: members who may publish the
 project publish it at once, everyone else proposes it for a reviewer to
 accept. The server also decides whether a machine may hold personal
 credentials: a per-session microVM, or a machine that serves only this
@@ -145,7 +145,7 @@ allows personal credentials; each file says whether it was sent or why not (\`pr
 \`configError\` explain failures. No status file means the project is not
 linked, the server does not support this yet, or Work has not checked yet.
 The person can also open "Remote environment settings" from the command
-palette, or Remote environment in the sidebar's Server section, to see the
+palette, or Remote environment on the server's row in the sidebar's Server list, to see the
 same and send now.
 
 Never ask for passwords, tokens or API keys in chat, and never copy a

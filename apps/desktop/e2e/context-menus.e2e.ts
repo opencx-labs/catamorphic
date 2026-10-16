@@ -371,19 +371,18 @@ describe("bookmarks", () => {
       "Delete",
     ]);
     await pick("Edit…");
-    await app.waitFor(
-      "document.activeElement?.matches('input[name=bookmarkName]')",
-      { label: "edit dialog focused on the name" },
-    );
+    await app.waitFor("document.activeElement?.matches('input[name=label]')", {
+      label: "edit dialog focused on the name",
+    });
     expect(
       await run(
-        "return [$('[role=dialog] h2').textContent, $('input[name=bookmarkName]').value, $('input[name=bookmarkUrl]').value]",
+        "return [$('[role=dialog] h2').textContent, $('input[name=label]').value, $('input[name=url]').value]",
       ),
     ).toEqual(["Edit bookmark", "Pinned site", `${origin}/pinned`]);
     await run(
-      "setReactValue($('input[name=bookmarkName]'), 'Team wiki'); setReactValue($('input[name=bookmarkUrl]'), 'wiki.example.test/home'); button('Save').click()",
+      "setReactValue($('input[name=label]'), 'Team wiki'); setReactValue($('input[name=url]'), 'wiki.example.test/home'); button('Save').click()",
     );
-    await app.waitFor("!document.querySelector('input[name=bookmarkName]')", {
+    await app.waitFor("!document.querySelector('input[name=label]')", {
       label: "dialog closed",
     });
     await app.waitFor(`!!${row("Team wiki")}`, { label: "tile renamed" });
@@ -398,16 +397,16 @@ describe("bookmarks", () => {
   it("refuse an address that is not a web page's and keep the dialog open", async () => {
     await rowMenu("Docs");
     await pick("Edit…");
-    await app.waitFor("!!document.querySelector('input[name=bookmarkUrl]')");
+    await app.waitFor("!!document.querySelector('input[name=url]')");
     await run(
-      "setReactValue($('input[name=bookmarkUrl]'), 'ftp://files.example.test'); button('Save').click()",
+      "setReactValue($('input[name=url]'), 'ftp://files.example.test'); button('Save').click()",
     );
     await app.waitFor(
       "document.querySelector('[role=dialog] [role=alert]')?.textContent === 'Enter an http or https address.'",
       { label: "address refused" },
     );
     await run("button('Cancel').click()");
-    await app.waitFor("!document.querySelector('input[name=bookmarkUrl]')");
+    await app.waitFor("!document.querySelector('input[name=url]')");
   });
 });
 

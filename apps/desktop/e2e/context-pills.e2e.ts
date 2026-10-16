@@ -620,7 +620,7 @@ describe("context pills", () => {
     // Minimize the chat and find the file through the shared palette.
     await run(`pressKey('m', { metaKey: true }); return true;`);
     await run(
-      `$('[data-sidebar-search="search-files"]').click(); return true;`,
+      `$('[data-header-action="command:search-files"]').click(); return true;`,
     );
     await runWait(`return !!$('textarea[placeholder="Search filenames…"]');`, {
       label: "Files palette",

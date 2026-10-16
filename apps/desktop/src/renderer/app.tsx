@@ -70,7 +70,11 @@ import {
   type ProjectExperienceContext,
   writesProgram,
 } from "../shared/project-experience.js";
-import type { SidebarSide, SidebarSurface } from "../shared/sidebar.js";
+import {
+  type SidebarSide,
+  type SidebarSurface,
+  workSourceName,
+} from "../shared/sidebar.js";
 import { siteHost, siteOrigin } from "../shared/site-settings.js";
 import {
   isBrowserFile,
@@ -81,6 +85,7 @@ import {
 import type { TerminalMacro } from "../shared/terminal-macros.js";
 import { fieldKeepsKey } from "../shared/text-field.js";
 import { rosterAgentId } from "../shared/voice.js";
+import { parseWorkPage } from "../shared/work-pages.js";
 import {
   sidebarSections,
   visibleWorkspaceConfig,
@@ -89,6 +94,7 @@ import { findSearchInput } from "./components/action-search-input.js";
 import {
   type AgentPointer,
   AgentPointers,
+  pointedElement,
 } from "./components/agent-pointers.js";
 import { AgentWizard } from "./components/agent-wizard.js";
 import { BrowserImportDialog } from "./components/browser-import.js";
@@ -126,7 +132,9 @@ import { RemoteConnectModal } from "./components/remote-connect-modal.js";
 import { RemoteConnectionIndicator } from "./components/remote-connection-indicator.js";
 import { RemoteEnvironmentModal } from "./components/remote-environment-modal.js";
 import { RemoteHistoryModal } from "./components/remote-history-modal.js";
-import type { RemoteFeatures } from "./components/remote-nav.js";
+import { RemoteMembersModal } from "./components/remote-members-modal.js";
+import { RemoteSecretsModal } from "./components/remote-secrets-modal.js";
+import { RemoteServiceConnectionsModal } from "./components/remote-service-connections-modal.js";
 import { ScreenShareHost } from "./components/screen-share-picker.js";
 import {
   ArchiveSessionDialog,
@@ -137,7 +145,9 @@ import {
   ShortcutHint,
 } from "./components/shortcut-hint.js";
 import type { SidebarContentState } from "./components/sidebar-contribution.js";
+import { SidebarHostProvider } from "./components/sidebar-host.js";
 import { ConfiguredSection } from "./components/sidebar-navigation.js";
+import type { SessionCommand } from "./components/sidebar-session-inspector.js";
 import { SiteSettingsHost } from "./components/site-settings-modal.js";
 import { TabbedSidebar } from "./components/tabbed-sidebar.js";
 import { UpdateBanner } from "./components/update-banner.js";
@@ -161,6 +171,7 @@ import {
   type Profile,
   type ProfilesData,
   type ProjectAgentInfo,
+  type RemoteFeatures,
   type RemoteProjectStatus,
   type SidebarSectionConfig,
   type WorkspaceConfig,
@@ -214,10 +225,6 @@ import { NEW_WORKFLOW_PROMPT } from "./lib/workflow-authoring.js";
 import { useWorkspace } from "./lib/workspace-context.js";
 import { workspaceCustomizationMessage } from "./lib/workspace-customization.js";
 import {
-  useWorkspaceSources,
-  WorkspaceSourcesProvider,
-} from "./lib/workspace-sources.js";
-import {
   agentOpenInFront,
   attachedTabKeys,
   type BrowserEntry,
@@ -251,6 +258,7 @@ import {
   PaletteHostProvider,
   type ProjectAgentTarget,
 } from "./palette/host.js";
+import { loadSourceRows } from "./palette/sources.js";
 import type { PaletteChoiceMode, PaletteModeRequest } from "./palette/types.js";
 import { AppScreen } from "./screens/app-screen.js";
 import { ArtifactScreen } from "./screens/artifact-screen.js";
@@ -268,6 +276,11 @@ import { ProfileSettingsScreen } from "./screens/profile-settings-screen.js";
 import { RunScreen } from "./screens/run-screen.js";
 import { SettingsScreen } from "./screens/settings-screen.js";
 import { SitesScreen } from "./screens/sites-screen.js";
+import {
+  useAnswerSourceWork,
+  useWorkSources,
+  WorkSourcesProvider,
+} from "./sources/registry.js";
 
 // Heavy workspace surfaces stay out of the startup parse path. They remain
 // mounted after first use so editor state and terminal sessions survive tab
@@ -491,14 +504,6 @@ function focusedChatSurfaceId(): string | undefined {
   return lastPointerDownInFloatingChatId;
 }
 
-function findSidebarSearchButton(action: string) {
-  return [
-    ...document.querySelectorAll<HTMLButtonElement>(
-      `button[data-sidebar-search="${action}"]`,
-    ),
-  ].find((element) => !element.closest("[inert]") && element.checkVisibility());
-}
-
 /** An agent's open or close changing the tab in front, awaiting its commit. */
 interface AgentArrival {
   /** The strip before the change. */
@@ -561,9 +566,13 @@ export function App({
     null,
   );
   // Continue on mobile: the QR pairing modal + the chat it should open.
-  // Remote environment (ADR 0184): the palette's way into the same dialog
-  // the sidebar's Server section opens.
+  // Remote environment (ADR 0184): a command, which the Server list's row
+  // also offers.
   const [remoteEnvironmentOpen, setRemoteEnvironmentOpen] = useState(false);
+  // The server's other dialogs, commands too (ADR 0234).
+  const [serverDialog, setServerDialog] = useState<
+    "members" | "secrets" | "connections" | null
+  >(null);
   const [mobilePairing, setMobilePairing] = useState<{
     open: boolean;
     context: { projectId?: string; sessionId?: string } | null;
@@ -857,6 +866,8 @@ export function App({
     ? true
     : remoteSurfaceStatus !== null &&
       !writesProgram(remoteSurfaceStatus.capabilities);
+  const memberShellRef = useRef(memberShell);
+  memberShellRef.current = memberShell;
   const experienceRoot = remoteSurfaceResolved && remoteSurfaceStatus === null;
   const experiencePermissions = remoteSurfaceStatus?.capabilities?.permissions;
   // Stable between renders: the palette and sidebars derive indexes from it.
@@ -1081,7 +1092,7 @@ export function App({
     return () => window.clearTimeout(timer);
   }, [profileVeil]);
 
-  // Shared with SessionsNav via the query cache; titles feed tab labels.
+  // Titles feed tab labels and the palette.
   // This computer's chats follow its hints (ADR 0229); a remote server's
   // are polled.
   const { apiClient } = useCatamorphic();
@@ -2509,9 +2520,10 @@ export function App({
           sessionId: target.sessionId,
           mode: mode === "floating" ? "partial" : "tab",
         };
+        // Reconciled as any change is: a New Tab it leaves behind closes.
         return {
           ...current,
-          [target.projectId]: {
+          [target.projectId]: reconcileWorkspace(targetWorkspace, {
             ...targetWorkspace,
             chats: [
               ...targetWorkspace.chats.filter(
@@ -2539,7 +2551,7 @@ export function App({
                     ratio: 0.5,
                   }
                 : null,
-          },
+          }),
         };
       });
       selectProject(target.projectId);
@@ -3377,11 +3389,6 @@ export function App({
     setModeRequest({ mode, nonce: crypto.randomUUID() });
   };
   const focusSearch = (action: string, mode?: "files" | "content") => {
-    const button = findSidebarSearchButton(action);
-    if (button) {
-      button.click();
-      return;
-    }
     const input = findSearchInput(action);
     if (input) {
       input.focus();
@@ -4135,7 +4142,36 @@ export function App({
     },
     "find-next": () => runBrowserCommand("findNext"),
     "find-previous": () => runBrowserCommand("findPrevious"),
-    "search-changes": () => focusSearch("search-changes"),
+    // A diff's own search when one is in front, else the project's changes
+    // in the palette, from work:git (ADR 0234).
+    "search-changes": () => {
+      const input = findSearchInput("search-changes");
+      if (input) {
+        input.focus();
+        input.select();
+        return;
+      }
+      if (!projectId || memberShell) return;
+      setModeRequest({
+        mode: "section",
+        label: "Changes",
+        load: (signal) =>
+          loadSourceRows({
+            sources: workSources,
+            source: "git",
+            projectId,
+            signal,
+            onError: setLinkError,
+          }),
+        nonce: crypto.randomUUID(),
+      });
+      setPaletteOpen(true);
+    },
+    "new-workflow": (mode) =>
+      sendToAgent(NEW_WORKFLOW_PROMPT, mode === "tab" ? "tab" : "float"),
+    "server-members": () => setServerDialog("members"),
+    "server-secrets": () => setServerDialog("secrets"),
+    "server-connections": () => setServerDialog("connections"),
     "search-settings": settingsSearch,
     "browser-focus-address": () => runBrowserCommand("focusAddress"),
     "browser-reload": () => runBrowserCommand("reload"),
@@ -4312,10 +4348,8 @@ export function App({
               ))) &&
           (candidate !== "search-changes" ||
             (guestId === undefined &&
-              Boolean(
-                findSearchInput(candidate) ||
-                  findSidebarSearchButton(candidate),
-              ))) &&
+              (Boolean(findSearchInput(candidate)) ||
+                (Boolean(projectIdRef.current) && !memberShellRef.current)))) &&
           // Find belongs to a page (a key from it, or one in front) or a
           // diff's search; elsewhere the key stays with what is focused (an
           // editor's own find).
@@ -4663,9 +4697,7 @@ export function App({
         document.querySelector(
           `[data-project-runtime="${CSS.escape(projectIdRef.current ?? "")}"]`,
         ) ?? document;
-      const element = root.querySelector(
-        `[data-point-key="${CSS.escape(target)}"]`,
-      );
+      const element = pointedElement(target, root);
       const row = target.startsWith("sidebar:");
       const holder = element?.closest("aside[data-sidebar]");
       const sidebars = holder
@@ -4813,7 +4845,7 @@ export function App({
           }));
           const sidebar = sidebarSections(workspaceConfigRef.current).map(
             (section) => ({
-              type: section.type,
+              source: section.source,
               title: section.title,
               items: (section.items ?? []).map((item) => ({
                 label: item.label,
@@ -5977,6 +6009,16 @@ export function App({
     // run on their server.
     "new-worktree-chat": worktreesAvailable && remoteSurfaceStatus === null,
     "remote-environment": remoteSurfaceStatus !== null,
+    // The server's dialogs, for the people it gives them to (ADR 0234).
+    "server-secrets": remoteSurfaceStatus !== null,
+    "server-members":
+      remoteSurfaceStatus?.capabilities?.permissions.includes(
+        "memberships:write",
+      ) === true,
+    "server-connections":
+      remoteSurfaceStatus?.capabilities?.administrator === true,
+    "new-workflow": !memberShell,
+    "search-changes": !memberShell,
     "toggle-chat-minimized": paletteTargetChat !== undefined,
     "chat-to-tab":
       paletteTargetChat !== undefined &&
@@ -6024,6 +6066,51 @@ export function App({
           agent.id === paletteTargetAgentId && hasPermissionMode(agent.harness),
       ) === true,
   };
+  /**
+   * Every row, header button and action effect opens through here (ADR
+   * 0234): one of Work's commands, a server dialog on a file, an open tab,
+   * a chat, a page, or a workspace target.
+   */
+  const openTarget = async (url: string, mode: CommitMode) => {
+    if (url.startsWith("command:")) {
+      const command = BUILTIN_ACTIONS.find(
+        (action) => action.id === url.slice("command:".length),
+      )?.id;
+      if (!command) throw new Error("This is not one of Work's commands.");
+      if (paletteActionAvailability[command] === false)
+        throw new Error("That command is not available here.");
+      actionHandlersRef.current[command](mode);
+      return;
+    }
+    const page = parseWorkPage(url);
+    if (page) {
+      const features = remoteSurfaceStatus?.capabilities?.features;
+      if (page.page === "server-history") setRemoteHistoryPath(page.path);
+      else if (page.page === "server-publish")
+        setRemotePublish({ path: page.path, features });
+      else setRemotePropose({ files: page.paths, features });
+      return;
+    }
+    if (allTabs.some((tab) => tabKey(tab) === url)) {
+      focusTab(url, mode);
+      return;
+    }
+    if (
+      parseChatBookmarkUrl(url) ||
+      /^https?:/i.test(url) ||
+      url.startsWith("file:")
+    ) {
+      await openUrl(url, mode);
+      return;
+    }
+    await openLinkedSurface(url, { mode });
+  };
+  const openSidebarTarget = (url: string, mode: CommitMode) =>
+    void openTarget(url, mode).catch((cause: unknown) =>
+      setLinkError(
+        cause instanceof Error ? cause.message : "Could not open this item.",
+      ),
+    );
   const paletteHost: PaletteHost = {
     projectId,
     profileId: activeProfile?.id,
@@ -6032,7 +6119,7 @@ export function App({
     profiles: profilesData?.profiles ?? [],
     activeProfileId: activeProfile?.id,
     workspaceConfig: visibleWorkspace,
-    onOpenUrl: openUrl,
+    onOpenUrl: openSidebarTarget,
     onOpenTab: openTab,
     onOpenSession: openSession,
     focusedSite,
@@ -6050,7 +6137,6 @@ export function App({
     onSwitchProfile: switchProfile,
     onSendToAgent: sendToAgent,
     startingActions,
-    canCreateWorkflows: Boolean(projectId) && !memberShell,
     onRunSkill: runSkill,
     actionHandlers,
     terminalMacros: prefs?.terminalMacros ?? [],
@@ -6229,6 +6315,7 @@ export function App({
         )
       : undefined);
   const sidebarSurface: SidebarSurface = {
+    tabPlacement: prefs?.tabPlacement === "sidebar" ? "sidebar" : "top",
     kind: sidebarChat
       ? "chat"
       : sidebarEditor
@@ -6249,28 +6336,86 @@ export function App({
         ),
     );
   };
-  // One data layer for workspace lists (ADR 0186): sidebar widgets, the
-  // palette's resources, section searches and palette modes read it.
-  const workspaceSources = useWorkspaceSources({
+  // Work's lists (ADR 0234): what sections, the palette, app widgets and
+  // modules read, each a source on one contract.
+  const workSources = useWorkSources({
     projectId: projectId ?? "",
     profileId: activeProfile?.id,
-    tabs: allTabs,
-    activeTabKey: focusedTabKey,
-    onFocusTab: focusTab,
-    onOpenUrl: (url, mode) => void openUrl(url, mode ?? "replace"),
-    surface: sidebarSurface,
     writesProgram: !memberShell,
-    onOpenSession: openSession,
-    onOpenTab: openTab,
-    onOpenFile: openProjectFile,
-    onSessionAction: applySessionAction,
+    remote: remoteSurfaceStatus !== null,
+    host: {
+      sessionId: sidebarSurface.sessionId,
+      tabs: allTabs,
+      tabGroups,
+      activeTabKey: focusedTabKey,
+      unreadSessionIds,
+      agentName: (agentId) => {
+        const id = agentId ?? effectiveDefaultAgentId;
+        return (
+          agentsData?.agents.find((agent) => agent.id === id)?.name ??
+          (id ? projectAgentNames[id] : undefined)
+        );
+      },
+      closeTab: (key) => closeTab(key),
+      reorderTab,
+      sessionAction: applySessionAction,
+      openTab,
+    },
+    open: (url, mode) => openTarget(url, mode),
   });
+  useAnswerSourceWork({ sources: workSources, projectId });
+  const sidebarHost = {
+    projectId: projectId ?? "",
+    agentsData,
+    defaultAgentId: effectiveDefaultAgentId,
+    projectAgentNames,
+    onSessionCommand: (session: AgentSession, command: SessionCommand) => {
+      const entry = workspace.chats.find(
+        (chat) => chat.sessionId === session.id,
+      ) ?? { ...newChatEntry("tab"), sessionId: session.id };
+      if (command === "fork") {
+        void desktopApi
+          .sessionIsIncognito(session.id)
+          .then((incognito) => forkChat({ ...entry, incognito }));
+        return;
+      }
+      if (command === "parent") {
+        openParentChat(entry);
+        return;
+      }
+      openSession(session);
+      openPalettePicker(command);
+    },
+    onSessionAction: applySessionAction,
+    commandAvailable: (id: string) =>
+      !BUILTIN_ACTIONS.some(
+        (action) =>
+          action.id === id && paletteActionAvailability[action.id] === false,
+      ),
+    // Dragged from a list, a tab tiles to either side as from the strip.
+    onTabDrag: (key: string | null) => {
+      setTabDragKey(key);
+      if (!key) setDropSideHover(null);
+    },
+    openTab: (url: string) => {
+      const tab = allTabs.find((entry) => tabKey(entry) === url);
+      return tab
+        ? {
+            key: url,
+            kind: tab.kind,
+            title: tab.label ?? tab.name,
+            detail: tab.detail,
+            bookmarkUrl: tab.bookmarkUrl,
+          }
+        : undefined;
+    },
+  };
   const renderSidebarSection =
     (side: SidebarSide) =>
     (
       section: SidebarSectionConfig,
       visible: boolean,
-      report: (state: SidebarContentState) => void,
+      report: (state: SidebarContentState, droppable: boolean) => void,
       relevant: boolean,
       observeEmpty: boolean,
     ) =>
@@ -6288,69 +6433,19 @@ export function App({
             setPaletteOpen(true);
           }}
           section={section}
-          pinnedStyle={prefs?.pinnedBookmarks ?? "tiles"}
-          tabs={
-            section.source?.type === "tabs"
-              ? renderWorkspaceTabBar("vertical")
-              : tabsInSidebar
-                ? workspaceTabBar
-                : null
-          }
           experienceContext={projectExperienceContext}
           memberShell={memberShell}
           projectId={projectId}
           profileId={activeProfile?.id}
-          activeTab={activeTab}
-          activeFilePath={
-            workspace.editors.find(
-              (editor) =>
-                editorTabKey(editor.localId) === workspace.activeTabKey,
-            )?.filePath ?? undefined
-          }
-          activeChatSessionId={
-            workspace.chats.find(
-              (chat) => chat.localId === workspace.activeChatId,
-            )?.sessionId
-          }
-          keybindingLabel={formatBinding(keybindings["new-floating-chat"])}
-          agentsData={agentsData}
-          defaultAgentId={effectiveDefaultAgentId}
-          projectAgentNames={projectAgentNames}
-          unreadSessionIds={unreadSessionIds}
-          onOpenTab={openTab}
-          onNewWorkflow={() => sendToAgent(NEW_WORKFLOW_PROMPT, "float")}
-          onNewChat={() => addChat()}
-          onSessionCommand={(session, command) => {
-            const entry = workspace.chats.find(
-              (chat) => chat.sessionId === session.id,
-            ) ?? { ...newChatEntry("tab"), sessionId: session.id };
-            if (command === "fork") {
-              void desktopApi
-                .sessionIsIncognito(session.id)
-                .then((incognito) => forkChat({ ...entry, incognito }));
-              return;
-            }
-            if (command === "parent") {
-              openParentChat(entry);
-              return;
-            }
-            openSession(session);
-            openPalettePicker(command);
-          }}
-          onOpenSession={openSession}
-          onSessionAction={applySessionAction}
-          onOpenUrl={openUrl}
+          onOpenUrl={openSidebarTarget}
           onOpenSessionLink={(url, mode) => {
             // As a link in the chat opens: a tab the chat owns, so the
             // session's sections stay beside it (ADR 0226).
-            if (sidebarSessionChat)
+            if (sidebarSessionChat && /^https?:/i.test(url))
               openMessageLink(url, sidebarSessionChat, mode);
-            else void openUrl(url, mode);
+            else openSidebarTarget(url, mode);
           }}
           onOpenFile={openProjectFile}
-          onOpenHistory={setRemoteHistoryPath}
-          onPublish={(path, features) => setRemotePublish({ path, features })}
-          onPropose={(files, features) => setRemotePropose({ files, features })}
           onError={setLinkError}
         />
       ) : null;
@@ -6361,7 +6456,20 @@ export function App({
       candidate.terminals.some((terminal) => terminal.busy),
     );
 
-  const tabsInSidebar = prefs?.tabPlacement === "sidebar";
+  // Tabs leave the top bar only for a sidebar section that lists them (the
+  // default Tabs section, or a module or app granted Work's tabs, ADR 0234);
+  // a layout without one keeps them on top whatever the preference says. A
+  // module runs only in a local project, so it lists nothing on a server's.
+  const tabsInSidebar =
+    prefs?.tabPlacement === "sidebar" &&
+    sidebarSections(visibleWorkspace).some(
+      (section) =>
+        section.when?.tabPlacement !== "top" &&
+        (workSourceName(section.source) === "tabs" ||
+          (section.collections?.includes("tabs") === true &&
+            (section.app !== undefined ||
+              (remoteSurfaceResolved && remoteSurfaceStatus === null)))),
+    );
   const headerInSidebar = tabsInSidebar && prefs?.headerPlacement === "sidebar";
   const compactWindow = headerInSidebar && !sidebarOpen;
   // The chrome keeps the window buttons' corner free while they show. Only
@@ -6421,9 +6529,8 @@ export function App({
       )}
     </div>
   );
-  const renderWorkspaceTabBar = (orientation: "vertical" | "horizontal") => (
+  const workspaceTabBar = (
     <WorkspaceTabBar
-      orientation={orientation}
       alignment={prefs?.tabAlignment ?? "start"}
       tabs={allTabs}
       activeKey={focusedTabKey}
@@ -6472,559 +6579,1171 @@ export function App({
     </>
   );
 
-  const workspaceTabBar = renderWorkspaceTabBar(
-    tabsInSidebar ? "vertical" : "horizontal",
-  );
-
   return (
-    <WorkspaceSourcesProvider value={workspaceSources}>
-      <PaletteHostProvider value={paletteHost}>
-        <div
-          data-sidebar-dividers={prefs?.sidebarDividers ? "on" : "off"}
-          data-window-buttons={windowButtons ? "on" : "off"}
-          // The project's workspace is restored, revealed, and taking
-          // shortcuts: what automation waits for before pressing keys.
-          data-workspace-ready={
-            workspaceReady && bootRevealed && runtime.visible ? "" : undefined
-          }
-          // Clip, not hide: a closed right sidebar waits past the right edge,
-          // and a scroll container here would let scrollIntoView shift the app.
-          className="relative flex h-full overflow-clip bg-sidebar"
-        >
-          {/* Agent pointers: glow + scroll on data-point-key elements. The
+    <WorkSourcesProvider value={workSources}>
+      <SidebarHostProvider value={sidebarHost}>
+        <PaletteHostProvider value={paletteHost}>
+          <div
+            data-sidebar-dividers={prefs?.sidebarDividers ? "on" : "off"}
+            data-window-buttons={windowButtons ? "on" : "off"}
+            // The project's workspace is restored, revealed, and taking
+            // shortcuts: what automation waits for before pressing keys.
+            data-workspace-ready={
+              workspaceReady && bootRevealed && runtime.visible ? "" : undefined
+            }
+            // Clip, not hide: a closed right sidebar waits past the right edge,
+            // and a scroll container here would let scrollIntoView shift the app.
+            className="relative flex h-full overflow-clip bg-sidebar"
+          >
+            {/* Agent pointers: glow + scroll on data-point-key elements. The
           workspace object is the re-resolve trigger — a pointed tab may
           mount after the point_at call. */}
-          <AgentPointers
-            pointers={agentPointers}
-            onDismiss={dismissPointer}
-            revision={workspace}
-          />
-          {/* MCP elicitation: a connector asking the user a form or to open a
+            <AgentPointers
+              pointers={agentPointers}
+              onDismiss={dismissPointer}
+              revision={workspace}
+            />
+            {/* MCP elicitation: a connector asking the user a form or to open a
           sign-in URL. URL consent opens the page as a browser tab. */}
-          <ElicitationModal
-            pending={elicitations[0] ?? null}
-            onOpenUrl={(url) => openBrowserTab(url)}
-          />
-          <SiteSettingsHost
-            origin={siteSettingsOrigin}
-            onClose={() => setSiteSettingsOrigin(null)}
-          />
-          <ScreenShareHost />
-          <ExtensionPromptHost />
-          <PasskeyHost onOpenPasswords={() => openPasswords()} />
-          <UpdateBanner
-            hasActiveWork={hasActiveWork}
-            onOpenRelease={(url) => openBrowserTab(url)}
-          />
-          {linkError && (
-            <div
-              role="alert"
-              className="fixed right-4 top-12 z-[250] flex max-w-sm items-center gap-3 rounded-lg border border-border bg-bg-overlay p-3 text-xs text-fg shadow-lg"
-            >
-              <span>{linkError}</span>
-              <button
-                type="button"
-                onClick={() => setLinkError(null)}
-                className="text-accent"
+            <ElicitationModal
+              pending={elicitations[0] ?? null}
+              onOpenUrl={(url) => openBrowserTab(url)}
+            />
+            <SiteSettingsHost
+              origin={siteSettingsOrigin}
+              onClose={() => setSiteSettingsOrigin(null)}
+            />
+            <ScreenShareHost />
+            <ExtensionPromptHost />
+            <PasskeyHost onOpenPasswords={() => openPasswords()} />
+            <UpdateBanner
+              hasActiveWork={hasActiveWork}
+              onOpenRelease={(url) => openBrowserTab(url)}
+            />
+            {linkError && (
+              <div
+                role="alert"
+                className="fixed right-4 top-12 z-[250] flex max-w-sm items-center gap-3 rounded-lg border border-border bg-bg-overlay p-3 text-xs text-fg shadow-lg"
               >
-                Dismiss
-              </button>
-            </div>
-          )}
-          <DisabledControlHints />
-          <MobilePairingModal
-            open={mobilePairing.open}
-            context={mobilePairing.context}
-            onClose={() => setMobilePairing({ open: false, context: null })}
-          />
-          <PreviewPortDialog
-            request={previewRequest}
-            pending={previewPending}
-            error={previewError}
-            onClose={closeChatPreview}
-            onOpen={(port) => {
-              if (previewRequest)
-                void openChatPreview(previewRequest.sessionId, port);
-            }}
-          />
-          {projectId && (
-            <RemoteEnvironmentModal
-              open={remoteEnvironmentOpen && remoteSurfaceStatus !== null}
-              projectId={projectId}
-              onClose={() => setRemoteEnvironmentOpen(false)}
-              onOpenFile={(filePath) => {
-                void openLinkedSurface(`file:${filePath}`).catch(
-                  (cause: unknown) =>
-                    setLinkError(
-                      cause instanceof Error
-                        ? cause.message
-                        : "Could not open this file",
-                    ),
-                );
+                <span>{linkError}</span>
+                <button
+                  type="button"
+                  onClick={() => setLinkError(null)}
+                  className="text-accent"
+                >
+                  Dismiss
+                </button>
+              </div>
+            )}
+            <DisabledControlHints />
+            <MobilePairingModal
+              open={mobilePairing.open}
+              context={mobilePairing.context}
+              onClose={() => setMobilePairing({ open: false, context: null })}
+            />
+            <PreviewPortDialog
+              request={previewRequest}
+              pending={previewPending}
+              error={previewError}
+              onClose={closeChatPreview}
+              onOpen={(port) => {
+                if (previewRequest)
+                  void openChatPreview(previewRequest.sessionId, port);
               }}
             />
-          )}
-          {/* Project-agent consent (ADR 0050): approve, then complete the
-          original pick and refresh the roster's consent state. */}
-          <ProjectAgentConsentDialog
-            request={consentRequest}
-            onClose={() => setConsentRequest(null)}
-            onApproved={(agent) => {
-              const target = consentRequest?.target ?? "session";
-              setConsentRequest(null);
-              applyProjectAgent(agent, target);
-            }}
-          />
-          <CreateSubsessionDialog
-            parent={subsessionParent}
-            agents={[
-              ...(agentsData?.agents.map((agent) => ({
-                id: agent.id,
-                name: agent.name,
-              })) ?? []),
-              ...Object.entries(projectAgentNames).map(([id, name]) => ({
-                id,
-                name,
-              })),
-            ]}
-            defaultAgentId={effectiveDefaultAgentId}
-            pending={createSubsession.isPending}
-            error={subsessionError}
-            onClose={() => setSubsessionParent(null)}
-            onCreate={(input) => {
-              if (!subsessionParent) return;
-              setSubsessionError(null);
-              void createSubsession
-                .mutateAsync({
-                  parentSessionId: subsessionParent.id,
-                  ...input,
-                })
-                .then((session) => {
-                  setSubsessionParent(null);
-                  openSession(session);
-                })
-                .catch((cause) => {
-                  setSubsessionError(
-                    cause instanceof Error ? cause.message : String(cause),
+            {projectId && (
+              <RemoteEnvironmentModal
+                open={remoteEnvironmentOpen && remoteSurfaceStatus !== null}
+                projectId={projectId}
+                onClose={() => setRemoteEnvironmentOpen(false)}
+                onOpenFile={(filePath) => {
+                  void openLinkedSurface(`file:${filePath}`).catch(
+                    (cause: unknown) =>
+                      setLinkError(
+                        cause instanceof Error
+                          ? cause.message
+                          : "Could not open this file",
+                      ),
                   );
-                });
-            }}
-          />
-          <ArchiveSessionDialog
-            session={archiveRequest?.session ?? null}
-            sessionCount={archiveRequest?.sessionIds.length ?? 0}
-            runningCount={archiveRequest?.runningCount ?? 0}
-            watcherCount={archiveRequest?.watcherCount ?? 0}
-            watchers={archiveRequest?.watchers ?? []}
-            processCount={archiveRequest?.processCount ?? 0}
-            pending={archiveSession.isPending}
-            error={archiveError}
-            onClose={() => setArchiveRequest(null)}
-            onConfirm={() => {
-              if (archiveRequest) void finishArchive(archiveRequest);
-            }}
-          />
-          <TabbedSidebar
-            key={`left:${activeProfile?.id}:${projectId}`}
-            side="left"
-            scope={`${activeProfile?.id}:${projectId}`}
-            tabs={sidebarTabs("left")}
-            surface={sidebarSurface}
-            open={sidebarVisible}
-            sidebarRef={sidebarRef}
-            overlay={compactWindow}
-            revealed={revealed}
-            error={workspaceError}
-            onCustomize={() => customizeSidebar("left")}
-            onMotionChange={setSidebarMotion}
-            header={
-              <>
-                <div
-                  className={`app-drag flex h-10 shrink-0 items-center justify-end gap-1 pr-3 ${windowButtons ? "pl-[86px]" : "pl-3"} ${projectInSidebarHeader ? "mb-2" : ""}`}
-                >
-                  {/* The project heads the sidebar across its width, as
+                }}
+              />
+            )}
+            {/* Project-agent consent (ADR 0050): approve, then complete the
+          original pick and refresh the roster's consent state. */}
+            <ProjectAgentConsentDialog
+              request={consentRequest}
+              onClose={() => setConsentRequest(null)}
+              onApproved={(agent) => {
+                const target = consentRequest?.target ?? "session";
+                setConsentRequest(null);
+                applyProjectAgent(agent, target);
+              }}
+            />
+            <CreateSubsessionDialog
+              parent={subsessionParent}
+              agents={[
+                ...(agentsData?.agents.map((agent) => ({
+                  id: agent.id,
+                  name: agent.name,
+                })) ?? []),
+                ...Object.entries(projectAgentNames).map(([id, name]) => ({
+                  id,
+                  name,
+                })),
+              ]}
+              defaultAgentId={effectiveDefaultAgentId}
+              pending={createSubsession.isPending}
+              error={subsessionError}
+              onClose={() => setSubsessionParent(null)}
+              onCreate={(input) => {
+                if (!subsessionParent) return;
+                setSubsessionError(null);
+                void createSubsession
+                  .mutateAsync({
+                    parentSessionId: subsessionParent.id,
+                    ...input,
+                  })
+                  .then((session) => {
+                    setSubsessionParent(null);
+                    openSession(session);
+                  })
+                  .catch((cause) => {
+                    setSubsessionError(
+                      cause instanceof Error ? cause.message : String(cause),
+                    );
+                  });
+              }}
+            />
+            <ArchiveSessionDialog
+              session={archiveRequest?.session ?? null}
+              sessionCount={archiveRequest?.sessionIds.length ?? 0}
+              runningCount={archiveRequest?.runningCount ?? 0}
+              watcherCount={archiveRequest?.watcherCount ?? 0}
+              watchers={archiveRequest?.watchers ?? []}
+              processCount={archiveRequest?.processCount ?? 0}
+              pending={archiveSession.isPending}
+              error={archiveError}
+              onClose={() => setArchiveRequest(null)}
+              onConfirm={() => {
+                if (archiveRequest) void finishArchive(archiveRequest);
+              }}
+            />
+            <TabbedSidebar
+              key={`left:${activeProfile?.id}:${projectId}`}
+              side="left"
+              scope={`${activeProfile?.id}:${projectId}`}
+              tabs={sidebarTabs("left")}
+              surface={sidebarSurface}
+              open={sidebarVisible}
+              sidebarRef={sidebarRef}
+              overlay={compactWindow}
+              revealed={revealed}
+              error={workspaceError}
+              onCustomize={() => customizeSidebar("left")}
+              onMotionChange={setSidebarMotion}
+              header={
+                <>
+                  <div
+                    className={`app-drag flex h-10 shrink-0 items-center justify-end gap-1 pr-3 ${windowButtons ? "pl-[86px]" : "pl-3"} ${projectInSidebarHeader ? "mb-2" : ""}`}
+                  >
+                    {/* The project heads the sidebar across its width, as
                       it does below the buttons' row. This row keeps only
                       slivers to drag the window by; the chrome's empty
                       room does that (the tab strip's spare end, or the
                       title row), as Chrome's tab strip does. */}
-                  {projectInSidebarHeader && (
+                    {projectInSidebarHeader && (
+                      <div
+                        className="app-no-drag flex min-w-0 flex-1 items-center gap-1"
+                        data-sidebar-project
+                      >
+                        {projectControls}
+                      </div>
+                    )}
+                    {sidebarMotion.phase !== "closed" && sidebarToggle("left")}
+                    {headerInSidebar && (
+                      <div
+                        ref={setBrowserNavigationHost}
+                        className="app-no-drag flex items-center gap-1"
+                        data-sidebar-navigation
+                      />
+                    )}
+                  </div>
+                  {headerInSidebar && (
                     <div
-                      className="app-no-drag flex min-w-0 flex-1 items-center gap-1"
+                      className={`relative z-30 mx-3 mb-2 h-8 ${activeHeaderTitle || chromeBrowserId ? "" : "hidden"}`}
+                    >
+                      {workspaceTitle}
+                    </div>
+                  )}
+
+                  {!projectInSidebarHeader && (
+                    <div
+                      className="flex items-center gap-1 px-3 pb-3"
                       data-sidebar-project
                     >
                       {projectControls}
                     </div>
                   )}
-                  {sidebarMotion.phase !== "closed" && sidebarToggle("left")}
-                  {headerInSidebar && (
-                    <div
-                      ref={setBrowserNavigationHost}
-                      className="app-no-drag flex items-center gap-1"
-                      data-sidebar-navigation
+                </>
+              }
+              footer={
+                <footer className="flex h-12 shrink-0 items-center gap-1 px-3">
+                  {profilesData && activeProfile && (
+                    <ProfileBar
+                      data={profilesData}
+                      activeProfileId={activeProfile.id}
+                      onSwitch={switchProfile}
+                      onOpenSettings={(profileId) =>
+                        openTab({
+                          kind: "profile-settings",
+                          name: profileId,
+                          label:
+                            profilesData.profiles.find(
+                              (profile) => profile.id === profileId,
+                            )?.name ?? "Profile",
+                        })
+                      }
                     />
                   )}
-                </div>
-                {headerInSidebar && (
-                  <div
-                    className={`relative z-30 mx-3 mb-2 h-8 ${activeHeaderTitle || chromeBrowserId ? "" : "hidden"}`}
-                  >
-                    {workspaceTitle}
-                  </div>
-                )}
+                  <ShortcutHint label="Customize sidebar" side="top">
+                    <button
+                      type="button"
+                      onClick={() => customizeSidebar("left")}
+                      className="grid size-8 shrink-0 cursor-pointer place-items-center rounded-md text-fg-muted transition-colors duration-150 hover:bg-bg-overlay/60 hover:text-fg"
+                      aria-label="Customize sidebar"
+                    >
+                      <Wand2 className="size-3.5" />
+                    </button>
+                  </ShortcutHint>
+                  <ShortcutHint label="Settings" side="top">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        openTab({
+                          kind: "settings",
+                          name: "settings",
+                          label: "Settings",
+                        })
+                      }
+                      className={`grid size-8 shrink-0 cursor-pointer place-items-center rounded-md text-fg-muted transition-colors duration-150 hover:bg-bg-overlay/60 hover:text-fg ${activeTab?.kind === "settings" ? "bg-bg-overlay/60 text-fg" : ""}`}
+                      aria-label="Settings"
+                    >
+                      <SettingsIcon className="size-4" />
+                      <span className="sr-only">Settings</span>
+                    </button>
+                  </ShortcutHint>
+                </footer>
+              }
+              renderSection={renderSidebarSection("left")}
+            />
 
-                {!projectInSidebarHeader && (
-                  <div
-                    className="flex items-center gap-1 px-3 pb-3"
-                    data-sidebar-project
-                  >
-                    {projectControls}
-                  </div>
-                )}
-              </>
-            }
-            footer={
-              <footer className="flex h-12 shrink-0 items-center gap-1 px-3">
-                {profilesData && activeProfile && (
-                  <ProfileBar
-                    data={profilesData}
-                    activeProfileId={activeProfile.id}
-                    onSwitch={switchProfile}
-                    onOpenSettings={(profileId) =>
-                      openTab({
-                        kind: "profile-settings",
-                        name: profileId,
-                        label:
-                          profilesData.profiles.find(
-                            (profile) => profile.id === profileId,
-                          )?.name ?? "Profile",
-                      })
-                    }
-                  />
-                )}
-                <ShortcutHint label="Customize sidebar" side="top">
-                  <button
-                    type="button"
-                    onClick={() => customizeSidebar("left")}
-                    className="grid size-8 shrink-0 cursor-pointer place-items-center rounded-md text-fg-muted transition-colors duration-150 hover:bg-bg-overlay/60 hover:text-fg"
-                    aria-label="Customize sidebar"
-                  >
-                    <Wand2 className="size-3.5" />
-                  </button>
-                </ShortcutHint>
-                <ShortcutHint label="Settings" side="top">
-                  <button
-                    type="button"
-                    onClick={() =>
-                      openTab({
-                        kind: "settings",
-                        name: "settings",
-                        label: "Settings",
-                      })
-                    }
-                    className={`grid size-8 shrink-0 cursor-pointer place-items-center rounded-md text-fg-muted transition-colors duration-150 hover:bg-bg-overlay/60 hover:text-fg ${activeTab?.kind === "settings" ? "bg-bg-overlay/60 text-fg" : ""}`}
-                    aria-label="Settings"
-                  >
-                    <SettingsIcon className="size-4" />
-                    <span className="sr-only">Settings</span>
-                  </button>
-                </ShortcutHint>
-              </footer>
-            }
-            renderSection={renderSidebarSection("left")}
-          />
-
-          {/* min-h-0/overflow-hidden: the content column must clip its panes
+            {/* min-h-0/overflow-hidden: the content column must clip its panes
           (terminal canvases refit asynchronously and may overshoot for a
           frame) rather than push the document taller than the window. */}
-          <main
-            data-workspace-content
-            data-tab-layout={tabsInSidebar ? "sidebar" : "top"}
-            data-header-placement={headerInSidebar ? "sidebar" : "top"}
-            data-content-frame={prefs?.contentFrame ? "on" : "off"}
-            style={{
-              margin: prefs?.contentFrame ? prefs.contentPadding : 0,
-              borderRadius: prefs?.contentFrame ? prefs.contentRadius : 0,
-            }}
-            className={`workspace-surface relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden ${tabsInSidebar ? "bg-sidebar" : "bg-bg"}`}
-          >
-            {headerInSidebar &&
-              (!rightSidebarMotion.docked || rightSidebarMotion.push) && (
-                <span
-                  inert={rightSidebarMotion.phase !== "closed"}
-                  data-chrome-toggle="right-float"
-                  data-folded={rightSidebarMotion.docked || undefined}
-                  className="chrome-toggle-float app-no-drag absolute right-2 top-2 z-20 flex rounded-md bg-sidebar"
-                >
-                  {sidebarToggle("right")}
-                </span>
-              )}
-            {compactWindow && (
-              <button
-                type="button"
-                data-sidebar-reveal-edge
-                aria-label="Show sidebar"
-                tabIndex={revealed ? -1 : 0}
-                className={`absolute inset-y-0 left-0 z-40 w-1.5 cursor-default ${revealed ? "pointer-events-none" : ""}`}
-                onPointerEnter={revealOnHover}
-                onFocus={reveal}
-                onClick={reveal}
-              />
-            )}
-            {!headerInSidebar && (
-              <div className="workspace-chrome app-drag relative z-20 flex h-10 shrink-0 items-center gap-1 pl-2 pr-3">
-                {(!sidebarMotion.docked || sidebarMotion.push) && (
+            <main
+              data-workspace-content
+              data-tab-layout={tabsInSidebar ? "sidebar" : "top"}
+              data-header-placement={headerInSidebar ? "sidebar" : "top"}
+              data-content-frame={prefs?.contentFrame ? "on" : "off"}
+              style={{
+                margin: prefs?.contentFrame ? prefs.contentPadding : 0,
+                borderRadius: prefs?.contentFrame ? prefs.contentRadius : 0,
+              }}
+              className={`workspace-surface relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden ${tabsInSidebar ? "bg-sidebar" : "bg-bg"}`}
+            >
+              {headerInSidebar &&
+                (!rightSidebarMotion.docked || rightSidebarMotion.push) && (
                   <span
-                    // Under the panel until the content makes room; the
-                    // panel's own toggle is the live one. Moving with the
-                    // panel (push), it folds and unfolds as the panel
-                    // slides, so the tabs after it never jump.
-                    inert={sidebarMotion.phase !== "closed"}
-                    data-chrome-toggle="left"
-                    data-folded={sidebarMotion.docked || undefined}
-                    // Not app-no-drag: the corner kept for the window
-                    // buttons still drags the window.
-                    className="chrome-toggle-slot flex shrink-0 items-center"
-                  >
-                    <span
-                      className={`app-no-drag flex shrink-0 items-center ${windowButtons ? "ml-[70px]" : ""}`}
-                    >
-                      {sidebarToggle("left")}
-                    </span>
-                  </span>
-                )}
-                {(projectId || allTabs.length > 0) &&
-                  !tabsInSidebar &&
-                  workspaceTabBar}
-                {projectId &&
-                  tabsInSidebar &&
-                  !headerInSidebar &&
-                  workspaceTitle}
-                {(!rightSidebarMotion.docked || rightSidebarMotion.push) && (
-                  <span
-                    // Under the panel until the content makes room; the
-                    // panel's own toggle is the live one.
                     inert={rightSidebarMotion.phase !== "closed"}
-                    data-chrome-toggle="right"
+                    data-chrome-toggle="right-float"
                     data-folded={rightSidebarMotion.docked || undefined}
-                    className="chrome-toggle-slot app-no-drag ml-auto flex shrink-0 items-center justify-end"
+                    className="chrome-toggle-float app-no-drag absolute right-2 top-2 z-20 flex rounded-md bg-sidebar"
                   >
                     {sidebarToggle("right")}
                   </span>
                 )}
-              </div>
-            )}
+              {compactWindow && (
+                <button
+                  type="button"
+                  data-sidebar-reveal-edge
+                  aria-label="Show sidebar"
+                  tabIndex={revealed ? -1 : 0}
+                  className={`absolute inset-y-0 left-0 z-40 w-1.5 cursor-default ${revealed ? "pointer-events-none" : ""}`}
+                  onPointerEnter={revealOnHover}
+                  onFocus={reveal}
+                  onClick={reveal}
+                />
+              )}
+              {!headerInSidebar && (
+                <div className="workspace-chrome app-drag relative z-20 flex h-10 shrink-0 items-center gap-1 pl-2 pr-3">
+                  {(!sidebarMotion.docked || sidebarMotion.push) && (
+                    <span
+                      // Under the panel until the content makes room; the
+                      // panel's own toggle is the live one. Moving with the
+                      // panel (push), it folds and unfolds as the panel
+                      // slides, so the tabs after it never jump.
+                      inert={sidebarMotion.phase !== "closed"}
+                      data-chrome-toggle="left"
+                      data-folded={sidebarMotion.docked || undefined}
+                      // Not app-no-drag: the corner kept for the window
+                      // buttons still drags the window.
+                      className="chrome-toggle-slot flex shrink-0 items-center"
+                    >
+                      <span
+                        className={`app-no-drag flex shrink-0 items-center ${windowButtons ? "ml-[70px]" : ""}`}
+                      >
+                        {sidebarToggle("left")}
+                      </span>
+                    </span>
+                  )}
+                  {(projectId || allTabs.length > 0) &&
+                    !tabsInSidebar &&
+                    workspaceTabBar}
+                  {projectId &&
+                    tabsInSidebar &&
+                    !headerInSidebar &&
+                    workspaceTitle}
+                  {(!rightSidebarMotion.docked || rightSidebarMotion.push) && (
+                    <span
+                      // Under the panel until the content makes room; the
+                      // panel's own toggle is the live one.
+                      inert={rightSidebarMotion.phase !== "closed"}
+                      data-chrome-toggle="right"
+                      data-folded={rightSidebarMotion.docked || undefined}
+                      className="chrome-toggle-slot app-no-drag ml-auto flex shrink-0 items-center justify-end"
+                    >
+                      {sidebarToggle("right")}
+                    </span>
+                  )}
+                </div>
+              )}
 
-            {projectId ? (
-              <div
-                data-workspace-chat-region
-                className={`workspace-content relative flex min-h-0 flex-1 flex-col bg-bg ${tabsInSidebar ? "overflow-hidden" : ""}`}
-              >
-                {/* Every tab pane lives in this wrapper so keyboard cycling
+              {projectId ? (
+                <div
+                  data-workspace-chat-region
+                  className={`workspace-content relative flex min-h-0 flex-1 flex-col bg-bg ${tabsInSidebar ? "overflow-hidden" : ""}`}
+                >
+                  {/* Every tab pane lives in this wrapper so keyboard cycling
                   can nudge the visible content from the direction of
                   travel; chat docks and bubbles stay outside (they own
                   their own motion). */}
-                <div
-                  className={`relative flex min-h-0 flex-1 flex-col ${
-                    paneMotion
-                      ? paneMotion.direction === "left"
-                        ? "animate-pane-in-left"
-                        : "animate-pane-in-right"
-                      : ""
-                  }`}
-                  onAnimationEnd={(event) => {
-                    if (event.animationName.startsWith("pane-in")) {
-                      setPaneMotion(null);
-                    }
-                  }}
-                >
-                  {workspace.floatingKey && (
-                    <button
-                      type="button"
-                      aria-label="Dismiss floating panel"
-                      className="absolute inset-0 z-20 cursor-default bg-black/15"
-                      data-floating-backdrop={
-                        floatingMotion.closing ? "closing" : "open"
+                  <div
+                    className={`relative flex min-h-0 flex-1 flex-col ${
+                      paneMotion
+                        ? paneMotion.direction === "left"
+                          ? "animate-pane-in-left"
+                          : "animate-pane-in-right"
+                        : ""
+                    }`}
+                    onAnimationEnd={(event) => {
+                      if (event.animationName.startsWith("pane-in")) {
+                        setPaneMotion(null);
                       }
-                      onClick={dismissFloating}
-                    />
-                  )}
-                  {/* Screen-style tabs render whenever they occupy a view
+                    }}
+                  >
+                    {workspace.floatingKey && (
+                      <button
+                        type="button"
+                        aria-label="Dismiss floating panel"
+                        className="absolute inset-0 z-20 cursor-default bg-black/15"
+                        data-floating-backdrop={
+                          floatingMotion.closing ? "closing" : "open"
+                        }
+                        onClick={dismissFloating}
+                      />
+                    )}
+                    {/* Screen-style tabs render whenever they occupy a view
                     slot — in a split that can be two at once. */}
-                  {workspace.tabs
-                    .filter(
-                      (tab) =>
-                        tab.kind === "workflow" ||
-                        viewSlots[tabKey(tab)] ||
-                        tabKey(tab) === recedingSurface,
-                    )
-                    .map((tab) => (
-                      <div
-                        key={tabKey(tab)}
-                        className={paneClass(tabKey(tab))}
-                        style={paneStyle(tabKey(tab))}
-                        {...paneFocusProps(tabKey(tab))}
-                      >
-                        {floatingBar(tabKey(tab))}
-                        {isSplitSlot(tabKey(tab)) && (
-                          <PaneUnsplitButton
-                            onClick={() => openSurface(tabKey(tab), "tab")}
-                          />
-                        )}
-                        {tab.kind === "workflow" ? (
-                          <Suspense fallback={<div className="flex-1 bg-bg" />}>
-                            <WorkflowScreen
+                    {workspace.tabs
+                      .filter(
+                        (tab) =>
+                          tab.kind === "workflow" ||
+                          viewSlots[tabKey(tab)] ||
+                          tabKey(tab) === recedingSurface,
+                      )
+                      .map((tab) => (
+                        <div
+                          key={tabKey(tab)}
+                          className={paneClass(tabKey(tab))}
+                          style={paneStyle(tabKey(tab))}
+                          {...paneFocusProps(tabKey(tab))}
+                        >
+                          {floatingBar(tabKey(tab))}
+                          {isSplitSlot(tabKey(tab)) && (
+                            <PaneUnsplitButton
+                              onClick={() => openSurface(tabKey(tab), "tab")}
+                            />
+                          )}
+                          {tab.kind === "workflow" ? (
+                            <Suspense
+                              fallback={<div className="flex-1 bg-bg" />}
+                            >
+                              <WorkflowScreen
+                                projectId={projectId}
+                                workflowName={tab.name}
+                                canEdit={!memberShell}
+                                active={
+                                  runtime.visible &&
+                                  Boolean(viewSlots[tabKey(tab)])
+                                }
+                                onAskAgent={(message) =>
+                                  sendToAgent(message, "float", undefined, {
+                                    watchBackdrop: true,
+                                  })
+                                }
+                                onOpenSource={(path, line, column) => {
+                                  void openLinkedSurface(
+                                    `file:${path}${line ? `:${line}${column ? `:${column}` : ""}` : ""}`,
+                                    { side: true, newTab: true },
+                                  ).catch((cause: unknown) =>
+                                    setLinkError(
+                                      cause instanceof Error
+                                        ? cause.message
+                                        : "Could not open source",
+                                    ),
+                                  );
+                                }}
+                                initialDraft={tab.workflowDraft}
+                                onDraftChange={(workflowDraft) =>
+                                  updateWorkspace((ws) => ({
+                                    ...ws,
+                                    tabs: ws.tabs.map((item) =>
+                                      tabKey(item) === tabKey(tab)
+                                        ? {
+                                            ...item,
+                                            draft: Boolean(workflowDraft),
+                                            workflowDraft,
+                                          }
+                                        : item,
+                                    ),
+                                  }))
+                                }
+                              />
+                            </Suspense>
+                          ) : tab.kind === "run" ? (
+                            <RunScreen projectId={projectId} runId={tab.name} />
+                          ) : tab.kind === "artifact" ? (
+                            <ArtifactScreen
                               projectId={projectId}
-                              workflowName={tab.name}
-                              canEdit={!memberShell}
-                              active={
-                                runtime.visible &&
-                                Boolean(viewSlots[tabKey(tab)])
-                              }
+                              artifactId={tab.name}
                               onAskAgent={(message) =>
-                                sendToAgent(message, "float", undefined, {
-                                  watchBackdrop: true,
-                                })
-                              }
-                              onOpenSource={(path, line, column) => {
-                                void openLinkedSurface(
-                                  `file:${path}${line ? `:${line}${column ? `:${column}` : ""}` : ""}`,
-                                  { side: true, newTab: true },
-                                ).catch((cause: unknown) =>
-                                  setLinkError(
-                                    cause instanceof Error
-                                      ? cause.message
-                                      : "Could not open source",
-                                  ),
-                                );
-                              }}
-                              initialDraft={tab.workflowDraft}
-                              onDraftChange={(workflowDraft) =>
-                                updateWorkspace((ws) => ({
-                                  ...ws,
-                                  tabs: ws.tabs.map((item) =>
-                                    tabKey(item) === tabKey(tab)
-                                      ? {
-                                          ...item,
-                                          draft: Boolean(workflowDraft),
-                                          workflowDraft,
-                                        }
-                                      : item,
-                                  ),
-                                }))
+                                sendToAgent(message, "float")
                               }
                             />
-                          </Suspense>
-                        ) : tab.kind === "run" ? (
-                          <RunScreen projectId={projectId} runId={tab.name} />
-                        ) : tab.kind === "artifact" ? (
-                          <ArtifactScreen
-                            projectId={projectId}
-                            artifactId={tab.name}
-                            onAskAgent={(message) =>
-                              sendToAgent(message, "float")
-                            }
-                          />
-                        ) : tab.kind === "app" ? (
-                          <AppScreen projectId={projectId} appName={tab.name} />
-                        ) : tab.kind === "mcpapp" ? (
-                          <McpAppScreen
-                            toolKey={tab.toolKey}
-                            toolInput={tab.toolInput}
-                            toolResult={tab.toolResult}
-                            onOpenLink={(url) => openBrowserTab(url)}
-                          />
-                        ) : tab.kind === "settings" ? (
-                          <SettingsScreen
-                            destination={tab.destination}
-                            projectId={projectId}
-                            onSearch={settingsSearch}
-                            onAddAgent={() => setWizardModalOpen(true)}
-                            onCreateAssistant={createAssistant}
-                            onConfigureAgent={openConfigureAgent}
-                            onManageConnectors={() =>
-                              setConnectorsModalOpen(true)
-                            }
-                          />
-                        ) : tab.kind === "profile-settings" && profilesData ? (
-                          <ProfileSettingsScreen
-                            profileId={tab.name}
-                            activeProfileId={
-                              activeProfile?.id ?? profilesData.defaultProfileId
-                            }
-                            data={profilesData}
-                            projects={allProjects}
-                            onClose={() => closeTab(tabKey(tab))}
-                            onOpenPasswords={() => openPasswords(tab.name)}
-                          />
-                        ) : tab.kind === "history" ? (
-                          <HistoryScreen
-                            active={Boolean(viewSlots[tabKey(tab)])}
-                            profileId={activeProfile?.id}
-                            onSearch={historySearch}
-                            onOpen={openHistory}
-                          />
-                        ) : tab.kind === "passwords" ? (
-                          <PasswordsScreen profileId={tab.name} />
-                        ) : tab.kind === "sites" ? (
-                          <SitesScreen
-                            active={Boolean(viewSlots[tabKey(tab)])}
-                            onOpenSite={setSiteSettingsOrigin}
-                          />
-                        ) : tab.kind === "downloads" ? (
-                          <DownloadsScreen
-                            active={Boolean(viewSlots[tabKey(tab)])}
-                            onOpen={openDownload}
-                          />
-                        ) : tab.kind === "extensions" ? (
-                          <ExtensionsScreen
-                            active={Boolean(viewSlots[tabKey(tab)])}
-                            onOpenUrl={(url) => openBrowserTab(url)}
-                          />
-                        ) : tab.kind === "usage" ? (
-                          <Suspense fallback={<div className="flex-1 bg-bg" />}>
-                            <UsageScreen />
-                          </Suspense>
-                        ) : tab.kind === "palette" ? (
-                          <CommandPalette
-                            key={tabKey(tab)}
-                            variant="tab"
-                            onClose={() => closeTab(tabKey(tab))}
-                            onTypedChange={(typed) =>
-                              markNewTabTyped(tabKey(tab), typed)
-                            }
-                          />
-                        ) : tab.kind === "agent-setup" ? (
-                          <AgentWizard
-                            variant="tab"
-                            onClose={() => closeTab(tabKey(tab))}
-                            onDone={() => closeTab(tabKey(tab))}
-                            onEngagedChange={setWizardEngaged}
-                          />
-                        ) : tab.kind === "diff" ? (
-                          <Suspense fallback={<div className="flex-1 bg-bg" />}>
-                            <DiffScreen
-                              onOpenArtifact={(target, title) => {
-                                void openLinkedSurface(target, {
-                                  label: title,
-                                  newTab: true,
-                                }).catch((error: unknown) =>
-                                  setLinkError(
-                                    error instanceof Error
-                                      ? error.message
-                                      : "Could not open review",
-                                  ),
-                                );
-                              }}
-                              projectId={tab.projectId}
-                              source={tab.source}
+                          ) : tab.kind === "app" ? (
+                            <AppScreen
+                              projectId={projectId}
+                              appName={tab.name}
                             />
-                          </Suspense>
-                        ) : null}
+                          ) : tab.kind === "mcpapp" ? (
+                            <McpAppScreen
+                              toolKey={tab.toolKey}
+                              toolInput={tab.toolInput}
+                              toolResult={tab.toolResult}
+                              onOpenLink={(url) => openBrowserTab(url)}
+                            />
+                          ) : tab.kind === "settings" ? (
+                            <SettingsScreen
+                              destination={tab.destination}
+                              projectId={projectId}
+                              onSearch={settingsSearch}
+                              onAddAgent={() => setWizardModalOpen(true)}
+                              onCreateAssistant={createAssistant}
+                              onConfigureAgent={openConfigureAgent}
+                              onManageConnectors={() =>
+                                setConnectorsModalOpen(true)
+                              }
+                            />
+                          ) : tab.kind === "profile-settings" &&
+                            profilesData ? (
+                            <ProfileSettingsScreen
+                              profileId={tab.name}
+                              activeProfileId={
+                                activeProfile?.id ??
+                                profilesData.defaultProfileId
+                              }
+                              data={profilesData}
+                              projects={allProjects}
+                              onClose={() => closeTab(tabKey(tab))}
+                              onOpenPasswords={() => openPasswords(tab.name)}
+                            />
+                          ) : tab.kind === "history" ? (
+                            <HistoryScreen
+                              active={Boolean(viewSlots[tabKey(tab)])}
+                              profileId={activeProfile?.id}
+                              onSearch={historySearch}
+                              onOpen={openHistory}
+                            />
+                          ) : tab.kind === "passwords" ? (
+                            <PasswordsScreen profileId={tab.name} />
+                          ) : tab.kind === "sites" ? (
+                            <SitesScreen
+                              active={Boolean(viewSlots[tabKey(tab)])}
+                              onOpenSite={setSiteSettingsOrigin}
+                            />
+                          ) : tab.kind === "downloads" ? (
+                            <DownloadsScreen
+                              active={Boolean(viewSlots[tabKey(tab)])}
+                              onOpen={openDownload}
+                            />
+                          ) : tab.kind === "extensions" ? (
+                            <ExtensionsScreen
+                              active={Boolean(viewSlots[tabKey(tab)])}
+                              onOpenUrl={(url) => openBrowserTab(url)}
+                            />
+                          ) : tab.kind === "usage" ? (
+                            <Suspense
+                              fallback={<div className="flex-1 bg-bg" />}
+                            >
+                              <UsageScreen />
+                            </Suspense>
+                          ) : tab.kind === "palette" ? (
+                            <CommandPalette
+                              key={tabKey(tab)}
+                              variant="tab"
+                              onClose={() => closeTab(tabKey(tab))}
+                              onTypedChange={(typed) =>
+                                markNewTabTyped(tabKey(tab), typed)
+                              }
+                            />
+                          ) : tab.kind === "agent-setup" ? (
+                            <AgentWizard
+                              variant="tab"
+                              onClose={() => closeTab(tabKey(tab))}
+                              onDone={() => closeTab(tabKey(tab))}
+                              onEngagedChange={setWizardEngaged}
+                            />
+                          ) : tab.kind === "diff" ? (
+                            <Suspense
+                              fallback={<div className="flex-1 bg-bg" />}
+                            >
+                              <DiffScreen
+                                onOpenArtifact={(target, title) => {
+                                  void openLinkedSurface(target, {
+                                    label: title,
+                                    newTab: true,
+                                  }).catch((error: unknown) =>
+                                    setLinkError(
+                                      error instanceof Error
+                                        ? error.message
+                                        : "Could not open review",
+                                    ),
+                                  );
+                                }}
+                                projectId={tab.projectId}
+                                source={tab.source}
+                              />
+                            </Suspense>
+                          ) : null}
+                        </div>
+                      ))}
+
+                    {/* Browser tabs stay mounted while hidden — unmounting a
+                  webview would reload the page on every tab switch. */}
+                    {workspace.browsers.map((browser) => (
+                      <div
+                        key={browser.localId}
+                        className={paneClass(browserTabKey(browser.localId))}
+                        style={paneStyle(browserTabKey(browser.localId))}
+                        {...paneFocusProps(browserTabKey(browser.localId))}
+                      >
+                        {floatingBar(browserTabKey(browser.localId))}
+                        <BrowserScreen
+                          profileId={browser.profileId}
+                          projectId={projectId}
+                          projectName={
+                            projects.find((item) => item.id === projectId)?.name
+                          }
+                          // Remounts (project/profile switches) resume at the
+                          // last known URL, not the tab's original one.
+                          initialUrl={browser.url || browser.initialUrl}
+                          history={browser.history}
+                          surfaceKey={browserTabKey(browser.localId)}
+                          active={
+                            runtime.visible &&
+                            browser.localId === activeBrowserTabId
+                          }
+                          toolbarActive={
+                            runtime.visible &&
+                            browser.localId === chromeBrowserId
+                          }
+                          integratedToolbar={
+                            tabsInSidebar &&
+                            viewSlots[browserTabKey(browser.localId)] !==
+                              "floating"
+                          }
+                          toolbarHost={browserToolbarHost}
+                          sidebarToolbar={
+                            headerInSidebar &&
+                            viewSlots[browserTabKey(browser.localId)] !==
+                              "floating"
+                          }
+                          navigationHost={browserNavigationHost}
+                          onRevealToolbar={() => {
+                            if (!sidebarOpen) {
+                              setSidebarOpen(true);
+                              void desktopApi.setPrefs({ sidebarOpen: true });
+                            }
+                          }}
+                          visible={
+                            runtime.visible &&
+                            Boolean(viewSlots[browserTabKey(browser.localId)])
+                          }
+                          keepAwake={busyBrowsers.has(browser.localId)}
+                          asleep={tabSleep.asleep(browser.localId)}
+                          onStateChange={(state) =>
+                            onBrowserState(browser.localId, state)
+                          }
+                          onPageClose={() =>
+                            closeTab(browserTabKey(browser.localId), {
+                              final: true,
+                            })
+                          }
+                          onOpenSiteSettings={setSiteSettingsOrigin}
+                          onOpenPasswords={() =>
+                            openPasswords(browser.profileId)
+                          }
+                          onOpenExtensions={() =>
+                            openTab({
+                              kind: "extensions",
+                              name: "extensions",
+                              label: "Extensions",
+                            })
+                          }
+                          onOpenUrl={(url) => openBrowserTab(url)}
+                          previewLinksWithAlt={
+                            prefs?.previewLinksWithAlt ?? true
+                          }
+                          floatingDismissShortcut={
+                            keybindings["dismiss-floating"]
+                          }
+                          onDismissFloating={
+                            workspace.floatingKey ===
+                            browserTabKey(browser.localId)
+                              ? dismissFloating
+                              : undefined
+                          }
+                          onPreviewLink={(url, mode) =>
+                            openBrowserTab(url, {
+                              floating: mode === "floating",
+                              side: mode === "side",
+                            })
+                          }
+                          registerCommands={(commands) => {
+                            if (commands)
+                              browserCommandsRef.current.set(
+                                browser.localId,
+                                commands,
+                              );
+                            else
+                              browserCommandsRef.current.delete(
+                                browser.localId,
+                              );
+                          }}
+                          registerNavigate={(navigate) =>
+                            browserNavigatorsRef.current.set(
+                              browser.localId,
+                              navigate,
+                            )
+                          }
+                          registerHistoryNavigate={(navigate) =>
+                            browserHistoryNavigatorsRef.current.set(
+                              browser.localId,
+                              navigate,
+                            )
+                          }
+                          registerGuest={(guestId) => {
+                            if (guestId === null) {
+                              browserGuestIdsRef.current.delete(
+                                browser.localId,
+                              );
+                            } else {
+                              browserGuestIdsRef.current.set(
+                                browser.localId,
+                                guestId,
+                              );
+                            }
+                            reportExtensionTabsRef.current();
+                          }}
+                          onUnsplit={
+                            isSplitSlot(browserTabKey(browser.localId))
+                              ? () =>
+                                  openSurface(
+                                    browserTabKey(browser.localId),
+                                    "tab",
+                                  )
+                              : undefined
+                          }
+                        />
+                        <AgentControlOverlay
+                          kind="page"
+                          active={Boolean(browser.agentControlled)}
+                          onTakeOver={() =>
+                            takeOverSurface(browserTabKey(browser.localId))
+                          }
+                          onGoToChat={
+                            browser.chatLocalId
+                              ? () => revealChat(browser.chatLocalId as string)
+                              : undefined
+                          }
+                        />
                       </div>
                     ))}
 
-                  {/* Browser tabs stay mounted while hidden — unmounting a
-                  webview would reload the page on every tab switch. */}
+                    {/* Terminals stay mounted while hidden — unmounting kills
+                  the shell. Editors likewise, preserving undo history,
+                  scroll position, and unsaved drafts across switches. */}
+                    {workspace.terminals.map((terminal) => (
+                      <div
+                        key={terminal.localId}
+                        data-surface-pane
+                        className={paneClass(terminalTabKey(terminal.localId))}
+                        style={paneStyle(terminalTabKey(terminal.localId))}
+                        {...paneFocusProps(terminalTabKey(terminal.localId))}
+                      >
+                        {floatingBar(terminalTabKey(terminal.localId))}
+                        {isSplitSlot(terminalTabKey(terminal.localId)) && (
+                          <PaneUnsplitButton
+                            onClick={() =>
+                              openSurface(
+                                terminalTabKey(terminal.localId),
+                                "tab",
+                              )
+                            }
+                          />
+                        )}
+                        <Suspense fallback={<div className="flex-1 bg-bg" />}>
+                          <TerminalScreen
+                            projectId={projectId}
+                            active={
+                              runtime.visible &&
+                              terminal.localId === activeTerminalTabId
+                            }
+                            initialCommand={terminal.initialCommand}
+                            macroShortcuts={prefs?.terminalMacros.map(
+                              (macro) => macro.shortcut,
+                            )}
+                            floating={
+                              workspace.floatingKey ===
+                              terminalTabKey(terminal.localId)
+                            }
+                            attachSessionId={terminal.attachSessionId}
+                            restoreSessionId={terminal.restoreSessionId}
+                            adoptSessionId={terminal.adoptSessionId}
+                            {...(terminal.remoteSessionId
+                              ? {
+                                  remoteChat: {
+                                    sessionId: terminal.remoteSessionId,
+                                  },
+                                }
+                              : {})}
+                            readOnly={Boolean(terminal.agentControlled)}
+                            onTitle={(title) =>
+                              onTerminalTitle(terminal.localId, title)
+                            }
+                            onSession={(ptySessionId) =>
+                              updateWorkspace((ws) => ({
+                                ...ws,
+                                terminals: ws.terminals.map((t) =>
+                                  t.localId === terminal.localId
+                                    ? { ...t, ptySessionId }
+                                    : t,
+                                ),
+                              }))
+                            }
+                            onExit={() => {
+                              // An agent terminal ended with its command: its
+                              // chip leaves, a tab stays to read. User
+                              // terminals close as before.
+                              if (terminal.attachSessionId) {
+                                updateTerminals({
+                                  type: "terminal-ended",
+                                  sessionId: terminal.attachSessionId,
+                                });
+                              } else {
+                                closeTab(terminalTabKey(terminal.localId));
+                              }
+                            }}
+                          />
+                        </Suspense>
+                        <AgentControlOverlay
+                          kind="terminal"
+                          active={Boolean(terminal.agentControlled)}
+                          onTakeOver={() =>
+                            takeOverSurface(terminalTabKey(terminal.localId))
+                          }
+                          onGoToChat={
+                            terminal.chatLocalId
+                              ? () => revealChat(terminal.chatLocalId as string)
+                              : undefined
+                          }
+                        />
+                      </div>
+                    ))}
+
+                    {workspace.editors.map((editor) => (
+                      <div
+                        key={editor.localId}
+                        className={paneClass(editorTabKey(editor.localId))}
+                        style={paneStyle(editorTabKey(editor.localId))}
+                        {...paneFocusProps(editorTabKey(editor.localId))}
+                      >
+                        {floatingBar(editorTabKey(editor.localId))}
+                        {isSplitSlot(editorTabKey(editor.localId)) && (
+                          <PaneUnsplitButton
+                            onClick={() =>
+                              openSurface(editorTabKey(editor.localId), "tab")
+                            }
+                          />
+                        )}
+                        <Suspense fallback={<div className="flex-1 bg-bg" />}>
+                          <EditorScreen
+                            line={editor.line}
+                            column={editor.column}
+                            navigation={editor.navigation}
+                            projectId={projectId}
+                            filePath={editor.filePath}
+                            onFindFile={() =>
+                              focusSearch("search-files", "files")
+                            }
+                            onSharePersonal={
+                              remoteSurfaceStatus
+                                ? (path, intent) => {
+                                    sendToAgent(
+                                      `${intent === "propose" ? "Prepare and submit a proposal to add" : "Prepare to publish"} my local file ${JSON.stringify(path)} to this company project. Read this file, choose a suitable shared location using the project conventions, and include only this file and any dependencies it needs. Keep my local original until sharing succeeds. ${intent === "publish" ? "Show me the audience before creating the publication." : "Submit through the company proposal service and show me the review link."}`,
+                                      "float",
+                                    );
+                                  }
+                                : undefined
+                            }
+                            onDirtyChange={(dirty) =>
+                              onEditorState(editor.localId, { dirty })
+                            }
+                            onShare={
+                              editor.filePath?.startsWith(
+                                `${PROJECT_STORE_DIR}/`,
+                              ) &&
+                              remoteSurfaceStatus &&
+                              remoteSurfaceStatus.capabilities?.features
+                                .publications !== false
+                                ? (path) =>
+                                    setRemotePublish({
+                                      path: path.startsWith(
+                                        `${PROJECT_APP_DATA_DIR}/`,
+                                      )
+                                        ? path.slice(
+                                            PROJECT_APP_DATA_DIR.length + 1,
+                                          )
+                                        : path,
+                                      features:
+                                        remoteSurfaceStatus.capabilities
+                                          ?.features,
+                                    })
+                                : undefined
+                            }
+                            onPropose={
+                              remoteSurfaceStatus &&
+                              remoteSurfaceStatus.capabilities?.features
+                                .proposals !== false &&
+                              !editor.filePath?.startsWith(
+                                `${PROJECT_STORE_DIR}/`,
+                              )
+                                ? (path) =>
+                                    setRemotePropose({
+                                      files: [path],
+                                      features:
+                                        remoteSurfaceStatus.capabilities
+                                          ?.features,
+                                    })
+                                : undefined
+                            }
+                          />
+                        </Suspense>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Split divider: drag to resize. The full-region overlay
+                  during a drag keeps webviews from swallowing the moves. */}
+                  {split && (
+                    // biome-ignore lint/a11y/noStaticElementInteractions: pointer-only resize handle; the split is keyboard-reachable via Cmd+\ and tab focus
+                    <div
+                      data-split-divider
+                      onMouseDown={startDividerDrag}
+                      className={`absolute inset-y-0 z-40 w-[7px] -translate-x-1/2 cursor-col-resize ${
+                        dividerDragging
+                          ? ""
+                          : "transition-[left] duration-200 ease-[cubic-bezier(0.2,0,0,1)]"
+                      }`}
+                      style={{ left: `${splitRatio * 100}%` }}
+                    >
+                      <div className="mx-auto h-full w-px bg-transparent transition-colors duration-150 hover:bg-accent/60" />
+                    </div>
+                  )}
+                  {dividerDragging && (
+                    <div className="absolute inset-0 z-50 cursor-col-resize" />
+                  )}
+
+                  {/* Dragging a tab: side drop zones tile it left or right. While
+                a chat is in front, the bottom band stays clear of the zones
+                so the tab can be dropped on the chat's composer instead
+                (it becomes a tab pill there). */}
+                  {tabDragKey && (
+                    <div
+                      className={`absolute inset-x-0 top-0 z-50 flex ${
+                        workspace.chats.some(
+                          (entry) =>
+                            entry.mode === "partial" ||
+                            Boolean(viewSlots[chatTabKey(entry.localId)]),
+                        )
+                          ? "bottom-40"
+                          : "bottom-0"
+                      }`}
+                    >
+                      {(["left", "right"] as const).map((side) => (
+                        // biome-ignore lint/a11y/noStaticElementInteractions: drop target for an in-progress HTML5 drag only
+                        <div
+                          key={side}
+                          onDragOver={(event) => {
+                            event.preventDefault();
+                            setDropSideHover(side);
+                          }}
+                          onDragLeave={() =>
+                            setDropSideHover((current) =>
+                              current === side ? null : current,
+                            )
+                          }
+                          onDrop={(event) => {
+                            event.preventDefault();
+                            dropTabToSide(tabDragKey, side);
+                            setTabDragKey(null);
+                            setDropSideHover(null);
+                          }}
+                          className={`flex-1 border-2 border-dashed transition-colors duration-150 ${
+                            dropSideHover === side
+                              ? "border-accent/60 bg-accent/10"
+                              : "border-transparent"
+                          }`}
+                        />
+                      ))}
+                    </div>
+                  )}
+
+                  {workspace.chats.map((entry) => (
+                    <ChatRegistration
+                      onReveal={() => revealChat(entry.localId)}
+                      selected={entry.localId === workspace.activeChatId}
+                      projectName={activeProject?.name ?? "Project"}
+                      icon={chatIcons[entry.localId] ?? null}
+                      fork={chatForks[entry.localId] ?? false}
+                      unread={unreadByChat[entry.localId] ?? false}
+                      attention={attentionByChat[entry.localId] ?? false}
+                      menu={chatMenus[entry.localId] ?? []}
+                      onMenuAction={(action) => {
+                        if (entry.sessionId)
+                          applySessionAction(entry.sessionId, action.action);
+                      }}
+                      key={entry.localId}
+                      projectId={projectId}
+                      entry={entry}
+                      title={chatLabels[entry.localId] ?? "AI assistant"}
+                      tabActive={Boolean(viewSlots[chatTabKey(entry.localId)])}
+                      refreshWhileIdle={
+                        entry.localId === workspace.activeChatId &&
+                        chatVisible(workspace, entry)
+                      }
+                      slot={
+                        viewSlots[chatTabKey(entry.localId)] === "left"
+                          ? "left"
+                          : viewSlots[chatTabKey(entry.localId)] === "right"
+                            ? "right"
+                            : "full"
+                      }
+                      splitRatio={splitRatio}
+                      splitResizing={dividerDragging}
+                      bubbleClearance="strip"
+                      backdropTab={
+                        workspace.activeTabKey !== undefined &&
+                        workspace.activeTabKey !== chatTabKey(entry.localId)
+                      }
+                      defaultAgentId={effectiveDefaultAgentId ?? undefined}
+                      paletteTargeted={entry.localId === targetedChat?.localId}
+                      surfaces={surfacesFor(entry)}
+                      onOpenSurface={openSurface}
+                      onRemoveSurface={removeSurface}
+                      onOpenMcpApp={(view, mode) => {
+                        const name = view.toolUseId;
+                        openTab(
+                          {
+                            kind: "mcpapp",
+                            name,
+                            label: view.title,
+                            toolKey: view.toolKey,
+                            toolInput: view.toolInput,
+                            toolResult: view.toolResult,
+                          },
+                          mode === "split" ? "side" : mode,
+                        );
+                      }}
+                      onLinkClick={(url, modifiers) =>
+                        openMessageLink(url, entry, modifiers)
+                      }
+                      onFileClick={(path, modifiers) =>
+                        openMessageLink(
+                          `file:${path}`,
+                          entry,
+                          modifiers ?? {
+                            metaKey: false,
+                            ctrlKey: false,
+                            altKey: false,
+                            shiftKey: false,
+                          },
+                        )
+                      }
+                      onFork={(messageId) => forkChat(entry, messageId)}
+                      onForkCurrent={() => forkChat(entry)}
+                      archived={Boolean(
+                        entry.sessionId &&
+                          archivedSessionIds.has(entry.sessionId),
+                      )}
+                      onArchive={
+                        entry.sessionId
+                          ? () =>
+                              applySessionAction(
+                                entry.sessionId!,
+                                archivedSessionIds.has(entry.sessionId!)
+                                  ? "unarchive"
+                                  : "archive",
+                              )
+                          : undefined
+                      }
+                      inspectRequestNonce={
+                        sessionInspectRequests[entry.localId]
+                      }
+                      onOpenParent={
+                        chatForks[entry.localId]
+                          ? () => openParentChat(entry)
+                          : undefined
+                      }
+                      onEditAgent={() => {
+                        revealChat(entry.localId);
+                        openPalettePicker("switch-agent");
+                      }}
+                      onEditModel={() => {
+                        revealChat(entry.localId);
+                        openPalettePicker("model");
+                      }}
+                      runtimeSettingsError={
+                        updateSession.variables?.sessionId === entry.sessionId
+                          ? updateSession.error?.message
+                          : null
+                      }
+                      onEditEffort={() => {
+                        revealChat(entry.localId);
+                        openPalettePicker("effort");
+                      }}
+                      onEditPermissionMode={() => {
+                        revealChat(entry.localId);
+                        openPalettePicker("permission-mode");
+                      }}
+                      pullSelectionNonce={selectionPulls[entry.localId] ?? 0}
+                      onFocusRequest={
+                        split &&
+                        viewSlots[chatTabKey(entry.localId)] &&
+                        workspace.activeTabKey !== chatTabKey(entry.localId)
+                          ? () => selectTab(chatTabKey(entry.localId))
+                          : undefined
+                      }
+                      onUnsplit={
+                        viewSlots[chatTabKey(entry.localId)] &&
+                        viewSlots[chatTabKey(entry.localId)] !== "full"
+                          ? () => openSurface(chatTabKey(entry.localId), "tab")
+                          : undefined
+                      }
+                      onEntryChange={(next) =>
+                        updateWorkspace((ws) => ({
+                          ...ws,
+                          activeChatId: next.localId,
+                          activeTabKey:
+                            next.mode === "tab"
+                              ? chatTabKey(next.localId)
+                              : ws.activeTabKey === chatTabKey(next.localId)
+                                ? nextActiveTabKey(
+                                    ws,
+                                    chatTabKey(next.localId),
+                                    ws.chats.map((chat) =>
+                                      chat.localId === next.localId
+                                        ? next
+                                        : chat,
+                                    ),
+                                  )
+                                : ws.activeTabKey,
+                          chats: ws.chats.map((chat) =>
+                            chat.localId === next.localId ? next : chat,
+                          ),
+                        }))
+                      }
+                      onEscapeToFloating={(localId) => {
+                        lastChatStepDownRef.current = {
+                          localId,
+                          at: performance.now(),
+                        };
+                      }}
+                      onClose={closeChat}
+                      onCloseStarted={() =>
+                        closingChatIds.current.add(entry.localId)
+                      }
+                      registerClose={(close) =>
+                        chatClosersRef.current.set(entry.localId, close)
+                      }
+                      registerMinimize={(minimize) =>
+                        chatMinimizersRef.current.set(entry.localId, minimize)
+                      }
+                      registerSend={(send) =>
+                        chatSendersRef.current.set(entry.localId, send)
+                      }
+                      onSessionCreated={onSessionCreated}
+                      onSessionAgent={onSessionAgent}
+                      onSignalsChange={onSignalsChange}
+                    />
+                  ))}
+                </div>
+              ) : activeTab?.kind === "settings" ? (
+                <SettingsScreen
+                  destination={activeTab.destination}
+                  onSearch={settingsSearch}
+                  onAddAgent={() => setWizardModalOpen(true)}
+                  onCreateAssistant={createAssistant}
+                  onConfigureAgent={openConfigureAgent}
+                  onManageConnectors={() => setConnectorsModalOpen(true)}
+                />
+              ) : activeTab?.kind === "history" ? (
+                <HistoryScreen
+                  profileId={activeProfile?.id}
+                  onSearch={historySearch}
+                  onOpen={openHistory}
+                />
+              ) : activeTab?.kind === "passwords" ? (
+                <PasswordsScreen profileId={activeTab.name} />
+              ) : activeTab?.kind === "sites" ? (
+                <SitesScreen onOpenSite={setSiteSettingsOrigin} />
+              ) : activeTab?.kind === "downloads" ? (
+                <DownloadsScreen onOpen={openDownload} />
+              ) : activeTab?.kind === "extensions" ? (
+                <ExtensionsScreen onOpenUrl={(url) => openBrowserTab(url)} />
+              ) : activeTab?.kind === "profile-settings" && profilesData ? (
+                <ProfileSettingsScreen
+                  profileId={activeTab.name}
+                  activeProfileId={
+                    activeProfile?.id ?? profilesData.defaultProfileId
+                  }
+                  data={profilesData}
+                  projects={allProjects}
+                  onClose={() => closeTab(tabKey(activeTab))}
+                  onOpenPasswords={() => openPasswords(activeTab.name)}
+                />
+              ) : workspace.browsers.length > 0 ? (
+                <div className="relative flex min-h-0 flex-1 flex-col">
                   {workspace.browsers.map((browser) => (
                     <div
                       key={browser.localId}
@@ -7032,15 +7751,12 @@ export function App({
                       style={paneStyle(browserTabKey(browser.localId))}
                       {...paneFocusProps(browserTabKey(browser.localId))}
                     >
-                      {floatingBar(browserTabKey(browser.localId))}
                       <BrowserScreen
                         profileId={browser.profileId}
-                        projectId={projectId}
-                        projectName={
-                          projects.find((item) => item.id === projectId)?.name
+                        projectId={null}
+                        floatingDismissShortcut={
+                          keybindings["dismiss-floating"]
                         }
-                        // Remounts (project/profile switches) resume at the
-                        // last known URL, not the tab's original one.
                         initialUrl={browser.url || browser.initialUrl}
                         history={browser.history}
                         surfaceKey={browserTabKey(browser.localId)}
@@ -7048,32 +7764,10 @@ export function App({
                           runtime.visible &&
                           browser.localId === activeBrowserTabId
                         }
-                        toolbarActive={
-                          runtime.visible && browser.localId === chromeBrowserId
-                        }
-                        integratedToolbar={
-                          tabsInSidebar &&
-                          viewSlots[browserTabKey(browser.localId)] !==
-                            "floating"
-                        }
-                        toolbarHost={browserToolbarHost}
-                        sidebarToolbar={
-                          headerInSidebar &&
-                          viewSlots[browserTabKey(browser.localId)] !==
-                            "floating"
-                        }
-                        navigationHost={browserNavigationHost}
-                        onRevealToolbar={() => {
-                          if (!sidebarOpen) {
-                            setSidebarOpen(true);
-                            void desktopApi.setPrefs({ sidebarOpen: true });
-                          }
-                        }}
                         visible={
                           runtime.visible &&
                           Boolean(viewSlots[browserTabKey(browser.localId)])
                         }
-                        keepAwake={busyBrowsers.has(browser.localId)}
                         asleep={tabSleep.asleep(browser.localId)}
                         onStateChange={(state) =>
                           onBrowserState(browser.localId, state)
@@ -7093,22 +7787,6 @@ export function App({
                           })
                         }
                         onOpenUrl={(url) => openBrowserTab(url)}
-                        previewLinksWithAlt={prefs?.previewLinksWithAlt ?? true}
-                        floatingDismissShortcut={
-                          keybindings["dismiss-floating"]
-                        }
-                        onDismissFloating={
-                          workspace.floatingKey ===
-                          browserTabKey(browser.localId)
-                            ? dismissFloating
-                            : undefined
-                        }
-                        onPreviewLink={(url, mode) =>
-                          openBrowserTab(url, {
-                            floating: mode === "floating",
-                            side: mode === "side",
-                          })
-                        }
                         registerCommands={(commands) => {
                           if (commands)
                             browserCommandsRef.current.set(
@@ -7141,779 +7819,264 @@ export function App({
                           }
                           reportExtensionTabsRef.current();
                         }}
-                        onUnsplit={
-                          isSplitSlot(browserTabKey(browser.localId))
-                            ? () =>
-                                openSurface(
-                                  browserTabKey(browser.localId),
-                                  "tab",
-                                )
-                            : undefined
-                        }
                       />
-                      <AgentControlOverlay
-                        kind="page"
-                        active={Boolean(browser.agentControlled)}
-                        onTakeOver={() =>
-                          takeOverSurface(browserTabKey(browser.localId))
-                        }
-                        onGoToChat={
-                          browser.chatLocalId
-                            ? () => revealChat(browser.chatLocalId as string)
-                            : undefined
-                        }
-                      />
-                    </div>
-                  ))}
-
-                  {/* Terminals stay mounted while hidden — unmounting kills
-                  the shell. Editors likewise, preserving undo history,
-                  scroll position, and unsaved drafts across switches. */}
-                  {workspace.terminals.map((terminal) => (
-                    <div
-                      key={terminal.localId}
-                      data-surface-pane
-                      className={paneClass(terminalTabKey(terminal.localId))}
-                      style={paneStyle(terminalTabKey(terminal.localId))}
-                      {...paneFocusProps(terminalTabKey(terminal.localId))}
-                    >
-                      {floatingBar(terminalTabKey(terminal.localId))}
-                      {isSplitSlot(terminalTabKey(terminal.localId)) && (
-                        <PaneUnsplitButton
-                          onClick={() =>
-                            openSurface(terminalTabKey(terminal.localId), "tab")
-                          }
-                        />
-                      )}
-                      <Suspense fallback={<div className="flex-1 bg-bg" />}>
-                        <TerminalScreen
-                          projectId={projectId}
-                          active={
-                            runtime.visible &&
-                            terminal.localId === activeTerminalTabId
-                          }
-                          initialCommand={terminal.initialCommand}
-                          macroShortcuts={prefs?.terminalMacros.map(
-                            (macro) => macro.shortcut,
-                          )}
-                          floating={
-                            workspace.floatingKey ===
-                            terminalTabKey(terminal.localId)
-                          }
-                          attachSessionId={terminal.attachSessionId}
-                          restoreSessionId={terminal.restoreSessionId}
-                          adoptSessionId={terminal.adoptSessionId}
-                          {...(terminal.remoteSessionId
-                            ? {
-                                remoteChat: {
-                                  sessionId: terminal.remoteSessionId,
-                                },
-                              }
-                            : {})}
-                          readOnly={Boolean(terminal.agentControlled)}
-                          onTitle={(title) =>
-                            onTerminalTitle(terminal.localId, title)
-                          }
-                          onSession={(ptySessionId) =>
-                            updateWorkspace((ws) => ({
-                              ...ws,
-                              terminals: ws.terminals.map((t) =>
-                                t.localId === terminal.localId
-                                  ? { ...t, ptySessionId }
-                                  : t,
-                              ),
-                            }))
-                          }
-                          onExit={() => {
-                            // An agent terminal ended with its command: its
-                            // chip leaves, a tab stays to read. User
-                            // terminals close as before.
-                            if (terminal.attachSessionId) {
-                              updateTerminals({
-                                type: "terminal-ended",
-                                sessionId: terminal.attachSessionId,
-                              });
-                            } else {
-                              closeTab(terminalTabKey(terminal.localId));
-                            }
-                          }}
-                        />
-                      </Suspense>
-                      <AgentControlOverlay
-                        kind="terminal"
-                        active={Boolean(terminal.agentControlled)}
-                        onTakeOver={() =>
-                          takeOverSurface(terminalTabKey(terminal.localId))
-                        }
-                        onGoToChat={
-                          terminal.chatLocalId
-                            ? () => revealChat(terminal.chatLocalId as string)
-                            : undefined
-                        }
-                      />
-                    </div>
-                  ))}
-
-                  {workspace.editors.map((editor) => (
-                    <div
-                      key={editor.localId}
-                      className={paneClass(editorTabKey(editor.localId))}
-                      style={paneStyle(editorTabKey(editor.localId))}
-                      {...paneFocusProps(editorTabKey(editor.localId))}
-                    >
-                      {floatingBar(editorTabKey(editor.localId))}
-                      {isSplitSlot(editorTabKey(editor.localId)) && (
-                        <PaneUnsplitButton
-                          onClick={() =>
-                            openSurface(editorTabKey(editor.localId), "tab")
-                          }
-                        />
-                      )}
-                      <Suspense fallback={<div className="flex-1 bg-bg" />}>
-                        <EditorScreen
-                          line={editor.line}
-                          column={editor.column}
-                          navigation={editor.navigation}
-                          projectId={projectId}
-                          filePath={editor.filePath}
-                          onFindFile={() =>
-                            focusSearch("search-files", "files")
-                          }
-                          onSharePersonal={
-                            remoteSurfaceStatus
-                              ? (path, intent) => {
-                                  sendToAgent(
-                                    `${intent === "propose" ? "Prepare and submit a proposal to add" : "Prepare to publish"} my local file ${JSON.stringify(path)} to this company project. Read this file, choose a suitable shared location using the project conventions, and include only this file and any dependencies it needs. Keep my local original until sharing succeeds. ${intent === "publish" ? "Show me the audience before creating the publication." : "Submit through the company proposal service and show me the review link."}`,
-                                    "float",
-                                  );
-                                }
-                              : undefined
-                          }
-                          onDirtyChange={(dirty) =>
-                            onEditorState(editor.localId, { dirty })
-                          }
-                          onShare={
-                            editor.filePath?.startsWith(
-                              `${PROJECT_STORE_DIR}/`,
-                            ) &&
-                            remoteSurfaceStatus &&
-                            remoteSurfaceStatus.capabilities?.features
-                              .publications !== false
-                              ? (path) =>
-                                  setRemotePublish({
-                                    path: path.startsWith(
-                                      `${PROJECT_APP_DATA_DIR}/`,
-                                    )
-                                      ? path.slice(
-                                          PROJECT_APP_DATA_DIR.length + 1,
-                                        )
-                                      : path,
-                                    features:
-                                      remoteSurfaceStatus.capabilities
-                                        ?.features,
-                                  })
-                              : undefined
-                          }
-                          onPropose={
-                            remoteSurfaceStatus &&
-                            remoteSurfaceStatus.capabilities?.features
-                              .proposals !== false &&
-                            !editor.filePath?.startsWith(
-                              `${PROJECT_STORE_DIR}/`,
-                            )
-                              ? (path) =>
-                                  setRemotePropose({
-                                    files: [path],
-                                    features:
-                                      remoteSurfaceStatus.capabilities
-                                        ?.features,
-                                  })
-                              : undefined
-                          }
-                        />
-                      </Suspense>
                     </div>
                   ))}
                 </div>
-
-                {/* Split divider: drag to resize. The full-region overlay
-                  during a drag keeps webviews from swallowing the moves. */}
-                {split && (
-                  // biome-ignore lint/a11y/noStaticElementInteractions: pointer-only resize handle; the split is keyboard-reachable via Cmd+\ and tab focus
-                  <div
-                    data-split-divider
-                    onMouseDown={startDividerDrag}
-                    className={`absolute inset-y-0 z-40 w-[7px] -translate-x-1/2 cursor-col-resize ${
-                      dividerDragging
-                        ? ""
-                        : "transition-[left] duration-200 ease-[cubic-bezier(0.2,0,0,1)]"
-                    }`}
-                    style={{ left: `${splitRatio * 100}%` }}
-                  >
-                    <div className="mx-auto h-full w-px bg-transparent transition-colors duration-150 hover:bg-accent/60" />
-                  </div>
-                )}
-                {dividerDragging && (
-                  <div className="absolute inset-0 z-50 cursor-col-resize" />
-                )}
-
-                {/* Dragging a tab: side drop zones tile it left or right. While
-                a chat is in front, the bottom band stays clear of the zones
-                so the tab can be dropped on the chat's composer instead
-                (it becomes a tab pill there). */}
-                {tabDragKey && (
-                  <div
-                    className={`absolute inset-x-0 top-0 z-50 flex ${
-                      workspace.chats.some(
-                        (entry) =>
-                          entry.mode === "partial" ||
-                          Boolean(viewSlots[chatTabKey(entry.localId)]),
-                      )
-                        ? "bottom-40"
-                        : "bottom-0"
-                    }`}
-                  >
-                    {(["left", "right"] as const).map((side) => (
-                      // biome-ignore lint/a11y/noStaticElementInteractions: drop target for an in-progress HTML5 drag only
-                      <div
-                        key={side}
-                        onDragOver={(event) => {
-                          event.preventDefault();
-                          setDropSideHover(side);
-                        }}
-                        onDragLeave={() =>
-                          setDropSideHover((current) =>
-                            current === side ? null : current,
-                          )
-                        }
-                        onDrop={(event) => {
-                          event.preventDefault();
-                          dropTabToSide(tabDragKey, side);
-                          setTabDragKey(null);
-                          setDropSideHover(null);
-                        }}
-                        className={`flex-1 border-2 border-dashed transition-colors duration-150 ${
-                          dropSideHover === side
-                            ? "border-accent/60 bg-accent/10"
-                            : "border-transparent"
-                        }`}
-                      />
-                    ))}
-                  </div>
-                )}
-
-                {workspace.chats.map((entry) => (
-                  <ChatRegistration
-                    onReveal={() => revealChat(entry.localId)}
-                    selected={entry.localId === workspace.activeChatId}
-                    projectName={activeProject?.name ?? "Project"}
-                    icon={chatIcons[entry.localId] ?? null}
-                    fork={chatForks[entry.localId] ?? false}
-                    unread={unreadByChat[entry.localId] ?? false}
-                    attention={attentionByChat[entry.localId] ?? false}
-                    menu={chatMenus[entry.localId] ?? []}
-                    onMenuAction={(action) => {
-                      if (entry.sessionId)
-                        applySessionAction(entry.sessionId, action.action);
-                    }}
-                    key={entry.localId}
-                    projectId={projectId}
-                    entry={entry}
-                    title={chatLabels[entry.localId] ?? "AI assistant"}
-                    tabActive={Boolean(viewSlots[chatTabKey(entry.localId)])}
-                    refreshWhileIdle={
-                      entry.localId === workspace.activeChatId &&
-                      chatVisible(workspace, entry)
-                    }
-                    slot={
-                      viewSlots[chatTabKey(entry.localId)] === "left"
-                        ? "left"
-                        : viewSlots[chatTabKey(entry.localId)] === "right"
-                          ? "right"
-                          : "full"
-                    }
-                    splitRatio={splitRatio}
-                    splitResizing={dividerDragging}
-                    bubbleClearance="strip"
-                    backdropTab={
-                      workspace.activeTabKey !== undefined &&
-                      workspace.activeTabKey !== chatTabKey(entry.localId)
-                    }
-                    defaultAgentId={effectiveDefaultAgentId ?? undefined}
-                    paletteTargeted={entry.localId === targetedChat?.localId}
-                    surfaces={surfacesFor(entry)}
-                    onOpenSurface={openSurface}
-                    onRemoveSurface={removeSurface}
-                    onOpenMcpApp={(view, mode) => {
-                      const name = view.toolUseId;
-                      openTab(
-                        {
-                          kind: "mcpapp",
-                          name,
-                          label: view.title,
-                          toolKey: view.toolKey,
-                          toolInput: view.toolInput,
-                          toolResult: view.toolResult,
-                        },
-                        mode === "split" ? "side" : mode,
-                      );
-                    }}
-                    onLinkClick={(url, modifiers) =>
-                      openMessageLink(url, entry, modifiers)
-                    }
-                    onFileClick={(path, modifiers) =>
-                      openMessageLink(
-                        `file:${path}`,
-                        entry,
-                        modifiers ?? {
-                          metaKey: false,
-                          ctrlKey: false,
-                          altKey: false,
-                          shiftKey: false,
-                        },
-                      )
-                    }
-                    onFork={(messageId) => forkChat(entry, messageId)}
-                    onForkCurrent={() => forkChat(entry)}
-                    archived={Boolean(
-                      entry.sessionId &&
-                        archivedSessionIds.has(entry.sessionId),
-                    )}
-                    onArchive={
-                      entry.sessionId
-                        ? () =>
-                            applySessionAction(
-                              entry.sessionId!,
-                              archivedSessionIds.has(entry.sessionId!)
-                                ? "unarchive"
-                                : "archive",
-                            )
-                        : undefined
-                    }
-                    inspectRequestNonce={sessionInspectRequests[entry.localId]}
-                    onOpenParent={
-                      chatForks[entry.localId]
-                        ? () => openParentChat(entry)
-                        : undefined
-                    }
-                    onEditAgent={() => {
-                      revealChat(entry.localId);
-                      openPalettePicker("switch-agent");
-                    }}
-                    onEditModel={() => {
-                      revealChat(entry.localId);
-                      openPalettePicker("model");
-                    }}
-                    runtimeSettingsError={
-                      updateSession.variables?.sessionId === entry.sessionId
-                        ? updateSession.error?.message
-                        : null
-                    }
-                    onEditEffort={() => {
-                      revealChat(entry.localId);
-                      openPalettePicker("effort");
-                    }}
-                    onEditPermissionMode={() => {
-                      revealChat(entry.localId);
-                      openPalettePicker("permission-mode");
-                    }}
-                    pullSelectionNonce={selectionPulls[entry.localId] ?? 0}
-                    onFocusRequest={
-                      split &&
-                      viewSlots[chatTabKey(entry.localId)] &&
-                      workspace.activeTabKey !== chatTabKey(entry.localId)
-                        ? () => selectTab(chatTabKey(entry.localId))
-                        : undefined
-                    }
-                    onUnsplit={
-                      viewSlots[chatTabKey(entry.localId)] &&
-                      viewSlots[chatTabKey(entry.localId)] !== "full"
-                        ? () => openSurface(chatTabKey(entry.localId), "tab")
-                        : undefined
-                    }
-                    onEntryChange={(next) =>
-                      updateWorkspace((ws) => ({
-                        ...ws,
-                        activeChatId: next.localId,
-                        activeTabKey:
-                          next.mode === "tab"
-                            ? chatTabKey(next.localId)
-                            : ws.activeTabKey === chatTabKey(next.localId)
-                              ? nextActiveTabKey(
-                                  ws,
-                                  chatTabKey(next.localId),
-                                  ws.chats.map((chat) =>
-                                    chat.localId === next.localId ? next : chat,
-                                  ),
-                                )
-                              : ws.activeTabKey,
-                        chats: ws.chats.map((chat) =>
-                          chat.localId === next.localId ? next : chat,
-                        ),
-                      }))
-                    }
-                    onEscapeToFloating={(localId) => {
-                      lastChatStepDownRef.current = {
-                        localId,
-                        at: performance.now(),
-                      };
-                    }}
-                    onClose={closeChat}
-                    onCloseStarted={() =>
-                      closingChatIds.current.add(entry.localId)
-                    }
-                    registerClose={(close) =>
-                      chatClosersRef.current.set(entry.localId, close)
-                    }
-                    registerMinimize={(minimize) =>
-                      chatMinimizersRef.current.set(entry.localId, minimize)
-                    }
-                    registerSend={(send) =>
-                      chatSendersRef.current.set(entry.localId, send)
-                    }
-                    onSessionCreated={onSessionCreated}
-                    onSessionAgent={onSessionAgent}
-                    onSignalsChange={onSignalsChange}
-                  />
-                ))}
-              </div>
-            ) : activeTab?.kind === "settings" ? (
-              <SettingsScreen
-                destination={activeTab.destination}
-                onSearch={settingsSearch}
-                onAddAgent={() => setWizardModalOpen(true)}
-                onCreateAssistant={createAssistant}
-                onConfigureAgent={openConfigureAgent}
-                onManageConnectors={() => setConnectorsModalOpen(true)}
-              />
-            ) : activeTab?.kind === "history" ? (
-              <HistoryScreen
-                profileId={activeProfile?.id}
-                onSearch={historySearch}
-                onOpen={openHistory}
-              />
-            ) : activeTab?.kind === "passwords" ? (
-              <PasswordsScreen profileId={activeTab.name} />
-            ) : activeTab?.kind === "sites" ? (
-              <SitesScreen onOpenSite={setSiteSettingsOrigin} />
-            ) : activeTab?.kind === "downloads" ? (
-              <DownloadsScreen onOpen={openDownload} />
-            ) : activeTab?.kind === "extensions" ? (
-              <ExtensionsScreen onOpenUrl={(url) => openBrowserTab(url)} />
-            ) : activeTab?.kind === "profile-settings" && profilesData ? (
-              <ProfileSettingsScreen
-                profileId={activeTab.name}
-                activeProfileId={
-                  activeProfile?.id ?? profilesData.defaultProfileId
-                }
-                data={profilesData}
-                projects={allProjects}
-                onClose={() => closeTab(tabKey(activeTab))}
-                onOpenPasswords={() => openPasswords(activeTab.name)}
-              />
-            ) : workspace.browsers.length > 0 ? (
-              <div className="relative flex min-h-0 flex-1 flex-col">
-                {workspace.browsers.map((browser) => (
-                  <div
-                    key={browser.localId}
-                    className={paneClass(browserTabKey(browser.localId))}
-                    style={paneStyle(browserTabKey(browser.localId))}
-                    {...paneFocusProps(browserTabKey(browser.localId))}
-                  >
-                    <BrowserScreen
-                      profileId={browser.profileId}
-                      projectId={null}
-                      floatingDismissShortcut={keybindings["dismiss-floating"]}
-                      initialUrl={browser.url || browser.initialUrl}
-                      history={browser.history}
-                      surfaceKey={browserTabKey(browser.localId)}
-                      active={
-                        runtime.visible &&
-                        browser.localId === activeBrowserTabId
-                      }
-                      visible={
-                        runtime.visible &&
-                        Boolean(viewSlots[browserTabKey(browser.localId)])
-                      }
-                      asleep={tabSleep.asleep(browser.localId)}
-                      onStateChange={(state) =>
-                        onBrowserState(browser.localId, state)
-                      }
-                      onPageClose={() =>
-                        closeTab(browserTabKey(browser.localId), {
-                          final: true,
-                        })
-                      }
-                      onOpenSiteSettings={setSiteSettingsOrigin}
-                      onOpenPasswords={() => openPasswords(browser.profileId)}
-                      onOpenExtensions={() =>
-                        openTab({
-                          kind: "extensions",
-                          name: "extensions",
-                          label: "Extensions",
-                        })
-                      }
-                      onOpenUrl={(url) => openBrowserTab(url)}
-                      registerCommands={(commands) => {
-                        if (commands)
-                          browserCommandsRef.current.set(
-                            browser.localId,
-                            commands,
-                          );
-                        else browserCommandsRef.current.delete(browser.localId);
-                      }}
-                      registerNavigate={(navigate) =>
-                        browserNavigatorsRef.current.set(
-                          browser.localId,
-                          navigate,
-                        )
-                      }
-                      registerHistoryNavigate={(navigate) =>
-                        browserHistoryNavigatorsRef.current.set(
-                          browser.localId,
-                          navigate,
-                        )
-                      }
-                      registerGuest={(guestId) => {
-                        if (guestId === null) {
-                          browserGuestIdsRef.current.delete(browser.localId);
-                        } else {
-                          browserGuestIdsRef.current.set(
-                            browser.localId,
-                            guestId,
-                          );
-                        }
-                        reportExtensionTabsRef.current();
-                      }}
-                    />
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <EmptyState
-                key={activeProfile?.id}
-                loading={projectsLoading}
-                loadError={projectsLoadError}
-                retrying={projectsFetching}
-                onRetry={() => void projectsQuery.refetch()}
-                onNewProject={() => setProjectModalOpen(true)}
-                onConnectRemote={() =>
-                  setRemoteConnect({ open: true, link: null })
-                }
-                onStartWithAgent={startWithAgent}
-                profileId={activeProfile?.id}
-                importCompleted={Boolean(
-                  activeProfile?.browserImportCompletedAt,
-                )}
-              />
-            )}
-          </main>
-          <TabbedSidebar
-            key={`right:${activeProfile?.id}:${projectId}`}
-            side="right"
-            headerActions={
-              rightSidebarMotion.phase !== "closed" && sidebarToggle("right")
-            }
-            scope={`${activeProfile?.id}:${projectId}`}
-            tabs={sidebarTabs("right")}
-            surface={sidebarSurface}
-            open={rightSidebarOpen}
-            error={workspaceError}
-            onCustomize={() => customizeSidebar("right")}
-            onMotionChange={setRightSidebarMotion}
-            renderSection={renderSidebarSection("right")}
-          />
-
-          {/* Stays mounted so the close transition can play out. */}
-          <CommandPalette
-            variant="overlay"
-            open={paletteOpen}
-            onClose={() => setPaletteOpen(false)}
-            modeRequest={modeRequest}
-          />
-
-          {/* The wizard modal: same experience as the setup tab, reachable from
-          chat gating, Settings, and the palette command. */}
-          <AgentWizard
-            variant="modal"
-            open={wizardModalOpen}
-            onClose={() => {
-              setWizardModalOpen(false);
-              setSidebarCustomization(null);
-              wizardForAssistantRef.current = false;
-            }}
-            onDone={(agentId) => {
-              setWizardModalOpen(false);
-              if (wizardForAssistantRef.current && agentId)
-                void desktopApi.setPrefs({ voiceAssistant: agentId });
-              wizardForAssistantRef.current = false;
-            }}
-            onEngagedChange={setWizardEngaged}
-          />
-
-          {/* Configure-agent modal (ADR 0056): palette picker + Settings both
-          land here; project agents get the read-only definition view. */}
-          <ConfigureAgentModal
-            open={configureAgentOpen}
-            agentId={configureAgentId}
-            projectId={projectId}
-            onClose={() => setConfigureAgentOpen(false)}
-          />
-
-          {/* Connectors manager: reachable from the palette and Settings. */}
-          <ConnectorsModal
-            open={connectorsModalOpen}
-            onClose={() => {
-              setConnectorsModalOpen(false);
-              void finalizeConnectorRequest();
-            }}
-            // OAuth: the modal steps aside so the consent tab is visible, then
-            // comes back once the callback landed. Stepping aside is not the
-            // user closing it — an agent's request stays pending until then.
-            onStepAside={() => setConnectorsModalOpen(false)}
-            onReturn={() => setConnectorsModalOpen(true)}
-            onOpenUrl={(url) => openBrowserTab(url)}
-            agentRequest={
-              connectorRequest
-                ? {
-                    query: connectorRequest.query,
-                    ...(connectorRequest.reason
-                      ? { reason: connectorRequest.reason }
-                      : {}),
+              ) : (
+                <EmptyState
+                  key={activeProfile?.id}
+                  loading={projectsLoading}
+                  loadError={projectsLoadError}
+                  retrying={projectsFetching}
+                  onRetry={() => void projectsQuery.refetch()}
+                  onNewProject={() => setProjectModalOpen(true)}
+                  onConnectRemote={() =>
+                    setRemoteConnect({ open: true, link: null })
                   }
-                : null
-            }
-          />
+                  onStartWithAgent={startWithAgent}
+                  profileId={activeProfile?.id}
+                  importCompleted={Boolean(
+                    activeProfile?.browserImportCompletedAt,
+                  )}
+                />
+              )}
+            </main>
+            <TabbedSidebar
+              key={`right:${activeProfile?.id}:${projectId}`}
+              side="right"
+              headerActions={
+                rightSidebarMotion.phase !== "closed" && sidebarToggle("right")
+              }
+              scope={`${activeProfile?.id}:${projectId}`}
+              tabs={sidebarTabs("right")}
+              surface={sidebarSurface}
+              open={rightSidebarOpen}
+              error={workspaceError}
+              onCustomize={() => customizeSidebar("right")}
+              onMotionChange={setRightSidebarMotion}
+              renderSection={renderSidebarSection("right")}
+            />
 
-          {/* Boot veil: covers the workspace until its first real paint is
+            {/* Stays mounted so the close transition can play out. */}
+            <CommandPalette
+              variant="overlay"
+              open={paletteOpen}
+              onClose={() => setPaletteOpen(false)}
+              modeRequest={modeRequest}
+            />
+
+            {/* The wizard modal: same experience as the setup tab, reachable from
+          chat gating, Settings, and the palette command. */}
+            <AgentWizard
+              variant="modal"
+              open={wizardModalOpen}
+              onClose={() => {
+                setWizardModalOpen(false);
+                setSidebarCustomization(null);
+                wizardForAssistantRef.current = false;
+              }}
+              onDone={(agentId) => {
+                setWizardModalOpen(false);
+                if (wizardForAssistantRef.current && agentId)
+                  void desktopApi.setPrefs({ voiceAssistant: agentId });
+                wizardForAssistantRef.current = false;
+              }}
+              onEngagedChange={setWizardEngaged}
+            />
+
+            {/* Configure-agent modal (ADR 0056): palette picker + Settings both
+          land here; project agents get the read-only definition view. */}
+            <ConfigureAgentModal
+              open={configureAgentOpen}
+              agentId={configureAgentId}
+              projectId={projectId}
+              onClose={() => setConfigureAgentOpen(false)}
+            />
+
+            {/* Connectors manager: reachable from the palette and Settings. */}
+            <ConnectorsModal
+              open={connectorsModalOpen}
+              onClose={() => {
+                setConnectorsModalOpen(false);
+                void finalizeConnectorRequest();
+              }}
+              // OAuth: the modal steps aside so the consent tab is visible, then
+              // comes back once the callback landed. Stepping aside is not the
+              // user closing it — an agent's request stays pending until then.
+              onStepAside={() => setConnectorsModalOpen(false)}
+              onReturn={() => setConnectorsModalOpen(true)}
+              onOpenUrl={(url) => openBrowserTab(url)}
+              agentRequest={
+                connectorRequest
+                  ? {
+                      query: connectorRequest.query,
+                      ...(connectorRequest.reason
+                        ? { reason: connectorRequest.reason }
+                        : {}),
+                    }
+                  : null
+              }
+            />
+
+            {/* Boot veil: covers the workspace until its first real paint is
           ready, then fades — launch shows one composed frame, not pieces
           popping in. */}
-          {!bootVeilGone && (
-            <div
-              className={`fixed inset-0 z-[400] bg-bg transition-opacity duration-250 ease-[cubic-bezier(0.2,0,0,1)] ${
-                bootRevealed ? "pointer-events-none opacity-0" : "opacity-100"
-              }`}
-              onTransitionEnd={() => {
-                if (bootRevealed) setBootVeilGone(true);
-              }}
-            />
-          )}
+            {!bootVeilGone && (
+              <div
+                className={`fixed inset-0 z-[400] bg-bg transition-opacity duration-250 ease-[cubic-bezier(0.2,0,0,1)] ${
+                  bootRevealed ? "pointer-events-none opacity-0" : "opacity-100"
+                }`}
+                onTransitionEnd={() => {
+                  if (bootRevealed) setBootVeilGone(true);
+                }}
+              />
+            )}
 
-          {/* In-place profile switch veil: opaque at the midpoint, so the
+            {/* In-place profile switch veil: opaque at the midpoint, so the
           workspace swap beneath it is never visible. */}
-          {profileVeil && (
-            <div
-              className={`fixed inset-0 z-[300] bg-bg ${
-                profileVeil.stage === "in"
-                  ? "animate-profile-veil-in"
-                  : "animate-profile-veil-out"
-              }`}
-              onAnimationEnd={() => {
-                if (profileVeil.stage === "in" && profileVeil.target) {
-                  void completeProfileSwitch(profileVeil.target);
-                } else if (profileVeil.stage === "out") {
-                  setProfileVeil(null);
-                }
+            {profileVeil && (
+              <div
+                className={`fixed inset-0 z-[300] bg-bg ${
+                  profileVeil.stage === "in"
+                    ? "animate-profile-veil-in"
+                    : "animate-profile-veil-out"
+                }`}
+                onAnimationEnd={() => {
+                  if (profileVeil.stage === "in" && profileVeil.target) {
+                    void completeProfileSwitch(profileVeil.target);
+                  } else if (profileVeil.stage === "out") {
+                    setProfileVeil(null);
+                  }
+                }}
+              />
+            )}
+
+            <Modal
+              open={closingWorkflow !== null}
+              onClose={() => setClosingWorkflow(null)}
+              labelledBy="workflow-close-title"
+            >
+              <div className="p-5">
+                <h2
+                  id="workflow-close-title"
+                  className="text-base font-semibold"
+                >
+                  Discard workflow edits?
+                </h2>
+                <p className="mt-2 text-sm text-fg-muted">
+                  This workflow has unsaved changes. Keep editing to save them,
+                  or discard the draft and close the tab.
+                </p>
+                <div className="mt-5 flex justify-end gap-2">
+                  <button
+                    type="button"
+                    className="button-ghost"
+                    onClick={() => setClosingWorkflow(null)}
+                  >
+                    Keep editing
+                  </button>
+                  <button
+                    type="button"
+                    className="button-danger"
+                    onClick={() => {
+                      if (closingWorkflow)
+                        closeTab(closingWorkflow, { discardDraft: true });
+                      setClosingWorkflow(null);
+                    }}
+                  >
+                    Discard and close
+                  </button>
+                </div>
+              </div>
+            </Modal>
+            <ProjectModal
+              open={projectModalOpen}
+              onClose={() => setProjectModalOpen(false)}
+              onCreated={(project) => {
+                setProjectModalOpen(false);
+                selectProject(project.id);
               }}
             />
-          )}
-
-          <Modal
-            open={closingWorkflow !== null}
-            onClose={() => setClosingWorkflow(null)}
-            labelledBy="workflow-close-title"
-          >
-            <div className="p-5">
-              <h2 id="workflow-close-title" className="text-base font-semibold">
-                Discard workflow edits?
-              </h2>
-              <p className="mt-2 text-sm text-fg-muted">
-                This workflow has unsaved changes. Keep editing to save them, or
-                discard the draft and close the tab.
-              </p>
-              <div className="mt-5 flex justify-end gap-2">
-                <button
-                  type="button"
-                  className="button-ghost"
-                  onClick={() => setClosingWorkflow(null)}
-                >
-                  Keep editing
-                </button>
-                <button
-                  type="button"
-                  className="button-danger"
-                  onClick={() => {
-                    if (closingWorkflow)
-                      closeTab(closingWorkflow, { discardDraft: true });
-                    setClosingWorkflow(null);
-                  }}
-                >
-                  Discard and close
-                </button>
-              </div>
-            </div>
-          </Modal>
-          <ProjectModal
-            open={projectModalOpen}
-            onClose={() => setProjectModalOpen(false)}
-            onCreated={(project) => {
-              setProjectModalOpen(false);
-              selectProject(project.id);
-            }}
-          />
-          <DeleteProjectModal
-            project={deletingProject}
-            onClose={() => setDeletingProject(null)}
-            onDeleted={onProjectDeleted}
-          />
-          <RemoteConnectModal
-            open={remoteConnect.open}
-            link={remoteConnect.link}
-            onClose={() => setRemoteConnect({ open: false, link: null })}
-            onConnected={async (project) => {
-              if (activeProfile) {
-                await desktopApi.profilesClaimProject(
-                  activeProfile.id,
-                  project.id,
-                );
-              }
-              setRemoteConnect({ open: false, link: null });
-              selectProject(project.id);
-            }}
-          />
-          {projectId && (
-            <>
-              <RemoteHistoryModal
-                projectId={projectId}
-                path={remoteHistoryPath}
-                onClose={() => setRemoteHistoryPath(null)}
-              />
-              <RemotePublishModal
-                projectId={projectId}
-                path={remotePublish?.path ?? null}
-                features={remotePublish?.features}
-                onClose={() => setRemotePublish(null)}
-              />
-              <RemoteProposeModal
-                projectId={projectId}
-                open={remotePropose !== null}
-                files={remotePropose?.files ?? []}
-                onClose={() => setRemotePropose(null)}
-                onOpenProposal={({ number, title }) =>
-                  openTab({
-                    kind: "diff",
-                    name: `review:${number}`,
-                    label: `#${number} ${title}`,
-                    projectId,
-                    source: { type: "review", prNumber: number },
-                  })
+            <DeleteProjectModal
+              project={deletingProject}
+              onClose={() => setDeletingProject(null)}
+              onDeleted={onProjectDeleted}
+            />
+            <RemoteConnectModal
+              open={remoteConnect.open}
+              link={remoteConnect.link}
+              onClose={() => setRemoteConnect({ open: false, link: null })}
+              onConnected={async (project) => {
+                if (activeProfile) {
+                  await desktopApi.profilesClaimProject(
+                    activeProfile.id,
+                    project.id,
+                  );
                 }
-              />
-            </>
-          )}
-        </div>
-      </PaletteHostProvider>
-    </WorkspaceSourcesProvider>
+                setRemoteConnect({ open: false, link: null });
+                selectProject(project.id);
+              }}
+            />
+            {projectId && (
+              <>
+                <RemoteHistoryModal
+                  projectId={projectId}
+                  path={remoteHistoryPath}
+                  onClose={() => setRemoteHistoryPath(null)}
+                />
+                <RemoteMembersModal
+                  open={serverDialog === "members"}
+                  projectId={projectId}
+                  onClose={() => setServerDialog(null)}
+                />
+                <RemoteServiceConnectionsModal
+                  open={serverDialog === "connections"}
+                  projectId={projectId}
+                  onClose={() => setServerDialog(null)}
+                />
+                <RemoteSecretsModal
+                  open={serverDialog === "secrets"}
+                  projectId={projectId}
+                  canManage={
+                    remoteSurfaceStatus?.capabilities?.permissions.includes(
+                      "secrets:write",
+                    ) ?? false
+                  }
+                  canListMembers={
+                    remoteSurfaceStatus?.capabilities?.permissions.includes(
+                      "memberships:read",
+                    ) ?? false
+                  }
+                  onClose={() => setServerDialog(null)}
+                />
+                <RemotePublishModal
+                  projectId={projectId}
+                  path={remotePublish?.path ?? null}
+                  features={remotePublish?.features}
+                  onClose={() => setRemotePublish(null)}
+                />
+                <RemoteProposeModal
+                  projectId={projectId}
+                  open={remotePropose !== null}
+                  files={remotePropose?.files ?? []}
+                  onClose={() => setRemotePropose(null)}
+                  onOpenProposal={({ number, title }) =>
+                    openTab({
+                      kind: "diff",
+                      name: `review:${number}`,
+                      label: `#${number} ${title}`,
+                      projectId,
+                      source: { type: "review", prNumber: number },
+                    })
+                  }
+                />
+              </>
+            )}
+          </div>
+        </PaletteHostProvider>
+      </SidebarHostProvider>
+    </WorkSourcesProvider>
   );
 }
 

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import vm from "node:vm";
@@ -8,8 +9,33 @@ import {
   RESERVED_PALETTE_TRIGGERS,
 } from "../shared/palette.js";
 import { sanitizeProjectExperienceWhen } from "../shared/project-experience.js";
+import {
+  isHostAction,
+  isWorkSourceName,
+  rowTargetAllowed,
+  SESSION_WORK_SOURCES,
+  type SidebarActionInput,
+  type SidebarBadge,
+  type SidebarItem,
+  type SidebarItemPresentation,
+  type SidebarMenuEntry,
+  type SidebarPreview,
+  type SidebarPreviewMetadata,
+  type SidebarSectionConfig,
+  type SidebarSignal,
+  type SidebarTabConfig,
+  type SidebarWhen,
+  SOURCE_ACTION_PATTERN,
+  workSourceName,
+} from "../shared/sidebar.js";
 import type { SidebarSourceItem } from "../shared/sidebar-source.js";
+import {
+  type PaletteModeConfig,
+  sidebarSections,
+  type WorkspaceConfig,
+} from "../shared/workspace-config.js";
 import { WORKSPACE_AUTHORING_GUIDE } from "./workspace-authoring.js";
+import { upgradeWorkspaceLayout } from "./workspace-config-upgrade.js";
 
 /**
  * The user-customizable workspace (ADR 0186): both sidebars and the palette's
@@ -17,38 +43,21 @@ import { WORKSPACE_AUTHORING_GUIDE } from "./workspace-authoring.js";
  * `<userData>/profiles/<id>/workspace.js` (same philosophy as keybindings.json:
  * plain, user-visible, agent-editable, file-watched, applies live). The file
  * evaluates in an isolated vm context with no require/process/fs and exports
- * { sidebars: { left, right }, palette? }: icon tabs holding ordered widget
+ * { sidebars: { left, right }, palette? }: icon tabs holding ordered
  * sections, and palette modes over the same sources.
  *
  * Everything crossing into the renderer is DATA: the config is evaluated
- * in the main process and sent over IPC, so menu entries name a declared
- * `action` rather than carrying a callback.
+ * in the main process and sent over IPC, so menu entries name an action
+ * (Work's verb or the source's) rather than carrying a callback.
  */
-
-import {
-  resolveSidebarSection,
-  type SidebarAction,
-  type SidebarItem,
-  type SidebarItemPresentation,
-  type SidebarMenuEntry,
-  type SidebarPreview,
-  type SidebarPreviewMetadata,
-  type SidebarSectionConfig,
-  type SidebarSource,
-  type SidebarTabConfig,
-  type SidebarWhen,
-} from "../shared/sidebar.js";
-import {
-  isWorkspaceSource,
-  type PaletteModeConfig,
-  sidebarSections,
-  WORKSPACE_SOURCES,
-  type WorkspaceConfig,
-} from "../shared/workspace-config.js";
 
 export type { SidebarSectionConfig } from "../shared/sidebar.js";
 export type { WorkspaceConfig } from "../shared/workspace-config.js";
 
+/**
+ * Work's own layout (ADR 0234): every section names a source, and its
+ * buttons are ordinary header actions. The right sidebar starts empty.
+ */
 export const DEFAULT_WORKSPACE_CONFIG: WorkspaceConfig = {
   sidebars: {
     left: [
@@ -57,103 +66,125 @@ export const DEFAULT_WORKSPACE_CONFIG: WorkspaceConfig = {
         title: "Project",
         icon: "House",
         sections: [
-          { id: "bookmarks", type: "bookmarks" },
-          { id: "workflows", type: "workflows" },
-          { id: "apps", type: "apps" },
-          { id: "chats", type: "chats" },
-          { id: "tabs", type: "tabs" },
-          { id: "files", type: "files", collapsed: true },
-          { id: "remote", type: "remote", title: "Server" },
-        ],
-      },
-    ],
-    right: [
-      // Exists only beside a chat, or what it opened (ADR 0226): its
-      // worktree and the pull requests its agent recorded in the session's
-      // metadata.
-      {
-        id: "this-session",
-        title: "This session",
-        icon: "MessageSquareText",
-        sections: [{ id: "session", type: "session", when: { session: true } }],
-      },
-      {
-        id: "companion",
-        title: "Activity",
-        icon: "Activity",
-        sections: [
-          { id: "activity", type: "activity" },
           {
-            id: "subsessions",
-            type: "subsessions",
-            title: "Subsessions",
-            when: { surface: ["chat"], session: true },
+            id: "pinned",
+            source: "work:pinned",
+            title: "",
+            presentation: "tiles",
+            hideEmpty: true,
+            empty: "Drop a tab here to pin it across projects",
+          },
+          {
+            id: "library",
+            source: "work:library",
+            title: "",
             hideEmpty: true,
           },
-          { id: "changes", type: "git", hideEmpty: true },
+          {
+            id: "bookmarks",
+            source: "work:bookmarks",
+            headerActions: [
+              {
+                label: "Add bookmark",
+                action: "add",
+                icon: "Plus",
+                input: {
+                  title: "Add bookmark",
+                  submit: "Add",
+                  fields: [
+                    {
+                      name: "url",
+                      label: "Address",
+                      placeholder: "https://",
+                    },
+                    { name: "label", label: "Name" },
+                  ],
+                },
+              },
+              {
+                label: "New bookmark folder",
+                action: "new-folder",
+                icon: "FolderPlus",
+                input: {
+                  title: "New folder",
+                  submit: "Create",
+                  fields: [{ name: "label", label: "Name" }],
+                },
+              },
+            ],
+          },
+          {
+            id: "workflows",
+            source: "work:workflows",
+            hideEmpty: true,
+            headerActions: [
+              {
+                label: "Create workflow",
+                action: "open",
+                icon: "Plus",
+                url: "command:new-workflow",
+              },
+            ],
+          },
+          { id: "apps", source: "work:apps", hideEmpty: true },
+          // The window's tabs, chats among them, when the person places
+          // tabs in the sidebar (Settings). A module wrapping work:tabs can
+          // sort them (workspace-authoring.ts).
+          {
+            id: "tabs",
+            source: "work:tabs",
+            when: { tabPlacement: "sidebar" },
+            headerActions: [
+              {
+                label: "New tab",
+                action: "open",
+                icon: "Plus",
+                url: "command:new-tab",
+              },
+            ],
+          },
+          {
+            id: "files",
+            source: "work:files",
+            collapsed: true,
+            headerActions: [
+              {
+                label: "Find files",
+                action: "open",
+                icon: "Search",
+                url: "command:search-files",
+              },
+            ],
+          },
+          {
+            id: "remote",
+            source: "work:remote",
+            title: "Server",
+            hideEmpty: true,
+            headerActions: [
+              { label: "Download updates", action: "sync", icon: "Download" },
+              { label: "Upload all", action: "upload-all", icon: "Upload" },
+            ],
+          },
         ],
       },
-      {
-        id: "reviews",
-        title: "Proposals",
-        icon: "GitPullRequest",
-        sections: [{ id: "prs", type: "prs" }],
-      },
     ],
+    right: [],
   },
 };
 
-export const DEFAULT_WORKSPACE_FILE = `${WORKSPACE_AUTHORING_GUIDE.split("\n")
-  .map((line) => `// ${line}`)
-  .join("\n")}
-module.exports = ${JSON.stringify(DEFAULT_WORKSPACE_CONFIG, null, 2)};
+/** A workspace.js for a layout: the commented guide, then the data. */
+export function workspaceFileFor(config: unknown): string {
+  return `${WORKSPACE_AUTHORING_GUIDE.split("\n")
+    .map((line) => `// ${line}`)
+    .join("\n")}
+module.exports = ${JSON.stringify(config, null, 2)};
 `;
+}
 
-const VALID_TYPES = new Set([
-  "workflows",
-  "apps",
-  "files",
-  "chats",
-  "subsessions",
-  "bookmarks",
-  "tabs",
-  "git",
-  "prs",
-  "remote",
-  "custom",
-  "activity",
-  "note",
-  "app",
-  "session",
-]);
-
-const VALID_ACTIONS = new Set<SidebarAction>([
-  "open",
-  "open-tab",
-  "open-here",
-  "open-side",
-  "open-floating",
-  "copy-url",
-  "pin",
-  "unpin",
-  "rename",
-  "edit",
-  "remove",
-  "close",
-  "archive",
-  "unarchive",
-  "mark-read",
-  "mark-unread",
-  "stop",
-  "fork",
-  "new-subsession",
-  "history",
-  "publish",
-  "new-chat",
-  "new-workflow",
-  "refresh",
-  "search",
-]);
+export const DEFAULT_WORKSPACE_FILE = workspaceFileFor(
+  DEFAULT_WORKSPACE_CONFIG,
+);
 
 const asOpenMode = (value: unknown): OpenMode | undefined =>
   value === "tab" ||
@@ -163,67 +194,102 @@ const asOpenMode = (value: unknown): OpenMode | undefined =>
     ? value
     : undefined;
 
+const FIELD_NAME = /^[a-zA-Z][a-zA-Z0-9_-]{0,39}$/;
+
+function sanitizeInput(raw: unknown): SidebarActionInput | undefined {
+  if (raw === undefined) return undefined;
+  if (!isRecord(raw) || !Array.isArray(raw.fields))
+    throw new Error("An action's input needs fields: [{ name, label }].");
+  if (raw.fields.length < 1 || raw.fields.length > 4)
+    throw new Error("An action asks for one to four values.");
+  const names = new Set<string>();
+  const fields = raw.fields.map((field) => {
+    if (
+      !isRecord(field) ||
+      typeof field.name !== "string" ||
+      !FIELD_NAME.test(field.name) ||
+      names.has(field.name) ||
+      typeof field.label !== "string" ||
+      !field.label.trim()
+    )
+      throw new Error("Each input field needs a unique name and a label.");
+    names.add(field.name);
+    return {
+      name: field.name,
+      label: field.label,
+      ...(typeof field.value === "string" ? { value: field.value } : {}),
+      ...(typeof field.placeholder === "string"
+        ? { placeholder: field.placeholder }
+        : {}),
+    };
+  });
+  return {
+    ...(typeof raw.title === "string" ? { title: raw.title } : {}),
+    ...(typeof raw.submit === "string" ? { submit: raw.submit } : {}),
+    fields,
+  };
+}
+
 function sanitizeMenu(raw: unknown): SidebarMenuEntry[] | undefined {
   if (raw === undefined) return undefined;
   if (!Array.isArray(raw)) throw new Error("Actions must be an array.");
   // An explicit [] means "no menu button"; keep it distinct from absent.
-  return raw.flatMap((entry): SidebarMenuEntry[] => {
-    if (!isRecord(entry)) throw new Error("Actions need label and action.");
-    const record = entry;
+  return raw.map((entry): SidebarMenuEntry => {
     if (
-      typeof record.label !== "string" ||
-      typeof record.action !== "string" ||
-      !(
-        VALID_ACTIONS.has(record.action as SidebarAction) ||
-        /^run:.+/.test(record.action)
-      )
-    ) {
-      throw new Error("Action needs a label and a supported action name.");
-    }
-    return [
-      {
-        label: record.label,
-        action: record.action as SidebarAction,
-        danger: record.danger === true,
-        icon: typeof record.icon === "string" ? record.icon : undefined,
-        url: typeof record.url === "string" ? record.url : undefined,
-        disabledReason:
-          typeof record.disabledReason === "string"
-            ? record.disabledReason
-            : undefined,
-      },
-    ];
+      !isRecord(entry) ||
+      typeof entry.label !== "string" ||
+      typeof entry.action !== "string"
+    )
+      throw new Error("Actions need label and action.");
+    if (entry.action.startsWith("run:"))
+      throw new Error(
+        `Action "${entry.action}": name the source's action without run: (ADR 0234).`,
+      );
+    if (
+      !isHostAction(entry.action) &&
+      !SOURCE_ACTION_PATTERN.test(entry.action)
+    )
+      throw new Error(
+        `Action "${entry.action}" is not one of Work's verbs (open, open-tab, open-here, open-side, open-floating, copy-url, refresh, search) or a source action (lowercase words joined by dashes).`,
+      );
+    const input = sanitizeInput(entry.input);
+    return {
+      label: entry.label,
+      action: entry.action,
+      ...(entry.danger === true ? { danger: true } : {}),
+      ...(typeof entry.icon === "string" ? { icon: entry.icon } : {}),
+      ...(typeof entry.url === "string" ? { url: entry.url } : {}),
+      ...(typeof entry.disabledReason === "string"
+        ? { disabledReason: entry.disabledReason }
+        : {}),
+      ...(input ? { input } : {}),
+    };
   });
 }
 
 function sanitizePreview(raw: unknown): SidebarPreview | false | undefined {
   if (raw === false) return false;
-  if (typeof raw !== "object" || raw === null) return undefined;
-  const record = raw as Record<string, unknown>;
-  const metadata = Array.isArray(record.metadata)
-    ? record.metadata
-        .flatMap((entry): SidebarPreviewMetadata[] => {
-          if (typeof entry !== "object" || entry === null) return [];
-          const item = entry as Record<string, unknown>;
-          if (
-            typeof item.label !== "string" ||
-            typeof item.value !== "string" ||
-            item.label.length === 0 ||
-            item.value.length === 0
-          ) {
-            return [];
-          }
-          return [{ label: item.label, value: item.value }];
-        })
-        .slice(0, 4)
+  if (!isRecord(raw)) return undefined;
+  const metadata = Array.isArray(raw.metadata)
+    ? raw.metadata
+        .flatMap((entry): SidebarPreviewMetadata[] =>
+          isRecord(entry) &&
+          typeof entry.label === "string" &&
+          typeof entry.value === "string" &&
+          entry.label.length > 0 &&
+          entry.value.length > 0
+            ? [{ label: entry.label, value: entry.value }]
+            : [],
+        )
+        .slice(0, 6)
     : [];
   const title =
-    typeof record.title === "string" && record.title.length > 0
-      ? record.title
+    typeof raw.title === "string" && raw.title.length > 0
+      ? raw.title
       : undefined;
   const description =
-    typeof record.description === "string" && record.description.length > 0
-      ? record.description
+    typeof raw.description === "string" && raw.description.length > 0
+      ? raw.description
       : undefined;
   if (!title && !description && metadata.length === 0) return undefined;
   return {
@@ -232,6 +298,29 @@ function sanitizePreview(raw: unknown): SidebarPreview | false | undefined {
     metadata: metadata.length > 0 ? metadata : undefined,
   };
 }
+
+function sanitizeBadges(raw: unknown): (string | SidebarBadge)[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  return raw
+    .flatMap((badge): (string | SidebarBadge)[] =>
+      typeof badge === "string"
+        ? [badge]
+        : isRecord(badge) && typeof badge.label === "string"
+          ? [
+              {
+                label: badge.label,
+                ...(typeof badge.icon === "string" ? { icon: badge.icon } : {}),
+              },
+            ]
+          : [],
+    )
+    .slice(0, 4);
+}
+
+const asSignal = (value: unknown): SidebarSignal | undefined =>
+  value === "working" || value === "attention" || value === "unread"
+    ? value
+    : undefined;
 
 function sanitizeSidebarWhen(value: unknown): SidebarWhen | null | undefined {
   if (value === undefined) return undefined;
@@ -245,6 +334,7 @@ function sanitizeSidebarWhen(value: unknown): SidebarWhen | null | undefined {
           "session",
           "pathPrefix",
           "selection",
+          "tabPlacement",
         ].includes(key),
     )
   )
@@ -267,6 +357,12 @@ function sanitizeSidebarWhen(value: unknown): SidebarWhen | null | undefined {
     return null;
   if (value.pathPrefix !== undefined && typeof value.pathPrefix !== "string")
     return null;
+  if (
+    value.tabPlacement !== undefined &&
+    value.tabPlacement !== "top" &&
+    value.tabPlacement !== "sidebar"
+  )
+    return null;
   return {
     ...authority,
     surface: Array.isArray(value.surface)
@@ -277,80 +373,10 @@ function sanitizeSidebarWhen(value: unknown): SidebarWhen | null | undefined {
       typeof value.selection === "boolean" ? value.selection : undefined,
     pathPrefix:
       typeof value.pathPrefix === "string" ? value.pathPrefix : undefined,
-  };
-}
-
-function sanitizeSource(value: unknown): SidebarSource | undefined {
-  if (value === undefined) return undefined;
-  if (!isRecord(value) || !isSectionType(value.type))
-    throw new Error("Source needs a supported type.");
-  if (
-    value.module !== undefined &&
-    (value.type !== "custom" ||
-      typeof value.module !== "string" ||
-      !value.module.trim())
-  )
-    throw new Error("Executable sources need type custom and a module path.");
-  const scope = value.scope;
-  if (
-    scope !== undefined &&
-    scope !== "project" &&
-    scope !== "session" &&
-    scope !== "children"
-  )
-    throw new Error("Unknown source scope.");
-  if (
-    scope &&
-    scope !== "project" &&
-    !["chats", "subsessions"].includes(value.type)
-  )
-    throw new Error(
-      "Session and children scope require a chats or subsessions source.",
-    );
-  const filter: Record<string, string | number | boolean> = {};
-  if (value.filter !== undefined) {
-    if (!isRecord(value.filter))
-      throw new Error("Source filter must be a field/value object.");
-    for (const [key, entry] of Object.entries(value.filter)) {
-      if (
-        typeof entry !== "string" &&
-        typeof entry !== "boolean" &&
-        (typeof entry !== "number" || !Number.isFinite(entry))
-      )
-        throw new Error(
-          "Filter values must be strings, booleans or finite numbers.",
-        );
-      filter[key] = entry;
-    }
-  }
-  const sort = value.sort;
-  if (
-    sort !== undefined &&
-    (!isRecord(sort) ||
-      typeof sort.field !== "string" ||
-      (sort.direction !== undefined &&
-        sort.direction !== "asc" &&
-        sort.direction !== "desc"))
-  )
-    throw new Error("Sort needs field and asc/desc direction.");
-  return {
-    type: value.type,
-    module: typeof value.module === "string" ? value.module : undefined,
-    scope,
-    filter,
-    sort:
-      isRecord(sort) && typeof sort.field === "string"
-        ? {
-            field: sort.field,
-            direction: sort.direction === "desc" ? "desc" : "asc",
-          }
+    tabPlacement:
+      value.tabPlacement === "top" || value.tabPlacement === "sidebar"
+        ? value.tabPlacement
         : undefined,
-    groupBy: typeof value.groupBy === "string" ? value.groupBy : undefined,
-    pageSize:
-      typeof value.pageSize === "number"
-        ? Math.max(1, Math.min(100, Math.floor(value.pageSize)))
-        : undefined,
-    includeLatent: value.includeLatent === true,
   };
 }
 
@@ -367,15 +393,12 @@ function sanitizePresentation(
           .slice(0, 32)
       : undefined,
     icon: typeof record.icon === "string" ? record.icon : undefined,
-    badges: Array.isArray(record.badges)
-      ? record.badges.filter(
-          (badge): badge is string => typeof badge === "string",
-        )
-      : undefined,
+    badges: sanitizeBadges(record.badges),
     progress:
       typeof record.progress === "number" && Number.isFinite(record.progress)
         ? Math.max(0, Math.min(1, record.progress))
         : undefined,
+    signal: asSignal(record.signal),
     open: asOpenMode(record.open),
     menu: sanitizeMenu(record.menu),
     contextMenu: sanitizeMenu(record.contextMenu),
@@ -395,44 +418,33 @@ function sanitizeItems(
   parentId = "",
 ): SidebarItem[] | undefined {
   if (!Array.isArray(raw)) return undefined;
-  if (depth > 20) throw new Error("Custom item trees cannot exceed 20 levels.");
+  if (depth > 20) throw new Error("Item trees cannot exceed 20 levels.");
   return raw.flatMap((entry): SidebarItem[] => {
-    if (typeof entry !== "object" || entry === null) return [];
-    const record = entry as Record<string, unknown>;
-    const when = sanitizeSidebarWhen(record.when);
+    if (!isRecord(entry)) return [];
+    const when = sanitizeSidebarWhen(entry.when);
     if (when === null) return [];
-    const url = typeof record.url === "string" ? record.url : undefined;
+    const url = typeof entry.url === "string" ? entry.url : undefined;
     const id =
-      typeof record.id === "string"
-        ? record.id
-        : `${parentId}/${url ?? record.label ?? "Folder"}`;
+      typeof entry.id === "string"
+        ? entry.id
+        : `${parentId}/${url ?? entry.label ?? "Folder"}`;
     if (!id || ids.has(id))
-      throw new Error(
-        "Custom items need unique stable IDs within their section.",
-      );
+      throw new Error("Items need unique stable IDs within their section.");
     ids.add(id);
-    const items = sanitizeItems(record.items, depth + 1, ids, id);
-    if (
-      !url &&
-      (!items || items.length === 0) &&
-      !Array.isArray(record.actions)
-    )
+    const items = sanitizeItems(entry.items, depth + 1, ids, id);
+    if (!url && (!items || items.length === 0) && !Array.isArray(entry.actions))
       return [];
     return [
       {
-        ...sanitizePresentation(record),
+        ...sanitizePresentation(entry),
         id,
         label:
-          typeof record.label === "string" && record.label
-            ? record.label
+          typeof entry.label === "string" && entry.label
+            ? entry.label
             : (url ?? "Folder"),
         url,
-        icon: typeof record.icon === "string" ? record.icon : undefined,
-        open: asOpenMode(record.open),
-        menu: sanitizeMenu(record.menu),
-        preview: sanitizePreview(record.preview),
         items,
-        collapsed: record.collapsed === true,
+        collapsed: entry.collapsed === true,
         when,
       },
     ];
@@ -449,8 +461,165 @@ function stableId(value: unknown): value is string {
   );
 }
 
-function isSectionType(value: unknown): value is SidebarSectionConfig["type"] {
-  return typeof value === "string" && VALID_TYPES.has(value);
+const WORKFLOW_NAME = /^[a-zA-Z_$][a-zA-Z0-9_$-]{0,99}$/;
+
+/** `work:<name>`, or a module path; nothing else is a source. */
+function sanitizeSourceName(value: unknown, where: string): string {
+  if (typeof value !== "string" || !value.trim())
+    throw new Error(`${where}: source is "work:<name>" or a module path.`);
+  if (value.startsWith("work:")) {
+    if (!workSourceName(value))
+      throw new Error(
+        `${where}: ${value} is not one of Work's lists (work:${["pinned", "bookmarks", "library", "workflows", "apps", "chats", "subsessions", "activity", "files", "tabs", "remote", "git", "prs", "session"].join(", work:")}).`,
+      );
+    return value;
+  }
+  // A drive letter is a path; any other scheme is a typo for work:.
+  if (/^[a-z][a-z0-9+.-]+:/i.test(value))
+    throw new Error(
+      `${where}: ${value} is not a module path. Work's lists are work:<name>.`,
+    );
+  return value;
+}
+
+/** Grants name Work lists (bare) and workflows a module may use. */
+function sanitizeGrants(
+  record: Record<string, unknown>,
+  where: string,
+  module: boolean,
+  app = false,
+): { collections?: string[]; workflows?: string[] } {
+  const list = (key: "collections" | "workflows", valid: RegExp | null) => {
+    const raw = record[key];
+    if (raw === undefined) return undefined;
+    if (!Array.isArray(raw))
+      throw new Error(`${where}: ${key} must be an array of names.`);
+    return raw.map((name) => {
+      if (
+        typeof name !== "string" ||
+        (valid ? !valid.test(name) : !isWorkSourceName(name))
+      )
+        throw new Error(
+          key === "collections"
+            ? `${where}: collections name Work's lists without work: (chats, files, ...).`
+            : `${where}: workflows name the project's workflows.`,
+        );
+      return name;
+    });
+  };
+  const collections = list("collections", null);
+  const workflows = list("workflows", WORKFLOW_NAME);
+  if (collections && !module && !app)
+    throw new Error(
+      `${where}: only apps and modules take a collections grant.`,
+    );
+  if (workflows && !module)
+    throw new Error(`${where}: only modules take a workflows grant.`);
+  return {
+    ...(collections ? { collections } : {}),
+    ...(workflows ? { workflows } : {}),
+  };
+}
+
+function sanitizeSection(
+  raw: unknown,
+  sectionIds: Set<string>,
+): SidebarSectionConfig[] {
+  if (!isRecord(raw) || !stableId(raw.id) || sectionIds.has(raw.id))
+    throw new Error("Each section needs a unique id.");
+  const where = `Section ${raw.id}`;
+  if ("type" in raw)
+    throw new Error(
+      `${where}: sections have no type (ADR 0234). Name a source ("work:chats" or a module path), items, app or note.`,
+    );
+  sectionIds.add(raw.id);
+  const kinds = (["source", "items", "app", "note"] as const).filter(
+    (key) => raw[key] !== undefined,
+  );
+  if (kinds.length !== 1)
+    throw new Error(
+      `${where} needs exactly one of source, items, app or note.`,
+    );
+  const when = sanitizeSidebarWhen(raw.when);
+  if (when === null) return [];
+  const source =
+    raw.source === undefined
+      ? undefined
+      : sanitizeSourceName(raw.source, where);
+  const name = workSourceName(source);
+  if (name && SESSION_WORK_SOURCES.includes(name) && when?.session !== true)
+    throw new Error(
+      `${where}: ${source} lists the chat in front; add when: { session: true }.`,
+    );
+  if (
+    raw.app !== undefined &&
+    (typeof raw.app !== "string" || !/^[a-zA-Z0-9_-]+$/.test(raw.app))
+  )
+    throw new Error(`${where}: app is a project app's name.`);
+  if (
+    raw.note !== undefined &&
+    raw.note !== true &&
+    (typeof raw.note !== "string" ||
+      !raw.note ||
+      raw.note.startsWith("/") ||
+      raw.note.split(/[\\/]/).includes(".."))
+  )
+    throw new Error(`${where}: note is a project-relative path, or true.`);
+  if (
+    raw.presentation !== undefined &&
+    raw.presentation !== "rows" &&
+    raw.presentation !== "tiles"
+  )
+    throw new Error(`${where}: presentation is "rows" or "tiles".`);
+  const module = source !== undefined && !name;
+  const grants = sanitizeGrants(raw, where, module, raw.app !== undefined);
+  return [
+    {
+      id: raw.id,
+      ...(source !== undefined ? { source } : {}),
+      ...(raw.items !== undefined
+        ? { items: sanitizeItems(raw.items) ?? [] }
+        : {}),
+      ...(typeof raw.app === "string" ? { app: raw.app } : {}),
+      ...(raw.note === true || typeof raw.note === "string"
+        ? { note: raw.note }
+        : {}),
+      ...(typeof raw.title === "string" ? { title: raw.title } : {}),
+      ...(raw.presentation === "tiles" ? { presentation: "tiles" } : {}),
+      ...grants,
+      ...(isRecord(raw.itemDefaults)
+        ? { itemDefaults: sanitizePresentation(raw.itemDefaults) }
+        : {}),
+      ...(isRecord(raw.itemOverrides)
+        ? {
+            itemOverrides: Object.fromEntries(
+              Object.entries(raw.itemOverrides).map(([key, value]) => {
+                if (!isRecord(value))
+                  throw new Error(`${where}: invalid item override ${key}.`);
+                return [key, sanitizePresentation(value)];
+              }),
+            ),
+          }
+        : {}),
+      contextMenu: sanitizeMenu(raw.contextMenu),
+      actions: sanitizeMenu(raw.actions),
+      headerActions: sanitizeMenu(raw.headerActions),
+      menu: sanitizeMenu(raw.menu),
+      ...(typeof raw.rowHeight === "number" && Number.isFinite(raw.rowHeight)
+        ? { rowHeight: Math.max(28, Math.min(160, raw.rowHeight)) }
+        : {}),
+      ...(typeof raw.height === "number" && Number.isFinite(raw.height)
+        ? { height: Math.max(120, Math.min(1200, raw.height)) }
+        : {}),
+      ...(raw.collapsed === true ? { collapsed: true } : {}),
+      ...(typeof raw.hideEmpty === "boolean"
+        ? { hideEmpty: raw.hideEmpty }
+        : {}),
+      ...(typeof raw.empty === "string" ? { empty: raw.empty } : {}),
+      ...(asOpenMode(raw.open) ? { open: asOpenMode(raw.open) } : {}),
+      ...(when ? { when } : {}),
+    },
+  ];
 }
 
 function sanitizeTabs({
@@ -477,103 +646,8 @@ function sanitizeTabs({
         throw new Error("Each tab needs a unique id, a title, and sections.");
       }
       ids.add(tab.id);
-      const sections = tab.sections.flatMap(
-        (section): SidebarSectionConfig[] => {
-          if (
-            !isRecord(section) ||
-            !stableId(section.id) ||
-            sectionIds.has(section.id) ||
-            !isSectionType(section.type)
-          ) {
-            throw new Error(
-              "Each widget needs a unique id and a supported type.",
-            );
-          }
-          sectionIds.add(section.id);
-          const when = sanitizeSidebarWhen(section.when);
-          if (when === null) return [];
-          const source = sanitizeSource(section.source);
-          if (
-            (source?.type ?? section.type) === "app" &&
-            (typeof section.app !== "string" ||
-              !/^[a-zA-Z0-9_-]+$/.test(section.app))
-          )
-            throw new Error("App widgets need an app name.");
-          if (
-            section.path !== undefined &&
-            (typeof section.path !== "string" ||
-              section.path.startsWith("/") ||
-              section.path.split(/[\\/]/).includes(".."))
-          )
-            throw new Error("Notes need a project-relative path.");
-          return [
-            {
-              id: section.id,
-              source,
-              collections: Array.isArray(section.collections)
-                ? section.collections.filter(
-                    (name): name is string =>
-                      typeof name === "string" &&
-                      [
-                        "chats",
-                        "subsessions",
-                        "activity",
-                        "files",
-                        "workflows",
-                        "apps",
-                        "git",
-                        "prs",
-                        "bookmarks",
-                        "remote",
-                        "tabs",
-                      ].includes(name),
-                  )
-                : undefined,
-              itemDefaults: isRecord(section.itemDefaults)
-                ? sanitizePresentation(section.itemDefaults)
-                : undefined,
-              itemOverrides: isRecord(section.itemOverrides)
-                ? Object.fromEntries(
-                    Object.entries(section.itemOverrides).map(
-                      ([key, value]) => {
-                        if (!isRecord(value))
-                          throw new Error(`Invalid item override: ${key}`);
-                        return [key, sanitizePresentation(value)];
-                      },
-                    ),
-                  )
-                : undefined,
-              contextMenu: sanitizeMenu(section.contextMenu),
-              actions: sanitizeMenu(section.actions),
-              headerActions: sanitizeMenu(section.headerActions),
-              rowHeight:
-                typeof section.rowHeight === "number"
-                  ? Math.max(28, Math.min(160, section.rowHeight))
-                  : undefined,
-              type: section.type,
-              title:
-                typeof section.title === "string" ? section.title : undefined,
-              app: typeof section.app === "string" ? section.app : undefined,
-              path: typeof section.path === "string" ? section.path : undefined,
-              height:
-                typeof section.height === "number" &&
-                Number.isFinite(section.height)
-                  ? Math.max(120, Math.min(1200, section.height))
-                  : undefined,
-              collapsed: section.collapsed === true,
-              hideEmpty:
-                typeof section.hideEmpty === "boolean"
-                  ? section.hideEmpty
-                  : undefined,
-              empty:
-                typeof section.empty === "string" ? section.empty : undefined,
-              items: sanitizeItems(section.items),
-              open: asOpenMode(section.open),
-              menu: sanitizeMenu(section.menu),
-              when,
-            },
-          ];
-        },
+      const sections = tab.sections.flatMap((section) =>
+        sanitizeSection(section, sectionIds),
       );
       const when = sanitizeSidebarWhen(tab.when);
       return {
@@ -663,20 +737,15 @@ function sanitizePaletteModes({
     });
     if (mode.aliases !== undefined && !Array.isArray(mode.aliases))
       throw new Error(`${where}: aliases must be an array of names.`);
-    const source = sanitizeSource(mode.source);
-    if (
-      source &&
-      !(source.type === "custom"
-        ? source.module
-        : isWorkspaceSource(source.type))
-    )
+    const source =
+      mode.source === undefined
+        ? undefined
+        : sanitizeSourceName(mode.source, where);
+    const listed = workSourceName(source);
+    // The palette has no chat beside it.
+    if (listed && SESSION_WORK_SOURCES.includes(listed))
       throw new Error(
-        `${where}: a mode source is a module ({ type: "custom", module }) or a workspace source (${WORKSPACE_SOURCES.join(", ")}).`,
-      );
-    // Scope follows the chat beside a sidebar; the palette has none.
-    if (source?.scope && source.scope !== "project")
-      throw new Error(
-        `${where}: source.scope needs a sidebar; point section at a scoped section instead.`,
+        `${where}: ${source} needs a chat; the palette has none.`,
       );
     const section =
       typeof mode.section === "string"
@@ -689,14 +758,9 @@ function sanitizePaletteModes({
         throw new Error(
           `${where}: section ${mode.section} lists the chat in front (when.session); the palette has none.`,
         );
-      const type = resolveSidebarSection(section).type;
-      if (
-        type === "custom"
-          ? !section.source?.module && !section.items?.length
-          : !isWorkspaceSource(type)
-      )
+      if (section.source === undefined && !section.items?.length)
         throw new Error(
-          `${where}: a mode's section lists rows: a workspace source, or a custom section with a module or items.`,
+          `${where}: a mode's section lists rows: a source, or items.`,
         );
     }
     const items = sanitizeItems(mode.items);
@@ -710,13 +774,16 @@ function sanitizePaletteModes({
       mode.search !== "source"
     )
       throw new Error(`${where}: search is "palette" or "source".`);
-    const module = source?.module ?? section?.source?.module;
+    const module =
+      (source !== undefined && !listed) ||
+      (section?.source !== undefined && !workSourceName(section.source));
     if (mode.search === "source" && !module)
       throw new Error(`${where}: search "source" needs an executable module.`);
     if (mode.search === "source" && mode.topLevel === true)
       throw new Error(
         `${where}: topLevel rows must be loaded once; use search "palette".`,
       );
+    const grants = sanitizeGrants(mode, where, source !== undefined && !listed);
     let when: SidebarWhen | undefined;
     if (mode.when !== undefined) {
       if (
@@ -741,6 +808,7 @@ function sanitizePaletteModes({
       source,
       section: section?.id,
       items,
+      ...grants,
       search: mode.search === "source" ? "source" : "palette",
       topLevel: mode.topLevel === true,
       when,
@@ -749,11 +817,61 @@ function sanitizePaletteModes({
 }
 
 /** Evaluate a workspace.js source in the isolated vm context. Throws. */
+/**
+ * workspace.js is data written as a script. Nothing of this process enters
+ * its context (a host object would hand it this realm's Function, and with
+ * it `process`), and its value leaves as JSON, so none of its code runs
+ * here. A committed project file is someone else's: this is what keeps it
+ * data.
+ */
 function evaluateWorkspaceModule(source: string, filename: string): unknown {
-  const module = { exports: {} as unknown };
-  const context = vm.createContext({ module, exports: module.exports });
+  const context = vm.createContext(Object.create(null));
+  vm.runInContext(
+    "var module = { exports: {} }; var exports = module.exports;",
+    context,
+  );
   vm.runInContext(source, context, { filename, timeout: 250 });
-  return module.exports;
+  const json: unknown = vm.runInContext(
+    "JSON.stringify(module.exports)",
+    context,
+    { timeout: 250 },
+  );
+  return typeof json === "string" ? JSON.parse(json) : undefined;
+}
+
+/** Replace a file whole: a crash leaves the old one or the new one. */
+function writeFileAtomically(file: string, content: string) {
+  const temporary = `${file}.${randomUUID()}.tmp`;
+  fs.writeFileSync(temporary, content);
+  fs.renameSync(temporary, file);
+}
+
+/** Where the original goes: `.v1`, or the next free name if that differs. */
+function backupPath(file: string): string | null {
+  const original = fs.readFileSync(file, "utf-8");
+  for (let index = 1; index < 100; index += 1) {
+    const candidate = index === 1 ? `${file}.v1` : `${file}.v1-${index}`;
+    if (!fs.existsSync(candidate)) return candidate;
+    if (fs.readFileSync(candidate, "utf-8") === original) return null;
+  }
+  return null;
+}
+
+/**
+ * A host-owned file written before ADR 0234 is rewritten once in the new
+ * shape, its original kept beside it (`.v1`). Committed project files are
+ * never rewritten: they keep their error until someone edits them.
+ */
+function upgradeHostFile(file: string, raw: unknown): unknown {
+  const upgraded = upgradeWorkspaceLayout(raw);
+  if (upgraded === null) return raw;
+  // Checked before anything is written: a layout the rewrite cannot make
+  // valid stays as it is on disk, and its error says what to change.
+  sanitize(upgraded);
+  const backup = backupPath(file);
+  if (backup) fs.copyFileSync(file, backup);
+  writeFileAtomically(file, workspaceFileFor(upgraded));
+  return upgraded;
 }
 
 /**
@@ -763,11 +881,13 @@ function evaluateWorkspaceModule(source: string, filename: string): unknown {
  */
 const lastGood = new Map<string, WorkspaceConfig>();
 const loadErrors = new Map<string, string>();
-export function loadWorkspaceConfigFile(file: string): WorkspaceConfig {
+export function loadWorkspaceConfigFile(
+  file: string,
+  options: { upgrade?: boolean } = {},
+): WorkspaceConfig {
   try {
-    const config = sanitize(
-      evaluateWorkspaceModule(fs.readFileSync(file, "utf-8"), file),
-    );
+    const raw = evaluateWorkspaceModule(fs.readFileSync(file, "utf-8"), file);
+    const config = sanitize(options.upgrade ? upgradeHostFile(file, raw) : raw);
     lastGood.delete(file);
     lastGood.set(file, config);
     if (lastGood.size > 100) {
@@ -862,7 +982,10 @@ export function resolveWorkspaceConfig(opts: {
 }): ResolvedWorkspaceConfig {
   for (const { layer, file } of workspaceLayerFiles(opts)) {
     if (!fs.existsSync(file)) continue;
-    const config = loadWorkspaceConfigFile(file);
+    // Only files Work keeps for the person are rewritten (ADR 0234).
+    const config = loadWorkspaceConfigFile(file, {
+      upgrade: layer !== "project",
+    });
     return { config, layer, file, error: loadErrors.get(file) };
   }
   return { config: DEFAULT_WORKSPACE_CONFIG, layer: "default" };
@@ -976,7 +1099,7 @@ export class WorkspaceConfigStore {
   }
 
   load(): WorkspaceConfig {
-    return loadWorkspaceConfigFile(this.file);
+    return loadWorkspaceConfigFile(this.file, { upgrade: true });
   }
 
   /** The same watch as the project layers: directory events plus a poll. */
@@ -991,6 +1114,71 @@ export class WorkspaceConfigStore {
   }
 }
 
+/**
+ * A row's record crosses as plain JSON, bounded like session metadata: a
+ * larger record is left out (the row still shows), never failing its page.
+ */
+function sanitizeData(raw: unknown): Record<string, unknown> | undefined {
+  if (!isRecord(raw)) return undefined;
+  const json = JSON.stringify(raw);
+  // Room for a chat's record with its metadata (64 KB at most).
+  if (json.length > 131_072) return undefined;
+  const parsed: unknown = JSON.parse(json);
+  return isRecord(parsed) ? parsed : undefined;
+}
+
+/** Validate a module's row before it crosses into the renderer. */
+export function sanitizeSidebarSourceItem(
+  item: unknown,
+  ids = new Set<string>(),
+): SidebarSourceItem {
+  if (
+    !isRecord(item) ||
+    typeof item.id !== "string" ||
+    !item.id ||
+    ids.has(item.id) ||
+    typeof item.label !== "string"
+  )
+    throw new Error("Source items need unique stable IDs and labels.");
+  ids.add(item.id);
+  const data = sanitizeData(item.data);
+  const presentation = sanitizePresentation(item);
+  // What a source wrote is bounded, and opens only what a row may: a
+  // command that does more than open something stays the layout's.
+  const entries = (list: SidebarMenuEntry[] | undefined) =>
+    list?.filter((entry) => !entry.url || rowTargetAllowed(entry.url));
+  const url =
+    typeof item.url === "string" &&
+    item.url.length <= 8192 &&
+    rowTargetAllowed(item.url)
+      ? item.url
+      : undefined;
+  return {
+    ...presentation,
+    ...(presentation.description
+      ? { description: presentation.description.slice(0, 1000) }
+      : {}),
+    ...(presentation.icon && presentation.icon.length > 131_072
+      ? { icon: undefined }
+      : {}),
+    ...(presentation.menu ? { menu: entries(presentation.menu) } : {}),
+    ...(presentation.contextMenu
+      ? { contextMenu: entries(presentation.contextMenu) }
+      : {}),
+    ...(presentation.actions ? { actions: entries(presentation.actions) } : {}),
+    id: item.id,
+    label: item.label.slice(0, 1000),
+    parentId: typeof item.parentId === "string" ? item.parentId : null,
+    hasChildren: item.hasChildren === true,
+    url,
+    // false opens a row with children the first time it loads.
+    ...(typeof item.collapsed === "boolean"
+      ? { collapsed: item.collapsed }
+      : {}),
+    ...(data ? { data } : {}),
+  };
+}
+
 /** Validate executable source data before it crosses into the renderer. */
 export function sanitizeSidebarSourcePage(raw: unknown): {
   items: SidebarSourceItem[];
@@ -1001,25 +1189,7 @@ export function sanitizeSidebarSourcePage(raw: unknown): {
       "Source load must return { items, cursor? }, with at most 1000 items per page.",
     );
   const ids = new Set<string>();
-  const items = raw.items.map((item): SidebarSourceItem => {
-    if (
-      !isRecord(item) ||
-      typeof item.id !== "string" ||
-      !item.id ||
-      ids.has(item.id) ||
-      typeof item.label !== "string"
-    )
-      throw new Error("Source items need unique stable IDs and labels.");
-    ids.add(item.id);
-    return {
-      ...sanitizePresentation(item),
-      id: item.id,
-      label: item.label,
-      parentId: typeof item.parentId === "string" ? item.parentId : null,
-      hasChildren: item.hasChildren === true,
-      url: typeof item.url === "string" ? item.url : undefined,
-    };
-  });
+  const items = raw.items.map((item) => sanitizeSidebarSourceItem(item, ids));
   return {
     items,
     cursor: typeof raw.cursor === "string" ? raw.cursor : undefined,

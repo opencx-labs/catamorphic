@@ -2,31 +2,14 @@ import {
   matchesProjectExperience,
   type ProjectExperienceContext,
 } from "./project-experience.js";
-import type {
-  SidebarItem,
-  SidebarSectionConfig,
-  SidebarSource,
-  SidebarTabConfig,
-  SidebarWhen,
+import {
+  type SidebarItem,
+  type SidebarSectionConfig,
+  type SidebarTabConfig,
+  type SidebarWhen,
+  sectionModule,
+  workSourceName,
 } from "./sidebar.js";
-
-/** Every built-in list the workspace offers, by source name. */
-export const WORKSPACE_SOURCES = [
-  "chats",
-  "subsessions",
-  "activity",
-  "files",
-  "workflows",
-  "apps",
-  "git",
-  "prs",
-  "bookmarks",
-  "remote",
-  "tabs",
-] as const;
-export type WorkspaceSourceName = (typeof WORKSPACE_SOURCES)[number];
-export const isWorkspaceSource = (name: string): name is WorkspaceSourceName =>
-  WORKSPACE_SOURCES.some((source) => source === name);
 
 /**
  * The workspace file (`workspace.js`, ADR 0186): what the window offers for
@@ -40,7 +23,7 @@ export interface WorkspaceConfig {
 
 /**
  * A palette mode (ADR 0186): a typed trigger that scopes palette search to
- * one list of rows. Rows come from the same primitives sidebar sections use,
+ * one list of rows. Rows come from the same sources sidebar sections use,
  * so a list can be a section, a mode, or both.
  */
 export interface PaletteModeConfig {
@@ -55,12 +38,15 @@ export interface PaletteModeConfig {
   /** Lucide icon name for the chip and rows without their own icon. */
   icon?: string;
   placeholder?: string;
-  /** An executable source module, the same contract as a section's. */
-  source?: SidebarSource;
-  /** Reuse a custom section's rows (its module or items) by section id. */
+  /** `work:<name>`, or a module path: the same sources sections name. */
+  source?: string;
+  /** Reuse a section's rows (its source or items) by section id. */
   section?: string;
   /** Static rows; nested items are listed flat. */
   items?: SidebarItem[];
+  /** A module mode's grants, as a section's (ADR 0234). */
+  collections?: string[];
+  workflows?: string[];
   /**
    * "palette" (default) loads rows once and ranks them as the user types.
    * "source" passes the typed query to the module's load, for APIs that
@@ -81,20 +67,35 @@ export function sidebarSections(
   ].flatMap((tab) => tab.sections);
 }
 
-/** The executable module behind a section or palette mode id, if any. */
-export function executableSourceModule(
+/**
+ * What a section or palette mode id runs as a module, with the grants that
+ * bound what it may ask Work for (ADR 0234).
+ */
+export function executableSource(
   config: WorkspaceConfig | null | undefined,
   id: string,
-): string | undefined {
+): { module: string; collections: string[]; workflows: string[] } | undefined {
   const sections = sidebarSections(config);
   const section = sections.find((item) => item.id === id);
-  if (section) return section.source?.module;
-  const mode = config?.palette?.modes.find((item) => item.id === id);
-  if (!mode) return undefined;
-  return (
-    mode.source?.module ??
-    sections.find((item) => item.id === mode.section)?.source?.module
-  );
+  const mode = section
+    ? undefined
+    : config?.palette?.modes.find((item) => item.id === id);
+  const owner = section ?? mode;
+  const shown = mode?.section
+    ? sections.find((item) => item.id === mode.section)
+    : undefined;
+  const module = section
+    ? sectionModule(section)
+    : mode?.source && !mode.source.startsWith("work:")
+      ? mode.source
+      : sectionModule(shown);
+  if (!module || !owner) return undefined;
+  const grants = mode?.source ? mode : (shown ?? owner);
+  return {
+    module,
+    collections: grants.collections ?? [],
+    workflows: grants.workflows ?? [],
+  };
 }
 
 /** Resolve the same authorized presentation for sidebars, search and agent discovery. */
@@ -116,6 +117,9 @@ export function visibleWorkspaceConfig({
         ? [{ ...entry, items: children }]
         : [];
     });
+  // The project's git checkouts are for people who edit its program.
+  const programWriter =
+    context.root || context.permissions.includes("program:write");
   const tabs = (entries: SidebarTabConfig[]): SidebarTabConfig[] =>
     entries
       .filter((tab) => matchesProjectExperience(tab.when, context))
@@ -125,16 +129,18 @@ export function visibleWorkspaceConfig({
           .filter(
             (section) =>
               matchesProjectExperience(section.when, context) &&
-              (context.root ||
-                context.permissions.includes("program:write") ||
-                !["git"].includes(section.source?.type ?? section.type)),
+              (programWriter || workSourceName(section.source) !== "git"),
           )
-          .map((section) => ({ ...section, items: items(section.items) })),
+          .map((section) =>
+            section.items
+              ? { ...section, items: items(section.items) }
+              : section,
+          ),
       }))
       .filter((tab) => tab.sections.length > 0);
   const modes = config.palette?.modes
     .filter((mode) => matchesProjectExperience(mode.when, context))
-    .map((mode) => ({ ...mode, items: items(mode.items) }));
+    .map((mode) => (mode.items ? { ...mode, items: items(mode.items) } : mode));
   return {
     sidebars: {
       left: tabs(config.sidebars.left),

@@ -272,10 +272,11 @@ settings load exactly as in the CLI. Worktrees are first-class: discovered,
 listed, diffed, assignable by agents when concurrent work needs isolation,
 and a chat's own worktree is a palette command away, set up before its first
 turn and brought back from the chat's status popup. Chats you start in Claude
-Code or Codex outside Work can appear in the project's chat list, ready to
+Code or Codex outside Work can appear among the project's chats, ready to
 continue on an agent of the same tool. Checkout management is harness-neutral, so Claude Code, Codex,
 and the built-in agent follow the same policy. Diff tabs render in Monaco;
-the sidebar has Changes and Pull Requests sections; PR review opens per-file
+changed files and pull requests are sources any sidebar section or palette
+mode can list (Find changed files searches them); PR review opens per-file
 diffs through the CodeHost seam. Terminals are real PTYs with shell
 integration (OSC 133); the embedded browser, which installs Chrome
 extensions from the Chrome Web Store, and the command palette round out the
