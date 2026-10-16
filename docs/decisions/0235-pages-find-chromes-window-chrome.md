@@ -32,18 +32,21 @@ Chrome's client-hint brands now (`preload/chrome-object.ts`). It matches
 Chrome 154, read from Chrome itself: member order, values and JSON, the
 `TypeError`s Chrome's bindings throw for arguments they don't take,
 `installState` answering after the call, which functions construct, and
-that they read as native code (each sits behind a Proxy). Timing comes from
-the page's navigation entry, read through functions kept before the page's
-scripts run, and never throws. Members already there stay; extension pages
-and workers are untouched.
+that they read as native code: the app methods are bound functions, and
+`loadTimes` and `csi`, which construct and answer null for `caller`, sit
+behind a Proxy. Timing comes from the page's navigation entry, read through
+functions kept before the page's scripts run, and never throws. Members
+already there stay; extension pages and workers are untouched.
 
 **A live check watches the gate.** `e2e/google-sign-in.e2e.ts` takes the
 first sign-in step in a Work tab with a made-up address, only with
-`CATAMORPHIC_EXTERNAL_INTEGRATIONS=1`; it never enters a password. Real
-Chrome on the same host, where there is one, takes the step too: when
-Google refuses both, the network is refused and the test is skipped, not
-failed. `.github/workflows/google-sign-in.yml` runs it daily on macOS and on
-pull requests that change what pages see of Work or how the check runs. It
+`CATAMORPHIC_EXTERNAL_INTEGRATIONS=1`; it never enters a password. A
+refusal of Work always fails. Real Chrome on the same host, where there is
+one, takes the step too, and its answer goes beside Work's to explain a
+failure, never to excuse one: on GitHub's macOS runner, the first runs saw
+Google refuse that runner's Chrome 152 while admitting Work.
+`.github/workflows/google-sign-in.yml` runs it daily on macOS and on pull
+requests that change what pages see of Work or how the check runs. It
 requires the verdicts file each run writes, so a check that skipped for
 want of authority fails, and a failed daily run opens or adds to an issue.
 
@@ -58,9 +61,11 @@ Google has blocked identical engines by name before.
   changes that landed with it (TODO.md). Gmail's unsupported-browser notice
   (0150, Electron 44) was not re-measured.
 - Script cannot match Chrome's bindings exactly: the app methods read as
-  `function () { [native code] }`, without Chrome's names, and a frame a
-  script creates (`about:blank`) keeps Electron's empty `window.chrome`.
-  Google's first sign-in step checks neither today (TODO.md).
+  `function () { [native code] }`, without Chrome's names; `loadTimes` and
+  `csi` answer the probes that find a Proxy (a prototype cycle, the
+  `caller` getter called on them directly); and a frame a script creates
+  (`about:blank`) keeps Electron's empty `window.chrome`. Google's first
+  sign-in step checks none of these today (TODO.md).
 - `csi().pageT` keeps the page's 100µs timer resolution, and `firstPaintTime`
   comes from the `first-paint` entry, a few milliseconds from Chrome's.
 - Only the first step is checked; a full sign-in, through password and

@@ -6,9 +6,9 @@
  * says it is Chrome without `chrome.app`: "Couldn't sign you in. This
  * browser or app may not be secure" (ADR 0235). Serialized into the page's
  * main world by `executeInMainWorld`, so it may not close over anything
- * outside its body. It runs before the page's own scripts: it keeps what it
- * needs of the page's globals then, so a page that replaces them later
- * neither breaks it nor sees it call them. A member already there stays.
+ * outside its body. It runs before the page's own scripts and keeps the
+ * globals it calls (performance, timers, Math) from then, so a page that
+ * replaces them later does not break it. A member already there stays.
  */
 export function installChromeObject(): void {
   // biome-ignore lint/suspicious/noRedundantUseStrict: the main world runs this as a script, where functions are sloppy and own `arguments` and `caller`; Chrome's own functions have neither.
@@ -25,24 +25,40 @@ export function installChromeObject(): void {
   const entriesByName = performance.getEntriesByName.bind(performance);
   const now = performance.now.bind(performance);
   const later = setTimeout;
+  const floor = Math.floor;
+  const round = Math.round;
+  const finite = Number.isFinite;
+  const captureStack = Error.captureStackTrace;
   const protocolOf = () => location.protocol;
 
-  /** What Chrome's own bindings throw for arguments they don't take. */
-  const invalid = (method: string, signature = "") =>
-    new TypeError(`Error in invocation of app.${method}(${signature}): `);
+  /**
+   * What Chrome's own bindings throw for arguments they don't take. A
+   * binding leaves no frame of its own in the stack, so neither does this.
+   */
+  const invalid = (
+    method: string,
+    signature: string,
+    from: (...args: unknown[]) => unknown,
+  ) => {
+    const error = new TypeError(
+      `Error in invocation of app.${method}(${signature}): `,
+    );
+    captureStack?.(error, from);
+    return error;
+  };
   // Method shorthand: named, no prototype, not constructible, like Chrome's.
-  const app = {
-    isInstalled: false,
+  const methods = {
     getDetails(...args: unknown[]): null {
-      if (args.length > 0) throw invalid("getDetails");
+      if (args.length > 0) throw invalid("getDetails", "", methods.getDetails);
       return null;
     },
     getIsInstalled(...args: unknown[]): boolean {
-      if (args.length > 0) throw invalid("getIsInstalled");
+      if (args.length > 0)
+        throw invalid("getIsInstalled", "", methods.getIsInstalled);
       return false;
     },
     installState(...args: unknown[]): void {
-      const [callback] = args;
+      const callback = args[0];
       // An optional callback: Chrome takes null and undefined for none.
       if (
         args.length > 1 ||
@@ -50,15 +66,37 @@ export function installChromeObject(): void {
           callback !== null &&
           typeof callback !== "function")
       )
-        throw invalid("installState", "optional function callback");
+        throw invalid(
+          "installState",
+          "optional function callback",
+          methods.installState,
+        );
       // Chrome answers after a round trip to the browser, never in the call.
       if (typeof callback === "function")
         later(() => callback("not_installed"), 0);
     },
     runningState(...args: unknown[]): string {
-      if (args.length > 0) throw invalid("runningState");
+      if (args.length > 0)
+        throw invalid("runningState", "", methods.runningState);
       return "cannot_run";
     },
+  };
+  /**
+   * Chrome's app methods are its own bindings, so they read as native code:
+   * a bound function does too (`function () { [native code] }`), without a
+   * prototype, and throws on `caller` as Chrome's do. It keeps the name.
+   */
+  const bound = (method: (...args: unknown[]) => unknown, name: string) => {
+    const shown = method.bind(undefined);
+    Object.defineProperty(shown, "name", { value: name });
+    return shown;
+  };
+  const app = {
+    isInstalled: false,
+    getDetails: bound(methods.getDetails, "getDetails"),
+    getIsInstalled: bound(methods.getIsInstalled, "getIsInstalled"),
+    installState: bound(methods.installState, "installState"),
+    runningState: bound(methods.runningState, "runningState"),
     InstallState: {
       DISABLED: "disabled",
       INSTALLED: "installed",
@@ -81,9 +119,9 @@ export function installChromeObject(): void {
    * The navigation's milestones, in whole epoch milliseconds (0: not yet),
    * and never a throw: Chrome's answer comes from the browser, not the page.
    */
+  const start = finite(timeOrigin) ? floor(timeOrigin) : 0;
   const timing = () => {
-    const start = Number.isFinite(timeOrigin) ? Math.floor(timeOrigin) : 0;
-    const at = (ms: number) => (ms > 0 ? Math.floor(timeOrigin + ms) : 0);
+    const at = (ms: number) => (ms > 0 ? floor(timeOrigin + ms) : 0);
     try {
       const navigation: object | undefined = entriesByType("navigation")[0];
       const paint: object | undefined = entriesByName("first-paint")[0];
@@ -97,7 +135,7 @@ export function installChromeObject(): void {
         firstPaint: at(offset(paint, "startTime")),
         type: typeof type === "string" ? type : "navigate",
         protocol: typeof protocol === "string" ? protocol : "",
-        pageMs: Math.round(now() * 1000) / 1000,
+        pageMs: round(now() * 1000) / 1000,
       };
     } catch {
       return {
@@ -125,8 +163,9 @@ export function installChromeObject(): void {
   // have a prototype. Chrome's are anonymous, so their names go.
   function loadTimes() {
     const times = timing();
-    const fromNetwork = /^https?:$/.test(protocolOf());
-    const negotiated = protocolOf() === "https:" && times.protocol !== "";
+    const pageProtocol = protocolOf();
+    const fromNetwork = pageProtocol === "https:" || pageProtocol === "http:";
+    const negotiated = pageProtocol === "https:" && times.protocol !== "";
     return {
       requestTime: times.start / 1000,
       startLoadTime: times.start / 1000,
@@ -161,35 +200,25 @@ export function installChromeObject(): void {
     Object.defineProperty(fn, "name", { value: "" });
 
   /**
-   * Chrome's functions are its own bindings, so they read as native code.
-   * A function behind a Proxy does too: `function () { [native code] }`,
-   * Chrome's exact text for loadTimes and csi. Strict functions throw on
-   * `caller` and `arguments`, as Chrome's app methods do; loadTimes and csi
-   * answer null, so those two say so.
+   * loadTimes and csi construct, have a prototype, and answer null for
+   * `caller` and `arguments`, which no bound or strict function does. A
+   * Proxy keeps all three and reads as Chrome's exact
+   * `function () { [native code] }`.
    */
-  const native = <T extends object>(target: T, quietCaller: boolean): T =>
-    new Proxy(
-      target,
-      quietCaller
-        ? {
-            get: (fn, key, receiver) =>
-              key === "caller" || key === "arguments"
-                ? null
-                : Reflect.get(fn, key, receiver),
-          }
-        : {},
-    );
-  const shownLoadTimes = native(loadTimes, true);
-  const shownCsi = native(csi, true);
+  const native = <T extends object>(target: T): T =>
+    new Proxy(target, {
+      get: (fn, key, receiver) =>
+        key === "caller" || key === "arguments"
+          ? null
+          : Reflect.get(fn, key, receiver),
+    });
+  const shownLoadTimes = native(loadTimes);
+  const shownCsi = native(csi);
   // `csi.prototype.constructor` names the function the page holds.
   Object.defineProperty(loadTimes.prototype, "constructor", {
     value: shownLoadTimes,
   });
   Object.defineProperty(csi.prototype, "constructor", { value: shownCsi });
-  app.getDetails = native(app.getDetails, false);
-  app.getIsInstalled = native(app.getIsInstalled, false);
-  app.installState = native(app.installState, false);
-  app.runningState = native(app.runningState, false);
 
   for (const [name, value] of [
     ["loadTimes", shownLoadTimes],

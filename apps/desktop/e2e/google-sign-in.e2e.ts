@@ -21,11 +21,11 @@ import { type AppHandle, launchApp } from "./harness.js";
  * says "Couldn't find this account"; Work must get the same answer. Only
  * the first step is checked, never a password.
  *
- * Real Chrome on the same host, where there is one, takes the step too: if
- * Google refuses Chrome as well, the network is refused and Work is not
- * judged. It runs every time, so a broken control shows the day it breaks.
- * Every run writes its verdicts to google-sign-in.json among the test
- * artifacts. Google changes its gate without notice, so this runs daily
+ * A refusal of Work always fails. Real Chrome on the same host, where
+ * there is one, takes the step too, and its answer goes beside Work's to
+ * explain a failure, never to excuse one: on GitHub's macOS runner Google
+ * refused its Chrome 152 while admitting Work. Every run writes its
+ * verdicts to google-sign-in.json among the test artifacts, Work's first. Google changes its gate without notice, so this runs daily
  * (.github/workflows/google-sign-in.yml), and only with the explicit
  * external-test authority (CATAMORPHIC_EXTERNAL_INTEGRATIONS=1).
  * browser-identity.e2e.ts checks offline what this depends on.
@@ -45,6 +45,8 @@ interface Outcome {
   url: string;
   text: string;
   error?: string;
+  /** Chrome's own name and version, for the control. */
+  browser?: string;
 }
 
 function verdictOf({ url, text }: { url: string; text: string }): Verdict {
@@ -97,10 +99,14 @@ function chromeBinary(): string | undefined {
 
 async function stopChrome(chrome: ChildProcess): Promise<void> {
   if (chrome.exitCode !== null || chrome.signalCode !== null) return;
-  const exited = new Promise((resolve) => chrome.once("exit", resolve));
+  const exited = new Promise((resolve) => {
+    chrome.once("exit", resolve);
+    chrome.once("error", resolve);
+  });
   chrome.kill("SIGTERM");
   const force = setTimeout(() => chrome.kill("SIGKILL"), 5_000);
-  await exited;
+  // A Chrome that never started sends no exit; don't wait on it for ever.
+  await Promise.race([exited, sleep(10_000)]);
   clearTimeout(force);
 }
 
@@ -121,6 +127,10 @@ async function signInWithChrome(binary: string): Promise<Outcome> {
     ],
     { stdio: "ignore" },
   );
+  const spawnFailed = new Promise<never>((_, reject) =>
+    chrome.once("error", reject),
+  );
+  spawnFailed.catch(() => {});
   try {
     const port = await poll(
       async () =>
@@ -149,24 +159,59 @@ async function signInWithChrome(binary: string): Promise<Outcome> {
       30_000,
     );
     if (!pageSocket) throw new Error("Chrome opened no page");
+    const version: unknown = await (
+      await fetch(`http://127.0.0.1:${port}/json/version`)
+    ).json();
+    const browser =
+      version && typeof version === "object" && "Browser" in version
+        ? String(version.Browser)
+        : undefined;
     const socket = new WebSocket(pageSocket);
-    await new Promise((resolve, reject) => {
-      socket.addEventListener("open", resolve);
-      socket.addEventListener("error", reject);
-    });
+    await Promise.race([
+      spawnFailed,
+      new Promise((resolve, reject) => {
+        socket.addEventListener("open", resolve);
+        socket.addEventListener("error", reject);
+      }),
+    ]);
     let next = 0;
-    const waiting = new Map<number, (result: unknown) => void>();
+    const waiting = new Map<
+      number,
+      { resolve: (result: unknown) => void; reject: (error: Error) => void }
+    >();
     socket.addEventListener("message", (event) => {
       const message: { id?: number; result?: unknown } = JSON.parse(
         String(event.data),
       );
-      if (message.id !== undefined) waiting.get(message.id)?.(message.result);
+      if (message.id === undefined) return;
+      waiting.get(message.id)?.resolve(message.result);
+      waiting.delete(message.id);
+    });
+    // A closed socket or a silent Chrome ends every call, not the test.
+    socket.addEventListener("close", () => {
+      for (const call of waiting.values())
+        call.reject(new Error("Chrome's debugging socket closed"));
+      waiting.clear();
     });
     const send = (method: string, params: object = {}) =>
-      new Promise<unknown>((resolve) => {
+      new Promise<unknown>((resolve, reject) => {
         next += 1;
-        waiting.set(next, resolve);
-        socket.send(JSON.stringify({ id: next, method, params }));
+        const id = next;
+        const timer = setTimeout(() => {
+          waiting.delete(id);
+          reject(new Error(`Chrome did not answer ${method}`));
+        }, 15_000);
+        waiting.set(id, {
+          resolve: (result) => {
+            clearTimeout(timer);
+            resolve(result);
+          },
+          reject: (error) => {
+            clearTimeout(timer);
+            reject(error);
+          },
+        });
+        socket.send(JSON.stringify({ id, method, params }));
       });
     const evaluate = async (expression: string): Promise<unknown> => {
       const answer = await send("Runtime.evaluate", {
@@ -202,7 +247,7 @@ async function signInWithChrome(binary: string): Promise<Outcome> {
       (state) => state.field || state.verdict === "rejected",
       30_000,
     );
-    if (ready.verdict === "rejected") return ready;
+    if (ready.verdict === "rejected") return { ...ready, browser };
     if (!ready.field)
       throw new Error(`Chrome never showed the address field: ${ready.url}`);
     await evaluate(`document.querySelector(${JSON.stringify(FIELD)}).focus()`);
@@ -221,7 +266,7 @@ async function signInWithChrome(binary: string): Promise<Outcome> {
       30_000,
     );
     socket.close();
-    return outcome;
+    return { ...outcome, browser };
   } finally {
     await stopChrome(chrome);
     try {
@@ -289,37 +334,29 @@ describeIf("Google's sign-in, live", () => {
 
   it("lets Work past its supported-browser gate", {
     timeout: 300_000,
-  }, async (context) => {
+  }, async () => {
     const work = await signInWithWork().catch(failed);
     if (work.verdict !== "admitted")
       await app
         .screenshot(path.join(ARTIFACTS, "google-sign-in.png"))
         .catch(() => {});
+    const record = (control: Outcome | null) => {
+      mkdirSync(ARTIFACTS, { recursive: true });
+      writeFileSync(
+        path.join(ARTIFACTS, "google-sign-in.json"),
+        JSON.stringify({ outcome: work.verdict, work, control }, null, 2),
+      );
+    };
+    // Work's verdict is on disk before the control can go wrong.
+    record(null);
     const binary = chromeBinary();
     const control = binary
       ? await signInWithChrome(binary).catch(failed)
-      : undefined;
-    // Work is judged unless Google refused real Chrome here too.
-    const outcome =
-      work.verdict === "rejected" && control?.verdict === "rejected"
-        ? "network-refused"
-        : work.verdict;
-    mkdirSync(ARTIFACTS, { recursive: true });
-    writeFileSync(
-      path.join(ARTIFACTS, "google-sign-in.json"),
-      JSON.stringify({ outcome, work, control: control ?? null }, null, 2),
-    );
-    if (outcome === "network-refused")
-      context.skip(
-        `Google refused real Chrome here too; nothing to learn about Work from this network. Chrome: ${summary(control ?? failed("no control"))}`,
-      );
-    if (outcome === "admitted" && control && control.verdict !== "admitted")
-      console.warn(
-        `[google-sign-in] Work was admitted but the Chrome control was not, so a refusal here would go unexplained: ${summary(control)}`,
-      );
+      : null;
+    record(control);
     expect(
       work.verdict,
-      `Work: ${summary(work)}. Chrome: ${control ? summary(control) : "not on this host"}`,
+      `Work: ${summary(work)}. Chrome${control?.browser ? ` (${control.browser})` : ""}: ${control ? summary(control) : "not on this host"}`,
     ).toBe("admitted");
   });
 });

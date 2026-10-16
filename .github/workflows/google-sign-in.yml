@@ -5,8 +5,8 @@ name: Google sign-in
 # without notice (ADR 0235). Every day, and on pull requests that change
 # what pages see of Work or how this check runs, a Work tab takes the
 # sign-in's first step with a made-up address and must get past the gate.
-# Real Chrome on the runner takes it too, as the control. A failed daily
-# run opens (or adds to) an issue.
+# Real Chrome on the runner takes it too; its answer explains a failure and
+# never excuses one. A failed daily run opens (or adds to) an issue.
 on:
   schedule:
     - cron: "41 5 * * *"
@@ -24,9 +24,7 @@ on:
       - apps/desktop/src/main/extensions/brand.ts
       - apps/desktop/src/main/extensions/host.ts
       - apps/desktop/src/main/index.ts
-      - apps/desktop/src/preload/chrome-object.ts
-      - apps/desktop/src/preload/client-hints.ts
-      - apps/desktop/src/preload/session.ts
+      - apps/desktop/src/preload/**
       - apps/desktop/src/shared/chrome-brands.ts
       - scripts/desktop-test.ts
       - scripts/desktop-test-environment.ts
@@ -44,7 +42,7 @@ jobs:
   sign-in:
     name: A Work tab gets past Google's gate
     # The platform Work ships on; hosted macOS images carry Google Chrome for
-    # the control run.
+    # the comparison run.
     runs-on: macos-15
     timeout-minutes: 30
     steps:
@@ -62,19 +60,18 @@ jobs:
       - name: Require a verdict
         if: always()
         run: |
-          verdicts=$(find test-results -name google-sign-in.json -print -quit)
+          verdicts=$(find test-results -name google-sign-in.json -print -quit 2>/dev/null || true)
           if [ -z "$verdicts" ]; then
             echo "::error::The live check left no verdict: it was skipped, or never reached Google"
             exit 1
           fi
           jq . "$verdicts"
-          outcome=$(jq -r .outcome "$verdicts")
-          control=$(jq -r '.control.verdict // "absent"' "$verdicts")
-          if [ "$outcome" = network-refused ]; then
-            echo "::warning::Google refused real Chrome on this runner too, so Work was not judged"
-          elif [ "$control" != admitted ]; then
-            echo "::warning::The Chrome control was $control, so a refusal of Work could not be told from a refusal of this network"
-          fi
+          {
+            echo "### Google sign-in"
+            echo
+            echo "- Work: $(jq -r '.work.verdict' "$verdicts")"
+            echo "- Real Chrome on this runner ($(jq -r '.control.browser // "none"' "$verdicts")): $(jq -r '.control.verdict // "not run"' "$verdicts")"
+          } >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         if: always()
         with:

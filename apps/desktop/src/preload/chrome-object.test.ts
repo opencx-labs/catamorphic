@@ -105,6 +105,20 @@ describe("installChromeObject", () => {
     expect(app.getDetails.call({})).toBeNull();
   });
 
+  it("leaves no frame of its own in a refusal's stack", () => {
+    const { app } = chromeOf(installInPage());
+    const stack = (() => {
+      try {
+        app.installState("x");
+      } catch (error) {
+        return error instanceof Error ? (error.stack ?? "") : "";
+      }
+      return "";
+    })();
+    const frames = stack.split("\n").slice(1).join("\n");
+    expect(frames).not.toMatch(/invalid|installState|getDetails/);
+  });
+
   it("takes null for installState's callback, as Chrome does", () => {
     const { app } = chromeOf(installInPage());
     expect(app.installState(null)).toBeUndefined();

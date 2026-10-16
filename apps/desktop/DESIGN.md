@@ -704,9 +704,9 @@ A web page, in a tab, a popup or a tab's embedded frame, now has Chrome's
 `window.chrome`: `loadTimes`, `csi` and `app`, matching Chrome's member
 order, values, argument errors, which functions construct and that they read
 as native code. A daily live check takes the sign-in's first step in a Work
-tab, with real Chrome on the same runner as the control, and opens an issue
-when a run fails (ADR 0235). A full sign-in, through password and 2FA, is
-checked by hand.
+tab and opens an issue when Google refuses Work; real Chrome on the same
+runner takes it too, to explain a failure, never to excuse one (ADR 0235). A
+full sign-in, through password and 2FA, is checked by hand.
 
 ### 2026-10-16: Every sidebar list is a source; the right sidebar starts empty
 
