@@ -204,6 +204,10 @@ const api = {
 
   filePreview: (input: FilePreviewInput): Promise<ResourcePreview> =>
     invoke("catamorphic:file-preview", input),
+  projectImage: (input: {
+    projectId: string;
+    filePath: string;
+  }): Promise<string | null> => invoke("catamorphic:project-image", input),
 
   composerFileSave: (input: {
     projectId: string;

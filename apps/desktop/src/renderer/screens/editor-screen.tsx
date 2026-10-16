@@ -360,6 +360,10 @@ export function EditorScreen({
               value={draft ?? savedContent}
               onChange={handleChange}
               onSave={() => saveRef.current()}
+              documentPath={filePath}
+              readImage={(path) =>
+                desktopApi.projectImage({ projectId, filePath: path })
+              }
               onSelectionReader={(reader) => {
                 if (reader) publishReader(reader);
                 else {
