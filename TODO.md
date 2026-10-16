@@ -10,7 +10,8 @@
   desktop apps is checked by hand on macOS only. MV2 extensions load
   unpacked only while Electron runs MV2.
 - **Electron 45: stable pin and async `safeStorage`.** Work pins
-  45.0.0-beta.1 for Chromium 156 (Google's sign-in gate, ADR 0150); move to
+  45.0.0-beta.1 (Chromium 156), taken for Google's sign-in gate, which
+  turned out to be `chrome.app` and not the engine (ADR 0150); move to
   45.0.0 stable when it ships. Electron 45 deprecates the synchronous
   `safeStorage.isEncryptionAvailable`, `encryptString` and `decryptString`
   (each logs a deprecation warning once), and Electron 46 removes them, so
@@ -22,6 +23,13 @@
   `runner-key-store.ts` in `apps/desktop/src/main`, plus
   `browser-vault.ts`, which only calls `isEncryptionAvailable`. Data
   written by `encryptString` decrypts with `decryptStringAsync`.
+- **`window.chrome` beyond a page's top frame (ADR 0150).** Work gives a
+  web page's top frame Chrome's `loadTimes`, `csi` and `app`, as page
+  script: `Function.prototype.toString` shows their source where Chrome's
+  show native code, and an embedded frame, or one a script creates
+  (`about:blank`), keeps Electron's empty `window.chrome`. Google's sign-in
+  checks neither today; the daily live check
+  (`.github/workflows/google-sign-in.yml`) says when that changes.
 - **Client hints on page loads (ADR 0150).** Electron sends no client-hint
   headers with a page load, and the webRequest rewrite in `main/browser.ts`
   only replaces headers already there, so documents carry no Sec-CH-UA

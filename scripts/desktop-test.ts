@@ -181,6 +181,9 @@ async function main(): Promise<void> {
       // Opt-in: installed speech models for the real-model voice suite
       // (ADR 0216), mounted read-only so the image never carries them.
       const voiceModels = process.env.CATAMORPHIC_VOICE_MODELS_DIR;
+      // Opt-in: the external-test authority, for the live Google sign-in
+      // check (e2e/google-sign-in.e2e.ts). It never rides in by default.
+      const external = process.env.CATAMORPHIC_EXTERNAL_INTEGRATIONS === "1";
       await run("docker", [
         "run",
         "--rm",
@@ -198,6 +201,7 @@ async function main(): Promise<void> {
               "CATAMORPHIC_VOICE_MODELS_DIR=/voice-models",
             ]
           : []),
+        ...(external ? ["--env", "CATAMORPHIC_EXTERNAL_INTEGRATIONS=1"] : []),
         imageId,
         ...args,
       ]);

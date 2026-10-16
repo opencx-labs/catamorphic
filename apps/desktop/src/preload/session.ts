@@ -3,6 +3,7 @@ import {
   EXTENSION_CHANNELS,
   type ExtensionCallAnswer,
 } from "../shared/extension-channels.js";
+import { installChromeObject } from "./chrome-object.js";
 import { alignClientHintBrands } from "./client-hints.js";
 import {
   type ExtensionBoot,
@@ -17,6 +18,9 @@ import { installWebStoreApis, type WebStoreBridge } from "./webstore-api.js";
  * worker of a profile's browsing session (ADR 0203). It must stay one
  * self-contained file: sandboxed renderers cannot load chunks.
  *  - Every page and worker presents Chrome's client-hint brands.
+ *  - A web page's top frame, in a tab or a popup, has Chrome's
+ *    `window.chrome` (`loadTimes`, `csi`, `app`), which Google's sign-in
+ *    looks for (chrome-object.ts).
  *  - A web page's top frame, in a tab or in a sign-in popup it opened,
  *    answers passkey requests from the profile's vault (passkeys.ts).
  *  - An extension's service worker or page gets Work's `chrome.*` APIs
@@ -146,6 +150,10 @@ function installForWebStore(): void {
   contextBridge.executeInMainWorld({ func: installWebStoreApis });
 }
 
+function installChromeWebObject(): void {
+  contextBridge.executeInMainWorld({ func: installChromeObject });
+}
+
 /**
  * A press in a page closes the window's extension popup, as Chrome's
  * closes when it loses focus: a window's guests share its focus, and a
@@ -187,6 +195,7 @@ function installForContext(): void {
     attempt(watchPopupMode);
     return;
   }
+  attempt(installChromeWebObject);
   attempt(installPasskeys);
   if (location.origin === webStoreOrigin()) attempt(installForWebStore);
 }

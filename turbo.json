@@ -110,7 +110,8 @@
         "GITHUB_ACTIONS",
         "RUNNER_ENVIRONMENT",
         "CATAMORPHIC_TEST_SHARD",
-        "CHROME_BIN"
+        "CHROME_BIN",
+        "CATAMORPHIC_EXTERNAL_INTEGRATIONS"
       ],
       "cache": true,
       "dependsOn": [

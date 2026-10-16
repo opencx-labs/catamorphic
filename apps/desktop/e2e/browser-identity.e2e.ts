@@ -98,4 +98,75 @@ describe("a page's view of the browser", () => {
     // The real version, not the reduced UA's zeros.
     expect(full).toMatch(new RegExp(`^${major}\\.0\\.[1-9]\\d*\\.\\d+$`));
   });
+
+  // Google's sign-in turns away a browser that says it is Chrome without
+  // `chrome.app` ("This browser or app may not be secure", ADR 0150), and
+  // Electron's `window.chrome` is empty. The live check is
+  // google-sign-in.e2e.ts.
+  it("has Chrome's window.chrome", async () => {
+    const page = await inGuest<{
+      members: string[];
+      app: string[];
+      answers: unknown[];
+      json: string;
+      loadTimes: string[];
+      csi: string[];
+      loaded: boolean;
+      functions: { name: string; own: string[] }[];
+    }>(`(() => {
+      const { app, loadTimes, csi } = window.chrome;
+      const times = loadTimes();
+      return {
+        members: Object.keys(window.chrome),
+        app: Object.keys(app),
+        answers: [app.isInstalled, app.getDetails(), app.getIsInstalled(), app.runningState()],
+        json: JSON.stringify(app),
+        loadTimes: Object.keys(times),
+        csi: Object.keys(csi()),
+        loaded: times.finishLoadTime > times.requestTime,
+        functions: [app.getDetails, loadTimes, csi].map((fn) => ({
+          name: fn.name,
+          own: Object.getOwnPropertyNames(fn).sort(),
+        })),
+      };
+    })()`);
+    expect(page.members).toEqual(["loadTimes", "csi", "app"]);
+    expect(page.app).toEqual([
+      "isInstalled",
+      "getDetails",
+      "getIsInstalled",
+      "installState",
+      "runningState",
+      "InstallState",
+      "RunningState",
+    ]);
+    expect(page.answers).toEqual([false, null, false, "cannot_run"]);
+    expect(page.json).toBe(
+      '{"isInstalled":false,"InstallState":{"DISABLED":"disabled","INSTALLED":"installed","NOT_INSTALLED":"not_installed"},"RunningState":{"CANNOT_RUN":"cannot_run","READY_TO_RUN":"ready_to_run","RUNNING":"running"}}',
+    );
+    expect(page.loadTimes).toEqual([
+      "requestTime",
+      "startLoadTime",
+      "commitLoadTime",
+      "finishDocumentLoadTime",
+      "finishLoadTime",
+      "firstPaintTime",
+      "firstPaintAfterLoadTime",
+      "navigationType",
+      "wasFetchedViaSpdy",
+      "wasNpnNegotiated",
+      "npnNegotiatedProtocol",
+      "wasAlternateProtocolAvailable",
+      "connectionInfo",
+    ]);
+    expect(page.csi).toEqual(["startE", "onloadT", "pageT", "tran"]);
+    expect(page.loaded).toBe(true);
+    // Chrome's methods are named and have no prototype; loadTimes and csi
+    // are anonymous constructors. All strict: no own arguments or caller.
+    expect(page.functions).toEqual([
+      { name: "getDetails", own: ["length", "name"] },
+      { name: "", own: ["length", "name", "prototype"] },
+      { name: "", own: ["length", "name", "prototype"] },
+    ]);
+  });
 });

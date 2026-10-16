@@ -13,7 +13,8 @@ const server = http.createServer((request, response) => {
   response.setHeader("Content-Type", "text/html");
   if (request.url?.startsWith("/popup")) {
     response.end(`<title>Popup</title><script>
-      window.opener?.postMessage("signed-in", "*");
+      // A sign-in popup meets Chrome too: Google's page looks for chrome.app.
+      window.opener?.postMessage("signed-in:" + typeof window.chrome?.app, "*");
       window.close();
     </script>`);
     return;
@@ -53,7 +54,7 @@ describe("browser popups", () => {
       `window.open(${JSON.stringify(`${origin}/popup`)}, "signin", "width=480,height=640"); true`,
     );
     await app.waitFor(
-      `document.querySelector('webview').getTitle() === 'got:signed-in'`,
+      `document.querySelector('webview').getTitle() === 'got:signed-in:object'`,
     );
     // The popup was a window of its own, never a workspace tab.
     expect(await app.eval(`document.querySelectorAll('webview').length`)).toBe(

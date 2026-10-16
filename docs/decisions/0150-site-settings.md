@@ -91,6 +91,18 @@ the way Chromium builds Chrome's (`shared/chrome-brands.ts`): the major
 version picks the placeholder brand and the order, so Chrome 156 is
 `"Not:A-Brand";v="8", "Chromium";v="156", "Google Chrome";v="156"` in the
 header, `navigator.userAgentData.brands` and its `toJSON()` alike.
+(2026-10-16) **`window.chrome`.** A web page's top frame, in a tab or a
+popup, gets Chrome's `window.chrome`: `loadTimes`, `csi` and `app`, with
+Chrome's member order, values, argument errors and function shapes
+(`preload/chrome-object.ts`, installed by the browsing session's preload).
+Electron's `window.chrome` is empty, and that, not the engine version, is
+what Google's sign-in gate checks: a browser that names itself Chrome
+without `chrome.app` gets "Couldn't sign you in. This browser or app may not
+be secure". Measured on the sign-in's first step with made-up addresses:
+Work's identity was refused every time, on Chromium 156 and 152, and
+admitted once `chrome.app` was present, on both; `csi`, `loadTimes`, client
+hints on page loads and a Firefox user agent each changed nothing; plain
+Electron, which names itself, was admitted.
 
 ## Consequences
 
@@ -122,7 +134,9 @@ header, `navigator.userAgentData.brands` and its `toJSON()` alike.
 - System audio with a screen or window share is Windows-only in Electron;
   the picker offers audio for tabs only.
 - Keeping Google's supported-browser gate happy means staying within two
-  Chromium majors of Chrome stable: track Electron releases.
+  Chromium majors of Chrome stable: track Electron releases. (2026-10-16:
+  not for the sign-in gate, which admits Chromium 152 once `chrome.app` is
+  there; see below. Gmail's unsupported-browser notice was not re-measured.)
   (2026-10-09) Chrome 156 reached stable on macOS on 2026-10-07, and
   Google's sign-in started refusing Work ("This browser or app may not be
   secure"). The newest Electron 44 (44.7.0) still carries Chromium 152, so
@@ -138,6 +152,18 @@ header, `navigator.userAgentData.brands` and its `toJSON()` alike.
   reports screen capture as `display-capture` instead of a `media` request
   with no media types; the picker now runs on that permission, and a
   `media` request is only ever the camera or microphone.
+- (2026-10-16) The 2026-10-09 move did not bring sign-in back: Google
+  refused Work on Chromium 156 too, and the gate turned out to be
+  `chrome.app` (see Decision). Google changes the gate without notice, so a
+  daily live check (`e2e/google-sign-in.e2e.ts`,
+  `.github/workflows/google-sign-in.yml`, also on pull requests that change
+  what pages see of Work) takes the first sign-in step in a Work tab with a
+  made-up address and opens an issue when Google refuses Work. When Work is
+  refused, real Chrome on the same runner takes the step too; if Google
+  refuses Chrome as well, the run says so and is skipped. The functions are
+  page script, so `Function.prototype.toString` shows their source where
+  Chrome's show native code, and a frame a script creates (`about:blank`)
+  still has an empty `window.chrome`. Google checks neither today.
 - Electron 43.6 through 44.4.3 threw an uncaught `Invalid guestInstanceId`
   from a `<webview>`'s `disconnectedCallback` when a loaded guest was
   removed (electron/electron#53989, fixed by #54089). The removal still
