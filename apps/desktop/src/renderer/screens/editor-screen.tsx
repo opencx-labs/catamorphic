@@ -361,16 +361,9 @@ export function EditorScreen({
               onChange={handleChange}
               onSave={() => saveRef.current()}
               documentPath={filePath}
-              readImage={async (path) => {
-                // The bounded preview read (16 MB), as a data URL.
-                const preview = await desktopApi.filePreview({
-                  filePath: path,
-                  projectId,
-                });
-                return preview.content.kind === "image"
-                  ? preview.content.src
-                  : null;
-              }}
+              readImage={(path) =>
+                desktopApi.projectImage({ projectId, filePath: path })
+              }
               onSelectionReader={(reader) => {
                 if (reader) publishReader(reader);
                 else {

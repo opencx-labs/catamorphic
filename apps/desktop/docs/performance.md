@@ -224,14 +224,14 @@ A minimised chat, or a chat tab behind another, stays mounted at opacity 0
 so its draft, scroll and queued sends survive, and it went on paying
 style, layout and paint for its whole transcript on every frame. Hidden,
 it now carries `content-visibility: hidden` (`chat-dock.tsx`): Chromium
-skips its subtree while keeping its rendering state. The value is a
-discrete step of the panel's transition (`transition-behavior:
-allow-discrete`), so a chat leaving by its fade (Cmd+M, a tab switch,
-another chat opening) stays drawn until the fade ends; skipped at once,
-it showed as an empty card for its first frames. Only that state
+skips its subtree while keeping its rendering state. The value changes as
+a discrete step of the panel's transition (`transition-behavior:
+allow-discrete`), after the fade, so a chat leaving by its fade (Cmd+M, a
+tab switch, another chat opening) stays drawn until it is gone; skipped at
+once, it showed as an empty card for its first frames. Only that state
 transitions the value, so a chat coming back is drawn at once, in time for
-its composer to take focus. Its height is explicit,
-so nothing about its box changes.
+its composer to take focus. Its height is explicit, so nothing about its
+box changes.
 
 Measured 2026-10-16 in a test copy with three minimised chats of 2,337
 elements each while a fourth streamed in front, 4 seconds per row:
@@ -245,29 +245,34 @@ A chat scrolled up into its history came back at the same scroll position
 (3,120 px of 9,361), and one following its latest message came back at its
 end. A chat that streamed while minimised lays out what arrived in its
 first restored frame, which reviewers measured as one longer frame (about
-50 to 150 ms in noisy runs) rather than that work spread over the turn. Fake-agent transcripts are small; a person's real minimised chats
-held about 12,000 of their window's 14,356 elements.
+50 to 150 ms in noisy runs) rather than that work spread over the turn.
+Its rows' entrance animations, which do not run while it is skipped,
+start then too. Fake-agent transcripts are small; a person's real
+minimised chats held about 12,000 of their window's 14,356 elements.
 
 ## Markdown drag handle
 
 The handle (Tiptap's drag-handle extension) found the block under the
-pointer with `elementsFromPoint` and `caretPositionFromPoint` on every
-frame the pointer moved, each forcing layout, and glided between blocks
-on a `top`/`left` transition, which needs layout on every frame too. Under
-a busy main thread the glide skipped frames and the handle lagged.
+pointer with a hit test and a caret lookup (`posAtCoords`:
+`elementFromPoint` and `caretPositionFromPoint`) on every frame the
+pointer moved, each forcing layout, and glided between blocks on a
+`top`/`left` transition, which needs layout on every frame too. Under a
+busy main thread the glide skipped frames and the handle lagged.
 
 `handle-hover.ts` takes pointer moves that stay on the block the handle
 already points at, before the extension sees them, so its lookup runs once
-per block; the block's box is read when the handle moves to it and
-forgotten when the editor scrolls (not when a chat beside it does), the
-window, editor or its scroller resizes, the document changes or the handle
-hides. Blocks holding other drag targets (lists, items with nested
-lists) and tables are never held. The extension still places the handle
-box; the grip inside it glides from the box's old place on a `transform`
-animation (`installHandleMotion`), which runs on the compositor. Shown
-again after hiding, it appears where it lands: the extension makes the box
-visible before placing it, and that placement is not a move. The table
-row grip is placed and glides by `transform` the same way.
+per block. A move stays on the block when its target, which the browser
+has already found, lies in the block's element, so it holds however the
+block has moved (an image above it loading, the properties box growing)
+and reads no layout. Moves between or beside blocks still look up, and an
+edit or the handle hiding lets go. Blocks holding other drag targets
+(lists, items with nested lists) and tables are never held. The extension
+still places the handle box; the grip inside it glides from the box's old
+place on a `transform` animation (`installHandleMotion`), which runs on
+the compositor. Shown again after hiding, it appears where it lands: the
+extension makes the box visible before placing it, and that placement is
+not a move. The table row grip is placed and glides by `transform` the
+same way.
 
 Measured 2026-10-16 in a test copy, with screencast frames for the glide
 and an injected main-thread load of 30 ms tasks every 40 ms:
@@ -276,14 +281,15 @@ and an injected main-thread load of 30 ms tasks every 40 ms:
 | --- | ---: | ---: |
 | Lookups over 60 pointer moves inside one paragraph | 60 | 1 |
 | Lookups over 48 moves crossing 12 blocks | 48 | 12 |
+| Lookups over 60 moves inside a paragraph while a chat streams beside it | 60 | 0 |
 | Handle glide frames under load (smooth steps / one-frame jumps) | 56 / 17 | 132 / 3 |
 | Handle glide frames idle | 133 / 3 | 134 / 3 |
-| Lookups over 60 moves inside a paragraph while a chat streams beside it (70 scroll events) | 60 | 0 |
 
-"Before" is `main` at 124f357b; the idle and loaded glide rows are from the same
-harness on the parent of #253 the day before. A lookup counts each
-`elementsFromPoint` or `caretPositionFromPoint` call. `markdown.e2e.ts`
-pins no lookup inside a block and a transform glide.
+"Before" is `main` at 124f357b; the idle and loaded glide rows are from
+the same harness on the parent of #253 the day before. A lookup counts
+`caretPositionFromPoint` calls, one per lookup. `markdown.e2e.ts` pins no
+lookup inside a block and a transform glide; `handle-hover.test.ts` pins
+which moves are held.
 
 ## Development timing retention
 

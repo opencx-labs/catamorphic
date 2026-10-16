@@ -1,9 +1,16 @@
 import { execFileSync } from "node:child_process";
-import { mkdtemp, rm, truncate, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  rm,
+  symlink,
+  truncate,
+  writeFile,
+} from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { readFilePreview } from "./file-preview";
+import { readFilePreview, readProjectImage } from "./file-preview";
 
 let root: string;
 beforeEach(async () => {
@@ -113,3 +120,32 @@ it.skipIf(process.platform === "win32")(
     );
   },
 );
+it("reads a project's own images only", async () => {
+  const project = path.join(root, "project");
+  const outside = path.join(root, "outside");
+  await mkdir(path.join(project, "assets"), { recursive: true });
+  await mkdir(outside);
+  const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"/>';
+  await writeFile(path.join(project, "assets", "logo.svg"), svg);
+  await writeFile(path.join(project, "notes.txt"), "not an image");
+  await writeFile(path.join(outside, "secret.svg"), svg);
+  await symlink(
+    path.join(outside, "secret.svg"),
+    path.join(project, "assets", "link.svg"),
+  );
+  await symlink(
+    path.join(project, "notes.txt"),
+    path.join(project, "assets", "notes.svg"),
+  );
+  const read = (filePath: string) =>
+    readProjectImage({ root: project, filePath });
+  expect(await read("assets/logo.svg")).toBe(
+    `data:image/svg+xml;base64,${Buffer.from(svg).toString("base64")}`,
+  );
+  expect(await read("../outside/secret.svg")).toBeNull();
+  expect(await read(path.join(outside, "secret.svg"))).toBeNull();
+  expect(await read("assets/link.svg")).toBeNull();
+  expect(await read("assets/notes.svg")).toBeNull();
+  expect(await read("notes.txt")).toBeNull();
+  expect(await read("assets/missing.png")).toBeNull();
+});

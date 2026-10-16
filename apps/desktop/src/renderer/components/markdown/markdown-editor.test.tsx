@@ -20,15 +20,6 @@ const plan = (counts: string) =>
 // ProseMirror measures selections to scroll them into view; jsdom has no layout.
 Range.prototype.getClientRects = () => [] as unknown as DOMRectList;
 Range.prototype.getBoundingClientRect = () => new DOMRect();
-// The drag handle's hover gate forgets its block when the editor resizes.
-vi.stubGlobal(
-  "ResizeObserver",
-  class {
-    observe() {}
-    unobserve() {}
-    disconnect() {}
-  },
-);
 
 it("loads a file changed on disk without reporting it as an edit", async () => {
   Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", true);

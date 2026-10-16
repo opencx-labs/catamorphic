@@ -57,13 +57,14 @@ export interface MarkdownEditorProps {
     reader: (() => EditorSelectionSnapshot | null) | null,
   ) => void;
   /**
-   * The document's path, relative to its project or absolute: where its
-   * images' relative paths start.
+   * The document's path relative to its project: where its images'
+   * relative paths start. Without one (or for a document outside a
+   * project) only web images show.
    */
   documentPath?: string;
   /**
-   * Reads a local image (a path relative to the project, or absolute) as a
-   * URL to show, or null. Without it only web images show.
+   * Reads an image in the project (a path relative to it) as a URL to
+   * show, or null.
    */
   readImage?: (path: string) => Promise<string | null>;
 }
@@ -137,38 +138,50 @@ function firstLineReference(view: EditorView, pos: number): HandleReference {
   };
 }
 
-/** The vertical center of an element's first line of text, or of its box. */
+/** The vertical center of an element's first line (text or an image), or of its box. */
 function firstLineCenter(element: HTMLElement): number {
-  const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
-  for (let text = walker.nextNode(); text; text = walker.nextNode()) {
-    const content = text.textContent ?? "";
+  // Text, or an image before any (a figure over its caption): the first
+  // line it is on.
+  const walker = document.createTreeWalker(
+    element,
+    NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT,
+  );
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    if (node instanceof Element) {
+      if (node.classList.contains("cat-mdedit-image")) {
+        return imageLineCenter(element, node);
+      }
+      continue;
+    }
+    const content = node.textContent ?? "";
     const start = content.search(/\S/);
     if (start === -1) continue;
     const range = document.createRange();
     // A first line with nothing on it (a code block opening with a blank
     // line): the caret's place at its start is that line.
     if (content.slice(0, start).includes("\n")) {
-      range.setStart(text, 0);
+      range.setStart(node, 0);
       range.collapse(true);
       const caret = range.getBoundingClientRect();
       if (caret.height > 0) return caret.top + caret.height / 2;
     }
-    range.setStart(text, start);
+    range.setStart(node, start);
     range.setEnd(
-      text,
+      node,
       start + ((content.codePointAt(start) ?? 0) > 0xffff ? 2 : 1),
     );
     const rect = range.getClientRects()[0];
     if (rect && rect.height > 0) return rect.top + rect.height / 2;
   }
-  // No text (a paragraph holding only an image): the first line of the
-  // first image, so the handle stays by a tall image's top.
-  const image = element.querySelector(".cat-mdedit-image");
-  const box = (image ?? element).getBoundingClientRect();
-  const line = Number.parseFloat(getComputedStyle(element).lineHeight);
-  return (
-    box.top + (image && line > 0 ? Math.min(box.height, line) : box.height) / 2
-  );
+  const box = element.getBoundingClientRect();
+  return box.top + box.height / 2;
+}
+
+/** An image's first line: a tall one keeps the handle by its top. */
+function imageLineCenter(block: HTMLElement, image: Element): number {
+  const box = image.getBoundingClientRect();
+  const line = Number.parseFloat(getComputedStyle(block).lineHeight);
+  return box.top + (line > 0 ? Math.min(box.height, line) : box.height) / 2;
 }
 
 /** Markdown equality modulo trailing blank lines. */

@@ -520,14 +520,16 @@ describe("markdown editor", () => {
   it("the handle looks its block up once, and glides on the compositor", async () => {
     // Moves on the block the handle points at cannot change its target, so
     // the lookup (a hit test and a caret lookup, each forcing layout) runs
-    // once per block, not once per frame (handle-hover.ts).
+    // once per block, not once per frame (handle-hover.ts). Each lookup
+    // makes one caretPositionFromPoint call.
     await hoverHandle(HANDLE_TARGETS.paragraph, "long paragraph");
     const box = await run<{ x: number; top: number; bottom: number }>(`
       window.__mdLookups = 0;
-      for (const name of ['caretPositionFromPoint', 'elementsFromPoint']) {
-        const real = document[name].bind(document);
-        document[name] = (...args) => { window.__mdLookups++; return real(...args); };
-      }
+      window.__mdCaretLookup = document.caretPositionFromPoint;
+      document.caretPositionFromPoint = (...args) => {
+        window.__mdLookups++;
+        return window.__mdCaretLookup.apply(document, args);
+      };
       const r = ${HANDLE_TARGETS.paragraph}.getBoundingClientRect();
       return { x: Math.round(r.left + 40), top: Math.ceil(r.top + 2), bottom: Math.floor(r.bottom - 2) };
     `);
@@ -585,6 +587,12 @@ describe("markdown editor", () => {
     expect(Math.abs(far.handle - far.line)).toBeLessThan(1.5);
     expect(await run<string[]>(`return window.__mdGlides;`)).toEqual([]);
     await mouse("mouseMoved", { x: 4, y: 4 });
+    // The later tests run on the real lookup and animation.
+    await run(`
+      document.caretPositionFromPoint = window.__mdCaretLookup;
+      delete $('.cat-mdedit-handle-grip').animate;
+      return true;
+    `);
   }, 60_000);
 
   it("the selection bubble leaves as it came and turns around mid-exit", async () => {

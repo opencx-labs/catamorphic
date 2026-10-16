@@ -51,15 +51,19 @@ export const MarkdownImage = Node.create<MarkdownImageOptions>({
 
   addNodeView() {
     // Per editor, by source: a view made again (an undo, a moved block)
-    // shows a loaded image at once instead of loading it again.
+    // shows a loaded image at once instead of loading it again. One not
+    // found is looked for again, so a file added since shows.
     const loads = new Map<string, Promise<string | null>>();
-    const settled = new Map<string, string | null>();
+    const settled = new Map<string, string>();
     const load = (src: string) => {
       const known = loads.get(src);
       if (known) return known;
       const loading = this.options.resolve(src).catch(() => null);
       loads.set(src, loading);
-      void loading.then((url) => settled.set(src, url));
+      void loading.then((url) => {
+        if (url) settled.set(src, url);
+        else loads.delete(src);
+      });
       return loading;
     };
     return ({ node }) => imageView({ node, load, settled });
@@ -262,7 +266,7 @@ function imageView({
 }: {
   node: PmNode;
   load: (src: string) => Promise<string | null>;
-  settled: ReadonlyMap<string, string | null>;
+  settled: ReadonlyMap<string, string>;
 }): NodeView {
   const dom = document.createElement("span");
   dom.className = "cat-mdedit-image";
@@ -310,8 +314,9 @@ function imageView({
     state.generation += 1;
     const current = state.generation;
     chip(attrs, "loading");
-    if (settled.has(attrs.src)) {
-      show(attrs, settled.get(attrs.src) ?? null, current);
+    const ready = settled.get(attrs.src);
+    if (ready) {
+      show(attrs, ready, current);
     } else {
       void load(attrs.src).then((url) => show(attrs, url, current));
     }
@@ -341,47 +346,34 @@ function imageLabel(attrs: ImageAttrs): string {
 
 /**
  * Where an image's source is: a URL shown as it is (https, inline image
- * data), a file relative to the project or absolute, or null for anything
- * else (http, other schemes, or a file with no document to be relative
- * to). A relative path is relative to the document; one starting with `/`
- * is relative to the project, as in a repository's own markdown.
+ * data), a file in the project (relative to it), or null for anything
+ * else: http and other schemes, file URLs, and paths leaving the project
+ * or with no project document to start from. A relative path starts at
+ * the document's folder; one starting with `/` at the project's root, as
+ * in a repository's own markdown.
  */
 export function imageLocation(
   src: string,
-  /** The document's path: relative to the project, or absolute. */
+  /** The document's path relative to its project; null without one. */
   documentPath: string | null,
 ): { url: string } | { path: string } | null {
   const source = src.trim();
   if (/^https:\/\//i.test(source)) return { url: source };
   if (source.startsWith("//")) return { url: `https:${source}` };
   if (/^data:image\//i.test(source)) return { url: source };
-  if (documentPath === null) return null;
-  const file = filePart(source);
+  if (documentPath === null || documentPath.startsWith("/")) return null;
+  // Any other scheme, `file:` and a drive letter included.
+  if (/^[a-z][a-z\d+.-]*:/i.test(source)) return null;
+  const file = decoded(source.replace(/[?#][\s\S]*$/, ""));
   if (!file) return null;
-  if (file.startsWith("/") || /^[a-z]:[\\/]/i.test(file)) {
-    // Absolute: a file URL, or a path the document names from the
-    // project's root.
-    return /^file:/i.test(source) || documentPath.startsWith("/")
-      ? { path: normalizedPath(file) }
-      : { path: normalizedPath(file.slice(1)) };
-  }
   const folder = documentPath.split("/").slice(0, -1).join("/");
-  return { path: normalizedPath(folder ? `${folder}/${file}` : file) };
+  const path = projectPath(
+    file.startsWith("/") || !folder ? file : `${folder}/${file}`,
+  );
+  return path ? { path } : null;
 }
 
-/** The file a local source names, decoded; null for other schemes. */
-function filePart(source: string): string | null {
-  if (/^file:/i.test(source)) {
-    try {
-      return decodeURIComponent(new URL(source).pathname);
-    } catch {
-      return null;
-    }
-  }
-  if (/^[a-z]:[\\/]/i.test(source)) return source;
-  if (/^[a-z][a-z\d+.-]*:/i.test(source)) return null;
-  const path = source.replace(/[?#][\s\S]*$/, "");
-  if (!path) return null;
+function decoded(path: string): string {
   try {
     return decodeURIComponent(path);
   } catch {
@@ -389,17 +381,15 @@ function filePart(source: string): string | null {
   }
 }
 
-/** `.` and `..` resolved; `..` past a relative path's start is kept. */
-function normalizedPath(path: string): string {
-  const absolute = path.startsWith("/");
+/** A path in the project with `.` and `..` resolved; null if it leaves. */
+function projectPath(path: string): string | null {
   const parts: string[] = [];
   for (const part of path.split("/")) {
     if (part === "" || part === ".") continue;
     if (part !== "..") parts.push(part);
-    else if (parts.length > 0 && parts.at(-1) !== "..") parts.pop();
-    else if (!absolute) parts.push(part);
+    else if (parts.pop() === undefined) return null;
   }
-  return `${absolute ? "/" : ""}${parts.join("/")}`;
+  return parts.length > 0 ? parts.join("/") : null;
 }
 
 function fileName(src: string): string {

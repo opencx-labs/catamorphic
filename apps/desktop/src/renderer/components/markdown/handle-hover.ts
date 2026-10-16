@@ -18,20 +18,16 @@ export interface HandleHoverGate {
  * layout. While the pointer stays on the block the handle already points
  * at, the answer cannot change, so this plugin, ordered before the
  * handle's, takes those moves and the handle's lookup runs only when the
- * pointer leaves the block. The block's box is read when the handle moves
- * to it, with layout fresh from the handle's own lookup, and forgotten when
- * the editor scrolls, the window, the editor or its scroller resizes, the
- * document changes or the handle hides. Blocks holding other drag targets
- * (a list, an item with a nested list) and tables are never held, so a
- * move onto an inner target still finds it. A block that moves any other
- * way (mid-entrance, a drop's reorder) keeps its old box until the pointer
- * leaves it.
+ * pointer leaves the block. "On the block" is the move's target lying in
+ * the block's element, which the browser has already found, so it holds
+ * however blocks move (an image above loading, the properties box
+ * growing) and reads no layout. Moves between blocks or beside them still
+ * look up. Blocks holding other drag targets (a list, an item with a
+ * nested list) and tables are never held, so a move onto an inner target
+ * still finds it.
  */
 export function createHandleHoverGate(): HandleHoverGate {
-  let box: DOMRect | null = null;
-  const forget = () => {
-    box = null;
-  };
+  const held: { block: Element | null } = { block: null };
 
   const extension = Extension.create({
     name: "handleHoverGate",
@@ -42,48 +38,19 @@ export function createHandleHoverGate(): HandleHoverGate {
       return [
         new Plugin({
           key: new PluginKey("handleHoverGate"),
-          view: (view) => {
-            // Blocks move without an edit when the editor's container
-            // resizes (the frontmatter panel opening above the document) or
-            // the scroller around it does (a line appearing above it).
-            const resized = new ResizeObserver(forget);
-            const container = view.dom.parentElement;
-            if (container) resized.observe(container);
-            if (container?.parentElement) {
-              resized.observe(container.parentElement);
-            }
-            // Only scrolls that move the editor: a chat streaming beside it
-            // scrolls its own log on every frame.
-            const onScroll = (event: Event) => {
-              const scrolled = event.target;
-              if (
-                scrolled === document ||
-                (scrolled instanceof globalThis.Node &&
-                  scrolled.contains(view.dom))
-              ) {
-                forget();
-              }
-            };
-            document.addEventListener("scroll", onScroll, true);
-            window.addEventListener("resize", forget);
-            return {
-              update: (current, previous) => {
-                if (!current.state.doc.eq(previous.doc)) forget();
-              },
-              destroy: () => {
-                resized.disconnect();
-                document.removeEventListener("scroll", onScroll, true);
-                window.removeEventListener("resize", forget);
-              },
-            };
-          },
+          // An edit can give the held element to another position.
+          view: () => ({
+            update: (current, previous) => {
+              if (current.state.doc !== previous.doc) held.block = null;
+            },
+          }),
           props: {
             handleDOMEvents: {
               mousemove: (_view, event) =>
-                box !== null &&
+                held.block !== null &&
                 event.buttons === 0 &&
-                event.clientY >= box.top &&
-                event.clientY < box.bottom,
+                event.target instanceof globalThis.Node &&
+                held.block.contains(event.target),
             },
           },
         }),
@@ -94,10 +61,10 @@ export function createHandleHoverGate(): HandleHoverGate {
   return {
     extension,
     track: (view, pos, node) => {
-      box = null;
+      held.block = null;
       if (!node || !holdsNoTargets(node)) return;
       const dom = view.nodeDOM(pos);
-      if (dom instanceof HTMLElement) box = dom.getBoundingClientRect();
+      if (dom instanceof Element) held.block = dom;
     },
   };
 }

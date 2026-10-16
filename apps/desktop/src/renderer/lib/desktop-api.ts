@@ -917,6 +917,14 @@ export interface CatamorphicDesktopApi {
   /** Absolute path of a pasted/dropped File; "" when it has none. */
   pathForFile: (file: File) => string;
   filePreview: (input: FilePreviewInput) => Promise<ResourcePreview>;
+  /**
+   * An image inside the project (a path relative to it) as a data URL, for
+   * a document showing it; null for anything else.
+   */
+  projectImage: (input: {
+    projectId: string;
+    filePath: string;
+  }) => Promise<string | null>;
   composerFileSave: (input: {
     projectId: string;
     name: string;

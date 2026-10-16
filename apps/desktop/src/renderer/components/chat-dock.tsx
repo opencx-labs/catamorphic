@@ -2264,8 +2264,8 @@ function ChatDockContent({
                 // queued sends) but skipped by style, layout and paint,
                 // which a long transcript otherwise pays on every frame
                 // while it streams (docs/performance.md). The skip is a
-                // discrete step at the end of the fade, so content stays
-                // drawn through it, whichever exit led here. Only this
+                // discrete step after the fade, so content stays drawn
+                // through it, whichever exit led here. Only this
                 // state transitions it: coming back, a transition's first
                 // frame would still skip the chat as it focuses its
                 // composer.
