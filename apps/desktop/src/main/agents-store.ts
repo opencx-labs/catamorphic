@@ -115,6 +115,12 @@ export interface AgentConfig {
    * harnesses have no memory and ignore it.
    */
   memory?: boolean;
+  /**
+   * Show the chats the person runs in this agent's tool outside Work
+   * (Claude Code or Codex) in their projects' chat lists, and continue
+   * them on this agent (ADR 0233). Absent means off.
+   */
+  syncSessions?: boolean;
   /** MCP connection assignment; absent means `{ mode: "all" }`. */
   connections?: AgentConnectionsSetting;
   /** Skills assignment; absent means `{ mode: "all" }`. */
@@ -176,6 +182,8 @@ export interface PublicAgentConfig {
   environment?: AgentEnvironmentPolicy;
   /** Claude Code auto-memory (always materialized; opt-in, default false). */
   memory: boolean;
+  /** Imports this tool's chats from outside Work (materialized; default false). */
+  syncSessions: boolean;
   /** MCP connection assignment (always materialized; default "all"). */
   connections: AgentConnectionsSetting;
   /** Skills assignment (always materialized; default "all"). */
@@ -230,6 +238,7 @@ export interface CreateAgentInput {
   coordination?: AgentCoordinationStrategy;
   environment?: AgentEnvironmentPolicy;
   memory?: boolean;
+  syncSessions?: boolean;
   connections?: AgentConnectionsSetting;
   skills?: AgentSkillsSetting;
   toolPolicies?: Record<string, McpToolPolicy>;
@@ -255,6 +264,7 @@ export interface UpdateAgentInput {
   coordination?: AgentCoordinationStrategy;
   environment?: AgentEnvironmentPolicy;
   memory?: boolean;
+  syncSessions?: boolean;
   connections?: AgentConnectionsSetting;
   skills?: AgentSkillsSetting;
   /** Replace the per-connection tool policies (null clears them). */
@@ -398,6 +408,9 @@ export class AgentsStore {
         : {}),
       ...(input.environment ? { environment: input.environment } : {}),
       ...(input.memory === true ? { memory: true } : {}),
+      ...(input.syncSessions === true && input.harness !== "ai-sdk"
+        ? { syncSessions: true }
+        : {}),
       ...(input.connections ? { connections: input.connections } : {}),
       ...(input.skills ? { skills: input.skills } : {}),
       ...(input.toolPolicies ? { toolPolicies: input.toolPolicies } : {}),
@@ -406,6 +419,7 @@ export class AgentsStore {
         : {}),
       ...this.encrypt(input.apiKey ?? null),
     };
+    if (stored.syncSessions) this.soleSyncing(stored);
     this.data.agents.push(stored);
     this.data.defaultAgentId ??= stored.id;
     this.save();
@@ -450,6 +464,13 @@ export class AgentsStore {
       if (patch.memory) stored.memory = true;
       else delete stored.memory;
     }
+    if (patch.syncSessions !== undefined) {
+      // Only Claude Code and Codex keep sessions Work can import.
+      if (patch.syncSessions && stored.harness !== "ai-sdk") {
+        stored.syncSessions = true;
+        this.soleSyncing(stored);
+      } else delete stored.syncSessions;
+    }
     if (patch.connections !== undefined) stored.connections = patch.connections;
     if (patch.skills !== undefined) {
       if (patch.skills.mode === "all") delete stored.skills;
@@ -470,6 +491,16 @@ export class AgentsStore {
     }
     this.save();
     return this.decrypt(stored);
+  }
+
+  /**
+   * One agent per tool syncs its chats, and continues them (ADR 0233):
+   * turning it on for this one turns it off for the tool's others.
+   */
+  private soleSyncing(agent: StoredAgent): void {
+    for (const other of this.data.agents)
+      if (other.id !== agent.id && other.harness === agent.harness)
+        delete other.syncSessions;
   }
 
   remove(id: string): boolean {
@@ -560,6 +591,7 @@ export function toPublicAgent(agent: AgentConfig): PublicAgentConfig {
     }),
     coordination: agent.coordination ?? "shared-first",
     memory: agent.memory === true,
+    syncSessions: agent.syncSessions === true,
     connections: agent.connections ?? { mode: "all" },
     skills: agent.skills ?? { mode: "all" },
     toolPolicies: agent.toolPolicies ?? {},

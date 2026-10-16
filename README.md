@@ -271,7 +271,9 @@ prompt, and the repo's CLAUDE.md, `.claude/` skills, agents, commands, and
 settings load exactly as in the CLI. Worktrees are first-class: discovered,
 listed, diffed, assignable by agents when concurrent work needs isolation,
 and a chat's own worktree is a palette command away, set up before its first
-turn and brought back from the chat's status popup. Checkout management is harness-neutral, so Claude Code, Codex,
+turn and brought back from the chat's status popup. Chats you start in Claude
+Code or Codex outside Work can appear in the project's chat list, ready to
+continue on an agent of the same tool. Checkout management is harness-neutral, so Claude Code, Codex,
 and the built-in agent follow the same policy. Diff tabs render in Monaco;
 the sidebar has Changes and Pull Requests sections; PR review opens per-file
 diffs through the CodeHost seam. Terminals are real PTYs with shell

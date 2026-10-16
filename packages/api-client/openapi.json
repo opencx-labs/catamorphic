@@ -37,6 +37,34 @@
           }
         ]
       },
+      "ImportedSessionInput": {
+        "type": "object",
+        "properties": {
+          "harness": {
+            "type": "string",
+            "enum": ["claude-code", "codex"]
+          },
+          "nativeSessionId": {
+            "type": "string"
+          },
+          "sourcePath": {
+            "type": "string"
+          },
+          "contentSha256": {
+            "type": "string"
+          },
+          "sourceModifiedAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "harness",
+          "nativeSessionId",
+          "sourcePath",
+          "contentSha256",
+          "sourceModifiedAt"
+        ]
+      },
       "ProtocolJsonValueInput": {
         "anyOf": [
           {
@@ -3153,6 +3181,14 @@
           "metadata": {
             "$ref": "#/components/schemas/SessionMetadataInput"
           },
+          "imported": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ImportedSessionInput"
+              }
+            ]
+          },
           "parentSessionId": {
             "nullable": true,
             "type": "string"
@@ -3301,6 +3337,14 @@
                     "allOf": [
                       {
                         "$ref": "#/components/schemas/SessionMetadataInput"
+                      }
+                    ]
+                  },
+                  "imported": {
+                    "nullable": true,
+                    "allOf": [
+                      {
+                        "$ref": "#/components/schemas/ImportedSessionInput"
                       }
                     ]
                   },
@@ -3643,6 +3687,35 @@
             }
           }
         ]
+      },
+      "ImportedSession": {
+        "type": "object",
+        "properties": {
+          "harness": {
+            "type": "string",
+            "enum": ["claude-code", "codex"]
+          },
+          "nativeSessionId": {
+            "type": "string"
+          },
+          "sourcePath": {
+            "type": "string"
+          },
+          "contentSha256": {
+            "type": "string"
+          },
+          "sourceModifiedAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "harness",
+          "nativeSessionId",
+          "sourcePath",
+          "contentSha256",
+          "sourceModifiedAt"
+        ],
+        "additionalProperties": false
       },
       "ProtocolJsonValue": {
         "anyOf": [
@@ -6869,6 +6942,14 @@
           "metadata": {
             "$ref": "#/components/schemas/SessionMetadata"
           },
+          "imported": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ImportedSession"
+              }
+            ]
+          },
           "parentSessionId": {
             "nullable": true,
             "type": "string"
@@ -7019,6 +7100,14 @@
                     "allOf": [
                       {
                         "$ref": "#/components/schemas/SessionMetadata"
+                      }
+                    ]
+                  },
+                  "imported": {
+                    "nullable": true,
+                    "allOf": [
+                      {
+                        "$ref": "#/components/schemas/ImportedSession"
                       }
                     ]
                   },
@@ -11997,6 +12086,20 @@
       }
     },
     "/api/connection-mcp": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "Default Response"
+          }
+        }
+      },
+      "delete": {
+        "responses": {
+          "200": {
+            "description": "Default Response"
+          }
+        }
+      },
       "post": {
         "responses": {
           "200": {
@@ -20736,6 +20839,14 @@
                       "format": "uuid",
                       "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                     },
+                    "imported": {
+                      "nullable": true,
+                      "allOf": [
+                        {
+                          "$ref": "#/components/schemas/ImportedSession"
+                        }
+                      ]
+                    },
                     "parentSessionId": {
                       "nullable": true,
                       "type": "string",
@@ -20954,6 +21065,7 @@
                     "title",
                     "icon",
                     "forkedFromSessionId",
+                    "imported",
                     "parentSessionId",
                     "visibility",
                     "archivedAt",
@@ -21346,6 +21458,14 @@
                             "format": "uuid",
                             "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                           },
+                          "imported": {
+                            "nullable": true,
+                            "allOf": [
+                              {
+                                "$ref": "#/components/schemas/ImportedSession"
+                              }
+                            ]
+                          },
                           "parentSessionId": {
                             "nullable": true,
                             "type": "string",
@@ -21573,6 +21693,7 @@
                           "title",
                           "icon",
                           "forkedFromSessionId",
+                          "imported",
                           "parentSessionId",
                           "visibility",
                           "archivedAt",
@@ -21782,6 +21903,14 @@
                       "type": "string",
                       "format": "uuid",
                       "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                    },
+                    "imported": {
+                      "nullable": true,
+                      "allOf": [
+                        {
+                          "$ref": "#/components/schemas/ImportedSession"
+                        }
+                      ]
                     },
                     "parentSessionId": {
                       "nullable": true,
@@ -22001,6 +22130,7 @@
                     "title",
                     "icon",
                     "forkedFromSessionId",
+                    "imported",
                     "parentSessionId",
                     "visibility",
                     "archivedAt",
@@ -22123,7 +22253,8 @@
                           "enum": [
                             "session_closed",
                             "authority_required",
-                            "handoff_pending"
+                            "handoff_pending",
+                            "imported"
                           ]
                         },
                         "authorityRevision": {
@@ -22383,6 +22514,14 @@
                       "format": "uuid",
                       "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                     },
+                    "imported": {
+                      "nullable": true,
+                      "allOf": [
+                        {
+                          "$ref": "#/components/schemas/ImportedSession"
+                        }
+                      ]
+                    },
                     "parentSessionId": {
                       "nullable": true,
                       "type": "string",
@@ -22604,6 +22743,7 @@
                     "title",
                     "icon",
                     "forkedFromSessionId",
+                    "imported",
                     "parentSessionId",
                     "visibility",
                     "archivedAt",
@@ -22791,6 +22931,14 @@
                       "type": "string",
                       "format": "uuid",
                       "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                    },
+                    "imported": {
+                      "nullable": true,
+                      "allOf": [
+                        {
+                          "$ref": "#/components/schemas/ImportedSession"
+                        }
+                      ]
                     },
                     "parentSessionId": {
                       "nullable": true,
@@ -23010,6 +23158,7 @@
                     "title",
                     "icon",
                     "forkedFromSessionId",
+                    "imported",
                     "parentSessionId",
                     "visibility",
                     "archivedAt",
@@ -23738,7 +23887,8 @@
                       "enum": [
                         "session_closed",
                         "authority_required",
-                        "handoff_pending"
+                        "handoff_pending",
+                        "imported"
                       ]
                     },
                     "authorityRevision": {
@@ -23938,6 +24088,14 @@
                       "type": "string",
                       "format": "uuid",
                       "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                    },
+                    "imported": {
+                      "nullable": true,
+                      "allOf": [
+                        {
+                          "$ref": "#/components/schemas/ImportedSession"
+                        }
+                      ]
                     },
                     "parentSessionId": {
                       "nullable": true,
@@ -24157,6 +24315,7 @@
                     "title",
                     "icon",
                     "forkedFromSessionId",
+                    "imported",
                     "parentSessionId",
                     "visibility",
                     "archivedAt",
@@ -24503,6 +24662,14 @@
                           "format": "uuid",
                           "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                         },
+                        "imported": {
+                          "nullable": true,
+                          "allOf": [
+                            {
+                              "$ref": "#/components/schemas/ImportedSession"
+                            }
+                          ]
+                        },
                         "parentSessionId": {
                           "nullable": true,
                           "type": "string",
@@ -24726,6 +24893,7 @@
                         "title",
                         "icon",
                         "forkedFromSessionId",
+                        "imported",
                         "parentSessionId",
                         "visibility",
                         "archivedAt",
@@ -25288,6 +25456,14 @@
                       "format": "uuid",
                       "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                     },
+                    "imported": {
+                      "nullable": true,
+                      "allOf": [
+                        {
+                          "$ref": "#/components/schemas/ImportedSession"
+                        }
+                      ]
+                    },
                     "parentSessionId": {
                       "nullable": true,
                       "type": "string",
@@ -25506,6 +25682,7 @@
                     "title",
                     "icon",
                     "forkedFromSessionId",
+                    "imported",
                     "parentSessionId",
                     "visibility",
                     "archivedAt",
@@ -25910,6 +26087,14 @@
                           "format": "uuid",
                           "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                         },
+                        "imported": {
+                          "nullable": true,
+                          "allOf": [
+                            {
+                              "$ref": "#/components/schemas/ImportedSession"
+                            }
+                          ]
+                        },
                         "parentSessionId": {
                           "nullable": true,
                           "type": "string",
@@ -26133,6 +26318,7 @@
                         "title",
                         "icon",
                         "forkedFromSessionId",
+                        "imported",
                         "parentSessionId",
                         "visibility",
                         "archivedAt",
@@ -26416,6 +26602,14 @@
                             "format": "uuid",
                             "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                           },
+                          "imported": {
+                            "nullable": true,
+                            "allOf": [
+                              {
+                                "$ref": "#/components/schemas/ImportedSession"
+                              }
+                            ]
+                          },
                           "parentSessionId": {
                             "nullable": true,
                             "type": "string",
@@ -26643,6 +26837,7 @@
                           "title",
                           "icon",
                           "forkedFromSessionId",
+                          "imported",
                           "parentSessionId",
                           "visibility",
                           "archivedAt",
@@ -26904,6 +27099,14 @@
                             "format": "uuid",
                             "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                           },
+                          "imported": {
+                            "nullable": true,
+                            "allOf": [
+                              {
+                                "$ref": "#/components/schemas/ImportedSession"
+                              }
+                            ]
+                          },
                           "parentSessionId": {
                             "nullable": true,
                             "type": "string",
@@ -27131,6 +27334,7 @@
                           "title",
                           "icon",
                           "forkedFromSessionId",
+                          "imported",
                           "parentSessionId",
                           "visibility",
                           "archivedAt",
@@ -27440,6 +27644,14 @@
                       "format": "uuid",
                       "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                     },
+                    "imported": {
+                      "nullable": true,
+                      "allOf": [
+                        {
+                          "$ref": "#/components/schemas/ImportedSession"
+                        }
+                      ]
+                    },
                     "parentSessionId": {
                       "nullable": true,
                       "type": "string",
@@ -27658,6 +27870,7 @@
                     "title",
                     "icon",
                     "forkedFromSessionId",
+                    "imported",
                     "parentSessionId",
                     "visibility",
                     "archivedAt",
@@ -27819,7 +28032,8 @@
                       "enum": [
                         "session_closed",
                         "authority_required",
-                        "handoff_pending"
+                        "handoff_pending",
+                        "imported"
                       ]
                     },
                     "authorityRevision": {
@@ -27982,7 +28196,8 @@
                       "enum": [
                         "session_closed",
                         "authority_required",
-                        "handoff_pending"
+                        "handoff_pending",
+                        "imported"
                       ]
                     },
                     "authorityRevision": {
@@ -28155,6 +28370,14 @@
                       "format": "uuid",
                       "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                     },
+                    "imported": {
+                      "nullable": true,
+                      "allOf": [
+                        {
+                          "$ref": "#/components/schemas/ImportedSession"
+                        }
+                      ]
+                    },
                     "parentSessionId": {
                       "nullable": true,
                       "type": "string",
@@ -28373,6 +28596,7 @@
                     "title",
                     "icon",
                     "forkedFromSessionId",
+                    "imported",
                     "parentSessionId",
                     "visibility",
                     "archivedAt",
@@ -28580,6 +28804,14 @@
                       "format": "uuid",
                       "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                     },
+                    "imported": {
+                      "nullable": true,
+                      "allOf": [
+                        {
+                          "$ref": "#/components/schemas/ImportedSession"
+                        }
+                      ]
+                    },
                     "parentSessionId": {
                       "nullable": true,
                       "type": "string",
@@ -28798,6 +29030,7 @@
                     "title",
                     "icon",
                     "forkedFromSessionId",
+                    "imported",
                     "parentSessionId",
                     "visibility",
                     "archivedAt",
@@ -29337,6 +29570,14 @@
                             "format": "uuid",
                             "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                           },
+                          "imported": {
+                            "nullable": true,
+                            "allOf": [
+                              {
+                                "$ref": "#/components/schemas/ImportedSession"
+                              }
+                            ]
+                          },
                           "parentSessionId": {
                             "nullable": true,
                             "type": "string",
@@ -29564,6 +29805,7 @@
                           "title",
                           "icon",
                           "forkedFromSessionId",
+                          "imported",
                           "parentSessionId",
                           "visibility",
                           "archivedAt",
@@ -29861,6 +30103,14 @@
                         "format": "uuid",
                         "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                       },
+                      "imported": {
+                        "nullable": true,
+                        "allOf": [
+                          {
+                            "$ref": "#/components/schemas/ImportedSession"
+                          }
+                        ]
+                      },
                       "parentSessionId": {
                         "nullable": true,
                         "type": "string",
@@ -30079,6 +30329,7 @@
                       "title",
                       "icon",
                       "forkedFromSessionId",
+                      "imported",
                       "parentSessionId",
                       "visibility",
                       "archivedAt",
@@ -32966,6 +33217,14 @@
                         "format": "uuid",
                         "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
                       },
+                      "imported": {
+                        "nullable": true,
+                        "allOf": [
+                          {
+                            "$ref": "#/components/schemas/ImportedSession"
+                          }
+                        ]
+                      },
                       "parentSessionId": {
                         "nullable": true,
                         "type": "string",
@@ -33184,6 +33443,7 @@
                       "title",
                       "icon",
                       "forkedFromSessionId",
+                      "imported",
                       "parentSessionId",
                       "visibility",
                       "archivedAt",

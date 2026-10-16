@@ -5,6 +5,8 @@ import {
   orderedTurns,
   sessionStateFromSnapshot,
 } from "@catamorphic/agent-protocol";
+import { ClaudeCodeTranscriptReader } from "@catamorphic/claude-code";
+import { CodexRolloutReader } from "@catamorphic/codex";
 import {
   type ConnectionProvider,
   formatProjectAgentId,
@@ -48,6 +50,10 @@ import {
 } from "../auth-health.js";
 import type { ConnectorsService } from "../connectors.js";
 import { DesktopCredentialVault } from "../credential-vault.js";
+import {
+  ExternalSessionImporter,
+  externalSessionHomes,
+} from "../external-sessions.js";
 import {
   findImageBuilderCommand,
   imageBuilderEnvironment,
@@ -203,6 +209,8 @@ export interface EmbeddedServer {
     sessionId: string;
     port: number;
   }) => Promise<string>;
+  /** An agent's "Sync chats from" switch may have changed (ADR 0233). */
+  refreshExternalSessions: () => void;
   shutdown: () => Promise<void>;
 }
 
@@ -1480,6 +1488,60 @@ export async function startEmbeddedServer(
       for (const listener of sessionsListeners) listener();
     },
   });
+  // Chats Claude Code and Codex ran outside Work, imported beside its own
+  // (ADR 0233); off until an agent's "Sync chats from" switch turns it on.
+  const externalSessions = new ExternalSessionImporter({
+    homes: externalSessionHomes(),
+    stateFile: path.join(paths.root, "external-session-imports.json"),
+    profiles: () =>
+      profiles.list().profiles.map((profile) => {
+        const config = profileConfig.forProfile(profile.id);
+        const agents = config.agents.list();
+        const remoteLinks = config.remoteProjects.list();
+        // The first agent of each tool whose "Sync chats from" switch is on.
+        const importer = (harness: "claude-code" | "codex") =>
+          agents.find(
+            (agent) => agent.harness === harness && agent.syncSessions,
+          )?.id;
+        const claude = importer("claude-code");
+        const codex = importer("codex");
+        return {
+          id: profile.id,
+          importers: {
+            ...(claude ? { "claude-code": claude } : {}),
+            ...(codex ? { codex } : {}),
+          },
+          // Every project with a folder this profile owns, those it
+          // has not claimed yet included. A connected project's chats live
+          // on its server (ADR 0098): it imports none.
+          projectIds: projectRoots
+            .projectIds()
+            .filter(
+              (projectId) =>
+                profiles.profileForProject(projectId).id === profile.id &&
+                !remoteLinks[projectId],
+            ),
+        };
+      }),
+    projectRoot: (projectId) => projectRoots.getSync(projectId),
+    readers: {
+      "claude-code": ({ nativeSessionId }) =>
+        new ClaudeCodeTranscriptReader({ sessionId: nativeSessionId }),
+      codex: () => new CodexRolloutReader(),
+    },
+    importTranscript: async ({ projectId, agentId, ...input }) => {
+      const sessions = catamorphic.core.agentSessions;
+      if (!sessions) throw new Error("agent sessions unavailable");
+      return sessions.importTranscript(
+        { tenantId: DESKTOP_TENANT_ID, externalUserId: DESKTOP_USER_ID },
+        projectId,
+        { ...input, agentId, source: "desktop" },
+      );
+    },
+    changed: () => sessionHints.hint(),
+    log: (message, error) => console.warn(`[desktop] ${message}`, error),
+  });
+  externalSessions.refresh();
   app.addHook("onResponse", (request, _reply, done) => {
     // A request that changes chats (from any window, tool or client) hints
     // beside core's own hints; other project requests never do.
@@ -1727,6 +1789,7 @@ export async function startEmbeddedServer(
       clearInterval(notificationTimer);
       clearInterval(sessionMailboxTimer);
       clearInterval(sessionMirrorTimer);
+      const sessionImports = externalSessions.dispose();
       sessionHints.dispose();
       sessionsListeners.clear();
       clearInterval(scheduleTimer);
@@ -1734,6 +1797,8 @@ export async function startEmbeddedServer(
       signInRecovery.dispose();
       await shutdownDesktopServices({
         steps: [
+          // A read in flight stops before the services it imports into.
+          { name: "session imports", dispose: () => sessionImports },
           { name: "schedules", dispose: () => scheduleTick?.catch(() => {}) },
           {
             name: "notifications",
@@ -1792,6 +1857,7 @@ export async function startEmbeddedServer(
     remoteTerminalRequest: ({ projectId, sessionId }) =>
       remoteTerminalRequest({ profiles: profileConfig, projectId, sessionId }),
     openRemotePreview: (address) => remotePreviews.open(address),
+    refreshExternalSessions: () => externalSessions.refresh(),
     shutdown,
   };
 }

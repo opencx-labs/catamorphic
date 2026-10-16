@@ -217,6 +217,8 @@ export interface AgentInfo {
   coordination: AgentCoordinationStrategy;
   /** Claude Code auto-memory — opt-in, default off (others ignore it). */
   memory: boolean;
+  /** Imports this tool's chats from outside Work (ADR 0233). */
+  syncSessions: boolean;
   connections: AgentConnectionsSetting;
   skills: AgentSkillsSetting;
   /** Per-connection tool policies layered on the profile's (by id). */
@@ -303,6 +305,7 @@ export function projectAgentAsInfo(agent: ProjectAgentInfo): AgentInfo {
     }),
     coordination: agent.coordination ?? "shared-first",
     memory: agent.memory === true,
+    syncSessions: false,
     connections: { mode: "all" },
     skills: agent.skills
       ? { mode: "picked", names: agent.skills }
@@ -336,6 +339,7 @@ export interface CreateAgentInput {
   harnessPermissions?: HarnessPermissions;
   coordination?: AgentCoordinationStrategy;
   memory?: boolean;
+  syncSessions?: boolean;
   connections?: AgentConnectionsSetting;
   skills?: AgentSkillsSetting;
   delegation?: AgentDelegationPolicy;
@@ -356,6 +360,7 @@ export interface UpdateAgentInput {
   harnessPermissions?: HarnessPermissions;
   coordination?: AgentCoordinationStrategy;
   memory?: boolean;
+  syncSessions?: boolean;
   connections?: AgentConnectionsSetting;
   skills?: AgentSkillsSetting;
   /** Per-connection tool policies (null clears). */

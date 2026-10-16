@@ -1,20 +1,22 @@
-import type {
-  AgentEffort,
-  AgentTodo,
-  Attempt,
-  AttemptReason,
-  AttemptStatus,
-  Item,
-  JsonValue,
-  NativeRef,
-  ProviderThread,
-  RuntimeRequest,
-  SessionFields,
-  SessionMetadata,
-  Turn,
-  TurnError,
-  TurnOutcome,
-  TurnStatus,
+import {
+  type AgentEffort,
+  type AgentTodo,
+  type Attempt,
+  type AttemptReason,
+  type AttemptStatus,
+  type ImportedSession,
+  type Item,
+  isImportedHarness,
+  type JsonValue,
+  type NativeRef,
+  type ProviderThread,
+  type RuntimeRequest,
+  type SessionFields,
+  type SessionMetadata,
+  type Turn,
+  type TurnError,
+  type TurnOutcome,
+  type TurnStatus,
 } from "@catamorphic/agent-protocol";
 import type { DB, Json } from "@catamorphic/db";
 import type { Kysely, Selectable, Transaction } from "kysely";
@@ -210,6 +212,7 @@ export function sessionFieldsFromRow(row: SessionRow): SessionFields {
       ? (row.todos as unknown as AgentTodo[])
       : [],
     metadata: sessionMetadataFromRow(row.metadata),
+    imported: importedSessionFromRow(row.imported),
     parentSessionId: row.parent_session_id,
     forkedFromSessionId: row.forked_from_session_id,
     attentionRevision: Number(row.attention_revision),
@@ -218,6 +221,35 @@ export function sessionFieldsFromRow(row: SessionRow): SessionFields {
     authorityRevision: Number(row.authority_revision),
     handoffStatus: row.handoff_status === "pending" ? "pending" : "none",
     updatedAt: row.updated_at.toISOString(),
+  };
+}
+
+/** The imported column (ADR 0233): where another tool's session came from. */
+export function importedSessionFromRow(
+  value: Json | null,
+): ImportedSession | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const {
+    harness,
+    nativeSessionId,
+    sourcePath,
+    contentSha256,
+    sourceModifiedAt,
+  } = value;
+  if (
+    !isImportedHarness(harness) ||
+    typeof nativeSessionId !== "string" ||
+    typeof sourcePath !== "string" ||
+    typeof contentSha256 !== "string" ||
+    typeof sourceModifiedAt !== "string"
+  )
+    return null;
+  return {
+    harness,
+    nativeSessionId,
+    sourcePath,
+    contentSha256,
+    sourceModifiedAt,
   };
 }
 

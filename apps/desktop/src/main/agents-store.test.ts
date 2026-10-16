@@ -270,3 +270,37 @@ it("advertises the native Codex attachment path to the composer", () => {
     "document",
   ]);
 });
+
+it("imports chats only for Claude Code and Codex agents that turn it on (ADR 0233)", () => {
+  const store = new AgentsStore(storeFile());
+  const claude = store.create({ harness: "claude-code" });
+  expect(toPublicAgent(claude).syncSessions).toBe(false);
+  expect(store.update(claude.id, { syncSessions: true })?.syncSessions).toBe(
+    true,
+  );
+  expect(
+    store.update(claude.id, { syncSessions: false })?.syncSessions,
+  ).toBeUndefined();
+  const builtIn = store.create({ harness: "ai-sdk", syncSessions: true });
+  expect(builtIn.syncSessions).toBeUndefined();
+  expect(
+    store.update(builtIn.id, { syncSessions: true })?.syncSessions,
+  ).toBeUndefined();
+  expect(
+    store.create({ harness: "codex", syncSessions: true }).syncSessions,
+  ).toBe(true);
+});
+
+it("syncs a tool's chats on one agent of that tool at a time (ADR 0233)", () => {
+  const store = new AgentsStore(storeFile());
+  const first = store.create({ harness: "claude-code", syncSessions: true });
+  const codex = store.create({ harness: "codex", syncSessions: true });
+  const second = store.create({ harness: "claude-code" });
+  store.update(second.id, { syncSessions: true });
+  const synced = store
+    .list()
+    .filter((agent) => agent.syncSessions)
+    .map((agent) => agent.id);
+  expect(synced.sort()).toEqual([codex.id, second.id].sort());
+  expect(synced).not.toContain(first.id);
+});

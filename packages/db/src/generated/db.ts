@@ -168,6 +168,7 @@ export interface AgentSessions {
   harness: string | null;
   icon: string | null;
   id: Generated<string>;
+  imported: Json | null;
   metadata: Generated<Json>;
   mirror_sequence: Generated<Int8>;
   model: string | null;

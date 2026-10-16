@@ -4,6 +4,9 @@ import { type Kysely, type Selectable, sql, type Transaction } from "kysely";
 
 type Executor = Kysely<DB> | Transaction<DB>;
 
+/** Entries per insert statement: five parameters each, well under the limit. */
+const APPEND_BATCH = 1_000;
+
 /**
  * A provider thread's native state, stored with Work (ADR 0198): Claude
  * Code's session transcript through its SessionStore, a Codex rollout, the
@@ -29,39 +32,42 @@ export class NativeStateStore {
       .where("subpath", "=", subpath)
       .executeTakeFirst();
     let seq = Number(last?.seq ?? 0);
-    await db
-      .insertInto("agent_provider_thread_entries")
-      .values(
-        input.entries.map((entry) => {
-          seq += 1;
-          const uuid =
-            entry &&
-            typeof entry === "object" &&
-            !Array.isArray(entry) &&
-            typeof entry.uuid === "string"
-              ? entry.uuid
-              : null;
-          return {
-            thread_id: input.threadId,
-            subpath,
-            seq,
-            entry_uuid: uuid,
-            // As the harness wrote it: json keeps its text, key order and
-            // every character included, and refuses none of it. An entry
-            // may be a bare string (a rollout line that is not JSON), which
-            // both drivers would send as raw text. SQL never reads inside
-            // an entry: a json operator refuses a \u0000 escape in it.
-            entry: sql<Json>`${JSON.stringify(entry)}::json`,
-          };
-        }),
-      )
-      .onConflict((conflict) =>
-        conflict
-          .columns(["thread_id", "subpath", "entry_uuid"])
-          .where("entry_uuid", "is not", null)
-          .doNothing(),
-      )
-      .execute();
+    // In bounded statements: an imported transcript can hold tens of
+    // thousands of lines, and a statement takes at most 65,535 parameters.
+    for (let start = 0; start < input.entries.length; start += APPEND_BATCH)
+      await db
+        .insertInto("agent_provider_thread_entries")
+        .values(
+          input.entries.slice(start, start + APPEND_BATCH).map((entry) => {
+            seq += 1;
+            const uuid =
+              entry &&
+              typeof entry === "object" &&
+              !Array.isArray(entry) &&
+              typeof entry.uuid === "string"
+                ? entry.uuid
+                : null;
+            return {
+              thread_id: input.threadId,
+              subpath,
+              seq,
+              entry_uuid: uuid,
+              // As the harness wrote it: json keeps its text, key order and
+              // every character included, and refuses none of it. An entry
+              // may be a bare string (a rollout line that is not JSON), which
+              // both drivers would send as raw text. SQL never reads inside
+              // an entry: a json operator refuses a \u0000 escape in it.
+              entry: sql<Json>`${JSON.stringify(entry)}::json`,
+            };
+          }),
+        )
+        .onConflict((conflict) =>
+          conflict
+            .columns(["thread_id", "subpath", "entry_uuid"])
+            .where("entry_uuid", "is not", null)
+            .doNothing(),
+        )
+        .execute();
     // The thread's state now lives with Work: the row that turned portable,
     // for the caller to log (ADR 0197), or null when it already was.
     return (

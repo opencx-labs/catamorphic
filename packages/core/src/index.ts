@@ -104,6 +104,7 @@ export {
   AgentSessionClosedError,
   type AgentSessionDetail,
   AgentSessionHandoffPendingError,
+  AgentSessionImportedError,
   AgentSessionNotFoundError,
   type AgentSessionPeer,
   AgentSessionRewindingError,

@@ -245,3 +245,4 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0230](0230-agent-terminals-mark-commands-in-bash-too.md) | Agent terminals mark commands in bash too | Accepted (amends 0223) |
 | [0231](0231-daytona-support-is-removed.md) | Daytona support is removed | Accepted (amends 0004, 0008, 0174) |
 | [0232](0232-bun-builds-and-checks-packages.md) | Bun builds and type checks the packages | Accepted |
+| [0233](0233-sessions-imported-from-claude-code-and-codex.md) | Sessions imported from Claude Code and Codex | Accepted |

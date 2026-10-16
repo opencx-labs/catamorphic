@@ -295,6 +295,7 @@ function ProfileAgentBody({
   );
   const [instructions, setInstructions] = useState(agent.instructions);
   const [memory, setMemory] = useState(agent.memory);
+  const [syncSessions, setSyncSessions] = useState(agent.syncSessions);
   const [auth, setAuth] = useState<AgentAuthMode>(agent.auth);
   const [apiKey, setApiKey] = useState("");
   const [clearKey, setClearKey] = useState(false);
@@ -359,6 +360,7 @@ function ProfileAgentBody({
           : { harnessPermissions }),
         coordination,
         memory,
+        ...(harness === "ai-sdk" ? {} : { syncSessions }),
         instructions,
         auth: effectiveAuth,
         connections,
@@ -556,6 +558,31 @@ function ProfileAgentBody({
                 data={data}
                 projectId={projectId}
               />
+              {harness !== "ai-sdk" && (
+                <label className="flex cursor-pointer items-start justify-between gap-3 text-xs text-fg-muted">
+                  <span>
+                    <span className="block text-[12px] text-fg">
+                      Sync chats from {HARNESS_LABELS[harness]}
+                    </span>
+                    <span className="block text-[11px] text-fg-faint">
+                      Chats you start in {HARNESS_LABELS[harness]} outside Work
+                      appear in their project's chat list, and you can continue
+                      them here with this agent, one {HARNESS_LABELS[harness]}{" "}
+                      agent at a time. Only chats started after you turn this
+                      on, and they stay on this computer.
+                    </span>
+                  </span>
+                  <input
+                    type="checkbox"
+                    role="switch"
+                    aria-checked={syncSessions}
+                    checked={syncSessions}
+                    onChange={(event) => setSyncSessions(event.target.checked)}
+                    className="mt-0.5 shrink-0"
+                    data-testid="agent-sync-sessions"
+                  />
+                </label>
+              )}
               {harness === "claude-code" && <ClaudeCodeInstall />}
             </>
           )}
