@@ -1066,3 +1066,117 @@ describe("content Work draws moves with the sidebar", () => {
     expect(app.getRendererErrors()).toEqual([]);
   });
 });
+
+describe("a floating chat grows into its tab", () => {
+  it("over what was in front, which stays until covered, its card easing into the tab", async () => {
+    // Settings in front (the sidebar's test left it there), a new floating
+    // chat over it, which the person then makes a tab.
+    await run(
+      `$('[data-workspace-visible="true"] [aria-label="Settings"]').click(); return true;`,
+    );
+    const settings = `$('[data-workspace-visible="true"] [data-surface-key^="settings:"]')`;
+    await runWait(`return !!${settings}?.checkVisibility();`, {
+      label: "Settings in front",
+    });
+    await run(`pressKey('n', { metaKey: true }); return true;`);
+    await runWait(
+      `const dock = visibleDock();
+       return !!dock && dock.dataset.floatingChat === 'true' &&
+         getComputedStyle(dock).opacity === '1';`,
+      { label: "a floating chat over Settings" },
+    );
+    const frames = await run<
+      Array<{
+        t: number;
+        tab: boolean;
+        behind: boolean;
+        width: number;
+        title: number;
+      }>
+    >(`
+      const dock = visibleDock();
+      const title = dock.querySelector('header');
+      const frames = [];
+      const started = performance.now();
+      return new Promise((resolve) => {
+        const sample = () => {
+          frames.push({
+            t: Math.round(performance.now() - started),
+            tab: dock.dataset.chatTab === 'true',
+            behind: !!${settings}?.checkVisibility(),
+            width: Math.round(dock.getBoundingClientRect().width),
+            title: Number(getComputedStyle(title).opacity),
+          });
+          if (performance.now() - started < 700) requestAnimationFrame(sample);
+          else resolve(frames);
+        };
+        pressKey('M', { metaKey: true, shiftKey: true });
+        requestAnimationFrame(sample);
+      });`);
+    const grown = frames.filter((frame) => frame.tab);
+    expect(grown.length, JSON.stringify(frames)).toBeGreaterThan(5);
+    const from = grown[0]?.t ?? 0;
+    // What was in front stays beneath the growing chat, then goes once it
+    // is covered: never the bare backdrop around the chat.
+    expect(
+      grown
+        .filter((frame) => frame.t < from + 150)
+        .every((frame) => frame.behind),
+      JSON.stringify(frames),
+    ).toBe(true);
+    expect(grown.at(-1)?.behind, JSON.stringify(frames)).toBe(false);
+    // It grows through the sizes between (by however much the window
+    // leaves it: 48px on a narrow one), and its title fades rather than
+    // vanishing in the first frame.
+    const [first = 0, last = 0] = [grown[0]?.width, grown.at(-1)?.width];
+    expect(last - first, JSON.stringify(frames)).toBeGreaterThan(8);
+    expect(
+      grown.some((frame) => frame.width > first + 1 && frame.width < last - 1),
+      JSON.stringify(frames),
+    ).toBe(true);
+    expect(
+      grown.some((frame) => frame.title > 0 && frame.title < 1),
+      JSON.stringify(frames),
+    ).toBe(true);
+    expect(app.getRendererErrors()).toEqual([]);
+  });
+});
+
+describe("inputs grow by gliding", () => {
+  const paletteInput = `$$('textarea[aria-label="Search commands, pages, and more"]').find((el) => !el.closest('[inert]'))`;
+  it("the palette's input glides taller for a new line, as the composer does", async () => {
+    await run(
+      `if (!(${paletteInput})) pressKey('p', { metaKey: true }); return true;`,
+    );
+    await runWait(`return !!(${paletteInput});`, { label: "palette open" });
+    const glide = await run<{ before: number; heights: number[] }>(`
+      const input = ${paletteInput};
+      const frame = input.parentElement;
+      setReactValue(input, 'first line');
+      return new Promise((resolve) => requestAnimationFrame(() => {
+        const before = frame.getBoundingClientRect().height;
+        const heights = [];
+        const started = performance.now();
+        // Shift+Enter in a textarea is a newline.
+        setReactValue(input, 'first line\\nsecond line');
+        const tick = () => {
+          heights.push(frame.getBoundingClientRect().height);
+          if (performance.now() - started < 500) requestAnimationFrame(tick);
+          else resolve({ before, heights });
+        };
+        requestAnimationFrame(tick);
+      }));
+    `);
+    const end = glide.heights.at(-1) ?? 0;
+    expect(end, JSON.stringify(glide)).toBeGreaterThan(glide.before);
+    // Frames between one line and two: it glided rather than snapped.
+    expect(
+      glide.heights.some(
+        (height) => height > glide.before + 1 && height < end - 1,
+      ),
+      JSON.stringify(glide),
+    ).toBe(true);
+    await run(`setReactValue(${paletteInput}, ''); return true;`);
+    expect(app.getRendererErrors()).toEqual([]);
+  });
+});

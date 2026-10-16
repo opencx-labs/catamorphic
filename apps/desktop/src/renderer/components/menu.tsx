@@ -455,6 +455,14 @@ export function MenuPortal<TEntry extends ContextMenuEntry>({
         data-sidebar-menu
         role="menu"
         aria-label={label}
+        // A right-click in the open menu ends here. Drawn elsewhere on the
+        // page, it would still bubble through React to the menu's owner (a
+        // tab, a link), which opened it again at the pointer, or reach the
+        // window's own menu, which closed it.
+        onContextMenu={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+        }}
         onKeyDown={(event) => {
           if (event.key === "Escape") {
             event.preventDefault();

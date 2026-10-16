@@ -315,6 +315,7 @@ describe("a project's card", () => {
   });
 
   it("copies its Git remote", async () => {
+    const title = await centerOf(`${card}?.querySelector('h2')`, "card title");
     await press(
       await centerOf(
         `${card}?.querySelector('[aria-label="Copy Git remote"]')`,
@@ -328,17 +329,20 @@ describe("a project's card", () => {
       { label: "copied, shown" },
     );
     // Its confirmation stays in view when the pointer leaves the row, with
-    // nothing fading it, then the button rests hidden again.
-    await move(await centerOf(`${card}?.querySelector('h2')`, "card title"));
-    expect(
-      await app.eval<boolean>(
-        `${copyButton("Copy Git remote")}.dataset.copied === 'true' && ${shown("Copy Git remote")} && !${copyButton("Copy Git remote")}.getAnimations().some((animation) => animation.transitionProperty === 'opacity')`,
-      ),
-    ).toBe(true);
+    // nothing fading it, then the button rests hidden again. Every frame
+    // between the pointer leaving and the confirmation ending is sampled:
+    // a slow runner may leave only a few of them.
+    await app.eval(
+      `(() => { const button = ${copyButton("Copy Git remote")}; const title = ${card}.querySelector('h2'); const frames = window.__copiedAway = []; const sample = () => { if (button.dataset.copied !== 'true') return; if (title.matches(':hover')) frames.push(getComputedStyle(button).opacity === '1' && !button.getAnimations().some((animation) => animation.transitionProperty === 'opacity')); requestAnimationFrame(sample); }; sample(); return true; })()`,
+    );
+    await move(title);
     await app.waitFor(
       `!${copyButton("Copy Git remote")}.dataset.copied && ${hidden("Copy Git remote")}`,
       { label: "hidden after the confirmation" },
     );
+    const away = await app.eval<boolean[]>("window.__copiedAway");
+    expect(away.length).toBeGreaterThan(0);
+    expect(away.every(Boolean)).toBe(true);
     // What the clipboard holds, pasted into the page.
     await app.eval(`${view}.focus(); true`);
     await inPage(

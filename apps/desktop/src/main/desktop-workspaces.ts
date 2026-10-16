@@ -981,6 +981,9 @@ export class DesktopWorkspaces {
   }
 
   private syncFloating(profileId: string) {
+    // Quitting closes the dock first: a workspace taking focus after that
+    // would build a new one, which keeps the app from quitting.
+    if (this.quitting) return;
     const prefs = this.options.config.forProfile(profileId).prefs.load();
     const existing = this.floating.get(profileId);
     if (!this.detached(profileId)) {
@@ -1038,6 +1041,12 @@ export class DesktopWorkspaces {
       // restart (or a killed dev instance) comes back with the chosen default.
       event.preventDefault();
       this.setDetached(profileId, false);
+    });
+    // Teardown closes the dock before the workspaces: a workspace taking
+    // focus after that must not reach the destroyed window.
+    window.on("closed", () => {
+      if (this.floating.get(profileId) === window)
+        this.floating.delete(profileId);
     });
   }
 }

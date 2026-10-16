@@ -212,9 +212,11 @@ export function notice(
   code: string,
   text: string,
   data: Extract<Item, { kind: "notice" }>["data"] = {},
+  /** When it was written, in seconds from the epoch turns count from. */
+  seconds?: number,
 ): Item {
   return {
-    ...common(id, null),
+    ...common(id, null, seconds),
     kind: "notice",
     code,
     text,

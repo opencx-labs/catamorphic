@@ -450,16 +450,22 @@ describe("chat flows", () => {
       `return timelineMessages().some((m) => m.text.includes('You said: hello agent'));`,
       { timeoutMs: 30_000, label: "agent reply in timeline" },
     );
-    // set_title flowed through: the session shows up renamed in the sidebar.
-    await runWait(`return !!byText('button', 'Quick chat');`, {
-      timeoutMs: 30_000,
-      label: "session title in sidebar",
-    });
+    // set_title flowed through: the session shows up renamed in the sidebar
+    // (not only on its tab, when the chat opened as one).
+    await runWait(
+      `return !!byText('[data-sidebar="left"] button', 'Quick chat');`,
+      {
+        timeoutMs: 30_000,
+        label: "session title in sidebar",
+      },
+    );
   });
 
   it("previews a chat's agent, environment, and current state", async () => {
+    // The sidebar's row: a chat that opened as a tab has a "Quick chat" tab
+    // too, whose hover card is not the chat's preview.
     await run(`
-      const chat = byText('button', 'Quick chat');
+      const chat = byText('[data-sidebar="left"] button', 'Quick chat');
       chat.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
       return true;
     `);

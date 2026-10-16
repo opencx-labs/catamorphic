@@ -11,7 +11,7 @@ import {
 import { type ReactNode, useRef, useState } from "react";
 import { writesProgram } from "../../shared/project-experience.js";
 import { desktopApi, type RemoteProjectStatus } from "../lib/desktop-api.js";
-import { CopyButton } from "./copy-button.js";
+import { InspectorFact } from "./inspector-fact.js";
 import { type MenuAt, MenuPortal, menuAtControl } from "./menu.js";
 import { useHoldInspector, useInspectorPending } from "./resource-inspector.js";
 import { ShortcutHint } from "./shortcut-hint.js";
@@ -214,12 +214,16 @@ export function ProjectInspectorView({
       </header>
 
       <dl className="grid grid-cols-[auto_minmax(0,1fr)] items-center gap-x-3 gap-y-1.5 py-2.5 text-[11px]">
-        <Row
+        <InspectorFact
           term="Folder"
           busy={data.root === undefined}
-          copyable={
+          oneLine
+          copy={
             typeof data.root === "string" && data.root !== "unavailable"
+              ? data.root
+              : undefined
           }
+          copyLabel="Copy folder path"
         >
           {data.root === undefined ? (
             <Pending width="70%" />
@@ -228,17 +232,26 @@ export function ProjectInspectorView({
           ) : data.root === null ? (
             <Absent>None</Absent>
           ) : (
-            <CopyableValue value={data.root} copyLabel="Copy folder path" />
+            <CopyableValue value={data.root} />
           )}
-        </Row>
-        <Row term="Git remote" copyable={Boolean(remote)}>
-          {remote ? (
-            <CopyableValue value={remote} copyLabel="Copy Git remote" />
-          ) : (
-            <Absent>None</Absent>
-          )}
-        </Row>
-        <Row term="Work server" busy={server === undefined}>
+        </InspectorFact>
+        <InspectorFact
+          term="Git remote"
+          oneLine
+          copy={remote || undefined}
+          copyLabel="Copy Git remote"
+        >
+          {remote ? <CopyableValue value={remote} /> : <Absent>None</Absent>}
+        </InspectorFact>
+        <InspectorFact
+          term="Work server"
+          busy={server === undefined}
+          oneLine
+          copy={
+            server && server !== "unavailable" ? server.serverUrl : undefined
+          }
+          copyLabel="Copy server address"
+        >
           {server === undefined ? (
             <Pending width="55%" />
           ) : server === "unavailable" ? (
@@ -248,7 +261,7 @@ export function ProjectInspectorView({
           ) : (
             <ServerValue status={server} />
           )}
-        </Row>
+        </InspectorFact>
       </dl>
 
       {!current && <LatestChats sessions={data.sessions} />}
@@ -393,35 +406,6 @@ function ServerValue({ status }: { status: RemoteProjectStatus }) {
   );
 }
 
-/**
- * One row of the card's list: its label and value on the card's two
- * columns, as one box the pointer can rest on. A copyable row shows its
- * copy button while it is hovered or holds keyboard focus.
- */
-function Row({
-  term,
-  busy,
-  copyable,
-  children,
-}: {
-  term: string;
-  busy?: boolean;
-  copyable?: boolean;
-  children: ReactNode;
-}) {
-  return (
-    <div
-      data-copyable={copyable || undefined}
-      className="col-span-2 grid grid-cols-subgrid items-center"
-    >
-      <dt className="text-fg-faint">{term}</dt>
-      <dd className="min-w-0" aria-busy={busy || undefined}>
-        {children}
-      </dd>
-    </div>
-  );
-}
-
 /** One value line; every row of the card is this tall, loaded or not. */
 function Line({ children }: { children: ReactNode }) {
   return (
@@ -449,15 +433,10 @@ function Absent({ children }: { children: ReactNode }) {
 
 /**
  * A path or address on one line, its end kept when it is too long (the
- * folder's or repository's own name), all of it in a hint and a copy.
+ * folder's or repository's own name), all of it in a hint (and its row's
+ * copy).
  */
-function CopyableValue({
-  value,
-  copyLabel,
-}: {
-  value: string;
-  copyLabel: string;
-}) {
+function CopyableValue({ value }: { value: string }) {
   return (
     <Line>
       <ShortcutHint label={value} className="min-w-0 flex-1">
@@ -465,7 +444,6 @@ function CopyableValue({
           <bdi>{value}</bdi>
         </span>
       </ShortcutHint>
-      <CopyButton value={value} label={copyLabel} />
     </Line>
   );
 }

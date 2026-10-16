@@ -19,6 +19,7 @@ import {
   type SerializedComposer,
   serializeComposer,
 } from "../lib/composer-serialize";
+import { GLIDING_FRAME, useGlidingHeight } from "../lib/use-gliding-height";
 import { ContextPill } from "./context-pill";
 
 /**
@@ -520,31 +521,12 @@ export const ComposerInput = forwardRef<
     onKeyDown?.(event);
   };
 
-  // Size changes glide instead of snapping: a frame around the editable
-  // tweens to the editable's measured height (Shift+Enter, a wrapping
-  // pill, recall of a longer draft, growth while typing). The editable
-  // itself stays auto-height (its own max-h + overflow handle scrolling);
-  // the frame just follows it via ResizeObserver.
+  // Size changes glide instead of snapping, a wrapping pill's included.
   const frameRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const root = rootRef.current;
-    const frame = frameRef.current;
-    if (!root || !frame) return;
-    const follow = () => {
-      const height = `${root.offsetHeight}px`;
-      if (frame.style.height !== height) frame.style.height = height;
-    };
-    follow();
-    const observer = new ResizeObserver(follow);
-    observer.observe(root);
-    return () => observer.disconnect();
-  }, []);
+  useGlidingHeight({ content: rootRef, frame: frameRef });
 
   return (
-    <div
-      ref={frameRef}
-      className={`overflow-hidden transition-[height] duration-150 ease-[cubic-bezier(0.2,0,0,1)] ${wrapperClassName}`}
-    >
+    <div ref={frameRef} className={`${GLIDING_FRAME} ${wrapperClassName}`}>
       {/* biome-ignore lint/a11y/useSemanticElements: a textarea cannot hold inline pills; this contenteditable is the multiline textbox */}
       <div
         ref={rootRef}

@@ -1494,7 +1494,9 @@ const StepRow = memo(function StepRow({
           {step.status === "failed" && (
             <span className="shrink-0 text-danger">Failed</span>
           )}
-          <StepDuration step={step} />
+          {/* A background step's call returns as its work starts: its own
+              time is not the work's, which runs on after it. */}
+          {!step.background && <StepDuration step={step} />}
           {expandable && (
             <ChevronRight
               className={`size-3 shrink-0 text-fg-faint transition-transform duration-150 ${open ? "rotate-90" : ""}`}

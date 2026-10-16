@@ -104,19 +104,31 @@ describe("interrupted turn recovery", () => {
               window.catamorphicDesktop.getServerState().then((s) => !!s.url);`,
       { timeoutMs: 60_000, label: "embedded server ready after relaunch" },
     );
-    await runWait(
-      `const chat = document.querySelector('aside [data-session-id="${sessionId}"] [data-tree-primary]');
-       if (!chat) return false; chat.focus(); return document.activeElement === chat;`,
-      { timeoutMs: 30_000, label: "orphaned session in the sidebar" },
-    );
     // Explicitly open the dock through Chromium input and verify it is visible.
     // A click alone is not evidence of reopening during startup; the later
-    // orphan notification can render a transcript in a minimized dock.
-    await app.press("Enter", 1); // Alt+Enter opens floating on both platforms.
-    await runWait(
-      `return !!visibleDock()?.querySelector('[data-composer-input]');`,
-      { label: "orphaned session opened for continuation" },
-    );
+    // orphan notification can render a transcript in a minimized dock. A key
+    // pressed while the window is still starting can be lost (once on the
+    // macOS runner): the row takes focus and the key again until it opens.
+    for (let attempt = 0; ; attempt += 1) {
+      await runWait(
+        `const chat = document.querySelector('aside [data-session-id="${sessionId}"] [data-tree-primary]');
+         if (!chat) return false; chat.focus(); return document.activeElement === chat;`,
+        { timeoutMs: 30_000, label: "orphaned session in the sidebar" },
+      );
+      await app.press("Enter", 1); // Alt+Enter opens floating on both platforms.
+      try {
+        await runWait(
+          `return !!visibleDock()?.querySelector('[data-composer-input]');`,
+          {
+            label: "orphaned session opened for continuation",
+            timeoutMs: attempt < 2 ? 5_000 : 15_000,
+          },
+        );
+        break;
+      } catch (cause) {
+        if (attempt >= 2) throw cause;
+      }
+    }
 
     // The dead turn reads as a finished, interrupted message — not an
     // eternal "Thinking..." spinner.

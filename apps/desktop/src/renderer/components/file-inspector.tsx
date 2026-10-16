@@ -4,6 +4,7 @@ import { CircleDot, FileText, FolderOpen, LoaderCircle } from "lucide-react";
 import { useState } from "react";
 import { desktopApi } from "../lib/desktop-api.js";
 import { localEditorPath } from "../lib/local-project-files.js";
+import { InspectorFact } from "./inspector-fact.js";
 import { ResourceInspector } from "./resource-inspector.js";
 
 /** File lifecycle uses the same status and actions surface as chat. */
@@ -39,6 +40,8 @@ export function FileInspector({
     : dirty
       ? "Unsaved changes"
       : "Saved on this device";
+  const visibility = personal ? "Local only" : "Project file (local copy)";
+  const where = location.data ?? filePath;
   const run = async (action: () => Promise<void>) => {
     setError(null);
     try {
@@ -62,14 +65,19 @@ export function FileInspector({
             </h2>
           </header>
           <dl className="grid grid-cols-[5.5rem_1fr] gap-x-3 gap-y-2 py-3 text-[11px]">
-            <dt className="text-fg-faint">Status</dt>
-            <dd className="text-fg">{status}</dd>
-            <dt className="text-fg-faint">Visibility</dt>
-            <dd className="text-fg">
-              {personal ? "Local only" : "Project file (local copy)"}
-            </dd>
-            <dt className="text-fg-faint">Location</dt>
-            <dd className="break-all text-fg">{location.data ?? filePath}</dd>
+            <InspectorFact term="Status" copy={status}>
+              {status}
+            </InspectorFact>
+            <InspectorFact term="Visibility" copy={visibility}>
+              {visibility}
+            </InspectorFact>
+            <InspectorFact
+              term="Location"
+              copy={where}
+              copyLabel="Copy file path"
+            >
+              <span className="break-all">{where}</span>
+            </InspectorFact>
           </dl>
           <p className="pb-3 text-[11px] leading-4 text-fg-muted">
             {personal

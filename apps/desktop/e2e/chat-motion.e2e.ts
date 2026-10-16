@@ -193,7 +193,12 @@ const RECORDER = `(() => {
     if (on) requestAnimationFrame(sample);
   };
   requestAnimationFrame(sample);
-  window.__chatMotion = { stop() { on = false; return frames; } };
+  window.__chatMotion = {
+    stop() { on = false; return frames; },
+    // Frames sampled since a moment: a window waits for enough of them,
+    // whatever stalls the renderer meanwhile.
+    since(t) { return frames.filter((frame) => frame.t >= t).length; },
+  };
   return true;
 })()`;
 
@@ -643,12 +648,11 @@ describe("chat motion", () => {
   it("holds the live chrome still on a slow renderer, whose frames come late", async () => {
     await setDisplay("notes");
     await newChat();
-    const frames = await recordTurn(
-      "notes-slow",
-      "pace the work quickly",
-      undefined,
-      { cpuSlowdown: 6 },
-    );
+    // At the even pace, not quickly: a slowed renderer on a busy machine
+    // drew only 14 frames of a quick turn's work, too few to judge by.
+    const frames = await recordTurn("notes-slow", "pace the work", undefined, {
+      cpuSlowdown: 6,
+    });
     for (const frame of frames.filter((f) => f.rowParts.length > 0))
       expect(lineParts(frame)).toEqual(["svg", "activity-text"]);
     expectStill(frames);
@@ -950,6 +954,15 @@ describe("chat motion", () => {
     await setDisplay("all");
     await newChat();
     let onBar = false;
+    // At least 1.2 s after a press, and enough frames past the browser's
+    // own smooth scroll for it to judge: a renderer that stalls (CI stalled
+    // for 1.4 s once) holds the window open until it has them.
+    const sampled = (name: string) =>
+      runWait(
+        `const at = window.__marks.${name};
+         return performance.now() - at >= 1200 && window.__chatMotion.since(at + 400) > 20;`,
+        { label: `frames after the ${name} press`, timeoutMs: 15_000 },
+      );
     const frames = await recordTurn(
       "escapes",
       "pace the work quickly at length",
@@ -976,7 +989,7 @@ describe("chat motion", () => {
               clickCount: 1,
             });
           await mark("bar");
-          await sleep(1200);
+          await sampled("bar");
           await mark("barred");
           // Back to the latest.
           await run(`toLatest(); return true;`);
@@ -1004,7 +1017,7 @@ describe("chat motion", () => {
         });
         await app.cdp("Input.dispatchKeyEvent", { type: "keyUp", ...pageUp });
         await mark("key");
-        await sleep(1200);
+        await sampled("key");
         await mark("keyed");
         await run(`toLatest(); return true;`);
       },
@@ -1195,5 +1208,75 @@ describe("chat motion", () => {
       `document.getElementById('e2e-narrow-column').remove(); return true;`,
     );
     await app.movePointer(await point("composer()"));
+  }, 120_000);
+
+  it("keeps the latest words at the end of the view while the composer grows and shrinks", async () => {
+    await newChat();
+    await run(`
+      const input = composer(); input.focus();
+      setReactValue(input, 'pace the work quickly at length');
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+      return true;`);
+    await runWait(
+      `const s = logScroller();
+       return !!s && !frontDock().querySelector('[data-testid="chat-activity"]') &&
+         s.scrollHeight > s.clientHeight + 120 && following();`,
+      { label: "a long answer settled, followed", timeoutMs: 30_000 },
+    );
+    /** Every painted frame while the composer glides to `text`'s height. */
+    const glide = (text: string) =>
+      run<Array<{ height: number; fromEnd: number; pinned: boolean }>>(`
+        const s = logScroller();
+        const input = composer(); input.focus();
+        const frames = [];
+        // Each frame the view resizes, after the chat's own observer and
+        // before paint: what that frame paints. A task between frames would
+        // read a layout the glide has since moved on, one no frame paints.
+        const observer = new ResizeObserver(() => {
+          frames.push({
+            height: s.clientHeight,
+            fromEnd: s.scrollHeight - s.clientHeight - s.scrollTop,
+            // Still following: the library never took the taller view's
+            // pull back to its end for the person scrolling up.
+            pinned: s.firstElementChild.hasAttribute('data-pinned'),
+          });
+        });
+        observer.observe(s);
+        setReactValue(input, ${JSON.stringify(text)});
+        return new Promise((resolve) => setTimeout(() => {
+          observer.disconnect();
+          resolve(frames);
+        }, 600));`);
+    for (const [text, label] of [
+      ["one\ntwo\nthree\nfour", "growing"],
+      ["", "shrinking"],
+    ] as const) {
+      const frames = await glide(text);
+      const heights = frames.map((frame) => frame.height);
+      const [first = 0, last = 0] = [heights[0], heights.at(-1)];
+      expect(
+        Math.abs(last - first),
+        `${label}: the view resized`,
+      ).toBeGreaterThan(30);
+      expect(
+        heights.some(
+          (height) =>
+            height > Math.min(first, last) + 1 &&
+            height < Math.max(first, last) - 1,
+        ),
+        `${label}: through the frames between`,
+      ).toBe(true);
+      // The latest words ride the composer's edge on every frame, rather
+      // than slipping under it and catching up once it stops.
+      expect(
+        Math.max(...frames.map((frame) => frame.fromEnd)),
+        `${label}: ${JSON.stringify(frames)}`,
+      ).toBeLessThan(2);
+      expect(
+        frames.every((frame) => frame.pinned),
+        `${label}: ${JSON.stringify(frames)}`,
+      ).toBe(true);
+    }
+    expect(await run<boolean>("return following();")).toBe(true);
   }, 120_000);
 });

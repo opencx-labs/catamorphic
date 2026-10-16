@@ -421,8 +421,12 @@ function WorktreeSection({
           <span className="min-w-0 truncate">
             {tree.branch ?? "Detached HEAD"}
           </span>
+          {/* Named as the chat's status popup names it (ADR 0215): the
+            branch beside it is whatever the folder has checked out. */}
           {tree.isCurrent && (
-            <span className="text-[10px] text-fg-faint">Current</span>
+            <span className="shrink-0 text-[10px] text-fg-faint">
+              Project folder
+            </span>
           )}
           <span className="ml-auto text-[11px] text-fg-faint">{count}</span>
         </button>
