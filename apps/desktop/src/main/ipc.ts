@@ -81,7 +81,7 @@ import type { ConnectorsService } from "./connectors.js";
 import { defaultDesktopProjectsDir } from "./development-paths.js";
 import { readEditorFile, writeEditorFile } from "./editor-files.js";
 import { copyFileToClipboard, runAppleScript } from "./file-clipboard.js";
-import { readFilePreview } from "./file-preview.js";
+import { readFilePreview, readProjectImage } from "./file-preview.js";
 import { searchProjectFiles } from "./file-search.js";
 import { registerGitOverviewSubscriptions } from "./git-overview-ipc.js";
 import {
@@ -3007,6 +3007,20 @@ export function registerIpcHandlers(
         if (temporary)
           await fs.promises.rm(temporary, { recursive: true, force: true });
       }
+    },
+  );
+
+  // A markdown document's images: the project's own only (readProjectImage).
+  ipcMain.handle(
+    "catamorphic:project-image",
+    async (_event, input: { projectId: string; filePath: string }) => {
+      if (
+        typeof input?.projectId !== "string" ||
+        typeof input.filePath !== "string"
+      )
+        return null;
+      const root = await requireRoot(input.projectId).catch(() => null);
+      return root ? readProjectImage({ root, filePath: input.filePath }) : null;
     },
   );
 
