@@ -207,15 +207,7 @@ it("follows another project's checkout, then this one again", async () => {
   await wait(
     `return !$('${changes}')?.textContent.includes('after-commit.txt');`,
     "the removed file gone",
-  ).catch(async (error: unknown) => {
-    // DIAGNOSTIC
-    const state = await app.eval(
-      `(async () => ({ overview: await window.catamorphicDesktop.gitOverview(${JSON.stringify(project.id)}, [${JSON.stringify(plain)}]), text: document.querySelector('${changes}')?.textContent, visibleProject: document.querySelector('${visible}')?.dataset.projectRuntime, sections: [...document.querySelectorAll('[data-sidebar-widget="changes"]')].map(w => [w.closest('[data-project-runtime]')?.dataset.projectRuntime, w.closest('[data-workspace-visible]')?.dataset.workspaceVisible, w.textContent.slice(0, 200)]) }))()`,
-    );
-    throw new Error(
-      `${String(error)}; ${JSON.stringify(state).slice(0, 3000)}`,
-    );
-  });
+  );
   await app.eval(
     `window.catamorphicDesktop.workspaceNavigate({projectId: ${JSON.stringify(original)}})`,
   );

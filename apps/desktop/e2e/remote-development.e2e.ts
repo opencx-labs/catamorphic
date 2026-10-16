@@ -95,7 +95,12 @@ const shot = (name: string) =>
 const serverRow = `[data-sidebar-section="remote"] [data-sidebar-item-id="server"]`;
 /** Pick an entry from the Server row's menu: its dialogs live there. */
 async function serverMenu(label: string): Promise<void> {
-  await run(`$('${serverRow} [aria-haspopup="menu"]').click(); return true;`);
+  // The row settles as the connection's status arrives: open its menu once
+  // the row offers one.
+  await runWait(
+    `const button = $('${serverRow} [aria-haspopup="menu"]'); if (!button) return false; button.click(); return true;`,
+    { label: "the server row's menu" },
+  );
   await runWait(
     `const item = $$('[data-sidebar-menu] [role="menuitem"]').find((el) => el.textContent.trim() === ${JSON.stringify(label)}); if (!item) return false; item.click(); return true;`,
     { label: `${label} in the server's menu` },

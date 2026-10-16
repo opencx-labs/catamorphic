@@ -1,4 +1,8 @@
-import type { GitChangedFile, GitDiffMode } from "../../shared/git.js";
+import type {
+  GitChangedFile,
+  GitDiffMode,
+  GitOverview,
+} from "../../shared/git.js";
 import { openModeForAction } from "../../shared/open-mode.js";
 import type { SidebarSourceItem } from "../../shared/sidebar-source.js";
 import { desktopApi } from "../lib/desktop-api.js";
@@ -29,6 +33,12 @@ export function gitSource(deps: WorkSourceDeps): SectionSource {
       baseRef?: string;
     }
   >();
+  /**
+   * The observed overview while a view follows it (ADR 0149): a checkout's
+   * files are read from it, so the list shows what the watch saw and every
+   * change it sees, a file's removal included, reaches the list.
+   */
+  let observed: GitOverview | undefined;
   /** Untracked folders git names whole, by row id: opened, their files. */
   const folders = new Map<
     string,
@@ -103,11 +113,19 @@ export function gitSource(deps: WorkSourceDeps): SectionSource {
           ],
         };
       }
-      const overview = await desktopApi.gitOverview(
-        deps.projectId,
-        parentId ? [parentId] : [],
-        session?.id,
-      );
+      const watched = parentId
+        ? observed?.worktrees.find(
+            (entry) => entry.path === parentId && entry.loaded !== false,
+          )
+        : undefined;
+      const overview =
+        watched && observed
+          ? observed
+          : await desktopApi.gitOverview(
+              deps.projectId,
+              parentId ? [parentId] : [],
+              session?.id,
+            );
       if (overview.error) throw new Error(overview.error);
       if (!parentId)
         return {
@@ -136,15 +154,23 @@ export function gitSource(deps: WorkSourceDeps): SectionSource {
     subscribe: (publish, { branches, session }) => {
       if (!deps.writesProgram) return () => {};
       let last: string | undefined;
-      return desktopApi.watchGitOverview(
+      const stop = desktopApi.watchGitOverview(
         { projectId: deps.projectId, paths: "all", sessionId: session?.id },
         (snapshot) => {
           const next = JSON.stringify(snapshot);
-          if (last !== undefined && next !== last)
+          const first = last === undefined;
+          observed = snapshot.error ? undefined : snapshot;
+          // The first one too: rows read before the watch began may be
+          // behind what it saw.
+          if (first || next !== last)
             invalidateBranches(publish, branches(), { quiet: true });
           last = next;
         },
       );
+      return () => {
+        observed = undefined;
+        stop();
+      };
     },
     action: async ({ itemId, action }) => {
       // A notice row opens nothing.
