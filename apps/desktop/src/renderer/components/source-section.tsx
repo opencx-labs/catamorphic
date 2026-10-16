@@ -850,7 +850,18 @@ function SourceRow({
       itemId={row.id}
       label={row.label}
       pointKey={tab}
-      title={row.url}
+      // A tile shows no label: its tooltip names it. A row's shows a page's
+      // or file's address; Work's own (a tab key, a command, a chat link)
+      // are not a person's to read.
+      title={
+        tile
+          ? row.label
+          : row.url?.startsWith("file:")
+            ? row.url.slice("file:".length)
+            : row.url && /^https?:/i.test(row.url)
+              ? row.url
+              : undefined
+      }
       style={tile ? undefined : { marginLeft: depth * 14 }}
       presentation={tile ? "tile" : "row"}
       icon={<RowIcon icon={row.icon} url={row.url} tile={tile} />}
