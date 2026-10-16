@@ -394,7 +394,7 @@ screen, or under reduced motion.
 | `.chrome-toggle-slot` fold (the chrome's sidebar toggle folding away as a pushing panel arrives and unfolding as it leaves, its gap with it; `@starting-style` for arrival) | 200ms, the panel's easing and item wait | the panel's own slide; gone or at its own width once the panel is still |
 | `.overlay-scrollbar` fade (a sidebar list's scroll position on the window's edge while it scrolls or the pointer nears that edge) | 150ms | itself: one transition both ways, fading 900ms after the last scroll |
 | Markdown format bar (Web Animations in `components/markdown/motion.ts`: in, rising 4px from 97% and transparent; out, the same way back, in place and inert) | 160ms | itself: one motion both ways; shown again mid-exit, or hidden mid-entrance, it turns from where it is over the share of the 160ms left |
-| Markdown drag handle (`.cat-mdedit-handle`: appears with opacity and scale 0.9 to 1, glides `top`/`left` between blocks) | 160ms appear / 140ms glide | itself |
+| Markdown drag handle (`.cat-mdedit-handle`: appears with opacity and scale 0.9 to 1; the extension jumps the box to each block and the grip inside glides there on a `transform` animation, which runs on the compositor) and table row grip (`.cat-mdedit-rowgrip`, placed and gliding by `transform`) | 160ms appear / 140ms glide | itself |
 | `bubble-ask` (agent question arrival) | 280ms | — (one-shot nudge on a persistent bubble; no exit to pair) |
 | `input-recall-{up,down}-{a,b}` (composer ↑/↓ history) | 150ms | — (transform-only directional content signal; paired names replay rapid same-direction recalls without a classless frame) |
 | `cat-swap-out` / `cat-swap-in` (text changing in place: the agent's activity line, a steps line's count and word; shared from `@catamorphic/ui/styles.css` with `cat-fade-in`, `cat-fold-away` and `cat-step-in`) | 200ms / 200ms | each other (opacity only: the old text fades out from the opacity it had, the activity line's breath included, then the new fades in; the activity line resumes `animate-pulse`) |
@@ -674,6 +674,24 @@ the historical log explains how it arrived here.
 - [Performance](docs/performance.md): idle lifecycle checks and sustained measurement.
 
 ## Design log
+### 2026-10-16: A markdown document shows its images
+
+The markdown editor had no images. An image became its alt text, a document
+opening on one blanked the window, and saving after any edit wrote the alt
+text over the image. An image now shows in place: one in the project (a
+path relative to the document, or to the project when it starts with `/`)
+is read from it, never a file outside it, and https and inline images load
+as they are (a document opened from outside a project shows only those).
+While one loads, a chip naming it waits a moment before showing, so a quick
+load goes straight to the image; one that cannot show (missing, outside the
+project, or plain http) stays a chip with a broken image mark. Images stay
+where markdown puts them, inline: a badge sits in its line and an image on
+its own fills at most the column. Clicking one selects it, ringed in the
+accent, and the grip beside it sits by its top, even over a caption. Saving
+keeps each image's markdown as written, except that a reference image
+(`![logo][brand]`) is written inline, since the editor keeps no link
+definitions.
+
 ### 2026-10-15: The activity line says what the agent is doing, in its own words
 
 The line beside the spinner said "Thinking...", "Working..." and "Running

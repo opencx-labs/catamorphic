@@ -86,8 +86,9 @@ export function installRowDrag(
       const rowRect = row.getBoundingClientRect();
       const tableRect = row.closest("table")!.getBoundingClientRect();
       const at = rel(rowRect);
-      grip.style.left = `${rel(tableRect).x - 22}px`;
-      grip.style.top = `${at.y + (rowRect.height - 22) / 2}px`;
+      // Placed by transform, so its glide between rows runs on the
+      // compositor (left/top would need layout on every frame).
+      grip.style.transform = `translate(${rel(tableRect).x - 22}px, ${at.y + (rowRect.height - 22) / 2}px)`;
       grip.classList.add("show");
       if (!wasShown) {
         grip.classList.remove("glide");

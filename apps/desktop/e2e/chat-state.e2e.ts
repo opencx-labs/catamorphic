@@ -404,6 +404,12 @@ it("lets go of the caret in a chat it minimises, keeping the draft", async () =>
   // inert element before each frame (docs/performance.md). The chat stays
   // mounted while minimised, so the check is not met by its removal.
   expect(await app.eval(`document.querySelector('${dock}').inert`)).toBe(true);
+  // At rest it is kept but skipped by style, layout and paint, which its
+  // transcript would otherwise pay on every frame while it streams.
+  await app.waitFor(
+    `getComputedStyle(document.querySelector('${dock}')).contentVisibility === 'hidden'`,
+    { label: "minimised chat skipped by rendering" },
+  );
   expect(
     await app.eval(`(() => {
       const node = getSelection().anchorNode;

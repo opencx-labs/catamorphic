@@ -18,6 +18,13 @@ import { useEffect, useRef, useState } from "react";
 import { MarkdownBubbleMenu } from "./bubble-menu.js";
 import { joinFrontmatter, splitFrontmatter } from "./frontmatter.js";
 import { MarkdownGuardrails } from "./guardrails.js";
+import { createHandleHoverGate } from "./handle-hover.js";
+import {
+  ImageLink,
+  ImageParagraph,
+  imageLocation,
+  MarkdownImage,
+} from "./image.js";
 import { lowlight } from "./lowlight.js";
 import {
   createBubbleMotion,
@@ -49,6 +56,17 @@ export interface MarkdownEditorProps {
   onSelectionReader?: (
     reader: (() => EditorSelectionSnapshot | null) | null,
   ) => void;
+  /**
+   * The document's path relative to its project: where its images'
+   * relative paths start. Without one (or for a document outside a
+   * project) only web images show.
+   */
+  documentPath?: string;
+  /**
+   * Reads an image in the project (a path relative to it) as a URL to
+   * show, or null.
+   */
+  readImage?: (path: string) => Promise<string | null>;
 }
 
 export interface EditorSelectionSnapshot {
@@ -120,25 +138,36 @@ function firstLineReference(view: EditorView, pos: number): HandleReference {
   };
 }
 
-/** The vertical center of an element's first line of text, or of its box. */
+/** The vertical center of an element's first line (text or an image), or of its box. */
 function firstLineCenter(element: HTMLElement): number {
-  const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
-  for (let text = walker.nextNode(); text; text = walker.nextNode()) {
-    const content = text.textContent ?? "";
+  // Text, or an image before any (a figure over its caption): the first
+  // line it is on.
+  const walker = document.createTreeWalker(
+    element,
+    NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT,
+  );
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    if (node instanceof Element) {
+      if (node.classList.contains("cat-mdedit-image")) {
+        return imageLineCenter(element, node);
+      }
+      continue;
+    }
+    const content = node.textContent ?? "";
     const start = content.search(/\S/);
     if (start === -1) continue;
     const range = document.createRange();
     // A first line with nothing on it (a code block opening with a blank
     // line): the caret's place at its start is that line.
     if (content.slice(0, start).includes("\n")) {
-      range.setStart(text, 0);
+      range.setStart(node, 0);
       range.collapse(true);
       const caret = range.getBoundingClientRect();
       if (caret.height > 0) return caret.top + caret.height / 2;
     }
-    range.setStart(text, start);
+    range.setStart(node, start);
     range.setEnd(
-      text,
+      node,
       start + ((content.codePointAt(start) ?? 0) > 0xffff ? 2 : 1),
     );
     const rect = range.getClientRects()[0];
@@ -146,6 +175,13 @@ function firstLineCenter(element: HTMLElement): number {
   }
   const box = element.getBoundingClientRect();
   return box.top + box.height / 2;
+}
+
+/** An image's first line: a tall one keeps the handle by its top. */
+function imageLineCenter(block: HTMLElement, image: Element): number {
+  const box = image.getBoundingClientRect();
+  const line = Number.parseFloat(getComputedStyle(block).lineHeight);
+  return box.top + (line > 0 ? Math.min(box.height, line) : box.height) / 2;
 }
 
 /** Markdown equality modulo trailing blank lines. */
@@ -159,6 +195,8 @@ export function MarkdownEditor({
   onChange,
   onSave,
   onSelectionReader,
+  documentPath,
+  readImage,
 }: MarkdownEditorProps) {
   const mountRef = useRef<HTMLDivElement>(null);
   const bubbleLayerRef = useRef<HTMLDivElement | null>(null);
@@ -176,6 +214,8 @@ export function MarkdownEditor({
   onSaveRef.current = onSave;
   const onSelectionReaderRef = useRef(onSelectionReader);
   onSelectionReaderRef.current = onSelectionReader;
+  const imagesRef = useRef({ documentPath, readImage });
+  imagesRef.current = { documentPath, readImage };
   // The markdown we last emitted; external `value` changes that differ from
   // it are real (file switch, reload) and reset the document.
   const lastEmittedRef = useRef<string | null>(null);
@@ -216,6 +256,7 @@ export function MarkdownEditor({
       bar: bubbleBar,
     });
     const handleHolder: { el: HTMLElement | null } = { el: null };
+    const hoverGate = createHandleHoverGate();
     const hovered: { view: EditorView | null; pos: number } = {
       view: null,
       pos: -1,
@@ -225,9 +266,23 @@ export function MarkdownEditor({
       extensions: [
         StarterKit.configure({
           codeBlock: false,
+          // Both replaced by image-aware versions (image.ts).
+          link: false,
+          paragraph: false,
           dropcursor: { color: "var(--color-accent)", width: 2 },
         }),
         Markdown,
+        ImageLink,
+        ImageParagraph,
+        MarkdownImage.configure({
+          resolve: async (src) => {
+            const images = imagesRef.current;
+            const location = imageLocation(src, images.documentPath ?? null);
+            if (!location) return null;
+            if ("url" in location) return location.url;
+            return (await images.readImage?.(location.path)) ?? null;
+          },
+        }),
         TaskList,
         TaskItem.configure({ nested: true }),
         TableKit,
@@ -252,12 +307,18 @@ export function MarkdownEditor({
             onHide: bubbleMotion.hide,
           },
         }),
+        hoverGate.extension,
         DragHandle.configure({
           nested: { rules: [DRAG_SCOPE_RULE], edgeDetection: "none" },
+          // The box the extension places, and the grip that glides inside
+          // it (installHandleMotion).
           render: () => {
             const el = document.createElement("div");
             el.className = "cat-mdedit-handle";
-            el.innerHTML = GRIP_DOTS_SVG;
+            const grip = document.createElement("div");
+            grip.className = "cat-mdedit-handle-grip";
+            grip.innerHTML = GRIP_DOTS_SVG;
+            el.append(grip);
             handleHolder.el = el;
             return el;
           },
@@ -275,6 +336,7 @@ export function MarkdownEditor({
                 ? change.pos
                 : -1;
             hovered.view = change.editor.view;
+            hoverGate.track(change.editor.view, hovered.pos, change.node);
             // listItem = bullet/number markers to clear; taskItem has none.
             handleHolder.el?.classList.toggle(
               "for-list-item",
