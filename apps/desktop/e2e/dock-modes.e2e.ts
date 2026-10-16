@@ -68,6 +68,28 @@ const runWait = <T = unknown>(
   opts?: { timeoutMs?: number; label?: string },
 ) => app.waitFor<T>(`(() => { ${helpers}\n${body} })()`, opts);
 
+/**
+ * The dock's +, pressed as a person presses it (Chromium's own input, so a
+ * press precedes the click): it starts a floating chat even over a New Tab,
+ * where Cmd+N would open the chat in the tab.
+ */
+const pressDockPlus = async () => {
+  const point = await runWait<{ x: number; y: number }>(
+    `const plus = $('[data-dock-rail] button[aria-label="New chat"]');
+     if (!plus) return false;
+     const r = plus.getBoundingClientRect();
+     return { x: r.left + r.width / 2, y: r.top + r.height / 2 };`,
+    { label: "the dock's +" },
+  );
+  for (const type of ["mousePressed", "mouseReleased"])
+    await app.cdp("Input.dispatchMouseEvent", {
+      type,
+      ...point,
+      button: "left",
+      clickCount: 1,
+    });
+};
+
 // Native hover follows the isolated desktop's pointer and hit testing.
 const hoverChip = async (selector: string) => {
   await runWait(
@@ -139,10 +161,7 @@ describe("dock modes", () => {
     });
     // Cmd+N would open the chat in the New Tab in front; the dock's own +
     // starts it in the dock.
-    await runWait(
-      `const plus = $('[data-dock-rail] button[aria-label="New chat"]'); plus?.click(); return !!plus;`,
-      { label: "the dock's +" },
-    );
+    await pressDockPlus();
     await runWait(
       `const dock = frontDock();
        return dock && document.activeElement === composer() &&
@@ -222,10 +241,7 @@ describe("dock modes", () => {
     // A fresh chat picks up the new default through agents-changed. The
     // dock's + keeps the empty chat floating (Cmd+N would move it into the
     // New Tab behind it).
-    await runWait(
-      `const plus = $('[data-dock-rail] button[aria-label="New chat"]'); plus?.click(); return !!plus;`,
-      { label: "the dock's +" },
-    );
+    await pressDockPlus();
     const banner = await runWait<string>(
       `const b = frontDock()?.querySelector('[data-testid="auth-health-banner"]');
        return b ? b.textContent : false;`,
