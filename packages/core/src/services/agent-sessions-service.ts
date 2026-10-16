@@ -7524,7 +7524,10 @@ export class AgentSessionsService {
               visibility: "promoted",
             });
         return this.db.transaction().execute(async (trx) => {
-          // A native session Work's own chat holds is that chat's.
+          // A native session Work's own chat holds is that chat's: a thread
+          // that reported it, or a new Claude Code thread, whose native id
+          // Work chose (its own id) before the harness said a word. Only
+          // the import of this very session holds it as an import.
           const own = await trx
             .selectFrom("agent_provider_threads as thread")
             .innerJoin(
@@ -7539,12 +7542,26 @@ export class AgentSessionsService {
             )
             .select("thread.id")
             .where("project.tenant_id", "=", identity.tenantId)
-            .where("session.imported", "is", null)
             .where("thread.harness", "=", transcript.harness)
-            .where(
-              sql<string>`thread.native_ref ->> 'id'`,
-              "=",
-              transcript.nativeSessionId,
+            .where((eb) =>
+              eb.or([
+                eb(
+                  sql<string>`thread.native_ref ->> 'id'`,
+                  "=",
+                  transcript.nativeSessionId,
+                ),
+                eb(sql<string>`thread.id::text`, "=", transcript.nativeSessionId),
+              ]),
+            )
+            .where((eb) =>
+              eb.or([
+                eb("session.imported", "is", null),
+                eb(
+                  sql<string>`session.imported ->> 'nativeSessionId'`,
+                  "<>",
+                  transcript.nativeSessionId,
+                ),
+              ]),
             )
             .limit(1)
             .executeTakeFirst();

@@ -478,6 +478,101 @@ describe("imported sessions", () => {
     expect(result).toEqual({ outcome: "own", sessionId: null });
   });
 
+  it("never imports a new Claude Code thread of Work's before it reports its id", async () => {
+    const project = await projects.create(identity, { name: "Own early" });
+    const own = await sessions.create(identity, project.id);
+    // Work chooses a new Claude Code thread's native id: its own.
+    const threadId = randomUUID();
+    await db
+      .insertInto("agent_provider_threads")
+      .values({
+        id: threadId,
+        session_id: own.id,
+        harness: "claude-code",
+        status: "active",
+      })
+      .execute();
+    const result = await importInto(
+      project.id,
+      transcript([firstTurn({ done: true })], { nativeSessionId: threadId }),
+      "sha-own-early",
+    );
+    expect(result).toEqual({ outcome: "own", sessionId: null });
+  });
+
+  it("logs nothing for a re-read turn whose tool calls did not change", async () => {
+    const project = await projects.create(identity, { name: "Unchanged" });
+    const turn: ImportedTurn = {
+      ...secondTurn,
+      items: [
+        {
+          key: "prompt-2/toolu_edit",
+          status: "completed",
+          at: at(5),
+          item: {
+            kind: "tool_call",
+            server: null,
+            tool: "Edit",
+            description: null,
+            // Stored as jsonb, which orders nested keys its own way.
+            input: {
+              file_path: "src/schemas.ts",
+              old_string: "a",
+              new_string: "b",
+            },
+            result: { content: "ok", isError: false },
+            error: null,
+          },
+        },
+        ...secondTurn.items,
+      ],
+    };
+    const { sessionId } = await importInto(
+      project.id,
+      transcript([turn], { nativeSessionId: randomUUID() }),
+      "sha-u1",
+    );
+    const id = sessionId ?? "";
+    const nativeSessionId = (await sessions.get(identity, project.id, id))
+      .imported?.nativeSessionId;
+    const before = await loggedEvents(id);
+    const again = await importInto(
+      project.id,
+      transcript([turn], { nativeSessionId }),
+      "sha-u2",
+    );
+    expect(again.outcome).toBe("updated");
+    expect(await loggedEvents(id)).toEqual(before);
+  });
+
+  it("stores a long transcript's native records past one statement's parameters", async () => {
+    const project = await projects.create(identity, { name: "Long" });
+    const nativeSessionId = randomUUID();
+    // Five parameters a record: one statement would pass 65,535.
+    const lines: JsonValue[] = Array.from({ length: 14_000 }, () => ({
+      type: "progress",
+      uuid: randomUUID(),
+      sessionId: nativeSessionId,
+    }));
+    const { sessionId } = await importInto(
+      project.id,
+      transcript([firstTurn({ done: true })], { nativeSessionId }),
+      "sha-long",
+      { agentId: "claude-code-agent", native: { offset: 0, entries: lines } },
+    );
+    const thread = await db
+      .selectFrom("agent_provider_threads")
+      .select("id")
+      .where("session_id", "=", sessionId ?? "")
+      .executeTakeFirstOrThrow();
+    const stored = await db
+      .selectFrom("agent_provider_thread_entries")
+      .select((eb) => eb.fn.countAll().as("count"))
+      .where("thread_id", "=", thread.id)
+      .executeTakeFirstOrThrow();
+    expect(Number(stored.count)).toBe(14_000);
+  }, 60_000);
+
   it("keeps a hidden import hidden as its file grows", async () => {
     const project = await projects.create(identity, { name: "Hidden" });
     const { sessionId } = await importInto(
