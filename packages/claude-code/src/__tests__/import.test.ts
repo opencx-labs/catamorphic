@@ -57,7 +57,7 @@ const assistant = (
 
 const toolResult = (
   second: number,
-  input: { id: string; content: string; error?: boolean },
+  input: { id: string; content: string; error?: boolean; result?: object },
 ) =>
   JSON.stringify({
     ...common(second),
@@ -73,8 +73,77 @@ const toolResult = (
         },
       ],
     },
-    toolUseResult: { stdout: input.content, stderr: "", interrupted: false },
+    toolUseResult: input.result ?? {
+      stdout: input.content,
+      stderr: "",
+      interrupted: false,
+    },
   });
+
+/** A prompt the person typed, as current CLIs mark it. */
+const typed = (second: number, text: string, extra = {}) =>
+  prompt(second, text, {
+    origin: { kind: "human" },
+    promptSource: "sdk",
+    turnOrigin: "human",
+    ...extra,
+  });
+
+const answer = (second: number, text: string, extra = {}) =>
+  assistant(
+    second,
+    { id: `msg_${second}`, block: { type: "text", text }, stop: "end_turn" },
+    extra,
+  );
+
+const turnDuration = (second: number) =>
+  JSON.stringify({
+    ...common(second),
+    type: "system",
+    subtype: "turn_duration",
+    durationMs: 1000,
+  });
+
+/** A background subagent's launch: its call, and the CLI's word that it runs on. */
+const backgroundAgent = (second: number, id: string) => [
+  assistant(second, {
+    id: `msg_${id}`,
+    block: {
+      type: "tool_use",
+      id,
+      name: "Agent",
+      input: {
+        description: "Audit the docs",
+        subagent_type: "general-purpose",
+        prompt: "Find stale pages.",
+        run_in_background: true,
+      },
+    },
+    stop: "tool_use",
+  }),
+  toolResult(second + 1, {
+    id,
+    content: "Async agent launched successfully.",
+    result: {
+      isAsync: true,
+      status: "async_launched",
+      agentId: "a0c1",
+      description: "Audit the docs",
+    },
+  }),
+];
+
+const notification = (input: { id: string; status: string; result: string }) =>
+  [
+    "<task-notification>",
+    "<task-id>a0c1</task-id>",
+    `<tool-use-id>${input.id}</tool-use-id>`,
+    "<output-file>/tmp/claude/tasks/a0c1.output</output-file>",
+    `<status>${input.status}</status>`,
+    '<summary>Agent "Audit the docs" finished</summary>',
+    `<result>${input.result}</result>`,
+    "</task-notification>",
+  ].join("\n");
 
 const session = [
   JSON.stringify({ type: "queue-operation", operation: "enqueue" }),
@@ -260,5 +329,282 @@ describe("readClaudeCodeTranscript", () => {
       status: "failed",
       error: "API Error: 529 Overloaded",
     });
+  });
+});
+
+describe("what the CLI does by itself", () => {
+  it("reads a task's notification as the subagent ending, not as a prompt", () => {
+    const launched = [
+      typed(0, "Audit the docs"),
+      ...backgroundAgent(1, "toolu_bg"),
+      answer(3, "An agent is auditing the docs."),
+      turnDuration(3),
+    ];
+    const reader = new ClaudeCodeTranscriptReader();
+    for (const line of launched) reader.push(line);
+    // The turn is over; its subagent works on.
+    const waiting = reader.read({ now: new Date(at(10)) });
+    expect(waiting?.turns[0]).toMatchObject({ completedAt: at(3) });
+    expect(waiting?.turns[0]?.items[0]).toMatchObject({
+      status: "in_progress",
+      item: { kind: "subagent", title: "Audit the docs" },
+    });
+    for (const line of [
+      prompt(
+        20,
+        notification({
+          id: "toolu_bg",
+          status: "completed",
+          result: "Two pages are stale.",
+        }),
+        {
+          origin: { kind: "task-notification" },
+          promptSource: "system",
+          turnOrigin: "task_notification",
+        },
+      ),
+      answer(21, "The agent found two stale pages."),
+    ])
+      reader.push(line);
+    const done = reader.read({ now: new Date(at(30)) });
+    expect(done?.turns).toHaveLength(1);
+    const [turn] = done?.turns ?? [];
+    expect(turn).toMatchObject({
+      input: { text: "Audit the docs" },
+      completedAt: at(21),
+    });
+    expect(turn?.items.map((item) => [item.item.kind, item.status])).toEqual([
+      ["subagent", "completed"],
+      ["assistant_message", "completed"],
+      ["assistant_message", "completed"],
+    ]);
+    expect(turn?.items[0]?.item).toMatchObject({
+      result: "Two pages are stale.",
+    });
+  });
+
+  it("ends a subagent in the turn that started it, and reads a monitor's event as no prompt", () => {
+    const transcript = readClaudeCodeTranscript({
+      content: [
+        typed(0, "Audit the docs"),
+        ...backgroundAgent(1, "toolu_bg"),
+        answer(3, "An agent is on it."),
+        typed(10, "Meanwhile, fix the typo"),
+        answer(11, "Fixed."),
+        // Delivered while Claude worked: only an attachment says so.
+        JSON.stringify({
+          ...common(30),
+          type: "attachment",
+          attachment: {
+            type: "queued_command",
+            prompt: notification({
+              id: "toolu_bg",
+              status: "failed",
+              result: "The docs folder is missing.",
+            }),
+            commandMode: "task-notification",
+            origin: { kind: "task-notification" },
+            timestamp: at(30),
+          },
+        }),
+        prompt(
+          40,
+          '<ci-monitor-event source="github">Checks passed</ci-monitor-event>',
+          { promptSource: "sdk", turnOrigin: "sdk" },
+        ),
+        answer(41, "CI passed."),
+      ].join("\n"),
+      now: new Date(at(50)),
+    });
+    expect(transcript?.turns.map((turn) => turn.input?.text)).toEqual([
+      "Audit the docs",
+      "Meanwhile, fix the typo",
+    ]);
+    const [first, second] = transcript?.turns ?? [];
+    expect(first?.completedAt).toBe(at(3));
+    expect(first?.items[0]).toMatchObject({
+      status: "failed",
+      item: { kind: "subagent", result: "The docs folder is missing." },
+    });
+    expect(second?.completedAt).toBe(at(41));
+    expect(second?.items.map((item) => item.item)).toMatchObject([
+      { text: "Fixed." },
+      { text: "CI passed." },
+    ]);
+  });
+
+  it("reads a subagent that never reported as stopped once the transcript is quiet", () => {
+    const transcript = readClaudeCodeTranscript({
+      content: [
+        typed(0, "Audit the docs"),
+        ...backgroundAgent(1, "toolu_bg"),
+        answer(3, "An agent is on it."),
+        typed(10, "Thanks"),
+        answer(11, "You're welcome."),
+      ].join("\n"),
+      now: new Date(at(11 + 11 * 60)),
+    });
+    expect(transcript?.turns[0]?.items[0]?.status).toBe("cancelled");
+  });
+
+  it("starts a turn without a prompt when the CLI goes back to work after an interrupt", () => {
+    const transcript = readClaudeCodeTranscript({
+      content: [
+        typed(0, "Audit the docs"),
+        ...backgroundAgent(1, "toolu_bg"),
+        prompt(3, [
+          { type: "text", text: "[Request interrupted by user for tool use]" },
+        ]),
+        prompt(
+          20,
+          notification({
+            id: "toolu_bg",
+            status: "completed",
+            result: "Done.",
+          }),
+          { origin: { kind: "task-notification" }, promptSource: "system" },
+        ),
+        answer(21, "The audit finished after all."),
+      ].join("\n"),
+      now: new Date(at(30)),
+    });
+    expect(
+      transcript?.turns.map((turn) => [turn.input?.text ?? null, turn.status]),
+    ).toEqual([
+      ["Audit the docs", "interrupted"],
+      [null, "completed"],
+    ]);
+    expect(transcript?.turns[0]?.items[0]?.status).toBe("completed");
+  });
+});
+
+describe("messages typed while Claude worked", () => {
+  const lines = [
+    typed(0, "Run the tests"),
+    assistant(1, {
+      id: "msg_t",
+      block: {
+        type: "tool_use",
+        id: "toolu_t",
+        name: "Bash",
+        input: { command: "bun test" },
+      },
+      stop: "tool_use",
+    }),
+    JSON.stringify({
+      ...common(2),
+      uuid: "00000000-0000-4000-8000-0000000000aa",
+      type: "attachment",
+      attachment: {
+        type: "queued_command",
+        prompt: "Also check lint",
+        source_uuid: "00000000-0000-4000-8000-0000000000ab",
+        commandMode: "prompt",
+        origin: { kind: "human" },
+        humanTurn: true,
+        timestamp: at(2),
+      },
+    }),
+    toolResult(3, { id: "toolu_t", content: "12 pass" }),
+    answer(4, "Tests pass; lint is clean too."),
+  ];
+
+  it("reads a queued message as the person's, its call's result in the turn that made it", () => {
+    const transcript = readClaudeCodeTranscript({
+      content: lines.join("\n"),
+      now: new Date(at(10)),
+    });
+    expect(transcript?.turns.map((turn) => turn.input)).toEqual([
+      expect.objectContaining({ text: "Run the tests" }),
+      {
+        key: "00000000-0000-4000-8000-0000000000aa",
+        text: "Also check lint",
+        at: at(2),
+      },
+    ]);
+    const [first, second] = transcript?.turns ?? [];
+    expect(first?.completedAt).toBe(at(1));
+    expect(first?.items[0]).toMatchObject({
+      status: "completed",
+      item: { kind: "command", output: "12 pass" },
+    });
+    expect(second?.key).toBe("00000000-0000-4000-8000-0000000000aa");
+    expect(second?.items.map((item) => item.item.kind)).toEqual([
+      "assistant_message",
+    ]);
+  });
+
+  it("keeps the same turns read line by line", () => {
+    const reader = new ClaudeCodeTranscriptReader();
+    const now = new Date(at(10));
+    const keys: string[][] = [];
+    for (const line of lines) {
+      reader.push(line);
+      keys.push(reader.read({ now })?.turns.map((turn) => turn.key) ?? []);
+    }
+    expect(keys.at(-1)).toEqual(keys[2]);
+    expect(reader.read({ now })).toEqual(
+      readClaudeCodeTranscript({ content: lines.join("\n"), now }),
+    );
+  });
+});
+
+describe("a forked chat", () => {
+  const ORIGINAL = "5f0bf137-809c-4c95-85ab-121e10cfb0ab";
+  // A fork's file starts with its original's records, ids and all.
+  const copied = [
+    typed(0, "Plan the release", { sessionId: ORIGINAL }),
+    answer(1, "Here is a plan.", { sessionId: ORIGINAL }),
+  ];
+  const own = [
+    JSON.stringify({
+      type: "custom-title",
+      customTitle: "Release, take two",
+      sessionId: SESSION,
+    }),
+    typed(60, "Try a smaller release"),
+    answer(61, "A smaller plan."),
+  ];
+
+  it("is its own session, started at its own first record", () => {
+    for (const sessionId of [SESSION, undefined]) {
+      const transcript = readClaudeCodeTranscript({
+        content: [...copied, ...own].join("\n"),
+        now: new Date(at(70)),
+        ...(sessionId ? { sessionId } : {}),
+      });
+      expect(transcript).toMatchObject({
+        nativeSessionId: SESSION,
+        startedAt: at(60),
+        title: "Release, take two",
+      });
+      expect(transcript?.turns.map((turn) => turn.input?.text)).toEqual([
+        "Plan the release",
+        "Try a smaller release",
+      ]);
+    }
+  });
+
+  it("reads as nothing before its own first record, told its id", () => {
+    const reader = new ClaudeCodeTranscriptReader({ sessionId: SESSION });
+    for (const line of copied) reader.push(line);
+    expect(reader.read({ now: new Date(at(70)) })).toBeUndefined();
+  });
+});
+
+describe("a turn without an end record", () => {
+  it("ends at its own last record, not at the next prompt", () => {
+    const transcript = readClaudeCodeTranscript({
+      content: [
+        typed(0, "Explain the cache"),
+        assistant(1, {
+          id: "msg_cut",
+          block: { type: "text", text: "The cache keeps" },
+        }),
+        typed(30, "Go on"),
+      ].join("\n"),
+      now: new Date(at(40)),
+    });
+    expect(transcript?.turns[0]?.completedAt).toBe(at(1));
   });
 });

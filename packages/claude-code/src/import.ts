@@ -1,5 +1,6 @@
 import type {
   SDKAssistantMessage,
+  SDKTaskNotificationMessage,
   SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 import type {
@@ -30,19 +31,39 @@ const IMPORTED_KINDS: ReadonlySet<string> = new Set([
  * as a host-neutral transcript (ADR 0233), read as the CLI appends to it:
  * `push` each complete line once, `read` whenever. Its records run through
  * the same translator as Work's own Claude Code turns, so imported items
- * read exactly like them. Each prompt the person typed starts a turn; side
- * chains, meta prompts and compaction summaries are left out.
+ * read exactly like them. Each prompt the person typed starts a turn, one
+ * typed while Claude worked included; what the CLI went back to work on by
+ * itself (a background task's notification, a monitor's event) goes on in
+ * the turn before it, as in a live Work turn. Side chains, meta prompts and
+ * compaction summaries are left out.
  */
 export class ClaudeCodeTranscriptReader {
+  /** The file's own session (its name), when the caller knows it. */
+  private readonly ownId: string | undefined;
+  /** The session the records name, the last winning. */
   private sessionId: string | undefined;
   private cwd: string | undefined;
-  private firstAt: string | undefined;
+  /** Each session's first record. */
+  private readonly firstAt = new Map<string, string>();
   private lastAt: string | undefined;
   private model: string | null = null;
   private customTitle: string | undefined;
   private aiTitle: string | undefined;
-  private readonly turns: ImportedTurn[] = [];
+  /** Ended turns: a background subagent's notification may still reach one. */
+  private readonly turns: BuildingTurn[] = [];
   private building: BuildingTurn | undefined;
+  /** The turn each tool call was made in: its result and its task's notification go there. */
+  private readonly calls = new Map<string, BuildingTurn>();
+
+  /**
+   * `sessionId` is the file's own (its name). A fork's file starts with
+   * the records it copied from its original, under the original's id: the
+   * session is the file's, started at its first own record, and reads as
+   * nothing before one arrives. Without it, the last id named wins.
+   */
+  constructor(input: { sessionId?: string } = {}) {
+    this.ownId = input.sessionId;
+  }
 
   push(line: string): void {
     if (!line.trim()) return;
@@ -61,28 +82,31 @@ export class ClaudeCodeTranscriptReader {
    * reads as open until it says it ended or goes quiet.
    */
   read(input: { now?: Date } = {}): ImportedTranscript | undefined {
-    const sessionId = this.sessionId;
+    const sessionId = this.ownId ?? this.sessionId;
+    const startedAt = sessionId ? this.firstAt.get(sessionId) : undefined;
     const cwd = this.cwd;
-    const firstAt = this.firstAt;
     const lastAt = this.lastAt;
-    if (!sessionId || !cwd || !firstAt) return undefined;
+    if (!sessionId || !cwd || !startedAt || !lastAt) return undefined;
     const building = this.building;
     const quiet =
-      lastAt !== undefined &&
       (input.now ?? new Date()).getTime() - Date.parse(lastAt) >
-        SETTLED_AFTER_MS;
-    const turns = building
-      ? [
-          ...this.turns,
-          building.result({
-            ended:
-              building.ended !== undefined ||
-              building.status !== "completed" ||
+      SETTLED_AFTER_MS;
+    const ended =
+      building !== undefined &&
+      (building.ended !== undefined ||
+        building.status !== "completed" ||
+        quiet);
+    const turns = [
+      ...this.turns.map((turn) => turn.result({ quiet })),
+      ...(building
+        ? [
+            building.result({
               quiet,
-            at: building.ended ?? lastAt,
-          }),
-        ]
-      : this.turns;
+              ...(ended ? { endedAt: building.ended ?? lastAt } : {}),
+            }),
+          ]
+        : []),
+    ];
     if (turns.every((turn) => turn.input === null)) return undefined;
     return {
       harness: "claude-code",
@@ -90,13 +114,13 @@ export class ClaudeCodeTranscriptReader {
       cwd,
       title: this.customTitle ?? this.aiTitle ?? null,
       model: this.model,
-      startedAt: firstAt,
+      startedAt,
       turns,
     };
   }
 
   private record(record: Record<string, unknown>): void {
-    if (isText(record.sessionId)) this.sessionId ??= record.sessionId;
+    if (isText(record.sessionId)) this.sessionId = record.sessionId;
     if (isText(record.cwd)) this.cwd ??= record.cwd;
     if (record.type === "custom-title" && isText(record.customTitle))
       this.customTitle = record.customTitle;
@@ -104,74 +128,167 @@ export class ClaudeCodeTranscriptReader {
       this.aiTitle = record.aiTitle;
     if (record.isSidechain === true) return;
     const at = isText(record.timestamp) ? record.timestamp : this.lastAt;
-    const sessionId = this.sessionId;
-    if (!at || !sessionId) return;
-    this.firstAt ??= at;
+    if (!at) return;
+    if (
+      isText(record.sessionId) &&
+      isText(record.timestamp) &&
+      !this.firstAt.has(record.sessionId)
+    )
+      this.firstAt.set(record.sessionId, record.timestamp);
     this.lastAt = at;
     const uuid = isText(record.uuid) ? record.uuid : undefined;
-    if (record.type === "user") {
-      if (record.isMeta === true || record.isCompactSummary === true) return;
-      if (!isRecord(record.message)) return;
-      const prompt = promptText(record.message.content);
-      if (prompt !== undefined) {
-        if (prompt.startsWith("[Request interrupted by user")) {
-          this.building?.interrupt(at);
-          return;
-        }
-        if (!uuid) return;
-        this.endTurn();
-        this.building = new BuildingTurn({
-          key: uuid,
-          input: { key: uuid, text: prompt, at },
-          at,
-        });
+    const sessionId = this.ownId ?? this.sessionId ?? "";
+    switch (record.type) {
+      case "user":
+        this.user({ record, at, uuid, sessionId });
         return;
-      }
-      const message = userMessage(record, sessionId);
-      if (message && this.building) this.building.handle(message, at);
-      return;
-    }
-    if (record.type === "assistant") {
-      const message = assistantMessage(record, sessionId);
-      if (!message) return;
-      // Work the CLI started without a prompt (a resumed task).
-      this.building ??= new BuildingTurn({
-        key: message.uuid,
-        input: null,
-        at,
-      });
-      if (record.isApiErrorMessage === true) {
-        this.building.fail(at, messageText(message.message.content));
+      case "attachment":
+        this.attachment({ record, at, uuid, sessionId });
         return;
-      }
-      if (message.message.model && message.message.model !== "<synthetic>")
-        this.model = message.message.model;
-      this.building.handle(message, at);
-      if (message.message.stop_reason === "end_turn") this.building.ended = at;
-      return;
+      case "assistant":
+        this.assistant({ record, at, sessionId });
+        return;
+      case "system":
+        if (record.subtype === "turn_duration" && this.building)
+          this.building.ended = at;
+        return;
+      default:
+        return;
     }
-    if (record.type === "system" && record.subtype === "turn_duration")
-      if (this.building) this.building.ended = at;
   }
 
-  /** The person asked something new: the turn before it is over. */
+  private user(input: RecordInput): void {
+    const { record, at, uuid, sessionId } = input;
+    const message = record.message;
+    if (record.isCompactSummary === true || !isRecord(message)) return;
+    const call = answeredCall(message.content);
+    if (call !== undefined) {
+      const result = userMessage(record, sessionId);
+      if (result) (this.calls.get(call) ?? this.building)?.handle(result, at);
+      return;
+    }
+    const text = contentText(message.content) ?? "";
+    if (startedByCli(record, text)) {
+      this.notify({ text, uuid, sessionId });
+      this.resume();
+      return;
+    }
+    if (record.isMeta === true) return;
+    const prompt = promptText(message.content);
+    if (prompt === undefined) return;
+    if (prompt.startsWith("[Request interrupted by user")) {
+      this.building?.interrupt(at);
+      return;
+    }
+    if (uuid) this.ask({ key: uuid, text: prompt, at });
+  }
+
+  /**
+   * What the CLI attached to a turn while it worked: a message the person
+   * sent meanwhile (only ever recorded here), or a task's notification.
+   */
+  private attachment(input: RecordInput): void {
+    const { record, at, uuid, sessionId } = input;
+    const attachment = record.attachment;
+    if (!isRecord(attachment) || attachment.type !== "queued_command") return;
+    const text = contentText(attachment.prompt) ?? "";
+    if (attachment.commandMode === "task-notification") {
+      this.notify({ text, uuid, sessionId });
+      return;
+    }
+    if (
+      attachment.commandMode !== "prompt" ||
+      attachment.isMeta === true ||
+      startedByCli(attachment, text)
+    )
+      return;
+    const prompt = promptText(attachment.prompt);
+    if (prompt !== undefined && uuid) this.ask({ key: uuid, text: prompt, at });
+  }
+
+  private assistant(input: Omit<RecordInput, "uuid">): void {
+    const { record, at, sessionId } = input;
+    const message = assistantMessage(record, sessionId);
+    if (!message) return;
+    // Work the CLI started without a prompt (a resumed task).
+    this.building ??= new BuildingTurn({
+      key: message.uuid,
+      input: null,
+      at,
+    });
+    const building = this.building;
+    if (record.isApiErrorMessage === true) {
+      building.fail(at, messageText(message.message.content));
+      return;
+    }
+    if (message.message.model && message.message.model !== "<synthetic>")
+      this.model = message.message.model;
+    for (const block of message.message.content)
+      if (block.type === "tool_use") this.calls.set(block.id, building);
+    building.handle(message, at);
+    if (message.message.stop_reason === "end_turn") building.ended = at;
+  }
+
+  /** The person asked something: the turn before it is over. */
+  private ask(input: { key: string; text: string; at: string }): void {
+    this.endTurn();
+    this.building = new BuildingTurn({
+      key: input.key,
+      input: { key: input.key, text: input.text, at: input.at },
+      at: input.at,
+    });
+  }
+
+  /**
+   * The CLI went back to work by itself: its last turn goes on, as a live
+   * Work turn waits for its background work, unless it was cut short;
+   * then the work is a turn of its own, without a prompt.
+   */
+  private resume(): void {
+    if (this.building?.status === "completed") this.building.ended = undefined;
+    else this.endTurn();
+  }
+
+  /** Background tasks' notifications: each ends its subagent, in the turn that started it. */
+  private notify(input: {
+    text: string;
+    uuid: string | undefined;
+    sessionId: string;
+  }): void {
+    const { uuid } = input;
+    if (!isUuid(uuid)) return;
+    for (const notice of taskNotifications(input.text))
+      this.calls
+        .get(notice.tool_use_id)
+        ?.notify({ ...notice, uuid, session_id: input.sessionId });
+  }
+
   private endTurn(): void {
     const building = this.building;
     if (!building) return;
-    building.close();
-    this.turns.push(
-      building.result({ ended: true, at: building.ended ?? this.lastAt }),
-    );
+    building.end();
+    this.turns.push(building);
     this.building = undefined;
   }
+}
+
+interface RecordInput {
+  record: Record<string, unknown>;
+  at: string;
+  uuid: string | undefined;
+  sessionId: string;
 }
 
 /** A whole Claude Code transcript at once (see {@link ClaudeCodeTranscriptReader}). */
 export function readClaudeCodeTranscript(input: {
   content: string;
+  /** The file's own session (see {@link ClaudeCodeTranscriptReader}). */
+  sessionId?: string;
   now?: Date;
 }): ImportedTranscript | undefined {
-  const reader = new ClaudeCodeTranscriptReader();
+  const reader = new ClaudeCodeTranscriptReader(
+    input.sessionId ? { sessionId: input.sessionId } : {},
+  );
   for (const line of input.content.split("\n")) reader.push(line);
   return reader.read(input.now ? { now: input.now } : {});
 }
@@ -183,11 +300,14 @@ class BuildingTurn {
   private readonly startedAt: string;
   private readonly items = new Map<string, ImportedItem>();
   private readonly translator: ClaudeTranscript;
+  /** Its last record's time. */
   private at: string;
   status: ImportedTurn["status"] = "completed";
   private error: string | null = null;
   /** The CLI said the turn ended (a final answer, or its turn record). */
   ended: string | undefined;
+  /** Set once a later turn took over: it ended at its own last record. */
+  private completedAt: string | undefined;
 
   constructor(input: {
     key: string;
@@ -210,6 +330,11 @@ class BuildingTurn {
     this.translator.handle(message);
   }
 
+  /** A background task's notification, as the live SDK sends it: its subagent ends. */
+  notify(message: SDKTaskNotificationMessage): void {
+    this.translator.handle(message);
+  }
+
   interrupt(at: string): void {
     this.status = "interrupted";
     this.ended = at;
@@ -221,17 +346,20 @@ class BuildingTurn {
     this.ended = at;
   }
 
-  /** End the translator's open items: the turn will hear nothing more. */
-  close(): void {
-    this.translator.close({ interrupted: this.status === "interrupted" });
+  /** A later turn took over. */
+  end(): void {
+    this.completedAt ??= this.ended ?? this.at;
   }
 
   /**
-   * The turn as read now. An ended one's unfinished items read as
-   * stopped, without closing the translator: a long call's result may
-   * still arrive after a quiet spell.
+   * The turn as read now; `endedAt` when it reads as ended before a later
+   * turn took over. An ended turn's unfinished calls read as stopped and
+   * its plan as done, without closing the translator: a long call's result
+   * may still arrive after a quiet spell. A subagent the CLI runs in the
+   * background works on past its turn, until its notification or quiet.
    */
-  result(input: { ended: boolean; at: string | undefined }): ImportedTurn {
+  result(input: { quiet: boolean; endedAt?: string }): ImportedTurn {
+    const completedAt = this.completedAt ?? input.endedAt ?? null;
     const items = [...this.items.values()];
     return {
       key: this.key,
@@ -239,15 +367,24 @@ class BuildingTurn {
       status: this.status,
       error: this.error,
       startedAt: this.startedAt,
-      completedAt: input.ended ? (input.at ?? this.at) : null,
-      items: input.ended
-        ? items.map((item) =>
-            item.status === "in_progress"
-              ? { ...item, status: "cancelled" }
-              : item,
-          )
-        : items,
+      completedAt,
+      items:
+        completedAt === null
+          ? items
+          : items.map((item) => this.settled({ item, quiet: input.quiet })),
     };
+  }
+
+  private settled(input: { item: ImportedItem; quiet: boolean }): ImportedItem {
+    const { item } = input;
+    if (item.status !== "in_progress") return item;
+    if (item.item.kind === "plan") return { ...item, status: "completed" };
+    if (
+      !input.quiet &&
+      this.translator.inBackground(item.key.slice(this.key.length + 1))
+    )
+      return item;
+    return { ...item, status: "cancelled" };
   }
 
   /** Keys are the turn's: a translator's own (a plan's) repeat across turns. */
@@ -311,27 +448,11 @@ class BuildingTurn {
 
 /**
  * What a user record says the person typed: its text, or a slash command
- * as they typed it. Undefined for tool results and the CLI's own output.
+ * as they typed it. Undefined for the CLI's own output.
  */
 function promptText(content: unknown): string | undefined {
-  const text =
-    typeof content === "string"
-      ? content
-      : Array.isArray(content) &&
-          content.every(
-            (block) => isRecord(block) && block.type !== "tool_result",
-          )
-        ? content
-            .map((block) =>
-              isRecord(block) && block.type === "text" && isText(block.text)
-                ? block.text
-                : "",
-            )
-            .filter(Boolean)
-            .join("\n\n")
-        : undefined;
   // What the CLI or its host added to the prompt is not what was typed.
-  const typed = text
+  const typed = contentText(content)
     ?.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, "")
     .trim();
   if (!typed) return undefined;
@@ -347,6 +468,90 @@ function promptText(content: unknown): string | undefined {
   const bash = /<bash-input>(.*?)<\/bash-input>/s.exec(typed)?.[1];
   if (bash) return `! ${bash}`;
   return typed;
+}
+
+/** A user message's text: a string, or its text blocks. */
+function contentText(content: unknown): string | undefined {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return undefined;
+  return content
+    .map((block) =>
+      isRecord(block) && block.type === "text" && isText(block.text)
+        ? block.text
+        : "",
+    )
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+/** The call a tool-result record answers (its first); undefined for any other user record. */
+function answeredCall(content: unknown): string | undefined {
+  if (!Array.isArray(content)) return undefined;
+  for (const block of content)
+    if (
+      isRecord(block) &&
+      block.type === "tool_result" &&
+      isText(block.tool_use_id)
+    )
+      return block.tool_use_id;
+  return undefined;
+}
+
+/** What the CLI writes as the person's words when it goes back to work by itself. */
+const CLI_PROMPT =
+  /^\s*<(task-notification|ci-monitor-event|cross-session-message)[\s>]/;
+
+/**
+ * Whether a user record (or a queued one) is the CLI going back to work
+ * by itself rather than the person asking: a background task's
+ * notification, a monitor's event, a schedule's or another session's
+ * prompt. Current CLIs say who in `origin` or `turnOrigin` (`sdk` is a
+ * host's prompt, sent for its person); older ones only in the text.
+ */
+function startedByCli(record: Record<string, unknown>, text: string): boolean {
+  const origin = isRecord(record.origin)
+    ? record.origin.kind
+    : record.turnOrigin;
+  return (
+    (typeof origin === "string" && origin !== "human" && origin !== "sdk") ||
+    record.promptSource === "system" ||
+    CLI_PROMPT.test(text)
+  );
+}
+
+/**
+ * The background tasks' notifications in a CLI prompt, as the system
+ * messages the live SDK sends for them. Its words are the task's result
+ * when it reported one, else its summary; only a task started by a tool
+ * call (a subagent) has an item to end.
+ */
+function taskNotifications(text: string): (Omit<
+  SDKTaskNotificationMessage,
+  "uuid" | "session_id"
+> & {
+  tool_use_id: string;
+})[] {
+  return [
+    ...text.matchAll(/<task-notification>([\s\S]*?)<\/task-notification>/g),
+  ].flatMap(([, body = ""]) => {
+    const field = (tag: string) =>
+      new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`).exec(body)?.[1]?.trim();
+    const toolUseId = field("tool-use-id");
+    if (!toolUseId) return [];
+    const status = field("status");
+    return [
+      {
+        type: "system",
+        subtype: "task_notification",
+        task_id: field("task-id") ?? "",
+        tool_use_id: toolUseId,
+        status:
+          status === "completed" || status === "failed" ? status : "stopped",
+        output_file: field("output-file") ?? "",
+        summary: field("result") ?? field("summary") ?? "",
+      },
+    ];
+  });
 }
 
 function messageText(content: unknown): string {

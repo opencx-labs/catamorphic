@@ -224,6 +224,12 @@ export class ClaudeTranscript {
     return count;
   }
 
+  /** Whether a call is a native subagent still working in the background. */
+  inBackground(toolUseId: string): boolean {
+    const record = this.tools.get(toolUseId);
+    return record?.background === true && !record.done;
+  }
+
   constructor(
     private readonly emit: (event: HarnessEvent) => void,
     private readonly hostServers: ReadonlySet<string>,

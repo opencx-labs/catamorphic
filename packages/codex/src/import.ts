@@ -45,19 +45,30 @@ export class CodexRolloutReader {
   }
 
   /**
-   * The transcript so far. Undefined for a subagent's thread (it belongs
-   * to its parent), one Work's own Codex ran, or one nobody asked
-   * anything in yet. A last turn Codex may still be working on reads as
-   * open until it ends or goes quiet.
+   * Whether this rollout is never imported, known from its first line: a
+   * subagent's thread (it belongs to its parent) or one Work's own Codex
+   * ran. A caller can stop reading it there.
+   */
+  skipped(): boolean {
+    const session = this.session;
+    if (!session) return false;
+    return (
+      (isJsonRecord(session.source) && "subagent" in session.source) ||
+      session.originator === CODEX_CLIENT_NAME
+    );
+  }
+
+  /**
+   * The transcript so far. Undefined for a rollout that is never imported
+   * (see {@link skipped}) or one nobody asked anything in yet. A last turn
+   * Codex may still be working on reads as open until it ends or goes
+   * quiet.
    */
   read(input: { now?: Date } = {}): ImportedTranscript | undefined {
     const session = this.session ?? {};
     const threadId = text(session.id);
     const cwd = text(session.cwd);
-    if (!threadId || !cwd) return undefined;
-    if (isJsonRecord(session.source) && "subagent" in session.source)
-      return undefined;
-    if (session.originator === CODEX_CLIENT_NAME) return undefined;
+    if (!threadId || !cwd || this.skipped()) return undefined;
     const lastAt = this.builder.lastAt;
     const quiet =
       lastAt !== undefined &&
@@ -136,41 +147,54 @@ export function readCodexRollout(input: {
 /** The turns of a rollout as its records arrive. */
 class TurnBuilder {
   at = "";
+  /** The last record that said anything: the rollout goes quiet after it. */
   lastAt: string | undefined;
   private readonly turns: ImportedTurn[] = [];
   private current: ImportedTurn | undefined;
   /** Whether the current turn's end was recorded. */
   private ended = false;
+  /** The current turn's last record. */
+  private currentAt: string | undefined;
   /** Calls waiting for their output (the fallback reading). */
   private readonly calls = new Map<string, ImportedItem>();
-  /** Where each of the current turn's items is in it, by key. */
-  private readonly positions = new Map<string, number>();
+  /** Where each item is, by key: a later record of it replaces it there. */
+  private readonly positions = new Map<
+    string,
+    { turn: ImportedTurn; index: number }
+  >();
+  /** Each Codex turn's turn: a result after it ended still goes there. */
+  private readonly byTurnId = new Map<string, ImportedTurn>();
 
-  /** A message the person sent: a turn of its own. */
-  prompt(input: { key: string; text: string }): void {
-    this.close(undefined);
-    this.current = {
+  /** A message the person sent (or, without text, Codex Desktop did): a turn of its own. */
+  prompt(input: {
+    key: string;
+    text: string | null;
+    turnId: string | undefined;
+  }): void {
+    this.close();
+    this.open({
       key: input.key,
-      input: { key: input.key, text: input.text, at: this.at },
-      status: "completed",
-      error: null,
-      startedAt: this.at,
-      completedAt: null,
-      items: [],
-    };
-    this.ended = false;
-    this.lastAt = this.at;
+      input:
+        input.text === null
+          ? null
+          : { key: input.key, text: input.text, at: this.at },
+      turnId: input.turnId,
+    });
   }
 
-  add(item: ImportedItem, turnKey: string | undefined): void {
-    const turn = this.turnFor(turnKey ?? item.key);
-    const existing = this.positions.get(item.key);
-    if (existing !== undefined) turn.items[existing] = item;
+  add(item: ImportedItem, turnId: string | undefined): void {
+    const known = this.positions.get(item.key);
+    const turn =
+      known?.turn ??
+      (turnId ? this.byTurnId.get(turnId) : undefined) ??
+      this.turnFor({ key: turnId ?? item.key, turnId });
+    if (known) turn.items[known.index] = item;
     else {
-      this.positions.set(item.key, turn.items.length);
+      this.positions.set(item.key, { turn, index: turn.items.length });
       turn.items.push(item);
     }
     this.lastAt = this.at;
+    if (turn === this.current) this.currentAt = this.at;
   }
 
   /** A call whose output arrives later (the fallback reading). */
@@ -201,6 +225,7 @@ class TurnBuilder {
     this.ended = true;
     this.current.completedAt = at;
     this.lastAt = at;
+    this.currentAt = at;
   }
 
   interrupt(at: string): void {
@@ -222,53 +247,78 @@ class TurnBuilder {
    * long call's result may still arrive.
    */
   read(input: { settled: boolean }): ImportedTurn[] {
+    // A late result may still change a turn read before.
+    const turns = this.turns.map((turn) => ({
+      ...turn,
+      items: [...turn.items],
+    }));
     const current = this.current;
-    if (!current) return [...this.turns];
-    if (!this.ended && !input.settled) return [...this.turns, current];
+    if (!current) return turns;
+    if (!this.ended && !input.settled)
+      return [...turns, { ...current, items: [...current.items] }];
     return [
-      ...this.turns,
+      ...turns,
       {
         ...current,
-        completedAt: current.completedAt ?? this.lastAt ?? null,
-        items: current.items.map((item) =>
-          item.status === "in_progress"
-            ? { ...item, status: "cancelled" }
-            : item,
-        ),
+        completedAt: current.completedAt ?? this.currentAt ?? null,
+        items: current.items.map(stopped),
       },
     ];
   }
 
-  private turnFor(key: string): ImportedTurn {
-    if (this.current && !this.ended) return this.current;
+  /** The turn for a record of a turn not seen yet: the current one while it runs. */
+  private turnFor(input: {
+    key: string;
+    turnId: string | undefined;
+  }): ImportedTurn {
+    const current = this.current;
+    if (current && !this.ended) {
+      if (input.turnId) this.byTurnId.set(input.turnId, current);
+      return current;
+    }
     // Work Codex did without a message (a resumed or scheduled turn).
-    this.close(undefined);
-    this.current = {
-      key,
-      input: null,
+    this.close();
+    return this.open({ key: input.key, input: null, turnId: input.turnId });
+  }
+
+  private open(input: {
+    key: string;
+    input: ImportedTurn["input"];
+    turnId: string | undefined;
+  }): ImportedTurn {
+    const turn: ImportedTurn = {
+      key: input.key,
+      input: input.input,
       status: "completed",
       error: null,
       startedAt: this.at,
       completedAt: null,
       items: [],
     };
+    this.current = turn;
     this.ended = false;
-    return this.current;
+    this.currentAt = this.at;
+    this.lastAt = this.at;
+    if (input.turnId) this.byTurnId.set(input.turnId, turn);
+    return turn;
   }
 
-  /** End the current turn: calls it never finished stop with it. */
-  private close(at: string | undefined): void {
+  /** End the current turn at its last record: calls it never finished stop with it. */
+  private close(): void {
     const turn = this.current;
     if (!turn) return;
-    turn.completedAt ??= at ?? this.at;
-    turn.items = turn.items.map((item) =>
-      item.status === "in_progress" ? { ...item, status: "cancelled" } : item,
-    );
+    turn.completedAt ??= this.currentAt ?? this.at;
+    turn.items = turn.items.map(stopped);
     this.calls.clear();
-    this.positions.clear();
     this.turns.push(turn);
     this.current = undefined;
   }
+}
+
+function stopped(item: ImportedItem): ImportedItem {
+  return item.status === "in_progress"
+    ? { ...item, status: "cancelled" }
+    : item;
 }
 
 /** One `item_completed` record: Codex's own finished item. */
@@ -288,8 +338,9 @@ function completedItem(input: {
     );
   switch (item.type) {
     case "UserMessage": {
-      const prompt = contentText(item.content);
-      if (prompt) builder.prompt({ key: id, text: prompt });
+      const message = contentText(item.content);
+      if (message)
+        builder.prompt({ key: id, text: personText(message), turnId });
       return;
     }
     case "AgentMessage": {
@@ -324,7 +375,14 @@ function completedItem(input: {
     case "McpToolCall": {
       const server = text(item.server) ?? "";
       const tool = text(item.tool) ?? "";
-      const error = text(item.error) ?? null;
+      const failed =
+        item.status === "failed" ||
+        (isJsonRecord(item.result) && item.result.isError === true);
+      // A failure's words are its error, not its result.
+      const error =
+        text(item.error) ??
+        (isJsonRecord(item.error) ? text(item.error.message) : undefined) ??
+        (failed ? mcpText(item.result) || "The tool failed." : null);
       add(
         id,
         {
@@ -339,7 +397,7 @@ function completedItem(input: {
           result: error ? null : mcpResult(item.result),
           error,
         },
-        Boolean(error) || item.status === "failed",
+        Boolean(error),
       );
       return;
     }
@@ -395,8 +453,9 @@ function legacyEvent(input: {
   const at = builder.at;
   switch (payload.type) {
     case "user_message": {
-      const prompt = text(payload.message)?.trim();
-      if (prompt) builder.prompt({ key, text: prompt });
+      const message = text(payload.message)?.trim();
+      if (message)
+        builder.prompt({ key, text: personText(message), turnId: undefined });
       return;
     }
     case "agent_message": {
@@ -517,12 +576,74 @@ function outputText(value: JsonValue | undefined): string {
   return "";
 }
 
-/** An MCP result's text when it has some, else the result as it came. */
+/**
+ * An MCP result's text when it has some, else the result as it came with
+ * image bytes left out (a screenshot's are hundreds of kilobytes), and
+ * without `_meta`: Codex's own notes on the call, a browser tool's
+ * screenshot among them.
+ */
 function mcpResult(value: JsonValue | undefined): JsonValue {
   if (value === undefined) return null;
-  const content = isJsonRecord(value) ? value.content : undefined;
-  const words = outputText(content);
-  return words ? tail(words) : value;
+  const words = mcpText(value);
+  if (words) return words;
+  if (!isJsonRecord(value)) return value;
+  const { _meta, ...result } = value;
+  if (!Array.isArray(result.content)) return result;
+  return {
+    ...result,
+    content: result.content.map((part) =>
+      isJsonRecord(part) && part.type === "image"
+        ? {
+            type: "image",
+            ...(text(part.mimeType) ? { mimeType: part.mimeType } : {}),
+          }
+        : part,
+    ),
+  };
+}
+
+function mcpText(value: JsonValue | undefined): string {
+  return tail(outputText(isJsonRecord(value) ? value.content : undefined));
+}
+
+/**
+ * What the person wrote in a message Codex records as theirs, without
+ * what Codex Desktop adds to it (its in-app browser's context, a question
+ * reply's wrapper). Null for one Codex Desktop sent by itself: an
+ * automation's heartbeat, a background task's notification.
+ */
+function personText(message: string): string | null {
+  if (/^<(heartbeat|task-notification)>/.test(message)) return null;
+  const reply =
+    /^<send_user_message_question_reply>([\s\S]*)<\/send_user_message_question_reply>$/.exec(
+      message,
+    )?.[1];
+  if (reply !== undefined) return replyText(reply.trim());
+  return (
+    message
+      .replace(
+        /<in-app-browser-context\b[^>]*>[\s\S]*?<\/in-app-browser-context>/g,
+        "",
+      )
+      .trim() || null
+  );
+}
+
+/** The person's answers to Codex's questions (a JSON list of them), else the reply as it came. */
+function replyText(reply: string): string | null {
+  let value: unknown;
+  try {
+    value = JSON.parse(reply);
+  } catch {
+    return reply || null;
+  }
+  const answers = Array.isArray(value)
+    ? value.flatMap((entry) => {
+        const answer = isJsonRecord(entry) ? text(entry.answer) : undefined;
+        return answer ? [answer] : [];
+      })
+    : [];
+  return answers.length > 0 ? answers.join("\n\n") : reply || null;
 }
 
 function parseArguments(value: JsonValue | undefined): JsonValue {
