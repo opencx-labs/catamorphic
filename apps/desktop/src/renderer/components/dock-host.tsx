@@ -540,7 +540,7 @@ export function DockHost({
     if (matchesBinding(event, keybindings["new-floating-chat"])) {
       event.preventDefault();
       event.stopImmediatePropagation();
-      void desktopApi.dockNewChat();
+      void desktopApi.dockNewChat({ shortcut: true });
       return;
     }
     if (!chat) return;

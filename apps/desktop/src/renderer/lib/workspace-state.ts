@@ -562,11 +562,16 @@ function closeLeftNewTabs(previous: Workspace, updated: Workspace): Workspace {
   };
 }
 
-/** The New Tab in front of `ws`, if that is what the person is looking at. */
+/**
+ * The New Tab in front of `ws`, if that is what the person is looking at:
+ * not behind a floating surface.
+ */
 export const newTabInFront = (ws: Workspace): WorkspaceTab | undefined =>
-  ws.tabs.find(
-    (tab) => tab.kind === "palette" && tabKey(tab) === ws.activeTabKey,
-  );
+  ws.floatingKey
+    ? undefined
+    : ws.tabs.find(
+        (tab) => tab.kind === "palette" && tabKey(tab) === ws.activeTabKey,
+      );
 
 /**
  * A chat asked for while a New Tab is in front opens in that tab: it takes

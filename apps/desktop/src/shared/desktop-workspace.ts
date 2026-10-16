@@ -114,7 +114,12 @@ export type WorkspaceEvent =
    */
   | { kind: "release"; projectId: string }
   | { kind: "chat"; command: DockCommand }
-  | { kind: "newChat"; projectId: string }
+  /**
+   * The dock asked for a chat: from its + (or the detached dock), which
+   * keeps it in the dock, or Cmd+N in a workspace window (`shortcut`), which
+   * a New Tab in front takes.
+   */
+  | { kind: "newChat"; projectId: string; shortcut?: boolean }
   | {
       kind: "dockAction";
       localId: string;

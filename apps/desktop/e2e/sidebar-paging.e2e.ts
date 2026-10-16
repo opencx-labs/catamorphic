@@ -178,62 +178,110 @@ it("fades a list's edges where it continues; a thumb only where a section asks",
     const style = getComputedStyle(document.querySelector('${tree}'));
     return [style.getPropertyValue('--cat-edge-fade-top'), style.getPropertyValue('--cat-edge-fade-bottom')];
   })()`;
-  // At the end of the list (the last test scrolled there): its top fades,
-  // its last row does not.
-  await app.waitFor(`(${fades}).join() === '24px,0px'`, {
-    label: "the top edge fades at the end of the list",
-  });
-  const point = await app.eval<{ x: number; y: number }>(`(() => {
-    const rect = document.querySelector('${tree}').getBoundingClientRect();
-    return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+  /** What the list says about its edges, for a failure to show. */
+  const state = () =>
+    app.eval(`(() => {
+      const list = document.querySelector('${tree}');
+      return list && { top: list.scrollTop, room: list.scrollHeight - list.clientHeight, fades: ${fades}, children: [...list.children].map((child) => child.getAttribute('role') ?? Object.keys(child.dataset).join(',')) };
+    })()`);
+  const fadesAre = (expected: string, label: string) =>
+    app
+      .waitFor(`(${fades}).join() === '${expected}'`, { label })
+      .catch(async (error: unknown) => {
+        throw new Error(
+          `${String(error)}; list: ${JSON.stringify(await state())}`,
+        );
+      });
+  // At the end of the list: its top fades, its last row does not.
+  await app.eval(`(() => {
+    const list = document.querySelector('${tree}');
+    list.scrollTop = list.scrollHeight;
   })()`);
-  const wheel = (deltaY: number) =>
-    app.cdp("Input.dispatchMouseEvent", {
+  await fadesAre("24px,0px", "the top edge fades at the end of the list");
+  // A real wheel over the list, aimed where the list is now.
+  const wheel = async (deltaY: number) => {
+    const point = await app.eval<{ x: number; y: number }>(`(() => {
+      const element = document.querySelector('${tree}');
+      element.scrollIntoView({ block: "nearest" });
+      const rect = element.getBoundingClientRect();
+      return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+    })()`);
+    await app.cdp("Input.dispatchMouseEvent", {
       type: "mouseWheel",
       ...point,
       deltaX: 0,
       deltaY,
     });
+  };
   // Partway: both edges have more beyond them.
   await wheel(-200);
-  await app.waitFor(`(${fades}).join() === '24px,24px'`, {
-    label: "both edges fade partway through the list",
-  });
+  await fadesAre("24px,24px", "both edges fade partway through the list");
   // At its top: only the bottom.
   await app.eval(`document.querySelector('${tree}').scrollTop = 0`);
-  await app.waitFor(`(${fades}).join() === '0px,24px'`, {
-    label: "only the bottom edge fades at the top of the list",
-  });
+  await fadesAre(
+    "0px,24px",
+    "only the bottom edge fades at the top of the list",
+  );
 
   // A section that asks for a thumb shows it on the outer edge, beside the
   // list that moved and no taller than it, only while it moves.
   await writeSidebarSections(app, [{ ...CHATS_SECTION, scrollbar: true }]);
-  await app.waitFor(`!!document.querySelector('${thumb}')`, {
-    label: "the thumb for a section that asks for one",
-  });
+  await app.waitFor(
+    `!!document.querySelector('${chats}[data-sidebar-scrollbar]') && !!document.querySelector('${thumb}')`,
+    { label: "the thumb for a section that asks for one" },
+  );
   await app.waitFor(
     `document.querySelector('${thumb}')?.dataset.shown === 'false' && getComputedStyle(document.querySelector('${thumb}')).opacity === '0'`,
     {
       label: "nothing shows at rest",
     },
   );
-  await wheel(200);
-  const shown = await app.waitFor<{
-    left: number;
-    edge: number;
-    top: number;
-    bottom: number;
-    listTop: number;
-    listBottom: number;
-  }>(
-    `document.querySelector('${thumb}').dataset.shown === 'true' && (() => {
+  // The layout's change reads the section again: wheel once its rows are
+  // back and still, as often as it takes to move the list.
+  await app.waitFor(
+    `(() => {
+      const list = document.querySelector('${tree}');
+      return !!list && list.scrollHeight - list.clientHeight > 200 &&
+        !list.closest('[aria-busy="true"]') &&
+        list.getAnimations({ subtree: true }).every((a) => a.playState !== 'running');
+    })()`,
+    { label: "the list back, at rest" },
+  );
+  for (let tick = 0; tick < 5; tick += 1) {
+    await wheel(200);
+    if (
+      await app.eval<boolean>(`document.querySelector('${tree}').scrollTop > 0`)
+    )
+      break;
+    await app.eval("new Promise((resolve) => setTimeout(resolve, 300))");
+  }
+  const shown = await app
+    .waitFor<{
+      left: number;
+      edge: number;
+      top: number;
+      bottom: number;
+      listTop: number;
+      listBottom: number;
+    }>(
+      `document.querySelector('${thumb}').dataset.shown === 'true' && (() => {
       const bar = document.querySelector('${thumb}').getBoundingClientRect();
       const list = document.querySelector('${tree}').getBoundingClientRect();
       const side = document.querySelector('${side} .sidebar-inner').getBoundingClientRect();
       return { left: bar.left, edge: side.left, top: bar.top, bottom: bar.bottom, listTop: list.top, listBottom: list.bottom };
     })()`,
-    { label: "the thumb beside the scrolled list" },
-  );
+      { label: "the thumb beside the scrolled list" },
+    )
+    .catch(async (error: unknown) => {
+      const thumbState = await app.eval(`(() => {
+      const bar = document.querySelector('${thumb}');
+      const list = document.querySelector('${tree}');
+      const area = bar?.parentElement;
+      const rect = (element) => element && [Math.round(element.getBoundingClientRect().top), Math.round(element.getBoundingClientRect().bottom)];
+      return { shown: bar?.dataset.shown, style: bar?.getAttribute('style'), list: rect(list), area: rect(area), top: list?.scrollTop, room: list && list.scrollHeight - list.clientHeight, opted: !!list?.closest('[data-sidebar-scrollbar]'), overflow: list && getComputedStyle(list).overflowY };
+    })()`);
+      throw new Error(`${String(error)}; thumb: ${JSON.stringify(thumbState)}`);
+    });
   expect(shown.left - shown.edge).toBeLessThanOrEqual(2);
   expect(shown.top).toBeGreaterThanOrEqual(shown.listTop);
   expect(shown.bottom).toBeLessThanOrEqual(shown.listBottom);

@@ -2721,6 +2721,7 @@ export function App({
         (active?.mode === "tab" &&
           ws.activeTabKey === chatTabKey(active.localId));
       const activeSignals = active ? signalsByChat[active.localId] : undefined;
+      const inNewTab = opts?.inNewTab !== false && Boolean(newTabInFront(ws));
       if (
         activeIsVisible &&
         !closingChatIds.current.has(active.localId) &&
@@ -2734,20 +2735,37 @@ export function App({
         // Nor does a fresh worktree chat a plain one; the reverse takes one.
         (!active.worktree || opts?.worktree)
       ) {
+        // Floating over a New Tab, the fresh chat moves into that tab.
+        const kept = (reused: Workspace) =>
+          inNewTab && active.mode === "partial"
+            ? openChatInNewTab(
+                ws,
+                {
+                  ...reused,
+                  chats: reused.chats.map((chat) =>
+                    chat.localId === active.localId
+                      ? { ...chat, mode: "tab" as const }
+                      : chat,
+                  ),
+                  activeTabKey: chatTabKey(active.localId),
+                },
+                chatTabKey(active.localId),
+              )
+            : reused;
         // Asked for a worktree, the fresh chat takes one (ADR 0215).
         if (opts?.worktree && !active.worktree) {
           setSelectionPulls((current) => ({
             ...current,
             [active.localId]: (current[active.localId] ?? 0) + 1,
           }));
-          return {
+          return kept({
             ...ws,
             chats: ws.chats.map((chat) =>
               chat.localId === active.localId
                 ? { ...chat, worktree: true }
                 : chat,
             ),
-          };
+          });
         }
         setSelectionPulls((current) => ({
           ...current,
@@ -2755,16 +2773,18 @@ export function App({
         }));
         // Asked for with an agent, the fresh chat takes it.
         const agentId = opts?.agentId;
-        return agentId && active.agentId !== agentId
-          ? {
-              ...ws,
-              chats: ws.chats.map((chat) =>
-                chat.localId === active.localId
-                  ? { ...chat, agentId, model: undefined }
-                  : chat,
-              ),
-            }
-          : ws;
+        return kept(
+          agentId && active.agentId !== agentId
+            ? {
+                ...ws,
+                chats: ws.chats.map((chat) =>
+                  chat.localId === active.localId
+                    ? { ...chat, agentId, model: undefined }
+                    : chat,
+                ),
+              }
+            : ws,
+        );
       }
       // Floating chats become a full tab anyway when the workspace is
       // empty — with nothing behind it, the chat IS the workspace.
@@ -2774,7 +2794,6 @@ export function App({
         ws.terminals.length === 0 &&
         ws.editors.length === 0 &&
         ws.chats.every((chat) => chat.mode !== "tab");
-      const inNewTab = opts?.inNewTab !== false && newTabInFront(ws);
       const entry = newChatEntry(
         forceMode ?? (noTabsOpen || inNewTab ? "tab" : "partial"),
         opts,
@@ -2798,7 +2817,8 @@ export function App({
   };
 
   // Palette "Send to agent": a new chat born with its first message
-  // attached; ChatDock auto-sends it on mount.
+  // attached; ChatDock auto-sends it on mount. With a New Tab in front it
+  // opens in that tab, however it was asked for.
   const sendToAgent = (
     message: string | PendingChatMessage,
     mode: "float" | "tab",
@@ -2813,21 +2833,24 @@ export function App({
       ...(options.watchBackdrop ? { watchBackdrop: true } : {}),
     };
     updateWorkspace((ws) => {
+      const inNewTab = Boolean(newTabInFront(ws));
+      const placed: ChatDockEntry = inNewTab
+        ? { ...entry, mode: "tab" }
+        : entry;
       const next = {
         ...ws,
         chats: [
           ...ws.chats.map((chat) =>
             chat.mode === "partial" ? { ...chat, mode: "min" as const } : chat,
           ),
-          entry,
+          placed,
         ],
-        activeChatId: entry.localId,
+        activeChatId: placed.localId,
         activeTabKey:
-          entry.mode === "tab" ? chatTabKey(entry.localId) : ws.activeTabKey,
+          placed.mode === "tab" ? chatTabKey(placed.localId) : ws.activeTabKey,
       };
-      // A New Tab's palette sends in a tab: the chat takes that tab's place.
-      return entry.mode === "tab"
-        ? openChatInNewTab(ws, next, chatTabKey(entry.localId))
+      return inNewTab
+        ? openChatInNewTab(ws, next, chatTabKey(placed.localId))
         : next;
     });
     return entry.localId;
@@ -3532,6 +3555,8 @@ export function App({
     addChat(from?.mode === "tab" ? "tab" : undefined, {
       agentId,
       incognito: from?.incognito,
+      // Picked for a floating chat, it floats beside it.
+      inNewTab: from?.mode !== "partial",
     });
   };
 
@@ -4490,8 +4515,9 @@ export function App({
           event.projectId === projectIdRef.current
         )
           // The dock's own + (attached or detached) starts a chat in the
-          // dock, never in the New Tab behind it.
-          addChatRef.current(undefined, { inNewTab: false });
+          // dock, never in the New Tab behind it; Cmd+N it caught for this
+          // window is this window's Cmd+N.
+          addChatRef.current(undefined, { inNewTab: event.shortcut === true });
       }),
     [],
   );

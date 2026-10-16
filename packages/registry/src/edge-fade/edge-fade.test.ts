@@ -80,8 +80,9 @@ describe("fadeEdges", () => {
     const list = scroller({ client: 100, content: 100 });
     fadeEdges(list.element);
     observed();
-    // Everything fits: nothing fades.
+    // Everything fits: nothing fades, and nothing is masked.
     expect(list.fades()).toEqual(["0px", "0px"]);
+    expect(list.element.hasAttribute("data-edge-faded")).toBe(false);
     expect(
       list.element.lastElementChild?.hasAttribute("data-edge-fade-end"),
     ).toBe(true);
@@ -95,6 +96,23 @@ describe("fadeEdges", () => {
     list.grow(180);
     observed();
     expect(list.fades()).toEqual(["0px", "24px"]);
+    expect(list.element.hasAttribute("data-edge-faded")).toBe(true);
+  });
+
+  it("does nothing without observers, or on a scroller it already fades", () => {
+    const list = scroller({ client: 100, content: 400, top: 100 });
+    fadeEdges(list.element);
+    const again = fadeEdges(list.element);
+    expect(
+      list.element.querySelectorAll(":scope > [data-edge-fade-end]"),
+    ).toHaveLength(1);
+    again();
+    expect(list.element.querySelector("[data-edge-fade-end]")).not.toBeNull();
+    vi.unstubAllGlobals();
+    const bare = scroller({ client: 100, content: 400 });
+    fadeEdges(bare.element)();
+    expect(bare.element.querySelector("[data-edge-fade-end]")).toBeNull();
+    expect(bare.fades()).toEqual(["", ""]);
   });
 
   it("takes another length from --cat-edge-fade", () => {

@@ -61,7 +61,7 @@ import {
   sentWith,
   TitleHint,
 } from "../chat-queue/chat-queue.js";
-import { fadeEdges } from "../edge-fade/edge-fade.js";
+import { edgeFadeLength, fadeEdges } from "../edge-fade/edge-fade.js";
 import {
   ActivityText,
   afterMotion,
@@ -1299,10 +1299,12 @@ function JumpToPreviousUserMessage({
     settling.current?.();
     // Moving up lets go of the latest message, streaming or not.
     stopScroll();
+    // Clear of the top edge's fade.
     const off = () =>
       target.getBoundingClientRect().top -
       scroller.getBoundingClientRect().top -
-      12;
+      12 -
+      edgeFadeLength(scroller);
     scroller.scrollTo({ top: scroller.scrollTop + off(), behavior: "smooth" });
     // Turns skipped while out of view take their real height as the
     // scroll brings them in, which moves the message after its place was
@@ -3142,7 +3144,8 @@ function FocusMessage({
             scroller.scrollTop +
             target.getBoundingClientRect().top -
             scroller.getBoundingClientRect().top -
-            12,
+            12 -
+            edgeFadeLength(scroller),
           behavior: "instant",
         });
       place();

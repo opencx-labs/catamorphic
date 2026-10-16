@@ -259,6 +259,19 @@ it("opens a chat asked for from a New Tab in that tab's place", () => {
     rightKey: "chat:new",
     ratio: 0.4,
   });
+  const left: Workspace = {
+    ...ws,
+    split: { leftKey: "palette:a", rightKey: "settings:settings", ratio: 0.5 },
+  };
+  expect(openChatInNewTab(left, withChat(left), "chat:new").split).toEqual({
+    leftKey: "chat:new",
+    rightKey: "settings:settings",
+    ratio: 0.5,
+  });
+  // A surface floating over it is what the person looks at: it stays.
+  expect(newTabInFront({ ...ws, floatingKey: "settings:settings" })).toBe(
+    undefined,
+  );
   // Anything else in front keeps its place; the chat goes where it would.
   const elsewhere = { ...ws, activeTabKey: "history:history" };
   expect(newTabInFront(elsewhere)).toBeUndefined();

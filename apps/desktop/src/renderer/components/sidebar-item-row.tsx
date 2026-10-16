@@ -536,6 +536,18 @@ export function SidebarItemRow<
               {end}
             </button>
           </TitleHint>
+          {/* Before the row's controls, so its last stays at its end. */}
+          {actionError && (
+            <ShortcutHint label={actionError}>
+              <span
+                role="alert"
+                className="mr-1 flex shrink-0 items-center gap-1 text-xs text-danger"
+              >
+                <icons.CircleAlert aria-hidden="true" className="size-3" />
+                Failed<span className="sr-only">: {actionError}</span>
+              </span>
+            </ShortcutHint>
+          )}
           {inlineActions.map((entry) => {
             const Icon = lucideIcon(entry.icon) ?? icons.Circle;
             return (
@@ -635,17 +647,6 @@ export function SidebarItemRow<
                 ?.focus({ preventScroll: true });
           }}
         />
-      )}
-      {actionError && (
-        <ShortcutHint label={actionError}>
-          <span
-            role="alert"
-            className="mr-1 flex shrink-0 items-center gap-1 text-xs text-danger"
-          >
-            <icons.CircleAlert aria-hidden="true" className="size-3" />
-            Failed<span className="sr-only">: {actionError}</span>
-          </span>
-        </ShortcutHint>
       )}
       {previewEnabled && previewAnchor && (
         <SidebarPreviewPopover

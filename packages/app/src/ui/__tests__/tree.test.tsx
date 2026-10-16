@@ -69,6 +69,34 @@ describe("public collection presentation", () => {
     mounted.unmount();
     expect(cleanup).toHaveBeenCalledTimes(1);
   });
+  it("keeps a row the keyboard reaches clear of its scroller's scroll padding", () => {
+    const items = Array.from({ length: 20 }, (_, index) => ({
+      id: String(index),
+    }));
+    const { container } = render(
+      <Tree
+        items={items}
+        label="Padded tree"
+        height={280}
+        renderItem={(item) => <span>{item.id}</span>}
+      />,
+    );
+    const viewport = container.querySelector<HTMLElement>(
+      "[data-tree-viewport]",
+    );
+    if (!viewport) throw new Error("no viewport");
+    // A faded scroller's, as the host's stylesheet gives it.
+    viewport.style.setProperty("scroll-padding-top", "24px");
+    viewport.style.setProperty("scroll-padding-bottom", "24px");
+    const row = (id: string) =>
+      screen.getByText(id).closest<HTMLElement>('[role="treeitem"]');
+    // Down to the row just past the view: it stops 24px short of the end.
+    for (let index = 0; index < 10; index += 1)
+      fireEvent.keyDown(row(String(index)) as HTMLElement, {
+        key: "ArrowDown",
+      });
+    expect(viewport.scrollTop).toBe(10 * 28 + 28 + 24 - 280);
+  });
   it("bounds DOM size for a 10,000-item hierarchy", () => {
     const items = Array.from({ length: 10000 }, (_, index) => ({
       id: String(index),

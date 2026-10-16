@@ -72,7 +72,8 @@ installs the same files under its `components/catamorphic` directory.
 ## Chat timeline
 
 `chat-timeline` (with `chat-queue` and `edge-fade`) is the conversation every
-Catamorphic chat renders: the desktop and the PWA install it as copies (ADR 0218). It is five
+Catamorphic chat renders: the desktop and the PWA install it as copies (ADR
+0218). It is five
 files that install together: `chat-timeline.tsx`, `chat-steps.tsx` (the step
 model and rows), `activity-text.tsx`, `turn-rows.ts` (how a turn folds into
 rows, and the `WorkDisplay` choice) and `session-input.tsx`. Feed it from
@@ -88,16 +89,6 @@ for sent attachments (default: a pill with an icon and the name), `Hint`
 with `jumpShortcut`. Rows are memoized: keep render-affecting slots stable;
 action callbacks may change every render.
 
-## Edge fade
-
-`edge-fade` gives any scroller overflow hints: content fades out over the last
-24px of an edge it continues past, instead of being cut there, and only while
-there is more that way. Give the scroller `cat-edge-fade` (from
-`@catamorphic/ui/styles.css`) and call `fadeEdges(scroller)` once it is
-mounted; it returns its cleanup. The scroller's own height must not follow its
-content. The timeline fades its conversation with it; the desktop also fades
-its sidebars and palette.
-
 Import `@catamorphic/ui/styles.css` from the host's Tailwind entry: it holds
 `.cat-markdown` and the timeline's `cat-*` motion classes. Hosts provide the
 global `:focus-visible` ring; the timeline draws no focus ring of its own,
@@ -110,6 +101,17 @@ After changing an item, run `bun scripts/registry-copies.ts --sync desktop` and
 fails on any other difference. `bun run --cwd packages/registry test` runs the
 items' unit tests, including a DOM contract test for the selectors the desktop
 and PWA end-to-end suites read.
+
+## Edge fade
+
+`edge-fade` gives any scroller overflow hints: content fades out over the last
+24px of an edge it continues past, instead of being cut there, and only while
+there is more that way. Give the scroller `cat-edge-fade` (from
+`@catamorphic/ui/styles.css`) and call `fadeEdges(scroller)` once it is
+mounted; it returns its cleanup. The scroller lays its content out as blocks,
+and its size changes only outside resize observer callbacks. The timeline
+fades its conversation with it; the desktop also fades its sidebars and
+palette.
 
 ## Other items
 

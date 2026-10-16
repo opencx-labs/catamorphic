@@ -392,7 +392,7 @@ screen, or under reduced motion.
 | Tab strip `translate` (the horizontal strip slides with the left sidebar's panel, to where the settle puts it) | 200ms, the panel's easing and item wait | the panel's own slide; dropped without a transition when the content settles |
 | `.tabbed-sidebar[data-push]` width (the sidebar's place growing or shrinking with its panel beside content Work draws, so that content rides the panel's edge) | 200ms, the panel's easing and item wait | the panel's own slide, reversing with it |
 | `.chrome-toggle-slot` fold (the chrome's sidebar toggle folding away as a pushing panel arrives and unfolding as it leaves, its gap with it; `@starting-style` for arrival) | 200ms, the panel's easing and item wait | the panel's own slide; gone or at its own width once the panel is still |
-| `.overlay-scrollbar` fade (a sidebar list's scroll position on the window's edge while it scrolls or the pointer nears that edge) | 150ms | itself: one transition both ways, fading 900ms after the last scroll |
+| `.overlay-scrollbar` fade (the scroll position of a section's list that asks for a thumb, `scrollbar: true`, on the window's edge while it scrolls or the pointer nears that edge) | 150ms | itself: one transition both ways, fading 900ms after the last scroll |
 | Markdown format bar (Web Animations in `components/markdown/motion.ts`: in, rising 4px from 97% and transparent; out, the same way back, in place and inert) | 160ms | itself: one motion both ways; shown again mid-exit, or hidden mid-entrance, it turns from where it is over the share of the 160ms left |
 | Markdown drag handle (`.cat-mdedit-handle`: appears with opacity and scale 0.9 to 1; the extension jumps the box to each block and the grip inside glides there on a `transform` animation, which runs on the compositor) and table row grip (`.cat-mdedit-rowgrip`, placed and gliding by `transform`) | 160ms appear / 140ms glide | itself |
 | `bubble-ask` (agent question arrival) | 280ms | — (one-shot nudge on a persistent bubble; no exit to pair) |
@@ -563,13 +563,14 @@ and one component (`source-section.tsx`) draws every list.
   or a column for one. The sidebar's panel and every section's list fade
   their content out over the last 24px of an edge with more beyond it, and
   only then (the registry's `edge-fade` with `cat-edge-fade`); the chat's
-  conversation and the palette's results do the same, so nothing in Work is
-  cut at a hard edge mid-content.
-  A section may ask for a thumb (`scrollbar: true`; none of Work's do): one
-  thin thumb on the sidebar's outer edge (the window's edge) stands for
-  whichever of those lists is moving, spanning its height. It fades in as
-  the list scrolls or the pointer nears the edge beside it, can be dragged,
-  and fades out a moment after (`components/overlay-scrollbar.tsx`).
+  conversation and the palette's results do the same, instead of cutting
+  their content at a hard edge. A section may ask for a thumb
+  (`scrollbar: true`; none of Work's do): one thin thumb on the sidebar's
+  outer edge (the window's edge) stands for that section's list while it
+  moves, spanning its height; the sidebar's panel itself never has one. It
+  fades in as the list scrolls or the pointer nears the edge beside it, can
+  be dragged, and fades out a moment after
+  (`components/overlay-scrollbar.tsx`).
 - **A row's chevron ends it.** A row with children ends with its
   disclosure, after its actions and centered under its section header's,
   so every row's icon starts in one place and only a child's indent says
@@ -696,6 +697,9 @@ the historical log explains how it arrived here.
 
 ## Design log
 ### 2026-10-17: Lists fade where they continue; a row's chevron ends it; a New Tab takes the chat
+
+[ADR 0237](../../docs/decisions/0237-lists-fade-where-they-continue.md) records
+the overflow hint.
 
 A sidebar row with children put its chevron before its icon, so a row
 without children (a file beside a folder) sat further left, and the rows

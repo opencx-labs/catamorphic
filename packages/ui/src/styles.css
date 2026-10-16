@@ -2040,8 +2040,16 @@
    surface behind. The registry's edge-fade (fadeEdges) keeps the two
    lengths it reads as the list scrolls and changes size; without it the
    edges stay sharp. Its scroll padding keeps what focus or a jump brings
-   into view clear of the fade. */
+   into view clear of the fade; a list that anchors its end (the chat's
+   conversation) takes none, since anchoring looks only inside it. */
 
+/* Any length, read as pixels by the script; set it on the scroller or
+   around it. */
+@property --cat-edge-fade {
+  syntax: "<length>";
+  inherits: true;
+  initial-value: 24px;
+}
 @property --cat-edge-fade-top {
   syntax: "<length>";
   inherits: false;
@@ -2053,7 +2061,10 @@
   initial-value: 0px;
 }
 .cat-edge-fade {
-  --cat-edge-fade: 24px;
+  scroll-padding-block: var(--cat-edge-fade);
+}
+/* Only while an edge fades: a mask costs the compositor a pass per frame. */
+.cat-edge-fade[data-edge-faded] {
   mask-image: linear-gradient(
     to bottom,
     transparent,
@@ -2061,7 +2072,12 @@
     #000 calc(100% - var(--cat-edge-fade-bottom)),
     transparent
   );
-  scroll-padding-block: var(--cat-edge-fade);
+}
+/* The conversation holds its latest words still by scroll anchoring to a
+   pixel at its very end, and the browser only anchors to what lies inside
+   the scroll padding: there, the edge takes none. */
+.cat-timeline .cat-edge-fade {
+  scroll-padding-block: 0;
 }
 
 .catamorphic-run-section-label {

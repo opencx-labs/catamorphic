@@ -97,6 +97,18 @@ scroll-following spring, Markdown parsed again per update, every turn
 rendered per update, and its loops, see above), which this change does not
 touch.
 
+## Overflow hints
+
+A list fades the edge it continues past with a mask (ADR 0237), applied only
+while an edge fades and kept by listeners, so it costs nothing at rest and
+nothing for a list that fits. Measured on an Apple M-series Mac (the dev
+app, hardware compositing) over four alternating 13.5 s streamed answers
+("pace the work quickly at length") in a chat scrolled to its end: the
+window's renderer stayed within run-to-run noise (21 to 23% of a core with
+the fade, 20 to 21% without), and the GPU process spent about 2 points of a
+core more (10.6 and 9.8% against 7.7 and 8.2%), the masked conversation's
+extra pass while it streams.
+
 ## Web page loading and sleeping tabs
 
 ADR 0194 records the measurements. Three rules keep pages loading as they

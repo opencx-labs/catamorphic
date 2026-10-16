@@ -39,10 +39,14 @@ something else is shown in its place, a New Tab with nothing in its input closes
 (`reconcileWorkspace`); one with typed text or an entered mode, or one still on
 screen as the other pane of a split, stays. Its input is not restored on relaunch,
 so neither is that mark. A chat asked for while a New Tab is in front (Cmd+N, New
-chat or Send to agent from the palette) opens in that tab: it takes the New Tab's
-place in the strip and in a split, and the New Tab closes, typed or not
-(`openChatInNewTab`). Elsewhere Cmd+N floats a chat as before, and the dock's +
-never takes a New Tab: it starts its chat in the dock.
+chat or Send to agent from the New Tab's palette or the overlay) opens in that tab:
+it takes the New Tab's place in the strip and in a split, and the New Tab closes,
+typed or not (`openChatInNewTab`). An empty chat already floating over the New Tab
+moves into it instead; a floating chat with a conversation is minimised as the new
+one takes the tab, and a surface floating over the New Tab keeps it. Elsewhere
+Cmd+N floats a chat as before. The dock's + never takes a New Tab: it starts its
+chat in the dock, and a chat switched to another harness from a floating chat
+floats beside it.
 
 The mouse's back and forward buttons move between the places a project's
 workspace was at: the focused tab and the chat or surface floating over it

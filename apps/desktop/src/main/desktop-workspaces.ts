@@ -398,15 +398,21 @@ export class DesktopWorkspaces {
       else this.activeChats.delete(profileId);
       this.broadcast(profileId);
     });
-    ipcMain.handle("catamorphic:dock-new-chat", (event) => {
+    ipcMain.handle("catamorphic:dock-new-chat", (event, input: unknown) => {
       const snapshot = this.snapshot(event.sender);
       const owner = snapshot.activeProjectId
         ? this.owner(snapshot.activeProjectId)
         : undefined;
+      // Cmd+N in a workspace window is that window's Cmd+N: a New Tab in
+      // front takes the chat. The dock's + and the detached dock keep it.
+      const shortcut =
+        z.object({ shortcut: z.literal(true) }).safeParse(input).success &&
+        !snapshot.detached;
       if (owner && snapshot.activeProjectId)
         owner.send("catamorphic:workspace-event", {
           kind: "newChat",
           projectId: snapshot.activeProjectId,
+          ...(shortcut ? { shortcut: true } : {}),
         } satisfies WorkspaceEvent);
     });
     ipcMain.handle(

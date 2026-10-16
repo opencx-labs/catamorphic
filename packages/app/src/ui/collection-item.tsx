@@ -193,6 +193,7 @@ export function CollectionItemView({
         <progress aria-label={`${label} progress`} max={1} value={progress} />
       )}
       {children}
+      {actionState.error && <span role="alert">{actionState.error}</span>}
       {actions.map((action) => actionButton(action))}
       {preview && (
         <button
@@ -241,7 +242,6 @@ export function CollectionItemView({
           {expanded ? "▾" : "▸"}
         </button>
       )}
-      {actionState.error && <span role="alert">{actionState.error}</span>}
       {inspecting &&
         createPortal(
           <div

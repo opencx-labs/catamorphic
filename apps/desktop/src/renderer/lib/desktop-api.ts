@@ -1223,7 +1223,8 @@ export interface CatamorphicDesktopApi {
   dockSnapshot: () => Promise<DockSnapshot>;
   dockCommand: (command: DockCommand) => Promise<void>;
   dockActivate: (localId?: string) => Promise<void>;
-  dockNewChat: () => Promise<void>;
+  /** `shortcut`: Cmd+N, not the dock's +. */
+  dockNewChat: (input?: { shortcut?: boolean }) => Promise<void>;
   dockAction: (
     localId: string,
     action: "close" | "minimize" | "send",
