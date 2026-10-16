@@ -47,6 +47,7 @@ import {
   targetKey,
 } from "../sources/targets.js";
 import { ActionInputDialog } from "./action-input-dialog.js";
+import { fadeEdges } from "./catamorphic/edge-fade.js";
 import { RowIcon } from "./row-icon.js";
 import { SessionAccess } from "./session-access.js";
 import {
@@ -587,6 +588,8 @@ function SourceView({
         collection={collection}
         active={(contribution?.visible ?? true) && !awaitingSession}
         label={section?.title || source.title}
+        className="cat-edge-fade"
+        onViewport={fadeEdges}
         height={section?.height}
         rowHeight={section?.rowHeight}
         project={project}

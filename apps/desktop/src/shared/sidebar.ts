@@ -260,6 +260,12 @@ export interface SidebarSectionConfig {
   contextMenu?: SidebarMenuEntry[];
   actions?: SidebarMenuEntry[];
   height?: number;
+  /**
+   * Show a scroll thumb on the sidebar's edge while this section's list
+   * scrolls. Off by default: a list shows where it continues by fading
+   * that edge.
+   */
+  scrollbar?: boolean;
   /** Start collapsed (default open). */
   collapsed?: boolean;
   /** Hide the whole section (header included) while it has nothing to list. */

@@ -559,13 +559,21 @@ and one component (`source-section.tsx`) draws every list.
   neighbours slide. The insertion line glides between slots and never leaves
   the viewport. A tree whose rows fit never scrolls, so no scrollbar flashes
   while it grows.
-- **A list shows where it is scrolled only while that helps.** No sidebar
-  list keeps a scrollbar or a column for one. One thin thumb on the
-  sidebar's outer edge (the window's edge) stands for whichever list is
-  moving, the sidebar itself or a section's own list, spanning that list's
-  height: it fades in as the list scrolls or the pointer nears the edge
-  beside it, can be dragged, and fades out a moment after
-  (`components/overlay-scrollbar.tsx`).
+- **A list fades where it continues.** No sidebar list keeps a scrollbar
+  or a column for one. The sidebar's panel and every section's list fade
+  their content out over the last 24px of an edge with more beyond it, and
+  only then (the registry's `edge-fade` with `cat-edge-fade`); the chat's
+  conversation and the palette's results do the same, so nothing in Work is
+  cut at a hard edge mid-content.
+  A section may ask for a thumb (`scrollbar: true`; none of Work's do): one
+  thin thumb on the sidebar's outer edge (the window's edge) stands for
+  whichever of those lists is moving, spanning its height. It fades in as
+  the list scrolls or the pointer nears the edge beside it, can be dragged,
+  and fades out a moment after (`components/overlay-scrollbar.tsx`).
+- **A row's chevron ends it.** A row with children ends with its
+  disclosure, after its actions and centered under its section header's,
+  so every row's icon starts in one place and only a child's indent says
+  it belongs to the row above.
 - **Drags reveal only what accepts them.** A section hidden for being empty
   whose source takes drops (pinned pages) opens while something it takes is
   dragged, says what a drop does with its empty sentence, and stays a moment
@@ -614,7 +622,7 @@ and one component (`source-section.tsx`) draws every list.
   `work:*` sources on the contract a person's module implements (`load`,
   `subscribe`, `action`, `move`, `drop`, `reveal`), with the same fields
   around them (`empty`, `headerActions`, `itemDefaults`, `itemOverrides`,
-  `presentation`, `height`, `rowHeight`). A row gets Work's knowledge of what
+  `presentation`, `height`, `rowHeight`, `scrollbar`). A row gets Work's knowledge of what
   it names by its address (a chat's glyph, signals and live inspector; a
   page's favicon; the active highlight), never by which source wrote it. A
   header button is a header action (New tab is `command:new-tab`). When a
@@ -687,6 +695,39 @@ the historical log explains how it arrived here.
 - [Performance](docs/performance.md): idle lifecycle checks and sustained measurement.
 
 ## Design log
+### 2026-10-17: Lists fade where they continue; a row's chevron ends it; a New Tab takes the chat
+
+A sidebar row with children put its chevron before its icon, so a row
+without children (a file beside a folder) sat further left, and the rows
+below a childless row read as its children. The chevron now ends the row, as
+it ends a section's header and centered under it, after the row's actions;
+every row's icon starts in one place and only a child's indent reads as
+belonging. The kit's `CollectionItemView` ends its row with its disclosure
+too.
+
+Where a list continues past an edge, its content now fades out over the last
+24px of that edge instead of being cut there, and only while there is more
+that way, following the scroll (the registry's `edge-fade`: a mask from
+`cat-edge-fade` in `@catamorphic/ui/styles.css`, so it needs no knowledge of
+the surface behind). A scroll timeline would have done it without script,
+but its animation counts as running for as long as a list is shown, and what
+waits for motion to end (the detached dock's shape, tests) would wait
+forever; observing the content's size made the sidebar's collapsibles report
+resize loops. So a scroll, the scroller's size and a marker at the content's
+end, watched by intersection observers, move the two lengths the mask reads,
+at no cost at rest. The sidebar's panel and every section's list, the chat's
+conversation (under the header and above the composer, where it was cut at
+the composer's border) and the palette's results use it. The sidebar's
+scroll thumb is a section's choice now (`scrollbar: true`); none of Work's
+sections asks for it. The fade's scroll padding keeps what focus or a jump
+brings into view clear of it, the kit's tree included.
+
+Cmd+N, or New chat from the palette, with a New Tab in front opened a
+floating chat over the empty page. The chat now opens in that tab: it takes
+the New Tab's place in the strip and in a split, and the New Tab closes,
+typed into or not. Elsewhere a new chat floats as before, and the dock's +
+never takes a New Tab: it starts its chat in the dock.
+
 ### 2026-10-16: Google's sign-in admits Work, because a page finds `chrome.app`
 
 Google's sign-in still answered "Couldn't sign you in. This browser or app

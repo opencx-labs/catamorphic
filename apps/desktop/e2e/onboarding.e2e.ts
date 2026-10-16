@@ -408,7 +408,12 @@ describe.each([false, true])(
       }
     });
     it("lets the agent edit without initializing or committing the imported folder", async () => {
-      await run(`pressKey('n', { metaKey: true }); return true;`);
+      // A floating chat stays over the surfaces the next tests open; the
+      // dock's + floats it (Cmd+N would take the New Tab in front).
+      await runWait(
+        `const plus = $('[data-dock-rail] button[aria-label="New chat"]'); plus?.click(); return !!plus;`,
+        { label: "the dock's +" },
+      );
       await runWait(`return !!visibleDock();`);
       await run(`
       const ta = visibleDock().querySelector('[data-composer-input]');

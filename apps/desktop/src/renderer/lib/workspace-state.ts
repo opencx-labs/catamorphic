@@ -562,6 +562,41 @@ function closeLeftNewTabs(previous: Workspace, updated: Workspace): Workspace {
   };
 }
 
+/** The New Tab in front of `ws`, if that is what the person is looking at. */
+export const newTabInFront = (ws: Workspace): WorkspaceTab | undefined =>
+  ws.tabs.find(
+    (tab) => tab.kind === "palette" && tabKey(tab) === ws.activeTabKey,
+  );
+
+/**
+ * A chat asked for while a New Tab is in front opens in that tab: it takes
+ * the New Tab's place in the strip and in a split, and the New Tab closes,
+ * typed or not, since it was the way to the chat. `ws` already holds the
+ * chat (`chatKey`); `previous` is the workspace it was asked for from.
+ */
+export function openChatInNewTab(
+  previous: Workspace,
+  ws: Workspace,
+  chatKey: string,
+): Workspace {
+  const newTab = newTabInFront(previous);
+  if (!newTab) return ws;
+  const key = tabKey(newTab);
+  const replace = (candidate: string) =>
+    candidate === key ? chatKey : candidate;
+  return {
+    ...ws,
+    tabs: ws.tabs.filter((tab) => tabKey(tab) !== key),
+    tabOrder: orderedTabKeys(previous, { includeCollapsed: true }).map(replace),
+    split: ws.split && {
+      ...ws.split,
+      leftKey: replace(ws.split.leftKey),
+      rightKey: replace(ws.split.rightKey),
+    },
+    activeTabKey: chatKey,
+  };
+}
+
 /** All workspace mutations pass this boundary, including resource creation/close. */
 export function reconcileWorkspace(
   previous: Workspace,

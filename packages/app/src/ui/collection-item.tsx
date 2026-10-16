@@ -169,17 +169,6 @@ export function CollectionItemView({
         }
       }}
     >
-      {onToggle && (
-        <button
-          type="button"
-          className="cat-btn cat-btn--subtle"
-          aria-label={`${expanded ? "Collapse" : "Expand"} ${label}`}
-          aria-expanded={expanded}
-          onClick={onToggle}
-        >
-          {expanded ? "▾" : "▸"}
-        </button>
-      )}
       <button
         type="button"
         className="cat-collection-label"
@@ -237,6 +226,19 @@ export function CollectionItemView({
           }}
         >
           ⋯
+        </button>
+      )}
+      {/* The disclosure ends the row, so every row's label starts at the
+          same place and only a child's indent reads as belonging. */}
+      {onToggle && (
+        <button
+          type="button"
+          className="cat-btn cat-btn--subtle"
+          aria-label={`${expanded ? "Collapse" : "Expand"} ${label}`}
+          aria-expanded={expanded}
+          onClick={onToggle}
+        >
+          {expanded ? "▾" : "▸"}
         </button>
       )}
       {actionState.error && <span role="alert">{actionState.error}</span>}

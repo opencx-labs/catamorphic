@@ -1376,8 +1376,12 @@ describe("navigation shortcuts", () => {
       label: "background New Tab open",
     });
     // Fresh empty chat ("New chat") joins the titled chats from earlier
-    // groups — cycling must swap which chat the dock shows.
-    await run(`pressKey('n', { metaKey: true }); return true;`);
+    // groups — cycling must swap which chat the dock shows. Cmd+N would open
+    // it in the New Tab; the dock's + floats it over the New Tab.
+    await runWait(
+      `const plus = $('[data-dock-rail] button[aria-label="New chat"]'); plus?.click(); return !!plus;`,
+      { label: "the dock's +" },
+    );
     await runWait(`return !!floatingDock();`, { label: "dock open" });
     const first = await run<string>(
       `return floatingDock().getAttribute('aria-label');`,

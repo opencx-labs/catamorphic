@@ -240,8 +240,12 @@ describe("agents and profiles", () => {
     );
     await run(paletteEscape);
 
-    // Focus a chat; the command appears.
-    await run(`pressKey('n', { metaKey: true }); return true;`);
+    // Focus a chat; the command appears. The dock's + floats it (Cmd+N
+    // would open it in the New Tab in front, which Escape does not close).
+    await runWait(
+      `const plus = $('[data-dock-rail] button[aria-label="New chat"]'); plus?.click(); return !!plus;`,
+      { label: "the dock's +" },
+    );
     await runWait(`return !!visibleDock();`, { label: "chat focused" });
     await ensurePalette();
     await resetPalette();
@@ -611,8 +615,12 @@ describe("agents and profiles", () => {
     });
 
     // With a floating chat focused, session-scoped commands target it:
-    // the dock's border goes accent while the row is highlighted.
-    await run(`pressKey('n', { metaKey: true }); return true;`);
+    // the dock's border goes accent while the row is highlighted. The
+    // dock's + floats it over the New Tab (Cmd+N would open it there).
+    await runWait(
+      `const plus = $('[data-dock-rail] button[aria-label="New chat"]'); plus?.click(); return !!plus;`,
+      { label: "the dock's +" },
+    );
     await runWait(`return !!visibleDock();`, { label: "chat focused" });
     await ensureOverlay();
     await run(`setReactValue(${overlayInput}, '>switch agent'); return true;`);

@@ -81,6 +81,15 @@ describe("resolveWorkspaceConfig", () => {
     expect(
       resolveWorkspaceConfig({ profileDir, projectId, projectRoot }),
     ).toEqual({ config: DEFAULT_WORKSPACE_CONFIG, layer: "default" });
+    // Work's own lists show where they continue by fading, never a thumb.
+    expect(
+      [
+        ...DEFAULT_WORKSPACE_CONFIG.sidebars.left,
+        ...DEFAULT_WORKSPACE_CONFIG.sidebars.right,
+      ].flatMap((tab) =>
+        tab.sections.filter((section) => section.scrollbar !== undefined),
+      ),
+    ).toEqual([]);
   });
 
   it("takes the most specific existing layer, whole", () => {
@@ -130,8 +139,8 @@ describe("resolveWorkspaceConfig", () => {
   it("keeps sources, items and presentation", () => {
     const resolved = resolveProfile(
       sections(`
-        { id: "flows", source: "work:workflows", collapsed: true, hideEmpty: true },
-        { id: "pins", source: "work:pinned", title: "", presentation: "tiles" },
+        { id: "flows", source: "work:workflows", collapsed: true, hideEmpty: true, scrollbar: true },
+        { id: "pins", source: "work:pinned", title: "", presentation: "tiles", scrollbar: "yes" },
         { id: "todos", source: ".work/todos.ts", collections: ["tabs"], workflows: ["listTickets"] },
         { id: "docs", title: "Docs", items: [
           { label: "MDN", url: "https://developer.mozilla.org" },
@@ -147,8 +156,11 @@ describe("resolveWorkspaceConfig", () => {
       source: "work:workflows",
       collapsed: true,
       hideEmpty: true,
+      scrollbar: true,
     });
     expect(pins).toMatchObject({ title: "", presentation: "tiles" });
+    // A thumb is asked for with true; anything else leaves the faded edge.
+    expect(pins).not.toHaveProperty("scrollbar");
     expect(todos).toMatchObject({
       source: ".work/todos.ts",
       collections: ["tabs"],

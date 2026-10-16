@@ -68,6 +68,12 @@ const helpers = `
     $$(selector).find((el) => el.textContent.trim().includes(text));
   const visibleDock = () =>
     $$('section[aria-label]').find((el) => !el.inert && el.querySelector('[data-composer-input]'));
+  // A floating chat: the dock's + (Cmd+N would take a New Tab in front).
+  const newFloatingChat = () => {
+    const plus = $('[data-dock-rail] button[aria-label="New chat"]');
+    plus?.click();
+    return !!plus;
+  };
   ${setReactValueJs}
   const pressKey = (key, mods = {}) =>
     window.dispatchEvent(new KeyboardEvent('keydown',
@@ -355,7 +361,7 @@ describe("paired motion (enter/exit mirrors)", () => {
   it("the dock's minimized pose mirrors dock-in's starting pose", async () => {
     await runWait(
       `if (visibleDock()) return true;
-       pressKey('n', { metaKey: true });
+       newFloatingChat();
        return false;`,
       { label: "floating dock ready for pose check" },
     );
@@ -526,7 +532,7 @@ describe("animate-before-unmount", () => {
   });
 
   it("dismissing an empty floating chat tweens out, then unmounts", async () => {
-    await run(`pressKey('n', { metaKey: true }); return true;`);
+    await runWait(`return newFloatingChat();`, { label: "the dock's +" });
     // Let the enter animation finish — dismissing a barely-mounted dock
     // (opacity still ~0) would leave the exit tween nothing to fade.
     await runWait(
@@ -557,7 +563,7 @@ describe("animate-before-unmount", () => {
   });
 
   it("minimizing a floating chat never replays dock-in between the two poses", async () => {
-    await run(`pressKey('n', { metaKey: true }); return true;`);
+    await runWait(`return newFloatingChat();`, { label: "the dock's +" });
     await runWait(
       `const dock = visibleDock();
        return !!dock && getComputedStyle(dock).opacity === '1';`,
@@ -665,7 +671,7 @@ describe("animate-before-unmount", () => {
     // settled reply. Each must MOUNT in the hidden pose (opacity 0) and
     // tween to visible — a message that appears already-opaque skipped
     // its entrance (the pre-paint effect-flush regression).
-    await run(`pressKey('n', { metaKey: true }); return true;`);
+    await runWait(`return newFloatingChat();`, { label: "the dock's +" });
     await runWait(`return !!visibleDock();`, { label: "chat open" });
     // Every arrival has to stay on screen to be measured: by default the
     // preambles are replaced as they come and folded once answered.
@@ -842,7 +848,7 @@ describe("chats over a settling sidebar", () => {
   });
 
   it("a floating chat glides with the content instead of vanishing under it", async () => {
-    await run(`pressKey('n', { metaKey: true }); return true;`);
+    await runWait(`return newFloatingChat();`, { label: "the dock's +" });
     await runWait(
       `const dock = visibleDock();
        return !!dock && getComputedStyle(dock).opacity === '1' && dock.getAnimations().every((a) => a.playState !== 'running');`,

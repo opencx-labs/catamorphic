@@ -137,7 +137,12 @@ describe("dock modes", () => {
       timeoutMs: 60_000,
       label: "workspace ready",
     });
-    await run(`pressKey('n', { metaKey: true }); return true;`);
+    // Cmd+N would open the chat in the New Tab in front; the dock's own +
+    // starts it in the dock.
+    await runWait(
+      `const plus = $('[data-dock-rail] button[aria-label="New chat"]'); plus?.click(); return !!plus;`,
+      { label: "the dock's +" },
+    );
     await runWait(
       `const dock = frontDock();
        return dock && document.activeElement === composer() &&

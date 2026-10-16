@@ -135,7 +135,7 @@ export const BUILTIN_ACTIONS = [
     id: "new-floating-chat",
     label: "New chat",
     icon: "MessageSquarePlus",
-    description: "open the small floating chat",
+    description: "start a chat: in the New Tab in front, floating otherwise",
     defaultBinding: "Cmd+N",
     keywords: ["chat", "assistant", "agent", "ai", "quick"],
   },

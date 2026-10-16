@@ -3,6 +3,9 @@ import {
   agentOpenInFront,
   emptyUtilityWorkspace,
   hydrateWorkspace,
+  newTabInFront,
+  openChatInNewTab,
+  orderedTabKeys,
   reconcileWorkspace,
   serializeWorkspace,
   stripTravel,
@@ -213,6 +216,54 @@ it("keeps a New Tab with typed input, or one still on screen", () => {
     name: "a",
     label: undefined,
   });
+});
+
+it("opens a chat asked for from a New Tab in that tab's place", () => {
+  const ws: Workspace = {
+    ...initial(),
+    tabs: [
+      { kind: "history", name: "history" },
+      { kind: "palette", name: "a", typed: true },
+      { kind: "settings", name: "settings" },
+    ],
+    activeTabKey: "palette:a",
+  };
+  expect(newTabInFront(ws)?.name).toBe("a");
+  const withChat = (from: Workspace): Workspace => ({
+    ...from,
+    chats: [...from.chats, { localId: "new", mode: "tab" }],
+    activeChatId: "new",
+    activeTabKey: "chat:new",
+  });
+  // The chat stands where the New Tab stood, and the New Tab is gone,
+  // typed into or not: it was the way to the chat.
+  const opened = reconcileWorkspace(
+    ws,
+    openChatInNewTab(ws, withChat(ws), "chat:new"),
+  );
+  expect(opened.tabs.map((tab) => tab.name)).toEqual(["history", "settings"]);
+  expect(orderedTabKeys(opened)).toEqual([
+    "history:history",
+    "chat:new",
+    "settings:settings",
+    "chat:c",
+  ]);
+  expect(opened.activeTabKey).toBe("chat:new");
+  // As one pane of a split, it takes that pane.
+  const split: Workspace = {
+    ...ws,
+    split: { leftKey: "history:history", rightKey: "palette:a", ratio: 0.4 },
+  };
+  expect(openChatInNewTab(split, withChat(split), "chat:new").split).toEqual({
+    leftKey: "history:history",
+    rightKey: "chat:new",
+    ratio: 0.4,
+  });
+  // Anything else in front keeps its place; the chat goes where it would.
+  const elsewhere = { ...ws, activeTabKey: "history:history" };
+  expect(newTabInFront(elsewhere)).toBeUndefined();
+  const next = withChat(elsewhere);
+  expect(openChatInNewTab(elsewhere, next, "chat:new")).toBe(next);
 });
 
 it("opens an agent's surface in front only where the person is looking", () => {

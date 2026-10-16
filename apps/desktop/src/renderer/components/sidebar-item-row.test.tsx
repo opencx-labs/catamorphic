@@ -301,3 +301,40 @@ describe("SidebarItemRow icons", () => {
     expect(unknown.textContent).toBe("Support answers");
   });
 });
+
+describe("SidebarItemRow disclosure", () => {
+  it("ends the row, after its actions, so every row's icon starts in one place", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    containers.push(container);
+    const root = createRoot(container);
+    roots.push(root);
+    const onToggle = vi.fn();
+    act(() => {
+      root.render(
+        <SidebarItemRow
+          label="Engineering"
+          icon="Folder"
+          actions={[{ label: "Add", action: "add", icon: "Plus" }]}
+          menu={[{ label: "Rename", action: "rename" }]}
+          disclosure={{ open: false, onToggle }}
+          onOpen={() => {}}
+          onAction={() => {}}
+        />,
+      );
+    });
+    const row = container.firstElementChild as HTMLElement;
+    const controls = [...row.querySelectorAll("button")].map((button) =>
+      button.getAttribute("aria-label"),
+    );
+    expect(controls.at(-1)).toBe("Expand Engineering");
+    // The label leads: nothing stands before it, with or without children.
+    expect(row.firstElementChild?.matches("[data-tree-primary]")).toBe(true);
+    const disclosure = row.querySelector<HTMLButtonElement>(
+      "[data-row-disclosure]",
+    );
+    expect(disclosure?.getAttribute("aria-expanded")).toBe("false");
+    act(() => disclosure?.click());
+    expect(onToggle).toHaveBeenCalledTimes(1);
+  });
+});

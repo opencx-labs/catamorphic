@@ -1778,11 +1778,11 @@ kbd {
     display 200ms;
   transition-behavior: allow-discrete;
 }
-/* The sidebar's lists (the panel, a section's own list) show where they
-   are scrolled only while it helps, on the sidebar's outer edge
-   (components/overlay-scrollbar.tsx): no column is kept for a scrollbar,
-   so rows sit evenly, nothing narrows when a section grows, and at rest no
-   bar shows at all. */
+/* The sidebar's lists (the panel, a section's own list) keep no scrollbar
+   and no column for one, so rows sit evenly and nothing narrows when a
+   section grows. Each fades the edge it continues past (cat-edge-fade); a
+   section that asks for a thumb (scrollbar: true) also shows one on the
+   sidebar's outer edge while it scrolls (components/overlay-scrollbar.tsx). */
 .sidebar-tab-panel,
 .sidebar-tab-panel * {
   scrollbar-width: none;

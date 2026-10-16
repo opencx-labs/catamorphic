@@ -64,8 +64,10 @@ beforeAll(async () => {
   await app.waitFor("!!document.querySelector('[data-workspace-ready]')", {
     label: "workspace ready for shortcuts",
   });
-  await app.eval(
-    "window.dispatchEvent(new KeyboardEvent('keydown',{key:'n',metaKey:/Mac/.test(navigator.platform),ctrlKey:!/Mac/.test(navigator.platform),bubbles:true}))",
+  // The dock's + floats the chat over the New Tab (Cmd+N opens it there).
+  await app.waitFor(
+    `(() => { const plus = document.querySelector('[data-dock-rail] button[aria-label="New chat"]'); plus?.click(); return !!plus; })()`,
+    { label: "the dock's +" },
   );
   await app.waitFor(
     "!!document.querySelector('[data-floating-chat] [data-composer-input]')",

@@ -612,6 +612,7 @@ function sanitizeSection(
         ? { height: Math.max(120, Math.min(1200, raw.height)) }
         : {}),
       ...(raw.collapsed === true ? { collapsed: true } : {}),
+      ...(raw.scrollbar === true ? { scrollbar: true } : {}),
       ...(typeof raw.hideEmpty === "boolean"
         ? { hideEmpty: raw.hideEmpty }
         : {}),

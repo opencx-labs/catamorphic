@@ -2032,6 +2032,38 @@
   background-clip: padding-box;
 }
 
+/* --- Overflow hints -----------------------------------------------------
+   Where a scroller's content continues past its top or bottom, it fades
+   out over the last --cat-edge-fade of that edge instead of being cut
+   there, and only while there is more to see that way: at the top of a
+   list, its top edge is sharp. A mask, so it needs no knowledge of the
+   surface behind. The registry's edge-fade (fadeEdges) keeps the two
+   lengths it reads as the list scrolls and changes size; without it the
+   edges stay sharp. Its scroll padding keeps what focus or a jump brings
+   into view clear of the fade. */
+
+@property --cat-edge-fade-top {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 0px;
+}
+@property --cat-edge-fade-bottom {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 0px;
+}
+.cat-edge-fade {
+  --cat-edge-fade: 24px;
+  mask-image: linear-gradient(
+    to bottom,
+    transparent,
+    #000 var(--cat-edge-fade-top),
+    #000 calc(100% - var(--cat-edge-fade-bottom)),
+    transparent
+  );
+  scroll-padding-block: var(--cat-edge-fade);
+}
+
 .catamorphic-run-section-label {
   font-size: 12px;
   font-weight: 600;

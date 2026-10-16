@@ -391,6 +391,7 @@ function SidebarSection({
     <section
       className={`sidebar-section ${headed ? "pb-2" : "pb-1"}`}
       data-sidebar-section={contribution?.section.id}
+      data-sidebar-scrollbar={contribution?.section.scrollbar ? "" : undefined}
       aria-busy={loading || refreshing || undefined}
       aria-label={headed ? undefined : name}
     >

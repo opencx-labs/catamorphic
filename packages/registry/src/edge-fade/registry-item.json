@@ -1,0 +1,16 @@
+{
+  "$schema": "https://ui.shadcn.com/schema/registry-item.json",
+  "name": "edge-fade",
+  "type": "registry:component",
+  "title": "Edge fade",
+  "description": "Overflow hints for any scroller: its content fades out over the last stretch of an edge it continues past, instead of being cut there, and only while there is more that way. A mask, so it needs no knowledge of the surface behind. chat-timeline fades its conversation with it.",
+  "dependencies": ["@catamorphic/ui"],
+  "registryDependencies": [],
+  "files": [
+    {
+      "path": "components/catamorphic/edge-fade.ts",
+      "type": "registry:component"
+    }
+  ],
+  "docs": "Give the scroller the cat-edge-fade class from @catamorphic/ui/styles.css (import it from your Tailwind entry) and call fadeEdges(scroller) once it is mounted; it returns the cleanup, so a React 19 callback ref can be the function itself: ref={(element) => element ? fadeEdges(element) : undefined}, defined once outside render. It keeps an empty marker as the scroller's last child (data-edge-fade-end) to see the content's end move, so the scroller's own height must not follow its content (give it a height or a max-height). The fade is 24px; set --cat-edge-fade on the scroller for another length. Its scroll padding keeps what focus or scrollIntoView brings into view clear of the fade. Without the script the edges stay sharp."
+}

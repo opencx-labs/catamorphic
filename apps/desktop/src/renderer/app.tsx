@@ -238,7 +238,9 @@ import {
   emptyWorkspace,
   hydrateWorkspace,
   newChatEntry,
+  newTabInFront,
   nextActiveTabKey,
+  openChatInNewTab,
   orderedTabKeys,
   reconcileWorkspace,
   serializeWorkspace,
@@ -2695,11 +2697,17 @@ export function App({
     });
   };
 
-  // Cmd+T and the tab-strip + always open a full chat tab (Chrome muscle
-  // memory); the sidebar +, bubble +, and Cmd+N open the floating aside.
+  // Cmd+N and the palette open the floating aside, or the New Tab in
+  // front: a chat asked for from one opens in it. The dock's + keeps its
+  // chats in the dock (`inNewTab: false`).
   const addChat = (
     forceMode?: "tab",
-    opts?: { incognito?: boolean; worktree?: boolean; agentId?: string },
+    opts?: {
+      incognito?: boolean;
+      worktree?: boolean;
+      agentId?: string;
+      inNewTab?: boolean;
+    },
   ) => {
     if (!requireAgents()) return;
     updateWorkspace((ws) => {
@@ -2766,11 +2774,12 @@ export function App({
         ws.terminals.length === 0 &&
         ws.editors.length === 0 &&
         ws.chats.every((chat) => chat.mode !== "tab");
+      const inNewTab = opts?.inNewTab !== false && newTabInFront(ws);
       const entry = newChatEntry(
-        forceMode ?? (noTabsOpen ? "tab" : "partial"),
+        forceMode ?? (noTabsOpen || inNewTab ? "tab" : "partial"),
         opts,
       );
-      return {
+      const next = {
         ...ws,
         chats: [
           ...ws.chats.map((chat) =>
@@ -2782,6 +2791,9 @@ export function App({
         activeTabKey:
           entry.mode === "tab" ? chatTabKey(entry.localId) : ws.activeTabKey,
       };
+      return inNewTab && entry.mode === "tab"
+        ? openChatInNewTab(ws, next, chatTabKey(entry.localId))
+        : next;
     });
   };
 
@@ -2801,7 +2813,7 @@ export function App({
       ...(options.watchBackdrop ? { watchBackdrop: true } : {}),
     };
     updateWorkspace((ws) => {
-      return {
+      const next = {
         ...ws,
         chats: [
           ...ws.chats.map((chat) =>
@@ -2813,6 +2825,10 @@ export function App({
         activeTabKey:
           entry.mode === "tab" ? chatTabKey(entry.localId) : ws.activeTabKey,
       };
+      // A New Tab's palette sends in a tab: the chat takes that tab's place.
+      return entry.mode === "tab"
+        ? openChatInNewTab(ws, next, chatTabKey(entry.localId))
+        : next;
     });
     return entry.localId;
   };
@@ -4473,7 +4489,9 @@ export function App({
           event.kind === "newChat" &&
           event.projectId === projectIdRef.current
         )
-          addChatRef.current();
+          // The dock's own + (attached or detached) starts a chat in the
+          // dock, never in the New Tab behind it.
+          addChatRef.current(undefined, { inNewTab: false });
       }),
     [],
   );

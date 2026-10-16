@@ -483,3 +483,75 @@ it("closes an untouched New Tab once another tab is shown, and keeps a typed one
   await new Promise((resolve) => setTimeout(resolve, 400));
   expect(await newTabs()).toBe(1);
 });
+
+it("opens a chat asked for from a New Tab in that tab, in its place", async () => {
+  const keys = () =>
+    run<string[]>(
+      `return [...document.querySelectorAll('[data-tab-orientation] [data-point-key]:not([data-sidebar-item-id])')].map((el) => el.dataset.pointKey)`,
+    );
+  const select = async (key: string) => {
+    const point = await wait<{ x: number; y: number }>(`
+      const tab = document.querySelector('[data-tab-orientation] [data-point-key="${key}"]');
+      if (!tab?.checkVisibility()) return false;
+      if (tab.closest('[data-tab-orientation]').getAnimations({ subtree: true }).some((a) => a.playState === 'running')) return false;
+      const r = tab.getBoundingClientRect();
+      const point = { x: r.left + Math.min(24, r.width / 3), y: r.top + r.height / 2 };
+      const hit = document.elementFromPoint(point.x, point.y);
+      return tab.contains(hit) && !hit.closest('[aria-label^="Close"]') && point;
+    `);
+    await app.movePointer(point);
+    await app.clickPointer(point);
+  };
+  /** The chat in front: in a tab, its composer focused, nothing floating. */
+  const chatInTab = `(() => {
+    const chat = document.querySelector('section[data-chat-tab]');
+    return !!chat && !document.querySelector('section[data-floating-chat]') &&
+      chat.querySelector('[data-composer-input]') === document.activeElement &&
+      chat.dataset.chatLocalId;
+  })()`;
+  // The typed New Tab the last test kept: Cmd+N there opens the chat in it.
+  const before = await keys();
+  const newTab = before.find((key) => key.startsWith("palette:"));
+  if (!newTab) throw new Error("No New Tab to start from");
+  await select(newTab);
+  await wait(
+    `return document.activeElement?.closest('[data-palette="tab"]')`,
+    "the New Tab in front",
+  );
+  await shortcut("n");
+  const first = await wait<string>(
+    `return ${chatInTab}`,
+    "the chat opened in the New Tab",
+  );
+  const after = await keys();
+  expect(after).toHaveLength(before.length);
+  expect(after.indexOf(`chat:${first}`)).toBe(before.indexOf(newTab));
+  expect(after.some((key) => key.startsWith("palette:"))).toBe(false);
+  // New chat from a New Tab's own palette does the same.
+  await shortcut("t");
+  await wait(
+    `return document.activeElement?.closest('[data-palette="tab"]') && document.activeElement.tagName === 'TEXTAREA'`,
+    "a fresh New Tab",
+  );
+  await type("New chat");
+  await wait(
+    `return rows().find((row) => row.getAttribute('aria-selected') === 'true')?.dataset.itemId === 'action:new-floating-chat'`,
+    "New chat highlighted",
+  );
+  await run(`key('Enter')`);
+  const second = await wait<string>(
+    `return ${chatInTab} !== ${JSON.stringify(first)} && ${chatInTab}`,
+    "the palette's chat opened in its New Tab",
+  );
+  expect((await keys()).filter((key) => key.startsWith("palette:"))).toEqual(
+    [],
+  );
+  expect(await keys()).toContain(`chat:${second}`);
+  // With anything else in front, a new chat floats as before.
+  await shortcut("n");
+  await wait(
+    `return !!document.querySelector('section[data-floating-chat] [data-composer-input]')`,
+    "a floating chat over the chat tab",
+  );
+  expect(app.getRendererErrors()).toEqual([]);
+});

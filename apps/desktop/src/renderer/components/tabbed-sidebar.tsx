@@ -21,10 +21,15 @@ import { motionMs } from "../lib/motion.js";
 import { leaveSidebar, type SidebarLeave } from "../lib/sidebar-leave.js";
 import { type SidebarMotion, useSidebarMotion } from "../lib/sidebar-motion.js";
 import { useDraggingTab } from "../lib/use-dragging-tab.js";
+import { fadeEdges } from "./catamorphic/edge-fade.js";
 import { Collapsible } from "./collapsible.js";
 import { OverlayScrollbar } from "./overlay-scrollbar.js";
 import { ShortcutHint } from "./shortcut-hint.js";
 import type { SidebarContentState } from "./sidebar-contribution.js";
+
+/** A panel fades where its sections continue past its edges. */
+const edgeFade = (panel: HTMLDivElement | null) =>
+  panel ? fadeEdges(panel) : undefined;
 
 interface LayoutState {
   width: number;
@@ -544,7 +549,8 @@ export function TabbedSidebar({
               tabIndex={0}
               hidden={selected !== tab.id}
               inert={selected !== tab.id || !open}
-              className="sidebar-tab-panel"
+              ref={edgeFade}
+              className="sidebar-tab-panel cat-edge-fade"
             >
               {tab.sections.map((section) => (
                 <SidebarSlot
@@ -573,7 +579,13 @@ export function TabbedSidebar({
               ))}
             </div>
           ))}
-          <OverlayScrollbar edge={side} getArea={() => panelArea.current} />
+          {/* Only a section that asks for one has a thumb; every other
+              list fades the edge it continues past (cat-edge-fade). */}
+          {configuredTabs.some((tab) =>
+            tab.sections.some((section) => section.scrollbar),
+          ) && (
+            <OverlayScrollbar edge={side} getArea={() => panelArea.current} />
+          )}
           {tabs.length === 0 && (
             <div className="grid h-full place-items-center p-4">
               <button

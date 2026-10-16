@@ -322,6 +322,7 @@ export function Tree<T extends TreeItem>({
   defaultExpanded = true,
   className,
   style,
+  onViewport,
   motionClasses,
   dragAndDrop,
 }: {
@@ -346,8 +347,14 @@ export function Tree<T extends TreeItem>({
   expanded?: ReadonlySet<string>;
   onExpandedChange?: (expanded: ReadonlySet<string>) => void;
   defaultExpanded?: boolean;
+  /** Class for the scroller. */
   className?: string;
   style?: CSSProperties;
+  /**
+   * Called with the scroller once it is mounted (a host's overflow hint,
+   * say); may return its cleanup. Keep it stable.
+   */
+  onViewport?: (viewport: HTMLDivElement) => (() => void) | undefined;
   motionClasses?: { enter: string; exit: string };
 }) {
   const withTail = useMemo(() => {
@@ -398,6 +405,10 @@ export function Tree<T extends TreeItem>({
     onScreen.current = renderedNow;
   });
   const viewport = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const node = viewport.current;
+    return node && onViewport ? onViewport(node) : undefined;
+  }, [onViewport]);
   const [scrollTop, setScrollTop] = useState(0);
   const [overrides, setOverrides] = useState<ReadonlyMap<string, boolean>>(
     new Map(),
@@ -517,10 +528,15 @@ export function Tree<T extends TreeItem>({
       const index = layout.indexById.get(id) ?? -1;
       const node = viewport.current;
       if (index < 0 || !node) return;
+      // The scroller's scroll padding (a faded edge's) is kept clear too.
+      const padding = getComputedStyle(node);
+      const before = Number.parseFloat(padding.scrollPaddingTop) || 0;
+      const after = Number.parseFloat(padding.scrollPaddingBottom) || 0;
       const top = index * rowHeight;
-      if (top < node.scrollTop) node.scrollTop = top;
-      else if (top + rowHeight > node.scrollTop + actualHeight)
-        node.scrollTop = top + rowHeight - actualHeight;
+      if (top - before < node.scrollTop)
+        node.scrollTop = Math.max(0, top - before);
+      else if (top + rowHeight + after > node.scrollTop + actualHeight)
+        node.scrollTop = top + rowHeight + after - actualHeight;
       setScrollTop(node.scrollTop);
     },
     [layout, rowHeight, actualHeight],
@@ -1442,8 +1458,14 @@ export function CollectionTree<T extends CollectionItem>({
   tail,
   dragAndDrop,
   initiallyExpanded,
+  className,
+  onViewport,
 }: {
   dragAndDrop?: TreeDragAndDrop<T>;
+  /** Class for the scroller (see `Tree`). */
+  className?: string;
+  /** Called with the scroller once mounted (see `Tree`). */
+  onViewport?: (viewport: HTMLDivElement) => (() => void) | undefined;
   /**
    * Whether a row with children starts open the first time it loads
    * (default: closed). Later toggles are the person's.
@@ -1601,6 +1623,8 @@ export function CollectionTree<T extends CollectionItem>({
       <Tree
         items={entries}
         label={label}
+        className={className}
+        onViewport={onViewport}
         height={height}
         rowHeight={rowHeight}
         selectedId={selectedId}

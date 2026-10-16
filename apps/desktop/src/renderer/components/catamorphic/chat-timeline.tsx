@@ -84,6 +84,7 @@ import {
   TurnSteps,
   turnStepsOf,
 } from "./chat-steps.js";
+import { fadeEdges } from "./edge-fade.js";
 import {
   endsOwnChat,
   InboundMessageRow,
@@ -811,6 +812,10 @@ export function ChatTimeline(props: ChatTimelineProps) {
                     role="log"
                   >
                     <StickToBottom.Content
+                      // The conversation fades out where it continues, above
+                      // the composer and under the header, instead of being
+                      // cut at their edges (FadeEdges).
+                      scrollClassName="cat-edge-fade"
                       className={`flex min-h-full flex-col gap-3 p-5 ${contentClassName}`}
                     >
                       {hasOlder && onLoadOlder && (
@@ -886,6 +891,7 @@ export function ChatTimeline(props: ChatTimelineProps) {
                     <ScrollToLatest />
                     <FollowScrollerResize />
                     <PinToBottom />
+                    <FadeEdges />
                     <TrackOnScreen state={onScreen} />
                   </StickToBottom>
                 </OnScreen.Provider>
@@ -2852,6 +2858,16 @@ function FollowScrollerResize() {
       scroller.removeEventListener("scroll", onScroll, { capture: true });
     };
   }, [scrollRef, state]);
+  return null;
+}
+
+/** The conversation fades out where it continues past an edge (edge-fade). */
+function FadeEdges() {
+  const { scrollRef } = useStickToBottomContext();
+  useEffect(() => {
+    const scroller = scrollRef.current;
+    return scroller ? fadeEdges(scroller) : undefined;
+  }, [scrollRef]);
   return null;
 }
 

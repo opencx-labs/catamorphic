@@ -71,8 +71,8 @@ installs the same files under its `components/catamorphic` directory.
 
 ## Chat timeline
 
-`chat-timeline` (with `chat-queue`) is the conversation every Catamorphic chat
-renders: the desktop and the PWA install it as copies (ADR 0218). It is five
+`chat-timeline` (with `chat-queue` and `edge-fade`) is the conversation every
+Catamorphic chat renders: the desktop and the PWA install it as copies (ADR 0218). It is five
 files that install together: `chat-timeline.tsx`, `chat-steps.tsx` (the step
 model and rows), `activity-text.tsx`, `turn-rows.ts` (how a turn folds into
 rows, and the `WorkDisplay` choice) and `session-input.tsx`. Feed it from
@@ -87,6 +87,16 @@ for sent attachments (default: a pill with an icon and the name), `Hint`
 `backgroundCommands`, `workDisplay` and `registerJumpToPreviousUserMessage`
 with `jumpShortcut`. Rows are memoized: keep render-affecting slots stable;
 action callbacks may change every render.
+
+## Edge fade
+
+`edge-fade` gives any scroller overflow hints: content fades out over the last
+24px of an edge it continues past, instead of being cut there, and only while
+there is more that way. Give the scroller `cat-edge-fade` (from
+`@catamorphic/ui/styles.css`) and call `fadeEdges(scroller)` once it is
+mounted; it returns its cleanup. The scroller's own height must not follow its
+content. The timeline fades its conversation with it; the desktop also fades
+its sidebars and palette.
 
 Import `@catamorphic/ui/styles.css` from the host's Tailwind entry: it holds
 `.cat-markdown` and the timeline's `cat-*` motion classes. Hosts provide the

@@ -152,7 +152,7 @@ it("loads the next page of chats as the person scrolls to the end", async () => 
   expect(app.getRendererErrors()).toEqual([]);
 });
 
-it("shows where a list is scrolled on the window's edge only while it moves", async () => {
+it("fades a list's edges where it continues; a thumb only where a section asks", async () => {
   const side = `[data-workspace-visible="true"] [data-sidebar="left"]`;
   const thumb = `${side} .overlay-scrollbar`;
   // No list in the sidebar keeps a scrollbar, or a column for one.
@@ -169,23 +169,55 @@ it("shows where a list is scrolled on the window's edge only while it moves", as
       return panel.offsetWidth === panel.clientWidth;
     })()`),
   ).toBe(true);
+  // Work's lists ask for no thumb: there is none to show.
+  expect(await app.eval<boolean>(`!!document.querySelector('${thumb}')`)).toBe(
+    false,
+  );
+  /** How far each edge of the list fades, in pixels. */
+  const fades = `(() => {
+    const style = getComputedStyle(document.querySelector('${tree}'));
+    return [style.getPropertyValue('--cat-edge-fade-top'), style.getPropertyValue('--cat-edge-fade-bottom')];
+  })()`;
+  // At the end of the list (the last test scrolled there): its top fades,
+  // its last row does not.
+  await app.waitFor(`(${fades}).join() === '24px,0px'`, {
+    label: "the top edge fades at the end of the list",
+  });
+  const point = await app.eval<{ x: number; y: number }>(`(() => {
+    const rect = document.querySelector('${tree}').getBoundingClientRect();
+    return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+  })()`);
+  const wheel = (deltaY: number) =>
+    app.cdp("Input.dispatchMouseEvent", {
+      type: "mouseWheel",
+      ...point,
+      deltaX: 0,
+      deltaY,
+    });
+  // Partway: both edges have more beyond them.
+  await wheel(-200);
+  await app.waitFor(`(${fades}).join() === '24px,24px'`, {
+    label: "both edges fade partway through the list",
+  });
+  // At its top: only the bottom.
+  await app.eval(`document.querySelector('${tree}').scrollTop = 0`);
+  await app.waitFor(`(${fades}).join() === '0px,24px'`, {
+    label: "only the bottom edge fades at the top of the list",
+  });
+
+  // A section that asks for a thumb shows it on the outer edge, beside the
+  // list that moved and no taller than it, only while it moves.
+  await writeSidebarSections(app, [{ ...CHATS_SECTION, scrollbar: true }]);
+  await app.waitFor(`!!document.querySelector('${thumb}')`, {
+    label: "the thumb for a section that asks for one",
+  });
   await app.waitFor(
     `document.querySelector('${thumb}')?.dataset.shown === 'false' && getComputedStyle(document.querySelector('${thumb}')).opacity === '0'`,
     {
       label: "nothing shows at rest",
     },
   );
-  const point = await app.eval<{ x: number; y: number }>(`(() => {
-    const rect = document.querySelector('${tree}').getBoundingClientRect();
-    return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
-  })()`);
-  await app.cdp("Input.dispatchMouseEvent", {
-    type: "mouseWheel",
-    ...point,
-    deltaX: 0,
-    deltaY: -200,
-  });
-  // On the outer edge, beside the list that moved and no taller than it.
+  await wheel(200);
   const shown = await app.waitFor<{
     left: number;
     edge: number;

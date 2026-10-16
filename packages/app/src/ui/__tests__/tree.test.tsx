@@ -48,6 +48,27 @@ describe("public collection presentation", () => {
     expect(await screen.findByRole("button", { name: "child" })).toBeTruthy();
     mounted.unmount();
   });
+  it("hands its scroller to the host once, and takes back what it set up", () => {
+    const cleanup = vi.fn();
+    const onViewport = vi.fn((_viewport: HTMLDivElement) => cleanup);
+    const view = (label: string) => (
+      <Tree
+        items={[{ id: "a" }, { id: "b" }]}
+        label={label}
+        className="cat-edge-fade"
+        onViewport={onViewport}
+        renderItem={(item) => <span>{item.id}</span>}
+      />
+    );
+    const mounted = render(view("Faded tree"));
+    expect(onViewport).toHaveBeenCalledTimes(1);
+    const scroller = onViewport.mock.calls[0]?.[0];
+    expect(scroller?.matches("[data-tree-viewport].cat-edge-fade")).toBe(true);
+    mounted.rerender(view("Faded tree, renamed"));
+    expect(onViewport).toHaveBeenCalledTimes(1);
+    mounted.unmount();
+    expect(cleanup).toHaveBeenCalledTimes(1);
+  });
   it("bounds DOM size for a 10,000-item hierarchy", () => {
     const items = Array.from({ length: 10000 }, (_, index) => ({
       id: String(index),
@@ -128,6 +149,23 @@ describe("public collection presentation", () => {
     );
     fireEvent.click(screen.getByRole("menuitem", { name: "Overflow" }));
     await waitFor(() => expect(overflow).toHaveBeenCalledTimes(1));
+  });
+  it("ends a row with its disclosure, so every label starts in one place", () => {
+    const toggle = vi.fn();
+    const { container } = render(
+      <CollectionItemView
+        id="folder"
+        label="Folder"
+        expanded={false}
+        onToggle={toggle}
+        menu={[{ id: "rename", label: "Rename", run: () => {} }]}
+      />,
+    );
+    const buttons = [...container.querySelectorAll("button")];
+    expect(buttons[0]?.className).toBe("cat-collection-label");
+    expect(buttons.at(-1)?.getAttribute("aria-label")).toBe("Expand Folder");
+    fireEvent.click(screen.getByRole("button", { name: "Expand Folder" }));
+    expect(toggle).toHaveBeenCalledTimes(1);
   });
   it("keeps inspectors outside virtual row geometry and restores focus on Escape", () => {
     const { container } = render(
