@@ -1495,7 +1495,9 @@ export async function startEmbeddedServer(
     stateFile: path.join(paths.root, "external-session-imports.json"),
     profiles: () =>
       profiles.list().profiles.map((profile) => {
-        const agents = profileConfig.forProfile(profile.id).agents.list();
+        const config = profileConfig.forProfile(profile.id);
+        const agents = config.agents.list();
+        const remoteLinks = config.remoteProjects.list();
         // The first agent of each tool whose "Sync chats from" switch is on.
         const importer = (harness: "claude-code" | "codex") =>
           agents.find(
@@ -1510,12 +1512,14 @@ export async function startEmbeddedServer(
             ...(codex ? { codex } : {}),
           },
           // Every project with a folder this profile owns, those it
-          // has not claimed yet included.
+          // has not claimed yet included. A connected project's chats live
+          // on its server (ADR 0098): it imports none.
           projectIds: projectRoots
             .projectIds()
             .filter(
               (projectId) =>
-                profiles.profileForProject(projectId).id === profile.id,
+                profiles.profileForProject(projectId).id === profile.id &&
+                !remoteLinks[projectId],
             ),
         };
       }),
@@ -1784,7 +1788,7 @@ export async function startEmbeddedServer(
       clearInterval(notificationTimer);
       clearInterval(sessionMailboxTimer);
       clearInterval(sessionMirrorTimer);
-      externalSessions.dispose();
+      const sessionImports = externalSessions.dispose();
       sessionHints.dispose();
       sessionsListeners.clear();
       clearInterval(scheduleTimer);
@@ -1792,6 +1796,8 @@ export async function startEmbeddedServer(
       signInRecovery.dispose();
       await shutdownDesktopServices({
         steps: [
+          // A read in flight stops before the services it imports into.
+          { name: "session imports", dispose: () => sessionImports },
           { name: "schedules", dispose: () => scheduleTick?.catch(() => {}) },
           {
             name: "notifications",

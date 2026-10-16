@@ -290,3 +290,17 @@ it("imports chats only for Claude Code and Codex agents that turn it on (ADR 023
     store.create({ harness: "codex", syncSessions: true }).syncSessions,
   ).toBe(true);
 });
+
+it("syncs a tool's chats on one agent of that tool at a time (ADR 0233)", () => {
+  const store = new AgentsStore(storeFile());
+  const first = store.create({ harness: "claude-code", syncSessions: true });
+  const codex = store.create({ harness: "codex", syncSessions: true });
+  const second = store.create({ harness: "claude-code" });
+  store.update(second.id, { syncSessions: true });
+  const synced = store
+    .list()
+    .filter((agent) => agent.syncSessions)
+    .map((agent) => agent.id);
+  expect(synced.sort()).toEqual([codex.id, second.id].sort());
+  expect(synced).not.toContain(first.id);
+});

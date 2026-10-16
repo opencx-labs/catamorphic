@@ -567,8 +567,9 @@ function ProfileAgentBody({
                     <span className="block text-[11px] text-fg-faint">
                       Chats you start in {HARNESS_LABELS[harness]} outside Work
                       appear in their project's chat list, and you can continue
-                      them here with this agent. Only chats started after you
-                      turn this on, and they stay on this computer.
+                      them here with this agent, one {HARNESS_LABELS[harness]}{" "}
+                      agent at a time. Only chats started after you turn this
+                      on, and they stay on this computer.
                     </span>
                   </span>
                   <input

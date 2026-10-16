@@ -702,7 +702,11 @@ project's chat list (ADR 0233):
   once it settles, from where the last read stopped (rollouts reach a
   gigabyte), and only the turns that changed go to core, so an open chat
   follows a CLI that is still working. A last turn reads as open until the
-  CLI ends it or goes quiet for ten minutes.
+  CLI ends it or goes quiet for ten minutes, and an open one is read again
+  then, so a CLI killed mid-step does not leave it spinning. A launch
+  reads only the files changed since the last look began, and a session
+  that will never import (Work's own, older than the switch, in no
+  project) is not kept in memory.
 - **Never twice, never shared.** A session Work itself ran (its native id
   is one of Work's threads), a Claude Code side chain, a Codex subagent and
   Codex Desktop's own copies of Claude Code chats are skipped. Imported

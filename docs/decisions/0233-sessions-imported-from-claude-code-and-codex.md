@@ -61,17 +61,22 @@ the rollouts Codex Desktop made from Claude Code transcripts.
 
 **The desktop decides what to import and where.** A Claude Code or Codex
 agent's "Sync chats from" switch (`syncSessions`, off by default) turns
-it on for that tool in its profile, and continuations run on that agent.
-It is a choice about the agent, not the workspace: whoever runs Claude
-Code outside Work has a Claude Code agent inside it. Only sessions that
-start after it was turned on are imported (no backfill). Directory watches on both stores are hints (0229);
-a file is read when it settles. A session belongs to the project whose
-folder holds its working directory, or holds the main checkout of the
-worktree it ran in. Connected projects (0098) do not import.
+it on for that tool in its profile, and continuations run on that agent;
+one agent per tool holds it. It is a choice about the agent, not the
+workspace: whoever runs Claude Code outside Work has a Claude Code agent
+inside it. Only sessions that start after it was turned on are imported
+(no backfill). Directory watches on both stores are hints (0229); a file
+is read when it settles, and a last turn left open is read once more
+when it would read as ended. A look over the stores (at launch, or when
+a switch changes) reads only files changed since the last complete one
+began, and a session that will never import keeps only that verdict. A
+session belongs to the project whose folder holds its working directory,
+or holds the main checkout of the worktree it ran in. Connected projects
+(0098) do not import.
 
 **Imported sessions stay on this computer.** The mirror pusher skips them
-as it skips incognito chats (0062): terminal history is private unless
-the person continues it, and a fork is an ordinary chat that syncs like
+as it skips incognito chats (0062): terminal history stays private, even
+once Work continued it, and a fork is an ordinary chat that syncs like
 any other.
 
 ## Consequences

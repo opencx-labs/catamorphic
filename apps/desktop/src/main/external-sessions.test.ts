@@ -36,6 +36,8 @@ describe("ExternalSessionImporter", () => {
   let imports: Imported[];
   let outcome: "created" | "updated" | "unchanged" | "own" | "taken_over";
   let importer: ExternalSessionImporter;
+  let now: Date;
+  let projects: Record<string, string>;
 
   const build = (overrides: Partial<ExternalSessionImporterDeps> = {}) =>
     new ExternalSessionImporter({
@@ -45,10 +47,10 @@ describe("ExternalSessionImporter", () => {
         {
           id: "profile-1",
           importers,
-          projectIds: ["project-1"],
+          projectIds: Object.keys(projects),
         },
       ],
-      projectRoot: (id) => (id === "project-1" ? projectRoot : undefined),
+      projectRoot: (id) => projects[id],
       readers: {
         "claude-code": () => new ClaudeCodeTranscriptReader(),
         codex: () => new CodexRolloutReader(),
@@ -59,7 +61,7 @@ describe("ExternalSessionImporter", () => {
       },
       mainCheckout: async (cwd) =>
         cwd.startsWith(path.join(dir, "elsewhere")) ? projectRoot : undefined,
-      now: () => ENABLED_AT,
+      now: () => now,
       ...overrides,
     });
 
@@ -110,11 +112,21 @@ describe("ExternalSessionImporter", () => {
     importers = {};
     imports = [];
     outcome = "created";
+    now = ENABLED_AT;
+    projects = { "project-1": projectRoot };
     importer = build();
   });
 
+  const readState = async () =>
+    JSON.parse(
+      await fs.readFile(
+        path.join(dir, "external-session-imports.json"),
+        "utf8",
+      ),
+    );
+
   afterEach(async () => {
-    importer.dispose();
+    await importer.dispose();
     await fs.rm(dir, { recursive: true, force: true });
   });
 
@@ -129,13 +141,7 @@ describe("ExternalSessionImporter", () => {
     await importer.idle();
     // The old session started before importing was on: no backfill.
     expect(imports).toEqual([]);
-    const state = JSON.parse(
-      await fs.readFile(
-        path.join(dir, "external-session-imports.json"),
-        "utf8",
-      ),
-    );
-    expect(state).toEqual({
+    expect((await readState()).profiles).toEqual({
       "profile-1": { "claude-code": ENABLED_AT.toISOString() },
     });
 
@@ -301,14 +307,101 @@ describe("ExternalSessionImporter", () => {
     importer.refresh();
     importers = { codex: "codex-agent" };
     importer.refresh();
-    const state = JSON.parse(
-      await fs.readFile(
-        path.join(dir, "external-session-imports.json"),
-        "utf8",
-      ),
-    );
-    expect(state).toEqual({
-      "profile-1": { codex: ENABLED_AT.toISOString() },
+    await importer.idle();
+    expect(await readState()).toEqual({
+      profiles: { "profile-1": { codex: ENABLED_AT.toISOString() } },
+      scanned: { codex: ENABLED_AT.toISOString() },
     });
+  });
+
+  it("reads at launch only the files changed since the last look began", async () => {
+    importers = { "claude-code": "claude-code-agent" };
+    const file = await writeClaude(claudeLines(projectRoot, ["One"]));
+    const written = new Date(ENABLED_AT.getTime() + 5 * 60_000);
+    await fs.utimes(file, written, written);
+    importer.refresh();
+    await importer.idle();
+    expect(imports).toHaveLength(1);
+
+    // Launched again an hour later: the file changed during the last run.
+    await importer.dispose();
+    now = new Date(ENABLED_AT.getTime() + 60 * 60_000);
+    importer = build();
+    importer.refresh();
+    await importer.idle();
+    expect(imports).toHaveLength(2);
+
+    // And again: nothing changed since that launch's look began.
+    await importer.dispose();
+    now = new Date(ENABLED_AT.getTime() + 2 * 60 * 60_000);
+    importer = build();
+    importer.refresh();
+    await importer.idle();
+    expect(imports).toHaveLength(2);
+  });
+
+  it("imports a session no project held once its folder becomes one", async () => {
+    importers = { "claude-code": "claude-code-agent" };
+    const elsewhere = path.join(dir, "unrelated");
+    await fs.mkdir(elsewhere, { recursive: true });
+    const file = await writeClaude(
+      claudeLines(elsewhere, ["Somewhere else"]),
+      "unrelated.jsonl",
+    );
+    importer.refresh();
+    await importer.idle();
+    expect(imports).toEqual([]);
+
+    projects = { ...projects, "project-2": elsewhere };
+    await fs.appendFile(
+      file,
+      `${claudeLines(elsewhere, ["Somewhere else", "More"]).slice(2).join("\n")}\n`,
+    );
+    importer.refresh();
+    await importer.idle();
+    expect(imports).toHaveLength(1);
+    expect(imports[0]?.projectId).toBe("project-2");
+    // Its records from the start: a continuation resumes Claude Code's own.
+    expect(imports[0]?.native).toMatchObject({ offset: 0 });
+    expect(imports[0]?.native?.entries).toHaveLength(4);
+  });
+
+  it("keeps a character the CLI was still writing whole", async () => {
+    importers = { "claude-code": "claude-code-agent" };
+    const [prompt, answer, next, reply] = claudeLines(projectRoot, [
+      "One",
+      "Café ☕ two",
+    ]);
+    const nextBytes = Buffer.from(`${next}\n`, "utf8");
+    // Cut inside the cup's three bytes.
+    const cut = nextBytes.indexOf(Buffer.from("☕", "utf8")) + 1;
+    const file = await writeClaude([prompt ?? "", answer ?? ""]);
+    await fs.appendFile(file, nextBytes.subarray(0, cut));
+    importer.refresh();
+    await importer.idle();
+    expect(imports).toHaveLength(1);
+
+    await fs.appendFile(file, nextBytes.subarray(cut));
+    await fs.appendFile(file, `${reply}\n`);
+    importer.refresh();
+    await importer.idle();
+    expect(
+      imports[1]?.transcript.turns.map((turn) => turn.input?.text),
+    ).toEqual(["Café ☕ two"]);
+  });
+
+  it("reads a turn left open again once it would read as ended", async () => {
+    importers = { "claude-code": "claude-code-agent" };
+    // A prompt, and a CLI that never answered.
+    await writeClaude(claudeLines(projectRoot, ["Hello?"]).slice(0, 1));
+    importer.refresh();
+    await importer.idle();
+    expect(imports[0]?.transcript.turns[0]?.completedAt).toBeNull();
+
+    // No line comes; the read scheduled for later finds it quiet.
+    now = new Date(ENABLED_AT.getTime() + 15 * 60_000);
+    await importer.idle();
+    expect(imports).toHaveLength(2);
+    expect(imports[1]?.transcript.turns[0]?.completedAt).not.toBeNull();
   });
 });

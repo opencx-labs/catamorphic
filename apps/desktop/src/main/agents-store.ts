@@ -419,6 +419,7 @@ export class AgentsStore {
         : {}),
       ...this.encrypt(input.apiKey ?? null),
     };
+    if (stored.syncSessions) this.soleSyncing(stored);
     this.data.agents.push(stored);
     this.data.defaultAgentId ??= stored.id;
     this.save();
@@ -465,9 +466,10 @@ export class AgentsStore {
     }
     if (patch.syncSessions !== undefined) {
       // Only Claude Code and Codex keep sessions Work can import.
-      if (patch.syncSessions && stored.harness !== "ai-sdk")
+      if (patch.syncSessions && stored.harness !== "ai-sdk") {
         stored.syncSessions = true;
-      else delete stored.syncSessions;
+        this.soleSyncing(stored);
+      } else delete stored.syncSessions;
     }
     if (patch.connections !== undefined) stored.connections = patch.connections;
     if (patch.skills !== undefined) {
@@ -489,6 +491,16 @@ export class AgentsStore {
     }
     this.save();
     return this.decrypt(stored);
+  }
+
+  /**
+   * One agent per tool syncs its chats, and continues them (ADR 0233):
+   * turning it on for this one turns it off for the tool's others.
+   */
+  private soleSyncing(agent: StoredAgent): void {
+    for (const other of this.data.agents)
+      if (other.id !== agent.id && other.harness === agent.harness)
+        delete other.syncSessions;
   }
 
   remove(id: string): boolean {

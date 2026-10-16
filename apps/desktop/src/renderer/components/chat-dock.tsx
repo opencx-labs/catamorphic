@@ -1014,10 +1014,12 @@ function ChatDockContent({
           ),
       );
   // A chat from Claude Code or Codex goes on only on an agent of that tool
-  // (ADR 0233); on any other it waits for the person to switch.
+  // (ADR 0233); on any other it waits for the person to switch. Until the
+  // roster is known the composer stays: core refuses another tool's agent.
   const importedLock =
     chat.session?.imported &&
-    activeAgent?.harness !== chat.session.imported.harness
+    activeAgent &&
+    activeAgent.harness !== chat.session.imported.harness
       ? chat.session.imported
       : null;
   // Another agent to pick for this chat: before it starts any, after it

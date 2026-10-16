@@ -465,8 +465,8 @@ export class RemoteSessionMirror {
       this.deps.markIncognito(sessionId);
       throw new Error("Incognito sessions are not mirrored");
     }
-    // Another tool's history stays on this machine; a continuation of it
-    // is an ordinary chat and syncs like one (ADR 0233).
+    // Another tool's history stays on this machine, even once Work
+    // continued it; a fork of it is an ordinary chat (ADR 0233).
     if (detail.imported) throw new Error("Imported sessions are not mirrored");
     // A project agent's slug survives the trip: the same committed
     // definition exists on the server, so the fork can run the SAME agent.
