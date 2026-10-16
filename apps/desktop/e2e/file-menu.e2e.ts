@@ -46,11 +46,16 @@ afterAll(async () => {
   expect(errors).toEqual([]);
 });
 
+/** Where the open menu rests, once it has popped in; false before. */
+const MENU_AT_REST = `(() => { const menu = document.querySelector('[role="menuitem"]')?.closest('[role="menu"]'); return !!menu && menu.getAnimations().every((a) => a.playState !== 'running') && JSON.stringify(menu.getBoundingClientRect()); })()`;
+
 /**
  * A real right-click at a point of `selector`'s box (a fraction across),
  * once nothing covers it there (the Files palette closing over the tabs),
- * again if the first lands while something still did. Exactly on it, or
- * anywhere on its tab.
+ * until its menu opens and comes to rest: again if the first lands while
+ * something still covered it, or the menu closed as it opened (macOS CI
+ * can take key status from the window then). Exactly on it, or anywhere
+ * on its tab.
  */
 async function rightClick(selector: string, across = 0.5, exactly = false) {
   const at = `(() => { const el = document.querySelector(${JSON.stringify(selector)}); if (!el) return false; const r = el.getBoundingClientRect(); const x = r.x + r.width * ${across}; const y = r.y + r.height / 2; const hit = document.elementFromPoint(x, y); return el.contains(hit) || (!${exactly} && el.closest('[data-point-key]')?.contains(hit)) ? { x, y } : false; })()`;
@@ -73,6 +78,10 @@ async function rightClick(selector: string, across = 0.5, exactly = false) {
           timeoutMs: attempt < 2 ? 3_000 : 15_000,
         },
       );
+      await app.waitFor(MENU_AT_REST, {
+        label: `menu on ${selector} at rest`,
+        timeoutMs: attempt < 2 ? 3_000 : 15_000,
+      });
       break;
     } catch (cause) {
       if (attempt >= 2) throw cause;
@@ -158,9 +167,9 @@ it("lists a file tab's actions after its ways to open, from anywhere on the tab"
     MENU,
   );
   // A right-click in the open menu does not open it again where it was.
-  // Where the menu rests, once it has popped in.
-  const menuAt = `(() => { const menu = document.querySelector('[role="menuitem"]')?.closest('[role="menu"]'); return !!menu && menu.getAnimations().every((a) => a.playState !== 'running') && JSON.stringify(menu.getBoundingClientRect()); })()`;
-  const before = await app.waitFor<string>(menuAt, { label: "menu at rest" });
+  const before = await app.waitFor<string>(MENU_AT_REST, {
+    label: "menu at rest",
+  });
   const item = await app.eval<{ x: number; y: number }>(
     `(() => { const r = [...document.querySelectorAll('[role="menuitem"]')].at(-1).getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()`,
   );
@@ -172,9 +181,9 @@ it("lists a file tab's actions after its ways to open, from anywhere on the tab"
       clickCount: 1,
     });
   await new Promise((resolve) => setTimeout(resolve, 300));
-  expect(await app.waitFor<string>(menuAt, { label: "menu at rest" })).toBe(
-    before,
-  );
+  expect(
+    await app.waitFor<string>(MENU_AT_REST, { label: "menu at rest" }),
+  ).toBe(before);
   await choose("Copy file");
   await app.waitFor(`!document.querySelector('[role="menuitem"]')`, {
     label: "menu gone",
