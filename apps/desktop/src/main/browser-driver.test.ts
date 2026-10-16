@@ -4,17 +4,28 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { pageDialogs, registerBrowserDialogs } from "./browser-dialogs.js";
 import { BrowserDriver } from "./browser-driver.js";
 
+/** Which of Work's windows is in front, and which one holds the page. */
+const windows = vi.hoisted(() => ({
+  front: null as string | null,
+  page: "page",
+  focused: null as unknown,
+}));
+
 vi.mock("electron", async () => {
   const { EventEmitter } = await import("node:events");
   return {
     app: new EventEmitter(),
+    BrowserWindow: {
+      getFocusedWindow: () => windows.front,
+      fromWebContents: () => windows.page,
+    },
     ipcMain: Object.assign(new EventEmitter(), {
       handle: () => {},
       removeHandler: () => {},
     }),
     webContents: {
       fromId: () => undefined,
-      getFocusedWebContents: () => null,
+      getFocusedWebContents: () => windows.focused,
     },
   };
 });
@@ -26,7 +37,7 @@ class Guest extends EventEmitter {
   debugger = {
     isAttached: () => true,
     attach: vi.fn(),
-    sendCommand: vi.fn(async () => ({})),
+    sendCommand: vi.fn(async (_method: string, _params?: unknown) => ({})),
     on: vi.fn(),
     once: vi.fn(),
     off: vi.fn(),
@@ -70,6 +81,8 @@ beforeEach(() => {
   });
 });
 afterEach(() => {
+  windows.front = null;
+  windows.focused = null;
   dispose();
   app.removeAllListeners();
   ipcMain.removeAllListeners();
@@ -160,5 +173,79 @@ describe("browser driver and page dialogs", () => {
       driver.act({ type: "fill", uid: "dialog", text: "x" }),
     ).resolves.toMatchObject({ dialog: { kind: "alert" } });
     expect(pageDialogs()?.has(guest.id)).toBe(true);
+  });
+});
+
+describe("browser driver and window focus", () => {
+  const focusEmulation = (guest: Guest) =>
+    guest.debugger.sendCommand.mock.calls.flatMap(([method, params]) =>
+      method === "Emulation.setFocusEmulationEnabled" ? [params] : [],
+    );
+  const read = async (guest: Guest) => {
+    const driver = new BrowserDriver(
+      asWebContents(guest),
+      () => {},
+      async () => {},
+    );
+    const reading = driver.read();
+    await flush();
+    guest.waiting[0]?.({ value: { text: "Hello" } });
+    await expect(reading).resolves.toEqual({ text: "Hello" });
+  };
+
+  it("leaves focus in the person's window when the page is in another, telling the page it has focus", async () => {
+    windows.front = "person";
+    const person = { isDestroyed: () => false, focus: vi.fn() };
+    windows.focused = person;
+    const guest = new Guest();
+    await read(guest);
+    // Focusing the page would focus its window too, and handing focus
+    // back would focus the person's: the two windows traded places.
+    expect(guest.focus).not.toHaveBeenCalled();
+    expect(guest.hostWebContents.focus).not.toHaveBeenCalled();
+    expect(person.focus).not.toHaveBeenCalled();
+    expect(focusEmulation(guest)).toEqual([
+      { enabled: true },
+      { enabled: false },
+    ]);
+  });
+
+  it("focuses the page in the person's own window and hands focus back after", async () => {
+    windows.front = "page";
+    const composer = { isDestroyed: () => false, focus: vi.fn() };
+    windows.focused = composer;
+    const guest = new Guest();
+    await read(guest);
+    expect(guest.focus).toHaveBeenCalledTimes(1);
+    expect(composer.focus).toHaveBeenCalledTimes(1);
+    expect(focusEmulation(guest)).toEqual([]);
+  });
+
+  it("leaves the person in the window they went to during an action", async () => {
+    windows.front = "page";
+    const composer = { isDestroyed: () => false, focus: vi.fn() };
+    windows.focused = composer;
+    const guest = new Guest();
+    const driver = new BrowserDriver(
+      asWebContents(guest),
+      () => {},
+      async () => {},
+    );
+    // A long wait begins in the person's window; they go to another.
+    const reading = driver.read();
+    await flush();
+    windows.front = "person";
+    guest.waiting[0]?.({ value: { text: "Hello" } });
+    await reading;
+    expect(guest.focus).toHaveBeenCalledTimes(1);
+    expect(composer.focus).not.toHaveBeenCalled();
+  });
+
+  it("focuses the page while no window of Work's is in front", async () => {
+    const guest = new Guest();
+    await read(guest);
+    expect(guest.focus).toHaveBeenCalledTimes(1);
+    expect(guest.hostWebContents.focus).toHaveBeenCalledTimes(1);
+    expect(focusEmulation(guest)).toEqual([]);
   });
 });

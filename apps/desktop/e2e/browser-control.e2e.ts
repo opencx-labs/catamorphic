@@ -472,3 +472,53 @@ it("shows the veil where a held page is pressed, and keeps the press from the pa
   });
   expect(await clicks()).toBe(before);
 });
+it("drives a page in a window behind the person's without bringing it forward", async () => {
+  const elsewhere = await app.eval<{ id: string }>(
+    `window.catamorphicDesktop.createProject(${JSON.stringify({ name: "Elsewhere", rootPath: path.join(app.userDataDir, "elsewhere") })})`,
+  );
+  await app.eval(
+    `window.catamorphicDesktop.workspaceNavigate({projectId: ${JSON.stringify(elsewhere.id)}, newWindow: true})`,
+  );
+  const front = await app.connectToFrame(`project=${elsewhere.id}`);
+  try {
+    await front.waitFor(
+      `document.querySelector('[data-workspace-visible="true"] [data-workspace-ready]') !== null`,
+      { label: "the other project's window" },
+    );
+    await front.eval("window.catamorphicDesktop.devWindow('focus')");
+    await front.waitFor("document.hasFocus()", {
+      label: "the person's window in front",
+    });
+    await front.eval(
+      "window.__blurs = 0; addEventListener('blur', () => { window.__blurs += 1; }); true",
+    );
+    // Looks, typing and a wait: each brought the agent's window forward
+    // and then handed focus back, trading the two windows' places.
+    await snapshot();
+    expect(
+      await tool("browser_act", {
+        key,
+        action: "fill",
+        uid: await uid("Destination"),
+        text: "Osaka",
+      }),
+    ).toEqual({ ok: true });
+    await tool("browser_act", { key, action: "press", press_key: "Backspace" });
+    expect(await guest.eval('document.querySelector("#name").value')).toBe(
+      "Osak",
+    );
+    expect(
+      await tool("browser_act", {
+        key,
+        action: "wait_for",
+        text: "Plan a trip",
+      }),
+    ).toEqual({ found: true });
+    expect(await front.eval<number>("window.__blurs")).toBe(0);
+    expect(await front.eval<boolean>("document.hasFocus()")).toBe(true);
+  } finally {
+    front.close();
+    // A test after this one starts in the first window, as the others do.
+    await app.eval("window.catamorphicDesktop.devWindow('focus')");
+  }
+});

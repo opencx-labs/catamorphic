@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { agentToolResult } from "@catamorphic/sandbox";
-import { type WebContents, webContents } from "electron";
+import { BrowserWindow, type WebContents, webContents } from "electron";
 import { z } from "zod";
 import { type PageDialog, pageDialogAsker } from "../shared/page-dialogs.js";
 import { PAGE_DIALOG_MESSAGE_LIMIT } from "../shared/script-dialogs.js";
@@ -252,19 +252,57 @@ export class BrowserDriver {
     if (!this.guest.debugger.isAttached()) this.guest.debugger.attach("1.3");
   }
 
+  /**
+   * Whether the person is working in another of Work's windows. Focusing
+   * the page then would focus its window too (macOS, Linux), and handing
+   * focus back would focus theirs: every action traded the two windows'
+   * places.
+   */
+  private elsewhere(): boolean {
+    const front = BrowserWindow.getFocusedWindow();
+    const own = BrowserWindow.fromWebContents(
+      this.guest.hostWebContents ?? this.guest,
+    );
+    return Boolean(front && own && front !== own);
+  }
+
+  /** Sends at once (before any await), so calls keep their order. */
+  private async emulateFocus(enabled: boolean): Promise<void> {
+    if (this.guest.isDestroyed()) return;
+    try {
+      this.attach();
+    } catch {
+      return;
+    }
+    await this.guest.debugger
+      .sendCommand("Emulation.setFocusEmulationEnabled", { enabled })
+      .catch(() => {});
+  }
+
   private serial<T>(operation: () => Promise<T>): Promise<T> {
     const run = async () => {
       await this.activity(true);
-      const focused =
-        webContents.getFocusedWebContents() ?? this.guest.hostWebContents;
+      // Behind the person's window, the page is told it has focus instead.
+      const elsewhere = this.elsewhere();
+      const focused = elsewhere
+        ? null
+        : (webContents.getFocusedWebContents() ?? this.guest.hostWebContents);
       try {
         if (this.guest.isDestroyed())
           throw new Error("Browser tab was closed.");
-        this.guest.focus();
+        if (!elsewhere) this.guest.focus();
+        // Not waited on: a page waiting on a dialog answers nothing until
+        // it closes, and one opening now must still reach the agent.
+        else if (!this.openDialog()) void this.emulateFocus(true);
         return await operation();
       } finally {
         try {
-          if (focused && !focused.isDestroyed()) focused.focus();
+          // Gone to another window meanwhile (a long wait), the person
+          // keeps it: handing focus back would bring this one forward.
+          if (focused && !focused.isDestroyed() && !this.elsewhere())
+            focused.focus();
+          // Not awaited: the action may have opened a dialog.
+          if (elsewhere) void this.emulateFocus(false);
         } finally {
           await this.activity(false);
         }
