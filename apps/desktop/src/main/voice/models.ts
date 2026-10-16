@@ -37,25 +37,17 @@ const PARAKEET: VoiceModelArtifact = {
 };
 
 /**
- * DPDFNet (Apache 2.0), a DeepFilterNet descendant: noise removal on the
- * microphone, streaming, about 11 times real time on one core.
- */
-const DPDFNET: VoiceModelArtifact = {
-  id: "dpdfnet2",
-  url: `${RELEASES}/speech-enhancement-models/dpdfnet2.onnx`,
-  sha256: "ce35d6025fc71df0ef10d1540e1b7916837bbfe5f6896deb744508d2cad487a9",
-  bytes: 10_249_356,
-};
-
-/**
- * WeSpeaker's ResNet34 (Apache 2.0) trained on VoxCeleb: a speaker
- * embedding for the person's voice print.
+ * 3D-Speaker's ERes2Net (Apache 2.0) trained on VoxCeleb: who is speaking,
+ * as an embedding. On the speech benchmark it told the person from others
+ * where WeSpeaker's ResNet34 could not: keeping 98% of the person's
+ * stretches of 1.5 s in a café, it let 2 to 8% of others through, against
+ * 24 to 62% (ADR 0236).
  */
 const SPEAKER_EMBEDDING: VoiceModelArtifact = {
-  id: "wespeaker-resnet34",
-  url: `${RELEASES}/speaker-recongition-models/wespeaker_en_voxceleb_resnet34.onnx`,
-  sha256: "5ef208a9da1453335308a6b6f4e6dfbd7e183a38b604de0a57664f45d257fe94",
-  bytes: 26_534_365,
+  id: "eres2net-voxceleb",
+  url: `${RELEASES}/speaker-recongition-models/3dspeaker_speech_eres2net_sv_en_voxceleb_16k.onnx`,
+  sha256: "c59158379255ad66e161679cca6af8d52d51e389e3224ab7d7a7baae295c2db5",
+  bytes: 26_485_263,
 };
 
 /** Kokoro-82M v1.0 (Apache 2.0), full precision, with its voices. */
@@ -68,13 +60,12 @@ const KOKORO: VoiceModelArtifact = {
 };
 
 /**
- * DPDFNet to clean the microphone, Silero VAD and Parakeet TDT 0.6B v2
- * (int8, English) to listen, a WeSpeaker embedding for the person's voice
- * print, Kokoro v1.0 to speak: all on sherpa-onnx in the speech worker
- * (ADR 0216). About 870 MB, downloaded the first time voice starts.
+ * Silero VAD and Parakeet TDT 0.6B v2 (int8, English) to listen, an
+ * ERes2Net embedding to know who speaks, Kokoro v1.0 to speak: all on
+ * sherpa-onnx in the speech worker (ADR 0216, 0236). About 860 MB,
+ * downloaded the first time voice starts.
  */
 const VOICE_MODEL_ARTIFACTS: readonly VoiceModelArtifact[] = [
-  DPDFNET,
   SILERO_VAD,
   PARAKEET,
   SPEAKER_EMBEDDING,
@@ -95,11 +86,10 @@ export function voiceModelPaths(root: string): VoiceModelPaths {
   const tts = path.join(root, KOKORO.id);
   return {
     vad: path.join(root, SILERO_VAD.id, "silero_vad.onnx"),
-    denoiser: path.join(root, DPDFNET.id, "dpdfnet2.onnx"),
     speaker: path.join(
       root,
       SPEAKER_EMBEDDING.id,
-      "wespeaker_en_voxceleb_resnet34.onnx",
+      "3dspeaker_speech_eres2net_sv_en_voxceleb_16k.onnx",
     ),
     asr: {
       encoder: path.join(asr, "encoder.int8.onnx"),

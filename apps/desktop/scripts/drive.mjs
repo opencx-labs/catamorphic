@@ -28,12 +28,15 @@ const targets = await fetch(`http://127.0.0.1:${PORT}/json`).then((r) =>
   r.json(),
 );
 // CDP_TARGET narrows to the page whose URL contains it (e.g. "surface=dock");
-// "main" picks the workspace window, which carries no surface parameter.
+// "main" picks the workspace window, which carries no surface parameter and
+// is not the hidden voice audio page.
 const wanted = process.env.CDP_TARGET;
 const matches = (url) =>
   !wanted ||
   (wanted === "main"
-    ? !url.includes("surface=") && !url.startsWith("chrome-extension:")
+    ? !url.includes("surface=") &&
+      !url.includes("voice.html") &&
+      !url.startsWith("chrome-extension:")
     : url.includes(wanted));
 const page = targets.find((t) => t.type === "page" && matches(String(t.url)));
 if (!page) throw new Error("no page target — is the app running with CDP?");

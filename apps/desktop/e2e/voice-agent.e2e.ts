@@ -16,8 +16,8 @@ import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
  * talks to that chat's agent, which hears that the person talks by voice
  * until they type again. An agent can stop listening, and voice turns off
  * once its goodbye is said. The dock's microphone can leave the dock, and its
- * shortcut turns it on and off; in push to talk it hears only while the
- * keys are held, even in a web page.
+ * shortcut turns it on and off with a tap; held, it hears only while held,
+ * even in a web page.
  */
 
 const UTTERANCES = [
@@ -44,7 +44,7 @@ const ASSISTANT_SESSION_TOOLS = [
 ];
 
 let app: AppHandle;
-/** A web page to hold push to talk's keys in. */
+/** A web page to hold voice's keys in. */
 const page = http.createServer((_request, response) => {
   response.setHeader("Content-Type", "text/html");
   response.end("<title>Talk page</title><p>Hold to talk</p>");
@@ -129,34 +129,38 @@ const recordPhases = () =>
     return true;
   `);
 
-/** CDP's modifier bits: Alt=1, Ctrl=2, Meta=4, Shift=8. */
-const SPACE = { key: " ", code: "Space", windowsVirtualKeyCode: 32 };
-
-/** Presses an action's default keys (Cmd is Ctrl off a Mac). */
-async function shortcut(action: "toggle-voice") {
-  const cmd = process.platform === "darwin" ? 4 : 2;
-  const modifiers = action === "toggle-voice" ? cmd + 8 : 0;
-  for (const type of ["keyDown", "keyUp"])
-    await app.cdp("Input.dispatchKeyEvent", { type, modifiers, ...SPACE });
+/**
+ * Taps Talk to Work's default keys (Cmd is Ctrl off a Mac) in the web
+ * page: the main process reads them on their way in, which keys sent over
+ * DevTools never take.
+ */
+async function tapTalkKeys() {
+  await holdTalkKeys("keyDown");
+  await holdTalkKeys("keyUp");
 }
 
 /**
- * Option+Space, push to talk's default keys, going down or up in the web
- * page: through the page's real input path, which main reads first.
+ * Talk to Work's default keys going down or up in the web page: through
+ * the page's real input path, which main reads first.
  */
-function holdPushToTalk(type: "keyDown" | "keyUp") {
+function holdTalkKeys(type: "keyDown" | "keyUp") {
+  const cmd = process.platform === "darwin" ? "meta" : "control";
   return app.eval(`(() => {
     const view = document.querySelector('webview');
     view.focus();
-    view.sendInputEvent({ type: '${type}', keyCode: 'Space', modifiers: ['alt'] });
+    view.sendInputEvent({ type: '${type}', keyCode: 'Space', modifiers: ['${cmd}', 'shift'] });
     return true;
   })()`);
 }
 
-/** Opens a browser tab on the test page. */
+/** Opens a browser tab on the test page, once. */
 async function openPage() {
   const address = page.address();
   if (!address || typeof address === "string") throw new Error("No page");
+  const open = await app.eval<boolean>(
+    `(() => { try { return document.querySelector('webview')?.getTitle() === 'Talk page'; } catch { return false; } })()`,
+  );
+  if (open) return;
   await app.eval(`window.dispatchEvent(new KeyboardEvent('keydown', {
     key: 't', altKey: true, bubbles: true, cancelable: true,
     ...(/Mac/.test(navigator.platform) ? { metaKey: true } : { ctrlKey: true }),
@@ -575,10 +579,13 @@ describe("voice", () => {
     // passes their answer back to the session that asked.
     await recordPhases();
     await run(`mic().click(); return true;`);
+    // The click hears while it is held; the person, only after the news,
+    // and what they say reaches the agent after it too.
     await runWait(
       `const phases = window.__voicePhases;
-       return phases.includes('speaking') && phases.includes('hearing') &&
-         phases.indexOf('speaking') < phases.indexOf('hearing');`,
+       const news = phases.indexOf('speaking');
+       return news >= 0 && phases.indexOf('hearing', news) > news &&
+         phases.indexOf('thinking') > news;`,
       {
         timeoutMs: 30_000,
         label: "the news spoken before listening to the person",
@@ -779,7 +786,8 @@ describe("voice", () => {
       { label: "the microphone shrunk out of the dock" },
     );
     // Its shortcut still turns voice on, and the microphone shows meanwhile.
-    await shortcut("toggle-voice");
+    await openPage();
+    await tapTalkKeys();
     await runWait(
       `return dockVoice() === 'shown' && mic().dataset.phase !== 'off';`,
       {
@@ -787,7 +795,7 @@ describe("voice", () => {
         label: "voice on by its shortcut, the microphone back",
       },
     );
-    await shortcut("toggle-voice");
+    await tapTalkKeys();
     await runWait(`return dockVoice() === 'hidden';`, {
       timeoutMs: 30_000,
       label: "voice off by its shortcut, the microphone gone again",
@@ -815,55 +823,37 @@ describe("voice", () => {
     );
   }, 120_000);
 
-  it("in push to talk, hears only while its keys are held, even in a web page", async () => {
+  it("talks while its keys are held, even in a web page, and goes off after", async () => {
     await openPage();
-    await openMenu();
-    await runWait(
-      `const item = byText('[role="menuitemcheckbox"]', 'Push to talk');
-       if (!item) return false; item.click(); return true;`,
-      { label: "push to talk from the microphone's menu" },
-    );
-    await runWait(`return (await api.getPrefs()).voicePushToTalk === true;`, {
-      label: "push to talk on",
-    });
-    await run(`mic().click(); return true;`);
-    const ref = await runWait<Ref>(
-      `const status = await api.voiceStatus();
-       const prefs = await api.getPrefs();
-       return status.phase === 'listening' && prefs.assistantSession;`,
-      { timeoutMs: 30_000, label: "listening, for the keys" },
+    const assistant = await run<Ref>(
+      `return (await api.getPrefs()).assistantSession;`,
     );
     const heard = () =>
       run<number>(
-        `const detail = await session(${JSON.stringify(ref)});
+        `const detail = await session(${JSON.stringify(assistant)});
          return detail.messages.filter((m) => m.role === 'user').length;`,
       );
     const before = await heard();
-    // The scripted person talks a moment after the microphone opens; with
-    // no keys held, none of it becomes a message.
-    await new Promise((resolve) => setTimeout(resolve, 2_500));
-    expect(await heard()).toBe(before);
-    await holdPushToTalk("keyDown");
+    // Down with voice off: it starts, hearing only while held.
+    await holdTalkKeys("keyDown");
     await runWait(`return mic().dataset.phase === 'hearing';`, {
+      timeoutMs: 30_000,
       label: "hearing while the keys are down",
     });
-    await new Promise((resolve) => setTimeout(resolve, 1_000));
-    await holdPushToTalk("keyUp");
+    // Held past the scripted speech, which detection would have taken.
+    await new Promise((resolve) => setTimeout(resolve, 2_500));
+    expect(await heard()).toBe(before);
+    await holdTalkKeys("keyUp");
     await runWait(
-      `const detail = await session(${JSON.stringify(ref)});
+      `const detail = await session(${JSON.stringify(assistant)});
        return detail.messages.filter((m) => m.role === 'user').length === ${before + 1};`,
       { timeoutMs: 30_000, label: "heard as the keys came up" },
     );
-    await run(`mic().click(); return true;`);
+    // Started by holding, voice goes off once it has nothing left to do.
     await runWait(`return mic().dataset.phase === 'off';`, {
-      label: "microphone off",
+      timeoutMs: 60_000,
+      label: "voice off once idle",
     });
-    await openMenu();
-    await runWait(
-      `const item = byText('[role="menuitemcheckbox"]', 'Push to talk');
-       if (!item) return false; item.click(); return true;`,
-      { label: "push to talk off again" },
-    );
   }, 120_000);
 
   it("stops listening when its agent says so, once its goodbye is said", async () => {

@@ -16,6 +16,7 @@ import type {
 import { parseDockClicks } from "../../shared/dock-clicks.js";
 import { dockLanding } from "../../shared/dock-position.js";
 import { fileUrlFor } from "../../shared/downloads.js";
+import { VOICE_ACTIONS } from "../../shared/voice.js";
 import { localPresentations } from "../lib/chat-presentations.js";
 import { desktopApi } from "../lib/desktop-api.js";
 import { drawnDockRects } from "../lib/dock-shape.js";
@@ -508,6 +509,19 @@ export function DockHost({
   if (active) lastActive.current = active.entry.localId;
   const keyboard = useRef<(event: KeyboardEvent) => void>(() => {});
   keyboard.current = (event) => {
+    // Voice's keys are the main process's (ADR 0236): in the detached dock
+    // no window swallows them, so they would type there.
+    if (
+      detachedWindow &&
+      VOICE_ACTIONS.some((action) => {
+        const binding = keybindings[action];
+        return !!binding && matchesBinding(event, binding);
+      })
+    ) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      return;
+    }
     if (!isPresentation || event.defaultPrevented) return;
     const chat =
       active ??
@@ -1019,12 +1033,14 @@ export function DockHost({
                 });
               }}
               onClose={(id) => actions.current.get(id)?.close?.()}
-              // Kept out of the dock, the assistant's microphone still
-              // shows while voice talks to it, started by its shortcut.
+              // Kept out of the dock, the microphone still shows while
+              // voice talks to the assistant or dictates, started by a
+              // shortcut (ADR 0236).
               voiceShown={
                 voiceInDock ||
                 (voiceStatus.phase !== "off" &&
-                  voiceStatus.target?.kind === "assistant")
+                  (voiceStatus.target?.kind === "assistant" ||
+                    voiceStatus.target?.kind === "dictation"))
               }
               voiceInDock={voiceInDock}
               onVoiceInDockChange={(inDock) => void setVoiceInDock(inDock)}

@@ -14,19 +14,87 @@ import { isEcho, meaningfulUtterance } from "./speech-text.js";
 const PREROLL_SECONDS = 0.8;
 /** The longest utterance kept for recognition. */
 const UTTERANCE_MAX_SECONDS = 30;
+/** How often dictation shows the words of speech still going on. */
+const PARTIAL_SECONDS = 0.5;
 /** How much of what was said recently an echo is checked against. */
 const RECENT_SPEECH_CHARS = 600;
-/** Speech a voice print is learned from. */
+/** Speech a voice print is learned from, on purpose. */
 const LEARN_SECONDS = 6;
-/** Shorter speech is too little to check against the voice print. */
-const VERIFY_MIN_SECONDS = 0.8;
+/** Shorter speech is too little to tell whose voice it is. */
+const VOICE_MIN_SECONDS = 1;
 /**
- * How alike a voice must be to the voice print to be the person's. With
- * WeSpeaker ResNet34 the same speaker scored 0.84 or more on clean
- * speech and other people 0.59 on average (0.73 at the 90th percentile);
- * the margin leaves room for a different microphone and a noisy room.
+ * What the person's voice is learned from at most: later stretches still
+ * refine it, as much as the last half minute of their speech.
  */
-const SAME_VOICE = 0.65;
+const VOICE_MEMORY_SECONDS = 30;
+/**
+ * A voice this alike to the person's is theirs beyond doubt, at any level,
+ * and teaches voice more of it. Less alike, down to `sameVoice`, it must
+ * also be about as loud as they speak, and teaches nothing: a voice across
+ * the room that scores near the edge never becomes theirs.
+ */
+const CLEARLY_SAME_VOICE = 0.5;
+/** Voice is sure who the person is after this much of their speech. */
+const KNOWN_SECONDS = 2;
+
+/**
+ * How voice tells the person from everything else the microphone hears
+ * (ADR 0216, 0236): the measured choices, which the speech benchmark
+ * varies.
+ */
+export interface Hearing {
+  /**
+   * Speech too short to tell whose voice it is, and this many dB quieter
+   * than the person's own, is someone farther from the microphone; null
+   * hears every level.
+   */
+  nearDb: number | null;
+  /**
+   * Windows this many dB under the person's level are silence to
+   * detection, so a voice farther away neither starts speech nor draws out
+   * the person's turn when it carries on after them.
+   */
+  gateDb: number;
+  /** How long detection keeps hearing after a window near enough. */
+  gateHoldSeconds: number;
+  /**
+   * The least average log probability per token of words recognized:
+   * what the recognizer makes of noise ("Yeah.", "Okay, so.") scores far
+   * below anything said.
+   */
+  sureOfWords: number;
+  /**
+   * How alike a stretch's voice must be to the person's (cosine of
+   * ERes2Net embeddings) to be theirs.
+   */
+  sameVoice: number;
+  /**
+   * A new voice this many dB louder than the person's is someone nearer
+   * the microphone, and becomes the person: the voice heard first was not
+   * theirs, or they moved. Never when they taught voice their voice.
+   */
+  nearerDb: number;
+  /**
+   * While the agent speaks, speech must come within this many dB of the
+   * person's level to stop it; null holds it to `nearDb` alone.
+   */
+  bargeInDb: number | null;
+}
+
+/**
+ * Measured on the speech benchmark (ADR 0236): a far talker 12 dB under
+ * the person no longer reaches the chat or draws out their turns, and a
+ * quiet or soft-spoken person is heard as before.
+ */
+export const HEARING: Hearing = {
+  nearDb: 8,
+  gateDb: 10,
+  gateHoldSeconds: 0.25,
+  sureOfWords: -0.35,
+  sameVoice: 0.3,
+  nearerDb: 4,
+  bargeInDb: 4,
+};
 
 /** Voice activity at 16 kHz, fed one fixed-size window at a time. */
 export interface VoiceActivity {
@@ -36,6 +104,8 @@ export interface VoiceActivity {
   detected(): boolean;
   /** Speech segments completed since the last call, oldest first. */
   takeSegments(): Float32Array[];
+  /** Forget speech in progress and any segment not yet taken. */
+  reset(): void;
 }
 
 /** Mono audio at its own sample rate. */
@@ -44,10 +114,17 @@ export interface SpeechClip {
   sampleRate: number;
 }
 
+/** Words recognized, and how sure the recognizer was of them. */
+export interface Recognized {
+  text: string;
+  /** Average log probability per token; 0 when nothing says. */
+  confidence: number;
+}
+
 /** The models behind the engine: real ones in the app, scripted in tests. */
 export interface SpeechParts {
   activity: VoiceActivity;
-  recognize(samples: Float32Array): Promise<string>;
+  recognize(samples: Float32Array): Promise<Recognized>;
   /**
    * All the speech for a text. Each sentence also goes to `onSentence` as
    * soon as it is made, in order; returning false stops the rest.
@@ -60,8 +137,6 @@ export interface SpeechParts {
   cue(): SpeechClip;
   /** Speak in another voice from the next text on. */
   setVoice?(voice: VoiceId): void;
-  /** Noise removed from a stretch of 16 kHz speech. */
-  denoise?(samples: Float32Array): Float32Array;
   /** Who is speaking in 16 kHz speech, as a unit-length embedding. */
   voiceprint?(samples: Float32Array): number[];
 }
@@ -69,6 +144,25 @@ export interface SpeechParts {
 interface Utterance {
   id: string;
   text: string;
+}
+
+/** The person at the microphone, as voice knows them. */
+interface Person {
+  /** Their voice, a unit embedding; null until a stretch long enough. */
+  voice: number[] | null;
+  /** Seconds of their speech the voice was learned from. */
+  seconds: number;
+  /** How loud they speak, in dBFS; null until heard. */
+  level: number | null;
+  /** They taught voice their voice on purpose ("Learn my voice"). */
+  taught: boolean;
+}
+
+/** A stretch of speech as voice judges it. */
+interface Stretch {
+  seconds: number;
+  level: number;
+  voice: number[] | null;
 }
 
 /**
@@ -79,16 +173,17 @@ interface Utterance {
  * A reply is spoken once it is written, a sentence at a time: each plays
  * as soon as it is made, back to back with the one before, so a long
  * reply starts as quickly as a short one. Listening never stops, on the
- * microphone as heard: noise removal delays the onset of soft speech
- * enough to cut first words. When the person's words end they are
- * transcribed; words that are not an echo of the agent stop it if it is
- * speaking, and become the next utterance. Echo cancellation should keep
- * the agent from hearing itself; the echo check keeps it from answering
- * itself when it does.
+ * microphone as heard. When the person's words end they are transcribed;
+ * words that are not an echo of the agent stop it if it is speaking, and
+ * become the next utterance. Echo cancellation should keep the agent from
+ * hearing itself; the echo check keeps it from answering itself when it
+ * does.
  *
- * Once voice knows the person's voice (a voice print learned from a few
- * seconds of their speech), anyone else is ignored: the TV, a colleague
- * on a call, the agent's own voice through the speakers.
+ * Only the person is heard (ADR 0236): the nearest voice that keeps
+ * talking. Voice learns their voice and how loud they speak from what they
+ * say, or from a few seconds they teach it, and anyone else is ignored:
+ * the TV, a colleague on a call, the agent's own voice through the
+ * speakers.
  */
 export class VoiceEngine {
   private readonly window: Float32Array;
@@ -113,21 +208,66 @@ export class VoiceEngine {
    * can clip the first word.
    */
   private utterance: Float32Array[] = [];
-  private voiceprint: number[] | null = null;
-  private pushToTalk = false;
-  /** The push-to-talk keys are down. */
+  /** Who the person is, once voice has heard them; null until then. */
+  private person: Person | null = null;
+  /**
+   * Voice listens for speech on its own; off, it hears only while held
+   * (a voice started by holding its keys or its microphone).
+   */
+  private handsFree = true;
+  /** The keys or the microphone are held. */
   private held = false;
+  /** They went down while the person was already speaking. */
+  private heldMidSpeech = false;
+  /**
+   * Dictation: what the person says is written into a composer, nothing
+   * is sent or spoken. Their words show while they talk.
+   */
+  private dictation = false;
+  /** Counts stretches of speech, so dictation can tell them apart. */
+  private segment = 0;
+  /** Windows heard since dictation last showed the words so far. */
+  private sincePartial = 0;
+  /** A partial recognition in flight; recognition waits for it. */
+  private partial: Promise<void> | null = null;
   /** Off for good once voice is ending: nothing more is heard. */
   private listening = true;
+  /**
+   * Voice is ending: no more audio is heard, and what was is still
+   * recognized (dictation's last words).
+   */
+  private ending = false;
+  /** Let go by the worker: it says nothing more. */
+  private closed = false;
+  /** Bumped when voice moves on: what was said before goes unanswered. */
+  private epoch = 0;
   /** Speech heard while learning the voice print; null when not learning. */
   private learning: Float32Array[] | null = null;
+  /** Windows detection still hears after the last one near enough. */
+  private nearHold = 0;
+  /**
+   * The power of each window of speech under way, and how loud it is so
+   * far: before the person has said anything, the measure of what is
+   * near.
+   */
+  private speechPowers: number[] = [];
+  private speechSoFar: number | null = null;
+  private readonly silence: Float32Array;
 
   constructor(
     private readonly parts: SpeechParts,
-    private readonly emit: (event: VoiceWorkerEvent) => void,
+    private readonly events: (event: VoiceWorkerEvent) => void,
     private readonly audio: (message: VoiceAudioDown) => void,
+    private readonly hearing: Hearing = HEARING,
   ) {
     this.window = new Float32Array(parts.activity.windowSize);
+    this.silence = new Float32Array(parts.activity.windowSize);
+    // The detector outlives voices: nothing heard by the last one carries on.
+    parts.activity.reset();
+  }
+
+  private emit(event: VoiceWorkerEvent): void {
+    if (!this.closed) this.events(event);
   }
 
   /** Whether the agent's voice is coming out of the speakers, or about to. */
@@ -138,6 +278,11 @@ export class VoiceEngine {
       this.queue.length > 0 ||
       this.drainedSeq < this.sentSeq
     );
+  }
+
+  /** Settles once everything heard so far has been recognized. */
+  recognized(): Promise<void> {
+    return this.recognizing;
   }
 
   onAudio(message: VoiceAudioUp): void {
@@ -164,9 +309,19 @@ export class VoiceEngine {
     this.parts.setVoice?.(voice);
   }
 
-  /** Listen to this voice alone; null listens to anyone. */
+  /**
+   * The person's voice, taught on purpose: it is theirs whoever else is
+   * nearer. Null forgets it, and voice learns them again as they talk.
+   */
   setVoiceprint(voiceprint: number[] | null): void {
-    this.voiceprint = voiceprint;
+    if (voiceprint)
+      this.person = {
+        voice: voiceprint,
+        seconds: LEARN_SECONDS,
+        level: this.person?.level ?? null,
+        taught: true,
+      };
+    else if (this.person?.taught) this.person = null;
   }
 
   /** Learn the voice print from the next few seconds of speech. */
@@ -176,7 +331,7 @@ export class VoiceEngine {
 
   /**
    * Hear nothing more, for the rest of this voice: no speech is detected,
-   * push to talk holds nothing, and nothing still being recognized
+   * holding the keys hears nothing, and nothing still being recognized
    * interrupts the speech already asked for.
    */
   stopListening(): void {
@@ -191,6 +346,52 @@ export class VoiceEngine {
   }
 
   /**
+   * Voice is ending (ADR 0236): dictation hears what the person is still
+   * saying as if they had paused there, and nothing after it. Settles once
+   * everything heard is recognized; then the microphone closes.
+   */
+  async finish(): Promise<void> {
+    if (this.listening && !this.ending) {
+      this.ending = true;
+      // A press that turned voice off caught only what came before it,
+      // unless they were still speaking.
+      const speaking = this.inSpeech && (!this.held || this.heldMidSpeech);
+      if (speaking && this.dictation && !this.learning) {
+        const samples = concat(this.utterance);
+        const speech = this.speechSeconds();
+        this.inSpeech = false;
+        this.held = false;
+        this.utterance = [];
+        this.emit({ type: "speech-end" });
+        this.hear(samples, { pressed: false, speech });
+      }
+    }
+    await this.recognizing;
+    this.stopListening();
+  }
+
+  /**
+   * Voice moved on to another chat, or to dictation: what was said for the
+   * one before, still under way or being recognized, is dropped.
+   */
+  forget(): void {
+    this.epoch += 1;
+    if (this.inSpeech) this.emit({ type: "speech-end" });
+    this.inSpeech = false;
+    this.preroll.length = 0;
+    this.utterance = [];
+    this.speechPowers = [];
+    this.speechSoFar = null;
+    this.parts.activity.reset();
+  }
+
+  /** The worker let this voice go: nothing it still recognizes is said. */
+  close(): void {
+    this.stopListening();
+    this.closed = true;
+  }
+
+  /**
    * Another audio page took over (a microphone move): whatever the old one
    * had still to play went with it, so it counts as played, and a voice
    * that stopped listening closes the new page's microphone too.
@@ -202,41 +403,73 @@ export class VoiceEngine {
   }
 
   /**
-   * Push to talk: the person says when they talk, by holding a key, so
-   * nothing is detected and nothing else is heard. Off, voice listens for
-   * speech on its own.
+   * Hands-free, voice listens for speech on its own; otherwise the person
+   * says when they talk, by holding a key or the microphone, and nothing
+   * else is heard.
    */
-  setPushToTalk(enabled: boolean): void {
-    if (this.pushToTalk === enabled) return;
-    if (this.held) this.hold(false);
-    this.pushToTalk = enabled;
+  setHandsFree(enabled: boolean): void {
+    if (this.handsFree === enabled) return;
+    this.handsFree = enabled;
+    if (this.held) return;
+    if (this.inSpeech) this.emit({ type: "speech-end" });
     this.inSpeech = false;
     this.utterance = [];
+    this.parts.activity.reset();
   }
 
   /**
-   * The push-to-talk keys went down: the agent stops talking, and what the
-   * person says is kept from just before. Up: it is heard, at once and
-   * whole, with no wait for silence and no check of whose voice it is.
+   * Dictation writes what the person says, a stretch of speech at a time,
+   * showing the words while they talk; conversation hands each utterance
+   * to the agent. Either way, the agent's voice stops.
    */
-  hold(held: boolean): void {
-    if (!this.pushToTalk || !this.listening || held === this.held) return;
+  setDictation(enabled: boolean): void {
+    if (this.dictation === enabled) return;
+    this.dictation = enabled;
+    this.stopSpeaking();
+  }
+
+  /**
+   * The keys or the microphone went down: the agent stops talking, and
+   * what the person says is kept from just before, or from the start of
+   * speech already under way. Up: it is heard, at once and whole, with no
+   * wait for silence and no check of whose voice it is; detection rests
+   * while they are held. A tap is not talk: `discard` drops what the press
+   * caught, and speech still going on is heard from the preroll, as any.
+   */
+  hold(held: boolean, { discard = false }: { discard?: boolean } = {}): void {
+    if (!this.listening || held === this.held) return;
     this.held = held;
     if (held) {
+      this.heldMidSpeech = this.inSpeech;
       if (this.audible) {
         this.stopSpeaking();
         this.emit({ type: "barge-in" });
       }
-      this.inSpeech = true;
-      this.utterance = [...this.preroll];
-      this.emit({ type: "speech-start" });
+      if (!this.inSpeech) this.beginSpeech();
+      this.parts.activity.reset();
       return;
     }
     this.inSpeech = false;
     this.emit({ type: "speech-end" });
     const samples = concat(this.utterance);
+    const speech = this.speechSeconds();
     this.utterance = [];
-    this.hear(samples, { pressed: true });
+    this.speechPowers = [];
+    this.speechSoFar = null;
+    this.parts.activity.reset();
+    if (discard) {
+      if (this.dictation)
+        this.emit({
+          type: "dictation",
+          segment: this.segment,
+          text: "",
+          final: true,
+        });
+      return;
+    }
+    // What the hold heard is heard: speech after it starts afresh.
+    this.preroll.length = 0;
+    this.hear(samples, { pressed: true, speech });
   }
 
   cue(): void {
@@ -261,6 +494,7 @@ export class VoiceEngine {
   }
 
   private onFrame(samples: Float32Array): void {
+    if (this.ending) return;
     const activity = this.parts.activity;
     let offset = 0;
     while (offset < samples.length) {
@@ -273,40 +507,137 @@ export class VoiceEngine {
       offset += take;
       if (this.filled < this.window.length) break;
       this.filled = 0;
-      this.keep(this.window.slice());
-      if (this.pushToTalk || !this.listening) continue;
-      activity.accept(this.window);
+      const level = power(this.window);
+      this.keep(this.window.slice(), level);
+      if (this.listening && this.dictation && this.inSpeech && !this.learning)
+        this.showSoFar();
+      if (!this.handsFree || this.held || !this.listening) continue;
+      // Speech far quieter than the person's is someone farther away: to
+      // detection it is silence, so it starts nothing and never draws out
+      // the person's turn when it carries on after them.
+      activity.accept(this.near(level) ? this.window : this.silence);
       this.afterWindow();
     }
   }
 
-  private keep(window: Float32Array): void {
+  /**
+   * Whether a window is loud enough to be the person, with a short hold.
+   * Until they have said something, speech under way is the measure: a
+   * voice across the room that ran on when they stopped ends their first
+   * turn as silence would.
+   */
+  private near(level: number): boolean {
+    const { nearDb, gateDb, gateHoldSeconds } = this.hearing;
+    const reference = this.person?.level ?? this.speechSoFar;
+    if (nearDb === null || reference === null) return true;
+    if (level >= reference - gateDb)
+      this.nearHold = Math.ceil(
+        (gateHoldSeconds * SPEECH_SAMPLE_RATE) / this.window.length,
+      );
+    if (this.nearHold === 0) return false;
+    this.nearHold -= 1;
+    return true;
+  }
+
+  private beginSpeech(): void {
+    this.inSpeech = true;
+    this.segment += 1;
+    this.sincePartial = 0;
+    this.speechPowers = [];
+    this.speechSoFar = null;
+    this.utterance = [...this.preroll];
+    this.emit({ type: "speech-start" });
+  }
+
+  /**
+   * Dictation shows the words of speech still going on, every half second
+   * or so: the whole stretch so far, recognized again. One at a time, and
+   * never in the way of a finished stretch.
+   */
+  private showSoFar(): void {
+    this.sincePartial += this.window.length / SPEECH_SAMPLE_RATE;
+    if (this.sincePartial < PARTIAL_SECONDS || this.partial) return;
+    this.sincePartial = 0;
+    const segment = this.segment;
+    const epoch = this.epoch;
+    const samples = concat(this.utterance);
+    this.partial = this.recognizing
+      .then(async () => {
+        if (segment !== this.segment || !this.inSpeech) return;
+        const { text, confidence } = await this.parts.recognize(samples);
+        if (
+          segment === this.segment &&
+          epoch === this.epoch &&
+          this.inSpeech &&
+          this.listening &&
+          this.dictation &&
+          text.trim() &&
+          confidence >= this.hearing.sureOfWords
+        )
+          this.emit({
+            type: "dictation",
+            segment,
+            text: text.trim(),
+            final: false,
+          });
+      })
+      .catch(() => {})
+      .finally(() => {
+        this.partial = null;
+      });
+  }
+
+  private keep(window: Float32Array, level: number): void {
     const windowSeconds = window.length / SPEECH_SAMPLE_RATE;
     this.preroll.push(window);
     if (this.preroll.length * windowSeconds > PREROLL_SECONDS)
       this.preroll.shift();
+    if (!this.inSpeech) return;
+    this.speechPowers.push(level);
+    // A second of speech is enough to know how loud it is; kept current.
     if (
-      this.inSpeech &&
-      this.utterance.length * windowSeconds < UTTERANCE_MAX_SECONDS
+      this.speechPowers.length * windowSeconds >= 1 &&
+      this.speechPowers.length % 8 === 0
     )
+      this.speechSoFar = percentile(this.speechPowers, 0.9);
+    if (this.utterance.length * windowSeconds < UTTERANCE_MAX_SECONDS) {
       this.utterance.push(window);
+      return;
+    }
+    // Keys held this long: what was said so far is heard, and the rest
+    // carries on as the next stretch.
+    if (!this.held) return;
+    const samples = concat(this.utterance);
+    this.hear(samples, {
+      pressed: true,
+      speech: samples.length / SPEECH_SAMPLE_RATE,
+    });
+    this.speechPowers = [];
+    this.segment += 1;
+    this.sincePartial = 0;
+    this.utterance = [window];
   }
 
   private afterWindow(): void {
     const detected = this.parts.activity.detected();
     if (detected && !this.inSpeech) {
-      this.inSpeech = true;
-      this.utterance = [...this.preroll];
-      this.emit({ type: "speech-start" });
+      this.beginSpeech();
     } else if (!detected && this.inSpeech) {
       this.inSpeech = false;
+      // Speech over, its loudness no longer measures anything.
+      this.speechSoFar = null;
       this.emit({ type: "speech-end" });
     }
     for (const segment of this.parts.activity.takeSegments()) {
       const samples =
         this.utterance.length > 0 ? concat(this.utterance) : segment;
       this.utterance = [];
-      this.hear(samples, { pressed: false });
+      // How long they spoke is the detector's: not the onset kept before
+      // it, nor the pause that ended it.
+      this.hear(samples, {
+        pressed: false,
+        speech: segment.length / SPEECH_SAMPLE_RATE,
+      });
     }
   }
 
@@ -315,15 +646,25 @@ export class VoiceEngine {
    * failure stops voice with its reason; it must never leave the chain
    * rejected, which would drop every later utterance unheard.
    */
-  private hear(samples: Float32Array, how: { pressed: boolean }): void {
+  private hear(
+    samples: Float32Array,
+    how: { pressed: boolean; speech: number },
+  ): void {
+    const segment = this.segment;
+    const epoch = this.epoch;
+    const partial = this.partial;
     this.recognizing = this.recognizing
-      .then(() => this.recognizeSegment(samples, how))
-      .catch((cause: unknown) =>
+      .then(() => partial)
+      .then(() => this.recognizeSegment(samples, { ...how, segment, epoch }))
+      .catch((cause: unknown) => {
+        // Dictation's words so far go: they were never finished.
+        if (this.dictation)
+          this.emit({ type: "dictation", segment, text: "", final: true });
         this.emit({
           type: "failed",
           message: `Listening failed: ${cause instanceof Error ? cause.message : String(cause)}`,
-        }),
-      );
+        });
+      });
   }
 
   /**
@@ -332,24 +673,47 @@ export class VoiceEngine {
    * with noise removal's artifacts.
    */
   private async recognizeSegment(
-    segment: Float32Array,
-    { pressed }: { pressed: boolean },
+    samples: Float32Array,
+    {
+      pressed,
+      speech,
+      segment,
+      epoch,
+    }: { pressed: boolean; speech: number; segment: number; epoch: number },
   ): Promise<void> {
-    if (!this.listening) return;
+    if (!this.listening || epoch !== this.epoch) return;
+    const dictated = (text: string) =>
+      this.emit({ type: "dictation", segment, text, final: true });
     if (this.learning) {
-      this.learnFrom(segment);
+      this.learnFrom(samples);
+      if (this.dictation) dictated("");
       return;
     }
-    if (!pressed && !this.isPerson(segment)) {
+    const heard = this.stretchOf(samples, speech);
+    const speaking = this.audible;
+    const whose = pressed ? "person" : this.whose(heard, { speaking });
+    if (whose === "someone else") {
+      if (this.dictation) dictated("");
       this.emit({ type: "ignored" });
       return;
     }
-    const text = (await this.parts.recognize(segment)).trim();
-    if (!this.listening) return;
-    const speaking = this.audible;
-    if (!meaningfulUtterance(text) || (speaking && isEcho(text, this.recent)))
+    const recognized = await this.parts.recognize(samples);
+    if (!this.listening || epoch !== this.epoch) return;
+    const text = recognized.text.trim();
+    // Words made of noise are no words: the keys held say someone spoke.
+    const words =
+      meaningfulUtterance(text) &&
+      (pressed || recognized.confidence >= this.hearing.sureOfWords);
+    if (this.dictation) {
+      if (words) this.heardFrom(heard, { pressed });
+      dictated(words ? text : "");
       return;
-    if (speaking) {
+    }
+    // The agent may have started talking while this was recognized.
+    const talking = speaking || this.audible;
+    if (!words || (talking && isEcho(text, this.recent))) return;
+    this.heardFrom(heard, { pressed });
+    if (talking) {
       this.stopSpeaking();
       this.emit({ type: "barge-in" });
     }
@@ -365,22 +729,136 @@ export class VoiceEngine {
       learning.reduce((sum, part) => sum + part.length, 0) / SPEECH_SAMPLE_RATE;
     if (seconds < LEARN_SECONDS) return;
     this.learning = null;
-    this.voiceprint = this.parts.voiceprint(this.cleaned(concat(learning)));
-    this.emit({ type: "learned", voiceprint: this.voiceprint });
+    const samples = concat(learning);
+    const voice = this.parts.voiceprint(samples);
+    this.person = {
+      voice,
+      seconds: LEARN_SECONDS,
+      level: speechLevel(samples),
+      taught: true,
+    };
+    this.emit({ type: "learned", voiceprint: voice });
   }
 
-  /** Whether speech is the person's, by their voice print when known. */
-  private isPerson(segment: Float32Array): boolean {
-    if (!this.voiceprint || !this.parts.voiceprint) return true;
-    if (segment.length < VERIFY_MIN_SECONDS * SPEECH_SAMPLE_RATE) return true;
+  /**
+   * How loud a stretch is, and whose voice, when the person spoke long
+   * enough to tell.
+   */
+  private stretchOf(samples: Float32Array, speech: number): Stretch {
+    return {
+      seconds: speech,
+      level: speechLevel(samples),
+      voice:
+        this.parts.voiceprint && speech >= VOICE_MIN_SECONDS
+          ? this.parts.voiceprint(samples)
+          : null,
+    };
+  }
+
+  /** How long the speech under way has gone on, its onset kept aside. */
+  private speechSeconds(): number {
+    return (this.speechPowers.length * this.window.length) / SPEECH_SAMPLE_RATE;
+  }
+
+  /**
+   * Whether a stretch is the person's (ADR 0236). The first voice heard is
+   * theirs until a nearer one, clearly louder, takes over; after that, a
+   * stretch is theirs when it is clearly their voice, or a voice like
+   * theirs about as loud as they speak, or, too short to tell, about as
+   * loud. While the agent talks, only their full voice stops it.
+   */
+  private whose(
+    heard: Stretch,
+    { speaking }: { speaking: boolean },
+  ): "person" | "someone else" {
+    const { nearDb, sameVoice, bargeInDb } = this.hearing;
+    const person = this.person;
+    if (!person) return "person";
+    const margin = speaking && bargeInDb !== null ? bargeInDb : nearDb;
+    const near =
+      margin === null ||
+      person.level === null ||
+      heard.level >= person.level - margin;
+    if (heard.voice && person.voice) {
+      const alike = cosine(heard.voice, person.voice);
+      if (alike >= CLEARLY_SAME_VOICE || (alike >= sameVoice && near))
+        return "person";
+      return this.nearer(heard) ? "person" : "someone else";
+    }
+    return near ? "person" : "someone else";
+  }
+
+  /**
+   * A new voice clearly louder than the person's, once voice is sure who
+   * they are: someone nearer the microphone, who becomes the person.
+   * Never when they taught voice their voice.
+   */
+  private nearer(heard: Stretch): boolean {
+    const person = this.person;
     return (
-      cosine(this.parts.voiceprint(this.cleaned(segment)), this.voiceprint) >=
-      SAME_VOICE
+      !!person &&
+      !person.taught &&
+      !!heard.voice &&
+      person.seconds >= KNOWN_SECONDS &&
+      person.level !== null &&
+      heard.level >= person.level + this.hearing.nearerDb
     );
   }
 
-  private cleaned(samples: Float32Array): Float32Array {
-    return this.parts.denoise ? this.parts.denoise(samples) : samples;
+  /**
+   * What the person said teaches voice who they are, from speech that is
+   * surely theirs: their first stretch long enough to tell, a stretch
+   * clearly their voice, or one said with the keys held. Held and not
+   * their voice, or a nearer voice, voice learns them afresh. Speech
+   * accepted on the edge teaches nothing.
+   */
+  private heardFrom(heard: Stretch, { pressed }: { pressed: boolean }): void {
+    const person = this.person;
+    if (!heard.voice) {
+      // Too short to tell whose: only a held key says how loud they are.
+      if (pressed && person && person.level === null)
+        person.level = heard.level;
+      return;
+    }
+    const alike = person?.voice ? cosine(heard.voice, person.voice) : null;
+    const clearly = alike !== null && alike >= CLEARLY_SAME_VOICE;
+    // Only another voice takes over by being nearer: one merely like
+    // theirs, a little louder, is still them on the edge.
+    const afresh =
+      !person?.voice ||
+      (!clearly &&
+        (pressed ||
+          (alike !== null &&
+            alike < this.hearing.sameVoice &&
+            this.nearer(heard))));
+    if (afresh) {
+      // A taught voice stays theirs; only how loud they are is learned.
+      if (person?.taught && person.voice) {
+        person.level = heard.level;
+        return;
+      }
+      this.person = {
+        voice: heard.voice,
+        seconds: heard.seconds,
+        level: heard.level,
+        taught: false,
+      };
+      return;
+    }
+    if (!person?.voice || !clearly) return;
+    person.level =
+      person.level === null
+        ? heard.level
+        : person.level + 0.3 * (heard.level - person.level);
+    // A running mean of their voice, the latest half minute weighing most.
+    const weight = Math.min(person.seconds, VOICE_MEMORY_SECONDS);
+    person.voice = unit(
+      person.voice.map(
+        (value, index) =>
+          value * weight + (heard.voice?.[index] ?? 0) * heard.seconds,
+      ),
+    );
+    person.seconds = weight + heard.seconds;
   }
 
   private async drainSpeech(): Promise<void> {
@@ -428,6 +906,37 @@ export class VoiceEngine {
   private remember(text: string): void {
     this.recent = `${this.recent} ${text}`.slice(-RECENT_SPEECH_CHARS);
   }
+}
+
+/** A window's power, in dBFS. */
+function power(samples: Float32Array): number {
+  let sum = 0;
+  for (const sample of samples) sum += sample * sample;
+  return 10 * Math.log10(sum / Math.max(1, samples.length) + 1e-12);
+}
+
+/**
+ * How loud speech is, in dBFS: the power its loudest windows reach (the
+ * 90th percentile of 32 ms windows). Pauses and quieter voices under it
+ * do not pull it down, so speech that ran on into someone farther away
+ * still measures the person.
+ */
+export function speechLevel(samples: Float32Array): number {
+  const size = 512;
+  const powers: number[] = [];
+  for (let start = 0; start + size <= samples.length; start += size)
+    powers.push(power(samples.subarray(start, start + size)));
+  return powers.length === 0 ? power(samples) : percentile(powers, 0.9);
+}
+
+function percentile(values: readonly number[], share: number): number {
+  const sorted = [...values].sort((a, b) => a - b);
+  return sorted[Math.floor((sorted.length - 1) * share)] ?? -120;
+}
+
+function unit(vector: number[]): number[] {
+  const length = Math.hypot(...vector) || 1;
+  return vector.map((value) => value / length);
 }
 
 function cosine(a: readonly number[], b: readonly number[]): number {

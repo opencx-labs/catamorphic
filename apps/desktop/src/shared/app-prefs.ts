@@ -5,8 +5,10 @@ import {
 import {
   DEFAULT_VOICE,
   type VoiceId,
+  type Voiceprint,
   type VoiceSessionRef,
   voiceIdOf,
+  voiceprintOf,
 } from "./voice.js";
 
 export const CODE_THEMES = [
@@ -124,14 +126,25 @@ export interface AppPrefs {
   agentVoices: Record<string, VoiceId>;
   /** The microphone voice listens with; null follows the system's. */
   voiceMicrophone: string | null;
-  /** The person's voice print: voice ignores everyone else (ADR 0216). */
-  voiceprint: number[] | null;
+  /**
+   * The person's voice, taught on purpose: voice ignores everyone else,
+   * however near (ADR 0216, 0236).
+   */
+  voiceprint: Voiceprint | null;
   /** The microphone in the dock; voice still works by its shortcut. */
   voiceInDock: boolean;
   /** A microphone in every chat's composer, to talk to that chat's agent. */
   voiceInChats: boolean;
-  /** Voice listens only while the push-to-talk keys are held. */
-  voicePushToTalk: boolean;
+  /**
+   * Dictation only: a microphone's click dictates into the text field the
+   * person is in, rather than talking with an agent (ADR 0236).
+   */
+  voiceDictation: boolean;
+  /**
+   * macOS was asked, once, to let voice's shortcuts work in other apps
+   * (Accessibility); Settings asks again.
+   */
+  voiceShortcutsAsked: boolean;
 }
 
 export const DEFAULT_PREFS: AppPrefs = {
@@ -177,7 +190,8 @@ export const DEFAULT_PREFS: AppPrefs = {
   voiceprint: null,
   voiceInDock: true,
   voiceInChats: true,
-  voicePushToTalk: false,
+  voiceDictation: false,
+  voiceShortcutsAsked: false,
 };
 
 function dimension(value: unknown, fallback: number, max: number): number {
@@ -307,18 +321,14 @@ export function normalizePrefs(raw: unknown): AppPrefs {
         : null,
     voiceId: voiceIdOf(record.voiceId),
     agentVoices: agentVoicesOf(record.agentVoices),
-    voiceprint:
-      Array.isArray(record.voiceprint) &&
-      record.voiceprint.length > 0 &&
-      record.voiceprint.every((value) => typeof value === "number")
-        ? record.voiceprint
-        : null,
+    voiceprint: voiceprintOf(record.voiceprint),
     voiceMicrophone:
       typeof record.voiceMicrophone === "string" && record.voiceMicrophone
         ? record.voiceMicrophone
         : null,
     voiceInDock: record.voiceInDock !== false,
     voiceInChats: record.voiceInChats !== false,
-    voicePushToTalk: record.voicePushToTalk === true,
+    voiceDictation: record.voiceDictation === true,
+    voiceShortcutsAsked: record.voiceShortcutsAsked === true,
   };
 }

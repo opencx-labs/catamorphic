@@ -49,6 +49,7 @@ import { ShortcutHint } from "../components/shortcut-hint.js";
 import {
   useMicrophones,
   useProfileAgents,
+  useVoiceKeys,
 } from "../components/voice-button.js";
 import {
   type AgentHarness,
@@ -898,7 +899,9 @@ function VoiceSection({
   const agents = useProfileAgents();
   const microphones = useMicrophones();
   const bindings = useKeybindings();
-  const holdKeys = formatBinding(bindings["push-to-talk"]);
+  const dictateKeys = formatBinding(bindings.dictate);
+  const talkKeys = formatBinding(bindings["talk-to-work"]);
+  const keys = useVoiceKeys();
   const assistant =
     agents.find((agent) => agent.id === prefs.voiceAssistant)?.id ?? "";
   return (
@@ -985,22 +988,49 @@ function VoiceSection({
         </select>
       </SettingRow>
       <SettingRow
-        id="voicePushToTalk"
-        label="Push to talk"
-        description={
-          holdKeys
-            ? `Voice listens only while you hold ${holdKeys}, wherever you are in Work.`
-            : "Voice listens only while you hold the push-to-talk keys."
-        }
+        id="voiceKeys"
+        label="Voice shortcuts"
+        control={keys === "needs-permission"}
+        description={`${[
+          dictateKeys && `${dictateKeys} dictates where you type`,
+          talkKeys && `${talkKeys} talks to Work`,
+        ]
+          .filter(Boolean)
+          .join(", ")
+          .replace(/^./, (first) => first.toUpperCase())}${
+          dictateKeys || talkKeys ? ". " : ""
+        }Tap one to start or stop; hold it to talk while you hold it. ${
+          keys === "everywhere"
+            ? "They work in any app."
+            : keys === "needs-permission"
+              ? "To use them in other apps, allow Work in System Settings, Privacy & Security, Accessibility."
+              : "They work in Work."
+        }`}
+      >
+        {keys === "needs-permission" && (
+          <button
+            id="setting-voiceKeys"
+            type="button"
+            className="btn rounded-md px-3 py-1.5 text-xs"
+            onClick={() => void desktopApi.voiceKeysAllow()}
+          >
+            Allow…
+          </button>
+        )}
+      </SettingRow>
+      <SettingRow
+        id="voiceDictation"
+        label="Dictation only"
+        description="A microphone's click dictates where you type, a chat's into its message box, instead of talking. Nothing is sent or read aloud: edit it and send it as you would typed text."
       >
         <input
-          id="setting-voicePushToTalk"
+          id="setting-voiceDictation"
           type="checkbox"
           role="switch"
-          aria-checked={prefs.voicePushToTalk}
-          checked={prefs.voicePushToTalk}
+          aria-checked={prefs.voiceDictation}
+          checked={prefs.voiceDictation}
           onChange={(event) =>
-            void update({ voicePushToTalk: event.target.checked })
+            void update({ voiceDictation: event.target.checked })
           }
         />
       </SettingRow>

@@ -121,7 +121,13 @@ import type { TerminalAppearanceResult } from "../../shared/terminal-appearance.
 import type { ThemeFonts } from "../../shared/theme-fonts.js";
 import type { DesktopUpdateState } from "../../shared/update.js";
 import type { UsageSummary } from "../../shared/usage.js";
-import type { VoiceLevels, VoiceStatus } from "../../shared/voice.js";
+import type {
+  VoiceDictation,
+  VoiceKeysState,
+  VoiceLevels,
+  VoicePress,
+  VoiceStatus,
+} from "../../shared/voice.js";
 
 export type { AppPrefs, DesktopUpdateState, UsageSummary };
 
@@ -1249,6 +1255,8 @@ export interface CatamorphicDesktopApi {
   dockDetach: (detached: boolean) => Promise<void>;
   /** Native context menu for the detached dock window; resolves the action. */
   dockMenu: (entries: readonly MenuItem[]) => Promise<string | null>;
+  /** Native context menu for voice's floating bubble; resolves the action. */
+  voiceBubbleMenu: (entries: readonly MenuItem[]) => Promise<string | null>;
   /** The workspace window reports where its chat region sits; null clears. */
   dockRegion: (region: DockRegion | null) => Promise<void>;
   onDockSnapshot: (listener: (snapshot: DockSnapshot) => void) => () => void;
@@ -2056,13 +2064,16 @@ export interface CatamorphicDesktopApi {
    */
   voiceStatus: () => Promise<VoiceStatus>;
   /**
-   * Talk to a chat (`sessionId`) or to the assistant from the project; the
-   * microphone that is on turns voice off, another moves voice to it.
+   * A microphone or a voice shortcut went down (ADR 0236): voice hears the
+   * person from now. Released soon after, it was a tap, and voice turns on
+   * there, or off when it already was; held, it talked while held.
    */
-  voiceToggle: (input: {
-    projectId?: string;
-    sessionId?: string;
-  }) => Promise<void>;
+  voicePress: (press: VoicePress) => Promise<void>;
+  voiceRelease: () => Promise<void>;
+  /** The chat in front of this window, for "Talk to this chat". */
+  voiceFrontChat: (
+    chat: { projectId: string; sessionId: string } | null,
+  ) => void;
   /** Close the assistant's chat; the next start makes a new one. */
   voiceReset: () => Promise<void>;
   /** Learn the person's voice now, starting voice when it is off. */
@@ -2073,6 +2084,19 @@ export interface CatamorphicDesktopApi {
   onVoiceStatus: (listener: (status: VoiceStatus) => void) => () => void;
   /** How each sentence voice says sounds, as it is scheduled. */
   onVoiceLevels: (listener: (levels: VoiceLevels) => void) => () => void;
+  /** Dictation's words for this window's text field, as they are said. */
+  onVoiceDictation: (
+    listener: (dictation: VoiceDictation) => void,
+  ) => () => void;
+  /** A text field here has focus: dictation writes into this window. */
+  voiceFieldFocus: () => void;
+  /** What was dictated here was sent: listening on its own ends. */
+  voiceDictationSent: () => void;
+  /** Where voice's shortcuts work. */
+  voiceKeysStatus: () => Promise<VoiceKeysState>;
+  /** Asks macOS to let voice's shortcuts work in every app. */
+  voiceKeysAllow: () => Promise<void>;
+  onVoiceKeys: (listener: (state: VoiceKeysState) => void) => () => void;
 }
 
 declare global {
@@ -2115,6 +2139,10 @@ export const desktopApi: CatamorphicDesktopApi = {
   ),
   onVoiceStatus: shareEvent((publish) => nativeApi.onVoiceStatus(publish)),
   onVoiceLevels: shareEvent((publish) => nativeApi.onVoiceLevels(publish)),
+  onVoiceDictation: shareEvent((publish) =>
+    nativeApi.onVoiceDictation(publish),
+  ),
+  onVoiceKeys: shareEvent((publish) => nativeApi.onVoiceKeys(publish)),
   // Every chat's microphone and settings view reads prefs.
   onPrefsChanged: shareEvent((publish) => nativeApi.onPrefsChanged(publish)),
   // Every browser tab follows its page's dialogs and its close answers.

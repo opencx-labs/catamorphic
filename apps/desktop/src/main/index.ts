@@ -772,6 +772,9 @@ app.whenReady().then(async () => {
     profiles: profilesStore,
     windows,
     incognito: incognitoSessions,
+    dockDetached: (profileId) =>
+      desktopWorkspaces?.dockDetached(profileId) ??
+      profileConfig.forProfile(profileId).prefs.load().dockDetached,
   });
   terminalSupport = registerTerminalSupport(
     state,

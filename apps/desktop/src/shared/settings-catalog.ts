@@ -150,10 +150,29 @@ export const SETTINGS_CATALOG: readonly SettingsEntry[] = [
     keywords: ["microphone", "mic", "input", "audio", "device"],
   },
   {
-    id: "voicePushToTalk",
-    label: "Push to talk",
+    id: "voiceKeys",
+    label: "Voice shortcuts in other apps",
     category: "voice",
-    keywords: ["push to talk", "hold", "keys", "listen", "walkie"],
+    keywords: [
+      "push to talk",
+      "global",
+      "other apps",
+      "accessibility",
+      "hold",
+      "shortcut",
+    ],
+  },
+  {
+    id: "voiceDictation",
+    label: "Dictation only",
+    category: "voice",
+    keywords: [
+      "dictation",
+      "dictate",
+      "speech to text",
+      "transcribe",
+      "type with voice",
+    ],
   },
   {
     id: "voiceInDock",

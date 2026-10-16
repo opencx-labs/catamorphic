@@ -963,6 +963,11 @@ export class DesktopWorkspaces {
     return screen.getDisplayMatching(dock.getBounds()).workArea;
   }
 
+  /** Whether a profile's dock floats detached now, as the person left it. */
+  dockDetached(profileId: string): boolean {
+    return this.detached(profileId);
+  }
+
   private detached(profileId: string): boolean {
     return (
       this.detachOverrides.get(profileId) ??

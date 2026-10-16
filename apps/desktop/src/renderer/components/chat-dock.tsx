@@ -3289,6 +3289,7 @@ function ChatDockContent({
                           chat.session?.agentId ?? selectedAgentId ?? null,
                         agentName: activeAgent?.name ?? null,
                         ensureSession: chat.ensureSession,
+                        focusComposer: () => composerRef.current?.focusToType(),
                       }}
                     />
                   )}

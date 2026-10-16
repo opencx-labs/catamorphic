@@ -9,7 +9,9 @@ import { createRoot } from "react-dom/client";
 import { CatamorphicAppProvider } from "./components/catamorphic/catamorphic-provider.js";
 import { DockHost } from "./components/dock-host.js";
 import { PasskeyHost } from "./components/passkey-sheet.js";
+import { VoiceBubble } from "./components/voice-bubble.js";
 import { desktopApi, type ServerInfo } from "./lib/desktop-api.js";
+import { installFieldDictation } from "./lib/field-dictation.js";
 import { installFocusModality } from "./lib/focus-modality.js";
 import { installInertSelectionGuard } from "./lib/inert-selection.js";
 import { KeybindingsProvider } from "./lib/keybindings.js";
@@ -26,13 +28,23 @@ const detachedWindow = surface === "dock";
 // tab's sign-in popup, ADR 0220): a transparent view main lays over the
 // window's page, showing the same sheet the workspace shows over a tab.
 const passkeySheet = surface === "passkey";
+// Voice's bubble alone, over other apps while Work is behind them.
+const voiceBubble = surface === "voice";
 document.documentElement.dataset.surface = detachedWindow
   ? "dock"
   : passkeySheet
     ? "passkey"
-    : "workspace";
+    : voiceBubble
+      ? "voice"
+      : "workspace";
 installFocusModality();
 installInertSelectionGuard();
+// Dictation writes into the text field the person is in (voice).
+installFieldDictation({
+  fieldFocused: desktopApi.voiceFieldFocus,
+  sent: desktopApi.voiceDictationSent,
+  onWords: desktopApi.onVoiceDictation,
+});
 
 /** This window's chat lists follow this computer's hints (ADR 0229). */
 function SessionChangeHints() {
@@ -81,6 +93,10 @@ createRoot(document.getElementById("root") as HTMLElement).render(
         <QueryClientProvider client={new QueryClient()}>
           <PasskeyHost />
         </QueryClientProvider>
+      ) : voiceBubble ? (
+        <KeybindingsProvider>
+          <VoiceBubble />
+        </KeybindingsProvider>
       ) : (
         <Root />
       )}

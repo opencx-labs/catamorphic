@@ -31,6 +31,7 @@ import {
   type AgentMcpServerConfig,
   type ExtraTool,
   PROJECT_TOOLS_SERVER_KEY,
+  type TurnContextFragment,
 } from "@catamorphic/sandbox";
 import { PROJECT_AGENTS_DIR } from "@catamorphic/workflow/project-layout";
 import type { AgentCommandsResult } from "../../shared/agent-commands.js";
@@ -60,7 +61,11 @@ import type { ProfileConfigManager } from "../profile-config.js";
 import type { ProfilesStore } from "../profiles.js";
 import { projectDefaultAgentSlug } from "../project-manifest.js";
 import { shellBinShimDir } from "../shell-integration.js";
-import { ASSISTANT_INSTRUCTIONS, VOICE_CONTEXT } from "../voice/guidance.js";
+import {
+  ASSISTANT_INSTRUCTIONS,
+  VOICE_CONTEXT,
+  voicePlaceContext,
+} from "../voice/guidance.js";
 import { DesktopAgentMcp, type ResolvedMcp } from "./agent-mcp-policy.js";
 import {
   assistantDelegation,
@@ -1368,7 +1373,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
         : instructions,
       context: async (turn: AgentTurnContext) => [
         ...(turn.sessionId && this.voice?.talking(turn.sessionId)
-          ? [VOICE_CONTEXT]
+          ? [VOICE_CONTEXT, ...voicePlace(this.voice.where(turn.sessionId))]
           : []),
         ...(turn.sessionId
           ? await workspaceTurnContext({
@@ -1664,4 +1669,11 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
       return "shared-first";
     }
   }
+}
+
+/** Where the person spoke from, for the voice turn: another app, or nothing. */
+function voicePlace(
+  place: { app: string; window: string | null } | null,
+): TurnContextFragment[] {
+  return place ? voicePlaceContext(place) : [];
 }

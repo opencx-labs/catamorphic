@@ -574,14 +574,34 @@ export const BUILTIN_ACTIONS = [
       "ghost",
     ],
   },
+  // Voice (ADR 0236): every shortcut toggles when tapped and talks while
+  // held, in every app once Work may watch the keys.
   {
-    id: "toggle-voice",
+    id: "dictate",
+    label: "Dictate",
+    icon: "Mic",
+    description:
+      "type what you say where your cursor is: tap to start or stop, hold to dictate while held",
+    defaultBinding: "Alt+Space",
+    keywords: ["dictation", "dictate", "speech to text", "voice", "type"],
+  },
+  {
+    id: "talk-to-work",
     label: "Talk to Work",
     icon: "Mic",
     description:
-      "turn voice on or off: your assistant listens through the dock's microphone and talks back",
+      "talk with your assistant: tap to start or stop, hold to talk while held",
     defaultBinding: "Cmd+Shift+Space",
-    keywords: ["voice", "microphone", "mic", "talk", "speak", "listen"],
+    keywords: ["voice", "microphone", "mic", "talk", "speak", "assistant"],
+  },
+  {
+    id: "talk-to-chat",
+    label: "Talk to this chat",
+    icon: "Mic",
+    description:
+      "talk with the agent of the chat in front of you: tap to start or stop, hold to talk while held",
+    defaultBinding: null,
+    keywords: ["voice", "microphone", "talk", "chat", "agent"],
   },
   {
     id: "change-assistant",
@@ -591,17 +611,6 @@ export const BUILTIN_ACTIONS = [
       "pick who the dock's microphone talks to: Work's built-in assistant or one of your agents",
     defaultBinding: null,
     keywords: ["assistant", "voice", "dock", "agent", "orchestrator", "talk"],
-  },
-  {
-    id: "push-to-talk",
-    label: "Push to talk",
-    icon: "Mic",
-    description:
-      "hold to talk to Work when voice is set to push to talk; it hears you when you let go",
-    defaultBinding: "Alt+Space",
-    keywords: ["voice", "microphone", "talk", "hold"],
-    // Held, not pressed: the palette cannot hold a key.
-    hiddenInPalette: true,
   },
   {
     id: "continue-on-mobile",
