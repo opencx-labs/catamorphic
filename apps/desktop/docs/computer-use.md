@@ -54,7 +54,12 @@ Pointers follow layout/scroll, dismiss when the target is used, and clear throug
 `point_at` with `target: null`. Existing sidebar/tab pointing uses the same tool without `uid`.
 
 The driver serializes operations per guest, wakes hidden guests only during an
-operation, and restores focus without activating the native window. Chromium
+operation, and restores focus without activating the native window. While
+another of Work's windows is in front, it leaves the page's window where it is
+and tells the page it has focus (`Emulation.setFocusEmulationEnabled`) instead
+of focusing it, so the person's window never trades places with the agent's.
+Focus is handed back after an action only if the person is still in the window
+where it began. Chromium
 pointer input and Electron native editing preserve browser behavior. Do not
 replace them with synthetic DOM click/key events. Takeover/release blocks future
 agent input; reclaim is explicit. Page content is untrusted data, never authority

@@ -266,9 +266,14 @@ export class BrowserDriver {
     return Boolean(front && own && front !== own);
   }
 
+  /** Sends at once (before any await), so calls keep their order. */
   private async emulateFocus(enabled: boolean): Promise<void> {
     if (this.guest.isDestroyed()) return;
-    this.attach();
+    try {
+      this.attach();
+    } catch {
+      return;
+    }
     await this.guest.debugger
       .sendCommand("Emulation.setFocusEmulationEnabled", { enabled })
       .catch(() => {});
@@ -286,8 +291,9 @@ export class BrowserDriver {
         if (this.guest.isDestroyed())
           throw new Error("Browser tab was closed.");
         if (!elsewhere) this.guest.focus();
-        // A page waiting on its dialog answers nothing until it closes.
-        else if (!this.openDialog()) await this.emulateFocus(true);
+        // Not waited on: a page waiting on a dialog answers nothing until
+        // it closes, and one opening now must still reach the agent.
+        else if (!this.openDialog()) void this.emulateFocus(true);
         return await operation();
       } finally {
         try {

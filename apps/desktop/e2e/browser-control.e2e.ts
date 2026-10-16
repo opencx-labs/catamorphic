@@ -518,5 +518,7 @@ it("drives a page in a window behind the person's without bringing it forward", 
     expect(await front.eval<boolean>("document.hasFocus()")).toBe(true);
   } finally {
     front.close();
+    // A test after this one starts in the first window, as the others do.
+    await app.eval("window.catamorphicDesktop.devWindow('focus')");
   }
 });
