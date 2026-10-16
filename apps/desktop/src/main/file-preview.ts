@@ -72,7 +72,9 @@ export async function readProjectImage({
   filePath: string;
 }): Promise<string | null> {
   if (filePath.includes("\0") || path.isAbsolute(filePath)) return null;
-  const projectRoot = await realpath(root);
+  // The project's folder may be gone (moved or deleted while open).
+  const projectRoot = await realpath(root).catch(() => null);
+  if (!projectRoot) return null;
   const target = await realpath(path.resolve(projectRoot, filePath)).catch(
     () => null,
   );

@@ -681,15 +681,16 @@ opening on one blanked the window, and saving after any edit wrote the alt
 text over the image. An image now shows in place: one in the project (a
 path relative to the document, or to the project when it starts with `/`)
 is read from it, never a file outside it, and https and inline images load
-as they are. While one loads, a chip naming it waits a moment before
-showing, so a quick load goes straight to the image; one that cannot show
-(missing, outside the project, or plain http) stays a chip with a broken
-image mark. Images stay where markdown puts them, inline: a badge sits in
-its line and an image on its own fills at most the column. Clicking one
-selects it, ringed in the accent, and the grip beside it sits by its top,
-even over a caption. Saving keeps each image's markdown as written, except
-that a reference image (`![logo][brand]`) is written inline, since the
-editor keeps no link definitions.
+as they are (a document opened from outside a project shows only those).
+While one loads, a chip naming it waits a moment before showing, so a quick
+load goes straight to the image; one that cannot show (missing, outside the
+project, or plain http) stays a chip with a broken image mark. Images stay
+where markdown puts them, inline: a badge sits in its line and an image on
+its own fills at most the column. Clicking one selects it, ringed in the
+accent, and the grip beside it sits by its top, even over a caption. Saving
+keeps each image's markdown as written, except that a reference image
+(`![logo][brand]`) is written inline, since the editor keeps no link
+definitions.
 
 ### 2026-10-15: The activity line says what the agent is doing, in its own words
 

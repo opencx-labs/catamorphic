@@ -281,7 +281,7 @@ and an injected main-thread load of 30 ms tasks every 40 ms:
 | --- | ---: | ---: |
 | Lookups over 60 pointer moves inside one paragraph | 60 | 1 |
 | Lookups over 48 moves crossing 12 blocks | 48 | 12 |
-| Lookups over 60 moves inside a paragraph while a chat streams beside it | 60 | 0 |
+| Lookups over 60 moves inside a paragraph, the handle already on it, while a chat streams beside it | 60 | 0 |
 | Handle glide frames under load (smooth steps / one-frame jumps) | 56 / 17 | 132 / 3 |
 | Handle glide frames idle | 133 / 3 | 134 / 3 |
 
