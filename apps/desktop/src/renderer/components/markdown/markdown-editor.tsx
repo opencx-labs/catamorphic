@@ -19,7 +19,12 @@ import { MarkdownBubbleMenu } from "./bubble-menu.js";
 import { joinFrontmatter, splitFrontmatter } from "./frontmatter.js";
 import { MarkdownGuardrails } from "./guardrails.js";
 import { createHandleHoverGate } from "./handle-hover.js";
-import { ImageLink, ImageParagraph, MarkdownImage } from "./image.js";
+import {
+  ImageLink,
+  ImageParagraph,
+  imageLocation,
+  MarkdownImage,
+} from "./image.js";
 import { lowlight } from "./lowlight.js";
 import {
   createBubbleMotion,
@@ -51,6 +56,16 @@ export interface MarkdownEditorProps {
   onSelectionReader?: (
     reader: (() => EditorSelectionSnapshot | null) | null,
   ) => void;
+  /**
+   * The document's path, relative to its project or absolute: where its
+   * images' relative paths start.
+   */
+  documentPath?: string;
+  /**
+   * Reads a local image (a path relative to the project, or absolute) as a
+   * URL to show, or null. Without it only web images show.
+   */
+  readImage?: (path: string) => Promise<string | null>;
 }
 
 export interface EditorSelectionSnapshot {
@@ -146,8 +161,14 @@ function firstLineCenter(element: HTMLElement): number {
     const rect = range.getClientRects()[0];
     if (rect && rect.height > 0) return rect.top + rect.height / 2;
   }
-  const box = element.getBoundingClientRect();
-  return box.top + box.height / 2;
+  // No text (a paragraph holding only an image): the first line of the
+  // first image, so the handle stays by a tall image's top.
+  const image = element.querySelector(".cat-mdedit-image");
+  const box = (image ?? element).getBoundingClientRect();
+  const line = Number.parseFloat(getComputedStyle(element).lineHeight);
+  return (
+    box.top + (image && line > 0 ? Math.min(box.height, line) : box.height) / 2
+  );
 }
 
 /** Markdown equality modulo trailing blank lines. */
@@ -161,6 +182,8 @@ export function MarkdownEditor({
   onChange,
   onSave,
   onSelectionReader,
+  documentPath,
+  readImage,
 }: MarkdownEditorProps) {
   const mountRef = useRef<HTMLDivElement>(null);
   const bubbleLayerRef = useRef<HTMLDivElement | null>(null);
@@ -178,6 +201,8 @@ export function MarkdownEditor({
   onSaveRef.current = onSave;
   const onSelectionReaderRef = useRef(onSelectionReader);
   onSelectionReaderRef.current = onSelectionReader;
+  const imagesRef = useRef({ documentPath, readImage });
+  imagesRef.current = { documentPath, readImage };
   // The markdown we last emitted; external `value` changes that differ from
   // it are real (file switch, reload) and reset the document.
   const lastEmittedRef = useRef<string | null>(null);
@@ -236,7 +261,15 @@ export function MarkdownEditor({
         Markdown,
         ImageLink,
         ImageParagraph,
-        MarkdownImage,
+        MarkdownImage.configure({
+          resolve: async (src) => {
+            const images = imagesRef.current;
+            const location = imageLocation(src, images.documentPath ?? null);
+            if (!location) return null;
+            if ("url" in location) return location.url;
+            return (await images.readImage?.(location.path)) ?? null;
+          },
+        }),
         TaskList,
         TaskItem.configure({ nested: true }),
         TableKit,

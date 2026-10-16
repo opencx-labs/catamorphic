@@ -2,6 +2,16 @@ import type { JSONContent } from "@tiptap/core";
 import { Node } from "@tiptap/core";
 import Link from "@tiptap/extension-link";
 import Paragraph from "@tiptap/extension-paragraph";
+import type { Node as PmNode } from "@tiptap/pm/model";
+import type { NodeView } from "@tiptap/pm/view";
+
+/** A URL the editor can show for an image's markdown source, or null. */
+export type ImageResolver = (src: string) => Promise<string | null>;
+
+export interface MarkdownImageOptions {
+  /** Without one, only web images (https, inline data) show. */
+  resolve: ImageResolver;
+}
 
 /**
  * Markdown images, as an inline atom. Without an image node the markdown
@@ -15,20 +25,45 @@ import Paragraph from "@tiptap/extension-paragraph";
  * link included) and emits it unchanged, so it round-trips byte for byte;
  * a reference-style image is written inline from its resolved URL, since
  * the editor does not keep link definitions, and an HTML `<img>` becomes
- * markdown. It shows as a chip naming the image; nothing is fetched. It
- * carries its markdown through the clipboard, as data attributes for a
- * paste back here and as text elsewhere. Images stay inline, as markdown
- * has them, so a paragraph holding only an image stays a paragraph
- * (`ImageParagraph`), and a link holding only one stays one image
- * (`ImageLink`).
+ * markdown. It shows the image its `resolve` option finds (`imageView`),
+ * and a chip naming it while it loads or when it cannot. It carries its
+ * markdown through the clipboard, as data attributes for a paste back here
+ * and as text elsewhere. Images stay inline, as markdown has them, so a
+ * paragraph holding only an image stays a paragraph (`ImageParagraph`),
+ * and a link holding only one stays one image (`ImageLink`).
  */
-export const MarkdownImage = Node.create({
+export const MarkdownImage = Node.create<MarkdownImageOptions>({
   name: "image",
   inline: true,
   group: "inline",
   atom: true,
   selectable: true,
   draggable: false,
+
+  addOptions() {
+    return {
+      resolve: async (src) => {
+        const location = imageLocation(src, null);
+        return location && "url" in location ? location.url : null;
+      },
+    };
+  },
+
+  addNodeView() {
+    // Per editor, by source: a view made again (an undo, a moved block)
+    // shows a loaded image at once instead of loading it again.
+    const loads = new Map<string, Promise<string | null>>();
+    const settled = new Map<string, string | null>();
+    const load = (src: string) => {
+      const known = loads.get(src);
+      if (known) return known;
+      const loading = this.options.resolve(src).catch(() => null);
+      loads.set(src, loading);
+      void loading.then((url) => settled.set(src, url));
+      return loading;
+    };
+    return ({ node }) => imageView({ node, load, settled });
+  },
 
   addAttributes() {
     return {
@@ -85,11 +120,7 @@ export const MarkdownImage = Node.create({
         "data-markdown": imageMarkdown(attrs),
         title: named ? attrs.src : undefined,
       },
-      [
-        "span",
-        { class: "cat-mdedit-image-label" },
-        attrs.alt || (named ? fileName(attrs.src) : "") || "Image",
-      ],
+      ["span", { class: "cat-mdedit-image-label" }, imageLabel(attrs)],
     ];
   },
 
@@ -217,6 +248,158 @@ function caption(title: string | null): string {
 
 function stringOr<T extends string | null>(value: unknown, fallback: T) {
   return typeof value === "string" ? value : fallback;
+}
+
+/**
+ * A rendered image: a chip naming it while its source loads (shown only
+ * if that takes a moment) or when it cannot, then the image. Nothing in it
+ * is editable, so ProseMirror ignores its mutations.
+ */
+function imageView({
+  node,
+  load,
+  settled,
+}: {
+  node: PmNode;
+  load: (src: string) => Promise<string | null>;
+  settled: ReadonlyMap<string, string | null>;
+}): NodeView {
+  const dom = document.createElement("span");
+  dom.className = "cat-mdedit-image";
+  dom.contentEditable = "false";
+  const state = { node, generation: 0 };
+  const chip = (attrs: ImageAttrs, status: "loading" | "failed") => {
+    const label = document.createElement("span");
+    label.className = "cat-mdedit-image-label";
+    label.textContent = imageLabel(attrs);
+    dom.dataset.state = status;
+    dom.setAttribute("role", "img");
+    dom.setAttribute(
+      "aria-label",
+      status === "failed"
+        ? `${label.textContent}, could not be shown`
+        : label.textContent,
+    );
+    dom.replaceChildren(label);
+  };
+  const show = (attrs: ImageAttrs, url: string | null, current: number) => {
+    if (current !== state.generation) return;
+    if (!url) {
+      chip(attrs, "failed");
+      return;
+    }
+    const image = document.createElement("img");
+    image.alt = attrs.alt;
+    image.draggable = false;
+    const loaded = () => {
+      if (current !== state.generation) return;
+      dom.dataset.state = "loaded";
+      dom.removeAttribute("role");
+      dom.removeAttribute("aria-label");
+      dom.replaceChildren(image);
+    };
+    image.addEventListener("error", () => {
+      if (current === state.generation) chip(attrs, "failed");
+    });
+    image.src = url;
+    if (image.complete && image.naturalWidth > 0) loaded();
+    else image.addEventListener("load", loaded, { once: true });
+  };
+  const render = (next: PmNode) => {
+    const attrs = imageAttrs(next.attrs);
+    state.generation += 1;
+    const current = state.generation;
+    chip(attrs, "loading");
+    if (settled.has(attrs.src)) {
+      show(attrs, settled.get(attrs.src) ?? null, current);
+    } else {
+      void load(attrs.src).then((url) => show(attrs, url, current));
+    }
+  };
+  render(node);
+  return {
+    dom,
+    update: (next) => {
+      if (next.type !== state.node.type) return false;
+      const before = imageAttrs(state.node.attrs);
+      const after = imageAttrs(next.attrs);
+      state.node = next;
+      if (after.src !== before.src || after.alt !== before.alt) render(next);
+      return true;
+    },
+    ignoreMutation: () => true,
+    destroy: () => {
+      state.generation += 1;
+    },
+  };
+}
+
+function imageLabel(attrs: ImageAttrs): string {
+  const named = !attrs.src.startsWith("data:");
+  return attrs.alt || (named ? fileName(attrs.src) : "") || "Image";
+}
+
+/**
+ * Where an image's source is: a URL shown as it is (https, inline image
+ * data), a file relative to the project or absolute, or null for anything
+ * else (http, other schemes, or a file with no document to be relative
+ * to). A relative path is relative to the document; one starting with `/`
+ * is relative to the project, as in a repository's own markdown.
+ */
+export function imageLocation(
+  src: string,
+  /** The document's path: relative to the project, or absolute. */
+  documentPath: string | null,
+): { url: string } | { path: string } | null {
+  const source = src.trim();
+  if (/^https:\/\//i.test(source)) return { url: source };
+  if (source.startsWith("//")) return { url: `https:${source}` };
+  if (/^data:image\//i.test(source)) return { url: source };
+  if (documentPath === null) return null;
+  const file = filePart(source);
+  if (!file) return null;
+  if (file.startsWith("/") || /^[a-z]:[\\/]/i.test(file)) {
+    // Absolute: a file URL, or a path the document names from the
+    // project's root.
+    return /^file:/i.test(source) || documentPath.startsWith("/")
+      ? { path: normalizedPath(file) }
+      : { path: normalizedPath(file.slice(1)) };
+  }
+  const folder = documentPath.split("/").slice(0, -1).join("/");
+  return { path: normalizedPath(folder ? `${folder}/${file}` : file) };
+}
+
+/** The file a local source names, decoded; null for other schemes. */
+function filePart(source: string): string | null {
+  if (/^file:/i.test(source)) {
+    try {
+      return decodeURIComponent(new URL(source).pathname);
+    } catch {
+      return null;
+    }
+  }
+  if (/^[a-z]:[\\/]/i.test(source)) return source;
+  if (/^[a-z][a-z\d+.-]*:/i.test(source)) return null;
+  const path = source.replace(/[?#][\s\S]*$/, "");
+  if (!path) return null;
+  try {
+    return decodeURIComponent(path);
+  } catch {
+    return path;
+  }
+}
+
+/** `.` and `..` resolved; `..` past a relative path's start is kept. */
+function normalizedPath(path: string): string {
+  const absolute = path.startsWith("/");
+  const parts: string[] = [];
+  for (const part of path.split("/")) {
+    if (part === "" || part === ".") continue;
+    if (part !== "..") parts.push(part);
+    else if (parts.length > 0 && parts.at(-1) !== "..") parts.pop();
+    else if (!absolute) parts.push(part);
+  }
+  return `${absolute ? "/" : ""}${parts.join("/")}`;
 }
 
 function fileName(src: string): string {

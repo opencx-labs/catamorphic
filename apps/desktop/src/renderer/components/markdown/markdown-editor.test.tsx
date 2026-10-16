@@ -2,7 +2,7 @@
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vitest";
-import { MarkdownEditor } from "./markdown-editor.js";
+import { MarkdownEditor, type MarkdownEditorProps } from "./markdown-editor.js";
 
 const plan = (counts: string) =>
   [
@@ -100,14 +100,17 @@ it("keeps images: a document opening on one, and their markdown after edits", as
 });
 
 /** Mounts the editor on `doc`; returns its editor and the last emission. */
-async function openDoc(doc: string) {
+async function openDoc(
+  doc: string,
+  props?: Pick<MarkdownEditorProps, "documentPath" | "readImage">,
+) {
   Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", true);
   const node = document.createElement("div");
   document.body.append(node);
   const root = createRoot(node);
   const onChange = vi.fn();
   await act(async () =>
-    root.render(<MarkdownEditor value={doc} onChange={onChange} />),
+    root.render(<MarkdownEditor value={doc} onChange={onChange} {...props} />),
   );
   const editor = Reflect.get(window, "__catMarkdownEditor").editor;
   const append = (text: string) =>
@@ -187,4 +190,58 @@ it("pastes a copied image back as the same image, and copies its markdown as tex
     .match(/!\[Work logo\]\(assets\/logo\.png "Brand"\)/g);
   expect(images).toHaveLength(2);
   opened.close();
+});
+
+it("shows a document's images through its reader, and names one it cannot show", async () => {
+  // jsdom loads no images: one with a source counts as loaded.
+  const complete = vi
+    .spyOn(HTMLImageElement.prototype, "complete", "get")
+    .mockReturnValue(true);
+  const width = vi
+    .spyOn(HTMLImageElement.prototype, "naturalWidth", "get")
+    .mockReturnValue(16);
+  const readImage = vi.fn(async (path: string) =>
+    path === "docs/assets/logo v2.png" ? "data:image/png;base64,AAAA" : null,
+  );
+  const opened = await openDoc(
+    [
+      "![Work logo](assets/logo%20v2.png)",
+      "",
+      "A badge ![build](https://ci.example.com/badge.svg) and ![Missing](../gone.png), and ![plain](http://example.com/a.png).",
+      "",
+    ].join("\n"),
+    { documentPath: "docs/notes.md", readImage },
+  );
+  await act(async () => {});
+  expect(readImage.mock.calls.map(([path]) => path).sort()).toEqual([
+    "docs/assets/logo v2.png",
+    "gone.png",
+  ]);
+  const images = [...opened.node.querySelectorAll(".cat-mdedit-image")];
+  expect(
+    images.map((image) => ({
+      state: image.getAttribute("data-state"),
+      src: image.querySelector("img")?.getAttribute("src") ?? null,
+      label: image.getAttribute("aria-label"),
+    })),
+  ).toEqual([
+    {
+      state: "loaded",
+      src: "data:image/png;base64,AAAA",
+      label: null,
+    },
+    {
+      state: "loaded",
+      src: "https://ci.example.com/badge.svg",
+      label: null,
+    },
+    { state: "failed", src: null, label: "Missing, could not be shown" },
+    { state: "failed", src: null, label: "plain, could not be shown" },
+  ]);
+  // Shown, the markdown is still as written.
+  await opened.append("Added.");
+  expect(opened.saved()).toContain("![Work logo](assets/logo%20v2.png)");
+  opened.close();
+  complete.mockRestore();
+  width.mockRestore();
 });

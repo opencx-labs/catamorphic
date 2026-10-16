@@ -674,6 +674,22 @@ the historical log explains how it arrived here.
 - [Performance](docs/performance.md): idle lifecycle checks and sustained measurement.
 
 ## Design log
+### 2026-10-16: A markdown document shows its images
+
+The markdown editor had no images. `![logo](x.png)` became the word
+"logo", a document opening on an image blanked the window, and saving after
+any edit wrote the alt text over the image. An image now shows in place:
+one beside the document (a path relative to it, or to the project when it
+starts with `/`) is read from the project, and https and inline images load
+as they are. While one loads, a chip naming it waits a moment before
+showing, so a quick load goes straight to the image; one that cannot show
+(missing, or plain http) stays a chip with a broken image mark. Images stay
+where markdown puts them, inline: a badge sits in its line and an image on
+its own fills at most the column. Clicking one selects it, outlined in the
+accent, and the grip beside it sits by its top. Saving keeps each image's
+markdown as written, except that a reference image (`![logo][brand]`) is
+written inline, since the editor keeps no link definitions.
+
 ### 2026-10-15: The activity line says what the agent is doing, in its own words
 
 The line beside the spinner said "Thinking...", "Working..." and "Running

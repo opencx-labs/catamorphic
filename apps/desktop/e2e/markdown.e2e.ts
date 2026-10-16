@@ -735,31 +735,35 @@ describe("markdown editor", () => {
       label: "bubble left after a press away",
     });
   }, 90_000);
-  it("opens a document whose first block is an image, keeping it through an edit", async () => {
+  it("opens a document whose first block is an image, showing it and keeping it through an edit", async () => {
     // Without an image node the parser left the image's alt text at the
     // document's top level: the editor's trailing paragraph after a list
     // then blanked the window, and a save wrote the alt text over it.
     const doc = [
-      "![Work logo](assets/logo%20v2.png)",
+      "![Work logo](assets/logo%20v2.svg)",
       "",
-      "Text between.",
+      "Text between, and ![Missing](assets/gone.png) one that is not there.",
       "",
       "- one",
       "- two",
       "",
     ].join("\n");
-    const status = await app.eval<number>(
-      `(async () => {
-      const { apiUrl, projectId } = window.__mdE2e;
-      return fetch(apiUrl + '/api/projects/' + projectId + '/files/' +
-        encodeURIComponent('images.md'), {
-        method: 'PUT',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ content: ${JSON.stringify("__DOC__")} }),
-      }).then((r) => r.status);
-    })()`.replace('"__DOC__"', JSON.stringify(doc)),
-    );
-    expect(status).toBe(200);
+    const logo =
+      '<svg xmlns="http://www.w3.org/2000/svg" width="120" height="40"><rect width="120" height="40" fill="#4f46e5"/></svg>';
+    const put = (name: string, content: string) =>
+      app.eval<number>(
+        `(async () => {
+        const { apiUrl, projectId } = window.__mdE2e;
+        return fetch(apiUrl + '/api/projects/' + projectId + '/files/' +
+          encodeURIComponent(${JSON.stringify(name)}), {
+          method: 'PUT',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ content: ${JSON.stringify(content)} }),
+        }).then((r) => r.status);
+      })()`,
+      );
+    expect(await put("assets/logo v2.svg", logo)).toBe(200);
+    expect(await put("images.md", doc)).toBe(200);
     await run(
       `$('[data-sidebar-search="search-files"]').click(); return true;`,
     );
@@ -774,9 +778,19 @@ describe("markdown editor", () => {
        if (!row) return false; row.dispatchEvent(new MouseEvent('mousedown',{button:0,bubbles:true,cancelable:true})); return true;`,
       { timeoutMs: 30_000, label: "images.md in Files palette" },
     );
+    // The image beside the document shows, read from the project; the
+    // missing one is named.
     await runWait(
-      `return $('.cat-mdedit .cat-mdedit-image')?.textContent === 'Work logo';`,
-      { timeoutMs: 60_000, label: "image shown as a chip" },
+      `const image = $('.cat-mdedit .cat-mdedit-image img');
+       return image?.alt === 'Work logo' && image.naturalWidth === 120 &&
+         Math.round(image.getBoundingClientRect().height) === 40;`,
+      { timeoutMs: 60_000, label: "image shown" },
+    );
+    await runWait(
+      `const missing = $$('.cat-mdedit .cat-mdedit-image')[1];
+       return missing?.dataset.state === 'failed' &&
+         missing.textContent === 'Missing';`,
+      { label: "missing image named" },
     );
     await hoverHandle(`$('.ProseMirror > p')`, "image paragraph");
     await run(`
@@ -803,7 +817,8 @@ describe("markdown editor", () => {
         '/files/' + encodeURIComponent('images.md')).then((r) => r.json());
       return file.content;
     })()`);
-    expect(content).toContain("![Work logo](assets/logo%20v2.png)");
+    expect(content).toContain("![Work logo](assets/logo%20v2.svg)");
+    expect(content).toContain("![Missing](assets/gone.png)");
     expect(content).toContain("Added.");
     expect(app.getRendererErrors()).toEqual([]);
   }, 90_000);

@@ -181,6 +181,43 @@
 .cat-mdedit .ProseMirror .cat-mdedit-image.ProseMirror-selectednode {
   border-color: var(--color-accent);
 }
+/* While its source loads the chip waits a moment before showing, so a
+   quick load goes straight to the image. */
+.cat-mdedit .ProseMirror .cat-mdedit-image[data-state="loading"] {
+  animation: fade-in 150ms cubic-bezier(0.2, 0, 0, 1) 300ms both;
+}
+.cat-mdedit .ProseMirror .cat-mdedit-image[data-state="failed"] {
+  border-style: dashed;
+}
+.cat-mdedit .ProseMirror .cat-mdedit-image[data-state="failed"]::before {
+  mask:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m2 2 20 20'/%3E%3Cpath d='M10.41 10.41a2 2 0 1 1-2.83-2.83'/%3E%3Cpath d='M13.5 13.5 6 21'/%3E%3Cpath d='m18 12 3 3'/%3E%3Cpath d='M3.59 3.59A2 2 0 0 0 3 5v14a2 2 0 0 0 2 2h14c.55 0 1.05-.22 1.41-.59'/%3E%3Cpath d='M21 15V5a2 2 0 0 0-2-2H9'/%3E%3C/svg%3E")
+    center / contain no-repeat;
+}
+.cat-mdedit .ProseMirror .cat-mdedit-image[data-state="loaded"] {
+  display: inline-block;
+  vertical-align: middle;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  line-height: 0;
+}
+.cat-mdedit .ProseMirror .cat-mdedit-image[data-state="loaded"]::before {
+  content: none;
+}
+.cat-mdedit .ProseMirror .cat-mdedit-image img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  border-radius: inherit;
+}
+/* A picked image: a selection mark, not a focus ring. */
+.cat-mdedit .ProseMirror .cat-mdedit-image.ProseMirror-selectednode img {
+  box-shadow:
+    0 0 0 2px var(--color-bg),
+    0 0 0 4px var(--color-accent);
+}
 .cat-mdedit .ProseMirror pre {
   background: var(--color-bg-inset);
   border: 1px solid var(--color-border);
