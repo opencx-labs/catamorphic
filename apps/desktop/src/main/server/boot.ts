@@ -1525,7 +1525,8 @@ export async function startEmbeddedServer(
       }),
     projectRoot: (projectId) => projectRoots.getSync(projectId),
     readers: {
-      "claude-code": () => new ClaudeCodeTranscriptReader(),
+      "claude-code": ({ nativeSessionId }) =>
+        new ClaudeCodeTranscriptReader({ sessionId: nativeSessionId }),
       codex: () => new CodexRolloutReader(),
     },
     importTranscript: async ({ projectId, agentId, ...input }) => {

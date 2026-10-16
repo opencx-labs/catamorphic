@@ -17,6 +17,11 @@ import {
  */
 
 const ENABLED_AT = new Date(Date.UTC(2026, 9, 15, 12, 0, 0));
+/** Claude Code names each session's file after it. */
+const SESSION = "11111111-1111-4111-8111-111111111111";
+const OLD = "22222222-2222-4222-8222-222222222222";
+const WORKTREE = "33333333-3333-4333-8333-333333333333";
+const UNRELATED = "44444444-4444-4444-8444-444444444444";
 const after = (second: number) =>
   new Date(ENABLED_AT.getTime() + second * 1_000).toISOString();
 
@@ -52,7 +57,8 @@ describe("ExternalSessionImporter", () => {
       ],
       projectRoot: (id) => projects[id],
       readers: {
-        "claude-code": () => new ClaudeCodeTranscriptReader(),
+        "claude-code": ({ nativeSessionId }) =>
+          new ClaudeCodeTranscriptReader({ sessionId: nativeSessionId }),
         codex: () => new CodexRolloutReader(),
       },
       importTranscript: async (input) => {
@@ -65,12 +71,17 @@ describe("ExternalSessionImporter", () => {
       ...overrides,
     });
 
-  const claudeLines = (cwd: string, prompts: string[], start = 1) =>
+  const claudeLines = (
+    cwd: string,
+    prompts: string[],
+    start = 1,
+    session = SESSION,
+  ) =>
     prompts.flatMap((text, index) => [
       JSON.stringify({
         type: "user",
         isSidechain: false,
-        sessionId: "11111111-1111-4111-8111-111111111111",
+        sessionId: session,
         cwd,
         uuid: `00000000-0000-4000-8000-0000000000${String(index * 2 + 10)}`,
         timestamp: after(start + index * 10),
@@ -79,7 +90,7 @@ describe("ExternalSessionImporter", () => {
       JSON.stringify({
         type: "assistant",
         isSidechain: false,
-        sessionId: "11111111-1111-4111-8111-111111111111",
+        sessionId: session,
         cwd,
         uuid: `00000000-0000-4000-8000-0000000000${String(index * 2 + 11)}`,
         timestamp: after(start + index * 10 + 1),
@@ -93,10 +104,10 @@ describe("ExternalSessionImporter", () => {
       }),
     ]);
 
-  const writeClaude = async (lines: string[], name = "session.jsonl") => {
+  const writeClaude = async (lines: string[], session = SESSION) => {
     const folder = path.join(homes.claude, "projects", "-work-web");
     await fs.mkdir(folder, { recursive: true });
-    const file = path.join(folder, name);
+    const file = path.join(folder, `${session}.jsonl`);
     await fs.writeFile(file, `${lines.join("\n")}\n`);
     return file;
   };
@@ -131,7 +142,7 @@ describe("ExternalSessionImporter", () => {
   });
 
   it("imports nothing while off, and only sessions started after it was turned on", async () => {
-    await writeClaude(claudeLines(projectRoot, ["Before"], -60), "old.jsonl");
+    await writeClaude(claudeLines(projectRoot, ["Before"], -60, OLD), OLD);
     importer.refresh();
     await importer.idle();
     expect(imports).toEqual([]);
@@ -188,12 +199,22 @@ describe("ExternalSessionImporter", () => {
   it("finds the project of a worktree elsewhere, and skips folders of no project", async () => {
     importers = { "claude-code": "claude-code-agent" };
     await writeClaude(
-      claudeLines(path.join(dir, "elsewhere", "feature"), ["In a worktree"]),
-      "worktree.jsonl",
+      claudeLines(
+        path.join(dir, "elsewhere", "feature"),
+        ["In a worktree"],
+        1,
+        WORKTREE,
+      ),
+      WORKTREE,
     );
     await writeClaude(
-      claudeLines(path.join(dir, "unrelated"), ["Somewhere else"]),
-      "unrelated.jsonl",
+      claudeLines(
+        path.join(dir, "unrelated"),
+        ["Somewhere else"],
+        1,
+        UNRELATED,
+      ),
+      UNRELATED,
     );
     importer.refresh();
     await importer.idle();
@@ -302,6 +323,44 @@ describe("ExternalSessionImporter", () => {
     expect(imports[0]?.agentId).toBe("codex-agent");
   });
 
+  it("stops at the first line of a rollout Work's own Codex wrote", async () => {
+    importers = { codex: "codex-agent" };
+    const folder = path.join(homes.codex, "sessions", "2026", "10", "15");
+    await fs.mkdir(folder, { recursive: true });
+    const thread = "01a0d5ac-8636-7032-b6a9-267d2bd70d1c";
+    await fs.writeFile(
+      path.join(folder, `rollout-2026-10-15T12-00-01-${thread}.jsonl`),
+      `${[
+        {
+          type: "session_meta",
+          payload: {
+            id: thread,
+            cwd: projectRoot,
+            originator: "catamorphic",
+            timestamp: after(1),
+          },
+        },
+        {
+          type: "event_msg",
+          payload: {
+            type: "item_completed",
+            turn_id: "t1",
+            item: {
+              type: "UserMessage",
+              id: "u-own",
+              content: [{ type: "text", text: "Work asked this" }],
+            },
+          },
+        },
+      ]
+        .map((record) => JSON.stringify({ timestamp: after(2), ...record }))
+        .join("\n")}\n`,
+    );
+    importer.refresh();
+    await importer.idle();
+    expect(imports).toEqual([]);
+  });
+
   it("forgets when a tool was turned on once it is turned off", async () => {
     importers = { "claude-code": "claude-code-agent", codex: "codex-agent" };
     importer.refresh();
@@ -345,8 +404,8 @@ describe("ExternalSessionImporter", () => {
     const elsewhere = path.join(dir, "unrelated");
     await fs.mkdir(elsewhere, { recursive: true });
     const file = await writeClaude(
-      claudeLines(elsewhere, ["Somewhere else"]),
-      "unrelated.jsonl",
+      claudeLines(elsewhere, ["Somewhere else"], 1, UNRELATED),
+      UNRELATED,
     );
     importer.refresh();
     await importer.idle();
@@ -355,7 +414,9 @@ describe("ExternalSessionImporter", () => {
     projects = { ...projects, "project-2": elsewhere };
     await fs.appendFile(
       file,
-      `${claudeLines(elsewhere, ["Somewhere else", "More"]).slice(2).join("\n")}\n`,
+      `${claudeLines(elsewhere, ["Somewhere else", "More"], 1, UNRELATED)
+        .slice(2)
+        .join("\n")}\n`,
     );
     importer.refresh();
     await importer.idle();

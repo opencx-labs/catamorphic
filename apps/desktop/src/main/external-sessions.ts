@@ -26,7 +26,7 @@ import { readGit } from "./git-view.js";
 const SETTLE_MS = 1_500;
 const CHUNK_BYTES = 4 * 1024 * 1024;
 /**
- * A last turn still open is read again once the readers' quiet rule (ten
+ * A turn still open is read again once the readers' quiet rule (ten
  * minutes without a line) would end it: a CLI killed mid-step writes no
  * more lines to wake the import.
  */
@@ -61,7 +61,11 @@ export interface ExternalSessionImporterDeps {
   stateFile: string;
   profiles(): ImportingProfile[];
   projectRoot(projectId: string): string | undefined;
-  readers: Record<ImportedHarness, () => TranscriptReader>;
+  /** A reader for one session, by its own id (a Claude Code file's name). */
+  readers: Record<
+    ImportedHarness,
+    (input: { nativeSessionId: string }) => TranscriptReader
+  >;
   importTranscript(input: {
     projectId: string;
     transcript: ImportedTranscript;
@@ -310,18 +314,29 @@ export class ExternalSessionImporter {
   /** The session a path is a transcript of, if it is one. */
   private sourceOf(
     file: string,
-  ): { harness: ImportedHarness; key: string } | undefined {
+  ):
+    | { harness: ImportedHarness; key: string; nativeSessionId: string }
+    | undefined {
     const claude = this.root("claude-code");
     const codex = this.root("codex");
     if (file.startsWith(`${claude}${path.sep}`)) {
       const parts = path.relative(claude, file).split(path.sep);
       // `<escaped cwd>/<session>.jsonl`; subagents' side chains sit deeper.
-      if (parts.length !== 2 || !parts[1]?.endsWith(".jsonl")) return undefined;
-      return { harness: "claude-code", key: `claude-code:${parts[1]}` };
+      const name = parts[1];
+      if (parts.length !== 2 || !name?.endsWith(".jsonl")) return undefined;
+      return {
+        harness: "claude-code",
+        key: `claude-code:${name}`,
+        // The file is named after its session: a fork's starts with the
+        // records it copied, under its original's id.
+        nativeSessionId: name.slice(0, -".jsonl".length),
+      };
     }
     if (file.startsWith(`${codex}${path.sep}`)) {
       const thread = ROLLOUT.exec(path.basename(file))?.[1];
-      return thread ? { harness: "codex", key: `codex:${thread}` } : undefined;
+      return thread
+        ? { harness: "codex", key: `codex:${thread}`, nativeSessionId: thread }
+        : undefined;
     }
     return undefined;
   }
@@ -393,9 +408,12 @@ export class ExternalSessionImporter {
       ).some(Boolean)
     ) {
       source = {
-        ...id,
+        harness: id.harness,
+        key: id.key,
         files: new Map(),
-        reader: this.deps.readers[id.harness](),
+        reader: this.deps.readers[id.harness]({
+          nativeSessionId: id.nativeSessionId,
+        }),
         hash: createHash("sha256"),
         decoder: new StringDecoder("utf8"),
         rest: "",
@@ -551,11 +569,13 @@ export class ExternalSessionImporter {
         offset: native.offset + native.entries.length,
         entries: [],
       };
-    const last = transcript.turns.at(-1);
+    // A background subagent can keep an ended turn's item open too.
     if (
-      last &&
-      (last.completedAt === null ||
-        last.items.some((item) => item.status === "in_progress"))
+      transcript.turns.some(
+        (turn) =>
+          turn.completedAt === null ||
+          turn.items.some((item) => item.status === "in_progress"),
+      )
     )
       this.schedule(sourcePath, REREAD_OPEN_MS);
   }
