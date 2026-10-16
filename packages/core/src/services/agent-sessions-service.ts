@@ -7550,7 +7550,11 @@ export class AgentSessionsService {
                   "=",
                   transcript.nativeSessionId,
                 ),
-                eb(sql<string>`thread.id::text`, "=", transcript.nativeSessionId),
+                eb(
+                  sql<string>`thread.id::text`,
+                  "=",
+                  transcript.nativeSessionId,
+                ),
               ]),
             )
             .where((eb) =>
