@@ -4,22 +4,46 @@ import path from "node:path";
 import { nativeGit } from "@catamorphic/git";
 import { afterAll, beforeAll, expect, it } from "vitest";
 import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
+import { addSidebarSections } from "./sidebar-config.js";
 
+/**
+ * The project's changes as a source (`work:git`, ADR 0234): its checkouts
+ * and the files changed in each, read through the observed overview
+ * (ADR 0149). The default layout has no Changes section; the suite adds one,
+ * as a person would.
+ */
 let app: AppHandle;
 let temp: string;
 let root: string;
 let linked: string;
 const visible = '[data-workspace-visible="true"]';
+const changes = `${visible} [data-sidebar-widget="changes"]`;
 const helper = `const $ = s => document.querySelector(s); const $$ = s => [...document.querySelectorAll(s)]; const byText = (s,t) => $$(s).find(e => e.textContent.trim().includes(t)); const diffText = () => { const read = root => root.textContent + [...root.querySelectorAll("*")].filter(e => e.shadowRoot).map(e => read(e.shadowRoot)).join("\\n"); return $$("[data-testid=code-diff]").map(read).join("\\n").replaceAll("\\u00a0", " "); }; ${setReactValueJs}`;
 const run = <T>(body: string) => app.eval<T>(`(()=>{${helper};${body}})()`);
-const wait = (body: string) =>
-  app.waitFor(`(()=>{${helper};${body}})()`, { timeoutMs: 60_000 });
+const wait = (body: string, label?: string) =>
+  app.waitFor(`(()=>{${helper};${body}})()`, {
+    timeoutMs: 60_000,
+    ...(label ? { label } : {}),
+  });
 const author = [
   "-c",
   "user.name=Test",
   "-c",
   "user.email=test@example.invalid",
 ];
+/** A checkout's row, expanded so its changed files load. */
+const expand = async (checkout: string) => {
+  await wait(
+    `return !!$('${changes} [data-sidebar-item-id=${JSON.stringify(checkout)}]');`,
+    `the ${path.basename(checkout)} checkout listed`,
+  );
+  await run(
+    `const row = $('${changes} [data-sidebar-item-id=${JSON.stringify(checkout)}]'); const toggle = row.querySelector('button[aria-expanded="false"]'); toggle?.click(); return true;`,
+  );
+};
+const fileRow = (checkout: string, mode: string, file: string) =>
+  `$('${changes} [data-sidebar-item-id=${JSON.stringify(`${checkout}:${mode}:${file}`)}]')`;
+
 beforeAll(async () => {
   temp = await fs.realpath(
     await fs.mkdtemp(path.join(os.tmpdir(), "git-sidebar-e2e-")),
@@ -48,11 +72,7 @@ beforeAll(async () => {
     path.join(root, "notes.txt"),
     "Working primary document\n",
   );
-  app = await launchApp({
-    env: {
-      CATAMORPHIC_E2E_PICK_FOLDER: root,
-    },
-  });
+  app = await launchApp({ env: { CATAMORPHIC_E2E_PICK_FOLDER: root } });
   await wait(`return !!byText('button','Create or import project');`);
   await run(`byText('button','Create or import project').click();return true;`);
   await wait(`return !!byText('button','Import folder');`);
@@ -68,193 +88,131 @@ beforeAll(async () => {
   await wait(
     `const b=$('[data-testid="project-submit"]');if(b&&!b.disabled){b.click();return true;}return false;`,
   );
-  // Changes lives in the right sidebar, which starts collapsed.
-  await wait(
-    `return !!$('[data-workspace-visible="true"] [data-sidebar="right"] [role="tab"]');`,
-  );
-  await run(
-    `$$('[aria-label="Expand right sidebar"]').find(e=>!e.closest('[inert]'))?.click();return true;`,
-  );
-  await wait(
-    `return $('[data-workspace-visible="true"] [data-sidebar="right"]')?.getAttribute('aria-hidden') === 'false';`,
-  );
-  await wait(`return $$('[data-worktree-path]').length === 1;`);
-  await run(
-    `setReactValue($('select[aria-label="Changes checkout"]'), ${JSON.stringify(linked)});return true;`,
-  );
-  await wait(
-    `return !!$$('[data-worktree-path]').find(e=>e.dataset.worktreePath===${JSON.stringify(linked)});`,
-  );
+  await wait(`return !!$('${visible} [data-sidebar="left"]');`);
+  await addSidebarSections(app, [
+    { id: "changes", source: "work:git", title: "Changes", hideEmpty: true },
+  ]);
 });
 afterAll(async () => {
   await app?.stop();
   if (temp) await fs.rm(temp, { recursive: true, force: true });
 });
-it("searches Changes through the palette scoped to the selected checkout", async () => {
-  await run(`$('[data-sidebar-search="search-changes"]').click();`);
+
+it("lists each checkout and opens committed versus local diffs without crossing checkouts", async () => {
+  await expand(linked);
+  await wait(
+    `return !!${fileRow(linked, "branch", "notes.txt")} && !!${fileRow(linked, "unstaged", "notes.txt")};`,
+    "the feature checkout's committed and local changes",
+  );
+  await run(
+    `${fileRow(linked, "branch", "notes.txt")}.querySelector('[data-tree-primary]').click();return true;`,
+  );
+  await wait(
+    `return diffText().includes('Committed branch document');`,
+    "the committed diff",
+  );
+  expect(await run(`return diffText();`)).not.toContain(
+    "Private working document",
+  );
+  await expand(root);
+  await wait(
+    `return !!${fileRow(root, "unstaged", "notes.txt")};`,
+    "the project folder's local change",
+  );
+  await run(
+    `${fileRow(root, "unstaged", "notes.txt")}.querySelector('[data-tree-primary]').click();return true;`,
+  );
+  await wait(
+    `return diffText().includes('Working primary document');`,
+    "the working diff",
+  );
+  expect((await nativeGit(root, ["log", "--format=%s"])).trim()).toBe(
+    "Initial",
+  );
+});
+
+it("finds changed files in the palette, naming their checkout", async () => {
+  // Find changed files (Cmd+Alt+F): Alt is 1, Ctrl 2, Meta 4.
+  await app.press("f", process.platform === "darwin" ? 5 : 3);
   await wait(`return !!$('textarea[placeholder="Search changes…"]');`);
   await run(
     `setReactValue($('textarea[placeholder="Search changes…"]'), 'notes.txt');`,
   );
+  const options = `[...$('textarea[placeholder="Search changes…"]').closest('[role="dialog"]').querySelectorAll('[role="option"]')]`;
   await wait(
-    `return [...$('textarea[placeholder="Search changes…"]').closest('[role="dialog"]').querySelectorAll('[role="option"]')].some(row => row.textContent.includes('notes.txt'));`,
+    `return ${options}.some(row => row.textContent.includes('feature/review') && row.textContent.includes('branch'));`,
+    "the feature checkout's committed change found",
   );
-  expect(
-    await run(
-      `return [...$('textarea[placeholder="Search changes…"]').closest('[role="dialog"]').querySelectorAll('[role="option"]')].every(row => row.textContent.includes('feature/review'));`,
-    ),
-  ).toBe(true);
   await run(
-    `[...$('textarea[placeholder="Search changes…"]').closest('[role="dialog"]').querySelectorAll('[role="option"]')].find(row => row.textContent.includes('branch')).dispatchEvent(new MouseEvent('mousedown',{button:0,bubbles:true,cancelable:true}));`,
+    `${options}.find(row => row.textContent.includes('feature/review') && row.textContent.includes('branch')).dispatchEvent(new MouseEvent('mousedown',{button:0,bubbles:true,cancelable:true}));`,
   );
   await wait(`return diffText().includes('Committed branch document');`);
-  expect(await run(`return diffText();`)).not.toContain(
-    "Working primary document",
-  );
 });
-it("groups worktrees and opens committed versus local diffs without crossing checkouts", async () => {
-  expect(
-    await run(
-      `return $('[data-testid="git-changes"]').textContent.replaceAll("\u00a0", " ");`,
-    ),
-  ).toContain("Committed vs trunk");
+
+it("follows writes, staging and removal promptly, without taking focus", async () => {
+  const file = path.join(linked, "live-refresh.txt");
+  await expand(linked);
+  // Focus something the person could be using: the list's own reads must
+  // not take it.
   await run(
-    `const tree=$$('[data-worktree-path]').find(e=>e.dataset.worktreePath===${JSON.stringify(linked)});tree.querySelector('[data-change-group="branch"] button').click();return true;`,
+    `${fileRow(linked, "branch", "notes.txt")}.querySelector('[data-tree-primary]').focus(); return true;`,
   );
-  await wait(`return diffText().includes('Committed branch document');`);
-  expect(await run(`return diffText();`)).not.toContain(
-    "Private working document",
-  );
-  await run(
-    `setReactValue($('select[aria-label="Changes checkout"]'), ${JSON.stringify(root)});return true;`,
-  );
+  const focused = () =>
+    app.eval<string | null>(
+      `document.activeElement?.closest('[data-sidebar-item-id]')?.getAttribute('data-sidebar-item-id') ?? null`,
+    );
+  const before = await focused();
+  await fs.writeFile(file, "External editor change\n");
   await wait(
-    `return !!$$('[data-worktree-path]').find(e=>e.dataset.worktreePath===${JSON.stringify(root)});`,
+    `return !!${fileRow(linked, "untracked", "live-refresh.txt")};`,
+    "the new file listed",
   );
-  await run(
-    `const tree=$$('[data-worktree-path]').find(e=>e.dataset.worktreePath===${JSON.stringify(root)});tree.querySelector('[data-change-group="unstaged"] button').click();return true;`,
-  );
-  await wait(`return diffText().includes('Working primary document');`);
-  await fs.writeFile(path.join(root, "notes.txt"), "Edited outside the app\n");
-  await run(`window.dispatchEvent(new Event('focus'));return true;`);
-  await wait(`return diffText().includes('Edited outside the app');`);
-  await run(
-    `setReactValue($('select[aria-label="Changes checkout"]'), ${JSON.stringify(linked)});return true;`,
-  );
+  expect(await focused()).toBe(before);
+  await nativeGit(linked, ["add", "live-refresh.txt"]);
   await wait(
-    `return !!$$('[data-worktree-path]').find(e=>e.dataset.worktreePath===${JSON.stringify(linked)});`,
+    `return !!${fileRow(linked, "staged", "live-refresh.txt")};`,
+    "the staged file listed",
   );
-  const header = `$$('[data-worktree-path]').find(e=>e.dataset.worktreePath===${JSON.stringify(linked)}).querySelector('h4 button')`;
-  await run(`${header}.click();return true;`);
-  expect(await run(`return ${header}.getAttribute('aria-expanded');`)).toBe(
-    "false",
-  );
-  expect(
-    await run(
-      `return document.getElementById(${header}.getAttribute('aria-controls')).querySelector('[data-collapsible]').getAttribute('aria-hidden');`,
-    ),
-  ).toBe("true");
-  await run(`${header}.click();return true;`);
-  if (process.env.CATAMORPHIC_GIT_SCREENSHOT) {
-    await app.eval(`window.catamorphicDesktop.devWindow('maximize')`);
-    await app.screenshot(process.env.CATAMORPHIC_GIT_SCREENSHOT);
-  }
-  expect((await nativeGit(root, ["log", "--format=%s"])).trim()).toBe(
-    "Initial",
-  );
-  expect((await nativeGit(linked, ["log", "--format=%s", "-1"])).trim()).toBe(
-    "Branch change",
+  await nativeGit(linked, ["reset", "HEAD", "--", "live-refresh.txt"]);
+  await fs.rm(file);
+  await wait(
+    `return !$('${changes}').textContent.includes('live-refresh.txt');`,
+    "the removed file gone",
   );
 });
 
-it("brings Changes back after it hid for being empty", async () => {
-  // A checkout with a single worktree and nothing to show: the section
-  // hides (hideEmpty is the default for Changes). It used to drop its
-  // subscription with it and never return.
-  const solo = path.join(temp, "Solo");
-  await fs.mkdir(solo);
-  await nativeGit(solo, ["init", "-b", "main"]);
-  await fs.writeFile(path.join(solo, "README.md"), "Solo\n");
-  await nativeGit(solo, ["add", "."]);
-  await nativeGit(solo, [...author, "commit", "-m", "Initial"]);
+it("follows another project's checkout, then this one again", async () => {
+  const plain = path.join(temp, "Plain");
+  await fs.mkdir(plain);
+  await nativeGit(plain, ["init", "-b", "main"]);
+  await fs.writeFile(path.join(plain, "README.md"), "Plain\n");
+  await nativeGit(plain, ["add", "."]);
+  await nativeGit(plain, [...author, "commit", "-m", "Initial"]);
   const original = await app.eval<string>(
     "window.catamorphicDesktop.getPrefs().then((prefs) => prefs.lastProjectId)",
   );
   const project = await app.eval<{ id: string }>(
-    `window.catamorphicDesktop.createProject({name:'Solo',rootPath:${JSON.stringify(solo)},importExisting:true})`,
+    `window.catamorphicDesktop.createProject({name:'Plain',rootPath:${JSON.stringify(plain)},importExisting:true})`,
   );
   await app.eval(
     `window.catamorphicDesktop.workspaceNavigate({projectId: ${JSON.stringify(project.id)}})`,
   );
-  const widget = `document.querySelector('[data-workspace-visible="true"] [data-sidebar-widget="changes"]')`;
-  await app.waitFor(`!!${widget}`, { timeoutMs: 15_000 });
-  // The right sidebar starts collapsed; a closed sidebar observes nothing.
-  await app.waitFor(
-    `(() => { const b = [...document.querySelectorAll('[data-workspace-visible="true"] [aria-label="Expand right sidebar"]')].find((e) => !e.closest('[inert]')); if (b) b.click(); return document.querySelector('[data-workspace-visible="true"] [data-sidebar="right"]')?.getAttribute('aria-hidden') === 'false'; })()`,
-    { timeoutMs: 8_000, label: "solo project's right sidebar open" },
+  await expand(plain);
+  await fs.writeFile(path.join(plain, "after-commit.txt"), "Back again\n");
+  await wait(
+    `return $('${changes}')?.textContent.includes('after-commit.txt');`,
+    "an external write listed",
   );
-  await app.waitFor(`${widget}?.hidden === true`, {
-    timeoutMs: 8_000,
-    label: "clean solo checkout hides Changes",
-  });
-  await fs.writeFile(path.join(solo, "after-commit.txt"), "Back again\n");
-  await app.waitFor(
-    `${widget}?.hidden === false && ${widget}.textContent.includes('after-commit.txt')`,
-    { timeoutMs: 8_000, label: "external write brings Changes back" },
+  await fs.rm(path.join(plain, "after-commit.txt"));
+  await wait(
+    `return !$('${changes}')?.textContent.includes('after-commit.txt');`,
+    "the removed file gone",
   );
-  await fs.rm(path.join(solo, "after-commit.txt"));
-  await app.waitFor(`${widget}?.hidden === true`, {
-    timeoutMs: 8_000,
-    label: "removing the file hides Changes again",
-  });
   await app.eval(
     `window.catamorphicDesktop.workspaceNavigate({projectId: ${JSON.stringify(original)}})`,
   );
-  // Solo's workspace stays mounted and focused until the switch lands, and
-  // the original one keeps its rows while inert behind it: wait for the
-  // original to be the visible workspace, not merely for its rows.
-  await wait(`return !!$('${visible} [data-worktree-path]');`);
-});
-
-it("updates visible Changes promptly after external writes, staging and removal without stealing focus", async () => {
-  const file = path.join(linked, "live-refresh.txt");
-  const checkout = `${visible} select[aria-label="Changes checkout"]`;
-  const changes = `${visible} [data-testid="git-changes"]`;
-  await run(`setReactValue($('${checkout}'), ${JSON.stringify(linked)});`);
   await wait(
-    `return !!$$('${visible} [data-worktree-path]').find(e=>e.dataset.worktreePath===${JSON.stringify(linked)});`,
+    `return !!$('${changes} [data-sidebar-item-id=${JSON.stringify(linked)}]');`,
   );
-  // Focus something the user could be using: a background refresh must
-  // not take it. (A hidden pane's input is not a fair witness; it loses
-  // focus whenever that pane becomes inert.)
-  await run(`$('${checkout}').focus(); return true;`);
-  const focusedBefore = await app.eval(
-    "document.activeElement?.getAttribute('aria-label')",
-  );
-  expect(focusedBefore).toBe("Changes checkout");
-  await fs.writeFile(file, "External editor change\n");
-  await app.waitFor(
-    `document.querySelector('${changes}')?.textContent.includes('live-refresh.txt')`,
-    { timeoutMs: 8_000 },
-  );
-  // The section reveals with motion; judge focus once that has settled,
-  // not on the frame the text landed.
-  await app.waitFor(
-    `document.querySelector('${visible} [data-sidebar="right"]')?.getAnimations({ subtree: true }).every((animation) => animation.playState !== 'running')`,
-    { timeoutMs: 8_000, label: "sidebar motion settled" },
-  );
-  expect(
-    await app.eval("document.activeElement?.getAttribute('aria-label')"),
-  ).toBe(focusedBefore);
-  await nativeGit(linked, ["add", "live-refresh.txt"]);
-  await app.waitFor(
-    `document.querySelector('${visible} [data-worktree-path] [data-change-group="staged"]')?.textContent.includes('live-refresh.txt')`,
-    { timeoutMs: 8_000 },
-  );
-  await nativeGit(linked, ["reset", "HEAD", "--", "live-refresh.txt"]);
-  await fs.rm(file);
-  await app.waitFor(
-    `!document.querySelector('${changes}')?.textContent.includes('live-refresh.txt')`,
-    { timeoutMs: 8_000 },
-  );
+  expect(app.getRendererErrors()).toEqual([]);
 });

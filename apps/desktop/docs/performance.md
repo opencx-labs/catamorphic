@@ -368,8 +368,9 @@ input. Preserve the prepared-index boundary and result cap when adding providers
 
 ## Changes subscriptions
 
-[ADR 0149](../../../docs/decisions/0149-observed-git-overviews.md) replaces the
-Changes section's 15-second polling with scoped main-process subscriptions.
+[ADR 0149](../../../docs/decisions/0149-observed-git-overviews.md) replaces
+15-second polling of the project's changes with scoped main-process
+subscriptions; the `work:git` source (ADR 0234) reads through them.
 Native filesystem events invalidate Git snapshots; Git remains authoritative.
 Notifications coalesce for 200 ms with a 1-second maximum wait. A two-minute
 reconciliation repairs missed events and replaced directories. Hidden windows
@@ -442,9 +443,8 @@ subscription live:
 
 Each scan of this fixture takes about 150 ms, so the cooldown holds scanning
 near a fifth of wall time while an agent edits continuously, and only while a
-Changes section is visible. Idle and single-edit behaviour is unchanged.
+section listing `work:git` is visible. Idle and single-edit behaviour is unchanged.
 
 Tests cover external atomic saves, index changes, renames, deletes, commits,
 linked checkouts and shared refs, ignored output with tracked exceptions, burst
-coalescing, shared ownership, teardown races and fallback recovery. The Electron
-Changes suite verifies visible writes/staging/removal without moving input focus.
+coalescing, shared ownership, teardown races and fallback recovery.

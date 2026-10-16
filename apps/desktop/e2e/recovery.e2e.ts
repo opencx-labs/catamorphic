@@ -1,5 +1,6 @@
 import { afterAll, describe, it } from "vitest";
 import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
+import { addSidebarSections, CHATS_SECTION } from "./sidebar-config.js";
 
 /**
  * Recovery flows: the app dies mid-agent-turn (crash, quit, dev restart)
@@ -74,6 +75,8 @@ describe("interrupted turn recovery", () => {
       timeoutMs: 60_000,
       label: "workspace ready",
     });
+    // The relaunch reopens the chat from a sidebar list of chats.
+    await addSidebarSections(app, [CHATS_SECTION]);
 
     // Start a slow turn and kill the app while the agent is mid-flight.
     await run(`pressKey('n', { metaKey: true }); return true;`);

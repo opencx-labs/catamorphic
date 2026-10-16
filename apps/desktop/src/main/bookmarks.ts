@@ -43,7 +43,7 @@ const treeSchema = z.looseObject({
   bookmarks: z.array(bookmarkSchema).default([]),
 });
 const bookmarksFileSchema = z.looseObject({
-  /** A project's own tree (the sidebar's This project section). */
+  /** A project's own tree (the sidebar's Bookmarks section). */
   byProject: z.record(z.string(), treeSchema).default({}),
   /** Bookmarks that follow a profile across projects. */
   pinnedByProfile: z.record(z.string(), treeSchema).default({}),

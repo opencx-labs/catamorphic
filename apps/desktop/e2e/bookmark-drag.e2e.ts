@@ -5,6 +5,7 @@ import {
   NEW_TAB_INPUT,
   setReactValueJs,
 } from "./harness.js";
+import { addSidebarSections, CHATS_SECTION } from "./sidebar-config.js";
 
 let app: AppHandle;
 let folderId: string;
@@ -64,6 +65,8 @@ beforeAll(async () => {
   folderId = await app.eval(
     "(async()=>{const api=window.catamorphicDesktop;await api.setPrefs({tabPlacement:'sidebar',headerPlacement:'sidebar'});window.__bookmarkScope={profileId:await api.windowProfile(),projectId:(await api.getPrefs()).lastProjectId};return (await api.bookmarksAddFolder({...window.__bookmarkScope,label:'Research'})).id})()",
   );
+  // Chats as a list, so a chat row can be dragged as well as a tab row.
+  await addSidebarSections(app, [CHATS_SECTION]);
 });
 afterAll(async () => {
   await app?.stop();
@@ -97,7 +100,9 @@ describe("drag tabs and chats into bookmarks", () => {
     ).toBe(true);
   });
   it("pins a saved chat and reopens the same conversation after its tab closes", async () => {
-    await run("$('button[aria-label=\"New chat\"]').click()");
+    await run(
+      "$('[data-sidebar-section=chats] button[aria-label=\"New chat\"]').click()",
+    );
     await app.waitFor("!!document.querySelector('[data-composer-input]')");
     await run(
       "setReactValue($('[data-composer-input]'),'remember this pinned conversation');$('[data-composer-input]').focus()",

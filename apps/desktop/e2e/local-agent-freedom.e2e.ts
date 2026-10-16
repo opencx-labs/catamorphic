@@ -39,13 +39,10 @@ it("accepts a screenshot into the Codex composer as native image media", async (
   await app.waitFor(
     `!!document.querySelector('textarea[placeholder*="Search or ask"]')`,
   );
-  // A reloaded page can render before global shortcut bindings settle.
-  // Open through the rendered control; this test covers media, not shortcuts.
-  await app.waitFor(
-    `!!document.querySelector('button[aria-label="New chat"]')`,
-  );
+  // Keys pressed before the workspace is restored are lost or open a tab.
+  await app.waitFor(`!!document.querySelector('[data-workspace-ready]')`);
   await app.eval(
-    `document.querySelector('button[aria-label="New chat"]').click()`,
+    "window.dispatchEvent(new KeyboardEvent('keydown',{key:'n',metaKey:/Mac/.test(navigator.platform),ctrlKey:!/Mac/.test(navigator.platform),bubbles:true}))",
   );
   await app.waitFor(`!!document.querySelector('[data-composer-input]')`);
   expect(

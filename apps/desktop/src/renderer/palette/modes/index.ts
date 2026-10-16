@@ -1,7 +1,7 @@
 import { useMemo, useRef } from "react";
 import type { HistoryEntry } from "../../../shared/history.js";
 import type { ProjectAgentInfo } from "../../lib/desktop-api.js";
-import { useWorkspaceSourcesContext } from "../../lib/workspace-sources.js";
+import { useWorkSourcesContext } from "../../sources/registry.js";
 import { usePaletteHost } from "../host.js";
 import type {
   PaletteChoiceMode,
@@ -48,7 +48,7 @@ export function usePaletteModes({
     onOpenUrl,
     onError,
   } = usePaletteHost();
-  const sources = useWorkspaceSourcesContext();
+  const sources = useWorkSourcesContext();
   const choices = useChoiceModes({ picker, projectAgents });
   const history = useHistoryMode(historyRow);
   const files = useFileModes();

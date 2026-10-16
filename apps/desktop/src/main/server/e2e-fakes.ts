@@ -2363,7 +2363,6 @@ export const catalog = defineWorkflow(({ defineBoundary }) => ({
     await turn.writeFiles({
       ".work/desktop/layout.json": JSON.stringify({
         tabPlacement: "sidebar",
-        pinnedBookmarks: "list",
         headerPlacement: "sidebar",
       }),
     });

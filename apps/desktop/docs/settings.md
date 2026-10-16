@@ -41,7 +41,7 @@ shrink within their rows so both sidebars can remain open without horizontal scr
 ## Other families
 
 Settings > Workspace > Code review exposes `diffLayout`, `diffWrap`,
-`reviewStartView`, `reviewGrouping`, `changesFileLayout` and `prDefaultView`.
+`reviewStartView` and `reviewGrouping`.
 These are profile preferences in `prefs.json`, with reset and live file edits.
 The code theme lives in Appearance as `codeTheme`. Review progress and explicit
 checkout selection are runtime state, separate from presentation preferences.

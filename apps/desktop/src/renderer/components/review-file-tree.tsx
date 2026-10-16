@@ -1,7 +1,7 @@
 import { Check, ChevronRight, File, Folder } from "lucide-react";
 import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { PullRequestFile } from "../lib/desktop-api.js";
-import { buildTree } from "./files-nav.js";
+import { buildTree } from "../lib/project-file-tree.js";
 import { LazyList } from "./lazy-list.js";
 
 /** A compact virtual tree. Folder state survives file selection and filtering. */

@@ -60,7 +60,7 @@ that message. Late delivery shows the original scheduled time.
 File and proposal lifecycle (ADR 0136): new personal files stay on this device
 by default, including inside company projects. A file's top controls use the
 same status inspector as chat: actual location, Save, Publish, and Propose.
-The Proposals sidebar reuses PR review. Members submit selected files through
+A `work:prs` list opens PR review. Members submit selected files through
 the company host; holders of `program:publish` approve or apply the reviewed
 revision with their own repository identity. Worktrees serve independent repository work, not
 ordinary documents, privacy, or the existence of a proposal.
@@ -378,7 +378,7 @@ screen, or under reduced motion.
 | Bubble strip fold (the chats' `width` from their own size, capped by `calc-size`, never a `max-width`; the rail's gap and padding; its slide between resting spots) | 250ms | itself: one motion both ways, reversing from where it is (the slide shortened as CSS shortens the reversed transitions, so both land together); folded beside a leaving chat, however it leaves, it runs with that chat's exit |
 | `tab-in` / `tab-out` | 200ms / 180ms | each other (exit snappier) |
 | `.workspace-tab-close` transition (a strip tab's close button showing on hover or keyboard focus: opacity and scale 0.8 to 1, over the label's end; the title's end fades under it through `--tab-title-end`) | 150ms | itself: one transition both ways, so a pointer crossing the strip turns each back from where it is; nothing beside it moves |
-| `.sidebar-tab-slot` transition (a sidebar tab's place growing in or shrinking out of its strip: This session beside a chat; `@starting-style` for arrival) | 200ms | itself: one transition both ways on one element, so a quick change back reverses from where it is; at no width the place gives back its flex gap |
+| `.sidebar-tab-slot` transition (a sidebar tab's place growing in or shrinking out of its strip: a tab of `when.session` sections beside a chat; `@starting-style` for arrival) | 200ms | itself: one transition both ways on one element, so a quick change back reverses from where it is; at no width the place gives back its flex gap |
 | `.sidebar-strip` transition (a sidebar's tab strip opening as a second tab arrives, folding as the count drops to one; never for the sidebar's own opening) | 200ms | itself, reversing the same way; the panel below follows its height |
 | `fade-in` / `fade-out` (modal section swap; agent-control overlay) | 200ms | each other (exact mirror; `fade-out` holds its final frame for removal on animationend) |
 | `modal-in` / `modal-out` (dialog panel: opacity + scale 0.96↔1) | 200ms in, 160ms out | the backdrop's `fade-in`/`fade-out`; `modal-out` holds its final frame until the backdrop unmounts both |
@@ -506,8 +506,9 @@ the same page styled three different ways.
 
 ## Sidebar sections
 
-Every section, built in or user defined, is the same kind of thing: a source of
-rows inside shared chrome. The chrome owns status; sections own rows.
+Every list section, Work's or a person's, is the same kind of thing: a source of
+rows inside shared chrome (ADR 0234). The chrome owns status; sources own rows,
+and one component (`source-section.tsx`) draws every list.
 
 - **One status language.** A section reports `{state, refreshing, error, retry,
   empty}` and renders rows only. The section header shows a small spinner while
@@ -532,13 +533,14 @@ rows inside shared chrome. The chrome owns status; sections own rows.
   voice, beside the tree; the loaded rows stay and focus stays on the last
   one. Chats read 30 at a time. Polls read a list of two pages or fewer whole
   and only the first page of a deeper one (every loaded page about every 30
-  seconds, on focus and on Refresh). The open chat is always in the list: an
-  older one shows past the end, without reading every page above it.
+  seconds, on focus and on Refresh). What is in front is always in its list
+  when the source can place it (`reveal`): an older chat shows past the end,
+  without reading every page above it.
 - **One drag-and-drop model.** The shared `Tree` owns pointer math, the accent
   insertion line between rows and the accent outline on the row (or tree) that
   becomes the parent. A section only declares what a row offers when dragged and
-  what a target accepts, through the same `move`/`drop` contract custom sources
-  export; built-in sections implement that contract over their stores. Rows with
+  what a target accepts, through the same `move`/`drop` contract every source
+  exports, Work's lists over their stores. Rows with
   children are the only "inside" targets. No section owns drop zones, drop-zone
   classes or payload formats of its own; `data-bookmark-drop`-style private
   attributes are defects.
@@ -564,14 +566,14 @@ rows inside shared chrome. The chrome owns status; sections own rows.
   height: it fades in as the list scrolls or the pointer nears the edge
   beside it, can be dragged, and fades out a moment after
   (`components/overlay-scrollbar.tsx`).
-- **Drags reveal only what accepts them.** The pinned area opens for drags it
-  could pin and stays open until a pin dropped into it arrives. Hover
-  previews close when a drag starts.
-- **Groups inside a section are subsections.** `SidebarSubsection` is the only
-  way to label a sub-list: the same quiet label row every section uses, with
-  the section chevron and collapsible motion when `collapsible`. A section whose
-  title already names its content leaves its main groups unlabelled; Bookmarks
-  labels only "This project".
+- **Drags reveal only what accepts them.** A section hidden for being empty
+  whose source takes drops (pinned pages) opens while something it takes is
+  dragged, says what a drop does with its empty sentence, and stays a moment
+  after the drop so what arrives lands in view. Hover previews close when a
+  drag starts.
+- **A list without a heading stands alone.** `title: ""` drops the header:
+  pinned tiles and the imported library sit above Bookmarks without labels of
+  their own.
 - **Hover controls share one reveal.** Overflow dots, close and open-in-window
   buttons on rows, tabs and bubbles use the `row-reveal` class: hidden until the
   row is hovered or holds keyboard focus, fading in and out over 150ms. Mouse
@@ -608,13 +610,25 @@ rows inside shared chrome. The chrome owns status; sections own rows.
   Focus from a click (a pressed button in the panel included), returning to
   the trigger after Escape, or moved by the app leaves the inspector to the
   pointer.
-- **Primitives, not presets.** Anything a built-in section can do, a `workspace.js`
-  section can do with the same fields: `empty`, `headerActions`, `itemDefaults`,
-  `itemOverrides`, `height`, `rowHeight`, and a source that exports `load`,
-  `subscribe`, `action`, `move`, `drop`. A sidebar an agent writes looks like a
-  built-in one without extra effort, and cannot break the chrome.
+- **Primitives, not presets.** There are no section types. Work's lists are
+  `work:*` sources on the contract a person's module implements (`load`,
+  `subscribe`, `action`, `move`, `drop`, `reveal`), with the same fields
+  around them (`empty`, `headerActions`, `itemDefaults`, `itemOverrides`,
+  `presentation`, `height`, `rowHeight`). A row gets Work's knowledge of what
+  it names by its address (a chat's glyph, signals and live inspector; a
+  page's favicon; the active highlight), never by which source wrote it. A
+  header button is a header action (New tab is `command:new-tab`). When a
+  list needs something rows cannot say, the row, action or `work` contract
+  grows for everyone; a component of its own is a defect. A sidebar an agent
+  writes looks like Work's own without extra effort, and cannot break the
+  chrome.
+- **Lists that sort move their rows.** A source may reorder its rows on any
+  read (a module wrapping `work:tabs` puts working chats first); rows keep
+  their identity, so one that changes place slides to it with the tree's
+  structural motion.
 - **Tabs follow the chat in front, and never take the panel.** A tab whose
-  sections need a chat's session (This session, `when.session`) exists only
+  sections need a chat's session (any `when.session` section, such as one
+  showing `work:session`) exists only
   beside the chat, or a page, file or terminal it opened, whose session the
   sidebar keeps (ADR 0226); its links open as the chat's, in a tab it owns,
   so a click never takes the tab away under the pointer. It is never the
@@ -626,11 +640,10 @@ rows inside shared chrome. The chrome owns status; sections own rows.
   first list, nor the sidebar's own opening. When the tab in front leaves,
   the panels cross-fade to the one that stays, and the leaving panel's
   sections keep their shape as it fades. Focus in what leaves moves to the
-  tab or panel in front. A section built in (`session`) or written
-  (`when.session`, its source given `session`) shows the chat's metadata the
-  same way, read where the chat reads it (a connected project's own access);
-  a part of a section that is empty says so with the chrome's own sentence
-  ("No pull requests yet."), and a failed refresh keeps the rows it had.
+  tab or panel in front. Any source in a `when.session` section is given the
+  chat (`work:session`, or a module) and shows its metadata the same way,
+  read where the chat reads it (a connected project's own access); a failed
+  refresh keeps the rows it had.
 
 ## Registry component rules
 
@@ -674,6 +687,27 @@ the historical log explains how it arrived here.
 - [Performance](docs/performance.md): idle lifecycle checks and sustained measurement.
 
 ## Design log
+### 2026-10-16: Every sidebar list is a source; the right sidebar starts empty
+
+A section showed one of a dozen hand-written components picked by its
+`type`, and those components could do what a person's section could not:
+read Work's lists, own verbs and header buttons, draw chat signals and
+inspectors. Now a section names a source (`work:tabs`, or a module in the
+project), static items, an app or a note (ADR 0234), and one component draws
+every list. Work's lists are modules on the person's contract; rows open
+their address, and Work's knowledge of a target (a chat's glyph, signals and
+live inspector, a page's favicon, the active highlight, how it drags) comes
+from that address. Header buttons are header actions, actions may ask for
+values (`input`) and report a sentence, and a module reaches Work's lists
+(`work.read`, live) and workflows (`work.call`, for secrets and company APIs)
+through its section's grants. The right sidebar's content (This session,
+Activity, Subsessions, Changes, Proposals) is gone; its data stays as sources,
+and Find changed files searches `work:git` in the palette. The default left
+sidebar has no chats list (chats are tabs; the palette finds every chat); with
+tabs placed in the sidebar, the Tabs section lists `work:tabs`, which a module
+can sort, and rows slide when the order changes. The tab strip has no vertical
+form any more. Existing profile layouts are rewritten once in the new shape.
+
 ### 2026-10-16: A markdown document shows its images
 
 The markdown editor had no images. An image became its alt text, a document

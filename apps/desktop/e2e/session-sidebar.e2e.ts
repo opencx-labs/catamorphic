@@ -3,14 +3,48 @@ import path from "node:path";
 import { nativeGit } from "@catamorphic/git";
 import { afterAll, beforeAll, expect, it } from "vitest";
 import { DEFAULT_WORKSPACE_CONFIG } from "../src/main/workspace-config.js";
+import type { WorkspaceConfig } from "../src/shared/workspace-config.js";
 import { type AppHandle, launchApp } from "./harness.js";
+import { CHATS_SECTION } from "./sidebar-config.js";
 
 /**
- * "This session" (ADR 0226): a right-sidebar tab that exists only while a
- * chat is in front, showing where the chat works and the pull requests its
- * agent recorded in the session's metadata with set_session_metadata. The
- * fake agent calls the real tool through discovery, as a model would.
+ * A tab of `when: { session: true }` sections (ADR 0226, 0234) exists only
+ * while a chat is in front. Here it shows `work:session`: where the chat
+ * works and the pull requests its agent recorded in the session's metadata
+ * with set_session_metadata. The fake agent calls the real tool through
+ * discovery, as a model would.
  */
+const LAYOUT: WorkspaceConfig = {
+  sidebars: {
+    left: [
+      {
+        ...DEFAULT_WORKSPACE_CONFIG.sidebars.left[0],
+        id: "project",
+        title: "Project",
+        sections: [
+          ...(DEFAULT_WORKSPACE_CONFIG.sidebars.left[0]?.sections ?? []),
+          CHATS_SECTION,
+        ],
+      },
+    ],
+    right: [
+      {
+        id: "this-session",
+        title: "This session",
+        icon: "MessageSquareText",
+        sections: [
+          { id: "session", source: "work:session", when: { session: true } },
+        ],
+      },
+      {
+        id: "companion",
+        title: "Activity",
+        icon: "Activity",
+        sections: [{ id: "activity", source: "work:activity" }],
+      },
+    ],
+  },
+};
 
 let app: AppHandle;
 let projectId: string;
@@ -19,7 +53,7 @@ let base: string;
 const visible = '[data-workspace-visible="true"]';
 const right = `${visible} [data-sidebar="right"]`;
 const thisSessionTab = `${right} [role="tab"][aria-label="This session"]`;
-const details = `${right} [data-sidebar-widget="session"] [data-session-details]`;
+const details = `${right} [data-sidebar-widget="session"]`;
 const pullRequest = "https://git.invalid/acme/web/pull/42";
 const selectedRightTab = () =>
   app.eval<string | null>(
@@ -89,6 +123,10 @@ beforeAll(async () => {
   await app.eval(
     `window.catamorphicDesktop.sessionUseOwnWorktree(${JSON.stringify({ projectId, sessionId })})`,
   );
+  await fs.writeFile(
+    await app.eval<string>("window.catamorphicDesktop.workspaceConfigFile()"),
+    `module.exports = ${JSON.stringify(LAYOUT)};\n`,
+  );
   await app.reload();
   await app.waitFor(
     `!!document.querySelector('${visible} [data-sidebar-item-id="${sessionId}"]')`,
@@ -130,9 +168,9 @@ it("offers This session only beside a chat, without taking the panel", async () 
   const file = await app.eval<string>(
     "window.catamorphicDesktop.workspaceConfigFile()",
   );
-  const config = structuredClone(DEFAULT_WORKSPACE_CONFIG);
+  const config = structuredClone(LAYOUT);
   const activity = config.sidebars.right.find((tab) => tab.id === "companion");
-  if (!activity) throw new Error("The default right sidebar has no Activity");
+  if (!activity) throw new Error("The layout has no Activity");
   activity.id = "companion-renamed";
   await fs.writeFile(file, `module.exports = ${JSON.stringify(config)};\n`);
   await app.waitFor(
@@ -140,13 +178,10 @@ it("offers This session only beside a chat, without taking the panel", async () 
     { label: "the renamed Activity tab shown" },
   );
   expect(await selectedRightTab()).toBe("Activity");
-  await fs.writeFile(
-    file,
-    `module.exports = ${JSON.stringify(DEFAULT_WORKSPACE_CONFIG)};\n`,
-  );
+  await fs.writeFile(file, `module.exports = ${JSON.stringify(LAYOUT)};\n`);
   await app.waitFor(
     `!!document.querySelector('${right} [aria-controls$="-panel-companion"]')`,
-    { label: "the default layout back" },
+    { label: "the layout back" },
   );
 });
 

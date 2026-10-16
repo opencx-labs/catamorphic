@@ -9,9 +9,11 @@ import {
 import type { OpenMode } from "../../shared/open-mode.js";
 import type {
   SidebarItemPresentation,
+  SidebarMenuEntry,
   SidebarSectionConfig,
   SidebarSurface,
 } from "../../shared/sidebar.js";
+import type { SidebarSourceSession } from "../../shared/sidebar-source.js";
 
 export type SidebarContentState =
   | "loading"
@@ -37,18 +39,34 @@ export interface SidebarStatus {
   retry?: () => unknown;
   /** Default empty sentence; the section config's `empty` wins. */
   empty?: string;
+  /**
+   * Its source takes drops: hidden only for being empty, the section shows
+   * while something it could take is dragged.
+   */
+  droppable?: boolean;
 }
 export interface SidebarContributionContext {
   section: SidebarSectionConfig;
   surface: SidebarSurface;
   visible: boolean;
   relevant: boolean;
+  /**
+   * Hidden only for being empty, on screen otherwise: it keeps reading
+   * its first rows so it can come back.
+   */
+  observeEmpty?: boolean;
   status: SidebarStatus;
   report: (status: SidebarStatus) => void;
   reportItems?: (id: string, count: number | null) => void;
+  /** Open a workspace target as this section opens links. */
   open: (url: string, mode: OpenMode) => void;
+  /** Work's own verbs on the section: refresh and search. */
   command?: (action: string) => void | Promise<void>;
   commands?: ReadonlySet<string>;
+  /** Run one of the section's header actions (ADR 0234). */
+  runHeader?: (entry: SidebarMenuEntry) => Promise<void>;
+  /** The chat a chat-scoped section shows, for its header actions. */
+  chat?: { current?: SidebarSourceSession };
   registerRefresh?: (refresh: () => unknown) => () => void;
 }
 const Context = createContext<SidebarContributionContext | null>(null);
@@ -69,7 +87,14 @@ export function useSidebarContent(input: SidebarContentState | SidebarStatus) {
   const status = typeof input === "string" ? { state: input } : input;
   const retry = useRef(status.retry);
   retry.current = status.retry;
-  const { state, refreshing = false, idle = false, error, empty } = status;
+  const {
+    state,
+    refreshing = false,
+    idle = false,
+    error,
+    empty,
+    droppable = false,
+  } = status;
   useEffect(() => {
     report?.({
       state,
@@ -77,9 +102,10 @@ export function useSidebarContent(input: SidebarContentState | SidebarStatus) {
       idle,
       error,
       empty,
+      droppable,
       retry: () => retry.current?.(),
     });
-  }, [report, state, refreshing, idle, error, empty]);
+  }, [report, state, refreshing, idle, error, empty, droppable]);
 }
 
 export function sidebarItemPresentation({
@@ -97,40 +123,6 @@ export function sidebarItemPresentation({
     ...section?.itemDefaults,
     ...(id ? section?.itemOverrides?.[id] : undefined),
   };
-}
-
-/** Source-independent filtering and ordering over authorized source records. */
-export function projectSidebarItems<T extends object>(
-  items: readonly T[],
-  section?: SidebarSectionConfig,
-): T[] {
-  const source = section?.source;
-  const read = (item: T, field: string): unknown => {
-    let value: unknown = item;
-    for (const part of field.split(".")) {
-      if (!value || typeof value !== "object") return undefined;
-      const entry = Object.entries(value).find(([key]) => key === part);
-      value = entry?.[1];
-    }
-    return value;
-  };
-  const filtered = items.filter((item) =>
-    Object.entries(source?.filter ?? {}).every(
-      ([field, value]) => read(item, field) === value,
-    ),
-  );
-  const sort = source?.sort;
-  return sort
-    ? filtered.sort((left, right) => {
-        const a = read(left, sort.field);
-        const b = read(right, sort.field);
-        const order =
-          typeof a === "number" && typeof b === "number"
-            ? a - b
-            : String(a ?? "").localeCompare(String(b ?? ""));
-        return order * (sort.direction === "desc" ? -1 : 1);
-      })
-    : filtered;
 }
 
 /** A section owns refresh callbacks; no global synthetic focus event is needed. */

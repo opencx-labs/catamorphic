@@ -1,5 +1,6 @@
 import type { AppCollectionItem } from "@catamorphic/app";
 import {
+  Activity,
   FileCode,
   FileDiff,
   GitPullRequest,
@@ -8,6 +9,8 @@ import {
   type LucideIcon,
   MessageSquare,
   PanelTop,
+  Pin,
+  Server,
   Workflow as WorkflowIcon,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -19,15 +22,13 @@ import {
   surfaceUsageKey,
   webUsageKey,
 } from "../../shared/palette.js";
-import type { SidebarSource } from "../../shared/sidebar.js";
-import type { WorkspaceSourceName } from "../../shared/workspace-config.js";
+import type { WorkSourceName } from "../../shared/sidebar.js";
 import { SiteFavicon } from "../components/site-favicon.js";
 import { lucideIcon } from "../lib/lucide-icon.js";
 import {
-  projectSourceItems,
-  useWorkspaceSourcesContext,
-  type WorkspaceSources,
-} from "../lib/workspace-sources.js";
+  useWorkSourcesContext,
+  type WorkSources,
+} from "../sources/registry.js";
 import { oneRowPerDestination, type PaletteCategory } from "./rank.js";
 import type { PaletteItem } from "./types.js";
 import { bareUrl, hostOf } from "./urls.js";
@@ -44,18 +45,31 @@ const urlOf = (item: AppCollectionItem): string | undefined =>
  * How each workspace source reads in the palette: its row id prefix (stable
  * across the old per-list rows), what the detail says, how use is counted.
  */
-const PRESENTATION: Record<
-  WorkspaceSourceName,
-  {
-    prefix: string;
-    icon: LucideIcon;
-    category: PaletteCategory;
-    detail: (item: AppCollectionItem) => string | undefined;
-    keywords: (item: AppCollectionItem) => string[];
-    /** History identity kind, when history counts these rows. */
-    history?: "workflow" | "app" | "chat" | "file";
-  }
-> = {
+interface SourcePresentation {
+  prefix: string;
+  icon: LucideIcon;
+  category: PaletteCategory;
+  detail: (item: AppCollectionItem) => string | undefined;
+  keywords: (item: AppCollectionItem) => string[];
+  /** History identity kind, when history counts these rows. */
+  history?: "workflow" | "app" | "chat" | "file";
+}
+
+const BOOKMARKS: SourcePresentation = {
+  prefix: "bookmark",
+  icon: Globe,
+  category: "bookmark",
+  detail: (item: AppCollectionItem) => {
+    const url = urlOf(item);
+    return url ? hostOf(url) : undefined;
+  },
+  keywords: (item: AppCollectionItem) => {
+    const url = urlOf(item);
+    return url ? [hostOf(url), bareUrl(url), "bookmark"] : ["bookmark"];
+  },
+};
+
+const PRESENTATION: Record<WorkSourceName, SourcePresentation> = {
   workflows: {
     prefix: "workflow",
     icon: WorkflowIcon,
@@ -95,26 +109,22 @@ const PRESENTATION: Record<
     history: "chat",
   },
   activity: {
-    prefix: "session",
-    icon: MessageSquare,
+    prefix: "activity",
+    icon: Activity,
     category: "resource",
-    detail: (item) => item.description ?? "Working chat",
-    keywords: () => ["chat", "working", "activity"],
-    history: "chat",
+    detail: (item) => item.description ?? "Working now",
+    keywords: () => ["working", "activity", "run"],
   },
-  bookmarks: {
-    prefix: "bookmark",
-    icon: Globe,
-    category: "bookmark",
-    detail: (item) => {
-      const url = urlOf(item);
-      return url ? hostOf(url) : undefined;
-    },
-    keywords: (item) => {
-      const url = urlOf(item);
-      return url ? [hostOf(url), bareUrl(url), "bookmark"] : ["bookmark"];
-    },
+  session: {
+    prefix: "session-detail",
+    icon: GitPullRequest,
+    category: "resource",
+    detail: (item) => item.description,
+    keywords: () => ["pull request", "folder"],
   },
+  pinned: { ...BOOKMARKS, icon: Pin },
+  bookmarks: BOOKMARKS,
+  library: BOOKMARKS,
   files: {
     prefix: "file",
     icon: FileCode,
@@ -135,12 +145,20 @@ const PRESENTATION: Record<
     prefix: "change",
     icon: FileDiff,
     category: "resource",
-    detail: (item) => item.badges?.join(" · "),
+    // Which checkout, then what changed: a file changed in two checkouts
+    // reads apart.
+    detail: (item) =>
+      [
+        typeof item.data?.checkout === "string" ? item.data.checkout : "",
+        ...(item.badges ?? []),
+      ]
+        .filter(Boolean)
+        .join(" · "),
     keywords: () => ["change", "diff"],
   },
   remote: {
     prefix: "remote",
-    icon: FileCode,
+    icon: Server,
     category: "resource",
     detail: (item) => item.badges?.join(" · "),
     keywords: () => ["publish", "server"],
@@ -216,9 +234,9 @@ export function sourcePaletteRow({
   listed = false,
   onError,
 }: {
-  source: WorkspaceSourceName;
+  source: WorkSourceName;
   item: AppCollectionItem;
-  sources: WorkspaceSources;
+  sources: WorkSources;
   projectId: string | undefined;
   /** A sidebar section lists this source: its rows rank with commands. */
   listed?: boolean;
@@ -245,7 +263,7 @@ export function sourcePaletteRow({
     id: `${view.prefix}:${item.id}`,
     icon: lucideIcon(item.icon) ?? view.icon,
     iconNode:
-      (source === "bookmarks" || source === "tabs") && url ? (
+      (view.category === "bookmark" || source === "tabs") && url ? (
         <SiteFavicon url={url} faviconUrl={faviconUrl} className="size-4" />
       ) : undefined,
     label,
@@ -266,13 +284,10 @@ export function sourcePaletteRow({
                 resource: item.id,
               })
             : `${source}:${item.id}`,
-    ...(source === "bookmarks" ? { bookmarked: true } : {}),
+    ...(view.category === "bookmark" ? { bookmarked: true } : {}),
     // Open tabs and an imported bookmark library are found by typing; the
     // tab strip already shows the tabs, and a library is too long a list.
-    ...(source === "tabs" ||
-    (source === "bookmarks" && item.data?.scope === "library")
-      ? { searchOnly: true }
-      : {}),
+    ...(source === "tabs" || source === "library" ? { searchOnly: true } : {}),
     ...(source === "tabs" && item.data?.active ? { current: true } : {}),
     disabled: !opens,
     kind: "navigate",
@@ -303,7 +318,6 @@ export async function loadSourceRows({
   sources,
   source,
   projectId,
-  filter,
   signal,
   onError,
   archived = false,
@@ -311,10 +325,9 @@ export async function loadSourceRows({
   keep,
   listed = false,
 }: {
-  sources: WorkspaceSources;
-  source: WorkspaceSourceName;
+  sources: WorkSources;
+  source: WorkSourceName;
   projectId: string | undefined;
-  filter?: SidebarSource;
   signal: AbortSignal;
   onError: (message: string) => void;
   /** Chats: archived ones too. */
@@ -332,7 +345,7 @@ export async function loadSourceRows({
     ...(archived && source === "chats" ? await read(true) : []),
   ];
   return oneRowPerDestination(
-    projectSourceItems(items, filter)
+    items
       .filter(
         (item) =>
           (keep?.(item) ?? true) &&
@@ -360,14 +373,14 @@ export function useSourceRows({
   projectId,
   onError,
 }: {
-  names: readonly WorkspaceSourceName[];
+  names: readonly WorkSourceName[];
   /** The names a sidebar section lists; their rows rank with commands. */
-  listed?: readonly WorkspaceSourceName[];
+  listed?: readonly WorkSourceName[];
   active: boolean;
   projectId: string | undefined;
   onError: (message: string) => void;
 }): PaletteItem[] {
-  const sources = useWorkspaceSourcesContext();
+  const sources = useWorkSourcesContext();
   const key = `${projectId}:${names.join(",")}:${listed.join(",")}`;
   const listedRef = useRef(listed);
   listedRef.current = listed;
@@ -384,7 +397,7 @@ export function useSourceRows({
     const controller = new AbortController();
     const timers = new Map<string, ReturnType<typeof setTimeout>>();
     const requests = new Map<string, number>();
-    const load = (source: WorkspaceSourceName) => {
+    const load = (source: WorkSourceName) => {
       const request = (requests.get(source) ?? 0) + 1;
       requests.set(source, request);
       void loadSourceRows({
@@ -396,7 +409,8 @@ export function useSourceRows({
         archived: true,
         // Chats without their subsessions (history lists those); bookmarks
         // with their folders, where an imported library keeps most pages.
-        children: source === "bookmarks",
+        children:
+          source === "bookmarks" || source === "pinned" || source === "library",
         listed: listedRef.current.includes(source),
         // New Tab pages (the palette's own tabs) are not places to go.
         keep: (item) => source !== "tabs" || item.data?.kind !== "palette",

@@ -57,6 +57,10 @@ describe("configurable browser workspace", () => {
       await run("return !!$('aside button[aria-label=\"Collapse sidebar\"]')"),
     ).toBe(true);
     await app.eval("window.catamorphicDesktop.setPrefs({tabPlacement:'top'})");
+    await app.waitFor(
+      "!!document.querySelector('main [data-tab-orientation=horizontal]')",
+      { label: "tabs back on top" },
+    );
   });
 
   it("switches the theme and moves existing tabs through Settings without losing their keys", async () => {
@@ -64,22 +68,25 @@ describe("configurable browser workspace", () => {
     // The New Tab the app opened with closes once Settings shows in its
     // place; its tab stays in the strip while it animates out.
     await app.waitFor(
-      "!!document.querySelector('select[name=tabPlacement]') && !document.querySelector('[data-tab-orientation] [data-point-key^=\"palette:\"]')",
+      "!!document.querySelector('select[name=tabPlacement]') && !!document.querySelector('[data-tab-orientation] [data-point-key^=\"settings:\"]') && !document.querySelector('[data-tab-orientation] [data-point-key^=\"palette:\"]')",
     );
     const before = await run<string[]>(
-      "return [...document.querySelectorAll('[data-tab-orientation] [data-point-key]:not([data-sidebar-item-id])')].map(e => e.dataset.pointKey)",
+      "return [...document.querySelectorAll('[data-tab-orientation] [data-point-key]')].map(e => e.dataset.pointKey)",
     );
     await run(
       "button('Work Light').click(); setReactValue($('select[name=tabPlacement]'), 'sidebar')",
     );
     await app.waitFor(
-      "document.documentElement.dataset.theme === 'light' && !!document.querySelector('aside [data-tab-orientation=vertical]')",
+      "document.documentElement.dataset.theme === 'light' && !!document.querySelector('aside [data-sidebar-section=tabs] [data-sidebar-item-id]')",
     );
+    // The tabs are the Tabs section's rows now (ADR 0234), same keys.
     expect(
-      await run(
-        "return [...document.querySelectorAll('[data-tab-orientation] [data-point-key]:not([data-sidebar-item-id])')].map(e => e.dataset.pointKey)",
+      await app.waitFor<string[]>(
+        `(() => { const keys = [...document.querySelectorAll('aside [data-sidebar-section=tabs] [data-sidebar-item-id]')].filter(e => !e.closest('[data-tree-exiting]')).map(e => e.dataset.sidebarItemId); return JSON.stringify(keys) === ${JSON.stringify(JSON.stringify(before))} && keys; })()`,
+        { label: "the same tabs listed in the sidebar" },
       ),
     ).toEqual(before);
+    expect(await run("return !!$('[data-tab-orientation]')")).toBe(false);
     expect(
       await app.eval(
         "window.catamorphicDesktop.getPrefs().then(p => p.tabPlacement)",
@@ -113,32 +120,38 @@ describe("configurable browser workspace", () => {
     ).toBe(true);
     await run("$('button[aria-label=\"Expand sidebar\"]').click()");
     await app.waitFor(
-      "document.querySelector('aside').dataset.motion === 'open' && document.querySelector('aside').dataset.settled === 'true' && !!document.querySelector('aside [data-tab-orientation=vertical]')",
+      "document.querySelector('aside').dataset.motion === 'open' && document.querySelector('aside').dataset.settled === 'true' && !!document.querySelector('aside [data-sidebar-section=tabs] [data-sidebar-item-id]')",
     );
   });
 
   it("creates a folder and a bookmark through the sidebar", async () => {
-    await run("$('button[aria-label=\"New bookmark folder\"]').click()");
-    await app.waitFor("!!document.querySelector('input[name=bookmarkName]')");
+    // The Bookmarks section's header actions ask for their values first.
     await run(
-      "setReactValue($('input[name=bookmarkName]'), 'Dev'); button('Save').click()",
+      "$('[data-sidebar-section=bookmarks] button[aria-label=\"New bookmark folder\"]').click()",
+    );
+    await app.waitFor("!!document.querySelector('input[name=label]')");
+    await run(
+      "setReactValue($('input[name=label]'), 'Dev'); button('Create').click()",
     );
     await app.waitFor(
-      "!!document.querySelector('[data-point-key=\"sidebar:Dev\"]')",
+      "!!document.querySelector('[data-point-key=\"sidebar:Dev\"]') && !document.querySelector('input[name=label]')",
     );
-    await run("button('Add bookmark').click()");
-    await app.waitFor("!!document.querySelector('input[name=bookmarkUrl]')");
+    // A folder's own menu adds a bookmark into it.
+    await run("$('button[aria-label=\"More actions for Dev\"]').click()");
+    await app.waitFor("!!document.querySelector('[data-sidebar-menu]')");
+    await run("button('Add bookmark…').click()");
+    await app.waitFor("!!document.querySelector('input[name=url]')");
     await run(
-      "setReactValue($('input[name=bookmarkName]'), 'Reference'); setReactValue($('input[name=bookmarkUrl]'), 'http://example.test'); const select = $('select[name=bookmarkFolder]'); setReactValue(select, [...select.options].find(o => o.text === 'Dev').value); button('Save').click()",
+      "setReactValue($('input[name=url]'), 'http://example.test'); setReactValue($('input[name=label]'), 'Reference'); button('Add').click()",
     );
-    await app.waitFor("!document.querySelector('input[name=bookmarkUrl]')");
-    await run("$('[data-point-key=\"sidebar:Dev\"] button').click()");
+    await app.waitFor("!document.querySelector('input[name=url]')");
+    await run("$('button[aria-label=\"Expand Dev\"]').click()");
     await app.waitFor(
       "!!document.querySelector('[data-point-key=\"sidebar:Reference\"]')",
     );
     expect(
       await run(
-        "return $('[data-point-key=\"sidebar:Reference\"]').closest('[aria-hidden]').getAttribute('aria-hidden')",
+        "return $('[data-point-key=\"sidebar:Reference\"]').closest('[aria-hidden]')?.getAttribute('aria-hidden') ?? 'false'",
       ),
     ).toBe("false");
   });
@@ -297,37 +310,24 @@ describe("configurable browser workspace", () => {
     await run("document.activeElement.blur()");
   });
 
-  it("pins a bookmark as a tile and can change favorites to list rows", async () => {
+  it("pins a bookmark as a tile", async () => {
+    const tiles = "[data-sidebar-section=pinned] ul[aria-label=Tiles]";
     await run("$('button[aria-label=\"More actions for Reference\"]').click()");
     await app.waitFor("!!document.querySelector('[data-sidebar-menu]')");
     await run("button('Pin across projects').click()");
     await app.waitFor(
-      '!!document.querySelector(\'[aria-label="Pinned bookmarks"] [data-point-key="sidebar:Reference"]\')',
+      `!!document.querySelector('${tiles} [data-point-key="sidebar:Reference"]')`,
     );
-    expect(
-      await run(
-        "return getComputedStyle($('[aria-label=\"Pinned bookmarks\"]')).display",
-      ),
-    ).toBe("grid");
+    expect(await run(`return getComputedStyle($('${tiles}')).display`)).toBe(
+      "grid",
+    );
     const tileCenters = await run<[number, number]>(
-      "const tile = $('[aria-label=\"Pinned bookmarks\"] [data-point-key]'); return [tile, tile.querySelector('button').firstElementChild].map(e => {const r=e.getBoundingClientRect(); return r.x+r.width/2})",
+      `const tile = $('${tiles} [data-point-key]'); return [tile, tile.querySelector('button').firstElementChild].map(e => {const r=e.getBoundingClientRect(); return r.x+r.width/2})`,
     );
     expect(Math.abs(tileCenters[0] - tileCenters[1])).toBeLessThanOrEqual(1);
-    await run(
-      "const target = $('[aria-label=\"Pinned bookmarks\"] button'); target.dispatchEvent(new MouseEvent('mouseover', {bubbles:true}))",
-    );
-    await app.waitFor("!!document.querySelector('[role=tooltip]')");
-    expect(
-      await run(
-        "const r=$('[role=tooltip]').getBoundingClientRect(); return r.left >= 8 && r.right <= innerWidth - 8",
-      ),
-    ).toBe(true);
-    await run(
-      "$('[aria-label=\"Pinned bookmarks\"] button').dispatchEvent(new MouseEvent('mouseout', {bubbles:true}))",
-    );
     // Tiles have no hover dots; their menu opens on right-click.
     await run(
-      "const tile=$('[aria-label=\"Pinned bookmarks\"] [data-point-key=\"sidebar:Reference\"] button'); const r=tile.getBoundingClientRect(); tile.dispatchEvent(new MouseEvent('contextmenu', {bubbles:true, cancelable:true, clientX:r.x+r.width/2, clientY:r.y+r.height/2}))",
+      `const tile=$('${tiles} [data-point-key="sidebar:Reference"] button'); const r=tile.getBoundingClientRect(); tile.dispatchEvent(new MouseEvent('contextmenu', {bubbles:true, cancelable:true, clientX:r.x+r.width/2, clientY:r.y+r.height/2}))`,
     );
     await app.waitFor("!!document.querySelector('[data-sidebar-menu]')");
     expect(
@@ -336,28 +336,22 @@ describe("configurable browser workspace", () => {
       ),
     ).toBe(true);
     await app.press("Escape");
-    await run("setReactValue($('select[name=pinnedBookmarks]'), 'list')");
-    await app.waitFor(
-      "getComputedStyle(document.querySelector('[aria-label=\"Pinned bookmarks\"]')).display === 'flex'",
-    );
-    await run("setReactValue($('select[name=pinnedBookmarks]'), 'tiles')");
   });
 
   it("removes a folder while keeping its remaining bookmarks", async () => {
+    const tiles = "[data-sidebar-section=pinned] ul[aria-label=Tiles]";
     // Reference is still a pinned tile here: right-click opens its menu.
     await run(
-      "const tile=$('[aria-label=\"Pinned bookmarks\"] [data-point-key=\"sidebar:Reference\"] button'); const r=tile.getBoundingClientRect(); tile.dispatchEvent(new MouseEvent('contextmenu', {bubbles:true, cancelable:true, clientX:r.x+r.width/2, clientY:r.y+r.height/2}))",
+      `const tile=$('${tiles} [data-point-key="sidebar:Reference"] button'); const r=tile.getBoundingClientRect(); tile.dispatchEvent(new MouseEvent('contextmenu', {bubbles:true, cancelable:true, clientX:r.x+r.width/2, clientY:r.y+r.height/2}))`,
     );
     await app.waitFor("!!document.querySelector('[data-sidebar-menu]')");
-    // The emptied pinned area collapses through intermediate heights and
+    // The emptied pinned section collapses through intermediate heights and
     // stays mounted, instead of vanishing in one frame.
     await run(
-      "const box = $('[aria-label=\"Pinned bookmarks scroll area\"]').closest('[data-collapsible]'); window.__pinnedBox = box; window.__pinnedHeights = []; const t0 = performance.now(); const tick = () => { window.__pinnedHeights.push(Math.round(box.getBoundingClientRect().height)); if (performance.now() - t0 < 1500) requestAnimationFrame(tick); }; requestAnimationFrame(tick);",
+      "const box = $('[data-sidebar-widget=pinned] [data-collapsible]'); window.__pinnedBox = box; window.__pinnedHeights = []; const t0 = performance.now(); const tick = () => { window.__pinnedHeights.push(Math.round(box.getBoundingClientRect().height)); if (performance.now() - t0 < 1500) requestAnimationFrame(tick); }; requestAnimationFrame(tick);",
     );
     await run("button('Unpin').click()");
-    await app.waitFor(
-      "!document.querySelector('[aria-label=\"Pinned bookmarks\"] [data-point-key]')",
-    );
+    await app.waitFor(`!document.querySelector('${tiles} [data-point-key]')`);
     await new Promise((resolve) => setTimeout(resolve, 1600));
     const collapse = await app.eval<{
       heights: number[];
@@ -373,26 +367,38 @@ describe("configurable browser workspace", () => {
       collapse.heights.filter((height) => height > 0 && height < start).length,
     ).toBeGreaterThan(2);
     expect(collapse).toMatchObject({ connected: true, state: "closed" });
+    // Unpinned, it is the project's again, at the top; Edit renames it.
     await run("$('button[aria-label=\"More actions for Reference\"]').click()");
     await run("button('Edit…').click()");
     await app.waitFor(
-      "!!document.querySelector('select[name=bookmarkFolder]')",
+      "document.querySelector('input[name=label]')?.value === 'Reference'",
     );
     await run(
-      "const select = $('select[name=bookmarkFolder]'); setReactValue(select, [...select.options].find(o => o.text === 'Dev').value); button('Save').click()",
+      "setReactValue($('input[name=label]'), 'Reference docs'); button('Save').click()",
     );
-    await app.waitFor("!document.querySelector('select[name=bookmarkFolder]')");
+    await app.waitFor(
+      "!!document.querySelector('[data-point-key=\"sidebar:Reference docs\"]') && !document.querySelector('input[name=label]')",
+    );
+    await run("$('button[aria-label=\"More actions for Dev\"]').click()");
+    await run("button('Add bookmark…').click()");
+    await app.waitFor("!!document.querySelector('input[name=url]')");
+    await run(
+      "setReactValue($('input[name=url]'), 'http://second.test'); setReactValue($('input[name=label]'), 'Second'); button('Add').click()",
+    );
+    await app.waitFor("!document.querySelector('input[name=url]')");
     await run("$('button[aria-label=\"More actions for Dev\"]').click()");
     await run("button('Remove folder, keep bookmarks').click()");
     await app.waitFor(
       "!document.querySelector('[data-point-key=\"sidebar:Dev\"]')",
     );
     expect(
-      await run("return !!$('[data-point-key=\"sidebar:Reference\"]')"),
-    ).toBe(true);
+      await run(
+        "return [!!$('[data-point-key=\"sidebar:Reference docs\"]'), !!$('[data-point-key=\"sidebar:Second\"]')]",
+      ),
+    ).toEqual([true, true]);
   });
 
-  it("keeps the profile switcher at the bottom and closes vertical tabs", async () => {
+  it("keeps the profile switcher at the bottom and closes a tab from its row", async () => {
     expect(
       await run(
         "return !!$('aside footer button[aria-label^=\"Switch profile:\"]')",
@@ -480,26 +486,25 @@ describe("configurable browser workspace", () => {
     await app.waitFor(
       "document.querySelector('aside').getBoundingClientRect().width === 260",
     );
-    const tabCount = await run<number>(
-      "return document.querySelectorAll('[data-tab-orientation] [data-point-key]:not([data-sidebar-item-id])').length",
-    );
-    // The sidebar settles after it moves; the row is reachable once it has.
+    const listedTabs =
+      "[...document.querySelectorAll('aside [data-sidebar-section=tabs] [data-sidebar-item-id]')].filter(e => !e.closest('[data-tree-exiting]')).length";
+    const tabRows = `return ${listedTabs}`;
+    const tabCount = await run<number>(tabRows);
+    // New tab is the Tabs section's header action.
     await app.waitFor(
-      "document.querySelector('aside').dataset.settled === 'true' && (() => { const row = document.querySelector('button[aria-label=\"New tab\"]').closest('[data-tab-orientation]').lastElementChild; const r = row.getBoundingClientRect(); return !!document.elementFromPoint(r.right-6,r.y+r.height/2)?.closest('button[aria-label=\"New tab\"]') })()",
-      { label: "New Tab fills its row" },
+      "document.querySelector('aside').dataset.settled === 'true'",
     );
     await run(
-      "const row = $('button[aria-label=\"New tab\"]').closest('[data-tab-orientation]').lastElementChild; const r = row.getBoundingClientRect(); document.elementFromPoint(r.right-6,r.y+r.height/2).click()",
+      "$('aside [data-sidebar-section=tabs] button[data-header-action=\"command:new-tab\"]').click()",
     );
     await app.waitFor(
       "document.activeElement?.matches('textarea[placeholder*=\"Search or ask\"]')",
     );
     expect(await app.eval("window.__sidebarErrors")).toEqual([]);
-    expect(
-      await run(
-        "return document.querySelectorAll('[data-tab-orientation] [data-point-key]:not([data-sidebar-item-id])').length",
-      ),
-    ).toBe(tabCount + 1);
+    await app.waitFor(`${listedTabs} === ${tabCount + 1}`, {
+      label: "the new tab listed",
+    });
+    expect(await run<number>(tabRows)).toBe(tabCount + 1);
     await run(
       "[...document.querySelectorAll('aside button')].find(b => b.textContent.includes('Header check')).click()",
     );

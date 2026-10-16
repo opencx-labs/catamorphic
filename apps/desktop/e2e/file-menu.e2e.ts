@@ -136,7 +136,7 @@ async function copied(label: string): Promise<string> {
 
 it("lists a file tab's actions after its ways to open, from anywhere on the tab", async () => {
   await app.eval(
-    `document.querySelector('[data-sidebar-search="search-files"]').click(); true`,
+    `document.querySelector('[data-header-action="command:search-files"]').click(); true`,
   );
   await app.waitFor(
     `!!document.querySelector('textarea[placeholder="Search filenames…"]')`,

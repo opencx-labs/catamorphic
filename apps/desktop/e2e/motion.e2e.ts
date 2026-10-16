@@ -526,8 +526,7 @@ describe("animate-before-unmount", () => {
   });
 
   it("dismissing an empty floating chat tweens out, then unmounts", async () => {
-    // Sidebar + is icon-only: select by aria-label, not text.
-    await run(`$('button[aria-label="New chat"]').click(); return true;`);
+    await run(`pressKey('n', { metaKey: true }); return true;`);
     // Let the enter animation finish — dismissing a barely-mounted dock
     // (opacity still ~0) would leave the exit tween nothing to fade.
     await runWait(
@@ -558,7 +557,7 @@ describe("animate-before-unmount", () => {
   });
 
   it("minimizing a floating chat never replays dock-in between the two poses", async () => {
-    await run(`$('button[aria-label="New chat"]').click(); return true;`);
+    await run(`pressKey('n', { metaKey: true }); return true;`);
     await runWait(
       `const dock = visibleDock();
        return !!dock && getComputedStyle(dock).opacity === '1';`,
@@ -843,7 +842,7 @@ describe("chats over a settling sidebar", () => {
   });
 
   it("a floating chat glides with the content instead of vanishing under it", async () => {
-    await run(`$('button[aria-label="New chat"]').click(); return true;`);
+    await run(`pressKey('n', { metaKey: true }); return true;`);
     await runWait(
       `const dock = visibleDock();
        return !!dock && getComputedStyle(dock).opacity === '1' && dock.getAnimations().every((a) => a.playState !== 'running');`,

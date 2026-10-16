@@ -69,7 +69,7 @@ beforeAll(async () => {
     `
     import {watch} from 'node:fs'; import {readFile,writeFile,rename} from 'node:fs/promises';
     export default {
-      async load(){await new Promise(r=>setTimeout(r,250));return {items:JSON.parse(await readFile('todos.json','utf8')).map(t=>({id:t.id,label:t.text,icon:t.done?'CircleCheck':'Circle',description:t.done?'Completed':undefined,actions:[{action:'run:toggle',label:t.done?'Reopen':'Complete',icon:'Check'}],menu:[{action:'run:fail',label:'Fail write'}]}))}},
+      async load(){await new Promise(r=>setTimeout(r,250));return {items:JSON.parse(await readFile('todos.json','utf8')).map(t=>({id:t.id,label:t.text,icon:t.done?'CircleCheck':'Circle',description:t.done?'Completed':undefined,actions:[{action:'toggle',label:t.done?'Reopen':'Complete',icon:'Check'}],menu:[{action:'fail',label:'Fail write'}]}))}},
       subscribe({invalidate}){void writeFile('subscribed','yes');const w=watch('.',(event,n)=>{if(event==='rename'||!n||n==='todos.json')invalidate()});return()=>{w.close();void writeFile('subscribed','no')}},
       async action({itemId,action}){await new Promise(r=>setTimeout(r,400));if(action==='fail')throw Error('Write unavailable');const ts=JSON.parse(await readFile('todos.json','utf8'));ts.find(t=>t.id===itemId).done=!ts.find(t=>t.id===itemId).done;await writeFile('todos.tmp',JSON.stringify(ts));await rename('todos.tmp','todos.json')}
     };`,
@@ -78,9 +78,17 @@ beforeAll(async () => {
     path.join(projectRoot, ".work/http.ts"),
     `export default {async load({signal}){const r=await fetch('http://127.0.0.1:${address.port}',{signal});if(!r.ok)throw Error('Service unavailable: '+r.status);return r.json()}}`,
   );
+  // Work's tabs, sorted by name: a module wrapping one of Work's lists.
+  fs.writeFileSync(
+    path.join(projectRoot, ".work/sorted-tabs.ts"),
+    `export default {
+      async load({work,parentId,cursor}){const page=await work.read({source:'tabs',parentId,cursor});return {...page,items:[...page.items].sort((a,b)=>a.label.localeCompare(b.label))}},
+      action:({work,itemId,action,values})=>work.execute({source:'tabs',itemId,action,values})
+    };`,
+  );
   fs.writeFileSync(
     path.join(projectRoot, ".work/workspace.js"),
-    `module.exports={sidebars: {left:[{id:'live',title:'Sources',icon:'ListTodo',sections:[{id:'todos',type:'custom',title:'My todos',source:{type:'custom',module:'.work/todos.ts'},height:180},{id:'http',type:'custom',title:'Service',source:{type:'custom',module:'.work/http.ts'},height:120,headerActions:[{label:'Refresh Service',action:'refresh',icon:'RefreshCw'}]}]},{id:'other',title:'Other',icon:'Folder',sections:[{id:'files',type:'files'}]}],right:[] }};`,
+    `module.exports={sidebars: {left:[{id:'live',title:'Sources',icon:'ListTodo',sections:[{id:'todos',title:'My todos',source:'.work/todos.ts',height:180},{id:'http',title:'Service',source:'.work/http.ts',height:120,headerActions:[{label:'Refresh Service',action:'refresh',icon:'RefreshCw'}]},{id:'sorted-tabs',title:'Sorted tabs',source:'.work/sorted-tabs.ts',collections:['tabs']}]},{id:'other',title:'Other',icon:'Folder',sections:[{id:'files',source:'work:files'}]}],right:[] }};`,
   );
   await app.reload();
   await app.waitFor(
@@ -220,6 +228,44 @@ it("releases hidden sources and virtualizes a large file-backed list", async () 
   );
   await app.waitFor(
     `!!document.querySelector('[data-sidebar-source="todos"] [data-sidebar-item-id="item-0"] [aria-label="Reopen"]')`,
+  );
+  expect(app.getRendererErrors()).toEqual([]);
+});
+it("sorts Work's tabs in a module, follows them live and closes through them", async () => {
+  const sorted = '[data-sidebar-source="sorted-tabs"]';
+  const labels = () =>
+    app.eval<string[]>(
+      `[...document.querySelectorAll('${sorted} [data-sidebar-item-id]')].map(row => row.querySelector('[data-tree-primary]').textContent.trim())`,
+    );
+  const strip = () =>
+    app.eval<string[]>(
+      `[...document.querySelectorAll('[data-tab-orientation] [data-point-key]')].map(tab => tab.dataset.pointKey)`,
+    );
+  await app.eval(
+    `document.querySelector('aside footer button[aria-label=Settings]').click()`,
+  );
+  await app.eval(
+    `window.dispatchEvent(new KeyboardEvent('keydown',{key:'t',metaKey:/Mac/.test(navigator.platform),ctrlKey:!/Mac/.test(navigator.platform),bubbles:true}))`,
+  );
+  // The strip has Settings, then the New Tab; the module lists them by name.
+  await app.waitFor(
+    `document.querySelectorAll('${sorted} [data-sidebar-item-id]').length === document.querySelectorAll('[data-tab-orientation] [data-point-key]').length && document.querySelectorAll('${sorted} [data-sidebar-item-id]').length >= 2`,
+    { label: "every tab listed" },
+  );
+  const listed = await labels();
+  expect(listed).toEqual([...listed].sort((a, b) => a.localeCompare(b)));
+  expect((await strip()).length).toBe(listed.length);
+  // Its rows are the tabs: an agent points at them by tab key, and the close
+  // action goes through the module to Work's list.
+  const settings = await app.eval<string>(
+    `document.querySelector('${sorted} [data-point-key^="settings:"]').dataset.pointKey`,
+  );
+  await app.eval(
+    `document.querySelector('${sorted} [data-point-key="${settings}"] button[aria-label^="Close"]').click()`,
+  );
+  await app.waitFor(
+    `!document.querySelector('[data-tab-orientation] [data-point-key="${settings}"]') && !document.querySelector('${sorted} [data-point-key="${settings}"]')`,
+    { label: "the tab closed through the module, and gone from its list" },
   );
   expect(app.getRendererErrors()).toEqual([]);
 });

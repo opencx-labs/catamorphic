@@ -776,8 +776,8 @@ export interface SessionFields {
   todos: AgentTodo[];
   /**
    * Named JSON values agents and people set on the session, read by
-   * clients (ADR 0226): a sidebar section shows `pull_requests`, a
-   * person's own section shows the keys their agent sets.
+   * clients (ADR 0226): a sidebar section of `work:session` shows
+   * `pull_requests`, a person's own module shows the keys their agent sets.
    */
   metadata: SessionMetadata;
   /**

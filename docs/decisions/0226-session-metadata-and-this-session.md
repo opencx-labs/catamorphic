@@ -1,6 +1,6 @@
 # 0226 — Session metadata, and a sidebar section for the chat in front
 
-- **Status:** Accepted
+- **Status:** Accepted. Amended by [0234](0234-sidebar-sections-are-sources.md): sections name sources, Work's lists are modules on the same contract, and the right sidebar's screens are gone.
 - **Date:** 2026-10-13
 - **Refines:** [0147](0147-uniform-sidebar-sections.md) (sections), [0132](0132-shared-contextual-sidebar-contributions.md) (contextual relevance), [0215](0215-a-chats-own-worktree.md) (where a chat works)
 - **Relates to:** [0219](0219-typed-deliveries.md) (no free-form delivery metadata)

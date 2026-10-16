@@ -1,4 +1,3 @@
-import type { CollectionPage } from "@catamorphic/app";
 import { shareEvent } from "@catamorphic/app";
 import type { ResourcePreview } from "@catamorphic/react";
 import type { ImportableBrowser } from "../../main/browser-import/types.js";
@@ -105,8 +104,8 @@ import type {
   SettingsSnapshot,
 } from "../../shared/settings.js";
 import type {
-  SidebarSourceItem,
   SidebarSourceRequest,
+  SidebarSourceWorkCall,
 } from "../../shared/sidebar-source.js";
 import type {
   SiteDetails,
@@ -563,6 +562,8 @@ export interface RemoteCapabilities {
     storeUploadMaxBytes: number;
   };
 }
+/** What a project's server offers (GET /me), for its dialogs. */
+export type RemoteFeatures = RemoteCapabilities["features"];
 export interface RemoteSyncReport {
   pulled: string[];
   removed: string[];
@@ -2017,9 +2018,8 @@ export interface CatamorphicDesktopApi {
   prList: (projectId: string) => Promise<PullRequestSummary[]>;
   prFiles: (projectId: string, number: number) => Promise<PullRequestFile[]>;
 
-  sidebarSourceRequest: (
-    input: SidebarSourceRequest,
-  ) => Promise<CollectionPage<SidebarSourceItem> | null>;
+  /** A page for load, a row or null for reveal, an effect or null for action. */
+  sidebarSourceRequest: (input: SidebarSourceRequest) => Promise<unknown>;
   sidebarSourceCancel: (id: string) => Promise<void>;
   sidebarSourceSubscribe: (input: {
     projectId: string;
@@ -2030,6 +2030,20 @@ export interface CatamorphicDesktopApi {
   onSidebarSourceChanged: (
     listener: (event: { leaseId: string; error?: string }) => void,
   ) => () => void;
+  onSidebarSourceWork: (
+    listener: (event: {
+      callId: string;
+      projectId: string;
+      sectionId: string;
+      call: SidebarSourceWorkCall;
+    }) => void,
+  ) => () => void;
+  sidebarSourceWorkResult: (input: {
+    callId: string;
+    ok: boolean;
+    value?: unknown;
+    error?: string;
+  }) => Promise<void>;
   workspaceConfigGet: (projectId?: string) => Promise<ResolvedWorkspaceConfig>;
   workspaceConfigFile: () => Promise<string>;
   workspaceConfigSource: () => Promise<string>;

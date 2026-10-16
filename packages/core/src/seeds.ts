@@ -605,20 +605,22 @@ leaves no empty UI behind.
 \`\`\`
 
 \`\`\`javascript
-// .work/workspace.js
+// .work/workspace.js: a whole layout (start from the resolved one), so it
+// keeps the Tabs section people with tabs in the sidebar rely on.
 module.exports = {
   sidebars: {
     left: [{ id: "project", title: "Project", icon: "House", sections: [
-      { id: "chats", type: "chats" },
-      { id: "files", type: "files" },
+      { id: "bookmarks", source: "work:bookmarks" },
+      { id: "chats", source: "work:chats" },
+      { id: "tabs", source: "work:tabs", when: { tabPlacement: "sidebar" } },
+      { id: "files", source: "work:files" },
       {
         id: "brain",
-        type: "custom",
         title: "Company brain",
         when: { permissions: ["brain:maintain"] },
         items: [{ label: "Handbook", url: "https://handbook.example.com" }],
       },
-      { id: "changes", type: "git", title: "Changes", when: { permissions: ["program:write"] } },
+      { id: "changes", source: "work:git", title: "Changes", when: { permissions: ["program:write"] } },
     ] }],
     right: [],
   },
@@ -626,7 +628,7 @@ module.exports = {
 \`\`\`
 
 The same file may add \`palette: { modes: [...] }\`: typed command palette
-modes (\`tickets\` then Space) over a custom section's module or items, for
+modes (\`tickets\` then Space) over a section's source or items, for
 lists worth finding but not worth permanent sidebar space. The desktop
 configuration skill has the full contract and design guidance.
 

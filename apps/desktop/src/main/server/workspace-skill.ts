@@ -179,10 +179,13 @@ rollback. Activity publication is optional when it adds useful peer context.
 A chat has metadata: named values its session holds, which Work shows
 beside it. Discover set_session_metadata: a call with a value replaces that
 key's whole value, remove: true removes the key, and a call with neither reads
-the metadata. ${SESSION_PULL_REQUESTS_CONTRACT} The chat's This session section
-shows them. A pull request you open, or are asked to work on, belongs in that
-list: read it first and include the ones already there, and write it again
-when you see one merged or closed. A person's own sidebar sections can read
+the metadata. ${SESSION_PULL_REQUESTS_CONTRACT} A sidebar section showing
+work:session lists them beside the chat; none does by default, so when the
+person wants to see them, offer one on the right sidebar: { id: "session",
+title: "This chat", source: "work:session", when: { session: true } }. A pull request you open, or are asked
+to work on, belongs in that list: read it first and include the ones already
+there, and write it again when you see one merged or closed. A person's own
+sidebar modules receive the metadata of the chat they sit beside and can show
 other keys; keep the ones they ask for.
 
 ## Apps, workflows, sharing and connections

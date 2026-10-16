@@ -75,3 +75,16 @@ export interface PageContextMenu {
   y: number;
   items: MenuItem[];
 }
+
+/**
+ * Destructive entries last, behind a rule of their own: a menu a source
+ * wrote as plain data takes the shape of one drawn by hand.
+ */
+export function dangerLast<T extends MenuEntry>(
+  items: readonly (T | MenuSeparator)[],
+): (T | MenuSeparator)[] {
+  return menuGroups(
+    items.filter((item) => isMenuSeparator(item) || !item.danger),
+    items.filter((item) => !isMenuSeparator(item) && item.danger),
+  );
+}

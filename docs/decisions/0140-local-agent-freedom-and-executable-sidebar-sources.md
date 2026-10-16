@@ -1,6 +1,6 @@
 # 0140: Local agent freedom and executable sidebar sources
 
-- **Status:** Accepted
+- **Status:** Accepted. Amended by [0234](0234-sidebar-sections-are-sources.md): sections name sources, Work's lists are modules on the same contract, and the right sidebar's screens are gone.
 - **Date:** 2026-09-17
 - **Refines:** 0056, 0111, 0112, 0132
 

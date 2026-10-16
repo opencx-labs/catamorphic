@@ -2,6 +2,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
+import { addSidebarSections, CHATS_SECTION } from "./sidebar-config.js";
 
 /**
  * End-to-end flows against the real Electron app: isolated userData dir,
@@ -159,6 +160,8 @@ describe("first launch", () => {
               !!$('textarea[placeholder*="Search or ask"]');`,
       { timeoutMs: 60_000, label: "palette New Tab after project creation" },
     );
+    // The chat flows below act on chats as a sidebar list (ADR 0234).
+    await addSidebarSections(app, [CHATS_SECTION]);
   });
 
   it("does not load editor or terminal runtimes before first use", async () => {
@@ -391,7 +394,7 @@ describe("terminal tabs", () => {
 describe("editor tabs", () => {
   it("opens an editor file through the Files palette", async () => {
     await run(
-      `$('[data-sidebar-search="search-files"]').click(); return true;`,
+      `$('[data-header-action="command:search-files"]').click(); return true;`,
     );
     await runWait(`return !!$('textarea[placeholder="Search filenames…"]');`, {
       label: "Files palette",
@@ -792,7 +795,7 @@ describe("chat flows", () => {
     await runWait(
       `const row = [...document.querySelectorAll('aside [data-session-id]')]
          .find((item) => item.textContent.includes('Session menu'));
-       return !!row?.querySelector('[data-testid="session-unread"]');`,
+       return !!row?.querySelector('[data-signal="unread"]');`,
       { label: "manual unread dot in the sidebar" },
     );
     // The dock applies its action before its menu finishes animating out.
@@ -822,7 +825,7 @@ describe("chat flows", () => {
     await runWait(
       `const row = [...document.querySelectorAll('aside [data-session-id]')]
          .find((item) => item.textContent.includes('Session menu'));
-       return !!row && !row.querySelector('[data-testid="session-unread"]');`,
+       return !!row && !row.querySelector('[data-signal="unread"]');`,
       { label: "session marked read" },
     );
 

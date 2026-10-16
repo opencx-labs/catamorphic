@@ -17,7 +17,6 @@ describe("sidebar presentation", () => {
             sections: [
               {
                 id: "private-links",
-                type: "custom",
                 items: [
                   { label: "Hidden", url: "https://example.test/private" },
                 ],
@@ -30,11 +29,10 @@ describe("sidebar presentation", () => {
             id: "work",
             title: "Work",
             sections: [
-              { id: "git", type: "git" },
-              { id: "remote", type: "remote" },
+              { id: "git", source: "work:git" },
+              { id: "remote", source: "work:remote" },
               {
                 id: "links",
-                type: "custom",
                 items: [
                   {
                     label: "Folder",

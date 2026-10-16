@@ -3,20 +3,23 @@ import { useEffect, useMemo, useState } from "react";
 import type { OpenMode as CommitMode } from "../../../shared/open-mode.js";
 import { webUsageKey } from "../../../shared/palette.js";
 import {
-  resolveSidebarSection,
   type SidebarItem,
   type SidebarSectionConfig,
+  sectionModule,
+  workSourceName,
 } from "../../../shared/sidebar.js";
 import type { SidebarSourceItem } from "../../../shared/sidebar-source.js";
 import {
-  isWorkspaceSource,
   sidebarSections,
   type WorkspaceConfig,
 } from "../../../shared/workspace-config.js";
 import { sidebarItemPresentation } from "../../components/sidebar-contribution.js";
-import { desktopApi } from "../../lib/desktop-api.js";
 import { lucideIcon } from "../../lib/lucide-icon.js";
-import type { WorkspaceSources } from "../../lib/workspace-sources.js";
+import type { SectionSource } from "../../sources/contract.js";
+import { itemsSource } from "../../sources/items.js";
+import { moduleSource } from "../../sources/module.js";
+import type { WorkSources } from "../../sources/registry.js";
+import { runRowAction } from "../../sources/run.js";
 import { loadSourceRows } from "../sources.js";
 import type { PaletteItem, PaletteMode } from "../types.js";
 
@@ -26,264 +29,164 @@ export interface RowOwner {
   title: string;
 }
 
-/** A source row as a palette row: open its url, else run its first command. */
-function sourceRow({
-  owner,
-  item,
-  parent,
-  icon,
-  onOpenUrl,
-  onRun,
-}: {
-  owner: RowOwner;
-  item: SidebarItem & { id: string };
-  parent?: string;
-  icon: LucideIcon;
-  onOpenUrl: (url: string, commit: CommitMode) => void;
-  onRun?: (itemId: string, action: string) => void;
-}): PaletteItem {
-  const command = [...(item.actions ?? []), ...(item.menu ?? [])].find(
-    (entry) => entry.action.startsWith("run:") && !entry.disabledReason,
-  );
-  const url = item.url;
-  return {
-    id: `mode:${owner.id}:${item.id}`,
-    icon: lucideIcon(item.icon) ?? icon,
-    label: item.label,
-    detail: item.description ?? parent,
-    keywords: [...(item.keywords ?? []), ...(item.badges ?? [])],
-    category: "resource",
-    usage: url ? webUsageKey(url) : `mode:${owner.id}:${item.id}`,
-    disabled: !url && !(command && onRun),
-    kind: url ? "navigate" : "action",
-    run: (commit) => {
-      if (url) onOpenUrl(url, commit);
-      else if (command && onRun)
-        onRun(item.id, command.action.slice("run:".length));
-    },
-  };
-}
-
-/** Static rows open urls; folders contribute their children, flat. */
-function flatten(
-  items: readonly SidebarItem[] | undefined,
-  parent?: string,
-): Array<{ item: SidebarItem & { id: string }; parent?: string }> {
-  return (items ?? []).flatMap((item) => [
-    ...(item.url
-      ? [{ item: { ...item, id: item.id ?? item.label }, parent }]
-      : []),
-    ...flatten(item.items, item.label),
-  ]);
-}
-
-const MODULE_ROW_LIMIT = 1000;
-const MODULE_PAGE_LIMIT = 50;
+const ROW_LIMIT = 1000;
+const PAGE_LIMIT = 50;
 
 /**
- * Every row a module offers, roots first, then children, up to the limits.
- * A searching source returns its best matches in one page: only that page
- * is read, per keystroke.
+ * Every row a source offers, roots first, then children, up to the limits.
+ * A source that searches (search "source") returns its best matches in one
+ * page: only that page is read, per keystroke.
  */
-async function loadModuleRows({
-  projectId,
-  sourceId,
+async function sourceRows({
+  source,
   query,
   signal,
 }: {
-  projectId: string;
-  sourceId: string;
+  source: SectionSource;
   query?: string;
   signal: AbortSignal;
 }): Promise<Array<{ item: SidebarSourceItem; parent?: string }>> {
   const rows: Array<{ item: SidebarSourceItem; parent?: string }> = [];
+  // A page may start a few rows early (chats do, so none is skipped): each
+  // row is listed once.
+  const listed = new Set<string>();
   const queue: Array<{ parentId: string | null; parent?: string }> = [
     { parentId: null },
   ];
   let pages = 0;
-  while (queue.length && rows.length < MODULE_ROW_LIMIT) {
+  while (queue.length && rows.length < ROW_LIMIT) {
     const next = queue.shift();
     if (!next) break;
     let cursor: string | undefined;
     const seen = new Set<string>();
     do {
-      if (++pages > MODULE_PAGE_LIMIT) return rows;
+      if (++pages > PAGE_LIMIT) return rows;
       signal.throwIfAborted();
-      const requestId = crypto.randomUUID();
-      const cancel = () => void desktopApi.sidebarSourceCancel(requestId);
-      signal.addEventListener("abort", cancel, { once: true });
-      try {
-        const page = await desktopApi.sidebarSourceRequest({
-          projectId,
-          sectionId: sourceId,
-          requestId,
-          method: "load",
-          parentId: next.parentId,
-          cursor,
-          ...(query !== undefined ? { query } : {}),
-        });
-        if (!page) throw new Error("Source returned no collection page.");
-        for (const item of page.items) {
-          if (item.hide) continue;
-          rows.push({ item, parent: next.parent });
-          // A source that searches returns matches, not a tree to walk.
-          if (item.hasChildren && query === undefined)
-            queue.push({ parentId: item.id, parent: item.label });
-        }
-        // Stop on a repeated cursor or an empty page: a source that keeps
-        // answering "more" without rows must not page forever.
-        cursor =
-          query === undefined &&
-          page.items.length > 0 &&
-          page.cursor &&
-          !seen.has(page.cursor)
-            ? page.cursor
-            : undefined;
-        if (cursor) seen.add(cursor);
-      } finally {
-        signal.removeEventListener("abort", cancel);
+      const page = await source.load({
+        parentId: next.parentId,
+        cursor,
+        signal,
+        size: 100,
+        ...(query !== undefined ? { query } : {}),
+      });
+      for (const item of page.items) {
+        if (item.hide || listed.has(item.id)) continue;
+        listed.add(item.id);
+        rows.push({ item, parent: next.parent });
+        // A source that searches returns matches, not a tree to walk.
+        if (item.hasChildren && query === undefined)
+          queue.push({ parentId: item.id, parent: item.label });
       }
-    } while (cursor && rows.length < MODULE_ROW_LIMIT);
+      // Stop on a repeated cursor or an empty page: a source that keeps
+      // answering "more" without rows must not page forever.
+      cursor =
+        query === undefined &&
+        page.items.length > 0 &&
+        page.cursor &&
+        !seen.has(page.cursor)
+          ? page.cursor
+          : undefined;
+      if (cursor) seen.add(cursor);
+    } while (cursor && rows.length < ROW_LIMIT);
   }
-  return rows.slice(0, MODULE_ROW_LIMIT);
-}
-
-/** Static rows (custom section or mode items) as palette rows. */
-export function staticRows({
-  owner,
-  items,
-  icon,
-  onOpenUrl,
-}: {
-  owner: RowOwner;
-  items: readonly SidebarItem[] | undefined;
-  icon: LucideIcon;
-  onOpenUrl: (url: string, commit: CommitMode) => void;
-}): PaletteItem[] {
-  return flatten(items).map(({ item, parent }) =>
-    sourceRow({ owner, item, parent, icon, onOpenUrl }),
-  );
+  return rows.slice(0, ROW_LIMIT);
 }
 
 /**
- * A module source's rows (section or mode, by id). Enter opens a row's url
- * or runs its first run: action; the worker invalidates the source's views
- * after an action, so a sidebar section over the same module refreshes.
+ * A source's rows as palette rows: Enter opens a row's address, or runs its
+ * source's open action when it has none, the way a click on the row does.
  */
-export async function moduleRows({
+async function paletteRows({
   owner,
-  projectId,
+  source,
   icon,
   query,
   signal,
-  onOpenUrl,
+  open,
   onError,
+  keep = () => true,
 }: {
   owner: RowOwner;
-  projectId: string;
+  source: SectionSource;
   icon: LucideIcon;
   query?: string;
   signal: AbortSignal;
-  onOpenUrl: (url: string, commit: CommitMode) => void;
+  open: (url: string, mode: CommitMode) => void;
   onError: (message: string) => void;
+  keep?: (item: SidebarSourceItem) => boolean;
 }): Promise<PaletteItem[]> {
-  const onRun = (itemId: string, action: string) => {
-    void desktopApi
-      .sidebarSourceRequest({
-        projectId,
-        sectionId: owner.id,
-        requestId: crypto.randomUUID(),
-        method: "action",
-        itemId,
-        action,
-      })
-      .catch((cause: unknown) =>
-        onError(
-          cause instanceof Error && cause.message
-            ? cause.message
-            : `${owner.title}: the action failed.`,
-        ),
-      );
-  };
-  return (
-    await loadModuleRows({
-      projectId,
-      sourceId: owner.id,
-      ...(query !== undefined ? { query } : {}),
-      signal,
-    })
-  ).map(({ item, parent }) =>
-    sourceRow({ owner, item, parent, icon, onOpenUrl, onRun }),
-  );
+  return (await sourceRows({ source, query, signal }))
+    .filter(({ item }) => keep(item) && (item.url || !item.hasChildren))
+    .map(({ item, parent }): PaletteItem => {
+      const url = item.url;
+      return {
+        id: `mode:${owner.id}:${item.id}`,
+        icon: lucideIcon(item.icon) ?? icon,
+        label: item.label,
+        detail: item.description ?? parent,
+        keywords: [
+          ...(item.keywords ?? []),
+          ...(item.badges ?? []).map((badge) =>
+            typeof badge === "string" ? badge : badge.label,
+          ),
+        ],
+        category: "resource",
+        usage: url ? webUsageKey(url) : `mode:${owner.id}:${item.id}`,
+        disabled: !url && !source.action,
+        kind: url ? "navigate" : "action",
+        run: (commit) =>
+          void runRowAction({
+            source,
+            row: item,
+            itemId: item.id,
+            action: "open",
+            mode: commit,
+            signal: new AbortController().signal,
+            open,
+          }).catch((cause: unknown) =>
+            onError(
+              cause instanceof Error && cause.message
+                ? cause.message
+                : `${owner.title}: the action failed.`,
+            ),
+          ),
+      };
+    });
 }
 
 /**
- * The rows behind a sidebar section, for its palette search: its module,
- * its static items, or its workspace source with the section's own
- * filter and sort. Sections with their own view state (a selected
- * checkout, a review filter) search what they show instead.
+ * The rows behind a sidebar section, for its palette search: the same
+ * source the section draws, without what the section hides.
  */
 export async function sectionRows({
   section,
-  sources,
-  projectId,
-  memberShell,
+  source,
   signal,
-  onOpenUrl,
+  open,
   onError,
 }: {
   section: SidebarSectionConfig;
-  sources: WorkspaceSources;
-  projectId: string;
-  /** Connected projects run no local modules (ADR 0140). */
-  memberShell: boolean;
+  source: SectionSource;
   signal: AbortSignal;
-  onOpenUrl: (url: string, commit: CommitMode) => void;
+  open: (url: string, mode: CommitMode) => void;
   onError: (message: string) => void;
 }): Promise<PaletteItem[]> {
-  const owner = { id: section.id, title: section.title ?? section.type };
-  const icon = Search;
-  // What the section hides stays out of its search.
-  const shown = (id: string) => !sidebarItemPresentation({ section, id }).hide;
-  if (section.source?.module)
-    return memberShell
-      ? []
-      : (
-          await moduleRows({
-            owner,
-            projectId,
-            icon,
-            signal,
-            onOpenUrl,
-            onError,
-          })
-        ).filter((row) => shown(row.id.slice(`mode:${owner.id}:`.length)));
-  const type = resolveSidebarSection(section).type;
-  if (type === "custom")
-    return staticRows({ owner, items: section.items, icon, onOpenUrl });
-  if (!isWorkspaceSource(type)) return [];
-  // A chats section scoped to the current chat lists its children.
-  const scoped =
-    (type === "chats" || type === "subsessions") &&
-    section.source?.scope &&
-    section.source.scope !== "project"
-      ? "subsessions"
-      : type;
-  return loadSourceRows({
-    sources,
-    source: scoped,
-    projectId,
-    filter: section.source,
+  return paletteRows({
+    owner: { id: section.id, title: section.title || source.title },
+    source,
+    icon: Search,
     signal,
+    open,
     onError,
-    keep: (item) => shown(item.id),
+    keep: (item) => !sidebarItemPresentation({ section, id: item.id }).hide,
   });
 }
 
 /**
- * workspace.js palette modes as palette modes (ADR 0186). Module sources run
- * in the same local Bun process as sidebar sections; member shells, where
- * local code never runs, list only static modes.
+ * workspace.js palette modes as palette modes (ADR 0186, 0234): rows from a
+ * source (one of Work's lists, or a module in its Bun process), a section,
+ * or static items. Member shells, where local code never runs, list no
+ * module modes.
  */
 export function customPaletteModes({
   config,
@@ -299,7 +202,7 @@ export function customPaletteModes({
   onOpenUrl: (url: string, commit: CommitMode) => void;
   /** A row's action failed after the palette closed. */
   onError: (message: string) => void;
-  sources: WorkspaceSources;
+  sources: WorkSources;
 }): Array<PaletteMode & { topLevel: boolean }> {
   const sections = sidebarSections(config);
   return (config?.palette?.modes ?? []).flatMap(
@@ -309,7 +212,6 @@ export function customPaletteModes({
         : undefined;
       // A mode over a section hidden here (when.permissions) hides with it.
       if (mode.section && !section) return [];
-      const module = mode.source?.module ?? section?.source?.module;
       const icon = lucideIcon(mode.icon) ?? Search;
       const base = {
         id: `custom:${mode.id}`,
@@ -322,31 +224,55 @@ export function customPaletteModes({
         topLevel: mode.topLevel === true,
       };
       const owner = { id: mode.id, title: mode.title };
-      // A built-in source (chats, bookmarks, ...), directly or through a
-      // section, with the mode's or section's own filter and sort.
-      const listed = mode.source ?? section?.source;
-      const builtin =
-        listed && !listed.module && isWorkspaceSource(listed.type)
-          ? listed.type
-          : section && !section.source && isWorkspaceSource(section.type)
-            ? section.type
-            : undefined;
-      if (builtin) {
+      const named = mode.source ?? section?.source;
+      const listed = workSourceName(named);
+      if (listed) {
         if (!projectId) return [];
         return [
           {
             ...base,
             rows: {
               kind: "load",
-              key: `${projectId}:${mode.id}:${JSON.stringify(listed ?? builtin)}`,
+              key: `${projectId}:${mode.id}:${listed}`,
               filtered: false,
               load: async (_query, signal) => ({
                 items: await loadSourceRows({
                   sources,
-                  source: builtin,
+                  source: listed,
                   projectId,
-                  filter: listed,
                   signal,
+                  onError,
+                  ...(section
+                    ? {
+                        keep: (item) =>
+                          !sidebarItemPresentation({ section, id: item.id })
+                            .hide,
+                      }
+                    : {}),
+                }),
+              }),
+            },
+          },
+        ];
+      }
+      const module = mode.source ?? sectionModule(section);
+      if (!module) {
+        const items: readonly SidebarItem[] =
+          mode.items ?? section?.items ?? [];
+        return [
+          {
+            ...base,
+            rows: {
+              kind: "load",
+              key: `${mode.id}:items:${JSON.stringify(items)}`,
+              filtered: false,
+              load: async (_query, signal) => ({
+                items: await paletteRows({
+                  owner,
+                  source: itemsSource({ items, ownerId: mode.id }),
+                  icon,
+                  signal,
+                  open: onOpenUrl,
                   onError,
                 }),
               }),
@@ -354,23 +280,15 @@ export function customPaletteModes({
           },
         ];
       }
-      if (!module)
-        return [
-          {
-            ...base,
-            rows: {
-              kind: "list",
-              items: staticRows({
-                owner,
-                items: mode.items ?? section?.items,
-                icon,
-                onOpenUrl,
-              }),
-            },
-          },
-        ];
       if (memberShell || !projectId) return [];
       const filtered = mode.search === "source";
+      // A mode over a section runs the section's module, by its id.
+      const source = moduleSource({
+        projectId,
+        ownerId: mode.source ? mode.id : (section?.id ?? mode.id),
+        title: mode.title,
+        work: sources,
+      });
       return [
         {
           ...base,
@@ -380,13 +298,13 @@ export function customPaletteModes({
             filtered,
             debounceMs: 200,
             load: async (query, signal) => ({
-              items: await moduleRows({
+              items: await paletteRows({
                 owner,
-                projectId,
+                source,
                 icon,
                 ...(filtered ? { query } : {}),
                 signal,
-                onOpenUrl,
+                open: onOpenUrl,
                 onError,
               }),
             }),

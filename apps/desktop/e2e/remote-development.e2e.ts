@@ -91,6 +91,22 @@ const settled = () =>
 const shot = (name: string) =>
   app.screenshot(path.join(ARTIFACTS, `remote-development-${name}.png`));
 
+/** The connected project's row in the Server section (ADR 0234). */
+const serverRow = `[data-sidebar-section="remote"] [data-sidebar-item-id="server"]`;
+/** Pick an entry from the Server row's menu: its dialogs live there. */
+async function serverMenu(label: string): Promise<void> {
+  // The row settles as the connection's status arrives: open its menu once
+  // the row offers one.
+  await runWait(
+    `const button = $('${serverRow} [aria-haspopup="menu"]'); if (!button) return false; button.click(); return true;`,
+    { label: "the server row's menu" },
+  );
+  await runWait(
+    `const item = $$('[data-sidebar-menu] [role="menuitem"]').find((el) => el.textContent.trim() === ${JSON.stringify(label)}); if (!item) return false; item.click(); return true;`,
+    { label: `${label} in the server's menu` },
+  );
+}
+
 /** Run a command from the Cmd+P palette by its label. */
 async function command(label: string): Promise<void> {
   await runWait(`return !overlayOpen();`, { label: "palette closed" });
@@ -481,14 +497,14 @@ describe("remote development on a Work server", () => {
       `const button = $('[data-testid="remote-connect-submit"]'); if (!button || button.disabled) return false; button.click(); return true;`,
       { label: "connect" },
     );
-    await runWait(`return !!$('[data-testid="remote-secrets"]');`, {
+    await runWait(`return !!$('${serverRow}');`, {
       timeoutMs: 90_000,
       label: "connected project",
     });
   }, 240_000);
 
   it("sets his own value of a secret, never shown again", async () => {
-    await run(`$('[data-testid="remote-secrets"]').click(); return true;`);
+    await serverMenu("Secrets");
     await runWait(
       `return $$('[data-testid="remote-secret"]').length === 2 && !!$('[aria-label="Set Your value of CLICKHOUSE_API_KEY"]');`,
       { label: "declared secrets" },
@@ -533,7 +549,7 @@ describe("remote development on a Work server", () => {
       path.join(projectDir, ".work", "personal", "environment.json"),
       `${JSON.stringify({ setup: 'echo "personal setup ran" > "$HOME/.personal-setup"' })}\n`,
     );
-    await run(`$('[data-testid="remote-environment"]').click(); return true;`);
+    await serverMenu("Remote environment");
     // Sent now rather than at the next check, which also reads the file.
     await runWait(
       `const button = byText('button', 'Send now'); if (!button || button.disabled) return false; button.click(); return true;`,
@@ -648,7 +664,7 @@ describe("remote development on a Work server", () => {
     await shot("preview");
   }, 240_000);
   it("signs in to Codex on his machine from the app", async () => {
-    await run(`$('[data-testid="remote-environment"]').click(); return true;`);
+    await serverMenu("Remote environment");
     await runWait(
       `return $$('[data-testid="remote-machine"]').length === 1 && $('[data-testid="remote-machine"]').textContent.includes('Codex not signed in');`,
       { timeoutMs: 35_000, label: "his machine" },

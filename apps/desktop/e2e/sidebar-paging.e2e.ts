@@ -1,9 +1,10 @@
 import path from "node:path";
 import { afterAll, beforeAll, expect, it } from "vitest";
 import { type AppHandle, launchApp } from "./harness.js";
+import { CHATS_SECTION, writeSidebarSections } from "./sidebar-config.js";
 
 /**
- * The Chats section reads its first 30 chats, then the next page as the
+ * A Chats section (`work:chats`) reads its first 30 chats, then the next page as the
  * person scrolls toward the end: placeholder rows hold the end while it
  * loads, and the rows arrive in their place.
  */
@@ -58,6 +59,7 @@ beforeAll(async () => {
     });
     expect(response.status).toBe(201);
   }
+  await writeSidebarSections(app, [CHATS_SECTION]);
   await app.reload();
   await app.waitFor(hasRow(CHATS - 1), {
     timeoutMs: 60_000,

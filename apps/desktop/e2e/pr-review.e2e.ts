@@ -1,5 +1,7 @@
+import fs from "node:fs";
 import { APP_PROTOCOL_VERSION } from "@catamorphic/app";
 import { afterAll, beforeAll, expect, it } from "vitest";
+import { DEFAULT_WORKSPACE_CONFIG } from "../src/main/workspace-config.js";
 import {
   type AppHandle,
   type FrameHandle,
@@ -129,8 +131,39 @@ beforeAll(async () => {
   await app.eval(
     "window.catamorphicDesktop.setPrefs({ githubCliEnabled: true })",
   );
+  // Work's right sidebar starts empty (ADR 0234): the person lists the
+  // project's pull requests (work:prs) where they want them.
+  fs.writeFileSync(
+    await app.eval<string>("window.catamorphicDesktop.workspaceConfigFile()"),
+    `module.exports = ${JSON.stringify({
+      sidebars: {
+        left: DEFAULT_WORKSPACE_CONFIG.sidebars.left,
+        right: [
+          {
+            id: "companion",
+            title: "Activity",
+            icon: "Activity",
+            sections: [{ id: "activity", source: "work:activity" }],
+          },
+          {
+            id: "reviews",
+            title: "Proposals",
+            icon: "GitPullRequest",
+            sections: [{ id: "prs", source: "work:prs" }],
+          },
+        ],
+      },
+    })};\n`,
+  );
   await wait(
     "return !!$('[data-sidebar=right] [role=tab][aria-label=\"Proposals\"]');",
+  );
+  // It started empty, so closed: open it.
+  await run(
+    "[...document.querySelectorAll('[aria-label=\"Expand right sidebar\"]')].find(b => !b.closest('[inert]'))?.click();",
+  );
+  await wait(
+    "return $('[data-sidebar=right]')?.getAttribute('aria-hidden') === 'false';",
   );
   await run(
     "$('[data-sidebar=right] [role=tab][aria-label=\"Proposals\"]').click();",
@@ -142,6 +175,14 @@ beforeAll(async () => {
     "[...document.querySelectorAll('[data-sidebar=right] button')].find(b=>b.textContent.includes('Validate input before processing')).click();",
   );
   await wait("return !!$('[aria-label=\"Pull request details\"]');");
+  // The review gets the window's width back, as with the sidebar closed by
+  // default.
+  await run(
+    "[...document.querySelectorAll('[data-sidebar=right] [aria-label=\"Collapse right sidebar\"]')].find(b => !b.closest('[inert]'))?.click();",
+  );
+  await wait(
+    "return $('[data-sidebar=right]')?.dataset.motion === 'closed' && $('[data-sidebar=right]')?.dataset.settled === 'true';",
+  );
 });
 afterAll(async () => {
   const errors = app?.getRendererErrors() ?? [];

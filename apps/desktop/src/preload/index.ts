@@ -59,7 +59,10 @@ import type { MenuItem, PageContextMenu } from "../shared/menu.js";
 import type { OpenMode } from "../shared/open-mode.js";
 import type { PrCommentInput, PrDecisionInput } from "../shared/pr-details.js";
 import type { SettingsScope } from "../shared/settings.js";
-import type { SidebarSourceRequest } from "../shared/sidebar-source.js";
+import type {
+  SidebarSourceRequest,
+  SidebarSourceWorkCall,
+} from "../shared/sidebar-source.js";
 import type { DesktopUpdateState } from "../shared/update.js";
 import {
   VOICE_PORT_MESSAGE,
@@ -1515,6 +1518,34 @@ const api = {
     return () =>
       ipcRenderer.removeListener("catamorphic:sidebar-source-changed", handler);
   },
+  /** A module asking Work for something while it serves this window (ADR 0234). */
+  onSidebarSourceWork: (
+    listener: (event: {
+      callId: string;
+      projectId: string;
+      sectionId: string;
+      call: SidebarSourceWorkCall;
+    }) => void,
+  ) => {
+    const handler = (
+      _event: Electron.IpcRendererEvent,
+      value: {
+        callId: string;
+        projectId: string;
+        sectionId: string;
+        call: SidebarSourceWorkCall;
+      },
+    ) => listener(value);
+    ipcRenderer.on("catamorphic:sidebar-source-work", handler);
+    return () =>
+      ipcRenderer.removeListener("catamorphic:sidebar-source-work", handler);
+  },
+  sidebarSourceWorkResult: (input: {
+    callId: string;
+    ok: boolean;
+    value?: unknown;
+    error?: string;
+  }): Promise<void> => invoke("catamorphic:sidebar-source-work-result", input),
   // --- voice (ADR 0216); its settings are prefs ---
   voiceStatus: (): Promise<VoiceStatus> =>
     invoke("catamorphic:voice-get-status"),

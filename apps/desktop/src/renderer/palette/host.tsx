@@ -51,7 +51,6 @@ export interface PaletteHost {
   ) => void;
   /** Project-authored, caller-resolved zero-state actions. Empty means no UI. */
   startingActions: Array<{ label: string; prompt: string; agentId?: string }>;
-  canCreateWorkflows?: boolean;
   /**
    * A skill row was committed: send its invocation message to an agent —
    * into the focused chat when one exists, else a new chat in `mode`.

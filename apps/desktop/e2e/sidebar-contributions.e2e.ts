@@ -244,6 +244,9 @@ it("suspends expanded child IO when the whole section is collapsed", async () =>
   await app.eval(
     `document.querySelector('[data-sidebar-widget="subsessions"] .sidebar-section > div > button').click()`,
   );
+  // Reads already on their way when it closed land first (a timing entry
+  // is written when its response ends); from then on, nothing.
+  await app.eval("new Promise(resolve => setTimeout(resolve, 400))");
   const before = await app.eval<number>(branchReads);
   await app.eval("new Promise(resolve => setTimeout(resolve, 2200))");
   expect(await app.eval<number>(branchReads)).toBe(before);
@@ -260,7 +263,7 @@ it("mounts the real Codex-authored live widget through the sandboxed app bridge"
   const source = fs.readFileSync(file, "utf8");
   fs.writeFileSync(
     file,
-    `${source}\nmodule.exports.sidebars.right.find(tab => tab.id === "focused-chat").sections = module.exports.sidebars.right.find(tab => tab.id === "focused-chat").sections.filter(section => section.id !== "agent-monitor"); module.exports.sidebars.right.find(tab => tab.id === "focused-chat").sections.push({id:"agent-monitor",type:"app",app:"agent-monitor",title:"Agent monitor",height:320,hideEmpty:true,collections:["subsessions"]});\n`,
+    `${source}\nmodule.exports.sidebars.right.find(tab => tab.id === "focused-chat").sections = module.exports.sidebars.right.find(tab => tab.id === "focused-chat").sections.filter(section => section.id !== "agent-monitor"); module.exports.sidebars.right.find(tab => tab.id === "focused-chat").sections.push({id:"agent-monitor",app:"agent-monitor",title:"Agent monitor",height:320,hideEmpty:true,collections:["subsessions"]});\n`,
   );
   try {
     await app.waitFor(
