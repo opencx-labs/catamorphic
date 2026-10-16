@@ -71,6 +71,8 @@ static atomic_bool stretchBroken = false;
  */
 static os_unfair_lock clickLock = OS_UNFAIR_LOCK_INIT;
 static CGPoint click;
+/** The window clicked in, by its number; 0 when unknown. */
+static int64_t clickWindow = 0;
 static atomic_bool clicked = false;
 /** A shortcut whose hold ended before its key came up: its key is still ours. */
 static int64_t swallowing = -1;
@@ -110,6 +112,7 @@ static CGEventRef onEvent(CGEventTapProxy proxy, CGEventType type,
       say("up", bindings[held].name);
       held = -1;
     }
+    swallowing = -1;
     return event;
   }
   if (CGEventGetIntegerValueField(event, kCGEventSourceUserData) ==
@@ -121,6 +124,8 @@ static CGEventRef onEvent(CGEventTapProxy proxy, CGEventType type,
     if (atomic_load(&stretchLive)) {
       os_unfair_lock_lock(&clickLock);
       click = CGEventGetLocation(event);
+      clickWindow = CGEventGetIntegerValueField(
+          event, kCGMouseEventWindowUnderMousePointer);
       os_unfair_lock_unlock(&clickLock);
       atomic_store(&clicked, true);
     }
@@ -291,12 +296,35 @@ static bool inside(CFTypeRef element, CGPoint point) {
   return !known || CGRectContainsPoint((CGRect){origin, extent}, point);
 }
 
-/** A click since the last update in the stretch's field: the caret moved. */
+/** Whether a window is Work's own (its floating microphone, say). */
+static bool worksWindow(int64_t number) {
+  if (number <= 0) return false;
+  CFArrayRef windows = CGWindowListCopyWindowInfo(
+      kCGWindowListOptionIncludingWindow, (CGWindowID)number);
+  if (!windows) return false;
+  bool works = false;
+  if (CFArrayGetCount(windows) > 0) {
+    CFDictionaryRef info = CFArrayGetValueAtIndex(windows, 0);
+    CFNumberRef owner = CFDictionaryGetValue(info, kCGWindowOwnerPID);
+    pid_t pid = 0;
+    works = owner && CFNumberGetValue(owner, kCFNumberIntType, &pid) &&
+            pid == getppid();
+  }
+  CFRelease(windows);
+  return works;
+}
+
+/**
+ * A click since the last update in the stretch's field: the caret moved.
+ * Never one on Work's own windows, which take no focus.
+ */
 static bool clickedInField(void) {
   if (!atomic_exchange(&clicked, false)) return false;
   os_unfair_lock_lock(&clickLock);
   CGPoint point = click;
+  int64_t window = clickWindow;
   os_unfair_lock_unlock(&clickLock);
+  if (worksWindow(window)) return false;
   return !liveElement || inside(liveElement, point);
 }
 

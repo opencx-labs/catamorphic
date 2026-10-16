@@ -146,7 +146,9 @@ interface Dictation {
  */
 type DictationSink =
   | { kind: "field"; frame: WebFrameMain }
-  | { kind: "app"; spaced: boolean };
+  | { kind: "app"; spaced: boolean }
+  /** The person moved on mid-stretch: the rest of it is not written. */
+  | { kind: "settled" };
 
 interface ActiveVoice {
   profileId: string;
@@ -170,8 +172,13 @@ interface ActiveVoice {
   ending: boolean;
   /** Listening on its own; else only while held, and off once idle. */
   handsFree: boolean;
-  /** Heard before voice reached its chat: handed over once it does. */
+  /**
+   * Heard before voice reached its chat and the chat caught the person up
+   * (its news said first): handed over then.
+   */
   early: VoiceWorkerEvent[];
+  /** The conversation reading what the person has not heard, if any. */
+  catchingUp: VoiceConversation | null;
   /** Where the person was when they last spoke, when not in Work. */
   place: FrontPlace | null;
   idle: ReturnType<typeof setTimeout> | undefined;
@@ -656,7 +663,14 @@ export function registerVoiceSupport(deps: {
           sessions.interrupt(identity, target.projectId, target.sessionId),
       },
       speech: {
-        speak: (id, text) => send(voice, { type: "speak", id, text }),
+        // Speaking from the moment it is asked for: the worker says when
+        // it is spoken, or cut off, whatever happens to it.
+        speak: (id, text) => {
+          if (!text.trim()) return;
+          voice.speaking.add(id);
+          send(voice, { type: "speak", id, text });
+          update(voice);
+        },
         cue: () => send(voice, { type: "cue" }),
         stopSpeaking: () => send(voice, { type: "stop-speaking" }),
       },
@@ -677,8 +691,16 @@ export function registerVoiceSupport(deps: {
     });
     if (assistant) news.delete(profileId);
     update(voice, { target: targetOf(request), dictation: false });
+    // What the person missed is said first; what they said meanwhile
+    // goes to the chat after it.
+    const conversation = voice.conversation;
+    voice.catchingUp = conversation;
+    try {
+      await conversation.start();
+    } finally {
+      if (voice.catchingUp === conversation) voice.catchingUp = null;
+    }
     handOver(voice);
-    await voice.conversation.start();
     update(voice);
     // Choices made while voice was starting apply now.
     await follow(voice, prefs(profileId).load());
@@ -741,8 +763,8 @@ export function registerVoiceSupport(deps: {
         voice.hearing = false;
         break;
       case "utterance":
-        if (!voice.conversation) {
-          if (!connected(voice)) voice.early.push(event);
+        if (!voice.conversation || voice.catchingUp) {
+          if (!connected(voice) || voice.catchingUp) voice.early.push(event);
           return;
         }
         void heard(voice, voice.conversation, event.text);
@@ -823,7 +845,29 @@ export function registerVoiceSupport(deps: {
     if (!frame) return;
     // A page's profile is its window's.
     const contents = event.sender.hostWebContents ?? event.sender;
-    lastFields.set(windows.profileFor(contents), frame);
+    const profileId = windows.profileFor(contents);
+    lastFields.set(profileId, frame);
+    const voice = active;
+    if (voice?.profileId === profileId && voice.dictating)
+      settleElsewhere(voice.dictating, frame);
+  };
+  /**
+   * The person moved to a field in another page mid-stretch: what showed
+   * stays where it was, settled, and the rest of that stretch is theirs.
+   */
+  const settleElsewhere = (dictation: Dictation, frame: WebFrameMain) => {
+    for (const known of dictation.stretches.values()) {
+      const { sink } = known;
+      if (sink.kind !== "field" || sameFrame(sink.frame, frame)) continue;
+      known.sink = { kind: "settled" };
+      if (sink.frame.isDestroyed()) continue;
+      const words: VoiceDictation = {
+        segment: known.stretch,
+        text: known.text,
+        final: true,
+      };
+      sink.frame.send("catamorphic:voice-dictation", words);
+    }
   };
   ipcMain.on("catamorphic:voice-field-focus", onFieldFocus);
 
@@ -863,6 +907,7 @@ export function registerVoiceSupport(deps: {
     known.text = event.text;
     const { sink, stretch } = known;
     if (event.final) dictation.stretches.delete(event.segment);
+    if (sink.kind === "settled") return;
     if (sink.kind === "app") {
       systemKeys?.dictate(
         stretch,
@@ -963,6 +1008,7 @@ export function registerVoiceSupport(deps: {
       ending: false,
       handsFree: options.handsFree,
       early: [],
+      catchingUp: null,
       place: null,
       idle: undefined,
       finishing: undefined,
@@ -1270,7 +1316,14 @@ export function registerVoiceSupport(deps: {
   app.on("browser-window-created", onWindowCreated);
   // Work coming in front, or going behind another app, moves the bubble.
   app.on("browser-window-focus", refreshBubble);
-  app.on("browser-window-blur", refreshBubble);
+  // Focus moving between Work's windows blurs one before the next is
+  // focused: the bubble waits to see whether Work is still in front.
+  let bubbleBlur: ReturnType<typeof setTimeout> | undefined;
+  const onBubbleBlur = () => {
+    clearTimeout(bubbleBlur);
+    bubbleBlur = setTimeout(refreshBubble, 100);
+  };
+  app.on("browser-window-blur", onBubbleBlur);
   app.on("did-become-active", refreshBubble);
   app.on("did-resign-active", refreshBubble);
 
@@ -1447,13 +1500,18 @@ export function registerVoiceSupport(deps: {
     if (!systemKeys || disposed) return;
     const profileId = keysProfile();
     const shortcuts = profileId ? shortcutsFor(profileId) : {};
-    if (Object.keys(shortcuts).length === 0) {
+    // A key the helper held is let go with it.
+    const stopKeys = () => {
       systemKeys.stop();
+      if (press?.helper) pressUp();
+    };
+    if (Object.keys(shortcuts).length === 0) {
+      stopKeys();
       setKeysState("app");
       return;
     }
     if (!systemPreferences.isTrustedAccessibilityClient(false)) {
-      systemKeys.stop();
+      stopKeys();
       setKeysState("needs-permission");
       return;
     }
@@ -1549,7 +1607,8 @@ export function registerVoiceSupport(deps: {
       app.off("browser-window-created", onWindowCreated);
       app.off("browser-window-created", onKeysWindow);
       app.off("browser-window-focus", refreshBubble);
-      app.off("browser-window-blur", refreshBubble);
+      app.off("browser-window-blur", onBubbleBlur);
+      clearTimeout(bubbleBlur);
       app.off("did-become-active", refreshBubble);
       app.off("did-resign-active", refreshBubble);
       app.off("browser-window-focus", onWindowFocus);
@@ -1592,6 +1651,16 @@ async function ensureMicrophone(): Promise<void> {
   if (await systemPreferences.askForMediaAccess("microphone")) return;
   throw new Error(
     "Work cannot use the microphone. Allow it in System Settings, Privacy & Security, Microphone.",
+  );
+}
+
+function sameFrame(a: WebFrameMain, b: WebFrameMain): boolean {
+  return (
+    a === b ||
+    (!a.isDestroyed() &&
+      !b.isDestroyed() &&
+      a.processId === b.processId &&
+      a.routingId === b.routingId)
   );
 }
 

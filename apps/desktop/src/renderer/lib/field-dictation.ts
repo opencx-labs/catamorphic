@@ -128,6 +128,11 @@ export class FieldDictation {
       }
       start = shown.start;
       end = start + shown.text.length;
+      // The person moved the caret or selected (Command-A): theirs now.
+      if (field.selectionStart !== end || field.selectionEnd !== end) {
+        this.settle();
+        return;
+      }
     }
     if (!final) {
       const preview = spaced(field.value.slice(0, start).at(-1), text);

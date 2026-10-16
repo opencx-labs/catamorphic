@@ -28,6 +28,9 @@ export function createVoiceBubble(options: {
 
   const open = () => {
     const next = new BrowserWindow({
+      // A panel on macOS: over full-screen apps and on every Space, and a
+      // click on it never brings Work forward.
+      ...(process.platform === "darwin" ? { type: "panel" } : {}),
       width: SIZE,
       height: SIZE,
       show: false,
@@ -48,7 +51,11 @@ export function createVoiceBubble(options: {
       },
     });
     next.setAlwaysOnTop(true, "floating");
-    next.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+    // Not `visibleOnFullScreen`: Electron implements that by turning the
+    // whole app into a UIElement, which drops Work from the Dock and the
+    // app switcher.
+    if (process.platform === "linux")
+      next.setVisibleOnAllWorkspaces(true, { skipTransformProcessType: true });
     if (process.platform === "darwin") next.excludedFromShownWindowsMenu = true;
     next.once("ready-to-show", () => {
       if (window === next && wanted) place(next);

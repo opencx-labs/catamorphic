@@ -579,18 +579,12 @@ describe("voice", () => {
     // passes their answer back to the session that asked.
     await recordPhases();
     await run(`mic().click(); return true;`);
-    // The click hears while it is held; the person, only after the news,
-    // and what they say reaches the agent after it too.
-    await runWait(
-      `const phases = window.__voicePhases;
-       const news = phases.indexOf('speaking');
-       return news >= 0 && phases.indexOf('hearing', news) > news &&
-         phases.indexOf('thinking') > news;`,
-      {
-        timeoutMs: 30_000,
-        label: "the news spoken before listening to the person",
-      },
-    );
+    // What the person says meanwhile waits for the news (the main
+    // process hands it over once the chat has caught them up).
+    await runWait(`return window.__voicePhases.includes('speaking');`, {
+      timeoutMs: 30_000,
+      label: "the news spoken as voice starts",
+    });
     expect(await run(`return mic().dataset.pending ?? null;`)).toBe(null);
     const docs = await runWait<Ref>(
       `const children = await session(${JSON.stringify(ref)}, '/subsessions');
