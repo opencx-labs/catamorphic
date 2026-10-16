@@ -334,10 +334,19 @@ export async function launchApp(opts: LaunchOpts = {}): Promise<AppHandle> {
             await terminate(child, { sampleTo: artifactDirectory });
         } catch (error) {
           throw new Error(
-            `${String(error)}\n--- app output ---\n${output.slice(-4000)}`,
+            `${String(error)}${mainProcessErrors(output)
+              .map((failure) => `\n${failure}`)
+              .join("")}\n--- app output ---\n${output.slice(-4000)}`,
           );
         }
         if (!opts?.preserveUserData) removeE2eDirectory(userDataDir);
+        // A main-process error the app printed (main/index.ts) fails the
+        // run that saw it, by name, though the app quit.
+        const failures = mainProcessErrors(output);
+        if (failures.length > 0)
+          throw new Error(
+            `The main process failed during this run:\n${failures.join("\n")}`,
+          );
       },
       kill: async () => {
         ws.close();
@@ -699,6 +708,22 @@ export async function pointerOnPage(
       throw new Error(`${input.selector} never took the pointer`);
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
+}
+
+/**
+ * Errors the main process did not catch, as it printed them under test
+ * (main/index.ts), each with its stack up to the next log line.
+ */
+export function mainProcessErrors(output: string): string[] {
+  const marker = "[desktop] Main process ";
+  const failures: string[] = [];
+  for (
+    let at = output.indexOf(marker);
+    at !== -1;
+    at = output.indexOf(marker, at + marker.length)
+  )
+    failures.push(output.slice(at, at + 3000).split("\n[")[0] ?? "");
+  return failures;
 }
 
 export async function terminate(

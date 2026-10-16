@@ -19,6 +19,7 @@ import {
   WorkflowEditorScope,
   WorkflowReview,
 } from "@catamorphic/ui";
+import { useQuery } from "@tanstack/react-query";
 import { useAtomValue, useSetAtom } from "jotai";
 import { ChevronRight, Code2, ExternalLink, Play, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -47,6 +48,7 @@ import {
 } from "../components/workflow-status.js";
 import type { WorkflowDraft } from "../components/workspace-tabs.js";
 import { desktopApi } from "../lib/desktop-api.js";
+import { localEditorPath } from "../lib/local-project-files.js";
 import { useMonacoTheme } from "../lib/monaco-setup.js";
 import { useTheme } from "../lib/theme.js";
 import "./workflow-screen.css";
@@ -174,6 +176,13 @@ function WorkflowWorkbench({
 }) {
   const theme = useTheme();
   const editorTheme = useMonacoTheme();
+  // Where its source is on this machine: the status popup copies that, as
+  // a file's popup does.
+  const sourcePath = useQuery({
+    queryKey: ["file-location", projectId, filePath],
+    queryFn: () => localEditorPath(projectId, filePath),
+    enabled: Boolean(filePath),
+  });
   const workflow = useWorkflow(projectId, workflowName, {
     refetchInterval: active ? 2000 : false,
   });
@@ -451,6 +460,7 @@ function WorkflowWorkbench({
               graph={graph}
               workflowName={workflowName}
               filePath={filePath}
+              sourcePath={sourcePath.data}
               saving={write.isPending}
               dirty={dirty}
               conflict={conflict}

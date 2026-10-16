@@ -170,7 +170,10 @@ import {
   OPEN_EXTENSION_POPUP_EVENT,
   type OpenExtensionPopupDetail,
 } from "./lib/extensions.js";
-import { useFloatingMotion } from "./lib/floating-motion.js";
+import {
+  useFloatingMotion,
+  useRecedingSurface,
+} from "./lib/floating-motion.js";
 import { historyDestination } from "./lib/history.js";
 import {
   formatBinding,
@@ -1487,6 +1490,11 @@ export function App({
   const floatingMotion = useFloatingMotion(
     workspace.floatingKey ? `${projectId}:${workspace.floatingKey}` : undefined,
   );
+  const recedingSurface = useRecedingSurface({
+    identity: projectId,
+    activeTabKey: workspace.activeTabKey,
+    chats: workspace.chats,
+  });
   // Ref'd for the agent-bridge handler (a mount-time effect closure).
   const floatingMotionRef = useRef(floatingMotion);
   floatingMotionRef.current = floatingMotion;
@@ -5714,6 +5722,10 @@ export function App({
   const paneClass = (key: string) => {
     const slot = viewSlots[key];
     if (slot) return SLOT_CLASSES[slot] + paneGeometryTransition;
+    // What a floating chat grows over as it becomes a tab stays in place
+    // beneath it until the chat covers it (useRecedingSurface).
+    if (key === recedingSurface)
+      return `${SLOT_CLASSES.full} pointer-events-none`;
     // Browser panes keep their layout while hidden — a display:none
     // webview detaches its guest and background pages would stop
     // loading (worse for agent-driven tabs).
@@ -6427,6 +6439,13 @@ export function App({
       onNew={openPaletteTab}
       onToggleGroup={toggleChatGroup}
       onReorder={reorderTab}
+      // An editor's tab acts on its file too (copy its path, show it, copy it).
+      tabFile={(key) => {
+        const filePath = workspace.editors.find(
+          (candidate) => editorTabKey(candidate.localId) === key,
+        )?.filePath;
+        return filePath && projectId ? { projectId, filePath } : undefined;
+      }}
       onDragStateChange={(key) => {
         setTabDragKey(key);
         if (!key) setDropSideHover(null);
@@ -6834,7 +6853,9 @@ export function App({
                   {workspace.tabs
                     .filter(
                       (tab) =>
-                        tab.kind === "workflow" || viewSlots[tabKey(tab)],
+                        tab.kind === "workflow" ||
+                        viewSlots[tabKey(tab)] ||
+                        tabKey(tab) === recedingSurface,
                     )
                     .map((tab) => (
                       <div

@@ -1009,10 +1009,54 @@ describe("agents and profiles", () => {
       `return $$('[data-testid="chat-queued-message"]').length === 1;`,
       { label: "queued behind the slow turn" },
     );
-    await run(`
+    // Every frame from the press until the message has arrived: the bubble
+    // looks sent at once, and the message takes over where it was, already
+    // shown, rather than rising in anew somewhere else.
+    type Box = { top: number; right: number };
+    const handover = await run<{
+      sending: boolean;
+      bubble: Box | null;
+      arrived: (Box & { opacity: number }) | null;
+    }>(`
+      const box = (el) => { const r = el.getBoundingClientRect(); return { top: r.top, right: r.right }; };
+      let bubble = null;
+      let sending = false;
       $('[data-testid="chat-queued-send-now"]').click();
-      return true;
+      return new Promise((resolve) => {
+        const started = performance.now();
+        const sample = () => {
+          const queued = $('[data-testid="chat-queued-message"]');
+          if (queued) {
+            bubble = box(queued.firstElementChild);
+            sending ||= queued.dataset.sending === 'true' &&
+              queued.querySelector('[data-testid="chat-queued-state"]')?.textContent === 'Sending';
+          }
+          const message = $$('[role="log"] article[data-user-message]')
+            .find((el) => el.textContent.includes('urgent now'));
+          if (message) {
+            resolve({ sending, bubble, arrived: { ...box(message), opacity: Number(getComputedStyle(message).opacity) } });
+            return;
+          }
+          if (performance.now() - started > 20000) resolve({ sending, bubble, arrived: null });
+          else requestAnimationFrame(sample);
+        };
+        sample();
+      });
     `);
+    expect(handover.sending, JSON.stringify(handover)).toBe(true);
+    expect(handover.arrived?.opacity, JSON.stringify(handover)).toBeGreaterThan(
+      0.9,
+    );
+    expect(
+      Math.abs((handover.arrived?.top ?? 0) - (handover.bubble?.top ?? 1e6)),
+      JSON.stringify(handover),
+    ).toBeLessThan(8);
+    expect(
+      Math.abs(
+        (handover.arrived?.right ?? 0) - (handover.bubble?.right ?? 1e6),
+      ),
+      JSON.stringify(handover),
+    ).toBeLessThan(8);
     await runWait(
       `return $$('[role="log"] article')
         .some((el) => el.textContent.includes('You said: urgent now'));`,

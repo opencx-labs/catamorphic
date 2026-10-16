@@ -1488,6 +1488,13 @@ export interface CatamorphicDesktopApi {
   }) => Promise<void>;
   projectRoot: (projectId: string) => Promise<string | null>;
   revealFolder: (folderPath: string) => Promise<void>;
+  /** Puts a file on the clipboard as itself, for Finder, Mail or Slack to paste. */
+  copyFileToClipboard: (filePath: string) => Promise<void>;
+  /** A sheet on the window saying a file action could not be done. */
+  sayFileActionFailed: (input: {
+    message: string;
+    detail: string;
+  }) => Promise<void>;
   editorFileRead: (input: { filePath: string }) => Promise<{ content: string }>;
   projectLocalFiles: (projectId: string) => Promise<Array<{ path: string }>>;
   editorFileWrite: (input: {

@@ -2,6 +2,7 @@ import {
   createContext,
   type ReactNode,
   type RefObject,
+  type TransitionEvent,
   useCallback,
   useContext,
   useEffect,
@@ -592,6 +593,18 @@ export function InspectorPortal({
   // snapping it. The first measurement lands before paint, untransitioned.
   const [height, setHeight] = useState<number | null>(null);
   const [settled, setSettled] = useState(false);
+  // While the height glides taller, what has not glided into view yet is
+  // clipped rather than scrolled to: no scrollbar flashes through the
+  // growth. The stable gutter keeps the width either way.
+  const [gliding, setGliding] = useState(false);
+  const onGlide = (glides: boolean) => (event: TransitionEvent) => {
+    // React fills in propertyName for transitionend only: read the browser's.
+    if (
+      event.target === event.currentTarget &&
+      event.nativeEvent.propertyName === "height"
+    )
+      setGliding(glides);
+  };
   // Unseen until the reads its content reports pending land, or for at most
   // SETTLE_MAX_MS: it appears at its size (useInspectorPending).
   const [shown, setShown] = useState(false);
@@ -601,14 +614,20 @@ export function InspectorPortal({
   const overdue = useRef(false);
   const openRef = useRef(open);
   openRef.current = open;
+  const measureRef = useRef(() => {});
   // Only while it is open: a panel closed before it was seen never appears.
   const reveal = useCallback(() => {
     if (
       openRef.current &&
       measured.current &&
       (pending.current.size === 0 || overdue.current)
-    )
+    ) {
+      // A read that just landed grew the content in this commit; the
+      // ResizeObserver would report it a frame late, after the panel showed
+      // at its old height. Measured now, it appears at its size.
+      measureRef.current();
       setShown(true);
+    }
   }, []);
   const report = useCallback(
     (key: string, isPending: boolean) => {
@@ -626,7 +645,12 @@ export function InspectorPortal({
       overdue.current = true;
       reveal();
     }, SETTLE_MAX_MS);
-    return () => window.clearTimeout(timer);
+    return () => {
+      window.clearTimeout(timer);
+      // Effects torn down and set up again (StrictMode, a hidden subtree)
+      // withdraw the content's pending reads first: that is no landing.
+      measured.current = false;
+    };
   }, [reveal]);
   useLayoutEffect(() => {
     if (open) reveal();
@@ -654,6 +678,7 @@ export function InspectorPortal({
       );
     };
     const measure = () => setHeight(node.offsetHeight + chrome());
+    measureRef.current = measure;
     measure();
     const observer =
       typeof ResizeObserver === "undefined"
@@ -757,8 +782,11 @@ export function InspectorPortal({
         )
           onExited();
       }}
+      onTransitionRun={onGlide(true)}
+      onTransitionEnd={onGlide(false)}
+      onTransitionCancel={onGlide(false)}
       // Over a window's drag row its buttons must still take clicks.
-      className={`app-no-drag fixed z-[130] max-h-[calc(100vh-1rem)] max-w-[calc(100vw-1rem)] w-80 overflow-y-auto overscroll-contain rounded-lg border border-border bg-bg-overlay p-3 shadow-2xl [scrollbar-gutter:stable] ${settled ? "transition-[height,top] duration-200 ease-[cubic-bezier(0.2,0,0,1)] motion-reduce:transition-none" : ""} ${!shown ? "pointer-events-none opacity-0" : open ? `animate-inspector-in-${position.side}` : `pointer-events-none opacity-0 animate-inspector-out-${position.side}`}`}
+      className={`app-no-drag fixed z-[130] max-h-[calc(100vh-1rem)] max-w-[calc(100vw-1rem)] w-80 ${gliding ? "overflow-y-hidden" : "overflow-y-auto"} overscroll-contain rounded-lg border border-border bg-bg-overlay p-3 shadow-2xl [scrollbar-gutter:stable] ${settled ? "transition-[height,top] duration-200 ease-[cubic-bezier(0.2,0,0,1)] motion-reduce:transition-none" : ""} ${!shown ? "pointer-events-none opacity-0" : open ? `animate-inspector-in-${position.side}` : `pointer-events-none opacity-0 animate-inspector-out-${position.side}`}`}
     >
       <InspectorPendingContext.Provider value={report}>
         <div ref={content}>{children}</div>

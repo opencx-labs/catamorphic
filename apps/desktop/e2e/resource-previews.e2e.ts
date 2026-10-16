@@ -17,6 +17,15 @@ const run = <T = unknown>(body: string) =>
   app.eval<T>(`(()=>{${js}\n${body}})()`);
 const wait = (body: string) => app.waitFor(`(()=>{${js}\n${body}})()`);
 async function clear() {
+  // The real pointer rests on an empty stretch of the tab bar first. Left
+  // where a scenario put it, the chips row can grow under it, and a chip
+  // arriving there opens its preview again after Escape (on the macOS
+  // runner, a terminal's chip did).
+  await app.movePointer(
+    await app.eval<{ x: number; y: number }>(
+      "({ x: Math.round(innerWidth * 0.6), y: 12 })",
+    ),
+  );
   if (await run("return !!preview();")) await app.press("Escape");
   // Sidebar and outside interactions can park the floating chat. Restore it
   // before the next preview scenario edits the shared composer.

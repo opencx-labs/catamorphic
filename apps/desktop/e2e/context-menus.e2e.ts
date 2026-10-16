@@ -263,13 +263,22 @@ const rowMenu = async (label: string) => {
     `(() => { const el = ${row(label)}?.querySelector('[data-tree-primary], button'); if (!el) return false; const r = el.getBoundingClientRect(); const x = Math.round(r.x + r.width / 2), y = Math.round(r.y + r.height / 2); return r.width > 0 && el.contains(document.elementFromPoint(x, y)) && { x, y }; })()`,
     { label: `${label} row reachable` },
   );
-  // A window that is not key closes a menu as it opens (on blur).
-  await focusWindow(app);
-  await recordDismissals();
-  await mouse(point, "right");
-  await app.waitFor(`!!${menu}`, { label: `${label} menu open` });
-  await settled();
-  return point;
+  for (let attempt = 0; ; attempt += 1) {
+    // A window that is not key closes a menu as it opens (on blur).
+    await focusWindow(app);
+    await recordDismissals();
+    await mouse(point, "right");
+    await app.waitFor(`!!${menu}`, { label: `${label} menu open` });
+    try {
+      await settled();
+      return point;
+    } catch (cause) {
+      // The OS took key status from the window as the menu opened (once on
+      // macOS CI, right after a dialog closed): the window is made key again
+      // and the row right-clicked again. Anything else closing it fails.
+      if (attempt >= 1 || !String(cause).includes("blur window")) throw cause;
+    }
+  }
 };
 const toggleSidebar = () =>
   app.eval(`window.dispatchEvent(new KeyboardEvent('keydown', {

@@ -908,8 +908,12 @@ describe.skipIf(!databaseUrl)("reviewing pull requests (#118)", () => {
         .execute();
       return live.length === 0 ? true : undefined;
     });
-    expect(await originBranches()).not.toContain(
-      `refs/heads/sessions/${sessionId}`,
+    // Its branch goes last, after the grants, the workspace and the
+    // checkout (releaseClosedResources): the grants gone is not yet that.
+    await waitFor("the chat's branch to be deleted", async () =>
+      (await originBranches()).includes(`refs/heads/sessions/${sessionId}`)
+        ? undefined
+        : true,
     );
     expect(sandboxDir).not.toBe("");
     await waitFor("the sandbox to be destroyed", () =>

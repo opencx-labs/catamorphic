@@ -165,4 +165,63 @@ describe("SessionInspectorContent", () => {
     expect(locked?.disabled).toBe(true);
     expect(locked?.textContent).toBe("Plan");
   });
+
+  it("offers each fact's value to copy on its row, a model without its tag", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    await act(async () => {
+      root.render(
+        <SessionInspectorContent
+          session={session}
+          fallbackTitle="Chat"
+          agentName="Customer success"
+          model="claude-sonnet-5"
+          modelIsDefault
+          effort="high"
+          onEditModel={vi.fn()}
+          environmentControl={
+            <select aria-label="Environment">
+              <option>Customer success team</option>
+              <option>Support</option>
+            </select>
+          }
+          environmentLabel="Customer success team"
+          onManageConnections={vi.fn()}
+          incognito={false}
+        />,
+      );
+    });
+    const rows = [...container.querySelectorAll("dl > div")];
+    // Every fact but an action (Connections) has its copy, revealed while
+    // its row is hovered.
+    expect(
+      rows.map((row) => [
+        row.querySelector("dt")?.textContent,
+        row.querySelector('button[aria-label^="Copy "]')?.ariaLabel ?? null,
+        row.hasAttribute("data-copyable"),
+      ]),
+    ).toEqual([
+      ["Agent", "Copy agent", true],
+      ["Model", "Copy model", true],
+      ["Reasoning", "Copy reasoning", true],
+      ["Source", "Copy source", true],
+      ["Status", "Copy status", true],
+      ["Environment", "Copy environment", true],
+      ["Connections", null, false],
+      ["Updated", "Copy update time", true],
+    ]);
+    const copy = (label: string) =>
+      container.querySelector<HTMLButtonElement>(`[aria-label="${label}"]`);
+    // The model, not "default" after it; the environment as its picker names
+    // it, not every option the picker lists.
+    await act(async () => copy("Copy model")?.click());
+    expect(writeText).toHaveBeenLastCalledWith("claude-sonnet-5");
+    await act(async () => copy("Copy environment")?.click());
+    expect(writeText).toHaveBeenLastCalledWith("Customer success team");
+    await act(async () => copy("Copy source")?.click());
+    expect(writeText).toHaveBeenLastCalledWith("Slack");
+  });
 });
