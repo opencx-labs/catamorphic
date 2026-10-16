@@ -77,6 +77,7 @@ We built Work because we believe one well-built piece of software can replace mo
 - How agents are expected to work inside the repository itself: AGENTS.md and apps/desktop/AGENTS.md
 - What is being worked on next: TODO.md
 - The skills agents receive inside a project (how apps, workflows and sidebars are authored): packages/core/src/seeds.ts
+- Customizing the sidebars and palette modes, and writing a sidebar source (a module over Work's lists, files or any API): apps/desktop/docs/sidebar-sources.md
 
 ## Pages on this site
 
