@@ -54,7 +54,10 @@ describe("browser popups", () => {
       `window.open(${JSON.stringify(`${origin}/popup`)}, "signin", "width=480,height=640"); true`,
     );
     await app.waitFor(
-      `document.querySelector('webview').getTitle() === 'got:signed-in:object'`,
+      `document.querySelector('webview').getTitle().startsWith('got:')`,
+    );
+    expect(await app.eval(`document.querySelector('webview').getTitle()`)).toBe(
+      "got:signed-in:object",
     );
     // The popup was a window of its own, never a workspace tab.
     expect(await app.eval(`document.querySelectorAll('webview').length`)).toBe(

@@ -6,7 +6,8 @@ import { type AppHandle, launchApp } from "./harness.js";
  * A page meets Chrome: the request's User-Agent and, in JavaScript, the
  * user agent and its client hints are Chrome's, down to the reduced UA's
  * version (major.0.0.0) and the real full version in the hints that ask
- * for it. Google's supported-browser gate reads exactly these. (Client
+ * for it, and Chrome's `window.chrome`, in the page and in a frame from
+ * another origin. Google's supported-browser gate reads these. (Client
  * hint headers ride secure origins only, which this local server isn't.)
  */
 let app: AppHandle;
@@ -18,7 +19,22 @@ const server = http.createServer((request, response) => {
     userAgent: String(request.headers["user-agent"] ?? ""),
   });
   response.setHeader("Content-Type", "text/html");
-  response.end("<title>Identity</title><p>who am I</p>");
+  if (request.url === "/frame") {
+    // Reports what a frame from another origin sees of the browser.
+    response.end(`<script>
+      parent.postMessage({
+        members: Object.keys(window.chrome),
+        app: typeof window.chrome.app,
+        brands: navigator.userAgentData.brands.map((entry) => entry.brand),
+      }, "*");
+    </script>`);
+    return;
+  }
+  // localhost, not 127.0.0.1: the frame is another site, in its own process.
+  const frame = origin.replace("127.0.0.1", "localhost");
+  response.end(`<title>Identity</title><p>who am I</p>
+    <script>addEventListener("message", (event) => { window.frameReport = event.data; });</script>
+    <iframe src="${frame}/frame"></iframe>`);
 });
 const view = `document.querySelector('webview')`;
 const inGuest = <T>(code: string) =>
@@ -100,7 +116,7 @@ describe("a page's view of the browser", () => {
   });
 
   // Google's sign-in turns away a browser that says it is Chrome without
-  // `chrome.app` ("This browser or app may not be secure", ADR 0150), and
+  // `chrome.app` ("This browser or app may not be secure", ADR 0235), and
   // Electron's `window.chrome` is empty. The live check is
   // google-sign-in.e2e.ts.
   it("has Chrome's window.chrome", async () => {
@@ -112,7 +128,7 @@ describe("a page's view of the browser", () => {
       loadTimes: string[];
       csi: string[];
       loaded: boolean;
-      functions: { name: string; own: string[] }[];
+      functions: { name: string; own: string[]; native: boolean }[];
     }>(`(() => {
       const { app, loadTimes, csi } = window.chrome;
       const times = loadTimes();
@@ -127,6 +143,7 @@ describe("a page's view of the browser", () => {
         functions: [app.getDetails, loadTimes, csi].map((fn) => ({
           name: fn.name,
           own: Object.getOwnPropertyNames(fn).sort(),
+          native: Function.prototype.toString.call(fn).includes('[native code]'),
         })),
       };
     })()`);
@@ -162,11 +179,27 @@ describe("a page's view of the browser", () => {
     expect(page.csi).toEqual(["startE", "onloadT", "pageT", "tran"]);
     expect(page.loaded).toBe(true);
     // Chrome's methods are named and have no prototype; loadTimes and csi
-    // are anonymous constructors. All strict: no own arguments or caller.
+    // are anonymous constructors. None owns arguments or caller, and all
+    // read as native code.
     expect(page.functions).toEqual([
-      { name: "getDetails", own: ["length", "name"] },
-      { name: "", own: ["length", "name", "prototype"] },
-      { name: "", own: ["length", "name", "prototype"] },
+      { name: "getDetails", own: ["length", "name"], native: true },
+      { name: "", own: ["length", "name", "prototype"], native: true },
+      { name: "", own: ["length", "name", "prototype"], native: true },
     ]);
+  });
+
+  it("is Chrome's in a frame from another origin, too", async () => {
+    await app.waitFor(
+      `${view}.executeJavaScript('!!window.frameReport', true)`,
+      { label: "the frame's report" },
+    );
+    const frame = await inGuest<{
+      members: string[];
+      app: string;
+      brands: string[];
+    }>("window.frameReport");
+    expect(frame.members).toEqual(["loadTimes", "csi", "app"]);
+    expect(frame.app).toBe("object");
+    expect(frame.brands).toContain("Google Chrome");
   });
 });

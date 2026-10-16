@@ -28,16 +28,20 @@ function installInPage(
     navigation?: Partial<FakeNavigationTiming>;
     firstPaint?: number;
     now?: number;
+    /** The browser's own timing call fails. */
+    broken?: boolean;
   } = {},
 ) {
   const window = input.window ?? {};
   window.performance = {
     timeOrigin: 1792167008130.6,
     now: () => input.now ?? 3070.7311,
-    getEntriesByType: (type: string) =>
-      type === "navigation" && input.navigation
+    getEntriesByType: (type: string) => {
+      if (input.broken) throw new Error("no timing");
+      return type === "navigation" && input.navigation
         ? [new FakeNavigationTiming(input.navigation)]
-        : [],
+        : [];
+    },
     getEntriesByName: (name: string) =>
       name === "first-paint" && input.firstPaint !== undefined
         ? [{ startTime: input.firstPaint }]
@@ -46,10 +50,9 @@ function installInPage(
   const run = new Function(
     "globalThis",
     "location",
-    "PerformanceNavigationTiming",
     `(${installChromeObject.toString()})();`,
   );
-  run(window, { protocol: input.protocol ?? "https:" }, FakeNavigationTiming);
+  run(window, { protocol: input.protocol ?? "https:" });
   return window;
 }
 
@@ -102,6 +105,12 @@ describe("installChromeObject", () => {
     expect(app.getDetails.call({})).toBeNull();
   });
 
+  it("takes null for installState's callback, as Chrome does", () => {
+    const { app } = chromeOf(installInPage());
+    expect(app.installState(null)).toBeUndefined();
+    expect(app.installState(undefined)).toBeUndefined();
+  });
+
   it("answers installState after the call, never in it", async () => {
     const { app } = chromeOf(installInPage());
     const answers: unknown[] = [];
@@ -109,6 +118,23 @@ describe("installChromeObject", () => {
     expect(answers).toEqual([]);
     await new Promise((resolve) => setTimeout(resolve, 5));
     expect(answers).toEqual(["not_installed"]);
+  });
+
+  it("reads as native code, as Chrome's bindings do", () => {
+    const chrome = chromeOf(installInPage());
+    const source = (fn: unknown) => Function.prototype.toString.call(fn);
+    // Chrome's exact text for these two.
+    expect(source(chrome.loadTimes)).toBe("function () { [native code] }");
+    expect(source(chrome.csi)).toBe("function () { [native code] }");
+    expect(source(chrome.app.getDetails)).toContain("[native code]");
+    // Chrome's loadTimes and csi answer null; its app methods throw.
+    expect(Reflect.get(chrome.csi, "caller")).toBeNull();
+    expect(Reflect.get(chrome.loadTimes, "arguments")).toBeNull();
+    expect(() => Reflect.get(chrome.app.getDetails, "caller")).toThrow(
+      TypeError,
+    );
+    // The prototype names the function the page holds.
+    expect(Reflect.get(chrome.csi, "prototype").constructor).toBe(chrome.csi);
   });
 
   it("shapes each function as Chrome does", () => {
@@ -204,7 +230,34 @@ describe("installChromeObject", () => {
     expect(chromeOf(installInPage()).csi().onloadT).toBe(0);
   });
 
-  it("leaves members a page already has, and creates window.chrome", () => {
+  it("keeps answering when the page replaces its timing, or timing fails", () => {
+    const window = installInPage({
+      navigation: { domContentLoadedEventEnd: 102.1 },
+    });
+    // A page's script runs after the preload and may swap performance out.
+    window.performance = { now: () => 1 };
+    expect(chromeOf(window).csi()).toMatchObject({
+      startE: 1792167008130,
+      onloadT: 1792167008232,
+    });
+    const broken = chromeOf(installInPage({ broken: true }));
+    expect(broken.csi()).toEqual({
+      startE: 1792167008130,
+      onloadT: 0,
+      pageT: 0,
+      tran: 15,
+    });
+    expect(broken.loadTimes().finishLoadTime).toBe(0);
+  });
+
+  it("names no protocol for a page off the network", () => {
+    for (const protocol of ["about:", "data:", "file:"]) {
+      const times = chromeOf(installInPage({ protocol })).loadTimes();
+      expect(times.npnNegotiatedProtocol).toBe("");
+    }
+  });
+
+  it("leaves members already there, and creates window.chrome", () => {
     const own = { mine: true };
     const window = installInPage({ window: { chrome: { app: own } } });
     const chrome = chromeOf(window);

@@ -58,6 +58,9 @@ Local commands, main, and manual CI runs execute tests fresh.
 
 The stable `checks` job requires every lane and shard to succeed. Optional
 credentialed model evals remain separate and are excluded from PR checks.
+The live Google sign-in check (`e2e/google-sign-in.e2e.ts`) is skipped in
+these lanes; `.github/workflows/google-sign-in.yml` runs it daily on macOS
+and on pull requests that change what pages see of Work (ADR 0235).
 Desktop logs, screenshots, and JUnit results from executed suites are uploaded
 even after failure. Cache hits have a Turbo summary instead of new diagnostics.
 

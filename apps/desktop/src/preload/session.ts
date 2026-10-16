@@ -18,9 +18,9 @@ import { installWebStoreApis, type WebStoreBridge } from "./webstore-api.js";
  * worker of a profile's browsing session (ADR 0203). It must stay one
  * self-contained file: sandboxed renderers cannot load chunks.
  *  - Every page and worker presents Chrome's client-hint brands.
- *  - A web page's top frame, in a tab or a popup, has Chrome's
+ *  - A web page, in a tab, a popup or a tab's embedded frame, has Chrome's
  *    `window.chrome` (`loadTimes`, `csi`, `app`), which Google's sign-in
- *    looks for (chrome-object.ts).
+ *    looks for (chrome-object.ts, ADR 0235).
  *  - A web page's top frame, in a tab or in a sign-in popup it opened,
  *    answers passkey requests from the profile's vault (passkeys.ts).
  *  - An extension's service worker or page gets Work's `chrome.*` APIs
@@ -178,10 +178,15 @@ function attempt(job: () => void): void {
 }
 
 // A tab's embedded frames run the session's preloads too, for the tab
-// preload's page dialogs (ADR 0227). They get nothing of this one, as
-// before: everything here is for a top frame or a service worker.
+// preload's page dialogs (ADR 0227). They get Chrome's identity, as Chrome's
+// frames have it (ADR 0235), and nothing else of this one: the rest is for a
+// top frame or a service worker.
 if (process.type === "service-worker" || window.top === window)
   installForContext();
+else if (location.protocol !== "chrome-extension:") {
+  attempt(alignClientHintBrands);
+  attempt(installChromeWebObject);
+}
 
 function installForContext(): void {
   attempt(alignClientHintBrands);
