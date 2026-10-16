@@ -105,8 +105,10 @@ if (app.commandLine.hasSwitch("remote-debugging-port")) {
 // the Electron and app tokens here, before ready, makes every layer
 // (request headers, navigator.userAgent, navigator.userAgentData)
 // consistently Chrome. There is no "register as a browser with Google"
-// path; identical-engine browsers get blocked by name (Vivaldi proved
-// it by misspelling theirs), so shipping Chrome's identity IS the fix.
+// path, so Chrome's identity is the fix, but only whole: Google's sign-in
+// refuses a browser that says it is Chrome without `window.chrome.app`,
+// which the browsing session's preload supplies (preload/chrome-object.ts,
+// ADR 0235).
 // Whole tokens: a prerelease version ("0.1.0-alpha.8") left "-alpha.8"
 // dangling in the UA, which is not a Chrome UA any more. Chromium also
 // drops the spaces from the app name ("Work Development/1.2.3" is

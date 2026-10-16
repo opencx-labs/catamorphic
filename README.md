@@ -798,6 +798,7 @@ configuration is absent:
 - **Cloudflare Sandbox** (`packages/cloudflare`, `packages/core`): needs `CLOUDFLARE_SANDBOX_API_URL`, `CLOUDFLARE_SANDBOX_API_KEY`, and `CF_SANDBOX_INTEGRATION=1`. Start the sandbox bridge separately if the test needs it.
 - **Cloudflare Artifacts** (`packages/cloudflare`): needs `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN`, and `CLOUDFLARE_ARTIFACTS_NAMESPACE`; it skips with a warning while feature-gated.
 - **S3-compatible storage** (`packages/s3`): needs `S3_BUCKET`, `S3_ACCESS_KEY_ID`, and `S3_SECRET_ACCESS_KEY`. Set `S3_REGION` when the provider requires it, `S3_ENDPOINT` for R2, MinIO, or another non-AWS endpoint, and `S3_FORCE_PATH_STYLE=true` when that endpoint requires path-style requests.
+- **Google sign-in** (`apps/desktop/e2e/google-sign-in.e2e.ts`): takes the first step of Google's sign-in in a Work tab and fails when Google refuses Work. `bun run test:external` does not run it; run it in the desktop suite: `CATAMORPHIC_EXTERNAL_INTEGRATIONS=1 bun run --cwd apps/desktop test:e2e e2e/google-sign-in.e2e.ts`. CI runs it daily on macOS, with real Chrome's answer beside Work's (`.github/workflows/google-sign-in.yml`).
 
 Unit tests run with no setup. `bun run --cwd apps/desktop test:e2e` runs the
 complete desktop suite in Docker, using real Electron on a private Xvfb display

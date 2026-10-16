@@ -162,7 +162,7 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0147](0147-uniform-sidebar-sections.md) | Uniform sidebar sections: one status language and one drag-and-drop model | Accepted (amended by 0234) |
 | [0148](0148-session-access-for-apps.md) | Session access for apps | Accepted |
 | [0149](0149-observed-git-overviews.md) | Observed Git overviews | Accepted |
-| [0150](0150-site-settings.md) | Site settings: one modal per site, Chrome's permission model | Accepted |
+| [0150](0150-site-settings.md) | Site settings: one modal per site, Chrome's permission model | Accepted (amended by 0235) |
 | [0151](0151-browser-password-manager.md) | Browser password manager: offers after sign-ins that land, suggestions under the field, generated passwords that save themselves | Accepted (amended by 0201) |
 | [0152](0152-agent-context-channels.md) | Agent context: a short standing prompt and per-turn context beside the message | Accepted |
 | [0153](0153-downloads-in-the-dock.md) | Downloads in the dock: no save dialog, a dock button with progress, a Downloads page | Accepted |
@@ -215,7 +215,7 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0200](0200-sidebars-move-first-content-settles-after.md) | Sidebars move first; the content settles after them | Accepted |
 | [0201](0201-work-keeps-passkeys-in-the-profile-vault.md) | Work keeps passkeys in the profile's vault: the sheet saves and signs in, autofill offers them, Bitwarden and KeePassXC files import | Accepted (amends 0185, 0151; browsing windows by 0220) |
 | [0202](0202-agents-see-the-browser-subagents-and-their-path.md) | Agents see the browser, their subagents and their PATH | Accepted (amends 0133, 0090, 0112, 0093) |
-| [0203](0203-work-runs-chrome-extensions-from-the-web-store.md) | Work runs Chrome extensions from the Chrome Web Store: a host-owned `chrome.*` API on Electron, verified store installs, Chrome's toolbar, popups, side panel and dialogs | Accepted (amends 0194) |
+| [0203](0203-work-runs-chrome-extensions-from-the-web-store.md) | Work runs Chrome extensions from the Chrome Web Store: a host-owned `chrome.*` API on Electron, verified store installs, Chrome's toolbar, popups, side panel and dialogs | Accepted (amends 0194; amended by 0235) |
 | [0204](0204-sandboxes-on-any-linux-machine.md) | Sandboxes on any Linux machine: the container backend | Accepted |
 | [0205](0205-machine-classes-pools-and-retention.md) | Machine classes: cloud servers, pooled machines, and retention | Accepted |
 | [0206](0206-project-secrets-reach-environments-per-member.md) | Project secrets reach Environments, with a value per member | Accepted (amends 0162, 0175, 0184; refined by 0212; directory events by 0210) |
@@ -247,3 +247,4 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0232](0232-bun-builds-and-checks-packages.md) | Bun builds and type checks the packages | Accepted |
 | [0233](0233-sessions-imported-from-claude-code-and-codex.md) | Sessions imported from Claude Code and Codex | Accepted |
 | [0234](0234-sidebar-sections-are-sources.md) | A sidebar section is a source; Work's lists are sources like any other | Accepted (amends 0132, 0140, 0147, 0186, 0226) |
+| [0235](0235-pages-find-chromes-window-chrome.md) | Pages find Chrome's `window.chrome`; a daily check watches Google's sign-in | Accepted (amends 0150, 0203) |

@@ -141,8 +141,9 @@ import { DEFAULT_WORKSPACE_FILE } from "./workspace-config.js";
  * the renderer (they composite into the page, so app overlays like the
  * autocomplete dropdown and chat dock stack correctly); this module owns
  * everything per-profile and main-process-only:
- *  - persistent session partitions (`persist:profile-<id>`) with a clean
- *    Chrome UA so Google sign-in works and survives restarts per profile,
+ *  - persistent session partitions (`persist:profile-<id>`) with Chrome's
+ *    identity (a clean Chrome UA here, `window.chrome` from the session
+ *    preload) so Google sign-in works and survives restarts per profile,
  *  - popup/new-window requests turned into "open new tab" events,
  *  - Cmd+L observed inside page content and forwarded to the address bar,
  *  - browsing history (address-bar autocomplete),

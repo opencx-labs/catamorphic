@@ -26,8 +26,10 @@ extension.
 ## Calls and identity
 
 The session preload runs in every frame and service worker of a browsing
-session. Beyond Chrome's client-hint brands everywhere and passkeys in each
-web page's top frame (ADR 0220), it acts only in `chrome-extension://`
+session. Beyond Chrome's identity in every web page and frame (client-hint
+brands, and `window.chrome` with `loadTimes`, `csi` and `app`;
+`preload/chrome-object.ts`, ADR 0235) and passkeys in each web page's top
+frame (ADR 0220), it acts only in `chrome-extension://`
 contexts (and on the store page), and installs the APIs before the
 extension's own code runs. Every
 call goes to main, which names the extension from the IPC sender (the

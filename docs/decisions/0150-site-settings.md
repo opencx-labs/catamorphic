@@ -130,7 +130,10 @@ header, `navigator.userAgentData.brands` and its `toJSON()` alike.
   exactly; follow the 45 betas to its stable release. A beta, because no
   stable Electron carries a Chromium within two majors of Chrome 156; the
   user agent and the JavaScript client hints already read as Chrome, so
-  the Chromium version was the gap Google's sign-in hit. The headers are
+  the Chromium version was the gap Google's sign-in hit. (2026-10-16) It
+  was not: Google refused Work on Chromium 156 too, and the gate checks
+  `window.chrome.app`, admitting Chromium 152 with it (ADR 0235). Gmail's
+  unsupported-browser notice was not re-measured. The headers are
   not a full match: Electron sends no client hints with a page load, and
   scripts and images carry Chromium's own brands; only fetch and XHR
   requests carry Google Chrome (documents and frames too in a profile

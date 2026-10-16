@@ -687,6 +687,27 @@ the historical log explains how it arrived here.
 - [Performance](docs/performance.md): idle lifecycle checks and sustained measurement.
 
 ## Design log
+### 2026-10-16: Google's sign-in admits Work, because a page finds `chrome.app`
+
+Google's sign-in still answered "Couldn't sign you in. This browser or app
+may not be secure" on Electron 45 (Chromium 156), so the 2026-10-09 entry's
+cause was wrong. Taking the sign-in's first step with a made-up address, on
+the same engine with each part of Work's identity switched on or off, found
+the gate: a browser that says it is Chrome must have `window.chrome.app`.
+Chrome's comes from Chrome's own layer, which Electron does not include, so
+Work's `window.chrome` was empty. Work's identity was refused every time and
+admitted once `chrome.app` was present, on Chromium 152 too. Client hints on
+page loads, `csi`, `loadTimes` and a Firefox user agent changed nothing, and
+plain Electron, which names itself, was admitted.
+
+A web page, in a tab, a popup or a tab's embedded frame, now has Chrome's
+`window.chrome`: `loadTimes`, `csi` and `app`, matching Chrome's member
+order, values, argument errors, which functions construct and that they read
+as native code. A daily live check takes the sign-in's first step in a Work
+tab and opens an issue when Google refuses Work; real Chrome on the same
+runner takes it too, to explain a failure, never to excuse one (ADR 0235). A
+full sign-in, through password and 2FA, is checked by hand.
+
 ### 2026-10-16: Every sidebar list is a source; the right sidebar starts empty
 
 A section showed one of a dozen hand-written components picked by its
