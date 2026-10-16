@@ -676,9 +676,9 @@ the historical log explains how it arrived here.
 ## Design log
 ### 2026-10-16: A markdown document shows its images
 
-The markdown editor had no images. `![logo](x.png)` became the word
-"logo", a document opening on an image blanked the window, and saving after
-any edit wrote the alt text over the image. An image now shows in place:
+The markdown editor had no images. An image became its alt text, a
+document opening on one blanked the window, and saving after any edit
+wrote the alt text over the image. An image now shows in place:
 one beside the document (a path relative to it, or to the project when it
 starts with `/`) is read from the project, and https and inline images load
 as they are. While one loads, a chip naming it waits a moment before
