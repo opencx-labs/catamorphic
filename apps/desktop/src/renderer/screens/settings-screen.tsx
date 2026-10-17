@@ -46,11 +46,7 @@ import { DefaultBrowserButton } from "../components/default-browser.js";
 import { Modal } from "../components/modal.js";
 import { PendingButton } from "../components/pending-button.js";
 import { ShortcutHint } from "../components/shortcut-hint.js";
-import {
-  useMicrophones,
-  useProfileAgents,
-  useVoiceKeys,
-} from "../components/voice-button.js";
+import { useProfileAgents, useVoiceKeys } from "../components/voice-button.js";
 import {
   type AgentHarness,
   type AgentsData,
@@ -68,6 +64,7 @@ import {
   useKeybindings,
 } from "../lib/keybindings.js";
 import { useListMotion } from "../lib/list-motion.js";
+import { useMicrophones } from "../lib/microphones.js";
 import { EASE_STANDARD, motionMs } from "../lib/motion.js";
 import { useTerminalAppearance } from "../lib/terminal-appearance.js";
 import { useAppPreferences } from "../lib/use-app-preferences.js";

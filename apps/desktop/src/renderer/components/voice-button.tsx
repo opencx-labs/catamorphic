@@ -1,11 +1,5 @@
 import { Mic } from "lucide-react";
-import {
-  type MouseEvent,
-  useEffect,
-  useRef,
-  useState,
-  useSyncExternalStore,
-} from "react";
+import { type MouseEvent, useEffect, useRef, useState } from "react";
 import type { AppPrefs } from "../../shared/app-prefs.js";
 import { menuGroups } from "../../shared/menu.js";
 import {
@@ -31,6 +25,7 @@ import {
 } from "../lib/bubble-press.js";
 import { type AgentInfo, desktopApi } from "../lib/desktop-api.js";
 import { formatBinding, useKeybindings } from "../lib/keybindings";
+import { useMicrophones, useWatchedMicrophones } from "../lib/microphones.js";
 import { prefersReducedMotion } from "../lib/motion.js";
 import { useAppPreferences } from "../lib/use-app-preferences.js";
 import { voicePressFor, voiceWindowEntries } from "../lib/voice-menu.js";
@@ -41,61 +36,6 @@ import {
   menuAtPointer,
 } from "./menu.js";
 import { ShortcutHint } from "./shortcut-hint.js";
-
-type Microphone = { id: string; label: string };
-
-/**
- * The microphones this machine has, read once for every microphone and
- * kept current as devices come and go, while anything shows them.
- */
-const microphoneList = (() => {
-  let list: Microphone[] = [];
-  const listeners = new Set<() => void>();
-  let stop: (() => void) | undefined;
-  const read = () =>
-    void navigator.mediaDevices
-      ?.enumerateDevices()
-      .then((all) => {
-        // "default" and "communications" are Chromium's aliases of real
-        // devices; the menu's first entry already follows the system.
-        list = all
-          .filter(
-            (device) =>
-              device.kind === "audioinput" &&
-              device.deviceId !== "default" &&
-              device.deviceId !== "communications",
-          )
-          .map((device, index) => ({
-            id: device.deviceId,
-            label: device.label || `Microphone ${index + 1}`,
-          }));
-        for (const listener of listeners) listener();
-      })
-      .catch(() => {});
-  return {
-    subscribe(listener: () => void) {
-      listeners.add(listener);
-      const devices = navigator.mediaDevices;
-      if (!stop && devices) {
-        read();
-        devices.addEventListener("devicechange", read);
-        stop = () => devices.removeEventListener("devicechange", read);
-      }
-      return () => {
-        listeners.delete(listener);
-        if (listeners.size === 0) {
-          stop?.();
-          stop = undefined;
-        }
-      };
-    },
-    get: () => list,
-  };
-})();
-
-export function useMicrophones(): Microphone[] {
-  return useSyncExternalStore(microphoneList.subscribe, microphoneList.get);
-}
 
 /** Voice's state for this window's profile, kept live. */
 export function useVoiceStatus(): VoiceStatus {
@@ -424,6 +364,8 @@ export function VoiceButton({
   }, [phase, error]);
   const [menuAt, setMenuAt] = useState<MenuAt | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
+  // Its list of microphones follows devices coming and going while open.
+  useWatchedMicrophones(menuOpen);
   const on = phase !== "off";
   const loading = starting || phase === "preparing";
   const lit = on && !loading;
@@ -503,6 +445,7 @@ export function VoiceButton({
         },
         ...microphones.map((microphone) => ({
           label: microphone.label,
+          ...(microphone.isDefault ? { detail: "Default" } : {}),
           action: `microphone:${microphone.id}`,
           checked: prefs.voiceMicrophone === microphone.id,
         })),
