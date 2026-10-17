@@ -1745,16 +1745,16 @@ describeIf("unified RunsService integration", () => {
     await core.runs.resume({ identity, runId: run.id });
     stopHearing();
     expect(woken).toHaveBeenCalledTimes(1);
+    // The resume stamps database time, as claims compare against it; the
+    // host clock can trail a containerized Postgres by a few milliseconds.
     const parked = await db
       .selectFrom("execution_jobs")
-      .select("available_at")
+      .select(sql<boolean>`available_at <= now()`.as("due"))
       .where("workflow_run_id", "=", run.id)
       .where("status", "=", "pending")
       .execute();
     expect(parked.length).toBeGreaterThan(0);
-    expect(
-      parked.every((job) => job.available_at.getTime() <= Date.now()),
-    ).toBe(true);
+    expect(parked.every((job) => job.due)).toBe(true);
     await expect(core.runs.resume({ identity, runId: run.id })).rejects.toEqual(
       expect.objectContaining({
         name: "RunCapabilityError",
