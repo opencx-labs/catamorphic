@@ -1,6 +1,8 @@
 import {
+  ChevronsDown,
   ChevronsLeft,
   ChevronsRight,
+  ChevronsUp,
   MessageSquare,
   Plus,
   X,
@@ -17,6 +19,7 @@ import {
   useState,
 } from "react";
 import { openModeFromEvent } from "../../shared/open-mode.js";
+import type { PillEdge } from "../../shared/pill-geometry.js";
 import type { ChatSessionMenuEntry } from "../lib/chat-session-actions.js";
 import { desktopApi } from "../lib/desktop-api.js";
 import { formatBinding, useKeybindings } from "../lib/keybindings";
@@ -29,6 +32,7 @@ import type { ChatDockEntry } from "./chat-dock";
 import { ChatGlyph } from "./chat-icon";
 import { type ChatSignals, SignalBadge, SignalGlyph } from "./chat-signals";
 import { type MenuAt, MenuPortal, menuAtPointer } from "./menu.js";
+import { PillIsland } from "./pill-island.js";
 import { ShortcutHint } from "./shortcut-hint";
 
 /** Bubbles identify themselves on hover without delay (unlike buttons,
@@ -94,6 +98,17 @@ export interface ChatBubblesProps {
   dragTarget?: "left" | "center" | "right" | null;
   /** Whether the dock lives in its own window; the bubble menu flips it. */
   detached?: boolean;
+  /**
+   * The screen edge the pill rests on (ADR 0242): the bottom in a
+   * workspace window; in its own window, any edge.
+   */
+  edge?: PillEdge;
+  /** At the top of a display with a camera cutout, the island wraps it. */
+  notch?: { width: number; height: number } | null;
+  /** The island opens when the pointer reaches it. */
+  islandHover?: boolean;
+  /** Docks the pill at an edge, from its menu (in its own window). */
+  onDockAt?: (edge: PillEdge) => void;
   /** The detached window is too small for in-page menus; use native ones. */
   nativeMenus?: boolean;
   onToggleDetached?: () => void;
@@ -184,7 +199,9 @@ function Bubble({
   onMenuAction,
   onExited,
   theme,
+  hintSide = "top",
 }: {
+  hintSide?: "top" | "bottom" | "left" | "right";
   theme?: CSSProperties;
   entry: ChatDockEntry;
   label: string;
@@ -229,7 +246,7 @@ function Bubble({
         if (event.animationName === "bubble-ask") setAsking(false);
       }}
     >
-      <ShortcutHint label={label} side="top" delay={BUBBLE_HINT_DELAY_MS}>
+      <ShortcutHint label={label} side={hintSide} delay={BUBBLE_HINT_DELAY_MS}>
         <button
           type="button"
           onClick={(event) => {
@@ -325,6 +342,10 @@ export function ChatBubbles({
   placementDragHandlers,
   dragTarget = null,
   detached = false,
+  edge = "bottom",
+  notch = null,
+  islandHover = true,
+  onDockAt,
   nativeMenus = false,
   onToggleDetached,
   newChatProjectName,
@@ -354,8 +375,21 @@ export function ChatBubbles({
   onCollapse,
 }: ChatBubblesProps) {
   const keybindings = useKeybindings();
-  // Right-click on the collapsed bubble or the arrows: moves the dock
-  // between the window and its own always-on-top window for this session.
+  const vertical = edge === "left" || edge === "right";
+  const island = edge === "top" && notch !== null;
+  // Hints open away from the edge the pill rests on.
+  const hintSide =
+    edge === "bottom"
+      ? "top"
+      : edge === "top"
+        ? "bottom"
+        : edge === "left"
+          ? "right"
+          : "left";
+  const [islandHovered, setIslandHovered] = useState(false);
+  // Right-click on the collapsed bubble or the arrows: moves the pill
+  // between the window and its own always-on-top window for this session,
+  // and in its own window to any edge of the screen.
   const [dockMenuAt, setDockMenuAt] = useState<MenuAt | null>(null);
   const [dockMenuOpen, setDockMenuOpen] = useState(false);
   const dockMenuEntries = [
@@ -363,9 +397,29 @@ export function ChatBubbles({
       ? [
           {
             label: detached
-              ? "Return dock to the window"
-              : "Float dock in its own window",
+              ? "Put the pill back in the window"
+              : "Pop the pill out onto the desktop",
             action: "detach",
+          },
+        ]
+      : []),
+    ...(detached && onDockAt
+      ? [
+          {
+            label: "Dock at",
+            action: "dock-at",
+            submenu: (
+              [
+                ["bottom", "Bottom"],
+                ["left", "Left"],
+                ["right", "Right"],
+                ["top", notch ? "The notch" : "Top"],
+              ] as const
+            ).map(([value, label]) => ({
+              label,
+              action: `dock-at:${value}`,
+              checked: edge === value,
+            })),
           },
         ]
       : []),
@@ -382,6 +436,8 @@ export function ChatBubbles({
   ];
   const pickDockMenu = (action: string | null) => {
     if (action === "detach") onToggleDetached?.();
+    if (action?.startsWith("dock-at:"))
+      onDockAt?.(action.slice("dock-at:".length) as PillEdge);
     if (action === "voice-in-dock") onVoiceInDockChange?.(!voiceInDock);
   };
   const openDockMenu =
@@ -497,7 +553,9 @@ export function ChatBubbles({
     observer.observe(rail);
     return () => observer.disconnect();
   }, []);
-  const spot: Spot = collapsed ? side : placement;
+  // Only the bottom has spots along it; every other edge centres the pill.
+  const spot: Spot =
+    edge === "bottom" ? (collapsed ? side : placement) : "center";
   // The spot and drag the DOM shows: what this render may move it from.
   const shownSpot = useRef(spot);
   const shownDragged = useRef(false);
@@ -589,15 +647,23 @@ export function ChatBubbles({
       arrowsRef.current?.focus({ preventScroll: true });
   }, [collapsed, focusedControl]);
   const itemsId = useId();
-  const spotClass =
-    spot === "left"
+  const spotClass = vertical
+    ? ""
+    : spot === "left"
       ? "left-8"
       : spot === "right"
         ? "right-8"
         : "left-1/2 -translate-x-1/2";
   // The arrows point at the corner the strip collapses into and sit on that
-  // side of the strip. They are also the handle that moves open chats.
-  const Arrows = side === "left" ? ChevronsLeft : ChevronsRight;
+  // side of the strip. They are also the handle that moves open chats. On
+  // a side the strip folds down into its bubble; at the notch, up into it.
+  const Arrows = vertical
+    ? ChevronsDown
+    : island
+      ? ChevronsUp
+      : side === "left"
+        ? ChevronsLeft
+        : ChevronsRight;
   const arrows = (
     <button
       ref={arrowsRef}
@@ -612,8 +678,16 @@ export function ChatBubbles({
       aria-label="Collapse chat bubbles"
       aria-expanded={!collapsed}
       aria-controls={itemsId}
-      aria-description="Drag to place open chats left, center or right. Arrow keys move them."
-      aria-keyshortcuts="ArrowLeft ArrowRight"
+      aria-description={
+        detached
+          ? "Drag to dock the pill at any edge of the screen. Arrow keys move it."
+          : "Drag to place open chats left, center or right. Arrow keys move them."
+      }
+      aria-keyshortcuts={
+        detached
+          ? "ArrowLeft ArrowRight ArrowUp ArrowDown"
+          : "ArrowLeft ArrowRight"
+      }
       data-dock-arrows={side}
     >
       <Arrows className="size-4" />
@@ -653,15 +727,19 @@ export function ChatBubbles({
   // Expanded strip content folds its width away when collapsed: from the
   // width it shows to none and back (styles.css), so the strip narrows
   // from the first frame as it slides into its corner.
+  // At the notch the row shows whenever the island is open, folded or not.
+  const itemsHidden = island ? false : collapsed;
   const items = (
     <div
       id={itemsId}
-      className={`flex items-center gap-1.5 overflow-hidden transition-[width,opacity] duration-250 ease-[cubic-bezier(0.2,0,0,1)] ${
-        collapsed ? "pointer-events-none opacity-0" : "opacity-100"
-      }`}
+      className={`flex items-center gap-1.5 overflow-hidden duration-250 ease-[cubic-bezier(0.2,0,0,1)] ${
+        vertical
+          ? "flex-col transition-[height,opacity]"
+          : "transition-[width,opacity]"
+      } ${itemsHidden ? "pointer-events-none opacity-0" : "opacity-100"}`}
       data-bubble-items
-      aria-hidden={collapsed}
-      inert={collapsed ? true : undefined}
+      aria-hidden={itemsHidden}
+      inert={itemsHidden ? true : undefined}
     >
       {display.entries.map((entry) => (
         <Bubble
@@ -682,6 +760,7 @@ export function ChatBubbles({
           nativeMenus={nativeMenus}
           onMenuAction={onMenuAction}
           onExited={removeExited}
+          hintSide={hintSide}
         />
       ))}
       {/* The bubble + opens the floating aside, not a tab. */}
@@ -690,7 +769,7 @@ export function ChatBubbles({
           newChatProjectName ? `New chat in ${newChatProjectName}` : "New chat"
         }
         shortcut={formatBinding(keybindings["new-floating-chat"])}
-        side="top"
+        side={hintSide}
       >
         <button
           type="button"
@@ -711,10 +790,18 @@ export function ChatBubbles({
   const voiceSlot = (
     <div
       data-dock-voice={voiceShown ? "shown" : "hidden"}
-      className={`transition-[max-width,margin,opacity,scale] duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${
-        voiceShown
-          ? "max-w-9 opacity-100"
-          : `pointer-events-none max-w-0 overflow-hidden opacity-0 scale-40 ${side === "left" ? "-me-1.5" : "-ms-1.5"}`
+      className={`duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${
+        vertical
+          ? `transition-[max-height,margin,opacity,scale] ${
+              voiceShown
+                ? "max-h-9 opacity-100"
+                : "pointer-events-none max-h-0 overflow-hidden opacity-0 scale-40 -mt-1.5"
+            }`
+          : `transition-[max-width,margin,opacity,scale] ${
+              voiceShown
+                ? "max-w-9 opacity-100"
+                : `pointer-events-none max-w-0 overflow-hidden opacity-0 scale-40 ${side === "left" ? "-me-1.5" : "-ms-1.5"}`
+            }`
       }`}
       aria-hidden={!voiceShown}
       inert={!voiceShown ? true : undefined}
@@ -722,7 +809,18 @@ export function ChatBubbles({
       {voice}
     </div>
   );
-  const tools = (
+  const tools = vertical ? (
+    <div
+      className={`flex flex-col items-center gap-1.5 transition-[margin] duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${
+        collapsed
+          ? "mb-1 [&:has(>[data-dock-voice=hidden]:only-child)]:mb-0"
+          : "[&:has(>[data-dock-voice=hidden]:only-child)]:-mt-1.5"
+      }`}
+    >
+      {trailing}
+      {voiceSlot}
+    </div>
+  ) : (
     <div
       className={`flex items-center gap-1.5 transition-[margin] duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${
         side === "left"
@@ -751,10 +849,18 @@ export function ChatBubbles({
   // place as the outermost control.
   const arrowsSlot = (
     <div
-      className={`flex overflow-hidden transition-[max-width,opacity] duration-250 ease-[cubic-bezier(0.2,0,0,1)] ${
-        collapsed
-          ? "pointer-events-none max-w-0 opacity-0"
-          : "max-w-9 opacity-100"
+      className={`flex overflow-hidden duration-250 ease-[cubic-bezier(0.2,0,0,1)] ${
+        vertical
+          ? `transition-[max-height,opacity] ${
+              collapsed
+                ? "pointer-events-none max-h-0 opacity-0"
+                : "max-h-9 opacity-100"
+            }`
+          : `transition-[max-width,opacity] ${
+              collapsed
+                ? "pointer-events-none max-w-0 opacity-0"
+                : "max-w-9 opacity-100"
+            }`
       }`}
       aria-hidden={collapsed}
       inert={collapsed ? true : undefined}
@@ -771,16 +877,32 @@ export function ChatBubbles({
       onContextMenu={openDockMenu}
       // Its edge is a ring, not a border: a border is never thinner than a
       // pixel, so the strip would snap 2px as the bubble comes and goes.
-      className={`relative grid touch-none cursor-grab active:cursor-grabbing place-items-center overflow-visible rounded-full bg-bg-overlay text-fg-muted inset-ring inset-ring-border transition-[max-width,opacity,background-color,box-shadow] duration-250 ease-[cubic-bezier(0.2,0,0,1)] hover:text-fg hover:inset-ring-border-strong ${
-        collapsed
-          ? "size-9 max-w-9 opacity-100"
-          : "pointer-events-none size-9 max-w-0 opacity-0"
+      className={`relative grid touch-none cursor-grab active:cursor-grabbing place-items-center overflow-visible rounded-full bg-bg-overlay text-fg-muted inset-ring inset-ring-border duration-250 ease-[cubic-bezier(0.2,0,0,1)] hover:text-fg hover:inset-ring-border-strong ${
+        vertical
+          ? `transition-[max-height,opacity,background-color,box-shadow] ${
+              collapsed
+                ? "size-9 max-h-9 opacity-100"
+                : "pointer-events-none size-9 max-h-0 opacity-0"
+            }`
+          : `transition-[max-width,opacity,background-color,box-shadow] ${
+              collapsed
+                ? "size-9 max-w-9 opacity-100"
+                : "pointer-events-none size-9 max-w-0 opacity-0"
+            }`
       }`}
       aria-label="Expand chat bubbles"
       aria-expanded={!collapsed}
       aria-controls={itemsId}
-      aria-description="Drag to either bottom corner. Arrow keys move left or right."
-      aria-keyshortcuts="ArrowLeft ArrowRight"
+      aria-description={
+        detached
+          ? "Drag to dock the pill at any edge of the screen. Arrow keys move it."
+          : "Drag to either bottom corner. Arrow keys move left or right."
+      }
+      aria-keyshortcuts={
+        detached
+          ? "ArrowLeft ArrowRight ArrowUp ArrowDown"
+          : "ArrowLeft ArrowRight"
+      }
       aria-hidden={!collapsed}
       inert={!collapsed ? true : undefined}
     >
@@ -804,8 +926,106 @@ export function ChatBubbles({
       </span>
     </button>
   );
+  const dockMenu = dockMenuAt && (
+    <MenuPortal
+      open={dockMenuOpen}
+      at={dockMenuAt}
+      label="Pill"
+      entries={dockMenuEntries}
+      onPick={(entry) => {
+        setDockMenuOpen(false);
+        pickDockMenu(entry.action);
+      }}
+      onDismiss={() => setDockMenuOpen(false)}
+      onExited={() => setDockMenuAt(null)}
+    />
+  );
+  if (island && notch) {
+    // The island's own handle in its right wing: the chats' bubble, always
+    // shown, opening or folding the strip; it peels the island off the
+    // notch when dragged.
+    const handle = (
+      <button
+        ref={expandRef}
+        type="button"
+        {...dragHandlers}
+        onClick={() => onFoldedChange(!collapsed)}
+        onContextMenu={openDockMenu}
+        className="relative grid size-7 touch-none cursor-grab place-items-center rounded-full text-fg-muted transition-colors duration-150 hover:text-fg active:cursor-grabbing"
+        aria-label={collapsed ? "Open the pill" : "Fold the pill"}
+        aria-expanded={!collapsed}
+        aria-controls={itemsId}
+        aria-description="Drag to dock the pill at any edge of the screen. Arrow keys move it."
+        aria-keyshortcuts="ArrowLeft ArrowRight ArrowUp ArrowDown"
+        data-island-handle
+      >
+        <SignalGlyph
+          working={aggregate.working}
+          awaitingInput={aggregate.awaitingInput}
+          className="size-4"
+        >
+          <MessageSquare className="size-4" />
+        </SignalGlyph>
+        {stripEntries.length > 1 && (
+          <span className="absolute -bottom-1 -right-1.5 grid min-w-4 place-items-center rounded-full bg-bg-overlay px-0.5 text-[9px] font-semibold leading-4 text-fg">
+            {stripEntries.length}
+          </span>
+        )}
+        <span className="absolute -right-1 -top-1">
+          <SignalBadge signals={aggregate} size="md" />
+        </span>
+      </button>
+    );
+    return (
+      <div
+        data-dock-edge={edge}
+        className="pointer-events-none absolute inset-0 z-40"
+      >
+        <div
+          ref={railRef}
+          data-dock-rail
+          data-dock-collapsed={collapsed}
+          className="contents"
+        >
+          <PillIsland
+            notch={notch}
+            open={!collapsed}
+            hoverOpens={islandHover}
+            hovered={islandHovered}
+            onHoverChange={setIslandHovered}
+            leftWing={voiceShown ? voice : null}
+            rightWing={handle}
+            row={
+              <>
+                {items}
+                {trailing}
+                {arrows}
+              </>
+            }
+          />
+        </div>
+        {dockMenu}
+      </div>
+    );
+  }
+  const rootClass =
+    edge === "top"
+      ? "pointer-events-none absolute inset-x-0 top-0 z-40 flex justify-center pt-3"
+      : edge === "left"
+        ? "pointer-events-none absolute inset-y-0 left-0 z-40 flex items-center pl-3"
+        : edge === "right"
+          ? "pointer-events-none absolute inset-y-0 right-0 z-40 flex items-center pr-3"
+          : "pointer-events-none absolute inset-x-0 bottom-0 z-40 flex justify-center pb-3";
+  const railPlace =
+    edge === "top"
+      ? `top-3 flex-row ${spotClass}`
+      : edge === "left"
+        ? "left-3 top-1/2 -translate-y-1/2 flex-col"
+        : edge === "right"
+          ? "right-3 top-1/2 -translate-y-1/2 flex-col"
+          : `bottom-3 ${spotClass}`;
   return (
-    <div className="pointer-events-none absolute inset-x-0 bottom-0 z-40 flex justify-center pb-3">
+    <div data-dock-edge={edge} className={rootClass}>
       {targets}
       <div
         ref={railRef}
@@ -817,13 +1037,23 @@ export function ChatBubbles({
             ? undefined
             : { left: dragLeft, right: "auto", translate: "0" }
         }
-        className={`pointer-events-auto absolute bottom-3 flex items-center rounded-full border border-border bg-bg-raised shadow-2xl transition-[padding,gap] duration-250 ease-[cubic-bezier(0.2,0,0,1)] ${spotClass} ${
+        className={`pointer-events-auto absolute flex items-center rounded-full border border-border bg-bg-raised shadow-2xl transition-[padding,gap] duration-250 ease-[cubic-bezier(0.2,0,0,1)] ${railPlace} ${
           collapsed ? "gap-0 p-1" : "gap-1.5 p-1.5"
         }`}
       >
         {/* The outer edge is one slot the arrows and the collapsed bubble
-            share, so folding cross-fades them in place. */}
-        {side === "left" ? (
+            share, so folding cross-fades them in place. On a side the
+            column ends in it, at the bottom. */}
+        {vertical ? (
+          <>
+            {items}
+            {tools}
+            <div className="flex flex-col">
+              {arrowsSlot}
+              {collapsedBubble}
+            </div>
+          </>
+        ) : side === "left" ? (
           <>
             <div className="flex">
               {collapsedBubble}
@@ -843,20 +1073,7 @@ export function ChatBubbles({
           </>
         )}
       </div>
-      {dockMenuAt && (
-        <MenuPortal
-          open={dockMenuOpen}
-          at={dockMenuAt}
-          label="Dock"
-          entries={dockMenuEntries}
-          onPick={(entry) => {
-            setDockMenuOpen(false);
-            pickDockMenu(entry.action);
-          }}
-          onDismiss={() => setDockMenuOpen(false)}
-          onExited={() => setDockMenuAt(null)}
-        />
-      )}
+      {dockMenu}
     </div>
   );
 }

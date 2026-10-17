@@ -160,7 +160,13 @@ control the fold makes inert hands focus to the one that replaces it (the
 arrows and the collapsed bubble, each with `aria-expanded`). A focused chat
 tab folds the strip and an open chat opens it beside the chat, each only for
 as long as it lasts; neither changes the choice.
-A detached dock stays above other apps and follows macOS desktops. Chat cards
+A detached dock (the pill, ADR 0242) stays above other apps and follows macOS
+desktops, also while Work is minimized. It docks on any screen edge: a column
+on either side, a centred pill at the top, or around the notch as an island
+that opens downward. Dragged in its own window it moves in two dimensions and
+across displays, shows its landing spots in an overlay that never takes a
+click, and lands on the edge nearest where it was thrown; arrow keys move it
+to the spot that way. A chat opens away from the edge it rests on. Chat cards
 and bubbles retain their project's theme; the new-chat control follows the
 current project. Files, links and session controls route to their owning project,
 using the same resource-opening gestures as other workspace surfaces. Project

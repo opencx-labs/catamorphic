@@ -1,3 +1,4 @@
+import { PILL_EDGES, type PillEdge } from "./pill-geometry.js";
 import {
   normalizeTerminalMacros,
   type TerminalMacro,
@@ -41,6 +42,24 @@ export interface AppPrefs {
   dockSide: "left" | "right";
   /** Where open chats and their bubble strip sit while expanded. */
   dockPlacement: "left" | "center" | "right";
+  /**
+   * The screen edge the pill docks to on the desktop (ADR 0242): the
+   * bottom (its corner and placement as above), either side, or the top
+   * (the notch, on a display with one).
+   */
+  dockEdge: PillEdge;
+  /**
+   * On the bottom edge, the pill rests in the front Work window's chat
+   * region while Work is in front; off, it stays on the screen's edge.
+   */
+  dockFollowsWindow: boolean;
+  /** At the notch, the island opens when the pointer reaches it. */
+  dockIslandHover: boolean;
+  /**
+   * The display the pill was last put on (Electron's display id). Runtime
+   * state: a display that is gone gives the main display, this kept.
+   */
+  dockDisplay: number | null;
   /**
    * The person folded the bubble strip into one bubble (its arrows), and
    * it stays folded, in every window and across launches, until they open
@@ -163,6 +182,10 @@ export const DEFAULT_PREFS: AppPrefs = {
   dockDetached: false,
   dockSide: "right",
   dockPlacement: "center",
+  dockEdge: "bottom",
+  dockFollowsWindow: true,
+  dockIslandHover: true,
+  dockDisplay: null,
   dockCollapsed: false,
   chatWorkLive: "all",
   chatWorkSettled: "collapse",
@@ -265,6 +288,16 @@ export function normalizePrefs(raw: unknown): AppPrefs {
       record.dockPlacement === "left" || record.dockPlacement === "right"
         ? record.dockPlacement
         : "center",
+    dockEdge: PILL_EDGES.includes(record.dockEdge as PillEdge)
+      ? (record.dockEdge as PillEdge)
+      : "bottom",
+    dockFollowsWindow: record.dockFollowsWindow !== false,
+    dockIslandHover: record.dockIslandHover !== false,
+    dockDisplay:
+      typeof record.dockDisplay === "number" &&
+      Number.isSafeInteger(record.dockDisplay)
+        ? record.dockDisplay
+        : null,
     notificationSounds:
       typeof record.notificationSounds === "boolean"
         ? record.notificationSounds

@@ -297,6 +297,7 @@ export function VoiceButton({
   chat,
   nativeMenus = false,
   bubble = false,
+  hintSide = "top",
   onOpenChat,
   onCreateAssistant,
 }: {
@@ -323,6 +324,8 @@ export function VoiceButton({
    * along the bottom of the screen.
    */
   bubble?: boolean;
+  /** Where its hint opens: away from the edge the pill rests on. */
+  hintSide?: "top" | "bottom" | "left" | "right";
   /** Opens the assistant's chat. */
   onOpenChat?: (session: VoiceSessionRef) => void;
   /** Adds an agent and makes it the assistant. */
@@ -669,7 +672,7 @@ export function VoiceButton({
       <ShortcutHint
         label={description}
         shortcut={shortcut || undefined}
-        side="top"
+        side={hintSide}
       >
         <button
           type="button"

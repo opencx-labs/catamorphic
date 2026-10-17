@@ -47,7 +47,9 @@ const wanted = process.env.CDP_TARGET;
 const isWorkspace = (url) =>
   !url.includes("surface=") &&
   !url.includes("voice.html") &&
-  !url.startsWith("chrome-extension:");
+  !url.startsWith("chrome-extension:") &&
+  // The pill's drop-target overlay (ADR 0242).
+  !url.startsWith("data:");
 const matches = (target) => {
   const url = String(target.url);
   if (!wanted) return true;

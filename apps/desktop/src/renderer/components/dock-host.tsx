@@ -14,8 +14,9 @@ import type {
   DockSnapshot,
 } from "../../shared/desktop-workspace.js";
 import { parseDockClicks } from "../../shared/dock-clicks.js";
-import { dockLanding } from "../../shared/dock-position.js";
+import { type DockSize, dockLanding } from "../../shared/dock-position.js";
 import { fileUrlFor } from "../../shared/downloads.js";
+import { PILL_EDGES, type PillEdge } from "../../shared/pill-geometry.js";
 import { VOICE_ACTIONS } from "../../shared/voice.js";
 import { localPresentations } from "../lib/chat-presentations.js";
 import { useAnswerChipsWork } from "../lib/chips-work.js";
@@ -34,6 +35,7 @@ import { ChatBubbles, useStripFold } from "./chat-bubbles.js";
 import { ChatDock } from "./chat-dock.js";
 import { DockDialogs } from "./dock-dialogs.js";
 import { DownloadsBubble } from "./downloads-bubble.js";
+import { ISLAND_ROW, ISLAND_WING } from "./pill-island.js";
 import { useVoiceStatus, VoiceButton } from "./voice-button.js";
 
 /** How this window lets clicks through, as the main process decided. */
@@ -48,6 +50,9 @@ const EMPTY: DockSnapshot = {
   side: "right",
   placement: "center",
   collapsed: false,
+  edge: "bottom",
+  notch: null,
+  islandHover: true,
 };
 
 /** One presentation vocabulary, mounted in a workspace or in the native dock. */
@@ -81,6 +86,8 @@ export function DockHost({
   const [signals, setSignals] = useState<Record<string, ChatSignals>>({});
   const dragStart = useRef<{
     x: number;
+    /** Its own window drags both ways (ADR 0242). */
+    y: number;
     left: number;
     max: number;
     /** The strip's width and the region's, for where it would land. */
@@ -313,8 +320,48 @@ export function DockHost({
   const DOCK_HEADROOM = 48;
   // Dialogs and the downloads popover need more room than the strip.
   const roomy = expanded || dialogOpen || downloadsOpen;
-  const windowWidth = roomy ? 780 : railWidth;
-  const windowHeight = roomy ? 560 : 76 + DOCK_HEADROOM;
+  // The edge the pill rests on (ADR 0242): in a workspace, the bottom.
+  const pillEdge: PillEdge = detachedWindow ? snapshot.edge : "bottom";
+  const stripCount = scoped.filter((chat) => chat.entry.mode !== "tab").length;
+  /**
+   * The window the pill needs at an edge: its own size plus room for its
+   * hints on the side they open to, or room for a chat beside it. At the
+   * notch it is as wide as the open island always, so the island opens in
+   * place on hover; the window lets clicks through around it.
+   */
+  const sizeAt = (edge: PillEdge): DockSize => {
+    const expandedAt = !collapsed || Boolean(expanded);
+    if (edge === "left" || edge === "right")
+      return roomy
+        ? { width: 612, height: 600, expanded: expandedAt }
+        : {
+            width: 236,
+            height:
+              (collapsed ? 96 : Math.min(640, stripCount * 42 + 174)) +
+              DOCK_HEADROOM,
+            expanded: expandedAt,
+          };
+    if (edge === "top" && snapshot.notch) {
+      const open =
+        Math.max(
+          snapshot.notch.width + 2 * ISLAND_WING,
+          stripCount * 42 + 174 + 28,
+        ) + 20;
+      return roomy
+        ? { width: 780, height: 640, expanded: expandedAt }
+        : {
+            width: Math.min(780, open + 32),
+            height: snapshot.notch.height + ISLAND_ROW + 12 + DOCK_HEADROOM,
+            expanded: expandedAt,
+          };
+    }
+    return {
+      width: roomy ? 780 : railWidth,
+      height: roomy ? 560 : 76 + DOCK_HEADROOM,
+      expanded: expandedAt,
+    };
+  };
+  const { width: windowWidth, height: windowHeight } = sizeAt(pillEdge);
   // Collapsing the strip with a chat open plays the chat's exit first; the
   // window keeps the open placement until that chat has minimized, then
   // moves to the collapsed corner with the bubble.
@@ -642,6 +689,7 @@ export function DockHost({
   const nativeDrag = (
     phase: "start" | "move" | "end" | "cancel",
     screenX: number,
+    screenY: number,
   ) => {
     const lands = phase === "end" || phase === "cancel";
     if (lands) sentSizeRef.current = sizeKey;
@@ -649,6 +697,8 @@ export function DockHost({
       .dockDrag({
         phase,
         screenX,
+        // Its own window moves both ways, onto any edge (ADR 0242).
+        screenY,
         reducedMotion: window.matchMedia("(prefers-reduced-motion: reduce)")
           .matches,
         ...(lands
@@ -658,6 +708,9 @@ export function DockHost({
                 height: windowHeight,
                 expanded: windowExpanded,
               },
+              sizes: Object.fromEntries(
+                PILL_EDGES.map((edge) => [edge, sizeAt(edge)]),
+              ),
             }
           : {}),
       })
@@ -667,7 +720,7 @@ export function DockHost({
   };
   const cancelDrag = () => {
     if (detachedWindow && dragStart.current)
-      nativeDrag("cancel", dragStart.current.x);
+      nativeDrag("cancel", dragStart.current.x, dragStart.current.y);
     suppressClick.current = dragStart.current?.moved ?? false;
     dragStart.current = null;
     setHeld(false);
@@ -718,13 +771,14 @@ export function DockHost({
       suppressClick.current = false;
       dragStart.current = {
         x: detachedWindow ? event.screenX : event.clientX,
+        y: detachedWindow ? event.screenY : event.clientY,
         left: rail.left - host.left,
         max: Math.max(32, host.width - rail.width - 32),
         width: rail.width,
         hostWidth: host.width,
         moved: false,
       };
-      if (detachedWindow) nativeDrag("start", event.screenX);
+      if (detachedWindow) nativeDrag("start", event.screenX, event.screenY);
       event.currentTarget.setPointerCapture(event.pointerId);
       setHeld(true);
     },
@@ -733,7 +787,9 @@ export function DockHost({
       if (!start || !event.currentTarget.hasPointerCapture(event.pointerId))
         return;
       const delta = (detachedWindow ? event.screenX : event.clientX) - start.x;
-      if (!start.moved && Math.abs(delta) < 5) return;
+      // Its own window drags both ways: either one past the threshold.
+      const across = detachedWindow ? event.screenY - start.y : 0;
+      if (!start.moved && Math.abs(delta) < 5 && Math.abs(across) < 5) return;
       if (!start.moved) {
         setDragging(true);
         // Dragging the open strip's arrows is using it open: a fold the
@@ -748,7 +804,7 @@ export function DockHost({
       }
       start.moved = true;
       event.preventDefault();
-      if (detachedWindow) nativeDrag("move", event.screenX);
+      if (detachedWindow) nativeDrag("move", event.screenX, event.screenY);
       else setDragLeft(Math.max(32, Math.min(start.max, start.left + delta)));
       setDragTarget(landing(start, delta, intent));
     },
@@ -764,7 +820,11 @@ export function DockHost({
           suppressClick.current = false;
         });
       if (detachedWindow)
-        nativeDrag(start.moved ? "end" : "cancel", event.screenX);
+        nativeDrag(
+          start.moved ? "end" : "cancel",
+          event.screenX,
+          event.screenY,
+        );
       else if (start.moved) {
         const spot = landing(start, event.clientX - start.x, intent);
         if (intent === "side") saveSide(spot === "left" ? "left" : "right");
@@ -790,6 +850,18 @@ export function DockHost({
       if (event.key === "Escape" && dragStart.current) {
         event.preventDefault();
         cancelDrag();
+      }
+      if (detachedWindow) {
+        const direction = {
+          ArrowLeft: "left",
+          ArrowRight: "right",
+          ArrowUp: "up",
+          ArrowDown: "down",
+        }[event.key] as "left" | "right" | "up" | "down" | undefined;
+        if (!direction) return;
+        event.preventDefault();
+        void desktopApi.dockMove(direction).catch(() => {});
+        return;
       }
       if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
       event.preventDefault();
@@ -821,8 +893,17 @@ export function DockHost({
       data-dock-native={detachedWindow || undefined}
       data-dock-side={snapshot.side}
       data-dock-placement={snapshot.placement}
+      data-dock-edge={pillEdge}
+      data-dock-notch={(pillEdge === "top" && !!snapshot.notch) || undefined}
       className={`pointer-events-none absolute ${detachedWindow ? "inset-0" : ""}`}
-      style={themeStyle(currentTheme)}
+      style={{
+        ...themeStyle(currentTheme),
+        ...(pillEdge === "top" && snapshot.notch
+          ? {
+              ["--pill-notch-height" as string]: `${snapshot.notch.height}px`,
+            }
+          : {}),
+      }}
     >
       {detachedWindow && <DockDialogs onOpenChange={setDialogOpen} />}
       {snapshot.chats.map((chat) => {
@@ -996,6 +1077,14 @@ export function DockHost({
               // spots drawn inside it would travel with the pointer.
               dragTarget={detachedWindow ? null : dragTarget}
               detached={snapshot.detached}
+              edge={pillEdge}
+              notch={pillEdge === "top" ? snapshot.notch : null}
+              islandHover={snapshot.islandHover}
+              onDockAt={
+                detachedWindow
+                  ? (edge) => void desktopApi.setPrefs({ dockEdge: edge })
+                  : undefined
+              }
               nativeMenus={detachedWindow}
               onToggleDetached={() => {
                 void desktopApi.dockDetach(!snapshot.detached);
@@ -1071,6 +1160,15 @@ export function DockHost({
                 <VoiceButton
                   projectId={currentProjectId}
                   nativeMenus={detachedWindow}
+                  hintSide={
+                    pillEdge === "top"
+                      ? "bottom"
+                      : pillEdge === "left"
+                        ? "right"
+                        : pillEdge === "right"
+                          ? "left"
+                          : "top"
+                  }
                   onOpenChat={(session) =>
                     navigateSurface({
                       url: chatBookmarkUrl(session),
@@ -1090,6 +1188,7 @@ export function DockHost({
               }
               trailing={
                 <DownloadsBubble
+                  edge={pillEdge}
                   // The bubble ends the strip: at a side of the screen its
                   // popover opens toward the middle.
                   align={

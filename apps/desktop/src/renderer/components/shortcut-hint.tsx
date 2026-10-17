@@ -32,7 +32,8 @@ export function ShortcutHint({
   label: string;
   /** Display form of the shortcut, e.g. "⌘B"; omit for a plain tooltip. */
   shortcut?: string;
-  side?: "bottom" | "top";
+  /** Which side of the control it opens on: away from a docked pill's edge. */
+  side?: "bottom" | "top" | "left" | "right";
   /**
    * Hover delay before the hint shows. The 800ms default fits buttons
    * (their meaning is usually guessable); identity hints on icon-only
@@ -69,12 +70,21 @@ export function ShortcutHint({
     const tooltip = tooltipRef.current;
     if (!position || !tooltip) return;
     const { width, height } = tooltip.getBoundingClientRect();
-    const x = Math.max(
-      Math.ceil(8 + width / 2),
-      Math.min(position.x, Math.floor(window.innerWidth - 8 - width / 2)),
-    );
-    const y =
-      side === "bottom"
+    const beside = side === "left" || side === "right";
+    const x = beside
+      ? side === "right"
+        ? Math.max(8, Math.min(position.x, window.innerWidth - width - 8))
+        : Math.max(width + 8, Math.min(position.x, window.innerWidth - 8))
+      : Math.max(
+          Math.ceil(8 + width / 2),
+          Math.min(position.x, Math.floor(window.innerWidth - 8 - width / 2)),
+        );
+    const y = beside
+      ? Math.max(
+          Math.ceil(8 + height / 2),
+          Math.min(position.y, Math.floor(window.innerHeight - 8 - height / 2)),
+        )
+      : side === "bottom"
         ? Math.max(8, Math.min(position.y, window.innerHeight - height - 8))
         : Math.max(height + 8, Math.min(position.y, window.innerHeight - 8));
     if (x !== position.x || y !== position.y) setPosition({ x, y });
@@ -103,10 +113,7 @@ export function ShortcutHint({
           ]),
         ),
       );
-      setPosition({
-        x: rect.x + rect.width / 2,
-        y: side === "bottom" ? rect.bottom + 7 : rect.top - 7,
-      });
+      setPosition(anchorPoint(rect, side));
       // Mount hidden, then flip visible next frame so the transition runs.
       frameRef.current = requestAnimationFrame(() => setVisible(true));
     }, delay);
@@ -117,10 +124,7 @@ export function ShortcutHint({
     const anchor = anchorRef.current;
     if (!anchor) return;
     const rect = anchor.getBoundingClientRect();
-    setPosition({
-      x: rect.x + rect.width / 2,
-      y: side === "bottom" ? rect.bottom + 7 : rect.top - 7,
-    });
+    setPosition(anchorPoint(rect, side));
     frameRef.current = requestAnimationFrame(() => setVisible(true));
   };
 
@@ -200,20 +204,32 @@ export function ShortcutHint({
             role="tooltip"
             style={{
               ...themeTokens,
-              left: position.x,
-              top: side === "bottom" ? position.y : undefined,
+              left: side === "left" ? undefined : position.x,
+              right:
+                side === "left" ? window.innerWidth - position.x : undefined,
+              top: side === "top" ? undefined : position.y,
               bottom:
                 side === "top" ? window.innerHeight - position.y : undefined,
             }}
             onTransitionEnd={() => {
               if (!visible) setPosition(null);
             }}
-            className={`pointer-events-none fixed z-[400] w-max max-w-[calc(100vw-1rem)] -translate-x-1/2 break-words rounded-md bg-bg-overlay px-2 py-1 text-[11px] text-fg-muted shadow-lg ring-1 ring-border transition-[opacity,translate] duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${
-              visible
-                ? "translate-y-0 opacity-100"
-                : side === "bottom"
-                  ? "translate-y-0.5 opacity-0"
-                  : "-translate-y-0.5 opacity-0"
+            className={`pointer-events-none fixed z-[400] w-max max-w-[calc(100vw-1rem)] break-words rounded-md bg-bg-overlay px-2 py-1 text-[11px] text-fg-muted shadow-lg ring-1 ring-border transition-[opacity,translate] duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${
+              side === "left" || side === "right"
+                ? `-translate-y-1/2 ${
+                    visible
+                      ? "translate-x-0 opacity-100"
+                      : side === "right"
+                        ? "-translate-x-0.5 opacity-0"
+                        : "translate-x-0.5 opacity-0"
+                  }`
+                : `-translate-x-1/2 ${
+                    visible
+                      ? "translate-y-0 opacity-100"
+                      : side === "bottom"
+                        ? "translate-y-0.5 opacity-0"
+                        : "-translate-y-0.5 opacity-0"
+                  }`
             }`}
           >
             {label}
@@ -225,6 +241,20 @@ export function ShortcutHint({
         )}
     </span>
   );
+}
+
+/** Where a hint opens from: 7px off the side of the control it names. */
+function anchorPoint(
+  rect: DOMRect,
+  side: "bottom" | "top" | "left" | "right",
+): { x: number; y: number } {
+  if (side === "left") return { x: rect.left - 7, y: rect.y + rect.height / 2 };
+  if (side === "right")
+    return { x: rect.right + 7, y: rect.y + rect.height / 2 };
+  return {
+    x: rect.x + rect.width / 2,
+    y: side === "bottom" ? rect.bottom + 7 : rect.top - 7,
+  };
 }
 
 /** Native disabled controls do not reliably dispatch React mouse events.

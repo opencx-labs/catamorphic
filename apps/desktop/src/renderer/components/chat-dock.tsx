@@ -2439,6 +2439,7 @@ function ChatDockContent({
   lurkingRef.current = lurking;
   return (
     <div
+      data-floating-wrapper={!presentsAsTab || undefined}
       className={`pointer-events-none absolute ${presentsAsTab ? "z-10" : "z-30"} flex flex-col items-center justify-end ${
         splitResizing
           ? "transition-[padding]"

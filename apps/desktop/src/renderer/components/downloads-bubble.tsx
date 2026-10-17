@@ -41,6 +41,7 @@ function readDismissedAt(key: string): number {
  */
 export function DownloadsBubble({
   align = "center",
+  edge = "bottom",
   onOpenAll,
   onOpenFile,
   onOpenChange,
@@ -51,6 +52,8 @@ export function DownloadsBubble({
    * it would hang past the window's edge.
    */
   align?: "start" | "center" | "end";
+  /** The screen edge the pill rests on (ADR 0242): it opens away from it. */
+  edge?: "bottom" | "top" | "left" | "right";
   onOpenAll: () => void;
   /** Open a saved file in Work (the dock's owner decides where). */
   onOpenFile: (record: DownloadRecord) => void;
@@ -190,7 +193,15 @@ export function DownloadsBubble({
               ? `${active.length} ${active.length === 1 ? "download" : "downloads"} in progress`
               : "Downloads"
           }
-          side="top"
+          side={
+            edge === "top"
+              ? "bottom"
+              : edge === "left"
+                ? "right"
+                : edge === "right"
+                  ? "left"
+                  : "top"
+          }
         >
           <button
             type="button"
@@ -271,12 +282,18 @@ export function DownloadsBubble({
         aria-label="Recent downloads"
         testId="downloads-popover"
         data-align={align}
-        className={`absolute bottom-12 w-80 rounded-xl border border-border bg-bg-raised p-1.5 shadow-2xl ${
-          align === "start"
-            ? "left-0 origin-bottom-left"
-            : align === "end"
-              ? "right-0 origin-bottom-right"
-              : "left-1/2 origin-bottom -translate-x-1/2"
+        className={`absolute w-80 rounded-xl border border-border bg-bg-raised p-1.5 shadow-2xl ${
+          edge === "left"
+            ? "left-12 top-1/2 origin-left -translate-y-1/2"
+            : edge === "right"
+              ? "right-12 top-1/2 origin-right -translate-y-1/2"
+              : `${edge === "top" ? "top-12" : "bottom-12"} ${
+                  align === "start"
+                    ? `left-0 ${edge === "top" ? "origin-top-left" : "origin-bottom-left"}`
+                    : align === "end"
+                      ? `right-0 ${edge === "top" ? "origin-top-right" : "origin-bottom-right"}`
+                      : `left-1/2 -translate-x-1/2 ${edge === "top" ? "origin-top" : "origin-bottom"}`
+                }`
         }`}
       >
         <ul className="flex flex-col">

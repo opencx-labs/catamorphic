@@ -24,19 +24,49 @@ const profileScope: readonly SettingsScope[] = ["profile"];
 export const SETTINGS = {
   dockMultiProject: {
     label: "Chats from all projects",
-    description: "Show this profile's project chats together in the dock.",
+    description: "Show this profile's project chats together in the pill.",
     scopes: profileScope,
     valid: boolean,
   },
   dockDetached: {
-    label: "Detached chat dock",
-    description: "Keep the dock above other windows and desktops.",
+    label: "Pill on the desktop",
+    description:
+      "Float the pill in a window of its own, above every app and on every desktop, also while Work is minimized.",
     scopes: profileScope,
     valid: boolean,
   },
+  dockEdge: {
+    label: "Screen edge",
+    description:
+      "Where the pill docks on the desktop. Drag it to any edge, the notch included.",
+    scopes: profileScope,
+    valid: oneOf("bottom", "left", "right", "top"),
+    options: {
+      bottom: "Bottom",
+      left: "Left",
+      right: "Right",
+      top: "Top, at the notch",
+    },
+  },
+  dockFollowsWindow: {
+    label: "Rest in the Work window",
+    description:
+      "At the bottom of the screen, the pill sits in the front Work window's chat area while Work is in front.",
+    scopes: profileScope,
+    valid: boolean,
+  },
+  dockIslandHover: {
+    label: "Open at the notch on hover",
+    description:
+      "At the notch, the pill opens into its chats when the pointer reaches it.",
+    scopes: profileScope,
+    valid: boolean,
+    macOnly: true,
+  },
   dockSide: {
-    label: "Collapsed bubble corner",
-    description: "Drag the collapsed bubble to switch bottom corners.",
+    label: "Folded pill corner",
+    description:
+      "The bottom corner the folded pill rests in. Drag it to the other one.",
     scopes: profileScope,
     valid: oneOf("left", "right"),
     options: { left: "Left", right: "Right" },
@@ -44,7 +74,7 @@ export const SETTINGS = {
   dockPlacement: {
     label: "Open chat position",
     description:
-      "Where open chats and their bubbles sit. Drag the arrows button to move them.",
+      "Where open chats and their bubbles sit at the bottom. Drag the arrows button to move them.",
     scopes: profileScope,
     valid: oneOf("left", "center", "right"),
     options: { left: "Left", center: "Centered", right: "Right" },

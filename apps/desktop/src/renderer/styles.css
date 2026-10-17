@@ -693,7 +693,8 @@ kbd {
    resting pose in Chromium. */
 @keyframes dock-in {
   from {
-    transform: translateY(16px) scale(0.985);
+    transform: translate(var(--dock-from-x, 0px), var(--dock-from-y, 16px))
+      scale(0.985);
     opacity: 0;
   }
   to {
@@ -715,7 +716,7 @@ kbd {
     opacity: 1;
   }
   to {
-    translate: 0 16px;
+    translate: var(--dock-from-x, 0px) var(--dock-from-y, 16px);
     scale: 0.985;
     opacity: 0;
   }
@@ -2293,6 +2294,116 @@ kbd {
 }
 [data-bubble-items][aria-hidden="true"] {
   width: 0;
+}
+/* On a side of the screen the strip is a column: it folds its height
+   away instead, toward the bubble at its foot (ADR 0242). */
+[data-dock-edge="left"] [data-bubble-items],
+[data-dock-edge="right"] [data-bubble-items] {
+  width: auto;
+  height: calc-size(auto, min(size, 100vh - 150px));
+}
+[data-dock-edge="left"] [data-bubble-items][aria-hidden="true"],
+[data-dock-edge="right"] [data-bubble-items][aria-hidden="true"] {
+  width: auto;
+  height: 0;
+}
+
+/* A chat opens from the pill, away from the screen edge it rests on: down
+   from the top or the notch, out from either side (ADR 0242). */
+[data-dock-native][data-dock-edge="top"] [data-floating-wrapper] {
+  justify-content: flex-start;
+  padding-top: 76px;
+  padding-bottom: 12px;
+}
+[data-dock-native][data-dock-edge="top"][data-dock-notch]
+  [data-floating-wrapper] {
+  padding-top: calc(var(--pill-notch-height, 32px) + 64px);
+}
+[data-dock-native][data-dock-edge="left"] [data-floating-wrapper] {
+  align-items: flex-start;
+  justify-content: center;
+  padding: 12px 12px 12px 76px;
+}
+[data-dock-native][data-dock-edge="right"] [data-floating-wrapper] {
+  align-items: flex-end;
+  justify-content: center;
+  padding: 12px 76px 12px 12px;
+}
+[data-dock-native][data-dock-edge="left"] [data-floating-chat],
+[data-dock-native][data-dock-edge="right"] [data-floating-chat] {
+  max-width: 34rem;
+}
+[data-dock-native][data-dock-edge="top"] [data-floating-chat] {
+  transform-origin: top;
+  --dock-from-y: -16px;
+}
+[data-dock-native][data-dock-edge="left"] [data-floating-chat] {
+  transform-origin: left;
+  --dock-from-x: -16px;
+  --dock-from-y: 0px;
+}
+[data-dock-native][data-dock-edge="right"] [data-floating-chat] {
+  transform-origin: right;
+  --dock-from-x: 16px;
+  --dock-from-y: 0px;
+}
+/* Minimized, it rests the same way it leaves. */
+[data-dock-native][data-dock-edge="top"] [data-floating-chat].translate-y-4 {
+  translate: 0 -1rem;
+}
+[data-dock-native][data-dock-edge="left"] [data-floating-chat].translate-y-4 {
+  translate: -1rem 0;
+}
+[data-dock-native][data-dock-edge="right"] [data-floating-chat].translate-y-4 {
+  translate: 1rem 0;
+}
+
+/* Settings' pill spots are radios drawn as miniature screens: the ring
+   goes on the screen (DESIGN.md "Focus rings"). */
+[data-pill-spot]:has(input:focus-visible) [data-pill-preview] {
+  outline: var(--focus-ring-width) var(--focus-ring-style) var(--color-accent);
+  outline-offset: var(--focus-ring-offset);
+}
+
+/* The island at the notch is black like the hardware it grows from, so the
+   strip's surface tokens become light ones on it; the accent stays the
+   profile's (ADR 0242). Its outline and box morph on one curve. */
+.pill-island {
+  --ease-island: cubic-bezier(0.32, 0.72, 0, 1);
+  --color-fg: #f5f5f5;
+  --color-fg-muted: rgb(255 255 255 / 0.74);
+  --color-fg-faint: rgb(255 255 255 / 0.5);
+  --color-border: rgb(255 255 255 / 0.14);
+  --color-border-strong: rgb(255 255 255 / 0.3);
+  --color-bg-overlay: rgb(255 255 255 / 0.1);
+  --color-bg-raised: #141414;
+  color: var(--color-fg);
+  color-scheme: dark;
+}
+/* A wing is as tall as the cutout: its control fits inside it. */
+.pill-island [data-island-wing] button {
+  width: 1.75rem;
+  height: 1.75rem;
+}
+/* Docking at the notch, it lands with a soft bulge, as if the notch
+   swallowed it. */
+@keyframes island-arrive {
+  0% {
+    scale: 0.82 0.6;
+    opacity: 0.4;
+  }
+  55% {
+    scale: 1.05 1.08;
+    opacity: 1;
+  }
+  100% {
+    scale: 1 1;
+    opacity: 1;
+  }
+}
+.animate-island-arrive {
+  animation: island-arrive 480ms var(--ease-island) both;
+  transform-origin: top center;
 }
 
 /* Voice's bubble comes and goes as a popover does, and changes colour with
