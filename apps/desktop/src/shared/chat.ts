@@ -125,7 +125,7 @@ export interface ChatDockProps {
    */
   paletteTargeted?: boolean;
   /**
-   * What the chat holds in this workspace, as chips (ADR 0238): its forks
+   * What the chat holds in this workspace, as chips (ADR 0239): its forks
    * and subagents, the tabs it opened. The dock adds what it knows itself
    * (recorded pull requests, chips its agent attached, its turns' subagents
    * and app views) to make Work's chips.

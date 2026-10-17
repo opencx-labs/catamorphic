@@ -8,7 +8,7 @@ import { chipBoard } from "./chip-board.js";
 import { desktopApi } from "./desktop-api.js";
 
 /**
- * Answer a chips module's requests of Work (ADR 0238) in the window that
+ * Answer a chips module's requests of Work (ADR 0239) in the window that
  * shows its chat: the chat's own chips (`work.read`, `work.execute` with
  * source "chips"), and the project workflows its grant names. Main checked
  * the grants and sends each call only to the window whose chips asked.

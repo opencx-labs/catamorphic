@@ -27,7 +27,7 @@ const text = (value: unknown) =>
   typeof value === "string" && value ? value : undefined;
 
 /**
- * A chip's hover preview (ADR 0238): the card it declares, else a live look
+ * A chip's hover preview (ADR 0239): the card it declares, else a live look
  * at what it stands for (a page, a terminal's output, a file, a workflow or
  * an app, from its `data`), else what it says about itself. Inspection
  * never opens or starts anything.

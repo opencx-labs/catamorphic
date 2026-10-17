@@ -4,7 +4,7 @@ import { afterAll, beforeAll, expect, it } from "vitest";
 import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
 
 /**
- * The chips above a chat's composer (ADR 0238): recorded pull requests as
+ * The chips above a chat's composer (ADR 0239): recorded pull requests as
  * wide chips with their live state, chips an agent attaches on the fly,
  * folding past three lines, the keyboard path, a project's chips module,
  * and Customize chips. The fake agent calls the real workspace tools; pull

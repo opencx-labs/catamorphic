@@ -7,7 +7,7 @@ import {
 } from "./contract.js";
 
 /**
- * `work:chips` (ADR 0238): the chips Work gives the chat a request names,
+ * `work:chips` (ADR 0239): the chips Work gives the chat a request names,
  * as that chat publishes them. One parent's chips at a time, like any
  * source: the roots, or the chips inside a group. Its actions are the
  * chat's own (a ✕ forgets a pull request or closes a tab).

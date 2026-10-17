@@ -51,6 +51,7 @@ import {
   useState,
 } from "react";
 import type { AgentCommandsResult } from "../../shared/agent-commands.js";
+import { normalizePrefs } from "../../shared/app-prefs.js";
 import { chatBookmarkUrl } from "../../shared/bookmark-target.js";
 import type { ChatDockProps, McpAppRef } from "../../shared/chat.js";
 import { modifiersForMode, type OpenMode } from "../../shared/open-mode.js";
@@ -100,6 +101,7 @@ import { TAB_DRAG_TYPE, type TabDragPayload } from "../lib/tab-drag";
 import { classifyPastedText, selectionName, textPill } from "../lib/text-pills";
 import { useBackgroundCommands } from "../lib/use-background-commands";
 import { useChips } from "../lib/use-chips.js";
+import { useQueueMessages } from "../lib/use-queue-messages.js";
 import { useSessionCheckout } from "../lib/use-session-checkout.js";
 import { useWorkDisplay } from "../lib/use-work-display.js";
 import type { ChatMode } from "../lib/workspace-types.js";
@@ -564,6 +566,9 @@ function ChatDockContent({
    */
   const [recordingWorktree, setRecordingWorktree] = useState(false);
   const [worktreeUnrecorded, setWorktreeUnrecorded] = useState(false);
+  // Sent while the agent works, a message reaches it at its next step
+  // unless the person chose to queue (ADR 0240).
+  const queueMessages = useQueueMessages();
   const chat = useAgentChat(projectId, {
     sessionId: entry.sessionId,
     agentId: selectedAgentId,
@@ -891,7 +896,7 @@ function ChatDockContent({
     [connectorIcons],
   );
 
-  // Work's chips for this chat (ADR 0238): the pull requests it recorded
+  // Work's chips for this chat (ADR 0239): the pull requests it recorded
   // and the chips its agent attached (its session's metadata), what it
   // holds in the workspace (the chips prop), and what its turns made
   // (subagents, apps it edited, app views), from the common event model.
@@ -1722,8 +1727,23 @@ function ChatDockContent({
 
   // Palette "Send to agent": the entry arrives with the message attached;
   // fire it once on mount and strip it so remounts don't re-send.
-  const sendRef = useRef(chat.send);
-  sendRef.current = chat.send;
+  // Sent from elsewhere (the palette), it reaches a working agent the way
+  // a message typed here does. Read as it sends: it can come as the chat
+  // mounts, before the preference has loaded.
+  const sendFromElsewhere = async (
+    text: string,
+    attachments?: AgentChatAttachment[],
+  ) => {
+    const queue = await desktopApi
+      .getPrefs()
+      .then((prefs) => normalizePrefs(prefs).chatQueueMessages)
+      .catch(() => false);
+    return chat.send(text, attachments, {
+      dispatch: queue ? "queue" : "steer",
+    });
+  };
+  const sendRef = useRef(sendFromElsewhere);
+  sendRef.current = sendFromElsewhere;
   const pendingSentRef = useRef(false);
   useEffect(() => {
     const pending = entryRef.current.pendingMessage;
@@ -1881,7 +1901,10 @@ function ChatDockContent({
     if (!composed) return;
     const message = resolveSlashMessage(composed.message, entries);
     if (now) void chat.sendNow(message, composed.files);
-    else void chat.send(message, composed.files);
+    else
+      void chat.send(message, composed.files, {
+        dispatch: queueMessages ? "queue" : "steer",
+      });
   };
   const submit = (event?: FormEvent) => {
     event?.preventDefault();
@@ -2993,6 +3016,7 @@ function ChatDockContent({
               onEditQueued={chat.editQueued}
               onCancelQueued={chat.cancelQueued}
               onSendQueuedNow={chat.sendQueuedNow}
+              onSteerNow={chat.steerNow}
               onHoldQueued={chat.holdQueued}
               onRetry={(turnId) => void chat.retry(turnId)}
               onInterrupt={(turnId) => void chat.interrupt(turnId)}
@@ -3065,7 +3089,7 @@ function ChatDockContent({
                 : "mx-auto max-w-3xl"
             }`}
           >
-            {/* The chips (ADR 0238): what the chat holds, recorded and
+            {/* The chips (ADR 0239): what the chat holds, recorded and
               made, above its composer. They yield while the dock lurks (its
               few rows belong to the latest activity), CSS-folded rather
               than unmounted so their motion state survives the lurk. */}
@@ -3570,9 +3594,10 @@ function ChatDockContent({
                     <ShortcutHint
                       label={
                         // A message during a blocking question reaches the
-                        // agent at once (ADR 0195); otherwise it queues.
+                        // agent at once (ADR 0195); otherwise it reaches it
+                        // at its next step, or queues (ADR 0240).
                         chat.isWorking && !awaitingInput
-                          ? `Queue (${/Mac/.test(navigator.platform) ? "⌘↵" : "Ctrl+Enter"} sends now)`
+                          ? `${queueMessages ? "Queue" : "Send"} (${/Mac/.test(navigator.platform) ? "⌘↵" : "Ctrl+Enter"} ${queueMessages ? "sends now" : "stops and sends"})`
                           : "Send"
                       }
                       shortcut="↵"

@@ -215,7 +215,7 @@ export const SESSION_PULL_REQUESTS_CONTRACT =
   "pull_requests lists the pull requests a chat opened or works on, as an array of { url, number?, title?, state? } with state open, draft, merged or closed.";
 
 // ---------------------------------------------------------------------------
-// The chips a chat's agent keeps in view (ADR 0238)
+// The chips a chat's agent keeps in view (ADR 0239)
 
 /** The metadata key the chips an agent attaches to its chat are kept under. */
 export const SESSION_CHIPS_KEY = "chips";

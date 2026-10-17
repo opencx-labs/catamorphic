@@ -49,7 +49,7 @@ export function workspaceCustomizationMessage({
 }
 
 /**
- * The "Customize chips" chat's composer (ADR 0238): one short sentence
+ * The "Customize chips" chat's composer (ADR 0239): one short sentence
  * waiting for the person to finish or send, and the same two pills as the
  * sidebar's, so the agent reads the layout file and the chips contract.
  */

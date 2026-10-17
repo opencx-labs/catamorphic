@@ -23,6 +23,13 @@ replaced by its item when the stream delivers it. Failed messages retain content
 attachments and their `commandId` for Send again, so a resend cannot deliver
 twice; timelines show them as unsent bubbles with Send again and Dismiss.
 
+A message sent while the agent works steers into its turn (ADR 0240): it
+shows in the conversation at once, unread (`in_progress`) until the agent
+takes it in at its next step, and its Interrupt (`steer_now`) has the agent
+stop that step and read it now. The profile's "Queue messages sent while the
+agent works" (`chatQueueMessages`, off by default) sends `queue` instead, and
+⌘↵ sends `interrupt` either way.
+
 The server's turn queue is the only queue authority. Queue commands
 (`edit_queued`, `cancel_queued`, `send_now`) carry their own command ids; a
 refused command shows its receipt's message, and failed edits do not discard
@@ -189,7 +196,7 @@ hovering never executes a workflow or mounts an app.
 
 Past three chips of one kind, Work's chips fold into a group labelled with the
 plural type: Terminals, Apps, Workflows, Files, Pages, Chats, Subagents or App
-views (ADR 0238). Show the count separately. Clicking the group discloses every member; each member retains its
+views (ADR 0239). Show the count separately. Clicking the group discloses every member; each member retains its
 preview and normal open/remove actions. Never label a group with one member's
 name or silently hide members behind a count.
 

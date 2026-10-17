@@ -296,10 +296,11 @@ class AiSdkAttempt {
     let error: TurnError | undefined;
     try {
       const folded = await this.history();
-      this.emit({ type: "turn.started", ref: this.turnRef });
       const turn = this.turnInput(folded);
       await this.append([turn.entry]);
       turnStored = true;
+      // Begun once its input is on the stored thread (ADR 0240).
+      this.emit({ type: "turn.started", ref: this.turnRef });
       servers = await this.connectMcp();
       await this.loop({
         messages: turn.messages,
@@ -486,30 +487,44 @@ class AiSdkAttempt {
     const signal = AbortSignal.any([this.abort.signal, this.failure.signal]);
     for (;;) {
       let prepared = messages;
-      let inserted: ModelMessage[] = [];
       const agent = new ToolLoopAgent({
         telemetry: input.telemetry.settings,
         model: this.model,
         instructions: this.instructions(),
         allowSystemInMessages: true,
         tools: input.tools,
-        // Steered input joins the turn before the next model step.
-        prepareStep: ({ messages: stepMessages }) => {
+        // Steered input joins the turn before the next model step. It is
+        // stored first: read, it survives a stop during that step.
+        prepareStep: async ({ messages: stepMessages }) => {
           const fresh = this.steers.splice(0);
-          inserted = fresh.map(userMessage);
+          const inserted = fresh.map(userMessage);
           prepared = [...stepMessages, ...inserted];
-          if (fresh.length > 0)
-            this.emit({
-              type: "input.consumed",
-              itemIds: fresh.map((steer) => steer.itemId),
-            });
+          if (fresh.length > 0) {
+            try {
+              await this.append([
+                {
+                  v: 1,
+                  kind: "step",
+                  ...(this.modelId ? { model: this.modelId } : {}),
+                  messages: inserted,
+                },
+              ]);
+              this.emit({
+                type: "input.consumed",
+                itemIds: fresh.map((steer) => steer.itemId),
+              });
+            } catch (cause) {
+              // Unread, it runs as a turn of its own after this failed one.
+              this.failureCause = cause;
+              this.failure.abort();
+            }
+          }
           return { messages: prepared };
         },
         onStepFinish: async (step) => {
           stepsLeft -= 1;
           messages = [...prepared, ...step.response.messages];
-          const written = [...inserted, ...step.response.messages];
-          inserted = [];
+          const written = step.response.messages;
           try {
             await this.append([
               {

@@ -22,7 +22,7 @@ export const isHostAction = (action: string): action is HostAction =>
 
 /**
  * How Work's verbs look when an entry names one and says nothing more
- * (ADR 0238): `{ action: "open-side" }` is the open-to-the-side button
+ * (ADR 0239): `{ action: "open-side" }` is the open-to-the-side button
  * wherever a row or chip shows it, in a module's rows or an agent's chip.
  */
 export const HOST_ACTION_LOOKS: Record<
@@ -40,7 +40,7 @@ export const HOST_ACTION_LOOKS: Record<
 };
 
 /**
- * A color a row's icon or a badge takes from the theme (ADR 0238): what
+ * A color a row's icon or a badge takes from the theme (ADR 0239): what
  * it says (a pull request merged, a check failing), never decoration.
  */
 export const SIDEBAR_TONES = [
@@ -180,11 +180,11 @@ export interface SidebarItemPresentation {
   /** Extra words the palette matches this row by (synonyms, ids). */
   keywords?: string[];
   icon?: string;
-  /** The icon's color: what the row's state says (ADR 0238). */
+  /** The icon's color: what the row's state says (ADR 0239). */
   tone?: SidebarTone;
   /**
    * Chips only: the chip spans the composer's width, its badges and
-   * buttons at the end (ADR 0238). Sidebar rows ignore it.
+   * buttons at the end (ADR 0239). Sidebar rows ignore it.
    */
   wide?: boolean;
   badges?: (string | SidebarBadge)[];

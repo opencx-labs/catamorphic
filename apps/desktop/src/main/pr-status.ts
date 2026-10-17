@@ -10,7 +10,7 @@ import {
 import { githubCliToken } from "./github-cli.js";
 
 /**
- * Where the pull request at a web address stands (ADR 0238), for the chip
+ * Where the pull request at a web address stands (ADR 0239), for the chip
  * of the chat that recorded it: read with the person's own connection to
  * the host serving the address, else the GitHub CLI when they turned it on
  * (ADR 0117). Null when nothing here may read it, so the chip shows what

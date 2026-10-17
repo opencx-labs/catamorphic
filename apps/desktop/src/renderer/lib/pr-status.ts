@@ -12,7 +12,7 @@ export const prStatusQueryKey = (url: string) =>
   ["desktop", "pr-status", url] as const;
 
 /**
- * Where each pull request a chat recorded stands (ADR 0238), read through
+ * Where each pull request a chat recorded stands (ADR 0239), read through
  * main while the chat is in view, every minute and when the window comes
  * back. Null for one nothing here may read: its chip shows what the chat
  * recorded. One cache for every chat, so two chats of one PR share it.

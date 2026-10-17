@@ -535,7 +535,7 @@ function sanitize(raw: unknown): WorkspaceConfig {
 }
 
 /**
- * chips (ADR 0238): Work's own list, or a module that reads it and returns
+ * chips (ADR 0239): Work's own list, or a module that reads it and returns
  * the chats' chips, with the grants a section's module takes.
  */
 function sanitizeChips(raw: unknown): ChipsConfig | undefined {

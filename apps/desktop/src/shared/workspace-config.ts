@@ -24,7 +24,7 @@ export interface WorkspaceConfig {
 }
 
 /**
- * Where a chat's chips come from (ADR 0238): Work's `work:chips`, or a
+ * Where a chat's chips come from (ADR 0239): Work's `work:chips`, or a
  * module in the project that reads it (`collections: ["chips"]`) and sorts,
  * groups, filters or adds to it. The rail draws whatever the source returns.
  */

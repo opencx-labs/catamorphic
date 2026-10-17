@@ -69,7 +69,7 @@ export async function readChips({
 }
 
 /**
- * A chat's chips (ADR 0238): Work's own, or what the project's chips
+ * A chat's chips (ADR 0239): Work's own, or what the project's chips
  * module makes of them. The module reads again when the chat's metadata
  * or Work's chips change (it reads them), and when it says its data did;
  * it pauses while the chat is out of view and keeps what it last read. A

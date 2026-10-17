@@ -16,7 +16,7 @@ import {
 import type { SidebarSourceItem } from "./sidebar-source.js";
 
 /**
- * What a row may hold (ADR 0234, 0238), checked wherever rows come from
+ * What a row may hold (ADR 0234, 0239), checked wherever rows come from
  * code or data Work did not write: a layout and a module's pages in main,
  * the chips an agent keeps in its session's metadata in the window. A row
  * that passes is the same everywhere, so every list and chip draws it the

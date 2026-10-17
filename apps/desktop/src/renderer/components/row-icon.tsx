@@ -22,7 +22,7 @@ export function RowIcon({
 }: {
   icon?: string;
   url?: string;
-  /** What the row's state says, as the icon's color (ADR 0238). */
+  /** What the row's state says, as the icon's color (ADR 0239). */
   tone?: SidebarTone;
   tile?: boolean;
 }) {

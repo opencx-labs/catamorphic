@@ -1,5 +1,5 @@
 /**
- * How chips wrap above a composer (ADR 0238): compact chips flow in lines,
+ * How chips wrap above a composer (ADR 0239): compact chips flow in lines,
  * a wide chip takes a line of its own, and nothing scrolls sideways. Past
  * a few lines the rest fold behind an "N more" chip at the end of the last
  * line shown. Pure, so the rail and its tests agree on where lines break.

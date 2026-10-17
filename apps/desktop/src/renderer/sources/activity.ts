@@ -118,7 +118,7 @@ export function activitySource(deps: WorkSourceDeps): SectionSource {
 
 /**
  * A pull request the chat recorded, as a row: the same look as its chip
- * (ADR 0238), in the state its host last said when the chips read it.
+ * (ADR 0239), in the state its host last said when the chips read it.
  */
 function pullRequestRow(
   pr: SessionPullRequest,

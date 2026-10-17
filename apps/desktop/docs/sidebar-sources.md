@@ -191,7 +191,7 @@ the Work lists it reads) and the public collection and tree primitives.
 
 ## Chips
 
-A chat's chips are a source too (ADR 0238): workspace.js `chips: { source }`
+A chat's chips are a source too (ADR 0239): workspace.js `chips: { source }`
 names `work:chips` (the default) or a module that reads it with
 `work.read({ source: "chips" })` and returns chips, with `collections:
 ["chips"]` and any `workflows`. A chip is a row plus `wide` and `tone`;

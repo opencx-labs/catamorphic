@@ -15,7 +15,7 @@ import type { SidebarSourceItem } from "../../shared/sidebar-source.js";
 import { sanitizeSidebarSourceItem } from "../../shared/source-rows.js";
 
 /**
- * A chip is a row (ADR 0238): what a source returns, drawn above a chat's
+ * A chip is a row (ADR 0239): what a source returns, drawn above a chat's
  * composer. Work's own chips and a module's are the same shape, so a module
  * passes Work's through and adds its own.
  */

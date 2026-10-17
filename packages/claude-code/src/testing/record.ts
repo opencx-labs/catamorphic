@@ -80,9 +80,9 @@ export function recordingQuery(input: {
           yield message;
         }
       },
-      interrupt: () => {
+      interrupt: (interruptOptions) => {
         log({ type: "replay.interrupt" });
-        return handle.interrupt();
+        return handle.interrupt(interruptOptions);
       },
       close: () => handle.close(),
     };

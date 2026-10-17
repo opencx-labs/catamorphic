@@ -3,7 +3,7 @@ import type { SidebarSourceEffect } from "../../shared/sidebar.js";
 import type { Chip } from "./chips.js";
 
 /**
- * What a chat publishes as Work's chips (`work:chips`, ADR 0238): its rows,
+ * What a chat publishes as Work's chips (`work:chips`, ADR 0239): its rows,
  * and how it carries out their own actions (a ✕ forgets a pull request or
  * closes a tab). Published by the chat where it is shown, so the chips and
  * a module reading them run in the window that shows the chat.

@@ -97,7 +97,7 @@ export const postedCommentSchema = z.object({
 });
 
 /**
- * Where a pull request stands (ADR 0238), as main reads it for the chip of
+ * Where a pull request stands (ADR 0239), as main reads it for the chip of
  * the chat that recorded it: core's `PullRequestStatus`, the shape the
  * window draws.
  */

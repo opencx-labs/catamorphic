@@ -679,7 +679,7 @@ function useFirstFrames(): RefObject<boolean> {
 }
 
 /**
- * The chips above a chat's composer (ADR 0238). Compact chips flow in
+ * The chips above a chat's composer (ADR 0239). Compact chips flow in
  * lines and wide ones take a line each; nothing scrolls sideways. Past
  * three lines the rest fold behind "N more". Chips enter and leave in
  * place, the ones that stay slide to where they now stand, and the rail's

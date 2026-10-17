@@ -5920,7 +5920,7 @@ export function App({
   };
 
   /**
-   * What a chat holds in this workspace, as chips (ADR 0238): its forks and
+   * What a chat holds in this workspace, as chips (ADR 0239): its forks and
    * subagents, then the tabs it opened. Its dock adds what it knows itself.
    */
   const chipsFor = (chat: ChatDockEntry): Chip[] => {
@@ -6348,7 +6348,7 @@ export function App({
     openSidebarCustomizationRef.current(sidebarCustomization.side);
   }, [sidebarCustomization, projectId, workspaceReady, hasAgents]);
 
-  // "Customize chips" (ADR 0238): a new chat with the request waiting in
+  // "Customize chips" (ADR 0239): a new chat with the request waiting in
   // its composer, and the layout file and chips contract as its pills.
   const openChipsCustomization = () => {
     if (!projectId || !requireAgents()) return;
@@ -7683,7 +7683,7 @@ export function App({
                       chips={chipsFor(entry)}
                       chipsModule={
                         // A local project, once known to be one: a connected
-                        // project's chats run no modules (ADR 0238).
+                        // project's chats run no modules (ADR 0239).
                         experienceRoot
                           ? chipsModule(visibleWorkspace)
                           : undefined

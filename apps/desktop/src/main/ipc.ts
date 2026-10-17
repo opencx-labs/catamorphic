@@ -3580,7 +3580,7 @@ export function registerIpcHandlers(
     },
   );
 
-  // Where a chat's recorded pull request stands (ADR 0238): any address,
+  // Where a chat's recorded pull request stands (ADR 0239): any address,
   // read with the person's own connection, the CLI as the fallback.
   ipcMain.handle("catamorphic:pr-status", async (event, raw: unknown) => {
     const url = pullRequestAddress(raw);

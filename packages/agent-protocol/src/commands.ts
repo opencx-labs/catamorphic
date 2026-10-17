@@ -199,7 +199,11 @@ export const sessionCommandSchema = z.discriminatedUnion("type", [
       /** May be empty when attachments carry the message. */
       text: z.string().max(1_000_000),
       attachments: z.array(attachmentSchema).max(50).optional(),
-      /** Default: steer a running subsession, queue otherwise. */
+      /**
+       * Default: steer, so a turn that works reads it at its next step
+       * (ADR 0240); with nothing running it starts a turn. `queue` waits
+       * for the turn to end; `interrupt` stops it and runs this next.
+       */
       dispatch: z.enum(["queue", "steer", "interrupt"]).optional(),
       /** Move the chat's workspace to a ref before this turn (ADR 0178). */
       workspace: workspaceRequestSchema.optional(),
@@ -238,6 +242,15 @@ export const sessionCommandSchema = z.discriminatedUnion("type", [
     type: z.literal("send_now"),
     commandId,
     turnId: z.string(),
+  }),
+  z.object({
+    /**
+     * Have the agent read a message steered into its turn now, not at its
+     * next step: the step stops and the turn goes on with it (ADR 0240).
+     */
+    type: z.literal("steer_now"),
+    commandId,
+    itemId: z.string(),
   }),
   z.object({
     type: z.literal("respond"),

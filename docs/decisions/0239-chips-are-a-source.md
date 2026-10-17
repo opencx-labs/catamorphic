@@ -1,4 +1,4 @@
-# 0238 — A chat's chips are a source, and agents attach chips by metadata
+# 0239 — A chat's chips are a source, and agents attach chips by metadata
 
 - **Status:** Accepted
 - **Date:** 2026-10-17
