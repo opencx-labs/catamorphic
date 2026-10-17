@@ -264,6 +264,8 @@ export interface ProjectAgentInfo {
   skills: string[] | null;
   delegation: AgentDelegationPolicy | null;
   promptPreview: string | null;
+  /** The command an ACP agent runs on this machine once approved. */
+  command: string[] | null;
   consent: "not-required" | "none" | "stale" | "ok";
   invalid: string | null;
 }

@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { createAcpAdapter } from "@catamorphic/acp";
 import type { JsonObject } from "@catamorphic/agent-protocol";
 import type {
   AttemptStart,
@@ -795,12 +796,6 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     }
     const def = validated.definition;
 
-    if (def.kind === "acp") {
-      return {
-        error: `"${def.name}" is an ACP agent. ACP harness support isn't built yet. Pick another agent for now.`,
-      };
-    }
-
     // The security core: a committed definition is collaborator-authored
     // code. Before it runs on THIS user's own credentials, the owning
     // profile must hold a consent binding whose hash matches the
@@ -897,6 +892,39 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     if ("error" in resolved)
       return resolved.missing ? undefined : this.failFast(id, resolved.error);
     const { config, profileId, def, persona, source } = resolved;
+    // An ACP agent (ADR 0241) runs its own command in the chat's checkout,
+    // on its own configuration and sign-in, with the workspace tools.
+    if (def.kind === "acp") {
+      const command = def.acp?.command;
+      if (!command?.[0])
+        return this.failFast(
+          id,
+          `"${def.name}" is an ACP agent without a command. Set "acp": { "command": [...] } in agents/${slug}.json and try again.`,
+        );
+      const live = () => this.mcp.live({ config, profileId });
+      return {
+        id,
+        harness: {
+          placement: "host",
+          // One harness per command: a chat stays with the agent it began on.
+          adapter: createAcpAdapter({
+            id: `acp:${path.basename(command[0])}`,
+          }),
+          hostTools: this.workspaceTools(config, "native") ?? [],
+          toolPolicies: () => live().policies,
+          toolAnnotations: () => live().annotations,
+          ...this.workspaceHooks({ config, profileId }),
+        },
+        options: { command },
+        topology: "native",
+        sandboxing: def.sandboxing ?? DESKTOP_DEFAULT_SANDBOXING,
+        ...(def.environment ? { environment: def.environment } : {}),
+        ...(def.connections ? { connectionRequirements: def.connections } : {}),
+        defaults: {},
+        ...(persona ? { systemPrompt: persona } : {}),
+        delegation: resolveProjectDelegation(def.delegation, projectId),
+      };
+    }
     // A secret-credentialed agent reads its key from the project's secrets
     // at each attempt: the registry is synchronous, secrets are not, and a
     // secret set after a failed turn is picked up by the next one.

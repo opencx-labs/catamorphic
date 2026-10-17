@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, it } from "vitest";
 import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
@@ -162,6 +163,11 @@ describe("project agents", () => {
       `${JSON.stringify({ version: 1, name: "Reviewer", kind: "claude-code", credentials: { source: "profile" } }, null, 2)}\n`,
     );
     fs.writeFileSync(path.join(agentsDir, "broken.json"), "{ not json\n");
+    // A real ACP agent process (the adapter tests' agent, ADR 0241).
+    fs.writeFileSync(
+      path.join(agentsDir, "echoer.json"),
+      `${JSON.stringify({ version: 1, name: "Echoer", kind: "acp", acp: { command: [process.execPath, path.resolve(import.meta.dirname, "../../../packages/acp/src/__tests__/test-agent.mjs"), path.join(os.tmpdir(), `echoer-${Date.now()}.json`)] } }, null, 2)}\n`,
+    );
   });
 
   it("lists project agents in the picker under their scope label, broken ones disabled", async () => {
@@ -267,6 +273,70 @@ describe("project agents", () => {
       },
     );
     await run(paletteEscape);
+  });
+
+  it("runs a committed ACP agent once approved: its command in the dialog, its reply and approvals in the chat", async () => {
+    await runWait(`return !!visibleDock();`, { label: "chat still open" });
+    await openPicker("Switch agent for this chat", "Chat agent");
+    await runWait(pickOption("Echoer"), {
+      timeoutMs: 15_000,
+      label: "pick Echoer",
+    });
+    // Approving runs a command on this machine: the dialog names it.
+    await runWait(
+      `return !!byText('[data-testid="project-agent-consent"] dd', 'test-agent.mjs') &&
+              !!byText('[data-testid="project-agent-consent"] dd', 'ACP');`,
+      { timeoutMs: 15_000, label: "consent dialog naming the command" },
+    );
+    await app.screenshot(
+      path.join(
+        process.env.CATAMORPHIC_E2E_ARTIFACTS_DIR ?? os.tmpdir(),
+        "acp-agent-consent.png",
+      ),
+    );
+    await run(
+      `$('[data-testid="project-agent-approve"]').click(); return true;`,
+    );
+    // Its own sign-in: approving binds nothing of the profile's. The chat
+    // on it is the one naming it.
+    const echoDock = `$$('section[aria-label]').find((el) => !el.inert &&
+      el.querySelector('[data-composer-input]') && el.textContent.includes('Echoer'))`;
+    const send = (text: string) =>
+      run(`
+        const ta = ${echoDock}.querySelector('[data-composer-input]');
+        setReactValue(ta, ${JSON.stringify(text)});
+        ta.closest('form').requestSubmit();
+        return true;
+      `);
+    await runWait(
+      `return !$('[data-testid="project-agent-consent"]') && !!${echoDock};`,
+      { timeoutMs: 15_000, label: "a chat on the approved ACP agent" },
+    );
+    await send("hello acp");
+    await runWait(
+      `return [...${echoDock}.querySelectorAll('[role="log"] article')]
+        .some((el) => el.textContent.includes('Echo: hello acp'));`,
+      { timeoutMs: 30_000, label: "reply from the ACP agent" },
+    );
+    // The agent's own permission request is a Work approval card.
+    await send("[[permission]]");
+    await runWait(
+      `const card = $('[data-testid="approval-card"]');
+       return !!card && card.textContent.includes('rm -rf build');`,
+      { timeoutMs: 30_000, label: "the agent's permission request as a card" },
+    );
+    await run(`$('[data-testid="approval-allow"]').click(); return true;`);
+    await runWait(
+      `return [...${echoDock}.querySelectorAll('[role="log"] article')]
+        .some((el) => el.textContent.includes('Permission: allow_once'));`,
+      { timeoutMs: 30_000, label: "the agent told it was allowed once" },
+    );
+    await app.screenshot(
+      path.join(
+        process.env.CATAMORPHIC_E2E_ARTIFACTS_DIR ?? os.tmpdir(),
+        "acp-agent-reply.png",
+      ),
+    );
   });
 
   it("re-requires consent after the persona file changes", async () => {

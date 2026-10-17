@@ -86,7 +86,7 @@ export function ProjectAgentConsentDialog({
           <p className="mb-4 text-xs text-fg-muted">
             {agent.consent === "stale"
               ? "This project agent's definition changed since you approved it, so your approval was reset."
-              : "This agent is defined by files committed to the project — anyone with write access can change it. Approving lets it run with your credentials."}
+              : `This agent is defined by files committed to the project — anyone with write access can change it. ${agent.command ? "Approving runs its command on this machine as you." : "Approving lets it run with your credentials."}`}
           </p>
 
           <dl className="mb-4 space-y-2 text-xs">
@@ -94,6 +94,14 @@ export function ProjectAgentConsentDialog({
               <dt className="w-24 shrink-0 text-fg-faint">Harness</dt>
               <dd>{KIND_LABELS[agent.kind] ?? agent.kind}</dd>
             </div>
+            {agent.command && (
+              <div className="flex gap-2">
+                <dt className="w-24 shrink-0 text-fg-faint">Runs</dt>
+                <dd className="break-all font-mono">
+                  {agent.command.join(" ")}
+                </dd>
+              </div>
+            )}
             <div className="flex gap-2">
               <dt className="w-24 shrink-0 text-fg-faint">Model</dt>
               <dd>{agent.model || "Harness default"}</dd>
@@ -102,7 +110,9 @@ export function ProjectAgentConsentDialog({
               <dt className="w-24 shrink-0 text-fg-faint">Runs with</dt>
               <dd className="flex items-center gap-1.5">
                 <KeyRound className="size-3.5 text-fg-faint" />
-                {SOURCE_LABELS[agent.credentialsSource]}
+                {agent.command
+                  ? "Its own configuration and sign-in"
+                  : SOURCE_LABELS[agent.credentialsSource]}
               </dd>
             </div>
             {agent.connections.length > 0 && (
@@ -156,9 +166,11 @@ export function ProjectAgentConsentDialog({
             >
               Cancel
             </button>
-            <span className="ml-auto text-[11px] text-fg-faint">
-              Uses your existing sign-in — configure in Settings
-            </span>
+            {!agent.command && (
+              <span className="ml-auto text-[11px] text-fg-faint">
+                Uses your existing sign-in — configure in Settings
+              </span>
+            )}
           </div>
         </div>
       )}

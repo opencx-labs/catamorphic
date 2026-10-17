@@ -228,6 +228,8 @@ export interface ProjectAgentInfo {
   delegation: import("@catamorphic/core").AgentDelegationPolicy | null;
   /** First lines of the persona file, for the consent dialog. */
   promptPreview: string | null;
+  /** The command an ACP agent runs on this machine once approved. */
+  command: string[] | null;
   /**
    * Consent state for THIS profile: `not-required` (secret-credentialed),
    * `none` (never approved), `stale` (definition changed since approval),
@@ -831,6 +833,7 @@ export function registerIpcHandlers(
       skills: definition?.skills ?? null,
       delegation: definition?.delegation ?? null,
       promptPreview,
+      command: definition?.acp?.command ?? null,
       consent,
       invalid: entry.invalid?.error ?? null,
     };
@@ -909,7 +912,8 @@ export function registerIpcHandlers(
         .list()
         .find((agent) => agent.harness === harness);
       let auth: BindingAuth;
-      if (definition.kind === "e2e-fake") {
+      // An ACP agent signs in on its own (ADR 0241): nothing of ours to bind.
+      if (definition.kind === "e2e-fake" || definition.kind === "acp") {
         auth = { mode: "local" };
       } else if (match?.auth === "api-key" && match.apiKey) {
         auth = { mode: "api-key", apiKey: match.apiKey };

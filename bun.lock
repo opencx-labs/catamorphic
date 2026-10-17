@@ -20,6 +20,7 @@
       "dependencies": {
         "@ai-sdk/anthropic": "^4.0.52",
         "@ai-sdk/openai": "^4.0.65",
+        "@catamorphic/acp": "workspace:*",
         "@catamorphic/agent-protocol": "workspace:*",
         "@catamorphic/agent-runner": "workspace:*",
         "@catamorphic/ai-sdk": "workspace:*",
@@ -173,6 +174,20 @@
         "@opentelemetry/sdk-trace-node": "^2.9.0",
       },
       "devDependencies": {
+        "@types/node": "^26.1.1",
+      },
+    },
+    "packages/acp": {
+      "name": "@catamorphic/acp",
+      "version": "0.0.1",
+      "dependencies": {
+        "@agentclientprotocol/sdk": "1.7.0",
+        "@catamorphic/agent-protocol": "workspace:*",
+        "@catamorphic/sandbox": "workspace:*",
+        "@modelcontextprotocol/sdk": "^1.32.1",
+      },
+      "devDependencies": {
+        "@catamorphic/agent-runner": "workspace:*",
         "@types/node": "^26.1.1",
       },
     },
@@ -766,6 +781,8 @@
   "packages": {
     "@adobe/css-tools": ["@adobe/css-tools@4.5.0", "", {}, "sha512-6OzddxPio9UiWTCemp4N8cYLV2ZN1ncRnV1cVGtve7dhPOtRkleRyx32GQCYSwDYgaHU3USMm84tNsvKzRCa1Q=="],
 
+    "@agentclientprotocol/sdk": ["@agentclientprotocol/sdk@1.7.0", "", { "peerDependencies": { "zod": "^3.25.0 || ^4.0.0" } }, "sha512-ZORuxsuEnLjRly7t6Ad7zAsWitjWsyprswyPUHz/yycPb+tTm3DGa8XheaHhRXqX8LS9snuxaYavXSRA50TlHw=="],
+
     "@ai-sdk/anthropic": ["@ai-sdk/anthropic@4.0.52", "", { "dependencies": { "@ai-sdk/provider": "4.0.13", "@ai-sdk/provider-utils": "5.0.39" }, "peerDependencies": { "zod": "^3.25.76 || ^4.1.8" } }, "sha512-IQt/y++kSUdqa9EbFOJntxLGjZMURTm/MnTUikNBZ5X86K5l96t/BwsRsX/SrH5kx+7yRPrmJ1WBNlmE8quSVg=="],
 
     "@ai-sdk/gateway": ["@ai-sdk/gateway@4.0.78", "", { "dependencies": { "@ai-sdk/provider": "4.0.13", "@ai-sdk/provider-utils": "5.0.39", "@vercel/oidc": "3.2.0" }, "peerDependencies": { "zod": "^3.25.76 || ^4.1.8" } }, "sha512-fcamzmFlcy+c/tIc7QcATLe/kArgSVGQ1QxaddMjhOSX8zypc2hmD5sHB2bp1DSFcSxDD32d6usF9a7xLCTULg=="],
@@ -915,6 +932,8 @@
     "@biomejs/cli-win32-x64": ["@biomejs/cli-win32-x64@2.5.7", "", { "os": "win32", "cpu": "x64" }, "sha512-V+0wu/nrj2S+MhP4EQ0uHNolP0IALEsz45pg0WoKkHfDeh0+ItHwP/p7bX5RPoMOl9NkpHYWdYPhIcy2mACHvQ=="],
 
     "@bramus/specificity": ["@bramus/specificity@2.4.2", "", { "dependencies": { "css-tree": "^3.0.0" }, "bin": { "specificity": "bin/cli.js" } }, "sha512-ctxtJ/eA+t+6q2++vj5j7FYX3nRu311q1wfYH3xjlLOsczhlhxAg2FWNUXhpGvAw3BWo1xBcvOV6/YLc2r5FJw=="],
+
+    "@catamorphic/acp": ["@catamorphic/acp@workspace:packages/acp"],
 
     "@catamorphic/agent-protocol": ["@catamorphic/agent-protocol@workspace:packages/agent-protocol"],
 

@@ -505,6 +505,12 @@ export function useChoiceModes({
     const newChat = (harness: string) =>
       picker === "switch-agent" &&
       startsNewChat({ bound: focusedChat?.harness ?? null, next: harness });
+    // An ACP agent's harness is its command's (`acp:hermes`), as the
+    // registry names it (ADR 0241).
+    const projectHarness = (agent: ProjectAgentInfo) =>
+      agent.kind === "acp" && agent.command?.[0]
+        ? `acp:${agent.command[0].split(/[\\/]/).pop()}`
+        : projectAgentAsInfo(agent).harness;
     const build = (): PaletteItem[] => {
       // The assistant (ADR 0216): Work's built-in one, or one of the
       // person's agents as they set it up, or a new agent.
@@ -670,8 +676,7 @@ export function useChoiceModes({
                     label: agent.name,
                     // Its approval state stays first: it decides the pick.
                     detail:
-                      !agent.invalid &&
-                      newChat(projectAgentAsInfo(agent).harness)
+                      !agent.invalid && newChat(projectHarness(agent))
                         ? `${projectAgentDetail(agent)} · starts a new chat`
                         : projectAgentDetail(agent),
                     keywords: [agent.name, agent.slug, "project", agent.kind],
@@ -691,7 +696,7 @@ export function useChoiceModes({
                         agent,
                         picker === "default-agent"
                           ? "default"
-                          : newChat(projectAgentAsInfo(agent).harness)
+                          : newChat(projectHarness(agent))
                             ? "chat"
                             : "session",
                       );

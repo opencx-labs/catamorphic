@@ -180,7 +180,8 @@ git verbs (`sync_project`, `create_pull_request`) rather than raw git.
 
 One agent-session engine over pluggable harnesses: the built-in
 `@catamorphic/ai-sdk` tool loop (any API model), Claude Code
-(`@catamorphic/claude-code`), and Codex (`@catamorphic/codex`), selectable
+(`@catamorphic/claude-code`), Codex (`@catamorphic/codex`), and any Agent
+Client Protocol agent such as Hermes (`@catamorphic/acp`), selectable
 per session and switchable mid-session, with a normalized effort scale.
 Agents run either in a sandbox or directly on the host filesystem.
 `ask_user` questions, durable sessions that survive restarts, and
@@ -389,6 +390,7 @@ Supporting packages (consumed through the surface above, importable directly for
 | `@catamorphic/ai-sdk` | Built-in harness adapter: Vercel AI SDK tool loop on any API model, running in the host and driving the session's sandbox through its tools. |
 | `@catamorphic/claude-code` | Harness adapter backed by the Claude Code (Claude Agent SDK) CLI, with per-turn MCP servers, portable native state and full settings-source fidelity. |
 | `@catamorphic/codex` | Harness adapter backed by the pinned OpenAI Codex app-server protocol. |
+| `@catamorphic/acp` | Harness adapter for Agent Client Protocol agents (Hermes and others): runs the agent's own command and serves it Work's tools over MCP. |
 | `@catamorphic/mcp` | MCP client infrastructure: both protocol generations with auto-negotiation, elicitation, the official MCP registry search, and plugin-marketplace install. |
 | `@catamorphic/otel` | Tiny OpenTelemetry helpers (`@opentelemetry/api` only: the host owns the SDK/exporters). |
 | `@catamorphic/runtime` | Execution harness that runs *inside* the sandbox and reports step results. |
@@ -837,9 +839,9 @@ Direction, not shipped. Tracked in [`TODO.md`](TODO.md):
 
 - **More desktop platforms**: Intel Mac validation, then signed Windows and
   Linux packages.
-- **ACP harness**: project agent definitions already accept `kind: "acp"`;
-  the Agent Client Protocol client (local command and remote endpoint
-  transports) is the planned harness behind it.
+- **ACP beyond the desktop**: the desktop runs a project's local ACP agents
+  (`kind: "acp"` with `acp.command`, such as Hermes); the remote endpoint
+  transport and ACP agents on the Work server are next.
 - **TS `defineAgent`**: a typed authoring layer that compiles to the
   committed `.work/agents/<slug>.json` substrate.
 - **Review-mode collaboration**: PR-first sync for shared projects, invites,

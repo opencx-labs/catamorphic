@@ -1,0 +1,36 @@
+{
+  "name": "@catamorphic/acp",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "bun": "./src/index.ts",
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "bun ../../scripts/build-package.ts && tsc --project tsconfig.build.json --noEmit false --emitDeclarationOnly",
+    "dev": "bun ../../scripts/build-package.ts --watch",
+    "test": "bun ../../scripts/tool-runtime.ts vitest --tool-cwd packages/acp --config ../../vitest.config.ts",
+    "typecheck": "bun check --project ./tsconfig.json"
+  },
+  "bundle": {
+    "entry": [
+      "src/index.ts"
+    ]
+  },
+  "dependencies": {
+    "@agentclientprotocol/sdk": "1.7.0",
+    "@catamorphic/agent-protocol": "workspace:*",
+    "@catamorphic/sandbox": "workspace:*",
+    "@modelcontextprotocol/sdk": "^1.32.1"
+  },
+  "devDependencies": {
+    "@catamorphic/agent-runner": "workspace:*",
+    "@types/node": "^26.1.1"
+  }
+}
