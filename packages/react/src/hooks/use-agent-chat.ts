@@ -99,7 +99,11 @@ export interface AgentAuthenticationRequired {
 }
 
 export interface SendOptions {
-  /** Default: queue (core steers a reply to a waiting question itself). */
+  /**
+   * Default: steer, so a turn that works reads it at its next step and an
+   * idle agent starts on it (ADR 0240). `queue` waits for the turn to end;
+   * `interrupt` stops it and runs this next.
+   */
   dispatch?: "queue" | "steer" | "interrupt";
 }
 
@@ -159,6 +163,11 @@ export interface UseAgentChatResult {
   cancelQueued: (turnId: string) => Promise<boolean>;
   /** Run a queued turn now: it goes next and stops the active one. */
   sendQueuedNow: (turnId: string) => Promise<boolean>;
+  /**
+   * Have the agent read a message steered into its turn now: the step it
+   * is on stops and the turn goes on with the message (ADR 0240).
+   */
+  steerNow: (itemId: string) => Promise<boolean>;
   /**
    * Stop a turn: the active one by default, or the turn named (one
    * waiting to retry stops as interrupted).
@@ -435,9 +444,7 @@ export function useAgentChat(
           ...(message.attachments.length > 0
             ? { attachments: message.attachments }
             : {}),
-          ...(message.dispatch !== "queue"
-            ? { dispatch: message.dispatch }
-            : {}),
+          dispatch: message.dispatch,
         },
       });
       // Only this chat's held send is cleared: a late receipt from a chat
@@ -499,7 +506,7 @@ export function useAgentChat(
       commandId: randomId(),
       text: trimmed,
       attachments: attachments ?? [],
-      dispatch: sendOptions?.dispatch ?? "queue",
+      dispatch: sendOptions?.dispatch ?? "steer",
       status: "sending",
     });
   };
@@ -607,6 +614,8 @@ export function useAgentChat(
       if (heldRef.current === turnId) heldRef.current = null;
       return (await run({ type: "send_now", turnId })) !== null;
     },
+    steerNow: async (itemId) =>
+      (await run({ type: "steer_now", itemId })) !== null,
     interrupt: async (turnId) => {
       const target = turnId ?? active?.id;
       return (

@@ -6,6 +6,7 @@ import {
   answerRows,
   type ContextHandoffItem,
   isActiveTurnStatus,
+  isUnreadSteer,
   type NoticeItem,
   type PendingAgentMessage,
   type QueuedMessage,
@@ -34,6 +35,7 @@ import {
   RotateCcw,
   TextQuote,
   Undo2,
+  Zap,
 } from "lucide-react";
 import {
   createContext,
@@ -166,6 +168,11 @@ export interface ChatTimelineProps {
   onCancelQueued?: (turnId: string) => ActionResult;
   /** Run a queued turn now: it goes next and stops the active one. */
   onSendQueuedNow?: (turnId: string) => ActionResult;
+  /**
+   * Have the agent read a message sent while it works now, not at its next
+   * step: offered on the message until it is read (ADR 0240).
+   */
+  onSteerNow?: (itemId: string) => ActionResult;
   /** A queued message entered or left inline editing (null = none). */
   onHoldQueued?: (turnId: string | null) => ActionResult;
   /** Run a failed or interrupted turn again. */
@@ -272,6 +279,7 @@ interface TimelineActions {
   openFile: (path: string, modifiers?: LinkModifiers) => void;
   fork: (itemId: string) => void;
   rollback: (turnId: string, item: UserMessageItem) => ActionResult;
+  steerNow: (itemId: string) => ActionResult;
   resend: (commandId: string) => void;
   dismiss: (commandId: string) => void;
 }
@@ -289,6 +297,7 @@ const ActionsContext = createContext<TimelineActions>({
   openFile: () => undefined,
   fork: () => undefined,
   rollback: () => undefined,
+  steerNow: () => undefined,
   resend: () => undefined,
   dismiss: () => undefined,
 });
@@ -507,6 +516,7 @@ export function ChatTimeline(props: ChatTimelineProps) {
     onEditQueued,
     onCancelQueued,
     onSendQueuedNow,
+    onSteerNow,
     onHoldQueued,
     onRetry,
     onInterrupt,
@@ -536,6 +546,7 @@ export function ChatTimeline(props: ChatTimelineProps) {
       latest.current.onFileClick?.(path, modifiers),
     fork: (itemId) => latest.current.onFork?.(itemId),
     rollback: (turnId, item) => latest.current.onRollback?.(turnId, item),
+    steerNow: (itemId) => latest.current.onSteerNow?.(itemId),
     resend: (commandId) => latest.current.onResendFailed?.(commandId),
     dismiss: (commandId) => latest.current.onDismissFailed?.(commandId),
   }));
@@ -722,6 +733,14 @@ export function ChatTimeline(props: ChatTimelineProps) {
             <UserMessage
               item={row.entry.item}
               focused={row.entry.item.id === focusMessageId}
+              unread={view.live && isUnreadSteer(row.entry.item)}
+              steerable={
+                Boolean(onSteerNow) &&
+                view.live &&
+                isUnreadSteer(row.entry.item) &&
+                (turn?.status === "running" || turn?.status === "waiting") &&
+                !turn.cancellationRequested
+              }
               restoreTurnId={
                 onRollback &&
                 turn &&
@@ -786,6 +805,13 @@ export function ChatTimeline(props: ChatTimelineProps) {
       <div key={key} className={`cat-row flex flex-col gap-3 ${USER_ROW}`}>
         <UserMessage
           pending={message}
+          // Sent into the working turn: unread from the start, so the
+          // message keeps its look as the session's item takes over.
+          unread={
+            working &&
+            message.dispatch === "steer" &&
+            message.status !== "failed"
+          }
           resendable={Boolean(onResendFailed)}
           dismissable={Boolean(onDismissFailed)}
         />
@@ -1551,6 +1577,10 @@ interface UserMessageProps {
   focused?: boolean;
   /** The turn "Restore to here" undoes, when it is offered. */
   restoreTurnId?: string;
+  /** Sent while the agent works, and not read yet (ADR 0240). */
+  unread?: boolean;
+  /** The agent can stop its step to read it now. */
+  steerable?: boolean;
   resendable?: boolean;
   dismissable?: boolean;
 }
@@ -1564,6 +1594,8 @@ const UserMessage = memo(function UserMessage({
   pending,
   focused = false,
   restoreTurnId,
+  unread = false,
+  steerable = false,
   resendable = false,
   dismissable = false,
 }: UserMessageProps) {
@@ -1619,6 +1651,12 @@ const UserMessage = memo(function UserMessage({
       <div className="whitespace-pre-wrap break-words leading-6">
         <InlineMessage content={text} attachments={attachments} />
       </div>
+      <UnreadLine
+        unread={unread}
+        onSteerNow={
+          item && steerable ? () => actions.steerNow(item.id) : undefined
+        }
+      />
       {pending && failed && (
         <div
           className="mt-1.5 flex flex-wrap items-center gap-2 border-t border-danger/20 pt-1.5 text-[11px]"
@@ -1678,8 +1716,89 @@ function sameUserMessage(
     previous.pending === next.pending &&
     previous.focused === next.focused &&
     previous.restoreTurnId === next.restoreTurnId &&
+    previous.unread === next.unread &&
+    previous.steerable === next.steerable &&
     previous.resendable === next.resendable &&
     previous.dismissable === next.dismissable
+  );
+}
+
+/**
+ * Under a message sent while the agent works (ADR 0240): it is not read
+ * yet, and the agent reads it at its next step. Interrupt has it stop that
+ * step and read it now. The line closes once the message is read.
+ */
+function UnreadLine({
+  unread,
+  onSteerNow,
+}: {
+  unread: boolean;
+  onSteerNow?: () => ActionResult;
+}) {
+  const { Hint } = useContext(HostContext);
+  const [state, setState] = useState<"idle" | "asking" | "asked" | "failed">(
+    "idle",
+  );
+  const lineRef = useRef<HTMLDivElement>(null);
+  // Kept while it closes, so the words stay as the line folds away.
+  const shown = useLinger(unread ? state : undefined, 200, () =>
+    transitionPlaying(lineRef.current, "grid-template-rows"),
+  );
+  const interrupt = async () => {
+    if (!onSteerNow || state === "asking" || state === "asked") return;
+    setState("asking");
+    try {
+      setState((await onSteerNow()) === false ? "failed" : "asked");
+    } catch {
+      setState("failed");
+    }
+  };
+  const label =
+    shown.value === "asking" || shown.value === "asked"
+      ? "Stopping to read it"
+      : shown.value === "failed"
+        ? "Could not interrupt. Try again."
+        : "Not read yet";
+  return (
+    <div
+      ref={lineRef}
+      className={`grid transition-[grid-template-rows,opacity] duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${unread ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0"}`}
+      data-testid="chat-unread-line"
+      data-unread={unread || undefined}
+    >
+      <div className="overflow-hidden" inert={!unread}>
+        {shown.value !== undefined && (
+          <div className="mt-1 flex min-h-5 items-center justify-end gap-1.5 text-[11px] leading-4 text-fg-faint">
+            {onSteerNow && shown.value !== "asked" && (
+              <span className={MESSAGE_ACTIONS}>
+                <Hint label="Interrupt: the agent stops its current step and reads this now">
+                  <button
+                    type="button"
+                    onClick={() => void interrupt()}
+                    disabled={state === "asking"}
+                    className="flex h-5 cursor-pointer items-center gap-1 rounded-md px-1.5 text-fg-muted transition-colors duration-150 hover:bg-accent/10 hover:text-accent disabled:cursor-default disabled:opacity-50"
+                    aria-label="Interrupt so the agent reads this now"
+                    data-testid="chat-steer-now"
+                  >
+                    <Zap className="size-3" />
+                    Interrupt
+                  </button>
+                </Hint>
+              </span>
+            )}
+            <Hint label="The agent reads it when its current step ends">
+              <span
+                role={shown.value === "failed" ? "alert" : undefined}
+                className={shown.value === "failed" ? "text-danger" : ""}
+                data-testid="chat-unread-state"
+              >
+                {label}
+              </span>
+            </Hint>
+          </div>
+        )}
+      </div>
+    </div>
   );
 }
 

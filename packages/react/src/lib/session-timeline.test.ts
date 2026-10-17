@@ -9,6 +9,7 @@ import {
   reply,
   requestItem,
   snapshot,
+  taskNotification,
   toolCall,
   turn,
   userMessage,
@@ -73,6 +74,38 @@ describe("sessionTimeline", () => {
     ).toEqual([
       ["First", "First answer"],
       ["Second, sent while the first ran", "Second answer"],
+    ]);
+  });
+
+  it("reads what a turn took in before its input, then the input, then what reached it while it worked", () => {
+    const state = sessionStateFromSnapshot(
+      snapshot({
+        sequence: 10,
+        turns: [turn("t1", 1)],
+        items: [
+          // Waited for a turn, and rode this one (ADR 0240).
+          taskNotification("n1", 1, "t1", "Unit tests finished"),
+          userMessage("t1:input", 2, "t1", "Chips use the same file?"),
+          toolCall("c1", 3, "t1", "Read"),
+          userMessage("s1", 4, "t1", "Also check the docs", {
+            dispatch: "steer",
+          }),
+          reply("a1", 5, "t1", "Yes, and the docs too"),
+        ],
+      }),
+    );
+    expect(
+      sessionTimeline(state)[0]?.entries.map((entry) =>
+        entry.kind === "input" || entry.kind === "reply"
+          ? entry.item.text
+          : entry.kind,
+      ),
+    ).toEqual([
+      "notifications",
+      "Chips use the same file?",
+      "steps",
+      "Also check the docs",
+      "Yes, and the docs too",
     ]);
   });
 

@@ -339,6 +339,64 @@ describe("ChatTimeline DOM contract", () => {
     expect(answer?.className).toContain("ml-auto");
   });
 
+  it("marks a message sent while the agent works until it is read, and interrupts for it", async () => {
+    const steerNow = vi.fn(() => true);
+    const working = turn("t1", 1, {
+      status: "running",
+      completedAt: null,
+    });
+    const sent = input("t1", "Use the blue one", {
+      id: "s1",
+      dispatch: "steer",
+      status: "in_progress",
+    });
+    const items: Item[] = [
+      input("t1", "Build the page"),
+      command("c1", "t1", { command: "bun test" }),
+      sent,
+    ];
+    await render({
+      timeline: timelineOf({ turns: [working], items }),
+      activity: "Working",
+      onSteerNow: steerNow,
+    });
+    const message = $('[data-message-id="s1"]');
+    const line = message?.querySelector('[data-testid="chat-unread-line"]');
+    expect(line?.hasAttribute("data-unread")).toBe(true);
+    expect(
+      line?.querySelector('[data-testid="chat-unread-state"]')?.textContent,
+    ).toBe("Not read yet");
+    await act(async () =>
+      line
+        ?.querySelector<HTMLButtonElement>('[data-testid="chat-steer-now"]')
+        ?.click(),
+    );
+    expect(steerNow).toHaveBeenCalledWith("s1");
+    expect(
+      line?.querySelector('[data-testid="chat-unread-state"]')?.textContent,
+    ).toBe("Stopping to read it");
+    // Read: the line closes, and nothing is offered on it anymore.
+    await render({
+      timeline: timelineOf({
+        turns: [working],
+        items: [...items.slice(0, 2), { ...sent, status: "completed" }],
+      }),
+      activity: "Working",
+      onSteerNow: steerNow,
+    });
+    expect(
+      $(
+        '[data-message-id="s1"] [data-testid="chat-unread-line"]',
+      )?.hasAttribute("data-unread"),
+    ).toBe(false);
+    // The turn's own input was never unread.
+    expect(
+      $(
+        '[data-message-id="t1:input"] [data-testid="chat-unread-line"]',
+      )?.hasAttribute("data-unread"),
+    ).toBe(false);
+  });
+
   it("keeps the queue's controls", async () => {
     await render({
       timeline: [],

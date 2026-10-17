@@ -372,6 +372,21 @@ export async function ingestHarnessEvents(input: {
   }
   if (line && line !== turn.activity && turn.status === "running")
     emitTurn({ ...turn, activity: line, activityAt: at });
+  // Steered input the agent took in is read (ADR 0240).
+  if (result.consumed.length > 0) {
+    const unread = await trx
+      .selectFrom("agent_items")
+      .select("payload")
+      .where("id", "in", result.consumed)
+      .where("turn_id", "=", turn.id)
+      .where("status", "=", "in_progress")
+      .execute();
+    for (const row of unread)
+      out.push({
+        type: "item.changed",
+        item: { ...itemFromRow(row), status: "completed", updatedAt: at },
+      });
+  }
   return { ...result, events: out, turn, attempt, thread };
 }
 

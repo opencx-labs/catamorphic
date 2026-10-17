@@ -18,6 +18,7 @@ import {
   isActiveTurnStatus,
   isInputItem,
   isSettledTurnStatus,
+  isUnreadSteer,
   type JsonValue,
   messageInput,
   type NativeRef,
@@ -2281,12 +2282,13 @@ export class AgentSessionsService {
   /**
    * Put input into a session inside the caller's transaction (ADR 0197): an
    * item of the input's kind (ADR 0217) and, unless it is `message_only`, a
-   * turn. `steer` joins the active turn (the engine delivers it, natively
-   * or by a restart); `interrupt` jumps the queue and stops the active turn.
-   * A task notification steers only into a turn still working and otherwise
-   * joins the one turn waiting for notifications, so they never stack up.
-   * A `message_only` input waits, `in_progress`, for the next turn to take
-   * it in, unless it is only for people to read (`forAgent: false`).
+   * turn. `steer` joins the active turn, `in_progress` until the agent reads
+   * it at its next step (the engine delivers it, natively or by a restart;
+   * ADR 0240); `interrupt` jumps the queue and stops the active turn. A task
+   * notification steers into a turn that has not finished its work and
+   * otherwise joins the one turn waiting for notifications, so they never
+   * stack up. A `message_only` input waits, `in_progress`, for the next turn
+   * to take it in, unless it is only for people to read (`forAgent: false`).
    * Idempotent by `idempotencyKey`. The session row must be locked by the
    * caller.
    */
@@ -2370,16 +2372,15 @@ export class AgentSessionsService {
       ((input.kind === "user_message" && !input.answer) ||
         (input.kind === "inbound_message" &&
           input.from.kind === "assistant")) &&
-      delivery.dispatch === "queue" &&
+      (delivery.dispatch === "queue" || delivery.dispatch === "steer") &&
       active?.status === "waiting";
-    // A notification reaches a turn while it works; once it waits on the
-    // person or its answer is on the way, the next turn takes it in.
+    // A notification reaches a turn until its work is done, waiting on the
+    // person included (the agent reads it once they answer); once its
+    // answer is on the way, the next turn takes it in.
     const steerable =
       active !== undefined &&
       joinable &&
-      (input.kind !== "task_notification" ||
-        active.status === "preparing" ||
-        active.status === "running");
+      (input.kind !== "task_notification" || active.status !== "finalizing");
     const dispatch: DispatchMode = replyToWaiting
       ? "steer"
       : delivery.dispatch === "steer" && !steerable
@@ -2473,9 +2474,11 @@ export class AgentSessionsService {
       attemptId: null,
       parentItemId: null,
       position: 0,
-      // Delivered without a turn: unread until the next turn takes it in.
+      // Unread until the agent takes it in: delivered without a turn, until
+      // the next turn does; steered, until the turn's next step.
       status:
-        dispatch === "message_only" && delivery.forAgent !== false
+        (dispatch === "message_only" && delivery.forAgent !== false) ||
+        (dispatch === "steer" && active)
           ? "in_progress"
           : "completed",
       nativeRef: null,
@@ -3046,15 +3049,8 @@ export class AgentSessionsService {
           switch (command.type) {
             case "send": {
               this.assertAcceptsInput(locked);
-              const active = await trx
-                .selectFrom("agent_turns")
-                .select("id")
-                .where("session_id", "=", sessionId)
-                .where("status", "in", [...ACTIVE_TURN_STATUSES])
-                .executeTakeFirst();
-              const dispatch: DispatchMode =
-                command.dispatch ??
-                (locked.parent_session_id && active ? "steer" : "queue");
+              // A turn that works reads it at its next step (ADR 0240).
+              const dispatch: DispatchMode = command.dispatch ?? "steer";
               const delivered = await this.deliverIn(trx, {
                 session: locked,
                 input: {
@@ -3097,6 +3093,12 @@ export class AgentSessionsService {
                 identity,
                 session: locked,
                 command,
+                commandId,
+              });
+            case "steer_now":
+              return this.steerNowIn(trx, {
+                session: locked,
+                itemId: command.itemId,
                 commandId,
               });
             case "respond":
@@ -3515,6 +3517,76 @@ export class AgentSessionsService {
       ],
     });
     return { turnId: turn.id };
+  }
+
+  /**
+   * Have the agent read a message steered into its turn now (ADR 0240):
+   * the attempt is interrupted and the turn starts again on the same
+   * thread with what it had not read, the way a steer the harness refused
+   * does. A message the agent already read, or one whose turn ended, has
+   * nothing to stop for.
+   */
+  private async steerNowIn(
+    trx: Transaction<DB>,
+    input: { session: SessionRow; itemId: string; commandId: string },
+  ): Promise<JsonObject> {
+    const row = await trx
+      .selectFrom("agent_items")
+      .select("payload")
+      .where("id", "=", input.itemId)
+      .where("session_id", "=", input.session.id)
+      .executeTakeFirst();
+    const item = row ? itemFromRow(row) : null;
+    if (item?.kind !== "user_message")
+      throw new SessionCommandRejectedError(
+        "not_found",
+        "That message does not exist.",
+        404,
+      );
+    if (!isUnreadSteer(item) || !item.turnId)
+      throw new SessionCommandRejectedError(
+        "already_read",
+        "The agent already read that message.",
+      );
+    const turnRow = await trx
+      .selectFrom("agent_turns")
+      .selectAll()
+      .where("id", "=", item.turnId)
+      .executeTakeFirstOrThrow();
+    const turn = turnFromRow(turnRow);
+    // Preparing, it reads the message as it starts; finalizing, the next
+    // turn does; stopping, the person's stop stands.
+    if (
+      (turn.status !== "running" && turn.status !== "waiting") ||
+      turn.cancellationRequested
+    )
+      throw new SessionCommandRejectedError(
+        "not_working",
+        "The agent is not working on a turn it can stop for this.",
+      );
+    const now = new Date().toISOString();
+    await this.queue.enqueueCommand(trx, {
+      turnId: turn.id,
+      attemptId: turn.activeAttemptId,
+      kind: "interrupt",
+      payload: { restart: true },
+    });
+    await this.log.append(trx, {
+      sessionId: input.session.id,
+      commandId: input.commandId,
+      events: [
+        {
+          type: "turn.changed",
+          turn: {
+            ...turn,
+            activity: "Stopping to read your message",
+            activityAt: now,
+            updatedAt: now,
+          },
+        },
+      ],
+    });
+    return { turnId: turn.id, itemId: item.id };
   }
 
   private async changeQueuedIn(

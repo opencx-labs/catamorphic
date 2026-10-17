@@ -50,7 +50,12 @@ import { turnUsageFromResult } from "./usage.js";
 
 /** What the adapter needs of a running query: its messages, interrupt and close. */
 export interface ClaudeQueryHandle extends AsyncIterable<SDKMessage> {
-  interrupt(): Promise<unknown>;
+  /**
+   * Stop the turn. `cancelQueued` also withdraws the input still waiting in
+   * the CLI's queue, which would otherwise run as its next turn (the CLI's
+   * `interrupt_cancel_queued_v1`).
+   */
+  interrupt(options?: { cancelQueued?: boolean }): Promise<unknown>;
   close(): void;
 }
 
@@ -280,8 +285,15 @@ class ClaudeSession implements WarmSession {
     void this.read(this.handle);
   }
 
+  /**
+   * Stop the turn and withdraw what waits in the CLI's queue: input Work
+   * steered that the turn never read goes on as Work's own (a restart's
+   * prompt, or a turn of its own), never also as the CLI's next turn.
+   */
   interrupt(): Promise<unknown> {
-    return this.handle ? this.handle.interrupt() : Promise.resolve();
+    return this.handle
+      ? this.handle.interrupt({ cancelQueued: true })
+      : Promise.resolve();
   }
 
   private async read(handle: ClaudeQueryHandle): Promise<void> {
@@ -553,6 +565,8 @@ class ClaudeAttempt {
         this.consume([uuid]);
         return;
       }
+      // Withdrawn with an interrupt, never read: Work runs it itself.
+      if (state === "cancelled") this.pendingSteers.delete(uuid);
       // The CLI ended this attempt's own input before running anything: no
       // turn and no result will follow, though it stays up for more input.
       if (

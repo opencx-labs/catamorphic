@@ -479,8 +479,11 @@ and the pure reducer are `@catamorphic/agent-protocol`.
   Fold them with `applySessionEvents`; resume from the last sequence.
 - `POST .../commands` takes one `SessionCommand` (`send` with `dispatch:
   queue | steer | interrupt`, `interrupt`, `retry`, `edit_queued`,
-  `cancel_queued`, `send_now`, `respond`, `rollback`) with a client-made
-  `commandId`; sending it again returns its first receipt.
+  `cancel_queued`, `send_now`, `steer_now`, `respond`, `rollback`) with a
+  client-made `commandId`; sending it again returns its first receipt. A
+  `send` steers by default: a working turn reads it at its next step, and it
+  is `in_progress` until then; `steer_now` has the turn stop its step and
+  read it now (ADR 0240). Pass `dispatch: "queue"` to wait for the turn.
 
 Agents are `RegisteredCodingAgent`s whose `harness` is either `{ placement:
 "host", adapter }` (a `HarnessAdapter` such as `createClaudeCodeAdapter`,

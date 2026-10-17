@@ -687,6 +687,38 @@ the historical log explains how it arrived here.
 - [Performance](docs/performance.md): idle lifecycle checks and sustained measurement.
 
 ## Design log
+### 2026-10-17: A message sent while the agent works reaches it
+
+A message sent while the agent worked waited, a dashed ghost, until the
+whole turn ended; reaching the agent sooner meant ⌘↵, which stopped the
+turn, so a quick question cost the agent its place. As in the Claude Code
+app, it is sent now (ADR 0240): the bubble lands in the conversation at
+once, under it "Not read yet" until the agent takes it in at its next
+step, and the line folds away as it does. Hovering it offers Interrupt:
+the agent stops the step it is on and reads the message now, in the same
+turn, the line saying "Stopping to read it" meanwhile. ⌘↵ still stops the
+turn and sends a message as the next one.
+
+Queueing is a setting, "Queue messages sent while the agent works" in
+the chat dock's settings, off by default; on, messages wait as editable
+ghosts as before and the send button's hint says so. A message sent from
+elsewhere into a chat (the palette, voice) follows the same choice.
+
+Work's news about the agent's tasks no longer sits queued while the agent
+works. It reaches a turn waiting on the person too (the agent reads it once
+they answer), and news a stopped turn never read rides the next turn to
+start rather than queueing behind it. The screenshot that started this had
+a test run's result queued under a working turn although the agent had
+already read it: the interrupted turn's steer was still in the warm Claude
+Code CLI's own queue, which ran it in the next turn while Work held it to
+run again. An interrupt now withdraws what the CLI holds.
+
+`chat-timeline-dom.test.tsx` covers the unread line and Interrupt;
+`session-log.integration.test.ts` unread steers, Interrupt and news that
+rides the next turn; `warm.native.test.ts` the CLI's queue after an
+interrupt; `e2e/agents.e2e.ts` and the PWA's `e2e/pwa.e2e.ts` the whole
+path, with queueing on and off.
+
 ### 2026-10-16: Google's sign-in admits Work, because a page finds `chrome.app`
 
 Google's sign-in still answered "Couldn't sign you in. This browser or app

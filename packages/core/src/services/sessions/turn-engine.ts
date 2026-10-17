@@ -65,6 +65,7 @@ import {
   type SessionRow,
   turnFromRow,
   waitingNotificationTurn,
+  waitingNotificationTurns,
 } from "./session-rows.js";
 import { batchStreamedRead } from "./stream-batch.js";
 import { derivedId, ingestHarnessEvents } from "./turn-ingest.js";
@@ -285,6 +286,10 @@ function runnerWrite(
  * already, so they are not kept twice.
  */
 const APPLIED_APPEND: HostCall = { kind: "native_state.append", entries: [] };
+
+/** A restart for messages the stopped attempt read after all: it goes on. */
+const STEER_RESTART_CONTINUE =
+  "Your previous attempt at this turn was stopped. Carry on where you left off.";
 
 /** The text a continuation turn gives the agent (ADR 0198). */
 export const CONTINUATION_PROMPT =
@@ -967,16 +972,17 @@ export class TurnEngine {
           .where("id", "=", turn.inputItemId)
           .executeTakeFirst()
       : undefined;
-    // What was delivered without waking the agent reaches its next turn.
-    const riders =
+    // What was delivered without waking the agent, and notifications
+    // waiting for a turn, reach its next turn.
+    const { items: riders, turns: absorbed } =
       reason === "initial"
         ? await this.riders({
             session: ctx.session,
             turn,
             ownerOnly: prepared.ownerOnly === true,
           })
-        : [];
-    const { input, steered } = await this.attemptInput({
+        : { items: [], turns: [] };
+    const { input, steered, read } = await this.attemptInput({
       turn,
       attempt,
       reason,
@@ -1060,6 +1066,25 @@ export class TurnEngine {
               },
             }),
           ),
+          // The notifications' own turn has nothing left to run.
+          ...(await this.stillWaiting(trx, absorbed)).map(
+            (waiting): SessionEvent => ({
+              type: "turn.changed",
+              turn: {
+                ...waiting,
+                status: "cancelled",
+                completedAt: now(),
+                updatedAt: now(),
+              },
+            }),
+          ),
+          // Steered input the prompt carries is read now.
+          ...read.map(
+            (item): SessionEvent => ({
+              type: "item.changed",
+              item: { ...item, status: "completed", updatedAt: now() },
+            }),
+          ),
         ],
       });
     });
@@ -1070,15 +1095,18 @@ export class TurnEngine {
   }
 
   /**
-   * Inputs delivered `message_only` that no turn took in yet (ADR 0217),
-   * oldest first. A turn on its owner's sign-in or files takes only what
-   * the owner wrote (ADR 0199); the rest waits for one that may.
+   * What a turn's first attempt reads before its own input, oldest first:
+   * inputs delivered `message_only` that no turn took in yet (ADR 0217),
+   * and the notifications waiting in a turn of their own, which this turn
+   * takes in rather than leave queued behind it (ADR 0240). A turn on its
+   * owner's sign-in or files takes only what the owner wrote (ADR 0199);
+   * the rest waits for one that may.
    */
   private async riders(input: {
     session: SessionRow;
     turn: Turn;
     ownerOnly: boolean;
-  }): Promise<InputItem[]> {
+  }): Promise<{ items: InputItem[]; turns: Turn[] }> {
     const rows = await this.deps.db
       .selectFrom("agent_items")
       .select("payload")
@@ -1090,15 +1118,58 @@ export class TurnEngine {
       .orderBy("position")
       .limit(50)
       .execute();
-    const items = rows.map((row) => itemFromRow(row)).filter(isInputItem);
-    if (!input.ownerOnly) return items;
-    const admitted: InputItem[] = [];
-    for (const item of items)
-      if (
-        await this.deps.host.authoredByOwner({ session: input.session, item })
+    const admits = async (item: InputItem) =>
+      !input.ownerOnly ||
+      (await this.deps.host.authoredByOwner({ session: input.session, item }));
+    const items: InputItem[] = [];
+    for (const item of rows.map((row) => itemFromRow(row)).filter(isInputItem))
+      if (await admits(item)) items.push(item);
+    const turns: Turn[] = [];
+    for (const waiting of await waitingNotificationTurns(
+      this.deps.db,
+      input.turn.sessionId,
+    )) {
+      if (waiting.id === input.turn.id) continue;
+      const notifications = (
+        await this.deps.db
+          .selectFrom("agent_items")
+          .select("payload")
+          .where("turn_id", "=", waiting.id)
+          .where("kind", "in", [...INPUT_ITEM_KINDS])
+          .orderBy("position")
+          .execute()
       )
-        admitted.push(item);
-    return admitted;
+        .map((row) => itemFromRow(row))
+        .filter(isInputItem);
+      let admitted = true;
+      for (const item of notifications)
+        if (!(await admits(item))) admitted = false;
+      if (!admitted || notifications.length === 0) continue;
+      turns.push(waiting);
+      items.push(...notifications);
+    }
+    items.sort((a, b) => a.position - b.position);
+    return { items, turns };
+  }
+
+  /** Of these waiting turns, the ones that still wait: none started or was withdrawn meanwhile. */
+  private async stillWaiting(
+    trx: Transaction<DB>,
+    turns: readonly Turn[],
+  ): Promise<Turn[]> {
+    if (turns.length === 0) return [];
+    const rows = await trx
+      .selectFrom("agent_turns")
+      .selectAll()
+      .where(
+        "id",
+        "in",
+        turns.map((turn) => turn.id),
+      )
+      .where("status", "=", "queued")
+      .where("attempt_count", "=", 0)
+      .execute();
+    return rows.map(turnFromRow);
   }
 
   /**
@@ -1113,7 +1184,12 @@ export class TurnEngine {
     inputItem: Item | null;
     riders: InputItem[];
     handoff: string | null;
-  }): Promise<{ input: AttemptStart["input"]; steered: string[] }> {
+  }): Promise<{
+    input: AttemptStart["input"];
+    steered: string[];
+    /** Inputs not read before that the prompt carries: read once it starts. */
+    read: InputItem[];
+  }> {
     const others = (
       await this.deps.db
         .selectFrom("agent_items")
@@ -1160,15 +1236,16 @@ export class TurnEngine {
       input.inputItem && isInputItem(input.inputItem) ? input.inputItem : null;
     const inputs = [...input.riders, ...(base ? [base] : []), ...joined];
     const attachments: AgentAttachment[] = (
-      input.reason === "steer_restart" && steerTexts.length > 0
-        ? steeredItems
-        : inputs
+      input.reason === "steer_restart" ? steeredItems : inputs
     ).flatMap((item) =>
       item.kind === "task_notification" ? [] : item.attachments,
     );
     const body =
-      input.reason === "steer_restart" && steerTexts.length > 0
-        ? `Your previous attempt at this turn was stopped so you can take in these messages that arrived while you worked:\n\n${steerTexts.join("\n\n")}`
+      input.reason === "steer_restart"
+        ? steerTexts.length > 0
+          ? `Your previous attempt at this turn was stopped so you can take in these messages that arrived while you worked:\n\n${steerTexts.join("\n\n")}`
+          : // Read meanwhile, by the attempt that stopped for them.
+            STEER_RESTART_CONTINUE
         : [
             ...input.riders.map((item) => this.deps.inputText(item)),
             // A continuation (or a turn whose input is gone) carries on.
@@ -1192,6 +1269,9 @@ export class TurnEngine {
         input.reason === "steer_restart" && steerTexts.length === 0
           ? []
           : carried.map((item) => item.id),
+      read: (input.reason === "steer_restart" ? steeredItems : joined).filter(
+        (item) => item.status === "in_progress",
+      ),
     };
   }
 
@@ -1604,10 +1684,12 @@ export class TurnEngine {
       if (completion) {
         if (
           completion.status === "interrupted" &&
-          runner.restartWith.length > 0
+          (runner.restartWith.length > 0 ||
+            (await this.restartAsked(turn.id, attempt.id)))
         ) {
-          // Steered input the harness could not take: a new attempt of the
-          // same turn, on the same native thread, with that input.
+          // Steered input the harness could not take, or that a person
+          // asked it to read now (ADR 0240): a new attempt of the same
+          // turn, on the same native thread, with that input.
           const superseded: Attempt = {
             ...attempt,
             status: "superseded",
@@ -1708,6 +1790,22 @@ export class TurnEngine {
         };
       }
     }
+  }
+
+  /** A person stopped this attempt for it to read what they sent (ADR 0240). */
+  private async restartAsked(
+    turnId: string,
+    attemptId: string,
+  ): Promise<boolean> {
+    const row = await this.deps.db
+      .selectFrom("agent_turn_commands")
+      .select("id")
+      .where("turn_id", "=", turnId)
+      .where("attempt_id", "=", attemptId)
+      .where("kind", "=", "interrupt")
+      .where(sql<string>`payload->>'restart'`, "=", "true")
+      .executeTakeFirst();
+    return row !== undefined;
   }
 
   private async loadThread(id: string | null): Promise<ProviderThread> {
@@ -3138,6 +3236,7 @@ export class TurnEngine {
             ...item,
             turnId: notifications.id,
             dispatch: "queue",
+            status: "completed",
             updatedAt: now,
           },
         });
@@ -3174,8 +3273,15 @@ export class TurnEngine {
         { type: "turn.changed", turn: next },
         {
           type: "item.changed",
+          // The input of a turn of its own now, which reads it as it starts.
           item: isInputItem(item)
-            ? { ...item, turnId: next.id, dispatch: "queue", updatedAt: now }
+            ? {
+                ...item,
+                turnId: next.id,
+                dispatch: "queue",
+                status: "completed",
+                updatedAt: now,
+              }
             : { ...item, turnId: next.id, updatedAt: now },
         },
       );
@@ -3318,7 +3424,8 @@ function itemText(item: Item): string {
 
 /**
  * Close what an attempt left open: in-progress items are cancelled and
- * pending requests can no longer be answered.
+ * pending requests can no longer be answered. Input the agent never read
+ * is not work: it runs as a turn of its own (see requeueSteers).
  */
 async function closeOpenWork(
   trx: Transaction<DB>,
@@ -3344,6 +3451,7 @@ async function closeOpenWork(
     .select("payload")
     .where("turn_id", "=", input.turn.id)
     .where("status", "=", "in_progress")
+    .where("kind", "not in", [...INPUT_ITEM_KINDS])
     .execute();
   for (const row of items) {
     const item = itemFromRow(row);

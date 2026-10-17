@@ -1,6 +1,6 @@
 # 0197 — Agent sessions are an event log of turns
 
-- **Status:** Accepted (input item kinds and notification dispatch by [0217](0217-only-people-write-user-messages.md))
+- **Status:** Accepted (input item kinds and notification dispatch by [0217](0217-only-people-write-user-messages.md); steering is the default dispatch, a steered input is unread until taken in, and `steer_now` by [0240](0240-a-message-sent-while-the-agent-works-reaches-it.md))
 - **Date:** 2026-10-02
 - **Supersedes:** [0061](0061-session-mirroring.md) (mirror transport), the
   event and command half of [0095](0095-authoritative-agent-execution.md)

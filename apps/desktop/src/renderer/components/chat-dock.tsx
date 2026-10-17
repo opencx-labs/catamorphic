@@ -91,6 +91,7 @@ import {
 import { TAB_DRAG_TYPE, type TabDragPayload } from "../lib/tab-drag";
 import { classifyPastedText, selectionName, textPill } from "../lib/text-pills";
 import { useBackgroundCommands } from "../lib/use-background-commands";
+import { useQueueMessages } from "../lib/use-queue-messages.js";
 import { useSessionCheckout } from "../lib/use-session-checkout.js";
 import { useWorkDisplay } from "../lib/use-work-display.js";
 import type { ChatMode } from "../lib/workspace-types.js";
@@ -523,6 +524,9 @@ function ChatDockContent({
    */
   const [recordingWorktree, setRecordingWorktree] = useState(false);
   const [worktreeUnrecorded, setWorktreeUnrecorded] = useState(false);
+  // Sent while the agent works, a message reaches it at its next step
+  // unless the person chose to queue (ADR 0240).
+  const queueMessages = useQueueMessages();
   const chat = useAgentChat(projectId, {
     sessionId: entry.sessionId,
     agentId: selectedAgentId,
@@ -1478,8 +1482,17 @@ function ChatDockContent({
 
   // Palette "Send to agent": the entry arrives with the message attached;
   // fire it once on mount and strip it so remounts don't re-send.
-  const sendRef = useRef(chat.send);
-  sendRef.current = chat.send;
+  // Sent from elsewhere (the palette, voice), it reaches a working agent
+  // the way a message typed here does.
+  const sendFromElsewhere = (
+    text: string,
+    attachments?: AgentChatAttachment[],
+  ) =>
+    chat.send(text, attachments, {
+      dispatch: queueMessages ? "queue" : "steer",
+    });
+  const sendRef = useRef(sendFromElsewhere);
+  sendRef.current = sendFromElsewhere;
   const pendingSentRef = useRef(false);
   useEffect(() => {
     const pending = entryRef.current.pendingMessage;
@@ -1637,7 +1650,10 @@ function ChatDockContent({
     if (!composed) return;
     const message = resolveSlashMessage(composed.message, entries);
     if (now) void chat.sendNow(message, composed.files);
-    else void chat.send(message, composed.files);
+    else
+      void chat.send(message, composed.files, {
+        dispatch: queueMessages ? "queue" : "steer",
+      });
   };
   const submit = (event?: FormEvent) => {
     event?.preventDefault();
@@ -2740,6 +2756,7 @@ function ChatDockContent({
               onEditQueued={chat.editQueued}
               onCancelQueued={chat.cancelQueued}
               onSendQueuedNow={chat.sendQueuedNow}
+              onSteerNow={chat.steerNow}
               onHoldQueued={chat.holdQueued}
               onRetry={(turnId) => void chat.retry(turnId)}
               onInterrupt={(turnId) => void chat.interrupt(turnId)}
@@ -3315,9 +3332,10 @@ function ChatDockContent({
                     <ShortcutHint
                       label={
                         // A message during a blocking question reaches the
-                        // agent at once (ADR 0195); otherwise it queues.
+                        // agent at once (ADR 0195); otherwise it reaches it
+                        // at its next step, or queues (ADR 0240).
                         chat.isWorking && !awaitingInput
-                          ? `Queue (${/Mac/.test(navigator.platform) ? "⌘↵" : "Ctrl+Enter"} sends now)`
+                          ? `${queueMessages ? "Queue" : "Send"} (${/Mac/.test(navigator.platform) ? "⌘↵" : "Ctrl+Enter"} ${queueMessages ? "sends now" : "interrupts"})`
                           : "Send"
                       }
                       shortcut="↵"

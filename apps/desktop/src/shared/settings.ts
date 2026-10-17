@@ -69,6 +69,13 @@ export const SETTINGS = {
     valid: oneOf("keep", "collapse"),
     options: { keep: "Keep the notes", collapse: "Fold notes into steps" },
   },
+  chatQueueMessages: {
+    label: "Queue messages sent while the agent works",
+    description:
+      "Off: the agent reads your message at its next step, and Interrupt on the message has it read it at once. On: your message waits until the agent finishes, and you can edit it until then.",
+    scopes: profileScope,
+    valid: boolean,
+  },
   windowButtons: {
     label: "Window buttons",
     description:
