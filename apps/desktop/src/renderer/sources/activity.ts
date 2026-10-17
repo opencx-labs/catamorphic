@@ -1,12 +1,14 @@
 import {
   type SessionPullRequest,
-  type SessionPullRequestState,
   sessionPullRequests,
 } from "@catamorphic/agent-protocol";
 import { workflowKeys } from "@catamorphic/react";
+import type { PullRequestStatus } from "../../shared/pr-details.js";
 import type { SidebarSourceItem } from "../../shared/sidebar-source.js";
 import { chatFolderView } from "../components/chat-folder.js";
+import { PULL_REQUEST_LOOKS, repositoryOf } from "../lib/chips.js";
 import { desktopApi } from "../lib/desktop-api.js";
+import { prStatusQueryKey } from "../lib/pr-status.js";
 import { subscribeSidebarSessions } from "../lib/sidebar-sessions.js";
 import { sessionCheckoutKey } from "../lib/use-session-checkout.js";
 import { activeChatRows, chatAction } from "./chats.js";
@@ -114,50 +116,35 @@ export function activitySource(deps: WorkSourceDeps): SectionSource {
   return source;
 }
 
-const STATE_ICONS: Record<SessionPullRequestState, string> = {
-  open: "GitPullRequest",
-  draft: "GitPullRequestDraft",
-  merged: "GitMerge",
-  closed: "GitPullRequestClosed",
-};
-
-/** Where a pull request lives: `owner/name` on a forge, else the host. */
-function repositoryOf(url: string): string {
-  try {
-    const { host, pathname } = new URL(url);
-    const [owner, name] = pathname.split("/").filter(Boolean);
-    return owner && name ? `${owner}/${name}` : host;
-  } catch {
-    return url;
-  }
-}
-
-const capitalized = (word: string) =>
-  `${word.charAt(0).toUpperCase()}${word.slice(1)}`;
-
-function pullRequestRow(pr: SessionPullRequest): SidebarSourceItem {
+/**
+ * A pull request the chat recorded, as a row: the same look as its chip
+ * (ADR 0238), in the state its host last said when the chips read it.
+ */
+function pullRequestRow(
+  pr: SessionPullRequest,
+  status: PullRequestStatus | null | undefined,
+): SidebarSourceItem {
+  const state = status?.state ?? pr.state ?? "open";
+  const looks = PULL_REQUEST_LOOKS[state];
+  const number = status?.number ?? pr.number;
+  const title = status?.title ?? pr.title;
   const label =
-    pr.title ??
-    (pr.number
-      ? `Pull request #${pr.number}`
-      : pr.url.replace(/^https?:\/\//i, ""));
+    title ??
+    (number ? `Pull request #${number}` : pr.url.replace(/^https?:\/\//i, ""));
   return {
     id: pr.url,
     label,
-    description: pr.title && pr.number ? `#${pr.number}` : repositoryOf(pr.url),
-    icon: STATE_ICONS[pr.state ?? "open"],
+    description: title && number ? `#${number}` : repositoryOf(pr.url),
+    icon: looks.icon,
+    ...(looks.tone ? { tone: looks.tone } : {}),
     url: pr.url,
-    ...(pr.state && pr.state !== "open"
-      ? { badges: [capitalized(pr.state)] }
-      : {}),
+    ...(state !== "open" ? { badges: [looks.label] } : {}),
     preview: {
       title: label,
       description: pr.url,
-      ...(pr.state
-        ? { metadata: [{ label: "State", value: capitalized(pr.state) }] }
-        : {}),
+      metadata: [{ label: "State", value: looks.label }],
     },
-    data: { ...pr },
+    data: { ...pr, state },
   };
 }
 
@@ -244,7 +231,14 @@ export function sessionSource(deps: WorkSourceDeps): SectionSource {
                 } satisfies SidebarSourceItem,
               ]
             : []),
-          ...sessionPullRequests(session.metadata).map(pullRequestRow),
+          ...sessionPullRequests(session.metadata).map((pr) =>
+            pullRequestRow(
+              pr,
+              deps.queryClient.getQueryData<PullRequestStatus | null>(
+                prStatusQueryKey(pr.url),
+              ),
+            ),
+          ),
         ],
       };
     },

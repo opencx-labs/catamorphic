@@ -286,11 +286,12 @@ await sleep(350);
 await press("Enter");
 await sleep(4000);
 
-// D. Tile the agent terminal to the side via the surface chip's split button
+// D. Tile the agent terminal to the side via its chip's open-to-the-side button
 await evalJs(`(() => {
-  const chip = document.querySelector('[data-testid="surface-chip"]');
-  const btn = chip && chip.querySelector("button");
-  if (!btn) throw new Error("no split button on surface chip");
+  const btn = document.querySelector(
+    '[data-testid="chip"][data-kind="terminal"] [data-chip-button="open-side"]',
+  );
+  if (!btn) throw new Error("no open-to-the-side button on the terminal chip");
   btn.click();
   return true;
 })()`);

@@ -1,62 +1,82 @@
 import { useWorkflows } from "@catamorphic/react";
 import { useContext, useEffect, useState } from "react";
-import type { ChatSurface } from "../../shared/chat";
 import { sanitizeTerminalOutput } from "../../shared/terminal-text";
+import { type Chip, chipKind } from "../lib/chips";
 import { desktopApi } from "../lib/desktop-api";
 import { useApps } from "../screens/app-screen";
 import { ResourcePreviewContent } from "./catamorphic/resource-preview";
 import { FilePreview, FilePreviewProjectContext } from "./file-preview";
+import { PreviewCard } from "./sidebar-preview";
 import { WebPreview } from "./web-preview";
 
-export const SURFACE_LABELS = {
+/** What each of Work's chips is called in its preview. */
+export const CHIP_KIND_LABELS: Partial<Record<string, string>> = {
   browser: "Page",
   terminal: "Terminal",
   editor: "File",
   chat: "Chat",
   subagent: "Subagent",
-  watcher: "Watcher",
   app: "App",
   workflow: "Workflow",
   mcpapp: "App view",
-} as const;
+  "pull-request": "Pull request",
+  group: "Chips",
+};
 
-/** A surface stays a resource on hover; inspection never opens or starts it. */
-export function SurfacePreview({ surface }: { surface: ChatSurface }) {
-  if (surface.filePath) return <FilePreview filePath={surface.filePath} />;
-  if (surface.url) return <WebPreview url={surface.url} />;
-  if (surface.terminalSessionId)
-    return (
-      <TerminalPreview
-        surface={surface}
-        sessionId={surface.terminalSessionId}
-      />
-    );
-  if (surface.kind === "workflow") return <WorkflowPreview surface={surface} />;
-  if (surface.kind === "app") return <AppPreview surface={surface} />;
-  return <SurfaceSummary surface={surface} />;
+const text = (value: unknown) =>
+  typeof value === "string" && value ? value : undefined;
+
+/**
+ * A chip's hover preview (ADR 0238): the card it declares, else a live look
+ * at what it stands for (a page, a terminal's output, a file, a workflow or
+ * an app, from its `data`), else what it says about itself. Inspection
+ * never opens or starts anything.
+ */
+export function ChipPreview({ chip }: { chip: Chip }) {
+  if (chip.preview)
+    return <PreviewCard preview={chip.preview} fallbackTitle={chip.label} />;
+  const data = chip.data ?? {};
+  const kind = chipKind(chip);
+  const filePath = text(data.filePath);
+  if (filePath) return <FilePreview filePath={filePath} />;
+  const url = text(data.url);
+  if (kind === "browser" && url) return <WebPreview url={url} />;
+  const terminal = text(data.terminalSessionId);
+  if (terminal) return <TerminalPreview chip={chip} sessionId={terminal} />;
+  const name = text(data.name);
+  if (kind === "workflow" && name)
+    return <WorkflowPreview chip={chip} name={name} />;
+  if (kind === "app" && name) return <AppPreview chip={chip} name={name} />;
+  return <ChipSummary chip={chip} />;
 }
 
-function SurfaceSummary({ surface }: { surface: ChatSurface }) {
+function ChipSummary({
+  chip,
+  description = chip.description,
+}: {
+  chip: Chip;
+  description?: string;
+}) {
+  const kind = chipKind(chip);
+  const typeLabel = (kind && CHIP_KIND_LABELS[kind]) ?? "Chip";
   return (
     <ResourcePreviewContent
       preview={{
-        name: surface.label,
-        typeLabel: SURFACE_LABELS[surface.kind],
+        name: chip.label,
+        typeLabel,
         content: {
           kind: "summary",
           text:
             [
-              surface.attention
+              chip.signal === "attention"
                 ? "Ready for you"
-                : surface.active
+                : chip.signal === "working"
                   ? "Working"
                   : undefined,
-              surface.description,
-              ...(surface.info ?? []),
+              description,
             ]
               .filter(Boolean)
-              .join("\n") ||
-            `Open ${SURFACE_LABELS[surface.kind].toLowerCase()} to view it.`,
+              .join("\n") || `Open ${typeLabel.toLowerCase()} to view it.`,
         },
       }}
     />
@@ -64,10 +84,10 @@ function SurfaceSummary({ surface }: { surface: ChatSurface }) {
 }
 
 function TerminalPreview({
-  surface,
+  chip,
   sessionId,
 }: {
-  surface: ChatSurface;
+  chip: Chip;
   sessionId: string;
 }) {
   const [result, setResult] = useState<{
@@ -103,7 +123,7 @@ function TerminalPreview({
     <>
       <ResourcePreviewContent
         preview={{
-          name: surface.label,
+          name: chip.label,
           typeLabel: "Terminal",
           content: !value
             ? { kind: "summary", text: "Loading recent output…" }
@@ -133,17 +153,15 @@ function TerminalPreview({
   );
 }
 
-function WorkflowPreview({ surface }: { surface: ChatSurface }) {
+function WorkflowPreview({ chip, name }: { chip: Chip; name: string }) {
   const projectId = useContext(FilePreviewProjectContext);
   const query = useWorkflows(projectId);
-  const name = surface.key.slice("workflow:".length);
   const workflow = query.data?.find((workflow) => workflow.name === name);
   return (
-    <SurfaceSummary
-      surface={{
-        ...surface,
-        label: workflow?.displayName ?? surface.label,
-        description: workflow
+    <ChipSummary
+      chip={{ ...chip, label: workflow?.displayName ?? chip.label }}
+      description={
+        workflow
           ? [
               workflow.description,
               `${workflow.parameterCount} ${workflow.parameterCount === 1 ? "input" : "inputs"}`,
@@ -155,23 +173,21 @@ function WorkflowPreview({ surface }: { surface: ChatSurface }) {
               .join("\n")
           : query.isError
             ? "Workflow details are unavailable. Open the workflow to try again."
-            : surface.description,
-      }}
+            : chip.description
+      }
     />
   );
 }
 
-function AppPreview({ surface }: { surface: ChatSurface }) {
+function AppPreview({ chip, name }: { chip: Chip; name: string }) {
   const projectId = useContext(FilePreviewProjectContext);
   const query = useApps(projectId);
-  const app = query.data?.find(
-    (app) => app.name === surface.key.slice("app:".length),
-  );
+  const app = query.data?.find((app) => app.name === name);
   return (
-    <SurfaceSummary
-      surface={{
-        ...surface,
-        description: app
+    <ChipSummary
+      chip={chip}
+      description={
+        app
           ? app.publishedAt
             ? "Published"
             : app.activeVersionId
@@ -179,8 +195,8 @@ function AppPreview({ surface }: { surface: ChatSurface }) {
               : "No successful build yet"
           : query.isError
             ? "App details are unavailable. Open the app to try again."
-            : surface.description,
-      }}
+            : chip.description
+      }
     />
   );
 }

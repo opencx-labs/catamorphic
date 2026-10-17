@@ -259,6 +259,10 @@ export {
 export { useSelectedNode } from "./hooks/use-selected-node.js";
 export { useSessionArtifacts } from "./hooks/use-session-artifacts.js";
 export {
+  type SetAgentSessionMetadataInput,
+  useSetAgentSessionMetadata,
+} from "./hooks/use-set-agent-session-metadata.js";
+export {
   type UpdateAgentSessionInput,
   useUpdateAgentSession,
 } from "./hooks/use-update-agent-session.js";

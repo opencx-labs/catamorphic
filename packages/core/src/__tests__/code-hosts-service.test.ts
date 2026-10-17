@@ -142,6 +142,37 @@ describe("CodeHostsService", () => {
     ).toBeUndefined();
   });
 
+  it("reads a pull request by its address with the caller's own connection only", async () => {
+    const forge = fakeCodeHost({
+      db,
+      projectManager: manager,
+      remoteBase: temp,
+    });
+    // The tenant's service connection (from above) reads for no one.
+    const carol: Identity = { tenantId, externalUserId: "carol" };
+    const url = `${temp}/remotes/shared/pull/7`;
+    await expect(
+      forge.codeHosts.pullRequestStatus({ identity: carol, url }),
+    ).rejects.toBeInstanceOf(CodeHostNotConnectedError);
+    await forge.connectPersonal(carol, "carol-token");
+    expect(
+      await forge.codeHosts.pullRequestStatus({ identity: carol, url }),
+    ).toMatchObject({ number: 7, author: "carol-token", state: "open" });
+    // An address its host takes for no pull request, or no host serves.
+    expect(
+      await forge.codeHosts.pullRequestStatus({
+        identity: carol,
+        url: `${temp}/remotes/shared`,
+      }),
+    ).toBeNull();
+    expect(
+      await forge.codeHosts.pullRequestStatus({
+        identity: carol,
+        url: "https://elsewhere.test/a/b/pull/1",
+      }),
+    ).toBeNull();
+  });
+
   it("refreshes a lapsed personal token before acting", async () => {
     const forge = fakeCodeHost({
       db,

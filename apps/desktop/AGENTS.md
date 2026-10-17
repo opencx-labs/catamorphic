@@ -176,7 +176,9 @@ only Work's lists can use; grow the shared row, action or `work` contract instea
 so a person's source gets it too ([sidebar sources](docs/sidebar-sources.md)).
 Keep the validated contract and examples in `src/main/workspace-authoring.ts`
 synchronized with changes; every `workspace.js`, the configuring skill and the
-default layout consume that single guide. Inline actions, overflow menus, and
+default layout consume that single guide. A chat's chips are a source on the same
+contract (ADR 0238): grow the shared row rather than giving chips a model of their
+own, and keep Work's chips (`renderer/lib/chips.ts`) passable through a module. Inline actions, overflow menus, and
 right-click menus are independent placements.
 
 ## Agent tool admission

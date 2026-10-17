@@ -214,12 +214,34 @@ export const SESSION_PULL_REQUESTS_KEY = "pull_requests";
 export const SESSION_PULL_REQUESTS_CONTRACT =
   "pull_requests lists the pull requests a chat opened or works on, as an array of { url, number?, title?, state? } with state open, draft, merged or closed.";
 
+// ---------------------------------------------------------------------------
+// The chips a chat's agent keeps in view (ADR 0238)
+
+/** The metadata key the chips an agent attaches to its chat are kept under. */
+export const SESSION_CHIPS_KEY = "chips";
+
+/** The convention in one sentence, quoted wherever agents meet it. */
+export const SESSION_CHIPS_CONTRACT =
+  "chips lists what you keep in view above your chat's composer, as an array of { id, label, url?, icon?, description?, tone?, wide?, badges?, actions?, data? }: id is lowercase letters, digits, '.', '_' or '-' (up to 64, starting with a letter or digit), a click opens url (a page, file:, workflow:, app:), icon is a PascalCase Lucide name such as Rocket, tone is accent, success, warning, danger or info, wide: true spans the composer's width, badges are short strings or { label, icon?, tone? }, actions are its buttons ({ action: 'open-side' } opens url to the side; { action, label, icon? } of another name runs in the person's chips module, and Work adds the X), and data is what a chips module reads; write the list without a chip to remove it.";
+
+/** What an attached chip's id may be: a short lowercase name. */
+export const SESSION_CHIP_ID_PATTERN = /^[a-z0-9][a-z0-9_.-]{0,63}$/;
+
+/**
+ * One entry of {@link SESSION_CHIPS_KEY}: an id and a label, and whatever
+ * else the agent gave it. The host reads the rest as a chip's presentation
+ * and keeps only what it understands.
+ */
+export type SessionChip = { id: string; label: string } & {
+  readonly [key: string]: JsonValue;
+};
+
 /**
  * `set_session_metadata`, the one tool every host offers agents for their
  * own chat's metadata: its description and input, so each projection
  * (Work's workspace tools, the project MCP) says the same thing.
  */
-export const SET_SESSION_METADATA_DESCRIPTION = `Set one named value on this chat's session, replacing what the key held; remove: true removes the key, and a call with neither reads the session's metadata. Work shows these values beside the chat. ${SESSION_PULL_REQUESTS_CONTRACT} Read a list before writing it again and keep what it holds. Returns the session's metadata.`;
+export const SET_SESSION_METADATA_DESCRIPTION = `Set one named value on this chat's session, replacing what the key held; remove: true removes the key, and a call with neither reads the session's metadata. Work shows these values beside the chat. ${SESSION_PULL_REQUESTS_CONTRACT} ${SESSION_CHIPS_CONTRACT} Read a list before writing it again and keep what it holds. Returns the session's metadata.`;
 
 /**
  * A value a key can hold through the tool: any JSON but null. A model that
@@ -326,5 +348,31 @@ export function sessionPullRequests(metadata: unknown): SessionPullRequest[] {
         ...(state ? { state } : {}),
       },
     ];
+  });
+}
+
+/**
+ * The chips an agent attached to its chat, read leniently: entries without
+ * a label or an id of {@link SESSION_CHIP_ID_PATTERN}, and repeated ids,
+ * are left out. What else an entry holds is the host's to read.
+ */
+export function sessionChips(metadata: unknown): SessionChip[] {
+  const value =
+    typeof metadata === "object" && metadata !== null
+      ? Object.entries(metadata).find(([key]) => key === SESSION_CHIPS_KEY)?.[1]
+      : undefined;
+  if (!Array.isArray(value)) return [];
+  const seen = new Set<string>();
+  return value.flatMap((entry): SessionChip[] => {
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry))
+      return [];
+    const record: Record<string, JsonValue> = Object.fromEntries(
+      Object.entries(entry),
+    );
+    const id = typeof record.id === "string" ? record.id.trim() : "";
+    const label = typeof record.label === "string" ? record.label.trim() : "";
+    if (!SESSION_CHIP_ID_PATTERN.test(id) || !label || seen.has(id)) return [];
+    seen.add(id);
+    return [{ ...record, id, label }];
   });
 }

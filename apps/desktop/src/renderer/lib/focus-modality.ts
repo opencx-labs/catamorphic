@@ -43,3 +43,11 @@ export function installFocusModality(doc: Document = document): () => void {
     delete root.dataset.focusModality;
   };
 }
+
+/**
+ * A shortcut that moves focus (focus-chips) leads with the keyboard as
+ * much as Tab does: the ring shows on what it focused.
+ */
+export function markKeyboardModality(doc: Document = document): void {
+  doc.documentElement.dataset.focusModality = "keyboard";
+}

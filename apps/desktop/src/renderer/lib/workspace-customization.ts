@@ -37,7 +37,47 @@ export function workspaceCustomizationMessage({
         source: { type: "paste" },
         text: [
           `The live workspace configuration file on this machine is ${JSON.stringify(file)}. Read it first, or create it from the current layout below if it does not exist. Edits apply live.`,
-          'The file exports module.exports = { sidebars: { left: [...], right: [...] }, palette: { modes: [...] } }. Each tab has a stable id, title, Lucide icon and sections. Each section has a stable id and shows one of: source (one of Work\'s lists such as "work:tabs", "work:chats", "work:bookmarks", or a module path for code in the project), items, app or note. To sort, filter or group one of Work\'s lists, write a module that reads it with work.read and passes its rows through. palette is optional. Preserve existing ids, the other sidebar and any palette modes. Profile selection and Settings are fixed in the left footer. A single tab hides its icon strip. Load the configuring-catamorphic-desktop skill for the full contract and examples.',
+          'The file exports module.exports = { sidebars: { left: [...], right: [...] }, palette: { modes: [...] }, chips: { source } }. Each tab has a stable id, title, Lucide icon and sections. Each section has a stable id and shows one of: source (one of Work\'s lists such as "work:tabs", "work:chats", "work:bookmarks", or a module path for code in the project), items, app or note. To sort, filter or group one of Work\'s lists, write a module that reads it with work.read and passes its rows through. palette and chips are optional. Preserve existing ids, the other sidebar, any palette modes and chips. Profile selection and Settings are fixed in the left footer. A single tab hides its icon strip. Load the configuring-catamorphic-desktop skill for the full contract and examples.',
+          layer === "project"
+            ? `This is the project's shared file (${PROJECT_WORKSPACE_CONFIG_PATH}): changes reach everyone in the project once committed.`
+            : "This is a local file: do not commit it.",
+          `Current layout: ${JSON.stringify(config)}`,
+        ].join("\n\n"),
+      },
+    ],
+  };
+}
+
+/**
+ * The "Customize chips" chat's composer (ADR 0238): one short sentence
+ * waiting for the person to finish or send, and the same two pills as the
+ * sidebar's, so the agent reads the layout file and the chips contract.
+ */
+export function chipsCustomizationMessage({
+  file,
+  layer,
+  config,
+}: {
+  file: string;
+  layer: WorkspaceLayer;
+  config: WorkspaceConfig;
+}): PendingChatMessage {
+  return {
+    text: "Help me customize my chat chips.",
+    attachments: [
+      {
+        kind: "text",
+        name: file.slice(file.lastIndexOf("/") + 1),
+        source: { type: "path", path: file },
+        text: file,
+      },
+      {
+        kind: "text",
+        name: "Chips configuration",
+        source: { type: "paste" },
+        text: [
+          `The live workspace configuration file on this machine is ${JSON.stringify(file)}. Read it first, or create it from the current layout below if it does not exist. Edits apply live.`,
+          "Chips sit above every chat's composer. workspace.js names where they come from: chips: { source: \"work:chips\" } is Work's own (the chat's tabs, subagents and app views, its pull requests and the chips its agent attached). To sort, group, filter, restyle or add chips, write a module in the project that reads work.read({ source: \"chips\" }) and returns chips, and point chips.source at it with collections: [\"chips\"]. A module path resolves in the project, so the chips key that names it belongs in the project's layer (.work/workspace.js in the project folder, or the personal project file): when the file below is the profile's, copy the resolved layout into the project's layer and edit that one. A chip is a row: id, label, url, icon, tone, wide, badges, actions, and parentId to put it in a group. Agents can also attach chips on the fly under the chat's chips metadata. Load the configuring-catamorphic-desktop skill for the full contract and examples, and keep the sidebars and palette modes as they are.",
           layer === "project"
             ? `This is the project's shared file (${PROJECT_WORKSPACE_CONFIG_PATH}): changes reach everyone in the project once committed.`
             : "This is a local file: do not commit it.",

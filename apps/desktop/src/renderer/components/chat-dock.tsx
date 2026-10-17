@@ -1,9 +1,12 @@
+import { sessionPullRequests } from "@catamorphic/agent-protocol";
 import {
   type AgentAttachment,
   type AgentChatAttachment,
   type AgentTextAttachment,
+  ATTACHMENT_MARKER,
   type InputSource,
   type Item,
+  type JsonObject,
   messageWithAttachmentNames,
   QUESTIONS_DISMISSED_MESSAGE,
   type RuntimeRequestResponse,
@@ -13,6 +16,7 @@ import {
   useAgentCatalog,
   useAgentChat,
   useEnvironments,
+  useSetAgentSessionMetadata,
   useWatchers,
 } from "@catamorphic/react";
 import { AgentEnvironmentControl } from "@catamorphic/ui";
@@ -48,12 +52,8 @@ import {
 } from "react";
 import type { AgentCommandsResult } from "../../shared/agent-commands.js";
 import { chatBookmarkUrl } from "../../shared/bookmark-target.js";
-import type {
-  ChatDockProps,
-  ChatSurface,
-  McpAppRef,
-} from "../../shared/chat.js";
-import { modifiersForMode } from "../../shared/open-mode.js";
+import type { ChatDockProps, McpAppRef } from "../../shared/chat.js";
+import { modifiersForMode, type OpenMode } from "../../shared/open-mode.js";
 import { rosterAgentId } from "../../shared/voice.js";
 import {
   defaultModelLabel,
@@ -68,6 +68,13 @@ import {
   moveFocusAsApp,
   onPagePress,
 } from "../lib/app-focus.js";
+import { chipBoard } from "../lib/chip-board.js";
+import {
+  type Chip,
+  chipKind,
+  isAttachedChipId,
+  workChips,
+} from "../lib/chips.js";
 import {
   type AgentInfo,
   desktopApi,
@@ -79,6 +86,7 @@ import {
   selectionFromClipboard,
 } from "../lib/editor-selection";
 import { usePopoverDismiss } from "../lib/popover-dismiss.js";
+import { usePullRequestStatuses } from "../lib/pr-status.js";
 import { ipcErrorText } from "../lib/remote-workspace.js";
 import { LOCAL_CHATS_POLL_MS } from "../lib/session-change-hints.js";
 import { skillsForAgent, useProjectSkillCatalog } from "../lib/skills";
@@ -91,9 +99,11 @@ import {
 import { TAB_DRAG_TYPE, type TabDragPayload } from "../lib/tab-drag";
 import { classifyPastedText, selectionName, textPill } from "../lib/text-pills";
 import { useBackgroundCommands } from "../lib/use-background-commands";
+import { useChips } from "../lib/use-chips.js";
 import { useSessionCheckout } from "../lib/use-session-checkout.js";
 import { useWorkDisplay } from "../lib/use-work-display.js";
 import type { ChatMode } from "../lib/workspace-types.js";
+import { isOpenAction } from "../sources/run.js";
 import { AgentQuestionPanel } from "./agent-question-panel";
 import { AuthenticationRequiredCard } from "./authentication-required-card.js";
 import { ActivityText } from "./catamorphic/activity-text.js";
@@ -105,7 +115,7 @@ import {
 } from "./catamorphic/chat-timeline";
 import { TodoProgress } from "./catamorphic/todo-progress.js";
 import { ChatFolder } from "./chat-folder.js";
-import { SurfacesRail } from "./chat-surface-rail.js";
+import { ChipRail, type ChipRailHandle } from "./chip-rail.js";
 import { ContextPill } from "./context-pill";
 import { FilePreviewProjectContext } from "./file-preview";
 import { renderResponseLink } from "./response-link";
@@ -115,7 +125,6 @@ export type {
   ChatDockEntry,
   ChatDockProps,
   ChatMode,
-  ChatSurface,
   McpAppRef,
 } from "../../shared/chat.js";
 
@@ -176,8 +185,8 @@ const MAX_TOTAL_MEDIA_BYTES = 48 * 1024 * 1024;
 
 /** Server-side attachment cap, mirrored so the composer can refuse early. */
 const MAX_ATTACHMENTS = 32;
-/** One empty list, so what depends on the surfaces settles. */
-const NO_SURFACES: ChatSurface[] = [];
+/** One empty list, so what depends on the chips settles. */
+const NO_CHIPS: Chip[] = [];
 
 /** A workspace tab dropped on the chat becomes a tab pill. */
 function tabPillFromDrag(
@@ -295,27 +304,36 @@ const appNameFromPath = (filePath: string | undefined): string | undefined =>
 const firstLine = (value: string | undefined): string =>
   (value ?? "").split("\n", 1)[0]?.trim() ?? "";
 
-/** One line of what a subagent did, for its chip. */
-const activityLine = (item: Item): string => {
-  if (item.kind === "command") return `$ ${firstLine(item.command)}`;
-  if (item.kind === "file_change") return `Edited ${item.path || "a file"}`;
-  if (item.kind === "tool_call") return `Used ${stepToolName(item)}`;
-  return "";
+/** One thing a subagent did, as a row inside its chip. */
+const activityRow = (
+  item: Item,
+): { label: string; icon: string } | undefined => {
+  if (item.kind === "command")
+    return {
+      label: firstLine(item.command) || "Command",
+      icon: "SquareTerminal",
+    };
+  if (item.kind === "file_change")
+    return { label: `Edited ${item.path || "a file"}`, icon: "FilePen" };
+  if (item.kind === "tool_call")
+    return { label: `Used ${stepToolName(item)}`, icon: "Wrench" };
+  return undefined;
 };
 
 /**
- * Chips derived from the chat's own work (not workspace tabs): subagents
- * from the latest turn that delegated work, spinning while it runs and
- * inspectable after; apps the agent worked on; MCP Apps views its tool
- * calls opened. Background commands are terminals, and their chips come
- * with the workspace's terminal surfaces.
+ * Chips the chat's own work makes (not workspace tabs): subagents from the
+ * latest turn that delegated work, spinning while they run, their steps
+ * inside them; apps the agent worked on; MCP Apps views its tool calls
+ * opened (with the views, which open by their `mcpapp:` address).
+ * Background commands are terminals, whose chips come with the tabs.
  */
 function activityChips(
   state: SessionState | null,
   activeTurnId: string | null,
   uiTools: Record<string, string>,
-): ChatSurface[] {
-  if (!state) return [];
+): { chips: Chip[]; views: ReadonlyMap<string, McpAppRef> } {
+  const views = new Map<string, McpAppRef>();
+  if (!state) return { chips: [], views };
   const turns = Object.values(state.turns);
   const ordinalOf = new Map(turns.map((turn) => [turn.id, turn.ordinal]));
   let latestDelegation: string | undefined;
@@ -333,7 +351,11 @@ function activityChips(
   const mcpApps = new Map<string, McpAppRef>();
   const subagents = new Map<
     string,
-    { label: string; ended: boolean; info: string[] }
+    {
+      label: string;
+      ended: boolean;
+      steps: { label: string; icon: string }[];
+    }
   >();
   for (const item of state.items) {
     const live = item.turnId !== null && item.turnId === activeTurnId;
@@ -360,45 +382,61 @@ function activityChips(
       subagents.set(item.id, {
         label: firstLine(item.title) || item.agentType || "subagent",
         ended: item.status !== "in_progress",
-        info: subagents.get(item.id)?.info ?? [],
+        steps: subagents.get(item.id)?.steps ?? [],
       });
     } else if (item.parentItemId) {
-      const line = activityLine(item);
+      const step = activityRow(item);
       const entry = subagents.get(item.parentItemId);
-      if (line && entry) entry.info.push(line);
+      if (step && entry) entry.steps.push(step);
     }
   }
-  const chips: ChatSurface[] = [];
+  const chips: Chip[] = [];
   for (const [id, entry] of subagents) {
+    const chipId = `subagent:${id}`;
+    const working = !entry.ended && latestDelegation === activeTurnId;
     chips.push({
-      key: `subagent:${id}`,
-      kind: "subagent",
+      id: chipId,
       label: entry.label,
-      active: !entry.ended && latestDelegation === activeTurnId,
-      info:
-        entry.info.length > 0
-          ? entry.info.slice(-20)
-          : ["No visible activity yet."],
+      icon: "Bot",
+      parentId: null,
+      hasChildren: true,
+      ...(working ? { signal: "working" as const } : {}),
+      data: { kind: "subagent" },
+    });
+    entry.steps.slice(-20).forEach((step, index) => {
+      chips.push({
+        id: `${chipId}/${index}`,
+        parentId: chipId,
+        label: step.label,
+        icon: step.icon,
+        preview: false,
+        data: { kind: "step" },
+      });
     });
   }
   for (const [name, app] of apps) {
     chips.push({
-      key: `app:${name}`,
-      kind: "app",
+      id: `app:${name}`,
       label: name,
-      active: app.active,
+      icon: "LayoutGrid",
+      url: `app:${name}`,
+      ...(app.active ? { signal: "working" as const } : {}),
+      data: { kind: "app", name },
     });
   }
   // Newest app views first; older ones age off the rail.
   for (const ref of [...mcpApps.values()].slice(-4)) {
+    const url = `mcpapp:${ref.toolUseId}`;
+    views.set(url, ref);
     chips.push({
-      key: `mcpapp:${ref.toolUseId}`,
-      kind: "mcpapp",
+      id: url,
       label: ref.title,
-      mcpApp: ref,
+      icon: "AppWindow",
+      url,
+      data: { kind: "mcpapp" },
     });
   }
-  return chips;
+  return { chips, views };
 }
 
 /** Stable per-chat pick: hash the id so re-renders don't re-roll. */
@@ -447,7 +485,9 @@ function ChatDockContent({
   nativeWindow = false,
   defaultAgentId,
   paletteTargeted,
-  surfaces = NO_SURFACES,
+  chips: heldChips = NO_CHIPS,
+  chipsModule,
+  onCustomizeChips,
   onOpenSurface,
   onRemoveSurface,
   onOpenMcpApp,
@@ -475,6 +515,7 @@ function ChatDockContent({
   registerClose,
   registerMinimize,
   registerSend,
+  registerFocusChips,
   onSessionCreated,
   onSessionAgent,
   onSignalsChange,
@@ -711,6 +752,33 @@ function ChatDockContent({
       if (!live) return;
       if (next) restore(next);
       draftLoaded.current = true;
+      // A chat opened with words waiting ("Customize chips"): they go in
+      // the composer, unsent, and become its draft.
+      const seeded = entryRef.current.draftMessage;
+      if (!seeded) return;
+      onEntryChangeRef.current({
+        ...entryRef.current,
+        draftMessage: undefined,
+      });
+      if (next?.message || next?.attachments.length) return;
+      // Its pills follow the words, each where a marker stands.
+      const attachments = seeded.attachments ?? [];
+      const draft = {
+        message: `${seeded.text}${attachments.length ? " " : ""}${ATTACHMENT_MARKER.repeat(attachments.length)}`,
+        attachments,
+      };
+      restore(draft);
+      void desktopApi.dockDraftSet(entry.localId, draft);
+      // The caret waits after the words, for the person to go on.
+      const root = composerRef.current?.element();
+      composerRef.current?.focus();
+      if (root) {
+        const range = document.createRange();
+        range.selectNodeContents(root);
+        range.collapse(false);
+        document.getSelection()?.removeAllRanges();
+        document.getSelection()?.addRange(range);
+      }
     });
     const stop = desktopApi.onDockDraft((update) => {
       if (update.localId === entry.localId) restore(update.draft);
@@ -823,12 +891,12 @@ function ChatDockContent({
     [connectorIcons],
   );
 
-  // Subagent, watcher, worked-on-app, and MCP-app-view chips come from
-  // the chat's own turn events (every harness reports them through the
-  // common event model); workspace-tab chips arrive via the surfaces
-  // prop. One rail, all of them.
+  // Work's chips for this chat (ADR 0238): the pull requests it recorded
+  // and the chips its agent attached (its session's metadata), what it
+  // holds in the workspace (the chips prop), and what its turns made
+  // (subagents, apps it edited, app views), from the common event model.
   const activeTurnId = chat.activeTurn?.id ?? null;
-  const chatActivityChips = useMemo(
+  const turnChips = useMemo(
     () =>
       activityChips(
         chat.state,
@@ -837,26 +905,201 @@ function ChatDockContent({
       ),
     [chat.state, activeTurnId, chat.connectionLost, uiTools],
   );
-  const railSurfaces = useMemo(() => {
-    // One chip per key: a surface known to both the host and the turn
-    // events (an app tab prepared by open_surface AND touched by this
-    // turn's file edits) merges — activity animates it, host state
-    // (attention) rides along.
-    const activityByKey = new Map(
-      chatActivityChips.map((chip) => [chip.key, chip]),
+  const sessionFields = chat.state?.session;
+  const metadata = sessionFields?.metadata;
+  const pullRequests = useMemo(() => sessionPullRequests(metadata), [metadata]);
+  const pullRequestUrls = useMemo(
+    () => pullRequests.map((pr) => pr.url),
+    [pullRequests],
+  );
+  const pullRequestStatuses = usePullRequestStatuses({
+    urls: pullRequestUrls,
+    enabled: frontSurface,
+  });
+  const builtChips = useMemo(() => {
+    // One chip per id: an app tab the workspace holds that this turn also
+    // edits is one chip, spinning with the edit, keeping the workspace's
+    // attention.
+    const own = new Map(
+      turnChips.chips
+        .filter((chip) => !chip.parentId)
+        .map((chip) => [chip.id, chip]),
     );
-    const merged = surfaces.map((surface) => {
-      const activity = activityByKey.get(surface.key);
-      if (!activity) return surface;
-      activityByKey.delete(surface.key);
-      return {
-        ...activity,
-        ...surface,
-        active: surface.active || activity.active,
-      };
+    const held = heldChips.map((chip) => {
+      const mine = own.get(chip.id);
+      if (!mine) return chip;
+      own.delete(chip.id);
+      const signal = chip.signal ?? mine.signal;
+      return { ...mine, ...chip, ...(signal ? { signal } : {}) };
     });
-    return [...merged, ...activityByKey.values()];
-  }, [surfaces, chatActivityChips]);
+    return workChips({
+      pullRequests,
+      statuses: pullRequestStatuses,
+      metadata,
+      held: [
+        ...held,
+        ...turnChips.chips.filter((chip) => chip.parentId || own.has(chip.id)),
+      ],
+    });
+  }, [turnChips, heldChips, metadata, pullRequests, pullRequestStatuses]);
+  // The same chips stay the same value while a turn streams, so the rail
+  // and a chips module only hear of a change that is one.
+  const builtSignature = JSON.stringify(builtChips);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the signature is what changes them
+  const defaultChips = useMemo(() => builtChips, [builtSignature]);
+  // A chip opens as the chat opens what it holds: an app view as itself,
+  // the chat's own tabs as its tabs, anything else as a link of the chat's.
+  const openChip = useCallback(
+    (url: string, mode: OpenMode) => {
+      const view = turnChips.views.get(url);
+      if (view) onOpenMcpApp?.(view, mode);
+      else if (
+        heldChips.some((chip) => chip.url === url) ||
+        turnChips.chips.some((chip) => chip.url === url)
+      )
+        onOpenSurface?.(url, mode);
+      else onLinkClick?.(url, mode);
+    },
+    [turnChips, heldChips, onOpenMcpApp, onOpenSurface, onLinkClick],
+  );
+  const setSessionMetadata = useSetAgentSessionMetadata(projectId);
+  // A chip's ✕: an attached chip or a recorded pull request leaves the
+  // chat's metadata (its list is written without it), a tab of the chat's
+  // closes. Decided by where the chip came from, never by the kind its
+  // data claims: an attached id is a short name, a pull request's its URL.
+  const removeChip = async (itemId: string) => {
+    const chip = defaultChips.find((candidate) => candidate.id === itemId);
+    if (!chip) throw new Error("This chip is no longer here.");
+    const without = (key: string, matches: (entry: JsonObject) => boolean) => {
+      const listed = metadata?.[key];
+      const kept = (Array.isArray(listed) ? listed : []).filter(
+        (entry) =>
+          !(
+            typeof entry === "object" &&
+            entry !== null &&
+            !Array.isArray(entry) &&
+            matches(entry)
+          ),
+      );
+      return kept.length ? kept : null;
+    };
+    const attached = isAttachedChipId(itemId);
+    if (attached || pullRequests.some((pr) => pr.url === itemId)) {
+      if (!activeSessionId) throw new Error("This chat has not started yet.");
+      await setSessionMetadata.mutateAsync({
+        sessionId: activeSessionId,
+        metadata: attached
+          ? {
+              chips: without(
+                "chips",
+                (entry) =>
+                  typeof entry.id === "string" && entry.id.trim() === itemId,
+              ),
+            }
+          : {
+              pull_requests: without(
+                "pull_requests",
+                (entry) =>
+                  typeof entry.url === "string" && entry.url.trim() === itemId,
+              ),
+            },
+      });
+      return;
+    }
+    const kind = chipKind(chip);
+    if (kind === "browser" || kind === "terminal" || kind === "editor") {
+      onRemoveSurface?.(itemId);
+      return;
+    }
+    throw new Error("This chip cannot be removed.");
+  };
+  const chipActions = useRef({ removeChip, openChip });
+  chipActions.current = { removeChip, openChip };
+  // The rail keeps one callback while a turn streams (it redraws only
+  // when its chips change).
+  const openChipFromRail = useCallback(
+    (url: string, mode: OpenMode) => chipActions.current.openChip(url, mode),
+    [],
+  );
+  // Published for Work's chips list here: what a chips module reads and
+  // acts on, in this window.
+  const boardOwner = useMemo(
+    () => ({ localId: entry.localId }),
+    [entry.localId],
+  );
+  useEffect(() => {
+    if (!activeSessionId) return;
+    chipBoard.publish({
+      sessionId: activeSessionId,
+      owner: boardOwner,
+      chips: {
+        rows: defaultChips,
+        act: async ({ itemId, action }) => {
+          // A chip of Work's without an address (a subagent's step) opens
+          // nothing; any other verb of Work's ran before it got here.
+          if (isOpenAction(action)) return undefined;
+          if (action !== "remove")
+            throw new Error("Work's chips do not do that.");
+          await chipActions.current.removeChip(itemId);
+          return undefined;
+        },
+        open: (url, mode) => chipActions.current.openChip(url, mode),
+      },
+    });
+  }, [activeSessionId, boardOwner, defaultChips]);
+  useEffect(() => {
+    if (!activeSessionId) return;
+    return () =>
+      chipBoard.retract({ sessionId: activeSessionId, owner: boardOwner });
+  }, [activeSessionId, boardOwner]);
+  const chipSession = useMemo(
+    () =>
+      activeSessionId
+        ? {
+            id: activeSessionId,
+            title: sessionFields?.title ?? null,
+            metadata: metadata ?? {},
+          }
+        : undefined,
+    [activeSessionId, sessionFields?.title, metadata],
+  );
+  // The project's chips module reads while the chat is in view, and its
+  // chips stay while it is not, so a chat reopening shows them at once.
+  const chipView = useChips({
+    projectId,
+    module: chipsModule,
+    enabled: frontSurface,
+    session: chipSession,
+    defaults: defaultChips,
+  });
+  const chipRailRef = useRef<ChipRailHandle | null>(null);
+  const registerChipRail = useCallback((handle: ChipRailHandle) => {
+    chipRailRef.current = handle;
+  }, []);
+  const customizeChips = useCallback(() => onCustomizeChipsRef.current?.(), []);
+  const leaveChips = useCallback(() => composerRef.current?.focus(), []);
+  const onCustomizeChipsRef = useRef(onCustomizeChips);
+  onCustomizeChipsRef.current = onCustomizeChips;
+  // A lurking dock folds its chips inert: the shortcut engages the dock
+  // first, then focuses the first chip once they are back. A chat out of
+  // view (the workspace brings it back) focuses it as it opens.
+  const lurkingRef = useRef(false);
+  const expandedRef = useRef(false);
+  const chipsOnExpandRef = useRef(Number.NEGATIVE_INFINITY);
+  useEffect(() => {
+    registerFocusChips?.(() => {
+      if (!expandedRef.current) {
+        chipsOnExpandRef.current = performance.now();
+        return true;
+      }
+      if (!lurkingRef.current) return chipRailRef.current?.focus() ?? false;
+      setDockEngaged(true);
+      requestAnimationFrame(() =>
+        requestAnimationFrame(() => chipRailRef.current?.focus()),
+      );
+      return true;
+    });
+  }, [registerFocusChips]);
 
   // ↑/↓ in the composer recall previously sent messages, shell-history
   // style: ↑ from an empty (or recalled) draft steps back through what
@@ -980,11 +1223,12 @@ function ChatDockContent({
       roster.agents.find((agent) => agent.id === rosterAgentId(agentId))?.name,
     [roster.agents],
   );
-  // Response links preview what the chat has on its surfaces.
+  // Response links preview what the chat holds as its chips do.
+  const chipsShown = chipView.chips;
   const renderLink = useCallback(
     (props: Parameters<NonNullable<ChatTimelineProps["renderLink"]>>[0]) =>
-      renderResponseLink({ ...props, surfaces }),
-    [surfaces],
+      renderResponseLink({ ...props, chips: chipsShown }),
+    [chipsShown],
   );
   // A chat in another project (the assistant's) opens by its bookmark
   // address; the rest by the timeline's own links.
@@ -2077,12 +2321,20 @@ function ChatDockContent({
     focusComposerInternally();
     return true;
   };
+  expandedRef.current = expanded;
   useEffect(() => {
     if (!expanded) return;
-    if (watchBackdropInteractionRef.current === userInteractionRef.current)
+    // The focus-chips shortcut opened it: its first chip, not the composer.
+    const chipsFirst = performance.now() - chipsOnExpandRef.current < 1000;
+    chipsOnExpandRef.current = Number.NEGATIVE_INFINITY;
+    if (
+      !chipsFirst &&
+      watchBackdropInteractionRef.current === userInteractionRef.current
+    )
       return;
     const userInteraction = userInteractionRef.current;
     const frame = requestAnimationFrame(() => {
+      if (chipsFirst && chipRailRef.current?.focus()) return;
       if (userInteractionRef.current === userInteraction) {
         focusComposerInternally();
       }
@@ -2161,6 +2413,7 @@ function ChatDockContent({
     !dockHovered &&
     (!dockEngaged || nativeBackdrop) &&
     !dropActive;
+  lurkingRef.current = lurking;
   return (
     <div
       className={`pointer-events-none absolute ${presentsAsTab ? "z-10" : "z-30"} flex flex-col items-center justify-end ${
@@ -2812,29 +3065,31 @@ function ChatDockContent({
                 : "mx-auto max-w-3xl"
             }`}
           >
-            {/* The surfaces rail: the agent's working tabs (linked pages,
-              terminals, changed files) live with the chat. Click opens
-              the tab; the split button (or Cmd+click) tiles it to the
-              right of the current view. Only real surfaces earn a chip —
-              the new-terminal affordance lives with the header controls. */}
-            {/* The rail yields while lurking — the strip's few rows
-              belong to the latest activity, not to chips. CSS-collapsed
-              (not unmounted) so chip motion state survives the lurk. */}
-            {railSurfaces.length > 0 && onOpenSurface && (
+            {/* The chips (ADR 0238): what the chat holds, recorded and
+              made, above its composer. They yield while the dock lurks (its
+              few rows belong to the latest activity), CSS-folded rather
+              than unmounted so their motion state survives the lurk. */}
+            {chipSession && (
               <div
-                className={`shrink-0 transition-[max-height,opacity] duration-250 ease-[cubic-bezier(0.2,0,0,1)] ${
+                className={`grid shrink-0 transition-[grid-template-rows,opacity] duration-250 ease-[cubic-bezier(0.2,0,0,1)] ${
                   lurking
-                    ? "max-h-0 overflow-hidden opacity-0"
-                    : "max-h-12 overflow-visible opacity-100"
+                    ? "grid-rows-[0fr] opacity-0"
+                    : "grid-rows-[1fr] opacity-100"
                 }`}
                 inert={lurking ? true : undefined}
               >
-                <SurfacesRail
-                  surfaces={railSurfaces}
-                  onOpenSurface={onOpenSurface}
-                  onRemoveSurface={onRemoveSurface}
-                  onOpenMcpApp={onOpenMcpApp}
-                />
+                <div className={`min-h-0 ${lurking ? "overflow-hidden" : ""}`}>
+                  <ChipRail
+                    chips={chipView.chips}
+                    source={chipView.source}
+                    session={chipView.session}
+                    failure={chipView.failure}
+                    onOpen={openChipFromRail}
+                    onCustomize={customizeChips}
+                    onLeave={leaveChips}
+                    register={registerChipRail}
+                  />
+                </div>
               </div>
             )}
             {authority &&

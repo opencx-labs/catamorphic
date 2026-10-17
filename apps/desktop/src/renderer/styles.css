@@ -1213,6 +1213,19 @@ kbd {
   outline: none;
 }
 
+/* A chip is one rounded box, like a sidebar row: keyboard focus on its main
+   button rings the box over its border, with its radius; its own buttons
+   keep their rings. A group's member rows do the same. */
+[data-chip-root]:has(> [data-chip-main]:focus-visible),
+[data-member]:has(> [data-member-main]:focus-visible) {
+  outline: var(--focus-ring-width) var(--focus-ring-style) var(--color-accent);
+  outline-offset: var(--focus-ring-inset);
+}
+[data-chip-root] > [data-chip-main]:focus-visible:not([hidden]),
+[data-member] > [data-member-main]:focus-visible:not([hidden]) {
+  outline: none;
+}
+
 /* A top-strip tab's label fills the tab, so the tab wears the label's ring
    inside its border, with its own corners (a split pair's merged ones
    included), above its neighbours; its close and expand buttons keep

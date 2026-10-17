@@ -1,7 +1,9 @@
 import { Circle } from "lucide-react";
 import { parseChatBookmarkUrl } from "../../shared/bookmark-target.js";
 import { parseChatIcon } from "../../shared/chat-icons.js";
+import type { SidebarTone } from "../../shared/sidebar.js";
 import { lucideIcon } from "../lib/lucide-icon.js";
+import { TONE_TEXT } from "../lib/tones.js";
 import { ChatGlyph } from "./chat-icon.js";
 import { SiteFavicon } from "./site-favicon.js";
 
@@ -15,10 +17,13 @@ const IMAGE = /^(https?:|data:image\/)/i;
 export function RowIcon({
   icon,
   url,
+  tone,
   tile = false,
 }: {
   icon?: string;
   url?: string;
+  /** What the row's state says, as the icon's color (ADR 0238). */
+  tone?: SidebarTone;
   tile?: boolean;
 }) {
   const size = tile ? "size-4" : "size-3.5";
@@ -29,7 +34,10 @@ export function RowIcon({
   const Named = lucideIcon(icon);
   if (Named)
     return (
-      <Named className={`${size} shrink-0 text-fg-faint`} aria-hidden="true" />
+      <Named
+        className={`${size} shrink-0 transition-colors duration-150 ${tone ? TONE_TEXT[tone] : "text-fg-faint"}`}
+        aria-hidden="true"
+      />
     );
   if (url && parseChatBookmarkUrl(url))
     return <ChatGlyph className={`${size} shrink-0 text-fg-faint`} />;

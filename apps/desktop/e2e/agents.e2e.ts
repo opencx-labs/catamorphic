@@ -1180,7 +1180,7 @@ describe("agents and profiles", () => {
     await runWait(`return !!visibleDock();`, { label: "chat open" });
     // An agent terminal lives as long as its command (ADR 0223), so a
     // terminal chip in this app is one whose command still runs.
-    const chip = `$('[data-testid="surface-chip"][data-kind="terminal"]')`;
+    const chip = `$('[data-testid="chip"][data-kind="terminal"]')`;
     const tabs = `$$('[data-point-key]').filter((el) =>
       (el.getAttribute('data-point-key') ?? '').startsWith('terminal:'))`;
     const send = (text: string) =>
@@ -1200,18 +1200,21 @@ describe("agents and profiles", () => {
     // A slow-ish command: the chip must spin DURING it and leave AFTER.
     await send("terminal: sleep 3 && echo chip-done");
     try {
-      await runWait(`return !!${chip}?.hasAttribute('data-active');`, {
-        timeoutMs: 30_000,
-        label: "chip spinning while the command runs",
-      });
+      await runWait(
+        `return ${chip}?.getAttribute('data-signal') === 'working';`,
+        {
+          timeoutMs: 30_000,
+          label: "chip spinning while the command runs",
+        },
+      );
     } catch (error) {
       console.log(
         "chip-debug:",
         JSON.stringify(
           await run<unknown>(`
             return {
-              chips: $$('[data-testid="surface-chip"]').map((el) => ({
-                active: el.hasAttribute('data-active'),
+              chips: $$('[data-testid="chip"]').map((el) => ({
+                active: el.getAttribute('data-signal') === 'working',
                 text: el.textContent.trim().slice(0, 30),
               })),
               lastArticles: $$('[role="log"] article')
@@ -1242,11 +1245,16 @@ describe("agents and profiles", () => {
     // Opened as a tab while it runs, a terminal keeps showing what it
     // printed once its command ends, until the person closes it.
     await send("terminal: sleep 5 && echo tab-done");
-    await runWait(`return !!${chip}?.hasAttribute('data-active');`, {
-      timeoutMs: 30_000,
-      label: "second command running",
-    });
-    await run(`${chip}.querySelector('button').click(); return true;`);
+    await runWait(
+      `return ${chip}?.getAttribute('data-signal') === 'working';`,
+      {
+        timeoutMs: 30_000,
+        label: "second command running",
+      },
+    );
+    await run(
+      `${chip}.querySelector('[data-chip-main]').click(); return true;`,
+    );
     await runWait(`return ${tabs}.length === 1;`, {
       label: "terminal open as a tab",
     });
@@ -1255,7 +1263,7 @@ describe("agents and profiles", () => {
     )?.[1];
     if (!terminalId) throw new Error("the reply names no terminal");
     await runWait(
-      `return ${tabs}.length === 1 && !${chip}?.hasAttribute('data-active');`,
+      `return ${tabs}.length === 1 && ${chip}?.getAttribute('data-signal') !== 'working';`,
       {
         timeoutMs: 15_000,
         label: "ended terminal's tab stays, idle",
@@ -1295,10 +1303,13 @@ describe("agents and profiles", () => {
 
     // Stopped by its agent, a command leaves no spinning chip behind.
     await send("stop: sleep 60");
-    await runWait(`return !!${chip}?.hasAttribute('data-active');`, {
-      timeoutMs: 30_000,
-      label: "chip spinning before the stop",
-    });
+    await runWait(
+      `return ${chip}?.getAttribute('data-signal') === 'working';`,
+      {
+        timeoutMs: 30_000,
+        label: "chip spinning before the stop",
+      },
+    );
     await runWait(
       `return $$('[role="log"] article').some((el) =>
         el.textContent.includes('Stopped it') && el.textContent.includes('stopped'));`,
@@ -1584,7 +1595,7 @@ describe("agents and profiles", () => {
     `);
     await runWait(
       `const chip = visibleDock()?.querySelector(
-         '[data-testid="surface-chip"][data-kind="browser"]');
+         '[data-testid="chip"][data-kind="browser"]');
        const view = $$('webview').find((candidate) =>
          decodeURIComponent(candidate.src ?? '').endsWith('/artifact.pdf'));
        return !!chip && chip.textContent.includes('artifact.pdf') &&
@@ -1595,7 +1606,7 @@ describe("agents and profiles", () => {
 
   it("rejects opening a directory without adding a broken surface", async () => {
     const before = await run<number>(
-      `return visibleDock().querySelectorAll('[data-testid="surface-chip"]').length;`,
+      `return visibleDock().querySelectorAll('[data-testid="chip"]').length;`,
     );
     await run(`
       const ta = visibleDock().querySelector('[data-composer-input]');
@@ -1609,7 +1620,7 @@ describe("agents and profiles", () => {
     );
     expect(
       await run<number>(
-        `return visibleDock().querySelectorAll('[data-testid="surface-chip"]').length;`,
+        `return visibleDock().querySelectorAll('[data-testid="chip"]').length;`,
       ),
     ).toBe(before);
   });
@@ -1617,8 +1628,8 @@ describe("agents and profiles", () => {
   it("centers the surface chip actions vertically", async () => {
     await runWait(
       `const chip = visibleDock()?.querySelector(
-         '[data-testid="surface-chip"][data-kind="browser"]');
-       const action = chip?.querySelector('button[aria-label$="to the right"]');
+         '[data-testid="chip"][data-kind="browser"]');
+       const action = chip?.querySelector('[data-chip-button="open-side"]');
        if (!chip || !action) return false;
        const chipRect = chip.getBoundingClientRect();
        const actionRect = action.getBoundingClientRect();
@@ -1633,7 +1644,7 @@ describe("agents and profiles", () => {
   it("keeps a surface chip when its tab closes and removes it only from the chip", async () => {
     const key = await run<string | null>(`
       return visibleDock()?.querySelector(
-        '[data-testid="surface-chip"][data-kind="browser"]')
+        '[data-testid="chip"][data-kind="browser"]')
         ?.getAttribute('data-point-key')?.slice('chip:'.length) ?? null;
     `);
     if (!key) throw new Error("PDF surface chip has no key");
@@ -1659,16 +1670,16 @@ describe("agents and profiles", () => {
     await run(`pressKey('m', { metaKey: true }); return true;`);
     await runWait(
       `const chip = visibleDock()?.querySelector(
-         '[data-testid="surface-chip"][data-kind="browser"]');
+         '[data-testid="chip"][data-kind="browser"]');
        return !!chip &&
          chip.getAttribute('data-point-key') === ${JSON.stringify(`chip:${key}`)} &&
-         !!chip.querySelector('button[aria-label^="Remove "]');`,
+         !!chip.querySelector('[data-chip-button="remove"]');`,
       { label: "closed PDF tab remains as a removable chip" },
     );
 
     await runWait(
       `const remove = visibleDock()?.querySelector(
-        '[data-testid="surface-chip"][data-kind="browser"] button[aria-label^="Remove "]'
+        '[data-testid="chip"][data-kind="browser"] [data-chip-button="remove"]'
       );
       if (!remove) return false;
       remove.click();
@@ -1677,7 +1688,7 @@ describe("agents and profiles", () => {
     );
     await runWait(
       `return !visibleDock()?.querySelector(
-         '[data-testid="surface-chip"][data-kind="browser"]');`,
+         '[data-testid="chip"][data-kind="browser"]');`,
       { label: "PDF chip explicitly removed" },
     );
   });

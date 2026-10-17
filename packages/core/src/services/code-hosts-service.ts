@@ -16,6 +16,7 @@ import type {
   PullRequestComment,
   PullRequestDiscussion,
   PullRequestFile,
+  PullRequestStatus,
   PullRequestSummary,
 } from "./code-host.js";
 import type {
@@ -463,6 +464,44 @@ export class CodeHostsService {
       connection,
       use: (credential) => listRepositories({ credential }),
     });
+  }
+
+  /**
+   * Where the pull request at a web address stands, read with the caller's
+   * own connection to the host serving that address: any repository it
+   * reads, not only a project's origin. Null for an address no host
+   * serves, or one its host does not take for a pull request.
+   */
+  async pullRequestStatus(args: {
+    identity: Identity;
+    url: string;
+  }): Promise<PullRequestStatus | null> {
+    const host = this.resolve(args.url)?.host;
+    if (!host?.pullRequestStatus) return null;
+    const read = host.pullRequestStatus.bind(host);
+    return withSpan(
+      {
+        tracer,
+        name: "code_host.pull_request_status",
+        attributes: {
+          "catamorphic.tenant.id": args.identity.tenantId,
+          "user.id": args.identity.externalUserId,
+        },
+      },
+      async () => {
+        const connection = await this.connectionFor({
+          identity: args.identity,
+          provider: host.provider,
+          principal: "member",
+        });
+        if (!connection) throw new CodeHostNotConnectedError(host.provider);
+        return this.withCredential({
+          identity: args.identity,
+          connection,
+          use: (credential) => read({ credential, url: args.url }),
+        });
+      },
+    );
   }
 
   /** Read one repository with the caller's own or the service connection. */

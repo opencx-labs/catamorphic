@@ -135,6 +135,26 @@ export function fakeForge(args: { remoteBase: string }) {
       url: "https://forge.test/pr/1#comment-1",
     }),
     viewer: async ({ credential }) => ({ login: decode(credential.material) }),
+    // A pull request under the forge's base, read as the token that asked.
+    pullRequestStatus: async ({ credential, url }) => {
+      const match = /\/pull\/(\d+)$/.exec(url);
+      if (!match) return null;
+      return {
+        number: Number(match[1]),
+        title: "Forge pull request",
+        url,
+        repository: "forge/repo",
+        author: decode(credential.material),
+        head: "work/topic",
+        base: "trunk",
+        state: "open",
+        additions: 1,
+        deletions: 0,
+        changedFiles: 1,
+        comments: 0,
+        updatedAt: new Date(0).toISOString(),
+      };
+    },
   };
   return { provider, host, createPullRequest, gitCalls };
 }

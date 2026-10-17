@@ -172,7 +172,7 @@ registry source and installed desktop/PWA copies aligned.
 
 Use `ResourceInspector` for hover/focus behavior and `InspectorPortal` for every
 rich preview's shell, positioning, motion and dismissal. Composer attachments,
-surface chips (including expanded group members), response links and sidebar
+chips (including expanded group members), response links and sidebar
 previews use these primitives. Do not add per-surface hover timers or standalone
 preview modals. A preview opens on keyboard focus, stays open while the pointer
 moves into it, and dismisses on Escape without opening the resource.
@@ -181,15 +181,15 @@ Use the installable `ResourcePreviewContent` for bounded file/Markdown/media and
 resource summaries. Keep Markdown's default URL sanitization and raw HTML disabled;
 embedded images and links in previews are inert so hovering never navigates or
 loads remote content. Preserve filenames, locations, truncation and retry states.
-Surface chips carry host-resolved file paths/URLs when available, so they preview
+Work's chips carry host-resolved file paths/URLs in their data when available, so they preview
 the same content as a response link to that resource. Terminal previews read a
 bounded recent-output snapshot through the existing terminal buffer API and the
 shared terminal-text sanitizer. Workflow and app previews use catalog metadata;
 hovering never executes a workflow or mounts an app.
 
-Crowded surface groups use the plural type as the label: Terminals, Apps,
-Workflows, Files, Pages, Chats, Subagents, Watchers, or App views. Show the count
-separately. Clicking the group discloses every member; each member retains its
+Past three chips of one kind, Work's chips fold into a group labelled with the
+plural type: Terminals, Apps, Workflows, Files, Pages, Chats, Subagents or App
+views (ADR 0238). Show the count separately. Clicking the group discloses every member; each member retains its
 preview and normal open/remove actions. Never label a group with one member's
 name or silently hide members behind a count.
 

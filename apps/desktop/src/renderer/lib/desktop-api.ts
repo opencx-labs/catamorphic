@@ -86,6 +86,7 @@ import type {
   PrCommentInput,
   PrDecisionInput,
   PrDetails,
+  PullRequestStatus,
 } from "../../shared/pr-details.js";
 import type {
   CodexSignIn,
@@ -1226,7 +1227,7 @@ export interface CatamorphicDesktopApi {
   dockNewChat: () => Promise<void>;
   dockAction: (
     localId: string,
-    action: "close" | "minimize" | "send",
+    action: "close" | "minimize" | "send" | "focusChips",
     message?: string,
   ) => Promise<void>;
   dockDrag: (input: DockDrag) => Promise<void>;
@@ -2016,6 +2017,8 @@ export interface CatamorphicDesktopApi {
     number: number,
   ) => Promise<{ proposal: PullRequestSummary; files: PullRequestFile[] }>;
   prList: (projectId: string) => Promise<PullRequestSummary[]>;
+  /** Where the pull request at a web address stands; null when unreadable. */
+  prStatus: (url: string) => Promise<PullRequestStatus | null>;
   prFiles: (projectId: string, number: number) => Promise<PullRequestFile[]>;
 
   /** A page for load, a row or null for reveal, an effect or null for action. */
@@ -2035,6 +2038,8 @@ export interface CatamorphicDesktopApi {
       callId: string;
       projectId: string;
       sectionId: string;
+      /** The chat the asking request serves, for Work's chat-scoped lists. */
+      sessionId?: string;
       call: SidebarSourceWorkCall;
     }) => void,
   ) => () => void;

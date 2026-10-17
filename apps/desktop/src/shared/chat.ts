@@ -1,5 +1,6 @@
 import type { AgentTextAttachment } from "@catamorphic/react";
 import type { OpenMode, OpenModifiers } from "./open-mode.js";
+import type { SidebarSourceItem } from "./sidebar-source.js";
 
 /**
  * A first message sent on the user's behalf. The text is what the user
@@ -19,60 +20,6 @@ export interface ChatSignals {
 }
 
 export type ChatMode = "min" | "partial" | "tab";
-
-/**
- * A workspace tab attached to this chat — the agent's working surfaces
- * (browser pages it linked, terminals for its project, files it changed) —
- * or a live activity the chat itself tracks (subagents at work, background
- * processes the agent started or left running).
- */
-/**
- * A workspace tab attached to this chat — the agent's working surfaces
- * (browser pages it linked, terminals for its project, files it changed) —
- * or a live activity the chat itself tracks (subagents at work, background
- * processes the agent started or left running).
- */
-export interface ChatSurface {
-  appIcon?: string | null;
-  /** Workspace tab key ("browser:<id>" / "terminal:<id>" / "chat:<id>"). */
-  key: string;
-  kind:
-    | "browser"
-    | "terminal"
-    | "editor"
-    | "chat"
-    | "subagent"
-    | "app"
-    | "workflow"
-    | "mcpapp";
-  label: string;
-  faviconUrl?: string | null;
-  /** Host-resolved destinations for lazy, read-only hover previews. */
-  filePath?: string;
-  terminalSessionId?: string;
-  url?: string;
-  description?: string;
-  /** The agent is actively working here (spinner on the chip). */
-  active?: boolean;
-  /**
-   * The agent opened this surface in the BACKGROUND (open_surface while
-   * the user was on another tab): the chip carries an accent dot with
-   * the waiting-state pulse (the question badge's sanctioned loop —
-   * indeterminate until the user answers) until the user opens the
-   * surface. Dismissal-by-interaction, like point_at's glow.
-   */
-  attention?: boolean;
-  /**
-   * Detail lines opened in an upward popover on click. Chips with `info`
-   * aren't workspace tabs — the popover IS their surface (a subagent's
-   * activity feed).
-   */
-  info?: string[];
-  /** MCP app chips: the view to open when clicked. */
-  mcpApp?: McpAppRef;
-  /** The chip owns a workspace resource that can be explicitly disposed. */
-  removable?: boolean;
-}
 
 /** An MCP Apps view reachable from a chat's tool call. */
 export interface McpAppRef {
@@ -100,11 +47,16 @@ export interface ChatDockEntry {
   worktree?: boolean;
   /**
    * The chat this one was forked from, when the parent is (or was) open
-   * in this workspace — puts the fork on the parent's surfaces rail.
+   * in this workspace: puts the fork among the parent's chips.
    */
   parentLocalId?: string;
   /** Auto-sent as the first message on mount (palette "Send to agent"). */
   pendingMessage?: PendingChatMessage;
+  /**
+   * Placed in the composer on mount, for the person to finish or send
+   * ("Customize chips"); consumed like `pendingMessage`.
+   */
+  draftMessage?: PendingChatMessage;
   /**
    * Started from the surface behind the dock (a workflow change request):
    * the dock opens folded without taking focus, so that surface stays in
@@ -172,8 +124,20 @@ export interface ChatDockProps {
    * dock's border so the command visibly points at it before Enter.
    */
   paletteTargeted?: boolean;
-  /** Tabs attached to this chat, rendered as the surfaces rail. */
-  surfaces?: ChatSurface[];
+  /**
+   * What the chat holds in this workspace, as chips (ADR 0238): its forks
+   * and subagents, the tabs it opened. The dock adds what it knows itself
+   * (recorded pull requests, chips its agent attached, its turns' subagents
+   * and app views) to make Work's chips.
+   */
+  chips?: SidebarSourceItem[];
+  /**
+   * The project's chips module (`chips.source` in workspace.js), when it
+   * has one and may run it here: the dock draws what it returns instead.
+   */
+  chipsModule?: string;
+  /** Open a chat that helps the person customize their chips. */
+  onCustomizeChips?: () => void;
   /**
    * Open an attached surface: "tab" focuses it as a full tab, "split"
    * tiles it to the right of the current view.
@@ -244,6 +208,11 @@ export interface ChatDockProps {
    * The bubble strip folds while it leaves instead of after.
    */
   onLeaveStarted?: () => void;
+  /**
+   * Hands the host a way to focus this chat's first chip (the focus-chips
+   * shortcut), unfolding them; it says false when there is none.
+   */
+  registerFocusChips?: (focus: () => boolean) => void;
   /**
    * Hands the host this chat's live sender (palette skill rows, post-auth
    * continuations). Sends queue behind an in-flight turn like composer

@@ -118,6 +118,11 @@ import {
   updatePersonalEnvironmentConfig,
 } from "./personal-environment-config.js";
 import { listPersonalFiles } from "./personal-files.js";
+import {
+  e2ePullRequestStatus,
+  pullRequestAddress,
+  readPullRequestStatus,
+} from "./pr-status.js";
 import type { ProfileConfigManager } from "./profile-config.js";
 import type { ProfilesStore } from "./profiles.js";
 import {
@@ -3574,6 +3579,26 @@ export function registerIpcHandlers(
       return { proposal, files };
     },
   );
+
+  // Where a chat's recorded pull request stands (ADR 0238): any address,
+  // read with the person's own connection, the CLI as the fallback.
+  ipcMain.handle("catamorphic:pr-status", async (event, raw: unknown) => {
+    const url = pullRequestAddress(raw);
+    const fixture = e2ePullRequestStatus(url);
+    if (fixture !== undefined) return fixture;
+    const server = state.current;
+    return readPullRequestStatus({
+      url,
+      viaConnection: async (address) =>
+        server
+          ? server.catamorphic.core.codeHosts.pullRequestStatus({
+              identity,
+              url: address,
+            })
+          : null,
+      cliEnabled: storesFor(event).prefs.load().githubCliEnabled === true,
+    });
+  });
 
   ipcMain.handle("catamorphic:pr-list", async (event, projectId: string) => {
     const fixture = e2eReviewFixture();

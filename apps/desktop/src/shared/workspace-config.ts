@@ -19,6 +19,40 @@ import {
 export interface WorkspaceConfig {
   sidebars: { left: SidebarTabConfig[]; right: SidebarTabConfig[] };
   palette?: { modes: PaletteModeConfig[] };
+  /** The chips above every chat's composer; Work's own list by default. */
+  chips?: ChipsConfig;
+}
+
+/**
+ * Where a chat's chips come from (ADR 0238): Work's `work:chips`, or a
+ * module in the project that reads it (`collections: ["chips"]`) and sorts,
+ * groups, filters or adds to it. The rail draws whatever the source returns.
+ */
+export interface ChipsConfig {
+  /** `work:chips`, or a module path relative to the project. */
+  source: string;
+  collections?: string[];
+  workflows?: string[];
+}
+
+/**
+ * The owner id a chips module answers to: sections, palette modes and the
+ * chips share one namespace of executable sources, so no section or mode
+ * may take it. It is also the one list a chips module may read (its chat's
+ * chips, `work.read({ source: "chips" })`): the chips run beside the chat,
+ * in whichever window shows it, where Work's other lists are not.
+ */
+export const CHIPS_OWNER_ID = "chips";
+
+/** Work's own chips: what the chat holds, before any module reshapes it. */
+export const WORK_CHIPS_SOURCE = "work:chips";
+
+/** The module behind a chat's chips, when they come from code in the project. */
+export function chipsModule(
+  config: WorkspaceConfig | null | undefined,
+): string | undefined {
+  const source = config?.chips?.source;
+  return source && source !== WORK_CHIPS_SOURCE ? source : undefined;
 }
 
 /**
@@ -75,6 +109,16 @@ export function executableSource(
   config: WorkspaceConfig | null | undefined,
   id: string,
 ): { module: string; collections: string[]; workflows: string[] } | undefined {
+  if (id === CHIPS_OWNER_ID) {
+    const module = chipsModule(config);
+    return module
+      ? {
+          module,
+          collections: config?.chips?.collections ?? [],
+          workflows: config?.chips?.workflows ?? [],
+        }
+      : undefined;
+  }
   const sections = sidebarSections(config);
   const section = sections.find((item) => item.id === id);
   const mode = section
@@ -147,5 +191,6 @@ export function visibleWorkspaceConfig({
       right: tabs(config.sidebars.right),
     },
     ...(modes?.length ? { palette: { modes } } : {}),
+    ...(config.chips ? { chips: config.chips } : {}),
   };
 }

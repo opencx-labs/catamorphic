@@ -864,7 +864,9 @@ function SourceRow({
       }
       style={tile ? undefined : { marginLeft: depth * 14 }}
       presentation={tile ? "tile" : "row"}
-      icon={<RowIcon icon={row.icon} url={row.url} tile={tile} />}
+      icon={
+        <RowIcon icon={row.icon} url={row.url} tone={row.tone} tile={tile} />
+      }
       description={row.description}
       // A short identifier (#42, 3m) stays whole and the label gives way; a
       // long description (a path) shrinks first.

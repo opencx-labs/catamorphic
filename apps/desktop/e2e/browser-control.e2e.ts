@@ -392,9 +392,9 @@ it("stops input after a take-over until reclaimed, and validates navigation and 
   expect(app.getRendererErrors()).toEqual([]);
 });
 it("holds a tab while a turn drives it and hands it back when the turn ends", async () => {
-  const chip = `document.querySelector(${JSON.stringify(`[data-testid="surface-chip"][data-point-key="chip:${key}"]`)})`;
+  const chip = `document.querySelector(${JSON.stringify(`[data-testid="chip"][data-point-key="chip:${key}"]`)})`;
   const held = (active: boolean) =>
-    `(()=>{const el=${chip};return !!el && el.hasAttribute('data-active')===${active};})()`;
+    `(()=>{const el=${chip};return !!el && el.getAttribute('data-signal') === 'working'===${active};})()`;
   // Every tool call above was a turn of its own, and each has ended.
   await app.waitFor(held(false), { label: "handed back after its turn" });
   // A turn waiting on the page holds the tab meanwhile.
@@ -424,7 +424,7 @@ it("holds a tab while a turn drives it and hands it back when the turn ends", as
 });
 it("shows the veil where a held page is pressed, and keeps the press from the page", async () => {
   await tool("open_surface", { target: key });
-  const chip = `document.querySelector(${JSON.stringify(`[data-testid="surface-chip"][data-point-key="chip:${key}"]`)})`;
+  const chip = `document.querySelector(${JSON.stringify(`[data-testid="chip"][data-point-key="chip:${key}"]`)})`;
   const clicks = () =>
     guest.eval<number>(
       "events.filter((event) => event.type === 'click').length",
@@ -440,7 +440,7 @@ it("shows the veil where a held page is pressed, and keeps the press from the pa
     `(()=>{${helpers};setReactValue(composer(),${JSON.stringify(prompt)});composer().closest('form').requestSubmit();})()`,
   );
   await app.waitFor(
-    `(()=>{const el=${chip};return !!el && el.hasAttribute('data-active');})()`,
+    `(()=>{const el=${chip};return !!el && el.getAttribute('data-signal') === 'working';})()`,
     { label: "held" },
   );
   // A point on the veiled page itself, clear of the floating chat.

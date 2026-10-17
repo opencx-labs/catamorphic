@@ -39,7 +39,7 @@ function MenuOwner() {
   );
 }
 
-/** A chip with a right-click menu, as a chat rail's surface chip has. */
+/** A chip with a right-click menu, as a chat's chip has. */
 function ChipWithMenu() {
   const [at, setAt] = useState<MenuAt | null>(null);
   const [open, setOpen] = useState(false);
