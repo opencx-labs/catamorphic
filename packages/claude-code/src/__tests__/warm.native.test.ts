@@ -74,6 +74,12 @@ beforeEach(async () => {
             message: "The scripted model refused this turn.",
           },
         };
+      // A long answer the person stops while it streams.
+      if (text.includes("Write a long story") && !text.includes("Which word"))
+        return {
+          blocks: [{ type: "text", text: "Once upon a time, far away." }],
+          holdMs: 8_000,
+        };
       if (text.includes("Which word"))
         return {
           blocks: [
@@ -208,6 +214,88 @@ it("another launch, or a history that moved on, starts a new CLI", async () => {
     "completed",
   );
 }, 120_000);
+
+it("an interrupt withdraws the steers its turn never read, so the next turn does not run them", async () => {
+  const steered = "The background tests passed: pineapple.";
+  const first = await driveAttempt({
+    runner: new InProcessRunner({
+      adapters: { "claude-code": adapter },
+      version: "warm",
+    }),
+    attempt: scenarioAttempt({
+      context,
+      scenario,
+      turn: 1,
+      text: "Remember the word mango. Write a long story",
+    }),
+    host: {
+      onEvent: (() => {
+        let steeredOnce = false;
+        return (event, control) => {
+          // Mid-answer: no step boundary comes before the person stops it.
+          if (event.type !== "item.delta" || steeredOnce) return;
+          steeredOnce = true;
+          control.steer({ itemId: "item-late-steer", text: steered });
+          setTimeout(() => control.interrupt("The person stopped it"), 500);
+        };
+      })(),
+    },
+    nativeState,
+    timeoutMs: 45_000,
+  });
+  expect(first.completed?.status).toBe("interrupted");
+  // Never read: Work runs it as a turn of its own.
+  expect(
+    first.events.some(
+      (event) =>
+        event.type === "input.consumed" &&
+        event.itemIds.includes("item-late-steer"),
+    ),
+  ).toBe(false);
+  const second = await run(followUp(first));
+  expect(second.completed?.status).toBe("completed");
+  // The warm CLI served it, and its queue no longer held the steer.
+  expect(loaded(second)).toBe(false);
+  expect(
+    model.requests.filter((request) => sent(request).includes("pineapple")),
+  ).toEqual([]);
+}, 90_000);
+
+it("takes a message steered while its CLI still starts, after the attempt's own input", async () => {
+  const outcome = await driveAttempt({
+    runner: new InProcessRunner({
+      adapters: { "claude-code": adapter },
+      version: "warm",
+    }),
+    attempt: scenarioAttempt({
+      context,
+      scenario,
+      turn: 1,
+      text: "Remember the word mango",
+    }),
+    host: {
+      afterStart: (control) =>
+        control.steer({ itemId: "item-early-steer", text: "Also kiwi." }),
+    },
+    nativeState,
+    timeoutMs: 45_000,
+  });
+  expect(outcome.completed?.status).toBe("completed");
+  // Taken, never refused: a refusal would stop the attempt for it.
+  expect([...outcome.acks.values()].every((error) => !error)).toBe(true);
+  expect(
+    outcome.events.some(
+      (event) =>
+        event.type === "input.consumed" &&
+        event.itemIds.includes("item-early-steer"),
+    ),
+  ).toBe(true);
+  const asked = model.requests.map(sent).join("\n");
+  expect(asked.indexOf("Remember the word mango")).toBeGreaterThan(-1);
+  expect(asked.indexOf("Remember the word mango")).toBeLessThan(
+    asked.indexOf("Also kiwi."),
+  );
+}, 90_000);
 
 it("a failed turn's CLI does not serve the retry", async () => {
   const failed = await run(

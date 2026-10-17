@@ -1639,15 +1639,30 @@ describe("agent shows and points", () => {
 
   // What an agent does moves as what a person does (DESIGN.md, motion
   // contract): animationstart records which motion each step played.
+  /**
+   * The motion that starts, by animation name. A floating surface's exit is
+   * recorded as it enters its closing state, which plays
+   * floating-surface-out: the surface leaves on a timer, so its
+   * animationstart can miss a frame a busy runner drops.
+   */
   const recordMotion = () =>
     run(`
       window.__agentMotion = [];
       if (!window.__agentMotionListener) {
         window.__agentMotionListener = (event) => {
-          if (/^(pane-in|floating-surface-out|agent-pointer)/.test(event.animationName))
+          if (/^(pane-in|agent-pointer)/.test(event.animationName))
             window.__agentMotion.push(event.animationName);
         };
         document.addEventListener('animationstart', window.__agentMotionListener, true);
+        new MutationObserver((records) => {
+          for (const record of records)
+            if (record.target.getAttribute('data-floating-state') === 'closing')
+              window.__agentMotion.push('floating-surface-out');
+        }).observe(document.body, {
+          subtree: true,
+          attributes: true,
+          attributeFilter: ['data-floating-state'],
+        });
       }
       return true;
     `);
@@ -1664,6 +1679,11 @@ describe("agent shows and points", () => {
     `);
   /** Sends a message from the chat on screen and waits for the reply. */
   const askAgent = async (message: string, reply: string) => {
+    // The turn before has ended: this one is a turn of its own (ADR 0240).
+    await runWait(
+      `return !visibleDock()?.querySelector('[data-testid="chat-stop"]');`,
+      { timeoutMs: 30_000, label: "the turn before settled" },
+    );
     const before = await run<number>(
       `return timelineMessages().filter((m) => m.text.includes(${JSON.stringify(reply)})).length;`,
     );

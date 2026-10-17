@@ -193,6 +193,7 @@ export function AgentChat({
           onEditQueued={chat.editQueued}
           onCancelQueued={chat.cancelQueued}
           onSendQueuedNow={chat.sendQueuedNow}
+          onSteerNow={chat.steerNow}
           onHoldQueued={chat.holdQueued}
           onRetry={(turnId) => void chat.retry(turnId)}
           onInterrupt={(turnId) => void chat.interrupt(turnId)}
@@ -266,7 +267,7 @@ export function AgentChat({
             questions.length > 0
               ? "Or reply in your own words..."
               : chat.isWorking
-                ? "Message (queues until the agent is done)..."
+                ? "Message (the agent reads it at its next step)..."
                 : placeholder
           }
           rows={1}

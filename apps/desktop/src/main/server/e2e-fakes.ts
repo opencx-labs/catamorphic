@@ -387,7 +387,11 @@ export class E2eFakeAdapter implements HarnessAdapter {
   start(attempt: AttemptStart, host: AttemptHost): AttemptControl {
     let interrupted = false;
     const wakers = new Set<() => void>();
-    type Steer = { text: string; attachments: AgentAttachment[] };
+    type Steer = {
+      itemId: string;
+      text: string;
+      attachments: AgentAttachment[];
+    };
     /**
      * Messages sent into the turn that no step was waiting for: the next
      * step that asks takes them first; any still here when the turn ends
@@ -395,17 +399,43 @@ export class E2eFakeAdapter implements HarnessAdapter {
      */
     const steered: Steer[] = [];
     const steerWaiters: Array<(input: Steer) => void> = [];
-    const pause = (ms: number) =>
-      new Promise<void>((resolve) => {
+    /**
+     * Sent while a step was under way, as with a real harness: read once
+     * that step ends (ADR 0240). A stop leaves them unread.
+     */
+    const unread: string[] = [];
+    const takeIn = (itemIds: string[]) => {
+      if (itemIds.length > 0) host.emit({ type: "input.consumed", itemIds });
+    };
+    /** A step takes a message that waited for it: read now. */
+    const read = (steer: Steer) => {
+      const at = unread.indexOf(steer.itemId);
+      if (at >= 0) takeIn(unread.splice(at, 1));
+      return steer;
+    };
+    /** A step: when it ends, what was steered during it is read. */
+    const step = (ms: number) => {
+      let cancel = () => {};
+      const ended = new Promise<void>((resolve) => {
         if (interrupted) return resolve();
         const wake = () => {
           clearTimeout(timer);
           wakers.delete(wake);
+          if (!interrupted) takeIn(unread.splice(0));
           resolve();
         };
         const timer = setTimeout(wake, ms);
         wakers.add(wake);
+        // Given up on before it ended: no boundary, nothing read.
+        cancel = () => {
+          clearTimeout(timer);
+          wakers.delete(wake);
+          resolve();
+        };
       });
+      return { ended, cancel };
+    };
+    const pause = (ms: number) => step(ms).ended;
     const run = async () => {
       const ref = threadRef(attempt);
       host.emit({ type: "thread", ref });
@@ -439,23 +469,25 @@ export class E2eFakeAdapter implements HarnessAdapter {
         nextSteer: () => {
           const waiting = steered.shift();
           return waiting
-            ? Promise.resolve(waiting)
+            ? Promise.resolve(read(waiting))
             : new Promise<Steer>((resolve) => {
                 steerWaiters.push(resolve);
               });
         },
         steerWithin: async (ms) => {
           const waiting = steered.shift();
-          if (waiting) return waiting;
+          if (waiting) return read(waiting);
           const waiter: { resolve?: (input: Steer) => void } = {};
           const steer = new Promise<Steer>((resolve) => {
             waiter.resolve = resolve;
             steerWaiters.push(resolve);
           });
+          const boundary = step(ms);
           const news = await Promise.race([
             steer,
-            pause(ms).then(() => undefined),
+            boundary.ended.then(() => undefined),
           ]);
+          boundary.cancel();
           // Given up on: its claim goes, so a later message is echoed.
           if (!news && waiter.resolve) {
             const at = steerWaiters.indexOf(waiter.resolve);
@@ -506,8 +538,13 @@ export class E2eFakeAdapter implements HarnessAdapter {
         }
         transcript.apply(step);
       }
-      for (const steer of steered)
-        transcript.apply({ type: "text", content: `Steered: ${steer.text}` });
+      // A turn that stopped or failed never read what was still waiting:
+      // Work runs it as a turn of its own.
+      if (!interrupted && !failure) {
+        takeIn(unread.splice(0));
+        for (const steer of steered)
+          transcript.apply({ type: "text", content: `Steered: ${steer.text}` });
+      }
       transcript.close();
       await host.nativeState.append({
         entries: [{ askedQuestion: turn.askedQuestion }],
@@ -530,9 +567,14 @@ export class E2eFakeAdapter implements HarnessAdapter {
     return {
       steer: async (input) => {
         const waiter = steerWaiters.shift();
-        if (waiter) waiter(input);
-        else steered.push(input);
-        host.emit({ type: "input.consumed", itemIds: [input.itemId] });
+        // A step waiting for it reads it now; else the step under way ends first.
+        if (waiter) {
+          waiter(input);
+          takeIn([input.itemId]);
+        } else {
+          steered.push(input);
+          unread.push(input.itemId);
+        }
         return true;
       },
       interrupt: () => {

@@ -1,6 +1,6 @@
 # 0217 — Only people write user messages
 
-- **Status:** Accepted (delivery fields typed, metadata removed, by [0219](0219-typed-deliveries.md))
+- **Status:** Accepted (delivery fields typed, metadata removed, by [0219](0219-typed-deliveries.md); notifications reach a turn waiting on the person, and waiting ones ride the next turn, by [0240](0240-a-message-sent-while-the-agent-works-reaches-it.md))
 - **Date:** 2026-10-11
 - **Amends:** [0074](0074-temporary-watchers-and-session-delivery.md) (attributed delivery), [0155](0155-shells-background-commands-and-live-status.md) (background command wakes), [0197](0197-agent-sessions-are-an-event-log-of-turns.md) (items, dispatch), [0216](0216-voice-local-speech-in-any-chat-and-the-assistant.md) (session notes)
 

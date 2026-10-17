@@ -2398,7 +2398,7 @@ describe("agent session coordination", () => {
   // -------------------------------------------------------------------------
   // Inputs that are not the person's (ADR 0217)
 
-  it("takes task notifications into the working turn, and otherwise into one waiting turn", async () => {
+  it("takes task notifications into the turn until its work is done, waiting on the person included", async () => {
     const project = await projects.create(identity, {
       name: "Task notifications",
     });
@@ -2428,7 +2428,8 @@ describe("agent session coordination", () => {
       });
       expect(steered[0]).toContain("<task-notification>");
       expect(steered[0]).toContain("Build printed what you were waiting for");
-      // Waiting on the person: what arrives now waits for a turn.
+      // Waiting on the person: what arrives now reaches the turn too, and
+      // the agent reads it once they answer (ADR 0240).
       await host.request("pick", {
         kind: "question",
         blocking: true,
@@ -2443,6 +2444,8 @@ describe("agent session coordination", () => {
           },
         ],
       });
+      // Answered: what came meanwhile is in.
+      expect(steered).toHaveLength(3);
       say("Shipped");
     };
     try {
@@ -2478,11 +2481,10 @@ describe("agent session coordination", () => {
       const joined = await notify("third", "Build finished");
       const turns = await turnsOf(session.id, project.id);
       expect(steered).toMatchObject({ mode: "steer", turnId: turns[0]?.id });
-      expect(waiting.mode).toBe("queue");
-      expect(waiting.turnId).not.toBe(turns[0]?.id);
-      // One waiting turn takes them all: no turn per notification.
-      expect(joined.turnId).toBe(waiting.turnId);
-      expect(turns).toHaveLength(2);
+      expect(waiting).toMatchObject({ mode: "steer", turnId: turns[0]?.id });
+      expect(joined).toMatchObject({ mode: "steer", turnId: turns[0]?.id });
+      // Nothing waits in the queue while the agent has work to finish.
+      expect(turns).toHaveLength(1);
       await sessions.command(identity, project.id, session.id, {
         type: "respond",
         commandId: randomUUID(),
@@ -2494,26 +2496,18 @@ describe("agent session coordination", () => {
         async () =>
           expect(
             (await turnsOf(session.id, project.id)).map((turn) => turn.status),
-          ).toEqual(["completed", "completed"]),
+          ).toEqual(["completed"]),
         { timeout: 10_000 },
       );
       const items = (await snapshot(session.id, project.id)).items;
-      const answer = [...items]
-        .reverse()
-        .find(
-          (item) =>
-            item.kind === "assistant_message" && item.turnId === waiting.turnId,
-        );
-      // The waiting turn read both, enveloped, in the order they came.
-      const text = answer?.kind === "assistant_message" ? answer.text : "";
-      expect(text).toContain("Build printed more");
-      expect(text).toContain("Build finished");
-      expect(text.indexOf("Build printed more")).toBeLessThan(
-        text.indexOf("Build finished"),
+      const notifications = items.filter(
+        (item) => item.kind === "task_notification",
       );
-      expect(
-        items.filter((item) => item.kind === "task_notification"),
-      ).toHaveLength(3);
+      expect(notifications).toHaveLength(3);
+      // The turn read them all, in the order they came.
+      expect(notifications.map((item) => [item.turnId, item.status])).toEqual(
+        Array(3).fill([turns[0]?.id, "completed"]),
+      );
       expect(items.some((item) => item.kind === "user_message")).toBe(true);
       expect(
         items.filter(

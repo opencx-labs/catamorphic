@@ -50,7 +50,12 @@ import { turnUsageFromResult } from "./usage.js";
 
 /** What the adapter needs of a running query: its messages, interrupt and close. */
 export interface ClaudeQueryHandle extends AsyncIterable<SDKMessage> {
-  interrupt(): Promise<unknown>;
+  /**
+   * Stop the turn. `cancelQueued` also withdraws the input still waiting in
+   * the CLI's queue, which would otherwise run as its next turn (the CLI's
+   * `interrupt_cancel_queued_v1`).
+   */
+  interrupt(options?: { cancelQueued?: boolean }): Promise<unknown>;
   close(): void;
 }
 
@@ -280,8 +285,15 @@ class ClaudeSession implements WarmSession {
     void this.read(this.handle);
   }
 
+  /**
+   * Stop the turn and withdraw what waits in the CLI's queue: input Work
+   * steered that the turn never read goes on as Work's own (a restart's
+   * prompt, or a turn of its own), never also as the CLI's next turn.
+   */
   interrupt(): Promise<unknown> {
-    return this.handle ? this.handle.interrupt() : Promise.resolve();
+    return this.handle
+      ? this.handle.interrupt({ cancelQueued: true })
+      : Promise.resolve();
   }
 
   private async read(handle: ClaudeQueryHandle): Promise<void> {
@@ -346,7 +358,18 @@ class ClaudeAttempt {
   private ownInputStarted = false;
   /** The CLI finished a native turn of this attempt. */
   private resultSeen = false;
+  /**
+   * A native turn ended and the attempt waits for the next one it holds
+   * input for: none runs now.
+   */
+  private awaitingMore = false;
   private threadEmitted = false;
+  private turnStartedEmitted = false;
+  /** The attempt's own input is in the CLI's queue, or the attempt ended. */
+  private resolveInputSent!: () => void;
+  private readonly inputSent = new Promise<void>((resolve) => {
+    this.resolveInputSent = resolve;
+  });
   private interruptRequested = false;
   private interruptTimer?: ReturnType<typeof setTimeout>;
   private settled = false;
@@ -455,8 +478,17 @@ class ClaudeAttempt {
     this.stderrFrom = session.stderr.length;
     this.ownInputUuid = message.uuid;
     session.inputs.push(message);
+    this.resolveInputSent();
     await this.settledTurn;
     const thread = session.nativeId;
+    // Steered input an interrupt left in the CLI's queue (a CLI too old to
+    // withdraw it) would run as its next turn while Work runs it again:
+    // that CLI ends at once, without draining its queue.
+    if (this.interruptRequested && this.pendingSteers.size > 0) {
+      session.abort.abort();
+      session.release(this);
+      return;
+    }
     // A failed turn's CLI ends: whatever failed it (an expired sign-in, a
     // broken connection) should not meet the retry. So does one writing a
     // debug log, which covers its own attempt only.
@@ -538,7 +570,6 @@ class ClaudeAttempt {
         type: "thread",
         ref: { id: message.session_id, strength: "strong" },
       });
-      this.host.emit({ type: "turn.started" });
     }
     if (this.settled) return;
     // Lifecycle frames are not in the SDK's message union; a steered
@@ -549,10 +580,17 @@ class ClaudeAttempt {
       const state = Reflect.get(message, "state");
       if (typeof uuid !== "string") return;
       if (state === "started") {
-        if (uuid === this.ownInputUuid) this.ownInputStarted = true;
+        if (uuid === this.ownInputUuid) {
+          this.ownInputStarted = true;
+          this.turnStarted();
+        }
+        // A native turn runs again: the one waited for.
+        this.awaitingMore = false;
         this.consume([uuid]);
         return;
       }
+      // Withdrawn with an interrupt, never read: Work runs it itself.
+      if (state === "cancelled") this.pendingSteers.delete(uuid);
       // The CLI ended this attempt's own input before running anything: no
       // turn and no result will follow, though it stays up for more input.
       if (
@@ -568,6 +606,17 @@ class ClaudeAttempt {
         );
       return;
     }
+    // The model at work on the turn (a CLI without lifecycle frames says no
+    // more than this).
+    if (
+      message.type === "assistant" ||
+      message.type === "stream_event" ||
+      message.type === "result"
+    )
+      this.turnStarted();
+    // Anything but a turn's end is a native turn at work again (a
+    // background subagent's report starts one with no lifecycle frame).
+    if (message.type !== "result") this.awaitingMore = false;
     if (message.type !== "result") {
       this.transcript.handle(message);
       return;
@@ -587,7 +636,15 @@ class ClaudeAttempt {
         this.pendingSteers.size > 0 ||
         // A native background subagent's notification continues the turn.
         this.transcript.backgroundAgents > 0);
+    this.awaitingMore = more;
     if (!more) this.settleFromResult(message);
+  }
+
+  /** The CLI began the turn on this attempt's input (ADR 0240). */
+  private turnStarted(): void {
+    if (this.turnStartedEmitted) return;
+    this.turnStartedEmitted = true;
+    this.host.emit({ type: "turn.started" });
   }
 
   /** The CLI's messages ended (it exited) while this attempt was its own. */
@@ -685,6 +742,7 @@ class ClaudeAttempt {
   }): void {
     if (this.settled) return;
     this.settled = true;
+    this.resolveInputSent();
     this.failed = input.status === "failed";
     clearTimeout(this.interruptTimer);
     this.transcript.close({ interrupted: input.status === "interrupted" });
@@ -716,13 +774,17 @@ class ClaudeAttempt {
     text: string;
     attachments: AgentAttachment[];
   }): Promise<boolean> {
-    if (this.settled || this.interruptRequested || !this.session) return false;
+    if (this.settled || this.interruptRequested) return false;
+    // Steered while the CLI starts: it follows the attempt's own input,
+    // never stops the attempt for want of a CLI.
+    await Promise.race([this.inputSent, this.settledTurn]);
     const prompt = await renderPrompt({
       ...input,
       stateDirectory: this.attempt.stateDirectory,
     });
     const session = this.session;
-    if (this.settled || this.interruptRequested || !session.alive) return false;
+    if (this.settled || this.interruptRequested || !session?.alive)
+      return false;
     const message = this.userMessage({ itemId: input.itemId, text: prompt });
     if (message.uuid) this.pendingSteers.set(message.uuid, input.itemId);
     // "next" folds the input into the running turn at its next step; "now"
@@ -741,7 +803,18 @@ class ClaudeAttempt {
       () => session.abort.abort(),
       this.interruptGraceMs,
     );
-    void session.interrupt().catch(() => session.abort.abort());
+    void session.interrupt().then(
+      () => {
+        // Stopped between native turns: no turn runs to end. With nothing
+        // more to wait for, it ends here; waiting on a background subagent,
+        // that CLI ends now, as the grace would end it later.
+        if (!this.awaitingMore) return;
+        if (this.transcript.backgroundAgents === 0)
+          this.settle({ status: "interrupted" });
+        else session.abort.abort();
+      },
+      () => session.abort.abort(),
+    );
   }
 
   /**

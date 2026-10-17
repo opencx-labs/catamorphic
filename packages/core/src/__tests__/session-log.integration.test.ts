@@ -571,6 +571,7 @@ describe("session log", () => {
       type: "send",
       commandId: randomUUID(),
       text: "after",
+      dispatch: "queue",
     });
     await sessions.command(identity, projectId, sessionId, {
       type: "interrupt",
@@ -589,7 +590,7 @@ describe("session log", () => {
     );
   });
 
-  it("steers a running turn without a new one", async () => {
+  it("steers a message sent while the agent works into its turn (ADR 0240)", async () => {
     const { projectId, sessionId } = await chat("Steer");
     await sessions.command(identity, projectId, sessionId, {
       type: "send",
@@ -603,12 +604,13 @@ describe("session log", () => {
       },
       { timeout: 10_000 },
     );
-    await sessions.command(identity, projectId, sessionId, {
+    // No dispatch: a working turn reads it at its next step.
+    const sent = await sessions.command(identity, projectId, sessionId, {
       type: "send",
       commandId: randomUUID(),
       text: "also this",
-      dispatch: "steer",
     });
+    expect(sent.result).toMatchObject({ mode: "steer" });
     await vi.waitFor(
       async () => {
         const detail = await sessions.get(identity, projectId, sessionId);
@@ -625,6 +627,397 @@ describe("session log", () => {
       { timeout: 15_000 },
     );
   });
+
+  /** The session's items and turns as a client folds them. */
+  async function folded(projectId: string, sessionId: string) {
+    const detail = await sessions.get(identity, projectId, sessionId);
+    return sessionStateFromSnapshot(detail.snapshot);
+  }
+
+  async function running(projectId: string, sessionId: string) {
+    await vi.waitFor(
+      async () =>
+        expect(
+          orderedTurns(await folded(projectId, sessionId))[0]?.status,
+        ).toBe("running"),
+      { timeout: 10_000 },
+    );
+  }
+
+  function notifyTests(projectId: string, sessionId: string, key: string) {
+    return sessions.notify(identity, projectId, sessionId, {
+      task: {
+        type: "background_command",
+        id: `tests-${key}`,
+        title: "Run the tests",
+        status: "completed",
+      },
+      summary: `Run the tests finished (${key})`,
+      detail: `All passed (${key})`,
+      idempotencyKey: `tests:${sessionId}:${key}`,
+    });
+  }
+
+  it("keeps a steered message unread until the agent reaches its next step", async () => {
+    const { projectId, sessionId } = await chat("Unread steer");
+    await sessions.command(identity, projectId, sessionId, {
+      type: "send",
+      commandId: randomUUID(),
+      text: "[[defer-steers]] [[wait 1500]]",
+    });
+    await running(projectId, sessionId);
+    const sent = await sessions.command(identity, projectId, sessionId, {
+      type: "send",
+      commandId: randomUUID(),
+      text: "and the docs",
+    });
+    const itemId = String(sent.result?.itemId);
+    // The harness took the steer, and holds it until its step ends.
+    await vi.waitFor(
+      async () =>
+        expect(
+          await db
+            .selectFrom("agent_turn_commands")
+            .select("status")
+            .where("kind", "=", "steer")
+            .where(sql<string>`payload->>'itemId'`, "=", itemId)
+            .executeTakeFirst(),
+        ).toEqual({ status: "acknowledged" }),
+      { timeout: 10_000 },
+    );
+    const unread = (await folded(projectId, sessionId)).items.find(
+      (item) => item.id === itemId,
+    );
+    expect(unread).toMatchObject({ dispatch: "steer", status: "in_progress" });
+    await vi.waitFor(
+      async () => {
+        const state = await folded(projectId, sessionId);
+        expect(orderedTurns(state).map((turn) => turn.status)).toEqual([
+          "completed",
+        ]);
+        expect(state.items.find((item) => item.id === itemId)?.status).toBe(
+          "completed",
+        );
+        const reply = state.items.find(
+          (item) => item.kind === "assistant_message",
+        );
+        expect(reply?.kind === "assistant_message" && reply.text).toContain(
+          "Steered: and the docs",
+        );
+      },
+      { timeout: 15_000 },
+    );
+  });
+
+  it("stops the agent's step to read a steered message now, in the same turn", async () => {
+    const { projectId, sessionId } = await chat("Steer now");
+    await sessions.command(identity, projectId, sessionId, {
+      type: "send",
+      commandId: randomUUID(),
+      text: "[[defer-steers]] [[hang]]",
+    });
+    await running(projectId, sessionId);
+    const sent = await sessions.command(identity, projectId, sessionId, {
+      type: "send",
+      commandId: randomUUID(),
+      text: "use the blue one",
+    });
+    const itemId = String(sent.result?.itemId);
+    const now = await sessions.command(identity, projectId, sessionId, {
+      type: "steer_now",
+      commandId: randomUUID(),
+      itemId,
+    });
+    expect(now.status).toBe("accepted");
+    await vi.waitFor(
+      async () => {
+        const state = await folded(projectId, sessionId);
+        expect(orderedTurns(state).map((turn) => turn.status)).toEqual([
+          "completed",
+        ]);
+        expect(state.items.find((item) => item.id === itemId)?.status).toBe(
+          "completed",
+        );
+      },
+      { timeout: 20_000 },
+    );
+    const attempts = await db
+      .selectFrom("agent_turn_attempts")
+      .select(["reason", "status"])
+      .where("session_id", "=", sessionId)
+      .orderBy("ordinal")
+      .execute();
+    expect(attempts).toEqual([
+      { reason: "initial", status: "superseded" },
+      { reason: "steer_restart", status: "completed" },
+    ]);
+    const replies = (await folded(projectId, sessionId)).items.flatMap(
+      (item) => (item.kind === "assistant_message" ? [item.text] : []),
+    );
+    expect(replies.join("\n").split("use the blue one")).toHaveLength(2);
+    // Read now, there is nothing left to stop for: nothing changes.
+    const again = await sessions.command(identity, projectId, sessionId, {
+      type: "steer_now",
+      commandId: randomUUID(),
+      itemId,
+    });
+    expect(again).toMatchObject({
+      status: "accepted",
+      result: { interrupted: false },
+    });
+  }, 40_000);
+
+  it("starts the turn's input over when the person stops an attempt that never began", async () => {
+    const { projectId, sessionId } = await chat("Never began");
+    await sessions.command(identity, projectId, sessionId, {
+      type: "send",
+      commandId: randomUUID(),
+      text: "[[slow-start 5000]] [[defer-steers]] [[wait 200]] build the page",
+    });
+    await running(projectId, sessionId);
+    const sent = await sessions.command(identity, projectId, sessionId, {
+      type: "send",
+      commandId: randomUUID(),
+      text: "and the footer",
+    });
+    const itemId = String(sent.result?.itemId);
+    const now = await sessions.command(identity, projectId, sessionId, {
+      type: "steer_now",
+      commandId: randomUUID(),
+      itemId,
+    });
+    expect(now.result).toMatchObject({ interrupted: true });
+    await vi.waitFor(
+      async () =>
+        expect(
+          orderedTurns(await folded(projectId, sessionId)).map(
+            (turn) => turn.status,
+          ),
+        ).toEqual(["completed"]),
+      { timeout: 20_000 },
+    );
+    const replies = (await folded(projectId, sessionId)).items.flatMap(
+      (item) => (item.kind === "assistant_message" ? [item.text] : []),
+    );
+    // Its thread never had the input: it starts over, the message after it.
+    expect(replies.join("\n")).toContain("build the page and the footer");
+  }, 40_000);
+
+  it("reads a message the attempt never read with the retry of a rate-limited turn", async () => {
+    const { projectId, sessionId } = await chat("Steer through a retry");
+    await sessions.command(identity, projectId, sessionId, {
+      type: "send",
+      commandId: randomUUID(),
+      text: "[[defer-steers]] [[rate-limit 1500]]",
+    });
+    await running(projectId, sessionId);
+    const sent = await sessions.command(identity, projectId, sessionId, {
+      type: "send",
+      commandId: randomUUID(),
+      text: "and the docs",
+    });
+    const itemId = String(sent.result?.itemId);
+    await vi.waitFor(
+      async () => {
+        const [turn] = orderedTurns(await folded(projectId, sessionId));
+        expect(turn?.retryAt).not.toBeNull();
+      },
+      { timeout: 10_000 },
+    );
+    // Its backoff is over: a worker runs the retry.
+    await db
+      .updateTable("agent_turns")
+      .set({ available_at: new Date(0) })
+      .where("session_id", "=", sessionId)
+      .execute();
+    const worker = sessions.startWorker({
+      resolveIdentity: async () => identity,
+      pollIntervalMs: 20,
+    });
+    try {
+      await vi.waitFor(
+        async () => {
+          const state = await folded(projectId, sessionId);
+          expect(orderedTurns(state).map((turn) => turn.status)).toEqual([
+            "completed",
+          ]);
+          expect(state.items.find((item) => item.id === itemId)?.status).toBe(
+            "completed",
+          );
+          const reply = state.items.find(
+            (item) => item.kind === "assistant_message",
+          );
+          expect(reply?.kind === "assistant_message" && reply.text).toContain(
+            "and the docs",
+          );
+        },
+        { timeout: 15_000 },
+      );
+    } finally {
+      await worker.stop();
+    }
+  }, 40_000);
+
+  it("runs a message a turn waiting to retry never read as its own once the person stops it", async () => {
+    const { projectId, sessionId } = await chat("Stop while waiting to retry");
+    await sessions.command(identity, projectId, sessionId, {
+      type: "send",
+      commandId: randomUUID(),
+      text: "[[defer-steers]] [[rate-limit 800]]",
+    });
+    await running(projectId, sessionId);
+    const sent = await sessions.command(identity, projectId, sessionId, {
+      type: "send",
+      commandId: randomUUID(),
+      text: "check the footer",
+    });
+    const itemId = String(sent.result?.itemId);
+    await vi.waitFor(
+      async () => {
+        const [turn] = orderedTurns(await folded(projectId, sessionId));
+        expect(turn).toMatchObject({ status: "queued" });
+        expect(turn?.retryAt).not.toBeNull();
+      },
+      { timeout: 10_000 },
+    );
+    await sessions.command(identity, projectId, sessionId, {
+      type: "interrupt",
+      commandId: randomUUID(),
+    });
+    await vi.waitFor(
+      async () => {
+        const state = await folded(projectId, sessionId);
+        const turns = orderedTurns(state);
+        expect(turns.map((turn) => turn.status)).toEqual([
+          "interrupted",
+          "completed",
+        ]);
+        expect(turns[1]?.inputItemId).toBe(itemId);
+        expect(state.items.find((item) => item.id === itemId)?.status).toBe(
+          "completed",
+        );
+      },
+      { timeout: 15_000 },
+    );
+  }, 30_000);
+
+  it("carries on when the steer it stopped for was read meanwhile", async () => {
+    const { projectId, sessionId } = await chat("Read meanwhile");
+    await sessions.command(identity, projectId, sessionId, {
+      type: "send",
+      commandId: randomUUID(),
+      text: "[[defer-steers]] [[read-on-stop]] [[hang]]",
+    });
+    await running(projectId, sessionId);
+    const sent = await sessions.command(identity, projectId, sessionId, {
+      type: "send",
+      commandId: randomUUID(),
+      text: "small thing",
+    });
+    // The attempt the person stops reads it as it stops.
+    const itemId = String(sent.result?.itemId);
+    await sessions.command(identity, projectId, sessionId, {
+      type: "steer_now",
+      commandId: randomUUID(),
+      itemId,
+    });
+    await vi.waitFor(
+      async () =>
+        expect(
+          orderedTurns(await folded(projectId, sessionId)).map(
+            (turn) => turn.status,
+          ),
+        ).toEqual(["completed"]),
+      { timeout: 20_000 },
+    );
+    const replies = (await folded(projectId, sessionId)).items.flatMap(
+      (item) => (item.kind === "assistant_message" ? [item.text] : []),
+    );
+    // It goes on, never handed the turn's own input (and its hang) again.
+    expect(replies.join("\n")).toContain("Carry on where you left off.");
+  }, 40_000);
+
+  it("runs a notification the stopped turn never read with the turn that stopped it", async () => {
+    const { projectId, sessionId } = await chat("Unread notification");
+    await sessions.command(identity, projectId, sessionId, {
+      type: "send",
+      commandId: randomUUID(),
+      text: "[[defer-steers]] [[hang]]",
+    });
+    await running(projectId, sessionId);
+    const notified = await notifyTests(projectId, sessionId, "unit");
+    expect(notified.mode).toBe("steer");
+    // The person sends now (⌘↵): the working turn stops before it read it.
+    const sent = await sessions.command(identity, projectId, sessionId, {
+      type: "send",
+      commandId: randomUUID(),
+      text: "Chips use the same file, right?",
+      dispatch: "interrupt",
+    });
+    await vi.waitFor(
+      async () => {
+        const turns = orderedTurns(await folded(projectId, sessionId));
+        expect(
+          turns
+            .filter((turn) => turn.status !== "cancelled")
+            .map((turn) => turn.status),
+        ).toEqual(["interrupted", "completed"]);
+      },
+      { timeout: 20_000 },
+    );
+    const state = await folded(projectId, sessionId);
+    const asked = String(sent.result?.turnId);
+    // Read with the person's turn: nothing is left in the queue for it.
+    expect(
+      state.items.find((item) => item.id === notified.messageId),
+    ).toMatchObject({ turnId: asked, status: "completed" });
+    expect(
+      orderedTurns(state).filter(
+        (turn) => turn.status === "queued" || turn.status === "held",
+      ),
+    ).toEqual([]);
+    const reply = state.items.find(
+      (item) => item.kind === "assistant_message" && item.turnId === asked,
+    );
+    const text = reply?.kind === "assistant_message" ? reply.text : "";
+    expect(text).toContain("All passed (unit)");
+    expect(text).toContain("Chips use the same file, right?");
+  }, 40_000);
+
+  it("runs the notifications a stopped turn never read together, in one turn", async () => {
+    const { projectId, sessionId } = await chat("Unread notifications");
+    await sessions.command(identity, projectId, sessionId, {
+      type: "send",
+      commandId: randomUUID(),
+      text: "[[defer-steers]] [[hang]]",
+    });
+    await running(projectId, sessionId);
+    await notifyTests(projectId, sessionId, "unit");
+    await notifyTests(projectId, sessionId, "e2e");
+    await sessions.command(identity, projectId, sessionId, {
+      type: "interrupt",
+      commandId: randomUUID(),
+    });
+    await vi.waitFor(
+      async () =>
+        expect(
+          orderedTurns(await folded(projectId, sessionId)).map(
+            (turn) => turn.status,
+          ),
+        ).toEqual(["interrupted", "completed"]),
+      { timeout: 20_000 },
+    );
+    const state = await folded(projectId, sessionId);
+    const last = orderedTurns(state).at(-1);
+    const reply = state.items.find(
+      (item) => item.kind === "assistant_message" && item.turnId === last?.id,
+    );
+    const text = reply?.kind === "assistant_message" ? reply.text : "";
+    expect(text.indexOf("All passed (unit)")).toBeGreaterThan(-1);
+    expect(text.indexOf("All passed (unit)")).toBeLessThan(
+      text.indexOf("All passed (e2e)"),
+    );
+  }, 40_000);
 
   it("restarts once with a steer the harness refused, and the agent reads it once", async () => {
     const project = await projects.create(identity, { name: "Stubborn" });
@@ -919,6 +1312,7 @@ describe("session log", () => {
         type: "send",
         commandId: randomUUID(),
         text,
+        dispatch: "queue",
       });
     await send("[[wait 800]] first");
     await send("second");

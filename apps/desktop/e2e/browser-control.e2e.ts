@@ -27,6 +27,11 @@ async function tool(
   counter++;
   const prefix = `E2E result ${counter}: `;
   const prompt = `E2E workspace tool ${JSON.stringify({ name, input, serial: counter })}`;
+  // The call before has ended: this one is a turn of its own (ADR 0240).
+  await app.waitFor(
+    `(()=>{${helpers};const section=composer()?.closest('section[aria-label]');return !!section && !section.querySelector('[data-testid="chat-stop"]');})()`,
+    { label: "the call before settled" },
+  );
   await app.eval(
     `(()=>{${helpers};setReactValue(composer(),${JSON.stringify(prompt)});composer().closest('form').requestSubmit();})()`,
   );

@@ -100,3 +100,85 @@ it("a thread's next attempt runs on its warm Codex", async () => {
     await rm(root, { recursive: true, force: true, maxRetries: 10 });
   }
 }, 90_000);
+
+it("an interrupted turn's unread steer never reaches its warm Codex's next turn", async () => {
+  const root = await mkdtemp(
+    path.join(await realpath(tmpdir()), "codex-warm-steer-"),
+  );
+  const problems: string[] = [];
+  const model = await modelServer(
+    [
+      { items: [{ message: "Once upon a time, far away." }], hang: true },
+      {
+        items: [{ message: "The number was 7." }],
+        rejectInput: ["pineapple"],
+      },
+    ],
+    problems,
+  );
+  const adapter = createCodexAdapter({ warm: { idleMs: 60_000, max: 2 } });
+  try {
+    await mkdir(path.join(root, "work"), { recursive: true });
+    for (const [file, text] of Object.entries(WORKSPACE_FILES))
+      await writeFile(path.join(root, "work", file), text);
+    await writeFile(path.join(root, "model-key"), "fixture-model-key");
+    const context = {
+      root,
+      model: model.url,
+      node: process.execPath,
+      fixtures: MCP_FIXTURES,
+      command: pinnedCodexCommand(),
+    };
+    const store = new NativeStore();
+    let steered = false;
+    const first = await driveAttempt({
+      adapter,
+      attempt: attemptBase(context, {
+        ordinal: 1,
+        text: "Remember the number 7. Write a long story.",
+      }),
+      store,
+      script: {
+        onEvent: (event, act) => {
+          // Mid-answer, the person sends more and then stops the turn.
+          if (event.type !== "item.delta" || steered) return;
+          steered = true;
+          act.steer("The background tests passed: pineapple.");
+          act.interrupt();
+        },
+      },
+    });
+    expect(completed(first)?.status).toBe("interrupted");
+    const consumed = first.events.some(
+      (event) =>
+        event.type === "input.consumed" && event.itemIds.includes("steer-1"),
+    );
+    const thread = threadOf(first);
+    const lastTurnRef = completed(first)?.ref;
+    const second = await driveAttempt({
+      adapter,
+      attempt: {
+        ...attemptBase(context, {
+          ordinal: 2,
+          text: "Which number was it?",
+        }),
+        thread: {
+          mode: "restore",
+          providerThreadId: "thread-1",
+          nativeRef: thread.ref,
+          ...(lastTurnRef ? { lastTurnRef } : {}),
+          ...(thread.statePath ? { statePath: thread.statePath } : {}),
+        },
+      },
+      store,
+    });
+    expect(completed(second)?.status).toBe("completed");
+    // Unread when the turn stopped, it is Work's to run again: the warm
+    // Codex never ran it on its own. Read, it was the stopped turn's.
+    if (!consumed) expect(problems).toEqual([]);
+  } finally {
+    await adapter.dispose?.();
+    await model.close();
+    await rm(root, { recursive: true, force: true, maxRetries: 10 });
+  }
+}, 90_000);
