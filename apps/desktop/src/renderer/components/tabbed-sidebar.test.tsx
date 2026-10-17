@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 
+import { Tree } from "@catamorphic/app/ui";
 import { act, useEffect } from "react";
 import { createRoot } from "react-dom/client";
 import { describe, expect, it, vi } from "vitest";
@@ -653,4 +654,54 @@ it("shows a hidden empty section that takes drops while something it takes is dr
     node.remove();
     vi.useRealTimers();
   }
+});
+
+describe("focus as the sidebar opens (ADR 0238)", () => {
+  it("takes focus to the row of what is in front for a new request, never one it mounted with", async () => {
+    Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", true);
+    const node = document.createElement("div");
+    document.body.append(node);
+    const root = createRoot(node);
+    const view = (focusRequest: number) => (
+      <TabbedSidebar
+        side="left"
+        scope="focus-test"
+        open
+        focusRequest={focusRequest}
+        tabs={[{ id: "files", title: "Files", sections: [{ id: "list" }] }]}
+        onCustomize={() => {}}
+        renderSection={() => (
+          <Tree
+            items={[{ id: "a" }, { id: "b" }]}
+            label="List"
+            selectedId="b"
+            renderItem={(item) => <span>{item.id}</span>}
+          />
+        )}
+      />
+    );
+    const frames = () =>
+      act(
+        () =>
+          new Promise<void>((resolve) =>
+            requestAnimationFrame(() => resolve()),
+          ),
+      );
+    try {
+      // Remounted with the project or profile: an old request is not news.
+      await act(async () => root.render(view(3)));
+      await frames();
+      expect(document.activeElement).toBe(document.body);
+      await act(async () => root.render(view(4)));
+      await frames();
+      expect(
+        document.activeElement
+          ?.closest("[data-tree-id]")
+          ?.getAttribute("data-tree-id"),
+      ).toBe("b");
+    } finally {
+      await act(async () => root.unmount());
+      node.remove();
+    }
+  });
 });

@@ -22,6 +22,7 @@ import {
   openModeFromEvent,
 } from "../../shared/open-mode.js";
 import type { SidebarBadge, SidebarSignal } from "../../shared/sidebar.js";
+import { appIsMovingFocus } from "../lib/app-focus.js";
 import type { SidebarMenuEntry, SidebarPreview } from "../lib/desktop-api.js";
 import { lucideIcon } from "../lib/lucide-icon.js";
 import { AnimatedTitle } from "./animated-title.js";
@@ -371,7 +372,12 @@ export function SidebarItemRow<
         rowFocusedRef.current = true;
         // Keyboard focus previews the row. Focus a click or a dismissed menu
         // hands back does not: the pointer's own hover already does that.
-        if (document.documentElement.dataset.focusModality !== "pointer")
+        // Nor does focus the app moves (an opening sidebar's, onto what is
+        // already in front).
+        if (
+          document.documentElement.dataset.focusModality !== "pointer" &&
+          !appIsMovingFocus()
+        )
           armPreview();
       }}
       onBlurCapture={(event) => {

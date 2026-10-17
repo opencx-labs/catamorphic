@@ -1203,8 +1203,11 @@ kbd {
 
 /* A sidebar row or tile is one rounded box. When keyboard focus lands on
    the control inside it, the ring is drawn on that box with its radius and
-   over its border; the inner control never draws its own square ring. */
-[data-sidebar-item-id]:has(:focus-visible) {
+   over its border; the inner control never draws its own square ring. A
+   tree's rows wear the tree's one gliding ring instead (below). */
+[data-sidebar-item-id]:has(:focus-visible):not(
+  [data-tree-viewport] [data-sidebar-item-id]
+) {
   outline: var(--focus-ring-width) var(--focus-ring-style) var(--color-accent);
   outline-offset: var(--focus-ring-inset);
 }
@@ -1237,6 +1240,24 @@ kbd {
   border-radius: var(--radius-md);
   z-index: 1;
 }
+/* The app kit's trees (every sidebar list) draw one ring instead: on the
+   focused row's own indented box, wholly inside it so it never reaches a
+   neighbour, gliding from row to row as the keyboard moves rather than
+   going out on one row and coming on at the next. It arrives at once where
+   focus enters, as every ring does. */
+[data-tree-viewport] [role="treeitem"]:focus-visible {
+  outline: none;
+}
+[data-tree-focus] {
+  border-radius: var(--radius-md);
+  outline: var(--focus-ring-width) var(--focus-ring-style) var(--color-accent);
+  outline-offset: calc(-1 * var(--focus-ring-width));
+}
+[data-tree-focus][data-glide] {
+  transition:
+    top 150ms var(--ease-standard),
+    left 150ms var(--ease-standard);
+}
 
 /* Expanding or collapsing a branch moves the rows below it and resizes the
    tree with the same 200ms standard curve the section collapsible uses. */
@@ -1267,6 +1288,7 @@ kbd {
   [role="tree"],
   [role="tree"] [role="treeitem"],
   [role="tree"] [role="treeitem"] > *,
+  [data-tree-focus],
   [data-drop-zone] > li,
   [data-tree-drop-line] {
     transition: none;

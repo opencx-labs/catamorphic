@@ -294,14 +294,21 @@ It sits outside a standalone control (`--focus-ring-offset`, 1px) and inside
 a row, tile, menu item, scroll container or anything stacked or clipped
 (`--focus-ring-inset`, -1px, which covers a 1px border instead of doubling
 it). Use the global `:focus-visible` rule or `.focus-ring-inset`; sidebar
-rows and tree items already draw the inset ring on their rounded box. Text
-fields keep their border-and-glow focus instead.
+rows already draw the inset ring on their rounded box, and a tree (the kit's
+`Tree`, every sidebar list) draws one ring of its own (`[data-tree-focus]`)
+on the focused row's box, which glides to the next row as the arrows move
+it. Its rows touch, so that ring sits wholly inside the row, offset by its
+full width rather than the 1px inset (ADR 0238). Text fields keep their
+border-and-glow focus instead.
 
 - **The keyboard leads.** `lib/focus-modality.ts` marks the root `pointer`
   after a pointer press and `keyboard` after Tab, arrows, Home/End,
   PageUp/PageDown, F6 or the context-menu key. While the pointer leads, rings
   are off, so Escape or Enter after a click never lights the focused control.
-  Row previews open on focus only when the keyboard leads.
+  Row previews open on focus only when the keyboard leads. A shortcut that
+  moves focus somewhere new (Cmd+B onto the sidebar's row) counts as the
+  keyboard (`keyMovedFocus`), so its ring shows on arrival; a press that
+  opens the same surface leaves the ring off until the first arrow.
 - **Rings appear at once.** Every element rests with the accent as its
   outline color, so a transition that includes outline color never fades a
   ring in from the text color.
@@ -392,6 +399,7 @@ screen, or under reduced motion.
 | Tab strip `translate` (the horizontal strip slides with the left sidebar's panel, to where the settle puts it) | 200ms, the panel's easing and item wait | the panel's own slide; dropped without a transition when the content settles |
 | `.tabbed-sidebar[data-push]` width (the sidebar's place growing or shrinking with its panel beside content Work draws, so that content rides the panel's edge) | 200ms, the panel's easing and item wait | the panel's own slide, reversing with it |
 | `.chrome-toggle-slot` fold (the chrome's sidebar toggle folding away as a pushing panel arrives and unfolding as it leaves, its gap with it; `@starting-style` for arrival) | 200ms, the panel's easing and item wait | the panel's own slide; gone or at its own width once the panel is still |
+| `[data-tree-focus]` glide (a list's keyboard ring following focus from row to row: its `top` and `left`, only while it moves between rows, `data-glide`; arriving in a list it appears in place, and otherwise it rides its row's own 200ms slide when rows move under it) | 150ms | itself: the ring turns from where it is when the arrows outpace it |
 | `.overlay-scrollbar` fade (the scroll position of a section's list that asks for a thumb, `scrollbar: true`, on the window's edge while it scrolls or the pointer nears that edge) | 150ms | itself: one transition both ways, fading 900ms after the last scroll |
 | Markdown format bar (Web Animations in `components/markdown/motion.ts`: in, rising 4px from 97% and transparent; out, the same way back, in place and inert) | 160ms | itself: one motion both ways; shown again mid-exit, or hidden mid-entrance, it turns from where it is over the share of the 160ms left |
 | Markdown drag handle (`.cat-mdedit-handle`: appears with opacity and scale 0.9 to 1; the extension jumps the box to each block and the grip inside glides there on a `transform` animation, which runs on the compositor) and table row grip (`.cat-mdedit-rowgrip`, placed and gliding by `transform`) | 160ms appear / 140ms glide | itself |
@@ -545,9 +553,23 @@ and one component (`source-section.tsx`) draws every list.
   classes or payload formats of its own; `data-bookmark-drop`-style private
   attributes are defects.
 - **Rows and tiles.** A row's overflow menu button appears on hover; a tile
-  has no room for one and opens the same menu on right-click only. Keyboard
-  focus rings sit inside the row (the inset ring, above siblings) so stacked
-  rows never cover or clip them.
+  has no room for one and opens the same menu on right-click only.
+- **One keyboard ring per list.** A list draws its ring once, over the
+  focused row's own box, wholly inside it (offset by its full width) and
+  above every row, so no row covers or clips it and it never reaches a
+  neighbour. A child row's indent is its box's place (`indent` on the kit
+  tree), never a margin inside the row, so the ring and the row's highlight
+  start where the row does. The ring glides 150ms to the next row as the
+  arrows move it, and moves with its row when rows slide.
+- **An opened sidebar takes focus to what is in front.** Opening a sidebar
+  focuses the row of what is in front (a list's selected row, when the list
+  has it loaded), so the arrows work at once; with none, focus stays where
+  it was. The app moves that focus (`moveFocusAsApp`), so it opens no row's
+  preview of what is already in front. The arrows go on past a list's last
+  row into the next list shown in the panel, and up past its first into the
+  last row of the one before (`onTreeLeave`; a list with more to load keeps
+  the key and reads on). A row the keyboard or the app focuses comes into
+  the panel's view, clear of its faded edges.
 - **Nothing in the sidebar snaps.** `Collapsible` tweens to its content's
   height whenever that changes (skeleton to rows, empty sentence to a list),
   following exactly while something inside animates its own height. Sections
@@ -696,6 +718,23 @@ the historical log explains how it arrived here.
 - [Performance](docs/performance.md): idle lifecycle checks and sustained measurement.
 
 ## Design log
+### 2026-10-17: An opened sidebar takes focus to what is in front; one ring glides between rows
+
+Opening a sidebar left focus where it was, so reaching what was in front
+by keyboard meant tabbing through the panel's headers. It now focuses the
+row of what is in front, when its list has that row loaded (a file in a
+folder nobody opened is not), and the arrows run on from list to list. The
+ring shows on arrival when a key opened the sidebar (a shortcut that moves
+focus counts as the keyboard) and waits for the first arrow when a press
+did.
+
+Each row drew its own ring, around a box that started at the list's edge
+while the row's content was indented by a margin, so a child's ring took in
+its indent and the highlight did not; the ring on a highlighted row also
+sat under the row's own background. A tree now places each row at its
+indent (`indent`), and draws one ring over the focused row's box, inside
+it and above every row, gliding from row to row as the arrows go.
+
 ### 2026-10-17: Lists fade where they continue; a row's chevron ends it; a New Tab takes the chat
 
 [ADR 0237](../../docs/decisions/0237-lists-fade-where-they-continue.md) records

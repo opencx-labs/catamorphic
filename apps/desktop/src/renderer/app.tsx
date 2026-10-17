@@ -619,6 +619,10 @@ export function App({
     null,
   );
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  // Raised each time the person opens a sidebar: it focuses the row of
+  // what is in front (TabbedSidebar).
+  const [sidebarFocusRequest, setSidebarFocusRequest] = useState(0);
+  const [rightSidebarFocusRequest, setRightSidebarFocusRequest] = useState(0);
   // A sidebar moves first and takes or gives back its space once still;
   // its toggles, and the room the chrome makes for it, follow the motion
   // rather than the setting.
@@ -4277,6 +4281,7 @@ export function App({
       openEditorTab({ side: mode === "side", floating: mode === "floating" }),
     "toggle-right-sidebar": () => {
       const open = !rightSidebarOpen;
+      if (open) setRightSidebarFocusRequest((count) => count + 1);
       if (rightSidebarHasContent) {
         setSavedRightSidebarOpen(open);
         void desktopApi.setPrefs({ rightSidebarOpen: open });
@@ -4286,6 +4291,7 @@ export function App({
     },
     "toggle-sidebar": () => {
       const open = !sidebarOpen;
+      if (open) setSidebarFocusRequest((count) => count + 1);
       setSidebarOpen(open);
       void desktopApi.setPrefs({ sidebarOpen: open });
     },
@@ -6782,6 +6788,7 @@ export function App({
               tabs={sidebarTabs("left")}
               surface={sidebarSurface}
               open={sidebarVisible}
+              focusRequest={sidebarFocusRequest}
               sidebarRef={sidebarRef}
               overlay={compactWindow}
               revealed={revealed}
@@ -7899,6 +7906,7 @@ export function App({
               tabs={sidebarTabs("right")}
               surface={sidebarSurface}
               open={rightSidebarOpen}
+              focusRequest={rightSidebarFocusRequest}
               error={workspaceError}
               onCustomize={() => customizeSidebar("right")}
               onMotionChange={setRightSidebarMotion}

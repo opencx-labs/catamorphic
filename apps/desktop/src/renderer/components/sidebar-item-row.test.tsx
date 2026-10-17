@@ -3,6 +3,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { moveFocusAsApp } from "../lib/app-focus.js";
 import { SidebarItemRow } from "./sidebar-item-row.js";
 import { SIDEBAR_PREVIEW_DELAY_MS } from "./sidebar-preview";
 
@@ -109,6 +110,21 @@ describe("SidebarItemRow hover preview", () => {
     document.documentElement.dataset.focusModality = "pointer";
     try {
       act(() => button?.focus());
+      act(() => vi.advanceTimersByTime(SIDEBAR_PREVIEW_DELAY_MS));
+      expect(document.querySelector("[data-resource-inspector]")).toBeNull();
+    } finally {
+      delete document.documentElement.dataset.focusModality;
+    }
+  });
+
+  it("does not preview focus the app moves, though the keyboard leads", () => {
+    vi.useFakeTimers();
+    const container = mountRow();
+    const button = container.querySelector("button");
+    document.documentElement.dataset.focusModality = "keyboard";
+    try {
+      // An opening sidebar's focus onto the row of what is in front.
+      act(() => moveFocusAsApp(() => button?.focus()));
       act(() => vi.advanceTimersByTime(SIDEBAR_PREVIEW_DELAY_MS));
       expect(document.querySelector("[data-resource-inspector]")).toBeNull();
     } finally {

@@ -1,5 +1,7 @@
+import { focusTreeRow, onTreeLeave } from "@catamorphic/app/ui";
 import { Circle, Plus } from "lucide-react";
 import {
+  type FocusEvent as ReactFocusEvent,
   type ReactNode,
   type Ref,
   useCallback,
@@ -16,6 +18,13 @@ import type {
   SidebarTabConfig,
 } from "../../shared/sidebar.js";
 import { matchesSidebarSurface, sessionSection } from "../../shared/sidebar.js";
+import {
+  appIsMovingFocus,
+  moveFocusAsApp,
+  personInputCount,
+  personMovedOn,
+} from "../lib/app-focus.js";
+import { keyLedLast, keyMovedFocus } from "../lib/focus-modality.js";
 import { lucideIcon } from "../lib/lucide-icon.js";
 import { motionMs } from "../lib/motion.js";
 import { leaveSidebar, type SidebarLeave } from "../lib/sidebar-leave.js";
@@ -27,9 +36,154 @@ import { OverlayScrollbar } from "./overlay-scrollbar.js";
 import { ShortcutHint } from "./shortcut-hint.js";
 import type { SidebarContentState } from "./sidebar-contribution.js";
 
-/** A panel fades where its sections continue past its edges. */
-const edgeFade = (panel: HTMLDivElement | null) =>
-  panel ? fadeEdges(panel) : undefined;
+/** How long an opening sidebar waits for the row of what is in front. */
+const FOCUS_WAIT_MS = 1500;
+/** How long an arrow into the next list waits for its row to be drawn. */
+const ROW_DRAW_WAIT_MS = 300;
+
+/**
+ * The lists in a panel the keyboard can reach, in order: closed sections
+ * are inert and hidden ones hidden, so nothing here forces a layout while
+ * the panel slides.
+ */
+const panelLists = (panel: Element | null | undefined): Element[] =>
+  panel
+    ? [...panel.querySelectorAll("[data-tree-viewport]")].filter(
+        (list) => !list.closest("[inert], [hidden]"),
+      )
+    : [];
+
+/**
+ * Asks lists in turn for a row (`focusTreeRow`) until focus is on one of
+ * theirs, again each frame for up to `ms`: a list may still be loading, and
+ * draws a row it revealed from out of view by the next frame. Stops once
+ * the person has acted and put focus somewhere. `asApp` counts the move as
+ * the app's own, so it opens no row's preview. Returns its cancel.
+ */
+function focusRowSoon({
+  lists,
+  which,
+  visible,
+  ms,
+  asApp = false,
+  landed,
+}: {
+  lists: () => Element[];
+  which: "first" | "last" | "selected";
+  visible: boolean;
+  ms: number;
+  asApp?: boolean;
+  landed?: () => void;
+}): () => void {
+  const started = performance.now();
+  const inputs = personInputCount();
+  let frame = 0;
+  const there = () => {
+    const active = document.activeElement;
+    return (
+      !!active?.closest("[data-tree-id]") &&
+      lists().some((list) => list.contains(active))
+    );
+  };
+  const ask = () => {
+    lists().some((list) => focusTreeRow({ scroller: list, which, visible }));
+  };
+  const look = () => {
+    if (!there()) {
+      if (personMovedOn(inputs)) return;
+      if (asApp) moveFocusAsApp(ask);
+      else ask();
+    }
+    if (there()) landed?.();
+    else if (performance.now() - started < ms)
+      frame = requestAnimationFrame(look);
+  };
+  look();
+  return () => cancelAnimationFrame(frame);
+}
+
+/**
+ * An arrow past a list's end (onTreeLeave) goes on to the next or previous
+ * open list in the panel, so the sidebar reads as one list. True when a
+ * list took it.
+ */
+function continueAcrossLists({
+  panel,
+  direction,
+  scroller,
+}: {
+  panel: Element;
+  direction: "up" | "down";
+  scroller: Element;
+}): boolean {
+  const lists = panelLists(panel);
+  const from = lists.indexOf(scroller);
+  if (from < 0) return false;
+  const step = direction === "down" ? 1 : -1;
+  const which = direction === "down" ? "first" : "last";
+  for (
+    let index = from + step;
+    index >= 0 && index < lists.length;
+    index += step
+  ) {
+    const list = lists[index];
+    if (list && focusTreeRow({ scroller: list, which })) {
+      // A row revealed from out of view is drawn by the next frame.
+      focusRowSoon({
+        lists: () => [list],
+        which,
+        visible: true,
+        ms: ROW_DRAW_WAIT_MS,
+      });
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * A sidebar panel: it fades where its sections continue past its edges, and
+ * the arrows run across its lists.
+ */
+const panelRef = (panel: HTMLDivElement | null) => {
+  if (!panel) return;
+  const unfade = fadeEdges(panel);
+  const unleave = onTreeLeave({
+    container: panel,
+    onLeave: (leave) => continueAcrossLists({ panel, ...leave }),
+  });
+  return () => {
+    unfade();
+    unleave();
+  };
+};
+
+/**
+ * A row the keyboard (or the app) focuses comes into the panel's view,
+ * clear of its faded edges (the panel's scroll padding); focus a press
+ * gives leaves the panel where it is.
+ */
+const keepRowInView = (event: ReactFocusEvent<HTMLDivElement>) => {
+  const panel = event.currentTarget;
+  const row =
+    event.target instanceof Element
+      ? event.target.closest("[data-tree-id]")
+      : null;
+  if (
+    !row ||
+    (document.documentElement.dataset.focusModality === "pointer" &&
+      !appIsMovingFocus())
+  )
+    return;
+  const padding = getComputedStyle(panel);
+  const view = panel.getBoundingClientRect();
+  const top = view.top + (Number.parseFloat(padding.scrollPaddingTop) || 0);
+  const bottom =
+    view.bottom - (Number.parseFloat(padding.scrollPaddingBottom) || 0);
+  const box = row.getBoundingClientRect();
+  if (box.top < top) panel.scrollTop -= top - box.top;
+  else if (box.bottom > bottom) panel.scrollTop += box.bottom - bottom;
+};
 
 interface LayoutState {
   width: number;
@@ -97,6 +251,7 @@ export function TabbedSidebar({
   headerActions,
   footer,
   error,
+  focusRequest = 0,
   onCustomize,
   onMotionChange,
   renderSection,
@@ -114,6 +269,11 @@ export function TabbedSidebar({
   headerActions?: ReactNode;
   footer?: ReactNode;
   error?: string;
+  /**
+   * Raised each time the person opens the sidebar: keyboard focus goes to
+   * the row standing for what is in front, when a list shows one.
+   */
+  focusRequest?: number;
   onCustomize: () => void;
   /** Where the sidebar is in its slide, as laid out. */
   onMotionChange?: (motion: SidebarMotion) => void;
@@ -395,6 +555,35 @@ export function TabbedSidebar({
   useEffect(() => {
     localStorage.setItem(storageKey, JSON.stringify(layout));
   }, [storageKey, layout]);
+  // Opened by the person, the sidebar takes keyboard focus to the row of
+  // what is in front, so the arrows go on from there; the panel and its
+  // lists may still be arriving. The app moves this focus, so it previews
+  // nothing; opened by a shortcut, the ring shows where focus went, and by
+  // a press it waits for the first arrow.
+  const openRef = useRef(open);
+  openRef.current = open;
+  // A request older than this sidebar (it remounts with the project or
+  // profile) was someone else's.
+  const handledFocus = useRef(focusRequest);
+  useEffect(() => {
+    if (focusRequest === handledFocus.current) return;
+    handledFocus.current = focusRequest;
+    if (!openRef.current) return;
+    const visible = keyLedLast();
+    return focusRowSoon({
+      lists: () =>
+        panelLists(
+          panelArea.current?.querySelector(".sidebar-tab-panel:not([hidden])"),
+        ),
+      which: "selected",
+      visible,
+      ms: FOCUS_WAIT_MS,
+      asApp: true,
+      landed: () => {
+        if (visible) keyMovedFocus();
+      },
+    });
+  }, [focusRequest]);
   const select = (tabId: string) => {
     setTabMotion(true);
     setLayout((current) => ({ ...current, selected: tabId }));
@@ -549,7 +738,8 @@ export function TabbedSidebar({
               tabIndex={0}
               hidden={selected !== tab.id}
               inert={selected !== tab.id || !open}
-              ref={edgeFade}
+              ref={panelRef}
+              onFocus={keepRowInView}
               className="sidebar-tab-panel cat-edge-fade"
             >
               {tab.sections.map((section) => (

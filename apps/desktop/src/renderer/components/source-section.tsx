@@ -541,7 +541,6 @@ function SourceView({
       row={row}
       projectId={projectId}
       tile={!tree}
-      depth={tree?.depth ?? 0}
       disclosure={
         tree?.hasChildren
           ? { open: tree.expanded, onToggle: tree.toggle }
@@ -590,6 +589,7 @@ function SourceView({
         label={section?.title || source.title}
         className="cat-edge-fade"
         onViewport={fadeEdges}
+        indent={14}
         height={section?.height}
         rowHeight={section?.rowHeight}
         project={project}
@@ -794,7 +794,6 @@ function SourceRow({
   row,
   projectId,
   tile,
-  depth,
   disclosure,
   active,
   canAct,
@@ -804,7 +803,6 @@ function SourceRow({
   row: SidebarSourceItem;
   projectId: string;
   tile: boolean;
-  depth: number;
   disclosure?: { open: boolean; onToggle: () => void };
   active: boolean;
   /** Its source runs actions (a module, one of Work's lists). */
@@ -865,7 +863,6 @@ function SourceRow({
               ? row.url
               : undefined
       }
-      style={tile ? undefined : { marginLeft: depth * 14 }}
       presentation={tile ? "tile" : "row"}
       icon={<RowIcon icon={row.icon} url={row.url} tile={tile} />}
       description={row.description}

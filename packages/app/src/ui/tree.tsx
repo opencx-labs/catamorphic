@@ -293,6 +293,76 @@ const VISUALLY_HIDDEN: CSSProperties = {
   border: 0,
 };
 
+/** What a host dispatches on a tree's scroller to move focus into it. */
+const TREE_FOCUS_EVENT = "cat-tree-focus";
+/** What a tree dispatches from its scroller when an arrow passes an end. */
+const TREE_LEAVE_EVENT = "cat-tree-leave";
+
+/** A host's request for focus in a tree (`focusTreeRow`). */
+interface TreeFocusRequest {
+  which: "first" | "last" | "selected";
+  /** A keyboard move: the ring shows where focus lands. */
+  visible: boolean;
+}
+
+/**
+ * Arrows past a tree's first or last row (with nothing left to load there),
+ * for a host that goes on from there into a list beside it. Listens on
+ * `container`, around the trees; `onLeave` gets the way and the tree's
+ * scroller, and says whether it moved focus on. The tree keeps the key
+ * either way, so an end never scrolls what holds it. Returns the
+ * unsubscribe.
+ */
+export function onTreeLeave({
+  container,
+  onLeave,
+}: {
+  container: Element;
+  onLeave: (leave: { direction: "up" | "down"; scroller: Element }) => boolean;
+}): () => void {
+  const listener = (event: Event) => {
+    const detail: unknown = event instanceof CustomEvent ? event.detail : null;
+    const direction =
+      typeof detail === "object" && detail !== null && "direction" in detail
+        ? detail.direction
+        : undefined;
+    if (
+      (direction === "up" || direction === "down") &&
+      event.target instanceof Element &&
+      onLeave({ direction, scroller: event.target })
+    )
+      event.preventDefault();
+  };
+  container.addEventListener(TREE_LEAVE_EVENT, listener);
+  return () => container.removeEventListener(TREE_LEAVE_EVENT, listener);
+}
+
+/**
+ * Moves focus into a tree: its first or last row, or its selected one. The
+ * row is revealed and, when the tree draws it, focused before this returns,
+ * so a host can count the move as its own; a row revealed from outside the
+ * drawn window is drawn by the next frame, when the host asks again.
+ * `scroller` is the tree's `[data-tree-viewport]`; `visible` says the
+ * keyboard made the move, so the focus ring shows. True when the tree has
+ * such a row.
+ */
+export function focusTreeRow({
+  scroller,
+  which,
+  visible = true,
+}: {
+  scroller: Element;
+  which: TreeFocusRequest["which"];
+  visible?: boolean;
+}): boolean {
+  return !scroller.dispatchEvent(
+    new CustomEvent<TreeFocusRequest>(TREE_FOCUS_EVENT, {
+      detail: { which, visible },
+      cancelable: true,
+    }),
+  );
+}
+
 /**
  * One virtual viewport for a whole tree. Source items can be paginated and have
  * unloaded children. Identity, focus and expansion survive reordering and updates.
@@ -316,6 +386,7 @@ export function Tree<T extends TreeItem>({
   selectedId,
   rowHeight = 28,
   height = 336,
+  indent = 0,
   overscan = 5,
   expanded: controlled,
   onExpandedChange,
@@ -343,6 +414,12 @@ export function Tree<T extends TreeItem>({
   selectedId?: string;
   rowHeight?: number;
   height?: number;
+  /**
+   * How far each level of depth sets a row in, in pixels. The row's own box
+   * starts there, so its background, its drop outline and the focus ring
+   * all share the indented box.
+   */
+  indent?: number;
   overscan?: number;
   expanded?: ReadonlySet<string>;
   onExpandedChange?: (expanded: ReadonlySet<string>) => void;
@@ -414,6 +491,13 @@ export function Tree<T extends TreeItem>({
     new Map(),
   );
   const [focusedId, setFocusedId] = useState<string>();
+  // The keyboard's ring: one box that glides from row to row while focus
+  // moves inside the tree (data-tree-focus), instead of a ring blinking off
+  // one row and on the next. It arrives where focus enters, without a glide.
+  const [ring, setRing] = useState<{ id: string; glide: boolean } | null>(null);
+  // Focus is in the tree, or was in a row that has since gone: only then
+  // does focus follow the roving row (a click elsewhere leaves it be).
+  const holdsFocus = useRef(false);
   const [drop, setDrop] = useState<{
     id: string | null;
     position: TreeDropPosition;
@@ -565,6 +649,12 @@ export function Tree<T extends TreeItem>({
   useLayoutEffect(() => {
     if (!focusedId || focusedId === lastFocused.current) return;
     lastFocused.current = focusedId;
+    const active = document.activeElement;
+    if (
+      !viewport.current?.contains(active) &&
+      !(holdsFocus.current && (active === null || active === document.body))
+    )
+      return;
     reveal(focusedId);
     const node = [
       ...(viewport.current?.querySelectorAll<HTMLElement>("[data-tree-id]") ??
@@ -572,6 +662,40 @@ export function Tree<T extends TreeItem>({
     ].find((entry) => entry.dataset.treeId === focusedId);
     node?.focus({ preventScroll: true });
   }, [focusedId, reveal]);
+  // A host asks for a row by name (focusTreeRow): the first, the last or
+  // the selected one, revealed and focused. Handled, the event is canceled.
+  useEffect(() => {
+    const node = viewport.current;
+    if (!node) return;
+    const onFocusRequest = (event: Event) => {
+      const request: Partial<TreeFocusRequest> =
+        event instanceof CustomEvent ? (event.detail ?? {}) : {};
+      const which = request.which;
+      const visible = request.visible !== false;
+      const id =
+        which === "first"
+          ? tree.rows[0]?.id
+          : which === "last"
+            ? tree.rows.at(-1)?.id
+            : which === "selected" &&
+                selectedId &&
+                tree.indexById.has(selectedId)
+              ? selectedId
+              : undefined;
+      if (!id) return;
+      event.preventDefault();
+      // Revealed and, if drawn, focused here, inside the host's call; the
+      // roving effect above leaves the row to it.
+      reveal(id);
+      lastFocused.current = id;
+      if (id !== focusedId) setFocusedId(id);
+      [...node.querySelectorAll<HTMLElement>("[data-tree-id]")]
+        .find((entry) => entry.dataset.treeId === id)
+        ?.focus({ preventScroll: true, focusVisible: visible });
+    };
+    node.addEventListener(TREE_FOCUS_EVENT, onFocusRequest);
+    return () => node.removeEventListener(TREE_FOCUS_EVENT, onFocusRequest);
+  }, [tree, selectedId, focusedId, reveal]);
   useEffect(() => {
     if (!selectedId) return;
     const ancestors = new Set<string>();
@@ -972,6 +1096,38 @@ export function Tree<T extends TreeItem>({
           )
             allowReads();
         }}
+        onFocus={(event) => {
+          const target = event.target;
+          const row =
+            target instanceof HTMLElement
+              ? target.closest<HTMLElement>("[data-tree-id]")?.dataset.treeId
+              : undefined;
+          holdsFocus.current = true;
+          // Focus that reached a row another way (a click, a host) is where
+          // the arrows go on from: the roving row follows it.
+          if (row && row !== focusedId) {
+            lastFocused.current = row;
+            setFocusedId(row);
+          }
+          const id =
+            target instanceof HTMLElement && target.matches(":focus-visible")
+              ? row
+              : undefined;
+          setRing((current) =>
+            id ? { id, glide: current !== null && current.id !== id } : null,
+          );
+        }}
+        onBlur={(event) => {
+          if (
+            event.relatedTarget instanceof Node &&
+            event.currentTarget.contains(event.relatedTarget)
+          )
+            return;
+          // A focused row taken away leaves focus to its neighbour.
+          if (!(event.target instanceof Node) || event.target.isConnected)
+            holdsFocus.current = false;
+          setRing(null);
+        }}
         onKeyDown={(event) => {
           if (
             event.target instanceof HTMLElement &&
@@ -986,16 +1142,34 @@ export function Tree<T extends TreeItem>({
           const index = tree.rows.findIndex((row) => row.id === id);
           const row = tree.rows[index];
           if (!row) return;
+          // A key on a row: the tree holds focus.
+          holdsFocus.current = true;
           const children = tree.children.get(row.id) ?? [];
           const item = byId.get(row.id);
           let next: string | undefined;
           switch (event.key) {
             case "ArrowDown":
-              next = tree.rows[Math.min(tree.rows.length - 1, index + 1)]?.id;
+            case "ArrowUp": {
+              const down = event.key === "ArrowDown";
+              const slot = layout.indexById.get(row.id);
+              // Past an end with nothing more to load there, a host may go
+              // on to the list beside this one (onTreeLeave).
+              if (down ? slot === layout.slots.length - 1 : slot === 0)
+                viewport.current?.dispatchEvent(
+                  new CustomEvent(TREE_LEAVE_EVENT, {
+                    bubbles: true,
+                    cancelable: true,
+                    detail: { direction: down ? "down" : "up" },
+                  }),
+                );
+              next =
+                tree.rows[
+                  down
+                    ? Math.min(tree.rows.length - 1, index + 1)
+                    : Math.max(0, index - 1)
+                ]?.id;
               break;
-            case "ArrowUp":
-              next = tree.rows[Math.max(0, index - 1)]?.id;
-              break;
+            }
             case "Home":
               next = tree.rows[0]?.id;
               break;
@@ -1066,6 +1240,41 @@ export function Tree<T extends TreeItem>({
             data-dragging={draggingId ? "true" : undefined}
             style={{ position: "absolute", inset: 0 }}
           >
+            {(() => {
+              // The keyboard's ring, on the focused row's own (indented) box.
+              const index = ring ? layout.indexById.get(ring.id) : undefined;
+              const slot =
+                index === undefined ? undefined : layout.slots[index];
+              if (index === undefined || slot?.kind !== "row") return null;
+              return (
+                <div
+                  aria-hidden="true"
+                  data-tree-focus=""
+                  data-glide={ring?.glide ? "" : undefined}
+                  // Gliding between rows, the ring takes the glide; done,
+                  // it rides its row's own slide when rows move under it.
+                  onTransitionEnd={() =>
+                    setRing((current) =>
+                      current?.glide ? { ...current, glide: false } : current,
+                    )
+                  }
+                  style={{
+                    position: "absolute",
+                    top: index * rowHeight,
+                    left: slot.row.depth * indent,
+                    right: 0,
+                    height: rowHeight,
+                    pointerEvents: "none",
+                    transition: ring?.glide
+                      ? undefined
+                      : slide && `top ${slide}`,
+                    // Above the rows, the focused one included (hosts lift
+                    // it), so a highlighted row never covers it.
+                    zIndex: 2,
+                  }}
+                />
+              );
+            })()}
             {dropLineTop !== undefined && (
               <div
                 aria-hidden="true"
@@ -1175,7 +1384,7 @@ export function Tree<T extends TreeItem>({
                       position: "absolute",
                       top: index * rowHeight,
                       height: rowHeight,
-                      left: 0,
+                      left: row.depth * indent,
                       right: 0,
                       transition:
                         settleMoved && row.id === settling?.id
@@ -1228,7 +1437,7 @@ export function Tree<T extends TreeItem>({
                     position: "absolute",
                     top: placed.top,
                     height: rowHeight,
-                    left: 0,
+                    left: placed.depth * indent,
                     right: 0,
                   }}
                 >
@@ -1460,12 +1669,15 @@ export function CollectionTree<T extends CollectionItem>({
   initiallyExpanded,
   className,
   onViewport,
+  indent,
 }: {
   dragAndDrop?: TreeDragAndDrop<T>;
   /** Class for the scroller (see `Tree`). */
   className?: string;
   /** Called with the scroller once mounted (see `Tree`). */
   onViewport?: (viewport: HTMLDivElement) => (() => void) | undefined;
+  /** How far each level of depth sets a row in (see `Tree`). */
+  indent?: number;
   /**
    * Whether a row with children starts open the first time it loads
    * (default: closed). Later toggles are the person's.
@@ -1625,6 +1837,7 @@ export function CollectionTree<T extends CollectionItem>({
         label={label}
         className={className}
         onViewport={onViewport}
+        indent={indent}
         height={height}
         rowHeight={rowHeight}
         selectedId={selectedId}

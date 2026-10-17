@@ -8,7 +8,7 @@ import {
 import { describe, expect, it, vi } from "vitest";
 import { type CollectionPage, createCollection } from "../../collection.js";
 import { CollectionItemView } from "../collection-item.js";
-import { CollectionTree, Tree } from "../tree.js";
+import { CollectionTree, focusTreeRow, onTreeLeave, Tree } from "../tree.js";
 
 describe("public collection presentation", () => {
   it("resumes an expanded child request after the view becomes active again", async () => {
@@ -671,5 +671,181 @@ describe("paged trees", () => {
     expect(first?.style.paddingInlineStart).toBe("22px");
     expect(top('[data-tree-id="b"]')).toBe("168px");
     expect(load).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("keyboard focus in a tree", () => {
+  const items = [
+    { id: "folder" },
+    { id: "a", parentId: "folder" },
+    { id: "b", parentId: "folder" },
+    { id: "c" },
+  ];
+  const view = (selectedId?: string, shown = items) => (
+    <Tree
+      items={shown}
+      label="Focus tree"
+      indent={14}
+      selectedId={selectedId}
+      renderItem={(item) => <span>{item.id}</span>}
+    />
+  );
+  const row = (id: string) => {
+    const found = document.querySelector<HTMLElement>(`[data-tree-id="${id}"]`);
+    if (!found) throw new Error(`no row ${id}`);
+    return found;
+  };
+  const scroller = () => {
+    const found = document.querySelector("[data-tree-viewport]");
+    if (!found) throw new Error("no viewport");
+    return found;
+  };
+
+  it("sets each row in by its depth, so its own box carries the indent", () => {
+    render(view());
+    expect(row("folder").style.left).toBe("0px");
+    expect(row("a").style.left).toBe("14px");
+  });
+
+  it("focuses the first, last or selected row a host asks for, within the call", () => {
+    // What has focus as the call returns: a host can count the move as its own.
+    const ask = (which: "first" | "last" | "selected") => {
+      let handled = false;
+      let focused: Element | null = null;
+      act(() => {
+        handled = focusTreeRow({ scroller: scroller(), which });
+        focused = document.activeElement;
+      });
+      return { handled, focused };
+    };
+    const { rerender } = render(view());
+    expect(ask("selected")).toEqual({
+      handled: false,
+      focused: document.body,
+    });
+    expect(ask("last")).toEqual({ handled: true, focused: row("c") });
+    rerender(view("b"));
+    expect(ask("selected")).toEqual({ handled: true, focused: row("b") });
+    expect(ask("first")).toEqual({ handled: true, focused: row("folder") });
+    // The arrows go on from where the host put focus.
+    fireEvent.keyDown(row("folder"), { key: "ArrowDown" });
+    expect(document.activeElement).toBe(row("a"));
+  });
+
+  it("goes on from a row focus reached another way", () => {
+    render(view());
+    // The roving row was "folder"; focus reaches "b" by a click or a host.
+    act(() => row("b").focus());
+    fireEvent.keyDown(row("b"), { key: "ArrowUp" });
+    expect(document.activeElement).toBe(row("a"));
+  });
+
+  it("hands an arrow past either end to a host, and keeps the key itself", () => {
+    const { container } = render(view());
+    const leaves: string[] = [];
+    let take = false;
+    const stop = onTreeLeave({
+      container,
+      onLeave: ({ direction, scroller: from }) => {
+        leaves.push(`${direction} ${from === scroller()}`);
+        return take;
+      },
+    });
+    const press = (key: string, at: HTMLElement) => {
+      const event = new KeyboardEvent("keydown", {
+        key,
+        bubbles: true,
+        cancelable: true,
+      });
+      act(() => {
+        at.dispatchEvent(event);
+      });
+      return event.defaultPrevented;
+    };
+    act(() => row("c").focus());
+    // No host goes on: the key stays the tree's, so nothing around scrolls.
+    expect(press("ArrowDown", row("c"))).toBe(true);
+    expect(document.activeElement).toBe(row("c"));
+    take = true;
+    act(() => row("folder").focus());
+    expect(press("ArrowUp", row("folder"))).toBe(true);
+    // Between rows, no host hears of it.
+    press("ArrowDown", row("folder"));
+    expect(document.activeElement).toBe(row("a"));
+    expect(leaves).toEqual(["down true", "up true"]);
+    stop();
+  });
+
+  it("keeps an arrow past the last loaded row while more is to load", () => {
+    const { container } = render(
+      <Tree
+        items={[{ id: "x" }, { id: "y" }]}
+        label="Paged"
+        more={new Map([[null, { load: () => {} }]])}
+        renderItem={(item) => <span>{item.id}</span>}
+      />,
+    );
+    const onLeave = vi.fn(() => true);
+    const stop = onTreeLeave({ container, onLeave });
+    act(() => row("y").focus());
+    fireEvent.keyDown(row("y"), { key: "ArrowDown" });
+    expect(onLeave).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(row("y"));
+    stop();
+  });
+
+  it("follows a focused row that goes, and leaves focus elsewhere be", () => {
+    const outside = document.createElement("button");
+    document.body.append(outside);
+    const { rerender } = render(view());
+    const without = (id: string) => items.filter((item) => item.id !== id);
+    // Focused in the list, the row goes: focus moves to its parent.
+    act(() => row("b").focus());
+    rerender(view(undefined, without("b")));
+    expect(document.activeElement).toBe(row("folder"));
+    // Clicked once, then the person works elsewhere: the row going takes
+    // nothing from them.
+    rerender(view());
+    act(() => row("a").focus());
+    act(() => outside.focus());
+    rerender(view(undefined, without("a")));
+    expect(document.activeElement).toBe(outside);
+    outside.remove();
+  });
+
+  it("draws one ring on the focused row's box that glides as focus moves", () => {
+    // jsdom has no :focus-visible; the keyboard is leading here.
+    const matches = HTMLElement.prototype.matches;
+    const visible = vi
+      .spyOn(HTMLElement.prototype, "matches")
+      .mockImplementation(function (this: HTMLElement, selector: string) {
+        return selector === ":focus-visible"
+          ? document.activeElement === this
+          : matches.call(this, selector);
+      });
+    render(view());
+    const ring = () => document.querySelector<HTMLElement>("[data-tree-focus]");
+    expect(ring()).toBeNull();
+    act(() => row("folder").focus());
+    expect(ring()?.style.top).toBe("0px");
+    expect(ring()?.style.left).toBe("0px");
+    // It arrives where focus enters, riding its row's own slide, then
+    // glides from row to row (the stylesheet's glide).
+    expect(ring()?.hasAttribute("data-glide")).toBe(false);
+    expect(ring()?.style.transition).toMatch(/^top /);
+    fireEvent.keyDown(row("folder"), { key: "ArrowDown" });
+    expect(ring()?.style.top).toBe("28px");
+    expect(ring()?.style.left).toBe("14px");
+    expect(ring()?.hasAttribute("data-glide")).toBe(true);
+    expect(ring()?.style.transition).toBe("");
+    // Glided there, it rides the row again.
+    act(() => {
+      ring()?.dispatchEvent(new Event("transitionend", { bubbles: true }));
+    });
+    expect(ring()?.hasAttribute("data-glide")).toBe(false);
+    expect(ring()?.style.transition).toMatch(/^top /);
+    act(() => row("a").blur());
+    expect(ring()).toBeNull();
+    visible.mockRestore();
   });
 });

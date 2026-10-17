@@ -43,6 +43,14 @@ export const APP_KIT_CSS = `
   outline-offset:var(--focus-ring-inset);border-radius:var(--radius-md);z-index:1;
 }
 .cat-collection-item :focus-visible{outline:none}
+/* A Tree draws one ring instead, wholly inside the focused row's box, that
+   glides from row to row as the keyboard moves (data-tree-focus). */
+[data-tree-viewport] [role="treeitem"]:focus-visible,[data-tree-viewport] .cat-collection-item:has(:focus-visible){outline:none}
+[data-tree-focus]{
+  outline:var(--focus-ring-width) var(--focus-ring-style) var(--color-accent);
+  outline-offset:calc(-1 * var(--focus-ring-width));border-radius:var(--radius-md);
+}
+[data-tree-focus][data-glide]{transition:top var(--cat-motion-fast) var(--ease-standard),left var(--cat-motion-fast) var(--ease-standard)}
 
 /* -------------------------------------------------------------- buttons */
 .cat-btn{
@@ -687,7 +695,7 @@ export const APP_KIT_CSS = `
   .cat-skeleton::after{animation:none}
   .cat-btn,.cat-tab,.cat-input,.cat-textarea,.cat-select select,
   .cat-checkbox,.cat-checkbox::before,.cat-select select::picker(select),.cat-select select::picker-icon,.cat-select option,.cat-switch,.cat-switch::after,.cat-cal-day,.cat-cal-nav,
-  .cat-table tbody tr,.cat-table-sort .cat-table-arrow,.cat-scrollhint-fade,
+  .cat-table tbody tr,.cat-table-sort .cat-table-arrow,.cat-scrollhint-fade,[data-tree-focus],
   .cat-datepicker-clear{transition-duration:1ms}
 }
 
