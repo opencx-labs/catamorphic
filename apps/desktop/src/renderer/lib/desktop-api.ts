@@ -287,7 +287,11 @@ export function projectAgentAsInfo(agent: ProjectAgentInfo): AgentInfo {
       ? "claude-code"
       : agent.kind === "codex"
         ? "codex"
-        : "ai-sdk";
+        : // ACP agents run as Hermes does: their own model, no effort or
+          // model choice of Work's, images only (ADR 0241).
+          agent.kind === "acp"
+          ? "hermes"
+          : "ai-sdk";
   return {
     id: agent.id,
     name: agent.name,

@@ -44,6 +44,9 @@ const EXIT_GRACE_MS = 3_000;
 /** How long an interrupted agent gets to end its turn before it is killed. */
 const CANCEL_GRACE_MS = 10_000;
 
+// ponytail: one agent process per attempt, its session reopened (and its
+// history replayed) each turn; keep a thread's process warm between attempts
+// (ADR 0222's pattern) when start-up or long histories cost too much.
 /**
  * The ACP harness adapter (ADR 0050, 0241): runs one agent process per
  * attempt from `options.command` (`["hermes", "acp"]`) in the workspace,
@@ -123,7 +126,7 @@ function startAttempt(
     tools = hostServers?.server;
     const mcpServers = [
       ...Object.entries(attempt.mcpServers).map(([name, spec]) =>
-        acpMcpServer(name, spec),
+        acpMcpServer({ name, spec }),
       ),
       ...(hostServers?.servers ?? []),
     ];
@@ -161,12 +164,14 @@ function startAttempt(
               },
               { signal: withdrawn.signal },
             );
+            // A one-time approval never becomes the agent's "always":
+            // offered no "once", the agent is told no.
             const kinds: acp.PermissionOptionKind[] =
               response.kind !== "approval" || response.decision === "denied"
                 ? ["reject_once", "reject_always"]
                 : response.remember === "always"
                   ? ["allow_always", "allow_once"]
-                  : ["allow_once", "allow_always"];
+                  : ["allow_once", "reject_once", "reject_always"];
             const option = kinds
               .map((kind) =>
                 options.find((candidate) => candidate.kind === kind),
@@ -201,15 +206,20 @@ function startAttempt(
     agentName =
       initialized.agentInfo?.title ?? initialized.agentInfo?.name ?? agentName;
     const capabilities = initialized.agentCapabilities;
-    const reopen =
+    const earlier =
       attempt.thread.mode === "resume" || attempt.thread.mode === "restore"
         ? attempt.thread.nativeRef.id
         : undefined;
+    // An agent that cannot reopen a session starts a new one, told Work's
+    // instructions again, rather than failing every later turn.
+    const reopen = capabilities?.loadSession ? earlier : undefined;
+    if (earlier && !reopen)
+      host.emit({
+        type: "diagnostic",
+        level: "warn",
+        message: `${agentName} can't reopen its earlier session, so this turn starts a new one.`,
+      });
     if (reopen) {
-      if (!capabilities?.loadSession)
-        throw new Error(
-          `${agentName} can't reopen its earlier session. Start a new chat to keep working with it.`,
-        );
       // The agent replays the session's history before answering; the
       // stream ignores it until the turn starts.
       await until(
@@ -237,10 +247,11 @@ function startAttempt(
     const response = await until(
       connection.prompt({
         sessionId,
-        prompt: promptBlocks(
+        prompt: promptBlocks({
           attempt,
-          capabilities?.promptCapabilities?.image === true,
-        ),
+          takesImages: capabilities?.promptCapabilities?.image === true,
+          newSession: !reopen,
+        }),
       }),
     );
     const cancelled = interrupted || response.stopReason === "cancelled";
@@ -291,17 +302,22 @@ function startAttempt(
   };
 }
 
-/** Ends an agent process, killing it when it ignores the request. */
+/**
+ * Ends an agent process: its input closes so it can exit on its own (Hermes
+ * does in under a second, saving its session), then it is asked to stop,
+ * then killed.
+ */
 async function stop(child: ChildProcess | undefined): Promise<void> {
   if (!child || child.exitCode !== null || child.signalCode !== null) return;
   const exited = new Promise<void>((resolve) =>
     child.once("exit", () => resolve()),
   );
   child.stdin?.end();
-  child.kill();
-  const timer = setTimeout(() => child.kill("SIGKILL"), EXIT_GRACE_MS);
+  const term = setTimeout(() => child.kill(), EXIT_GRACE_MS);
+  const kill = setTimeout(() => child.kill("SIGKILL"), 2 * EXIT_GRACE_MS);
   await exited;
-  clearTimeout(timer);
+  clearTimeout(term);
+  clearTimeout(kill);
 }
 
 /**
@@ -310,18 +326,20 @@ async function stop(child: ChildProcess | undefined): Promise<void> {
  * own so the context never reads as theirs. Images go along when the agent
  * takes them; otherwise every media attachment is named as not delivered.
  */
-function promptBlocks(
-  attempt: AttemptStart,
-  takesImages: boolean,
-): acp.ContentBlock[] {
+function promptBlocks({
+  attempt,
+  takesImages,
+  newSession,
+}: {
+  attempt: AttemptStart;
+  takesImages: boolean;
+  newSession: boolean;
+}): acp.ContentBlock[] {
   const input = attempt.input ?? { itemId: "", text: "", attachments: [] };
   const media = input.attachments.filter((item) => item.kind !== "text");
   const delivered = takesImages && media.every((item) => item.kind === "image");
   const blocks: acp.ContentBlock[] = [];
-  const instructions =
-    attempt.thread.mode === "fresh" || attempt.thread.mode === "fork"
-      ? attempt.systemPrompt.trim()
-      : "";
+  const instructions = newSession ? attempt.systemPrompt.trim() : "";
   if (instructions)
     blocks.push({
       type: "text",
@@ -350,7 +368,13 @@ function promptBlocks(
 }
 
 /** A server the attempt names, as ACP describes MCP servers. */
-function acpMcpServer(name: string, spec: McpServerSpec): acp.McpServer {
+function acpMcpServer({
+  name,
+  spec,
+}: {
+  name: string;
+  spec: McpServerSpec;
+}): acp.McpServer {
   if (spec.transport === "stdio")
     return {
       name,
@@ -435,17 +459,23 @@ async function serveHostTools(input: {
     const key = tool.server ?? "workspace";
     byServer.set(key, [...(byServer.get(key) ?? []), tool]);
   }
+  // Served at their encoded paths, matched as sent: nothing a request
+  // carries is decoded before its bearer is checked.
+  const byPath = new Map(
+    [...byServer].map(([name, tools]) => [
+      `/${encodeURIComponent(name)}`,
+      tools,
+    ]),
+  );
   const token = randomBytes(32).toString("hex");
   const server = createServer((request, response) => {
-    const tools = byServer.get(
-      decodeURIComponent((request.url ?? "").split("?")[0]?.slice(1) ?? ""),
-    );
-    if (request.headers.authorization !== `Bearer ${token}` || !tools) {
-      response
-        .writeHead(
-          request.headers.authorization === `Bearer ${token}` ? 404 : 401,
-        )
-        .end();
+    if (request.headers.authorization !== `Bearer ${token}`) {
+      response.writeHead(401).end();
+      return;
+    }
+    const tools = byPath.get((request.url ?? "").split("?")[0] ?? "");
+    if (!tools) {
+      response.writeHead(404).end();
       return;
     }
     const mcp = new McpServer(
@@ -495,6 +525,9 @@ async function serveHostTools(input: {
   const port = typeof address === "object" && address ? address.port : 0;
   return {
     server,
+    // ponytail: HTTP even when the agent does not advertise it (Hermes takes
+    // HTTP MCP servers without saying so); a stdio bridge would serve the
+    // agents that cannot.
     servers: [...byServer.keys()].map((name) => ({
       type: "http" as const,
       name,
@@ -520,6 +553,8 @@ class ItemStream {
     | { key: string; kind: "assistant_message" | "reasoning" }
     | undefined;
   private readonly tools = new Set<string>();
+  /** Calls already finished: a late update for one says nothing new. */
+  private readonly done = new Set<string>();
   private count = 0;
 
   constructor(private readonly host: AttemptHost) {}
@@ -559,6 +594,7 @@ class ItemStream {
       case "tool_call_update": {
         this.closeText();
         const key = `tool:${update.toolCallId}`;
+        if (this.done.has(key)) return;
         if (!this.tools.has(key)) {
           this.tools.add(key);
           this.host.emit({
@@ -591,6 +627,7 @@ class ItemStream {
         }
         if (update.status === "completed" || update.status === "failed") {
           this.tools.delete(key);
+          this.done.add(key);
           const output = toolOutput(update);
           this.host.emit({
             type: "item.completed",

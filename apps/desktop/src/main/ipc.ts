@@ -791,7 +791,11 @@ export function registerIpcHandlers(
   ): ProjectAgentInfo => {
     const owning = profileConfig.forProject(projectId);
     const definition = entry.definition;
-    const source = definition?.credentials?.source ?? "profile";
+    // An ACP agent always needs its member's approval (ADR 0241).
+    const source =
+      definition?.kind === "acp"
+        ? "profile"
+        : (definition?.credentials?.source ?? "profile");
     let consent: ProjectAgentInfo["consent"] = "not-required";
     // A connection-credentialed agent uses no personal credential (ADR 0180).
     if (
@@ -833,7 +837,8 @@ export function registerIpcHandlers(
       skills: definition?.skills ?? null,
       delegation: definition?.delegation ?? null,
       promptPreview,
-      command: definition?.acp?.command ?? null,
+      command:
+        definition?.kind === "acp" ? (definition.acp?.command ?? null) : null,
       consent,
       invalid: entry.invalid?.error ?? null,
     };
@@ -900,7 +905,10 @@ export function registerIpcHandlers(
         return { ok: false, error: entry?.invalid?.error ?? "Agent not found" };
       }
       const definition = entry.definition;
-      const source = definition.credentials?.source ?? "profile";
+      const source =
+        definition.kind === "acp"
+          ? "profile"
+          : (definition.credentials?.source ?? "profile");
       if (source === "secret" || source === "connection") {
         // Nothing personal to consent to; the secret or the Environment's
         // model connection is the authorization.

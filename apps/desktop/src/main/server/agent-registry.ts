@@ -808,7 +808,10 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     // persona). "secret" definitions skip this — the project secret is
     // the authorization and nothing personal is used. The e2e fake kind
     // auto-consents under the e2e flag (it never touches credentials).
-    const source = def.credentials?.source ?? "profile";
+    // An ACP agent runs a command on this machine, so its member approves
+    // it whatever its credentials say (ADR 0241).
+    const source =
+      def.kind === "acp" ? "profile" : (def.credentials?.source ?? "profile");
     if (source === "connection") {
       // ADR 0180: the harness runs in a server sandbox and reaches its
       // model through that server's gateway; nothing here can serve it.
@@ -911,14 +914,19 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
         id,
         harness: {
           placement: "host",
-          // One harness per command: a chat stays with the agent it began on.
-          adapter: createAcpAdapter({
-            id: `acp:${path.basename(command[0])}`,
-          }),
+          // One harness per definition: a chat stays with the agent it
+          // began on, never reopening its session in another.
+          adapter: createAcpAdapter({ id: `acp:${slug}` }),
           hostTools: this.workspaceTools(config, "native") ?? [],
           toolPolicies: () => live().policies,
           toolAnnotations: () => live().annotations,
           ...this.workspaceHooks({ config, profileId }),
+          // Where installers such as Hermes' put agents, should PATH not say.
+          env: {
+            PATH: [process.env.PATH, path.join(os.homedir(), ".local", "bin")]
+              .filter(Boolean)
+              .join(path.delimiter),
+          },
         },
         options: { command },
         topology: "native",
@@ -1545,10 +1553,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
           ? "Claude Code"
           : config.harness === "codex"
             ? "Codex"
-            : config.harness === "hermes"
-              ? "Hermes"
-              : (labels[config.provider ?? "anthropic"] ??
-                "The model provider"),
+            : (labels[config.provider ?? "anthropic"] ?? "The model provider"),
     };
   }
 

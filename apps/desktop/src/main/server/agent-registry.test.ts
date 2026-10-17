@@ -7,6 +7,7 @@ import type {
   HarnessEvent,
 } from "@catamorphic/agent-protocol/runner";
 import { NO_CAPABILITIES } from "@catamorphic/agent-protocol/runner";
+import { PROJECT_AGENTS_DIR } from "@catamorphic/workflow/project-layout";
 import { describe, expect, it, vi } from "vitest";
 
 const starts = vi.hoisted(() => [] as AttemptStart[]);
@@ -127,6 +128,30 @@ it("registers Hermes as `hermes acp` over ACP, never the scripted fake (ADR 0241
   expect(harness.env?.PATH?.split(path.delimiter)).toContain(
     path.join(os.homedir(), ".local", "bin"),
   );
+});
+
+it("waits for its member's approval before running a project's ACP agent, whatever its credentials say (ADR 0241)", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "acp-consent-"));
+  const agents = path.join(root, PROJECT_AGENTS_DIR);
+  fs.mkdirSync(agents, { recursive: true });
+  fs.writeFileSync(
+    path.join(agents, "runner.json"),
+    JSON.stringify({
+      version: 1,
+      name: "Runner",
+      kind: "acp",
+      acp: { command: ["sh", "-c", "echo hi"] },
+      credentials: { source: "secret", secret: "token" },
+    }),
+  );
+  try {
+    const agent = registryWith(claudeAgent, {
+      projectRootPath: () => root,
+    }).get("project:project:runner");
+    expect(agent?.unavailable).toContain("needs your approval");
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
 
 const probeConnection = {

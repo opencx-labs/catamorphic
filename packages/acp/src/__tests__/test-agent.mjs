@@ -5,6 +5,9 @@
 //
 //   [[tool <server> <name> <json>]]  call a tool on an MCP server it was given
 //   [[permission]]                   ask permission, say the chosen option
+//   [[permission always-only]]       the same, offering no "once"
+//
+// With TEST_AGENT_NO_LOAD=1 it cannot reopen a session, as ACP allows.
 //   [[hang]]                         work until cancelled
 //   [[recall]]                       say how many turns the session has seen
 import fs from "node:fs";
@@ -36,7 +39,7 @@ new acp.AgentSideConnection(
         protocolVersion: acp.PROTOCOL_VERSION,
         agentInfo: { name: "test-agent", version: "1" },
         agentCapabilities: {
-          loadSession: true,
+          loadSession: process.env.TEST_AGENT_NO_LOAD !== "1",
           promptCapabilities: { image: true },
         },
       }),
@@ -111,10 +114,20 @@ new acp.AgentSideConnection(
               content: [{ type: "content", content: { type: "text", text } }],
             },
           });
+          // Agents may still say something about a call they finished.
+          await connection.sessionUpdate({
+            sessionId,
+            update: {
+              sessionUpdate: "tool_call_update",
+              toolCallId: "call-1",
+              title: "Called it",
+            },
+          });
           await say(sessionId, "agent_message_chunk", `Tool said: ${text}`);
           return { stopReason: "end_turn" };
         }
-        if (words.includes("[[permission]]")) {
+        if (words.includes("[[permission")) {
+          const alwaysOnly = words.includes("[[permission always-only]]");
           const { outcome } = await connection.requestPermission({
             sessionId,
             toolCall: {
@@ -124,11 +137,15 @@ new acp.AgentSideConnection(
               rawInput: { command: "rm -rf build" },
             },
             options: [
-              {
-                optionId: "allow_once",
-                kind: "allow_once",
-                name: "Allow once",
-              },
+              ...(alwaysOnly
+                ? []
+                : [
+                    {
+                      optionId: "allow_once",
+                      kind: "allow_once",
+                      name: "Allow once",
+                    },
+                  ]),
               {
                 optionId: "allow_session",
                 kind: "allow_always",

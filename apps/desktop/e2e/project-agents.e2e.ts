@@ -19,6 +19,8 @@ import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
 
 let app: AppHandle;
 let projectRoot: string;
+/** Where the ACP test agent keeps its sessions across turns. */
+const echoerState = path.join(os.tmpdir(), `echoer-${Date.now()}.json`);
 
 beforeAll(async () => {
   app = await launchApp();
@@ -26,6 +28,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await app?.stop();
+  fs.rmSync(echoerState, { force: true });
 });
 
 const helpers = `
@@ -166,7 +169,7 @@ describe("project agents", () => {
     // A real ACP agent process (the adapter tests' agent, ADR 0241).
     fs.writeFileSync(
       path.join(agentsDir, "echoer.json"),
-      `${JSON.stringify({ version: 1, name: "Echoer", kind: "acp", acp: { command: [process.execPath, path.resolve(import.meta.dirname, "../../../packages/acp/src/__tests__/test-agent.mjs"), path.join(os.tmpdir(), `echoer-${Date.now()}.json`)] } }, null, 2)}\n`,
+      `${JSON.stringify({ version: 1, name: "Echoer", kind: "acp", acp: { command: [process.execPath, path.resolve(import.meta.dirname, "../../../packages/acp/src/__tests__/test-agent.mjs"), echoerState] } }, null, 2)}\n`,
     );
   });
 

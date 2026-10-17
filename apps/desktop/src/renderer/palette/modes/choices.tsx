@@ -506,11 +506,11 @@ export function useChoiceModes({
     const newChat = (harness: string) =>
       picker === "switch-agent" &&
       startsNewChat({ bound: focusedChat?.harness ?? null, next: harness });
-    // An ACP agent's harness is its command's (`acp:hermes`), as the
+    // An ACP agent's harness is its definition's (`acp:<slug>`), as the
     // registry names it (ADR 0241).
     const projectHarness = (agent: ProjectAgentInfo) =>
-      agent.kind === "acp" && agent.command?.[0]
-        ? `acp:${agent.command[0].split(/[\\/]/).pop()}`
+      agent.kind === "acp"
+        ? `acp:${agent.slug}`
         : projectAgentAsInfo(agent).harness;
     const build = (): PaletteItem[] => {
       // The assistant (ADR 0216): Work's built-in one, or one of the

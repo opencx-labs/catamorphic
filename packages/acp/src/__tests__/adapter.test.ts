@@ -45,7 +45,11 @@ function workspace() {
         string,
         {
           cwd: string;
-          mcpServers: Array<{ name: string }>;
+          mcpServers: Array<{
+            name: string;
+            url?: string;
+            headers?: Array<{ name: string; value: string }>;
+          }>;
           prompts: Array<Array<{ type: string; text?: string }>>;
         }
       >;
@@ -260,6 +264,45 @@ describe("ACP adapter", () => {
       status: "completed",
       item: { result: "found 3 cats" },
     });
+    // The agent's later word on a finished call is not a second call.
+    expect(
+      turn
+        .events()
+        .filter(
+          (event) =>
+            (event.type === "item.started" ||
+              event.type === "item.completed") &&
+            event.key === "tool:call-1",
+        )
+        .map((event) => event.type),
+    ).toEqual(["item.started", "item.completed"]);
+  });
+
+  it("checks the tool server's bearer before anything a request carries, so a malformed path is refused", async () => {
+    const space = workspace();
+    const turn = run(
+      attempt(space, "[[hang]]", {
+        hostTools: [
+          {
+            name: "lookup",
+            description: "Look something up.",
+            inputSchema: { type: "object" },
+          },
+        ],
+      }),
+    );
+    await turn.until(() => turn.text("assistant_message") === "Working");
+    const server = space.state().sessions["session-1"]?.mcpServers[0];
+    if (!server?.url) throw new Error("No tool server was given to the agent");
+    const origin = new URL(server.url).origin;
+    expect((await fetch(`${origin}/%`)).status).toBe(401);
+    const authorization = server.headers?.[0]?.value ?? "";
+    expect(
+      (await fetch(`${origin}/%`, { headers: { authorization } })).status,
+    ).toBe(404);
+    turn.send({ kind: "interrupt" });
+    await turn.finished();
+    expect(turn.completed()).toMatchObject({ status: "interrupted" });
   });
 
   it("refuses a host tool its policy denies, without calling the host", async () => {
@@ -453,6 +496,53 @@ describe("ACP adapter", () => {
     },
     400_000,
   );
+
+  it("never widens a one-time approval: offered no 'once', the agent is told no", async () => {
+    const space = workspace();
+    const turn = run(attempt(space, "[[permission always-only]]"));
+    await turn.until(() => turn.requests().length > 0);
+    const [asked] = turn.requests();
+    turn.send({
+      kind: "respond",
+      requestKey: asked?.key ?? "",
+      response: { kind: "approval", decision: "approved" },
+    });
+    await turn.finished();
+    expect(turn.text("assistant_message")).toBe("Permission: deny");
+  });
+
+  it("starts a new session, with Work's instructions, for an agent that cannot reopen its own", async () => {
+    const space = workspace();
+    const env = { TEST_AGENT_STATE: space.stateFile, TEST_AGENT_NO_LOAD: "1" };
+    const first = run(
+      attempt(space, "hello", { systemPrompt: "Be brief.", env }),
+    );
+    await first.finished();
+    const second = run(
+      attempt(space, "[[recall]]", {
+        systemPrompt: "Be brief.",
+        env,
+        thread: {
+          mode: "resume",
+          providerThreadId: "thread",
+          nativeRef: { id: "session-1", strength: "strong" },
+        },
+      }),
+    );
+    await second.finished();
+    expect(second.completed()).toMatchObject({ status: "completed" });
+    expect(second.events()).toContainEqual(
+      expect.objectContaining({ type: "diagnostic", level: "warn" }),
+    );
+    expect(second.events()).toContainEqual({
+      type: "thread",
+      ref: { id: "session-2", strength: "strong" },
+    });
+    expect(space.state().sessions["session-2"]?.prompts[0]?.[0]).toEqual({
+      type: "text",
+      text: "<work-instructions>\nBe brief.\n</work-instructions>",
+    });
+  });
 
   it("fails the turn clearly when the agent's command cannot start", async () => {
     const space = workspace();

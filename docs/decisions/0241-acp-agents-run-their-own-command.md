@@ -18,22 +18,28 @@ per attempt from the definition's `acp.command` in the chat's checkout and
 speaks ACP over its stdio with the official SDK. The agent keeps its own
 configuration, model and sign-in (`modelAccess: host`). The desktop runs it
 for an approved project definition; approving one runs its command on
-this machine, so the consent dialog names the command, and the consent
-hash already covers it.
+this machine, so the consent dialog names the command, the consent hash
+already covers it, and an ACP definition needs its member's approval
+whatever its `credentials` say. Approval covers the definition, not files
+in the checkout its command runs: as with Claude Code's project hooks
+(ADR 0045), a collaborator can change those after approval.
 
 - **Sessions** stay with the agent: the first turn opens one in the
   checkout, later turns reopen it with `session/load`. Native state is
-  `none`, so a chat moved to another machine starts fresh with a handoff.
-  The harness id is `acp:<command name>`, so a chat stays with its agent.
+  `none`, so a chat moved to another machine starts fresh with a handoff,
+  and an agent that cannot reopen a session starts a new one. The harness
+  id is `acp:<definition slug>`, so a chat stays with its agent.
 - **Work's tools** (workspace tools, `ask_user`) reach the agent as a
   loopback MCP server per attempt behind a bearer only that agent is
-  given, decided by the attempt's tool policy. Servers the attempt names
-  pass through as ACP MCP servers.
+  given, decided by the attempt's tool policy, over HTTP even when the
+  agent does not advertise HTTP MCP (Hermes takes it without saying so).
+  Servers the attempt names pass through as ACP MCP servers.
 - **Instructions and context** have no ACP channel. They ride the prompt
   as blocks of their own (`<work-instructions>` on a new session's first
   turn, `<work-context>` every turn), apart from the person's words.
 - **The agent's permission requests** become Work approvals. "Always"
-  picks the agent's own persistent option.
+  picks the agent's own persistent option; a one-time approval never
+  becomes it, and is a refusal when the agent offers no "once".
 - **Interrupt** is `session/cancel`; an agent that ignores it is stopped.
   ACP has no steer, so a message sent mid-turn restarts the attempt with
   it.
@@ -47,7 +53,7 @@ shows Hermes' own install and setup commands. Work never downloads it (a
 Python install cannot be integrity-pinned like ADR 0091's components) and
 offers no model, effort or key fields for it: those stay in Hermes
 (`hermes model`, `hermes setup`). Its harness id is `hermes`, so its chats
-stay with it; a project's ACP agents are `acp:<command name>`.
+stay with it; a project's ACP agents are `acp:<definition slug>`.
 
 Considered: Hermes' TUI gateway protocol, which adds steering, questions and
 branching. It is Hermes' own and changes with it; ACP is the seam ADR 0050

@@ -86,7 +86,7 @@ export function ProjectAgentConsentDialog({
           <p className="mb-4 text-xs text-fg-muted">
             {agent.consent === "stale"
               ? "This project agent's definition changed since you approved it, so your approval was reset."
-              : `This agent is defined by files committed to the project — anyone with write access can change it. ${agent.command ? "Approving runs its command on this machine as you." : "Approving lets it run with your credentials."}`}
+              : `This agent is defined by files committed to the project, and anyone with write access can change them. ${agent.command ? "Approving runs its command on this machine as you." : "Approving lets it run with your credentials."}`}
           </p>
 
           <dl className="mb-4 space-y-2 text-xs">
@@ -168,7 +168,7 @@ export function ProjectAgentConsentDialog({
             </button>
             {!agent.command && (
               <span className="ml-auto text-[11px] text-fg-faint">
-                Uses your existing sign-in — configure in Settings
+                Uses your existing sign-in. Configure it in Settings.
               </span>
             )}
           </div>
