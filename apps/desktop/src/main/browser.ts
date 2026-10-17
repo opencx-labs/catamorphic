@@ -74,6 +74,7 @@ import {
 } from "../shared/site-settings.js";
 import type { TerminalMacro } from "../shared/terminal-macros.js";
 import { isCaretKey, TEXT_FIELD_PROBE } from "../shared/text-field.js";
+import { isVoiceAction } from "../shared/voice.js";
 import { pageClosing, registerBrowserDialogs } from "./browser-dialogs.js";
 import { HistoryStore } from "./browser-history.js";
 import {
@@ -1433,8 +1434,8 @@ export function registerBrowserSupport(
         !KEYBINDING_ACTIONS.some(
           (action) =>
             action !== "dismiss-floating" &&
-            // Voice reads its held keys in every page itself.
-            action !== "push-to-talk" &&
+            // Voice reads its keys in every page itself.
+            !isVoiceAction(action) &&
             !PAGE_FIRST_ACTIONS.has(action) &&
             matchesShortcut({
               event: key,

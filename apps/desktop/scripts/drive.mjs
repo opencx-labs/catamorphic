@@ -40,14 +40,23 @@ const targets = await fetch(`http://127.0.0.1:${PORT}/json`).then((r) =>
   r.json(),
 );
 // CDP_TARGET narrows to the page whose URL contains it (e.g. "surface=dock");
-// "main" picks the workspace window, which carries no surface parameter.
+// "main" picks the workspace window, which carries no surface parameter and
+// is not the hidden voice audio page; "title=<title>" picks the window of
+// that title (its project), where several workspace windows are open.
 const wanted = process.env.CDP_TARGET;
-const matches = (url) =>
-  !wanted ||
-  (wanted === "main"
-    ? !url.includes("surface=") && !url.startsWith("chrome-extension:")
-    : url.includes(wanted));
-const page = targets.find((t) => t.type === "page" && matches(String(t.url)));
+const isWorkspace = (url) =>
+  !url.includes("surface=") &&
+  !url.includes("voice.html") &&
+  !url.startsWith("chrome-extension:");
+const matches = (target) => {
+  const url = String(target.url);
+  if (!wanted) return true;
+  if (wanted === "main") return isWorkspace(url);
+  if (wanted.startsWith("title="))
+    return isWorkspace(url) && target.title === wanted.slice("title=".length);
+  return url.includes(wanted);
+};
+const page = targets.find((t) => t.type === "page" && matches(t));
 if (!page) throw new Error("no page target — is the app running with CDP?");
 const ws = new WebSocket(page.webSocketDebuggerUrl);
 await new Promise((resolve, reject) => {

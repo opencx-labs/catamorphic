@@ -70,10 +70,21 @@ import type {
 import type { DesktopUpdateState } from "../shared/update.js";
 import {
   VOICE_PORT_MESSAGE,
+  VOICE_REST_MESSAGE,
+  type VoiceBubbleState,
+  type VoiceDictation,
+  type VoiceKeysState,
   type VoiceLevels,
   type VoicePortMessage,
+  type VoicePress,
+  type VoiceRestMessage,
   type VoiceStatus,
+  type VoiceWindowChoice,
 } from "../shared/voice.js";
+import type {
+  VoiceBubbleDrag,
+  VoiceSpotsState,
+} from "../shared/voice-bubble.js";
 
 export interface ServerInfo {
   url: string | null;
@@ -156,6 +167,36 @@ const api = {
     invoke("catamorphic:dock-detach", detached),
   dockMenu: (entries: readonly MenuItem[]): Promise<string | null> =>
     invoke("catamorphic:dock-menu", entries),
+  voiceBubbleMenu: (entries: readonly MenuItem[]): Promise<string | null> =>
+    invoke("catamorphic:voice-bubble-menu", entries),
+  voiceBubbleState: (): Promise<VoiceBubbleState | null> =>
+    invoke("catamorphic:voice-bubble-state"),
+  voiceBubbleWindows: (): Promise<VoiceWindowChoice[]> =>
+    invoke("catamorphic:voice-bubble-windows"),
+  voiceBubbleWindow: (windowId: number): Promise<void> =>
+    invoke("catamorphic:voice-bubble-window", windowId),
+  voiceBubbleDrag: (input: VoiceBubbleDrag): Promise<void> =>
+    invoke("catamorphic:voice-bubble-drag", input),
+  voiceSpotsState: (): Promise<VoiceSpotsState | null> =>
+    invoke("catamorphic:voice-bubble-spots-state"),
+  onVoiceSpots: (listener: (state: VoiceSpotsState) => void) => {
+    const handler = (
+      _event: Electron.IpcRendererEvent,
+      value: VoiceSpotsState,
+    ) => listener(value);
+    ipcRenderer.on("catamorphic:voice-bubble-spots", handler);
+    return () =>
+      ipcRenderer.removeListener("catamorphic:voice-bubble-spots", handler);
+  },
+  onVoiceBubble: (listener: (state: VoiceBubbleState) => void) => {
+    const handler = (
+      _event: Electron.IpcRendererEvent,
+      value: VoiceBubbleState,
+    ) => listener(value);
+    ipcRenderer.on("catamorphic:voice-bubble", handler);
+    return () =>
+      ipcRenderer.removeListener("catamorphic:voice-bubble", handler);
+  },
   dockRegion: (region: DockRegion | null): Promise<void> =>
     invoke("catamorphic:dock-region", region),
   onDockSnapshot: (
@@ -1559,10 +1600,12 @@ const api = {
   // --- voice (ADR 0216); its settings are prefs ---
   voiceStatus: (): Promise<VoiceStatus> =>
     invoke("catamorphic:voice-get-status"),
-  voiceToggle: (input: {
-    projectId?: string;
-    sessionId?: string;
-  }): Promise<void> => invoke("catamorphic:voice-toggle", input),
+  voicePress: (press: VoicePress): Promise<void> =>
+    invoke("catamorphic:voice-press", press),
+  voiceRelease: (input?: { heldMs?: number }): Promise<void> =>
+    invoke("catamorphic:voice-release", input),
+  voiceFrontChat: (chat: { projectId: string; sessionId: string } | null) =>
+    ipcRenderer.send("catamorphic:voice-front-chat", chat),
   voiceReset: (): Promise<void> => invoke("catamorphic:voice-reset"),
   voiceLearn: (input: {
     projectId?: string;
@@ -1581,6 +1624,33 @@ const api = {
     ipcRenderer.on("catamorphic:voice-levels", handler);
     return () =>
       ipcRenderer.removeListener("catamorphic:voice-levels", handler);
+  },
+  /** A text field here has focus: dictation writes into this window. */
+  voiceFieldFocus: (): void =>
+    ipcRenderer.send("catamorphic:voice-field-focus"),
+  /** What was dictated here was sent. */
+  voiceDictationSent: (): void =>
+    ipcRenderer.send("catamorphic:voice-dictation-sent"),
+  voiceKeysStatus: (): Promise<VoiceKeysState> =>
+    invoke("catamorphic:voice-keys-status"),
+  /** Asks macOS to let voice's shortcuts work in every app. */
+  voiceKeysAllow: (): Promise<void> => invoke("catamorphic:voice-keys-allow"),
+  onVoiceKeys: (listener: (state: VoiceKeysState) => void) => {
+    const handler = (
+      _event: Electron.IpcRendererEvent,
+      value: VoiceKeysState,
+    ) => listener(value);
+    ipcRenderer.on("catamorphic:voice-keys", handler);
+    return () => ipcRenderer.removeListener("catamorphic:voice-keys", handler);
+  },
+  onVoiceDictation: (listener: (dictation: VoiceDictation) => void) => {
+    const handler = (
+      _event: Electron.IpcRendererEvent,
+      value: VoiceDictation,
+    ) => listener(value);
+    ipcRenderer.on("catamorphic:voice-dictation", handler);
+    return () =>
+      ipcRenderer.removeListener("catamorphic:voice-dictation", handler);
   },
   // --- workspace config (sidebars, palette modes) ---
   workspaceConfigGet: (projectId?: string): Promise<unknown> =>
@@ -1620,5 +1690,11 @@ ipcRenderer.on(VOICE_PORT_MESSAGE, (event, microphone: unknown) => {
     } satisfies VoicePortMessage,
     "*",
     event.ports,
+  );
+});
+ipcRenderer.on(VOICE_REST_MESSAGE, () => {
+  window.postMessage(
+    { type: VOICE_REST_MESSAGE } satisfies VoiceRestMessage,
+    "*",
   );
 });

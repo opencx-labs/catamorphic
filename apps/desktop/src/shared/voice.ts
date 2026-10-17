@@ -67,21 +67,58 @@ export function voiceIdOf(value: unknown): VoiceId {
 }
 
 /**
- * What voice talks to (ADR 0216): the assistant, from the dock's
- * microphone, or a chat, from its composer's, to that chat's own agent.
+ * What voice does (ADR 0216, 0236): talk with the assistant, or with a
+ * chat's own agent, or dictate into the text field the person is in.
+ * Dictation started from a chat's microphone names that chat, so its
+ * microphone shows it.
  */
 export type VoiceTarget =
   | { kind: "assistant" }
-  | { kind: "chat"; projectId: string; sessionId: string };
+  | { kind: "chat"; projectId: string; sessionId: string }
+  | { kind: "dictation"; sessionId?: string };
 
+/**
+ * What a microphone or a shortcut asks of voice (ADR 0236): a tap turns
+ * it on or off, a hold talks while held.
+ */
+export type VoiceAction = "dictate" | "talk-to-work" | "talk-to-chat";
+
+/** Voice's shortcuts: the main process reads them, never a page. */
+export const VOICE_ACTIONS: readonly VoiceAction[] = [
+  "dictate",
+  "talk-to-work",
+  "talk-to-chat",
+];
+
+export function isVoiceAction(action: string): action is VoiceAction {
+  return VOICE_ACTIONS.some((voiceAction) => voiceAction === action);
+}
+
+/** A press of a microphone, or of a voice shortcut from a page. */
+export interface VoicePress {
+  action: VoiceAction;
+  projectId?: string;
+  /** The chat a chat's microphone belongs to. */
+  sessionId?: string;
+}
+
+/**
+ * Whether a press asks for what voice is doing now. Dictation pressed
+ * from anywhere (its shortcut, the dock) is whatever dictation is on;
+ * from a chat's composer, dictation into that chat.
+ */
 export function sameVoiceTarget(
-  a: VoiceTarget | null,
-  b: VoiceTarget | null,
+  now: VoiceTarget | null,
+  asked: VoiceTarget | null,
 ): boolean {
-  if (!a || !b || a.kind !== b.kind) return false;
-  return (
-    a.kind === "assistant" || (b.kind === "chat" && a.sessionId === b.sessionId)
-  );
+  if (!now || !asked) return false;
+  if (now.kind === "assistant") return asked.kind === "assistant";
+  if (now.kind === "dictation")
+    return (
+      asked.kind === "dictation" &&
+      (!asked.sessionId || asked.sessionId === now.sessionId)
+    );
+  return asked.kind === "chat" && asked.sessionId === now.sessionId;
 }
 
 /** An agent's voice: its own, or the profile's default. */
@@ -94,7 +131,7 @@ export function agentVoice(
 
 /**
  * What voice is doing for a profile. Its settings (the assistant, voices,
- * microphone, push to talk, where microphones show) are the profile's
+ * microphone, dictation only, where microphones show) are the profile's
  * prefs, which a live voice follows.
  */
 export interface VoiceStatus {
@@ -115,6 +152,13 @@ export interface VoiceStatus {
   error: string | null;
   /** Voice is learning the person's voice from what they say now. */
   learning: boolean;
+  /** Voice writes what the person says where they type: dictation. */
+  dictation: boolean;
+  /**
+   * Voice listens on its own (it was tapped on); else only while held (it
+   * was started by holding a shortcut or a microphone).
+   */
+  handsFree: boolean;
 }
 
 export const VOICE_OFF: VoiceStatus = {
@@ -124,15 +168,62 @@ export const VOICE_OFF: VoiceStatus = {
   download: null,
   error: null,
   learning: false,
+  dictation: false,
+  handsFree: false,
 };
+
+/**
+ * Dictation's words for one stretch of speech, on their way to the text
+ * field the person is in (ADR 0236).
+ */
+export interface VoiceDictation {
+  /** One stretch of speech; a later stretch has a larger number. */
+  segment: number;
+  text: string;
+  /** The stretch is over: `text` is what was said, empty for nothing. */
+  final: boolean;
+}
+
+/**
+ * Where voice's shortcuts work (ADR 0236): in Work's windows, or in every
+ * app (macOS, once Work is allowed in Accessibility).
+ */
+export type VoiceKeysState =
+  | "app"
+  | "everywhere"
+  | "needs-permission"
+  | "unsupported";
+
+/**
+ * The person's voice, as the speaker model hears it (ADR 0236). A print
+ * names its model: one made by another cannot be compared, and is
+ * forgotten.
+ */
+export interface Voiceprint {
+  model: typeof VOICEPRINT_MODEL;
+  vector: number[];
+}
+
+export const VOICEPRINT_MODEL = "eres2net-voxceleb";
+
+/** A stored voice print the speaker model can use, else null. */
+export function voiceprintOf(value: unknown): Voiceprint | null {
+  if (typeof value !== "object" || value === null) return null;
+  const model = "model" in value ? value.model : undefined;
+  const vector = "vector" in value ? value.vector : undefined;
+  return model === VOICEPRINT_MODEL &&
+    Array.isArray(vector) &&
+    vector.length > 0 &&
+    vector.every((entry) => typeof entry === "number")
+    ? { model, vector }
+    : null;
+}
 
 /** Local files of the speech models, as the worker loads them. */
 export interface VoiceModelPaths {
   /** Silero voice activity detector. */
   vad: string;
-  /** DPDFNet noise removal, for the voice print. */
-  denoiser: string;
-  /** WeSpeaker ResNet34 speaker embeddings, for the voice print. */
+  /** ERes2Net speaker embeddings: who is speaking. */
   speaker: string;
   /** Parakeet TDT transducer. */
   asr: { encoder: string; decoder: string; joiner: string; tokens: string };
@@ -158,14 +249,32 @@ export type VoiceWorkerCommand =
         | FakeSpeechScript;
       /** The person's voice print, when voice knows it. */
       voiceprint: number[] | null;
-      pushToTalk: boolean;
+      handsFree: boolean;
+      dictation: boolean;
     }
-  /** Listen only while held (push to talk), or whenever someone speaks. */
-  | { type: "push-to-talk"; enabled: boolean }
-  /** The push-to-talk keys went down, or came up. */
-  | { type: "hold"; held: boolean }
+  /** Listen whenever someone speaks, or only while held. */
+  | { type: "hands-free"; enabled: boolean }
+  /**
+   * Voice is off: drop the conversation and close the microphone, keep the
+   * models loaded for the next start.
+   */
+  | { type: "rest" }
+  /** Write what the person says into a composer, or talk with the agent. */
+  | { type: "dictation"; enabled: boolean }
+  /**
+   * The keys or a microphone went down, or came up; `discard` drops what a
+   * tap caught.
+   */
+  | { type: "hold"; held: boolean; discard?: boolean }
   /** Hear nothing more; speech already asked for is still said. */
   | { type: "stop-listening" }
+  /**
+   * Voice is ending: dictation hears what the person is still saying, then
+   * nothing more; `finished` says when all of it is written.
+   */
+  | { type: "finish" }
+  /** Voice moved on: drop what was said for where it was before. */
+  | { type: "forget" }
   /** Learn the person's voice from the next few seconds they speak. */
   | { type: "learn" }
   /** Listen to this voice alone from now on; null listens to anyone. */
@@ -191,6 +300,12 @@ export type VoiceWorkerEvent =
   | { type: "speech-end" }
   /** A transcript the person meant, never an echo of the agent. */
   | { type: "utterance"; text: string }
+  /**
+   * Dictation's words for one stretch of speech: while it goes on, what
+   * was said so far; once it ends (`final`), what was said, empty when
+   * nothing was or it was someone else.
+   */
+  | { type: "dictation"; segment: number; text: string; final: boolean }
   /** The person talked over the agent, which stopped speaking. */
   | { type: "barge-in" }
   | { type: "speaking"; id: string }
@@ -199,6 +314,8 @@ export type VoiceWorkerEvent =
   | { type: "learned"; voiceprint: number[] }
   /** Someone else spoke: not the voice print's person, so not heard. */
   | { type: "ignored" }
+  /** Everything heard before `finish` is recognized and said. */
+  | { type: "finished" }
   | ({ type: "levels" } & VoiceLevels);
 
 /**
@@ -245,6 +362,40 @@ export interface VoicePortMessage {
   type: typeof VOICE_PORT_MESSAGE;
   /** A device id from `enumerateDevices`; null opens the system's. */
   microphone: string | null;
+}
+
+/**
+ * What voice's bubble shows (ADR 0236): whether it is up, the profile its
+ * page reads, and the project whose colours it wears.
+ */
+export interface VoiceBubbleState {
+  shown: boolean;
+  profileId: string | null;
+  projectId: string | null;
+}
+
+/** A window of Work's whose assistant the bubble can talk to. */
+export interface VoiceWindowChoice {
+  id: number;
+  /** The window's title: its project's name. */
+  title: string;
+  /** Its assistant's name; null when it has none yet. */
+  assistant: string | null;
+  /** Its profile's name, when windows of several profiles are open. */
+  profile?: string;
+  /** The window voice talks to the assistant of now. */
+  current: boolean;
+}
+
+/**
+ * The IPC message that rests the audio page between voices (ADR 0236):
+ * its microphone closes and its speakers stop, and it stays loaded, so
+ * the next voice opens the microphone at once.
+ */
+export const VOICE_REST_MESSAGE = "catamorphic:voice-rest";
+
+export interface VoiceRestMessage {
+  type: typeof VOICE_REST_MESSAGE;
 }
 
 /**

@@ -1,6 +1,7 @@
 import {
   SPEECH_SAMPLE_RATE,
   VOICE_PORT_MESSAGE,
+  VOICE_REST_MESSAGE,
   type VoiceAudioDown,
   type VoiceAudioUp,
   type VoicePortMessage,
@@ -15,6 +16,10 @@ import { LEVEL_FRAME_MS, speechLevels } from "./speech-levels.js";
  * echo cancellation on, which cancels everything Work plays on the output
  * device, the agent's voice included: the agent hearing itself would
  * otherwise read as the person talking over it.
+ *
+ * Each voice brings its own port. Between voices the page rests, loaded,
+ * with its microphone closed (ADR 0236): the next voice only opens the
+ * microphone, so the person's first words are heard.
  */
 /**
  * A microphone that has sent nothing but silence this long is not reaching
@@ -24,10 +29,20 @@ import { LEVEL_FRAME_MS, speechLevels } from "./speech-levels.js";
 const SILENT_SECONDS = 4;
 const SILENT_PEAK = 1e-4;
 
+/** The voice this page serves now; null while it rests. */
+let current: { close(): void } | null = null;
+
 window.addEventListener("message", (event: MessageEvent<unknown>) => {
-  if (event.source !== window || !isPortMessage(event.data)) return;
+  if (event.source !== window) return;
+  if (isRestMessage(event.data)) {
+    current?.close();
+    current = null;
+    return;
+  }
+  if (!isPortMessage(event.data)) return;
   const port = event.ports[0];
   if (!port) return;
+  current?.close();
   const speaker = new Speaker(port);
   const microphone = listen(port, event.data.microphone).catch(
     (cause: unknown) => {
@@ -43,6 +58,14 @@ window.addEventListener("message", (event: MessageEvent<unknown>) => {
       void microphone.then((close) => close?.());
     else speaker.receive(message.data);
   };
+  current = {
+    close: () => {
+      port.onmessage = null;
+      port.close();
+      speaker.close();
+      void microphone.then((close) => close?.());
+    },
+  };
 });
 
 // Copied, never transferred: a port that ends in a utility process
@@ -57,8 +80,32 @@ async function listen(
   microphone: string | null,
 ): Promise<() => void> {
   const stream = await openMicrophone(microphone);
+  let context: AudioContext | null = null;
+  let closed = false;
+  const close = () => {
+    if (closed) return;
+    closed = true;
+    for (const capture of stream.getTracks()) capture.stop();
+    void context?.close();
+  };
+  try {
+    context = new AudioContext({ sampleRate: SPEECH_SAMPLE_RATE });
+    await capture(port, stream, context);
+  } catch (cause) {
+    // A microphone voice cannot hear never stays open.
+    close();
+    throw cause;
+  }
+  return close;
+}
+
+/** Streams the microphone's audio to the port as it comes. */
+async function capture(
+  port: MessagePort,
+  stream: MediaStream,
+  context: AudioContext,
+): Promise<void> {
   const [track] = stream.getAudioTracks();
-  const context = new AudioContext({ sampleRate: SPEECH_SAMPLE_RATE });
   await context.audioWorklet.addModule(captureWorklet);
   const tap = new AudioWorkletNode(context, "voice-capture", {
     numberOfInputs: 1,
@@ -93,19 +140,23 @@ async function listen(
   };
   context.createMediaStreamSource(stream).connect(tap);
   await context.resume();
-  return () => {
-    for (const capture of stream.getTracks()) capture.stop();
-    void context.close();
-  };
 }
 
-/** The chosen microphone, or the system's when it is gone or unset. */
+/**
+ * The chosen microphone, or the system's when it is gone or unset. Its
+ * gain stays as the system sets it: automatic gain lifts a voice across
+ * the room to the person's own level when they pause, and how loud speech
+ * arrives is how voice tells the person from someone farther away. Noise
+ * stays in too: speech recognition copes with a room's noise better than
+ * with noise suppression's artifacts, which cost about twice the words
+ * (ADR 0236), and voice tells speech from noise on its own.
+ */
 async function openMicrophone(microphone: string | null): Promise<MediaStream> {
   const audio = {
     channelCount: 1,
     echoCancellation: true,
-    noiseSuppression: true,
-    autoGainControl: true,
+    noiseSuppression: false,
+    autoGainControl: false,
   };
   if (microphone)
     try {
@@ -120,6 +171,15 @@ async function openMicrophone(microphone: string | null): Promise<MediaStream> {
         throw cause;
     }
   return navigator.mediaDevices.getUserMedia({ audio });
+}
+
+function isRestMessage(value: unknown): boolean {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "type" in value &&
+    value.type === VOICE_REST_MESSAGE
+  );
 }
 
 function isPortMessage(value: unknown): value is VoicePortMessage {
@@ -186,6 +246,13 @@ class Speaker {
       if (this.sources.size === 0)
         post(this.port, { type: "drained", seq: this.lastSeq });
     };
+  }
+
+  /** Voice is over: nothing more plays, and the output goes. */
+  close(): void {
+    this.flush(this.lastSeq);
+    void this.context?.close();
+    this.context = null;
   }
 
   private flush(seq: number): void {

@@ -27,6 +27,7 @@ import type {
 } from "../../shared/page-dialogs.js";
 import { samePage } from "../../shared/page-url.js";
 import { siteOrigin } from "../../shared/site-settings.js";
+import { VOICE_ACTIONS } from "../../shared/voice.js";
 import { AuthorizationInspector } from "../components/authorization-inspector.js";
 import {
   ExtensionDebuggingBar,
@@ -65,7 +66,6 @@ import { setPageDialogWaiting } from "../lib/page-dialogs.js";
 import { pageThemeCss } from "../lib/page-theme.js";
 import { pointerMoved } from "../lib/pointer-moved.js";
 import { useTheme } from "../lib/theme.js";
-import { useAppPreferences } from "../lib/use-app-preferences.js";
 
 /**
  * A browser page inside a workspace tab: address bar (with Chrome-style
@@ -457,17 +457,17 @@ export function BrowserScreen({
     if (guestReadyRef.current)
       webviewRef.current?.send("catamorphic:page-keys", pageKeys);
   }, [pageKeys]);
-  // Push to talk's keys, while voice is set to it: the page swallows them,
-  // and the main process hears them go down and up (voice).
-  const pushToTalk = useAppPreferences().prefs.voicePushToTalk
-    ? keybindings["push-to-talk"]
-    : "";
-  const pushToTalkRef = useRef(pushToTalk);
-  pushToTalkRef.current = pushToTalk;
+  // Voice's keys: the page swallows them, and the main process hears them
+  // go down and up (ADR 0236).
+  const voiceKeys = VOICE_ACTIONS.map((action) => keybindings[action])
+    .filter(Boolean)
+    .join("\n");
+  const voiceKeysRef = useRef(voiceKeys);
+  voiceKeysRef.current = voiceKeys;
   useEffect(() => {
     if (guestReadyRef.current)
-      webviewRef.current?.send("catamorphic:push-to-talk-keys", pushToTalk);
-  }, [pushToTalk]);
+      webviewRef.current?.send("catamorphic:voice-keys", voiceKeys);
+  }, [voiceKeys]);
   // Selected text and find matches take the theme's accent (lib/page-theme).
   const theme = useTheme();
   const pageCss = theme ? pageThemeCss(theme) : "";
@@ -748,7 +748,7 @@ export function BrowserScreen({
           );
           view.send("catamorphic:floating-preview", floatingBindingRef.current);
           view.send("catamorphic:page-keys", pageKeysRef.current);
-          view.send("catamorphic:push-to-talk-keys", pushToTalkRef.current);
+          view.send("catamorphic:voice-keys", voiceKeysRef.current);
           view.send("catamorphic:page-theme", pageCssRef.current);
         } catch {
           // Guest gone mid-call; the next dom-ready re-sends.
@@ -795,7 +795,7 @@ export function BrowserScreen({
         if (message.channel === "catamorphic:page-keys-wanted") {
           try {
             view.send("catamorphic:page-keys", pageKeysRef.current);
-            view.send("catamorphic:push-to-talk-keys", pushToTalkRef.current);
+            view.send("catamorphic:voice-keys", voiceKeysRef.current);
           } catch {
             // Guest gone mid-call; its dom-ready re-sends.
           }
