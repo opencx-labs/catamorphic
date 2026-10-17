@@ -538,7 +538,9 @@ export class E2eFakeAdapter implements HarnessAdapter {
         }
         transcript.apply(step);
       }
-      if (!interrupted) {
+      // A turn that stopped or failed never read what was still waiting:
+      // Work runs it as a turn of its own.
+      if (!interrupted && !failure) {
         takeIn(unread.splice(0));
         for (const steer of steered)
           transcript.apply({ type: "text", content: `Steered: ${steer.text}` });

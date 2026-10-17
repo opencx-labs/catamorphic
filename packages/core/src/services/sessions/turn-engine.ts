@@ -1228,20 +1228,29 @@ export class TurnEngine {
     )
       .map((row) => itemFromRow(row))
       .filter(isInputItem);
-    const runners = (
+    const earlier = (
       await this.deps.db
         .selectFrom("agent_turn_attempts")
         .select("runner")
         .where("turn_id", "=", input.turn.id)
+        .where("id", "!=", input.attempt.id)
+        .orderBy("ordinal")
         .execute()
     ).map((row) => row.runner as unknown as RunnerState | null);
-    // What an earlier attempt took in is already on its thread.
-    const taken = new Set(runners.flatMap((runner) => runner?.consumed ?? []));
     // A restart goes on from where the stopped attempt was, unless its
-    // harness never began the turn: then the turn's input starts over.
+    // harness never began the turn: then that attempt's prompt starts over,
+    // with what was steered since.
+    const stopped = earlier.at(-1);
     const restart =
-      input.reason === "steer_restart" &&
-      runners.some((runner) => runner?.started === true);
+      input.reason === "steer_restart" && stopped?.started === true;
+    const fresh = input.reason === "steer_restart" && !restart;
+    // What an earlier attempt took in is already on its thread; what the
+    // stopped attempt that never began carried is not.
+    const taken = new Set(
+      (fresh ? earlier.slice(0, -1) : earlier).flatMap(
+        (runner) => runner?.consumed ?? [],
+      ),
+    );
     const base =
       input.inputItem && isInputItem(input.inputItem) ? input.inputItem : null;
     if (restart) {
@@ -1267,12 +1276,13 @@ export class TurnEngine {
       };
     }
     // Inputs that joined the turn while it waited (and, on a retry, what
-    // its first attempt read), and steered ones nothing took in yet; ones
+    // its first attempt read), and steered ones nothing took in yet (or,
+    // restarting an attempt that never began, ones it carried); ones
     // steered into a running attempt that took them reached it on their own.
     const joined = others.filter(
       (item) =>
         item.dispatch !== "steer" ||
-        (item.status === "in_progress" && !taken.has(item.id)),
+        (!taken.has(item.id) && (fresh || item.status === "in_progress")),
     );
     const carried = [...input.riders, ...joined];
     // In the order they came, as the conversation shows them; a turn whose
@@ -1620,8 +1630,9 @@ export class TurnEngine {
           .map((command) => command.id),
         status: "sent",
       });
+      // Only an interrupt that went out: one dropped as moot stops nothing.
       if (
-        commands.some((command) => command.kind === "interrupt") &&
+        frames.some((frame) => frame.command.kind === "interrupt") &&
         interruptAt === null
       )
         interruptAt = Date.now();
@@ -1831,6 +1842,8 @@ export class TurnEngine {
       .where("attempt_id", "=", attemptId)
       .where("kind", "=", "interrupt")
       .where(sql<string>`payload->>'restart'`, "=", "true")
+      // Sent to the harness: one dropped as moot asked nothing of it.
+      .where("status", "in", ["sent", "acknowledged"])
       .executeTakeFirst();
     return row !== undefined;
   }

@@ -47,6 +47,7 @@ import {
   useState,
 } from "react";
 import type { AgentCommandsResult } from "../../shared/agent-commands.js";
+import { normalizePrefs } from "../../shared/app-prefs.js";
 import { chatBookmarkUrl } from "../../shared/bookmark-target.js";
 import type {
   ChatDockProps,
@@ -1482,15 +1483,18 @@ function ChatDockContent({
 
   // Palette "Send to agent": the entry arrives with the message attached;
   // fire it once on mount and strip it so remounts don't re-send.
-  // Sent from elsewhere (the palette, voice), it reaches a working agent
-  // the way a message typed here does.
-  const sendFromElsewhere = (
+  // Sent from elsewhere (the palette), it reaches a working agent the way
+  // a message typed here does. Read as it sends: it can come as the chat
+  // mounts, before the preference has loaded.
+  const sendFromElsewhere = async (
     text: string,
     attachments?: AgentChatAttachment[],
-  ) =>
-    chat.send(text, attachments, {
-      dispatch: queueMessages ? "queue" : "steer",
+  ) => {
+    const queue = normalizePrefs(await desktopApi.getPrefs()).chatQueueMessages;
+    return chat.send(text, attachments, {
+      dispatch: queue ? "queue" : "steer",
     });
+  };
   const sendRef = useRef(sendFromElsewhere);
   sendRef.current = sendFromElsewhere;
   const pendingSentRef = useRef(false);

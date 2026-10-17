@@ -823,6 +823,11 @@ describe("agents and profiles", () => {
 
   it("a successful reconnect retries the failed turn on its own", async () => {
     await runWait(`return !!visibleDock();`, { label: "chat open" });
+    await settled();
+    // An earlier turn recovered the same way: this one's recovery is the next.
+    const recovered = `return $$('[role="log"] article')
+      .filter((el) => el.textContent.includes('Recovered after reconnecting.')).length;`;
+    const before = await run<number>(recovered);
     await run(`
       const ta = visibleDock().querySelector('[data-composer-input]');
       setReactValue(ta, 'one more auth error please');
@@ -842,11 +847,10 @@ describe("agents and profiles", () => {
     // retry runs against a freshly re-anchored harness session. The
     // successful reconnect must retry the failed turn WITHOUT another
     // click or message.
-    await runWait(
-      `return $$('[role="log"] article')
-        .some((el) => el.textContent.includes('Recovered after reconnecting.'));`,
-      { timeoutMs: 30_000, label: "reconnect auto-retried the turn" },
-    );
+    await runWait(`return (() => { ${recovered} })() > ${before};`, {
+      timeoutMs: 30_000,
+      label: "reconnect auto-retried the turn",
+    });
     // The dead-retry regression: a re-anchored session routed through the
     // harness's native re-run answered "nothing to retry" forever. That
     // wording (old or new) must never land in the transcript here.
@@ -969,16 +973,28 @@ describe("agents and profiles", () => {
   });
 
   describe("with queueing on", () => {
-    beforeAll(async () => {
-      await app.eval(
-        `window.catamorphicDesktop.setPrefs({ chatQueueMessages: true }).then(() => true)`,
+    // Saved preferences reach the window through a file watch, after the
+    // save returns: wait until the window has heard.
+    const setQueueing = async (on: boolean) => {
+      const already = await app.eval<boolean>(
+        `window.catamorphicDesktop.getPrefs().then((prefs) => prefs.chatQueueMessages === ${on})`,
       );
-    });
-    afterAll(async () => {
-      await app.eval(
-        `window.catamorphicDesktop.setPrefs({ chatQueueMessages: false }).then(() => true)`,
-      );
-    });
+      if (already) return;
+      await app.eval(`(() => {
+        window.__queueHeard = undefined;
+        window.__queueUnsubscribe?.();
+        window.__queueUnsubscribe = window.catamorphicDesktop.onPrefsChanged(
+          (prefs) => { window.__queueHeard = prefs.chatQueueMessages; });
+        return window.catamorphicDesktop
+          .setPrefs({ chatQueueMessages: ${on} })
+          .then(() => true);
+      })()`);
+      await app.waitFor(`window.__queueHeard === ${on}`, {
+        label: "the window heard the queue preference",
+      });
+    };
+    beforeAll(() => setQueueing(true));
+    afterAll(() => setQueueing(false));
 
     it("queues messages during a turn; edits hold their place until done", async () => {
       await settled();

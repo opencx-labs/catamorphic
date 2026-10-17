@@ -614,6 +614,9 @@ class ClaudeAttempt {
       message.type === "result"
     )
       this.turnStarted();
+    // Anything but a turn's end is a native turn at work again (a
+    // background subagent's report starts one with no lifecycle frame).
+    if (message.type !== "result") this.awaitingMore = false;
     if (message.type !== "result") {
       this.transcript.handle(message);
       return;
@@ -803,8 +806,10 @@ class ClaudeAttempt {
     void session.interrupt().then(
       () => {
         // Stopped between native turns: the input it waited for is
-        // withdrawn and no turn runs to end, so it ends here.
-        if (this.awaitingMore) this.settle({ status: "interrupted" });
+        // withdrawn and no turn runs to end, so it ends here. A background
+        // subagent still at work keeps it to its turn's end (or the abort).
+        if (this.awaitingMore && this.transcript.backgroundAgents === 0)
+          this.settle({ status: "interrupted" });
       },
       () => session.abort.abort(),
     );
