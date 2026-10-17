@@ -23721,6 +23721,24 @@
                     "properties": {
                       "type": {
                         "type": "string",
+                        "enum": ["steer_now"]
+                      },
+                      "commandId": {
+                        "type": "string",
+                        "minLength": 8,
+                        "maxLength": 200
+                      },
+                      "itemId": {
+                        "type": "string"
+                      }
+                    },
+                    "required": ["type", "commandId", "itemId"]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "type": {
+                        "type": "string",
                         "enum": ["respond"]
                       },
                       "commandId": {

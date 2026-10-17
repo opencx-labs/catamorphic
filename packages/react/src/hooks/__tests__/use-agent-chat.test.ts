@@ -365,7 +365,12 @@ describe("useAgentChat commands", () => {
     await act(async () => {
       await sending;
     });
-    expect(bodies[0]).toMatchObject({ type: "send", text: "Second question" });
+    // A working turn reads it at its next step (ADR 0240).
+    expect(bodies[0]).toMatchObject({
+      type: "send",
+      text: "Second question",
+      dispatch: "steer",
+    });
     expect(typeof bodies[0]?.commandId).toBe("string");
     expect(result.current.pending[0]?.status).toBe("sent");
     act(() =>
@@ -502,6 +507,7 @@ describe("useAgentChat commands", () => {
       await result.current.holdQueued("t2");
       await result.current.editQueued("t2", "Edited");
       await result.current.sendQueuedNow("t2");
+      await result.current.steerNow("t3:steer");
       await result.current.cancelQueued("t2");
       await result.current.retry();
       await result.current.rollback("t1");
@@ -515,13 +521,14 @@ describe("useAgentChat commands", () => {
       { type: "edit_queued", turnId: "t2", held: true },
       { type: "edit_queued", turnId: "t2", text: "Edited", held: false },
       { type: "send_now", turnId: "t2" },
+      { type: "steer_now", itemId: "t3:steer" },
       { type: "cancel_queued", turnId: "t2" },
       { type: "retry", turnId: "t1" },
       { type: "rollback", turnId: "t1" },
       { type: "interrupt", turnId: "t3" },
       { type: "interrupt", turnId: "t1" },
     ]);
-    expect(new Set(bodies.map((body) => body.commandId)).size).toBe(8);
+    expect(new Set(bodies.map((body) => body.commandId)).size).toBe(9);
   });
 
   it("creates the session on the first message", async () => {

@@ -44,6 +44,14 @@ const CAPABILITIES: HarnessCapabilities = {
  *   does
  * - `[[refuse-steers]]` refuses steered input, as a harness that cannot take
  *   input mid-turn: the turn restarts with it
+ * - `[[defer-steers]]` takes steered input in at its next step (the end of
+ *   a directive), as a harness mid-answer does: until then it is unread
+ * - `[[read-on-stop]]` (with `[[defer-steers]]`) takes it in as it is
+ *   interrupted, as a harness whose step had already folded it in
+ * - `[[rate-limit <ms>]]` works for a while, then fails the turn's first
+ *   attempt as a rate limit Work retries; a retry passes it by
+ * - `[[slow-start <ms>]]` takes a while to begin a turn's first attempt
+ *   (no thread, no turn yet), as a harness still starting does
  *
  * Its native state is the list of turns it saw, stored with Work, so a
  * restored thread remembers ("turn 3") wherever it resumes.
@@ -59,6 +67,17 @@ export class EchoAdapter implements HarnessAdapter {
     let interrupted = false;
     let wake: (() => void) | undefined;
     const steered: string[] = [];
+    /** Accepted, not taken in yet (`[[defer-steers]]`). */
+    const deferred: Array<{ itemId: string; text: string }> = [];
+    const takeDeferred = () => {
+      const taken = deferred.splice(0);
+      if (taken.length === 0) return;
+      steered.push(...taken.map((input) => input.text));
+      host.emit({
+        type: "input.consumed",
+        itemIds: taken.map((input) => input.itemId),
+      });
+    };
     const sleep = (ms: number) =>
       new Promise<void>((resolve) => {
         const timer = setTimeout(resolve, ms);
@@ -68,6 +87,16 @@ export class EchoAdapter implements HarnessAdapter {
         };
       });
     const run = async () => {
+      const slowStart = directives(attempt.input?.text ?? "").find(
+        (directive) => directive.split(" ")[0] === "slow-start",
+      );
+      if (slowStart && attempt.reason === "initial") {
+        await sleep(Number(slowStart.split(" ")[1]) || 1_000);
+        if (interrupted) {
+          host.emit({ type: "turn.completed", status: "interrupted" });
+          return;
+        }
+      }
       const ref =
         attempt.thread.mode === "fresh"
           ? { id: randomUUID(), strength: "strong" as const }
@@ -89,6 +118,8 @@ export class EchoAdapter implements HarnessAdapter {
       const text = attempt.input?.text ?? lastText(seen) ?? "";
       for (const directive of directives(text)) {
         if (interrupted) break;
+        // The step before this one ended: what was steered meanwhile is in.
+        takeDeferred();
         const [name, ...rest] = directive.split(" ");
         const argument = rest.join(" ");
         if (name === "tool") {
@@ -173,6 +204,20 @@ export class EchoAdapter implements HarnessAdapter {
         } else if (name === "hang") {
           host.emit({ type: "status", text: "Working" });
           while (!interrupted) await sleep(60_000);
+        } else if (name === "rate-limit") {
+          if (attempt.reason !== "initial") continue;
+          await sleep(Number(argument) || 1_000);
+          if (interrupted) break;
+          host.emit({
+            type: "turn.completed",
+            status: "failed",
+            error: {
+              message: "429 rate limit exceeded",
+              kind: "rate_limit",
+              retrySafe: true,
+            },
+          });
+          return;
         } else if (name === "fail") {
           host.emit({
             type: "turn.completed",
@@ -213,6 +258,7 @@ export class EchoAdapter implements HarnessAdapter {
         await new Promise((resolve) => setTimeout(resolve, ms));
         await store();
       };
+      if (!interrupted) takeDeferred();
       if (interrupted) {
         host.emit({ type: "turn.completed", status: "interrupted" });
         if (late) await storeLate();
@@ -274,14 +320,25 @@ export class EchoAdapter implements HarnessAdapter {
     const refusesSteers = directives(attempt.input?.text ?? "").includes(
       "refuse-steers",
     );
+    const defersSteers = directives(attempt.input?.text ?? "").includes(
+      "defer-steers",
+    );
+    const readsOnStop = directives(attempt.input?.text ?? "").includes(
+      "read-on-stop",
+    );
     return {
       steer: async (input) => {
         if (refusesSteers) return false;
+        if (defersSteers) {
+          deferred.push({ itemId: input.itemId, text: input.text });
+          return true;
+        }
         steered.push(input.text);
         host.emit({ type: "input.consumed", itemIds: [input.itemId] });
         return true;
       },
       interrupt: () => {
+        if (readsOnStop && !interrupted) takeDeferred();
         interrupted = true;
         wake?.();
       },

@@ -152,8 +152,13 @@ describe.skipIf(!chromeBinary())("pwa PWA", () => {
     );
   });
 
-  it("queues a message while the agent works and sends it now", async () => {
-    await app.eval(TYPE("[data-testid=chat-input]", "first long task"));
+  it("sends a message the working agent reads, and interrupts for it", async () => {
+    // The turn before may still be finishing: a message now would reach it.
+    await app.waitFor(
+      "!document.querySelector('[data-testid=chat-interrupt]')",
+      { timeoutMs: 20_000, label: "settled" },
+    );
+    await app.eval(TYPE("[data-testid=chat-input]", "slow first task"));
     await app.eval(CLICK("[data-testid=chat-send]"));
     await app.waitFor(
       "!!document.querySelector('[data-testid=chat-interrupt]')",
@@ -164,14 +169,40 @@ describe.skipIf(!chromeBinary())("pwa PWA", () => {
     );
     await app.eval(TYPE("[data-testid=chat-input]", "second task"));
     await app.eval(CLICK("[data-testid=chat-send]"));
+    // In the conversation at once, not queued: unread until its next step.
     await app.waitFor(
-      "!!document.querySelector('[data-testid=chat-queued-send-now]')",
-      { timeoutMs: 20_000, label: "queued message" },
+      "document.querySelector('[data-unread] [data-testid=chat-unread-state]')?.textContent === 'Not read yet' && !!document.querySelector('[data-unread] [data-testid=chat-steer-now]') && !document.querySelector('[data-testid=chat-queued-message]')",
+      { timeoutMs: 20_000, label: "unread message" },
     );
-    await app.eval(CLICK("[data-testid=chat-queued-send-now]"));
+    expect(
+      await app.eval(CLICK("[data-unread] [data-testid=chat-steer-now]")),
+    ).toBe(true);
+    await app.waitFor("!document.querySelector('[data-unread]')", {
+      timeoutMs: 10_000,
+      label: "read at once",
+    });
     await app.waitFor(
-      "!!document.querySelector('[data-testid=chat-interrupted]') && document.body.innerText.includes('You said: second task')",
-      { timeoutMs: 20_000, label: "first interrupted, second answered" },
+      "document.body.innerText.includes('You also said: second task')",
+      { timeoutMs: 20_000, label: "answered in the same turn" },
+    );
+  });
+
+  it("interrupts the agent to send a message now", async () => {
+    await app.waitFor(
+      "!document.querySelector('[data-testid=chat-interrupt]')",
+      { timeoutMs: 20_000, label: "settled" },
+    );
+    await app.eval(TYPE("[data-testid=chat-input]", "slow long task"));
+    await app.eval(CLICK("[data-testid=chat-send]"));
+    await app.waitFor(
+      "!!document.querySelector('[data-testid=chat-interrupt]')",
+      { timeoutMs: 20_000, label: "working" },
+    );
+    await app.eval(TYPE("[data-testid=chat-input]", "third task"));
+    await app.eval(CLICK("[data-testid=chat-send-now]"));
+    await app.waitFor(
+      "!!document.querySelector('[data-testid=chat-interrupted]') && document.body.innerText.includes('You said: third task')",
+      { timeoutMs: 20_000, label: "first interrupted, third answered" },
     );
   });
 

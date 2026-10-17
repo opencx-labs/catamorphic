@@ -518,7 +518,12 @@ export interface TaskNotificationItem
     DeliveryFields,
     Extract<SessionInput, { kind: "task_notification" }> {}
 
-/** An item a delivery added: what a turn takes in. */
+/**
+ * An item a delivery added: what a turn takes in. It is `in_progress` while
+ * the agent has not read it: delivered `message_only` until a turn takes it
+ * in, or steered into a working turn until the agent reaches its next step
+ * (ADR 0240). Once read it is `completed`.
+ */
 export type InputItem =
   | UserMessageItem
   | InboundMessageItem
@@ -532,6 +537,18 @@ export const INPUT_ITEM_KINDS = [
 
 export function isInputItem(item: Item): item is InputItem {
   return (INPUT_ITEM_KINDS as readonly string[]).includes(item.kind);
+}
+
+/**
+ * Steered into a working turn and not read yet: the agent takes it in at
+ * its next step, or at once with `steer_now` (ADR 0240).
+ */
+export function isUnreadSteer(item: Item): item is InputItem {
+  return (
+    isInputItem(item) &&
+    item.dispatch === "steer" &&
+    item.status === "in_progress"
+  );
 }
 
 export interface AssistantMessageItem extends ItemCommon {

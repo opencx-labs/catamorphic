@@ -7,6 +7,7 @@ import type {
   SessionFields,
   SessionSnapshot,
   StoredSessionEvent,
+  TaskNotificationItem,
   Turn,
   UserMessageItem,
 } from "@catamorphic/agent-protocol";
@@ -123,6 +124,35 @@ export function userMessage(
     author: { kind: "user", externalUserId: "test-user" },
     text,
     attachments: [],
+    dispatch: "queue",
+    attention: null,
+    idempotencyKey: null,
+    deliveredBy: null,
+    causation: [],
+    ...overrides,
+  };
+}
+
+/** Work's report that a background command finished. */
+export function taskNotification(
+  id: string,
+  position: number,
+  turnId: string | null,
+  summary: string,
+  overrides: Partial<TaskNotificationItem> = {},
+): TaskNotificationItem {
+  return {
+    ...common(id, position, turnId),
+    kind: "task_notification",
+    task: {
+      type: "background_command",
+      id: `task:${id}`,
+      title: summary,
+      status: "completed",
+    },
+    summary,
+    detail: "",
+    source: null,
     dispatch: "queue",
     attention: null,
     idempotencyKey: null,

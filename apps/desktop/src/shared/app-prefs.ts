@@ -55,6 +55,12 @@ export interface AppPrefs {
    */
   chatWorkLive: "all" | "latest" | "notes";
   chatWorkSettled: "keep" | "collapse";
+  /**
+   * A message sent while the agent works waits for its turn to end,
+   * editable until then. Off: the agent reads it at its next step, and the
+   * person can interrupt it to read it at once (ADR 0240).
+   */
+  chatQueueMessages: boolean;
   /** Soft chime when an agent finishes or asks a question. */
   notificationSounds: boolean;
   /** OS notification for the same events while the app is unfocused. */
@@ -155,6 +161,7 @@ export const DEFAULT_PREFS: AppPrefs = {
   dockCollapsed: false,
   chatWorkLive: "all",
   chatWorkSettled: "collapse",
+  chatQueueMessages: false,
   notificationSounds: true,
   desktopNotifications: true,
   sidebarOpen: true,
@@ -247,6 +254,7 @@ export function normalizePrefs(raw: unknown): AppPrefs {
         ? record.chatWorkLive
         : "all",
     chatWorkSettled: record.chatWorkSettled === "keep" ? "keep" : "collapse",
+    chatQueueMessages: record.chatQueueMessages === true,
     dockPlacement:
       record.dockPlacement === "left" || record.dockPlacement === "right"
         ? record.dockPlacement
