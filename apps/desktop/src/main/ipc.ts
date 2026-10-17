@@ -163,6 +163,10 @@ import {
 } from "./remote-sync.js";
 import type { EmbeddedServer } from "./server/boot.js";
 import { DESKTOP_TENANT_ID, DESKTOP_USER_ID } from "./server/boot.js";
+import {
+  CLAUDE_SIGNED_IN_PAGE,
+  type ClaudeAccounts,
+} from "./server/claude-accounts.js";
 import { e2eReviewFixture } from "./server/e2e-review-fixture.js";
 import { GITHUB_APP } from "./server/github.js";
 import {
@@ -331,6 +335,7 @@ export function registerIpcHandlers(
   mcpApps?: McpAppsService,
   mobilePairing?: MobilePairingService,
   incognitoSessions?: IncognitoSessionsStore,
+  claudeAccounts?: ClaudeAccounts,
 ): void {
   registerGitOverviewSubscriptions({
     resolve: async (input) => {
@@ -1187,10 +1192,13 @@ export function registerIpcHandlers(
     }
     const home = app.getPath("home");
     return {
-      claudeCode: [
-        path.join(home, ".claude", ".credentials.json"),
-        path.join(home, ".claude.json"),
-      ].some((file) => fs.existsSync(file)),
+      // An account signed in from Work counts (ADR 0243).
+      claudeCode:
+        claudeAccounts?.hasAccounts() === true ||
+        [
+          path.join(home, ".claude", ".credentials.json"),
+          path.join(home, ".claude.json"),
+        ].some((file) => fs.existsSync(file)),
       codex: fs.existsSync(path.join(home, ".codex", "auth.json")),
     };
   });
@@ -1330,6 +1338,14 @@ export function registerIpcHandlers(
       if (agent.auth === "api-key" || agent.harness === "ai-sdk") {
         return { health: agent.apiKey !== null ? "ok" : "missing", reauth };
       }
+      // Claude accounts signed in from Work take turns for this machine's
+      // login (ADR 0243); one signed out is passed over.
+      if (
+        agent.harness === "claude-code" &&
+        agent.auth === "local" &&
+        claudeAccounts?.hasAccounts()
+      )
+        return { health: "ok", reauth };
       const credentials = await agentCredentials(agent);
       if (agent.harness === "codex") {
         // Codex's auth.json has no readable expiry; presence is the probe.
@@ -1629,6 +1645,28 @@ export function registerIpcHandlers(
     }
     return { started: false, command };
   });
+
+  // Claude accounts (ADR 0243): the roster, and signing in and out. Every
+  // rule is fixed in the roster; there is nothing to set.
+  ipcMain.handle("catamorphic:claude-accounts-list", () =>
+    claudeAccounts?.view(),
+  );
+  ipcMain.handle("catamorphic:claude-accounts-sign-in", async (event) => {
+    if (!claudeAccounts) return { ok: false, error: "Work is still starting." };
+    const sender = event.sender;
+    const result = await claudeAccounts.signIn((url) => {
+      try {
+        openWorkspaceUrl(sender, url);
+      } catch (cause) {
+        console.warn("[desktop] Claude sign-in page could not open:", cause);
+      }
+    });
+    if (result.ok) closeWorkspaceCallback(sender, CLAUDE_SIGNED_IN_PAGE);
+    return result;
+  });
+  ipcMain.handle("catamorphic:claude-accounts-sign-out", (_event, id: string) =>
+    claudeAccounts?.signOut(id),
+  );
 
   ipcMain.handle("catamorphic:server-state", () => ({
     url: state.current?.url ?? null,

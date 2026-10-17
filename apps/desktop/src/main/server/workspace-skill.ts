@@ -228,6 +228,7 @@ Connected services are MCP servers named after the service when your harness
 searches its own tools: find their tools with that search. Otherwise discover the
 connection by service name, then its tools. Authentication stays in the host UI.
 Discover request_connection for a missing service; never ask for credentials in
-chat. If installation needs another turn, follow its returned
+chat. Discover claude_accounts when the person wants another Claude account or
+asks about Claude usage limits. If installation needs another turn, follow its returned
 continuation instructions. Use tools only within the user's authorized task.
 `;

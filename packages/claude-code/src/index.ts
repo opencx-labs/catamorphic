@@ -17,7 +17,10 @@ export {
 export {
   type ClaudeCodeDefaultModel,
   type ClaudeCodeModel,
+  type ClaudeCodeUsage,
+  type ClaudeCodeUsageWindow,
   listClaudeCodeModels,
+  readClaudeCodeUsage,
   resolveClaudeCodeModel,
 } from "./list-models.js";
 export {

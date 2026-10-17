@@ -273,7 +273,10 @@ listed, diffed, assignable by agents when concurrent work needs isolation,
 and a chat's own worktree is a palette command away, set up before its first
 turn and brought back from the chat's status popup. Chats you start in Claude
 Code or Codex outside Work can appear among the project's chats, ready to
-continue on an agent of the same tool. Checkout management is harness-neutral, so Claude Code, Codex,
+continue on an agent of the same tool. Sign several Claude accounts in from
+Settings and Claude Code takes turns on them, moving to the next account when
+the one in use reaches 85% of its 5-hour or weekly limit
+([ADR 0243](docs/decisions/0243-claude-accounts-take-turns.md)). Checkout management is harness-neutral, so Claude Code, Codex,
 and the built-in agent follow the same policy. Diff tabs render in Monaco;
 changed files and pull requests are sources any sidebar section or palette
 mode can list (Find changed files searches them); PR review opens per-file

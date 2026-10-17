@@ -21,6 +21,7 @@ import {
 } from "electron";
 import type { DesktopUpdateChannel } from "../shared/update.js";
 import { registerAgentBridge } from "./agent-bridge.js";
+import { readAgentCredentials } from "./agent-credentials.js";
 import { macApplicationMenu } from "./app-menu.js";
 import { registerBrowserSupport } from "./browser.js";
 import { toPublicConnection } from "./connections-store.js";
@@ -36,6 +37,7 @@ import {
 } from "./development-paths.js";
 import { dockClicks } from "./dock-clicks.js";
 import { shouldUseE2ePlainTextEncryption } from "./e2e-safe-storage.js";
+import { harnessPathEnvironment } from "./harness-components.js";
 import { IncognitoSessionsStore } from "./incognito-sessions.js";
 import { registerIpcHandlers, type ServerState } from "./ipc.js";
 import { type Keybindings, toAccelerator } from "./keybindings.js";
@@ -46,6 +48,8 @@ import { prepareVersionBackup } from "./pre-migration-backup.js";
 import { ProfileConfigManager } from "./profile-config.js";
 import { ProfilesStore } from "./profiles.js";
 import { type EmbeddedServer, startEmbeddedServer } from "./server/boot.js";
+import { ClaudeAccounts, claudeAccountsCli } from "./server/claude-accounts.js";
+import { e2eClaudeAccountsCli } from "./server/e2e-fakes.js";
 import { DESKTOP_API_TOKEN_HEADER } from "./server/local-api-guard.js";
 import { resolveDataPaths } from "./server/paths.js";
 import {
@@ -723,6 +727,38 @@ app.whenReady().then(async () => {
     path.join(paths.root, "..", "incognito-sessions.json"),
   );
 
+  // Claude accounts (ADR 0243): app-wide, like the machine's own login.
+  // E2E never runs a real Claude Code sign-in.
+  const e2eAccounts = process.env.CATAMORPHIC_E2E_FAKE_AGENT === "1";
+  const homeDir = app.getPath("home");
+  const claudeAccounts = new ClaudeAccounts({
+    file: path.join(paths.root, "..", "claude-accounts.json"),
+    homesDir: paths.agentHomesDir,
+    machineConfigDir: path.join(homeDir, ".claude"),
+    machineSignedIn: async () =>
+      (
+        await readAgentCredentials(
+          { harness: "claude-code", auth: "local", id: "" },
+          { homeDir, agentHomesDir: paths.agentHomesDir },
+        )
+      ).present,
+    cli: e2eAccounts
+      ? e2eClaudeAccountsCli(process.env.CATAMORPHIC_E2E_CLAUDE_ACCOUNTS ?? "")
+      : claudeAccountsCli(async () => {
+          const registry = state.current?.agentRegistry;
+          if (!registry)
+            throw new Error("Work is still starting. Try again in a moment.");
+          const claude = await registry.ensureHarnessExecutable("claude-code");
+          return {
+            path: claude.executablePath,
+            env: harnessPathEnvironment(claude),
+          };
+        }),
+    onChange: () =>
+      state.broadcast("catamorphic:claude-accounts-changed", null),
+    alwaysFresh: e2eAccounts,
+  });
+
   // "Continue on mobile": the LAN listener that serves the PWA and
   // proxies /api with device-token auth. Auto-listens when phones are
   // already paired, so they reconnect after a desktop restart.
@@ -755,6 +791,7 @@ app.whenReady().then(async () => {
     mcpApps,
     mobilePairing,
     incognitoSessions,
+    claudeAccounts,
   );
   browserSupport = registerBrowserSupport(
     profilesStore,
@@ -827,6 +864,7 @@ app.whenReady().then(async () => {
       mcpApps,
       incognitoSessions,
       [desktopProfileMcpProvider],
+      claudeAccounts,
     );
     versionBackup.markBootSuccessful();
     // The app's own windows (the default session; browser tabs have their

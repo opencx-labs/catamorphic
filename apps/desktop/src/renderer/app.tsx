@@ -4324,6 +4324,21 @@ export function App({
     },
     "close-tab": closeActiveSurface,
     "setup-agent": () => setWizardModalOpen(true),
+    // Claude Code's own sign-in opens in a browser tab (ADR 0243); once it
+    // is done, Settings shows the roster with the new account.
+    "sign-in-claude-account": () =>
+      void desktopApi.claudeAccountsSignIn().then((result) => {
+        if (result.ok)
+          openTab({
+            kind: "settings",
+            name: "settings",
+            label: "Settings",
+            destination: {
+              id: "claude-accounts",
+              requestId: crypto.randomUUID(),
+            },
+          });
+      }),
     "default-agent": () => openPalettePicker("default-agent"),
     "change-assistant": () => openPalettePicker("assistant"),
     "session-status": () => {
@@ -6275,6 +6290,7 @@ export function App({
             [
               "check-for-updates",
               "setup-agent",
+              "sign-in-claude-account",
               "manage-connectors",
               "connect-remote-project",
               "new-browser-tab",

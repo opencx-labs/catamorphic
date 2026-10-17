@@ -146,6 +146,103 @@ export async function resolveClaudeCodeModel(opts: {
   }
 }
 
+/** One plan window of a Claude sign-in, as `/usage` shows it. */
+export interface ClaudeCodeUsageWindow {
+  /** Percent of the window used, 0-100. */
+  utilization: number;
+  /** When the window resets (ISO 8601). */
+  resetsAt?: string;
+}
+
+/** A Claude Code sign-in and its plan usage, as the CLI reports them. */
+export interface ClaudeCodeUsage {
+  /** The CLI is signed in to a Claude account (not a key or a gateway). */
+  signedIn: boolean;
+  email?: string;
+  /** The account's plan as the CLI names it ("Claude Max"). */
+  plan?: string;
+  fiveHour?: ClaudeCodeUsageWindow;
+  sevenDay?: ClaudeCodeUsageWindow;
+}
+
+/**
+ * Who the CLI is signed in as and the plan usage `/usage` shows, asked of
+ * the CLI over its control channel (`get_usage`, which the SDK still marks
+ * experimental). The CLI reads both with its own sign-in, so the host never
+ * touches a credential. Opens a query that never sends a prompt (no model
+ * request), asks, and closes.
+ */
+export async function readClaudeCodeUsage(opts: {
+  /** Over the host's environment (see hostProcessEnv), e.g. CLAUDE_CONFIG_DIR. */
+  env?: Record<string, string>;
+  /** Host-provided CLI path, including an on-demand desktop component. */
+  pathToClaudeCodeExecutable?: string;
+  /** Give up after this long (default 15s). */
+  timeoutMs?: number;
+}): Promise<ClaudeCodeUsage> {
+  const abort = new AbortController();
+  const never = (async function* (): AsyncGenerator<SDKUserMessage> {
+    await new Promise<void>((resolve) => {
+      if (abort.signal.aborted) return resolve();
+      abort.signal.addEventListener("abort", () => resolve(), { once: true });
+    });
+  })();
+  const live = query({
+    prompt: never,
+    options: {
+      abortController: abort,
+      env: { ...hostProcessEnv({ env: opts.env }), ...opts.env },
+      pathToClaudeCodeExecutable: opts.pathToClaudeCodeExecutable,
+      // Asking must not execute hooks, connect MCP servers, or ask a model.
+      settings: { disableAllHooks: true },
+      strictMcpConfig: true,
+      mcpServers: {},
+      tools: [],
+      persistSession: false,
+    },
+  });
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_resolve, reject) => {
+    timeout = setTimeout(() => {
+      reject(new Error("Claude usage did not answer in time."));
+      abort.abort();
+      live.close();
+    }, opts.timeoutMs ?? 15_000);
+  });
+  try {
+    const account = await Promise.race([live.accountInfo(), deadline]);
+    if (!account.email) return { signedIn: false };
+    const usage = await Promise.race([
+      live.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET({
+        skipBehaviors: true,
+      }),
+      deadline,
+    ]);
+    const window = (
+      value: { utilization: number | null; resets_at: string | null } | null,
+    ): ClaudeCodeUsageWindow | undefined =>
+      typeof value?.utilization === "number"
+        ? {
+            utilization: value.utilization,
+            ...(value.resets_at ? { resetsAt: value.resets_at } : {}),
+          }
+        : undefined;
+    const fiveHour = window(usage.rate_limits?.five_hour ?? null);
+    const sevenDay = window(usage.rate_limits?.seven_day ?? null);
+    return {
+      signedIn: true,
+      email: account.email,
+      ...(account.subscriptionType ? { plan: account.subscriptionType } : {}),
+      ...(fiveHour ? { fiveHour } : {}),
+      ...(sevenDay ? { sevenDay } : {}),
+    };
+  } finally {
+    clearTimeout(timeout);
+    abort.abort();
+    await live.return();
+  }
+}
+
 /**
  * `get_settings` is part of the CLI's control protocol ("the effective
  * merged settings", `applied.model` being the model the next request

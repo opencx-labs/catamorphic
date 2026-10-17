@@ -721,6 +721,37 @@ the historical log explains how it arrived here.
 - [Performance](docs/performance.md): idle lifecycle checks and sustained measurement.
 
 ## Design log
+### 2026-10-17: Claude accounts take turns, and there is nothing to set
+
+Someone with two Claude plans reached one's 5-hour limit and had to run
+`/login` in a terminal or move their chats to a second agent. Settings,
+Agents now ends with Claude accounts (ADR 0243): this Mac's own Claude
+Code login, then every account signed in from Work, each with its plan and
+two small meters, 5-hour and weekly, which turn amber at 85%. "In use"
+marks the account Claude Code agents on this machine's login run on. The
+card's only control is "Sign in to a Claude account"; a row's remove
+button signs it out. No threshold, no order, no per-agent switch: the
+roster is meant to be used without being understood.
+
+Signing in runs Claude Code's own `claude auth login` in a home of its
+own; its page opens in a Work tab, which closes once Claude says it is
+done, and the button reads "Finish signing in in the browser tab…"
+meanwhile. When the account in use reaches 85% of either limit, or a turn
+on it is rate limited, the next turn moves to the next account and its
+activity line says so ("Using b@example.com: a@example.com is at 87% of
+its 5-hour limit"); the card names the last switch under the rows. The
+palette has "Sign in to a Claude account…" and finds "Claude accounts"
+among the settings; opened from there, the card focuses its sign-in button
+(or itself while a sign-in finishes), never a row's sign-out: a Settings
+block that names its control focuses only that control. An agent asked for
+another account starts the same sign-in with the `claude_accounts` tool and
+waits for it.
+
+`claude-accounts.test.ts` covers the choice, sign-in, sign-out, rests
+and readings; `usage.native.test.ts` the CLI's answer for a home nobody
+signed in to; `e2e/claude-accounts.e2e.ts` the card, the palette, the
+assistant's sign-in and a chat moving accounts at 85% and on a rate limit.
+
 ### 2026-10-17: A message sent while the agent works reaches it
 
 A message sent while the agent worked waited, a dashed ghost, until the

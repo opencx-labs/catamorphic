@@ -78,6 +78,12 @@ it("identifies the owning profile and primary project paths, with live file erro
   expect(DESKTOP_SETTINGS_SKILL).toMatch(
     /\| windowButtons \| Window buttons: .* Only on macOS; elsewhere it changes nothing\. \| boolean \| profile \| true \|/,
   );
+  // Asked for another Claude account, an agent signs it in with the tool,
+  // and knows there is nothing to configure (ADR 0243).
+  expect(DESKTOP_SETTINGS_SKILL).toContain("claude_accounts tool");
+  expect(DESKTOP_SETTINGS_SKILL).toContain(
+    "reaches 85% of its 5-hour or weekly limit",
+  );
 });
 it("distinguishes restricted native access from an unavailable host filesystem", () => {
   const { config, one } = fixture();

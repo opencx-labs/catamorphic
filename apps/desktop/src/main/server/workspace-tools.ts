@@ -16,6 +16,7 @@ import {
 } from "../../shared/chat-icons.js";
 import { parseSurfaceLink } from "../../shared/surface-link.js";
 import type { TurnHolder, WorkspaceBridge } from "../agent-bridge.js";
+import type { ClaudeAccounts } from "./claude-accounts.js";
 
 /**
  * The agent's workspace toolset: discovery (what tabs, chats, and sidebar
@@ -300,6 +301,7 @@ export const WORKSPACE_TOOL_POLICY: Readonly<
   request_connection: write,
   read_skill: read,
   desktop_settings: read,
+  claude_accounts: write,
   surface_control: write,
 };
 
@@ -308,6 +310,8 @@ export function buildWorkspaceToolkit(
   host: {
     /** Work's settings files and their state for one project's profile. */
     desktopSettings?: (projectId: string) => unknown;
+    /** The Claude accounts roster (ADR 0243). */
+    claudeAccounts?: Pick<ClaudeAccounts, "view" | "signIn">;
   } = {},
 ): WorkspaceToolkit {
   let readChatTranscript: ChatTranscriptReader | null = null;
@@ -1221,6 +1225,28 @@ export function buildWorkspaceToolkit(
         if (!host.desktopSettings)
           throw new Error("Work settings are not available here.");
         return host.desktopSettings(ctx.projectId);
+      },
+    },
+    {
+      name: "claude_accounts",
+      description:
+        "The Claude accounts that Claude Code agents on this machine's login take turns on (Settings, Agents, Claude accounts): each account's plan, its 5-hour and weekly usage, and which one is in use. Work moves to the next account when the one in use reaches 85% of either limit; there is nothing to configure. 'list' reads the roster. 'sign_in' adds an account: Claude Code's own sign-in opens in a browser tab and this waits until the person finishes it (up to 10 minutes). Never ask for passwords, codes or tokens. To sign one out, point the person at Settings.",
+      parameters: {
+        action: z
+          .enum(["list", "sign_in"])
+          .describe("'list' the roster, or 'sign_in' another account"),
+      },
+      execute: async (input, ctx) => {
+        const accounts = host.claudeAccounts;
+        if (!accounts)
+          throw new Error("Claude accounts are not available here.");
+        if (input.action !== "sign_in") return accounts.view();
+        const result = await accounts.signIn((url) => {
+          void bridge
+            .openTarget(ctx.projectId, ctx.sessionId ?? "", url)
+            .catch(() => {});
+        });
+        return { ...result, roster: await accounts.view() };
       },
     },
     {

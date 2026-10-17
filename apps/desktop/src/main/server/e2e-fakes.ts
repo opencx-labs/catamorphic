@@ -40,6 +40,7 @@ import {
   StdioDeploymentRuntimeProvider,
 } from "@catamorphic/sandbox";
 import { z } from "zod";
+import type { ClaudeAccountsCli } from "./claude-accounts.js";
 import type { desktopSettingsContext } from "./desktop-settings-context.js";
 import { reviewAppFiles, reviewAppSource } from "./e2e-review-app.js";
 import { localAgentWorkspace } from "./local-agent-workspace.js";
@@ -301,6 +302,8 @@ interface FakeTurn {
   projectId: string;
   sessionId: string;
   workingDirectory: string;
+  /** The attempt's environment: which Claude account it runs on (ADR 0243). */
+  env: Record<string, string>;
   /** The last turn asked the person a question this message answers. */
   askedQuestion: boolean;
   interrupted(): boolean;
@@ -363,6 +366,8 @@ interface FakeTurn {
  *   live line, then an answer streamed a few words at a time ("quickly",
  *   "with notes", "then go quiet" and "at length" vary it).
  * - "auth error" / "rate limit" → a provider failure once per message.
+ * - "which claude account" → names the Claude account the turn ran on.
+ * - "add a claude account" → the REAL claude_accounts tool signs one in.
  * - "expired sign-in" / "expired sign-in xN" → a Claude Code sign-in that
  *   did not refresh, safe to retry, on the first (N) attempts.
  * - "permission: <server>/<tool>" → a tool approval request.
@@ -456,6 +461,7 @@ export class E2eFakeAdapter implements HarnessAdapter {
         projectId: attempt.projectId,
         sessionId: attempt.sessionId,
         workingDirectory: attempt.workingDirectory,
+        env: attempt.env ?? {},
         askedQuestion: lastAskedQuestion(saved),
         interrupted: () => interrupted,
         pause,
@@ -865,6 +871,65 @@ export function parse(input = ""): Token[] {
 
 `,
 ).join("");
+
+/** Where an e2e Claude account home records who signed in. */
+const E2E_ACCOUNT_FILE = "e2e-account";
+
+/**
+ * E2E: the Claude accounts roster's Claude Code (ADR 0243), no real
+ * sign-in. The test writes `file`: `{ machine?: email, signIns: email[],
+ * usage: { [email]: { fiveHour?, weekly? } } }`. A sign-in takes the next
+ * email in `signIns` after a beat, so its pending state shows; usage is
+ * read from the file on every ask, so a test moves an account past 85% by
+ * rewriting it.
+ */
+export function e2eClaudeAccountsCli(file: string): ClaudeAccountsCli {
+  let signIns = 0;
+  const read = (): {
+    machine?: string;
+    signIns?: string[];
+    usage?: Record<string, { fiveHour?: number; weekly?: number }>;
+  } => {
+    try {
+      return JSON.parse(fs.readFileSync(file, "utf8"));
+    } catch {
+      return {};
+    }
+  };
+  return {
+    login: async ({ home, signal }) => {
+      const email = read().signIns?.[signIns];
+      if (!email) return false;
+      signIns += 1;
+      await new Promise((resolve) => setTimeout(resolve, 1_500));
+      if (signal.aborted) return false;
+      fs.writeFileSync(path.join(home, E2E_ACCOUNT_FILE), email);
+      return true;
+    },
+    logout: async () => {},
+    usage: async (home) => {
+      let email: string | undefined;
+      try {
+        email = home
+          ? fs.readFileSync(path.join(home, E2E_ACCOUNT_FILE), "utf8")
+          : read().machine;
+      } catch {}
+      if (!email) return { signedIn: false };
+      const usage = read().usage?.[email] ?? {};
+      return {
+        signedIn: true,
+        email,
+        plan: "Claude Max",
+        ...(usage.fiveHour === undefined
+          ? {}
+          : { fiveHour: { utilization: usage.fiveHour } }),
+        ...(usage.weekly === undefined
+          ? {}
+          : { sevenDay: { utilization: usage.weekly } }),
+      };
+    },
+  };
+}
 
 async function* fakeScript(turn: FakeTurn): AsyncGenerator<FakeStep> {
   const message = turn.message;
@@ -2297,6 +2362,29 @@ export const catalog = defineWorkflow(({ defineBoundary }) => ({
     return;
   }
 
+  // "add a claude account" → the REAL claude_accounts tool (ADR 0243),
+  // as an agent asked for another account uses it: sign one in, then say
+  // who joined the roster.
+  if (prompt.includes("add a claude account")) {
+    const result = z
+      .object({
+        ok: z.boolean(),
+        email: z.string().optional(),
+        error: z.string().optional(),
+        roster: z.object({
+          accounts: z.array(z.object({ label: z.string() })),
+        }),
+      })
+      .parse(await turn.tool("claude_accounts", { action: "sign_in" }));
+    yield {
+      type: "text",
+      content: result.ok
+        ? `Signed in ${result.email}. Claude accounts: ${result.roster.accounts.map((account) => account.label).join(", ")}.`
+        : `The sign-in did not finish: ${result.error ?? "no reason given"}.`,
+    };
+    return;
+  }
+
   // "connect: <query>" → the REAL request_connection tool: the front
   // window opens the connectors modal seeded with the query; the tool
   // resolves with whatever the user (the test) installed before closing.
@@ -2348,6 +2436,20 @@ export const catalog = defineWorkflow(({ defineBoundary }) => ({
         content: `open error: ${error instanceof Error ? error.message : String(error)}`,
       };
     }
+    return;
+  }
+
+  // "which claude account" → the account of the roster this attempt runs
+  // on (ADR 0243): its home's e2e sign-in, or the machine's login.
+  if (prompt.includes("which claude account")) {
+    // A beat, as a CLI starting on another account takes: the activity
+    // line shows why the turn changed accounts meanwhile.
+    await turn.pause(1_500);
+    const home = turn.env.CLAUDE_CONFIG_DIR;
+    const email = home
+      ? fs.readFileSync(path.join(home, E2E_ACCOUNT_FILE), "utf8")
+      : "this Mac's login";
+    yield { type: "text", content: `Claude account: ${email}` };
     return;
   }
 

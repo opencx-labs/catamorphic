@@ -88,7 +88,9 @@ catalog id and a new request id, so opening an already-mounted Settings surface
 reveals the control again. Every id resolves to one block: the Connections
 category exposes `github-cli` and `connectors` rather than a category-wide
 target. Navigation expands advanced colors when needed, waits for async
-controls, scrolls, highlights and focuses the target. A floating chat minimizes so it cannot obscure
+controls, scrolls, highlights and focuses the target. A block that names its
+control with `data-setting-control` focuses that control, or the block itself
+while the control is disabled, never another of its buttons. A floating chat minimizes so it cannot obscure
 the control. Rows identify the inspected scope even when navigation passes its
 section header. Navigation never changes a preference itself.
 

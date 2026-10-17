@@ -67,6 +67,7 @@ import {
   assistantHostTools,
   withoutReplacedTools,
 } from "./assistant-agent.js";
+import type { ClaudeAccounts } from "./claude-accounts.js";
 import { buildAiSdkAdapter } from "./coding-agent.js";
 import { desktopSettingsContext } from "./desktop-settings-context.js";
 import { E2eFakeAdapter } from "./e2e-fakes.js";
@@ -202,6 +203,11 @@ export interface DesktopAgentRegistryDeps {
   signInRefreshable?: (signIn: AgentSignIn) => Promise<boolean>;
   /** Work's logs directory: a sign-in retry's CLI writes its debug log there. */
   logsDir?: string;
+  /**
+   * The Claude accounts Claude Code agents on this machine's login take
+   * turns on (ADR 0243): each attempt asks which one it runs on.
+   */
+  claudeAccounts?: Pick<ClaudeAccounts, "forAttempt" | "view" | "signIn">;
 }
 
 function resolveProjectDelegation(
@@ -310,6 +316,9 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     this.workspaceToolkit = deps.workspaceBridge
       ? buildWorkspaceToolkit(deps.workspaceBridge, {
           desktopSettings: (projectId) => this.settingsContext(projectId),
+          ...(deps.claudeAccounts
+            ? { claudeAccounts: deps.claudeAccounts }
+            : {}),
         })
       : undefined;
     const needsOpenRouterDefault = deps.profiles
@@ -1012,13 +1021,28 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
       const fake = new E2eFakeAdapter({
         settingsContext: (projectId) => this.settingsContext(projectId, config),
       });
+      const accounts =
+        config.harness === "claude-code" && config.auth === "local"
+          ? this.deps.claudeAccounts
+          : undefined;
       return {
         harness: {
           placement: "host",
           adapter: desktopAdapter({
             id: config.harness,
             capabilities: () => fake.capabilities(),
-            prepare: async (attempt) => ({ adapter: fake, attempt }),
+            prepare: async (attempt, report) => {
+              const account = await accounts?.forAttempt(report);
+              return account
+                ? {
+                    adapter: account.watch(fake),
+                    attempt: {
+                      ...attempt,
+                      env: { ...attempt.env, ...account.env },
+                    },
+                  }
+                : { adapter: fake, attempt };
+            },
             errors,
           }),
           ...served,
@@ -1096,22 +1120,35 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
           harness: "claude-code",
           permissions: config.harnessPermissions,
         });
+        // On this machine's login, each attempt runs on the account of the
+        // Claude accounts roster in turn (ADR 0243).
+        const accounts =
+          config.auth === "local" && !apiKey
+            ? this.deps.claudeAccounts
+            : undefined;
         return {
           harness: {
             placement: "host",
             adapter: desktopAdapter({
               id: this.claudeCode.id,
               capabilities: () => CLAUDE_CODE_CAPABILITIES,
-              prepare: (attempt, report) =>
-                this.nativeAttempt({
+              prepare: async (attempt, report) => {
+                const account = await accounts?.forAttempt(report);
+                const prepared = await this.nativeAttempt({
                   harness: "claude-code",
                   adapter: this.claudeCode,
                   attempt,
                   report,
                   keyEnv: apiKey
                     ? async () => ({ ANTHROPIC_API_KEY: await apiKey() })
-                    : undefined,
-                }),
+                    : account
+                      ? async () => account.env
+                      : undefined,
+                });
+                return account
+                  ? { ...prepared, adapter: account.watch(prepared.adapter) }
+                  : prepared;
+              },
               errors,
             }),
             ...served,

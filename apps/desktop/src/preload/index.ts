@@ -1,6 +1,10 @@
 import type { ResourcePreview } from "@catamorphic/react";
 import { contextBridge, ipcRenderer, webUtils } from "electron";
 import type { BackgroundCommandView } from "../shared/background-commands.js";
+import type {
+  ClaudeAccountSignIn,
+  ClaudeAccountsView,
+} from "../shared/claude-accounts.js";
 
 // Electron prefixes every rejected invoke with "Error invoking remote method
 // '<channel>': Error: ". The renderer shows messages to people and matches
@@ -276,6 +280,23 @@ const api = {
     invoke("catamorphic:agent-login", id),
   agentLoginStatus: (id: string): Promise<boolean> =>
     invoke("catamorphic:agent-login-status", id),
+  /** The Claude accounts roster (ADR 0243). */
+  claudeAccountsList: (): Promise<ClaudeAccountsView | undefined> =>
+    invoke("catamorphic:claude-accounts-list"),
+  /** Claude Code's own sign-in for another account; resolves when it ends. */
+  claudeAccountsSignIn: (): Promise<ClaudeAccountSignIn> =>
+    invoke("catamorphic:claude-accounts-sign-in"),
+  claudeAccountsSignOut: (id: string): Promise<void> =>
+    invoke("catamorphic:claude-accounts-sign-out", id),
+  onClaudeAccountsChanged: (listener: () => void): (() => void) => {
+    const handler = () => listener();
+    ipcRenderer.on("catamorphic:claude-accounts-changed", handler);
+    return () =>
+      ipcRenderer.removeListener(
+        "catamorphic:claude-accounts-changed",
+        handler,
+      );
+  },
   /** Fresh commands for the selected harness and session checkout. */
   agentCommands: (input: {
     projectId: string;

@@ -91,6 +91,7 @@ import {
   ASSISTANT_WORK_ROUTE,
 } from "./assistant-agent.js";
 import { assistantTools } from "./assistant-tools.js";
+import type { ClaudeAccounts } from "./claude-accounts.js";
 import { componentRegistryCapability } from "./component-registry.js";
 import {
   connectorMcpPath,
@@ -223,6 +224,7 @@ export async function startEmbeddedServer(
   mcpApps?: McpAppsService,
   incognitoSessions?: IncognitoSessionsStore,
   connectionProviders?: readonly ConnectionProvider[],
+  claudeAccounts?: ClaudeAccounts,
 ): Promise<EmbeddedServer> {
   validateDatabaseFiles(paths.db);
   fs.mkdirSync(paths.db, { recursive: true });
@@ -509,6 +511,7 @@ export async function startEmbeddedServer(
         now: Date.now(),
       }),
     logsDir: electronApp.getPath("logs"),
+    ...(claudeAccounts ? { claudeAccounts } : {}),
   });
   // A chat that failed on its agent's sign-in runs again once the sign-in
   // works, however it came back (ADR 0228).

@@ -18,6 +18,7 @@ import {
   useState,
 } from "react";
 import { ACTION_LABELS, KEYBINDING_ACTIONS } from "../../shared/actions.js";
+import type { ClaudeAccountsView } from "../../shared/claude-accounts.js";
 import { bindingFromEvent, parseBinding } from "../../shared/keybindings.js";
 import {
   SETTING_SOURCE_LABELS,
@@ -158,12 +159,18 @@ export function SettingsScreen({
         );
         highlighted = target;
         keepInView(target);
-        const control =
-          target.querySelector<HTMLElement>("[data-setting-control]") ??
-          target.querySelector<HTMLElement>(
-            "input:not(:disabled),select:not(:disabled)",
-          ) ??
-          target.querySelector<HTMLElement>("button:not(:disabled)");
+        // A block that names its control focuses it, or itself while that
+        // control is busy, never another of its buttons.
+        const named = target.querySelector<HTMLElement>(
+          "[data-setting-control]",
+        );
+        const control = named
+          ? named.matches(":disabled")
+            ? null
+            : named
+          : (target.querySelector<HTMLElement>(
+              "input:not(:disabled),select:not(:disabled)",
+            ) ?? target.querySelector<HTMLElement>("button:not(:disabled)"));
         if (control) control.focus({ preventScroll: true });
         else {
           target.tabIndex = -1;
@@ -214,7 +221,12 @@ export function SettingsScreen({
           Add agent
         </button>
       ),
-      content: <AgentsSection onConfigureAgent={onConfigureAgent} />,
+      content: (
+        <>
+          <AgentsSection onConfigureAgent={onConfigureAgent} />
+          <ClaudeAccountsSection />
+        </>
+      ),
     },
     {
       id: "connections",
@@ -691,6 +703,185 @@ function AgentsSection({
               </div>
             );
           })}
+        </div>
+      )}
+    </section>
+  );
+}
+
+/**
+ * The Claude accounts Claude Code agents on this machine's login take turns
+ * on (ADR 0243). Signing in and out is all there is: Work moves to the next
+ * account at 85% of a limit by itself.
+ */
+function ClaudeAccountsSection() {
+  const [view, setView] = useState<ClaudeAccountsView | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let live = true;
+    const load = () =>
+      void desktopApi
+        .claudeAccountsList()
+        .then((next) => {
+          if (live && next) setView(next);
+        })
+        .catch(() => {});
+    load();
+    const stop = desktopApi.onClaudeAccountsChanged(load);
+    // Usage moves while turns run elsewhere; look again each minute.
+    const timer = setInterval(load, 60_000);
+    return () => {
+      live = false;
+      stop();
+      clearInterval(timer);
+    };
+  }, []);
+
+  const signIn = async () => {
+    setError(null);
+    const result = await desktopApi
+      .claudeAccountsSignIn()
+      .catch((cause: unknown) => ({
+        ok: false as const,
+        error: cause instanceof Error ? cause.message : String(cause),
+      }));
+    if (!result.ok && result.error) setError(result.error);
+  };
+
+  const meter = (label: string, percent: number, switchAt: number) => (
+    <span className="inline-flex items-center gap-1">
+      <span>{label}</span>
+      <span
+        aria-hidden
+        className="relative h-1 w-10 overflow-hidden rounded-full bg-bg-inset"
+      >
+        <span
+          className={`absolute inset-y-0 left-0 rounded-full ${percent >= switchAt ? "bg-warning" : "bg-fg-faint"}`}
+          style={{ width: `${Math.min(100, percent)}%` }}
+        />
+      </span>
+      <span
+        className={`tabular-nums ${percent >= switchAt ? "text-warning" : ""}`}
+      >
+        {percent}%
+      </span>
+    </span>
+  );
+
+  return (
+    <section className="settings-card mt-4" data-setting-id="claude-accounts">
+      <h2 className="text-sm font-semibold text-fg">Claude accounts</h2>
+      <p className="mt-1 text-xs leading-5 text-fg-muted">
+        Claude Code agents on this machine's login take turns on these accounts.
+        Work moves to the next one when the account in use reaches{" "}
+        {view?.switchAt ?? 85}% of its 5-hour or weekly limit.
+      </p>
+      {view && (
+        <div className="mt-3 flex flex-col gap-1.5">
+          {view.accounts.length === 0 && (
+            <p className="text-xs text-fg-faint">
+              No Claude account yet. Sign one in to start.
+            </p>
+          )}
+          {view.accounts.map((account) => (
+            <div
+              key={account.id}
+              data-claude-account={account.label}
+              className="group rounded-md px-2 py-2 transition-colors duration-150 hover:bg-bg-overlay/60"
+            >
+              <div className="flex items-center gap-1.5">
+                <span className="min-w-0 flex-1 truncate text-[13px]">
+                  {account.label}
+                </span>
+                {account.inUse && (
+                  <span
+                    data-testid="claude-account-in-use"
+                    className="shrink-0 rounded bg-bg-overlay px-1.5 py-0.5 text-[10px] font-medium text-fg-muted"
+                  >
+                    In use
+                  </span>
+                )}
+                {!account.machine && (
+                  <ShortcutHint label="Sign out">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        void desktopApi.claudeAccountsSignOut(account.id)
+                      }
+                      className="row-reveal grid size-6 shrink-0 cursor-pointer place-items-center rounded text-fg-faint transition-colors hover:text-danger"
+                      aria-label={`Sign out of ${account.label}`}
+                    >
+                      <Trash2 className="size-3" />
+                    </button>
+                  </ShortcutHint>
+                )}
+              </div>
+              <div className="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[11px] text-fg-faint">
+                <span>
+                  {account.machine ? "This Mac's login" : "Signed in from Work"}
+                </span>
+                {account.plan && (
+                  <>
+                    <span>·</span>
+                    <span>{account.plan}</span>
+                  </>
+                )}
+                {account.fiveHour !== undefined && (
+                  <>
+                    <span>·</span>
+                    {meter("5-hour", account.fiveHour, view.switchAt)}
+                  </>
+                )}
+                {account.weekly !== undefined && (
+                  <>
+                    <span>·</span>
+                    {meter("weekly", account.weekly, view.switchAt)}
+                  </>
+                )}
+              </div>
+              {account.note && (
+                <p
+                  data-testid="claude-account-note"
+                  className="mt-1 text-[11px] text-warning"
+                >
+                  {account.note}
+                </p>
+              )}
+            </div>
+          ))}
+          {view.lastSwitch && (
+            <p
+              data-testid="claude-account-last-switch"
+              className="px-2 text-[11px] text-fg-faint"
+            >
+              Switched to {view.lastSwitch.to} at{" "}
+              {new Date(view.lastSwitch.at).toLocaleTimeString([], {
+                hour: "numeric",
+                minute: "2-digit",
+              })}
+              : {view.lastSwitch.from} {view.lastSwitch.reason}.
+            </p>
+          )}
+          <div className="mt-1 flex flex-col gap-1.5 px-2">
+            <PendingButton
+              type="button"
+              data-testid="claude-accounts-sign-in"
+              // Opening the card focuses this, never a row's sign-out.
+              data-setting-control
+              pending={view.signingIn}
+              pendingLabel="Finish signing in in the browser tab…"
+              onClick={() => void signIn()}
+              className="h-6 w-fit cursor-pointer rounded-md border border-border-strong bg-bg-inset px-2 text-[12px] text-fg-muted transition-colors duration-150 hover:border-fg-faint hover:text-fg"
+            >
+              Sign in to a Claude account
+            </PendingButton>
+            {error && (
+              <p role="alert" className="text-[11px] text-danger">
+                {error}
+              </p>
+            )}
+          </div>
         </div>
       )}
     </section>

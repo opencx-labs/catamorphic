@@ -26,6 +26,10 @@ import type {
   BrowserImportRequest,
   BrowserImportResult,
 } from "../../shared/browser-import.js";
+import type {
+  ClaudeAccountSignIn,
+  ClaudeAccountsView,
+} from "../../shared/claude-accounts.js";
 import type { ClaudeCodeInstallStatus } from "../../shared/claude-code-install.js";
 import type {
   ChatDraft,
@@ -1299,6 +1303,12 @@ export interface CatamorphicDesktopApi {
     id: string,
   ) => Promise<{ started: boolean; command?: string; error?: string }>;
   agentLoginStatus: (id: string) => Promise<boolean>;
+  /** The Claude accounts roster (ADR 0243). */
+  claudeAccountsList: () => Promise<ClaudeAccountsView | undefined>;
+  /** Claude Code's own sign-in for another account; resolves when it ends. */
+  claudeAccountsSignIn: () => Promise<ClaudeAccountSignIn>;
+  claudeAccountsSignOut: (id: string) => Promise<void>;
+  onClaudeAccountsChanged: (listener: () => void) => () => void;
   agentAuthHealth: (
     id: string,
   ) => Promise<{ health: "ok" | "expired" | "missing"; reauth: boolean }>;

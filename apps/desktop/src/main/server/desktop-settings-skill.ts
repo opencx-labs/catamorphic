@@ -15,7 +15,7 @@ const tableCell = (text: string) => text.replaceAll("|", "\\|");
 export const DESKTOP_SETTINGS_SKILL = `---
 name: configuring-catamorphic-desktop
 title: Configure desktop settings
-description: Edit Work desktop configuration files to customize theme, fonts, shortcuts, sidebars, the chips above chats and command palette modes (workspace.js, including source modules that sort, filter or group Work's lists such as tabs, chats and a chat's chips, or show any data), tabs, window buttons, notifications, terminal macros or browser bookmarks, including project overrides and reset.
+description: Edit Work desktop configuration files to customize theme, fonts, shortcuts, sidebars, the chips above chats and command palette modes (workspace.js, including source modules that sort, filter or group Work's lists such as tabs, chats and a chat's chips, or show any data), tabs, window buttons, notifications, terminal macros or browser bookmarks, including project overrides and reset. Also signing in another Claude account for the roster Claude Code agents take turns on, and reading its usage.
 ---
 
 # Configure the desktop
@@ -162,4 +162,19 @@ used destinations first, and rows the user picked for a query earlier. Type tabs
 then Space to list only open tabs. A source a sidebar section shows lifts its rows,
 so adding or removing a section in workspace.js changes their rank; otherwise the
 palette learns from use on its own. Do not try to tune ranking any other way.
+
+## Claude accounts
+
+Claude Code agents on this machine's login take turns on the Claude accounts in
+Settings, Agents, Claude accounts: this Mac's own Claude Code login, then every
+account signed in from Work. Work moves to the next account when the one in use
+reaches 85% of its 5-hour or weekly limit, rests an account a turn was rate
+limited on for 5 minutes, and says so on that turn's activity line. Nothing about
+it is configurable: no threshold, order or per-agent choice, and no file to edit.
+When the person wants another account, a second plan, or asks why a chat switched
+accounts, use the claude_accounts tool: \`list\` shows each account's plan and
+usage and which is in use; \`sign_in\` opens Claude Code's own sign-in in a
+browser tab and waits for them to finish it. Never ask for a password, code or
+token. Signing out is in Settings, with the account's remove button; the
+palette's "Sign in to a Claude account…" adds one by hand.
 `;
