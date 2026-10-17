@@ -1,0 +1,42 @@
+name: Desktop icon
+
+# Packaging compiles the Icon Composer icon with actool; this catches a
+# broken icon before a release does, and keeps the compiled catalog for review.
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - apps/desktop/build/icon.icon/**
+      - .github/actions/xcode-26/**
+      - .github/workflows/desktop-icon.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compile:
+    name: Compile the macOS app icon
+    runs-on: macos-15
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/xcode-26
+      - name: Compile as electron-builder does
+        run: |
+          out="${RUNNER_TEMP}/icon"
+          mkdir -p "${out}"
+          cp -R apps/desktop/build/icon.icon "${RUNNER_TEMP}/Icon.icon"
+          actool "${RUNNER_TEMP}/Icon.icon" --compile "${out}" \
+            --output-format human-readable-text --notices --warnings --errors \
+            --output-partial-info-plist "${out}/assetcatalog_generated_info.plist" \
+            --app-icon Icon --include-all-app-icons \
+            --target-device mac --minimum-deployment-target 26.0 --platform macosx
+          test -s "${out}/Assets.car"
+          test -s "${out}/Icon.icns"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-icon
+          path: ${{ runner.temp }}/icon
+          if-no-files-found: error
+          retention-days: 14

@@ -82,6 +82,8 @@ jobs:
           can_push="$(gh api repos/opencx-labs/homebrew-tap --jq '.permissions.push')"
           test "${can_push}" = "true" || { echo "HOMEBREW_TAP_TOKEN cannot push to opencx-labs/homebrew-tap" >&2; exit 1; }
 
+      - uses: ./.github/actions/xcode-26
+
       - name: Build signed and notarized application
         env:
           CSC_LINK: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
@@ -122,8 +124,11 @@ jobs:
           xcrun stapler validate "${app}"
           bundle_id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "${app}/Contents/Info.plist")"
           scheme="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleURLTypes:0:CFBundleURLSchemes:0' "${app}/Contents/Info.plist")"
+          icon_name="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIconName' "${app}/Contents/Info.plist")"
           test "${bundle_id}" = "software.work.desktop"
           test "${scheme}" = "work"
+          test "${icon_name}" = "Icon"
+          test -s "${app}/Contents/Resources/Assets.car"
           (
             cd apps/desktop/release
             shasum -a 256 \

@@ -1,0 +1,10 @@
+name: Xcode 26
+description: Selects the newest Xcode 26 on the runner. Only its actool compiles the Icon Composer app icon.
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: |
+        xcode="$(ls -d /Applications/Xcode_26.*.app | sort -V | tail -n 1)"
+        echo "DEVELOPER_DIR=${xcode}/Contents/Developer" >> "${GITHUB_ENV}"
+        DEVELOPER_DIR="${xcode}/Contents/Developer" actool --version
