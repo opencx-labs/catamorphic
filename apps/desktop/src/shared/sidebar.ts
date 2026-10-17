@@ -20,6 +20,40 @@ export type HostAction = (typeof HOST_ACTIONS)[number];
 export const isHostAction = (action: string): action is HostAction =>
   HOST_ACTIONS.some((name) => name === action);
 
+/**
+ * How Work's verbs look when an entry names one and says nothing more
+ * (ADR 0239): `{ action: "open-side" }` is the open-to-the-side button
+ * wherever a row or chip shows it, in a module's rows or an agent's chip.
+ */
+export const HOST_ACTION_LOOKS: Record<
+  HostAction,
+  { label: string; icon: string }
+> = {
+  open: { label: "Open", icon: "ArrowUpRight" },
+  "open-here": { label: "Open here", icon: "ArrowUpRight" },
+  "open-tab": { label: "Open in new tab", icon: "SquarePlus" },
+  "open-side": { label: "Open to the side", icon: "Columns2" },
+  "open-floating": { label: "Open floating", icon: "PictureInPicture2" },
+  "copy-url": { label: "Copy link", icon: "Link" },
+  refresh: { label: "Refresh", icon: "RefreshCw" },
+  search: { label: "Search", icon: "Search" },
+};
+
+/**
+ * A color a row's icon or a badge takes from the theme (ADR 0239): what
+ * it says (a pull request merged, a check failing), never decoration.
+ */
+export const SIDEBAR_TONES = [
+  "accent",
+  "success",
+  "warning",
+  "danger",
+  "info",
+] as const;
+export type SidebarTone = (typeof SIDEBAR_TONES)[number];
+export const isSidebarTone = (value: unknown): value is SidebarTone =>
+  SIDEBAR_TONES.some((tone) => tone === value);
+
 /** A source's own action: lowercase words joined by dashes (`mark-read`). */
 export const SOURCE_ACTION_PATTERN = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
 
@@ -73,6 +107,7 @@ export interface SidebarActionInput {
 }
 
 export interface SidebarMenuEntry {
+  /** Optional in a layout or a source for Work's verbs (HOST_ACTION_LOOKS). */
   label: string;
   action: SidebarAction;
   /** Render in the danger color (destructive). */
@@ -126,10 +161,11 @@ export interface SidebarWhen extends ProjectExperienceWhen {
   tabPlacement?: "top" | "sidebar";
 }
 
-/** A small chip after a row's label, with an optional icon. */
+/** A small chip after a row's label, with an optional icon and tone. */
 export interface SidebarBadge {
   label: string;
   icon?: string;
+  tone?: SidebarTone;
 }
 
 /**
@@ -144,6 +180,13 @@ export interface SidebarItemPresentation {
   /** Extra words the palette matches this row by (synonyms, ids). */
   keywords?: string[];
   icon?: string;
+  /** The icon's color: what the row's state says (ADR 0239). */
+  tone?: SidebarTone;
+  /**
+   * Chips only: the chip spans the composer's width, its badges and
+   * buttons at the end (ADR 0239). Sidebar rows ignore it.
+   */
+  wide?: boolean;
   badges?: (string | SidebarBadge)[];
   progress?: number;
   signal?: SidebarSignal;
@@ -260,6 +303,12 @@ export interface SidebarSectionConfig {
   contextMenu?: SidebarMenuEntry[];
   actions?: SidebarMenuEntry[];
   height?: number;
+  /**
+   * Show a scroll thumb on the sidebar's edge while this section's list
+   * scrolls. Off by default: a list shows where it continues by fading
+   * that edge.
+   */
+  scrollbar?: boolean;
   /** Start collapsed (default open). */
   collapsed?: boolean;
   /** Hide the whole section (header included) while it has nothing to list. */

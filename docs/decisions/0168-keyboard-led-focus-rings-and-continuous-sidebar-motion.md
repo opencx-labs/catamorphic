@@ -1,6 +1,6 @@
 # 0168 — Keyboard-led focus rings and continuous sidebar motion
 
-- **Status:** Accepted
+- **Status:** Accepted; amended by [0238](0238-one-ring-per-list-and-sidebar-focus.md) (a list's one ring sits wholly inside its row, `focusVisible` is honored, a shortcut that moves focus leads with the keyboard)
 - **Date:** 2026-09-26
 
 ## Context

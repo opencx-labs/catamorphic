@@ -779,7 +779,8 @@ const logs=()=>[...document.querySelectorAll('[role="log"]')].map(el=>el.textCon
     ).toEqual([]);
     // Removing it from the chat disposes of the page, so the page is
     // asked, and its tab comes forward to ask.
-    const remove = `document.querySelector('button[aria-label="Remove Unload"]').click(); true`;
+    const removeButton = `document.querySelector('[data-chip-root=${JSON.stringify(key)}] [data-chip-button="remove"]')`;
+    const remove = `${removeButton}.click(); true`;
     const anyDialog = `document.querySelector('[data-testid="page-dialog"]:not([inert])')`;
     await app.eval(remove);
     await app.waitFor(`${anyDialog}?.dataset.kind === 'beforeunload'`, {
@@ -789,11 +790,7 @@ const logs=()=>[...document.querySelectorAll('[role="log"]')].map(el=>el.textCon
       `${anyDialog}.querySelector('[data-testid="page-dialog-cancel"]').click(); true`,
     );
     await app.waitFor(`!${anyDialog}`, { label: "stayed" });
-    expect(
-      await app.eval<boolean>(
-        `!!document.querySelector('button[aria-label="Remove Unload"]')`,
-      ),
-    ).toBe(true);
+    expect(await app.eval<boolean>(`!!${removeButton}`)).toBe(true);
     await app.eval(remove);
     await app.waitFor(`${anyDialog}?.dataset.kind === 'beforeunload'`, {
       label: "Leave site? again",
@@ -801,9 +798,8 @@ const logs=()=>[...document.querySelectorAll('[role="log"]')].map(el=>el.textCon
     await app.eval(
       `${anyDialog}.querySelector('[data-testid="page-dialog-accept"]').click(); true`,
     );
-    await app.waitFor(
-      `!document.querySelector('button[aria-label="Remove Unload"]') && !${tab}`,
-      { label: "the page went with its chip" },
-    );
+    await app.waitFor(`!${removeButton} && !${tab}`, {
+      label: "the page went with its chip",
+    });
   });
 });

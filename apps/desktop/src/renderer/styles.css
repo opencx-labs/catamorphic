@@ -1291,13 +1291,29 @@ kbd {
 
 /* A sidebar row or tile is one rounded box. When keyboard focus lands on
    the control inside it, the ring is drawn on that box with its radius and
-   over its border; the inner control never draws its own square ring. */
-[data-sidebar-item-id]:has(:focus-visible) {
+   over its border; the inner control never draws its own square ring. A
+   tree's rows wear the tree's one gliding ring instead (below). */
+[data-sidebar-item-id]:has(:focus-visible):not(
+  [data-tree-viewport] [data-sidebar-item-id]
+) {
   outline: var(--focus-ring-width) var(--focus-ring-style) var(--color-accent);
   outline-offset: var(--focus-ring-inset);
 }
 /* Outranks the global ring rule's :not() specificity. */
 [data-sidebar-item-id] :focus-visible:not([hidden]) {
+  outline: none;
+}
+
+/* A chip is one rounded box, like a sidebar row: keyboard focus on its main
+   button rings the box over its border, with its radius; its own buttons
+   keep their rings. A group's member rows do the same. */
+[data-chip-root]:has(> [data-chip-main]:focus-visible),
+[data-member]:has(> [data-member-main]:focus-visible) {
+  outline: var(--focus-ring-width) var(--focus-ring-style) var(--color-accent);
+  outline-offset: var(--focus-ring-inset);
+}
+[data-chip-root] > [data-chip-main]:focus-visible:not([hidden]),
+[data-member] > [data-member-main]:focus-visible:not([hidden]) {
   outline: none;
 }
 
@@ -1324,6 +1340,24 @@ kbd {
   outline-offset: var(--focus-ring-inset);
   border-radius: var(--radius-md);
   z-index: 1;
+}
+/* The app kit's trees (every sidebar list) draw one ring instead: on the
+   focused row's own indented box, wholly inside it so it never reaches a
+   neighbour, gliding from row to row as the keyboard moves rather than
+   going out on one row and coming on at the next. It arrives at once where
+   focus enters, as every ring does. */
+[data-tree-viewport] [role="treeitem"]:focus-visible {
+  outline: none;
+}
+[data-tree-focus] {
+  border-radius: var(--radius-md);
+  outline: var(--focus-ring-width) var(--focus-ring-style) var(--color-accent);
+  outline-offset: calc(-1 * var(--focus-ring-width));
+}
+[data-tree-focus][data-glide] {
+  transition:
+    top 150ms var(--ease-standard),
+    left 150ms var(--ease-standard);
 }
 
 /* Expanding or collapsing a branch moves the rows below it and resizes the
@@ -1355,6 +1389,7 @@ kbd {
   [role="tree"],
   [role="tree"] [role="treeitem"],
   [role="tree"] [role="treeitem"] > *,
+  [data-tree-focus],
   [data-drop-zone] > li,
   [data-tree-drop-line] {
     transition: none;
@@ -1866,11 +1901,11 @@ kbd {
     display 200ms;
   transition-behavior: allow-discrete;
 }
-/* The sidebar's lists (the panel, a section's own list) show where they
-   are scrolled only while it helps, on the sidebar's outer edge
-   (components/overlay-scrollbar.tsx): no column is kept for a scrollbar,
-   so rows sit evenly, nothing narrows when a section grows, and at rest no
-   bar shows at all. */
+/* The sidebar's lists (the panel, a section's own list) keep no scrollbar
+   and no column for one, so rows sit evenly and nothing narrows when a
+   section grows. Each fades the edge it continues past (cat-edge-fade); a
+   section that asks for a thumb (scrollbar: true) also shows one on the
+   sidebar's outer edge while it scrolls (components/overlay-scrollbar.tsx). */
 .sidebar-tab-panel,
 .sidebar-tab-panel * {
   scrollbar-width: none;

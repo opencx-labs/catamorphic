@@ -1,4 +1,7 @@
-import { SESSION_PULL_REQUESTS_CONTRACT } from "@catamorphic/agent-protocol";
+import {
+  SESSION_CHIPS_CONTRACT,
+  SESSION_PULL_REQUESTS_CONTRACT,
+} from "@catamorphic/agent-protocol";
 
 /** Replaceable desktop doctrine. Mechanics live in the existing host services. */
 export const DESKTOP_WORKSPACE_SKILL = `---
@@ -187,6 +190,18 @@ to work on, belongs in that list: read it first and include the ones already
 there, and write it again when you see one merged or closed. A person's own
 sidebar modules receive the metadata of the chat they sit beside and can show
 other keys; keep the ones they ask for.
+
+Chips sit above your chat's composer: the tabs you opened, your subagents and
+app views, and every pull request in pull_requests, wide, with its live state,
+size, comments and checks. To keep anything else in view (a preview deploy, a
+ticket, a report you wrote), attach a chip: ${SESSION_CHIPS_CONTRACT} For
+example { id: "preview", label: "Preview", url: "https://...", icon: "Rocket",
+tone: "success", wide: true, badges: [{ label: "Live", tone: "success" }] }.
+Read the list first and keep what it holds; update a chip in place to change its
+state (its icon cross-fades), and take it off when it no longer helps. point_at
+"chip:<id>" glows one. Chips without code open their url and carry Work's
+buttons; when the person wants chips that rank, group or act differently, that
+is a chips module in workspace.js (load configuring-catamorphic-desktop).
 
 ## Apps, workflows, sharing and connections
 

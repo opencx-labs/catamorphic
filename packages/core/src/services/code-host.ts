@@ -62,6 +62,15 @@ export interface CodeHost {
   pullRequest?(
     input: CodeHostCall & { number: number },
   ): Promise<PullRequestSummary>;
+  /**
+   * Where the pull request at a web address stands, in any repository the
+   * connection reads (not only the project's origin); null when the
+   * address is not one of this host's pull requests.
+   */
+  pullRequestStatus?(input: {
+    credential: CodeHostCredential;
+    url: string;
+  }): Promise<PullRequestStatus | null>;
   pullRequestDiscussion?(
     input: CodeHostCall & { number: number },
   ): Promise<PullRequestDiscussion>;
@@ -122,6 +131,31 @@ export interface PullRequestSummary {
   head: string;
   base: string;
   draft: boolean;
+  updatedAt: string;
+}
+
+/** Where a pull request stands, for a glance beside a chat. */
+export interface PullRequestStatus {
+  number: number;
+  title: string;
+  url: string;
+  /** Host-specific repository path, e.g. `owner/name`. */
+  repository: string;
+  author: string;
+  head: string;
+  base: string;
+  state: "open" | "draft" | "merged" | "closed";
+  additions: number;
+  deletions: number;
+  changedFiles: number;
+  comments: number;
+  /** Absent when the head has no checks or they could not be read. */
+  checks?: {
+    state: "pending" | "success" | "failure";
+    passed: number;
+    failed: number;
+    pending: number;
+  };
   updatedAt: string;
 }
 

@@ -68,6 +68,28 @@ const runWait = <T = unknown>(
   opts?: { timeoutMs?: number; label?: string },
 ) => app.waitFor<T>(`(() => { ${helpers}\n${body} })()`, opts);
 
+/**
+ * The dock's +, pressed as a person presses it (Chromium's own input, so a
+ * press precedes the click): it starts a floating chat even over a New Tab,
+ * where Cmd+N would open the chat in the tab.
+ */
+const pressDockPlus = async () => {
+  const point = await runWait<{ x: number; y: number }>(
+    `const plus = $('[data-dock-rail] button[aria-label="New chat"]');
+     if (!plus) return false;
+     const r = plus.getBoundingClientRect();
+     return { x: r.left + r.width / 2, y: r.top + r.height / 2 };`,
+    { label: "the dock's +" },
+  );
+  for (const type of ["mousePressed", "mouseReleased"])
+    await app.cdp("Input.dispatchMouseEvent", {
+      type,
+      ...point,
+      button: "left",
+      clickCount: 1,
+    });
+};
+
 // Native hover follows the isolated desktop's pointer and hit testing.
 const hoverChip = async (selector: string) => {
   await runWait(
@@ -137,7 +159,9 @@ describe("dock modes", () => {
       timeoutMs: 60_000,
       label: "workspace ready",
     });
-    await run(`pressKey('n', { metaKey: true }); return true;`);
+    // Cmd+N would open the chat in the New Tab in front; the dock's own +
+    // starts it in the dock.
+    await pressDockPlus();
     await runWait(
       `const dock = frontDock();
        return dock && document.activeElement === composer() &&
@@ -214,8 +238,10 @@ describe("dock modes", () => {
       await window.catamorphicDesktop.agentsSetDefault(created.id);
       return created.id;
     })()`);
-    // A fresh chat picks up the new default through agents-changed.
-    await run(`pressKey('n', { metaKey: true }); return true;`);
+    // A fresh chat picks up the new default through agents-changed. The
+    // dock's + keeps the empty chat floating (Cmd+N would move it into the
+    // New Tab behind it).
+    await pressDockPlus();
     const banner = await runWait<string>(
       `const b = frontDock()?.querySelector('[data-testid="auth-health-banner"]');
        return b ? b.textContent : false;`,
@@ -687,7 +713,7 @@ describe("dock modes", () => {
     // present instead of assuming an exact accumulated count.
     for (const label of ["one", "two", "three", "four"]) {
       const grouped = await run<boolean>(
-        `return !!frontDock().querySelector('button[aria-label$=" terminals"]');`,
+        `return !!frontDock().querySelector('[data-testid="chip"][data-chip-id="group:terminal"] [data-chip-main]');`,
       );
       if (grouped) break;
       const marker = `${label}-${Date.now()}`;
@@ -701,43 +727,42 @@ describe("dock modes", () => {
       );
     }
     await runWait(
-      `return !!frontDock().querySelector('button[aria-label$=" terminals"]');`,
+      `return !!frontDock().querySelector('[data-testid="chip"][data-chip-id="group:terminal"] [data-chip-main]');`,
       { timeoutMs: 15_000, label: "collapsed group chip" },
     );
     expect(
       await run(
-        `return frontDock().querySelector('[data-testid="surface-group"][data-kind="terminal"]').textContent;`,
+        `return frontDock().querySelector('[data-testid="chip"][data-chip-id="group:terminal"]').textContent;`,
       ),
     ).toMatch(/^Terminals\d+$/);
-    // The group chip ENTERED through the pill vocabulary (its wrapper
-    // keeps the class for the element's lifetime).
+    // The group chip is read as its words and how many it holds.
     expect(
-      await run<boolean>(
-        `return !!frontDock().querySelector('.animate-pill-in button[aria-label$=" terminals"]');`,
+      await run<string>(
+        `return frontDock().querySelector('[data-testid="chip"][data-chip-id="group:terminal"] [data-chip-main]').getAttribute('aria-label');`,
       ),
-    ).toBe(true);
+    ).toMatch(/^Terminals, \d+$/);
     await runWait(
-      `const button = frontDock().querySelector('[data-testid="surface-group"]'); return button && !button.closest('[inert]');`,
+      `const button = frontDock().querySelector('[data-testid="chip"][data-chip-id="group:terminal"] [data-chip-main]'); return button && !button.closest('[inert]');`,
       { label: "rail is interactive after the turn settles" },
     );
     // Its popover pops in and back out.
     await run(
-      `frontDock().querySelector('button[aria-label$=" terminals"]').click(); return true;`,
+      `frontDock().querySelector('[data-testid="chip"][data-chip-id="group:terminal"] [data-chip-main]').click(); return true;`,
     );
     await runWait(
       `const pop = frontDock().querySelector('.animate-pop-in');
-       const members = pop?.querySelector('[data-testid="surface-group-members"]') ?? frontDock().querySelector('[data-testid="surface-group-members"]');
-       return !!pop && members?.children.length >= 4;`,
+       const members = pop?.querySelector('[data-testid="chip-group-members"]') ?? frontDock().querySelector('[data-testid="chip-group-members"]');
+       return !!pop && (members?.querySelectorAll('[data-testid="chip-member"]').length ?? 0) >= 4;`,
       { label: "group popover popped in" },
     );
-    await hoverChip('[data-testid="surface-group-members"] button');
+    await hoverChip('[data-testid="chip-group-members"] [data-member-main]');
     await runWait(
       `return document.querySelector('[data-resource-inspector][data-open="true"]')?.textContent.includes('Terminal');`,
       { label: "group member uses shared preview" },
     );
     await app.press("Escape");
     await run(
-      `frontDock().querySelector('button[aria-label$=" terminals"]').click(); return true;`,
+      `frontDock().querySelector('[data-testid="chip"][data-chip-id="group:terminal"] [data-chip-main]').click(); return true;`,
     );
     await runWait(
       `return !!frontDock().querySelector('.animate-pop-out') ||
@@ -751,7 +776,7 @@ describe("dock modes", () => {
     // has no requesting chat and therefore no rail chip.
     await run(`setComposer('show: https://example.org'); send(); return true;`);
     const overlay = await runWait<{ opacity: string; overlaid: boolean }>(
-      `const chip = frontDock().querySelector('[data-testid="surface-chip"][data-kind="browser"]');
+      `const chip = frontDock().querySelector('[data-testid="chip"][data-kind="browser"]');
        if (!chip) return false;
        const layer = [...chip.children].find((el) => el.className.includes('absolute'));
        if (!layer) return false;
@@ -763,7 +788,9 @@ describe("dock modes", () => {
     );
     expect(overlay.opacity).toBe("0");
     expect(overlay.overlaid).toBe(true);
-    await hoverChip('[data-testid="surface-chip"][data-kind="browser"] button');
+    await hoverChip(
+      '[data-testid="chip"][data-kind="browser"] [data-chip-main]',
+    );
     await runWait(
       `return document.querySelector('[data-resource-inspector][data-open="true"] [data-preview-location]')?.textContent.includes('https://example.org');`,
       { label: "composer surface previews its destination on hover" },

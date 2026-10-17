@@ -3,35 +3,32 @@ import fs from "node:fs";
 import path from "node:path";
 import vm from "node:vm";
 import { PROJECT_WORKSPACE_CONFIG_PATH } from "@catamorphic/workflow/project-layout";
-import type { OpenMode } from "../shared/open-mode.js";
 import {
   normalizePaletteTrigger,
   RESERVED_PALETTE_TRIGGERS,
 } from "../shared/palette.js";
 import { sanitizeProjectExperienceWhen } from "../shared/project-experience.js";
 import {
-  isHostAction,
   isWorkSourceName,
-  rowTargetAllowed,
   SESSION_WORK_SOURCES,
-  type SidebarActionInput,
-  type SidebarBadge,
   type SidebarItem,
-  type SidebarItemPresentation,
-  type SidebarMenuEntry,
-  type SidebarPreview,
-  type SidebarPreviewMetadata,
   type SidebarSectionConfig,
-  type SidebarSignal,
   type SidebarTabConfig,
   type SidebarWhen,
-  SOURCE_ACTION_PATTERN,
+  WORK_SOURCES,
   workSourceName,
 } from "../shared/sidebar.js";
-import type { SidebarSourceItem } from "../shared/sidebar-source.js";
 import {
+  asOpenMode,
+  sanitizeMenu,
+  sanitizePresentation,
+} from "../shared/source-rows.js";
+import {
+  CHIPS_OWNER_ID,
+  type ChipsConfig,
   type PaletteModeConfig,
   sidebarSections,
+  WORK_CHIPS_SOURCE,
   type WorkspaceConfig,
 } from "../shared/workspace-config.js";
 import { WORKSPACE_AUTHORING_GUIDE } from "./workspace-authoring.js";
@@ -171,6 +168,9 @@ export const DEFAULT_WORKSPACE_CONFIG: WorkspaceConfig = {
     ],
     right: [],
   },
+  // The chips above every chat's composer: Work's own list. A module that
+  // reads it sorts, groups, filters or adds chips (workspace-authoring.ts).
+  chips: { source: WORK_CHIPS_SOURCE },
 };
 
 /** A workspace.js for a layout: the commented guide, then the data. */
@@ -185,142 +185,6 @@ module.exports = ${JSON.stringify(config, null, 2)};
 export const DEFAULT_WORKSPACE_FILE = workspaceFileFor(
   DEFAULT_WORKSPACE_CONFIG,
 );
-
-const asOpenMode = (value: unknown): OpenMode | undefined =>
-  value === "tab" ||
-  value === "replace" ||
-  value === "side" ||
-  value === "floating"
-    ? value
-    : undefined;
-
-const FIELD_NAME = /^[a-zA-Z][a-zA-Z0-9_-]{0,39}$/;
-
-function sanitizeInput(raw: unknown): SidebarActionInput | undefined {
-  if (raw === undefined) return undefined;
-  if (!isRecord(raw) || !Array.isArray(raw.fields))
-    throw new Error("An action's input needs fields: [{ name, label }].");
-  if (raw.fields.length < 1 || raw.fields.length > 4)
-    throw new Error("An action asks for one to four values.");
-  const names = new Set<string>();
-  const fields = raw.fields.map((field) => {
-    if (
-      !isRecord(field) ||
-      typeof field.name !== "string" ||
-      !FIELD_NAME.test(field.name) ||
-      names.has(field.name) ||
-      typeof field.label !== "string" ||
-      !field.label.trim()
-    )
-      throw new Error("Each input field needs a unique name and a label.");
-    names.add(field.name);
-    return {
-      name: field.name,
-      label: field.label,
-      ...(typeof field.value === "string" ? { value: field.value } : {}),
-      ...(typeof field.placeholder === "string"
-        ? { placeholder: field.placeholder }
-        : {}),
-    };
-  });
-  return {
-    ...(typeof raw.title === "string" ? { title: raw.title } : {}),
-    ...(typeof raw.submit === "string" ? { submit: raw.submit } : {}),
-    fields,
-  };
-}
-
-function sanitizeMenu(raw: unknown): SidebarMenuEntry[] | undefined {
-  if (raw === undefined) return undefined;
-  if (!Array.isArray(raw)) throw new Error("Actions must be an array.");
-  // An explicit [] means "no menu button"; keep it distinct from absent.
-  return raw.map((entry): SidebarMenuEntry => {
-    if (
-      !isRecord(entry) ||
-      typeof entry.label !== "string" ||
-      typeof entry.action !== "string"
-    )
-      throw new Error("Actions need label and action.");
-    if (entry.action.startsWith("run:"))
-      throw new Error(
-        `Action "${entry.action}": name the source's action without run: (ADR 0234).`,
-      );
-    if (
-      !isHostAction(entry.action) &&
-      !SOURCE_ACTION_PATTERN.test(entry.action)
-    )
-      throw new Error(
-        `Action "${entry.action}" is not one of Work's verbs (open, open-tab, open-here, open-side, open-floating, copy-url, refresh, search) or a source action (lowercase words joined by dashes).`,
-      );
-    const input = sanitizeInput(entry.input);
-    return {
-      label: entry.label,
-      action: entry.action,
-      ...(entry.danger === true ? { danger: true } : {}),
-      ...(typeof entry.icon === "string" ? { icon: entry.icon } : {}),
-      ...(typeof entry.url === "string" ? { url: entry.url } : {}),
-      ...(typeof entry.disabledReason === "string"
-        ? { disabledReason: entry.disabledReason }
-        : {}),
-      ...(input ? { input } : {}),
-    };
-  });
-}
-
-function sanitizePreview(raw: unknown): SidebarPreview | false | undefined {
-  if (raw === false) return false;
-  if (!isRecord(raw)) return undefined;
-  const metadata = Array.isArray(raw.metadata)
-    ? raw.metadata
-        .flatMap((entry): SidebarPreviewMetadata[] =>
-          isRecord(entry) &&
-          typeof entry.label === "string" &&
-          typeof entry.value === "string" &&
-          entry.label.length > 0 &&
-          entry.value.length > 0
-            ? [{ label: entry.label, value: entry.value }]
-            : [],
-        )
-        .slice(0, 6)
-    : [];
-  const title =
-    typeof raw.title === "string" && raw.title.length > 0
-      ? raw.title
-      : undefined;
-  const description =
-    typeof raw.description === "string" && raw.description.length > 0
-      ? raw.description
-      : undefined;
-  if (!title && !description && metadata.length === 0) return undefined;
-  return {
-    title,
-    description,
-    metadata: metadata.length > 0 ? metadata : undefined,
-  };
-}
-
-function sanitizeBadges(raw: unknown): (string | SidebarBadge)[] | undefined {
-  if (!Array.isArray(raw)) return undefined;
-  return raw
-    .flatMap((badge): (string | SidebarBadge)[] =>
-      typeof badge === "string"
-        ? [badge]
-        : isRecord(badge) && typeof badge.label === "string"
-          ? [
-              {
-                label: badge.label,
-                ...(typeof badge.icon === "string" ? { icon: badge.icon } : {}),
-              },
-            ]
-          : [],
-    )
-    .slice(0, 4);
-}
-
-const asSignal = (value: unknown): SidebarSignal | undefined =>
-  value === "working" || value === "attention" || value === "unread"
-    ? value
-    : undefined;
 
 function sanitizeSidebarWhen(value: unknown): SidebarWhen | null | undefined {
   if (value === undefined) return undefined;
@@ -378,37 +242,6 @@ function sanitizeSidebarWhen(value: unknown): SidebarWhen | null | undefined {
         ? value.tabPlacement
         : undefined,
   };
-}
-
-function sanitizePresentation(
-  record: Record<string, unknown>,
-): SidebarItemPresentation {
-  const presentation: SidebarItemPresentation = {
-    label: typeof record.label === "string" ? record.label : undefined,
-    description:
-      typeof record.description === "string" ? record.description : undefined,
-    keywords: Array.isArray(record.keywords)
-      ? record.keywords
-          .filter((word): word is string => typeof word === "string")
-          .slice(0, 32)
-      : undefined,
-    icon: typeof record.icon === "string" ? record.icon : undefined,
-    badges: sanitizeBadges(record.badges),
-    progress:
-      typeof record.progress === "number" && Number.isFinite(record.progress)
-        ? Math.max(0, Math.min(1, record.progress))
-        : undefined,
-    signal: asSignal(record.signal),
-    open: asOpenMode(record.open),
-    menu: sanitizeMenu(record.menu),
-    contextMenu: sanitizeMenu(record.contextMenu),
-    actions: sanitizeMenu(record.actions),
-    preview: sanitizePreview(record.preview),
-    hide: typeof record.hide === "boolean" ? record.hide : undefined,
-  };
-  return Object.fromEntries(
-    Object.entries(presentation).filter(([, value]) => value !== undefined),
-  );
 }
 
 function sanitizeItems(
@@ -470,7 +303,7 @@ function sanitizeSourceName(value: unknown, where: string): string {
   if (value.startsWith("work:")) {
     if (!workSourceName(value))
       throw new Error(
-        `${where}: ${value} is not one of Work's lists (work:${["pinned", "bookmarks", "library", "workflows", "apps", "chats", "subsessions", "activity", "files", "tabs", "remote", "git", "prs", "session"].join(", work:")}).`,
+        `${where}: ${value} is not one of Work's lists (work:${WORK_SOURCES.join(", work:")}).`,
       );
     return value;
   }
@@ -525,6 +358,10 @@ function sanitizeSection(
   raw: unknown,
   sectionIds: Set<string>,
 ): SidebarSectionConfig[] {
+  if (isRecord(raw) && raw.id === CHIPS_OWNER_ID)
+    throw new Error(
+      `A section cannot take the id "${CHIPS_OWNER_ID}": it names the chips' source.`,
+    );
   if (!isRecord(raw) || !stableId(raw.id) || sectionIds.has(raw.id))
     throw new Error("Each section needs a unique id.");
   const where = `Section ${raw.id}`;
@@ -612,6 +449,7 @@ function sanitizeSection(
         ? { height: Math.max(120, Math.min(1200, raw.height)) }
         : {}),
       ...(raw.collapsed === true ? { collapsed: true } : {}),
+      ...(raw.scrollbar === true ? { scrollbar: true } : {}),
       ...(typeof raw.hideEmpty === "boolean"
         ? { hideEmpty: raw.hideEmpty }
         : {}),
@@ -665,9 +503,9 @@ function sanitize(raw: unknown): WorkspaceConfig {
   if (!isRecord(raw))
     throw new Error("Export a workspace configuration object.");
   if (!isRecord(raw.sidebars))
-    throw new Error("Export { sidebars: { left, right }, palette? }.");
+    throw new Error("Export { sidebars: { left, right }, palette?, chips? }.");
   const unknown = Object.keys(raw).filter(
-    (key) => key !== "sidebars" && key !== "palette",
+    (key) => key !== "sidebars" && key !== "palette" && key !== "chips",
   );
   if (unknown.length)
     throw new Error(`Unknown workspace keys: ${unknown.join(", ")}.`);
@@ -689,7 +527,61 @@ function sanitize(raw: unknown): WorkspaceConfig {
     sections: sidebarSections({ sidebars }),
     ids: sectionIds,
   });
-  return { sidebars, ...(modes ? { palette: { modes } } : {}) };
+  const chips = sanitizeChips(raw.chips);
+  return {
+    sidebars,
+    ...(modes ? { palette: { modes } } : {}),
+    ...(chips ? { chips } : {}),
+  };
+}
+
+/**
+ * chips (ADR 0239): Work's own list, or a module that reads it and returns
+ * the chats' chips, with the grants a section's module takes.
+ */
+function sanitizeChips(raw: unknown): ChipsConfig | undefined {
+  if (raw === undefined) return undefined;
+  if (!isRecord(raw))
+    throw new Error('chips must be { source: "work:chips" } or a module.');
+  const where = "chips";
+  const extra = Object.keys(raw).filter(
+    (key) => !["source", "collections", "workflows"].includes(key),
+  );
+  if (extra.length)
+    throw new Error(
+      `${where}: unknown keys ${extra.join(", ")}; chips take source, collections and workflows.`,
+    );
+  if (raw.source === WORK_CHIPS_SOURCE) {
+    if (raw.collections !== undefined || raw.workflows !== undefined)
+      throw new Error(`${where}: only a chips module takes grants.`);
+    return { source: WORK_CHIPS_SOURCE };
+  }
+  const source = sanitizeSourceName(raw.source, where);
+  if (source.startsWith("work:"))
+    throw new Error(
+      `${where}: source is "${WORK_CHIPS_SOURCE}" or a module path; Work's other lists are not chips.`,
+    );
+  const collections = raw.collections;
+  if (
+    collections !== undefined &&
+    (!Array.isArray(collections) ||
+      collections.some((name) => name !== CHIPS_OWNER_ID))
+  )
+    throw new Error(
+      `${where}: a chips module reads its chat's chips only: collections: ["${CHIPS_OWNER_ID}"].`,
+    );
+  const { workflows } = sanitizeGrants(
+    { workflows: raw.workflows },
+    where,
+    true,
+  );
+  return {
+    source,
+    ...(Array.isArray(collections) && collections.length
+      ? { collections: [CHIPS_OWNER_ID] }
+      : {}),
+    ...(workflows ? { workflows } : {}),
+  };
 }
 
 /**
@@ -710,6 +602,10 @@ function sanitizePaletteModes({
     throw new Error("palette must be { modes: [...] }.");
   const names = new Set<string>();
   return raw.modes.map((mode): PaletteModeConfig => {
+    if (isRecord(mode) && mode.id === CHIPS_OWNER_ID)
+      throw new Error(
+        `A palette mode cannot take the id "${CHIPS_OWNER_ID}": it names the chips' source.`,
+      );
     if (!isRecord(mode) || !stableId(mode.id) || ids.has(mode.id))
       throw new Error(
         "Each palette mode needs a unique id, distinct from section ids.",
@@ -1112,86 +1008,4 @@ export class WorkspaceConfigStore {
     this.unwatch?.();
     this.unwatch = undefined;
   }
-}
-
-/**
- * A row's record crosses as plain JSON, bounded like session metadata: a
- * larger record is left out (the row still shows), never failing its page.
- */
-function sanitizeData(raw: unknown): Record<string, unknown> | undefined {
-  if (!isRecord(raw)) return undefined;
-  const json = JSON.stringify(raw);
-  // Room for a chat's record with its metadata (64 KB at most).
-  if (json.length > 131_072) return undefined;
-  const parsed: unknown = JSON.parse(json);
-  return isRecord(parsed) ? parsed : undefined;
-}
-
-/** Validate a module's row before it crosses into the renderer. */
-export function sanitizeSidebarSourceItem(
-  item: unknown,
-  ids = new Set<string>(),
-): SidebarSourceItem {
-  if (
-    !isRecord(item) ||
-    typeof item.id !== "string" ||
-    !item.id ||
-    ids.has(item.id) ||
-    typeof item.label !== "string"
-  )
-    throw new Error("Source items need unique stable IDs and labels.");
-  ids.add(item.id);
-  const data = sanitizeData(item.data);
-  const presentation = sanitizePresentation(item);
-  // What a source wrote is bounded, and opens only what a row may: a
-  // command that does more than open something stays the layout's.
-  const entries = (list: SidebarMenuEntry[] | undefined) =>
-    list?.filter((entry) => !entry.url || rowTargetAllowed(entry.url));
-  const url =
-    typeof item.url === "string" &&
-    item.url.length <= 8192 &&
-    rowTargetAllowed(item.url)
-      ? item.url
-      : undefined;
-  return {
-    ...presentation,
-    ...(presentation.description
-      ? { description: presentation.description.slice(0, 1000) }
-      : {}),
-    ...(presentation.icon && presentation.icon.length > 131_072
-      ? { icon: undefined }
-      : {}),
-    ...(presentation.menu ? { menu: entries(presentation.menu) } : {}),
-    ...(presentation.contextMenu
-      ? { contextMenu: entries(presentation.contextMenu) }
-      : {}),
-    ...(presentation.actions ? { actions: entries(presentation.actions) } : {}),
-    id: item.id,
-    label: item.label.slice(0, 1000),
-    parentId: typeof item.parentId === "string" ? item.parentId : null,
-    hasChildren: item.hasChildren === true,
-    url,
-    // false opens a row with children the first time it loads.
-    ...(typeof item.collapsed === "boolean"
-      ? { collapsed: item.collapsed }
-      : {}),
-    ...(data ? { data } : {}),
-  };
-}
-
-/** Validate executable source data before it crosses into the renderer. */
-export function sanitizeSidebarSourcePage(raw: unknown): {
-  items: SidebarSourceItem[];
-  cursor?: string;
-} {
-  if (!isRecord(raw) || !Array.isArray(raw.items) || raw.items.length > 1000)
-    throw new Error(
-      "Source load must return { items, cursor? }, with at most 1000 items per page.",
-    );
-  const ids = new Set<string>();
-  const items = raw.items.map((item) => sanitizeSidebarSourceItem(item, ids));
-  return {
-    items,
-    cursor: typeof raw.cursor === "string" ? raw.cursor : undefined,
-  };
 }

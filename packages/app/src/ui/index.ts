@@ -65,6 +65,8 @@ export { Tooltip } from "./tooltip.js";
 export {
   CollectionTree,
   dropPositionFor,
+  focusTreeRow,
+  onTreeLeave,
   Tree,
   type TreeDragAndDrop,
   type TreeDragSpec,

@@ -300,10 +300,10 @@ it("previews recent terminal output from the composer rail", async () => {
     `paste('start: echo preview-terminal-output && sleep 600'); composer().dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true,cancelable:true}));`,
   );
   await wait(
-    `const button = front().querySelector('[data-testid="surface-chip"][data-kind="terminal"] button'); return button && !button.closest("[inert]") && front().textContent.includes("in the background");`,
+    `const button = front().querySelector('[data-testid="chip"][data-kind="terminal"] [data-chip-main]'); return button && !button.closest("[inert]") && front().textContent.includes("in the background");`,
   );
   await run(
-    `front().querySelector('[data-testid="surface-chip"][data-kind="terminal"] button').focus();`,
+    `front().querySelector('[data-testid="chip"][data-kind="terminal"] [data-chip-main]').focus();`,
   );
   await wait(
     `return preview()?.querySelector('pre')?.textContent.includes('preview-terminal-output');`,
@@ -330,26 +330,26 @@ it("expands a plural group into every member without clipping the list", async (
     );
   }
   await wait(
-    `const button = front().querySelector('[data-testid="surface-group"][data-kind="terminal"]'); return button && !button.closest('[inert]');`,
+    `const button = front().querySelector('[data-testid="chip"][data-chip-id="group:terminal"]'); return button && !button.closest('[inert]');`,
   );
   expect(
     await run(
-      `return front().querySelector('[data-testid="surface-group"][data-kind="terminal"]').textContent;`,
+      `return front().querySelector('[data-testid="chip"][data-chip-id="group:terminal"]').textContent;`,
     ),
   ).toBe("Terminals4");
   await run(
-    `front().querySelector('[data-testid="surface-group"][data-kind="terminal"]').click();`,
+    `front().querySelector('[data-testid="chip"][data-chip-id="group:terminal"] [data-chip-main]').click();`,
   );
   await wait(
-    `const panel = front().querySelector('[data-testid="surface-group-members"]'); if (!panel || panel.children.length !== 4) return false; const button = panel.querySelector('button'); const rect = button.getBoundingClientRect(); return button.contains(document.elementFromPoint(rect.left + 10, rect.top + rect.height / 2));`,
+    `const panel = front().querySelector('[data-testid="chip-group-members"]'); if (!panel || panel.querySelectorAll('[data-testid="chip-member"]').length !== 4) return false; const button = panel.querySelector('[data-member-main]'); const rect = button.getBoundingClientRect(); return button.contains(document.elementFromPoint(rect.left + 10, rect.top + rect.height / 2));`,
   );
   const memberLabels = await run<string[]>(
-    `return [...front().querySelectorAll('[data-testid="surface-group-members"] > div')].map(row => row.querySelector('button')?.textContent);`,
+    `return [...front().querySelectorAll('[data-testid="chip-group-members"] [data-testid="chip-member"]')].map(row => row.querySelector('[data-member-main]')?.textContent);`,
   );
   expect(new Set(memberLabels).size).toBe(4);
   await app.screenshot("/tmp/resource-preview-group.png");
   await run(
-    `front().querySelector('[data-testid="surface-group-members"] button').focus();`,
+    `front().querySelector('[data-testid="chip-group-members"] [data-member-main]').focus();`,
   );
   // The stationary pointer can hover a different member as the group expands.
   // Assert the focused member's own preview, identified by its ARIA relationship.
@@ -358,7 +358,7 @@ it("expands a plural group into every member without clipping the list", async (
   );
   await app.press("Escape");
   await run(
-    `front().querySelector('[data-testid="surface-group"][data-kind="terminal"]').click();`,
+    `front().querySelector('[data-testid="chip"][data-chip-id="group:terminal"] [data-chip-main]').click();`,
   );
 });
 it("clamps the preview to a compact viewport and dismisses on outside interaction", async () => {

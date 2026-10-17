@@ -54,31 +54,47 @@ export function SidebarPreviewPopover({
       onExited={onExited}
     >
       {content ?? (
-        <>
-          <p className="break-words text-[12px] font-medium leading-4 text-fg">
-            {preview?.title ? preview.title : fallbackTitle}
-          </p>
-          {preview?.description && (
-            <p className="mt-1 line-clamp-2 break-words text-[11px] leading-4 text-fg-muted">
-              {preview.description}
-            </p>
-          )}
-          {preview?.metadata && preview.metadata.length > 0 && (
-            <dl className="mt-2 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 border-t border-border pt-2 text-[11px] leading-4">
-              {preview.metadata.map((entry) => (
-                <div key={`${entry.label}:${entry.value}`} className="contents">
-                  <dt className="font-mono text-[10px] uppercase tracking-wide text-fg-faint">
-                    {entry.label}
-                  </dt>
-                  <dd className="truncate text-right text-fg-muted">
-                    {entry.value}
-                  </dd>
-                </div>
-              ))}
-            </dl>
-          )}
-        </>
+        <PreviewCard preview={preview} fallbackTitle={fallbackTitle} />
       )}
     </InspectorPortal>
+  );
+}
+
+/**
+ * A row's or a chip's declared preview (ADR 0234): its title, a line or
+ * two, and up to six facts. The same card wherever a source's row shows.
+ */
+export function PreviewCard({
+  preview,
+  fallbackTitle,
+}: {
+  preview?: SidebarPreview;
+  fallbackTitle: string;
+}) {
+  return (
+    <>
+      <p className="break-words text-[12px] font-medium leading-4 text-fg">
+        {preview?.title ? preview.title : fallbackTitle}
+      </p>
+      {preview?.description && (
+        <p className="mt-1 line-clamp-2 break-words text-[11px] leading-4 text-fg-muted">
+          {preview.description}
+        </p>
+      )}
+      {preview?.metadata && preview.metadata.length > 0 && (
+        <dl className="mt-2 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 border-t border-border pt-2 text-[11px] leading-4">
+          {preview.metadata.map((entry) => (
+            <div key={`${entry.label}:${entry.value}`} className="contents">
+              <dt className="font-mono text-[10px] uppercase tracking-wide text-fg-faint">
+                {entry.label}
+              </dt>
+              <dd className="truncate text-right text-fg-muted">
+                {entry.value}
+              </dd>
+            </div>
+          ))}
+        </dl>
+      )}
+    </>
   );
 }

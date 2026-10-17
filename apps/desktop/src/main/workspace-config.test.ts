@@ -2,13 +2,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { executableSource } from "../shared/workspace-config.js";
+import { sanitizeSidebarSourcePage } from "../shared/source-rows.js";
+import { chipsModule, executableSource } from "../shared/workspace-config.js";
 import {
   DEFAULT_WORKSPACE_CONFIG,
   DEFAULT_WORKSPACE_FILE,
   loadWorkspaceConfigFile,
   resolveWorkspaceConfig,
-  sanitizeSidebarSourcePage,
   watchConfigLayerFile,
 } from "./workspace-config.js";
 
@@ -81,6 +81,15 @@ describe("resolveWorkspaceConfig", () => {
     expect(
       resolveWorkspaceConfig({ profileDir, projectId, projectRoot }),
     ).toEqual({ config: DEFAULT_WORKSPACE_CONFIG, layer: "default" });
+    // Work's own lists show where they continue by fading, never a thumb.
+    expect(
+      [
+        ...DEFAULT_WORKSPACE_CONFIG.sidebars.left,
+        ...DEFAULT_WORKSPACE_CONFIG.sidebars.right,
+      ].flatMap((tab) =>
+        tab.sections.filter((section) => section.scrollbar !== undefined),
+      ),
+    ).toEqual([]);
   });
 
   it("takes the most specific existing layer, whole", () => {
@@ -130,8 +139,8 @@ describe("resolveWorkspaceConfig", () => {
   it("keeps sources, items and presentation", () => {
     const resolved = resolveProfile(
       sections(`
-        { id: "flows", source: "work:workflows", collapsed: true, hideEmpty: true },
-        { id: "pins", source: "work:pinned", title: "", presentation: "tiles" },
+        { id: "flows", source: "work:workflows", collapsed: true, hideEmpty: true, scrollbar: true },
+        { id: "pins", source: "work:pinned", title: "", presentation: "tiles", scrollbar: "yes" },
         { id: "todos", source: ".work/todos.ts", collections: ["tabs"], workflows: ["listTickets"] },
         { id: "docs", title: "Docs", items: [
           { label: "MDN", url: "https://developer.mozilla.org" },
@@ -147,8 +156,11 @@ describe("resolveWorkspaceConfig", () => {
       source: "work:workflows",
       collapsed: true,
       hideEmpty: true,
+      scrollbar: true,
     });
     expect(pins).toMatchObject({ title: "", presentation: "tiles" });
+    // A thumb is asked for with true; anything else leaves the faded edge.
+    expect(pins).not.toHaveProperty("scrollbar");
     expect(todos).toMatchObject({
       source: ".work/todos.ts",
       collections: ["tabs"],
@@ -655,6 +667,66 @@ describe("workspace shape", () => {
   });
 });
 
+describe("chips", () => {
+  /** A profile layout with no sidebar sections and these chips. */
+  const withChips = (chips: string) =>
+    `module.exports = { sidebars: { left: [], right: [] }, chips: ${chips} };`;
+
+  it("defaults to Work's chips, which run no module", () => {
+    expect(DEFAULT_WORKSPACE_CONFIG.chips).toEqual({ source: "work:chips" });
+    expect(chipsModule(DEFAULT_WORKSPACE_CONFIG)).toBeUndefined();
+    expect(executableSource(DEFAULT_WORKSPACE_CONFIG, "chips")).toBeUndefined();
+  });
+
+  it("runs a module with the chat's chips and its workflows", () => {
+    const { config, error } = resolveProfile(
+      withChips(
+        `{ source: ".work/chips.ts", collections: ["chips"], workflows: ["deploy"] }`,
+      ),
+    );
+    expect(error).toBeUndefined();
+    expect(chipsModule(config)).toBe(".work/chips.ts");
+    expect(executableSource(config, "chips")).toEqual({
+      module: ".work/chips.ts",
+      collections: ["chips"],
+      workflows: ["deploy"],
+    });
+    // No collections (or none named) grants nothing to read.
+    const bare = resolveProfile(
+      withChips(`{ source: ".work/chips.ts", collections: [] }`),
+    ).config;
+    expect(bare.chips).toEqual({ source: ".work/chips.ts" });
+    expect(executableSource(bare, "chips")?.collections).toEqual([]);
+  });
+
+  it("refuses chips Work cannot run", () => {
+    for (const [chips, message] of [
+      [`"work:chips"`, "chips must be"],
+      [`{ source: ".work/chips.ts", rank: 1 }`, "unknown keys rank"],
+      [
+        `{ source: "work:chips", workflows: ["deploy"] }`,
+        "only a chips module",
+      ],
+      [`{ source: "work:git" }`, "not chips"],
+      [`{ source: "work:nope" }`, "not one of Work's lists"],
+      [`{ source: ".work/chips.ts", collections: ["tabs"] }`, "chips only"],
+    ] as const)
+      expect(resolveProfile(withChips(chips)).error, chips).toContain(message);
+  });
+
+  it("keeps the id chips for the chips' source", () => {
+    expect(
+      resolveProfile(sections(`{ id: "chips", title: "Chips", items: [] }`))
+        .error,
+    ).toContain('cannot take the id "chips"');
+    expect(
+      resolveProfile(
+        `module.exports = { sidebars: { left: [], right: [] }, palette: { modes: [{ id: "chips", trigger: "chips", title: "Chips", source: "work:git" }] } };`,
+      ).error,
+    ).toContain('cannot take the id "chips"');
+  });
+});
+
 describe("module rows", () => {
   it("keeps every row field and leaves out a record too large to cross", () => {
     const page = sanitizeSidebarSourcePage({
@@ -691,5 +763,46 @@ describe("module rows", () => {
         ],
       }),
     ).toThrow("unique");
+  });
+
+  it("draws a chip's tone and width, and gives Work's verbs their looks", () => {
+    const [chip] = sanitizeSidebarSourcePage({
+      items: [
+        {
+          id: "deploy",
+          label: "Deploy",
+          wide: true,
+          tone: "success",
+          badges: [
+            { label: "live", tone: "success" },
+            { label: "odd", tone: "plaid" },
+          ],
+          actions: [
+            { action: "open-side" },
+            { action: "remove", label: "Remove", icon: "X" },
+          ],
+        },
+      ],
+    }).items;
+    expect(chip).toMatchObject({
+      wide: true,
+      tone: "success",
+      badges: [{ label: "live", tone: "success" }, { label: "odd" }],
+      actions: [
+        { action: "open-side", label: "Open to the side", icon: "Columns2" },
+        { action: "remove", label: "Remove", icon: "X" },
+      ],
+    });
+    expect(chip?.badges?.[1]).not.toHaveProperty("tone");
+    const plain = sanitizeSidebarSourcePage({
+      items: [{ id: "b", label: "B", tone: "plaid", wide: "yes" }],
+    }).items[0];
+    expect(plain).not.toHaveProperty("tone");
+    expect(plain).not.toHaveProperty("wide");
+    expect(() =>
+      sanitizeSidebarSourcePage({
+        items: [{ id: "a", label: "A", actions: [{ action: "deploy" }] }],
+      }),
+    ).toThrow("needs a label");
   });
 });

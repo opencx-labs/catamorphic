@@ -23,7 +23,8 @@ export type DockData = Pick<
   | "backdropTab"
   | "defaultAgentId"
   | "paletteTargeted"
-  | "surfaces"
+  | "chips"
+  | "chipsModule"
   | "pullSelectionNonce"
   | "archived"
   | "inspectRequestNonce"
@@ -53,6 +54,7 @@ export type ChatEvent =
     }
   | { kind: "surface"; key: string; mode: OpenMode | "split" }
   | { kind: "removeSurface"; key: string }
+  | { kind: "customizeChips" }
   | { kind: "mcpApp"; view: McpAppRef; mode: OpenMode | "split" }
   | {
       kind: "link";
@@ -114,11 +116,16 @@ export type WorkspaceEvent =
    */
   | { kind: "release"; projectId: string }
   | { kind: "chat"; command: DockCommand }
-  | { kind: "newChat"; projectId: string }
+  /**
+   * The dock asked for a chat: from its + (or the detached dock), which
+   * keeps it in the dock, or Cmd+N in a workspace window (`shortcut`), which
+   * a New Tab in front takes.
+   */
+  | { kind: "newChat"; projectId: string; shortcut?: boolean }
   | {
       kind: "dockAction";
       localId: string;
-      action: "close" | "minimize" | "send";
+      action: "close" | "minimize" | "send" | "focusChips";
       message?: string;
     };
 

@@ -55,7 +55,8 @@ export function ChatRegistration(
       backdropTab: props.backdropTab,
       defaultAgentId: props.defaultAgentId,
       paletteTargeted: props.paletteTargeted,
-      surfaces: props.surfaces,
+      chips: props.chips,
+      chipsModule: props.chipsModule,
       pullSelectionNonce: props.pullSelectionNonce,
     };
     const serialized = JSON.stringify(data);
@@ -65,7 +66,10 @@ export function ChatRegistration(
     void desktopApi.dockPublish(data);
   });
   useEffect(() => {
-    const send = (action: "close" | "minimize" | "send", message?: string) => {
+    const send = (
+      action: "close" | "minimize" | "send" | "focusChips",
+      message?: string,
+    ) => {
       void desktopApi.dockAction(localId, action, message);
     };
     current.current.registerClose?.(() => {
@@ -74,6 +78,10 @@ export function ChatRegistration(
     });
     current.current.registerMinimize?.(() => send("minimize"));
     current.current.registerSend?.((message) => send("send", message));
+    current.current.registerFocusChips?.(() => {
+      send("focusChips");
+      return true;
+    });
     const invoke = (event: ChatEvent) => {
       const p = current.current;
       switch (event.kind) {
@@ -106,6 +114,9 @@ export function ChatRegistration(
           break;
         case "removeSurface":
           p.onRemoveSurface?.(event.key);
+          break;
+        case "customizeChips":
+          p.onCustomizeChips?.();
           break;
         case "mcpApp":
           p.onOpenMcpApp?.(event.view, event.mode);

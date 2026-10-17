@@ -718,13 +718,13 @@ export function buildWorkspaceToolkit(
     {
       name: "point_at",
       description:
-        "Point the user's attention at a UI element with a subtle glow and scroll it into view. The glow stays until the user interacts with that element or you point at something else (pass keep_previous to stack pointers instead of replacing them). For an element inside a browser page, pass its browser tab key as target and its snapshot uid. Targets: a workspace tab key from workspace_overview (glows that tab), 'app:<name>', 'sidebar:<item label>' (glows that sidebar entry), or 'chip:<surface key>' (glows that surface's chip on your own chat, e.g. 'chip:terminal:<id>'). Pass target: null to clear highlighting.",
+        "Point the user's attention at a UI element with a subtle glow and scroll it into view. The glow stays until the user interacts with that element or you point at something else (pass keep_previous to stack pointers instead of replacing them). For an element inside a browser page, pass its browser tab key as target and its snapshot uid. Targets: a workspace tab key from workspace_overview (glows that tab), 'app:<name>', 'sidebar:<item label>' (glows that sidebar entry), or 'chip:<chip id>' (glows that chip on your own chat: a tab's key such as 'chip:terminal:<id>', a pull request's address, or an attached chip's id; chips folded behind 'N more' unfold for it, and a chip inside a group is reached by its group, e.g. 'chip:group:terminal'). Pass target: null to clear highlighting.",
       parameters: {
         target: z
           .string()
           .nullable()
           .describe(
-            "Tab key, 'app:<name>', 'sidebar:<item label>', or 'chip:<surface key>'",
+            "Tab key, 'app:<name>', 'sidebar:<item label>', or 'chip:<chip id>'",
           ),
         uid: z
           .string()

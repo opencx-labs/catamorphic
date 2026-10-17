@@ -191,6 +191,7 @@ export type {
   PullRequestComment,
   PullRequestDiscussion,
   PullRequestFile,
+  PullRequestStatus,
   PullRequestSummary,
 } from "./services/code-host.js";
 export {

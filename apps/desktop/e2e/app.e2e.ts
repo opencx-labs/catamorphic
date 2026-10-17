@@ -1376,8 +1376,12 @@ describe("navigation shortcuts", () => {
       label: "background New Tab open",
     });
     // Fresh empty chat ("New chat") joins the titled chats from earlier
-    // groups — cycling must swap which chat the dock shows.
-    await run(`pressKey('n', { metaKey: true }); return true;`);
+    // groups — cycling must swap which chat the dock shows. Cmd+N would open
+    // it in the New Tab; the dock's + floats it over the New Tab.
+    await runWait(
+      `const plus = $('[data-dock-rail] button[aria-label="New chat"]'); plus?.click(); return !!plus;`,
+      { label: "the dock's +" },
+    );
     await runWait(`return !!floatingDock();`, { label: "dock open" });
     const first = await run<string>(
       `return floatingDock().getAttribute('aria-label');`,
@@ -1478,10 +1482,9 @@ describe("tiling and chat surfaces", () => {
       label: "attached browser tab",
     });
     await runWait(
-      `return [...(floatingDock()?.querySelectorAll('button') ?? [])]
-         .some((el) =>
-           (el.getAttribute('aria-label') ?? '').endsWith('to the right'));`,
-      { label: "browser chip on the surfaces rail" },
+      `return !!floatingDock()?.querySelector(
+         '[data-testid="chip"][data-kind="browser"] [data-chip-button="open-side"]');`,
+      { label: "browser chip on the chat's chips" },
     );
     // A terminal to anchor the upcoming split against.
     await run(`pressKey('\u0060', { ctrlKey: true }); return true;`);
@@ -1494,8 +1497,8 @@ describe("tiling and chat surfaces", () => {
   it("opens a surface to the right as a split; Cmd+\\ toggles it", async () => {
     // Terminal is the active tab; split-open the browser chip beside it.
     await run(
-      `[...floatingDock().querySelectorAll('button')]
-         .find((el) => el.getAttribute('aria-label')?.endsWith('to the right'))
+      `floatingDock()
+         .querySelector('[data-testid="chip"][data-kind="browser"] [data-chip-button="open-side"]')
          .click();
        return true;`,
     );
@@ -1618,19 +1621,19 @@ describe("agent shows and points", () => {
     await run(`pressKey('m', { metaKey: true }); return true;`);
     await runWait(
       `return !!floatingDock()?.querySelector(
-         '[data-testid="surface-chip"][data-attention][data-kind="app"]');`,
+         '[data-testid="chip"][data-signal="attention"][data-kind="app"]');`,
       { label: "app chip carries the attention indicator" },
     );
     // Clicking the chip clears the attention and focuses the tab
     // (dismissal-by-interaction): every browser pane goes hidden.
     await run(`
       floatingDock()
-        .querySelector('[data-testid="surface-chip"][data-attention] button')
+        .querySelector('[data-testid="chip"][data-signal="attention"] [data-chip-main]')
         .click();
       return true;
     `);
     await runWait(
-      `return !$('[data-testid="surface-chip"][data-attention]') &&
+      `return !$('[data-testid="chip"][data-signal="attention"]') &&
               $$('input[aria-label="Address and search bar"]')
                 .every((el) => el.closest('.invisible'));`,
       { label: "attention cleared and the app tab focused" },
@@ -1768,7 +1771,7 @@ describe("agent shows and points", () => {
     });
     await run(`
       visibleDock()
-        .querySelector('[data-testid="surface-chip"][data-kind="app"] button')
+        .querySelector('[data-testid="chip"][data-kind="app"] [data-chip-main]')
         .dispatchEvent(new MouseEvent('click', { bubbles: true, altKey: true }));
       return true;
     `);
@@ -1894,7 +1897,7 @@ describe("subagents and background watchers", () => {
     `);
     await runWait(
       `return !!floatingDock()?.querySelector(
-         '[data-testid="surface-chip"][data-kind="subagent"]');`,
+         '[data-testid="chip"][data-kind="subagent"]');`,
       { timeoutMs: 30_000, label: "subagent chip on the rail" },
     );
     // Chip survives the finished turn; clicking opens the activity popover.
@@ -1905,18 +1908,18 @@ describe("subagents and background watchers", () => {
     );
     expect(
       await run(
-        `return floatingDock()?.querySelector('[data-testid="surface-chip"][data-kind="subagent"]')?.textContent;`,
+        `return floatingDock()?.querySelector('[data-testid="chip"][data-kind="subagent"]')?.textContent;`,
       ),
     ).toContain("Review the changes");
     await run(`
       floatingDock()
-        .querySelector('[data-testid="surface-chip"][data-kind="subagent"] button')
+        .querySelector('[data-testid="chip"][data-kind="subagent"] [data-chip-main]')
         .click();
       return true;
     `);
     await runWait(
       `const pop = floatingDock()?.querySelector(
-         '[data-testid="surface-info-popover"]');
+         '[data-testid="chip-group-members"]');
        return !!pop && pop.textContent.includes('bun test');`,
       { label: "subagent activity popover" },
     );
@@ -1942,7 +1945,7 @@ describe("subagents and background watchers", () => {
     );
     await runWait(
       `return !!floatingDock()?.querySelector(
-         '[data-testid="surface-chip"][data-kind="terminal"][data-active]');`,
+         '[data-testid="chip"][data-kind="terminal"][data-signal="working"]');`,
       { label: "its terminal chip spins" },
     );
     // When it finishes, the chat gets a task notification row (ADR 0217),
@@ -1969,7 +1972,7 @@ describe("subagents and background watchers", () => {
     // Its terminal ended with it (ADR 0223): the chip left the chat, and
     // the notification has no terminal to open.
     await runWait(
-      `return ![...floatingDock().querySelectorAll('[data-testid="surface-chip"][data-kind="terminal"]')]
+      `return ![...floatingDock().querySelectorAll('[data-testid="chip"][data-kind="terminal"]')]
          .some((el) => el.textContent.includes('Run it in the background'));`,
       { label: "its terminal chip left with it" },
     );

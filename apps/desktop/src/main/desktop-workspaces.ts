@@ -399,15 +399,21 @@ export class DesktopWorkspaces {
       else this.activeChats.delete(profileId);
       this.broadcast(profileId);
     });
-    ipcMain.handle("catamorphic:dock-new-chat", (event) => {
+    ipcMain.handle("catamorphic:dock-new-chat", (event, input: unknown) => {
       const snapshot = this.snapshot(event.sender);
       const owner = snapshot.activeProjectId
         ? this.owner(snapshot.activeProjectId)
         : undefined;
+      // Cmd+N in a workspace window is that window's Cmd+N: a New Tab in
+      // front takes the chat. The dock's + and the detached dock keep it.
+      const shortcut =
+        z.object({ shortcut: z.literal(true) }).safeParse(input).success &&
+        !snapshot.detached;
       if (owner && snapshot.activeProjectId)
         owner.send("catamorphic:workspace-event", {
           kind: "newChat",
           projectId: snapshot.activeProjectId,
+          ...(shortcut ? { shortcut: true } : {}),
         } satisfies WorkspaceEvent);
     });
     ipcMain.handle(
@@ -415,17 +421,18 @@ export class DesktopWorkspaces {
       (
         event,
         localId: string,
-        action: "close" | "minimize" | "send",
+        action: "close" | "minimize" | "send" | "focusChips",
         message?: string,
       ) => {
         const chat = this.chats.get(localId);
         if (!chat || !this.sameProfile(event.sender, chat.owner)) return;
         const profileId = options.windows.profileFor(event.sender);
         const floating = this.floating.get(profileId);
-        const target =
-          floating && this.detached(profileId)
-            ? floating.webContents
-            : event.sender;
+        const detached = floating && this.detached(profileId);
+        const target = detached ? floating.webContents : event.sender;
+        // Keys follow the chips the shortcut focuses: the detached dock's
+        // window takes the keyboard first.
+        if (detached && action === "focusChips") floating.focus();
         target.send("catamorphic:workspace-event", {
           kind: "dockAction",
           localId,

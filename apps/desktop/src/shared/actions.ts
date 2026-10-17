@@ -135,7 +135,7 @@ export const BUILTIN_ACTIONS = [
     id: "new-floating-chat",
     label: "New chat",
     icon: "MessageSquarePlus",
-    description: "open the small floating chat",
+    description: "start a chat: in the New Tab in front, floating otherwise",
     defaultBinding: "Cmd+N",
     keywords: ["chat", "assistant", "agent", "ai", "quick"],
   },
@@ -188,6 +188,15 @@ export const BUILTIN_ACTIONS = [
     description: "expand the active chat into a full workspace tab",
     defaultBinding: "Cmd+Shift+M",
     keywords: ["chat", "tab", "maximize", "expand", "full", "screen"],
+  },
+  {
+    id: "focus-chips",
+    label: "Focus chips",
+    icon: "Rows3",
+    description:
+      "move focus to the first chip above the front chat's composer, unfolding them; arrows move between chips, Tab between a chip's buttons, Escape returns to the composer",
+    defaultBinding: "Cmd+J",
+    keywords: ["chips", "focus", "keyboard", "pull request", "attached"],
   },
   {
     id: "split-view",

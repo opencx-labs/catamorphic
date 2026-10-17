@@ -1,6 +1,6 @@
 ---
 name: desktop-interactions
-description: Use when changing how the Work desktop app (apps/desktop) opens resources, arranges tabs, splits, floating chats and the dock, handles scoped settings, form controls, or the chat composer, and when verifying desktop UI changes in the running Electron app or its e2e suites. Reusable chat mechanics belong in packages/react and the registry; use this skill for how the desktop consumes them.
+description: Use when changing how the Work desktop app (apps/desktop) opens resources, arranges tabs, splits, floating chats and the dock, handles scoped settings, form controls, or the chat composer, and when verifying desktop UI changes in the running Electron app or its e2e suites or capturing their screenshots and GIFs for a pull request. Reusable chat mechanics belong in packages/react and the registry; use this skill for how the desktop consumes them.
 ---
 
 # Desktop interactions
@@ -106,6 +106,15 @@ node apps/desktop/scripts/drive.mjs click '[data-testid=...]'
   using a position from the image as CSS coordinates.
 - Other commands: `hover`, `type`, `key`, `wheel`, `drag`, `eval`, `text`
   (see the script header).
+- `clip <png> <x> <y> <w> <h> [scale]` captures a region in CSS pixels, and
+  `record <gif> <x> <y> <w> <h> <steps>` records one while JSON steps run
+  (keys with modifiers, clicks, pointer moves, wheel, `eval`, waits) at the
+  motion's real pace. Blur an editor before sending a shortcut it also
+  handles (Cmd+B is bold there).
+- The pull request shows what changed: screenshots of visual changes, before
+  and after, and GIFs of motion and keyboard or pointer interactions, hosted
+  on a parentless `pr-media/<topic>` commit (root `AGENTS.md`, "Pull requests
+  that change UI").
 - Renderer edits hot-reload; main-process and preload edits need a relaunch.
 - Set `CATAMORPHIC_DEV_NO_SYSTEM_PROMPTS=1` before `bun run dev:desktop` so macOS
   Keychain and Touch ID sheets do not block the dev app. Set

@@ -87,6 +87,7 @@ import {
   TurnSteps,
   turnStepsOf,
 } from "./chat-steps.js";
+import { edgeFadeLength, fadeEdges } from "./edge-fade.js";
 import {
   endsOwnChat,
   InboundMessageRow,
@@ -864,6 +865,10 @@ export function ChatTimeline(props: ChatTimelineProps) {
                     role="log"
                   >
                     <StickToBottom.Content
+                      // The conversation fades out where it continues, above
+                      // the composer and under the header, instead of being
+                      // cut at their edges (FadeEdges).
+                      scrollClassName="cat-edge-fade"
                       className={`flex min-h-full flex-col gap-3 p-5 ${contentClassName}`}
                     >
                       {hasOlder && onLoadOlder && (
@@ -939,6 +944,7 @@ export function ChatTimeline(props: ChatTimelineProps) {
                     <ScrollToLatest />
                     <FollowScrollerResize />
                     <PinToBottom />
+                    <FadeEdges />
                     <TrackOnScreen state={onScreen} />
                   </StickToBottom>
                 </OnScreen.Provider>
@@ -1346,10 +1352,12 @@ function JumpToPreviousUserMessage({
     settling.current?.();
     // Moving up lets go of the latest message, streaming or not.
     stopScroll();
+    // Clear of the top edge's fade.
     const off = () =>
       target.getBoundingClientRect().top -
       scroller.getBoundingClientRect().top -
-      12;
+      12 -
+      edgeFadeLength(scroller);
     scroller.scrollTo({ top: scroller.scrollTop + off(), behavior: "smooth" });
     // Turns skipped while out of view take their real height as the
     // scroll brings them in, which moves the message after its place was
@@ -3046,6 +3054,16 @@ function FollowScrollerResize() {
   return null;
 }
 
+/** The conversation fades out where it continues past an edge (edge-fade). */
+function FadeEdges() {
+  const { scrollRef } = useStickToBottomContext();
+  useEffect(() => {
+    const scroller = scrollRef.current;
+    return scroller ? fadeEdges(scroller) : undefined;
+  }, [scrollRef]);
+  return null;
+}
+
 /**
  * While the chat follows its latest message, the browser keeps it there:
  * everything in the conversation but the anchor at its end opts out of
@@ -3317,7 +3335,8 @@ function FocusMessage({
             scroller.scrollTop +
             target.getBoundingClientRect().top -
             scroller.getBoundingClientRect().top -
-            12,
+            12 -
+            edgeFadeLength(scroller),
           behavior: "instant",
         });
       place();
