@@ -282,6 +282,7 @@ const TOOL_STEP_LABELS: Record<string, string> = {
   create_worktree: "Created a worktree",
   use_worktree: "Switched worktrees",
   request_connection: "Requested a connection",
+  claude_accounts: "Checked Claude accounts",
   read_skill: "Read a skill",
 };
 
@@ -322,6 +323,7 @@ const WORKSPACE_STEP_TOOLS = new Set([
   "sync_project",
   "create_pull_request",
   "request_connection",
+  "claude_accounts",
   "read_skill",
   "surface_control",
 ]);
