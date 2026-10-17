@@ -91,7 +91,9 @@ beforeAll(async () => {
   )
     throw new Error("Parent did not return an id");
   parentId = parent.id;
-  await app.eval("location.reload()");
+  // Wait for the new document: a read sent while the old one is torn down
+  // fails as a lost page, not as a condition that is not met yet.
+  await app.reload();
   try {
     await app.waitFor(
       `!!document.querySelector('[data-sidebar-item-id="${parentId}"]')`,

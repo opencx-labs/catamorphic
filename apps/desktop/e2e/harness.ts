@@ -49,6 +49,19 @@ async function freeCdpPort(): Promise<number> {
 /** The evaluated expression threw inside the page. */
 class PageException extends Error {}
 
+/**
+ * DevTools' answer to a check sent as its page navigates or reloads: the
+ * document it ran in went, and the next one is not there yet.
+ */
+function navigating(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    /Execution context was destroyed|Cannot find context with specified id|Inspected target navigated or closed/.test(
+      error.message,
+    )
+  );
+}
+
 export interface FrameHandle {
   getRendererErrors: () => string[];
   /** Evaluate JS inside the frame; resolves the JSON-serialized result. */
@@ -528,11 +541,13 @@ async function createClient(
         thrown = undefined;
       } catch (error) {
         // A condition that throws is not met yet: an element not rendered,
-        // a document still loading (a frame just connected to). A lost
-        // connection still fails at once.
-        if (!(error instanceof PageException)) throw error;
+        // a document still loading (a frame just connected to), or one
+        // going as the page navigates or reloads. A lost connection still
+        // fails at once.
+        if (!(error instanceof PageException) && !navigating(error))
+          throw error;
         last = undefined;
-        thrown = error.message;
+        thrown = error instanceof Error ? error.message : String(error);
       }
       if (last) return last as T;
       await sleep(200);

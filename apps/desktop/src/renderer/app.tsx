@@ -4725,28 +4725,21 @@ export function App({
      * A floating surface over the view leaves with its paired exit before an
      * agent shows something else, as its close button plays it, and the
      * dismissal commits before this resolves, so the open decides on the
-     * view as it now is. The open goes ahead regardless: a dismissal
+     * view as it now is. It resolves however the surface left: a dismissal
      * already under way, or a newer floating surface, skips this one's
      * finish.
      */
-    const leaveFloating = (keep?: string) =>
-      new Promise<void>((resolve) => {
-        const key = workspaceRef.current.floatingKey;
-        if (!key || key === keep) {
-          resolve();
-          return;
-        }
-        const fallback = window.setTimeout(resolve, 400);
-        floatingMotionRef.current.dismiss(() => {
-          window.clearTimeout(fallback);
-          flushSync(() =>
-            updateWorkspace((current) =>
-              transitionWorkspace(current, { type: "dismiss-floating", key }),
-            ),
-          );
-          resolve();
-        });
-      });
+    const leaveFloating = async (keep?: string) => {
+      const key = workspaceRef.current.floatingKey;
+      if (!key || key === keep) return;
+      await floatingMotionRef.current.dismiss(() =>
+        flushSync(() =>
+          updateWorkspace((current) =>
+            transitionWorkspace(current, { type: "dismiss-floating", key }),
+          ),
+        ),
+      );
+    };
 
     /**
      * An agent's open or close that changes the tab in front narrates the
@@ -6759,8 +6752,16 @@ export function App({
             data-window-buttons={windowButtons ? "on" : "off"}
             // The project's workspace is restored, revealed, and taking
             // shortcuts: what automation waits for before pressing keys.
+            // Taking them means knowing whether the project is on a server:
+            // that decides the server's commands, and every list is read
+            // again (its rows drawn anew) when it arrives.
             data-workspace-ready={
-              workspaceReady && bootRevealed && runtime.visible ? "" : undefined
+              workspaceReady &&
+              remoteSurfaceResolved &&
+              bootRevealed &&
+              runtime.visible
+                ? ""
+                : undefined
             }
             // Clip, not hide: a closed right sidebar waits past the right edge,
             // and a scroll container here would let scrollIntoView shift the app.
