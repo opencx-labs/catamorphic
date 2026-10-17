@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it } from "vitest";
-import { installFocusModality } from "./focus-modality.js";
+import { installFocusModality, keyMovedFocus } from "./focus-modality.js";
 
 let uninstall: (() => void) | undefined;
 afterEach(() => uninstall?.());
@@ -48,5 +48,16 @@ describe("focus modality", () => {
     expect(modality()).toBeUndefined();
     press();
     expect(modality()).toBeUndefined();
+  });
+
+  it("a shortcut that moves focus leads with the keyboard; a press making the same move does not", () => {
+    uninstall = installFocusModality();
+    press();
+    key("b");
+    keyMovedFocus();
+    expect(modality()).toBe("keyboard");
+    press();
+    keyMovedFocus();
+    expect(modality()).toBe("pointer");
   });
 });

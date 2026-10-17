@@ -42,11 +42,13 @@ own and a module section is headed Items, so give a module section a title),
 presentation ("rows" or "tiles": tiles draw root rows without children as a grid
 of icons), collapsed, hideEmpty (hide while it lists nothing; a hidden list that
 takes drops shows while something it takes is dragged), empty (its one sentence
-when empty), height, rowHeight, open (default open mode: replace, tab, side,
-floating), when, headerActions, menu, contextMenu, actions, itemDefaults and
-itemOverrides (presentation for every row, or by row id). Grants: collections
-(Work lists an app or module may read) and workflows (workflows a module may
-call).
+when empty), height (the most a list shows before it scrolls; a list fades the
+edge it continues past), scrollbar (true adds a scroll thumb on the sidebar's
+edge while the list scrolls; off by default), rowHeight, open (default open
+mode: replace, tab, side, floating), when, headerActions, menu, contextMenu,
+actions, itemDefaults and itemOverrides (presentation for every row, or by row
+id). Grants: collections (Work lists an app or module may read) and workflows
+(workflows a module may call).
 
 Work's lists (bare names in grants and work.read; work:<name> in source):
 - pinned: pages pinned across this profile's projects (pin, unpin, edit,

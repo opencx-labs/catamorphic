@@ -3,6 +3,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { moveFocusAsApp } from "../lib/app-focus.js";
 import { SidebarItemRow } from "./sidebar-item-row.js";
 import { SIDEBAR_PREVIEW_DELAY_MS } from "./sidebar-preview";
 
@@ -109,6 +110,21 @@ describe("SidebarItemRow hover preview", () => {
     document.documentElement.dataset.focusModality = "pointer";
     try {
       act(() => button?.focus());
+      act(() => vi.advanceTimersByTime(SIDEBAR_PREVIEW_DELAY_MS));
+      expect(document.querySelector("[data-resource-inspector]")).toBeNull();
+    } finally {
+      delete document.documentElement.dataset.focusModality;
+    }
+  });
+
+  it("does not preview focus the app moves, though the keyboard leads", () => {
+    vi.useFakeTimers();
+    const container = mountRow();
+    const button = container.querySelector("button");
+    document.documentElement.dataset.focusModality = "keyboard";
+    try {
+      // An opening sidebar's focus onto the row of what is in front.
+      act(() => moveFocusAsApp(() => button?.focus()));
       act(() => vi.advanceTimersByTime(SIDEBAR_PREVIEW_DELAY_MS));
       expect(document.querySelector("[data-resource-inspector]")).toBeNull();
     } finally {
@@ -299,5 +315,42 @@ describe("SidebarItemRow icons", () => {
     const unknown = mountIconRow("NoSuchIconName");
     expect(unknown.querySelector("svg")).not.toBeNull();
     expect(unknown.textContent).toBe("Support answers");
+  });
+});
+
+describe("SidebarItemRow disclosure", () => {
+  it("ends the row, after its actions, so every row's icon starts in one place", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    containers.push(container);
+    const root = createRoot(container);
+    roots.push(root);
+    const onToggle = vi.fn();
+    act(() => {
+      root.render(
+        <SidebarItemRow
+          label="Engineering"
+          icon="Folder"
+          actions={[{ label: "Add", action: "add", icon: "Plus" }]}
+          menu={[{ label: "Rename", action: "rename" }]}
+          disclosure={{ open: false, onToggle }}
+          onOpen={() => {}}
+          onAction={() => {}}
+        />,
+      );
+    });
+    const row = container.firstElementChild as HTMLElement;
+    const controls = [...row.querySelectorAll("button")].map((button) =>
+      button.getAttribute("aria-label"),
+    );
+    expect(controls.at(-1)).toBe("Expand Engineering");
+    // The label leads: nothing stands before it, with or without children.
+    expect(row.firstElementChild?.matches("[data-tree-primary]")).toBe(true);
+    const disclosure = row.querySelector<HTMLButtonElement>(
+      "[data-row-disclosure]",
+    );
+    expect(disclosure?.getAttribute("aria-expanded")).toBe("false");
+    act(() => disclosure?.click());
+    expect(onToggle).toHaveBeenCalledTimes(1);
   });
 });

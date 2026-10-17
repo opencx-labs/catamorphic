@@ -38,7 +38,16 @@ A New Tab (Cmd+T, the palette as a page) is a way to somewhere, not a place. Onc
 something else is shown in its place, a New Tab with nothing in its input closes
 (`reconcileWorkspace`); one with typed text or an entered mode, or one still on
 screen as the other pane of a split, stays. Its input is not restored on relaunch,
-so neither is that mark.
+so neither is that mark. A chat asked for while a New Tab is in front (Cmd+N, New
+chat, Send to agent or a skill from the New Tab's palette or the overlay) opens in
+that tab: it takes the New Tab's place in the strip and in a split, and the New
+Tab closes, typed or not (`openChatInNewTab`). An empty chat already floating over
+the New Tab moves into it instead; a floating chat with a conversation is minimised
+as the new one takes the tab, and a surface floating over the New Tab keeps it.
+Elsewhere Cmd+N floats a chat as before. Chats Work starts for something else (the
+sidebar's customization chat, a workflow's) keep their own placement; the dock's +
+never takes a New Tab, it starts its chat in the dock; and a chat switched to
+another harness from a floating chat floats beside it.
 
 The mouse's back and forward buttons move between the places a project's
 workspace was at: the focused tab and the chat or surface floating over it

@@ -32,8 +32,10 @@ beforeAll(async () => {
   await run("$('[data-testid=project-submit]').click();");
   // Keys pressed before the workspace is restored are lost or open a tab.
   await wait("return !!$('[data-workspace-ready]');");
-  await run(
-    "window.dispatchEvent(new KeyboardEvent('keydown',{key:'n',metaKey:/Mac/.test(navigator.platform),ctrlKey:!/Mac/.test(navigator.platform),bubbles:true}));",
+  // A floating chat, which the tabs these tests open leave as a bubble:
+  // the dock's + (Cmd+N would open it in the New Tab in front).
+  await wait(
+    `const plus = $('[data-dock-rail] button[aria-label="New chat"]'); plus?.click(); return !!plus;`,
   );
 });
 afterAll(async () => {

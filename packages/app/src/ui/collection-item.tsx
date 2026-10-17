@@ -169,17 +169,6 @@ export function CollectionItemView({
         }
       }}
     >
-      {onToggle && (
-        <button
-          type="button"
-          className="cat-btn cat-btn--subtle"
-          aria-label={`${expanded ? "Collapse" : "Expand"} ${label}`}
-          aria-expanded={expanded}
-          onClick={onToggle}
-        >
-          {expanded ? "▾" : "▸"}
-        </button>
-      )}
       <button
         type="button"
         className="cat-collection-label"
@@ -204,6 +193,7 @@ export function CollectionItemView({
         <progress aria-label={`${label} progress`} max={1} value={progress} />
       )}
       {children}
+      {actionState.error && <span role="alert">{actionState.error}</span>}
       {actions.map((action) => actionButton(action))}
       {preview && (
         <button
@@ -239,7 +229,19 @@ export function CollectionItemView({
           ⋯
         </button>
       )}
-      {actionState.error && <span role="alert">{actionState.error}</span>}
+      {/* The disclosure ends the row, so every row's label starts at the
+          same place and only a child's indent reads as belonging. */}
+      {onToggle && (
+        <button
+          type="button"
+          className="cat-btn cat-btn--subtle"
+          aria-label={`${expanded ? "Collapse" : "Expand"} ${label}`}
+          aria-expanded={expanded}
+          onClick={onToggle}
+        >
+          {expanded ? "▾" : "▸"}
+        </button>
+      )}
       {inspecting &&
         createPortal(
           <div

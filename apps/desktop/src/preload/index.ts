@@ -130,7 +130,8 @@ const api = {
     invoke("catamorphic:dock-command", command),
   dockActivate: (localId?: string): Promise<void> =>
     invoke("catamorphic:dock-activate", localId),
-  dockNewChat: (): Promise<void> => invoke("catamorphic:dock-new-chat"),
+  dockNewChat: (input?: { shortcut?: boolean }): Promise<void> =>
+    invoke("catamorphic:dock-new-chat", input),
   dockAction: (
     localId: string,
     action: "close" | "minimize" | "send" | "focusChips",

@@ -6,6 +6,12 @@ const run = <T>(body: string) =>
   app.eval<T>(
     `(() => { ${setReactValueJs}\n const $ = s => document.querySelector(s); const button = text => [...document.querySelectorAll('button')].find(b => b.textContent.trim() === text); ${body} })()`,
   );
+/**
+ * What draws a sidebar row's keyboard ring, as page script: the row itself,
+ * or in a list (the kit tree) the list's one ring on its focused row.
+ */
+const ringOf =
+  "((row) => row && (row.closest('[data-tree-viewport]') ? row.closest('[role=tree]')?.querySelector('[data-tree-focus]') ?? null : row))";
 
 beforeAll(async () => {
   app = await launchApp();
@@ -290,13 +296,13 @@ describe("configurable browser workspace", () => {
     await new Promise((resolve) => setTimeout(resolve, 700));
     expect(
       await run(
-        "const row = document.activeElement.closest('[data-sidebar-item-id]'); return [document.documentElement.dataset.focusModality, getComputedStyle(row).outlineStyle, !!document.querySelector('[data-resource-inspector][data-open=true]')]",
+        `const row = document.activeElement.closest('[data-sidebar-item-id]'); const ring = ${ringOf}(row); return [document.documentElement.dataset.focusModality, ring ? getComputedStyle(ring).outlineStyle : 'none', !!document.querySelector('[data-resource-inspector][data-open=true]')]`,
       ),
     ).toEqual(["pointer", "none", false]);
     // Sample every frame after Tab: the ring is the accent from its first
     // frame, never faded in from the text color.
     await run(
-      "const probe = document.createElement('i'); probe.style.color = 'var(--color-accent)'; document.body.append(probe); window.__accent = getComputedStyle(probe).color; probe.remove(); window.__rings = []; const t0 = performance.now(); const tick = () => { const row = document.querySelector('[data-sidebar-item-id]:has(:focus-visible)'); if (row) { const style = getComputedStyle(row); if (style.outlineStyle !== 'none') window.__rings.push(style.outlineColor); } if (performance.now() - t0 < 600) requestAnimationFrame(tick); }; requestAnimationFrame(tick);",
+      `const probe = document.createElement('i'); probe.style.color = 'var(--color-accent)'; document.body.append(probe); window.__accent = getComputedStyle(probe).color; probe.remove(); window.__rings = []; const t0 = performance.now(); const tick = () => { const ring = ${ringOf}(document.querySelector('[data-sidebar-item-id]:has(:focus-visible)')); if (ring) { const style = getComputedStyle(ring); if (style.outlineStyle !== 'none') window.__rings.push(style.outlineColor); } if (performance.now() - t0 < 600) requestAnimationFrame(tick); }; requestAnimationFrame(tick);`,
     );
     await app.press("Tab");
     await new Promise((resolve) => setTimeout(resolve, 700));

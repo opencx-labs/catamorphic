@@ -59,6 +59,7 @@ import {
 import type { PaletteItem, PaletteModeRequest } from "../palette/types.js";
 import { bareUrl, rememberedOrigins } from "../palette/urls.js";
 import { resolveInput } from "../screens/browser-screen.js";
+import { fadeEdges } from "./catamorphic/edge-fade.js";
 import { PILL_SURFACE } from "./context-pill.js";
 import { OpenResourceButton } from "./open-resource-button.js";
 
@@ -210,6 +211,11 @@ export function CommandPalette({
   const inputFrameRef = useRef<HTMLDivElement>(null);
   useGlidingHeight({ content: inputRef, frame: inputFrameRef });
   const listRef = useRef<HTMLDivElement>(null);
+  // Results past either edge fade there instead of being cut.
+  useEffect(() => {
+    const list = listRef.current;
+    return list ? fadeEdges(list) : undefined;
+  }, []);
   const sizerRef = useRef<HTMLDivElement>(null);
 
   const enterMode = useCallback((next: string) => {
@@ -922,7 +928,7 @@ export function CommandPalette({
       </div>
       <div
         ref={listRef}
-        className="h-(--palette-list-height) max-h-[350px] overflow-y-auto overscroll-contain transition-[height] duration-250 ease-[cubic-bezier(0.2,0,0,1)]"
+        className="cat-edge-fade h-(--palette-list-height) max-h-[350px] overflow-y-auto overscroll-contain transition-[height] duration-250 ease-[cubic-bezier(0.2,0,0,1)]"
         role="listbox"
         aria-label="Results"
       >

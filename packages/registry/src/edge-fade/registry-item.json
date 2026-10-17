@@ -1,0 +1,16 @@
+{
+  "$schema": "https://ui.shadcn.com/schema/registry-item.json",
+  "name": "edge-fade",
+  "type": "registry:component",
+  "title": "Edge fade",
+  "description": "Overflow hints for any scroller: its content fades out over the last stretch of an edge it continues past, instead of being cut there, and only while there is more that way. A mask, so it needs no knowledge of the surface behind. chat-timeline fades its conversation with it.",
+  "dependencies": ["@catamorphic/ui"],
+  "registryDependencies": [],
+  "files": [
+    {
+      "path": "components/catamorphic/edge-fade.ts",
+      "type": "registry:component"
+    }
+  ],
+  "docs": "Give the scroller the cat-edge-fade class from @catamorphic/ui/styles.css (import it from your Tailwind entry) and call fadeEdges(scroller) once it is mounted; it returns the cleanup, so a React 19 callback ref can be the function itself: ref={(element) => element ? fadeEdges(element) : undefined}, defined once outside render. It lays an empty marker over the end of the content as the scroller's last child (data-edge-fade-end) to see the content's end move, so the scroller lays its content out as blocks (no flex gap or grid rows), and its own size may follow its content only outside resize observer callbacks. Without IntersectionObserver and ResizeObserver (a test DOM, a server) it does nothing, and the edges stay sharp. The fade is 24px; set --cat-edge-fade (any length) on the scroller or around it, before fadeEdges runs, for another. Its scroll padding keeps what focus or scrollIntoView brings into view clear of the fade; a list that holds its end still by scroll anchoring should take scroll-padding-block: 0, since the browser anchors only inside the scroll padding (chat-timeline does), and a jump by scrollTo should leave the fade's length clear itself."
+}

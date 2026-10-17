@@ -617,6 +617,7 @@ const KEY_CODES = {
   p: { windowsVirtualKeyCode: 80, code: "KeyP" },
   Space: { key: " ", windowsVirtualKeyCode: 32, code: "Space", text: " " },
   a: { windowsVirtualKeyCode: 65, code: "KeyA" },
+  b: { windowsVirtualKeyCode: 66, code: "KeyB" },
   f: { windowsVirtualKeyCode: 70, code: "KeyF" },
   j: { windowsVirtualKeyCode: 74, code: "KeyJ" },
   m: { windowsVirtualKeyCode: 77, code: "KeyM" },

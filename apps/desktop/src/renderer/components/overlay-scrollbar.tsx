@@ -7,22 +7,27 @@ const IDLE_MS = 900;
 /** How near the outer edge the pointer brings the thumb out. */
 const EDGE_PX = 14;
 
-/** Whether `element` scrolls vertically and has somewhere to go. */
+/**
+ * Whether `element` scrolls vertically, has somewhere to go, and belongs to
+ * a section that asked for a thumb (`scrollbar: true`).
+ */
 function scrolls(element: Element): element is HTMLElement {
   if (!(element instanceof HTMLElement)) return false;
   if (element.scrollHeight - element.clientHeight <= 1) return false;
+  if (!element.closest("[data-sidebar-scrollbar]")) return false;
   const { overflowY } = getComputedStyle(element);
   return overflowY === "auto" || overflowY === "scroll";
 }
 
 /**
- * Where an area's lists are scrolled to, shown only while it helps. The
- * area's scrollers hide their own scrollbars (styles.css); one thin thumb
- * on the area's outer edge (the window's edge, for a sidebar) stands in for
- * whichever of them is moving: the one that scrolled last, or the one
- * beside the pointer as it nears that edge. It spans that list's own height
- * (a section's list inside the sidebar, or the whole sidebar), fades in,
- * can be dragged, and fades out once nothing needs it. It takes no room, so
+ * Where a section's list is scrolled to, for a section that asks for it
+ * (`scrollbar: true`); every other list shows where it continues by fading
+ * that edge (`cat-edge-fade`). The area's scrollers hide their own
+ * scrollbars (styles.css); one thin thumb on the area's outer edge (the
+ * window's edge, for a sidebar) stands in for whichever of those lists is
+ * moving: the one that scrolled last, or the one beside the pointer as it
+ * nears that edge. It spans that list's own height, fades in, can be
+ * dragged, and fades out once nothing needs it. It takes no room, so
  * nothing is narrowed or shifted, and at rest nothing shows. The lists stay
  * the things that scroll: wheel, keyboard and find all still move them.
  */
@@ -106,7 +111,11 @@ export function OverlayScrollbar({
         place();
         return;
       }
-      if (event.target instanceof HTMLElement && box.contains(event.target))
+      if (
+        event.target instanceof HTMLElement &&
+        box.contains(event.target) &&
+        scrolls(event.target)
+      )
         show(event.target);
     };
     // The lists that can scroll, read once as the pointer reaches the edge

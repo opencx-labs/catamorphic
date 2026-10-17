@@ -289,6 +289,41 @@ CI runs the repository checks on every push to `main`. When you push to
 work. A successful run is valid evidence for the checks it completed; keep
 `main` green before reporting the work complete.
 
+### 10. Pull requests that change UI
+
+A pull request that changes what a person sees shows it in its description: a
+screenshot of each visual change (before and after when it replaces
+something) and a GIF of anything that moves (motion, focus travelling, drag,
+opening and closing). Capture from the running app with the CDP driver (see
+`apps/desktop/AGENTS.md`, "Visual verification"):
+
+```bash
+node apps/desktop/scripts/drive.mjs clip /tmp/pr/after.png <x> <y> <w> <h> 2
+node apps/desktop/scripts/drive.mjs record /tmp/pr/motion.gif <x> <y> <w> <h> @steps.json
+```
+
+`clip` and `record` take CSS pixels; `record` plays its steps (keys, clicks,
+pointer moves, wheel, script, waits) and keeps the motion's real pace. Crop
+to the change, keep a GIF to a few seconds, and show only fixture or dev
+profile content: the repository is public.
+
+Keep media out of the change's history. Commit the files with no parent on a
+`pr-media/<topic>` branch and embed them by commit:
+
+```bash
+export GIT_INDEX_FILE="$(mktemp -u)"
+for f in /tmp/pr/*; do
+  git update-index --add --cacheinfo "100644,$(git hash-object -w "$f"),$(basename "$f")"
+done
+media="$(git commit-tree "$(git write-tree)" -m "PR media: <topic>")"
+rm -f "$GIT_INDEX_FILE"; unset GIT_INDEX_FILE
+git push origin "${media}:refs/heads/pr-media/<topic>"  # braces: zsh reads "$media:r" as a modifier
+# In the description: ![After](https://github.com/opencx-labs/catamorphic/raw/<media>/after.png)
+```
+
+Pushing media follows the same rule as any push: only for a pull request
+the user asked for.
+
 ## Design Principles
 
 Settled decisions — do not deviate without explicit user approval. ADRs in `docs/decisions/`; operational detail in `.cursor/rules/`:

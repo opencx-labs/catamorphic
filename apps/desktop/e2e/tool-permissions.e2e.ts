@@ -90,7 +90,11 @@ describe("tool permissions", () => {
     await app.eval(
       `window.catamorphicDesktop.connectionsCreate({ name: 'fake', transport: 'http', url: 'http://127.0.0.1:1/mcp' })`,
     );
-    await run(`pressKey('n', { metaKey: true }); return true;`);
+    // The dock's + floats it over the New Tab (Cmd+N would open it there).
+    await runWait(
+      `const plus = $('[data-dock-rail] button[aria-label="New chat"]'); plus?.click(); return !!plus;`,
+      { label: "the dock's +" },
+    );
     await runWait(`return !!composer();`, { label: "floating chat" });
   }, 180_000);
 

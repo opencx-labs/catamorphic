@@ -283,7 +283,11 @@ it("restores each project's floating chat in single-project mode", async () => {
   await app.waitFor(
     `document.querySelector('[data-workspace-visible="true"]')?.dataset.projectRuntime === ${JSON.stringify(second)}`,
   );
-  await key("n");
+  // The dock's + floats it (Cmd+N would open it in the New Tab in front).
+  await app.waitFor(
+    `(() => { const plus = document.querySelector('[data-dock-rail] button[aria-label="New chat"]'); plus?.click(); return !!plus; })()`,
+    { label: "the dock's +" },
+  );
   await app.waitFor(
     `!!document.querySelector('[data-floating-chat]:not([inert]) [data-composer-input]')`,
   );

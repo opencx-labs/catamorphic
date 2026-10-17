@@ -121,7 +121,14 @@ bun run dev:desktop
 # CDP_TARGET=main picks the workspace window, never the detached dock.
 CDP_PORT="<port>" CDP_TARGET=main node apps/desktop/scripts/drive.mjs window maximize
 CDP_PORT="<port>" CDP_TARGET=main node apps/desktop/scripts/drive.mjs shot /tmp/app.png
+# A region, sharp at 2x; a GIF of a region while steps run (header of drive.mjs):
+CDP_PORT="<port>" CDP_TARGET=main node apps/desktop/scripts/drive.mjs clip /tmp/pr/after.png 0 0 320 400 2
+CDP_PORT="<port>" CDP_TARGET=main node apps/desktop/scripts/drive.mjs record /tmp/pr/motion.gif 0 0 320 400 @steps.json
 ```
+
+The pull request then shows those captures: screenshots of visual changes,
+GIFs of anything that moves (root `AGENTS.md`, "Pull requests that change
+UI").
 
 For credential-free manual checks, use `CATAMORPHIC_E2E_FAKE_AGENT=1` when launching.
 The root runner unsets `ELECTRON_RUN_AS_NODE`. Never reset user data to prepare a

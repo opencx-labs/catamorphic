@@ -22,6 +22,7 @@ import {
   openModeFromEvent,
 } from "../../shared/open-mode.js";
 import type { SidebarBadge, SidebarSignal } from "../../shared/sidebar.js";
+import { appIsMovingFocus } from "../lib/app-focus.js";
 import type { SidebarMenuEntry, SidebarPreview } from "../lib/desktop-api.js";
 import { lucideIcon } from "../lib/lucide-icon.js";
 import { TONE_TEXT } from "../lib/tones.js";
@@ -372,7 +373,12 @@ export function SidebarItemRow<
         rowFocusedRef.current = true;
         // Keyboard focus previews the row. Focus a click or a dismissed menu
         // hands back does not: the pointer's own hover already does that.
-        if (document.documentElement.dataset.focusModality !== "pointer")
+        // Nor does focus the app moves (an opening sidebar's, onto what is
+        // already in front).
+        if (
+          document.documentElement.dataset.focusModality !== "pointer" &&
+          !appIsMovingFocus()
+        )
           armPreview();
       }}
       onBlurCapture={(event) => {
@@ -429,19 +435,6 @@ export function SidebarItemRow<
         />
       ) : (
         <>
-          {disclosure && (
-            <button
-              type="button"
-              onClick={disclosure.onToggle}
-              className="ml-1 grid size-6 shrink-0 cursor-pointer place-items-center rounded text-fg-faint hover:text-fg"
-              aria-label={`${disclosure.open ? "Collapse" : "Expand"} ${label}`}
-              aria-expanded={disclosure.open}
-            >
-              <ChevronRight
-                className={`size-3 transition-transform duration-150 ${disclosure.open ? "rotate-90" : ""}`}
-              />
-            </button>
-          )}
           <TitleHint title={previewEnabled ? undefined : title}>
             <button
               type="button"
@@ -459,7 +452,7 @@ export function SidebarItemRow<
                 disarmPreview();
                 onOpen(openModeFromEvent(event, defaultOpenMode));
               }}
-              className={`flex h-full min-w-0 flex-1 cursor-pointer items-center gap-2 ${disclosure ? "pr-2" : "px-2"} text-left text-[13px] ${presentation === "tile" ? "justify-center" : ""} hover:text-fg ${
+              className={`flex h-full min-w-0 flex-1 cursor-pointer items-center gap-2 px-2 text-left text-[13px] ${presentation === "tile" ? "justify-center" : ""} hover:text-fg ${
                 active ? "text-fg" : "text-fg-muted"
               }`}
               aria-expanded={disclosure?.open ?? expanded}
@@ -552,6 +545,18 @@ export function SidebarItemRow<
               {end}
             </button>
           </TitleHint>
+          {/* Before the row's controls, so its last stays at its end. */}
+          {actionError && (
+            <ShortcutHint label={actionError}>
+              <span
+                role="alert"
+                className="mr-1 flex shrink-0 items-center gap-1 text-xs text-danger"
+              >
+                <icons.CircleAlert aria-hidden="true" className="size-3" />
+                Failed<span className="sr-only">: {actionError}</span>
+              </span>
+            </ShortcutHint>
+          )}
           {inlineActions.map((entry) => {
             const Icon = lucideIcon(entry.icon) ?? icons.Circle;
             return (
@@ -597,14 +602,32 @@ export function SidebarItemRow<
                 setMenuKind("overflow");
                 setOpen(true);
               }}
-              className={`grid size-6 shrink-0 cursor-pointer place-items-center rounded text-fg-faint transition-colors duration-150 hover:text-fg mr-1 ${
-                open ? "" : "row-reveal"
-              }`}
+              className={`grid size-6 shrink-0 cursor-pointer place-items-center rounded text-fg-faint transition-colors duration-150 hover:text-fg ${
+                disclosure ? "" : "mr-0.5"
+              } ${open ? "" : "row-reveal"}`}
               aria-label={`More actions for ${label}`}
               aria-haspopup="menu"
               aria-expanded={open}
             >
               <MoreHorizontal className="size-3.5" />
+            </button>
+          )}
+          {/* The disclosure ends the row, as it ends a section's header:
+              every row's icon starts at the same place, so only a child's
+              indent reads as belonging to the row above. The row's last
+              control (this, or ⋯) is centered under the header's chevron. */}
+          {disclosure && (
+            <button
+              type="button"
+              onClick={disclosure.onToggle}
+              className="mr-0.5 grid size-6 shrink-0 cursor-pointer place-items-center rounded text-fg-faint hover:text-fg"
+              aria-label={`${disclosure.open ? "Collapse" : "Expand"} ${label}`}
+              aria-expanded={disclosure.open}
+              data-row-disclosure=""
+            >
+              <ChevronRight
+                className={`size-3 transition-transform duration-150 ease-[cubic-bezier(0.2,0,0,1)] ${disclosure.open ? "rotate-90" : ""}`}
+              />
             </button>
           )}
         </>
@@ -633,17 +656,6 @@ export function SidebarItemRow<
                 ?.focus({ preventScroll: true });
           }}
         />
-      )}
-      {actionError && (
-        <ShortcutHint label={actionError}>
-          <span
-            role="alert"
-            className="mr-1 flex shrink-0 items-center gap-1 text-xs text-danger"
-          >
-            <icons.CircleAlert aria-hidden="true" className="size-3" />
-            Failed<span className="sr-only">: {actionError}</span>
-          </span>
-        </ShortcutHint>
       )}
       {previewEnabled && previewAnchor && (
         <SidebarPreviewPopover

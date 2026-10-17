@@ -268,8 +268,12 @@ async function setDisplay(live: "all" | "latest" | "notes") {
   );
 }
 
+/** A new floating chat: the dock's + (Cmd+N would take a New Tab in front). */
 async function newChat() {
-  await run(`pressKey('n', { metaKey: true }); return true;`);
+  await runWait(
+    `const plus = $('[data-dock-rail] button[aria-label="New chat"]'); plus?.click(); return !!plus;`,
+    { label: "the dock's +" },
+  );
   await runWait(
     `const dock = frontDock();
      return !!composer() && !dock.querySelector('[role="log"] article');`,

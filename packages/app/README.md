@@ -53,6 +53,13 @@ The React exports from `@catamorphic/app/ui` are composable:
 
 - `Tree`: virtual list/tree, stable expansion, keyboard navigation, selection,
   lazy disclosure, explicit row height and viewport size, arbitrary row renderer.
+  `indent` places each level's rows that far in, so a row's own box carries its
+  indent. Keyboard focus draws one ring over the focused row's box, wholly
+  inside it, that glides between rows (`[data-tree-focus]`). A host moves focus
+  in with `focusTreeRow({ scroller, which: "first" | "last" | "selected",
+  visible })` on the tree's `[data-tree-viewport]` (`onViewport` hands it over),
+  and hears arrows past either end through `onTreeLeave({ container, onLeave })`
+  to go on into a list beside it; the tree keeps those keys either way.
 - `CollectionTree`: paged roots and lazy children over a collection, retry states,
   grouping and projection. A branch with more rows ends with three still
   placeholder rows; its next page is read once the person moves within a

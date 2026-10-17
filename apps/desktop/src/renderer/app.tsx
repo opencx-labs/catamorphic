@@ -249,7 +249,9 @@ import {
   emptyWorkspace,
   hydrateWorkspace,
   newChatEntry,
+  newTabInFront,
   nextActiveTabKey,
+  openChatInNewTab,
   orderedTabKeys,
   reconcileWorkspace,
   serializeWorkspace,
@@ -628,6 +630,10 @@ export function App({
     null,
   );
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  // Raised each time the person opens a sidebar: it focuses the row of
+  // what is in front (TabbedSidebar).
+  const [sidebarFocusRequest, setSidebarFocusRequest] = useState(0);
+  const [rightSidebarFocusRequest, setRightSidebarFocusRequest] = useState(0);
   // A sidebar moves first and takes or gives back its space once still;
   // its toggles, and the room the chrome makes for it, follow the motion
   // rather than the setting.
@@ -2708,11 +2714,17 @@ export function App({
     });
   };
 
-  // Cmd+T and the tab-strip + always open a full chat tab (Chrome muscle
-  // memory); the sidebar +, bubble +, and Cmd+N open the floating aside.
+  // Cmd+N and the palette open the floating aside, or the New Tab in
+  // front: a chat asked for from one opens in it. The dock's + keeps its
+  // chats in the dock (`inNewTab: false`).
   const addChat = (
     forceMode?: "tab",
-    opts?: { incognito?: boolean; worktree?: boolean; agentId?: string },
+    opts?: {
+      incognito?: boolean;
+      worktree?: boolean;
+      agentId?: string;
+      inNewTab?: boolean;
+    },
   ) => {
     if (!requireAgents()) return;
     updateWorkspace((ws) => {
@@ -2726,6 +2738,7 @@ export function App({
         (active?.mode === "tab" &&
           ws.activeTabKey === chatTabKey(active.localId));
       const activeSignals = active ? signalsByChat[active.localId] : undefined;
+      const inNewTab = opts?.inNewTab !== false && Boolean(newTabInFront(ws));
       if (
         activeIsVisible &&
         !closingChatIds.current.has(active.localId) &&
@@ -2740,20 +2753,37 @@ export function App({
         // Nor does a fresh worktree chat a plain one; the reverse takes one.
         (!active.worktree || opts?.worktree)
       ) {
+        // Floating over a New Tab, the fresh chat moves into that tab.
+        const kept = (reused: Workspace) =>
+          inNewTab && active.mode === "partial"
+            ? openChatInNewTab(
+                ws,
+                {
+                  ...reused,
+                  chats: reused.chats.map((chat) =>
+                    chat.localId === active.localId
+                      ? { ...chat, mode: "tab" as const }
+                      : chat,
+                  ),
+                  activeTabKey: chatTabKey(active.localId),
+                },
+                chatTabKey(active.localId),
+              )
+            : reused;
         // Asked for a worktree, the fresh chat takes one (ADR 0215).
         if (opts?.worktree && !active.worktree) {
           setSelectionPulls((current) => ({
             ...current,
             [active.localId]: (current[active.localId] ?? 0) + 1,
           }));
-          return {
+          return kept({
             ...ws,
             chats: ws.chats.map((chat) =>
               chat.localId === active.localId
                 ? { ...chat, worktree: true }
                 : chat,
             ),
-          };
+          });
         }
         setSelectionPulls((current) => ({
           ...current,
@@ -2761,16 +2791,18 @@ export function App({
         }));
         // Asked for with an agent, the fresh chat takes it.
         const agentId = opts?.agentId;
-        return agentId && active.agentId !== agentId
-          ? {
-              ...ws,
-              chats: ws.chats.map((chat) =>
-                chat.localId === active.localId
-                  ? { ...chat, agentId, model: undefined }
-                  : chat,
-              ),
-            }
-          : ws;
+        return kept(
+          agentId && active.agentId !== agentId
+            ? {
+                ...ws,
+                chats: ws.chats.map((chat) =>
+                  chat.localId === active.localId
+                    ? { ...chat, agentId, model: undefined }
+                    : chat,
+                ),
+              }
+            : ws,
+        );
       }
       // Floating chats become a full tab anyway when the workspace is
       // empty — with nothing behind it, the chat IS the workspace.
@@ -2781,10 +2813,10 @@ export function App({
         ws.editors.length === 0 &&
         ws.chats.every((chat) => chat.mode !== "tab");
       const entry = newChatEntry(
-        forceMode ?? (noTabsOpen ? "tab" : "partial"),
+        forceMode ?? (noTabsOpen || inNewTab ? "tab" : "partial"),
         opts,
       );
-      return {
+      const next = {
         ...ws,
         chats: [
           ...ws.chats.map((chat) =>
@@ -2796,16 +2828,20 @@ export function App({
         activeTabKey:
           entry.mode === "tab" ? chatTabKey(entry.localId) : ws.activeTabKey,
       };
+      return inNewTab && entry.mode === "tab"
+        ? openChatInNewTab(ws, next, chatTabKey(entry.localId))
+        : next;
     });
   };
 
   // Palette "Send to agent": a new chat born with its first message
-  // attached; ChatDock auto-sends it on mount.
+  // attached; ChatDock auto-sends it on mount. Asked for from the palette
+  // (`inNewTab`), a New Tab in front takes it, however it was committed.
   const sendToAgent = (
     message: string | PendingChatMessage,
     mode: "float" | "tab",
     agentId?: string,
-    options: { watchBackdrop?: boolean } = {},
+    options: { watchBackdrop?: boolean; inNewTab?: boolean } = {},
   ) => {
     if (!requireAgents()) return;
     const entry: ChatDockEntry = {
@@ -2815,18 +2851,25 @@ export function App({
       ...(options.watchBackdrop ? { watchBackdrop: true } : {}),
     };
     updateWorkspace((ws) => {
-      return {
+      const inNewTab = options.inNewTab === true && Boolean(newTabInFront(ws));
+      const placed: ChatDockEntry = inNewTab
+        ? { ...entry, mode: "tab" }
+        : entry;
+      const next = {
         ...ws,
         chats: [
           ...ws.chats.map((chat) =>
             chat.mode === "partial" ? { ...chat, mode: "min" as const } : chat,
           ),
-          entry,
+          placed,
         ],
-        activeChatId: entry.localId,
+        activeChatId: placed.localId,
         activeTabKey:
-          entry.mode === "tab" ? chatTabKey(entry.localId) : ws.activeTabKey,
+          placed.mode === "tab" ? chatTabKey(placed.localId) : ws.activeTabKey,
       };
+      return inNewTab
+        ? openChatInNewTab(ws, next, chatTabKey(placed.localId))
+        : next;
     });
     return entry.localId;
   };
@@ -3300,7 +3343,7 @@ export function App({
       revealChat(focusedChat.localId);
       return;
     }
-    sendToAgent(skillInvocation(name), mode);
+    sendToAgent(skillInvocation(name), mode, undefined, { inNewTab: true });
   };
 
   const updateSession = useUpdateAgentSession(projectId);
@@ -3530,6 +3573,8 @@ export function App({
     addChat(from?.mode === "tab" ? "tab" : undefined, {
       agentId,
       incognito: from?.incognito,
+      // Picked for a floating chat, it floats beside it.
+      inNewTab: from?.mode !== "partial",
     });
   };
 
@@ -4263,6 +4308,7 @@ export function App({
       openEditorTab({ side: mode === "side", floating: mode === "floating" }),
     "toggle-right-sidebar": () => {
       const open = !rightSidebarOpen;
+      if (open) setRightSidebarFocusRequest((count) => count + 1);
       if (rightSidebarHasContent) {
         setSavedRightSidebarOpen(open);
         void desktopApi.setPrefs({ rightSidebarOpen: open });
@@ -4272,6 +4318,7 @@ export function App({
     },
     "toggle-sidebar": () => {
       const open = !sidebarOpen;
+      if (open) setSidebarFocusRequest((count) => count + 1);
       setSidebarOpen(open);
       void desktopApi.setPrefs({ sidebarOpen: open });
     },
@@ -4500,7 +4547,10 @@ export function App({
           event.kind === "newChat" &&
           event.projectId === projectIdRef.current
         )
-          addChatRef.current();
+          // The dock's own + (attached or detached) starts a chat in the
+          // dock, never in the New Tab behind it; Cmd+N it caught for this
+          // window is this window's Cmd+N.
+          addChatRef.current(undefined, { inNewTab: event.shortcut === true });
       }),
     [],
   );
@@ -6208,7 +6258,10 @@ export function App({
     },
     onSelectProject: selectProject,
     onSwitchProfile: switchProfile,
-    onSendToAgent: sendToAgent,
+    // What the palette starts is a chat asked for there: a New Tab in
+    // front takes it.
+    onSendToAgent: (message, mode, agentId) =>
+      sendToAgent(message, mode, agentId, { inNewTab: true }),
     startingActions,
     onRunSkill: runSkill,
     actionHandlers,
@@ -6847,6 +6900,7 @@ export function App({
               tabs={sidebarTabs("left")}
               surface={sidebarSurface}
               open={sidebarVisible}
+              focusRequest={sidebarFocusRequest}
               sidebarRef={sidebarRef}
               overlay={compactWindow}
               revealed={revealed}
@@ -7975,6 +8029,7 @@ export function App({
               tabs={sidebarTabs("right")}
               surface={sidebarSurface}
               open={rightSidebarOpen}
+              focusRequest={rightSidebarFocusRequest}
               error={workspaceError}
               onCustomize={() => customizeSidebar("right")}
               onMotionChange={setRightSidebarMotion}

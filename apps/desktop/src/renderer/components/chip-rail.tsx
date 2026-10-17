@@ -39,7 +39,7 @@ import type {
 import type { SidebarSourceSession } from "../../shared/sidebar-source.js";
 import { shownChipCount } from "../lib/chip-layout.js";
 import type { Chip } from "../lib/chips.js";
-import { markKeyboardModality } from "../lib/focus-modality.js";
+import { keyMovedFocus } from "../lib/focus-modality.js";
 import { lucideIcon } from "../lib/lucide-icon.js";
 import { EASE_STANDARD, motionMs } from "../lib/motion.js";
 import { usePopoverDismiss } from "../lib/popover-dismiss.js";
@@ -1005,7 +1005,7 @@ export const ChipRail = memo(function ChipRail({
         const flow = flowRef.current;
         if (rootsCount === 0 || !flow || flow.closest("[inert]")) return false;
         // The shortcut leads with the keyboard: the ring shows at once.
-        markKeyboardModality();
+        keyMovedFocus();
         setCurrentId(null);
         if (foldedNow) {
           setUnfolded("keyboard");
