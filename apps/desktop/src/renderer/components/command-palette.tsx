@@ -22,6 +22,7 @@ import {
   webUsageKey,
 } from "../../shared/palette.js";
 import { moveFocusAsApp } from "../lib/app-focus.js";
+import { caretLine } from "../lib/caret-line.js";
 import { normalizeCommandQuery } from "../lib/command-score.js";
 import { desktopApi, projectAgentAsInfo } from "../lib/desktop-api.js";
 import { formatBinding, useKeybindings } from "../lib/keybindings.js";
@@ -842,12 +843,14 @@ export function CommandPalette({
       exitMode();
       return;
     }
-    if (event.key === "ArrowDown") {
+    // ↑ and ↓ move the caret between the input's lines, like any text
+    // field; from the first line up or the last line down, the results.
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      const down = event.key === "ArrowDown";
+      const edge = caretLine(event.currentTarget);
+      if (down ? !edge.last : !edge.first) return;
       event.preventDefault();
-      moveSelection(1);
-    } else if (event.key === "ArrowUp") {
-      event.preventDefault();
-      moveSelection(-1);
+      moveSelection(down ? 1 : -1);
     } else if (
       event.key === "Enter" &&
       (!event.shiftKey ||

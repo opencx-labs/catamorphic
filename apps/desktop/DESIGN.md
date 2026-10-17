@@ -722,6 +722,41 @@ the historical log explains how it arrived here.
 - [Performance](docs/performance.md): idle lifecycle checks and sustained measurement.
 
 ## Design log
+### 2026-10-18: The Mac app's icon is drawn as designed; the palette's input grows in place and its arrows move the caret
+
+The installed app's icon looked worse than the dev app's. macOS 26 draws an
+app icon from an asset catalog; an app with only an `icns` gets the system's
+automatic treatment, which softened the tile's edge and embossed the W into
+a brownish glass. The dev app escaped it only because it hands the Dock the
+flat PNG while it runs. The icon's source is now `build/icon.icon`, an Icon
+Composer icon: the orange fill, a flat W without glass, and for the dark
+icon style the W in orange on Work's dark. Packaging compiles it with Xcode
+26's `actool` into the `Assets.car` macOS 26 draws, and derives the `icns`
+macOS 13 to 15 show from it. The release job selects Xcode 26 and checks
+the catalog is in the app; `.github/workflows/desktop-icon.yml` compiles the
+icon on any pull request that changes it.
+
+As the palette's input grew a line, its first line jumped up and slid back.
+The gliding frame (`lib/use-gliding-height.ts`) clipped with
+`overflow: hidden`, which still makes it a scroll container: Chromium
+scrolled it to show the caret on the new line, and the frame's growth
+scrolled it back. The composer did the same, unseen because it grows upward
+and its text rose anyway. The frame now clips with `overflow: clip`, so
+nothing can scroll it and the new line is revealed as the frame grows: what
+has not glided into view is clipped, not scrolled to.
+
+↑ and ↓ in the palette always moved the highlight, so a caret on the second
+line of a long query could not go back to the first. They move the caret
+between the input's lines now, wrapped lines included (`lib/caret-line.ts`
+lays the text out in a hidden copy to find them), and the highlight from
+the first line up and the last line down. A one-line query is both, so its
+arrows move the highlight as before.
+
+`e2e/motion.e2e.ts` presses a real Shift+Enter in the palette and the
+composer and checks the first line never leaves the frame's top edge;
+`e2e/palette.e2e.ts` walks the arrows through two lines, a wrapped line and
+one line.
+
 ### 2026-10-17: A message sent while the agent works reaches it
 
 A message sent while the agent worked waited, a dashed ghost, until the
@@ -1967,6 +2002,7 @@ about it or asks to use it.
 
 The desktop product is Work, powered by the Catamorphic framework. Its icon is
 the orange W in `build/icon.svg`, shared with Work mobile and work.software.
+The packaged Mac app draws it from the Icon Composer source `build/icon.icon`.
 Theme presets are Work Dark and Work Light; the existing palette and motion
 contract continue to apply. Packaging, invitations and storage identity follow
 [ADR 0146](../../docs/decisions/0146-work-application-identity.md).

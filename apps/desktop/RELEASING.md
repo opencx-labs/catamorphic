@@ -79,10 +79,13 @@ account. Verify:
 The tag workflow rejects unsupported prerelease names and any tag that does
 not match the desktop package version. It then:
 
-1. Builds the repository on an Apple silicon GitHub runner.
+1. Builds the repository on an Apple silicon GitHub runner, with the
+   runner's newest Xcode 26 selected: only its `actool` compiles the Icon
+   Composer app icon (`build/icon.icon`), so packaging elsewhere needs Xcode
+   26 too.
 2. Signs the app with Developer ID and submits it to Apple's notary service.
 3. Verifies the signature, Gatekeeper assessment, stapled ticket, bundle id,
-   URL scheme, DMG, and ZIP.
+   URL scheme, the icon's asset catalog, DMG, and ZIP.
 4. Rewrites generated update metadata to the tagged GitHub asset URLs.
 5. Creates or updates the GitHub release and uploads the DMG, ZIP, blockmaps,
    update metadata, and SHA-256 checksums. Preview builds are prereleases;

@@ -437,6 +437,73 @@ it("leaves the list where it is when the pointer highlights a clipped row", asyn
   await close();
 });
 
+it("moves the caret between the input's lines with the arrows, and the highlight past them", async () => {
+  await open();
+  // Real key presses: only the browser's own handling moves a caret. The
+  // palette claims a key by preventing it; a listener after React's reads that.
+  await run(`window.__arrows = [];
+    window.__arrow = (event) => { if (event.key.startsWith('Arrow')) window.__arrows.push(event.defaultPrevented); };
+    window.addEventListener('keydown', window.__arrow);
+    return true;`);
+  const caretAtEnd = () =>
+    run(
+      `const el = input(); el.setSelectionRange(el.value.length, el.value.length); return true;`,
+    );
+  const caret = () => run<number>(`return input().selectionStart`);
+  const press = async (key: "ArrowUp" | "ArrowDown") => {
+    await app.press(key);
+    return caret();
+  };
+  try {
+    await type("first line\nsecond line");
+    await caretAtEnd();
+    const end = "first line\nsecond line".length;
+    // Up from the second line reaches the first; from the first, the results.
+    const onFirst = await press("ArrowUp");
+    expect(onFirst).toBeLessThanOrEqual("first line".length);
+    expect(await press("ArrowUp")).toBe(onFirst);
+    // Down returns to the second line; from the last, the results again.
+    expect(await press("ArrowDown")).toBe(end);
+    expect(await press("ArrowDown")).toBe(end);
+    expect(await run(`return window.__arrows`)).toEqual([
+      false,
+      true,
+      false,
+      true,
+    ]);
+
+    // A line too long for the input wraps, and its wrapped lines count.
+    const long = Array.from({ length: 40 }, (_, i) => `word${i}`).join(" ");
+    await type(long);
+    await wait(`return input().offsetHeight > 60`, "the long query wraps");
+    await caretAtEnd();
+    await run(`window.__arrows = []; return true;`);
+    expect(await press("ArrowUp")).toBeLessThan(long.length);
+    expect(await run(`return window.__arrows`)).toEqual([false]);
+
+    // One line: the arrows only ever move the highlight.
+    await type("find");
+    await wait(`return rows().length > 1`, "results for one line");
+    await run(`window.__arrows = []; return true;`);
+    const highlighted = () =>
+      run<string>(
+        `return rows().find((row) => row.getAttribute('aria-selected') === 'true')?.dataset.itemId`,
+      );
+    const first = await highlighted();
+    expect(await press("ArrowDown")).toBe(4);
+    expect(await highlighted()).not.toBe(first);
+    expect(await press("ArrowUp")).toBe(4);
+    expect(await highlighted()).toBe(first);
+    expect(await run(`return window.__arrows`)).toEqual([true, true]);
+  } finally {
+    await run(
+      `window.removeEventListener('keydown', window.__arrow); return true;`,
+    );
+  }
+  await close();
+  expect(app.getRendererErrors()).toEqual([]);
+});
+
 it("closes an untouched New Tab once another tab is shown, and keeps a typed one", async () => {
   const strip = `[...document.querySelectorAll('[data-tab-orientation] [data-point-key]:not([data-sidebar-item-id])')]`;
   const newTabs = () =>
