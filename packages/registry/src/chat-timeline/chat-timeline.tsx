@@ -67,6 +67,7 @@ import {
   ActivityText,
   afterMotion,
   finishTransitions,
+  SwapText,
   transitionPlaying,
   useLinger,
 } from "./activity-text.js";
@@ -279,7 +280,8 @@ interface TimelineActions {
   openFile: (path: string, modifiers?: LinkModifiers) => void;
   fork: (itemId: string) => void;
   rollback: (turnId: string, item: UserMessageItem) => ActionResult;
-  steerNow: (itemId: string) => ActionResult;
+  /** Has the agent read the message now; its turn says it is stopping. */
+  steerNow: (item: UserMessageItem) => ActionResult;
   resend: (commandId: string) => void;
   dismiss: (commandId: string) => void;
 }
@@ -540,13 +542,37 @@ export function ChatTimeline(props: ChatTimelineProps) {
   } = props;
   const latest = useRef(props);
   latest.current = props;
+  // Messages the agent stops to read: the one the person interrupted for
+  // and every other its turn had not read then. They say so, and offer
+  // Interrupt no more, until they are read.
+  const [stopping, setStopping] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
   const [actions] = useState<TimelineActions>(() => ({
     openLink: (url, modifiers) => latest.current.onLinkClick?.(url, modifiers),
     openFile: (path, modifiers) =>
       latest.current.onFileClick?.(path, modifiers),
     fork: (itemId) => latest.current.onFork?.(itemId),
     rollback: (turnId, item) => latest.current.onRollback?.(turnId, item),
-    steerNow: (itemId) => latest.current.onSteerNow?.(itemId),
+    steerNow: async (item) => {
+      const unread = [
+        item.id,
+        ...(latest.current.timeline
+          .find((group) => group.turn?.id === item.turnId)
+          ?.entries.flatMap((entry) =>
+            entry.kind === "input" && isUnreadSteer(entry.item)
+              ? [entry.item.id]
+              : [],
+          ) ?? []),
+      ];
+      setStopping((ids) => new Set([...ids, ...unread]));
+      const result = await latest.current.onSteerNow?.(item.id);
+      if (result === false)
+        setStopping(
+          (ids) => new Set([...ids].filter((id) => !unread.includes(id))),
+        );
+      return result;
+    },
     resend: (commandId) => latest.current.onResendFailed?.(commandId),
     dismiss: (commandId) => latest.current.onDismissFailed?.(commandId),
   }));
@@ -734,6 +760,7 @@ export function ChatTimeline(props: ChatTimelineProps) {
               item={row.entry.item}
               focused={row.entry.item.id === focusMessageId}
               unread={view.live && isUnreadSteer(row.entry.item)}
+              stopping={stopping.has(row.entry.item.id)}
               steerable={
                 Boolean(onSteerNow) &&
                 view.live &&
@@ -1581,6 +1608,8 @@ interface UserMessageProps {
   unread?: boolean;
   /** The agent can stop its step to read it now. */
   steerable?: boolean;
+  /** Its turn stops for the agent to read what it had not. */
+  stopping?: boolean;
   resendable?: boolean;
   dismissable?: boolean;
 }
@@ -1596,6 +1625,7 @@ const UserMessage = memo(function UserMessage({
   restoreTurnId,
   unread = false,
   steerable = false,
+  stopping = false,
   resendable = false,
   dismissable = false,
 }: UserMessageProps) {
@@ -1620,8 +1650,9 @@ const UserMessage = memo(function UserMessage({
     if (takeover && articleRef.current) glideFrom(articleRef.current, takeover);
   }, [takeover]);
   // A send waiting in the queue (an interrupting one, ⌘↵) leaves this
-  // pending bubble for its queued one, which arrives from here.
-  const command = pending?.commandId;
+  // pending bubble for its queued one, which arrives from here; so does a
+  // message its turn ended without reading, queued as a turn of its own.
+  const command = pending?.commandId ?? (item ? sentWith(item) : undefined);
   useLayoutEffect(
     () => () => {
       const article = articleRef.current;
@@ -1653,8 +1684,12 @@ const UserMessage = memo(function UserMessage({
       </div>
       <UnreadLine
         unread={unread}
+        stopping={stopping}
+        // Not yet held by the session, a send has nothing to stop for; one
+        // the chat opens with is simply there.
+        already={Boolean(item) && unread}
         onSteerNow={
-          item && steerable ? () => actions.steerNow(item.id) : undefined
+          item && steerable ? () => actions.steerNow(item) : undefined
         }
       />
       {pending && failed && (
@@ -1718,6 +1753,7 @@ function sameUserMessage(
     previous.restoreTurnId === next.restoreTurnId &&
     previous.unread === next.unread &&
     previous.steerable === next.steerable &&
+    previous.stopping === next.stopping &&
     previous.resendable === next.resendable &&
     previous.dismissable === next.dismissable
   );
@@ -1726,80 +1762,116 @@ function sameUserMessage(
 /**
  * Under a message sent while the agent works (ADR 0240): it is not read
  * yet, and the agent reads it at its next step. Interrupt has it stop that
- * step and read it now. The line closes once the message is read.
+ * step and read it now; every message its turn had not read then says it
+ * is stopping. The line opens a moment after the message is sent, so one
+ * the agent reads at once never shows it, and closes once it is read.
  */
 function UnreadLine({
   unread,
+  stopping,
+  already,
   onSteerNow,
 }: {
   unread: boolean;
+  stopping: boolean;
+  /** Unread as it first showed: open at once, nothing to wait for. */
+  already: boolean;
   onSteerNow?: () => ActionResult;
 }) {
   const { Hint } = useContext(HostContext);
-  const [state, setState] = useState<"idle" | "asking" | "asked" | "failed">(
-    "idle",
-  );
+  const [asking, setAsking] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const open = useHeld(unread, UNREAD_LINE_DELAY_MS, already);
   const lineRef = useRef<HTMLDivElement>(null);
-  // Kept while it closes, so the words stay as the line folds away.
-  const shown = useLinger(unread ? state : undefined, 200, () =>
-    transitionPlaying(lineRef.current, "grid-template-rows"),
+  // Its words are there while it shows and closes, never otherwise: the
+  // message's text (a copy of it) is the message's alone.
+  const shown = useLinger(open ? true : undefined, REVEAL_MS + 80, () =>
+    transitionPlaying(
+      lineRef.current?.closest(".cat-reveal"),
+      "grid-template-rows",
+    ),
   );
+  const waiting = stopping || asking;
+  const offered = Boolean(onSteerNow) && !waiting;
+  // Focus inside a line that closes, or on a button that goes, rests on
+  // the message rather than falling to the page.
+  useLayoutEffect(() => {
+    const line = lineRef.current;
+    if ((!open || !offered) && line?.contains(document.activeElement))
+      line.closest<HTMLElement>("article")?.focus();
+  }, [open, offered]);
   const interrupt = async () => {
-    if (!onSteerNow || state === "asking" || state === "asked") return;
-    setState("asking");
+    if (!onSteerNow || waiting) return;
+    setAsking(true);
+    setFailed(false);
     try {
-      setState((await onSteerNow()) === false ? "failed" : "asked");
+      if ((await onSteerNow()) === false) setFailed(true);
     } catch {
-      setState("failed");
+      setFailed(true);
+    } finally {
+      setAsking(false);
     }
   };
-  const label =
-    shown.value === "asking" || shown.value === "asked"
-      ? "Stopping to read it"
-      : shown.value === "failed"
-        ? "Could not interrupt. Try again."
-        : "Not read yet";
   return (
-    <div
-      ref={lineRef}
-      className={`grid transition-[grid-template-rows,opacity] duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${unread ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0"}`}
-      data-testid="chat-unread-line"
-      data-unread={unread || undefined}
-    >
-      <div className="overflow-hidden" inert={!unread}>
-        {shown.value !== undefined && (
-          <div className="mt-1 flex min-h-5 items-center justify-end gap-1.5 text-[11px] leading-4 text-fg-faint">
-            {onSteerNow && shown.value !== "asked" && (
-              <span className={MESSAGE_ACTIONS}>
-                <Hint label="Interrupt: the agent stops its current step and reads this now">
-                  <button
-                    type="button"
-                    onClick={() => void interrupt()}
-                    disabled={state === "asking"}
-                    className="flex h-5 cursor-pointer items-center gap-1 rounded-md px-1.5 text-fg-muted transition-colors duration-150 hover:bg-accent/10 hover:text-accent disabled:cursor-default disabled:opacity-50"
-                    aria-label="Interrupt so the agent reads this now"
-                    data-testid="chat-steer-now"
-                  >
-                    <Zap className="size-3" />
-                    Interrupt
-                  </button>
-                </Hint>
-              </span>
-            )}
-            <Hint label="The agent reads it when its current step ends">
+    <div data-testid="chat-unread-line" data-unread={unread || undefined}>
+      <Reveal closed={!open} inert={!open}>
+        <div ref={lineRef} className="select-none">
+          {shown.value && (
+            <div className="mt-1 flex min-h-5 items-center justify-end gap-1.5 text-[11px] leading-4 text-fg-faint">
               <span
-                role={shown.value === "failed" ? "alert" : undefined}
-                className={shown.value === "failed" ? "text-danger" : ""}
-                data-testid="chat-unread-state"
+                className={`transition-opacity duration-150 ease-[cubic-bezier(0.2,0,0,1)] ${offered ? "" : "pointer-events-none opacity-0"}`}
+                inert={!offered}
               >
-                {label}
+                <span className={MESSAGE_ACTIONS}>
+                  <Hint label="Interrupt: the agent stops its current step and reads this now">
+                    <button
+                      type="button"
+                      onClick={() => void interrupt()}
+                      className="flex h-5 cursor-pointer items-center gap-1 rounded-md px-1.5 text-fg-muted transition-colors duration-150 hover:bg-accent/10 hover:text-accent"
+                      aria-label="Interrupt so the agent reads this now"
+                      data-testid="chat-steer-now"
+                    >
+                      <Zap className="size-3" />
+                      Interrupt
+                    </button>
+                  </Hint>
+                </span>
               </span>
-            </Hint>
-          </div>
-        )}
-      </div>
+              <SwapText
+                value={waiting ? "Stopping to read it" : "Not read yet"}
+                data-testid="chat-unread-state"
+              />
+            </div>
+          )}
+          {failed && (
+            <p role="alert" className="mt-1 text-right text-[11px] text-danger">
+              Could not interrupt. Try again.
+            </p>
+          )}
+        </div>
+      </Reveal>
     </div>
   );
+}
+
+/** How long a message stays unread before its line opens. */
+const UNREAD_LINE_DELAY_MS = 400;
+
+/**
+ * `value` once it has held for `ms`; false as soon as it does not. With
+ * `initial`, already held at first render.
+ */
+function useHeld(value: boolean, ms: number, initial = false): boolean {
+  const [held, setHeld] = useState(initial);
+  useEffect(() => {
+    if (!value) {
+      setHeld(false);
+      return;
+    }
+    const timer = setTimeout(() => setHeld(true), ms);
+    return () => clearTimeout(timer);
+  }, [value, ms]);
+  return value && held;
 }
 
 /**

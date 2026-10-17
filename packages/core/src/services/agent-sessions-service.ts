@@ -2885,12 +2885,13 @@ export class AgentSessionsService {
       });
       turnId = receipt.turnId;
     } else {
+      // It answers with the reply to this message: a turn of its own.
       const receipt = await this.command(identity, projectId, sessionId, {
         type: "send",
         commandId: randomUUID(),
         text: message,
         ...(input.attachments ? { attachments: input.attachments } : {}),
-        ...(input.dispatch ? { dispatch: input.dispatch } : {}),
+        dispatch: input.dispatch ?? "queue",
       });
       if (receipt.status === "rejected")
         throw new Error(receipt.error?.message ?? "The message was refused");
@@ -3049,8 +3050,10 @@ export class AgentSessionsService {
           switch (command.type) {
             case "send": {
               this.assertAcceptsInput(locked);
-              // A turn that works reads it at its next step (ADR 0240).
-              const dispatch: DispatchMode = command.dispatch ?? "steer";
+              // A turn that works reads it at its next step (ADR 0240),
+              // unless it moves the workspace, which happens before a turn.
+              const dispatch: DispatchMode =
+                command.dispatch ?? (command.workspace ? "queue" : "steer");
               const delivered = await this.deliverIn(trx, {
                 session: locked,
                 input: {
@@ -3311,18 +3314,22 @@ export class AgentSessionsService {
         });
       } else if (turn.attemptCount > 0) {
         // A turn waiting to retry already ran: stopping it interrupts it,
-        // so it reads as stopped and can be retried by hand.
-        events.push({
-          type: "turn.changed",
-          turn: {
-            ...turn,
-            status: "interrupted",
-            error: null,
-            retryAt: null,
-            completedAt: now,
-            updatedAt: now,
+        // so it reads as stopped and can be retried by hand. What was
+        // steered into it and never read runs as turns of its own.
+        events.push(
+          {
+            type: "turn.changed",
+            turn: {
+              ...turn,
+              status: "interrupted",
+              error: null,
+              retryAt: null,
+              completedAt: now,
+              updatedAt: now,
+            },
           },
-        });
+          ...(await this.engine.requeueSteers(trx, turn, now)),
+        );
       } else if (input.turnId !== undefined) {
         // Interrupting a named queued turn cancels it.
         events.push({
@@ -3523,8 +3530,9 @@ export class AgentSessionsService {
    * Have the agent read a message steered into its turn now (ADR 0240):
    * the attempt is interrupted and the turn starts again on the same
    * thread with what it had not read, the way a steer the harness refused
-   * does. A message the agent already read, or one whose turn ended, has
-   * nothing to stop for.
+   * does. A message the agent already read, or whose turn is not working
+   * (it starts, finishes, or the person stopped it), has nothing to stop
+   * for: accepted, and nothing changes.
    */
   private async steerNowIn(
     trx: Transaction<DB>,
@@ -3543,33 +3551,27 @@ export class AgentSessionsService {
         "That message does not exist.",
         404,
       );
-    if (!isUnreadSteer(item) || !item.turnId)
-      throw new SessionCommandRejectedError(
-        "already_read",
-        "The agent already read that message.",
-      );
-    const turnRow = await trx
-      .selectFrom("agent_turns")
-      .selectAll()
-      .where("id", "=", item.turnId)
-      .executeTakeFirstOrThrow();
-    const turn = turnFromRow(turnRow);
-    // Preparing, it reads the message as it starts; finalizing, the next
-    // turn does; stopping, the person's stop stands.
+    const turnRow =
+      isUnreadSteer(item) && item.turnId
+        ? await trx
+            .selectFrom("agent_turns")
+            .selectAll()
+            .where("id", "=", item.turnId)
+            .executeTakeFirst()
+        : undefined;
+    const turn = turnRow ? turnFromRow(turnRow) : null;
     if (
+      !turn ||
       (turn.status !== "running" && turn.status !== "waiting") ||
       turn.cancellationRequested
     )
-      throw new SessionCommandRejectedError(
-        "not_working",
-        "The agent is not working on a turn it can stop for this.",
-      );
+      return { itemId: item.id, interrupted: false };
     const now = new Date().toISOString();
     await this.queue.enqueueCommand(trx, {
       turnId: turn.id,
       attemptId: turn.activeAttemptId,
       kind: "interrupt",
-      payload: { restart: true },
+      payload: { restart: true, itemId: item.id },
     });
     await this.log.append(trx, {
       sessionId: input.session.id,
@@ -3586,7 +3588,7 @@ export class AgentSessionsService {
         },
       ],
     });
-    return { turnId: turn.id, itemId: item.id };
+    return { turnId: turn.id, itemId: item.id, interrupted: true };
   }
 
   private async changeQueuedIn(

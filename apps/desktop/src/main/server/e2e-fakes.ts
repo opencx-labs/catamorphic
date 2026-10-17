@@ -413,8 +413,10 @@ export class E2eFakeAdapter implements HarnessAdapter {
       if (at >= 0) takeIn(unread.splice(at, 1));
       return steer;
     };
-    const pause = (ms: number) =>
-      new Promise<void>((resolve) => {
+    /** A step: when it ends, what was steered during it is read. */
+    const step = (ms: number) => {
+      let cancel = () => {};
+      const ended = new Promise<void>((resolve) => {
         if (interrupted) return resolve();
         const wake = () => {
           clearTimeout(timer);
@@ -424,7 +426,16 @@ export class E2eFakeAdapter implements HarnessAdapter {
         };
         const timer = setTimeout(wake, ms);
         wakers.add(wake);
+        // Given up on before it ended: no boundary, nothing read.
+        cancel = () => {
+          clearTimeout(timer);
+          wakers.delete(wake);
+          resolve();
+        };
       });
+      return { ended, cancel };
+    };
+    const pause = (ms: number) => step(ms).ended;
     const run = async () => {
       const ref = threadRef(attempt);
       host.emit({ type: "thread", ref });
@@ -471,10 +482,12 @@ export class E2eFakeAdapter implements HarnessAdapter {
             waiter.resolve = resolve;
             steerWaiters.push(resolve);
           });
+          const boundary = step(ms);
           const news = await Promise.race([
             steer,
-            pause(ms).then(() => undefined),
+            boundary.ended.then(() => undefined),
           ]);
+          boundary.cancel();
           // Given up on: its claim goes, so a later message is echoed.
           if (!news && waiter.resolve) {
             const at = steerWaiters.indexOf(waiter.resolve);

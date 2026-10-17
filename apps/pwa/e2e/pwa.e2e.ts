@@ -171,7 +171,7 @@ describe.skipIf(!chromeBinary())("pwa PWA", () => {
     await app.eval(CLICK("[data-testid=chat-send]"));
     // In the conversation at once, not queued: unread until its next step.
     await app.waitFor(
-      "document.querySelector('[data-unread] [data-testid=chat-unread-state]')?.textContent === 'Not read yet' && !document.querySelector('[data-testid=chat-queued-message]')",
+      "document.querySelector('[data-unread] [data-testid=chat-unread-state]')?.textContent === 'Not read yet' && !!document.querySelector('[data-unread] [data-testid=chat-steer-now]') && !document.querySelector('[data-testid=chat-queued-message]')",
       { timeoutMs: 20_000, label: "unread message" },
     );
     expect(

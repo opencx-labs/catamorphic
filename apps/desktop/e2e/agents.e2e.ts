@@ -76,6 +76,19 @@ const openFreshChat = async (label: string) => {
   );
 };
 
+/**
+ * The visible chat's turn has ended: a message sent now starts a turn of
+ * its own instead of reaching the one still finishing (ADR 0240).
+ */
+const settled = (label = "the turn before settled") =>
+  runWait(
+    `return !visibleDock()?.querySelector('[data-testid="chat-stop"]');`,
+    {
+      timeoutMs: 30_000,
+      label,
+    },
+  );
+
 const ensurePalette = async () => {
   await run(
     `if (!paletteInput()) pressKey('p', { metaKey: true }); return true;`,
@@ -851,10 +864,7 @@ describe("agents and profiles", () => {
     await runWait(`return !!visibleDock();`, { label: "chat open" });
     // The recovered turn may still be finishing: a message now would reach
     // it rather than start a turn of its own (ADR 0240).
-    await runWait(`return !$('[data-testid="chat-stop"]');`, {
-      timeoutMs: 30_000,
-      label: "the turn before settled",
-    });
+    await settled();
     // The ticker lives only for the 5 s backoff, and a loaded host can
     // spend that between two polls: record it as it renders instead.
     await run(`
@@ -939,6 +949,8 @@ describe("agents and profiles", () => {
       return !!message &&
         message.querySelector('[data-testid="chat-unread-line"]')?.dataset.unread === 'true' &&
         message.querySelector('[data-testid="chat-unread-state"]')?.textContent === 'Not read yet' &&
+        // Offered once the session holds the message, not while it sends.
+        !!message.querySelector('[data-testid="chat-steer-now"]') &&
         $$('[data-testid="chat-queued-message"]').length === 0;`,
       { timeoutMs: 20_000, label: "unread message in the conversation" },
     );
@@ -969,6 +981,7 @@ describe("agents and profiles", () => {
     });
 
     it("queues messages during a turn; edits hold their place until done", async () => {
+      await settled();
       await run(`
       const ta = visibleDock().querySelector('[data-composer-input]');
       setReactValue(ta, 'respond slowly please');
@@ -1187,6 +1200,7 @@ describe("agents and profiles", () => {
   });
 
   it("the send button stops a running turn when there is nothing to send", async () => {
+    await settled();
     const interrupted = `return $$('[role="log"] div')
       .filter((el) => el.textContent.trim() === 'Interrupted').length;`;
     const before = await run<number>(interrupted);
@@ -1455,6 +1469,7 @@ describe("agents and profiles", () => {
       throw new Error(`Unexpected coordination result: ${coordinationResult}`);
     }
 
+    await settled("coordination turn settled");
     await run(`
       const ta = visibleDock().querySelector('[data-composer-input]');
       setReactValue(ta, 'terminal: git show --format= --name-only HEAD && pwd');
@@ -1642,6 +1657,7 @@ describe("agents and profiles", () => {
         label: "agent-created PDF",
       },
     );
+    await settled("PDF turn settled");
     await run(`
       const ta = visibleDock().querySelector('[data-composer-input]');
       setReactValue(ta, 'show: file:artifact.pdf');
@@ -1660,6 +1676,7 @@ describe("agents and profiles", () => {
   });
 
   it("rejects opening a directory without adding a broken surface", async () => {
+    await settled();
     const before = await run<number>(
       `return visibleDock().querySelectorAll('[data-testid="surface-chip"]').length;`,
     );

@@ -261,6 +261,42 @@ it("an interrupt withdraws the steers its turn never read, so the next turn does
   ).toEqual([]);
 }, 90_000);
 
+it("takes a message steered while its CLI still starts, after the attempt's own input", async () => {
+  const outcome = await driveAttempt({
+    runner: new InProcessRunner({
+      adapters: { "claude-code": adapter },
+      version: "warm",
+    }),
+    attempt: scenarioAttempt({
+      context,
+      scenario,
+      turn: 1,
+      text: "Remember the word mango",
+    }),
+    host: {
+      afterStart: (control) =>
+        control.steer({ itemId: "item-early-steer", text: "Also kiwi." }),
+    },
+    nativeState,
+    timeoutMs: 45_000,
+  });
+  expect(outcome.completed?.status).toBe("completed");
+  // Taken, never refused: a refusal would stop the attempt for it.
+  expect([...outcome.acks.values()].every((error) => !error)).toBe(true);
+  expect(
+    outcome.events.some(
+      (event) =>
+        event.type === "input.consumed" &&
+        event.itemIds.includes("item-early-steer"),
+    ),
+  ).toBe(true);
+  const asked = model.requests.map(sent).join("\n");
+  expect(asked.indexOf("Remember the word mango")).toBeGreaterThan(-1);
+  expect(asked.indexOf("Remember the word mango")).toBeLessThan(
+    asked.indexOf("Also kiwi."),
+  );
+}, 90_000);
+
 it("a failed turn's CLI does not serve the retry", async () => {
   const failed = await run(
     scenarioAttempt({

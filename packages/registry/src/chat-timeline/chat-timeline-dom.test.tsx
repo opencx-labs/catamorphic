@@ -339,6 +339,17 @@ describe("ChatTimeline DOM contract", () => {
     expect(answer?.className).toContain("ml-auto");
   });
 
+  /** What the unread line says, or is about to: its label swaps in place. */
+  const unreadState = (messageId: string) => {
+    const label = $(
+      `[data-message-id="${messageId}"] [data-testid="chat-unread-state"]`,
+    );
+    return (
+      label?.querySelector(".cat-swap-next")?.getAttribute("data-text") ??
+      label?.textContent
+    );
+  };
+
   it("marks a message sent while the agent works until it is read, and interrupts for it", async () => {
     const steerNow = vi.fn(() => true);
     const working = turn("t1", 1, {
@@ -350,36 +361,49 @@ describe("ChatTimeline DOM contract", () => {
       dispatch: "steer",
       status: "in_progress",
     });
+    const also = input("t1", "And the footer", {
+      id: "s2",
+      dispatch: "steer",
+      status: "in_progress",
+    });
     const items: Item[] = [
       input("t1", "Build the page"),
       command("c1", "t1", { command: "bun test" }),
       sent,
+      also,
     ];
     await render({
       timeline: timelineOf({ turns: [working], items }),
       activity: "Working",
       onSteerNow: steerNow,
     });
-    const message = $('[data-message-id="s1"]');
-    const line = message?.querySelector('[data-testid="chat-unread-line"]');
+    const line = $('[data-message-id="s1"] [data-testid="chat-unread-line"]');
     expect(line?.hasAttribute("data-unread")).toBe(true);
-    expect(
-      line?.querySelector('[data-testid="chat-unread-state"]')?.textContent,
-    ).toBe("Not read yet");
+    expect(unreadState("s1")).toBe("Not read yet");
     await act(async () =>
       line
         ?.querySelector<HTMLButtonElement>('[data-testid="chat-steer-now"]')
         ?.click(),
     );
     expect(steerNow).toHaveBeenCalledWith("s1");
-    expect(
-      line?.querySelector('[data-testid="chat-unread-state"]')?.textContent,
-    ).toBe("Stopping to read it");
+    // Every message the turn had not read is read with it.
+    expect(unreadState("s1")).toBe("Stopping to read it");
+    expect(unreadState("s2")).toBe("Stopping to read it");
+    for (const id of ["s1", "s2"])
+      expect(
+        $(`[data-message-id="${id}"] [data-testid="chat-steer-now"]`)?.closest(
+          "[inert]",
+        ),
+      ).not.toBeNull();
     // Read: the line closes, and nothing is offered on it anymore.
     await render({
       timeline: timelineOf({
         turns: [working],
-        items: [...items.slice(0, 2), { ...sent, status: "completed" }],
+        items: [
+          ...items.slice(0, 2),
+          { ...sent, status: "completed" },
+          { ...also, status: "completed" },
+        ],
       }),
       activity: "Working",
       onSteerNow: steerNow,
@@ -393,6 +417,113 @@ describe("ChatTimeline DOM contract", () => {
     expect(
       $(
         '[data-message-id="t1:input"] [data-testid="chat-unread-line"]',
+      )?.hasAttribute("data-unread"),
+    ).toBe(false);
+  });
+
+  it("offers Interrupt only while the turn works, and says when it did not work", async () => {
+    const sent = input("t1", "Use the blue one", {
+      id: "s1",
+      dispatch: "steer",
+      status: "in_progress",
+    });
+    const items: Item[] = [input("t1", "Build the page"), sent];
+    const offered = () =>
+      $('[data-message-id="s1"] [data-testid="chat-steer-now"]')?.closest(
+        "[inert]",
+      ) === null;
+    for (const working of [
+      turn("t1", 1, { status: "preparing", completedAt: null }),
+      turn("t1", 1, {
+        status: "running",
+        completedAt: null,
+        cancellationRequested: true,
+      }),
+    ]) {
+      await render({
+        timeline: timelineOf({ turns: [working], items }),
+        activity: "Working",
+        onSteerNow: () => true,
+      });
+      expect(offered()).toBe(false);
+    }
+    const refused = vi.fn(() => false);
+    await render({
+      timeline: timelineOf({
+        turns: [turn("t1", 1, { status: "running", completedAt: null })],
+        items,
+      }),
+      activity: "Working",
+      onSteerNow: refused,
+    });
+    expect(offered()).toBe(true);
+    await act(async () =>
+      $<HTMLButtonElement>(
+        '[data-message-id="s1"] [data-testid="chat-steer-now"]',
+      )?.click(),
+    );
+    expect(refused).toHaveBeenCalled();
+    expect($('[data-message-id="s1"] [role="alert"]')?.textContent).toBe(
+      "Could not interrupt. Try again.",
+    );
+    expect(offered()).toBe(true);
+    expect(unreadState("s1")).toBe("Not read yet");
+  });
+
+  it("keeps a send's bubble as the session takes it, unread throughout when it steers", async () => {
+    const working = turn("t1", 1, { status: "running", completedAt: null });
+    const base: Item[] = [input("t1", "Build the page")];
+    const pending = {
+      commandId: "cmd-1",
+      text: "Use the blue one",
+      attachments: [],
+      dispatch: "steer" as const,
+      status: "sent" as const,
+    };
+    await render({
+      timeline: timelineOf({ turns: [working], items: base }),
+      pending: [pending],
+      activity: "Working",
+    });
+    const bubble = $('[data-pending-message="sent"]');
+    expect(
+      bubble
+        ?.querySelector('[data-testid="chat-unread-line"]')
+        ?.hasAttribute("data-unread"),
+    ).toBe(true);
+    await render({
+      timeline: timelineOf({
+        turns: [working],
+        items: [
+          ...base,
+          input("t1", "Use the blue one", {
+            id: "s1",
+            dispatch: "steer",
+            status: "in_progress",
+            idempotencyKey: "user:me:cmd-1",
+          }),
+        ],
+      }),
+      pending: [pending],
+      activity: "Working",
+    });
+    // The same element, still unread: nothing flickers as it changes hands.
+    const message = $('[data-message-id="s1"]');
+    expect(message).toBe(bubble);
+    expect(
+      message
+        ?.querySelector('[data-testid="chat-unread-line"]')
+        ?.hasAttribute("data-unread"),
+    ).toBe(true);
+    // A send that queues is never unread.
+    await render({
+      timeline: timelineOf({ turns: [working], items: base }),
+      pending: [{ ...pending, commandId: "cmd-2", dispatch: "queue" }],
+      activity: "Working",
+    });
+    expect(
+      $(
+        '[data-pending-message="sent"] [data-testid="chat-unread-line"]',
       )?.hasAttribute("data-unread"),
     ).toBe(false);
   });

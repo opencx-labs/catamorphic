@@ -3335,7 +3335,7 @@ function ChatDockContent({
                         // agent at once (ADR 0195); otherwise it reaches it
                         // at its next step, or queues (ADR 0240).
                         chat.isWorking && !awaitingInput
-                          ? `${queueMessages ? "Queue" : "Send"} (${/Mac/.test(navigator.platform) ? "⌘↵" : "Ctrl+Enter"} ${queueMessages ? "sends now" : "interrupts"})`
+                          ? `${queueMessages ? "Queue" : "Send"} (${/Mac/.test(navigator.platform) ? "⌘↵" : "Ctrl+Enter"} ${queueMessages ? "sends now" : "stops and sends"})`
                           : "Send"
                       }
                       shortcut="↵"

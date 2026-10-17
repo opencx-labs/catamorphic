@@ -692,6 +692,61 @@ describe("ai-sdk adapter: steering and interrupts", () => {
     );
   });
 
+  it("keeps a steer it reported read when the step that took it is stopped", async () => {
+    const store: ThreadStore = new Map();
+    let steerId = "";
+    const { host } = await run({
+      store,
+      attempt: {
+        thread: fresh(),
+        hostTools: [
+          {
+            name: "slow_work",
+            description: "Work for a while",
+            inputSchema: { type: "object", properties: {} },
+          },
+        ],
+      },
+      host: {
+        tools: {
+          slow_work: async () => {
+            steerId = currentHost.send({
+              kind: "steer",
+              input: {
+                itemId: "steer-1",
+                text: "Use the blue theme.",
+                attachments: [],
+              },
+            });
+            await currentHost.waitFor(
+              () => currentHost.acks(steerId).length > 0,
+            );
+            return { content: [{ type: "text", text: "worked" }] };
+          },
+        },
+      },
+      transcript: {
+        calls: [
+          toolCallsCall([{ id: "work-1", name: "slow_work", input: {} }]),
+          hangingCall("Switching to"),
+        ],
+      },
+    });
+    const currentHost = host;
+    // The step that read it is under way when the person stops it.
+    await host.waitFor((event) => event.type === "item.delta");
+    host.send({ kind: "interrupt" });
+    await host.done;
+    expect(completed(host)).toMatchObject({ status: "interrupted" });
+    expect(host.of("input.consumed")).toEqual([
+      { type: "input.consumed", itemIds: ["steer-1"] },
+    ]);
+    // Read, so on the stored thread the next turn resumes.
+    expect(JSON.stringify(store.get("thread-1"))).toContain(
+      "Use the blue theme.",
+    );
+  });
+
   it("takes a steer that arrives during the final answer in one more round", async () => {
     const holder: { host?: FakeHost } = {};
     const { host, replay } = await run({

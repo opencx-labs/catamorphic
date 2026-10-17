@@ -672,6 +672,19 @@ describe("session log", () => {
       text: "and the docs",
     });
     const itemId = String(sent.result?.itemId);
+    // The harness took the steer, and holds it until its step ends.
+    await vi.waitFor(
+      async () =>
+        expect(
+          await db
+            .selectFrom("agent_turn_commands")
+            .select("status")
+            .where("kind", "=", "steer")
+            .where(sql<string>`payload->>'itemId'`, "=", itemId)
+            .executeTakeFirst(),
+        ).toEqual({ status: "acknowledged" }),
+      { timeout: 10_000 },
+    );
     const unread = (await folded(projectId, sessionId)).items.find(
       (item) => item.id === itemId,
     );
@@ -742,17 +755,115 @@ describe("session log", () => {
       (item) => (item.kind === "assistant_message" ? [item.text] : []),
     );
     expect(replies.join("\n").split("use the blue one")).toHaveLength(2);
-    // Read now, there is nothing left to stop for.
+    // Read now, there is nothing left to stop for: nothing changes.
     const again = await sessions.command(identity, projectId, sessionId, {
       type: "steer_now",
       commandId: randomUUID(),
       itemId,
     });
     expect(again).toMatchObject({
-      status: "rejected",
-      error: { code: "already_read" },
+      status: "accepted",
+      result: { interrupted: false },
     });
   }, 40_000);
+
+  it("reads a message the attempt never read with the retry of a rate-limited turn", async () => {
+    const { projectId, sessionId } = await chat("Steer through a retry");
+    await sessions.command(identity, projectId, sessionId, {
+      type: "send",
+      commandId: randomUUID(),
+      text: "[[defer-steers]] [[rate-limit 1500]]",
+    });
+    await running(projectId, sessionId);
+    const sent = await sessions.command(identity, projectId, sessionId, {
+      type: "send",
+      commandId: randomUUID(),
+      text: "and the docs",
+    });
+    const itemId = String(sent.result?.itemId);
+    await vi.waitFor(
+      async () => {
+        const [turn] = orderedTurns(await folded(projectId, sessionId));
+        expect(turn?.retryAt).not.toBeNull();
+      },
+      { timeout: 10_000 },
+    );
+    // Its backoff is over: a worker runs the retry.
+    await db
+      .updateTable("agent_turns")
+      .set({ available_at: new Date(0) })
+      .where("session_id", "=", sessionId)
+      .execute();
+    const worker = sessions.startWorker({
+      resolveIdentity: async () => identity,
+      pollIntervalMs: 20,
+    });
+    try {
+      await vi.waitFor(
+        async () => {
+          const state = await folded(projectId, sessionId);
+          expect(orderedTurns(state).map((turn) => turn.status)).toEqual([
+            "completed",
+          ]);
+          expect(state.items.find((item) => item.id === itemId)?.status).toBe(
+            "completed",
+          );
+          const reply = state.items.find(
+            (item) => item.kind === "assistant_message",
+          );
+          expect(reply?.kind === "assistant_message" && reply.text).toContain(
+            "and the docs",
+          );
+        },
+        { timeout: 15_000 },
+      );
+    } finally {
+      await worker.stop();
+    }
+  }, 40_000);
+
+  it("runs a message a turn waiting to retry never read as its own once the person stops it", async () => {
+    const { projectId, sessionId } = await chat("Stop while waiting to retry");
+    await sessions.command(identity, projectId, sessionId, {
+      type: "send",
+      commandId: randomUUID(),
+      text: "[[defer-steers]] [[rate-limit 800]]",
+    });
+    await running(projectId, sessionId);
+    const sent = await sessions.command(identity, projectId, sessionId, {
+      type: "send",
+      commandId: randomUUID(),
+      text: "check the footer",
+    });
+    const itemId = String(sent.result?.itemId);
+    await vi.waitFor(
+      async () => {
+        const [turn] = orderedTurns(await folded(projectId, sessionId));
+        expect(turn).toMatchObject({ status: "queued" });
+        expect(turn?.retryAt).not.toBeNull();
+      },
+      { timeout: 10_000 },
+    );
+    await sessions.command(identity, projectId, sessionId, {
+      type: "interrupt",
+      commandId: randomUUID(),
+    });
+    await vi.waitFor(
+      async () => {
+        const state = await folded(projectId, sessionId);
+        const turns = orderedTurns(state);
+        expect(turns.map((turn) => turn.status)).toEqual([
+          "interrupted",
+          "completed",
+        ]);
+        expect(turns[1]?.inputItemId).toBe(itemId);
+        expect(state.items.find((item) => item.id === itemId)?.status).toBe(
+          "completed",
+        );
+      },
+      { timeout: 15_000 },
+    );
+  }, 30_000);
 
   it("carries on when the steer it stopped for was read meanwhile", async () => {
     const { projectId, sessionId } = await chat("Read meanwhile");

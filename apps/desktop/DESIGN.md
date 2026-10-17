@@ -694,15 +694,18 @@ whole turn ended; reaching the agent sooner meant ⌘↵, which stopped the
 turn, so a quick question cost the agent its place. As in the Claude Code
 app, it is sent now (ADR 0240): the bubble lands in the conversation at
 once, under it "Not read yet" until the agent takes it in at its next
-step, and the line folds away as it does. Hovering it offers Interrupt:
-the agent stops the step it is on and reads the message now, in the same
-turn, the line saying "Stopping to read it" meanwhile. ⌘↵ still stops the
-turn and sends a message as the next one.
+step, and the line folds away as it does; it opens only after a moment,
+so a message the agent reads at once never shows it. Hovering it offers
+Interrupt: the agent stops the step it is on and reads the message now, in
+the same turn, every message it had not read saying "Stopping to read it"
+meanwhile. ⌘↵ still stops the turn and sends a message as the next one.
 
 Queueing is a setting, "Queue messages sent while the agent works" in
 the chat dock's settings, off by default; on, messages wait as editable
-ghosts as before and the send button's hint says so. A message sent from
-elsewhere into a chat (the palette, voice) follows the same choice.
+ghosts as before and the send button's hint says so. A message the palette
+sends into a chat follows the same choice; voice always reaches the working
+agent, as speaking to it would. A message its turn ends without reading
+runs as a turn of its own, gliding from its place to the queue's.
 
 Work's news about the agent's tasks no longer sits queued while the agent
 works. It reaches a turn waiting on the person too (the agent reads it once

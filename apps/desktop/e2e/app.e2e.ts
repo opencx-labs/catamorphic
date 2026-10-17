@@ -1664,6 +1664,11 @@ describe("agent shows and points", () => {
     `);
   /** Sends a message from the chat on screen and waits for the reply. */
   const askAgent = async (message: string, reply: string) => {
+    // The turn before has ended: this one is a turn of its own (ADR 0240).
+    await runWait(
+      `return !visibleDock()?.querySelector('[data-testid="chat-stop"]');`,
+      { timeoutMs: 30_000, label: "the turn before settled" },
+    );
     const before = await run<number>(
       `return timelineMessages().filter((m) => m.text.includes(${JSON.stringify(reply)})).length;`,
     );
