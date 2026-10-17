@@ -272,6 +272,11 @@ describe("design lint", () => {
         reason: "the palette's keys and its deferred focus giving way",
       },
       "components/dock-host.tsx": { count: 1, reason: "chat dock shortcuts" },
+      "lib/field-dictation.ts": {
+        count: 2,
+        reason:
+          "Return in a field dictation wrote into sends it, which ends dictation; typing or a click there takes the words still showing over",
+      },
       "components/extensions/extension-popup.tsx": {
         count: 2,
         reason: "an extension's popup page, which takes no hover card",

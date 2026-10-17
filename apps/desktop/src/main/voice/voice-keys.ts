@@ -6,50 +6,54 @@ import {
   webContents,
 } from "electron";
 import { matchesShortcut, parseBinding } from "../../shared/keybindings.js";
+import { VOICE_ACTIONS, type VoiceAction } from "../../shared/voice.js";
 
 /**
- * Push to talk's keys (ADR 0216), read in `before-input-event` of every
- * window and web page, so holding them talks wherever focus is. They are
- * never cancelled there: Chromium would then drop the key's release too.
- * The window's shortcuts and a page's preload swallow them instead, only
- * while push to talk is on.
+ * Voice's shortcuts in Work's own windows and pages (ADR 0216, 0236), read
+ * in `before-input-event` of every web contents, so they work wherever
+ * focus is in Work. They are never cancelled there: Chromium would then
+ * drop the key's release too. The window's shortcut dispatcher and a page's
+ * preload swallow them instead. Elsewhere, the `voice-keys` helper reads
+ * them (`system-keys.ts`).
  */
-export function listenForPushToTalk(deps: {
-  /**
-   * The keys of the profile a window or page belongs to, while push to
-   * talk is on for it.
-   */
-  keysFor(contents: WebContents): { profileId: string; binding: string } | null;
-  down(profileId: string): void;
-  up(): void;
+export function listenForVoiceKeys(deps: {
+  /** The profile a window or page belongs to, and its voice shortcuts. */
+  keysFor(contents: WebContents): {
+    profileId: string;
+    shortcuts: Partial<Record<VoiceAction, string>>;
+  };
+  down(profileId: string, action: VoiceAction, contents: WebContents): void;
+  up(action: VoiceAction): void;
 }): () => void {
   const mac = process.platform === "darwin";
-  let held: string | null = null;
+  let held: { action: VoiceAction; binding: string } | null = null;
   const release = () => {
-    if (held === null) return;
+    if (!held) return;
+    const { action } = held;
     held = null;
-    deps.up();
+    deps.up(action);
   };
   const onInput =
     (contents: WebContents) => (_event: ElectronEvent, input: Input) => {
       if (input.type === "keyUp") {
-        if (held !== null && endsHold(held, input)) release();
+        if (held && endsHold(held.binding, input)) release();
         return;
       }
-      if (input.type !== "keyDown" || input.isAutoRepeat || held !== null)
+      if (input.type !== "keyDown" || input.isAutoRepeat || held) return;
+      const { profileId, shortcuts } = deps.keysFor(
+        contents.hostWebContents ?? contents,
+      );
+      for (const action of VOICE_ACTIONS) {
+        const binding = shortcuts[action];
+        if (
+          !binding ||
+          !matchesShortcut({ event: shortcutOf(input), binding, mac })
+        )
+          continue;
+        held = { action, binding };
+        deps.down(profileId, action, contents.hostWebContents ?? contents);
         return;
-      const keys = deps.keysFor(contents.hostWebContents ?? contents);
-      if (
-        !keys ||
-        !matchesShortcut({
-          event: shortcutOf(input),
-          binding: keys.binding,
-          mac,
-        })
-      )
-        return;
-      held = keys.binding;
-      deps.down(keys.profileId);
+      }
     };
   const listening = new Map<WebContents, ReturnType<typeof onInput>>();
   const listen = (contents: WebContents) => {

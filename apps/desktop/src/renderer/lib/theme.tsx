@@ -115,8 +115,13 @@ export function themeStyle(theme: ResolvedTheme | null): CSSProperties {
     : {};
 }
 
-export function useProjectTheme(projectId?: string) {
+/**
+ * A project's theme; `profileId`, where a page moves between profiles
+ * (voice's bubble), reads it again in the profile it has moved to.
+ */
+export function useProjectTheme(projectId?: string, profileId?: string) {
   const [theme, setTheme] = useState<ResolvedTheme | null>(null);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: main reads the page's profile; a new one asks again
   useEffect(() => {
     let live = true;
     let generation = 0;
@@ -132,7 +137,7 @@ export function useProjectTheme(projectId?: string) {
       live = false;
       stop();
     };
-  }, [projectId]);
+  }, [projectId, profileId]);
   return theme;
 }
 
@@ -151,12 +156,15 @@ export function ThemeScope({
 
 export function ProjectTheme({
   projectId,
+  profileId,
   children,
 }: {
   projectId?: string;
+  /** Where the page moves between profiles: the one it reads now. */
+  profileId?: string;
   children: ReactNode;
 }) {
-  const theme = useProjectTheme(projectId);
+  const theme = useProjectTheme(projectId, profileId);
   return (
     <ThemeScope theme={theme}>
       <div

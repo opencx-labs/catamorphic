@@ -62,7 +62,7 @@ export function useListMotion(
       const row = node as HTMLElement;
       const id = row.dataset.itemId;
       if (!id) continue;
-      const matrix = new DOMMatrixReadOnly(getComputedStyle(row).transform);
+      const matrix = translationOf(row);
       const rect = row.getBoundingClientRect();
       const top = rect.top - origin.top + sizer.scrollTop - matrix.m42;
       const left = rect.left - origin.left + sizer.scrollLeft - matrix.m41;
@@ -138,7 +138,7 @@ export function useListMotion(
         const id = row.dataset.itemId;
         if (!id) continue;
         const rect = row.getBoundingClientRect();
-        const matrix = new DOMMatrixReadOnly(getComputedStyle(row).transform);
+        const matrix = translationOf(row);
         tops.set(id, {
           top: rect.top - origin.top + sizer.scrollTop - matrix.m42,
           left: rect.left - origin.left + sizer.scrollLeft - matrix.m41,
@@ -150,4 +150,13 @@ export function useListMotion(
     return () => observer.disconnect();
   }, [sizerRef]);
   return { reset: () => rowTopsRef.current.clear() };
+}
+
+/**
+ * How far a row is drawn from its place by a glide under way. A document
+ * that cannot read transforms (a test's DOM) draws none.
+ */
+function translationOf(row: HTMLElement): { m41: number; m42: number } {
+  if (typeof DOMMatrixReadOnly === "undefined") return { m41: 0, m42: 0 };
+  return new DOMMatrixReadOnly(getComputedStyle(row).transform);
 }

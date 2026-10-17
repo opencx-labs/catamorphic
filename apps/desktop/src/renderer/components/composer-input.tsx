@@ -19,6 +19,7 @@ import {
   type SerializedComposer,
   serializeComposer,
 } from "../lib/composer-serialize";
+import { DICTATION_PREVIEW_ATTR } from "../lib/field-dictation.js";
 import { GLIDING_FRAME, useGlidingHeight } from "../lib/use-gliding-height";
 import { ContextPill } from "./context-pill";
 
@@ -55,6 +56,8 @@ export interface ComposerState {
 
 export interface ComposerInputHandle {
   focus(): void;
+  /** Focus with the caret where it was, else at the end, ready to type. */
+  focusToType(): void;
   element(): HTMLDivElement | null;
   /** Insert pills at the caret (or the end when the caret is elsewhere). */
   insertPills(
@@ -430,6 +433,9 @@ export const ComposerInput = forwardRef<
     ref,
     () => ({
       focus: () => rootRef.current?.focus(),
+      focusToType: () => {
+        if (rootRef.current) claimSelection(rootRef.current);
+      },
       element: () => rootRef.current,
       insertPills,
       insertText,
@@ -541,6 +547,8 @@ export const ComposerInput = forwardRef<
         suppressContentEditableWarning
         spellCheck
         data-composer-input
+        // Dictation shows the words while they are said (voice).
+        {...{ [DICTATION_PREVIEW_ATTR]: "" }}
         data-placeholder={placeholder}
         data-testid="composer-input"
         className={`cat-composer whitespace-pre-wrap break-words outline-none ${className}`}

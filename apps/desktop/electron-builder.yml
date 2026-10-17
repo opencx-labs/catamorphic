@@ -55,8 +55,11 @@ mac:
   extraFiles:
     - from: native/browser-import/bin/browser-keychain
       to: MacOS/browser-keychain
+    - from: native/voice-keys/bin/voice-keys
+      to: MacOS/voice-keys
   binaries:
     - Contents/MacOS/browser-keychain
+    - Contents/MacOS/voice-keys
   category: public.app-category.developer-tools
   icon: build/icon.icns
   minimumSystemVersion: "13.0"

@@ -1,6 +1,6 @@
 # 0216: Voice: local speech, in any chat, and the assistant
 
-- **Status:** Proposed (experimental); session notes are task notifications by [0217](0217-only-people-write-user-messages.md)
+- **Status:** Proposed (experimental); session notes are task notifications by [0217](0217-only-people-write-user-messages.md); hearing, push to talk and dictation amended by [0236](0236-voice-hears-the-person-and-dictates-anywhere.md)
 - **Date:** 2026-10-02
 
 ## Context

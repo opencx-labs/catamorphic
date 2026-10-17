@@ -31,8 +31,13 @@ function scripted(transcripts: string[]) {
       },
       detected: () => loud,
       takeSegments: () => segments.splice(0),
+      reset: () => {
+        loud = false;
+        speech = [];
+        segments.length = 0;
+      },
     },
-    recognize: async () => transcripts.shift() ?? "",
+    recognize: async () => ({ text: transcripts.shift() ?? "", confidence: 0 }),
     synthesize: async (text, onSentence) => {
       synthesized.push(text);
       const sentences = text.match(/[^.!?]+[.!?]*/g) ?? [text];
@@ -279,18 +284,6 @@ describe("VoiceEngine voice print", () => {
     expect(voice.events.at(-1)).toEqual({ type: "utterance", text: "stop" });
   });
 
-  it("listens to the microphone as heard, not as cleaned", async () => {
-    const voice = harness(["list my sessions"], (parts) => {
-      parts.denoise = (samples) => new Float32Array(samples.length);
-    });
-    talk(voice, 0.5, 1);
-    await voice.settle();
-    expect(voice.events.at(-1)).toEqual({
-      type: "utterance",
-      text: "list my sessions",
-    });
-  });
-
   it("keeps listening after a stretch of speech fails", async () => {
     let checks = 0;
     const voice = harness(["list my sessions"], (parts) => {
@@ -314,41 +307,219 @@ describe("VoiceEngine voice print", () => {
       text: "list my sessions",
     });
   });
+});
 
-  it("tells who spoke with the noise removed", async () => {
-    const voice = harness(["never heard"], (parts) => {
-      // Cleaned, the person's voice is as quiet as someone else's.
-      parts.denoise = (samples) => samples.map((sample) => sample * 0.6);
-    });
-    voice.engine.setVoiceprint([1, 0]);
+describe("VoiceEngine hears the person, not the room", () => {
+  /** Seconds of speech at a level, then a second of silence. */
+  const talk = (
+    voice: ReturnType<typeof harness>,
+    level: number,
+    seconds: number,
+  ) => {
+    voice.frame(level, Math.round((seconds * 16_000) / WINDOW));
+    voice.frame(0, 16_000 / WINDOW);
+  };
+  const said = (voice: ReturnType<typeof harness>) =>
+    voice.events.flatMap((event) =>
+      event.type === "utterance" ? [event.text] : [],
+    );
+
+  it("ignores a voice far quieter than the person's once they have spoken", async () => {
+    const voice = harness(["list my sessions", "breaking news tonight"]);
     talk(voice, 0.5, 1);
     await voice.settle();
-    expect(voice.events.at(-1)).toEqual({ type: "ignored" });
+    // A television across the room: 14 dB under the person.
+    talk(voice, 0.1, 2);
+    await voice.settle();
+    expect(said(voice)).toEqual(["list my sessions"]);
   });
 
-  it("recognizes the audio as heard, not as cleaned", async () => {
-    const levels: number[] = [];
+  it("ends the person's turn when a quieter voice carries on after it", async () => {
+    const lengths: number[] = [];
     const voice = harness([], (parts) => {
-      parts.denoise = (samples) => samples.map((sample) => sample * 0.6);
       parts.recognize = async (samples) => {
-        levels.push(Math.max(...samples.map(Math.abs)));
-        return "list my sessions";
+        lengths.push(samples.length / 16_000);
+        return { text: "use the release branch", confidence: 0 };
       };
     });
     talk(voice, 0.5, 1);
     await voice.settle();
-    expect(levels).toEqual([0.5]);
-    expect(voice.events.at(-1)).toEqual({
-      type: "utterance",
-      text: "list my sessions",
+    // Their next turn runs straight into a far voice that goes on and on.
+    voice.frame(0.5, 100);
+    voice.frame(0.15, 400);
+    await voice.settle();
+    expect(lengths).toHaveLength(2);
+    // A second of speech and the quarter second held after it, not five.
+    expect(lengths[1]).toBeLessThan(2.5);
+  });
+
+  it("ends even a first turn when a quieter voice carries on after it", async () => {
+    const lengths: number[] = [];
+    const voice = harness([], (parts) => {
+      parts.recognize = async (samples) => {
+        lengths.push(samples.length / 16_000);
+        return { text: "hello there", confidence: 0 };
+      };
     });
+    voice.frame(0.5, 150);
+    voice.frame(0.12, 500);
+    await voice.settle();
+    expect(lengths).toHaveLength(1);
+    expect(lengths[0]).toBeLessThan(3);
+  });
+
+  it("ignores another voice once it has heard the person's", async () => {
+    const voice = harness(["list my sessions", "what is on tonight"]);
+    talk(voice, 0.5, 1);
+    await voice.settle();
+    // Another voice, 4.4 dB under the person: not theirs, not nearer.
+    talk(voice, 0.3, 1.5);
+    await voice.settle();
+    expect(said(voice)).toEqual(["list my sessions"]);
+    expect(voice.events).toContainEqual({ type: "ignored" });
+  });
+
+  it("hands the person to a nearer voice that keeps talking", async () => {
+    const voice = harness(["breaking news", "more news", "list my sessions"]);
+    // The television is heard first, long enough to be sure of it...
+    talk(voice, 0.3, 1.5);
+    await voice.settle();
+    talk(voice, 0.3, 1.5);
+    await voice.settle();
+    // ...then the person, another voice 4.4 dB louder, takes over...
+    talk(voice, 0.5, 1.5);
+    await voice.settle();
+    // ...and the television is someone else from then on.
+    talk(voice, 0.3, 1.5);
+    await voice.settle();
+    expect(said(voice)).toEqual([
+      "breaking news",
+      "more news",
+      "list my sessions",
+    ]);
+    expect(voice.events.at(-1)).toEqual({ type: "ignored" });
+  });
+
+  it("keeps a voice the person taught it, however loud another is", async () => {
+    // Ignored stretches are never recognized.
+    const voice = harness(["list my sessions", "and the docs"]);
+    voice.engine.setVoiceprint([0, 1]);
+    // The person speaks, so voice knows how loud they are...
+    talk(voice, 0.3, 1.5);
+    await voice.settle();
+    // ...and a voice 4.4 dB louder, long enough to be nearer, is not them.
+    talk(voice, 0.5, 1.5);
+    talk(voice, 0.5, 1.5);
+    await voice.settle();
+    expect(voice.events).toContainEqual({ type: "ignored" });
+    talk(voice, 0.3, 1.5);
+    await voice.settle();
+    expect(said(voice)).toEqual(["list my sessions", "and the docs"]);
+  });
+
+  it("is not taken over by a voice merely like theirs, a little louder", async () => {
+    const voice = harness(
+      ["list my sessions", "and the docs", "open the first", "quietly now"],
+      (parts) => {
+        // The person below 0.6; above it a voice only like theirs.
+        parts.voiceprint = (samples) =>
+          Math.max(...samples.map(Math.abs)) > 0.6
+            ? [0.4, Math.sqrt(1 - 0.16)]
+            : [1, 0];
+      },
+    );
+    talk(voice, 0.4, 1.5);
+    await voice.settle();
+    talk(voice, 0.4, 1.5);
+    await voice.settle();
+    // 4.2 dB louder and alike enough: heard, but they are still the person.
+    talk(voice, 0.65, 1.5);
+    await voice.settle();
+    // The person, 6 dB softer than they speak: still them, still heard.
+    talk(voice, 0.2, 1.5);
+    await voice.settle();
+    expect(said(voice)).toEqual([
+      "list my sessions",
+      "and the docs",
+      "open the first",
+      "quietly now",
+    ]);
+  });
+
+  it("judges speech too short to know by how loud it is", async () => {
+    const voice = harness(["list my sessions", "stop"]);
+    talk(voice, 0.5, 1);
+    await voice.settle();
+    // 8.9 dB under the person: through detection, not near enough.
+    talk(voice, 0.18, 0.5);
+    await voice.settle();
+    expect(voice.events).toContainEqual({ type: "ignored" });
+    talk(voice, 0.45, 0.5);
+    await voice.settle();
+    expect(said(voice)).toEqual(["list my sessions", "stop"]);
+  });
+
+  it("stops talking only for the person's voice", async () => {
+    const voice = harness(["hello", "wait, stop"]);
+    talk(voice, 0.5, 1);
+    await voice.settle();
+    voice.engine.speak("reply", "Here is a long answer about the build.");
+    await voice.settle();
+    talk(voice, 0.3, 1.5);
+    await voice.settle();
+    expect(voice.events).not.toContainEqual({ type: "barge-in" });
+    expect(voice.engine.audible).toBe(true);
+    talk(voice, 0.45, 1.5);
+    await voice.settle();
+    expect(voice.events).toContainEqual({ type: "barge-in" });
+    expect(said(voice)).toEqual(["hello", "wait, stop"]);
+  });
+
+  it("learns the person afresh from what is said with the keys held", async () => {
+    const voice = harness(["breaking news", "it is me", "and again"]);
+    talk(voice, 0.5, 1.5);
+    await voice.settle();
+    voice.engine.hold(true);
+    voice.frame(0.3, 150);
+    voice.engine.hold(false);
+    voice.frame(0, 100);
+    await voice.settle();
+    talk(voice, 0.3, 1.5);
+    await voice.settle();
+    expect(said(voice)).toEqual(["breaking news", "it is me", "and again"]);
+  });
+
+  it("keeps no measure of how loud speech is from a hold that said nothing", async () => {
+    const voice = harness(["", "hello"]);
+    voice.engine.hold(true);
+    voice.frame(0.9, 150);
+    voice.engine.hold(false);
+    await voice.settle();
+    // Someone soft, 15.6 dB under the hold, before anyone is known.
+    talk(voice, 0.15, 1);
+    await voice.settle();
+    expect(said(voice)).toEqual(["hello"]);
+  });
+
+  it("drops words the recognizer made of noise, unless the keys were held", async () => {
+    const voice = harness([], (parts) => {
+      parts.recognize = async () => ({ text: "Okay, so.", confidence: -0.8 });
+    });
+    talk(voice, 0.5, 1);
+    await voice.settle();
+    expect(said(voice)).toEqual([]);
+    voice.engine.hold(true);
+    voice.frame(0.5, 50);
+    voice.engine.hold(false);
+    await voice.settle();
+    expect(said(voice)).toEqual(["Okay, so."]);
   });
 });
 
-describe("VoiceEngine push to talk", () => {
+describe("VoiceEngine held keys", () => {
   it("hears only while the keys are held, and at once when they come up", async () => {
     const voice = harness(["list my sessions"]);
-    voice.engine.setPushToTalk(true);
+    voice.engine.setHandsFree(false);
     voice.frame(0.5, 20);
     voice.frame(0);
     await voice.settle();
@@ -366,9 +537,39 @@ describe("VoiceEngine push to talk", () => {
     ]);
   });
 
+  it("says when a hold heard no words, and only then", async () => {
+    const voice = harness(["", "open the docs"]);
+    voice.engine.setHandsFree(false);
+    voice.engine.hold(true);
+    voice.frame(0.01, 20);
+    voice.engine.hold(false);
+    await voice.settle();
+    expect(voice.events.at(-1)).toEqual({ type: "unheard" });
+    voice.engine.hold(true);
+    voice.frame(0.5, 20);
+    voice.engine.hold(false);
+    await voice.settle();
+    expect(voice.events.at(-1)).toEqual({
+      type: "utterance",
+      text: "open the docs",
+    });
+    expect(
+      voice.events.filter((event) => event.type === "unheard"),
+    ).toHaveLength(1);
+    // Speech not held for, that came to nothing, is no hold let go.
+    voice.engine.setHandsFree(true);
+    voice.frame(0.5, 20);
+    voice.frame(0);
+    await voice.settle();
+    expect(voice.events.at(-1)).toEqual({ type: "speech-end" });
+    expect(
+      voice.events.filter((event) => event.type === "unheard"),
+    ).toHaveLength(1);
+  });
+
   it("stops the agent the moment the keys go down", async () => {
     const voice = harness();
-    voice.engine.setPushToTalk(true);
+    voice.engine.setHandsFree(false);
     voice.engine.speak("reply", "Here is a long answer about the build.");
     await voice.settle();
     voice.engine.hold(true);
@@ -383,7 +584,7 @@ describe("VoiceEngine push to talk", () => {
   it("takes held speech as the person's, whatever the voice print", async () => {
     const voice = harness(["what is on tonight"]);
     voice.engine.setVoiceprint([1, 0]);
-    voice.engine.setPushToTalk(true);
+    voice.engine.setHandsFree(false);
     voice.engine.hold(true);
     voice.frame(0.3, 100);
     voice.engine.hold(false);
@@ -419,7 +620,7 @@ describe("VoiceEngine push to talk", () => {
     const voice = harness([], (parts) => {
       parts.recognize = () =>
         new Promise((resolve) => {
-          answer = resolve;
+          answer = (text) => resolve({ text, confidence: 0 });
         });
     });
     voice.engine.speak("bye", "Talk soon.");
@@ -468,15 +669,283 @@ describe("VoiceEngine push to talk", () => {
     ).toBe(false);
   });
 
-  it("holds nothing for push to talk once it stops listening", async () => {
+  it("talks while the keys are held even when voice listens on its own", async () => {
+    const voice = harness(["use the release branch"]);
+    voice.engine.speak("reply", "Here is a long answer about the build.");
+    await voice.settle();
+    voice.engine.hold(true);
+    expect(voice.events).toContainEqual({ type: "barge-in" });
+    // Pauses while held split nothing: detection rests until release.
+    voice.frame(0.5, 20);
+    voice.frame(0, 5);
+    voice.frame(0.5, 20);
+    await voice.settle();
+    expect(
+      voice.events.filter((event) => event.type === "utterance"),
+    ).toHaveLength(0);
+    voice.engine.hold(false);
+    await voice.settle();
+    expect(voice.events.filter((event) => event.type === "utterance")).toEqual([
+      { type: "utterance", text: "use the release branch" },
+    ]);
+    // Detection starts afresh: nothing from before the keys comes back.
+    voice.frame(0);
+    await voice.settle();
+    expect(
+      voice.events.filter((event) => event.type === "utterance"),
+    ).toHaveLength(1);
+  });
+
+  it("keeps speech already under way when the keys go down", async () => {
+    const recognized: number[] = [];
+    const voice = harness([], (parts) => {
+      parts.recognize = async (samples) => {
+        recognized.push(samples.length);
+        return { text: "list my sessions", confidence: 0 };
+      };
+    });
+    voice.frame(0.5, 10);
+    voice.engine.hold(true);
+    voice.frame(0.5, 10);
+    voice.engine.hold(false);
+    await voice.settle();
+    expect(
+      voice.events.filter((event) => event.type === "speech-start"),
+    ).toHaveLength(1);
+    // Twenty windows of speech, and the quiet before them.
+    expect(recognized).toEqual([20 * WINDOW]);
+  });
+
+  it("holds nothing once it stops listening", async () => {
     const voice = harness(["list my sessions"]);
-    voice.engine.setPushToTalk(true);
+    voice.engine.setHandsFree(false);
     voice.engine.stopListening();
     voice.engine.hold(true);
     voice.frame(0.5, 20);
     voice.engine.hold(false);
     await voice.settle();
     expect(voice.events).toEqual([]);
+  });
+});
+
+describe("VoiceEngine dictation", () => {
+  const dictated = (voice: ReturnType<typeof harness>) =>
+    voice.events.filter((event) => event.type === "dictation");
+
+  it("shows the words while the person talks, then what they said", async () => {
+    const heard: number[] = [];
+    const voice = harness([], (parts) => {
+      parts.recognize = async (samples) => {
+        heard.push(samples.length);
+        return {
+          text: samples.length < 16_000 ? "list my" : "list my sessions",
+          confidence: 0,
+        };
+      };
+    });
+    voice.engine.setDictation(true);
+    // A second and a half of speech, in 10 ms windows.
+    for (let i = 0; i < 15; i++) {
+      voice.frame(0.5, 10);
+      await voice.settle();
+    }
+    const partials = dictated(voice);
+    expect(partials.length).toBeGreaterThanOrEqual(2);
+    expect(partials.every((event) => !event.final)).toBe(true);
+    expect(partials[0]).toEqual({
+      type: "dictation",
+      segment: 1,
+      text: "list my",
+      final: false,
+    });
+    voice.frame(0);
+    await voice.settle();
+    expect(dictated(voice).at(-1)).toEqual({
+      type: "dictation",
+      segment: 1,
+      text: "list my sessions",
+      final: true,
+    });
+    // Dictation sends nothing: no utterance for the conversation.
+    expect(voice.events.map((event) => event.type)).not.toContain("utterance");
+  });
+
+  it("numbers each stretch of speech, and ends one that said nothing", async () => {
+    const voice = harness(["Um.", "open the docs"]);
+    voice.engine.setDictation(true);
+    voice.frame(0.5, 3);
+    voice.frame(0);
+    await voice.settle();
+    voice.frame(0.5, 3);
+    voice.frame(0);
+    await voice.settle();
+    expect(dictated(voice).filter((event) => event.final)).toEqual([
+      { type: "dictation", segment: 1, text: "", final: true },
+      { type: "dictation", segment: 2, text: "open the docs", final: true },
+    ]);
+  });
+
+  it("writes nothing for someone else's voice", async () => {
+    const voice = harness(["what is on tonight"]);
+    voice.engine.setDictation(true);
+    voice.engine.setVoiceprint([1, 0]);
+    voice.frame(0.3, 150);
+    voice.frame(0);
+    await voice.settle();
+    expect(dictated(voice).at(-1)).toEqual({
+      type: "dictation",
+      segment: 1,
+      text: "",
+      final: true,
+    });
+    expect(voice.events).toContainEqual({ type: "ignored" });
+  });
+
+  it("dictates while the keys are held, a stretch per hold", async () => {
+    const voice = harness(["first thought", "second thought"]);
+    voice.engine.setDictation(true);
+    voice.engine.setHandsFree(false);
+    voice.engine.hold(true);
+    voice.frame(0.5, 20);
+    voice.engine.hold(false);
+    await voice.settle();
+    voice.engine.hold(true);
+    voice.frame(0.5, 20);
+    voice.engine.hold(false);
+    await voice.settle();
+    expect(dictated(voice).filter((event) => event.final)).toEqual([
+      { type: "dictation", segment: 1, text: "first thought", final: true },
+      { type: "dictation", segment: 2, text: "second thought", final: true },
+    ]);
+  });
+
+  it("hears a long hold in parts, losing nothing", async () => {
+    const lengths: number[] = [];
+    const voice = harness([], (parts) => {
+      parts.recognize = async (samples) => {
+        lengths.push(samples.length);
+        return { text: "more words", confidence: 0 };
+      };
+    });
+    voice.engine.setHandsFree(false);
+    voice.engine.hold(true);
+    // Forty seconds held.
+    voice.frame(0.5, 4_000);
+    voice.engine.hold(false);
+    await voice.settle();
+    expect(
+      voice.events.filter((event) => event.type === "utterance"),
+    ).toHaveLength(2);
+    expect(lengths.reduce((sum, length) => sum + length, 0)).toBe(40 * 16_000);
+  });
+
+  it("hears what the person is still saying as voice turns off, then nothing", async () => {
+    const voice = harness(["send the report"]);
+    voice.engine.setDictation(true);
+    voice.frame(0.5, 100);
+    await voice.engine.finish();
+    expect(dictated(voice).at(-1)).toEqual({
+      type: "dictation",
+      segment: 1,
+      text: "send the report",
+      final: true,
+    });
+    expect(voice.audio).toContainEqual({ type: "close-microphone" });
+    const heard = voice.events.length;
+    voice.frame(0.5, 100);
+    voice.frame(0);
+    await voice.settle();
+    expect(voice.events).toHaveLength(heard);
+  });
+
+  it("hears nothing more from the press that turned it off", async () => {
+    const voice = harness(["send the report", "report"]);
+    voice.engine.setDictation(true);
+    voice.frame(0.5, 100);
+    voice.frame(0);
+    await voice.settle();
+    // The tap that turns voice off holds for a moment: what it caught
+    // from before it was already heard.
+    voice.engine.hold(true);
+    await voice.engine.finish();
+    expect(
+      dictated(voice).filter((event) => event.final && event.text),
+    ).toEqual([
+      { type: "dictation", segment: 1, text: "send the report", final: true },
+    ]);
+  });
+
+  it("does not repeat what a hold heard when the person talks on", async () => {
+    const lengths: number[] = [];
+    const voice = harness([], (parts) => {
+      parts.recognize = async (samples) => {
+        lengths.push(samples.length / 16_000);
+        return { text: "more words", confidence: 0 };
+      };
+    });
+    voice.engine.setDictation(true);
+    voice.frame(0, 100);
+    voice.engine.hold(true);
+    voice.frame(0.5, 100);
+    voice.engine.hold(false);
+    // Half a second more, listening on its own.
+    voice.frame(0.5, 50);
+    voice.frame(0);
+    await voice.settle();
+    expect(lengths).toHaveLength(2);
+    expect(lengths[1]).toBeLessThan(0.6);
+  });
+
+  it("stops the agent's voice when dictation starts", async () => {
+    const voice = harness();
+    voice.engine.speak("reply", "Here is a long answer about the build.");
+    await voice.settle();
+    voice.engine.setDictation(true);
+    expect(voice.engine.audible).toBe(false);
+    expect(voice.events).toContainEqual({
+      type: "spoken",
+      id: "reply",
+      interrupted: true,
+    });
+  });
+});
+
+describe("VoiceEngine moving on", () => {
+  it("answers nothing said for where it was before", async () => {
+    let answer: (text: string) => void = () => {};
+    const voice = harness([], (parts) => {
+      parts.recognize = () =>
+        new Promise((resolve) => {
+          answer = (text) => resolve({ text, confidence: 0 });
+        });
+    });
+    voice.frame(0.5, 100);
+    voice.frame(0);
+    await voice.settle();
+    // Voice moves to another chat while the last words are recognized.
+    voice.engine.forget();
+    answer("delete that branch");
+    await voice.settle();
+    expect(voice.events.map((event) => event.type)).not.toContain("utterance");
+  });
+
+  it("says nothing once the worker lets it go", async () => {
+    let answer: (text: string) => void = () => {};
+    const voice = harness([], (parts) => {
+      parts.recognize = () =>
+        new Promise((resolve) => {
+          answer = (text) => resolve({ text, confidence: 0 });
+        });
+    });
+    voice.frame(0.5, 100);
+    voice.frame(0);
+    await voice.settle();
+    voice.engine.close();
+    const said = voice.events.length;
+    answer("list my sessions");
+    await voice.settle();
+    expect(voice.events).toHaveLength(said);
+    expect(voice.audio).toContainEqual({ type: "close-microphone" });
   });
 });
 

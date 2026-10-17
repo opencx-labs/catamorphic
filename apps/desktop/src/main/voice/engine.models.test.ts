@@ -67,7 +67,9 @@ describe.skipIf(!MODELS)("speech on the real models", () => {
       const { samples, sampleRate } = await parts.synthesize(REPLY);
       // About 8 seconds of speech; a clip cut short would be far less.
       expect(samples.length / sampleRate).toBeGreaterThan(6);
-      const heard = words(await parts.recognize(resample(samples, sampleRate)));
+      const heard = words(
+        (await parts.recognize(resample(samples, sampleRate))).text,
+      );
       const said = words(REPLY);
       const missing = said.filter((word) => !heard.includes(word));
       expect(missing.length, `${voice.name} lost ${missing}`).toBeLessThan(3);

@@ -62,7 +62,6 @@ async function fixture() {
 
 const PATHS = (root: string): VoiceModelPaths => ({
   vad: path.join(root, "vad", "vad.onnx"),
-  denoiser: "",
   speaker: "",
   asr: { encoder: "", decoder: "", joiner: "", tokens: "" },
   tts: { model: "", voices: "", tokens: "", lexicon: "", dataDir: "" },

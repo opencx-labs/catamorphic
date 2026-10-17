@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer, webFrame } from "electron";
+import { installFieldDictation } from "../renderer/lib/field-dictation.js";
 import { matchesShortcut } from "../shared/keybindings.js";
 import {
   classifyPasswordField,
@@ -8,6 +9,7 @@ import {
 } from "../shared/login-fields.js";
 import { openModeFromEvent } from "../shared/open-mode.js";
 import { fieldKeepsKey } from "../shared/text-field.js";
+import type { VoiceDictation } from "../shared/voice.js";
 import { installPageDialogs } from "./page-dialogs.js";
 
 /**
@@ -27,6 +29,53 @@ import { installPageDialogs } from "./page-dialogs.js";
 
 const topFrame = window.top === window;
 installPageDialogs({ top: topFrame });
+// Dictation writes into the page's text field the person is in, an
+// embedded frame's included (voice, ADR 0236).
+installFieldDictation({
+  fieldFocused: () => ipcRenderer.send("catamorphic:voice-field-focus"),
+  sent: () => ipcRenderer.send("catamorphic:voice-dictation-sent"),
+  onWords: (listener) => {
+    const handler = (_event: unknown, words: VoiceDictation) => listener(words);
+    ipcRenderer.on("catamorphic:voice-dictation", handler);
+    return () =>
+      ipcRenderer.removeListener("catamorphic:voice-dictation", handler);
+  },
+});
+// Voice's keys (ADR 0216, 0236): the main process hears them go down and
+// up; no frame of the page gets them, so a held Option+Space types nothing.
+// The host tells the top frame, one per line; an embedded frame asks as it
+// starts.
+let voiceKeys: string[] = [];
+const voiceKeysOf = (keys: unknown) =>
+  typeof keys === "string" ? keys.split("\n").filter(Boolean) : [];
+ipcRenderer.on("catamorphic:voice-keys", (_event, keys: unknown) => {
+  voiceKeys = voiceKeysOf(keys);
+});
+if (!topFrame)
+  void ipcRenderer
+    .invoke("catamorphic:voice-keys-of-page")
+    .then((keys: unknown) => {
+      voiceKeys = voiceKeysOf(keys);
+    })
+    .catch(() => {});
+window.addEventListener(
+  "keydown",
+  (event) => {
+    if (
+      !voiceKeys.some((binding) =>
+        matchesShortcut({
+          event,
+          binding,
+          mac: /Mac/.test(navigator.platform),
+        }),
+      )
+    )
+      return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+  },
+  { capture: true },
+);
 // The host sees no input inside the page, so every frame tells it of the
 // person's presses: a press in the page, an embedded frame's included, is a
 // press outside the floating chat, a popover or a hover card. Presses the
@@ -855,31 +904,6 @@ function installTopFrame(): void {
     event.preventDefault();
     ipcRenderer.sendToHost("catamorphic:dismiss-floating");
   });
-
-  // Push to talk's keys, while voice is set to it (voice, ADR 0216): the
-  // main process hears them go down and up; the page never gets them, so a
-  // held Option+Space types nothing. They come with the page keys below.
-  let pushToTalkKeys = "";
-  ipcRenderer.on("catamorphic:push-to-talk-keys", (_event, keys: unknown) => {
-    pushToTalkKeys = typeof keys === "string" ? keys : "";
-  });
-  window.addEventListener(
-    "keydown",
-    (event) => {
-      if (
-        !pushToTalkKeys ||
-        !matchesShortcut({
-          event,
-          binding: pushToTalkKeys,
-          mac: /Mac/.test(navigator.platform),
-        })
-      )
-        return;
-      event.preventDefault();
-      event.stopImmediatePropagation();
-    },
-    { capture: true },
-  );
 
   // Page-first keys (find, back and forward) reach the page first, as in
   // Chrome: a page with its own find (a document editor) keeps them, and a
