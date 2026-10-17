@@ -256,8 +256,10 @@ describe("downloads", () => {
         );
         await opensInside(`open strip at ${placement}`);
       }
-      await dock.eval(
-        `document.querySelector('[data-dock-arrows]').click(); true`,
+      // On the desktop the pill folds from its menu; it has no arrows
+      // (ADR 0242). The fold is the profile's choice either way.
+      await app.eval(
+        `window.catamorphicDesktop.setPrefs({ dockCollapsed: true }).then(() => true)`,
       );
       for (const side of ["left", "right"]) {
         await app.eval(

@@ -693,8 +693,7 @@ kbd {
    resting pose in Chromium. */
 @keyframes dock-in {
   from {
-    transform: translate(var(--dock-from-x, 0px), var(--dock-from-y, 16px))
-      scale(0.985);
+    transform: translateY(16px) scale(0.985);
     opacity: 0;
   }
   to {
@@ -716,7 +715,7 @@ kbd {
     opacity: 1;
   }
   to {
-    translate: var(--dock-from-x, 0px) var(--dock-from-y, 16px);
+    translate: 0 16px;
     scale: 0.985;
     opacity: 0;
   }
@@ -2335,17 +2334,101 @@ kbd {
 }
 [data-dock-native][data-dock-edge="top"] [data-floating-chat] {
   transform-origin: top;
-  --dock-from-y: -16px;
 }
 [data-dock-native][data-dock-edge="left"] [data-floating-chat] {
   transform-origin: left;
-  --dock-from-x: -16px;
-  --dock-from-y: 0px;
 }
 [data-dock-native][data-dock-edge="right"] [data-floating-chat] {
   transform-origin: right;
-  --dock-from-x: 16px;
-  --dock-from-y: 0px;
+}
+/* Its chat comes and goes on the pill's side: dock-in and dock-out, from
+   and to the pose it rests in minimized there. */
+@keyframes dock-in-top {
+  from {
+    transform: translateY(-16px) scale(0.985);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0) scale(1);
+    opacity: 1;
+  }
+}
+@keyframes dock-in-left {
+  from {
+    transform: translateX(-16px) scale(0.985);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0) scale(1);
+    opacity: 1;
+  }
+}
+@keyframes dock-in-right {
+  from {
+    transform: translateX(16px) scale(0.985);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0) scale(1);
+    opacity: 1;
+  }
+}
+@keyframes dock-out-top {
+  from {
+    translate: 0 0;
+    scale: 1;
+    opacity: 1;
+  }
+  to {
+    translate: 0 -16px;
+    scale: 0.985;
+    opacity: 0;
+  }
+}
+@keyframes dock-out-left {
+  from {
+    translate: 0 0;
+    scale: 1;
+    opacity: 1;
+  }
+  to {
+    translate: -16px 0;
+    scale: 0.985;
+    opacity: 0;
+  }
+}
+@keyframes dock-out-right {
+  from {
+    translate: 0 0;
+    scale: 1;
+    opacity: 1;
+  }
+  to {
+    translate: 16px 0;
+    scale: 0.985;
+    opacity: 0;
+  }
+}
+[data-dock-native][data-dock-edge="top"] [data-floating-chat].animate-dock-in {
+  animation-name: dock-in-top;
+}
+[data-dock-native][data-dock-edge="left"] [data-floating-chat].animate-dock-in {
+  animation-name: dock-in-left;
+}
+[data-dock-native][data-dock-edge="right"]
+  [data-floating-chat].animate-dock-in {
+  animation-name: dock-in-right;
+}
+[data-dock-native][data-dock-edge="top"] [data-floating-chat].animate-dock-out {
+  animation-name: dock-out-top;
+}
+[data-dock-native][data-dock-edge="left"]
+  [data-floating-chat].animate-dock-out {
+  animation-name: dock-out-left;
+}
+[data-dock-native][data-dock-edge="right"]
+  [data-floating-chat].animate-dock-out {
+  animation-name: dock-out-right;
 }
 /* Minimized, it rests the same way it leaves. */
 [data-dock-native][data-dock-edge="top"] [data-floating-chat].translate-y-4 {
