@@ -423,12 +423,39 @@ kbd {
 }
 
 /* Dictation's words while they are still being said (voice): muted until
-   the stretch of speech ends and they are typed. */
+   the stretch of speech ends. Then they take the text's colour, or fade
+   when nothing was said, as the dot goes, and are typed. Chat's motion:
+   one easing, 200ms. */
 .cat-composer [data-dictation] {
   color: var(--color-fg-muted);
+  transition:
+    color 200ms cubic-bezier(0.2, 0, 0, 1),
+    opacity 200ms cubic-bezier(0.2, 0, 0, 1);
 }
 
-/* Voice still hearing: a soft dot where the words will go on. */
+.cat-composer [data-dictation][data-settling] {
+  color: inherit;
+}
+
+.cat-composer [data-dictation][data-settling="unsaid"] {
+  opacity: 0;
+}
+
+/* Each new word fades in as it is heard, as an agent's prose does. */
+.cat-composer [data-dictation-word] {
+  animation: dictation-word-in 200ms cubic-bezier(0.2, 0, 0, 1) both;
+}
+
+@keyframes dictation-word-in {
+  from {
+    opacity: 0;
+    filter: blur(2px);
+  }
+}
+
+/* Voice still hearing: a soft dot where the words will go on. It grows in
+   and breathes (scale and filter), and shrinks away (opacity and
+   transform) as the words settle, so the two never fight. */
 .cat-composer [data-dictation]::after {
   content: "";
   display: inline-block;
@@ -438,22 +465,46 @@ kbd {
   vertical-align: middle;
   border-radius: 9999px;
   background: var(--color-accent);
-  animation: dictation-pulse 1.1s ease-in-out infinite;
+  transition:
+    opacity 200ms cubic-bezier(0.2, 0, 0, 1),
+    transform 200ms cubic-bezier(0.2, 0, 0, 1);
+  animation:
+    dictation-dot-in 200ms cubic-bezier(0.2, 0, 0, 1),
+    dictation-pulse 1.1s ease-in-out 200ms infinite;
 }
 
+.cat-composer [data-dictation][data-settling]::after {
+  opacity: 0;
+  transform: scale(0.3);
+}
+
+@keyframes dictation-dot-in {
+  from {
+    opacity: 0;
+    transform: scale(0.3);
+  }
+}
+
+/* From where the dot grew in: bright and whole, then softer, and back. */
 @keyframes dictation-pulse {
   0%,
   100% {
-    opacity: 0.35;
-    transform: scale(0.8);
+    filter: opacity(1);
+    scale: 1;
   }
   50% {
-    opacity: 1;
-    transform: scale(1);
+    filter: opacity(0.45);
+    scale: 0.8;
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .cat-composer [data-dictation],
+  .cat-composer [data-dictation]::after {
+    transition-duration: 0.01ms;
+  }
+
+  .cat-composer [data-dictation-word],
   .cat-composer [data-dictation]::after {
     animation: none;
   }
@@ -2207,6 +2258,29 @@ kbd {
 }
 [data-bubble-items][aria-hidden="true"] {
   width: 0;
+}
+
+/* Voice's bubble comes and goes as a popover does, and changes colour with
+   the window it talks for. The window hides once it has gone. */
+.voice-bubble {
+  opacity: 0;
+  transform: translateY(6px) scale(0.85);
+  transition:
+    opacity 200ms cubic-bezier(0.2, 0, 0, 1),
+    transform 200ms cubic-bezier(0.2, 0, 0, 1),
+    background-color 220ms var(--ease-standard),
+    border-color 220ms var(--ease-standard);
+}
+
+.voice-bubble[data-shown] {
+  opacity: 1;
+  transform: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .voice-bubble {
+    transition-duration: 0.01ms;
+  }
 }
 
 html[data-surface="dock"] body,

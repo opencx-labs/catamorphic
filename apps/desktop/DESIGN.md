@@ -3081,10 +3081,14 @@ talk switch is gone. Nothing said while the models load is lost: the
 microphone opens at once, and the models stay loaded a while after.
 
 Dictation writes where the cursor is, in Work or any app: the words show
-as they are said, muted with a pulsing dot in a composer, typed and
-retyped only where they changed elsewhere, and sending them ends it.
-"Dictation only" makes a microphone's click dictate. Out of Work, the
-dock's microphone floats at the bottom of the screen while voice is on,
-unless the dock is detached. An agent talked to from another app hears
+as they are said, muted with a pulsing dot in a composer, each new word
+fading in as an agent's prose does and settling into the text's colour as
+the dot goes; typed and retyped only where they changed elsewhere; and
+sending them ends it. "Dictation only" makes a microphone's click
+dictate. Out of Work, the dock's microphone floats at the bottom of the
+screen while voice is on, unless the dock is detached: it eases in and
+out, wears the colours of the window the person was last in, and until
+they start talking its menu moves voice to another open window's
+assistant, colours and all. An agent talked to from another app hears
 which app and window the person was in, nothing more, and decides whether
 what they said was meant to be written there. See ADR 0236.

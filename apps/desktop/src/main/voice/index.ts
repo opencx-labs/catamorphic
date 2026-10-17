@@ -34,6 +34,7 @@ import {
   type VoiceSessionRef,
   type VoiceStatus,
   type VoiceTarget,
+  type VoiceWindowChoice,
   type VoiceWorkerCommand,
   type VoiceWorkerEvent,
 } from "../../shared/voice.js";
@@ -181,6 +182,18 @@ interface ActiveVoice {
   catchingUp: VoiceConversation | null;
   /** Where the person was when they last spoke, when not in Work. */
   place: FrontPlace | null;
+  /**
+   * The window of Work's whose assistant and colours the bubble shows:
+   * the last one the person was in, or the one they picked in its menu.
+   */
+  window: number | null;
+  windowPicked: boolean;
+  /**
+   * The person's words were heard (sent to the chat, or written), or they
+   * held to talk: voice stays where it is from now, as it does while they
+   * are being heard.
+   */
+  spoken: boolean;
   idle: ReturnType<typeof setTimeout> | undefined;
   /** Dictation turned off, writing what it still heard: then it stops. */
   finishing: ReturnType<typeof setTimeout> | undefined;
@@ -221,6 +234,10 @@ export function registerVoiceSupport(deps: {
   incognito: IncognitoSessionsStore;
   /** Whether a profile's dock floats detached now, as the person left it. */
   dockDetached: (profileId: string) => boolean;
+  /** Whether a window is a workspace: not the dock, nor a popup. */
+  isWorkspace: (window: BrowserWindow) => boolean;
+  /** The project a workspace window shows now, if it shows one. */
+  activeProject: (window: BrowserWindow) => string | null;
 }): { dispose: () => Promise<void> } {
   const { state, profileConfig, profiles, windows, incognito } = deps;
   const models = new VoiceModelStore({
@@ -249,19 +266,11 @@ export function registerVoiceSupport(deps: {
   let press: Press | null = null;
   /** Dictation's stretches so far, every voice's: the last one's number. */
   let stretches = 0;
-  /** The profile the bubble's page reads, once told. */
-  let bubbleProfile: string | null = null;
   const bubble = createVoiceBubble({
-    attach: (contents) => {
-      const profileId = active?.profileId ?? keysProfile();
-      if (!profileId || profileId === bubbleProfile) return;
-      bubbleProfile = profileId;
-      windows.attach(contents, profileId);
-    },
-    created: () => {
-      bubbleProfile = null;
-    },
+    attach: (contents, profileId) => windows.attach(contents, profileId),
   });
+  /** Voice moving to another window's assistant: the bubble stays up. */
+  let switching = false;
   // The bubble is too small for a menu inside it: its menus are native.
   ipcMain.handle(
     "catamorphic:voice-bubble-menu",
@@ -276,6 +285,30 @@ export function registerVoiceSupport(deps: {
   const prefs = (profileId: string) =>
     profileConfig.forProfile(profileId).prefs;
 
+  /** Work's windows the person was in, the latest first. */
+  let recentWindows: BrowserWindow[] = [];
+  /** A workspace window, open, of this profile. */
+  const ofProfile = (window: BrowserWindow, profileId: string) =>
+    !window.isDestroyed() &&
+    deps.isWorkspace(window) &&
+    windows.profileFor(window.webContents) === profileId;
+  /** The last workspace window of a profile the person was in. */
+  const windowFor = (profileId: string): BrowserWindow | null =>
+    recentWindows.find((window) => ofProfile(window, profileId)) ?? null;
+  /** The window a voice talks for, while it is still that profile's. */
+  const voiceWindow = (voice: ActiveVoice): BrowserWindow | null => {
+    const window =
+      voice.window === null ? null : BrowserWindow.fromId(voice.window);
+    return window && ofProfile(window, voice.profileId) ? window : null;
+  };
+  /** The project a window shows, else its profile's last one. */
+  const windowProject = (
+    window: BrowserWindow | null,
+    profileId: string,
+  ): string | null =>
+    (window ? deps.activeProject(window) : null) ??
+    prefs(profileId).load().lastProjectId ??
+    null;
   /** Work's windows the person works in: not the audio page or bubble. */
   const workWindows = () =>
     BrowserWindow.getAllWindows().filter(
@@ -305,24 +338,40 @@ export function registerVoiceSupport(deps: {
    * and stop voice, unless their dock is detached and floats there already.
    */
   const refreshBubble = () => {
+    // Moving to another window's assistant: up until the next voice says.
+    if (switching) return;
     const voice = active;
-    bubble.show(
-      !!voice &&
-        !disposed &&
-        !workInFront() &&
-        !deps.dockDetached(voice.profileId),
-    );
+    if (
+      !voice ||
+      disposed ||
+      workInFront() ||
+      deps.dockDetached(voice.profileId)
+    ) {
+      bubble.show(null);
+      return;
+    }
+    // Coming up, it wears the last window the person was in, unless they
+    // picked one in its menu that is still there.
+    if ((!bubble.state().shown && !voice.windowPicked) || !voiceWindow(voice))
+      voice.window = windowFor(voice.profileId)?.id ?? null;
+    bubble.show({
+      profileId: voice.profileId,
+      projectId: windowProject(voiceWindow(voice), voice.profileId),
+    });
   };
 
   const publish = () => {
+    // The bubble first: it may read another profile's status from now.
+    refreshBubble();
     for (const window of BrowserWindow.getAllWindows()) {
       if (window.isDestroyed() || isAudioWindow(window)) continue;
+      // Moving to another window's assistant, the bubble shows no "off".
+      if (switching && bubble.owns(window)) continue;
       window.webContents.send(
         "catamorphic:voice-status",
         statusFor(windows.profileFor(window.webContents)),
       );
     }
-    refreshBubble();
   };
 
   /** A voice started by holding goes off when nothing is left to do. */
@@ -763,6 +812,7 @@ export function registerVoiceSupport(deps: {
         voice.hearing = false;
         break;
       case "utterance":
+        voice.spoken = true;
         if (!voice.conversation || voice.catchingUp) {
           if (!connected(voice) || voice.catchingUp) voice.early.push(event);
           return;
@@ -770,6 +820,7 @@ export function registerVoiceSupport(deps: {
         void heard(voice, voice.conversation, event.text);
         break;
       case "dictation":
+        if (event.text) voice.spoken = true;
         if (!voice.dictating) {
           if (!connected(voice)) voice.early.push(event);
           return;
@@ -986,7 +1037,7 @@ export function registerVoiceSupport(deps: {
   const start = async (
     profileId: string,
     request: VoiceRequest,
-    options: { handsFree: boolean; learn?: boolean },
+    options: { handsFree: boolean; learn?: boolean; window?: number },
   ) => {
     errors.delete(profileId);
     if (request.kind !== "dictation") lastRequests.set(profileId, request);
@@ -1010,6 +1061,9 @@ export function registerVoiceSupport(deps: {
       early: [],
       catchingUp: null,
       place: null,
+      window: options.window ?? windowFor(profileId)?.id ?? null,
+      windowPicked: options.window !== undefined,
+      spoken: false,
       idle: undefined,
       finishing: undefined,
       live: {
@@ -1190,7 +1244,11 @@ export function registerVoiceSupport(deps: {
       voice.handsFree = true;
       send(voice, { type: "hands-free", enabled: true });
       watchSend();
-    } else send(voice, { type: "hold", held: false });
+    } else {
+      // Held to talk: the person talked.
+      voice.spoken = true;
+      send(voice, { type: "hold", held: false });
+    }
     update(voice);
   };
 
@@ -1424,18 +1482,128 @@ export function registerVoiceSupport(deps: {
    * The window of Work's the person was last in: whose shortcuts work in
    * every app, and whose chat is "this chat".
    */
-  let lastWorkWindow: BrowserWindow | null = null;
+  const lastWorkWindow = () =>
+    recentWindows.find((window) => !window.isDestroyed()) ?? null;
   const keysProfile = (): string | null => {
     const focused = BrowserWindow.getFocusedWindow();
     if (focused && workWindows().includes(focused))
       return windows.profileFor(focused.webContents);
-    if (lastWorkWindow && !lastWorkWindow.isDestroyed())
-      return windows.profileFor(lastWorkWindow.webContents);
+    const recent = lastWorkWindow();
+    if (recent) return windows.profileFor(recent.webContents);
     const open = workWindows().map((window) =>
       windows.profileFor(window.webContents),
     );
     const last = profiles.lastActiveProfile().id;
     return open.includes(last) ? last : (open[0] ?? null);
+  };
+
+  /**
+   * A window's assistant: its profile, the project its chat is kept in and
+   * its name; null when the window's profile has none to talk to. The
+   * bubble's menu shows it, and moving there starts it, so the two agree.
+   */
+  const windowAssistant = (
+    window: BrowserWindow,
+  ): { profileId: string; home: string; name: string } | null => {
+    const profileId = windows.profileFor(window.webContents);
+    let home: string;
+    try {
+      home = assistantHome(profileId, windowProject(window, profileId) ?? "");
+    } catch {
+      return null;
+    }
+    const assistant = assistantFor(profileId, home);
+    if (!assistant) return null;
+    const name = assistant.builtIn
+      ? "Work"
+      : (profileConfig.forProfile(profileId).agents.get(assistant.agentId)
+          ?.name ?? "Work");
+    return { profileId, home, name };
+  };
+
+  /**
+   * The workspace windows whose assistant the bubble can talk to, the last
+   * one the person was in first: while voice talks to the assistant.
+   */
+  const windowChoices = (): VoiceWindowChoice[] => {
+    const voice = active;
+    if (voice?.live.target?.kind !== "assistant") return [];
+    const open = [
+      ...recentWindows,
+      ...BrowserWindow.getAllWindows().filter(
+        (window) => !recentWindows.includes(window),
+      ),
+    ].filter(
+      (window) =>
+        !window.isDestroyed() &&
+        deps.isWorkspace(window) &&
+        (window.isVisible() || window.isMinimized()),
+    );
+    const profileIds = new Set(
+      open.map((window) => windows.profileFor(window.webContents)),
+    );
+    const current = voiceWindow(voice);
+    const locked = voice.spoken || voice.hearing || voice.ending;
+    return open.map((window) => {
+      const profileId = windows.profileFor(window.webContents);
+      const profileName =
+        profileIds.size > 1 ? profiles.get(profileId)?.name : undefined;
+      return {
+        id: window.id,
+        title: window.getTitle() || "Work",
+        assistant: windowAssistant(window)?.name ?? null,
+        ...(profileName ? { profile: profileName } : {}),
+        current: window === current,
+        locked,
+      };
+    });
+  };
+
+  /**
+   * Voice moves to another window's assistant, as the person picked in the
+   * bubble's menu, until they start talking. The bubble stays up and takes
+   * the window's colours; in another profile, voice starts again there.
+   * The window picked is where the person is from now: its profile's
+   * shortcuts, and its chat for "Talk to this chat".
+   */
+  const moveToWindow = async (windowId: number) => {
+    const voice = active;
+    if (
+      !voice ||
+      voice.spoken ||
+      voice.hearing ||
+      voice.ending ||
+      voice.live.target?.kind !== "assistant"
+    )
+      return;
+    const window = BrowserWindow.fromId(windowId);
+    if (!window || window.isDestroyed() || !deps.isWorkspace(window)) return;
+    const assistant = windowAssistant(window);
+    if (!assistant) return;
+    recentWindows = [
+      window,
+      ...recentWindows.filter(
+        (other) => other !== window && !other.isDestroyed(),
+      ),
+    ];
+    refreshSystemKeys();
+    if (assistant.profileId === voice.profileId) {
+      voice.window = windowId;
+      voice.windowPicked = true;
+      publish();
+      return;
+    }
+    switching = true;
+    try {
+      await stop();
+    } finally {
+      switching = false;
+    }
+    await start(
+      assistant.profileId,
+      { kind: "assistant", projectId: assistant.home },
+      { handsFree: voice.handsFree, window: windowId },
+    );
   };
 
   /**
@@ -1468,10 +1636,7 @@ export function registerVoiceSupport(deps: {
               const profileId = keysProfile();
               // The helper hears the keys in Work too: "this chat" is the
               // one in the window the person is, or was last, in.
-              const window =
-                lastWorkWindow && !lastWorkWindow.isDestroyed()
-                  ? lastWorkWindow
-                  : null;
+              const window = lastWorkWindow();
               if (action && profileId)
                 pressFrom(
                   profileId,
@@ -1533,6 +1698,26 @@ export function registerVoiceSupport(deps: {
   const watchSend = () =>
     systemKeys?.watchSend(!!active?.dictating && active.handsFree);
   ipcMain.handle("catamorphic:voice-keys-status", () => keysState);
+
+  // The bubble's page asks what it shows as it starts, and which windows'
+  // assistants it can talk to.
+  const fromBubble = (event: Electron.IpcMainInvokeEvent) => {
+    const window = BrowserWindow.fromWebContents(event.sender);
+    return !!window && bubble.owns(window);
+  };
+  ipcMain.handle("catamorphic:voice-bubble-state", (event) =>
+    fromBubble(event) ? bubble.state() : null,
+  );
+  ipcMain.handle("catamorphic:voice-bubble-windows", (event) =>
+    fromBubble(event) ? windowChoices() : [],
+  );
+  ipcMain.handle(
+    "catamorphic:voice-bubble-window",
+    async (event, windowId: unknown) => {
+      if (fromBubble(event) && typeof windowId === "number")
+        await moveToWindow(windowId);
+    },
+  );
   // An embedded frame of a page asks for voice's keys as it starts, to
   // keep them from the page (its tab's host tells the top frame).
   ipcMain.handle("catamorphic:voice-keys-of-page", (event) => {
@@ -1549,7 +1734,13 @@ export function registerVoiceSupport(deps: {
   });
   // Allowed in System Settings: Work notices when the person comes back.
   const onWindowFocus = (_event: unknown, window: BrowserWindow) => {
-    if (workWindows().includes(window)) lastWorkWindow = window;
+    if (workWindows().includes(window))
+      recentWindows = [
+        window,
+        ...recentWindows.filter(
+          (other) => other !== window && !other.isDestroyed(),
+        ),
+      ];
     refreshSystemKeys();
   };
   app.on("browser-window-focus", onWindowFocus);
@@ -1626,6 +1817,9 @@ export function registerVoiceSupport(deps: {
         "catamorphic:voice-keys-status",
         "catamorphic:voice-keys-allow",
         "catamorphic:voice-bubble-menu",
+        "catamorphic:voice-bubble-state",
+        "catamorphic:voice-bubble-windows",
+        "catamorphic:voice-bubble-window",
         "catamorphic:voice-keys-of-page",
       ])
         ipcMain.removeHandler(channel);

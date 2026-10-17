@@ -365,6 +365,31 @@ export interface VoicePortMessage {
 }
 
 /**
+ * What voice's bubble shows (ADR 0236): whether it is up, the profile its
+ * page reads, and the project whose colours it wears.
+ */
+export interface VoiceBubbleState {
+  shown: boolean;
+  profileId: string | null;
+  projectId: string | null;
+}
+
+/** A window of Work's whose assistant the bubble can talk to. */
+export interface VoiceWindowChoice {
+  id: number;
+  /** The window's title: its project's name. */
+  title: string;
+  /** Its assistant's name; null when it has none yet. */
+  assistant: string | null;
+  /** Its profile's name, when windows of several profiles are open. */
+  profile?: string;
+  /** The window voice talks to the assistant of now. */
+  current: boolean;
+  /** The person has started talking: voice stays where it is. */
+  locked: boolean;
+}
+
+/**
  * The IPC message that rests the audio page between voices (ADR 0236):
  * its microphone closes and its speakers stop, and it stays loaded, so
  * the next voice opens the microphone at once.

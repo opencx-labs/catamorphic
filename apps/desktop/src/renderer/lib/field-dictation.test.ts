@@ -4,8 +4,11 @@ import type { VoiceDictation } from "../../shared/voice.js";
 import {
   DICTATION_ATTR,
   DICTATION_PREVIEW_ATTR,
+  DICTATION_SETTLING_ATTR,
+  DICTATION_WORD_ATTR,
   FieldDictation,
   installFieldDictation,
+  SETTLE_MS,
 } from "./field-dictation.js";
 
 const words = (
@@ -83,24 +86,108 @@ describe("FieldDictation in an editor", () => {
   };
 
   it("shows the words in an editor that asks, then types them in their place", () => {
+    vi.useFakeTimers();
+    try {
+      const root = editor(true);
+      const dictation = new FieldDictation();
+      dictation.apply(root, words(1, "there"));
+      const shown = root.querySelector(`[${DICTATION_ATTR}]`);
+      expect(shown?.textContent).toBe(" there");
+      expect(root.textContent).toBe("Hello there");
+      dictation.apply(root, words(1, "there, friend.", true));
+      // Said: the words settle where they showed, then are typed.
+      expect(shown?.getAttribute(DICTATION_SETTLING_ATTR)).toBe("said");
+      expect(root.textContent).toBe("Hello there, friend.");
+      vi.advanceTimersByTime(SETTLE_MS);
+      expect(root.querySelector(`[${DICTATION_ATTR}]`)).toBeNull();
+      expect(root.textContent).toBe("Hello there, friend.");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("fades in only the words new to what shows", () => {
     const root = editor(true);
     const dictation = new FieldDictation();
-    dictation.apply(root, words(1, "there"));
-    const shown = root.querySelector(`[${DICTATION_ATTR}]`);
-    expect(shown?.textContent).toBe(" there");
-    expect(root.textContent).toBe("Hello there");
-    dictation.apply(root, words(1, "there, friend.", true));
-    expect(root.querySelector(`[${DICTATION_ATTR}]`)).toBeNull();
-    expect(root.textContent).toBe("Hello there, friend.");
+    const spans = () => [
+      ...root.querySelectorAll<HTMLElement>(`[${DICTATION_WORD_ATTR}]`),
+    ];
+    dictation.apply(root, words(1, "send the"));
+    const [send, the] = spans();
+    dictation.apply(root, words(1, "Send the report"));
+    // Firmed up in place (its case), the same spans; one new word.
+    expect(spans().slice(0, 2)).toEqual([send, the]);
+    expect(spans().map((span) => span.textContent)).toEqual([
+      " Send",
+      " the",
+      " report",
+    ]);
+    dictation.apply(root, words(1, "Send their report"));
+    // A word heard again differently, and what follows it, are new.
+    expect(spans()[0]).toBe(send);
+    expect(spans()[1]).not.toBe(the);
+    expect(root.textContent).toBe("Hello Send their report");
+  });
+
+  it("fades out a stretch that said nothing", () => {
+    vi.useFakeTimers();
+    try {
+      const root = editor(true);
+      const dictation = new FieldDictation();
+      dictation.apply(root, words(1, "um"));
+      const shown = root.querySelector(`[${DICTATION_ATTR}]`);
+      dictation.apply(root, words(1, "", true));
+      expect(shown?.getAttribute(DICTATION_SETTLING_ATTR)).toBe("unsaid");
+      // The words that showed fade as they are, then go.
+      expect(root.textContent).toBe("Hello um");
+      vi.advanceTimersByTime(SETTLE_MS);
+      expect(root.textContent).toBe("Hello");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("types settling words at once when more come, or the person does", () => {
+    vi.useFakeTimers();
+    try {
+      const root = editor(true);
+      const dictation = new FieldDictation();
+      dictation.apply(root, words(1, "first"));
+      dictation.apply(root, words(1, "first.", true));
+      expect(
+        root.querySelectorAll(`[${DICTATION_SETTLING_ATTR}]`),
+      ).toHaveLength(1);
+      dictation.apply(root, words(2, "second"));
+      expect(
+        root.querySelectorAll(`[${DICTATION_SETTLING_ATTR}]`),
+      ).toHaveLength(0);
+      expect(root.textContent).toBe("Hello first. second");
+      dictation.settle();
+      expect(root.querySelector(`[${DICTATION_ATTR}]`)).toBeNull();
+      expect(root.textContent).toBe("Hello first. second");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("writes nothing for a stretch whose words went with a sent message", () => {
-    const root = editor(true);
-    const dictation = new FieldDictation();
-    dictation.apply(root, words(1, "and the"));
-    root.replaceChildren();
-    dictation.apply(root, words(1, "And the rest.", true));
-    expect(root.textContent).toBe("");
+    vi.useFakeTimers();
+    try {
+      const root = editor(true);
+      const dictation = new FieldDictation();
+      dictation.apply(root, words(1, "and the"));
+      root.replaceChildren();
+      dictation.apply(root, words(1, "And the rest.", true));
+      expect(root.textContent).toBe("");
+      // Sent while settling: nothing comes back either.
+      dictation.apply(root, words(2, "Next one."));
+      dictation.apply(root, words(2, "Next one.", true));
+      root.replaceChildren();
+      vi.advanceTimersByTime(SETTLE_MS);
+      expect(root.textContent).toBe("");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("gives an editor that keeps its own model each stretch once said", () => {
@@ -280,6 +367,50 @@ describe("installFieldDictation", () => {
     say(words(1, "const x", true));
     expect(input.value).toBe("");
     uninstall();
+  });
+
+  it("types words still settling before the person's key acts", () => {
+    vi.useFakeTimers();
+    // jsdom has no isContentEditable: the composer is an editor.
+    const editable = Object.getOwnPropertyDescriptor(
+      HTMLElement.prototype,
+      "isContentEditable",
+    );
+    Object.defineProperty(HTMLElement.prototype, "isContentEditable", {
+      configurable: true,
+      get(this: HTMLElement) {
+        return this.closest('[contenteditable="true"]') !== null;
+      },
+    });
+    try {
+      const { say, uninstall } = page();
+      const composer = document.createElement("div");
+      composer.setAttribute("contenteditable", "true");
+      composer.setAttribute(DICTATION_PREVIEW_ATTR, "");
+      composer.tabIndex = 0;
+      document.body.append(composer);
+      composer.focus();
+      say(words(1, "Thanks"));
+      say(words(1, "Thanks.", true));
+      expect(composer.querySelector(`[${DICTATION_SETTLING_ATTR}]`)).not.toBe(
+        null,
+      );
+      composer.dispatchEvent(
+        new KeyboardEvent("keydown", { key: ",", bubbles: true }),
+      );
+      expect(composer.querySelector(`[${DICTATION_ATTR}]`)).toBe(null);
+      expect(composer.textContent).toBe("Thanks.");
+      uninstall();
+    } finally {
+      if (editable)
+        Object.defineProperty(
+          HTMLElement.prototype,
+          "isContentEditable",
+          editable,
+        );
+      else Reflect.deleteProperty(HTMLElement.prototype, "isContentEditable");
+      vi.useRealTimers();
+    }
   });
 
   it("never writes into a password, nor elsewhere while one has focus", () => {

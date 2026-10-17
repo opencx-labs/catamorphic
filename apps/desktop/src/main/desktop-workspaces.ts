@@ -65,6 +65,7 @@ export class DesktopWorkspaces {
   private readonly activeChats = new Map<string, string>();
   private readonly floating = new Map<string, BrowserWindow>();
   private readonly lastWindows = new Map<string, BrowserWindow>();
+  private readonly workspaces = new WeakSet<BrowserWindow>();
   private readonly dockExpanded = new Map<string, boolean>();
   private readonly dockDrags = new Map<
     string,
@@ -651,6 +652,11 @@ export class DesktopWorkspaces {
     return [...this.floating.values()].includes(window);
   }
 
+  /** A workspace window: not the dock, a sign-in popup or an extension's. */
+  isWorkspace(window: BrowserWindow): boolean {
+    return this.workspaces.has(window);
+  }
+
   activateProfile(profileId: string): boolean {
     const window = this.lastWindows.get(profileId);
     if (!window || window.isDestroyed()) return false;
@@ -692,6 +698,7 @@ export class DesktopWorkspaces {
   track(window: BrowserWindow, dock = false) {
     const profileId = this.options.windows.profileFor(window.webContents);
     if (dock) return;
+    this.workspaces.add(window);
     this.lastWindows.set(profileId, window);
     const contentsId = window.webContents.id;
     window.on("closed", () => {
@@ -961,6 +968,11 @@ export class DesktopWorkspaces {
       }
     }
     return screen.getDisplayMatching(dock.getBounds()).workArea;
+  }
+
+  /** The project a workspace window shows now, if it shows one. */
+  activeProject(window: BrowserWindow): string | null {
+    return this.activeProjects.get(window.webContents.id) ?? null;
   }
 
   /** Whether a profile's dock floats detached now, as the person left it. */

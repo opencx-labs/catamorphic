@@ -7,6 +7,7 @@ import {
   useSyncExternalStore,
 } from "react";
 import type { AppPrefs } from "../../shared/app-prefs.js";
+import { menuGroups } from "../../shared/menu.js";
 import {
   agentVoice,
   parseAssistantAgentId,
@@ -20,11 +21,11 @@ import {
   type VoicePress,
   type VoiceSessionRef,
   type VoiceStatus,
-  type VoiceTarget,
 } from "../../shared/voice.js";
 import { type AgentInfo, desktopApi } from "../lib/desktop-api.js";
 import { formatBinding, useKeybindings } from "../lib/keybindings";
 import { useAppPreferences } from "../lib/use-app-preferences.js";
+import { voicePressFor, voiceWindowEntries } from "../lib/voice-menu.js";
 import {
   type ContextMenuEntry,
   type MenuAt,
@@ -343,27 +344,6 @@ const RING_LENGTH = 2 * Math.PI * RING_RADIUS;
  * the assistant and the voice, the microphone, dictation only, the person's
  * own voice, and where microphones show.
  */
-/**
- * What a press of a microphone that shows a voice asks: that voice, so a
- * tap turns it off and a hold talks to it.
- */
-function pressFor(target: VoiceTarget, projectId: string | undefined) {
-  const press: VoicePress =
-    target.kind === "dictation"
-      ? {
-          action: "dictate",
-          ...(target.sessionId ? { sessionId: target.sessionId } : {}),
-        }
-      : target.kind === "chat"
-        ? {
-            action: "talk-to-chat",
-            projectId: target.projectId,
-            sessionId: target.sessionId,
-          }
-        : { action: "talk-to-work", ...(projectId ? { projectId } : {}) };
-  return press;
-}
-
 export function VoiceButton({
   projectId,
   chat,
@@ -578,7 +558,7 @@ export function VoiceButton({
    * made now if new) or the assistant.
    */
   const pressOf = async (): Promise<VoicePress | null> => {
-    if (on && target) return pressFor(target, projectId);
+    if (on && target) return voicePressFor(target, projectId);
     if (prefs.voiceDictation) {
       chat?.focusComposer();
       // A new chat gets its session now, so its microphone shows dictation.
@@ -641,6 +621,8 @@ export function VoiceButton({
       void update({
         voiceAssistant: action.slice("assistant:".length) || null,
       });
+    if (action.startsWith("window:"))
+      void desktopApi.voiceBubbleWindow(Number(action.slice("window:".length)));
     if (action === "learn") send(desktopApi.voiceLearn);
     if (action === "forget") void update({ voiceprint: null });
     if (action === "dictation")
@@ -661,9 +643,19 @@ export function VoiceButton({
     event.preventDefault();
     if (nativeMenus || bubble) {
       const shown = entries.filter((entry) => !entry.disabledReason);
-      void (
-        bubble ? desktopApi.voiceBubbleMenu(shown) : desktopApi.dockMenu(shown)
-      ).then(pick);
+      void (async () => {
+        if (!bubble) {
+          pick(await desktopApi.dockMenu(shown));
+          return;
+        }
+        // The windows first: whose assistant the bubble talks to.
+        const choices = await desktopApi.voiceBubbleWindows();
+        pick(
+          await desktopApi.voiceBubbleMenu(
+            menuGroups(voiceWindowEntries(choices), shown),
+          ),
+        );
+      })();
       return;
     }
     setMenuAt(menuAtPointer(event));

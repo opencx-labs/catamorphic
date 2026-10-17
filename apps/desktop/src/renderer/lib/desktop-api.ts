@@ -122,11 +122,13 @@ import type { ThemeFonts } from "../../shared/theme-fonts.js";
 import type { DesktopUpdateState } from "../../shared/update.js";
 import type { UsageSummary } from "../../shared/usage.js";
 import type {
+  VoiceBubbleState,
   VoiceDictation,
   VoiceKeysState,
   VoiceLevels,
   VoicePress,
   VoiceStatus,
+  VoiceWindowChoice,
 } from "../../shared/voice.js";
 
 export type { AppPrefs, DesktopUpdateState, UsageSummary };
@@ -1257,6 +1259,13 @@ export interface CatamorphicDesktopApi {
   dockMenu: (entries: readonly MenuItem[]) => Promise<string | null>;
   /** Native context menu for voice's floating bubble; resolves the action. */
   voiceBubbleMenu: (entries: readonly MenuItem[]) => Promise<string | null>;
+  /** What voice's bubble shows: asked by the bubble's page as it starts. */
+  voiceBubbleState: () => Promise<VoiceBubbleState | null>;
+  /** The windows whose assistant the bubble can talk to. */
+  voiceBubbleWindows: () => Promise<VoiceWindowChoice[]>;
+  /** The bubble talks to this window's assistant, until speech starts. */
+  voiceBubbleWindow: (windowId: number) => Promise<void>;
+  onVoiceBubble: (listener: (state: VoiceBubbleState) => void) => () => void;
   /** The workspace window reports where its chat region sits; null clears. */
   dockRegion: (region: DockRegion | null) => Promise<void>;
   onDockSnapshot: (listener: (snapshot: DockSnapshot) => void) => () => void;

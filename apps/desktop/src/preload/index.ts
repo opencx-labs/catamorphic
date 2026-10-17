@@ -67,6 +67,7 @@ import type { DesktopUpdateState } from "../shared/update.js";
 import {
   VOICE_PORT_MESSAGE,
   VOICE_REST_MESSAGE,
+  type VoiceBubbleState,
   type VoiceDictation,
   type VoiceKeysState,
   type VoiceLevels,
@@ -74,6 +75,7 @@ import {
   type VoicePress,
   type VoiceRestMessage,
   type VoiceStatus,
+  type VoiceWindowChoice,
 } from "../shared/voice.js";
 
 export interface ServerInfo {
@@ -158,6 +160,21 @@ const api = {
     invoke("catamorphic:dock-menu", entries),
   voiceBubbleMenu: (entries: readonly MenuItem[]): Promise<string | null> =>
     invoke("catamorphic:voice-bubble-menu", entries),
+  voiceBubbleState: (): Promise<VoiceBubbleState | null> =>
+    invoke("catamorphic:voice-bubble-state"),
+  voiceBubbleWindows: (): Promise<VoiceWindowChoice[]> =>
+    invoke("catamorphic:voice-bubble-windows"),
+  voiceBubbleWindow: (windowId: number): Promise<void> =>
+    invoke("catamorphic:voice-bubble-window", windowId),
+  onVoiceBubble: (listener: (state: VoiceBubbleState) => void) => {
+    const handler = (
+      _event: Electron.IpcRendererEvent,
+      value: VoiceBubbleState,
+    ) => listener(value);
+    ipcRenderer.on("catamorphic:voice-bubble", handler);
+    return () =>
+      ipcRenderer.removeListener("catamorphic:voice-bubble", handler);
+  },
   dockRegion: (region: DockRegion | null): Promise<void> =>
     invoke("catamorphic:dock-region", region),
   onDockSnapshot: (

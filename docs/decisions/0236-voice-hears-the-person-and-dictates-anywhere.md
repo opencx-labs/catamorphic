@@ -78,8 +78,10 @@ swallows them, so the app in front never acts on them.
 says where their cursor is: a composer, any field of Work's, a web page's,
 or, through the helper, the app in front. The words show as they are said
 and settle in place as recognition firms up: in a chat's composer as muted
-words with a pulsing dot, in other fields as plain words, in other apps
-typed and retyped only where they changed. Once the person types, clicks
+words with a pulsing dot, each new word fading in as an agent's prose does
+and a stretch said taking the text's colour as the dot goes, in other
+fields as plain words, in other apps typed and retyped only where they
+changed. Once the person types, clicks
 or moves elsewhere, what showed is theirs and the rest of that stretch is
 not written. Turning dictation off first writes what they are still
 saying. Sending what was dictated ends dictation that listens on its own:
@@ -90,8 +92,13 @@ microphone's click dictate instead of talk.
 
 **Out of Work, the dock's microphone floats.** While voice is on and Work
 is not in front, the same microphone floats at the bottom of the screen,
-never taking focus, unless the dock is detached and floats there already.
-In the dock it shows whenever voice talks to the assistant or dictates.
+a panel that never takes focus, unless the dock is detached and floats
+there already. It eases in and out, and wears the colours of the window
+the person was last in, whose assistant it talks to. Until they start
+talking, its menu moves voice to the assistant of another open window,
+another profile's included: the microphone stays, and its colours change
+to that window's. In the dock it shows whenever voice talks to the
+assistant or dictates.
 
 **An agent hears where the person is, not what they see.** While the
 person talks with a chat by voice from another app, each of their turns

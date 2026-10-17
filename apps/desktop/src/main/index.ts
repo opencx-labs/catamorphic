@@ -324,8 +324,11 @@ const windows: WindowProfileRegistry = {
   },
   attach(contents, profileId) {
     const id = contents.id;
+    // Attached again (voice's bubble moving between profiles): one
+    // listener is enough.
+    if (!windowProfiles.has(id))
+      contents.once("destroyed", () => windowProfiles.delete(id));
     windowProfiles.set(id, profileId);
-    contents.once("destroyed", () => windowProfiles.delete(id));
   },
   openWindow(profileId) {
     if (desktopWorkspaces?.activateProfile(profileId)) return;
@@ -775,6 +778,8 @@ app.whenReady().then(async () => {
     dockDetached: (profileId) =>
       desktopWorkspaces?.dockDetached(profileId) ??
       profileConfig.forProfile(profileId).prefs.load().dockDetached,
+    isWorkspace: (window) => desktopWorkspaces?.isWorkspace(window) ?? false,
+    activeProject: (window) => desktopWorkspaces?.activeProject(window) ?? null,
   });
   terminalSupport = registerTerminalSupport(
     state,

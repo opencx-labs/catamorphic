@@ -19,6 +19,15 @@ import type { VoiceDictation } from "../../shared/voice.js";
 export const DICTATION_ATTR = "data-dictation";
 /** An editor that shows the words while they are said. */
 export const DICTATION_PREVIEW_ATTR = "data-dictation-preview";
+/** One word showing, in a span of its own so a new one fades in. */
+export const DICTATION_WORD_ATTR = "data-dictation-word";
+/**
+ * The words showing were said (`said`), or nothing was (`unsaid`): they
+ * take the text's colour, or fade, as the dot goes, then are typed.
+ */
+export const DICTATION_SETTLING_ATTR = "data-settling";
+/** How long the words said take to settle: as long as chat prose fades in. */
+export const SETTLE_MS = 200;
 
 const ZERO_WIDTH = /​|‌|‍|﻿/g;
 const TEXT_INPUTS = new Set(["text", "search", "url", "email", "tel", ""]);
@@ -73,6 +82,13 @@ export class FieldDictation {
   private shown: Shown | null = null;
   /** Stretches settled: their words are in, or were taken away. */
   private through = 0;
+  /** Words said, settling in place before they are typed. */
+  private settling: {
+    field: HTMLElement;
+    node: HTMLElement;
+    text: string;
+    timer: ReturnType<typeof setTimeout>;
+  } | null = null;
 
   /** The field the words still being said show in, if any. */
   get showing(): HTMLElement | null {
@@ -81,6 +97,8 @@ export class FieldDictation {
 
   apply(field: HTMLElement, words: VoiceDictation): void {
     if (words.segment <= this.through) return;
+    // Words still settling are typed before any more come.
+    this.flush();
     // Another stretch, or another field: what showed is the person's.
     if (
       this.shown &&
@@ -99,6 +117,7 @@ export class FieldDictation {
    * the rest of that stretch is theirs, as in other apps.
    */
   settle(): void {
+    this.flush();
     const shown = this.shown;
     if (!shown) return;
     this.shown = null;
@@ -190,6 +209,7 @@ export class FieldDictation {
     }
     if (!final) {
       if (!field.hasAttribute(DICTATION_PREVIEW_ATTR)) return;
+      this.flush();
       let node = shown?.node;
       if (!node) {
         const at = caret ?? atEnd();
@@ -209,36 +229,111 @@ export class FieldDictation {
           selection?.addRange(after);
         }
       }
-      node.textContent = `${node.dataset.space ?? ""}${text}`;
+      showWords(node, text);
       changed(field, text);
       return;
     }
     this.shown = null;
     this.through = segment;
-    // The words said go in where they showed, else at the caret; the
-    // words shown were never typed, so undo takes back only these.
-    let at = caret ?? atEnd();
     if (shown) {
-      at = document.createRange();
-      at.setStartBefore(shown.node);
-      at.collapse(true);
-      shown.node.remove();
-    }
-    if (!text) {
-      if (shown) changed(field, "");
+      // The words said settle where they showed: they take the text's
+      // colour as the dot goes (or fade, when nothing was said), and are
+      // typed once they have.
+      // Nothing said: the words that showed fade as they are.
+      if (text) showWords(shown.node, text);
+      shown.node.setAttribute(
+        DICTATION_SETTLING_ATTR,
+        text ? "said" : "unsaid",
+      );
+      this.flush();
+      this.settling = {
+        field,
+        node: shown.node,
+        text,
+        timer: setTimeout(() => this.flush(), SETTLE_MS),
+      };
       return;
     }
-    const typed = spaced(charBefore(at), text);
-    const focused = field.contains(document.activeElement);
-    if (focused) {
-      selection?.removeAllRanges();
-      selection?.addRange(at);
-      if (document.execCommand("insertText", false, typed)) return;
-    }
-    const node = document.createTextNode(typed);
-    at.insertNode(node);
-    changed(field, typed);
+    if (text) typeAt(field, caret ?? atEnd(), text);
   }
+
+  /** Types the words settling now: more are coming, or the person is. */
+  flush(): void {
+    const settling = this.settling;
+    if (!settling) return;
+    this.settling = null;
+    clearTimeout(settling.timer);
+    const { field, node, text } = settling;
+    // Gone with a message sent meanwhile: nothing to type.
+    if (!node.isConnected) return;
+    // In the words' place; they were never typed, so undo takes back
+    // only these.
+    const at = field.ownerDocument.createRange();
+    at.setStartBefore(node);
+    at.collapse(true);
+    node.remove();
+    if (!text) {
+      changed(field, "");
+      return;
+    }
+    typeAt(field, at, text);
+  }
+}
+
+/** Words said, typed into an editor at a place in it, as typing does. */
+function typeAt(field: HTMLElement, at: Range, text: string): void {
+  const document = field.ownerDocument;
+  const before = document.createRange();
+  before.setStart(field, 0);
+  before.setEnd(at.startContainer, at.startOffset);
+  const typed = spaced(before.toString().replace(ZERO_WIDTH, "").at(-1), text);
+  if (field.contains(document.activeElement)) {
+    const selection = document.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(at);
+    if (document.execCommand("insertText", false, typed)) return;
+  }
+  at.insertNode(document.createTextNode(typed));
+  changed(field, typed);
+}
+
+/** The same word, recognition only firming it up: its case, its stops. */
+function sameWord(a: string, b: string): boolean {
+  const plain = (word: string) =>
+    word.toLowerCase().replace(/[^\p{L}\p{N}']/gu, "");
+  return plain(a) === plain(b);
+}
+
+/**
+ * The words so far, each in its own span: those already showing stay as
+ * they are, firmed up in place, and only new ones fade in, as an agent's
+ * words do in the chat.
+ */
+function showWords(node: HTMLElement, text: string): void {
+  const words = text.split(/\s+/).filter(Boolean);
+  const showing = [...node.children].filter(
+    (child): child is HTMLElement =>
+      child instanceof HTMLElement && child.hasAttribute(DICTATION_WORD_ATTR),
+  );
+  let kept = 0;
+  while (
+    kept < showing.length &&
+    kept < words.length &&
+    sameWord(showing[kept]?.textContent?.trim() ?? "", words[kept] ?? "")
+  )
+    kept++;
+  for (const gone of showing.slice(kept)) gone.remove();
+  const lead = node.dataset.space ?? "";
+  words.forEach((word, index) => {
+    const spaced = `${index === 0 ? lead : " "}${word}`;
+    let span = index < kept ? showing[index] : undefined;
+    if (!span) {
+      span = node.ownerDocument.createElement("span");
+      span.setAttribute(DICTATION_WORD_ATTR, "");
+      node.append(span);
+    }
+    if (span.textContent !== spaced) span.textContent = spaced;
+  });
 }
 
 /** How a page meets the main process. */
@@ -326,6 +421,9 @@ export function installFieldDictation(port: DictationPort): () => void {
     return element instanceof Element ? element : null;
   };
   const onFocus = (event: FocusEvent) => {
+    // Words still settling are typed before the person's key, click or
+    // move acts, so what they do lands after them.
+    dictation.flush();
     const element = elementOf(event);
     const target = textFieldOf(element);
     if (!target) {
@@ -353,9 +451,11 @@ export function installFieldDictation(port: DictationPort): () => void {
   // what changes the text, never a key alone: voice's own keys reach the
   // page before the window swallows them.
   const onEdit = (event: InputEvent) => {
+    dictation.flush();
     if (dictation.showing?.contains(elementOf(event))) dictation.settle();
   };
   const onKey = (event: KeyboardEvent) => {
+    dictation.flush();
     const target = textFieldOf(elementOf(event));
     if (!target) return;
     if (dictation.showing === target && CARET_KEYS.has(event.key))
@@ -378,6 +478,7 @@ export function installFieldDictation(port: DictationPort): () => void {
     }, SENT_MS);
   };
   const onPointer = (event: PointerEvent) => {
+    dictation.flush();
     if (dictation.showing?.contains(elementOf(event))) dictation.settle();
   };
   const onSubmit = (event: SubmitEvent) => {
@@ -409,6 +510,7 @@ export function installFieldDictation(port: DictationPort): () => void {
   });
   return () => {
     stopWords();
+    dictation.flush();
     document.removeEventListener("focusin", onFocus, true);
     document.removeEventListener("beforeinput", onEdit, true);
     document.removeEventListener("keydown", onKey, true);
