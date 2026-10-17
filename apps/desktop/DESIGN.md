@@ -722,6 +722,45 @@ the historical log explains how it arrived here.
 - [Performance](docs/performance.md): idle lifecycle checks and sustained measurement.
 
 ## Design log
+### 2026-10-17: The pill docks on any edge of the screen, the notch included
+
+The pill (the dock's bubble strip) could float in a window of its own, but
+only along the bottom, and only from a right-click. People keep Work
+minimized and want the pill where they look. On the desktop it now docks
+on any edge (ADR 0242): along the bottom as before, standing as a column
+on either side, or at the top, where on a MacBook it wraps the camera
+notch as a black island, the microphone in one wing and the chats' bubble
+in the other, a spinner while a chat works and a count when there are
+several. The island opens downward into the strip on hover (after a short
+dwell, so passing the menu bar does nothing) or when a chat opens; its one
+outline morphs between the two, flared where it meets the top of the
+screen as if the notch had grown. A chat opens from the pill, away from
+its edge.
+
+On the desktop the pill drops the strip's arrows: they pointed at a corner
+of a window it is no longer in, and their room sat uneven in the pill. It is
+grabbed by its body instead, anywhere off its controls, or folded by its
+bubble, and its menu folds it; the microphone's slot no longer adds a text
+line under its button, so the pill's padding is even on every side. Grabbing
+it moves the pill anywhere, across displays. While it is held, the edges it can land on show as quiet dashed
+spots over the screen, the one it would take lit in the accent; let go, it
+lands on the edge nearest where it was thrown and glides there on a
+critically damped spring. The overlay is a window that never takes a
+click, so however it fails it never stands between a person and their
+screen; Companion's one window per display moves best but can lock a
+display when a click fails to pass through. Arrow keys and the pill's menu
+move it too.
+
+Settings has a Pill section: miniature screens show where it can live (in
+Work, at the bottom, either side, the notch), with its behaviour beneath:
+resting in the Work window, opening at the notch on hover, its corner and
+placement, and chats from every project. The Chat dock card became Chats.
+
+`shared/pill-geometry.test.ts` covers bounds, landing, spots, arrows and
+the glide on nine display layouts; `chat-bubbles.test.tsx` the column and
+the island; `e2e/pill.e2e.ts` every edge, the chat beside it, the drag and
+its overlay, the throw, the arrows, a minimized Work and the picker.
+
 ### 2026-10-17: A message sent while the agent works reaches it
 
 A message sent while the agent worked waited, a dashed ghost, until the

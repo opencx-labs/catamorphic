@@ -7,6 +7,7 @@ import type {
 } from "./chat.js";
 import type { ChatSessionMenuEntry } from "./chat-session-actions.js";
 import type { OpenMode, OpenModifiers } from "./open-mode.js";
+import type { PillEdge } from "./pill-geometry.js";
 
 export type DockData = Pick<
   ChatDockProps,
@@ -89,6 +90,15 @@ export interface DockSnapshot {
   placement: "left" | "center" | "right";
   /** The person's folded strip (prefs `dockCollapsed`). */
   collapsed: boolean;
+  /**
+   * The screen edge the pill draws itself for (ADR 0242): its own window's
+   * `dockEdge`; a pill in a workspace window is always at the bottom.
+   */
+  edge: PillEdge;
+  /** At the top of a display with a camera cutout: the cutout's size. */
+  notch: { width: number; height: number } | null;
+  /** The island opens when the pointer reaches it (prefs `dockIslandHover`). */
+  islandHover: boolean;
 }
 export interface WorkspaceNavigation {
   projectId: string;

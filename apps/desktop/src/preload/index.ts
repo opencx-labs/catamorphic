@@ -165,6 +165,9 @@ const api = {
   ): Promise<boolean> => invoke("catamorphic:dock-shape", rects),
   dockDetach: (detached: boolean): Promise<void> =>
     invoke("catamorphic:dock-detach", detached),
+  /** Moves the pill in its own window to the spot that way (ADR 0242). */
+  dockMove: (direction: "left" | "right" | "up" | "down"): Promise<boolean> =>
+    invoke("catamorphic:dock-move", direction),
   dockMenu: (entries: readonly MenuItem[]): Promise<string | null> =>
     invoke("catamorphic:dock-menu", entries),
   voiceBubbleMenu: (entries: readonly MenuItem[]): Promise<string | null> =>

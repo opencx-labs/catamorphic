@@ -19,6 +19,8 @@ export interface DockRegion {
 export interface DockDrag {
   phase: "start" | "move" | "end" | "cancel";
   screenX: number;
+  /** The detached pill moves both ways (ADR 0242). */
+  screenY?: number;
   reducedMotion: boolean;
   /**
    * The window's size once the drag lands. The window keeps its size while
@@ -26,6 +28,8 @@ export interface DockDrag {
    * moves and resizes it in one step.
    */
   size?: DockSize;
+  /** Its size at each screen edge it may land on, the landing picking one. */
+  sizes?: Partial<Record<"bottom" | "left" | "right" | "top", DockSize>>;
 }
 
 /** A requested dock size, kept to the display's work area. */

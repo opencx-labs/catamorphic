@@ -3,6 +3,7 @@ import {
   autoUpdater,
   BrowserWindow,
   ipcMain,
+  powerMonitor,
   screen,
   type WebContents,
 } from "electron";
@@ -15,18 +16,35 @@ import type {
   WorkspaceEvent,
   WorkspaceNavigation,
 } from "../shared/desktop-workspace.js";
-import {
-  type DockDrag,
-  type DockRegion,
-  type DockSize,
-  dockLanding,
-  dockPosition,
-  fitDockSize,
+import type {
+  DockDrag,
+  DockRegion,
+  DockSize,
 } from "../shared/dock-position.js";
 import type { MenuItem } from "../shared/menu.js";
+import {
+  type PillDisplay,
+  type PillRect,
+  type PillRest,
+  pickDisplay,
+  pillBounds,
+  pillLanding,
+  pillTargetKey,
+  pillTargets,
+  pillTargetToward,
+} from "../shared/pill-geometry.js";
 import { dockClicks } from "./dock-clicks.js";
 import type { WindowProfileRegistry } from "./index.js";
 import { popupNativeMenu } from "./native-menu.js";
+import { PillNotches } from "./pill-notch.js";
+import {
+  PillFrameKeeper,
+  PillGlides,
+  PillTargetsOverlay,
+  pillDisplay,
+  pillDisplays,
+  systemReducedMotion,
+} from "./pill-window.js";
 import type { ProfileConfigManager } from "./profile-config.js";
 
 const dockShapeSchema = z
@@ -54,6 +72,28 @@ const RELEASE_ABANDON_MS = 30_000;
 /** How long agent calls for a moving project wait for its new window. */
 const ARRIVAL_TIMEOUT_MS = 15_000;
 
+/** How much of a drag's recent path its throw is measured over. */
+const THROW_WINDOW_MS = 120;
+
+type DockPoint = { t: number; x: number; y: number };
+
+/** The pointer's speed over the drag's last moments, in points per second. */
+function throwOf(samples: readonly DockPoint[]): { x: number; y: number } {
+  const first = samples[0];
+  const last = samples.at(-1);
+  if (!first || !last || last.t - first.t < 10) return { x: 0, y: 0 };
+  const seconds = (last.t - first.t) / 1000;
+  return { x: (last.x - first.x) / seconds, y: (last.y - first.y) / seconds };
+}
+
+const centreOf = (rect: PillRect) => ({
+  x: rect.x + rect.width / 2,
+  y: rect.y + rect.height / 2,
+});
+
+const clamp = (value: number, min: number, max: number) =>
+  Math.max(min, Math.min(max, value));
+
 /** One owner per project. Presentation can be hidden without disposing resources. */
 export class DesktopWorkspaces {
   private readonly owners = new Map<string, WebContents>();
@@ -69,8 +109,38 @@ export class DesktopWorkspaces {
   private readonly dockExpanded = new Map<string, boolean>();
   private readonly dockDrags = new Map<
     string,
-    { x: number; left: number; side: "left" | "right" }
+    {
+      x: number;
+      y: number;
+      left: number;
+      top: number;
+      from: PillRest;
+      samples: DockPoint[];
+      /** The drag moves both ways (the detached pill reports screenY). */
+      free: boolean;
+    }
   >();
+  /** Each display's camera cutout, for the pill at the top (ADR 0242). */
+  private readonly notches = new PillNotches({
+    platform: process.platform,
+    onChange: () => this.displaysChanged(),
+  });
+  private readonly glides = new PillGlides();
+  private readonly targets = new PillTargetsOverlay({
+    shape: dockClicks() === "shape",
+  });
+  private readonly frames = new PillFrameKeeper({
+    isBusy: (window) =>
+      this.glides.isGliding(window) ||
+      [...this.floating].some(
+        ([profileId, dock]) => dock === window && this.dockDrags.has(profileId),
+      ),
+  });
+  /**
+   * Where each pill was last put, as a key: a new rest glides there, while
+   * a region or display moving under the same rest follows at once.
+   */
+  private readonly placedRest = new Map<string, string>();
   private quitting = false;
   /**
    * Focus left the app, not just passed between its windows; so too at
@@ -123,7 +193,23 @@ export class DesktopWorkspaces {
   ) {
     app.on("before-quit", () => {
       this.quitting = true;
+      this.targets.destroy();
     });
+    // Displays come and go, wake, and change their menu bars and Docks:
+    // the pill reads every notch again and settles where it rests.
+    let displaysTimer: ReturnType<typeof setTimeout> | undefined;
+    const displaysMoved = () => {
+      clearTimeout(displaysTimer);
+      displaysTimer = setTimeout(() => {
+        void this.notches.refresh().finally(() => this.displaysChanged());
+      }, 100);
+    };
+    screen.on("display-added", displaysMoved);
+    screen.on("display-removed", displaysMoved);
+    screen.on("display-metrics-changed", displaysMoved);
+    powerMonitor.on("resume", displaysMoved);
+    powerMonitor.on("unlock-screen", displaysMoved);
+    void this.notches.refresh();
     // An update restart closes every window without a before-quit; the
     // hide-on-close below would cancel it and the app would sit on
     // "Preparing to restart" forever.
@@ -505,24 +591,18 @@ export class DesktopWorkspaces {
         !Number.isFinite(size.width)
       )
         return;
-      const area = this.dockArea(profileId, window);
-      const { width: nextWidth, height: nextHeight } = fitDockSize(size, area);
       this.dockExpanded.set(profileId, size.expanded === true);
-      const prefs = options.config.forProfile(profileId).prefs.load();
-      window.setBounds({
-        width: nextWidth,
-        height: nextHeight,
-        ...dockPosition({
-          area,
-          width: nextWidth,
-          height: nextHeight,
-          side:
-            size.expanded && prefs.dockPlacement !== "center"
-              ? prefs.dockPlacement
-              : prefs.dockSide,
-          centered: prefs.dockPlacement === "center" && size.expanded,
-        }),
-      });
+      // Held, the window keeps its size under the pointer; it lands with
+      // the size the drag reports.
+      if (this.dockDrags.has(profileId)) return;
+      const bounds = this.placement(
+        profileId,
+        window,
+        size,
+        size.expanded === true,
+      );
+      if (!this.glides.retarget(window, bounds)) window.setBounds(bounds);
+      this.keepFrame(profileId, window);
     });
     ipcMain.handle("catamorphic:dock-drag", (event, input: DockDrag) => {
       const profileId = options.windows.profileFor(event.sender);
@@ -533,107 +613,150 @@ export class DesktopWorkspaces {
         !Number.isFinite(input.screenX)
       )
         return;
-      const prefs = options.config.forProfile(profileId).prefs;
+      const free =
+        typeof input.screenY === "number" && Number.isFinite(input.screenY);
       const bounds = window.getBounds();
+      const pointer = {
+        x: input.screenX,
+        y: free ? (input.screenY as number) : bounds.y,
+      };
       if (input.phase === "start") {
+        this.glides.stop(window);
         this.dockDrags.set(profileId, {
-          x: input.screenX,
+          x: pointer.x,
+          y: pointer.y,
           left: bounds.x,
-          side: prefs.load().dockSide,
+          top: bounds.y,
+          from: this.rest(profileId),
+          samples: [{ t: Date.now(), ...pointer }],
+          free,
         });
+        if (free) {
+          // Above the overlay that shows where it can land.
+          window.setAlwaysOnTop(true, "status", 1);
+          this.showTargets(profileId, window, pointer);
+        }
         return;
       }
       const drag = this.dockDrags.get(profileId);
       if (!drag) return;
-      const area = this.dockArea(profileId, window);
       if (input.phase === "move") {
+        const now = Date.now();
+        drag.samples.push({ t: now, ...pointer });
+        while (
+          drag.samples.length > 2 &&
+          now - (drag.samples[0]?.t ?? now) > THROW_WINDOW_MS
+        )
+          drag.samples.shift();
+        // Free, it follows the pointer onto whichever display it is over;
+        // along the bottom, it keeps to its own row.
+        const limits = drag.free
+          ? (pickDisplay(pillDisplays(this.notches), pointer)?.bounds ?? bounds)
+          : this.placementArea(profileId, window);
         window.setPosition(
           Math.round(
-            Math.max(
-              area.x,
-              Math.min(
-                area.x + area.width - bounds.width,
-                drag.left + input.screenX - drag.x,
-              ),
+            clamp(
+              drag.left + pointer.x - drag.x,
+              limits.x,
+              limits.x + limits.width - bounds.width,
             ),
           ),
-          bounds.y,
+          drag.free
+            ? Math.round(
+                clamp(
+                  drag.top + pointer.y - drag.y,
+                  limits.y,
+                  limits.y + limits.height - bounds.height,
+                ),
+              )
+            : bounds.y,
         );
+        if (drag.free) this.showTargets(profileId, window, pointer);
         return;
       }
       if (input.phase !== "end" && input.phase !== "cancel") return;
-      const landing =
-        input.size &&
-        Number.isFinite(input.size.width) &&
-        Number.isFinite(input.size.height)
-          ? { ...fitDockSize(input.size, area), expanded: input.size.expanded }
-          : null;
-      if (landing) this.dockExpanded.set(profileId, landing.expanded === true);
-      const { width, height } = landing ?? bounds;
-      // Collapsed drags pick a corner; expanded drags pick where open chats
-      // sit: left, center or right. The strip lands on the spot nearest its
-      // centre, as in a workspace window (shared/dock-position.ts).
-      const expanded = this.dockExpanded.get(profileId) === true;
-      const current = prefs.load();
-      // Where the strip is let go, not where the last move left it: a
+      // The release is a sample too: held still before letting go, the
+      // pill is set down, not thrown with the speed it had before the pause.
+      const released = Date.now();
+      drag.samples.push({ t: released, ...pointer });
+      while (
+        drag.samples.length > 2 &&
+        released - (drag.samples[0]?.t ?? released) > THROW_WINDOW_MS
+      )
+        drag.samples.shift();
+      const expanded =
+        input.size?.expanded ?? this.dockExpanded.get(profileId) === true;
+      // Where the pill is let go, not where the last move left it: a
       // coalesced final move must not skew the landing.
-      const centre =
-        Math.max(
-          area.x,
-          Math.min(
-            area.x + area.width - bounds.width,
-            drag.left + input.screenX - drag.x,
-          ),
-        ) +
-        bounds.width / 2;
-      const restsAt = (spot: "left" | "center" | "right") =>
-        dockPosition({
-          area,
-          width: bounds.width,
-          height: bounds.height,
-          side: spot === "right" ? "right" : "left",
-          centered: spot === "center",
-        }).x +
-        bounds.width / 2;
-      const side =
-        input.phase === "cancel"
-          ? drag.side
-          : (dockLanding({
-              from: drag.side,
+      const centre = {
+        x: drag.left + pointer.x - drag.x + bounds.width / 2,
+        y: drag.top + pointer.y - drag.y + bounds.height / 2,
+      };
+      const landing =
+        input.phase === "end"
+          ? this.landing(profileId, window, {
+              pointer,
+              velocity: drag.free ? throwOf(drag.samples) : { x: 0, y: 0 },
+              from: drag.from,
               centre,
-              spots: [
-                { spot: "left", at: restsAt("left") },
-                { spot: "right", at: restsAt("right") },
-              ],
-            }) ?? drag.side);
-      const placement =
-        input.phase === "cancel"
-          ? current.dockPlacement
-          : (dockLanding({
-              from: current.dockPlacement,
-              centre,
-              spots: [
-                { spot: "left", at: restsAt("left") },
-                { spot: "center", at: restsAt("center") },
-                { spot: "right", at: restsAt("right") },
-              ],
-            }) ?? current.dockPlacement);
-      const position = dockPosition({
-        area,
-        width,
-        height,
-        side: expanded && placement !== "center" ? placement : side,
-        centered: expanded && placement === "center",
-      });
+              expanded,
+              free: drag.free,
+            })
+          : undefined;
+      const rest: PillRest = landing ?? drag.from;
+      const size = input.sizes?.[rest.edge] ??
+        input.size ?? { width: bounds.width, height: bounds.height, expanded };
+      this.dockExpanded.set(profileId, size.expanded === true);
+      const target = this.placement(
+        profileId,
+        window,
+        size,
+        size.expanded === true,
+        rest,
+        landing?.displayId,
+      );
+      this.placedRest.set(
+        profileId,
+        this.restKey(rest, landing?.displayId ?? this.restDisplayId(profileId)),
+      );
+      this.targets.hide();
       try {
-        if (expanded) {
-          if (current.dockPlacement !== placement)
-            prefs.save({ dockPlacement: placement });
-        } else if (current.dockSide !== side) prefs.save({ dockSide: side });
+        if (landing) this.saveRest(profileId, landing, landing.displayId);
       } finally {
         this.dockDrags.delete(profileId);
-        window.setBounds({ ...position, width, height }, !input.reducedMotion);
+        this.glides.glide(window, target, {
+          velocity: drag.free ? throwOf(drag.samples) : undefined,
+          reducedMotion: input.reducedMotion,
+          done: () => {
+            this.applyLevel(profileId, window);
+            this.keepFrame(profileId, window);
+          },
+        });
       }
+    });
+    // Arrow keys on the held pill's handle move it to the spot that way.
+    ipcMain.handle("catamorphic:dock-move", (event, direction: unknown) => {
+      if (
+        direction !== "left" &&
+        direction !== "right" &&
+        direction !== "up" &&
+        direction !== "down"
+      )
+        return false;
+      const profileId = options.windows.profileFor(event.sender);
+      const window = this.floating.get(profileId);
+      if (!window || window.webContents !== event.sender) return false;
+      const expanded = this.dockExpanded.get(profileId) === true;
+      const rest = this.rest(profileId);
+      const display = this.restDisplay(profileId, window);
+      const next = pillTargetToward(
+        pillTargets({ display, rest, expanded }),
+        pillTargetKey(rest, expanded),
+        direction,
+      );
+      if (!next) return false;
+      this.saveRest(profileId, next.rest, display.id);
+      return true;
     });
   }
 
@@ -707,6 +830,15 @@ export class DesktopWorkspaces {
     if (dock) return;
     this.workspaces.add(window);
     this.lastWindows.set(profileId, window);
+    // Minimized, hidden or back again: a pill resting in its chat region
+    // moves to the screen's bottom or back (focus alone does not say so:
+    // it may pass to the pill's own window, ADR 0242).
+    const resettle = () =>
+      this.syncFloating(this.options.windows.profileFor(window.webContents));
+    window.on("minimize", resettle);
+    window.on("restore", resettle);
+    window.on("hide", resettle);
+    window.on("show", resettle);
     const contentsId = window.webContents.id;
     window.on("closed", () => {
       this.dockRegions.delete(contentsId);
@@ -926,7 +1058,232 @@ export class DesktopWorkspaces {
       side: prefs.dockSide,
       placement: prefs.dockPlacement,
       collapsed: prefs.dockCollapsed,
+      edge: this.detached(profileId) ? prefs.dockEdge : "bottom",
+      notch: this.notchShown(profileId),
+      islandHover: prefs.dockIslandHover,
     };
+  }
+
+  /** The cutout a pill at the top of its display wraps, if it has one. */
+  private notchShown(profileId: string): PillDisplay["notch"] {
+    if (!this.detached(profileId)) return null;
+    if (this.rest(profileId).edge !== "top") return null;
+    const notch = this.restDisplay(
+      profileId,
+      this.floating.get(profileId),
+    ).notch;
+    return notch
+      ? { x: notch.x, width: notch.width, height: notch.height }
+      : null;
+  }
+
+  private rest(profileId: string): PillRest {
+    const prefs = this.options.config.forProfile(profileId).prefs.load();
+    return {
+      edge: prefs.dockEdge,
+      side: prefs.dockSide,
+      placement: prefs.dockPlacement,
+    };
+  }
+
+  private restKey(rest: PillRest, displayId: number | null): string {
+    return `${rest.edge}:${rest.side}:${rest.placement}:${displayId ?? ""}`;
+  }
+
+  private restDisplayId(profileId: string): number | null {
+    return this.options.config.forProfile(profileId).prefs.load().dockDisplay;
+  }
+
+  /**
+   * The display the pill rests on: the one it was put on, else the one its
+   * window is on, else the main display. A saved display that is gone is
+   * kept, for when it comes back.
+   */
+  private restDisplay(
+    profileId: string,
+    dock: BrowserWindow | undefined,
+    displays: PillDisplay[] = pillDisplays(this.notches),
+  ): PillDisplay {
+    const saved = this.restDisplayId(profileId);
+    return (
+      displays.find((display) => display.id === saved) ??
+      (dock && !dock.isDestroyed()
+        ? pickDisplay(displays, centreOf(dock.getBounds()))
+        : undefined) ??
+      pillDisplay(screen.getPrimaryDisplay(), this.notches)
+    );
+  }
+
+  /** Saves where a pill now rests, only what changed. */
+  private saveRest(profileId: string, rest: PillRest, displayId: number) {
+    const prefs = this.options.config.forProfile(profileId).prefs;
+    const current = prefs.load();
+    const patch = {
+      ...(current.dockEdge !== rest.edge ? { dockEdge: rest.edge } : {}),
+      ...(current.dockSide !== rest.side ? { dockSide: rest.side } : {}),
+      ...(current.dockPlacement !== rest.placement
+        ? { dockPlacement: rest.placement }
+        : {}),
+      ...(current.dockDisplay !== displayId ? { dockDisplay: displayId } : {}),
+    };
+    if (Object.keys(patch).length > 0) prefs.save(patch);
+  }
+
+  /**
+   * Where a let-go pill lands: the edge nearest the throw on the display
+   * under the pointer (pill-geometry.ts). Held only along the bottom (an
+   * older dock window, or the arrows of a strip that cannot leave it), it
+   * keeps its edge and picks the bottom's spot.
+   */
+  private landing(
+    profileId: string,
+    dock: BrowserWindow,
+    input: {
+      pointer: { x: number; y: number };
+      velocity: { x: number; y: number };
+      from: PillRest;
+      centre: { x: number; y: number };
+      expanded: boolean;
+      free: boolean;
+    },
+  ) {
+    const displays = pillDisplays(this.notches);
+    const bounds = dock.getBounds();
+    const region = this.followedRegion(profileId, dock);
+    const regionDisplay = region
+      ? pickDisplay(displays, centreOf(region))
+      : undefined;
+    const pointerDisplay = pickDisplay(displays, input.pointer);
+    return pillLanding({
+      displays: input.free
+        ? displays
+        : displays.filter(
+            (display) =>
+              display.id === this.restDisplay(profileId, dock, displays).id,
+          ),
+      pointer: input.free ? input.pointer : centreOf(bounds),
+      velocity: input.velocity,
+      from: input.from,
+      centre: input.centre,
+      width: bounds.width,
+      height: bounds.height,
+      expanded: input.expanded,
+      ...(region &&
+      this.options.config.forProfile(profileId).prefs.load()
+        .dockFollowsWindow &&
+      regionDisplay?.id === pointerDisplay?.id
+        ? { bottomArea: region }
+        : {}),
+      ...(input.free ? {} : { edge: input.from.edge }),
+    });
+  }
+
+  /** Shows where a held pill can land, the spot it would land in lit. */
+  private showTargets(
+    profileId: string,
+    dock: BrowserWindow,
+    pointer: { x: number; y: number },
+  ) {
+    const drag = this.dockDrags.get(profileId);
+    if (!drag) return;
+    const displays = pillDisplays(this.notches);
+    const display = pickDisplay(displays, pointer);
+    if (!display) return;
+    const expanded = this.dockExpanded.get(profileId) === true;
+    const bounds = dock.getBounds();
+    const landing = this.landing(profileId, dock, {
+      pointer,
+      velocity: throwOf(drag.samples),
+      from: drag.from,
+      centre: centreOf(bounds),
+      expanded,
+      free: true,
+    });
+    const theme = this.options.config.forProfile(profileId).theme.resolved();
+    this.targets.show(display, {
+      targets: pillTargets({ display, rest: drag.from, expanded }),
+      lit:
+        landing && landing.displayId === display.id
+          ? pillTargetKey(landing, expanded)
+          : null,
+      accent: theme.colors.accent ?? "",
+    });
+  }
+
+  /** At the notch the pill sits over the menu bar; elsewhere above apps. */
+  private applyLevel(profileId: string, dock: BrowserWindow) {
+    if (dock.isDestroyed()) return;
+    const atNotch = this.notchShown(profileId) !== null;
+    dock.setAlwaysOnTop(true, atNotch ? "status" : "floating");
+  }
+
+  /** A pill at the notch keeps its frame where macOS would move it from. */
+  private keepFrame(profileId: string, dock: BrowserWindow) {
+    if (this.notchShown(profileId) === null) {
+      this.frames.release(dock);
+      return;
+    }
+    this.frames.keep(dock, () =>
+      this.dockDrags.has(profileId) || this.glides.isGliding(dock)
+        ? null
+        : this.placement(
+            profileId,
+            dock,
+            dock.getBounds(),
+            this.dockExpanded.get(profileId) === true,
+          ),
+    );
+  }
+
+  /** A display changed: every pill settles again where it rests. */
+  private displaysChanged() {
+    for (const profileId of [...this.floating.keys()]) {
+      this.syncFloating(profileId);
+      this.broadcast(profileId);
+    }
+  }
+
+  /**
+   * Where the window holding the pill rests (pill-geometry.ts): at the
+   * bottom inside the front Work window's chat region when it follows one,
+   * else on its display's edge.
+   */
+  private placement(
+    profileId: string,
+    dock: BrowserWindow,
+    size: Pick<DockSize, "width" | "height">,
+    expanded: boolean,
+    rest: PillRest = this.rest(profileId),
+    displayId?: number,
+  ): PillRect {
+    const prefs = this.options.config.forProfile(profileId).prefs.load();
+    const displays = pillDisplays(this.notches);
+    const region =
+      rest.edge === "bottom" && prefs.dockFollowsWindow
+        ? this.followedRegion(profileId, dock)
+        : undefined;
+    const display =
+      (region ? pickDisplay(displays, centreOf(region)) : undefined) ??
+      displays.find((candidate) => candidate.id === displayId) ??
+      this.restDisplay(profileId, dock, displays);
+    return pillBounds({
+      rest,
+      display,
+      ...(region ? { region } : {}),
+      width: size.width,
+      height: size.height,
+      expanded,
+    });
+  }
+
+  /** The area a bottom pill moves along: its region, or its display's work area. */
+  private placementArea(profileId: string, dock: BrowserWindow): PillRect {
+    const prefs = this.options.config.forProfile(profileId).prefs.load();
+    return (
+      (prefs.dockFollowsWindow
+        ? this.followedRegion(profileId, dock)
+        : undefined) ?? this.restDisplay(profileId, dock).workArea
+    );
   }
 
   private broadcast(profileId: string) {
@@ -938,14 +1295,17 @@ export class DesktopWorkspaces {
   }
 
   /**
-   * Where the dock rests: the front workspace window's chat region when
-   * one of this profile's windows is in front, else the display's work
-   * area. Focus on the dock itself (a click on a bubble, typing in the
-   * chat) keeps the workspace it was resting in as the anchor; otherwise
-   * every open or collapse would move the strip between the region's
-   * edge and the display's.
+   * The front workspace window's chat region, when one of this profile's
+   * windows is in front: a bottom pill that follows Work rests there.
+   * Focus on the dock itself (a click on a bubble, typing in the chat)
+   * keeps the workspace it was resting in as the anchor; otherwise every
+   * open or collapse would move the strip between the region's edge and
+   * the display's.
    */
-  private dockArea(profileId: string, dock: BrowserWindow) {
+  private followedRegion(
+    profileId: string,
+    dock: BrowserWindow,
+  ): PillRect | undefined {
     const focused = BrowserWindow.getFocusedWindow();
     // While focus is on the dock, or passing between windows, the dock
     // keeps to the workspace it last sat in.
@@ -974,7 +1334,7 @@ export class DesktopWorkspaces {
         };
       }
     }
-    return screen.getDisplayMatching(dock.getBounds()).workArea;
+    return undefined;
   }
 
   /** The project a workspace window shows now, if it shows one. */
@@ -1015,43 +1375,62 @@ export class DesktopWorkspaces {
       return;
     }
     if (existing && !existing.isDestroyed()) {
-      const area = this.dockArea(profileId, existing);
       const bounds = existing.getBounds();
       const expanded = this.dockExpanded.get(profileId) === true;
-      const position = dockPosition({
-        area,
-        ...bounds,
-        side:
-          expanded && prefs.dockPlacement !== "center"
-            ? prefs.dockPlacement
-            : prefs.dockSide,
-        centered: expanded && prefs.dockPlacement === "center",
-      });
-      if (
-        !this.dockDrags.has(profileId) &&
-        (Math.abs(bounds.x - position.x) > 1 ||
-          Math.abs(bounds.y - position.y) > 1)
-      )
-        existing.setPosition(position.x, position.y);
+      const target = this.placement(profileId, existing, bounds, expanded);
+      // A new rest (Settings, the menu, the arrow keys) glides there; the
+      // same rest under a region or display that moved follows it at once.
+      const key = this.restKey(
+        this.rest(profileId),
+        this.restDisplayId(profileId),
+      );
+      const moved = this.placedRest.get(profileId) !== key;
+      this.placedRest.set(profileId, key);
+      if (!this.dockDrags.has(profileId)) {
+        if (this.glides.isGliding(existing))
+          this.glides.retarget(existing, target);
+        else if (moved && existing.isVisible())
+          this.glides.glide(existing, target, {
+            reducedMotion: systemReducedMotion(),
+            done: () => this.keepFrame(profileId, existing),
+          });
+        else if (
+          Math.abs(bounds.x - target.x) > 1 ||
+          Math.abs(bounds.y - target.y) > 1
+        )
+          existing.setPosition(target.x, target.y);
+      }
+      this.applyLevel(profileId, existing);
+      this.keepFrame(profileId, existing);
       existing.showInactive();
       return;
     }
     const window = this.options.createWindow(profileId, true);
-    const area = screen.getDisplayNearestPoint(
-      screen.getCursorScreenPoint(),
-    ).workArea;
-    const width = Math.min(780, area.width - 24);
-    window.setBounds({
-      x:
-        prefs.dockSide === "left"
-          ? area.x + 12
-          : area.x + area.width - width - 12,
-      y: area.y + area.height - 136,
-      width,
-      height: 124,
-    });
+    // A first pill opens on the display the person is looking at, unless
+    // they put it somewhere before.
+    const displays = pillDisplays(this.notches);
+    const pointerDisplay = pickDisplay(displays, screen.getCursorScreenPoint());
+    const saved = displays.find((display) => display.id === prefs.dockDisplay);
+    const display =
+      saved ??
+      pointerDisplay ??
+      pillDisplay(screen.getPrimaryDisplay(), this.notches);
+    window.setBounds(
+      pillBounds({
+        rest: this.rest(profileId),
+        display,
+        width: Math.min(780, display.workArea.width - 24),
+        height: 124,
+        expanded: false,
+      }),
+    );
+    this.placedRest.set(
+      profileId,
+      this.restKey(this.rest(profileId), this.restDisplayId(profileId)),
+    );
     this.floating.set(profileId, window);
-    window.setAlwaysOnTop(true, "floating");
+    this.applyLevel(profileId, window);
+    this.keepFrame(profileId, window);
     // The dock follows every Space. Not `visibleOnFullScreen`: Electron
     // implements that by turning the whole process into a UIElement app,
     // which drops Work from the Dock and the app switcher.

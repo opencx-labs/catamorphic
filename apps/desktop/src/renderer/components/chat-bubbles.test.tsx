@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatSessionMenuEntry } from "../lib/chat-session-actions.js";
 import { ChatBubbles, useStripFold } from "./chat-bubbles.js";
+import { islandPath } from "./pill-island.js";
 
 Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", true);
 
@@ -300,5 +301,215 @@ describe("ChatBubbles fold", () => {
     render({ folded: false });
     expect(arrows()?.getAttribute("aria-expanded")).toBe("true");
     expect(document.activeElement).toBe(arrows());
+  });
+});
+
+describe("ChatBubbles at an edge of the screen (ADR 0242)", () => {
+  function pill({
+    edge,
+    notch = null,
+    islandHover = true,
+    collapsed = true,
+    entries = [{ localId: "a", mode: "min" as const }],
+  }: {
+    edge: "bottom" | "left" | "right" | "top";
+    notch?: { width: number; height: number } | null;
+    islandHover?: boolean;
+    collapsed?: boolean;
+    entries?: { localId: string; mode: "min" }[];
+  }) {
+    const onFoldedChange = vi.fn();
+    const container = document.createElement("div");
+    document.body.append(container);
+    containers.push(container);
+    const root = createRoot(container);
+    roots.push(root);
+    act(() => {
+      root.render(
+        <ChatBubbles
+          detached
+          edge={edge}
+          notch={notch}
+          islandHover={islandHover}
+          entries={entries}
+          labels={{ a: "Launch plan", b: "Release notes" }}
+          icons={{}}
+          forks={{}}
+          signals={{}}
+          unread={{}}
+          attention={{}}
+          menus={{}}
+          collapsed={collapsed}
+          onFoldedChange={onFoldedChange}
+          voice={<button type="button" aria-label="Voice" />}
+          onToggle={() => {}}
+          onOpenAs={() => {}}
+          onClose={() => {}}
+          onMenuAction={() => {}}
+          onNewChat={() => {}}
+        />,
+      );
+    });
+    return { container, onFoldedChange };
+  }
+
+  it("stands as a column on either side and lies along the bottom", () => {
+    for (const edge of ["left", "right"] as const) {
+      const { container } = pill({ edge });
+      const rail = container.querySelector("[data-dock-rail]");
+      expect(
+        rail?.closest("[data-dock-edge]")?.getAttribute("data-dock-edge"),
+      ).toBe(edge);
+      expect(rail?.className).toContain("flex-col");
+      expect(rail?.className).toContain(edge === "left" ? "left-3" : "right-3");
+    }
+    const { container } = pill({ edge: "bottom" });
+    expect(
+      container.querySelector("[data-dock-rail]")?.className,
+    ).not.toContain("flex-col");
+    // Without a notch the top is a plain top-centred pill, never an island.
+    const top = pill({ edge: "top" });
+    expect(top.container.querySelector("[data-pill-island]")).toBeNull();
+    expect(
+      top.container.querySelector("[data-dock-rail]")?.className,
+    ).toContain("top-3");
+  });
+
+  it("has no arrows in its own window, where its body and its menu fold and move it", () => {
+    // In Work's window the arrows fold the strip and place open chats.
+    expect(
+      mount().container.querySelector("[data-dock-arrows]"),
+    ).not.toBeNull();
+    for (const edge of ["bottom", "left", "right"] as const) {
+      const { container, onFoldedChange } = pill({ edge, collapsed: false });
+      expect(container.querySelector("[data-dock-arrows]")).toBeNull();
+      const rail = container.querySelector("[data-dock-rail]");
+      expect(rail?.className).toContain("cursor-grab");
+      act(() => {
+        rail?.dispatchEvent(
+          new MouseEvent("contextmenu", {
+            bubbles: true,
+            cancelable: true,
+            clientX: 20,
+            clientY: 20,
+          }),
+        );
+      });
+      const fold = [...document.querySelectorAll("[role=menuitem]")].find(
+        (item) => item.textContent?.trim() === "Fold the pill",
+      );
+      if (!(fold instanceof HTMLElement)) throw new Error("no Fold the pill");
+      act(() => fold.click());
+      expect(onFoldedChange).toHaveBeenCalledWith(true);
+      act(() => {
+        for (const root of roots.splice(0)) root.unmount();
+      });
+    }
+    // The island has none either: its handle folds it.
+    const { container } = pill({
+      edge: "top",
+      notch: { width: 185, height: 32 },
+      collapsed: false,
+    });
+    expect(container.querySelector("[data-dock-arrows]")).toBeNull();
+  });
+
+  it("wraps the notch: the microphone and the chats' handle in its wings, the strip under it", () => {
+    const { container, onFoldedChange } = pill({
+      edge: "top",
+      notch: { width: 185, height: 32 },
+    });
+    const island = container.querySelector<HTMLElement>("[data-pill-island]");
+    expect(island?.dataset.pillIsland).toBe("rest");
+    expect(island?.style.height).toBe("32px");
+    expect(
+      container.querySelector('[data-island-wing="left"] [aria-label="Voice"]'),
+    ).not.toBeNull();
+    const handle = container.querySelector<HTMLButtonElement>(
+      '[data-island-wing="right"] [data-island-handle]',
+    );
+    expect(handle?.getAttribute("aria-label")).toBe("Open the pill");
+    const row = container.querySelector("[data-island-row]");
+    expect(row?.getAttribute("aria-hidden")).toBe("true");
+    expect(row?.querySelector('[aria-label="New chat"]')).not.toBeNull();
+    act(() => handle?.click());
+    expect(onFoldedChange).toHaveBeenCalledWith(false);
+  });
+
+  it("opens wide under the cutout when open, and counts its chats", () => {
+    const { container } = pill({
+      edge: "top",
+      notch: { width: 185, height: 32 },
+      collapsed: false,
+      entries: [
+        { localId: "a", mode: "min" },
+        { localId: "b", mode: "min" },
+      ],
+    });
+    const island = container.querySelector<HTMLElement>("[data-pill-island]");
+    expect(island?.dataset.pillIsland).toBe("open");
+    expect(island?.style.height).toBe(`${32 + 44 + 12}px`);
+    expect(
+      container.querySelector("[data-island-row]")?.getAttribute("aria-hidden"),
+    ).toBe("false");
+    expect(
+      container.querySelector("[data-island-handle]")?.textContent,
+    ).toContain("2");
+  });
+
+  it("opens on hover after a dwell, and only where hover is meant to open it", () => {
+    vi.useFakeTimers();
+    try {
+      for (const islandHover of [true, false]) {
+        const { container } = pill({
+          edge: "top",
+          notch: { width: 185, height: 32 },
+          islandHover,
+        });
+        const island =
+          container.querySelector<HTMLElement>("[data-pill-island]");
+        if (!island) throw new Error("no island");
+        act(() => {
+          island.dispatchEvent(
+            new MouseEvent("pointerover", {
+              bubbles: true,
+              relatedTarget: null,
+            }),
+          );
+        });
+        act(() => vi.advanceTimersByTime(60));
+        expect(island.dataset.pillIsland).toBe("rest");
+        act(() => vi.advanceTimersByTime(100));
+        expect(island.dataset.pillIsland).toBe(islandHover ? "open" : "rest");
+        act(() => {
+          island.dispatchEvent(
+            new MouseEvent("pointerout", {
+              bubbles: true,
+              relatedTarget: document.body,
+            }),
+          );
+        });
+        act(() => vi.advanceTimersByTime(400));
+        expect(island.dataset.pillIsland).toBe("rest");
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("draws every island state with the same commands, so its outline morphs", () => {
+    const shape = (open: boolean) =>
+      islandPath({
+        canvas: 400,
+        body: open ? 360 : 273,
+        height: open ? 88 : 32,
+        flare: open ? 10 : 7,
+        radius: open ? 22 : 12,
+      });
+    const commands = (d: string) => d.replace(/[^A-Za-z]/g, "");
+    expect(commands(shape(true))).toBe(commands(shape(false)));
+    // It meets the top of the screen at y 0 on both sides, flared out.
+    expect(shape(false).startsWith("M56.5,0")).toBe(true);
+    expect(shape(false)).toMatch(/343\.5,0 Z$/);
   });
 });

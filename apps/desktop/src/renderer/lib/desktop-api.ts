@@ -1261,6 +1261,11 @@ export interface CatamorphicDesktopApi {
   ) => Promise<boolean>;
   /** Session-only; the `dockDetached` preference stays the launch default. */
   dockDetach: (detached: boolean) => Promise<void>;
+  /**
+   * In the pill's own window: docks it at the spot an arrow key points
+   * at; false when there is none that way (ADR 0242).
+   */
+  dockMove: (direction: "left" | "right" | "up" | "down") => Promise<boolean>;
   /** Native context menu for the detached dock window; resolves the action. */
   dockMenu: (entries: readonly MenuItem[]) => Promise<string | null>;
   /** Native context menu for voice's floating bubble; resolves the action. */

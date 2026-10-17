@@ -401,8 +401,14 @@ function createWindow(
     title: "Work",
     // The detached dock is a bare transparent surface: no traffic lights,
     // no OS shadow or rounded frame around it.
+    // At the notch it sits over the menu bar, which macOS keeps other
+    // frames out of (ADR 0242).
     ...(dock
-      ? { hasShadow: false, roundedCorners: false }
+      ? {
+          hasShadow: false,
+          roundedCorners: false,
+          enableLargerThanScreen: true,
+        }
       : {
           titleBarStyle:
             process.platform === "darwin" ? "hiddenInset" : "default",

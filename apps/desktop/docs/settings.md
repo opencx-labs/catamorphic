@@ -96,24 +96,35 @@ Project themes use the same profile, shared-project and personal-project priorit
 as workspace settings. Missing selections, colors and fonts inherit. Choosing a
 selection replaces inherited color overrides; individual token and font edits
 remain sparse. Theme edits use the shared configuration file validation and
-last-valid-value caches. The dock preferences are profile choices:
-`dockMultiProject`, `dockDetached`, `dockSide`, and `dockPlacement`.
-`dockDetached` is the launch default only: right-clicking the collapsed bubble
-or the arrows floats the dock in its own window or returns it for the current
-session, and closing the detached window returns it the same way. Those actions
-never rewrite the preference, so a restart comes back with the chosen default.
-In the detached window those menus are native, and dragging shows no resting
-spots because the window itself moves. While a Work window is in front the
-detached dock rests inside that window's chat region, between the sidebars;
-when another app is in front it uses the display's work area. Clicking into
-another app while the agent works lurks the chat until the dock is focused
-again.
-`dockPlacement` chooses `left`, `center` (default) or `right` for open chats and
-their bubble strip; `dockSide` chooses the bottom corner the collapsed bubble
-rests in. Dragging the collapsed bubble changes the corner; dragging the
-arrows of an expanded strip changes the placement, and an open chat collapses as
-the drag starts. The detached window keeps its size while dragged and lands
-with its final size in one move.
+last-valid-value caches. The pill's preferences (the dock's bubble strip, Settings' Pill section,
+ADR 0242) are profile choices: `dockMultiProject`, `dockDetached`, `dockEdge`,
+`dockFollowsWindow`, `dockIslandHover`, `dockSide`, and `dockPlacement`;
+`dockDisplay` is the display it last docked on, kept by the app, not shown.
+`dockDetached` puts the pill on the desktop, in a window of its own above every
+app, and it stays there while Work is minimized. It is the launch default only:
+right-clicking the collapsed bubble or the arrows (on the desktop, the pill's
+body) floats the pill or returns it for the current session, and closing its window returns it the same way. Those
+actions never rewrite the preference, so a restart comes back with the chosen
+default. Settings' picker writes the default and moves the pill at once.
+`dockEdge` chooses the screen edge the pill docks on: `bottom` (default),
+`left`, `right`, or `top`, which wraps the camera notch on a display that has
+one (a black island that opens downward, on hover when `dockIslandHover` is on)
+and sits under the menu bar elsewhere. On the desktop the pill has no arrows:
+dragging its body, or the collapsed bubble, moves it in two dimensions, onto
+any display, and its menu folds it; while it is held, a
+display-wide overlay that never takes a click shows where it can land, and it
+lands on the edge nearest where it was thrown. Arrow keys on the collapsed
+bubble or the island's handle move it to the spot that way, and the pill's menu docks it at an edge. At the bottom,
+while a Work window is in front, the pill rests inside that window's chat
+region, between the sidebars, unless `dockFollowsWindow` is off; when another
+app is in front, or Work is minimized, it uses the display's work area.
+Clicking into another app while the agent works lurks the chat until the pill
+is focused again.
+At the bottom, `dockPlacement` chooses `left`, `center` (default) or `right`
+for open chats and their bubble strip; `dockSide` chooses the corner the
+collapsed bubble rests in. Dragging along the bottom changes the corner or the
+placement by the 40% rule, and an open chat collapses as the drag starts. The
+window keeps its size while dragged and lands with its final size in one move.
 
 ## Workspace frame
 

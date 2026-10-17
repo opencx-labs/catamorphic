@@ -255,16 +255,8 @@ export function SettingsScreen({
             <LayoutSection heading="Window" keys={["windowButtons"]} />
           )}
           <LayoutSection
-            keys={[
-              "dockMultiProject",
-              "dockDetached",
-              "dockSide",
-              "dockPlacement",
-              "chatWorkLive",
-              "chatWorkSettled",
-              "chatQueueMessages",
-            ]}
-            heading="Chat dock"
+            keys={["chatWorkLive", "chatWorkSettled", "chatQueueMessages"]}
+            heading="Chats"
           />
           <LayoutSection
             heading="Code review"
@@ -278,6 +270,13 @@ export function SettingsScreen({
           <WorkspaceSection />
         </>
       ),
+    },
+    {
+      id: "pill",
+      label: "Pill",
+      keywords:
+        "dock chat bubbles detach desktop float notch island edge screen minimize",
+      content: <PillSection />,
     },
     {
       id: "macros",
@@ -1150,6 +1149,128 @@ function TerminalSection() {
         their existing configuration.
       </p>
     </LayoutSection>
+  );
+}
+
+/** Where the pill sits on each spot's miniature screen (ADR 0242). */
+const PILL_SPOTS = [
+  {
+    id: "window",
+    label: "In Work",
+    pill: "bottom-[18%] left-1/2 h-1 w-6 -translate-x-1/2",
+  },
+  {
+    id: "bottom",
+    label: "Bottom",
+    pill: "bottom-1 left-1/2 h-1 w-6 -translate-x-1/2",
+  },
+  {
+    id: "left",
+    label: "Left",
+    pill: "left-1 top-1/2 h-6 w-1 -translate-y-1/2",
+  },
+  {
+    id: "right",
+    label: "Right",
+    pill: "right-1 top-1/2 h-6 w-1 -translate-y-1/2",
+  },
+  {
+    id: "top",
+    label: "Top",
+    pill: "left-1/2 top-2.5 h-1 w-6 -translate-x-1/2",
+  },
+] as const;
+
+/**
+ * Where the pill lives, picked on a miniature screen: in Work's window, or
+ * on the desktop at an edge of the screen, the notch included (ADR 0242).
+ */
+function PillSection() {
+  const { prefs, update, error } = useAppPreferences();
+  const mac = /Mac/.test(navigator.platform);
+  const current = prefs.dockDetached ? prefs.dockEdge : "window";
+  return (
+    <>
+      <section className="settings-card mt-4" data-setting-id="dockEdge">
+        <h2 className="text-sm font-semibold">Where the pill lives</h2>
+        <p className="mt-1 text-xs leading-5 text-fg-muted">
+          On the desktop it floats above every app and stays while Work is
+          minimized. Drag it to any edge of the screen
+          {mac ? ", or up into the notch" : ""}.
+        </p>
+        {error && (
+          <p role="alert" className="mt-2 text-xs text-danger">
+            {error}
+          </p>
+        )}
+        <div
+          role="radiogroup"
+          aria-label="Where the pill lives"
+          data-setting-id="dockDetached"
+          className="mt-3 grid grid-cols-5 gap-2"
+        >
+          {PILL_SPOTS.map((spot) => (
+            <label
+              key={spot.id}
+              data-pill-spot={spot.id}
+              // Relative: the hidden radio stays inside the scroller, so
+              // focusing it never scrolls the workspace around Settings.
+              className="group relative flex min-w-0 cursor-pointer flex-col items-center gap-1.5"
+            >
+              <input
+                type="radio"
+                name="pill-spot"
+                className="sr-only"
+                checked={current === spot.id}
+                data-setting-control={current === spot.id || undefined}
+                onChange={() => {
+                  const detached = spot.id !== "window";
+                  void update(
+                    spot.id === "window"
+                      ? { dockDetached: false }
+                      : { dockDetached: true, dockEdge: spot.id },
+                    // A pill popped out for this session alone follows too.
+                  ).then(() => desktopApi.dockDetach(detached));
+                }}
+              />
+              <span
+                aria-hidden="true"
+                data-pill-preview
+                className="relative block aspect-[16/10] w-full overflow-hidden rounded-md border border-border bg-bg-inset transition-colors duration-150 group-hover:border-border-strong group-has-[:checked]:border-accent"
+              >
+                <span className="absolute inset-x-0 top-0 h-1.5 bg-bg-overlay" />
+                {mac && (
+                  <span className="absolute top-0 left-1/2 h-1.5 w-5 -translate-x-1/2 rounded-b-[3px] bg-black" />
+                )}
+                {spot.id === "window" && (
+                  <span className="absolute inset-x-[14%] top-[24%] bottom-[10%] rounded-[3px] border border-border-strong bg-bg-raised" />
+                )}
+                <span
+                  className={`absolute rounded-full transition-colors duration-150 ${
+                    spot.id === "top" && mac
+                      ? "top-0 left-1/2 h-2.5 w-9 -translate-x-1/2 rounded-t-none bg-black ring-1 ring-fg-faint group-has-[:checked]:ring-accent"
+                      : `${spot.pill} bg-fg-faint group-has-[:checked]:bg-accent`
+                  }`}
+                />
+              </span>
+              <span className="truncate text-xs text-fg-muted group-has-[:checked]:text-fg">
+                {spot.id === "top" && mac ? "Notch" : spot.label}
+              </span>
+            </label>
+          ))}
+        </div>
+      </section>
+      <LayoutSection
+        heading="Behavior"
+        keys={[
+          "dockFollowsWindow",
+          ...(mac ? (["dockIslandHover"] as const) : []),
+          "dockSide",
+          "dockPlacement",
+          "dockMultiProject",
+        ]}
+      />
+    </>
   );
 }
 

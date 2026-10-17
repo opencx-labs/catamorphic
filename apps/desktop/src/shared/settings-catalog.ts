@@ -14,6 +14,7 @@ export interface SettingsEntry {
     | "connections"
     | "appearance"
     | "workspace"
+    | "pill"
     | "macros"
     | "shortcuts"
     | "notifications"
@@ -44,7 +45,9 @@ export const SETTINGS_CATALOG: readonly SettingsEntry[] = [
             ? "appearance"
             : key === "notificationSounds" || key === "desktopNotifications"
               ? "notifications"
-              : "workspace",
+              : key.startsWith("dock")
+                ? "pill"
+                : "workspace",
       keywords: [
         key,
         ...("options" in definition ? Object.values(definition.options) : []),
@@ -60,6 +63,19 @@ export const SETTINGS_CATALOG: readonly SettingsEntry[] = [
           : []),
         ...(key === "contentFrame"
           ? ["border", "rounded", "inset", "window", "frame"]
+          : []),
+        ...(key === "dockEdge" || key === "dockDetached"
+          ? [
+              "pill",
+              "dock",
+              "notch",
+              "float",
+              "detach",
+              "desktop",
+              "minimize",
+              "companion",
+              "island",
+            ]
           : []),
         ...(key === "windowButtons"
           ? ["traffic lights", "close", "minimize", "zoom", "title bar"]
