@@ -568,8 +568,9 @@ and one component (`source-section.tsx`) draws every list.
   preview of what is already in front. The arrows go on past a list's last
   row into the next list shown in the panel, and up past its first into the
   last row of the one before (`onTreeLeave`; a list with more to load keeps
-  the key and reads on). A row the keyboard or the app focuses comes into
-  the panel's view, clear of its faded edges.
+  the key and reads on). A row the keyboard or the opening focuses comes
+  into the panel's view, clear of its faded edges; focus a menu hands back
+  to its row leaves the panel still.
 - **Nothing in the sidebar snaps.** `Collapsible` tweens to its content's
   height whenever that changes (skeleton to rows, empty sentence to a list),
   following exactly while something inside animates its own height. Sections

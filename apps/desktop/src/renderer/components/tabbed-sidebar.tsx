@@ -159,22 +159,12 @@ const panelRef = (panel: HTMLDivElement | null) => {
 };
 
 /**
- * A row the keyboard (or the app) focuses comes into the panel's view,
- * clear of its faded edges (the panel's scroll padding); focus a press
- * gives leaves the panel where it is.
+ * Brings a focused row into its sidebar panel's view, clear of the panel's
+ * faded edges (its scroll padding).
  */
-const keepRowInView = (event: ReactFocusEvent<HTMLDivElement>) => {
-  const panel = event.currentTarget;
-  const row =
-    event.target instanceof Element
-      ? event.target.closest("[data-tree-id]")
-      : null;
-  if (
-    !row ||
-    (document.documentElement.dataset.focusModality === "pointer" &&
-      !appIsMovingFocus())
-  )
-    return;
+function revealInPanel(row: Element): void {
+  const panel = row.closest(".sidebar-tab-panel");
+  if (!panel) return;
   const padding = getComputedStyle(panel);
   const view = panel.getBoundingClientRect();
   const top = view.top + (Number.parseFloat(padding.scrollPaddingTop) || 0);
@@ -183,6 +173,24 @@ const keepRowInView = (event: ReactFocusEvent<HTMLDivElement>) => {
   const box = row.getBoundingClientRect();
   if (box.top < top) panel.scrollTop -= top - box.top;
   else if (box.bottom > bottom) panel.scrollTop += box.bottom - bottom;
+}
+
+/**
+ * A row the keyboard focuses comes into the panel's view. Focus a press
+ * gives, or the app hands back (a menu closing onto its row), leaves the
+ * panel where it is.
+ */
+const keepRowInView = (event: ReactFocusEvent<HTMLDivElement>) => {
+  const row =
+    event.target instanceof Element
+      ? event.target.closest("[data-tree-id]")
+      : null;
+  if (
+    row &&
+    document.documentElement.dataset.focusModality === "keyboard" &&
+    !appIsMovingFocus()
+  )
+    revealInPanel(row);
 };
 
 interface LayoutState {
@@ -580,6 +588,8 @@ export function TabbedSidebar({
       ms: FOCUS_WAIT_MS,
       asApp: true,
       landed: () => {
+        const row = document.activeElement?.closest("[data-tree-id]");
+        if (row) revealInPanel(row);
         if (visible) keyMovedFocus();
       },
     });
