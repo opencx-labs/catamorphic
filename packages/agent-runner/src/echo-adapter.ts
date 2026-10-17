@@ -50,6 +50,8 @@ const CAPABILITIES: HarnessCapabilities = {
  *   interrupted, as a harness whose step had already folded it in
  * - `[[rate-limit <ms>]]` works for a while, then fails the turn's first
  *   attempt as a rate limit Work retries; a retry passes it by
+ * - `[[slow-start <ms>]]` takes a while to begin a turn's first attempt
+ *   (no thread, no turn yet), as a harness still starting does
  *
  * Its native state is the list of turns it saw, stored with Work, so a
  * restored thread remembers ("turn 3") wherever it resumes.
@@ -85,6 +87,16 @@ export class EchoAdapter implements HarnessAdapter {
         };
       });
     const run = async () => {
+      const slowStart = directives(attempt.input?.text ?? "").find(
+        (directive) => directive.split(" ")[0] === "slow-start",
+      );
+      if (slowStart && attempt.reason === "initial") {
+        await sleep(Number(slowStart.split(" ")[1]) || 1_000);
+        if (interrupted) {
+          host.emit({ type: "turn.completed", status: "interrupted" });
+          return;
+        }
+      }
       const ref =
         attempt.thread.mode === "fresh"
           ? { id: randomUUID(), strength: "strong" as const }

@@ -805,11 +805,13 @@ class ClaudeAttempt {
     );
     void session.interrupt().then(
       () => {
-        // Stopped between native turns: the input it waited for is
-        // withdrawn and no turn runs to end, so it ends here. A background
-        // subagent still at work keeps it to its turn's end (or the abort).
-        if (this.awaitingMore && this.transcript.backgroundAgents === 0)
+        // Stopped between native turns: no turn runs to end. With nothing
+        // more to wait for, it ends here; waiting on a background subagent,
+        // that CLI ends now, as the grace would end it later.
+        if (!this.awaitingMore) return;
+        if (this.transcript.backgroundAgents === 0)
           this.settle({ status: "interrupted" });
+        else session.abort.abort();
       },
       () => session.abort.abort(),
     );

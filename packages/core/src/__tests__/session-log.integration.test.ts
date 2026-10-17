@@ -767,6 +767,42 @@ describe("session log", () => {
     });
   }, 40_000);
 
+  it("starts the turn's input over when the person stops an attempt that never began", async () => {
+    const { projectId, sessionId } = await chat("Never began");
+    await sessions.command(identity, projectId, sessionId, {
+      type: "send",
+      commandId: randomUUID(),
+      text: "[[slow-start 5000]] [[defer-steers]] [[wait 200]] build the page",
+    });
+    await running(projectId, sessionId);
+    const sent = await sessions.command(identity, projectId, sessionId, {
+      type: "send",
+      commandId: randomUUID(),
+      text: "and the footer",
+    });
+    const itemId = String(sent.result?.itemId);
+    const now = await sessions.command(identity, projectId, sessionId, {
+      type: "steer_now",
+      commandId: randomUUID(),
+      itemId,
+    });
+    expect(now.result).toMatchObject({ interrupted: true });
+    await vi.waitFor(
+      async () =>
+        expect(
+          orderedTurns(await folded(projectId, sessionId)).map(
+            (turn) => turn.status,
+          ),
+        ).toEqual(["completed"]),
+      { timeout: 20_000 },
+    );
+    const replies = (await folded(projectId, sessionId)).items.flatMap(
+      (item) => (item.kind === "assistant_message" ? [item.text] : []),
+    );
+    // Its thread never had the input: it starts over, the message after it.
+    expect(replies.join("\n")).toContain("build the page and the footer");
+  }, 40_000);
+
   it("reads a message the attempt never read with the retry of a rate-limited turn", async () => {
     const { projectId, sessionId } = await chat("Steer through a retry");
     await sessions.command(identity, projectId, sessionId, {

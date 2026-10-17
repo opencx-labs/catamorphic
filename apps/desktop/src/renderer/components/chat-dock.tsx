@@ -1490,7 +1490,10 @@ function ChatDockContent({
     text: string,
     attachments?: AgentChatAttachment[],
   ) => {
-    const queue = normalizePrefs(await desktopApi.getPrefs()).chatQueueMessages;
+    const queue = await desktopApi
+      .getPrefs()
+      .then((prefs) => normalizePrefs(prefs).chatQueueMessages)
+      .catch(() => false);
     return chat.send(text, attachments, {
       dispatch: queue ? "queue" : "steer",
     });

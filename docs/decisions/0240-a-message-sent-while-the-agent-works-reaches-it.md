@@ -43,9 +43,10 @@ restart a refused steer already used (`steer_restart`). It is offered on
 the person's unread message while the turn runs or waits, and every
 message the turn had not read then is read with it. A message read
 meanwhile, or a turn not working, has nothing to stop for: the command is
-accepted and changes nothing. A restart that finds nothing unread tells
-the agent to carry on, never its input again, unless the stopped
-attempt's harness never began the turn (`turn.started`): then the turn's
+accepted and changes nothing. A restart carries what no thread took in
+(what an attempt whose harness never began carried counts as not taken),
+and with nothing left tells the agent to carry on, never its input again;
+when no attempt's harness began the turn (`turn.started`), the turn's
 input starts over with what was steered. A harness waits for its own
 input to be sent before it takes a steer, rather than refusing one.
 
