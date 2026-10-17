@@ -2,6 +2,7 @@ import { FitAddon, init as initGhostty, Terminal } from "ghostty-web";
 import { useEffect, useRef, useState } from "react";
 import { KEYBINDING_ACTIONS } from "../../shared/actions.js";
 import { desktopApi } from "../lib/desktop-api.js";
+import { FRESH_SCREEN } from "../lib/fresh-terminal.js";
 import { matchesBinding, useKeybindings } from "../lib/keybindings.js";
 import { isMoving } from "../lib/project-move.js";
 import { ipcErrorText } from "../lib/remote-workspace.js";
@@ -203,6 +204,7 @@ export function TerminalScreen({
           if (dimensions) term?.resize(dimensions.cols, dimensions.rows);
         };
         fitToContainer();
+        term.write(FRESH_SCREEN);
         // FitAddon's observer drops changes during its 50ms resize lock.
         // A window manager or layout transition can shrink again inside
         // that interval, leaving a permanently cropped canvas. Coalesce
