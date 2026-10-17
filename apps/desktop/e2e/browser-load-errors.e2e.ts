@@ -86,11 +86,18 @@ describe("a page that failed to load", () => {
     await app.waitFor(errorShown, { label: "error shown", timeoutMs: 30_000 });
     await app.waitFor(`!${stopShown}`, { label: "done loading" });
     expect(requests).toBe(1);
-    await run("$('button[aria-label=\"Reload\"]').click()");
+    // The first failure's error stays through the reload, and the toolbar
+    // shows Reload until the pane hears the reload start, so neither says
+    // the second failure has arrived; the page's own failure event does.
+    // Heard after the pane's listener, it means the pane has handled it.
+    await run(
+      `${view}.addEventListener('did-fail-load', (event) => { if (event.isMainFrame) window.__reloadFailed = true; }); $('button[aria-label="Reload"]').click()`,
+    );
     await expect.poll(() => requests, { timeout: 15_000 }).toBe(2);
-    await app.waitFor(`${errorShown} && !${stopShown}`, {
-      label: "error after the second failure",
-    });
+    await app.waitFor(
+      `window.__reloadFailed === true && ${errorShown} && !${stopShown}`,
+      { label: "error after the second failure" },
+    );
   });
 
   it("keeps its error while a retry loads, then gives way to the page", async () => {

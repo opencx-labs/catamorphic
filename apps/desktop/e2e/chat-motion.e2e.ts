@@ -873,7 +873,12 @@ describe("chat motion", () => {
           });
         // The answer moves up as it streams until it is pressed, so a press
         // that reaches the page a moment after the line was found can land
-        // between two blocks, where a drag selects nothing: press again.
+        // between two blocks, or on the pixel row at a line's edge, which
+        // Chromium hits as the line but places the caret between blocks
+        // for (macOS CI pressed one). A drag selects nothing from either,
+        // so only a press clear of a line's edges goes on; another tries
+        // again. Each press races the stream anew, and it streams for
+        // seconds yet.
         for (let attempt = 1; ; attempt++) {
           // A line of the answer in the middle of the view.
           at = await runWait<{ x: number; y: number }>(
@@ -890,20 +895,22 @@ describe("chat motion", () => {
              line.setAttribute('data-e2e-held', '');
              window.__pressedText = undefined;
              document.addEventListener('pointerdown', (event) => {
-               window.__pressedText = event.target instanceof Element &&
-                 !!event.target.closest('.cat-markdown :is(p, li)');
+               const hit = event.target instanceof Element
+                 ? event.target.closest('.cat-markdown :is(p, li)')
+                 : null;
+               const r = hit?.getBoundingClientRect();
+               window.__pressedText = !!r &&
+                 event.clientY > r.top + 1 && event.clientY < r.bottom - 1;
              }, { capture: true, once: true });
              const r = line.getBoundingClientRect();
              return { x: Math.round(r.left + 6), y: Math.round(r.top + r.height / 2) };`,
             { label: "a line in the middle of the view" },
           );
           await mouse("mousePressed", at.x, 1);
-          if (
-            (await run<boolean>("return window.__pressedText === true;")) ||
-            attempt === 3
-          )
+          if (await run<boolean>("return window.__pressedText === true;"))
             break;
           await mouse("mouseReleased", at.x, 0);
+          expect(attempt, "presses that missed every line").toBeLessThan(6);
           await run(`toLatest(); return true;`);
           await runWait(`return following();`, {
             label: "following again",

@@ -3,7 +3,11 @@
 import { act, useLayoutEffect } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { CHAT_EXPAND_MS, useRecedingSurface } from "./floating-motion.js";
+import {
+  CHAT_EXPAND_MS,
+  useFloatingMotion,
+  useRecedingSurface,
+} from "./floating-motion.js";
 
 type Chats = Array<{ localId: string; mode: string }>;
 
@@ -92,5 +96,117 @@ describe("useRecedingSurface", () => {
     // A default workspace rebuilds its chats each render.
     render("settings", [{ localId: "a", mode: "partial" }]);
     expect(seen.length - renders).toBe(1);
+  });
+});
+
+describe("useFloatingMotion", () => {
+  let container: HTMLDivElement;
+  let root: Root;
+  let motion: ReturnType<typeof useFloatingMotion>;
+  /** In order: each commit that shows the exit, and each finish. */
+  let events: string[];
+
+  function Probe({ identity }: { identity: string | undefined }) {
+    const current = useFloatingMotion(identity);
+    const { closing } = current;
+    motion = current;
+    useLayoutEffect(() => {
+      if (closing) events.push("closing");
+    }, [closing]);
+    return null;
+  }
+
+  beforeEach(() => {
+    Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", true);
+    vi.useFakeTimers();
+    vi.stubGlobal("matchMedia", () => ({ matches: false }));
+    events = [];
+    container = document.createElement("div");
+    root = createRoot(container);
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+    Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", false);
+  });
+
+  const render = (identity: string | undefined) =>
+    act(() => root.render(<Probe identity={identity} />));
+  /** The host's finish: the surface leaves the workspace. */
+  const leave = (name: string) => () => {
+    events.push(name);
+    root.render(<Probe identity={undefined} />);
+  };
+
+  it("plays the whole exit when the closing state commits late", () => {
+    render("p1:app:a");
+    act(() => {
+      void motion.dismiss(leave("finish"));
+      // A busy renderer: the exit's time passes before the closing state
+      // reaches the screen.
+      vi.advanceTimersByTime(200);
+    });
+    expect(events).toEqual(["closing"]);
+    act(() => vi.advanceTimersByTime(199));
+    expect(events).toEqual(["closing"]);
+    act(() => vi.advanceTimersByTime(1));
+    expect(events).toEqual(["closing", "finish"]);
+  });
+
+  it("resolves each dismissal once the surface has left", async () => {
+    render("p1:app:a");
+    const settled: string[] = [];
+    act(() => {
+      void motion.dismiss(leave("first")).then(() => settled.push("first"));
+    });
+    // A dismissal already under way skips this one's finish.
+    act(() => {
+      void motion.dismiss(leave("second")).then(() => settled.push("second"));
+    });
+    await act(async () => vi.advanceTimersByTime(200));
+    expect(events).toEqual(["closing", "first"]);
+    expect(settled).toEqual(["first", "second"]);
+  });
+
+  it("drops the exit of a surface a newer one replaced, and resolves it", async () => {
+    render("p1:app:a");
+    let settled = false;
+    act(() => {
+      void motion.dismiss(leave("finish")).then(() => {
+        settled = true;
+      });
+    });
+    render("p1:app:b");
+    await act(async () => vi.advanceTimersByTime(200));
+    expect(events).toEqual(["closing"]);
+    expect(settled).toBe(true);
+    expect(motion.closing).toBe(false);
+  });
+
+  it("resolves when its finish keeps the surface", async () => {
+    render("p1:app:a");
+    let settled = false;
+    act(() => {
+      // A draft asks before it closes: the surface stays.
+      void motion
+        .dismiss(() => events.push("finish"))
+        .then(() => {
+          settled = true;
+        });
+    });
+    await act(async () => vi.advanceTimersByTime(200));
+    expect(events).toEqual(["closing", "finish"]);
+    expect(settled).toBe(true);
+    expect(motion.closing).toBe(false);
+  });
+
+  it("finishes at once with nothing floating", async () => {
+    render(undefined);
+    const finish = vi.fn();
+    await act(() => motion.dismiss(finish));
+    expect(finish).toHaveBeenCalledOnce();
+    expect(events).toEqual([]);
   });
 });

@@ -2017,15 +2017,21 @@ export const catalog = defineWorkflow(({ defineBoundary }) => ({
         };
         return;
       }
+      // A blocking read returns once the command prints anything new, so
+      // one that outlives the start's settle (a slow runner) takes reads
+      // until it ends; a single read could stop between two of its lines.
       let output = started.output;
-      if (started.status === "running") {
-        const finished = z.object({ output: z.string() }).parse(
+      let status = started.status;
+      const deadline = Date.now() + 60_000;
+      while (status === "running" && Date.now() < deadline) {
+        const read = z.object({ status: z.string(), output: z.string() }).parse(
           await turn.tool("read_background_output", {
             id: started.id,
             wait_seconds: 60,
           }),
         );
-        output += finished.output;
+        output += read.output;
+        status = read.status;
       }
       yield {
         type: "text",
