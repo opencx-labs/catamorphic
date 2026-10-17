@@ -7,7 +7,6 @@ const choice = (
 ): VoiceWindowChoice => ({
   assistant: "Work",
   current: false,
-  locked: false,
   ...over,
 });
 
@@ -40,18 +39,6 @@ describe("voiceWindowEntries", () => {
         detail: "Claude · Work",
       },
     ]);
-  });
-
-  it("keeps every window from being picked once the person is talking", () => {
-    const entries = voiceWindowEntries([
-      choice({ id: 1, title: "Docs", current: true, locked: true }),
-      choice({ id: 2, title: "Site", locked: true }),
-    ]);
-    expect(
-      entries
-        .slice(1)
-        .map((entry) => "disabledReason" in entry && entry.disabledReason),
-    ).toEqual(["You have started talking", "You have started talking"]);
   });
 
   it("names a window whose profile has no assistant yet, and keeps it out", () => {

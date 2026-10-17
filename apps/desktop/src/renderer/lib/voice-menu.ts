@@ -7,8 +7,8 @@ import type {
 
 /**
  * The windows of Work's the bubble can talk to the assistant of, when
- * there is a choice: the one it talks to checked, all of them fixed once
- * the person has started talking.
+ * there is a choice, the one it talks to checked. Always open: moving
+ * pauses the assistant voice leaves.
  */
 export function voiceWindowEntries(
   choices: readonly VoiceWindowChoice[],
@@ -24,17 +24,14 @@ export function voiceWindowEntries(
       const detail = [choice.assistant, choice.profile]
         .filter(Boolean)
         .join(" · ");
-      const reason = choice.locked
-        ? "You have started talking"
-        : choice.assistant === null
-          ? "That window's profile has no assistant yet"
-          : null;
       return {
         label: choice.title,
         action: `window:${choice.id}`,
         checked: choice.current,
         ...(detail ? { detail } : {}),
-        ...(reason ? { disabledReason: reason } : {}),
+        ...(choice.assistant === null
+          ? { disabledReason: "That window's profile has no assistant yet" }
+          : {}),
       };
     }),
   ];

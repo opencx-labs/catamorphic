@@ -3122,8 +3122,11 @@ the dot goes; typed and retyped only where they changed elsewhere; and
 sending them ends it. "Dictation only" makes a microphone's click
 dictate. Out of Work, the dock's microphone floats at the bottom of the
 screen while voice is on, unless the dock is detached: it eases in and
-out, wears the colours of the window the person was last in, and until
-they start talking its menu moves voice to another open window's
-assistant, colours and all. An agent talked to from another app hears
+out, rests left, in the middle or right where it was last dragged (the
+spots show while it moves, the dock's way), wears the colours of the
+window the person was last in, and its menu moves voice to another open
+window's assistant at any time, colours and all, pausing the one it
+leaves. A press on it is voice's only once it is a tap or a hold, so a
+drag never interrupts the agent. An agent talked to from another app hears
 which app and window the person was in, nothing more, and decides whether
 what they said was meant to be written there. See ADR 0236.

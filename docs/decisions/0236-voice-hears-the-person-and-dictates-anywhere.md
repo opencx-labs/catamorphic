@@ -93,12 +93,21 @@ microphone's click dictate instead of talk.
 **Out of Work, the dock's microphone floats.** While voice is on and Work
 is not in front, the same microphone floats at the bottom of the screen,
 a panel that never takes focus, unless the dock is detached and floats
-there already. It eases in and out, and wears the colours of the window
-the person was last in, whose assistant it talks to. Until they start
-talking, its menu moves voice to the assistant of another open window,
-another profile's included: the microphone stays, and its colours change
-to that window's. In the dock it shows whenever voice talks to the
-assistant or dictates.
+there already. It rests left, in the middle or right, where the person
+last dragged it (`voiceBubbleSpot`, also in Settings). Dragged, it follows
+the pointer while the spots it can rest at show along the bottom of the
+screen, the one it would land on lit, and let go it glides there, as the
+dock's bubbles do. A press on it reaches voice only once it is a tap or a
+hold (still for 250 ms), so moving it never stops the agent talking;
+voice keeps what was said just before a press, so a hold loses nothing.
+It eases in and out, and wears the colours of the window the person was
+last in, whose assistant it talks to. Its menu moves voice to the
+assistant of another open window, another profile's included, whenever
+the person likes: the microphone stays, and its colours change to that
+window's. The assistant it leaves is paused: it stops speaking, its work
+goes on, and what it says meanwhile, a reply cut off included, is news,
+said first when voice comes back to it. In the dock the microphone shows
+whenever voice talks to the assistant or dictates.
 
 **An agent hears where the person is, not what they see.** While the
 person talks with a chat by voice from another app, each of their turns
@@ -126,3 +135,5 @@ look at the screen and type. Nothing in the field is read for it.
 - In other apps Return cannot be told from a new line: it ends dictation
   that listens on its own either way.
 - Work's code editor keeps its own text: dictation writes nothing there.
+- A hold on the floating microphone stops the agent a quarter of a second
+  after the press goes down: the wait tells a hold from a drag.

@@ -77,6 +77,10 @@ import {
   type VoiceStatus,
   type VoiceWindowChoice,
 } from "../shared/voice.js";
+import type {
+  VoiceBubbleDrag,
+  VoiceSpotsState,
+} from "../shared/voice-bubble.js";
 
 export interface ServerInfo {
   url: string | null;
@@ -166,6 +170,19 @@ const api = {
     invoke("catamorphic:voice-bubble-windows"),
   voiceBubbleWindow: (windowId: number): Promise<void> =>
     invoke("catamorphic:voice-bubble-window", windowId),
+  voiceBubbleDrag: (input: VoiceBubbleDrag): Promise<void> =>
+    invoke("catamorphic:voice-bubble-drag", input),
+  voiceSpotsState: (): Promise<VoiceSpotsState | null> =>
+    invoke("catamorphic:voice-bubble-spots-state"),
+  onVoiceSpots: (listener: (state: VoiceSpotsState) => void) => {
+    const handler = (
+      _event: Electron.IpcRendererEvent,
+      value: VoiceSpotsState,
+    ) => listener(value);
+    ipcRenderer.on("catamorphic:voice-bubble-spots", handler);
+    return () =>
+      ipcRenderer.removeListener("catamorphic:voice-bubble-spots", handler);
+  },
   onVoiceBubble: (listener: (state: VoiceBubbleState) => void) => {
     const handler = (
       _event: Electron.IpcRendererEvent,

@@ -130,6 +130,10 @@ import type {
   VoiceStatus,
   VoiceWindowChoice,
 } from "../../shared/voice.js";
+import type {
+  VoiceBubbleDrag,
+  VoiceSpotsState,
+} from "../../shared/voice-bubble.js";
 
 export type { AppPrefs, DesktopUpdateState, UsageSummary };
 
@@ -1263,9 +1267,14 @@ export interface CatamorphicDesktopApi {
   voiceBubbleState: () => Promise<VoiceBubbleState | null>;
   /** The windows whose assistant the bubble can talk to. */
   voiceBubbleWindows: () => Promise<VoiceWindowChoice[]>;
-  /** The bubble talks to this window's assistant, until speech starts. */
+  /** The bubble talks to this window's assistant from now. */
   voiceBubbleWindow: (windowId: number) => Promise<void>;
   onVoiceBubble: (listener: (state: VoiceBubbleState) => void) => () => void;
+  /** The bubble's page moves it along the bottom of its screen. */
+  voiceBubbleDrag: (input: VoiceBubbleDrag) => Promise<void>;
+  /** What the bubble's resting spots show: asked by their page as it starts. */
+  voiceSpotsState: () => Promise<VoiceSpotsState | null>;
+  onVoiceSpots: (listener: (state: VoiceSpotsState) => void) => () => void;
   /** The workspace window reports where its chat region sits; null clears. */
   dockRegion: (region: DockRegion | null) => Promise<void>;
   onDockSnapshot: (listener: (snapshot: DockSnapshot) => void) => () => void;

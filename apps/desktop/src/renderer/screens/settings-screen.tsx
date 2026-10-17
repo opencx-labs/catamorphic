@@ -1052,6 +1052,26 @@ function VoiceSection({
         />
       </SettingRow>
       <SettingRow
+        id="voiceBubbleSpot"
+        label="Floating microphone"
+        description="Where the microphone floats over other apps while voice is on. Drag it to move it."
+      >
+        <select
+          id="setting-voiceBubbleSpot"
+          value={prefs.voiceBubbleSpot}
+          className="field h-8 min-w-0 max-w-full rounded-md px-2 text-sm"
+          onChange={(event) => {
+            const spot = event.target.value;
+            if (spot === "left" || spot === "center" || spot === "right")
+              void update({ voiceBubbleSpot: spot });
+          }}
+        >
+          <option value="left">Left</option>
+          <option value="center">Middle</option>
+          <option value="right">Right</option>
+        </select>
+      </SettingRow>
+      <SettingRow
         id="voiceInChats"
         label="Show voice in chats"
         description="A microphone in each chat's composer, to talk with that chat's agent and carry on typing after."

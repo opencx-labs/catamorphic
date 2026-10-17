@@ -142,6 +142,11 @@ export interface AppPrefs {
   /** A microphone in every chat's composer, to talk to that chat's agent. */
   voiceInChats: boolean;
   /**
+   * Where voice's bubble rests along the bottom of the screen while Work is
+   * behind other apps: dragged there (ADR 0236).
+   */
+  voiceBubbleSpot: "left" | "center" | "right";
+  /**
    * Dictation only: a microphone's click dictates into the text field the
    * person is in, rather than talking with an agent (ADR 0236).
    */
@@ -197,6 +202,7 @@ export const DEFAULT_PREFS: AppPrefs = {
   voiceprint: null,
   voiceInDock: true,
   voiceInChats: true,
+  voiceBubbleSpot: "center",
   voiceDictation: false,
   voiceShortcutsAsked: false,
 };
@@ -336,6 +342,10 @@ export function normalizePrefs(raw: unknown): AppPrefs {
         : null,
     voiceInDock: record.voiceInDock !== false,
     voiceInChats: record.voiceInChats !== false,
+    voiceBubbleSpot:
+      record.voiceBubbleSpot === "left" || record.voiceBubbleSpot === "right"
+        ? record.voiceBubbleSpot
+        : "center",
     voiceDictation: record.voiceDictation === true,
     voiceShortcutsAsked: record.voiceShortcutsAsked === true,
   };

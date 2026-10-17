@@ -181,6 +181,12 @@ export const SETTINGS_CATALOG: readonly SettingsEntry[] = [
     keywords: ["microphone", "dock", "hide", "show", "bubble"],
   },
   {
+    id: "voiceBubbleSpot",
+    label: "Floating microphone",
+    category: "voice",
+    keywords: ["microphone", "bubble", "position", "move", "left", "right"],
+  },
+  {
     id: "voiceInChats",
     label: "Show voice in chats",
     category: "voice",

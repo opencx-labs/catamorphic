@@ -52,7 +52,7 @@ import {
 } from "./conversation.js";
 import { VoiceModelStore } from "./models.js";
 import { type FrontPlace, SystemKeys } from "./system-keys.js";
-import { createVoiceBubble } from "./voice-bubble.js";
+import { createVoiceBubble, voiceBubbleDragSchema } from "./voice-bubble.js";
 import { listenForVoiceKeys } from "./voice-keys.js";
 
 /** What voice says when it starts learning the person's voice. */
@@ -67,6 +67,7 @@ const NEWS_POLL_MS = 5_000;
 const TAP_MS = 300;
 /** A voice started by holding turns off once it has been idle this long. */
 const HELD_IDLE_MS = 4_000;
+
 /** The speech models stay loaded this long after voice stops. */
 const WARM_MS = 15 * 60_000;
 /** Dictation turned off writes what it still hears for at most this long. */
@@ -188,12 +189,6 @@ interface ActiveVoice {
    */
   window: number | null;
   windowPicked: boolean;
-  /**
-   * The person's words were heard (sent to the chat, or written), or they
-   * held to talk: voice stays where it is from now, as it does while they
-   * are being heard.
-   */
-  spoken: boolean;
   idle: ReturnType<typeof setTimeout> | undefined;
   /** Dictation turned off, writing what it still heard: then it stops. */
   finishing: ReturnType<typeof setTimeout> | undefined;
@@ -268,6 +263,9 @@ export function registerVoiceSupport(deps: {
   let stretches = 0;
   const bubble = createVoiceBubble({
     attach: (contents, profileId) => windows.attach(contents, profileId),
+    spotOf: (profileId) => prefs(profileId).load().voiceBubbleSpot,
+    saveSpot: (profileId, spot) =>
+      prefs(profileId).save({ voiceBubbleSpot: spot }),
   });
   /** Voice moving to another window's assistant: the bubble stays up. */
   let switching = false;
@@ -276,7 +274,7 @@ export function registerVoiceSupport(deps: {
     "catamorphic:voice-bubble-menu",
     (event, entries: readonly MenuItem[]) => {
       const window = BrowserWindow.fromWebContents(event.sender);
-      return window && bubble.owns(window)
+      return window && bubble.pageOf(event.sender) === "bubble"
         ? popupNativeMenu(window, entries)
         : null;
     },
@@ -812,7 +810,6 @@ export function registerVoiceSupport(deps: {
         voice.hearing = false;
         break;
       case "utterance":
-        voice.spoken = true;
         if (!voice.conversation || voice.catchingUp) {
           if (!connected(voice) || voice.catchingUp) voice.early.push(event);
           return;
@@ -820,7 +817,6 @@ export function registerVoiceSupport(deps: {
         void heard(voice, voice.conversation, event.text);
         break;
       case "dictation":
-        if (event.text) voice.spoken = true;
         if (!voice.dictating) {
           if (!connected(voice)) voice.early.push(event);
           return;
@@ -1063,7 +1059,6 @@ export function registerVoiceSupport(deps: {
       place: null,
       window: options.window ?? windowFor(profileId)?.id ?? null,
       windowPicked: options.window !== undefined,
-      spoken: false,
       idle: undefined,
       finishing: undefined,
       live: {
@@ -1244,11 +1239,7 @@ export function registerVoiceSupport(deps: {
       voice.handsFree = true;
       send(voice, { type: "hands-free", enabled: true });
       watchSend();
-    } else {
-      // Held to talk: the person talked.
-      voice.spoken = true;
-      send(voice, { type: "hold", held: false });
-    }
+    } else send(voice, { type: "hold", held: false });
     update(voice);
   };
 
@@ -1546,7 +1537,6 @@ export function registerVoiceSupport(deps: {
       open.map((window) => windows.profileFor(window.webContents)),
     );
     const current = voiceWindow(voice);
-    const locked = voice.spoken || voice.hearing || voice.ending;
     return open.map((window) => {
       const profileId = windows.profileFor(window.webContents);
       const profileName =
@@ -1557,28 +1547,23 @@ export function registerVoiceSupport(deps: {
         assistant: windowAssistant(window)?.name ?? null,
         ...(profileName ? { profile: profileName } : {}),
         current: window === current,
-        locked,
       };
     });
   };
 
   /**
    * Voice moves to another window's assistant, as the person picked in the
-   * bubble's menu, until they start talking. The bubble stays up and takes
-   * the window's colours; in another profile, voice starts again there.
-   * The window picked is where the person is from now: its profile's
-   * shortcuts, and its chat for "Talk to this chat".
+   * bubble's menu, whenever they like. The bubble stays up and takes the
+   * window's colours; in another profile, voice starts again with its
+   * assistant, and the one it leaves is paused: it stops speaking, its work
+   * goes on, and what it says meanwhile is news for when voice comes back
+   * to it (a reply cut off is said again then). The window picked is where
+   * the person is from now: its profile's shortcuts, and its chat for
+   * "Talk to this chat".
    */
   const moveToWindow = async (windowId: number) => {
     const voice = active;
-    if (
-      !voice ||
-      voice.spoken ||
-      voice.hearing ||
-      voice.ending ||
-      voice.live.target?.kind !== "assistant"
-    )
-      return;
+    if (voice?.live.target?.kind !== "assistant") return;
     const window = BrowserWindow.fromId(windowId);
     if (!window || window.isDestroyed() || !deps.isWorkspace(window)) return;
     const assistant = windowAssistant(window);
@@ -1703,14 +1688,20 @@ export function registerVoiceSupport(deps: {
   ipcMain.handle("catamorphic:voice-keys-status", () => keysState);
 
   // The bubble's page asks what it shows as it starts, and which windows'
-  // assistants it can talk to.
-  const fromBubble = (event: Electron.IpcMainInvokeEvent) => {
-    const window = BrowserWindow.fromWebContents(event.sender);
-    return !!window && bubble.owns(window);
-  };
+  // assistants it can talk to; it moves the bubble when dragged. Its
+  // resting spots' page asks what it shows as it starts.
+  const fromBubble = (event: Electron.IpcMainInvokeEvent) =>
+    bubble.pageOf(event.sender) === "bubble";
   ipcMain.handle("catamorphic:voice-bubble-state", (event) =>
     fromBubble(event) ? bubble.state() : null,
   );
+  ipcMain.handle("catamorphic:voice-bubble-spots-state", (event) =>
+    bubble.pageOf(event.sender) === "spots" ? bubble.spotsState() : null,
+  );
+  ipcMain.handle("catamorphic:voice-bubble-drag", (event, input: unknown) => {
+    const drag = voiceBubbleDragSchema.safeParse(input);
+    if (fromBubble(event) && drag.success) bubble.drag(drag.data);
+  });
   ipcMain.handle("catamorphic:voice-bubble-windows", (event) =>
     fromBubble(event) ? windowChoices() : [],
   );
@@ -1765,6 +1756,7 @@ export function registerVoiceSupport(deps: {
         console.warn("[voice] applying a setting failed:", cause),
       );
     refreshBubble();
+    bubble.prefsChanged(profileId);
   });
   profileConfig.onKeybindingsChanged((profileId) => {
     shortcutsOf.delete(profileId);
@@ -1821,6 +1813,8 @@ export function registerVoiceSupport(deps: {
         "catamorphic:voice-keys-allow",
         "catamorphic:voice-bubble-menu",
         "catamorphic:voice-bubble-state",
+        "catamorphic:voice-bubble-spots-state",
+        "catamorphic:voice-bubble-drag",
         "catamorphic:voice-bubble-windows",
         "catamorphic:voice-bubble-window",
         "catamorphic:voice-keys-of-page",

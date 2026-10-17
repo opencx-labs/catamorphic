@@ -385,8 +385,6 @@ export interface VoiceWindowChoice {
   profile?: string;
   /** The window voice talks to the assistant of now. */
   current: boolean;
-  /** The person has started talking: voice stays where it is. */
-  locked: boolean;
 }
 
 /**

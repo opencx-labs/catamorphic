@@ -23,8 +23,15 @@ import {
   type VoiceSessionRef,
   type VoiceStatus,
 } from "../../shared/voice.js";
+import {
+  BUBBLE_HOLD_MS,
+  type BubblePress,
+  type BubblePressEvent,
+  bubblePress,
+} from "../lib/bubble-press.js";
 import { type AgentInfo, desktopApi } from "../lib/desktop-api.js";
 import { formatBinding, useKeybindings } from "../lib/keybindings";
+import { prefersReducedMotion } from "../lib/motion.js";
 import { useAppPreferences } from "../lib/use-app-preferences.js";
 import { voicePressFor, voiceWindowEntries } from "../lib/voice-menu.js";
 import {
@@ -372,7 +379,8 @@ export function VoiceButton({
   /**
    * The bubble floating over other apps (ADR 0236), where the person sees
    * and stops whatever voice is doing, wherever it was started. Its menus
-   * are native: the window is only as big as the button.
+   * are native: the window is only as big as the button. Dragged, it moves
+   * along the bottom of the screen.
    */
   bubble?: boolean;
   /** Opens the assistant's chat. */
@@ -583,9 +591,9 @@ export function VoiceButton({
   const pressing = useRef<Promise<unknown> | null>(null);
   /** When the press went down: the press is measured here, as it happened. */
   const pressedAt = useRef(0);
-  const pressDown = () => {
+  const pressDown = ({ at = performance.now() }: { at?: number } = {}) => {
     if (pressing.current) return;
-    pressedAt.current = performance.now();
+    pressedAt.current = at;
     if (!on) setStarting(true);
     pressing.current = pressOf()
       .then((press) => (press ? desktopApi.voicePress(press) : undefined))
@@ -602,6 +610,31 @@ export function VoiceButton({
       .then(() => desktopApi.voiceRelease({ heldMs }))
       .finally(() => setStarting(false));
   };
+  // On the bubble, a press is a tap, a hold or a drag, and reaches voice
+  // only as one of the first two (bubble-press.ts): moving the bubble never
+  // stops the agent talking.
+  const gesture = useRef<BubblePress>({ kind: "idle" });
+  const still = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const [dragging, setDragging] = useState(false);
+  const step = (event: BubblePressEvent) => {
+    const next = bubblePress(gesture.current, event);
+    gesture.current = next.press;
+    if (next.press.kind !== "waiting") clearTimeout(still.current);
+    setDragging(next.press.kind === "dragging");
+    for (const effect of next.effects) {
+      if (effect.kind === "press") pressDown({ at: effect.at });
+      else if (effect.kind === "release") pressUp();
+      else
+        void desktopApi
+          .voiceBubbleDrag({
+            phase: effect.phase,
+            screenX: effect.screenX,
+            reducedMotion: prefersReducedMotion(),
+          })
+          .catch(() => {});
+    }
+  };
+  useEffect(() => () => clearTimeout(still.current), []);
   /** Voice learning, started or moved here, then settled. */
   const send = (
     call: (input: { projectId?: string; sessionId?: string }) => Promise<void>,
@@ -704,10 +737,33 @@ export function VoiceButton({
             if (event.button !== 0 || event.ctrlKey) return;
             event.preventDefault();
             event.currentTarget.setPointerCapture(event.pointerId);
-            pressDown();
+            if (!bubble) {
+              pressDown();
+              return;
+            }
+            step({ kind: "down", x: event.screenX, at: performance.now() });
+            clearTimeout(still.current);
+            still.current = setTimeout(
+              () => step({ kind: "still" }),
+              BUBBLE_HOLD_MS,
+            );
           }}
-          onPointerUp={pressUp}
-          onPointerCancel={pressUp}
+          onPointerMove={(event) => {
+            if (
+              bubble &&
+              event.currentTarget.hasPointerCapture(event.pointerId)
+            )
+              step({ kind: "move", x: event.screenX });
+          }}
+          onPointerUp={(event) =>
+            bubble ? step({ kind: "up", x: event.screenX }) : pressUp()
+          }
+          onPointerCancel={() =>
+            bubble ? step({ kind: "cancel" }) : pressUp()
+          }
+          onLostPointerCapture={() => {
+            if (bubble) step({ kind: "cancel" });
+          }}
           onClick={(event) => {
             // From the keyboard: a tap.
             if (event.detail !== 0) return;
@@ -727,6 +783,7 @@ export function VoiceButton({
           data-lit={lit || undefined}
           data-progress={progress === null ? undefined : true}
           data-pending={pending || undefined}
+          data-dragging={dragging || undefined}
           className="voice-button"
         >
           <span aria-hidden="true" className="voice-ripple" />

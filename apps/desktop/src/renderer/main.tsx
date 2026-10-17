@@ -9,7 +9,7 @@ import { createRoot } from "react-dom/client";
 import { CatamorphicAppProvider } from "./components/catamorphic/catamorphic-provider.js";
 import { DockHost } from "./components/dock-host.js";
 import { PasskeyHost } from "./components/passkey-sheet.js";
-import { VoiceBubble } from "./components/voice-bubble.js";
+import { VoiceBubble, VoiceSpots } from "./components/voice-bubble.js";
 import { desktopApi, type ServerInfo } from "./lib/desktop-api.js";
 import { installFieldDictation } from "./lib/field-dictation.js";
 import { installFocusModality } from "./lib/focus-modality.js";
@@ -28,15 +28,19 @@ const detachedWindow = surface === "dock";
 // tab's sign-in popup, ADR 0220): a transparent view main lays over the
 // window's page, showing the same sheet the workspace shows over a tab.
 const passkeySheet = surface === "passkey";
-// Voice's bubble alone, over other apps while Work is behind them.
+// Voice's bubble alone, over other apps while Work is behind them, and
+// where it can rest while it is dragged.
 const voiceBubble = surface === "voice";
+const voiceSpots = surface === "bubble-spots";
 document.documentElement.dataset.surface = detachedWindow
   ? "dock"
   : passkeySheet
     ? "passkey"
     : voiceBubble
       ? "voice"
-      : "workspace";
+      : voiceSpots
+        ? "bubble-spots"
+        : "workspace";
 installFocusModality();
 installInertSelectionGuard();
 // Dictation writes into the text field the person is in (voice).
@@ -97,6 +101,8 @@ createRoot(document.getElementById("root") as HTMLElement).render(
         <KeybindingsProvider>
           <VoiceBubble />
         </KeybindingsProvider>
+      ) : voiceSpots ? (
+        <VoiceSpots />
       ) : (
         <Root />
       )}
