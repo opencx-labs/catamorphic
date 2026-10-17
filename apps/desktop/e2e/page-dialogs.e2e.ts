@@ -586,6 +586,11 @@ const logs=()=>[...document.querySelectorAll('[role="log"]')].map(el=>el.textCon
     serial++;
     const prefix = `E2E result ${serial}: `;
     const prompt = `E2E workspace tool ${JSON.stringify({ name, input, serial })}`;
+    // The call before has ended: this one is a turn of its own (ADR 0240).
+    await app.waitFor(
+      `(()=>{${helpers};const section=composer()?.closest('section[aria-label]');return !!section && !section.querySelector('[data-testid="chat-stop"]');})()`,
+      { label: "the call before settled" },
+    );
     await app.eval(
       `(()=>{${helpers};setReactValue(composer(),${JSON.stringify(prompt)});composer().closest('form').requestSubmit();})()`,
     );
