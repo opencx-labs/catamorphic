@@ -64,8 +64,11 @@ beforeAll(async () => {
   await app.waitFor("!!document.querySelector('[data-workspace-ready]')", {
     label: "workspace ready for shortcuts",
   });
-  await app.eval(
-    `window.dispatchEvent(new KeyboardEvent('keydown',{key:'n',metaKey:/Mac/.test(navigator.platform),ctrlKey:!/Mac/.test(navigator.platform),bubbles:true}))`,
+  // A floating chat, from the dock's + (Cmd+N over the starting New Tab
+  // would open it in the tab).
+  await wait(
+    `const plus = $('[data-dock-rail] button[aria-label="New chat"]'); plus?.click(); return !!plus;`,
+    { label: "the dock's +" },
   );
   await wait(`return !!composer();`, { label: "chat open" });
   // The chat's first message gives it a session, which chips belong to.
