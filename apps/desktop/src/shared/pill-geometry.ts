@@ -160,6 +160,8 @@ export function pillLanding(input: {
    * of the Work window a bottom pill follows, when on this display.
    */
   bottomArea?: PillRect;
+  /** The edge it stays on, when it may only move along one. */
+  edge?: PillEdge;
 }): (PillRest & { displayId: number }) | undefined {
   const display = pickDisplay(input.displays, input.pointer);
   if (!display) return undefined;
@@ -180,9 +182,11 @@ export function pillLanding(input: {
     right: area.x + area.width - aim.x,
     top: aim.y - top,
   };
-  const edge = PILL_EDGES.reduce((best, next) =>
-    distances[next] < distances[best] ? next : best,
-  );
+  const edge =
+    input.edge ??
+    PILL_EDGES.reduce((best, next) =>
+      distances[next] < distances[best] ? next : best,
+    );
   if (edge !== "bottom") return { ...input.from, edge, displayId: display.id };
   const spotsArea = input.bottomArea ?? area;
   const restsAt = (spot: DockSpot) =>

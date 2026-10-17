@@ -1154,7 +1154,7 @@ export class DesktopWorkspaces {
       ? pickDisplay(displays, centreOf(region))
       : undefined;
     const pointerDisplay = pickDisplay(displays, input.pointer);
-    const landing = pillLanding({
+    return pillLanding({
       displays: input.free
         ? displays
         : displays.filter(
@@ -1174,9 +1174,8 @@ export class DesktopWorkspaces {
       regionDisplay?.id === pointerDisplay?.id
         ? { bottomArea: region }
         : {}),
+      ...(input.free ? {} : { edge: input.from.edge }),
     });
-    if (!landing || input.free) return landing;
-    return { ...landing, edge: input.from.edge };
   }
 
   /** Shows where a held pill can land, the spot it would land in lit. */

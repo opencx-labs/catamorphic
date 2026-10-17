@@ -345,6 +345,32 @@ describe("where a dropped pill lands", () => {
     expect(open(1300)).toBe("right");
   });
 
+  it("kept to one edge, picks that edge's spot even let go nearer another", () => {
+    // A bottom pill in a short Work window high on the screen, moved along
+    // its row to the right: the right edge is nearer than the bottom.
+    const display = DISPLAYS.macbook14;
+    const region = rect(400, 40, 1100, 420);
+    const pointer = { x: 1430, y: 420 };
+    const land = (edge?: PillEdge) =>
+      pillLanding({
+        displays: [display],
+        pointer,
+        velocity: still,
+        // From the left corner: the right one is the spot it moved to.
+        from: { ...from, side: "left" },
+        centre: pointer,
+        width: 142,
+        height: 124,
+        expanded: false,
+        bottomArea: region,
+        ...(edge ? { edge } : {}),
+      });
+    expect(land()?.edge).toBe("right");
+    const kept = land("bottom");
+    expect(kept?.edge).toBe("bottom");
+    expect(kept?.side).toBe("right");
+  });
+
   it("arriving at the bottom from another edge, takes the nearest corner outright", () => {
     const display = DISPLAYS.macbook14;
     const fromLeft: PillRest = {
