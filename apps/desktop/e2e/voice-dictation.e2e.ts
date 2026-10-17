@@ -147,9 +147,12 @@ describe("dictation and voice's keys", () => {
        item.click(); return true;`,
       { label: "dictation only in the menu" },
     );
-    await runWait(`return (await api.getPrefs()).voiceDictation === true;`, {
-      label: "dictation on",
-    });
+    // Saved, and the microphone knows: a click dictates now.
+    await runWait(
+      `return (await api.getPrefs()).voiceDictation === true &&
+         chatMic(${id})?.dataset.action === 'dictate';`,
+      { label: "dictation on" },
+    );
     // The words still being said show in the composer, muted, then stay.
     await run(`
       window.__dictationShown = [];

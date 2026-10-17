@@ -15,6 +15,7 @@ import {
   VOICE_BARS,
   VOICE_OFF,
   VOICES,
+  type VoiceAction,
   type VoiceId,
   type VoiceKeysState,
   type VoiceLevels,
@@ -384,12 +385,13 @@ export function VoiceButton({
   const { prefs, loaded, update } = useAppPreferences();
   const agents = useProfileAgents(!chat);
   const bindings = useKeybindings();
-  // The shortcut that does what a click here does.
-  const shortcut = formatBinding(
-    bindings[
-      prefs.voiceDictation ? "dictate" : chat ? "talk-to-chat" : "talk-to-work"
-    ],
-  );
+  // What a click here does, and the shortcut that does it too.
+  const action: VoiceAction = prefs.voiceDictation
+    ? "dictate"
+    : chat
+      ? "talk-to-chat"
+      : "talk-to-work";
+  const shortcut = formatBinding(bindings[action]);
   // Voice does one thing at a time: this microphone shows it only while
   // that is its own. An error with no target is the dock's to show, and
   // the dock's shows dictation wherever it was started.
@@ -715,6 +717,7 @@ export function VoiceButton({
           aria-busy={loading}
           data-testid={chat ? "chat-voice-button" : "voice-button"}
           data-place={chat ? "composer" : "dock"}
+          data-action={action}
           data-phase={starting ? "preparing" : phase}
           data-loading={loading || undefined}
           data-lit={lit || undefined}
