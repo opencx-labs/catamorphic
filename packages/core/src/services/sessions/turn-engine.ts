@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import {
-  type AgentAttachment,
   type Attempt,
   type AttemptReason,
   INPUT_ITEM_KINDS,
@@ -65,6 +64,7 @@ import {
   type SessionRow,
   turnFromRow,
   waitingNotificationTurn,
+  waitingNotificationTurns,
 } from "./session-rows.js";
 import { batchStreamedRead } from "./stream-batch.js";
 import { derivedId, ingestHarnessEvents } from "./turn-ingest.js";
@@ -99,6 +99,11 @@ export interface RunnerState {
   ended?: boolean;
   /** Steered inputs the harness took in (an accepted one never taken is queued again). */
   consumed: string[];
+  /**
+   * The harness began the turn on the attempt's input: a restart of an
+   * attempt that never did starts that input over (ADR 0240).
+   */
+  started?: boolean;
   interruptSentAt: string | null;
 }
 
@@ -285,6 +290,10 @@ function runnerWrite(
  * already, so they are not kept twice.
  */
 const APPLIED_APPEND: HostCall = { kind: "native_state.append", entries: [] };
+
+/** A restart for messages the stopped attempt read after all: it goes on. */
+const STEER_RESTART_CONTINUE =
+  "Your previous attempt at this turn was stopped. Carry on where you left off.";
 
 /** The text a continuation turn gives the agent (ADR 0198). */
 export const CONTINUATION_PROMPT =
@@ -967,7 +976,14 @@ export class TurnEngine {
           .where("id", "=", turn.inputItemId)
           .executeTakeFirst()
       : undefined;
-    // What was delivered without waking the agent reaches its next turn.
+    // What was delivered without waking the agent reaches its next turn,
+    // as do notifications waiting for a turn (ADR 0240).
+    if (reason === "initial")
+      await this.absorbWaitingNotifications(local, {
+        session: ctx.session,
+        turn,
+        ownerOnly: prepared.ownerOnly === true,
+      });
     const riders =
       reason === "initial"
         ? await this.riders({
@@ -976,7 +992,7 @@ export class TurnEngine {
             ownerOnly: prepared.ownerOnly === true,
           })
         : [];
-    const { input, steered } = await this.attemptInput({
+    const { input, steered, read } = await this.attemptInput({
       turn,
       attempt,
       reason,
@@ -1060,6 +1076,13 @@ export class TurnEngine {
               },
             }),
           ),
+          // Steered input the prompt carries is read now.
+          ...read.map(
+            (item): SessionEvent => ({
+              type: "item.changed",
+              item: { ...item, status: "completed", updatedAt: now() },
+            }),
+          ),
         ],
       });
     });
@@ -1102,9 +1125,81 @@ export class TurnEngine {
   }
 
   /**
+   * Notifications waiting in a turn of their own become this turn's (ADR
+   * 0240): it reads them with its input instead of leaving them queued
+   * behind it, and their turn is withdrawn. Under the session's lock, so a
+   * notification arriving meanwhile either joins before or waits after. A
+   * turn on its owner's sign-in or files takes only what the owner wrote
+   * (ADR 0199).
+   */
+  private async absorbWaitingNotifications(
+    local: LocalTurn,
+    input: { session: SessionRow; turn: Turn; ownerOnly: boolean },
+  ): Promise<void> {
+    const { db, log } = this.deps;
+    await db.transaction().execute(async (trx) => {
+      await this.assertOwned(local, trx);
+      await log.lock(trx, input.turn.sessionId);
+      const now = new Date().toISOString();
+      const events: SessionEvent[] = [];
+      for (const waiting of await waitingNotificationTurns(
+        trx,
+        input.turn.sessionId,
+      )) {
+        if (waiting.id === input.turn.id) continue;
+        const items = (
+          await trx
+            .selectFrom("agent_items")
+            .select("payload")
+            .where("turn_id", "=", waiting.id)
+            .where("kind", "in", [...INPUT_ITEM_KINDS])
+            .orderBy("position")
+            .execute()
+        )
+          .map((row) => itemFromRow(row))
+          .filter(isInputItem);
+        if (items.length === 0) continue;
+        let admitted = true;
+        if (input.ownerOnly)
+          for (const item of items)
+            if (
+              !(await this.deps.host.authoredByOwner({
+                session: input.session,
+                item,
+              }))
+            )
+              admitted = false;
+        if (!admitted) continue;
+        events.push(
+          ...items.map(
+            (item): SessionEvent => ({
+              type: "item.changed",
+              item: { ...item, turnId: input.turn.id, updatedAt: now },
+            }),
+          ),
+          {
+            type: "turn.changed",
+            turn: {
+              ...waiting,
+              status: "cancelled",
+              completedAt: now,
+              updatedAt: now,
+            },
+          },
+        );
+      }
+      if (events.length > 0)
+        await log.append(trx, { sessionId: input.turn.sessionId, events });
+    });
+  }
+
+  /**
    * The input the harness receives (ADR 0217): what was delivered without
    * waking the agent since it last worked, the turn's own input, and the
-   * inputs that joined the turn while it waited; a handoff before them.
+   * inputs that joined the turn while it waited, in the order they came;
+   * a handoff before them. Input steered in that no attempt took in yet is
+   * read with it (ADR 0240). A restart for steered input carries only
+   * what no thread took in, unless no attempt's harness began the turn.
    */
   private async attemptInput(input: {
     turn: Turn;
@@ -1113,7 +1208,12 @@ export class TurnEngine {
     inputItem: Item | null;
     riders: InputItem[];
     handoff: string | null;
-  }): Promise<{ input: AttemptStart["input"]; steered: string[] }> {
+  }): Promise<{
+    input: AttemptStart["input"];
+    steered: string[];
+    /** Inputs not read before that the prompt carries: read once it starts. */
+    read: InputItem[];
+  }> {
     const others = (
       await this.deps.db
         .selectFrom("agent_items")
@@ -1128,70 +1228,78 @@ export class TurnEngine {
     )
       .map((row) => itemFromRow(row))
       .filter(isInputItem);
-    // What an earlier attempt took in is already on the resumed thread.
-    const taken =
-      input.reason === "steer_restart"
-        ? new Set(
-            (
-              await this.deps.db
-                .selectFrom("agent_turn_attempts")
-                .select("runner")
-                .where("turn_id", "=", input.turn.id)
-                .execute()
-            ).flatMap(
-              (row) =>
-                (row.runner as unknown as RunnerState | null)?.consumed ?? [],
-            ),
-          )
-        : new Set<string>();
-    const steeredItems =
-      input.reason === "steer_restart"
-        ? others.filter((item) => !taken.has(item.id))
-        : [];
-    // Inputs that joined the turn while it waited (and, on a retry, what
-    // its first attempt read) are part of its prompt; ones steered into a
-    // running attempt reached it on their own.
-    const joined =
-      input.reason === "steer_restart"
-        ? []
-        : others.filter((item) => item.dispatch !== "steer");
-    const steerTexts = steeredItems.map((item) => this.deps.inputText(item));
+    const earlier = (
+      await this.deps.db
+        .selectFrom("agent_turn_attempts")
+        .select("runner")
+        .where("turn_id", "=", input.turn.id)
+        .where("id", "!=", input.attempt.id)
+        .orderBy("ordinal")
+        .execute()
+    ).map((row) => row.runner as unknown as RunnerState | null);
+    // What an attempt whose harness began the turn took in is on its
+    // thread; what one that never began carried is not.
+    const began = earlier.filter((runner) => runner?.started === true);
+    const taken = new Set(began.flatMap((runner) => runner?.consumed ?? []));
+    // A restart goes on from where the thread is, unless no attempt ever
+    // began the turn: then its input starts over, with what was steered.
+    const restart = input.reason === "steer_restart" && began.length > 0;
     const base =
       input.inputItem && isInputItem(input.inputItem) ? input.inputItem : null;
-    const inputs = [...input.riders, ...(base ? [base] : []), ...joined];
-    const attachments: AgentAttachment[] = (
-      input.reason === "steer_restart" && steerTexts.length > 0
-        ? steeredItems
-        : inputs
-    ).flatMap((item) =>
-      item.kind === "task_notification" ? [] : item.attachments,
+    if (restart) {
+      const steeredItems = others.filter((item) => !taken.has(item.id));
+      const steerTexts = steeredItems.map((item) => this.deps.inputText(item));
+      const body =
+        steerTexts.length > 0
+          ? `Your previous attempt at this turn was stopped so you can take in these messages that arrived while you worked:\n\n${steerTexts.join("\n\n")}`
+          : // Read meanwhile, by the attempt that stopped for them.
+            STEER_RESTART_CONTINUE;
+      return {
+        input: {
+          itemId: input.inputItem?.id ?? derivedId(input.attempt.id, "input"),
+          text: input.handoff ? `${input.handoff}\n\n---\n\n${body}` : body,
+          attachments: steeredItems.flatMap((item) =>
+            item.kind === "task_notification" ? [] : item.attachments,
+          ),
+        },
+        // Exactly what the prompt carries: a steer for one of these is not
+        // delivered again.
+        steered: steeredItems.map((item) => item.id),
+        read: steeredItems.filter((item) => item.status === "in_progress"),
+      };
+    }
+    // Inputs that joined the turn while it waited (and, on a retry, what
+    // its first attempt read), and steered ones no thread took in yet (an
+    // attempt that never began carried them, or nothing read them); ones
+    // steered into an attempt that took them reached it on their own.
+    const joined = others.filter(
+      (item) => item.dispatch !== "steer" || !taken.has(item.id),
     );
-    const body =
-      input.reason === "steer_restart" && steerTexts.length > 0
-        ? `Your previous attempt at this turn was stopped so you can take in these messages that arrived while you worked:\n\n${steerTexts.join("\n\n")}`
-        : [
-            ...input.riders.map((item) => this.deps.inputText(item)),
-            // A continuation (or a turn whose input is gone) carries on.
-            base ? this.deps.inputText(base) : CONTINUATION_PROMPT,
-            ...joined.map((item) => this.deps.inputText(item)),
-          ].join("\n\n");
-    const full = input.handoff ? `${input.handoff}\n\n---\n\n${body}` : body;
-    const carried =
-      input.reason === "steer_restart"
-        ? steeredItems
-        : [...input.riders, ...joined];
+    const carried = [...input.riders, ...joined];
+    // In the order they came, as the conversation shows them; a turn whose
+    // input is gone (a continuation) carries on after what it read.
+    const pieces = base
+      ? [...carried, base]
+          .sort((a, b) => a.position - b.position)
+          .map((item) => this.deps.inputText(item))
+      : [
+          ...input.riders.map((item) => this.deps.inputText(item)),
+          CONTINUATION_PROMPT,
+          ...joined.map((item) => this.deps.inputText(item)),
+        ];
+    const body = pieces.join("\n\n");
     return {
       input: {
         itemId: input.inputItem?.id ?? derivedId(input.attempt.id, "input"),
-        text: full,
-        attachments,
+        text: input.handoff ? `${input.handoff}\n\n---\n\n${body}` : body,
+        attachments: [...carried, ...(base ? [base] : [])]
+          .sort((a, b) => a.position - b.position)
+          .flatMap((item) =>
+            item.kind === "task_notification" ? [] : item.attachments,
+          ),
       },
-      // Exactly what the prompt carries: a steer for one of these is not
-      // delivered again.
-      steered:
-        input.reason === "steer_restart" && steerTexts.length === 0
-          ? []
-          : carried.map((item) => item.id),
+      steered: carried.map((item) => item.id),
+      read: joined.filter((item) => item.status === "in_progress"),
     };
   }
 
@@ -1513,8 +1621,9 @@ export class TurnEngine {
           .map((command) => command.id),
         status: "sent",
       });
+      // Only an interrupt that went out: one dropped as moot stops nothing.
       if (
-        commands.some((command) => command.kind === "interrupt") &&
+        frames.some((frame) => frame.command.kind === "interrupt") &&
         interruptAt === null
       )
         interruptAt = Date.now();
@@ -1604,10 +1713,12 @@ export class TurnEngine {
       if (completion) {
         if (
           completion.status === "interrupted" &&
-          runner.restartWith.length > 0
+          (runner.restartWith.length > 0 ||
+            (await this.restartAsked(turn.id, attempt.id)))
         ) {
-          // Steered input the harness could not take: a new attempt of the
-          // same turn, on the same native thread, with that input.
+          // Steered input the harness could not take, or that a person
+          // asked it to read now (ADR 0240): a new attempt of the same
+          // turn, on the same native thread, with that input.
           const superseded: Attempt = {
             ...attempt,
             status: "superseded",
@@ -1710,6 +1821,25 @@ export class TurnEngine {
     }
   }
 
+  /** A person stopped this attempt for it to read what they sent (ADR 0240). */
+  private async restartAsked(
+    turnId: string,
+    attemptId: string,
+  ): Promise<boolean> {
+    const row = await this.deps.db
+      .selectFrom("agent_turn_commands")
+      .select("id")
+      .where("turn_id", "=", turnId)
+      .where("attempt_id", "=", attemptId)
+      .where("kind", "=", "interrupt")
+      .where(sql<string>`payload->>'restart'`, "=", "true")
+      // Sent to the harness: one dropped as moot before it went asked
+      // nothing of it (one dropped after, the message read meanwhile, did).
+      .where("sent_at", "is not", null)
+      .executeTakeFirst();
+    return row !== undefined;
+  }
+
   private async loadThread(id: string | null): Promise<ProviderThread> {
     if (!id) throw new Error("The attempt has no provider thread");
     const row = await this.deps.db
@@ -1728,6 +1858,15 @@ export class TurnEngine {
     const id = `${command.kind}:${command.id}`;
     switch (command.kind) {
       case "interrupt":
+        // A stop for the agent to read a message has nothing left to stop
+        // once another attempt runs or it read the message meanwhile.
+        if (
+          command.payload.restart === true &&
+          ((command.attemptId && command.attemptId !== attemptId) ||
+            (typeof command.payload.itemId === "string" &&
+              attempt.consumed.includes(command.payload.itemId)))
+        )
+          return null;
         return { id, command: { kind: "interrupt" } };
       case "stop":
         return { id, command: { kind: "stop" } };
@@ -1917,6 +2056,7 @@ export class TurnEngine {
           ...runner,
           consumed: [...(runner.consumed ?? []), ...ingested.consumed],
         };
+      if (ingested.started) runner = { ...runner, started: true };
       let turn = ingested.turn;
       const extra: SessionEvent[] = [];
       if (ingested.title)
@@ -3034,11 +3174,6 @@ export class TurnEngine {
     return rows.map((row) => row.id);
   }
 
-  /**
-   * Input steered into a turn that the harness never took in (accepted,
-   * then the turn ended) runs as turns of its own after it, in order: a
-   * person's message is never dropped.
-   */
   /** The steer commands among `ids` whose message a person wrote. */
   private async fromPeople(
     trx: Transaction<DB>,
@@ -3070,7 +3205,12 @@ export class TurnEngine {
     return ids.filter((id) => authors.get(itemOf.get(id) ?? "") === "user");
   }
 
-  private async requeueSteers(
+  /**
+   * Input steered into `turn` that no attempt took in, as turns of its own
+   * after it (a person's message is never dropped), or joining the turn
+   * waiting for notifications. The session row must be locked.
+   */
+  async requeueSteers(
     trx: Transaction<DB>,
     turn: Turn,
     now: string,
@@ -3138,6 +3278,7 @@ export class TurnEngine {
             ...item,
             turnId: notifications.id,
             dispatch: "queue",
+            status: "completed",
             updatedAt: now,
           },
         });
@@ -3174,8 +3315,15 @@ export class TurnEngine {
         { type: "turn.changed", turn: next },
         {
           type: "item.changed",
+          // The input of a turn of its own now, which reads it as it starts.
           item: isInputItem(item)
-            ? { ...item, turnId: next.id, dispatch: "queue", updatedAt: now }
+            ? {
+                ...item,
+                turnId: next.id,
+                dispatch: "queue",
+                status: "completed",
+                updatedAt: now,
+              }
             : { ...item, turnId: next.id, updatedAt: now },
         },
       );
@@ -3318,7 +3466,8 @@ function itemText(item: Item): string {
 
 /**
  * Close what an attempt left open: in-progress items are cancelled and
- * pending requests can no longer be answered.
+ * pending requests can no longer be answered. Input the agent never read
+ * is not work: it runs as a turn of its own (see requeueSteers).
  */
 async function closeOpenWork(
   trx: Transaction<DB>,
@@ -3344,6 +3493,7 @@ async function closeOpenWork(
     .select("payload")
     .where("turn_id", "=", input.turn.id)
     .where("status", "=", "in_progress")
+    .where("kind", "not in", [...INPUT_ITEM_KINDS])
     .execute();
   for (const row of items) {
     const item = itemFromRow(row);

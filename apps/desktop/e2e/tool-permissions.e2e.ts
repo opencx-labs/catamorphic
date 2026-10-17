@@ -49,6 +49,17 @@ const runWait = <T>(
   opts?: { timeoutMs?: number; label?: string },
 ) => app.waitFor<T>(`(() => { ${helpers}\n${body} })()`, opts);
 
+/**
+ * The chat's turn has ended: a message sent now starts a turn of its own
+ * instead of reaching the one still finishing (ADR 0240).
+ */
+const settled = () =>
+  runWait(
+    `const section = $$('section[aria-label]').find((el) => !el.inert && el.querySelector('[data-composer-input]'));
+     return !!section && !section.querySelector('[data-testid="chat-stop"]');`,
+    { timeoutMs: 30_000, label: "the turn before settled" },
+  );
+
 describe("tool permissions", () => {
   it("boots, creates a project, a 'fake' connection, and a chat", async () => {
     await run(`window.focus(); return true;`);
@@ -158,6 +169,7 @@ describe("tool permissions", () => {
   }, 60_000);
 
   it("another client answers the durable question; the originating chat resumes", async () => {
+    await settled();
     await run(`send('permission: fake/upload_file'); return true;`);
     await runWait(
       `return !!approval() && approval().textContent.includes('upload_file');`,
@@ -208,6 +220,7 @@ describe("tool permissions", () => {
   }, 60_000);
 
   it("Deny answers deny; the card closes", async () => {
+    await settled();
     await run(`send('permission: fake/delete_channel'); return true;`);
     await runWait(
       `return !!approval() && approval().textContent.includes('delete_channel');`,
@@ -228,6 +241,7 @@ describe("tool permissions", () => {
 });
 
 it("shows concurrent connector requests together and settles each independently", async () => {
+  await settled();
   await run(`send('elicitation: queue');`);
   await runWait(
     `return !!requestCard('First app') && !!requestCard('Second app');`,
@@ -254,6 +268,7 @@ it("shows concurrent connector requests together and settles each independently"
   expect(await run(`return !!$('[data-testid="approval-card"]');`)).toBe(false);
 });
 it("withdraws a connector request on cancellation", async () => {
+  await settled();
   await run(`send('elicitation: cancel');`);
   await runWait(`return !!requestCard('Cancelled app');`);
   await runWait(
@@ -262,6 +277,7 @@ it("withdraws a connector request on cancellation", async () => {
 });
 
 it("remembers native app consent only after an explicit answer in the chat", async () => {
+  await settled();
   await run(`send('elicitation: app'); return true;`);
   await runWait(`return !!requestCard('Calculator');`);
   expect(await run(`return !!$('[data-testid="elicitation-modal"]');`)).toBe(

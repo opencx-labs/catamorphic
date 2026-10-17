@@ -91,6 +91,8 @@ export interface ScriptedHostBehavior {
   }) => HostToolResult;
   /** Sees every event in order, and may steer or interrupt. */
   onEvent?: (event: HarnessEvent, control: HostControl) => void;
+  /** Right after the start, before the harness reports anything. */
+  afterStart?: (control: HostControl) => void;
 }
 
 export interface AttemptOutcome {
@@ -143,6 +145,7 @@ export async function driveAttempt(input: {
     acks: new Map(),
   };
   send({ kind: "start", attempt });
+  host.afterStart?.(control);
   const deadline = Date.now() + (input.timeoutMs ?? 60_000);
   let seq = 0;
   for (;;) {

@@ -288,7 +288,21 @@ export async function waitingNotificationTurn(
   executor: Kysely<DB> | Transaction<DB>,
   sessionId: string,
 ): Promise<Turn | null> {
-  const row = await executor
+  const [first] = await waitingNotificationTurns(executor, sessionId, 1);
+  return first ?? null;
+}
+
+/**
+ * Every turn waiting to take in task notifications, in order: one, unless
+ * some notifications were the owner's and some not (ADR 0199). The next
+ * turn to start takes them in instead (ADR 0240).
+ */
+export async function waitingNotificationTurns(
+  executor: Kysely<DB> | Transaction<DB>,
+  sessionId: string,
+  limit = 20,
+): Promise<Turn[]> {
+  const rows = await executor
     .selectFrom("agent_turns as turn")
     .innerJoin("agent_items as item", "item.id", "turn.input_item_id")
     .selectAll("turn")
@@ -297,7 +311,7 @@ export async function waitingNotificationTurn(
     .where("turn.attempt_count", "=", 0)
     .where("item.kind", "=", "task_notification")
     .orderBy("turn.ordinal")
-    .limit(1)
-    .executeTakeFirst();
-  return row ? turnFromRow(row) : null;
+    .limit(limit)
+    .execute();
+  return rows.map(turnFromRow);
 }

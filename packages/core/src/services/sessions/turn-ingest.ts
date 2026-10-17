@@ -62,6 +62,8 @@ export interface IngestResult {
   statePath?: string;
   /** Steered inputs the harness took into its context in this batch. */
   consumed: string[];
+  /** The harness began the turn on its input in this batch. */
+  started?: true;
 }
 
 /** The fields a harness streams into. */
@@ -176,6 +178,7 @@ export async function ingestHarnessEvents(input: {
         break;
       }
       case "turn.started": {
+        result.started = true;
         if (event.ref) {
           attempt = { ...attempt, nativeTurnRef: event.ref };
           out.push({ type: "attempt.changed", attempt });
@@ -372,6 +375,21 @@ export async function ingestHarnessEvents(input: {
   }
   if (line && line !== turn.activity && turn.status === "running")
     emitTurn({ ...turn, activity: line, activityAt: at });
+  // Steered input the agent took in is read (ADR 0240).
+  if (result.consumed.length > 0) {
+    const unread = await trx
+      .selectFrom("agent_items")
+      .select("payload")
+      .where("id", "in", result.consumed)
+      .where("turn_id", "=", turn.id)
+      .where("status", "=", "in_progress")
+      .execute();
+    for (const row of unread)
+      out.push({
+        type: "item.changed",
+        item: { ...itemFromRow(row), status: "completed", updatedAt: at },
+      });
+  }
   return { ...result, events: out, turn, attempt, thread };
 }
 

@@ -76,6 +76,19 @@ const openFreshChat = async (label: string) => {
   );
 };
 
+/**
+ * The visible chat's turn has ended: a message sent now starts a turn of
+ * its own instead of reaching the one still finishing (ADR 0240).
+ */
+const settled = (label = "the turn before settled") =>
+  runWait(
+    `return !visibleDock()?.querySelector('[data-testid="chat-stop"]');`,
+    {
+      timeoutMs: 30_000,
+      label,
+    },
+  );
+
 const ensurePalette = async () => {
   await run(
     `if (!paletteInput()) pressKey('p', { metaKey: true }); return true;`,
@@ -818,6 +831,11 @@ describe("agents and profiles", () => {
 
   it("a successful reconnect retries the failed turn on its own", async () => {
     await runWait(`return !!visibleDock();`, { label: "chat open" });
+    await settled();
+    // An earlier turn recovered the same way: this one's recovery is the next.
+    const recovered = `return $$('[role="log"] article')
+      .filter((el) => el.textContent.includes('Recovered after reconnecting.')).length;`;
+    const before = await run<number>(recovered);
     await run(`
       const ta = visibleDock().querySelector('[data-composer-input]');
       setReactValue(ta, 'one more auth error please');
@@ -837,11 +855,10 @@ describe("agents and profiles", () => {
     // retry runs against a freshly re-anchored harness session. The
     // successful reconnect must retry the failed turn WITHOUT another
     // click or message.
-    await runWait(
-      `return $$('[role="log"] article')
-        .some((el) => el.textContent.includes('Recovered after reconnecting.'));`,
-      { timeoutMs: 30_000, label: "reconnect auto-retried the turn" },
-    );
+    await runWait(`return (() => { ${recovered} })() > ${before};`, {
+      timeoutMs: 30_000,
+      label: "reconnect auto-retried the turn",
+    });
     // The dead-retry regression: a re-anchored session routed through the
     // harness's native re-run answered "nothing to retry" forever. That
     // wording (old or new) must never land in the transcript here.
@@ -857,6 +874,9 @@ describe("agents and profiles", () => {
 
   it("auto-retries rate-limited turns with a visible countdown", async () => {
     await runWait(`return !!visibleDock();`, { label: "chat open" });
+    // The recovered turn may still be finishing: a message now would reach
+    // it rather than start a turn of its own (ADR 0240).
+    await settled();
     // The ticker lives only for the 5 s backoff, and a loaded host can
     // spend that between two polls: record it as it renders instead.
     await run(`
@@ -912,93 +932,10 @@ describe("agents and profiles", () => {
     );
   });
 
-  it("queues messages during a turn; edits hold their place until done", async () => {
-    await run(`
-      const ta = visibleDock().querySelector('[data-composer-input]');
-      setReactValue(ta, 'respond slowly please');
-      ta.closest('form').requestSubmit();
-      return true;
-    `);
-    // Queue two while the slow turn runs: one to edit, one to delete.
-    await run(`
-      const ta = visibleDock().querySelector('[data-composer-input]');
-      setReactValue(ta, 'wrong words');
-      ta.closest('form').requestSubmit();
-      setReactValue(ta, 'delete me');
-      ta.closest('form').requestSubmit();
-      return true;
-    `);
-    await runWait(
-      `return $$('[data-testid="chat-queued-message"]').length === 2;`,
-      { label: "two queued ghost bubbles" },
-    );
-    // Delete the second straight away.
-    await run(`
-      const items = $$('[data-testid="chat-queued-message"]');
-      items[1].querySelector('[data-testid="chat-queued-delete"]').click();
-      return true;
-    `);
-    await runWait(
-      `return $$('[data-testid="chat-queued-message"]').length === 1;`,
-      { label: "queued message deleted (animated out)" },
-    );
-    // Start editing the head; its dispatch must WAIT for the edit even
-    // after the slow turn finishes.
-    await run(`
-      $('[data-testid="chat-queued-message"]')
-        .querySelector('[aria-label="Edit queued message"]').click();
-      return true;
-    `);
-    await runWait(`return !!$('[data-testid="chat-queued-edit"]');`, {
-      label: "inline queue editor",
-    });
-    await run(`
-      setReactValue($('[data-testid="chat-queued-edit"]'), 'actually right words');
-      return true;
-    `);
-    // Slow turn (4s) settles while the edit is open — nothing dispatches.
-    await runWait(
-      `return $$('[role="log"] article')
-        .some((el) => el.textContent.includes('Done after a long think.'));`,
-      { timeoutMs: 30_000, label: "slow turn finished during the edit" },
-    );
-    const dispatchedEarly = await run<boolean>(`
-      return $$('[role="log"] article')
-        .some((el) => el.textContent.includes('You said: wrong words') ||
-                      el.textContent.includes('You said: actually right words'));
-    `);
-    if (dispatchedEarly) {
-      throw new Error("queued message dispatched while it was being edited");
-    }
-    // Rejected edits keep both the local draft and the server hold.
-    await app.blockRequests(["*/agent/sessions/*/commands"]);
-    await run(`
-      $('[data-testid="chat-queued-edit"]').dispatchEvent(new KeyboardEvent('keydown', {key:'Enter',bubbles:true,cancelable:true}));
-      return true;
-    `);
-    await runWait(
-      `return !!$('[data-testid="chat-queued-message"] [role="alert"]') && $('[data-testid="chat-queued-edit"]')?.value === 'actually right words';`,
-      { label: "failed queue edit preserves the draft" },
-    );
-    await app.blockRequests([]);
-    // Committing again releases the successfully updated queue entry.
-    await run(`
-      const editor = $('[data-testid="chat-queued-edit"]');
-      editor.dispatchEvent(new KeyboardEvent('keydown',
-        { key: 'Enter', bubbles: true, cancelable: true }));
-      return true;
-    `);
-    await runWait(
-      `return $$('[role="log"] article')
-        .some((el) => el.textContent.includes('You said: actually right words'));`,
-      { timeoutMs: 30_000, label: "edited queued message sent after commit" },
-    );
-  });
-
-  it("send-now and Cmd+Enter interrupt the running turn", async () => {
-    // Wait until the provider is anchored and handling the slow turn before
-    // queueing. A completed turn earlier in this shared transcript also says
-    // "Working on it", so the live activity is the synchronization point.
+  it("reaches the working agent with a message sent meanwhile, and interrupts for it on request", async () => {
+    const interrupted = `return $$('[role="log"] div')
+      .filter((el) => el.textContent.trim() === 'Interrupted').length;`;
+    const before = await run<number>(interrupted);
     await run(`
       const ta = visibleDock().querySelector('[data-composer-input]');
       setReactValue(ta, 'respond slowly and wait for interruption');
@@ -1007,28 +944,184 @@ describe("agents and profiles", () => {
     `);
     await runWait(
       `return $('[role="log"] [data-testid="activity-text"]')?.textContent.trim() === 'Waiting...';`,
-      { timeoutMs: 30_000, label: "first slow turn running" },
+      { timeoutMs: 30_000, label: "slow turn running" },
     );
-    // Queue behind the running turn, then promote via the bubble's send-now.
     await run(`
+      const ta = visibleDock().querySelector('[data-composer-input]');
+      setReactValue(ta, 'use the blue one');
+      ta.closest('form').requestSubmit();
+      return true;
+    `);
+    const sent = `$$('[role="log"] article[data-user-message]')
+      .find((el) => el.textContent.includes('use the blue one'))`;
+    // In the conversation at once, never queued: unread until the agent's
+    // next step (ADR 0240).
+    await runWait(
+      `const message = ${sent};
+      return !!message &&
+        message.querySelector('[data-testid="chat-unread-line"]')?.dataset.unread === 'true' &&
+        message.querySelector('[data-testid="chat-unread-state"]')?.textContent === 'Not read yet' &&
+        // Offered once the session holds the message, not while it sends.
+        !!message.querySelector('[data-testid="chat-steer-now"]') &&
+        $$('[data-testid="chat-queued-message"]').length === 0;`,
+      { timeoutMs: 20_000, label: "unread message in the conversation" },
+    );
+    await run(`
+      ${sent}.querySelector('[data-testid="chat-steer-now"]').click();
+      return true;
+    `);
+    // The agent stops its step and reads it, in the same turn.
+    await runWait(
+      `return !${sent}.querySelector('[data-unread]') &&
+        $$('[role="log"] article').some((el) =>
+          el.textContent.includes('take in these messages') && el.textContent.includes('use the blue one'));`,
+      { timeoutMs: 30_000, label: "read now, in the same turn" },
+    );
+    expect(await run<number>(interrupted)).toBe(before);
+  });
+
+  describe("with queueing on", () => {
+    // Saved preferences reach the window through a file watch, after the
+    // save returns: wait until the window has heard.
+    const setQueueing = async (on: boolean) => {
+      const already = await app.eval<boolean>(
+        `window.catamorphicDesktop.getPrefs().then((prefs) => prefs.chatQueueMessages === ${on})`,
+      );
+      if (already) return;
+      await app.eval(`(() => {
+        window.__queueHeard = undefined;
+        window.__queueUnsubscribe?.();
+        window.__queueUnsubscribe = window.catamorphicDesktop.onPrefsChanged(
+          (prefs) => { window.__queueHeard = prefs.chatQueueMessages; });
+        return window.catamorphicDesktop
+          .setPrefs({ chatQueueMessages: ${on} })
+          .then(() => true);
+      })()`);
+      await app.waitFor(`window.__queueHeard === ${on}`, {
+        label: "the window heard the queue preference",
+      });
+    };
+    beforeAll(() => setQueueing(true));
+    afterAll(() => setQueueing(false));
+
+    it("queues messages during a turn; edits hold their place until done", async () => {
+      await settled();
+      await run(`
+      const ta = visibleDock().querySelector('[data-composer-input]');
+      setReactValue(ta, 'respond slowly please');
+      ta.closest('form').requestSubmit();
+      return true;
+    `);
+      // Queue two while the slow turn runs: one to edit, one to delete.
+      await run(`
+      const ta = visibleDock().querySelector('[data-composer-input]');
+      setReactValue(ta, 'wrong words');
+      ta.closest('form').requestSubmit();
+      setReactValue(ta, 'delete me');
+      ta.closest('form').requestSubmit();
+      return true;
+    `);
+      await runWait(
+        `return $$('[data-testid="chat-queued-message"]').length === 2;`,
+        { label: "two queued ghost bubbles" },
+      );
+      // Delete the second straight away.
+      await run(`
+      const items = $$('[data-testid="chat-queued-message"]');
+      items[1].querySelector('[data-testid="chat-queued-delete"]').click();
+      return true;
+    `);
+      await runWait(
+        `return $$('[data-testid="chat-queued-message"]').length === 1;`,
+        { label: "queued message deleted (animated out)" },
+      );
+      // Start editing the head; its dispatch must WAIT for the edit even
+      // after the slow turn finishes.
+      await run(`
+      $('[data-testid="chat-queued-message"]')
+        .querySelector('[aria-label="Edit queued message"]').click();
+      return true;
+    `);
+      await runWait(`return !!$('[data-testid="chat-queued-edit"]');`, {
+        label: "inline queue editor",
+      });
+      await run(`
+      setReactValue($('[data-testid="chat-queued-edit"]'), 'actually right words');
+      return true;
+    `);
+      // Slow turn (4s) settles while the edit is open — nothing dispatches.
+      await runWait(
+        `return $$('[role="log"] article')
+        .some((el) => el.textContent.includes('Done after a long think.'));`,
+        { timeoutMs: 30_000, label: "slow turn finished during the edit" },
+      );
+      const dispatchedEarly = await run<boolean>(`
+      return $$('[role="log"] article')
+        .some((el) => el.textContent.includes('You said: wrong words') ||
+                      el.textContent.includes('You said: actually right words'));
+    `);
+      if (dispatchedEarly) {
+        throw new Error("queued message dispatched while it was being edited");
+      }
+      // Rejected edits keep both the local draft and the server hold.
+      await app.blockRequests(["*/agent/sessions/*/commands"]);
+      await run(`
+      $('[data-testid="chat-queued-edit"]').dispatchEvent(new KeyboardEvent('keydown', {key:'Enter',bubbles:true,cancelable:true}));
+      return true;
+    `);
+      await runWait(
+        `return !!$('[data-testid="chat-queued-message"] [role="alert"]') && $('[data-testid="chat-queued-edit"]')?.value === 'actually right words';`,
+        { label: "failed queue edit preserves the draft" },
+      );
+      await app.blockRequests([]);
+      // Committing again releases the successfully updated queue entry.
+      await run(`
+      const editor = $('[data-testid="chat-queued-edit"]');
+      editor.dispatchEvent(new KeyboardEvent('keydown',
+        { key: 'Enter', bubbles: true, cancelable: true }));
+      return true;
+    `);
+      await runWait(
+        `return $$('[role="log"] article')
+        .some((el) => el.textContent.includes('You said: actually right words'));`,
+        { timeoutMs: 30_000, label: "edited queued message sent after commit" },
+      );
+    });
+
+    it("send-now and Cmd+Enter interrupt the running turn", async () => {
+      // Wait until the provider is anchored and handling the slow turn before
+      // queueing. A completed turn earlier in this shared transcript also says
+      // "Working on it", so the live activity is the synchronization point.
+      await run(`
+      const ta = visibleDock().querySelector('[data-composer-input]');
+      setReactValue(ta, 'respond slowly and wait for interruption');
+      ta.closest('form').requestSubmit();
+      return true;
+    `);
+      await runWait(
+        `return $('[role="log"] [data-testid="activity-text"]')?.textContent.trim() === 'Waiting...';`,
+        { timeoutMs: 30_000, label: "first slow turn running" },
+      );
+      // Queue behind the running turn, then promote via the bubble's send-now.
+      await run(`
       const ta = visibleDock().querySelector('[data-composer-input]');
       setReactValue(ta, 'urgent now');
       ta.closest('form').requestSubmit();
       return true;
     `);
-    await runWait(
-      `return $$('[data-testid="chat-queued-message"]').length === 1;`,
-      { label: "queued behind the slow turn" },
-    );
-    // Every frame from the press until the message has arrived: the bubble
-    // looks sent at once, and the message takes over where it was, already
-    // shown, rather than rising in anew somewhere else.
-    type Box = { top: number; right: number };
-    const handover = await run<{
-      sending: boolean;
-      bubble: Box | null;
-      arrived: (Box & { opacity: number }) | null;
-    }>(`
+      await runWait(
+        `return $$('[data-testid="chat-queued-message"]').length === 1;`,
+        { label: "queued behind the slow turn" },
+      );
+      // Every frame from the press until the message has arrived: the bubble
+      // looks sent at once, and the message takes over where it was, already
+      // shown, rather than rising in anew somewhere else.
+      type Box = { top: number; right: number };
+      const handover = await run<{
+        sending: boolean;
+        bubble: Box | null;
+        arrived: (Box & { opacity: number }) | null;
+      }>(`
       const box = (el) => { const r = el.getBoundingClientRect(); return { top: r.top, right: r.right }; };
       let bubble = null;
       let sending = false;
@@ -1054,81 +1147,84 @@ describe("agents and profiles", () => {
         sample();
       });
     `);
-    expect(handover.sending, JSON.stringify(handover)).toBe(true);
-    expect(handover.arrived?.opacity, JSON.stringify(handover)).toBeGreaterThan(
-      0.9,
-    );
-    expect(
-      Math.abs((handover.arrived?.top ?? 0) - (handover.bubble?.top ?? 1e6)),
-      JSON.stringify(handover),
-    ).toBeLessThan(8);
-    expect(
-      Math.abs(
-        (handover.arrived?.right ?? 0) - (handover.bubble?.right ?? 1e6),
-      ),
-      JSON.stringify(handover),
-    ).toBeLessThan(8);
-    await runWait(
-      `return $$('[role="log"] article')
-        .some((el) => el.textContent.includes('You said: urgent now'));`,
-      { timeoutMs: 30_000, label: "promoted message answered" },
-    );
-    try {
+      expect(handover.sending, JSON.stringify(handover)).toBe(true);
+      expect(
+        handover.arrived?.opacity,
+        JSON.stringify(handover),
+      ).toBeGreaterThan(0.9);
+      expect(
+        Math.abs((handover.arrived?.top ?? 0) - (handover.bubble?.top ?? 1e6)),
+        JSON.stringify(handover),
+      ).toBeLessThan(8);
+      expect(
+        Math.abs(
+          (handover.arrived?.right ?? 0) - (handover.bubble?.right ?? 1e6),
+        ),
+        JSON.stringify(handover),
+      ).toBeLessThan(8);
       await runWait(
-        `return $$('[role="log"] div')
-          .some((el) => el.textContent.trim() === 'Interrupted');`,
-        { label: "interrupted note for the aborted turn" },
+        `return $$('[role="log"] article')
+        .some((el) => el.textContent.includes('You said: urgent now'));`,
+        { timeoutMs: 30_000, label: "promoted message answered" },
       );
-    } catch (error) {
-      console.log(
-        "interrupt-debug:",
-        JSON.stringify(
-          await run<unknown>(`
+      try {
+        await runWait(
+          `return $$('[role="log"] div')
+          .some((el) => el.textContent.trim() === 'Interrupted');`,
+          { label: "interrupted note for the aborted turn" },
+        );
+      } catch (error) {
+        console.log(
+          "interrupt-debug:",
+          JSON.stringify(
+            await run<unknown>(`
             return $$('[role="log"] article, [role="log"] .italic')
               .map((el) => el.textContent.trim().slice(0, 60)).slice(-8);
           `),
-        ),
-      );
-      console.log(
-        "app-tail:",
-        app
-          .getOutput()
-          .split("\n")
-          .filter(
-            (line) => line.includes("[fake]") || line.includes("interrupt"),
-          )
-          .slice(-10)
-          .join("\n"),
-      );
-      throw error;
-    }
+          ),
+        );
+        console.log(
+          "app-tail:",
+          app
+            .getOutput()
+            .split("\n")
+            .filter(
+              (line) => line.includes("[fake]") || line.includes("interrupt"),
+            )
+            .slice(-10)
+            .join("\n"),
+        );
+        throw error;
+      }
 
-    // Cmd+Enter from the composer takes the same fast path.
-    await run(`
+      // Cmd+Enter from the composer takes the same fast path.
+      await run(`
       const ta = visibleDock().querySelector('[data-composer-input]');
       setReactValue(ta, 'respond slowly and wait for interruption');
       ta.closest('form').requestSubmit();
       return true;
     `);
-    await runWait(
-      `return $('[role="log"] [data-testid="activity-text"]')?.textContent.trim() === 'Waiting...';`,
-      { timeoutMs: 30_000, label: "second slow turn running" },
-    );
-    await run(`
+      await runWait(
+        `return $('[role="log"] [data-testid="activity-text"]')?.textContent.trim() === 'Waiting...';`,
+        { timeoutMs: 30_000, label: "second slow turn running" },
+      );
+      await run(`
       const ta = visibleDock().querySelector('[data-composer-input]');
       setReactValue(ta, 'jump the line');
       ta.dispatchEvent(new KeyboardEvent('keydown',
         { key: 'Enter', metaKey: /Mac/.test(navigator.platform), ctrlKey: !/Mac/.test(navigator.platform), bubbles: true, cancelable: true }));
       return true;
     `);
-    await runWait(
-      `return $$('[role="log"] article')
+      await runWait(
+        `return $$('[role="log"] article')
         .some((el) => el.textContent.includes('You said: jump the line'));`,
-      { timeoutMs: 30_000, label: "Cmd+Enter message answered immediately" },
-    );
+        { timeoutMs: 30_000, label: "Cmd+Enter message answered immediately" },
+      );
+    });
   });
 
   it("the send button stops a running turn when there is nothing to send", async () => {
+    await settled();
     const interrupted = `return $$('[role="log"] div')
       .filter((el) => el.textContent.trim() === 'Interrupted').length;`;
     const before = await run<number>(interrupted);
@@ -1397,6 +1493,7 @@ describe("agents and profiles", () => {
       throw new Error(`Unexpected coordination result: ${coordinationResult}`);
     }
 
+    await settled("coordination turn settled");
     await run(`
       const ta = visibleDock().querySelector('[data-composer-input]');
       setReactValue(ta, 'terminal: git show --format= --name-only HEAD && pwd');
@@ -1584,6 +1681,7 @@ describe("agents and profiles", () => {
         label: "agent-created PDF",
       },
     );
+    await settled("PDF turn settled");
     await run(`
       const ta = visibleDock().querySelector('[data-composer-input]');
       setReactValue(ta, 'show: file:artifact.pdf');
@@ -1602,6 +1700,7 @@ describe("agents and profiles", () => {
   });
 
   it("rejects opening a directory without adding a broken surface", async () => {
+    await settled();
     const before = await run<number>(
       `return visibleDock().querySelectorAll('[data-testid="surface-chip"]').length;`,
     );

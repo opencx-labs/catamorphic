@@ -250,3 +250,4 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0235](0235-pages-find-chromes-window-chrome.md) | Pages find Chrome's `window.chrome`; a daily check watches Google's sign-in | Accepted (amends 0150, 0203) |
 | [0237](0237-lists-fade-where-they-continue.md) | Lists fade where they continue: one overflow hint, the sidebar thumb a section's choice | Accepted (refines 0218, 0234) |
 | [0238](0238-one-ring-per-list-and-sidebar-focus.md) | One ring per list; an opened sidebar focuses what is in front | Accepted (amends 0168) |
+| [0240](0240-a-message-sent-while-the-agent-works-reaches-it.md) | A message sent while the agent works reaches it at its next step, and can stop it to be read now | Accepted (amends 0197, 0217) |

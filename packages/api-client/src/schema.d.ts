@@ -7292,6 +7292,11 @@ export interface paths {
                         turnId: string;
                     } | {
                         /** @enum {string} */
+                        type: "steer_now";
+                        commandId: string;
+                        itemId: string;
+                    } | {
+                        /** @enum {string} */
                         type: "respond";
                         commandId: string;
                         requestId: string;

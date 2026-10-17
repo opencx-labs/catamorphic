@@ -802,6 +802,11 @@ describe("dock modes", () => {
   it.skipIf(process.platform !== "darwin")(
     "`open <url>` in an agent terminal lands as an in-app browser tab",
     async () => {
+      // The turn before has ended: this one is a turn of its own (ADR 0240).
+      await runWait(
+        `return !frontDock()?.querySelector('[data-testid="chat-stop"]');`,
+        { timeoutMs: 30_000, label: "the turn before settled" },
+      );
       await run(
         `setComposer('terminal: open https://example.com'); send(); return true;`,
       );

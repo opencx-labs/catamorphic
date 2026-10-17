@@ -14,7 +14,7 @@ import {
 } from "@catamorphic/ui";
 import type { QueryClient } from "@tanstack/react-query";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowUp, Bot, GitFork, ListPlus, Square, X, Zap } from "lucide-react";
+import { ArrowUp, Bot, GitFork, Square, X, Zap } from "lucide-react";
 import {
   type FormEvent,
   useCallback,
@@ -372,6 +372,7 @@ function Chat({
           onRetry={(turnId) => void chat.retry(turnId)}
           onInterrupt={(turnId) => void chat.interrupt(turnId)}
           onCancelQueued={chat.cancelQueued}
+          onSteerNow={chat.steerNow}
           onResendFailed={(commandId) => void chat.resendFailed(commandId)}
           onDismissFailed={chat.dismissFailed}
           hasOlder={chat.hasOlder}
@@ -638,11 +639,11 @@ function Chat({
                   onChange={(event) => setDraft(event.target.value)}
                   placeholder={
                     // Open questions take free-text answers here (ADR 0195).
+                    // While the agent works, it reads a message at its
+                    // next step (ADR 0240).
                     questions.length > 0
                       ? "Answer in your own words…"
-                      : chat.isWorking
-                        ? "Message (queues)…"
-                        : "Message…"
+                      : "Message…"
                   }
                   rows={1}
                   enterKeyHint="send"
@@ -665,14 +666,10 @@ function Chat({
                 type="submit"
                 className="grid size-11 shrink-0 cursor-pointer place-items-center rounded-xl bg-accent text-accent-fg transition-transform duration-150 active:scale-95 disabled:opacity-35"
                 disabled={!draft.trim() || !sendReady}
-                aria-label={chat.isWorking ? "Queue message" : "Send message"}
+                aria-label="Send message"
                 data-testid="chat-send"
               >
-                {chat.isWorking ? (
-                  <ListPlus className="size-4.5" />
-                ) : (
-                  <ArrowUp className="size-4.5" />
-                )}
+                <ArrowUp className="size-4.5" />
               </button>
             </form>
           </div>

@@ -13,9 +13,12 @@
  *   "ask …"      → parks an approval request for a Slack tool call
  *   "question …" → asks a blocking question
  *   "fail …"     → fails the turn (Retry runs it again, and it works)
+ *   "slow …"     → one long step (20s) before its reply
  *   anything     → a command, a file change and a markdown reply
  * A plain message sent while a blocking question waits steers into the
- * turn: the question stays open, no longer blocking (ADR 0195).
+ * turn: the question stays open, no longer blocking (ADR 0195). One sent
+ * while the agent works steers into its turn, unread until its next step
+ * or until `steer_now` stops the step for it (ADR 0240).
  * Set THEME=midnight (or light/paper) to serve a committed project theme.
  */
 
@@ -104,6 +107,10 @@ function newSession(body) {
     waiters: new Map(),
     /** turnId -> the text that started it, for the scripted agent. */
     prompts: new Map(),
+    /** turnId -> ends the step it is on now (a person's steer_now). */
+    stepEnders: new Map(),
+    /** Turns asked to read now before their next step began. */
+    readNow: new Set(),
     running: false,
   };
   sessions.set(id, session);
@@ -322,6 +329,73 @@ function enqueue(session, { text, attachments, dispatch, commandId, answer }) {
   return { turnId: turn.id, itemId: item.id };
 }
 
+/** Steer a person's message into the working turn: unread until its next step. */
+function steer(session, turn, { text, attachments, commandId }) {
+  const item = addItem(
+    session,
+    turn.id,
+    "user_message",
+    {
+      ...userMessage({ text, attachments, dispatch: "steer", commandId }),
+      status: "in_progress",
+    },
+    commandId,
+  );
+  return { turnId: turn.id, itemId: item.id, mode: "steer" };
+}
+
+/** A message the ending turn never read runs as a turn of its own after it. */
+function requeueUnread(session, turnId, commandId) {
+  for (const item of [...session.items.values()]) {
+    if (
+      item.turnId !== turnId ||
+      item.kind !== "user_message" ||
+      item.dispatch !== "steer" ||
+      item.status !== "in_progress"
+    )
+      continue;
+    const next = newTurn(session, item.id, "queue");
+    session.prompts.set(next.id, item.text.trim());
+    emit(session, { type: "turn.changed", turn: next }, commandId);
+    changeItem(session, item, {
+      turnId: next.id,
+      dispatch: "queue",
+      status: "completed",
+    });
+  }
+}
+
+/** The turn's step ended: what was steered into it is read. Returns those words. */
+function readSteers(session, turnId) {
+  const read = [];
+  for (const item of session.items.values())
+    if (
+      item.turnId === turnId &&
+      item.kind === "user_message" &&
+      item.dispatch === "steer" &&
+      item.status === "in_progress"
+    ) {
+      changeItem(session, item, { status: "completed" });
+      read.push(item.text);
+    }
+  return read;
+}
+
+/** One step of work, which a person's steer_now ends early. */
+function step(session, turnId, ms) {
+  return new Promise((resolve) => {
+    // Asked to read now before this step began: it ends at once.
+    if (session.readNow.delete(turnId)) return resolve();
+    const timer = setTimeout(done, ms);
+    function done() {
+      clearTimeout(timer);
+      session.stepEnders.delete(turnId);
+      resolve();
+    }
+    session.stepEnders.set(turnId, done);
+  });
+}
+
 /** Run queued turns one at a time, highest priority first. */
 async function drain(session) {
   if (session.running) return;
@@ -346,6 +420,7 @@ function settled(session, turnId) {
 
 function finish(session, turnId, fields) {
   if (settled(session, turnId)) return;
+  requeueUnread(session, turnId);
   changeTurn(session, turnId, {
     status: "completed",
     activity: null,
@@ -539,6 +614,13 @@ async function runTurn(session, turnId) {
     return;
   }
 
+  const heard = [];
+  if (text.startsWith("slow")) {
+    changeTurn(session, turnId, { activity: "Thinking it through..." });
+    await step(session, turnId, 20_000);
+    if (settled(session, turnId)) return;
+    heard.push(...readSteers(session, turnId));
+  }
   changeTurn(session, turnId, { activity: "Reading files..." });
   const command = addItem(session, turnId, "command", {
     command: "ls -la",
@@ -548,8 +630,9 @@ async function runTurn(session, turnId) {
     status: "in_progress",
     endedAt: null,
   });
-  await sleep(600);
+  await step(session, turnId, 600);
   if (settled(session, turnId)) return;
+  heard.push(...readSteers(session, turnId));
   changeItem(session, command, {
     output: "12 files",
     exitCode: 0,
@@ -562,12 +645,13 @@ async function runTurn(session, turnId) {
     change: "modified",
     previousPath: null,
   });
-  await sleep(500);
+  await step(session, turnId, 500);
   if (settled(session, turnId)) return;
+  heard.push(...readSteers(session, turnId));
   await reply(
     session,
     turnId,
-    `You said: **${text}**\n\nHere's what I did:\n\n- Looked around the project\n- Edited \`src/index.ts\`\n\n\`\`\`ts\nexport const answer = 42;\n\`\`\``,
+    `You said: **${text}**${heard.map((words) => `\n\nYou also said: **${words}**`).join("")}\n\nHere's what I did:\n\n- Looked around the project\n- Edited \`src/index.ts\`\n\n\`\`\`ts\nexport const answer = 42;\n\`\`\``,
   );
   finish(session, turnId, {
     outcome: {
@@ -580,6 +664,8 @@ async function runTurn(session, turnId) {
 function interruptTurn(session, turnId, commandId) {
   const turn = session.turns.get(turnId);
   if (!turn || settled(session, turnId)) return;
+  session.stepEnders.get(turnId)?.();
+  requeueUnread(session, turnId, commandId);
   for (const item of session.items.values()) {
     if (item.turnId === turnId && item.status === "in_progress")
       changeItem(session, item, { status: "cancelled", endedAt: now() });
@@ -650,12 +736,38 @@ function command(session, body) {
         session.waiters.delete(blockingQuestion.id);
         return { itemId: item.id, turnId: active.id };
       }
+      const dispatch = body.dispatch ?? "steer";
+      if (dispatch === "steer" && active?.status === "running")
+        return steer(session, active, {
+          text,
+          attachments: body.attachments,
+          commandId: id,
+        });
       return enqueue(session, {
         text,
         attachments: body.attachments,
-        dispatch: body.dispatch ?? "queue",
+        dispatch: dispatch === "steer" ? "queue" : dispatch,
         commandId: id,
       });
+    }
+    case "steer_now": {
+      const item = session.items.get(body.itemId);
+      if (
+        item?.kind !== "user_message" ||
+        item.dispatch !== "steer" ||
+        item.status !== "in_progress"
+      )
+        throw new Error("The agent already read that message");
+      changeTurn(
+        session,
+        item.turnId,
+        { activity: "Taking in your message", activityAt: now() },
+        id,
+      );
+      const ender = session.stepEnders.get(item.turnId);
+      if (ender) ender();
+      else session.readNow.add(item.turnId);
+      return { turnId: item.turnId, itemId: item.id };
     }
     case "interrupt": {
       const active = body.turnId
