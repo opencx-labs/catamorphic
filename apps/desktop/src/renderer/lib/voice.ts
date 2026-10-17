@@ -7,5 +7,5 @@ import { desktopApi } from "./desktop-api.js";
  */
 export async function voiceTap(press: VoicePress): Promise<void> {
   await desktopApi.voicePress(press);
-  await desktopApi.voiceRelease();
+  await desktopApi.voiceRelease({ heldMs: 0 });
 }

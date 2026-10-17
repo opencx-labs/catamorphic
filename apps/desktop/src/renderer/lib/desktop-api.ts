@@ -2078,7 +2078,8 @@ export interface CatamorphicDesktopApi {
    * there, or off when it already was; held, it talked while held.
    */
   voicePress: (press: VoicePress) => Promise<void>;
-  voiceRelease: () => Promise<void>;
+  /** The press came up; `heldMs` is how long it was down, as measured here. */
+  voiceRelease: (input?: { heldMs?: number }) => Promise<void>;
   /** The chat in front of this window, for "Talk to this chat". */
   voiceFrontChat: (
     chat: { projectId: string; sessionId: string } | null,

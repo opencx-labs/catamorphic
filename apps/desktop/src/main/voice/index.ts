@@ -1227,14 +1227,14 @@ export function registerVoiceSupport(deps: {
    * where it already was; a hold is heard at once, and a voice started by
    * it goes off once idle.
    */
-  const pressUp = () => {
+  const pressUp = ({ heldMs }: { heldMs?: number } = {}) => {
     const done = press;
     press = null;
     if (!done) return;
     if (done.key) askForEveryApp(done.profileId);
     const voice = active?.profileId === done.profileId ? active : null;
     if (!voice) return;
-    const tap = Date.now() - done.at < TAP_MS;
+    const tap = (heldMs ?? Date.now() - done.at) < TAP_MS;
     if (tap && done.wasOn) {
       turnOff(voice);
       return;
@@ -1393,7 +1393,10 @@ export function registerVoiceSupport(deps: {
   ipcMain.handle("catamorphic:voice-press", (event, pressed: VoicePress) => {
     pressFrom(windows.profileFor(event.sender), pressed);
   });
-  ipcMain.handle("catamorphic:voice-release", () => pressUp());
+  // A microphone measures its own press: the main process may answer late.
+  ipcMain.handle("catamorphic:voice-release", (_event, input: unknown) =>
+    pressUp({ heldMs: heldMsOf(input) }),
+  );
   // Learning starts voice when it is off: it needs the microphone.
   ipcMain.handle(
     "catamorphic:voice-learn",
@@ -1856,6 +1859,16 @@ function sameFrame(a: WebFrameMain, b: WebFrameMain): boolean {
       a.processId === b.processId &&
       a.routingId === b.routingId)
   );
+}
+
+/** How long a press was held, as the page that saw it measured it. */
+function heldMsOf(input: unknown): number | undefined {
+  if (typeof input !== "object" || input === null || !("heldMs" in input))
+    return undefined;
+  const { heldMs } = input;
+  return typeof heldMs === "number" && Number.isFinite(heldMs) && heldMs >= 0
+    ? heldMs
+    : undefined;
 }
 
 /** Audio pages, live, resting or opening: the person never sees them. */

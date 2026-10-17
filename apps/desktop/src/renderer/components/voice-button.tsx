@@ -581,8 +581,11 @@ export function VoiceButton({
   };
   /** A press under way: its release waits for it to reach voice. */
   const pressing = useRef<Promise<unknown> | null>(null);
+  /** When the press went down: the press is measured here, as it happened. */
+  const pressedAt = useRef(0);
   const pressDown = () => {
     if (pressing.current) return;
+    pressedAt.current = performance.now();
     if (!on) setStarting(true);
     pressing.current = pressOf()
       .then((press) => (press ? desktopApi.voicePress(press) : undefined))
@@ -594,8 +597,9 @@ export function VoiceButton({
     const press = pressing.current;
     if (!press) return;
     pressing.current = null;
+    const heldMs = performance.now() - pressedAt.current;
     void press
-      .then(() => desktopApi.voiceRelease())
+      .then(() => desktopApi.voiceRelease({ heldMs }))
       .finally(() => setStarting(false));
   };
   /** Voice learning, started or moved here, then settled. */

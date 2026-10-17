@@ -1575,7 +1575,8 @@ const api = {
     invoke("catamorphic:voice-get-status"),
   voicePress: (press: VoicePress): Promise<void> =>
     invoke("catamorphic:voice-press", press),
-  voiceRelease: (): Promise<void> => invoke("catamorphic:voice-release"),
+  voiceRelease: (input?: { heldMs?: number }): Promise<void> =>
+    invoke("catamorphic:voice-release", input),
   voiceFrontChat: (chat: { projectId: string; sessionId: string } | null) =>
     ipcRenderer.send("catamorphic:voice-front-chat", chat),
   voiceReset: (): Promise<void> => invoke("catamorphic:voice-reset"),
