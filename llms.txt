@@ -14,7 +14,7 @@ Work is the product; Catamorphic is the open-source framework it is built on. Bo
 - Price: free; no account, subscription or hosted service required
 - Platform: macOS 12 or newer on Apple silicon (desktop); a mobile web companion; the Work server, a self-hosted Docker image
 - Install: `brew install --cask opencx-labs/tap/work@alpha`, or the DMG on https://github.com/opencx-labs/catamorphic/releases
-- AI: your own Claude Code or Codex account, or API keys (Anthropic, OpenAI, OpenRouter); providers bill you directly
+- AI: your own Claude Code or Codex account, your own Hermes Agent, or API keys (Anthropic, OpenAI, OpenRouter); providers bill you directly
 - Data: stays on your Mac by default; optionally on a server you run
 - Work server: `ghcr.io/opencx-labs/work-server`, published with every release (tags: the release version, `alpha`, and `latest` for Stable); one `docker run` with zero external services, `DATABASE_URL` opts into Postgres
 - Connect other tools: MCP (a project on your server is an MCP endpoint)
@@ -39,7 +39,7 @@ We built Work because we believe one well-built piece of software can replace mo
 
 - A project is an ordinary folder and a git repository. Every agent turn that changes files becomes a checkpoint commit; you can inspect diffs or trust routine work to continue.
 - Chats float over whatever you are doing (a page, a document, a terminal) and can be minimized to a dock. Agents see the workspace context you give them: the page, the file, the terminal.
-- Agents can be Claude Code, Codex, API models, or an Agent Client Protocol agent a project names, such as Hermes, which runs its own command on the desktop once you approve it (multi-harness), with per-agent permission mode (each harness's own, such as Claude Code's plan, auto or bypass permissions, or Codex's sandbox and approvals), sandboxing, memory, skills, instructions and effort. Connectors (MCP) attach to profiles and agents.
+- Agents can be Claude Code, Codex, API models, your own Hermes Agent (added in Settings, with its own model, memory and sign-in), or an Agent Client Protocol agent a project names, which runs its own command on the desktop once you approve it (multi-harness), with per-agent permission mode (each harness's own, such as Claude Code's plan, auto or bypass permissions, or Codex's sandbox and approvals), sandboxing, memory, skills, instructions and effort. Connectors (MCP) attach to profiles and agents.
 - Chats you run in Claude Code or Codex outside Work can appear among the project's chats (in the palette and any list of them), once you turn it on in that agent's settings: only chats started after that, kept current as the CLI writes, and never synced to a server. Only an agent of the same tool continues one, and a Claude Code chat resumes Claude Code's own session.
 - Every chat is a durable log of turns, the same on the desktop, the phone and the server, streamed live. Questions and approvals can be answered from any of them, a message sent while an agent waits on a question reaches it in the same turn, a turn whose machine stopped is picked up by another and continues on the agent's own conversation, and any turn can be undone with the files it changed.
 - Agents write durable workflows (TypeScript, run in sandboxes, resumable) and apps (small React screens built from Work's component kit). An app can read your own chats in a project after you allow it once; it never sees anyone else's.

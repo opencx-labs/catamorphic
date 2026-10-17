@@ -18,15 +18,20 @@ import { PendingButton } from "./pending-button.js";
  * existing sign-in when `agentSetupStatus` detects one.
  */
 
-type Step = "choose" | "claude-code" | "codex" | "api-key";
+type Step = "choose" | "claude-code" | "codex" | "hermes" | "api-key";
 /** One create-and-sign-in path; "-account" = a separate, per-agent login. */
 type Flow =
   | "claude-code"
   | "claude-code-account"
   | "codex"
   | "codex-account"
+  | "hermes"
   | "free";
 type AiSdkProvider = "anthropic" | "openai" | "openrouter";
+
+/** Hermes' own installer (hermes-agent.nousresearch.com). */
+const HERMES_INSTALL =
+  "curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash";
 
 const primaryActionClass =
   "min-h-9 w-full cursor-pointer rounded-md bg-accent px-3 py-2 text-sm font-medium text-accent-fg transition-[opacity,transform] duration-150 hover:opacity-90 active:scale-[0.98] motion-reduce:transition-none motion-reduce:active:scale-100 disabled:cursor-not-allowed disabled:opacity-50";
@@ -34,7 +39,7 @@ const secondaryActionClass =
   "min-h-9 w-full cursor-pointer rounded-md border border-border px-3 py-2 text-sm text-fg-muted transition-[background-color,border-color,color,opacity,transform] duration-150 hover:border-border-strong hover:bg-bg-overlay hover:text-fg active:scale-[0.98] motion-reduce:transition-none motion-reduce:active:scale-100 disabled:cursor-not-allowed disabled:opacity-50";
 
 const OPTIONS: Array<{
-  id: "claude-code" | "codex" | "api-key" | "free";
+  id: "claude-code" | "codex" | "hermes" | "api-key" | "free";
   title: string;
   description: string;
 }> = [
@@ -47,6 +52,11 @@ const OPTIONS: Array<{
     id: "codex",
     title: "ChatGPT",
     description: "Your ChatGPT account, via the Codex CLI.",
+  },
+  {
+    id: "hermes",
+    title: "Hermes",
+    description: "Your own Hermes Agent, with its model and memory.",
   },
   {
     id: "api-key",
@@ -81,6 +91,7 @@ export function AgentWizard({
   const [status, setStatus] = useState<{
     claudeCode: boolean;
     codex: boolean;
+    hermes: string | null;
   } | null>(null);
   const [busy, setBusy] = useState(false);
   // Which flow the busy state belongs to, so only the clicked button of a
@@ -276,7 +287,7 @@ export function AgentWizard({
   };
 
   /** "Already set up here" path: create the local-auth agent and finish. */
-  const addExistingSetup = async (flow: "claude-code" | "codex") => {
+  const addExistingSetup = async (flow: "claude-code" | "codex" | "hermes") => {
     setError(null);
     setBusy(true);
     setBusyFlow(flow);
@@ -665,6 +676,79 @@ export function AgentWizard({
                     Finish signing in in your browser…
                   </p>
                 )}
+              </>
+            ))}
+
+          {step === "hermes" &&
+            (status?.hermes ? (
+              <>
+                <h2 className="text-balance text-base font-semibold">
+                  Use your Hermes
+                </h2>
+                <p className="mt-2 text-pretty text-sm text-fg-muted">
+                  Hermes is installed on this machine. Work runs it as an agent,
+                  with its own model, memory and sign-in.
+                </p>
+                <p
+                  className="mt-1 truncate font-mono text-[11px] text-fg-faint"
+                  data-testid="agent-wizard-hermes-path"
+                >
+                  {status.hermes}
+                </p>
+                <div className="mt-3">{nameField("Hermes")}</div>
+                {connectionsField}
+                <PendingButton
+                  type="button"
+                  pending={busy && busyFlow === "hermes"}
+                  pendingLabel="Adding…"
+                  disabled={busy}
+                  data-disabled-reason="Wait for the current action to finish"
+                  onClick={() => void addExistingSetup("hermes")}
+                  className={`mt-4 ${primaryActionClass}`}
+                  data-testid="agent-wizard-hermes-use"
+                >
+                  Use Hermes
+                </PendingButton>
+              </>
+            ) : (
+              <>
+                <h2 className="text-balance text-base font-semibold">
+                  Install Hermes
+                </h2>
+                <p className="mt-2 text-pretty text-sm text-fg-muted">
+                  Hermes Agent by Nous Research is not on this machine yet.
+                  Install it in a terminal, choose its model, then check again.
+                </p>
+                <div className="mt-3 flex flex-col gap-1.5">
+                  {[HERMES_INSTALL, "hermes setup"].map((command) => (
+                    <div
+                      key={command}
+                      data-copyable
+                      className="flex items-center gap-1.5"
+                    >
+                      <code className="min-w-0 flex-1 truncate rounded-md border border-border bg-bg-inset px-2 py-1 font-mono text-[11px] text-fg-muted">
+                        {command}
+                      </code>
+                      <CopyButton value={command} label="Copy command" />
+                    </div>
+                  ))}
+                </div>
+                <PendingButton
+                  type="button"
+                  pending={busy}
+                  pendingLabel="Checking…"
+                  onClick={() => {
+                    setBusy(true);
+                    void desktopApi
+                      .agentSetupStatus()
+                      .then(setStatus)
+                      .finally(() => setBusy(false));
+                  }}
+                  className={`mt-4 ${primaryActionClass}`}
+                  data-testid="agent-wizard-hermes-recheck"
+                >
+                  Check again
+                </PendingButton>
               </>
             ))}
 

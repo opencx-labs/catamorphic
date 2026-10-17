@@ -111,6 +111,7 @@ export function defaultModelLabel(
   if (model) return model.id;
   if (agent?.harness === "claude-code") return "Claude Code default";
   if (agent?.harness === "codex") return "Codex default";
+  if (agent?.harness === "hermes") return "Hermes default";
   if (agent?.harness === "ai-sdk" && agent.provider === "openrouter")
     return "Best free model";
   return "Agent default";

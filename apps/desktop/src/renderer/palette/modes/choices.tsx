@@ -103,6 +103,7 @@ const HARNESS_LABELS: Record<AgentInfo["harness"], string> = {
   "ai-sdk": "Built-in",
   "claude-code": "Claude Code",
   codex: "Codex",
+  hermes: "Hermes",
 };
 
 const PROVIDER_LABELS: Record<string, string> = {

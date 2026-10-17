@@ -42,8 +42,8 @@ folders remain ordinary files you can import.
 ### Desktop app
 
 The desktop app ([`apps/desktop`](apps/desktop)) is a local-first workspace and
-the framework's reference implementation. Claude Code, Codex, and API models
-can work side by side in durable sessions. Agents use the browser, terminals,
+the framework's reference implementation. Claude Code, Codex, Hermes, and API
+models can work side by side in durable sessions. Agents use the browser, terminals,
 editors, project files, apps, and connectors you can also use yourself. You can
 take over a surface at any moment, inspect diffs when a change deserves your
 eyes, or trust routine work to continue.

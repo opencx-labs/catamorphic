@@ -1186,11 +1186,29 @@ export function registerIpcHandlers(
   // already have a Claude Code / Codex login the `local` auth mode can
   // inherit? (E2E reports both present so wizard flows stay scripted.)
   ipcMain.handle("catamorphic:agent-setup-status", () => {
-    if (process.env.CATAMORPHIC_E2E_FAKE_AGENT === "1") {
-      return { claudeCode: true, codex: true };
-    }
     const home = app.getPath("home");
+    // Hermes (ADR 0241): the person's own install, on PATH or where its
+    // installer puts it, which the agent's PATH also includes.
+    const hermes =
+      [
+        ...(process.env.PATH ?? "").split(path.delimiter),
+        path.join(home, ".local", "bin"),
+      ]
+        .filter(Boolean)
+        .map((dir) => path.join(dir, "hermes"))
+        .find((file) => {
+          try {
+            fs.accessSync(file, fs.constants.X_OK);
+            return true;
+          } catch {
+            return false;
+          }
+        }) ?? null;
+    if (process.env.CATAMORPHIC_E2E_FAKE_AGENT === "1") {
+      return { claudeCode: true, codex: true, hermes };
+    }
     return {
+      hermes,
       claudeCode: [
         path.join(home, ".claude", ".credentials.json"),
         path.join(home, ".claude.json"),
@@ -1299,6 +1317,8 @@ export function registerIpcHandlers(
     async (event, id: string) => {
       const agent = storesFor(event).agents.get(id);
       if (!agent) return false;
+      // Hermes signs in on its own (ADR 0241); Work never sees it.
+      if (agent.harness === "hermes") return true;
       if (agent.auth === "api-key" || agent.harness === "ai-sdk") {
         return agent.apiKey !== null;
       }
@@ -1331,6 +1351,7 @@ export function registerIpcHandlers(
         return { health: forced, reauth: agent === undefined ? true : reauth };
       }
       if (!agent) return { health: "missing", reauth };
+      if (agent.harness === "hermes") return { health: "ok", reauth };
       if (agent.auth === "api-key" || agent.harness === "ai-sdk") {
         return { health: agent.apiKey !== null ? "ok" : "missing", reauth };
       }

@@ -52,12 +52,14 @@ const HARNESS_LABELS: Record<AgentHarness, string> = {
   "ai-sdk": "Built-in",
   "claude-code": "Claude Code",
   codex: "Codex",
+  hermes: "Hermes",
 };
 
 const MODEL_PLACEHOLDERS: Record<AgentHarness, string> = {
   "ai-sdk": "claude-sonnet-4-5",
   "claude-code": "claude-sonnet-4-5",
   codex: "gpt-5.3-codex",
+  hermes: "",
 };
 
 const COORDINATION_OPTIONS: Array<{
@@ -360,7 +362,9 @@ function ProfileAgentBody({
           : { harnessPermissions }),
         coordination,
         memory,
-        ...(harness === "ai-sdk" ? {} : { syncSessions }),
+        ...(harness === "ai-sdk" || harness === "hermes"
+          ? {}
+          : { syncSessions }),
         instructions,
         auth: effectiveAuth,
         connections,
@@ -468,7 +472,17 @@ function ProfileAgentBody({
                 </label>
               )}
 
-              {harness === "ai-sdk" && provider === "openrouter" ? (
+              {harness === "hermes" ? (
+                // Hermes keeps its model in its own configuration (ADR 0241).
+                <p
+                  className="text-xs text-fg-faint"
+                  data-testid="agent-hermes-model"
+                >
+                  Hermes runs the model its own configuration names. Run{" "}
+                  <code className="font-mono">hermes model</code> in a terminal
+                  to change it.
+                </p>
+              ) : harness === "ai-sdk" && provider === "openrouter" ? (
                 <OpenRouterModelField value={model} onChange={setModel} />
               ) : (
                 <label className="flex flex-col gap-1 text-xs text-fg-muted">
@@ -488,29 +502,31 @@ function ProfileAgentBody({
                 </label>
               )}
 
-              <label className="flex flex-col gap-1 text-xs text-fg-muted">
-                Effort
-                <select
-                  value={effort}
-                  onChange={(event) =>
-                    setEffort(event.target.value as AgentEffort)
-                  }
-                  className="field h-8 px-2 text-[13px] text-fg"
-                  data-testid="agent-effort"
-                >
-                  {EFFORT_LEVELS.map((level) => (
-                    <option key={level} value={level}>
-                      {level}
-                    </option>
-                  ))}
-                </select>
-                {harness === "codex" &&
-                  (effort === "max" || effort === "xhigh") && (
-                    <span className="text-fg-faint">
-                      Codex tops out at xhigh; max runs there.
-                    </span>
-                  )}
-              </label>
+              {harness !== "hermes" && (
+                <label className="flex flex-col gap-1 text-xs text-fg-muted">
+                  Effort
+                  <select
+                    value={effort}
+                    onChange={(event) =>
+                      setEffort(event.target.value as AgentEffort)
+                    }
+                    className="field h-8 px-2 text-[13px] text-fg"
+                    data-testid="agent-effort"
+                  >
+                    {EFFORT_LEVELS.map((level) => (
+                      <option key={level} value={level}>
+                        {level}
+                      </option>
+                    ))}
+                  </select>
+                  {harness === "codex" &&
+                    (effort === "max" || effort === "xhigh") && (
+                      <span className="text-fg-faint">
+                        Codex tops out at xhigh; max runs there.
+                      </span>
+                    )}
+                </label>
+              )}
 
               <label className="flex flex-col gap-1 text-xs text-fg-muted">
                 Voice
@@ -558,7 +574,7 @@ function ProfileAgentBody({
                 data={data}
                 projectId={projectId}
               />
-              {harness !== "ai-sdk" && (
+              {harness !== "ai-sdk" && harness !== "hermes" && (
                 <label className="flex cursor-pointer items-start justify-between gap-3 text-xs text-fg-muted">
                   <span>
                     <span className="block text-[12px] text-fg">
@@ -807,7 +823,18 @@ function ProfileAgentBody({
             </>
           )}
 
-          {tab === "auth" && (
+          {tab === "auth" && harness === "hermes" && (
+            <p
+              className="text-xs text-fg-muted"
+              data-testid="agent-hermes-auth"
+            >
+              Hermes signs in on its own, on this machine. Run{" "}
+              <code className="font-mono">hermes setup</code> in a terminal to
+              change its provider or sign-in.
+            </p>
+          )}
+
+          {tab === "auth" && harness !== "hermes" && (
             <>
               {(harness !== "ai-sdk" || provider === "openrouter") && (
                 <label className="flex flex-col gap-1 text-xs text-fg-muted">

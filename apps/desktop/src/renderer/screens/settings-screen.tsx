@@ -473,6 +473,7 @@ const HARNESS_LABELS: Record<AgentHarness, string> = {
   "ai-sdk": "Built-in",
   "claude-code": "Claude Code",
   codex: "Codex",
+  hermes: "Hermes",
 };
 
 interface AgentLoginUi {
@@ -637,15 +638,24 @@ function AgentsSection({
                 <div className="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[11px] text-fg-faint">
                   <span>{HARNESS_LABELS[agent.harness]}</span>
                   <span>·</span>
-                  <span className={agent.model ? "font-mono" : ""}>
-                    {agent.model || "default model"}
-                  </span>
-                  <span>·</span>
-                  <span>{agent.effort} effort</span>
-                  <span>·</span>
-                  <span className={keyed && agent.hasApiKey ? "font-mono" : ""}>
-                    {authText}
-                  </span>
+                  {agent.harness === "hermes" ? (
+                    // Hermes keeps these in its own configuration (ADR 0241).
+                    <span>its own model and sign-in</span>
+                  ) : (
+                    <>
+                      <span className={agent.model ? "font-mono" : ""}>
+                        {agent.model || "default model"}
+                      </span>
+                      <span>·</span>
+                      <span>{agent.effort} effort</span>
+                      <span>·</span>
+                      <span
+                        className={keyed && agent.hasApiKey ? "font-mono" : ""}
+                      >
+                        {authText}
+                      </span>
+                    </>
+                  )}
                 </div>
                 {agent.auth === "account" && !connected && (
                   <div className="mt-2 flex flex-col gap-1.5">

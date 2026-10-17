@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { createAcpAdapter } from "@catamorphic/acp";
 import type { JsonObject } from "@catamorphic/agent-protocol";
@@ -418,7 +419,9 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     const { config, profileId } = resolved;
     if (profileId !== this.deps.profiles.profileForProject(projectId).id)
       return { commands: [], error: "This agent belongs to another profile." };
-    if (config.harness === "ai-sdk") return { commands: [] };
+    // Hermes' slash commands stay in Hermes.
+    if (config.harness === "ai-sdk" || config.harness === "hermes")
+      return { commands: [] };
     if (this.deps.e2eFake) {
       return {
         commands:
@@ -570,7 +573,9 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     config: AgentConfig,
     workingDirectory: string,
   ): Promise<AgentDefaultModelResult> {
-    if (config.harness === "ai-sdk") return { model: null };
+    // Hermes names its model in its own configuration (`hermes model`).
+    if (config.harness === "ai-sdk" || config.harness === "hermes")
+      return { model: null };
     try {
       const { component, environment } = await this.ensureNativeComponents(
         config.harness,
@@ -1030,6 +1035,26 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
       toolAnnotations: () => live().annotations,
       ...this.workspaceHooks({ config, profileId, assistant }),
     } satisfies Partial<HostHarness>;
+
+    // The person's own Hermes over ACP (ADR 0241), on its own model,
+    // memory and sign-in. Never the scripted fake: e2e puts a stand-in
+    // `hermes` on PATH.
+    if (config.harness === "hermes")
+      return {
+        harness: {
+          placement: "host",
+          adapter: createAcpAdapter({ id: "hermes" }),
+          ...served,
+          // Where Hermes' installer puts it, should PATH not say.
+          env: {
+            PATH: [process.env.PATH, path.join(os.homedir(), ".local", "bin")]
+              .filter(Boolean)
+              .join(path.delimiter),
+          },
+        },
+        options: { command: ["hermes", "acp"] },
+        defaults: {},
+      };
 
     // E2E: same registry mechanics, scripted harness, so renderer flows
     // (agent lists, switching, effort) exercise the real plumbing. It
@@ -1520,7 +1545,10 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
           ? "Claude Code"
           : config.harness === "codex"
             ? "Codex"
-            : (labels[config.provider ?? "anthropic"] ?? "The model provider"),
+            : config.harness === "hermes"
+              ? "Hermes"
+              : (labels[config.provider ?? "anthropic"] ??
+                "The model provider"),
     };
   }
 

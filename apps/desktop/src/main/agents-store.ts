@@ -37,7 +37,7 @@ import {
  * built-in agent on OpenRouter it's the browser PKCE flow, whose scoped
  * key lands back in the config so the user never pastes one.
  */
-export type AgentHarness = "ai-sdk" | "claude-code" | "codex";
+export type AgentHarness = "ai-sdk" | "claude-code" | "codex" | "hermes";
 export type AgentEffortSetting = "low" | "medium" | "high" | "xhigh" | "max";
 
 /**
@@ -213,6 +213,9 @@ export function agentAccepts(config: {
       return ["image", "document"];
     case "codex":
       return ["image", "document"];
+    // Hermes takes images over ACP; documents are named as not delivered.
+    case "hermes":
+      return ["image"];
   }
 }
 
@@ -222,6 +225,7 @@ export const DEFAULT_AGENT_NAMES: Record<AgentHarness, string> = {
   "ai-sdk": "Built-in",
   "claude-code": "Claude",
   codex: "ChatGPT",
+  hermes: "Hermes",
 };
 
 export interface CreateAgentInput {

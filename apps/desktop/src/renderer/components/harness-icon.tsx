@@ -1,4 +1,4 @@
-import { Bot } from "lucide-react";
+import { Bot, Feather } from "lucide-react";
 import claude from "../assets/harnesses/claude.svg";
 import openai from "../assets/harnesses/openai.svg";
 import openrouter from "../assets/harnesses/openrouter.svg";
@@ -21,6 +21,15 @@ export function HarnessIcon({
         : provider === "openrouter"
           ? "openrouter"
           : "default";
+  // Hermes (ADR 0241): its winged sandals, not a brand mark.
+  if (harness === "hermes")
+    return (
+      <Feather
+        aria-hidden="true"
+        data-harness-icon="hermes"
+        className={`shrink-0 ${className}`}
+      />
+    );
   if (brand === "default")
     return (
       <Bot

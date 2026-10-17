@@ -262,8 +262,12 @@ const api = {
     slug: string,
   ): Promise<{ ok: boolean; error?: string }> =>
     invoke("catamorphic:project-agent-approve", projectId, slug),
-  agentSetupStatus: (): Promise<{ claudeCode: boolean; codex: boolean }> =>
-    invoke("catamorphic:agent-setup-status"),
+  agentSetupStatus: (): Promise<{
+    claudeCode: boolean;
+    codex: boolean;
+    /** Where the person's Hermes is installed, if it is. */
+    hermes: string | null;
+  }> => invoke("catamorphic:agent-setup-status"),
   claudeCodeStatus: (): Promise<ClaudeCodeInstallStatus | null> =>
     invoke("catamorphic:claude-code-status"),
   claudeCodeUpdate: (): Promise<{

@@ -75,6 +75,7 @@ export function permissionModeChoices(
         })),
       ];
     case "ai-sdk":
+    case "hermes":
       return [];
   }
 }

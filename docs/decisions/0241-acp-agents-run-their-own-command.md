@@ -38,15 +38,26 @@ hash already covers it.
   ACP has no steer, so a message sent mid-turn restarts the attempt with
   it.
 
+**Hermes is also an agent of the person's own.** Settings' setup wizard
+offers Hermes beside Claude and ChatGPT: it finds the install on PATH or
+in `~/.local/bin` (where Hermes' installer puts it) and adds an agent of
+harness `hermes` that runs `hermes acp` through the same adapter. Nothing
+is approved, since the person set it up; when Hermes is missing the wizard
+shows Hermes' own install and setup commands. Work never downloads it (a
+Python install cannot be integrity-pinned like ADR 0091's components) and
+offers no model, effort or key fields for it: those stay in Hermes
+(`hermes model`, `hermes setup`). Its harness id is `hermes`, so its chats
+stay with it; a project's ACP agents are `acp:<command name>`.
+
 Considered: Hermes' TUI gateway protocol, which adds steering, questions and
 branching. It is Hermes' own and changes with it; ACP is the seam ADR 0050
 chose and covers other agents too.
 
 ## Consequences
 
-A project commits `{"kind": "acp", "acp": {"command": ["hermes", "acp"]}}`
-and its members chat with their own Hermes on the desktop after approving
-it. Each turn starts the agent's process. A host tool call that waits longer
+A person adds their Hermes in Settings in one step, and a project can
+commit `{"kind": "acp", "acp": {"command": ["hermes", "acp"]}}` for its
+members to approve. Each turn starts the agent's process. A host tool call that waits longer
 than the agent's own MCP timeout (Hermes: five minutes) fails on its side.
 Still open: the `acp.endpoint` transport, ACP agents on the Work server
 (the agent must be in the sandbox image), model choice through ACP, and

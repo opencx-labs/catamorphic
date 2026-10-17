@@ -106,6 +106,29 @@ it("registers Claude Code as a native host harness with the agent's settings", (
   expect(harness.env?.CLAUDE_CONFIG_DIR).toContain("claude");
 });
 
+it("registers Hermes as `hermes acp` over ACP, never the scripted fake (ADR 0241)", () => {
+  const hermes = {
+    id: "hermes",
+    name: "Hermes",
+    harness: "hermes",
+    model: "",
+    effort: "medium",
+    auth: "local",
+    apiKey: null,
+  };
+  const { agent, harness } = hostOf(
+    registryWith(hermes, { e2eFake: true }),
+    "hermes",
+  );
+  expect(harness.adapter.id).toBe("hermes");
+  expect(agent.options).toEqual({ command: ["hermes", "acp"] });
+  expect(agent.defaults).toEqual({});
+  // Where Hermes' installer puts it, should PATH not say.
+  expect(harness.env?.PATH?.split(path.delimiter)).toContain(
+    path.join(os.homedir(), ".local", "bin"),
+  );
+});
+
 const probeConnection = {
   id: "probe-id",
   name: "probe",

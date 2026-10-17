@@ -157,7 +157,7 @@ export interface SessionCheckoutDetail {
   changedFiles: number | null;
 }
 
-export type AgentHarness = "ai-sdk" | "claude-code" | "codex";
+export type AgentHarness = "ai-sdk" | "claude-code" | "codex" | "hermes";
 export type AgentEffort = "low" | "medium" | "high" | "xhigh" | "max";
 export type AgentAuthMode = "local" | "account" | "api-key";
 
@@ -1289,7 +1289,12 @@ export interface CatamorphicDesktopApi {
     projectId: string,
     slug: string,
   ) => Promise<{ ok: boolean; error?: string }>;
-  agentSetupStatus: () => Promise<{ claudeCode: boolean; codex: boolean }>;
+  agentSetupStatus: () => Promise<{
+    claudeCode: boolean;
+    codex: boolean;
+    /** Where the person's Hermes is installed, if it is. */
+    hermes: string | null;
+  }>;
   /** Which Claude Code runs: the person's own install or Work's copy. */
   claudeCodeStatus: () => Promise<ClaudeCodeInstallStatus | null>;
   /** Run the person's own Claude Code updater. */

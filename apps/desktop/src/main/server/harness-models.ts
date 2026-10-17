@@ -113,6 +113,9 @@ async function fetchModels(
     }
     case "codex":
       return codexModels(config, deps);
+    // Hermes keeps its model in its own configuration (`hermes model`).
+    case "hermes":
+      return [];
     case "ai-sdk":
       if (config.provider === "anthropic") return anthropicModels(config);
       if (config.provider === "openai") return openaiModels(config);
