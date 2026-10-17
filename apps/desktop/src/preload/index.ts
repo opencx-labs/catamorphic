@@ -57,7 +57,11 @@ import type {
 } from "../shared/git.js";
 import type { MenuItem, PageContextMenu } from "../shared/menu.js";
 import type { OpenMode } from "../shared/open-mode.js";
-import type { PrCommentInput, PrDecisionInput } from "../shared/pr-details.js";
+import type {
+  PrCommentInput,
+  PrDecisionInput,
+  PullRequestStatus,
+} from "../shared/pr-details.js";
 import type { SettingsScope } from "../shared/settings.js";
 import type {
   SidebarSourceRequest,
@@ -130,7 +134,7 @@ const api = {
     invoke("catamorphic:dock-new-chat", input),
   dockAction: (
     localId: string,
-    action: "close" | "minimize" | "send",
+    action: "close" | "minimize" | "send" | "focusChips",
     message?: string,
   ): Promise<void> =>
     invoke("catamorphic:dock-action", localId, action, message),
@@ -1494,6 +1498,8 @@ const api = {
     invoke("catamorphic:pr-review", projectId, number),
   prList: (projectId: string): Promise<unknown> =>
     invoke("catamorphic:pr-list", projectId),
+  prStatus: (url: string): Promise<PullRequestStatus | null> =>
+    invoke("catamorphic:pr-status", url),
   prFiles: (projectId: string, number: number): Promise<unknown> =>
     invoke("catamorphic:pr-files", projectId, number),
 
@@ -1525,6 +1531,8 @@ const api = {
       callId: string;
       projectId: string;
       sectionId: string;
+      /** The chat the asking request serves, for Work's chat-scoped lists. */
+      sessionId?: string;
       call: SidebarSourceWorkCall;
     }) => void,
   ) => {
@@ -1534,6 +1542,7 @@ const api = {
         callId: string;
         projectId: string;
         sectionId: string;
+        sessionId?: string;
         call: SidebarSourceWorkCall;
       },
     ) => listener(value);

@@ -9,15 +9,15 @@ import {
   type SidebarSourceWorkCall,
   sidebarSourceEffect,
 } from "../shared/sidebar-source.js";
+import {
+  sanitizeSidebarSourceItem,
+  sanitizeSidebarSourcePage,
+} from "../shared/source-rows.js";
 import { executableSource } from "../shared/workspace-config.js";
 import type { WindowProfileRegistry } from "./index.js";
 import type { ProfileConfigManager } from "./profile-config.js";
 import type { ProfilesStore } from "./profiles.js";
 import { SidebarSourceRuntime } from "./sidebar-source-runtime.js";
-import {
-  sanitizeSidebarSourceItem,
-  sanitizeSidebarSourcePage,
-} from "./workspace-config.js";
 
 const identity = z.object({
   projectId: z.string().min(1),
@@ -179,6 +179,8 @@ export function registerSidebarSources(deps: {
       sectionId?: string;
       collections?: readonly string[];
       workflows?: readonly string[];
+      /** The chat the request serves, which Work's chat lists read. */
+      sessionId?: string;
     }
   >();
   /** Work calls waiting on a window's answer. */
@@ -250,6 +252,7 @@ export function registerSidebarSources(deps: {
         callId,
         projectId: request.projectId,
         sectionId: request.sectionId,
+        ...(request.sessionId ? { sessionId: request.sessionId } : {}),
         call,
       });
     });
@@ -323,6 +326,7 @@ export function registerSidebarSources(deps: {
         sectionId?: string;
         collections?: readonly string[];
         workflows?: readonly string[];
+        sessionId?: string;
       } = { cancelled: false };
       requests.set(key, request);
       try {
@@ -336,6 +340,7 @@ export function registerSidebarSources(deps: {
           sectionId: input.sectionId,
           collections: grants.collections,
           workflows: grants.workflows,
+          sessionId: input.session?.id,
         });
         const { after, ...rest } = input;
         const result = await runtime.request({

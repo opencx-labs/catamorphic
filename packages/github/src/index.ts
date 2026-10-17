@@ -3,6 +3,7 @@ export {
   type GithubApiOptions,
   gitCredentialsFor,
   isGithubRemoteUrl,
+  pullRequestFromUrl,
   repoFullNameFromUrl,
 } from "./api.js";
 export {
@@ -56,6 +57,7 @@ export {
   type GithubPermissions,
   type GithubPullRequest,
   type GithubPullRequestFile,
+  type GithubPullRequestStatus,
   type GithubRepo,
   type GithubRepositoryEvent,
   type GithubReviewComment,

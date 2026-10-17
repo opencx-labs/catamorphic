@@ -11,7 +11,7 @@ export interface BrowserEntry {
   url: string;
   title: string;
   faviconUrl: string | null;
-  /** Chat this tab is attached to (its surfaces rail), if any. */
+  /** Chat this tab is attached to (among its chips), if any. */
   chatLocalId?: string;
   /** An agent is driving this page; user interaction waits on Take over. */
   agentControlled?: boolean;
@@ -28,7 +28,7 @@ export interface TerminalEntry {
   initialCommand?: string;
   /** Shell title (OSC 0/2) — feeds the tab label. */
   title: string;
-  /** Chat this tab is attached to (its surfaces rail), if any. */
+  /** Chat this tab is attached to (among its chips), if any. */
   chatLocalId?: string;
   /** Attached to an agent-owned PTY session instead of spawning one. */
   attachSessionId?: string;
@@ -62,7 +62,7 @@ export interface TerminalEntry {
   running?: boolean;
   /**
    * Agent terminal without a workspace tab: the PTY runs and the chip
-   * rides the chat's surfaces rail, but no tab appears and focus stays
+   * rides the chat's chips, but no tab appears and focus stays
    * put. Cleared when the user clicks the chip or the agent shows the
    * terminal via open_surface; closing the tab of a terminal attached to
    * a chat sets it back while its process runs. A background agent
@@ -80,7 +80,7 @@ export interface EditorEntry {
   filePath: string | null;
   /** Unsaved draft in the tab — a dot on the tab icon. */
   dirty: boolean;
-  /** Chat this tab is attached to (its surfaces rail), if any. */
+  /** Chat this tab is attached to (among its chips), if any. */
   chatLocalId?: string;
   /** Attached surface kept as a chip without occupying a tab. */
   background?: boolean;
@@ -213,7 +213,12 @@ export const serializeWorkspace = (
   const chats = ws.chats
     .filter((chat) => moving || chat.sessionId)
     .map(
-      ({ pendingMessage: _pending, focusMessageId: _focus, ...chat }) => chat,
+      ({
+        pendingMessage: _pending,
+        draftMessage: _draft,
+        focusMessageId: _focus,
+        ...chat
+      }) => chat,
     );
   const chatIds = new Set(chats.map((chat) => chat.localId));
   const chatRef = (id: string | undefined) =>

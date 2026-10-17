@@ -7,16 +7,18 @@
  */
 import { RESERVED_PALETTE_TRIGGERS } from "../shared/palette.js";
 
-export const WORKSPACE_AUTHORING_GUIDE = `## Workspace: sidebars and palette modes in workspace.js
+export const WORKSPACE_AUTHORING_GUIDE = `## Workspace: sidebars, chips and palette modes in workspace.js
 
-workspace.js holds what the window offers: both sidebars and your own command
-palette modes. Use the supplied workspace paths. Precedence is built-in, profile,
-shared project (.work/workspace.js), personal project. Each file replaces the
-entire document. Read the resolved highest existing layer before copying it to a
-higher layer, then edit only the intended parts. Preserve unrelated content. The
-profile file is the live, commented schema/example; read it before editing.
+workspace.js holds what the window offers: both sidebars, the chips above every
+chat's composer, and your own command palette modes. Use the supplied workspace
+paths. Precedence is built-in, profile, shared project (.work/workspace.js),
+personal project. Each file replaces the entire document. Read the resolved
+highest existing layer before copying it to a higher layer, then edit only the
+intended parts. Preserve unrelated content. The profile file is the live,
+commented schema/example; read it before editing.
 Export with module.exports = { sidebars: { left: [...], right: [...] },
-palette: { modes: [...] } }; palette is optional and no other keys are allowed.
+palette: { modes: [...] }, chips: { source } }; palette and chips are optional
+and no other keys are allowed.
 Delete an override file to inherit the lower layer again. The file is data:
 no functions, no require. Code goes in source modules (below).
 One left sidebar tab hides its tab strip; an empty right sidebar starts closed
@@ -316,6 +318,104 @@ export default {
 A call waits for the workflow to finish (up to 100 seconds); one that pauses
 is an error here. For an open HTTP API, fetch(url, { signal }) directly, check
 response.ok, and return the API's next cursor. Never put credentials in rows.
+
+## Chips
+
+Chips sit above every chat's composer: what the chat holds, recorded and made.
+chips: { source: "work:chips" } (the default) is Work's own chips for the chat:
+the tabs it opened (pages, terminals, files, apps, workflows), its forks and
+subagents, the app views its tools showed, the pull requests it recorded (wide,
+with their live state, size, comments and checks when the person's GitHub
+connection or GitHub CLI can read them), and the chips its agent attached. Past
+three of a kind Work folds them into one group chip. Compact chips come first,
+packed in lines; wide ones stack under them, against the composer. Past three
+lines the rest fold behind "N more"; nothing scrolls sideways.
+
+A chip is a row (above) with two more fields. wide: true spans the composer's
+width with its description, badges and buttons in view; a compact chip shows its
+icon and label, and its buttons come over its end under the pointer or keyboard
+focus. tone (accent, success, warning, danger or info) colors its icon by what
+it says (a pull request open, merged, failing), and a badge takes one too:
+{ label, icon?, tone? }. A change of icon cross-fades and a change of tone
+eases, so a chip that changes state reads as the same chip. url opens on click
+with the open grammar (Cmd-click a new tab, Cmd-Shift-click to the side,
+Option-click floating). actions are its buttons; menu or contextMenu its
+right-click entries, after the open modes and before Customize chips. preview
+is its hover card (false for none); without one, Work's chips show what they
+stand for live. signal: working spins its icon; attention and unread dot it.
+A chip with hasChildren is a group: a click opens its members upward. data is
+the record behind it: Work's chips say what they are in data.kind
+(pull-request, attached, browser, terminal, editor, chat, subagent, step, app,
+workflow, mcpapp, group) and carry what their previews read. signal is one of
+the three; attention outranks working.
+Work's verbs need no label of their own: { action: "open-side" } is the
+open-to-the-side button, and open-tab, open-floating and copy-url have theirs.
+Work's remove is the X on the pages, terminals and files the chat opened (it
+closes them), on recorded pull requests and on every attached chip (it takes
+them off the chat); other chips of Work's have no X.
+
+To rank, filter, group, restyle or add chips, write a module and name it:
+chips: { source: ".work/chips.ts", collections: ["chips"], workflows: [...] },
+in a project layer beside the module (the project's .work/workspace.js or the
+personal project file; in the profile file it would fail in every project
+without the module). It is a source module (below) with one
+list to read: work.read({ source: "chips", parentId? }) gives the chat's chips
+(the roots, or a group's members) and work.execute({ source: "chips", itemId,
+action }) runs Work's actions on them. load receives the chat as session
+{ id, title, metadata } and runs again when the chat's chips or metadata
+change. Order is rank (the first chip is the first the keyboard reaches and the
+last to fold). To group, give members parentId and add the group chip
+({ id, label, icon, hasChildren: true, badges: [count] }) where it stands;
+members may come in the same page or when load is asked for their parentId.
+Your own chips take your own actions, which reach action(). A chips module runs
+beside its chat, in whichever window shows it, so it reads no other Work list;
+call a workflow (its workflows grant) for anything behind a credential.
+Connected projects run no modules: their chats show Work's chips.
+
+Agents attach chips without code: the session metadata key chips is a list of
+chips (id: lowercase letters, digits, ".", "_" or "-", up to 64; label; and any
+chip field but parentId and hasChildren: an attached chip stands at the root),
+written with set_session_metadata; the list written without one removes it.
+Work draws them among its own, always with an X that takes them off the chat,
+and opens their url; an action of another name needs a chips module to run it.
+A chips module sees them with data.kind attached, unless their data names a
+kind, so an agent can give chips a kind the person's module styles, groups or
+gives buttons.
+
+Example: pull requests first, then a wide chip per deploy the agent recorded
+under deploys, with a button that calls a workflow:
+chips: { source: ".work/chips.ts", collections: ["chips"],
+  workflows: ["redeploy"] }
+.work/chips.ts:
+const rank = (chip) => (chip.data?.kind === "pull-request" ? 0 : 1);
+export default {
+  async load({ work, parentId, session }) {
+    const page = await work.read({ source: "chips", parentId });
+    if (parentId) return page;
+    const deploys = session?.metadata.deploys ?? [];
+    return { items: [
+      ...page.items
+        .map((chip, index) => ({ chip, index }))
+        .sort((a, b) => rank(a.chip) - rank(b.chip) || a.index - b.index)
+        .map(({ chip }) => chip),
+      ...deploys.map((deploy) => ({ id: "deploy-" + deploy.name,
+        label: deploy.name, description: deploy.version, url: deploy.url,
+        icon: "Rocket", wide: true, tone: deploy.healthy ? "success" : "danger",
+        actions: [{ action: "redeploy", label: "Redeploy", icon: "RotateCw" },
+          { action: "open-side" }],
+        data: { kind: "deploy", name: deploy.name } })),
+    ] };
+  },
+  async action({ work, itemId, action, values }) {
+    if (action === "redeploy") {
+      await work.call({ workflow: "redeploy",
+        input: { name: itemId.slice("deploy-".length) } });
+      return { message: "Redeploying." };
+    }
+    await work.execute({ source: "chips", itemId, action, values });
+  },
+};
+Pass Work's actions through (the last line), so their X still works.
 
 ## App widgets
 

@@ -619,6 +619,8 @@ const KEY_CODES = {
   a: { windowsVirtualKeyCode: 65, code: "KeyA" },
   b: { windowsVirtualKeyCode: 66, code: "KeyB" },
   f: { windowsVirtualKeyCode: 70, code: "KeyF" },
+  j: { windowsVirtualKeyCode: 74, code: "KeyJ" },
+  m: { windowsVirtualKeyCode: 77, code: "KeyM" },
   Enter: { windowsVirtualKeyCode: 13, code: "Enter", text: "\r" },
   Backspace: { windowsVirtualKeyCode: 8, code: "Backspace" },
   Delete: { windowsVirtualKeyCode: 46, code: "Delete" },

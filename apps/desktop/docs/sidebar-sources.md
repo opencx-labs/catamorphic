@@ -188,3 +188,21 @@ export default {
 
 For UI rows cannot express, use an app section (`app`, with `collections` for
 the Work lists it reads) and the public collection and tree primitives.
+
+## Chips
+
+A chat's chips are a source too (ADR 0239): workspace.js `chips: { source }`
+names `work:chips` (the default) or a module that reads it with
+`work.read({ source: "chips" })` and returns chips, with `collections:
+["chips"]` and any `workflows`. A chip is a row plus `wide` and `tone`;
+`hasChildren` makes a group whose members name it as `parentId`. Agents attach
+chips under their session's `chips` metadata (`SESSION_CHIPS_CONTRACT`). The
+contract and an example are in the authoring guide's Chips section.
+
+| Part | Where |
+|---|---|
+| Validation of `chips`, the owner id it shares with sections | `src/main/workspace-config.ts`, `src/shared/workspace-config.ts` |
+| Work's chips, built per chat | `src/renderer/lib/chips.ts` (rows), `src/renderer/app.tsx` (`chipsFor`, the chat's tabs), `src/renderer/components/chat-dock.tsx` (pull requests, attached chips, turns) |
+| `work:chips` and a chips module's `work` calls, in the window that shows the chat | `src/renderer/lib/chip-board.ts`, `src/renderer/sources/chips.ts`, `src/renderer/lib/chips-work.ts`, `src/renderer/lib/use-chips.ts` |
+| Pull request status (the person's connection, then the GitHub CLI) | `src/main/pr-status.ts`, `CodeHost.pullRequestStatus` |
+| The rail: layout, folding, motion, keyboard, menus | `src/renderer/components/chip-rail.tsx`, `src/renderer/lib/chip-layout.ts` |

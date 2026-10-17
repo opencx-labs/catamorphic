@@ -3,6 +3,7 @@ import {
   assertSessionMetadata,
   SESSION_METADATA_LIMITS,
   SessionMetadataError,
+  sessionChips,
   sessionMetadataToolWrite,
   sessionPullRequests,
   withSessionMetadata,
@@ -207,5 +208,39 @@ describe("sessionPullRequests", () => {
     ]);
     expect(sessionPullRequests({ pull_requests: "nope" })).toEqual([]);
     expect(sessionPullRequests(undefined)).toEqual([]);
+  });
+});
+
+describe("sessionChips", () => {
+  it("keeps chips with an id and a label, once each, with what else they hold", () => {
+    expect(
+      sessionChips({
+        chips: [
+          {
+            id: " preview ",
+            label: "Preview",
+            url: "https://x.dev",
+            wide: true,
+          },
+          { id: "preview", label: "Again" },
+          { id: "", label: "No id" },
+          { id: "nolabel" },
+          { id: "Not An Id", label: "Spaces and capitals" },
+          { id: "deploy:prod", label: "A colon" },
+          "a string",
+          ["an", "array"],
+          { id: "deploy", label: " Deploy ", data: { env: "prod" } },
+        ],
+      }),
+    ).toEqual([
+      { id: "preview", label: "Preview", url: "https://x.dev", wide: true },
+      { id: "deploy", label: "Deploy", data: { env: "prod" } },
+    ]);
+  });
+
+  it("reads nothing from other shapes", () => {
+    expect(sessionChips({ chips: { id: "a", label: "b" } })).toEqual([]);
+    expect(sessionChips(null)).toEqual([]);
+    expect(sessionChips({})).toEqual([]);
   });
 });

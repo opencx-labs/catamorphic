@@ -17,6 +17,7 @@ import { parseDockClicks } from "../../shared/dock-clicks.js";
 import { dockLanding } from "../../shared/dock-position.js";
 import { fileUrlFor } from "../../shared/downloads.js";
 import { localPresentations } from "../lib/chat-presentations.js";
+import { useAnswerChipsWork } from "../lib/chips-work.js";
 import { desktopApi } from "../lib/desktop-api.js";
 import { drawnDockRects } from "../lib/dock-shape.js";
 import { matchesBinding, useKeybindings } from "../lib/keybindings.js";
@@ -57,6 +58,8 @@ export function DockHost({
   detachedWindow?: boolean;
 }) {
   const keybindings = useKeybindings();
+  // A chat's chips module asks Work for its chips beside the chat.
+  useAnswerChipsWork();
   const [remoteSnapshot, setSnapshot] = useState(EMPTY);
   const local = useSyncExternalStore(
     localPresentations.subscribe,
@@ -108,6 +111,7 @@ export function DockHost({
         close?: () => void;
         minimize?: () => void;
         send?: (message: string) => void;
+        focusChips?: () => boolean;
       }
     >(),
   );
@@ -255,6 +259,7 @@ export function DockHost({
           action?.send?.(event.message);
         else if (event.action === "close") action?.close?.();
         else if (event.action === "minimize") action?.minimize?.();
+        else if (event.action === "focusChips") action?.focusChips?.();
       }),
     [],
   );
@@ -544,6 +549,13 @@ export function DockHost({
       return;
     }
     if (!chat) return;
+    if (matchesBinding(event, keybindings["focus-chips"])) {
+      if (actions.current.get(chat.entry.localId)?.focusChips?.()) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+      }
+      return;
+    }
     if (matchesBinding(event, keybindings["toggle-chat-minimized"])) {
       event.preventDefault();
       event.stopImmediatePropagation();
@@ -820,12 +832,15 @@ export function DockHost({
             detachedWindow || !chat.local
               ? undefined
               : chat.entry.pendingMessage,
+          draftMessage:
+            detachedWindow || !chat.local ? undefined : chat.entry.draftMessage,
         };
         if (visible) showing.current.add(entry.localId);
         const register = (patch: {
           close?: () => void;
           minimize?: () => void;
           send?: (message: string) => void;
+          focusChips?: () => boolean;
         }) =>
           actions.current.set(entry.localId, {
             ...actions.current.get(entry.localId),
@@ -857,6 +872,10 @@ export function DockHost({
                         chat.local && !detachedWindow
                           ? next.pendingMessage
                           : chat.entry.pendingMessage,
+                      draftMessage:
+                        chat.local && !detachedWindow
+                          ? next.draftMessage
+                          : chat.entry.draftMessage,
                     },
                   });
                 }}
@@ -923,6 +942,10 @@ export function DockHost({
                 registerClose={(close) => register({ close })}
                 registerMinimize={(minimize) => register({ minimize })}
                 registerSend={(send) => register({ send })}
+                registerFocusChips={(focusChips) => register({ focusChips })}
+                onCustomizeChips={() =>
+                  invoke(chat, { kind: "customizeChips" })
+                }
               />
             </div>
           </ThemeScope>

@@ -403,6 +403,8 @@ screen, or under reduced motion.
 | `.overlay-scrollbar` fade (the scroll position of a section's list that asks for a thumb, `scrollbar: true`, on the window's edge while it scrolls or the pointer nears that edge) | 150ms | itself: one transition both ways, fading 900ms after the last scroll |
 | Markdown format bar (Web Animations in `components/markdown/motion.ts`: in, rising 4px from 97% and transparent; out, the same way back, in place and inert) | 160ms | itself: one motion both ways; shown again mid-exit, or hidden mid-entrance, it turns from where it is over the share of the 160ms left |
 | Markdown drag handle (`.cat-mdedit-handle`: appears with opacity and scale 0.9 to 1; the extension jumps the box to each block and the grip inside glides there on a `transform` animation, which runs on the compositor) and table row grip (`.cat-mdedit-rowgrip`, placed and gliding by `transform`) | 160ms appear / 140ms glide | itself |
+| Chip motion (Web Animations in `components/chip-rail.tsx`: a chip arriving rises 4px from 96% and transparent; one leaving fades and sinks the same way where it stood; chips that stay slide from their old place; the rail's `height` transition follows its lines) | 200ms in and slides, 180ms out | each other (exit snappier); reduced motion settles at once |
+| Chip glyph cross-fade (a chip's new icon scales in from 60% over the one it replaces, as a pull request merges) | 150ms | itself: the old icon leaves as the new one arrives |
 | `bubble-ask` (agent question arrival) | 280ms | — (one-shot nudge on a persistent bubble; no exit to pair) |
 | `input-recall-{up,down}-{a,b}` (composer ↑/↓ history) | 150ms | — (transform-only directional content signal; paired names replay rapid same-direction recalls without a classless frame) |
 | `cat-swap-out` / `cat-swap-in` (text changing in place: the agent's activity line, a steps line's count and word; shared from `@catamorphic/ui/styles.css` with `cat-fade-in`, `cat-fold-away` and `cat-step-in`) | 200ms / 200ms | each other (opacity only: the old text fades out from the opacity it had, the activity line's breath included, then the new fades in; the activity line resumes `animate-pulse`) |
@@ -806,6 +808,34 @@ floating chat over the empty page. The chat now opens in that tab: it takes
 the New Tab's place in the strip and in a split, and the New Tab closes,
 typed into or not. Elsewhere a new chat floats as before, and the dock's +
 never takes a New Tab: it starts its chat in the dock.
+
+### 2026-10-17: Chips are a source; pull requests get wide chips
+
+The chips above a chat's composer were one hand-built list: a field per kind,
+one look, three of a kind folded into a group, a strip that scrolled sideways,
+and the darkest surface token behind them, so dark themes drew them black. Now
+they are rows from a source (ADR 0239): `work:chips` by default, or a module
+in the project named by workspace.js `chips`, which reads them, ranks, groups
+and adds its own with their own buttons. A chip is compact (icon and label, its
+buttons over its end under the pointer or focus) or wide (the composer's width,
+its description, badges and buttons in view). Every pull request a chat
+recorded is a wide chip with its state as icon and color, its size, comments
+and checks, read from the person's own GitHub connection; a merge cross-fades
+its icon. Agents keep anything else in view by attaching chips under the
+session's `chips` metadata.
+
+Chips sit on the raised surface with the hairline border and the theme's tones;
+badges are wells. Compact chips flow in lines first and wide ones stack under
+them against the composer; past three lines the rest fold behind a dashed "N
+more", which unfolds the rail (to two fifths of the window, scrolling only up
+and down past that) and becomes "Show less". Chips arrive rising, leave fading
+where they stood, and the ones that stay slide to their new place while the
+rail's height follows on the same curve. Cmd+J focuses the first chip (a
+hidden chat comes back for it), arrows move between chips and lines, Tab
+between a chip's buttons, Escape closes an open group and then returns to the
+composer. Right-click offers the open modes, a chip's own entries and
+Customize chips, which opens a chat with "Help me customize my chat chips."
+waiting in its composer.
 
 ### 2026-10-16: Google's sign-in admits Work, because a page finds `chrome.app`
 

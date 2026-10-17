@@ -36,9 +36,9 @@ export function keyLedLast(doc: Document = document): boolean {
 
 /**
  * A shortcut that moves focus somewhere new (opening a sidebar onto the
- * row of what is in front) leads with the keyboard, as a navigation key
- * does, so the ring shows where focus went; the same move made by a press
- * leaves the pointer leading.
+ * row of what is in front, Cmd+J onto the chips) leads with the keyboard,
+ * as a navigation key does, so the ring shows where focus went; the same
+ * move made by a press leaves the pointer leading.
  */
 export function keyMovedFocus(doc: Document = document): void {
   if (keyLedLast(doc)) doc.documentElement.dataset.focusModality = "keyboard";
