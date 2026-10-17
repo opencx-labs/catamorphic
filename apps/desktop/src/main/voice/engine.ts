@@ -707,11 +707,15 @@ export class VoiceEngine {
     if (this.dictation) {
       if (words) this.heardFrom(heard, { pressed });
       dictated(words ? text : "");
+      if (pressed && !words) this.emit({ type: "unheard" });
       return;
     }
     // The agent may have started talking while this was recognized.
     const talking = speaking || this.audible;
-    if (!words || (talking && isEcho(text, this.recent))) return;
+    if (!words || (talking && isEcho(text, this.recent))) {
+      if (pressed) this.emit({ type: "unheard" });
+      return;
+    }
     this.heardFrom(heard, { pressed });
     if (talking) {
       this.stopSpeaking();

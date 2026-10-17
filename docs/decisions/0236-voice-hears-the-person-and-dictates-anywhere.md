@@ -67,7 +67,8 @@ loaded each time.
 microphone's click and press are the same. A tap turns voice on, listening
 on its own, or off where it already is; held, voice hears while held and
 sends at release, with no wait for silence and no check of whose voice it
-is, and a voice started by holding goes off once idle. The push to talk
+is, and a voice started by holding goes off once idle, or at once when
+the hold said nothing. The push to talk
 switch and key are gone. On macOS, once Work is allowed in Accessibility
 (asked once, after the first shortcut used in Work; Settings after), a
 small helper (`native/voice-keys`, prebuilt and pinned like the browser

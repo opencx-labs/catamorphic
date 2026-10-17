@@ -858,6 +858,20 @@ export function registerVoiceSupport(deps: {
       case "finished":
         if (voice.finishing !== undefined) void stop();
         return;
+      case "unheard":
+        // A voice started by holding, held again and let go with nothing
+        // said, has nothing left to do: it goes now rather than idling.
+        if (
+          !voice.handsFree &&
+          !voice.busy &&
+          !voice.ending &&
+          voice.speaking.size === 0 &&
+          press?.profileId !== voice.profileId
+        ) {
+          void stop();
+          return;
+        }
+        break;
       case "ignored":
       case "barge-in":
       case "ready":

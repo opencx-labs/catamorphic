@@ -537,6 +537,36 @@ describe("VoiceEngine held keys", () => {
     ]);
   });
 
+  it("says when a hold heard no words, and only then", async () => {
+    const voice = harness(["", "open the docs"]);
+    voice.engine.setHandsFree(false);
+    voice.engine.hold(true);
+    voice.frame(0.01, 20);
+    voice.engine.hold(false);
+    await voice.settle();
+    expect(voice.events.at(-1)).toEqual({ type: "unheard" });
+    voice.engine.hold(true);
+    voice.frame(0.5, 20);
+    voice.engine.hold(false);
+    await voice.settle();
+    expect(voice.events.at(-1)).toEqual({
+      type: "utterance",
+      text: "open the docs",
+    });
+    expect(
+      voice.events.filter((event) => event.type === "unheard"),
+    ).toHaveLength(1);
+    // Speech not held for, that came to nothing, is no hold let go.
+    voice.engine.setHandsFree(true);
+    voice.frame(0.5, 20);
+    voice.frame(0);
+    await voice.settle();
+    expect(voice.events.at(-1)).toEqual({ type: "speech-end" });
+    expect(
+      voice.events.filter((event) => event.type === "unheard"),
+    ).toHaveLength(1);
+  });
+
   it("stops the agent the moment the keys go down", async () => {
     const voice = harness();
     voice.engine.setHandsFree(false);

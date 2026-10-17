@@ -31,6 +31,8 @@ const UTTERANCES = [
   "how am i talking to you",
   "how am i talking to you",
   "that's all, stop listening",
+  // Held and let go with nothing said.
+  "",
 ];
 /** The assistant's own tools over the person's chats. */
 const ASSISTANT_SESSION_TOOLS = [
@@ -885,5 +887,38 @@ describe("voice", () => {
       `return api.voiceStatus();`,
     );
     expect(status.error).toBeNull();
+  }, 120_000);
+
+  it("goes off as a hold that said nothing is let go, with nothing to show", async () => {
+    await openPage();
+    const assistant = await run<Ref>(
+      `return (await api.getPrefs()).assistantSession;`,
+    );
+    const heard = () =>
+      run<number>(
+        `const detail = await session(${JSON.stringify(assistant)});
+         return detail.messages.filter((m) => m.role === 'user').length;`,
+      );
+    const before = await heard();
+    await holdTalkKeys("keyDown");
+    await runWait(`return mic().dataset.phase === 'hearing';`, {
+      timeoutMs: 30_000,
+      label: "hearing while the keys are down",
+    });
+    // Longer than a tap, which would leave voice listening on its own.
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+    await holdTalkKeys("keyUp");
+    const letGo = Date.now();
+    await runWait(`return mic().dataset.phase === 'off';`, {
+      timeoutMs: 30_000,
+      label: "voice off as the keys came up",
+    });
+    // Not after the wait of a voice that had something to do (4 s).
+    expect(Date.now() - letGo).toBeLessThan(3_000);
+    expect(await heard()).toBe(before);
+    const status = await run<{ error: string | null; pending: boolean }>(
+      `return api.voiceStatus();`,
+    );
+    expect(status).toMatchObject({ error: null, pending: false });
   }, 120_000);
 });

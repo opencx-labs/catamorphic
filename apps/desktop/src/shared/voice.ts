@@ -314,6 +314,8 @@ export type VoiceWorkerEvent =
   | { type: "learned"; voiceprint: number[] }
   /** Someone else spoke: not the voice print's person, so not heard. */
   | { type: "ignored" }
+  /** The keys or the microphone were held, and let go with no words said. */
+  | { type: "unheard" }
   /** Everything heard before `finish` is recognized and said. */
   | { type: "finished" }
   | ({ type: "levels" } & VoiceLevels);
