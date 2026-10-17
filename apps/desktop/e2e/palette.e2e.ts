@@ -450,10 +450,11 @@ it("moves the caret between the input's lines with the arrows, and the highlight
       `const el = input(); el.setSelectionRange(el.value.length, el.value.length); return true;`,
     );
   const caret = () => run<number>(`return input().selectionStart`);
-  const press = async (key: "ArrowUp" | "ArrowDown") => {
-    await app.press(key);
+  const press = async (key: "ArrowUp" | "ArrowDown", modifiers = 0) => {
+    await app.press(key, modifiers);
     return caret();
   };
+  const SHIFT = 8;
   try {
     await type("first line\nsecond line");
     await caretAtEnd();
@@ -479,7 +480,20 @@ it("moves the caret between the input's lines with the arrows, and the highlight
     await caretAtEnd();
     await run(`window.__arrows = []; return true;`);
     expect(await press("ArrowUp")).toBeLessThan(long.length);
-    expect(await run(`return window.__arrows`)).toEqual([false]);
+    // From the start of the first line down to the start of the next, a
+    // caret where the line wraps, and from there up again.
+    await run(`input().setSelectionRange(0, 0); return true;`);
+    const wrapped = await press("ArrowDown");
+    expect(wrapped).toBeGreaterThan(0);
+    expect(await press("ArrowUp")).toBe(0);
+    expect(await run(`return window.__arrows`)).toEqual([false, false, false]);
+    // Shift selects in the text, on its last line too.
+    await caretAtEnd();
+    await run(`window.__arrows = []; return true;`);
+    await press("ArrowUp", SHIFT);
+    await press("ArrowDown", SHIFT);
+    await press("ArrowDown", SHIFT);
+    expect(await run(`return window.__arrows`)).toEqual([false, false, false]);
 
     // One line: the arrows only ever move the highlight.
     await type("find");
@@ -499,8 +513,8 @@ it("moves the caret between the input's lines with the arrows, and the highlight
     await run(
       `window.removeEventListener('keydown', window.__arrow); return true;`,
     );
+    await close();
   }
-  await close();
   expect(app.getRendererErrors()).toEqual([]);
 });
 

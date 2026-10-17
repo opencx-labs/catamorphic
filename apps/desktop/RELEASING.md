@@ -55,7 +55,8 @@ Install the DMG from the workflow artifact on a clean Apple silicon Mac user
 account. Verify:
 
 - Gatekeeper opens Work without an override.
-- Applications shows the Work icon and bundle identity.
+- Applications shows the Work icon and bundle identity: the Dock and
+  Finder draw the flat orange W, on macOS 26 and on an earlier macOS.
 - A `work://connect` invitation opens the installed app.
 - A local project can be created, reopened, and edited.
 - Claude Code and Codex each perform their one-time verified component

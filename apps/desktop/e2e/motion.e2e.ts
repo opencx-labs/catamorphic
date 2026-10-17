@@ -1222,9 +1222,9 @@ describe("inputs grow by gliding", () => {
     await run(`setReactValue(${paletteInput}, 'first line'); return true;`);
     expectGlide(await glide(paletteInput));
     await run(`setReactValue(${paletteInput}, ''); return true;`);
-    await run(
-      `window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); return true;`,
-    );
+    // Cancelable, as a real key is: the palette takes it, and the chat
+    // behind keeps its place.
+    await run(`pressKey('Escape'); return true;`);
     await runWait(`return !(${paletteInput});`, { label: "palette closed" });
     expect(app.getRendererErrors()).toEqual([]);
   });
