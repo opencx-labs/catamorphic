@@ -346,8 +346,9 @@ describe("talking around questions", () => {
       { timeoutMs: 30_000, label: "blocking question" },
     );
     await settle();
-    // The waiting status sits in the header beside the title; no row
-    // above it, no "Other" row, and the composer takes free text.
+    // The waiting status sits in the header beside the title, no row above
+    // it; the question has an Other answer, and the composer takes free
+    // text too.
     expect(
       await run(`
         const m = modal();
@@ -361,7 +362,7 @@ describe("talking around questions", () => {
     ).toEqual({
       headerFirst: true,
       status: "Waiting for your answer",
-      other: false,
+      other: true,
       placeholder: "Answer in your own words…",
     });
     await app.screenshot("/tmp/catamorphic-blocking-question.png");
@@ -426,6 +427,45 @@ describe("talking around questions", () => {
       { timeoutMs: 30_000, label: "answer card in history" },
     );
   }, 90_000);
+
+  it("answers a question in its own words through Other", async () => {
+    const SHIFT = 8;
+    const submit = `byText('section[aria-label="The agent has a question"] button', 'Submit')`;
+    await settled();
+    await run(`sendHere('blocking question about the layout'); return true;`);
+    await runWait(
+      `return !!modal() && modal().textContent.includes('Which layout should I use?');`,
+      { timeoutMs: 30_000, label: "blocking question" },
+    );
+    await settle();
+    await run(`answer('Other'); return true;`);
+    // Its own input takes the caret, the composer's kind, not the chat's.
+    await runWait(
+      `return document.activeElement?.dataset.testid === 'question-answer-input';`,
+      { label: "the answer takes the caret" },
+    );
+    expect(await run(`return ${submit}.disabled;`)).toBe(true);
+    // Typed at once, while the answer is still opening: text inserted then
+    // landed behind the caret, so the next line came first.
+    await app.insertText("Cards in columns");
+    await app.press("Enter", SHIFT);
+    await app.insertText("sorted by date");
+    expect(
+      await run(
+        `return { chat: here().textContent, ready: !${submit}.disabled };`,
+      ),
+    ).toEqual({ chat: "", ready: true });
+    // Enter on the last unanswered question sends the answers.
+    await app.press("Enter");
+    await runWait(
+      `return !modal() && hereLog().includes('Using the Cards in columns') && hereLog().includes('sorted by date layout');`,
+      { timeoutMs: 30_000, label: "the agent read the words" },
+    );
+    await runWait(
+      `const cards = hereChat().querySelectorAll('[data-testid="question-answer"]'); const card = cards[cards.length - 1]; return !!card && card.textContent.includes('Which layout should I use?') && card.textContent.includes('sorted by date');`,
+      { timeoutMs: 30_000, label: "the words in history" },
+    );
+  }, 60_000);
 
   it("the agent closes a question the conversation settled", async () => {
     await run(`sendHere('blocking question again'); return true;`);

@@ -1,3 +1,4 @@
+import { AnswerInput } from "./answer-input";
 import {
   type AgentQuestionPanelProps,
   AgentQuestionPanel as QuestionPanel,
@@ -15,6 +16,7 @@ export function AgentQuestionPanel(props: AgentQuestionPanelProps) {
           {button}
         </ShortcutHint>
       )}
+      renderOtherInput={(input) => <AnswerInput {...input} />}
     />
   );
 }

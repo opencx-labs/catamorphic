@@ -65,6 +65,7 @@ export {
 export {
   ATTACHMENT_MARKER,
   messageWithAttachmentNames,
+  renderUserMessage,
   splitAttachmentMarkers,
 } from "@catamorphic/sandbox/attachments";
 // Atoms

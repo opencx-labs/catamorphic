@@ -104,6 +104,13 @@ export interface ComposerInputProps {
   onOpenPath?: (path: string, mode: OpenMode) => void;
   /** Server-side cap, mirrored: inserts past it are dropped. */
   maxPills?: number;
+  /**
+   * The chat's own composer, the one the dock and drops look for
+   * (`data-composer-input`). Off for another input built on it, such as a
+   * question's Other answer.
+   */
+  chatComposer?: boolean;
+  testId?: string;
 }
 
 interface PillEntry {
@@ -206,6 +213,8 @@ export const ComposerInput = forwardRef<
     onOpenTab,
     onOpenPath,
     maxPills = 32,
+    chatComposer = true,
+    testId = "composer-input",
   },
   ref,
 ) {
@@ -546,11 +555,11 @@ export const ComposerInput = forwardRef<
         contentEditable
         suppressContentEditableWarning
         spellCheck
-        data-composer-input
+        data-composer-input={chatComposer || undefined}
         // Dictation shows the words while they are said (voice).
         {...{ [DICTATION_PREVIEW_ATTR]: "" }}
         data-placeholder={placeholder}
-        data-testid="composer-input"
+        data-testid={testId}
         className={`cat-composer whitespace-pre-wrap break-words outline-none ${className}`}
         onInput={sync}
         onKeyDown={handleKeyDown}

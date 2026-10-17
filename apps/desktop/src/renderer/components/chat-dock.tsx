@@ -76,16 +76,14 @@ import {
   isAttachedChipId,
   workChips,
 } from "../lib/chips.js";
+import { filesFrom, readComposerPaste } from "../lib/composer-paste";
 import {
   type AgentInfo,
   desktopApi,
   projectAgentAsInfo,
 } from "../lib/desktop-api";
 import { focusMovedByPerson, pointerLeft } from "../lib/dock-attention.js";
-import {
-  readEditorSelection,
-  selectionFromClipboard,
-} from "../lib/editor-selection";
+import { readEditorSelection } from "../lib/editor-selection";
 import { usePopoverDismiss } from "../lib/popover-dismiss.js";
 import { usePullRequestStatuses } from "../lib/pr-status.js";
 import { ipcErrorText } from "../lib/remote-workspace.js";
@@ -98,7 +96,7 @@ import {
   slashEntries,
 } from "../lib/slash-commands";
 import { TAB_DRAG_TYPE, type TabDragPayload } from "../lib/tab-drag";
-import { classifyPastedText, selectionName, textPill } from "../lib/text-pills";
+import { selectionName, textPill } from "../lib/text-pills";
 import { useBackgroundCommands } from "../lib/use-background-commands";
 import { useChips } from "../lib/use-chips.js";
 import { useQueueMessages } from "../lib/use-queue-messages.js";
@@ -273,21 +271,6 @@ function pathPillFor(file: File): ComposerAttachment | null {
     id: crypto.randomUUID(),
     ...textPill(path, { type: "path", path }, name),
   };
-}
-
-/**
- * Files from a DataTransfer, robust across sources: `files` covers
- * screenshots and copied images; the `items` fallback covers sources
- * that only populate the item list.
- */
-function filesFrom(data: DataTransfer | null): File[] {
-  if (!data) return [];
-  const files = [...data.files];
-  if (files.length > 0) return files;
-  return [...data.items]
-    .filter((item) => item.kind === "file")
-    .map((item) => item.getAsFile())
-    .filter((file): file is File => file !== null);
 }
 
 const APP_SOURCE_PATTERN = new RegExp(
@@ -2189,58 +2172,17 @@ function ChatDockContent({
     data: DataTransfer | null,
     opts: { intoComposer: boolean },
   ): boolean => {
-    const files = filesFrom(data);
-    if (files.length > 0) {
-      addFilesRef.current(files);
+    const paste = readComposerPaste(data);
+    if (paste.kind === "files") {
+      addFilesRef.current(paste.files);
       return true;
     }
-    const fromEditor = selectionFromClipboard(data);
-    if (fromEditor) {
-      addTextPillRef.current(
-        textPill(
-          fromEditor.text.replace(/\r\n?/g, "\n"),
-          {
-            type: "selection",
-            filePath: fromEditor.filePath,
-            ...(fromEditor.startLine !== undefined
-              ? { startLine: fromEditor.startLine }
-              : {}),
-            ...(fromEditor.endLine !== undefined
-              ? { endLine: fromEditor.endLine }
-              : {}),
-          },
-          selectionName(fromEditor),
-        ),
-      );
+    if (paste.kind === "pill") {
+      addTextPillRef.current(paste.pill);
       return true;
     }
-    let text = data?.getData("text/plain") ?? "";
-    if (!text) {
-      // Copy buttons that write only a text/html flavor (ClipboardItem)
-      // must still paste something: take the markup's text. Without this,
-      // the unconditional preventDefault would swallow the paste whole.
-      const html = data?.getData("text/html") ?? "";
-      if (html) {
-        text =
-          new DOMParser().parseFromString(html, "text/html").body.textContent ??
-          "";
-      }
-    }
-    const classified = classifyPastedText(text);
-    if (classified.kind === "pill") {
-      addTextPillRef.current(
-        textPill(
-          text.replace(/\r\n?/g, "\n"),
-          classified.source,
-          classified.name,
-        ),
-      );
-      return true;
-    }
-    if (!opts.intoComposer || !text) return false;
-    // Rich clipboards (HTML from a page) land as plain text — the composer
-    // is prose, not a document.
-    composerRef.current?.insertText(text.replace(/\r\n?/g, "\n"));
+    if (!opts.intoComposer || paste.kind === "nothing") return false;
+    composerRef.current?.insertText(paste.text);
     return true;
   };
   const consumePasteRef = useRef(consumePaste);
