@@ -414,17 +414,18 @@ export class DesktopWorkspaces {
       (
         event,
         localId: string,
-        action: "close" | "minimize" | "send",
+        action: "close" | "minimize" | "send" | "focusChips",
         message?: string,
       ) => {
         const chat = this.chats.get(localId);
         if (!chat || !this.sameProfile(event.sender, chat.owner)) return;
         const profileId = options.windows.profileFor(event.sender);
         const floating = this.floating.get(profileId);
-        const target =
-          floating && this.detached(profileId)
-            ? floating.webContents
-            : event.sender;
+        const detached = floating && this.detached(profileId);
+        const target = detached ? floating.webContents : event.sender;
+        // Keys follow the chips the shortcut focuses: the detached dock's
+        // window takes the keyboard first.
+        if (detached && action === "focusChips") floating.focus();
         target.send("catamorphic:workspace-event", {
           kind: "dockAction",
           localId,

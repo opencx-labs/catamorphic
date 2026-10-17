@@ -31,6 +31,7 @@ import type {
   SidebarSourceItem,
   SidebarSourceSession,
 } from "../../shared/sidebar-source.js";
+import { CHIPS_OWNER_ID } from "../../shared/workspace-config.js";
 import { desktopApi } from "../lib/desktop-api.js";
 import { readSidebarSessionPage } from "../lib/sidebar-sessions.js";
 import { tabKey } from "../lib/workspace-types.js";
@@ -48,6 +49,7 @@ import {
   workflowsSource,
 } from "./resources.js";
 import { runRowAction } from "./run.js";
+import { callProjectWorkflow } from "./workflow-call.js";
 
 /**
  * Work's lists, as one window serves them (ADR 0234): to its sections, to
@@ -96,9 +98,6 @@ export interface WorkSources extends AppCollections {
     limit?: number;
   }) => Promise<AppCollectionItem[]>;
 }
-
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
 
 /** A row as app widgets and the palette see it (`@catamorphic/app`). */
 function appItem(
@@ -508,6 +507,8 @@ export function useAnswerSourceWork({
     () =>
       desktopApi.onSidebarSourceWork(
         ({ callId, projectId: asked, sectionId, call }) => {
+          // A chat's chips answer for their own module, beside the chat.
+          if (sectionId === CHIPS_OWNER_ID) return;
           const reply = (result: {
             ok: boolean;
             value?: unknown;
@@ -541,38 +542,12 @@ export function useAnswerSourceWork({
               });
               return null;
             }
-            // A plain fetch, as the React hooks run workflows: the client
-            // cannot infer a body that mixes recursive JSON with siblings.
-            const response = await apiClient.fetch(
-              `${apiClient.baseUrl}/api/projects/${encodeURIComponent(asked)}/workflows/${encodeURIComponent(call.workflow)}/calls`,
-              {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                // Inside the two minutes main gives Work to answer a module.
-                body: JSON.stringify({
-                  input: call.input ?? {},
-                  budgetMs: 100_000,
-                }),
-              },
-            );
-            const outcome: unknown = await response.json().catch(() => null);
-            if (!response.ok || !isRecord(outcome))
-              throw new Error(
-                isRecord(outcome) && typeof outcome.error === "string"
-                  ? outcome.error
-                  : `Could not run ${call.workflow}.`,
-              );
-            if (outcome.status === "failed")
-              throw new Error(
-                typeof outcome.error === "string"
-                  ? outcome.error
-                  : `${call.workflow} failed.`,
-              );
-            if (outcome.status === "suspended")
-              throw new Error(
-                `${call.workflow} is waiting (run ${String(outcome.runId)}); a source needs a workflow that finishes.`,
-              );
-            return outcome.output;
+            return callProjectWorkflow({
+              apiClient,
+              projectId: asked,
+              workflow: call.workflow,
+              input: call.input,
+            });
           };
           void answer().then(
             (value) => reply({ ok: true, value }),

@@ -23,7 +23,8 @@ export type DockData = Pick<
   | "backdropTab"
   | "defaultAgentId"
   | "paletteTargeted"
-  | "surfaces"
+  | "chips"
+  | "chipsModule"
   | "pullSelectionNonce"
   | "archived"
   | "inspectRequestNonce"
@@ -53,6 +54,7 @@ export type ChatEvent =
     }
   | { kind: "surface"; key: string; mode: OpenMode | "split" }
   | { kind: "removeSurface"; key: string }
+  | { kind: "customizeChips" }
   | { kind: "mcpApp"; view: McpAppRef; mode: OpenMode | "split" }
   | {
       kind: "link";
@@ -118,7 +120,7 @@ export type WorkspaceEvent =
   | {
       kind: "dockAction";
       localId: string;
-      action: "close" | "minimize" | "send";
+      action: "close" | "minimize" | "send" | "focusChips";
       message?: string;
     };
 

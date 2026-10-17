@@ -61,6 +61,35 @@ export interface GithubRepo {
   pushedAt: string | null;
 }
 
+/**
+ * Where a pull request stands, for a glance beside the chat that opened
+ * it: its lifecycle, its size and what its checks say.
+ */
+export interface GithubPullRequestStatus {
+  number: number;
+  title: string;
+  url: string;
+  /** `owner/name`. */
+  repository: string;
+  author: string;
+  head: string;
+  base: string;
+  state: "open" | "draft" | "merged" | "closed";
+  additions: number;
+  deletions: number;
+  changedFiles: number;
+  /** Conversation and review comments together. */
+  comments: number;
+  /** Absent when the head has no checks, or they could not be read. */
+  checks?: {
+    state: "pending" | "success" | "failure";
+    passed: number;
+    failed: number;
+    pending: number;
+  };
+  updatedAt: string;
+}
+
 export interface GithubPullRequest {
   body?: string;
   headSha?: string;

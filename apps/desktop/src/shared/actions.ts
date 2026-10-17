@@ -190,6 +190,15 @@ export const BUILTIN_ACTIONS = [
     keywords: ["chat", "tab", "maximize", "expand", "full", "screen"],
   },
   {
+    id: "focus-chips",
+    label: "Focus chips",
+    icon: "Rows3",
+    description:
+      "move focus to the first chip above the front chat's composer, unfolding them; arrows move between chips, Tab between a chip's buttons, Escape returns to the composer",
+    defaultBinding: "Cmd+J",
+    keywords: ["chips", "focus", "keyboard", "pull request", "attached"],
+  },
+  {
     id: "split-view",
     label: "Split with previous tab",
     icon: "Columns2",

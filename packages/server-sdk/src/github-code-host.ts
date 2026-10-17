@@ -7,6 +7,7 @@ import {
   GithubApi,
   type GithubPermissions,
   type GithubRepo,
+  pullRequestFromUrl,
 } from "@catamorphic/github";
 import type { GithubConnectionProvider } from "./github-connection-provider.js";
 
@@ -72,6 +73,21 @@ export function githubCodeHost(provider: GithubConnectionProvider): CodeHost {
         permissions: read,
       });
       return client.pullRequest({ fullName, number });
+    },
+
+    pullRequestStatus: async ({ credential, url }) => {
+      const pull = pullRequestFromUrl({
+        url,
+        webBaseUrl: provider.api.webBaseUrl,
+      });
+      if (!pull) return null;
+      const { client } = await api({
+        credential,
+        fullName: pull.fullName,
+        // Checks and statuses come with what the installation may read.
+        permissions: read,
+      });
+      return client.pullRequestStatus(pull);
     },
 
     pullRequestDiscussion: async ({ credential, remoteUrl, number }) => {

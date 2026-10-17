@@ -12,13 +12,13 @@ import { invalidateBranches, type SectionSource } from "./contract.js";
 /** How long a burst of changes to Work's lists waits to read a module once. */
 const FOLLOW_MS = 150;
 
-/** What a module's section follows of the Work lists it reads. */
-export interface ModuleWork {
-  watchReads: (
-    ownerId: string,
-    onRead: (name: WorkSourceName) => void,
-  ) => () => void;
-  get: (name: WorkSourceName) => SectionSource;
+/**
+ * What a module's section follows of the Work lists it reads: Work's lists
+ * for a section or a palette mode, the chat's chips for a chips module.
+ */
+export interface ModuleWork<Name extends string = WorkSourceName> {
+  watchReads: (ownerId: string, onRead: (name: Name) => void) => () => void;
+  get: (name: Name) => SectionSource;
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -57,7 +57,7 @@ const failure = (cause: unknown) =>
  * palette mode id. What it may ask Work for is its section's grants, checked
  * in main; the window answers through `answerSourceWork`.
  */
-export function moduleSource({
+export function moduleSource<Name extends string = WorkSourceName>({
   projectId,
   ownerId,
   title = "Items",
@@ -73,7 +73,7 @@ export function moduleSource({
   /** A page tells what the module exports, for the drags it accepts. */
   onCapabilities?: (capabilities: SidebarSourceCapabilities) => void;
   /** Work's lists, so a module that reads one reads again as it changes. */
-  work?: ModuleWork;
+  work?: ModuleWork<Name>;
 }): SectionSource {
   let capabilities: SidebarSourceCapabilities = {
     move: false,
@@ -139,7 +139,7 @@ export function moduleSource({
       let released = false;
       // A module that read Work's tabs (to sort them) reads again when the
       // tabs change, and so for every list it reads.
-      const following = new Map<WorkSourceName, () => void>();
+      const following = new Map<Name, () => void>();
       let follow: ReturnType<typeof setTimeout> | undefined;
       const changed = () => {
         clearTimeout(follow);

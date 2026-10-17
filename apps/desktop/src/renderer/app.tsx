@@ -87,6 +87,7 @@ import { fieldKeepsKey } from "../shared/text-field.js";
 import { rosterAgentId } from "../shared/voice.js";
 import { parseWorkPage } from "../shared/work-pages.js";
 import {
+  chipsModule,
   sidebarSections,
   visibleWorkspaceConfig,
 } from "../shared/workspace-config.js";
@@ -97,8 +98,9 @@ import {
   pointedElement,
 } from "./components/agent-pointers.js";
 import { AgentWizard } from "./components/agent-wizard.js";
+import { appIconName } from "./components/app-icon.js";
 import { BrowserImportDialog } from "./components/browser-import.js";
-import type { ChatDockEntry, ChatSurface } from "./components/chat-dock.js";
+import type { ChatDockEntry } from "./components/chat-dock.js";
 import { ChatRegistration } from "./components/chat-registration.js";
 import { CommandPalette } from "./components/command-palette.js";
 import { ConfigureAgentModal } from "./components/configure-agent-modal.js";
@@ -163,6 +165,12 @@ import {
   chatSessionMenu,
 } from "./lib/chat-session-actions.js";
 import {
+  type Chip,
+  CLOSE_CHIP,
+  OPEN_SIDE_CHIP,
+  pageIcon,
+} from "./lib/chips.js";
+import {
   type AgentEffort,
   type AgentsData,
   type AppPrefs,
@@ -223,7 +231,10 @@ import {
 import { useWorkspaceConfig } from "./lib/use-workspace-config.js";
 import { NEW_WORKFLOW_PROMPT } from "./lib/workflow-authoring.js";
 import { useWorkspace } from "./lib/workspace-context.js";
-import { workspaceCustomizationMessage } from "./lib/workspace-customization.js";
+import {
+  chipsCustomizationMessage,
+  workspaceCustomizationMessage,
+} from "./lib/workspace-customization.js";
 import {
   agentOpenInFront,
   attachedTabKeys,
@@ -2152,7 +2163,7 @@ export function App({
             : {}),
     }));
     // Materialize first, then use the same placement rules as sidebar rows and
-    // surface chips. Reusing the focused editor keeps its floating/split frame.
+    // chips. Reusing the focused editor keeps its floating/split frame.
     if (!opts.background && !(intent === "replace" && key === focusedKey))
       openSurface(key, intent);
     return key;
@@ -2436,6 +2447,8 @@ export function App({
   // must play the dock's collapse before the mode flips, exactly like
   // the dash control (the tween runs before the workspace re-render).
   const chatMinimizersRef = useRef(new Map<string, () => void>());
+  /** Each chat's way to focus its first chip (the focus-chips shortcut). */
+  const chipFocusersRef = useRef(new Map<string, () => boolean>());
   // Per-chat "re-pull the editor selection" counters (see addChat).
   const [selectionPulls, setSelectionPulls] = useState<Record<string, number>>(
     {},
@@ -2718,6 +2731,7 @@ export function App({
         !closingChatIds.current.has(active.localId) &&
         !active.sessionId &&
         !active.pendingMessage &&
+        !active.draftMessage &&
         !activeSignals?.working &&
         !activeSignals?.draft &&
         !activeSignals?.awaitingInput &&
@@ -4218,6 +4232,19 @@ export function App({
       if (incognitoAllowed) addChat(undefined, { incognito: true });
     },
     "toggle-chat-minimized": toggleChatMinimized,
+    "focus-chips": () => {
+      const ws = workspaceRef.current;
+      const chat = actionChat(ws);
+      if (!chat) return;
+      // A chat out of view comes back; its dock focuses the first chip as
+      // it opens.
+      if (
+        chat.mode === "min" ||
+        (chat.mode === "tab" && ws.activeTabKey !== chatTabKey(chat.localId))
+      )
+        revealChat(chat.localId);
+      chipFocusersRef.current.get(chat.localId)?.();
+    },
     "chat-to-tab": expandChatToTab,
     "prev-chat": () => cycleChat(-1),
     "next-chat": () => cycleChat(1),
@@ -5810,20 +5837,21 @@ export function App({
     ) : null;
 
   /**
-   * A rail chip for an attention key with no attached surface behind it
-   * (an app tab open_surface prepared in the background, another chat's
-   * tab, …): the attention dot needs a chip to live on, so one is
-   * synthesized from what the workspace knows about the key.
+   * A chip for an attention key with no tab of the chat's behind it (an
+   * app tab open_surface prepared in the background, another chat's tab):
+   * the attention dot needs a chip to live on, so one is made from what the
+   * workspace knows about the key.
    */
-  const synthesizedSurface = (key: string): ChatSurface => {
+  const synthesizedChip = (key: string): Chip => {
+    const base = { id: key, url: key, signal: "attention" as const };
     if (key.startsWith("app:")) {
       const name = key.slice("app:".length);
       const metadata = appMetadata.get(name);
       return {
-        key,
-        kind: "app",
+        ...base,
         label: metadata?.title ?? name,
-        appIcon: metadata?.icon,
+        icon: appIconName(metadata?.icon),
+        data: { kind: "app", name },
       };
     }
     if (key.startsWith("browser:")) {
@@ -5831,22 +5859,25 @@ export function App({
         (browser) => browserTabKey(browser.localId) === key,
       );
       return {
-        key,
-        kind: "browser",
+        ...base,
         label: entry?.title || entry?.url || "Page",
-        faviconUrl: entry?.faviconUrl,
-        url: entry?.url,
+        icon: pageIcon(entry?.faviconUrl),
+        data: { kind: "browser", ...(entry?.url ? { url: entry.url } : {}) },
       };
     }
     if (key.startsWith("terminal:")) {
       const entry = workspace.terminals.find(
         (terminal) => terminalTabKey(terminal.localId) === key,
       );
+      const terminalSessionId = entry?.ptySessionId ?? entry?.attachSessionId;
       return {
-        key,
-        kind: "terminal",
+        ...base,
         label: entry?.title || "Terminal",
-        terminalSessionId: entry?.ptySessionId ?? entry?.attachSessionId,
+        icon: "SquareTerminal",
+        data: {
+          kind: "terminal",
+          ...(terminalSessionId ? { terminalSessionId } : {}),
+        },
       };
     }
     if (key.startsWith("editor:")) {
@@ -5854,41 +5885,54 @@ export function App({
         (editor) => editorTabKey(editor.localId) === key,
       );
       return {
-        key,
-        kind: "editor",
+        ...base,
         label: entry?.filePath?.split("/").at(-1) || "Editor",
-        filePath: entry?.filePath ?? undefined,
+        icon: "FileCode",
+        data: {
+          kind: "editor",
+          ...(entry?.filePath ? { filePath: entry.filePath } : {}),
+        },
       };
     }
-    if (key.startsWith("chat:")) {
+    if (key.startsWith("chat:"))
       return {
-        key,
-        kind: "chat",
+        ...base,
         label: chatLabels[key.slice("chat:".length)] ?? "Chat",
+        icon: "GitFork",
+        data: { kind: "chat" },
       };
-    }
     if (key.startsWith("workflow:")) {
       const name = key.slice("workflow:".length);
       return {
-        key,
-        kind: "workflow",
+        ...base,
         label: workflowTitles.get(name) ?? name,
+        icon: "Workflow",
+        data: { kind: "workflow", name },
       };
     }
     const tab = presentedTabs.find((candidate) => tabKey(candidate) === key);
     return {
-      key,
-      kind: "app",
+      ...base,
       label: tab?.label ?? tab?.name ?? key,
-      appIcon: tab?.kind === "app" ? tab.appIcon : undefined,
+      icon: appIconName(tab?.kind === "app" ? tab.appIcon : undefined),
+      data: { kind: "app", ...(tab ? { name: tab.name } : {}) },
     };
   };
 
-  /** The agent's working tabs for a chat — its surfaces rail. */
-  const surfacesFor = (chat: ChatDockEntry): ChatSurface[] => {
+  /**
+   * What a chat holds in this workspace, as chips (ADR 0239): its forks and
+   * subagents, then the tabs it opened. Its dock adds what it knows itself.
+   */
+  const chipsFor = (chat: ChatDockEntry): Chip[] => {
     const attentionKeys = chipAttention[chat.localId] ?? [];
-    const surfaces: ChatSurface[] = [
-      // Every first-class child lives on the parent's rail. Latent children
+    const signalOf = (key: string, working: boolean) =>
+      attentionKeys.includes(key)
+        ? { signal: "attention" as const }
+        : working
+          ? { signal: "working" as const }
+          : {};
+    const chips: Chip[] = [
+      // Every first-class child lives on the parent's chips. Latent children
       // stay here until the user messages them or they request attention.
       ...[...sessionsById.values()]
         .filter(
@@ -5896,74 +5940,105 @@ export function App({
             session.parentSessionId === chat.sessionId &&
             session.visibility !== "archived",
         )
-        .map((session) => {
+        .map((session): Chip => {
           const open = workspace.chats.find(
             (candidate) => candidate.sessionId === session.id,
           );
+          const key = open ? chatTabKey(open.localId) : `session:${session.id}`;
+          const forked = Boolean(session.forkedFromSessionId);
           return {
-            key: open ? chatTabKey(open.localId) : `session:${session.id}`,
-            kind: session.forkedFromSessionId
-              ? ("chat" as const)
-              : ("subagent" as const),
+            id: key,
             label: sessionLabel(session),
-            active: open
-              ? Boolean(signalsByChat[open.localId]?.working)
-              : session.running,
-            attention: session.attentionRequired,
+            icon: forked ? "GitFork" : "Bot",
+            url: key,
+            ...(session.attentionRequired
+              ? { signal: "attention" as const }
+              : signalOf(
+                  key,
+                  open
+                    ? Boolean(signalsByChat[open.localId]?.working)
+                    : session.running,
+                )),
+            actions: [OPEN_SIDE_CHIP],
+            data: { kind: forked ? "chat" : "subagent", sessionId: session.id },
           };
         }),
       ...presentedTabs
         .filter((tab) => tab.chatLocalId === chat.localId)
-        .map((tab) => ({
-          key: tabKey(tab),
-          kind:
-            tab.kind === "workflow" ? ("workflow" as const) : ("app" as const),
-          label: tab.label ?? tab.name,
-          appIcon: tab.kind === "app" ? tab.appIcon : undefined,
-          attention: attentionKeys.includes(tabKey(tab)),
-        })),
+        .map((tab): Chip => {
+          const key = tabKey(tab);
+          const workflow = tab.kind === "workflow";
+          return {
+            id: key,
+            label: tab.label ?? tab.name,
+            icon: workflow
+              ? "Workflow"
+              : appIconName(tab.kind === "app" ? tab.appIcon : undefined),
+            url: key,
+            ...signalOf(key, false),
+            actions: [OPEN_SIDE_CHIP],
+            data: { kind: workflow ? "workflow" : "app", name: tab.name },
+          };
+        }),
       ...workspace.browsers
         .filter((browser) => browser.chatLocalId === chat.localId)
-        .map((browser) => ({
-          key: browserTabKey(browser.localId),
-          kind: "browser" as const,
-          label: browser.title || browser.url || "Page",
-          faviconUrl: browser.faviconUrl,
-          url: browser.url,
-          active: Boolean(browser.agentControlled),
-          removable: true,
-        })),
+        .map((browser): Chip => {
+          const key = browserTabKey(browser.localId);
+          return {
+            id: key,
+            label: browser.title || browser.url || "Page",
+            icon: pageIcon(browser.faviconUrl),
+            url: key,
+            ...signalOf(key, Boolean(browser.agentControlled)),
+            actions: [OPEN_SIDE_CHIP, CLOSE_CHIP],
+            data: {
+              kind: "browser",
+              ...(browser.url ? { url: browser.url } : {}),
+            },
+          };
+        }),
       ...workspace.terminals
         .filter((terminal) => terminal.chatLocalId === chat.localId)
-        .map((terminal) => ({
-          key: terminalTabKey(terminal.localId),
-          kind: "terminal" as const,
-          label: terminal.title || "Terminal",
-          description: terminal.initialCommand,
-          terminalSessionId: terminal.ptySessionId ?? terminal.attachSessionId,
-          // The spinner tracks the COMMAND, not the shell: busy means a
-          // foreground process is actually running in there right now.
-          active: terminal.busy === true,
-          removable: true,
-        })),
+        .map((terminal): Chip => {
+          const key = terminalTabKey(terminal.localId);
+          const terminalSessionId =
+            terminal.ptySessionId ?? terminal.attachSessionId;
+          return {
+            id: key,
+            label: terminal.title || "Terminal",
+            ...(terminal.initialCommand
+              ? { description: terminal.initialCommand }
+              : {}),
+            icon: "SquareTerminal",
+            url: key,
+            // The spinner tracks the COMMAND, not the shell: busy means a
+            // foreground process is actually running in there right now.
+            ...signalOf(key, terminal.busy === true),
+            actions: [OPEN_SIDE_CHIP, CLOSE_CHIP],
+            data: {
+              kind: "terminal",
+              ...(terminalSessionId ? { terminalSessionId } : {}),
+            },
+          };
+        }),
       ...workspace.editors
         .filter((editor) => editor.chatLocalId === chat.localId)
-        .map((editor) => ({
-          key: editorTabKey(editor.localId),
-          kind: "editor" as const,
-          label: editor.filePath?.split("/").at(-1) || "Editor",
-          filePath: editor.filePath ?? undefined,
-          removable: true,
-        })),
+        .map((editor): Chip => {
+          const key = editorTabKey(editor.localId);
+          return {
+            id: key,
+            label: editor.filePath?.split("/").at(-1) || "Editor",
+            icon: "FileCode",
+            url: key,
+            ...signalOf(key, false),
+            actions: [OPEN_SIDE_CHIP, CLOSE_CHIP],
+            data: {
+              kind: "editor",
+              ...(editor.filePath ? { filePath: editor.filePath } : {}),
+            },
+          };
+        }),
     ];
-    if (attentionKeys.length === 0) return surfaces;
-    // Chips whose surface the agent opened in the background carry the
-    // attention dot until the user opens them.
-    const marked = surfaces.map((surface) =>
-      attentionKeys.includes(surface.key)
-        ? { ...surface, attention: true }
-        : surface,
-    );
     // A resource that is gone (a terminal whose command ended, a removed
     // chip) leaves no chip behind its attention.
     const gone = (key: string) =>
@@ -5979,12 +6054,10 @@ export function App({
         !workspace.editors.some(
           (editor) => editorTabKey(editor.localId) === key,
         ));
-    for (const key of attentionKeys) {
-      if (!marked.some((surface) => surface.key === key) && !gone(key)) {
-        marked.push({ ...synthesizedSurface(key), attention: true });
-      }
-    }
-    return marked;
+    for (const key of attentionKeys)
+      if (!chips.some((chip) => chip.id === key) && !gone(key))
+        chips.push(synthesizedChip(key));
+    return chips;
   };
 
   // Everything the palette searches and acts on, shared by both hosts
@@ -6274,6 +6347,45 @@ export function App({
     setSidebarCustomization(null);
     openSidebarCustomizationRef.current(sidebarCustomization.side);
   }, [sidebarCustomization, projectId, workspaceReady, hasAgents]);
+
+  // "Customize chips" (ADR 0239): a new chat with the request waiting in
+  // its composer, and the layout file and chips contract as its pills.
+  const openChipsCustomization = () => {
+    if (!projectId || !requireAgents()) return;
+    void Promise.all([
+      desktopApi.workspaceConfigGet(projectId),
+      desktopApi.workspaceConfigFile(),
+    ])
+      .then(([resolved, profileFile]) => {
+        const entry: ChatDockEntry = {
+          ...newChatEntry("partial"),
+          draftMessage: chipsCustomizationMessage({
+            file: resolved.file ?? profileFile,
+            layer: resolved.layer,
+            config: resolved.config,
+          }),
+        };
+        updateWorkspace((ws) => ({
+          ...ws,
+          chats: [
+            ...ws.chats.map((chat) =>
+              chat.mode === "partial"
+                ? { ...chat, mode: "min" as const }
+                : chat,
+            ),
+            entry,
+          ],
+          activeChatId: entry.localId,
+        }));
+      })
+      .catch((cause: unknown) =>
+        setLinkError(
+          cause instanceof Error
+            ? cause.message
+            : "Could not open chips customization",
+        ),
+      );
+  };
 
   const sidebarTabs = (side: "left" | "right") => {
     if (side === "right" && !projectId) return [];
@@ -7568,7 +7680,15 @@ export function App({
                       }
                       defaultAgentId={effectiveDefaultAgentId ?? undefined}
                       paletteTargeted={entry.localId === targetedChat?.localId}
-                      surfaces={surfacesFor(entry)}
+                      chips={chipsFor(entry)}
+                      chipsModule={
+                        // A local project, once known to be one: a connected
+                        // project's chats run no modules (ADR 0239).
+                        experienceRoot
+                          ? chipsModule(visibleWorkspace)
+                          : undefined
+                      }
+                      onCustomizeChips={openChipsCustomization}
                       onOpenSurface={openSurface}
                       onRemoveSurface={removeSurface}
                       onOpenMcpApp={(view, mode) => {
@@ -7695,6 +7815,9 @@ export function App({
                       }
                       registerClose={(close) =>
                         chatClosersRef.current.set(entry.localId, close)
+                      }
+                      registerFocusChips={(focus) =>
+                        chipFocusersRef.current.set(entry.localId, focus)
                       }
                       registerMinimize={(minimize) =>
                         chatMinimizersRef.current.set(entry.localId, minimize)

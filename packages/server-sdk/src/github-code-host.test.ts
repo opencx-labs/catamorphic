@@ -79,6 +79,24 @@ function fakeGithub() {
           incomplete_results: false,
           total_count: 1,
         });
+      case "GET /repos/octo/hello/pulls/8":
+        return Response.json({
+          number: 8,
+          title: "Fix",
+          html_url: "https://github.com/octo/hello/pull/8",
+          user: { login: "mona" },
+          head: { ref: "work/fix", sha: "a".repeat(40) },
+          base: { ref: "main" },
+          draft: false,
+          updated_at: "2026-09-27T00:00:00Z",
+          state: "closed",
+          merged: true,
+          additions: 3,
+          deletions: 1,
+          changed_files: 1,
+          comments: 0,
+          review_comments: 2,
+        });
       case "GET /installation/repositories":
         return Response.json({ repositories: [repo("hello")] });
       case "GET /user/repos":
@@ -213,6 +231,26 @@ describe("githubCodeHost", () => {
         (item) => item.fullName,
       ),
     ).toEqual(["octo/personal"]);
+    // Where a pull request at a web address stands, in any repository.
+    expect(
+      await host.pullRequestStatus?.({
+        credential: member,
+        url: "https://github.com/octo/hello/pull/8/files",
+      }),
+    ).toMatchObject({
+      number: 8,
+      repository: "octo/hello",
+      state: "merged",
+      additions: 3,
+      deletions: 1,
+      comments: 2,
+    });
+    expect(
+      await host.pullRequestStatus?.({
+        credential: member,
+        url: "https://github.com/octo/hello/issues/8",
+      }),
+    ).toBeNull();
     expect(
       github.calls
         .filter((call) => call.path.startsWith("/repos/"))

@@ -5,6 +5,7 @@ import {
   type GithubCheckRunFields,
   type GithubPullRequest,
   type GithubPullRequestFile,
+  type GithubPullRequestStatus,
   type GithubRepo,
   type GithubRepositoryEvent,
   type GithubReviewComment,
@@ -44,6 +45,32 @@ interface RawPullRequest {
   draft: boolean;
   updated_at: string;
 }
+
+/** The fields of a single pull request that its list entries lack. */
+interface RawPullRequestDetail extends RawPullRequest {
+  state: "open" | "closed";
+  merged?: boolean;
+  merged_at?: string | null;
+  additions?: number;
+  deletions?: number;
+  changed_files?: number;
+  comments?: number;
+  review_comments?: number;
+}
+
+interface RawCommitStatus {
+  state: string;
+  statuses: Array<{ state: string }>;
+}
+
+const FAILED_CONCLUSIONS = new Set([
+  "failure",
+  "timed_out",
+  "cancelled",
+  "action_required",
+  "startup_failure",
+  "stale",
+]);
 
 interface RawWatchPull {
   id: number;
@@ -539,6 +566,92 @@ export class GithubApi {
     );
   }
 
+  /**
+   * Where a pull request stands: open, draft, merged or closed, how much it
+   * changes, how many comments it has and what its head's checks say. A
+   * token that cannot read checks still reads the rest.
+   */
+  async pullRequestStatus(input: {
+    fullName: string;
+    number: number;
+  }): Promise<GithubPullRequestStatus> {
+    if (
+      !/^[\w.-]+\/[\w.-]+$/.test(input.fullName) ||
+      !Number.isSafeInteger(input.number) ||
+      input.number <= 0
+    )
+      throw new GithubApiError(400, "Invalid pull request");
+    const pr = await this.request<RawPullRequestDetail>(
+      `/repos/${input.fullName}/pulls/${input.number}`,
+    );
+    const checks =
+      pr.state === "open" && pr.head.sha
+        ? await this.checksOf(input.fullName, pr.head.sha).catch(
+            () => undefined,
+          )
+        : undefined;
+    return {
+      number: pr.number,
+      title: pr.title,
+      url: pr.html_url,
+      repository: input.fullName,
+      author: pr.user?.login ?? "unknown",
+      head: pr.head.ref,
+      base: pr.base.ref,
+      state:
+        pr.merged || pr.merged_at
+          ? "merged"
+          : pr.state === "closed"
+            ? "closed"
+            : pr.draft
+              ? "draft"
+              : "open",
+      additions: pr.additions ?? 0,
+      deletions: pr.deletions ?? 0,
+      changedFiles: pr.changed_files ?? 0,
+      comments: (pr.comments ?? 0) + (pr.review_comments ?? 0),
+      ...(checks ? { checks } : {}),
+      updatedAt: pr.updated_at,
+    };
+  }
+
+  /** Check runs and commit statuses on one commit, counted together. */
+  private async checksOf(
+    fullName: string,
+    sha: string,
+  ): Promise<GithubPullRequestStatus["checks"]> {
+    const [runs, status] = await Promise.all([
+      this.request<{ check_runs: RawCheckRun[] }>(
+        `/repos/${fullName}/commits/${sha}/check-runs?per_page=100`,
+      ),
+      this.request<RawCommitStatus>(
+        `/repos/${fullName}/commits/${sha}/status`,
+      ).catch(() => undefined),
+    ]);
+    const counts = { passed: 0, failed: 0, pending: 0 };
+    for (const run of runs.check_runs) {
+      if (run.status !== "completed") counts.pending += 1;
+      else if (run.conclusion && FAILED_CONCLUSIONS.has(run.conclusion))
+        counts.failed += 1;
+      else counts.passed += 1;
+    }
+    for (const entry of status?.statuses ?? []) {
+      if (entry.state === "pending") counts.pending += 1;
+      else if (entry.state === "success") counts.passed += 1;
+      else counts.failed += 1;
+    }
+    if (counts.passed + counts.failed + counts.pending === 0) return undefined;
+    return {
+      state:
+        counts.failed > 0
+          ? "failure"
+          : counts.pending > 0
+            ? "pending"
+            : "success",
+      ...counts,
+    };
+  }
+
   /** Changed files of a pull request, with unified-diff patches. */
   async pullRequestFiles(
     fullName: string,
@@ -836,6 +949,30 @@ export function gitCredentialsFor(accessToken: string): {
 /** True when the remote URL points at github.com (https or ssh form). */
 export function isGithubRemoteUrl(url: string): boolean {
   return repoFullNameFromUrl(url) !== null;
+}
+
+/**
+ * The repository and number of a pull request's web address
+ * (`https://github.com/owner/repo/pull/12`, anything after the number
+ * ignored), under `webBaseUrl` for GitHub Enterprise. Null otherwise.
+ */
+export function pullRequestFromUrl({
+  url,
+  webBaseUrl = "https://github.com",
+}: {
+  url: string;
+  webBaseUrl?: string;
+}): { fullName: string; number: number } | null {
+  const base = webBaseUrl.replace(/\/+$/, "");
+  const trimmed = url.trim();
+  if (!trimmed.toLowerCase().startsWith(`${base.toLowerCase()}/`)) return null;
+  const match = /^([\w.-]+\/[\w.-]+)\/pull\/(\d+)(?:[/?#].*)?$/.exec(
+    trimmed.slice(base.length + 1),
+  );
+  const number = Number(match?.[2]);
+  return match?.[1] && Number.isSafeInteger(number) && number > 0
+    ? { fullName: match[1], number }
+    : null;
 }
 
 /**

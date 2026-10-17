@@ -24,6 +24,7 @@ import {
 import type { SidebarBadge, SidebarSignal } from "../../shared/sidebar.js";
 import type { SidebarMenuEntry, SidebarPreview } from "../lib/desktop-api.js";
 import { lucideIcon } from "../lib/lucide-icon.js";
+import { TONE_TEXT } from "../lib/tones.js";
 import { AnimatedTitle } from "./animated-title.js";
 import { SignalBadge, SignalGlyph } from "./chat-signals.js";
 import {
@@ -501,10 +502,12 @@ export function SidebarItemRow<
                   typeof badge === "string"
                     ? undefined
                     : lucideIcon(badge.icon);
+                const tone = typeof badge === "string" ? undefined : badge.tone;
                 return (
                   <span
                     key={text}
-                    className="flex max-w-28 shrink-0 items-center gap-1 truncate rounded bg-bg-inset px-1 text-[10px] text-fg-muted"
+                    data-tone={tone}
+                    className={`flex max-w-28 shrink-0 items-center gap-1 truncate rounded bg-bg-inset px-1 text-[10px] transition-colors duration-150 ${tone ? TONE_TEXT[tone] : "text-fg-muted"}`}
                   >
                     {BadgeIcon && (
                       <BadgeIcon
