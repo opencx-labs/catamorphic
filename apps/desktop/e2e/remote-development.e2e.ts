@@ -91,14 +91,18 @@ const settled = () =>
 const shot = (name: string) =>
   app.screenshot(path.join(ARTIFACTS, `remote-development-${name}.png`));
 
-/** The connected project's row in the Server section (ADR 0234). */
-const serverRow = `[data-sidebar-section="remote"] [data-sidebar-item-id="server"]`;
+/**
+ * The connected project's row in the Server section (ADR 0234). A row its
+ * list draws anew leaves as an inert copy while the new one comes in; the
+ * copy's menu goes with it.
+ */
+const serverRow = `$$('[data-sidebar-section="remote"] [data-sidebar-item-id="server"]').find((el) => !el.closest('[inert]'))`;
 /** Pick an entry from the Server row's menu: its dialogs live there. */
 async function serverMenu(label: string): Promise<void> {
   // The row settles as the connection's status arrives: open its menu once
   // the row offers one.
   await runWait(
-    `const button = $('${serverRow} [aria-haspopup="menu"]'); if (!button) return false; button.click(); return true;`,
+    `const button = ${serverRow}?.querySelector('[aria-haspopup="menu"]'); if (!button) return false; button.click(); return true;`,
     { label: "the server row's menu" },
   );
   await runWait(
@@ -497,7 +501,10 @@ describe("remote development on a Work server", () => {
       `const button = $('[data-testid="remote-connect-submit"]'); if (!button || button.disabled) return false; button.click(); return true;`,
       { label: "connect" },
     );
-    await runWait(`return !!$('${serverRow}');`, {
+    // Until the window knows the project is on a server, its Secrets and
+    // Remote environment refuse, and when it does, every list is read again
+    // and the Server row drawn anew: its workspace is ready only then.
+    await runWait(`return !!$('[data-workspace-ready]') && !!${serverRow};`, {
       timeoutMs: 90_000,
       label: "connected project",
     });
