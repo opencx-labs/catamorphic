@@ -94,6 +94,11 @@ export interface ChatBubblesProps {
   dragHandlers?: DOMAttributes<HTMLButtonElement>;
   /** Drag surface of the expanded strip's arrows: picks the placement. */
   placementDragHandlers?: DOMAttributes<HTMLButtonElement>;
+  /**
+   * In its own window the pill has no arrows: it is grabbed by its body,
+   * wherever a press does not land on one of its controls (ADR 0242).
+   */
+  railDragHandlers?: DOMAttributes<HTMLDivElement>;
   /** The resting spot the current drag would choose; null when not dragging. */
   dragTarget?: "left" | "center" | "right" | null;
   /** Whether the dock lives in its own window; the bubble menu flips it. */
@@ -340,6 +345,7 @@ export function ChatBubbles({
   placement = "center",
   dragHandlers,
   placementDragHandlers,
+  railDragHandlers,
   dragTarget = null,
   detached = false,
   edge = "bottom",
@@ -403,6 +409,14 @@ export function ChatBubbles({
           },
         ]
       : []),
+    ...(detached
+      ? [
+          {
+            label: collapsed ? "Open the pill" : "Fold the pill",
+            action: "fold",
+          },
+        ]
+      : []),
     ...(detached && onDockAt
       ? [
           {
@@ -436,6 +450,10 @@ export function ChatBubbles({
   ];
   const pickDockMenu = (action: string | null) => {
     if (action === "detach") onToggleDetached?.();
+    if (action === "fold") {
+      onFoldedChange(!collapsed);
+      if (!collapsed) onCollapse?.();
+    }
     if (action?.startsWith("dock-at:"))
       onDockAt?.(action.slice("dock-at:".length) as PillEdge);
     if (action === "voice-in-dock") onVoiceInDockChange?.(!voiceInDock);
@@ -640,13 +658,16 @@ export function ChatBubbles({
           document.activeElement === expandRef.current
         ? "expand"
         : null;
+  const itemsId = useId();
   useLayoutEffect(() => {
     if (collapsed && focusedControl === "arrows")
       expandRef.current?.focus({ preventScroll: true });
     else if (!collapsed && focusedControl === "expand")
-      arrowsRef.current?.focus({ preventScroll: true });
-  }, [collapsed, focusedControl]);
-  const itemsId = useId();
+      (
+        arrowsRef.current ??
+        document.getElementById(itemsId)?.querySelector("button")
+      )?.focus({ preventScroll: true });
+  }, [collapsed, focusedControl, itemsId]);
   const spotClass = vertical
     ? ""
     : spot === "left"
@@ -790,7 +811,7 @@ export function ChatBubbles({
   const voiceSlot = (
     <div
       data-dock-voice={voiceShown ? "shown" : "hidden"}
-      className={`duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${
+      className={`flex duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${
         vertical
           ? `transition-[max-height,margin,opacity,scale] ${
               voiceShown
@@ -999,7 +1020,6 @@ export function ChatBubbles({
               <>
                 {items}
                 {trailing}
-                {arrows}
               </>
             }
           />
@@ -1024,9 +1044,22 @@ export function ChatBubbles({
         : edge === "right"
           ? "right-3 top-1/2 -translate-y-1/2 flex-col"
           : `bottom-3 ${spotClass}`;
+  // Open in its own window the outer slot holds only the folded bubble,
+  // shrunk to nothing: it gives its gap back, so the pill's padding stays
+  // even on every side.
+  const edgeSlot = `transition-[margin] duration-250 ease-[cubic-bezier(0.2,0,0,1)] ${
+    detached && !collapsed
+      ? vertical
+        ? "-mt-1.5"
+        : side === "left"
+          ? "-me-1.5"
+          : "-ms-1.5"
+      : ""
+  }`;
   return (
     <div data-dock-edge={edge} className={rootClass}>
       {targets}
+      {/* biome-ignore lint/a11y/noStaticElementInteractions: the pill's body is a pointer-only handle on the desktop; the folded bubble's arrow keys, Settings and the bubble's menu reach the same moves */}
       <div
         ref={railRef}
         data-dock-rail
@@ -1037,9 +1070,18 @@ export function ChatBubbles({
             ? undefined
             : { left: dragLeft, right: "auto", translate: "0" }
         }
+        {...(detached ? railDragHandlers : {})}
+        onContextMenu={
+          detached && openDockMenu
+            ? (event) => {
+                // A control's own menu (a chat's) has answered it.
+                if (!event.defaultPrevented) openDockMenu(event);
+              }
+            : undefined
+        }
         className={`pointer-events-auto absolute flex items-center rounded-full border border-border bg-bg-raised shadow-2xl transition-[padding,gap] duration-250 ease-[cubic-bezier(0.2,0,0,1)] ${railPlace} ${
           collapsed ? "gap-0 p-1" : "gap-1.5 p-1.5"
-        }`}
+        } ${detached ? "touch-none cursor-grab active:cursor-grabbing" : ""}`}
       >
         {/* The outer edge is one slot the arrows and the collapsed bubble
             share, so folding cross-fades them in place. On a side the
@@ -1048,16 +1090,16 @@ export function ChatBubbles({
           <>
             {items}
             {tools}
-            <div className="flex flex-col">
-              {arrowsSlot}
+            <div className={`flex flex-col ${edgeSlot}`}>
+              {detached ? null : arrowsSlot}
               {collapsedBubble}
             </div>
           </>
         ) : side === "left" ? (
           <>
-            <div className="flex">
+            <div className={`flex ${edgeSlot}`}>
               {collapsedBubble}
-              {arrowsSlot}
+              {detached ? null : arrowsSlot}
             </div>
             {tools}
             {items}
@@ -1066,8 +1108,8 @@ export function ChatBubbles({
           <>
             {items}
             {tools}
-            <div className="flex">
-              {arrowsSlot}
+            <div className={`flex ${edgeSlot}`}>
+              {detached ? null : arrowsSlot}
               {collapsedBubble}
             </div>
           </>

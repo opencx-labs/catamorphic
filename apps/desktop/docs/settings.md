@@ -102,18 +102,19 @@ ADR 0242) are profile choices: `dockMultiProject`, `dockDetached`, `dockEdge`,
 `dockDisplay` is the display it last docked on, kept by the app, not shown.
 `dockDetached` puts the pill on the desktop, in a window of its own above every
 app, and it stays there while Work is minimized. It is the launch default only:
-right-clicking the collapsed bubble or the arrows floats the pill or returns it
-for the current session, and closing its window returns it the same way. Those
+right-clicking the collapsed bubble or the arrows (on the desktop, the pill's
+body) floats the pill or returns it for the current session, and closing its window returns it the same way. Those
 actions never rewrite the preference, so a restart comes back with the chosen
 default. Settings' picker writes the default and moves the pill at once.
 `dockEdge` chooses the screen edge the pill docks on: `bottom` (default),
 `left`, `right`, or `top`, which wraps the camera notch on a display that has
 one (a black island that opens downward, on hover when `dockIslandHover` is on)
-and sits under the menu bar elsewhere. Dragging the collapsed bubble or the
-arrows moves the pill in two dimensions, onto any display; while it is held, a
+and sits under the menu bar elsewhere. On the desktop the pill has no arrows:
+dragging its body, or the collapsed bubble, moves it in two dimensions, onto
+any display, and its menu folds it; while it is held, a
 display-wide overlay that never takes a click shows where it can land, and it
-lands on the edge nearest where it was thrown. Arrow keys on those controls move
-it to the spot that way, and the pill's menu docks it at an edge. At the bottom,
+lands on the edge nearest where it was thrown. Arrow keys on the collapsed
+bubble or the island's handle move it to the spot that way, and the pill's menu docks it at an edge. At the bottom,
 while a Work window is in front, the pill rests inside that window's chat
 region, between the sidebars, unless `dockFollowsWindow` is off; when another
 app is in front, or Work is minimized, it uses the display's work area.

@@ -375,6 +375,45 @@ describe("ChatBubbles at an edge of the screen (ADR 0242)", () => {
     ).toContain("top-3");
   });
 
+  it("has no arrows in its own window, where its body and its menu fold and move it", () => {
+    // In Work's window the arrows fold the strip and place open chats.
+    expect(
+      mount().container.querySelector("[data-dock-arrows]"),
+    ).not.toBeNull();
+    for (const edge of ["bottom", "left", "right"] as const) {
+      const { container, onFoldedChange } = pill({ edge, collapsed: false });
+      expect(container.querySelector("[data-dock-arrows]")).toBeNull();
+      const rail = container.querySelector("[data-dock-rail]");
+      expect(rail?.className).toContain("cursor-grab");
+      act(() => {
+        rail?.dispatchEvent(
+          new MouseEvent("contextmenu", {
+            bubbles: true,
+            cancelable: true,
+            clientX: 20,
+            clientY: 20,
+          }),
+        );
+      });
+      const fold = [...document.querySelectorAll("[role=menuitem]")].find(
+        (item) => item.textContent?.trim() === "Fold the pill",
+      );
+      if (!(fold instanceof HTMLElement)) throw new Error("no Fold the pill");
+      act(() => fold.click());
+      expect(onFoldedChange).toHaveBeenCalledWith(true);
+      act(() => {
+        for (const root of roots.splice(0)) root.unmount();
+      });
+    }
+    // The island has none either: its handle folds it.
+    const { container } = pill({
+      edge: "top",
+      notch: { width: 185, height: 32 },
+      collapsed: false,
+    });
+    expect(container.querySelector("[data-dock-arrows]")).toBeNull();
+  });
+
   it("wraps the notch: the microphone and the chats' handle in its wings, the strip under it", () => {
     const { container, onFoldedChange } = pill({
       edge: "top",

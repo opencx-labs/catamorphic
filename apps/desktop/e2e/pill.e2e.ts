@@ -182,9 +182,19 @@ it("moves to the spot an arrow key points at", async () => {
   await pill().waitFor(restsAt("right"), { label: "arrow right" });
   expect(await move("up")).toBe(true);
   await pill().waitFor(restsAt("top"), { label: "arrow up" });
-  // From the keyboard, on the pill's own handle.
+  // From the keyboard, on the folded pill's bubble. Open, the pill has no
+  // arrows and no handle of its own: its body is what moves it.
+  expect(
+    await pill().eval<number>(
+      "document.querySelectorAll('[data-dock-arrows]').length",
+    ),
+  ).toBe(0);
+  await app.eval("window.catamorphicDesktop.setPrefs({dockCollapsed:true})");
+  await pill().waitFor(
+    `document.querySelector('[data-dock-rail]')?.dataset.dockCollapsed === 'true'`,
+  );
   await pill().eval(
-    `[...document.querySelectorAll('[aria-label="Collapse chat bubbles"], [aria-label="Expand chat bubbles"]')].find((handle) => !handle.closest('[inert]') && !handle.classList.contains('pointer-events-none'))?.focus()`,
+    `document.querySelector('[aria-label="Expand chat bubbles"]').focus()`,
   );
   await pill().eval(
     `document.activeElement.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true, cancelable: true }))`,

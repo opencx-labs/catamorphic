@@ -74,7 +74,7 @@ export const SETTINGS = {
   dockPlacement: {
     label: "Open chat position",
     description:
-      "Where open chats and their bubbles sit at the bottom. Drag the arrows button to move them.",
+      "Where open chats and their bubbles sit at the bottom. Drag the pill to move them.",
     scopes: profileScope,
     valid: oneOf("left", "center", "right"),
     options: { left: "Left", center: "Centered", right: "Right" },

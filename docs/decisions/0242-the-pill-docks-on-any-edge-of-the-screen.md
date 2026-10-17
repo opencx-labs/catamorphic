@@ -26,14 +26,17 @@ rests in the front Work window's chat region while Work is in front, unless
 placement and display (`dockDisplay`) are saved, never coordinates; a display
 that is gone gives the main display without losing the saved one.
 
-**Moving it.** The collapsed bubble and the arrows drag in two dimensions,
-across displays: the window follows the pointer at its size, and letting go
+**Moving it.** On the desktop the pill has no arrows: it is grabbed by its
+body, anywhere a press misses its controls, or folded by its bubble, and its
+menu folds and opens it (the island's handle does too). It drags in two
+dimensions, across displays: the window follows the pointer at its size, and letting go
 lands on the edge of the display under the pointer nearest the point it was
 thrown towards (its position 0.15 s on at the release speed), then on the
 bottom corner or placement by the 40% rule. The window glides there
 (critically damped; instantly with reduced motion). While it is held, a
 display-wide overlay that never takes a click shows where it can land, the
-nearest spot lit. Escape cancels; arrow keys move it to the spot that way.
+nearest spot lit. Escape cancels; arrow keys on the folded bubble or the
+island's handle move it to the spot that way.
 The pill's menu ("Dock at") and Settings move it too, and the palette's
 settings search finds them.
 

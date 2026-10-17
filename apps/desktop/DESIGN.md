@@ -737,8 +737,12 @@ outline morphs between the two, flared where it meets the top of the
 screen as if the notch had grown. A chat opens from the pill, away from
 its edge.
 
-Grabbing the folded bubble or the arrows moves the pill anywhere, across
-displays. While it is held, the edges it can land on show as quiet dashed
+On the desktop the pill drops the strip's arrows: they pointed at a corner
+of a window it is no longer in, and their room sat uneven in the pill. It is
+grabbed by its body instead, anywhere off its controls, or folded by its
+bubble, and its menu folds it; the microphone's slot no longer adds a text
+line under its button, so the pill's padding is even on every side. Grabbing
+it moves the pill anywhere, across displays. While it is held, the edges it can land on show as quiet dashed
 spots over the screen, the one it would take lit in the accent; let go, it
 lands on the edge nearest where it was thrown and glides there on a
 critically damped spring. The overlay is a window that never takes a

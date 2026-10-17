@@ -204,9 +204,11 @@ it("keeps an unsent draft when detached and reattached, and supports either edge
     `Math.abs(screenX + outerWidth / 2 - ${(region.left + region.right) / 2}) < 3 && Math.abs(screenY + outerHeight + 12 - ${region.bottom}) < 3`,
     { label: "dock centered in the workspace chat region" },
   );
-  await dock.eval(
-    `document.querySelector('[aria-label="Collapse chat bubbles"]').click()`,
-  );
+  // In its own window the pill folds from its menu, which has no arrows
+  // (ADR 0242): as they did, it minimizes the open chat and keeps the fold
+  // as the profile's choice.
+  await toggleNative();
+  await dock.eval(`window.catamorphicDesktop.setPrefs({dockCollapsed:true})`);
   await dock.waitFor(
     // The collapsed bubble with the microphone and downloads beside it.
     `innerWidth <= 154 && document.querySelector('[data-dock-rail]')?.dataset.dockCollapsed === 'true'`,

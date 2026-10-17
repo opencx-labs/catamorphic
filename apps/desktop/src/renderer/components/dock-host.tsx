@@ -758,7 +758,7 @@ export function DockHost({
    * Release snaps; a short press without movement is still a click.
    */
   const dragHandlersFor = (intent: "side" | "placement") => ({
-    onPointerDown: (event: PointerEvent<HTMLButtonElement>) => {
+    onPointerDown: (event: PointerEvent<HTMLElement>) => {
       if (event.button !== 0) return;
       const host = event.currentTarget
         .closest("[data-dock-host]")
@@ -782,7 +782,7 @@ export function DockHost({
       event.currentTarget.setPointerCapture(event.pointerId);
       setHeld(true);
     },
-    onPointerMove: (event: PointerEvent<HTMLButtonElement>) => {
+    onPointerMove: (event: PointerEvent<HTMLElement>) => {
       const start = dragStart.current;
       if (!start || !event.currentTarget.hasPointerCapture(event.pointerId))
         return;
@@ -808,7 +808,7 @@ export function DockHost({
       else setDragLeft(Math.max(32, Math.min(start.max, start.left + delta)));
       setDragTarget(landing(start, delta, intent));
     },
-    onPointerUp: (event: PointerEvent<HTMLButtonElement>) => {
+    onPointerUp: (event: PointerEvent<HTMLElement>) => {
       const start = dragStart.current;
       if (!start) return;
       dragStart.current = null;
@@ -840,13 +840,13 @@ export function DockHost({
     onLostPointerCapture: () => {
       if (dragStart.current) cancelDrag();
     },
-    onClickCapture: (event: React.MouseEvent<HTMLButtonElement>) => {
+    onClickCapture: (event: React.MouseEvent<HTMLElement>) => {
       if (!suppressClick.current) return;
       suppressClick.current = false;
       event.preventDefault();
       event.stopPropagation();
     },
-    onKeyDown: (event: React.KeyboardEvent<HTMLButtonElement>) => {
+    onKeyDown: (event: React.KeyboardEvent<HTMLElement>) => {
       if (event.key === "Escape" && dragStart.current) {
         event.preventDefault();
         cancelDrag();
@@ -884,6 +884,23 @@ export function DockHost({
       if (next && next !== snapshot.placement) savePlacement(next);
     },
   });
+  // In its own window the pill is grabbed by its body (ADR 0242): a press
+  // on one of its controls stays that control's, and keys stay theirs.
+  const body = dragHandlersFor(collapsed ? "side" : "placement");
+  const railDrag = detachedWindow
+    ? {
+        onPointerDown: (event: PointerEvent<HTMLElement>) => {
+          if (event.target instanceof Element && event.target.closest("button"))
+            return;
+          body.onPointerDown(event);
+        },
+        onPointerMove: body.onPointerMove,
+        onPointerUp: body.onPointerUp,
+        onPointerCancel: body.onPointerCancel,
+        onLostPointerCapture: body.onLostPointerCapture,
+        onClickCapture: body.onClickCapture,
+      }
+    : undefined;
   showing.current = new Set();
   // Where the strip rests: a corner while collapsed, its placement open.
   const railSpot = collapsed ? snapshot.side : snapshot.placement;
@@ -1092,6 +1109,7 @@ export function DockHost({
               placement={snapshot.placement}
               dragHandlers={dragHandlersFor("side")}
               placementDragHandlers={dragHandlersFor("placement")}
+              railDragHandlers={railDrag}
               newChatProjectName={
                 snapshot.chats.find(
                   (chat) => chat.projectId === currentProjectId,
