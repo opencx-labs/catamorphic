@@ -324,6 +324,8 @@ const TAKEN_OVER_TOOL =
   "The machine running this turn stopped while this tool ran. It may or may not have completed: check its effects before trying again.";
 /** What a tool call answers once its attempt ended. */
 const ENDED_TOOL = "This turn already ended, so the tool did not run.";
+/** The notice a turn whose thread was lost gets as it starts over (ADR 0245). */
+const THREAD_LOST_NOTICE = "thread_lost";
 
 /**
  * Drives claimed turns (ADR 0198): prepares an attempt, starts its runner
@@ -1768,20 +1770,7 @@ export class TurnEngine {
               stopped = true;
               return;
             }
-            // The new attempt's prompt carries every steered message, so
-            // no steer is sent again, and the interrupt has done its work.
-            await queue.markCommands({
-              ids: (
-                await queue.openCommands({ turnId: turn.id, executor: trx })
-              )
-                .filter(
-                  (command) =>
-                    command.kind === "interrupt" || command.kind === "steer",
-                )
-                .map((command) => command.id),
-              status: "dropped",
-              executor: trx,
-            });
+            await this.dropCarriedCommands(trx, turn.id);
             await log.append(trx, {
               sessionId: turn.sessionId,
               events: [
@@ -1848,9 +1837,9 @@ export class TurnEngine {
    * The thread this attempt was to resume is gone (ADR 0245): when its
    * harness said so and failed before beginning the turn, the turn runs
    * once more, on a new thread that is handed the conversation, instead of
-   * failing every turn after. Once per turn: never after an earlier attempt
-   * of it failed. The failed attempt keeps its error; a notice says why the
-   * agent starts over. A person's stop meanwhile ends the turn as it failed.
+   * failing every turn after. Once per turn: a thread lost again fails it.
+   * The failed attempt keeps its error; a notice says why the agent starts
+   * over. A person's stop meanwhile ends the turn.
    */
   private async rebindLostThread(
     local: LocalTurn,
@@ -1883,15 +1872,16 @@ export class TurnEngine {
       this.stopping
     )
       return undefined;
-    const earlier = await db
-      .selectFrom("agent_turn_attempts")
+    // A thread lost again on the new thread fails the turn: never a loop.
+    const rebound = await db
+      .selectFrom("agent_items")
       .select("id")
       .where("turn_id", "=", turn.id)
-      .where("id", "!=", attempt.id)
-      .where("status", "=", "failed")
+      .where("kind", "=", "notice")
+      .where(sql<string>`payload->>'code'`, "=", THREAD_LOST_NOTICE)
       .limit(1)
       .executeTakeFirst();
-    if (earlier) return undefined;
+    if (rebound) return undefined;
     const now = new Date().toISOString();
     const failed: Attempt = {
       ...attempt,
@@ -1919,6 +1909,7 @@ export class TurnEngine {
         stopped = true;
         return;
       }
+      await this.dropCarriedCommands(trx, turn.id);
       await log.append(trx, {
         sessionId: turn.sessionId,
         events: [
@@ -1939,8 +1930,8 @@ export class TurnEngine {
               startedAt: now,
               endedAt: now,
               kind: "notice",
-              code: "thread_lost",
-              text: "The agent couldn't reopen its earlier conversation, so it starts a new one, handed the conversation so far.",
+              code: THREAD_LOST_NOTICE,
+              text: "The agent couldn't reopen its earlier session, so it starts a new one, caught up on the chat so far.",
               data: {
                 providerThreadId: ctx.thread.id,
                 ...(ctx.threadLost ? { reason: ctx.threadLost } : {}),
@@ -1963,6 +1954,27 @@ export class TurnEngine {
       return { kind: "aborted", channel: ctx.channel };
     local.results.clear();
     return { kind: "restart", turn: preparing };
+  }
+
+  /**
+   * A new attempt's prompt carries every steered message, so no steer is
+   * sent again, and an interrupt meant for the attempt it replaces has done
+   * its work: neither may reach the new one.
+   */
+  private async dropCarriedCommands(
+    trx: Transaction<DB>,
+    turnId: string,
+  ): Promise<void> {
+    const { queue } = this.deps;
+    await queue.markCommands({
+      ids: (await queue.openCommands({ turnId, executor: trx }))
+        .filter(
+          (command) => command.kind === "interrupt" || command.kind === "steer",
+        )
+        .map((command) => command.id),
+      status: "dropped",
+      executor: trx,
+    });
   }
 
   /** A person stopped this attempt for it to read what they sent (ADR 0240). */

@@ -213,9 +213,34 @@ describe("ACP adapter", () => {
     ]);
   });
 
-  it("reopens with session/resume when the agent offers it, so nothing is replayed", async () => {
+  it("reopens with session/load even when the agent offers session/resume, its replay the proof the session is there", async () => {
     const space = workspace();
     const env = { TEST_AGENT_STATE: space.stateFile, TEST_AGENT_RESUME: "1" };
+    const first = run(attempt(space, "hello", { env }));
+    await first.finished();
+    const second = run(
+      attempt(space, "[[recall]]", {
+        env,
+        thread: {
+          mode: "resume",
+          providerThreadId: "thread",
+          nativeRef: { id: "session-1", strength: "strong" },
+        },
+      }),
+    );
+    await second.finished();
+    expect(second.text("assistant_message")).toBe("Turn 2");
+    expect(space.state().sessions["session-1"]?.reopenedWith).toBe("load");
+    expect(JSON.stringify(second.events())).not.toContain("(replayed)");
+  });
+
+  it("reopens with session/resume when the agent offers only that", async () => {
+    const space = workspace();
+    const env = {
+      TEST_AGENT_STATE: space.stateFile,
+      TEST_AGENT_RESUME: "1",
+      TEST_AGENT_NO_LOAD: "1",
+    };
     const first = run(attempt(space, "hello", { env }));
     await first.finished();
     const second = run(
@@ -699,10 +724,9 @@ describe("ACP adapter", () => {
 
   it("tells Work its session is gone when the agent no longer reopens sessions", async () => {
     const space = workspace();
-    const env = { TEST_AGENT_STATE: space.stateFile, TEST_AGENT_NO_LOAD: "1" };
     const turn = run(
-      attempt(space, "[[recall]]", {
-        env,
+      attempt(space, "hello", {
+        env: { TEST_AGENT_STATE: space.stateFile, TEST_AGENT_NO_LOAD: "1" },
         thread: {
           mode: "resume",
           providerThreadId: "thread",
@@ -719,7 +743,81 @@ describe("ACP adapter", () => {
     expect(turn.events().some((event) => event.type === "turn.started")).toBe(
       false,
     );
+    expect(fs.existsSync(space.stateFile)).toBe(false);
   });
+
+  it("tells Work its session is gone when the agent answers a load with nothing replayed, as Hermes does for a session it lost", async () => {
+    const space = workspace();
+    const turn = run(
+      attempt(space, "hello", {
+        env: { TEST_AGENT_STATE: space.stateFile, TEST_AGENT_LOAD: "hermes" },
+        thread: {
+          mode: "resume",
+          providerThreadId: "thread",
+          nativeRef: { id: "session-9", strength: "strong" },
+        },
+      }),
+    );
+    await turn.finished();
+    expect(turn.events()).toContainEqual({
+      type: "thread.lost",
+      reason:
+        "test-agent couldn't reopen its earlier session (it replayed none of it).",
+    });
+    expect(turn.completed()).toMatchObject({ status: "failed" });
+    expect(turn.events().some((event) => event.type === "turn.started")).toBe(
+      false,
+    );
+  });
+
+  it("tells Work its session is gone when the agent refuses to resume it", async () => {
+    const space = workspace();
+    const turn = run(
+      attempt(space, "hello", {
+        env: {
+          TEST_AGENT_STATE: space.stateFile,
+          TEST_AGENT_RESUME: "1",
+          TEST_AGENT_NO_LOAD: "1",
+        },
+        thread: {
+          mode: "resume",
+          providerThreadId: "thread",
+          nativeRef: { id: "session-9", strength: "strong" },
+        },
+      }),
+    );
+    await turn.finished();
+    expect(turn.events()).toContainEqual(
+      expect.objectContaining({ type: "thread.lost" }),
+    );
+    expect(turn.completed()).toMatchObject({ status: "failed" });
+  });
+
+  it.each([
+    ["a sign-in", "auth"],
+    ["a passing error", "busy"],
+    ["a crash", "crash"],
+  ])(
+    "leaves the session for the next turn when reopening fails for %s",
+    async (_why, failing) => {
+      const space = workspace();
+      const turn = run(
+        attempt(space, "hello", {
+          env: { TEST_AGENT_STATE: space.stateFile, TEST_AGENT_LOAD: failing },
+          thread: {
+            mode: "resume",
+            providerThreadId: "thread",
+            nativeRef: { id: "session-1", strength: "strong" },
+          },
+        }),
+      );
+      await turn.finished();
+      expect(turn.completed()).toMatchObject({ status: "failed" });
+      expect(turn.events().some((event) => event.type === "thread.lost")).toBe(
+        false,
+      );
+    },
+  );
 
   it("fails the turn clearly when the agent's command cannot start", async () => {
     const space = workspace();

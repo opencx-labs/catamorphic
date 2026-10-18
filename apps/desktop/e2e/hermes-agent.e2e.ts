@@ -34,7 +34,8 @@ function installHermes() {
   const sessions = path.join(bin, "sessions.json");
   fs.writeFileSync(
     path.join(bin, "hermes"),
-    `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(agent)} ${JSON.stringify(sessions)}\n`,
+    // It answers a load of a session it lost with nothing, as Hermes does.
+    `#!/bin/sh\nTEST_AGENT_LOAD=hermes exec ${JSON.stringify(process.execPath)} ${JSON.stringify(agent)} ${JSON.stringify(sessions)}\n`,
   );
   fs.chmodSync(path.join(bin, "hermes"), 0o755);
 }
@@ -219,7 +220,7 @@ describe("Hermes as the person's own agent", () => {
       return true;
     `);
     await runWait(
-      `return hermesDock().textContent.includes("couldn't reopen its earlier conversation");`,
+      `return hermesDock().textContent.includes("couldn't reopen its earlier session");`,
       { timeoutMs: 30_000, label: "the notice saying why it starts over" },
     );
     await runWait(

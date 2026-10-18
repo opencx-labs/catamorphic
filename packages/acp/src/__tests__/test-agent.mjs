@@ -16,6 +16,10 @@
 // TEST_AGENT_RESUME=1 it also offers `session/resume`, which replays
 // nothing. TEST_AGENT_EXIT_SAVE_MS=<ms> saves its state that long after its
 // input closes, as Hermes saves its session on the way out. With
+// TEST_AGENT_LOAD picks how `session/load` fails: `hermes` answers nothing
+// for a session it lost (no error, nothing replayed), as Hermes does;
+// `auth` asks for a sign-in, `busy` errs with a passing internal error, and
+// `crash` exits mid-load. With
 // TEST_AGENT_STUBBORN=1 it ignores a cancel and SIGTERM alike, and starts a
 // process of its own (`sleeper` in its state). It notes a cancel it heard
 // as `cancelled` in its state.
@@ -82,8 +86,14 @@ new acp.AgentSideConnection(
         return {};
       },
       loadSession: async ({ sessionId, cwd, mcpServers }) => {
+        const failing = process.env.TEST_AGENT_LOAD;
+        if (failing === "crash") process.exit(3);
+        if (failing === "auth") throw acp.RequestError.authRequired();
+        if (failing === "busy")
+          throw acp.RequestError.internalError(undefined, "database is locked");
         const state = read();
         const session = state.sessions[sessionId];
+        if (!session && failing === "hermes") return null;
         if (!session) throw acp.RequestError.resourceNotFound(sessionId);
         Object.assign(session, { cwd, mcpServers, reopenedWith: "load" });
         write(state);

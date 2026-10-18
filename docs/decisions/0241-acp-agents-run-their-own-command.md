@@ -28,9 +28,9 @@ collaborator can change those after approval. The agent runs with Work's
 environment, as a command in the person's own terminal would.
 
 - **Sessions** stay with the agent: the first turn opens one in the
-  checkout, later turns reopen it with `session/resume` when the agent
-  offers it (nothing replayed), else `session/load` (its history replayed
-  and ignored). Work hears of a session only once it holds the
+  checkout, later turns reopen it with `session/load` when the agent
+  offers it (its history replayed and ignored, the replay the proof the
+  session is there), else `session/resume`. Work hears of a session only once it holds the
   conversation and can be reopened: a new session after its first turn
   completes, never one from an agent that cannot reopen sessions, so Work
   hands that agent the whole conversation each turn instead. A session the

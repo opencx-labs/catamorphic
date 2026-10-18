@@ -169,6 +169,10 @@ export async function ingestHarnessEvents(input: {
     if (event.type !== "item.delta") flushDelta();
     switch (event.type) {
       case "thread": {
+        // A thread reported gone stays gone (ADR 0245): a replacement the
+        // harness opens is never resumed in its place, for it lacks what
+        // came before; the next attempt binds a thread handed all of it.
+        if (thread.status === "unavailable") break;
         thread = {
           ...thread,
           nativeRef: event.ref,
