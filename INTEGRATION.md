@@ -962,6 +962,18 @@ that person or their groups, using `accessTier` and `placementOrder` from
 its host-owned realization, and an Allocation is the immutable decision for
 one root session or workflow run. Machine selection is never a project choice.
 
+When the provider has no machine for a chat (it throws
+`EnvironmentCapacityError`, or answers nothing), an Environment with
+`"waitMinutes": n` starts the chat without an Allocation and its turns wait
+up to `n` minutes; a chat whose Allocation was released waits as long as it
+is queued. Core records each piece of waiting work in `placement_waits`
+(Environment, pool, owner, needs, on the database clock), deletes it in the
+transaction that creates the Allocation, and exposes
+`core.placementWaits.wake({ tenantId })` for a host to call when a machine
+comes online. A host that scales machines reads the table as demand,
+ignoring rows not tried for `PLACEMENT_WAIT_FRESH_SECONDS`
+([ADR 0258](docs/decisions/0258-machines-on-demand.md)).
+
 The managed multi-machine target is multiple Catamorphic server instances of
 one logical authority, sharing network Postgres and accessible authoritative
 storage ([ADR 0099](docs/decisions/0099-shared-postgres-server-environments.md)).

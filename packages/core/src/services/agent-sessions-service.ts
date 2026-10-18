@@ -150,6 +150,7 @@ import {
   isHttpMethodCapability,
   isProtocolCapability,
   MODEL_CAPABILITY,
+  type ResolvedConnectionBinding,
 } from "./connection-types.js";
 import { DbSandboxStore } from "./db-sandbox-store.js";
 import { DevSandboxService } from "./dev-sandbox-service.js";
@@ -172,6 +173,12 @@ import {
   removePersonalEnvironment,
 } from "./personal-environment-delivery.js";
 import type { PersonalEnvironmentService } from "./personal-environment-service.js";
+import {
+  PLACEMENT_WAIT_FRESH_SECONDS,
+  type PlacementWait,
+  PlacementWaitsService,
+  type PlacementWaitTarget,
+} from "./placement-waits.js";
 import type { PluginsService } from "./plugins-service.js";
 import {
   PROGRAM_READER,
@@ -1085,6 +1092,8 @@ export class AgentSessionsService {
   private readonly nativeAgentCheckout?: NativeAgentCheckout;
   private readonly executionEnvironments: ExecutionEnvironmentsService;
   private readonly executionAllocations: ExecutionAllocationsService;
+  /** Chats waiting for a machine (ADR 0258). */
+  private readonly placementWaits: PlacementWaitsService;
   private readonly connectionAdmission?: ConnectionAdmissionService;
   private readonly connectionGrants?: ConnectionCapabilityGrantsService;
   private readonly connectionMcpUrl?: AgentSessionsDeps["connectionMcpUrl"];
@@ -1220,36 +1229,60 @@ export class AgentSessionsService {
         // remote node or none (any host of the authority runs those; the
         // turn claim decides which), and chats whose workspace was released.
         .$if(this.workerNode !== undefined, (query) =>
-          query.where(({ exists, selectFrom }) =>
+          query.where(({ eb, exists, or, selectFrom }) =>
+            or([
+              // Waiting for a machine (ADR 0258): any host may admit it.
+              eb("agent_sessions.allocation_id", "is", null),
+              exists(
+                selectFrom("execution_allocations")
+                  .leftJoin(
+                    "worker_nodes",
+                    "worker_nodes.id",
+                    "execution_allocations.worker_node_id",
+                  )
+                  .select("execution_allocations.id")
+                  .whereRef(
+                    "execution_allocations.id",
+                    "=",
+                    "agent_sessions.allocation_id",
+                  )
+                  .where((allocation) =>
+                    allocation.or([
+                      allocation(
+                        "execution_allocations.worker_node_id",
+                        "is",
+                        null,
+                      ),
+                      allocation(
+                        "execution_allocations.worker_node_id",
+                        "=",
+                        this.workerNode?.id ?? "",
+                      ),
+                      allocation("worker_nodes.remote", "is not", null),
+                      allocation(
+                        "execution_allocations.status",
+                        "=",
+                        "released",
+                      ),
+                    ]),
+                  ),
+              ),
+            ]),
+          ),
+        )
+        // A chat waiting for a machine is tried again after its backoff.
+        .where(({ not, exists, selectFrom }) =>
+          not(
             exists(
-              selectFrom("execution_allocations")
-                .leftJoin(
-                  "worker_nodes",
-                  "worker_nodes.id",
-                  "execution_allocations.worker_node_id",
-                )
-                .select("execution_allocations.id")
+              selectFrom("placement_waits")
+                .select("placement_waits.root_workload_id")
                 .whereRef(
-                  "execution_allocations.id",
+                  "placement_waits.root_workload_id",
                   "=",
-                  "agent_sessions.allocation_id",
+                  "agent_sessions.id",
                 )
-                .where((allocation) =>
-                  allocation.or([
-                    allocation(
-                      "execution_allocations.worker_node_id",
-                      "is",
-                      null,
-                    ),
-                    allocation(
-                      "execution_allocations.worker_node_id",
-                      "=",
-                      this.workerNode?.id ?? "",
-                    ),
-                    allocation("worker_nodes.remote", "is not", null),
-                    allocation("execution_allocations.status", "=", "released"),
-                  ]),
-                ),
+                .where("placement_waits.retry_at", ">", sql<Date>`now()`)
+                .where("placement_waits.last_tried_at", ">", waitFresh()),
             ),
           ),
         )
@@ -1302,6 +1335,11 @@ export class AgentSessionsService {
         await this.finishAbandonedClosings().catch((error) =>
           console.warn("[catamorphic] Finishing closed chats failed", error),
         );
+        await this.placementWaits
+          .sweep()
+          .catch((error) =>
+            console.warn("[catamorphic] Forgetting old waits failed", error),
+          );
       }
     };
     const loop = async () => {
@@ -1350,7 +1388,34 @@ export class AgentSessionsService {
           .select(({ fn }) => fn.min("agent_turns.available_at").as("at"))
           .where("agent_sessions.authority_host_id", "=", this.hostId)
           .where("agent_turns.status", "=", "queued")
+          .where(({ not, exists, selectFrom }) =>
+            not(
+              exists(
+                selectFrom("placement_waits")
+                  .select("placement_waits.root_workload_id")
+                  .whereRef(
+                    "placement_waits.root_workload_id",
+                    "=",
+                    "agent_turns.session_id",
+                  )
+                  .where("placement_waits.retry_at", ">", sql<Date>`now()`)
+                  .where("placement_waits.last_tried_at", ">", waitFresh()),
+              ),
+            ),
+          )
           .as("queued"),
+        // A chat waiting for a machine falls due when its backoff ends.
+        eb
+          .selectFrom("placement_waits")
+          .innerJoin(
+            "agent_sessions",
+            "agent_sessions.id",
+            "placement_waits.root_workload_id",
+          )
+          .select(({ fn }) => fn.min("placement_waits.retry_at").as("at"))
+          .where("agent_sessions.authority_host_id", "=", this.hostId)
+          .where("placement_waits.last_tried_at", ">", waitFresh())
+          .as("waits"),
         eb
           .selectFrom("agent_turns")
           .innerJoin(
@@ -1380,7 +1445,7 @@ export class AgentSessionsService {
           .as("expires"),
       ])
       .executeTakeFirst();
-    const times = [row?.queued, row?.lapses, row?.expires]
+    const times = [row?.queued, row?.waits, row?.lapses, row?.expires]
       .filter((at) => at !== null && at !== undefined)
       .map((at) => new Date(at).getTime());
     return times.length > 0 ? new Date(Math.min(...times)) : null;
@@ -1479,6 +1544,7 @@ export class AgentSessionsService {
     this.nativeAgentCheckout = deps.nativeAgentCheckout;
     this.executionEnvironments = deps.executionEnvironments;
     this.executionAllocations = deps.executionAllocations;
+    this.placementWaits = new PlacementWaitsService(db);
     this.connectionAdmission = deps.connectionAdmission;
     this.connectionGrants = deps.connectionGrants;
     this.connectionMcpUrl = deps.connectionMcpUrl;
@@ -4517,13 +4583,23 @@ export class AgentSessionsService {
         .where("status", "=", "queued")
         .where("available_at", "<=", sql<Date>`now()`)
         .executeTakeFirst();
-      if (allocation?.status === "released" && due) {
-        try {
-          await this.readmit(identity, session.project_id, session);
-        } catch (error) {
-          if (error instanceof EnvironmentCapacityError) return;
-          throw error;
-        }
+      // No workspace: given back while the chat waited, or a chat that is
+      // waiting for a machine (ADR 0258).
+      const placing =
+        session.allocation_id === null || allocation?.status === "released";
+      if (placing && !due)
+        await this.placementWaits.clear({ rootWorkloadIds: [sessionId] });
+      if (placing && due) {
+        const placed = await this.placeWaiting(identity, session);
+        if (placed.kind === "admitted") continue;
+        if (placed.kind === "waiting") return;
+        // It waited as long as its Environment allows: its turn fails.
+        const refused = await this.engine.runNext({
+          sessionId,
+          ...(this.workerNode ? { localNode: this.workerNode } : {}),
+          refusal: placed.reason,
+        });
+        if (!refused) return;
         continue;
       }
       if (
@@ -5785,7 +5861,9 @@ export class AgentSessionsService {
     ]
       .filter((part): part is string => Boolean(part))
       .join("\n\n");
-    const admitted = await this.executionEnvironments.admit({
+    // With no machine free, a chat in an Environment that lets work wait
+    // starts without a workspace and its first turn waits (ADR 0258).
+    const placed = await this.executionEnvironments.admitOrWait({
       identity,
       projectId,
       environment: input.environment,
@@ -5798,6 +5876,12 @@ export class AgentSessionsService {
       },
       ...(agent.signIn ? { signIn: agent.signIn } : {}),
     });
+    const admitted = "admission" in placed ? placed.admission : undefined;
+    const environmentName = admitted
+      ? admitted.environmentName
+      : "wait" in placed
+        ? placed.wait.environmentName
+        : "";
     const requirements = agent.connectionRequirements ?? [];
     if (requirements.length > 0 && !this.connectionAdmission) {
       throw new Error("Connection providers are not configured");
@@ -5807,7 +5891,7 @@ export class AgentSessionsService {
         ? await this.connectionAdmission!.admit({
             identity,
             projectId,
-            environment: admitted.environmentName,
+            environment: environmentName,
             requirements,
             // A project chat is unattended: service connections only (ADR 0181).
             unattended: isProjectPrincipal(identity.externalUserId),
@@ -5839,16 +5923,45 @@ export class AgentSessionsService {
     return {
       visibility,
       insert: async (transaction: Transaction<DB>) => {
-        const allocation = await this.executionAllocations.create({
-          identity,
-          projectId,
-          environmentName: admitted.environmentName,
-          workloadKind: "agent",
-          rootWorkloadId: sessionId,
-          workerNodeId: admitted.runtime.workerNodeId,
-          policy: admissionPolicy({ admission: admitted, connections }),
-          transaction,
-        });
+        // The machine admitted may fill up before the Allocation is made:
+        // the chat then waits too, where its Environment lets it.
+        const allocation = admitted
+          ? await this.executionAllocations
+              .create({
+                identity,
+                projectId,
+                environmentName: admitted.environmentName,
+                workloadKind: "agent",
+                rootWorkloadId: sessionId,
+                workerNodeId: admitted.runtime.workerNodeId,
+                policy: admissionPolicy({ admission: admitted, connections }),
+                transaction,
+              })
+              .catch((error: unknown) => {
+                if (
+                  error instanceof EnvironmentCapacityError &&
+                  admitted.wait.waitMinutes > 0
+                )
+                  return undefined;
+                throw error;
+              })
+          : undefined;
+        const wait: PlacementWaitTarget | undefined =
+          "wait" in placed
+            ? placed.wait
+            : allocation || !admitted
+              ? undefined
+              : { ...admitted.wait, reason: "capacity" };
+        if (wait)
+          await this.placementWaits.record({
+            tenantId: identity.tenantId,
+            projectId,
+            workloadKind: "agent",
+            rootWorkloadId: sessionId,
+            target: wait,
+            limitMinutes: wait.waitMinutes,
+            transaction,
+          });
         const session = await transaction
           .insertInto("agent_sessions")
           .values({
@@ -5862,9 +5975,12 @@ export class AgentSessionsService {
             model_effort: input.effort ?? null,
             system_prompt: systemPrompt || null,
             sandbox_id: null,
-            allocation_id: allocation.id,
-            environment_name: admitted.environmentName,
-            placement: toPlacementJson(placementOf(admitted)),
+            allocation_id: allocation?.id ?? null,
+            environment_name: environmentName,
+            placement:
+              allocation && admitted
+                ? toPlacementJson(placementOf(admitted))
+                : null,
             status: "active",
             title: input.title ?? null,
             chat_key: input.chatKey ?? null,
@@ -7640,10 +7756,8 @@ export class AgentSessionsService {
       updates.model_effort = patch.effort;
     }
     if (patch.environment !== undefined || updates.agent_id !== undefined) {
+      // A chat waiting for a machine (ADR 0258) has none to give back.
       const previousAllocationId = session.allocation_id;
-      if (!previousAllocationId) {
-        throw new Error("Agent session has no Environment Allocation");
-      }
       const nextAgent = await this.resolveAgent(
         patch.agentId ?? session.agent_id,
         projectId,
@@ -7696,11 +7810,12 @@ export class AgentSessionsService {
               ).harness,
               next: nextHarness,
             });
-          await this.executionAllocations.release({
-            identity,
-            allocationId: previousAllocationId,
-            transaction,
-          });
+          if (previousAllocationId)
+            await this.executionAllocations.release({
+              identity,
+              allocationId: previousAllocationId,
+              transaction,
+            });
           const allocation = await this.executionAllocations.create({
             identity,
             projectId,
@@ -7722,9 +7837,10 @@ export class AgentSessionsService {
             .returningAll()
             .executeTakeFirstOrThrow();
         });
-      await this.connectionGrants?.revokeAllocation({
-        allocationId: previousAllocationId,
-      });
+      if (previousAllocationId)
+        await this.connectionGrants?.revokeAllocation({
+          allocationId: previousAllocationId,
+        });
     }
 
     if (Object.keys(updates).length === 0)
@@ -9038,11 +9154,70 @@ export class AgentSessionsService {
     return released;
   }
 
+  /**
+   * A chat with a queued turn and no workspace (ADR 0258): admitted on its
+   * Environment again, still waiting for a machine (tried again after its
+   * backoff), or out of time, when its due turns fail saying why. The wait
+   * is recorded only while the chat is open, so a close never leaves one.
+   */
+  private async placeWaiting(
+    identity: Identity,
+    session: SessionRow,
+  ): Promise<
+    | { kind: "admitted" }
+    | { kind: "waiting" }
+    | { kind: "expired"; reason: string }
+  > {
+    const wait = await this.placementWaits.get({ rootWorkloadId: session.id });
+    if (wait?.expired)
+      return { kind: "expired", reason: placementWaitExpired(wait) };
+    if (wait && !wait.due) return { kind: "waiting" };
+    const placed = await this.readmit(identity, session.project_id, session, {
+      wait: true,
+    });
+    if ("admitted" in placed) return { kind: "admitted" };
+    const recorded = await this.db.transaction().execute(async (trx) => {
+      const current = await trx
+        .selectFrom("agent_sessions")
+        .select(["status", "allocation_id"])
+        .where("id", "=", session.id)
+        .forShare()
+        .executeTakeFirst();
+      if (
+        current?.status !== "active" ||
+        current.allocation_id !== session.allocation_id
+      )
+        return undefined;
+      return this.placementWaits.record({
+        tenantId: identity.tenantId,
+        projectId: session.project_id,
+        workloadKind: "agent",
+        rootWorkloadId: session.id,
+        target: placed.wait,
+        limitMinutes:
+          placed.wait.waitMinutes > 0 ? placed.wait.waitMinutes : null,
+        transaction: trx,
+      });
+    });
+    // Closed or placed meanwhile: the next look sees it.
+    if (!recorded) return { kind: "admitted" };
+    return recorded.expired
+      ? { kind: "expired", reason: placementWaitExpired(recorded) }
+      : { kind: "waiting" };
+  }
+
+  /**
+   * Admit a chat whose workspace was given back, or that never had one, on
+   * its Environment again. With `wait`, a chat no machine can take yet
+   * answers where it waits (ADR 0258), whatever the Environment's
+   * `waitMinutes`, instead of failing.
+   */
   private async readmit(
     identity: Identity,
     projectId: string,
     session: SessionRow,
-  ): Promise<void> {
+    options: { wait?: boolean } = {},
+  ): Promise<{ admitted: true } | { wait: PlacementWaitTarget }> {
     const agent = await this.resolveAgent(session.agent_id, projectId);
     // A member's machine is readmitted on the runner it last used.
     const released = session.allocation_id
@@ -9052,7 +9227,7 @@ export class AgentSessionsService {
         })
       : undefined;
     const [kind, runnerId] = released?.bindingId.split(":") ?? [];
-    const admission = await this.executionEnvironments.admit({
+    const admitArgs = {
       identity:
         kind === "client" && runnerId
           ? { ...identity, clientRunnerId: runnerId }
@@ -9066,11 +9241,19 @@ export class AgentSessionsService {
       preferred: agent.environment?.preferred,
       requirements: {
         ...agent.environment?.requirements,
-        workload: "agent",
+        workload: "agent" as const,
         topology: agent.topology,
       },
       ...(agent.signIn ? { signIn: agent.signIn } : {}),
-    });
+    };
+    const placed = options.wait
+      ? await this.executionEnvironments.admitOrWait({
+          ...admitArgs,
+          always: true,
+        })
+      : { admission: await this.executionEnvironments.admit(admitArgs) };
+    if ("wait" in placed) return placed;
+    const { admission } = placed;
     const requirements = agent.connectionRequirements ?? [];
     const connectionAdmission = this.connectionAdmission;
     if (requirements.length > 0 && !connectionAdmission) {
@@ -9087,6 +9270,34 @@ export class AgentSessionsService {
           })
         : [];
     const previous = parsePlacement(session.placement);
+    try {
+      await this.readmitInto({
+        identity,
+        projectId,
+        session,
+        admission,
+        connections,
+        reason: previous?.reason ?? admission.reason,
+      });
+    } catch (error) {
+      // The machine admitted filled up (or went) before the Allocation.
+      if (options.wait && error instanceof EnvironmentCapacityError)
+        return { wait: { ...admission.wait, reason: "capacity" } };
+      throw error;
+    }
+    return { admitted: true };
+  }
+
+  /** The readmitted chat's new Allocation, unless it closed or moved meanwhile. */
+  private async readmitInto(input: {
+    identity: Identity;
+    projectId: string;
+    session: SessionRow;
+    admission: EnvironmentAdmission;
+    connections: readonly ResolvedConnectionBinding[];
+    reason: PlacementReason;
+  }): Promise<void> {
+    const { identity, projectId, session, admission, connections } = input;
     await this.db.transaction().execute(async (transaction) => {
       const current = await transaction
         .selectFrom("agent_sessions")
@@ -9117,7 +9328,7 @@ export class AgentSessionsService {
           sandbox_id: null,
           placement: toPlacementJson({
             ...placementOf(admission),
-            reason: previous?.reason ?? admission.reason,
+            reason: input.reason,
           }),
         })
         .where("id", "=", session.id)
@@ -9208,8 +9419,7 @@ export class AgentSessionsService {
                 allocationId: session.allocation_id,
               })
             : undefined;
-          if (!allocation) throw notRunning();
-          if (allocation.status === "active" && session.sandbox_id)
+          if (allocation?.status === "active" && session.sandbox_id)
             return this.liveWorkspace({
               owner,
               session,
@@ -9217,8 +9427,11 @@ export class AgentSessionsService {
               start: input.start,
             });
           if (!input.start) throw notRunning();
-          if (allocation.status !== "active") {
-            // The drain loop's own readmission: a concurrent one wins quietly.
+          if (allocation?.status !== "active") {
+            // The drain loop's own readmission: a concurrent one wins
+            // quietly. A chat waiting for a machine (ADR 0258) is admitted
+            // the same way, or says why not.
+            if (!allocation && session.allocation_id) throw notRunning();
             await this.readmit(owner, projectId, session);
             continue;
           }
@@ -9719,6 +9932,11 @@ export class AgentSessionsService {
           // Work delivered while the running turns stopped would wait on a
           // closed chat forever: cancel it with the closing, under the lock.
           await cancelOpenTurns(trx);
+          // Nothing of it waits for a machine any more (ADR 0258).
+          await this.placementWaits.clear({
+            rootWorkloadIds: sessionIds,
+            transaction: trx,
+          });
           return this.sessionsWithRunningTurns({
             sessionIds,
             executor: trx,
@@ -10713,7 +10931,7 @@ export class AgentSessionsService {
     agent: RegisteredCodingAgent,
   ): Promise<AgentExecutionRuntime> {
     if (!session.allocation_id)
-      throw new Error("Session has no execution Allocation");
+      throw new Error("This chat is waiting for a machine");
     const allocation = await this.executionAllocations.get({
       identity,
       allocationId: session.allocation_id,
@@ -11947,6 +12165,20 @@ function mapSession(
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString(),
   };
+}
+
+/** Since when a wait for a machine still counts (ADR 0258). */
+function waitFresh() {
+  return sql<Date>`now() - make_interval(secs => ${PLACEMENT_WAIT_FRESH_SECONDS})`;
+}
+
+/** Why a chat's turn did not run: it waited for a machine as long as allowed. */
+function placementWaitExpired(wait: PlacementWait): string {
+  const minutes = wait.limitMinutes ?? 0;
+  const span = `${minutes} minute${minutes === 1 ? "" : "s"}`;
+  return wait.reason === "capacity"
+    ? `No machine for Environment '${wait.environmentName}' had room for this chat within ${span}, so this turn did not run. The next message waits again.`
+    : `No machine for Environment '${wait.environmentName}' came online for this chat within ${span}, so this turn did not run. The next message waits again.`;
 }
 
 function toPlacementJson(placement: SessionPlacement): Json {

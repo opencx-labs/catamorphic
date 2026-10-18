@@ -683,6 +683,22 @@ export interface PersonalEnvironmentSetups {
   updated_at: Generated<Timestamp>;
 }
 
+export interface PlacementWaits {
+  environment_name: string;
+  expires_at: Timestamp | null;
+  last_tried_at: Generated<Timestamp>;
+  owner: string | null;
+  pool: Generated<Json>;
+  project_id: string;
+  reason: string;
+  requirements: Generated<Json>;
+  retry_at: Generated<Timestamp>;
+  root_workload_id: string;
+  tenant_id: string;
+  waiting_since: Generated<Timestamp>;
+  workload_kind: string;
+}
+
 export interface ProjectEventDeliveries {
   activation_id: string;
   attempt_count: Generated<number>;
@@ -1504,6 +1520,7 @@ export interface DB {
   notification_deliveries: NotificationDeliveries;
   personal_environment_entries: PersonalEnvironmentEntries;
   personal_environment_setups: PersonalEnvironmentSetups;
+  placement_waits: PlacementWaits;
   project_event_deliveries: ProjectEventDeliveries;
   project_event_monitors: ProjectEventMonitors;
   project_events: ProjectEvents;

@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
+  PLACEMENT_WAIT_FRESH_SECONDS,
   releaseReplicaClaim,
   renewReplicaClaim,
   takeReplicaClaim,
@@ -10,6 +11,7 @@ import {
   type HetznerCloudMachines,
 } from "@catamorphic/hetzner";
 import { getTracer, withSpan } from "@catamorphic/otel";
+import { poolMatches } from "@catamorphic/sandbox";
 import { type Kysely, sql } from "kysely";
 import { z } from "zod";
 import {
@@ -30,6 +32,7 @@ import {
   WorkerPlacementSchema,
 } from "./placement.js";
 import type {
+  MachineLoad,
   PooledMachine,
   ProvisionedMachine,
   WorkWorkerRegistry,
@@ -40,30 +43,117 @@ const tracer = getTracer("@catamorphic/work-server");
 /** Days a released machine keeps its disk unless its rule says otherwise. */
 export const DEFAULT_RETAIN_DAYS = 7;
 
+/** Minutes a machine on demand stays once idle, unless its rule says otherwise. */
+export const DEFAULT_IDLE_MINUTES = 10;
+
+/** Minutes a machine on demand has to enroll before it is replaced. */
+export const DEFAULT_ENROLL_MINUTES = 15;
+
 const DAY_MS = 24 * 60 * 60_000;
 
 /**
- * A machine rule (ADRs 0167, 0205): every active member of a directory
- * group gets a machine of their own, or the group shares a fixed number of
- * machines, of a machine class. A machine nobody should have any more is
- * released and kept for `retainDays` before it is destroyed or reset.
+ * Machines that come and go with the work waiting for them (ADR 0258): up
+ * to `max`, keeping `min` warm, each destroyed once idle for
+ * `idleMinutes`, and replaced when it does not enroll within
+ * `enrollMinutes`.
  */
-export const MachineRuleSchema = z.strictObject({
-  group: z.email().toLowerCase(),
-  machines: z.union([
-    z.literal("each-member"),
-    z.strictObject({ shared: z.number().int().positive().max(100) }),
-  ]),
-  /** A class from `WORK_MACHINES_CONFIG`, or the provisioner hook's. */
-  class: z.string().min(1).max(64),
-  /** Labels a created machine carries; a pooled one keeps its own. */
-  labels: NodeLabelsSchema.default({}),
-  /** Shared machines only: the group's members trust each other. */
-  trusted: z.boolean().default(false),
-  /** Days a released machine keeps its disk; 0 destroys or resets it at once. */
-  retainDays: z.number().int().min(0).max(365).default(DEFAULT_RETAIN_DAYS),
-});
+const DemandSchema = z
+  .strictObject({
+    max: z.number().int().positive().max(100),
+    min: z.number().int().min(0).max(100).default(0),
+    // At least a minute: a machine that just enrolled is idle until the
+    // work it was made for lands on it.
+    idleMinutes: z
+      .number()
+      .int()
+      .min(1)
+      .max(24 * 60)
+      .default(DEFAULT_IDLE_MINUTES),
+    enrollMinutes: z
+      .number()
+      .int()
+      .positive()
+      .max(24 * 60)
+      .default(DEFAULT_ENROLL_MINUTES),
+  })
+  .refine((demand) => demand.min <= demand.max, {
+    message: "min may not be more than max",
+    path: ["min"],
+  });
+export type MachineDemand = z.output<typeof DemandSchema>;
+
+/** How many machines a rule gives, and to whom. */
+const RuleMachinesSchema = z.union([
+  z.literal("each-member"),
+  z.strictObject({ shared: z.number().int().positive().max(100) }),
+  z.strictObject({ demand: DemandSchema }),
+]);
+type RuleMachines = z.output<typeof RuleMachinesSchema>;
+
+/**
+ * A machine rule (ADRs 0167, 0205, 0258): every active member of a
+ * directory group gets a machine of their own, the group shares a fixed
+ * number of machines, or machines come and go with the work waiting for
+ * them, of a machine class. Machines on demand serve a group's members or
+ * named projects' own work (project chats and automations). A machine
+ * nobody should have any more is released and kept for `retainDays` before
+ * it is destroyed or reset; a machine on demand keeps nothing.
+ */
+export const MachineRuleSchema = z
+  .strictObject({
+    group: z.email().toLowerCase().optional(),
+    /** Machines on demand only: the projects whose own work they take. */
+    projects: z.array(z.uuid()).min(1).max(100).optional(),
+    machines: RuleMachinesSchema,
+    /** A class from `WORK_MACHINES_CONFIG`, or the provisioner hook's. */
+    class: z.string().min(1).max(64),
+    /** Labels a created machine carries; a pooled one keeps its own. */
+    labels: NodeLabelsSchema.default({}),
+    /**
+     * Shared machines and machines on demand: the people (or projects)
+     * they serve trust each other, so processes are isolation enough.
+     */
+    trusted: z.boolean().default(false),
+    /** Days a released machine keeps its disk; 0 destroys or resets it at once. */
+    retainDays: z.number().int().min(0).max(365).optional(),
+  })
+  .superRefine((rule, context) => {
+    const demand = demandOf(rule) !== undefined;
+    if ((rule.group === undefined) === (rule.projects === undefined))
+      context.addIssue({
+        code: "custom",
+        message: "Name either a group or projects",
+        path: ["group"],
+      });
+    if (rule.projects !== undefined && !demand)
+      context.addIssue({
+        code: "custom",
+        message:
+          "Only machines on demand serve projects; give each-member and shared machines a group",
+        path: ["projects"],
+      });
+    if (demand && rule.retainDays !== undefined && rule.retainDays !== 0)
+      context.addIssue({
+        code: "custom",
+        message:
+          "A machine on demand is destroyed once it is idle; leave out retainDays",
+        path: ["retainDays"],
+      });
+  })
+  .transform((rule) => ({
+    ...rule,
+    retainDays: rule.retainDays ?? (demandOf(rule) ? 0 : DEFAULT_RETAIN_DAYS),
+  }));
 export type MachineRule = z.output<typeof MachineRuleSchema>;
+
+/** A rule's demand settings, when its machines come and go with demand. */
+export function demandOf(rule: {
+  machines: RuleMachines;
+}): MachineDemand | undefined {
+  return typeof rule.machines === "object" && "demand" in rule.machines
+    ? rule.machines.demand
+    : undefined;
+}
 
 /**
  * Creates and destroys worker machines on a platform (a cloud, a
@@ -73,12 +163,33 @@ export type MachineRule = z.output<typeof MachineRuleSchema>;
  * enrolls itself. `create` throws {@link MachineProvisioningRefusedError}
  * when the platform refused and created nothing, so the next pass tries
  * again with a new code; any other error keeps the code, since the machine
- * may still come up and enroll.
+ * may still come up and enroll. After such a failure Work cannot know
+ * whether the machine exists: it may later destroy it by `name` and ask
+ * for that name again. So `create` must be idempotent by `name` (an EC2
+ * `ClientToken` derived from it, say), never making a second machine for
+ * one name, and `destroy` must find a machine by `name` when `ref` is null.
  */
 export interface MachineProvisioner {
   create(args: {
     name: string;
     class: string;
+    /** The rule the machine is for. */
+    rule: string;
+    /** The class's `options` from `WORK_MACHINES_CONFIG`, as written. */
+    options?: Readonly<Record<string, unknown>>;
+    /**
+     * Machines on demand (ADR 0258): what the work waiting for this
+     * machine needs, to size it. Absent for a machine kept warm.
+     */
+    waiting?: {
+      resources: Readonly<{
+        cpuMillis?: number;
+        memoryMb?: number;
+        storageMb?: number;
+        gpu?: boolean;
+      }>;
+      capabilities: readonly string[];
+    };
     labels: Readonly<Record<string, string>>;
     enrollment: {
       controlPlaneUrl: string;
@@ -137,6 +248,8 @@ export interface MachineRuleStatus {
   waiting: number;
   /** Released and kept for their retention. */
   released: number;
+  /** Machines on demand: work waiting for one of this rule's machines. */
+  queued?: number;
   /** Why the rule cannot be acted on, such as an unknown class. */
   problem?: string;
   /** What failed for the rule's machines in the latest pass. */
@@ -150,7 +263,43 @@ interface DesiredMachine {
   class: string;
   placement: WorkerPlacement;
   retainDays: number;
+  /** Minutes it has to enroll once created (machines on demand). */
+  enrollMinutes?: number;
+  /** What the work it is created for needs (machines on demand). */
+  waiting?: DemandWait["requirements"];
 }
+
+/** Work waiting for a machine, as machine rules on demand read it. */
+interface DemandWait {
+  projectId: string;
+  /** Null for a project's own work. */
+  owner: string | null;
+  /** The owner's directory groups, for a group's machines. */
+  groups: readonly string[];
+  pool: Readonly<Record<string, string>>;
+  requirements: {
+    resources: {
+      cpuMillis?: number;
+      memoryMb?: number;
+      storageMb?: number;
+      gpu?: boolean;
+    };
+    capabilities: string[];
+  };
+}
+
+const DemandWaitPool = z.record(z.string(), z.string());
+const DemandWaitRequirements = z.object({
+  resources: z
+    .object({
+      cpuMillis: z.number().optional(),
+      memoryMb: z.number().optional(),
+      storageMb: z.number().optional(),
+      gpu: z.boolean().optional(),
+    })
+    .default({}),
+  capabilities: z.array(z.string()).default([]),
+});
 
 /** A place a pool rule fills with one of its class's free machines. */
 interface DesiredSlot {
@@ -171,6 +320,8 @@ interface Desired {
   slots: DesiredSlot[];
   /** Rules that cannot be acted on, and why; their machines stay as they are. */
   problems: Map<string, string>;
+  /** Machines on demand: work waiting for each rule's machines. */
+  queued: Map<string, number>;
 }
 
 /** Marks a ref as a Hetzner Cloud server id. */
@@ -244,6 +395,10 @@ export class MachineReconciler {
       throw new Error(
         "A pooled machine keeps the labels it enrolled with; remove labels from this rule",
       );
+    if (machineClass.platform === "pool" && demandOf(rule))
+      throw new Error(
+        `Machines on demand are created on a platform, and class '${rule.class}' is a pool of enrolled machines. Use a hetzner-cloud or custom class`,
+      );
     await this.deps.db
       .insertInto("work_machine_rules")
       .values({
@@ -291,7 +446,11 @@ export class MachineReconciler {
   /** Directory groups rules name, for the directory mirror. */
   async groups(): Promise<string[]> {
     return [
-      ...new Set(Object.values(await this.rules()).map((rule) => rule.group)),
+      ...new Set(
+        Object.values(await this.rules()).flatMap((rule) =>
+          rule.group ? [rule.group] : [],
+        ),
+      ),
     ];
   }
 
@@ -366,6 +525,7 @@ export class MachineReconciler {
           (machine) =>
             machine.state === "enrolled" && machine.releasedForMs !== null,
         ).length,
+        ...(demandOf(rule) ? { queued: desired.queued.get(name) ?? 0 } : {}),
         ...extra,
       };
     }
@@ -597,18 +757,22 @@ export class MachineReconciler {
               return;
             // Chats on it give their workspaces back saved once they idle
             // (ADR 0173); a machine that can no longer save them goes at
-            // once.
+            // once. Revoked under its node's lock, so no Allocation lands
+            // on it between this check and its revocation (ADR 0258).
+            const connected = await this.deps.workers.connected({
+              name: machine.name,
+            });
+            await fence();
             if (
-              (await this.deps.workers.connected({ name: machine.name })) &&
-              (await this.deps.workers.activeWorkspaces({
+              !(await this.deps.workers.drain({
                 name: machine.name,
-              })) > 0
+                force: !connected,
+              }))
             )
               return;
           }
           if (machine.state === "enrolled" || machine.state === "pending") {
             await fence();
-            await this.deps.workers.revoke({ name: machine.name });
             // Its code stops working, and it stays listed until destroyed.
             await this.deps.workers.expireEnrollments({ name: machine.name });
           }
@@ -685,7 +849,8 @@ export class MachineReconciler {
     const enrollment = await this.deps.workers.createMachineEnrollment({
       name: machine.name,
       rule: machine.rule,
-      ttlMinutes: 60,
+      // A machine on demand that does not enroll in time is replaced.
+      ttlMinutes: machine.enrollMinutes ?? 60,
       placement: machine.placement,
     });
     // Its machine enrolled or is being created since this pass looked.
@@ -941,6 +1106,9 @@ export class MachineReconciler {
       const { ref } = await this.deps.provisioner.create({
         name: machine.name,
         class: machine.class,
+        rule: machine.rule,
+        ...(machineClass.options ? { options: machineClass.options } : {}),
+        ...(machine.waiting ? { waiting: machine.waiting } : {}),
         labels: machine.placement.labels,
         enrollment: {
           controlPlaneUrl: this.deps.controlPlaneUrl,
@@ -1030,7 +1198,13 @@ export class MachineReconciler {
       provisioned: new Map(),
       slots: [],
       problems: new Map(),
+      queued: new Map(),
     };
+    const demand = Object.values(rules).some((rule) => demandOf(rule))
+      ? await this.demandState()
+      : undefined;
+    /** Waits a rule on demand counted already: each is one rule's to serve. */
+    const claimed = new Set<DemandWait>();
     for (const [rule, definition] of Object.entries(rules)) {
       const machineClass = this.classOf(definition.class);
       if (!machineClass) {
@@ -1040,10 +1214,34 @@ export class MachineReconciler {
         );
         continue;
       }
+      const ruleDemand = demandOf(definition);
+      if (ruleDemand && demand) {
+        if (machineClass.platform === "pool") {
+          desired.problems.set(
+            rule,
+            `Machines on demand are created on a platform, and class '${definition.class}' is a pool; this rule's machines are left as they are`,
+          );
+          continue;
+        }
+        const waits = demand.waits.filter(
+          (wait) => !claimed.has(wait) && demandWaitMatches(definition, wait),
+        );
+        for (const wait of waits) claimed.add(wait);
+        desired.queued.set(rule, waits.length);
+        for (const machine of demandMachines({
+          rule,
+          definition,
+          demand: ruleDemand,
+          machines: demand.machines.filter((machine) => machine.rule === rule),
+          loads: demand.loads,
+          waits,
+        }))
+          desired.provisioned.set(machine.name, machine);
+        continue;
+      }
+      const group = definition.group ?? "";
       const members =
-        definition.machines === "each-member"
-          ? await this.members(definition.group)
-          : [];
+        definition.machines === "each-member" ? await this.members(group) : [];
       if (machineClass.platform === "pool") {
         const holders =
           definition.machines === "each-member"
@@ -1056,13 +1254,16 @@ export class MachineReconciler {
                 trusted: false,
               }))
             : Array.from(
-                { length: definition.machines.shared },
+                {
+                  length:
+                    "shared" in definition.machines
+                      ? definition.machines.shared
+                      : 0,
+                },
                 (_, index) => ({
                   holder: { slot: index + 1 },
-                  group: definition.group,
-                  access: WorkerAccessSchema.parse({
-                    groups: [definition.group],
-                  }),
+                  group,
+                  access: WorkerAccessSchema.parse({ groups: [group] }),
                   trusted: definition.trusted,
                 }),
               );
@@ -1092,15 +1293,141 @@ export class MachineReconciler {
           });
         continue;
       }
-      for (let index = 1; index <= definition.machines.shared; index += 1)
-        add(sharedName(rule, definition.class, definition.group, index), {
+      const shared =
+        "shared" in definition.machines ? definition.machines.shared : 0;
+      for (let index = 1; index <= shared; index += 1)
+        add(sharedName(rule, definition.class, group, index), {
           labels,
-          access: { groups: [definition.group] },
+          access: { groups: [group] },
           trusted: definition.trusted,
         });
     }
     return desired;
   }
+
+  /**
+   * What machines on demand decide on (ADR 0258): the work waiting for a
+   * machine, tried recently and oldest first, with its owner's directory
+   * groups; every machine a rule provisioned; and how busy each enrolled
+   * one is.
+   */
+  private async demandState(): Promise<{
+    waits: DemandWait[];
+    machines: ProvisionedMachine[];
+    loads: Map<string, MachineLoad>;
+  }> {
+    const [rows, machines, loads] = await Promise.all([
+      this.deps.db
+        .selectFrom("placement_waits")
+        .leftJoin(
+          "work_accounts",
+          "work_accounts.user_id",
+          "placement_waits.owner",
+        )
+        .select([
+          "placement_waits.project_id",
+          "placement_waits.owner",
+          "placement_waits.pool",
+          "placement_waits.requirements",
+          "work_accounts.directory_groups",
+          "work_accounts.disabled_at",
+        ])
+        .where("placement_waits.tenant_id", "=", this.deps.tenantId)
+        .where(
+          "placement_waits.last_tried_at",
+          ">",
+          sql<Date>`now() - make_interval(secs => ${PLACEMENT_WAIT_FRESH_SECONDS})`,
+        )
+        .orderBy("placement_waits.waiting_since")
+        .execute(),
+      this.deps.workers.machines(),
+      this.deps.workers.machineLoad(),
+    ]);
+    const waits: DemandWait[] = [];
+    for (const row of rows) {
+      const pool = DemandWaitPool.safeParse(row.pool);
+      const requirements = DemandWaitRequirements.safeParse(row.requirements);
+      if (!pool.success || !requirements.success) continue;
+      // A disabled member's work gets no machine.
+      if (row.owner !== null && row.disabled_at !== null) continue;
+      waits.push({
+        projectId: row.project_id,
+        owner: row.owner,
+        groups: Array.isArray(row.directory_groups)
+          ? row.directory_groups.flatMap((group) =>
+              typeof group === "string" ? [group.toLowerCase()] : [],
+            )
+          : [],
+        pool: pool.data,
+        requirements: requirements.data,
+      });
+    }
+    return { waits, machines, loads };
+  }
+
+  /**
+   * Whether demand changed since this replica last looked (ADR 0258): one
+   * indexed statement every few seconds, a full pass only when the work
+   * waiting for machines, or the work on rules' machines, changed. Idle
+   * machines go on the regular pass. What it remembers is this replica's
+   * own shortcut (ADR 0193): another replica looks for itself, and the
+   * pass runs under the tenant's claim either way.
+   */
+  async checkDemand(): Promise<void> {
+    const row = await this.deps.db
+      .selectNoFrom((eb) => [
+        eb
+          .exists(
+            eb
+              .selectFrom("work_machine_rules")
+              .select("name")
+              .where("tenant_id", "=", this.deps.tenantId)
+              .where(sql<boolean>`definition -> 'machines' ? 'demand'`),
+          )
+          .as("demand"),
+        eb
+          .selectFrom("placement_waits")
+          .select(
+            sql<string>`count(*)::text || '/' || coalesce(max(waiting_since)::text, '')`.as(
+              "waits",
+            ),
+          )
+          .where("tenant_id", "=", this.deps.tenantId)
+          .where(
+            "last_tried_at",
+            ">",
+            sql<Date>`now() - make_interval(secs => ${PLACEMENT_WAIT_FRESH_SECONDS})`,
+          )
+          .as("waits"),
+        eb
+          .selectFrom("execution_allocations")
+          .select(
+            sql<string>`count(*) FILTER (WHERE capacity_released_at IS NULL)::text || '/' || coalesce(max(capacity_released_at)::text, '')`.as(
+              "work",
+            ),
+          )
+          .where(
+            "worker_node_id",
+            "in",
+            eb
+              .selectFrom("work_workers")
+              .select("node_id")
+              .where("tenant_id", "=", this.deps.tenantId)
+              .where("machine_rule", "is not", null)
+              .where("revoked_at", "is", null),
+          )
+          .as("work"),
+      ])
+      .executeTakeFirst();
+    if (!row?.demand) return;
+    const seen = `${row.waits ?? ""}|${row.work ?? ""}`;
+    if (seen === this.demandSeen) return;
+    this.demandSeen = seen;
+    this.reconcileSoon();
+  }
+
+  /** What {@link checkDemand} last saw. */
+  private demandSeen: string | undefined;
 
   /** Active accounts the directory last placed in the group. */
   private async members(
@@ -1188,6 +1515,155 @@ export function sharedName(
   index: number,
 ): string {
   return `${rule}-${digest(`${machineClass}\0${group}`, 6)}-${index}`;
+}
+
+/**
+ * A stable worker name for a machine on demand. The class and whom it
+ * serves (a group, or the projects) are part of it: a machine never moves
+ * to other people's work with its disk.
+ */
+export function demandName(args: {
+  rule: string;
+  machineClass: string;
+  scope: { group: string } | { projects: readonly string[] };
+  index: number;
+}): string {
+  return `${demandPrefix(args)}${args.index}`;
+}
+
+function demandPrefix(args: {
+  rule: string;
+  machineClass: string;
+  scope: { group: string } | { projects: readonly string[] };
+}): string {
+  const scope =
+    "group" in args.scope
+      ? `group\0${args.scope.group}`
+      : `projects\0${[...args.scope.projects].sort().join(",")}`;
+  return `${args.rule}-${digest(`${args.machineClass}\0${scope}`, 6)}-`;
+}
+
+/**
+ * Whether a rule on demand serves this waiting work: a machine with the
+ * rule's labels (and its class, on a worker) satisfies the work's pool,
+ * and its access takes the work's owner. A group's machines take its
+ * members' chats; projects' machines take those projects' own work.
+ */
+function demandWaitMatches(rule: MachineRule, wait: DemandWait): boolean {
+  const labels = { ...rule.labels, class: rule.class, plane: "worker" };
+  if (!poolMatches(labels, wait.pool)) return false;
+  if (rule.projects)
+    return wait.owner === null && rule.projects.includes(wait.projectId);
+  return (
+    wait.owner !== null &&
+    rule.group !== undefined &&
+    wait.groups.includes(rule.group)
+  );
+}
+
+/**
+ * The machines a rule on demand calls for now (ADR 0258). It keeps every
+ * machine still enrolling, every machine holding work, every machine idle
+ * for less than `idleMinutes`, then the most recently idle up to `min`.
+ * Work no kept machine has room for, beyond one piece per machine still
+ * enrolling, gets new machines, up to `max` in all. A machine holding work
+ * that has not called for `enrollMinutes` is lost, and replaced.
+ */
+function demandMachines(args: {
+  rule: string;
+  definition: MachineRule;
+  demand: MachineDemand;
+  machines: readonly ProvisionedMachine[];
+  loads: ReadonlyMap<string, MachineLoad>;
+  waits: readonly DemandWait[];
+}): DesiredMachine[] {
+  const { rule, definition, demand } = args;
+  const scope: { group: string } | { projects: readonly string[] } =
+    definition.projects
+      ? { projects: definition.projects }
+      : { group: definition.group ?? "" };
+  const prefix = demandPrefix({
+    rule,
+    machineClass: definition.class,
+    scope,
+  });
+  const placement = WorkerPlacementSchema.parse({
+    labels: { ...definition.labels, class: definition.class },
+    access:
+      "projects" in scope
+        ? { projects: [...scope.projects] }
+        : { groups: [scope.group] },
+    trusted: definition.trusted,
+  });
+  const desired = (name: string, waiting?: DesiredMachine["waiting"]) => ({
+    name,
+    rule,
+    class: definition.class,
+    placement,
+    retainDays: 0,
+    enrollMinutes: demand.enrollMinutes,
+    ...(waiting ? { waiting } : {}),
+  });
+  // Only machines for whom the rule serves now: another group's or
+  // projects' machines go once their work is done.
+  const own = args.machines.filter((machine) =>
+    machine.name.startsWith(prefix),
+  );
+  const pending = own.filter((machine) => machine.state === "pending");
+  const kept: ProvisionedMachine[] = [...pending];
+  const idle: Array<{ machine: ProvisionedMachine; idleForMs: number }> = [];
+  for (const machine of own) {
+    if (machine.state !== "enrolled") continue;
+    const load = args.loads.get(machine.name);
+    if (!load) continue;
+    const lost =
+      load.free === null &&
+      (load.seenForMs === null ||
+        load.seenForMs >= demand.enrollMinutes * 60_000);
+    if (load.holding > 0 && !lost) kept.push(machine);
+    else if (load.idleForMs < demand.idleMinutes * 60_000 && !lost)
+      kept.push(machine);
+    else idle.push({ machine, idleForMs: load.idleForMs });
+  }
+  idle.sort((left, right) => left.idleForMs - right.idleForMs);
+  for (const { machine } of idle) {
+    if (kept.length >= demand.min) break;
+    kept.push(machine);
+  }
+  // Work a kept machine has room for is admitted there on its next try.
+  const free = kept.flatMap((machine) => {
+    const room = args.loads.get(machine.name)?.free;
+    return room ? [{ ...room }] : [];
+  });
+  const uncovered = args.waits.filter((wait) => {
+    const { cpuMillis = 0, memoryMb = 0 } = wait.requirements.resources;
+    const room = free.find(
+      (slot) =>
+        slot.workspaces > 0 &&
+        (slot.cpuMillis === undefined || slot.cpuMillis >= cpuMillis) &&
+        (slot.memoryMb === undefined || slot.memoryMb >= memoryMb),
+    );
+    if (!room) return true;
+    room.workspaces -= 1;
+    if (room.cpuMillis !== undefined) room.cpuMillis -= cpuMillis;
+    if (room.memoryMb !== undefined) room.memoryMb -= memoryMb;
+    return false;
+  });
+  const unmet = uncovered.slice(pending.length);
+  const room = Math.max(0, demand.max - kept.length);
+  const add = Math.min(
+    room,
+    Math.max(unmet.length, demand.min - kept.length, 0),
+  );
+  const machines = kept.map((machine) => desired(machine.name));
+  const taken = new Set(own.map((machine) => machine.name));
+  for (let index = 1, made = 0; made < add; index += 1) {
+    const name = `${prefix}${index}`;
+    if (taken.has(name)) continue;
+    machines.push(desired(name, unmet[made]?.requirements));
+    made += 1;
+  }
+  return machines;
 }
 
 function digest(value: string, length: number): string {

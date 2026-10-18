@@ -182,6 +182,7 @@ export {
   ChatKeySchema,
   keyedChatOwnerId,
   parseChatKey,
+  projectChatIdentity,
 } from "./services/chat-delivery.js";
 export { ClientRunnersService } from "./services/client-runners-service.js";
 export type {
@@ -353,6 +354,7 @@ export {
 export {
   EnvironmentAccessDeniedError,
   type EnvironmentAdmission,
+  type EnvironmentAdmitArgs,
   EnvironmentBindingUnavailableError,
   EnvironmentIncompatibleError,
   EnvironmentNotFoundError,
@@ -460,6 +462,13 @@ export {
   personalSetupProblem,
   validatePersonalEnvironment,
 } from "./services/personal-environment-service.js";
+export {
+  PLACEMENT_WAIT_FRESH_SECONDS,
+  type PlacementWait,
+  type PlacementWaitReason,
+  PlacementWaitsService,
+  type PlacementWaitTarget,
+} from "./services/placement-waits.js";
 export {
   type AttachedPluginInfo,
   type PluginInfo,
@@ -837,6 +846,7 @@ export type { WorkerCapacity } from "./services/worker-capacity.js";
 export {
   capacityFits,
   EnvironmentCapacityError,
+  WorkerCapacitySchema,
 } from "./services/worker-capacity.js";
 export {
   REMOTE_EPOCH_PATTERN,
