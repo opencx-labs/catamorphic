@@ -2289,16 +2289,28 @@ function ChatDockContent({
   // The surfacing tab may mount (and focus) a couple of frames later,
   // after its pane-in animation — so claim focus now, next frame, and
   // once more after that animation window (tab-in is 200ms).
+  // Stepping up from floating into a tab (Cmd+N over a New Tab, expanding)
+  // lands the person in the chat too, even when its autofocus never ran:
+  // a key pressed before that frame cancels it (as the move's own Cmd+N
+  // does on a slow machine), and the move itself focuses nothing.
   const previousModeRef = useRef(entry.mode);
   useEffect(() => {
     const previous = previousModeRef.current;
     previousModeRef.current = entry.mode;
-    if (!(previous === "tab" && entry.mode === "partial")) return;
+    const steppedDown = previous === "tab" && entry.mode === "partial";
+    const steppedUp = previous === "partial" && entry.mode === "tab";
+    if (!steppedDown && !steppedUp) return;
     const userInteraction = userInteractionRef.current;
     const focus = () => {
-      if (userInteractionRef.current === userInteraction) {
-        focusComposerInternally();
-      }
+      if (userInteractionRef.current !== userInteraction) return;
+      // Stepping up keeps a focus already in the chat (a question's answer).
+      if (
+        steppedUp &&
+        sectionRef.current?.contains(document.activeElement) &&
+        document.activeElement !== sectionRef.current
+      )
+        return;
+      focusComposerInternally();
     };
     focus();
     const frame = requestAnimationFrame(focus);
