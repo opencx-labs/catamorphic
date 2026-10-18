@@ -690,6 +690,19 @@ it("opens a chat asked for from a New Tab in that tab, in its place", async () =
     `return document.querySelector('section[data-floating-chat]')?.dataset.chatLocalId;`,
     "a chat floating over the New Tab",
   );
+  // The person clicks back into the New Tab before Cmd+N, as a key pressed
+  // before the floating chat's autofocus frame does (on a slow machine):
+  // the chat it moves in still takes focus.
+  await run(`
+    const field = document.querySelector('[data-palette="tab"] textarea');
+    field.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+    field.focus();
+    return true;
+  `);
+  await wait(
+    `return document.activeElement?.closest('[data-palette="tab"]') && !document.querySelector('section[data-floating-chat] [data-composer-input]:focus')`,
+    "focus back in the New Tab",
+  );
   await shortcut("n");
   expect(await waitTelling<string>(`return ${chatInTab}`, "it moved in")).toBe(
     floated,
