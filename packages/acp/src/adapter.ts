@@ -249,17 +249,31 @@ function startAttempt(
         cwd: attempt.workingDirectory,
         mcpServers,
       };
+      let loaded = false;
       try {
         if (reopen === "resume") await until(connection.resumeSession(session));
         else await until(connection.loadSession(session));
-        reopened = reopen === "resume" || replayed > 0;
-        if (!reopened) refused = "it replayed none of it";
+        loaded = true;
       } catch (error) {
         // Only the agent's own answer that the session is gone counts: a
         // crash, an interrupt, a sign-in or a passing error ends this turn
         // and leaves the session to the next one.
         if (interrupted || !sessionGone(error)) throw error;
         refused = error.message;
+      }
+      reopened = loaded && (reopen === "resume" || replayed > 0);
+      // A load that replayed nothing: Hermes answers so for a session it
+      // lost, and for one it failed to restore. One it still lists is there,
+      // so this turn fails and the next tries again.
+      if (loaded && !reopened) {
+        if (
+          capabilities?.sessionCapabilities?.list &&
+          (await listsSession({ connection, sessionId: earlier, until }))
+        )
+          throw new Error(
+            `${agentName} couldn't load its earlier session, though it still has it. Send your message again to retry.`,
+          );
+        refused = "it replayed none of it";
       }
     }
     // The earlier session is gone (refused, or the agent no longer reopens
@@ -633,6 +647,31 @@ const REPLAYED: ReadonlySet<string> = new Set([
   "tool_call",
 ]);
 
+/** How many pages of an agent's sessions to look through for one. */
+const LIST_PAGES = 10;
+
+/**
+ * Whether the agent lists the session among its own, most recent first by
+ * its own order, a page at a time. A failure to list is passing: it throws.
+ */
+async function listsSession(input: {
+  connection: acp.ClientSideConnection;
+  sessionId: string;
+  until: <T>(promise: Promise<T>) => Promise<T>;
+}): Promise<boolean> {
+  let cursor: string | undefined;
+  for (let page = 0; page < LIST_PAGES; page++) {
+    const { sessions, nextCursor } = await input.until(
+      input.connection.listSessions(cursor ? { cursor } : {}),
+    );
+    if (sessions.some((listed) => listed.sessionId === input.sessionId))
+      return true;
+    if (!nextCursor) return false;
+    cursor = nextCursor;
+  }
+  return false;
+}
+
 /** What a refused reopen answers when the session is gone for good. */
 const GONE_CODES: ReadonlySet<number> = new Set([
   acp.RequestError.resourceNotFound().code,
@@ -648,14 +687,15 @@ const PASSING_CODES: ReadonlySet<number> = new Set([
 /**
  * Whether a refused reopen says the session is gone, rather than something
  * passing: not found, a session id the agent does not take, or a method it
- * does not have; never a sign-in or a cancel.
+ * does not have; never a sign-in or a cancel. An agent that throws a plain
+ * error answers "Internal error", its words in the error's data.
  */
 function sessionGone(error: unknown): error is acp.RequestError {
   if (!(error instanceof acp.RequestError)) return false;
   if (GONE_CODES.has(error.code)) return true;
   if (PASSING_CODES.has(error.code)) return false;
-  return /not found|no such|unknown session|does ?n[o']t exist/i.test(
-    error.message,
+  return /not found|no such|unknown session|invalid session|does ?n[o']t exist/i.test(
+    `${error.message} ${JSON.stringify(error.data ?? null)}`,
   );
 }
 

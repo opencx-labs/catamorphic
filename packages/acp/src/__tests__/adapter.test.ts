@@ -770,6 +770,74 @@ describe("ACP adapter", () => {
     );
   });
 
+  it("tells Work its session is gone when the agent throws a plain error naming it invalid, as Gemini CLI does", async () => {
+    const space = workspace();
+    const turn = run(
+      attempt(space, "hello", {
+        env: { TEST_AGENT_STATE: space.stateFile, TEST_AGENT_LOAD: "plain" },
+        thread: {
+          mode: "resume",
+          providerThreadId: "thread",
+          nativeRef: { id: "session-9", strength: "strong" },
+        },
+      }),
+    );
+    await turn.finished();
+    expect(turn.events()).toContainEqual(
+      expect.objectContaining({ type: "thread.lost" }),
+    );
+  });
+
+  it("tells Work a session is gone when a load replays nothing and the agent no longer lists it", async () => {
+    const space = workspace();
+    const turn = run(
+      attempt(space, "hello", {
+        env: {
+          TEST_AGENT_STATE: space.stateFile,
+          TEST_AGENT_LOAD: "hermes",
+          TEST_AGENT_LIST: "1",
+        },
+        thread: {
+          mode: "resume",
+          providerThreadId: "thread",
+          nativeRef: { id: "session-9", strength: "strong" },
+        },
+      }),
+    );
+    await turn.finished();
+    expect(turn.events()).toContainEqual(
+      expect.objectContaining({ type: "thread.lost" }),
+    );
+  });
+
+  it("leaves a session the agent still lists for the next turn when its load replays nothing, as Hermes does when a restore fails", async () => {
+    const space = workspace();
+    const first = run(attempt(space, "hello"));
+    await first.finished();
+    const second = run(
+      attempt(space, "again", {
+        env: {
+          TEST_AGENT_STATE: space.stateFile,
+          TEST_AGENT_LOAD: "hermes-flaky",
+          TEST_AGENT_LIST: "1",
+        },
+        thread: {
+          mode: "resume",
+          providerThreadId: "thread",
+          nativeRef: { id: "session-1", strength: "strong" },
+        },
+      }),
+    );
+    await second.finished();
+    expect(second.completed()).toMatchObject({
+      status: "failed",
+      error: { message: expect.stringContaining("though it still has it") },
+    });
+    expect(second.events().some((event) => event.type === "thread.lost")).toBe(
+      false,
+    );
+  });
+
   it("tells Work its session is gone when the agent refuses to resume it", async () => {
     const space = workspace();
     const turn = run(

@@ -30,19 +30,23 @@ attempt was bound to resume is gone.
   the agent starts over, with the harness's reason in its data; interrupts
   and steers meant for the failed attempt are dropped, as for a steer
   restart, since the new prompt carries every message. Once per turn: a
-  thread lost again in it fails the turn. A person's stop ends the turn.
-- **Reported later** (after the turn began, or with an interrupt), the
-  thread is still never resumed: the turn ends as it does, and the next
-  one starts a new thread with the full handoff.
+  thread lost again in it fails the turn. A person's stop ends the turn
+  (as failed, when it lands before the new attempt is queued).
+- **Reported later** (after the turn began), the thread is still never
+  resumed: the turn ends as it does, or restarts for a refused message
+  (ADR 0240), and the next attempt starts a new thread with the full
+  handoff.
 - **The ACP adapter reports it only for an answer that the session is
   gone:** a refusal of `session/load` or `session/resume` as not found,
-  invalid params or method not found (or a message saying so), an agent
-  that no longer offers either, or a load that replays nothing. It prefers
-  `session/load`, whose replay proves the session is there: Work reports a
-  session only once a turn ran on it, while Hermes answers a load of a
-  session it lost with nothing and a resume by opening another under a new
-  id. A crash, an interrupt, a sign-in or another error fails the turn and
-  leaves the session to the next one.
+  invalid params or method not found (or words saying so, in the error's
+  message or data, where a plain thrown error puts them), an agent that no
+  longer offers either, or a load that replays nothing of a session the
+  agent no longer lists. It prefers `session/load`, whose replay proves the
+  session is there: Work reports a session only once a turn ran on it,
+  while Hermes answers a load of a session it lost, or failed to restore,
+  with nothing, and a resume by opening another under a new id. A crash,
+  an interrupt, a sign-in, a session still listed or another error fails
+  the turn and leaves the session to the next one.
 
 Considered: the adapter replacing the session itself (ADR 0241's first
 answer), which cannot reach the conversation; clearing the thread's native
@@ -55,8 +59,10 @@ error.
 
 An agent whose session is gone picks the chat up from the conversation in
 the same turn, and the person sees why. An agent that loses its sessions
-every time pays a second start and a full handoff each turn, and a turn
-rebound after an earlier attempt of it began starts that turn over. Any
+every time pays a second start and a full handoff each turn; a turn
+rebound after an earlier attempt of it began starts that turn over; and a
+rebound turn's retry gets no second try for a passing sign-in (ADR 0228),
+whose guard counts the failed attempt. Any
 harness can report it; today only `@catamorphic/acp` does. The runner
 protocol gains one event, additive, so its version stays. A core without
 it would fail such a turn and every later one; ACP runs only beside its
