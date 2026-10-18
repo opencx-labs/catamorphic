@@ -16,6 +16,13 @@
 // TEST_AGENT_RESUME=1 it also offers `session/resume`, which replays
 // nothing. TEST_AGENT_EXIT_SAVE_MS=<ms> saves its state that long after its
 // input closes, as Hermes saves its session on the way out. With
+// TEST_AGENT_LOAD picks how `session/load` fails: `hermes` answers nothing
+// for a session it lost (no error, nothing replayed), as Hermes does, and
+// `hermes-flaky` for any session, as Hermes does when restoring one fails;
+// `plain` throws a plain error ("Invalid session identifier", as Gemini CLI
+// does), `auth` asks for a sign-in, `busy` errs with a passing internal
+// error, and `crash` exits mid-load. TEST_AGENT_LIST=1 offers
+// `session/list`. With
 // TEST_AGENT_STUBBORN=1 it ignores a cancel and SIGTERM alike, and starts a
 // process of its own (`sleeper` in its state). It notes a cancel it heard
 // as `cancelled` in its state.
@@ -61,8 +68,10 @@ new acp.AgentSideConnection(
         agentCapabilities: {
           loadSession: process.env.TEST_AGENT_NO_LOAD !== "1",
           promptCapabilities: { image: true },
-          sessionCapabilities:
-            process.env.TEST_AGENT_RESUME === "1" ? { resume: {} } : {},
+          sessionCapabilities: {
+            ...(process.env.TEST_AGENT_RESUME === "1" ? { resume: {} } : {}),
+            ...(process.env.TEST_AGENT_LIST === "1" ? { list: {} } : {}),
+          },
         },
       }),
       authenticate: async () => {},
@@ -82,8 +91,17 @@ new acp.AgentSideConnection(
         return {};
       },
       loadSession: async ({ sessionId, cwd, mcpServers }) => {
+        const failing = process.env.TEST_AGENT_LOAD;
+        if (failing === "crash") process.exit(3);
+        if (failing === "auth") throw acp.RequestError.authRequired();
+        if (failing === "busy")
+          throw acp.RequestError.internalError(undefined, "database is locked");
+        if (failing === "plain")
+          throw new Error(`Invalid session identifier: ${sessionId}`);
+        if (failing === "hermes-flaky") return null;
         const state = read();
         const session = state.sessions[sessionId];
+        if (!session && failing === "hermes") return null;
         if (!session) throw acp.RequestError.resourceNotFound(sessionId);
         Object.assign(session, { cwd, mcpServers, reopenedWith: "load" });
         write(state);
@@ -94,6 +112,14 @@ new acp.AgentSideConnection(
         }
         return {};
       },
+      listSessions: async () => ({
+        sessions: Object.entries(read().sessions).map(
+          ([sessionId, session]) => ({
+            sessionId,
+            cwd: session.cwd,
+          }),
+        ),
+      }),
       cancel: async () => {
         write({ ...read(), cancelled: true });
         if (process.env.TEST_AGENT_STUBBORN !== "1") cancel();

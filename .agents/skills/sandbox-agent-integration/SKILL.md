@@ -132,8 +132,10 @@ questions, approvals, elicitations, tool search (`toolSearch`: MCP tools load on
 demand, so a host may mount each connector as its own server, ADR 0225),
 subagents, streamed text, `nativeState`, and id strengths), and `start(attempt, host, local?)` returning `AttemptControl`
 (`steer`, `interrupt`, `finished`). The adapter emits `HarnessEvent`s through
-`host.emit` (`thread` as soon as it knows the native thread, items as they
-happen, exactly one `turn.completed`), runs host tools with `host.callTool`,
+`host.emit` (`thread` as soon as it knows the native thread, `thread.lost`
+when the thread it was to resume is gone and it fails before beginning the
+turn, so core runs the turn again on a new thread handed the conversation
+(ADR 0245), items as they happen, exactly one `turn.completed`), runs host tools with `host.callTool`,
 decides tool calls with `host.authorize` (policy arrives as data in
 `AttemptStart.toolPolicies`; only `ask` leaves the runner), opens questions and
 approvals with `host.request`, and stores portable native state with

@@ -60,6 +60,8 @@ export interface IngestResult {
   usage?: AgentTurnUsage;
   title?: string;
   statePath?: string;
+  /** The harness's words for why its thread is gone (`thread.lost`). */
+  threadLost?: string;
   /** Steered inputs the harness took into its context in this batch. */
   consumed: string[];
   /** The harness began the turn on its input in this batch. */
@@ -167,6 +169,10 @@ export async function ingestHarnessEvents(input: {
     if (event.type !== "item.delta") flushDelta();
     switch (event.type) {
       case "thread": {
+        // A thread reported gone stays gone (ADR 0245): a replacement the
+        // harness opens is never resumed in its place, for it lacks what
+        // came before; the next attempt binds a thread handed all of it.
+        if (thread.status === "unavailable") break;
         thread = {
           ...thread,
           nativeRef: event.ref,
@@ -175,6 +181,15 @@ export async function ingestHarnessEvents(input: {
         };
         out.push({ type: "provider_thread.changed", thread });
         if (event.statePath) result.statePath = event.statePath;
+        break;
+      }
+      case "thread.lost": {
+        // Kept for the turns that ran on it, never bound again: the next
+        // attempt starts a thread of its own, handed the conversation
+        // (ADR 0245).
+        thread = { ...thread, status: "unavailable", updatedAt: at };
+        out.push({ type: "provider_thread.changed", thread });
+        result.threadLost = mask ? mask.text(event.reason) : event.reason;
         break;
       }
       case "turn.started": {

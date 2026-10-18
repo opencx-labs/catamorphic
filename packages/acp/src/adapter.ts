@@ -27,7 +27,7 @@ import {
 
 /**
  * What an Agent Client Protocol agent offers through the protocol itself.
- * Its session lives with the agent (`session/resume` or `session/load`
+ * Its session lives with the agent (`session/load` or `session/resume`
  * reopens it where it was made), so a chat moved elsewhere starts fresh
  * with a handoff.
  */
@@ -45,10 +45,10 @@ const EXIT_GRACE_MS = 3_000;
 /** How long an interrupted agent gets to end its turn before it is killed. */
 const CANCEL_GRACE_MS = 10_000;
 
-// ponytail: one agent process per attempt, its session reopened each turn
-// (its history replayed by an agent without `session/resume`); keep a
-// thread's process warm between attempts (ADR 0222's pattern) when start-up
-// or long histories cost too much.
+// ponytail: one agent process per attempt, its session reopened (and its
+// history replayed) each turn; keep a thread's process warm between
+// attempts (ADR 0222's pattern) when start-up or long histories cost too
+// much.
 /**
  * The ACP harness adapter (ADR 0050, 0241): runs one agent process per
  * attempt from `options.command` (`["hermes", "acp"]`) in the workspace,
@@ -77,6 +77,8 @@ function startAttempt(
   let connection: acp.ClientSideConnection | undefined;
   let sessionId: string | undefined;
   let interrupted = false;
+  /** Conversation updates the agent replayed while reopening its session. */
+  let replayed = 0;
   /** Permission requests still waiting on their person. */
   const asks = new Set<AbortController>();
   const stderr: string[] = [];
@@ -139,7 +141,11 @@ function startAttempt(
     let agentName = path.basename(executable);
     connection = new acp.ClientSideConnection(
       () => ({
-        sessionUpdate: ({ update }) => items.update(update),
+        sessionUpdate: ({ update }) => {
+          // A reopened session's history, replayed before the turn starts.
+          if (!items.live && REPLAYED.has(update.sessionUpdate)) replayed += 1;
+          items.update(update);
+        },
         requestPermission: async ({ toolCall, options }) => {
           // Asked before the agent read the cancel: nobody is left to answer.
           if (interrupted) return { outcome: { outcome: "cancelled" } };
@@ -223,42 +229,61 @@ function startAttempt(
       attempt.thread.mode === "resume" || attempt.thread.mode === "restore"
         ? attempt.thread.nativeRef.id
         : undefined;
-    // The earlier session reopens with `session/resume` when the agent
-    // offers it (nothing replayed), else `session/load` (the agent replays
-    // its history first, which the stream ignores until the turn starts).
-    const reopen = capabilities?.sessionCapabilities?.resume
-      ? "resume"
-      : capabilities?.loadSession
-        ? "load"
+    // The earlier session reopens with `session/load` when the agent
+    // offers it, else `session/resume`. Load replays the history first
+    // (which the stream ignores until the turn starts), and that replay is
+    // the proof the session is there: Work only reports a session once a
+    // turn ran on it, while an agent may answer for one it lost without an
+    // error (Hermes returns nothing, and its resume opens another session
+    // under a new id).
+    const reopen = capabilities?.loadSession
+      ? "load"
+      : capabilities?.sessionCapabilities?.resume
+        ? "resume"
         : undefined;
     let reopened = false;
+    let refused: string | undefined;
     if (earlier && reopen) {
       const session = {
         sessionId: earlier,
         cwd: attempt.workingDirectory,
         mcpServers,
       };
+      let loaded = false;
       try {
         if (reopen === "resume") await until(connection.resumeSession(session));
         else await until(connection.loadSession(session));
-        reopened = true;
+        loaded = true;
       } catch (error) {
-        // Refused (the session was deleted or pruned): a new one keeps the
-        // chat going. An interrupt or a process gone ends the turn.
+        // Only the agent's own answer that the session is gone counts: a
+        // crash, an interrupt, a sign-in or a passing error ends this turn
+        // and leaves the session to the next one.
+        if (interrupted || !sessionGone(error)) throw error;
+        refused = error.message;
+      }
+      reopened = loaded && (reopen === "resume" || replayed > 0);
+      // A load that replayed nothing: Hermes answers so for a session it
+      // lost, and for one it failed to restore. One it still lists is there,
+      // so this turn fails and the next tries again.
+      if (loaded && !reopened) {
         if (
-          interrupted ||
-          spawned.exitCode !== null ||
-          spawned.signalCode !== null
+          capabilities?.sessionCapabilities?.list &&
+          (await listsSession({ connection, sessionId: earlier, until }))
         )
-          throw error;
+          throw new Error(
+            `${agentName} couldn't load its earlier session, though it still has it. Send your message again to retry.`,
+          );
+        refused = "it replayed none of it";
       }
     }
-    if (earlier && !reopened)
-      host.emit({
-        type: "diagnostic",
-        level: "warn",
-        message: `${agentName} couldn't reopen its earlier session, so this turn starts a new one.`,
-      });
+    // The earlier session is gone (refused, or the agent no longer reopens
+    // sessions): Work is told, and runs the turn again on a new thread that
+    // is handed the conversation (ADR 0245).
+    if (earlier && !reopened) {
+      const reason = `${agentName} couldn't reopen its earlier session${refused ? ` (${refused})` : ""}.`;
+      host.emit({ type: "thread.lost", reason });
+      throw new Error(reason);
+    }
     const opened =
       reopened && earlier
         ? earlier
@@ -275,13 +300,10 @@ function startAttempt(
     // reopened: a reopened one at once, a new one after its first turn ends
     // (an interrupted one starts afresh, told Work's instructions again),
     // and never one the agent cannot reopen, so that Work hands the agent
-    // the whole conversation each turn instead. One replacing a session the
-    // agent refused is reported at once, so Work never resumes the refused
-    // one again (a restart for a mid-turn message continues this one).
+    // the whole conversation each turn instead.
     const report = () =>
       host.emit({ type: "thread", ref: { id: opened, strength: "strong" } });
-    const replacing = Boolean(earlier && reopen);
-    if (reopened || replacing) report();
+    if (reopened) report();
     if (interrupted) return "cancelled";
     host.emit({ type: "turn.started" });
     items.live = true;
@@ -298,7 +320,7 @@ function startAttempt(
     // Only Work's interrupt makes the turn interrupted: an agent that ends
     // its own turn as cancelled (a request it was told no to) finished it.
     const outcome = interrupted ? "cancelled" : "completed";
-    if (!reopened && !replacing && reopen && outcome === "completed") report();
+    if (!reopened && reopen && outcome === "completed") report();
     return outcome;
   };
 
@@ -615,6 +637,66 @@ async function serveHostTools(input: {
       headers: [{ name: "Authorization", value: `Bearer ${token}` }],
     })),
   };
+}
+
+/** The conversation updates an agent replays from a session it reopens. */
+const REPLAYED: ReadonlySet<string> = new Set([
+  "user_message_chunk",
+  "agent_message_chunk",
+  "agent_thought_chunk",
+  "tool_call",
+]);
+
+/** How many pages of an agent's sessions to look through for one. */
+const LIST_PAGES = 10;
+
+/**
+ * Whether the agent lists the session among its own, most recent first by
+ * its own order, a page at a time. A failure to list is passing: it throws.
+ */
+async function listsSession(input: {
+  connection: acp.ClientSideConnection;
+  sessionId: string;
+  until: <T>(promise: Promise<T>) => Promise<T>;
+}): Promise<boolean> {
+  let cursor: string | undefined;
+  for (let page = 0; page < LIST_PAGES; page++) {
+    const { sessions, nextCursor } = await input.until(
+      input.connection.listSessions(cursor ? { cursor } : {}),
+    );
+    if (sessions.some((listed) => listed.sessionId === input.sessionId))
+      return true;
+    if (!nextCursor) return false;
+    cursor = nextCursor;
+  }
+  return false;
+}
+
+/** What a refused reopen answers when the session is gone for good. */
+const GONE_CODES: ReadonlySet<number> = new Set([
+  acp.RequestError.resourceNotFound().code,
+  acp.RequestError.invalidParams().code,
+  acp.RequestError.methodNotFound("").code,
+]);
+/** What it answers when something passing stood in the way. */
+const PASSING_CODES: ReadonlySet<number> = new Set([
+  acp.RequestError.authRequired().code,
+  acp.RequestError.requestCancelled().code,
+]);
+
+/**
+ * Whether a refused reopen says the session is gone, rather than something
+ * passing: not found, a session id the agent does not take, or a method it
+ * does not have; never a sign-in or a cancel. An agent that throws a plain
+ * error answers "Internal error", its words in the error's data.
+ */
+function sessionGone(error: unknown): error is acp.RequestError {
+  if (!(error instanceof acp.RequestError)) return false;
+  if (GONE_CODES.has(error.code)) return true;
+  if (PASSING_CODES.has(error.code)) return false;
+  return /not found|no such|unknown session|invalid session|does ?n[o']t exist/i.test(
+    `${error.message} ${JSON.stringify(error.data ?? null)}`,
+  );
 }
 
 function toJson(value: unknown): JsonValue {

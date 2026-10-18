@@ -151,6 +151,55 @@ describe("session log", () => {
       id: "forgetful",
       harness: { placement: "host", adapter: forgetfulAdapter },
     };
+    // Its threads are gone whenever it is asked to resume one, as an agent
+    // whose sessions were deleted (ADR 0245); with `[[always-lost]]`, on a
+    // fresh thread too; with `[[lost-midway]]`, it says so and goes on in a
+    // replacement of its own instead of failing.
+    const amnesiacAdapter: HarnessAdapter = {
+      id: "echo",
+      capabilities: () => inner.capabilities(),
+      start: (attempt, host) => {
+        const resuming =
+          attempt.thread.mode === "resume" || attempt.thread.mode === "restore";
+        if (
+          resuming &&
+          (attempt.input?.text ?? "").includes("[[lost-midway]]")
+        ) {
+          host.emit({ type: "thread.lost", reason: "Its session was pruned." });
+          return inner.start(
+            {
+              ...attempt,
+              thread: {
+                mode: "fresh",
+                providerThreadId: attempt.thread.providerThreadId,
+              },
+            },
+            host,
+          );
+        }
+        if (
+          !resuming &&
+          !(attempt.input?.text ?? "").includes("[[always-lost]]")
+        )
+          return inner.start(attempt, host);
+        host.emit({ type: "thread.lost", reason: "Its session was deleted." });
+        host.emit({
+          type: "turn.completed",
+          status: "failed",
+          error: { message: "The agent couldn't reopen its session." },
+        });
+        return {
+          steer: async () => false,
+          interrupt: () => {},
+          finished: Promise.resolve(),
+        };
+      },
+    };
+    const amnesiac: RegisteredCodingAgent = {
+      ...echo,
+      id: "amnesiac",
+      harness: { placement: "host", adapter: amnesiacAdapter },
+    };
     // Rate-limited on its first attempt: the turn waits to retry itself.
     let flakyStarts = 0;
     const flakyAdapter: HarnessAdapter = {
@@ -353,6 +402,7 @@ describe("session log", () => {
               guarded,
               stubborn,
               forgetful,
+              amnesiac,
               flaky,
               signedIn,
               forger,
@@ -1237,6 +1287,153 @@ describe("session log", () => {
     expect(replies.join("\n")).toContain("build the page");
     expect(replies.join("\n")).toContain("and the footer");
   }, 40_000);
+
+  it("runs a turn whose thread is gone again on a new thread, handed the conversation (ADR 0245)", async () => {
+    const project = await projects.create(identity, { name: "Amnesiac" });
+    const session = await sessions.create(identity, project.id, {
+      agentId: "amnesiac",
+    });
+    const projectId = project.id;
+    const sessionId = session.id;
+    await sessions.sendMessage(identity, projectId, sessionId, "first words");
+    const { reply } = await sessions.sendMessage(
+      identity,
+      projectId,
+      sessionId,
+      "second words",
+    );
+    // A new thread, handed what came before, then asked.
+    const said = reply?.kind === "assistant_message" ? reply.text : "";
+    expect(said).toContain("This conversation started before you joined it");
+    expect(said).toContain("Person: first words");
+    expect(said).toMatch(/---\s*second words$/);
+    const state = await folded(projectId, sessionId);
+    expect(orderedTurns(state).map((turn) => turn.status)).toEqual([
+      "completed",
+      "completed",
+    ]);
+    const second = orderedTurns(state)[1];
+    const attempts = await db
+      .selectFrom("agent_turn_attempts")
+      .select(["reason", "status", "provider_thread_id"])
+      .where("turn_id", "=", second?.id ?? "")
+      .orderBy("ordinal")
+      .execute();
+    expect(attempts.map(({ reason, status }) => ({ reason, status }))).toEqual([
+      { reason: "initial", status: "failed" },
+      { reason: "retry", status: "completed" },
+    ]);
+    const threads = await db
+      .selectFrom("agent_provider_threads")
+      .select(["id", "status"])
+      .where("session_id", "=", sessionId)
+      .orderBy("created_at")
+      .execute();
+    expect(threads.map((thread) => thread.status)).toEqual([
+      "unavailable",
+      "active",
+    ]);
+    expect(attempts[0]?.provider_thread_id).toBe(threads[0]?.id);
+    expect(attempts[1]?.provider_thread_id).toBe(threads[1]?.id);
+    const items = state.items.filter((item) => item.turnId === second?.id);
+    expect(items).toContainEqual(
+      expect.objectContaining({
+        kind: "notice",
+        code: "thread_lost",
+        data: {
+          providerThreadId: threads[0]?.id,
+          reason: "Its session was deleted.",
+        },
+      }),
+    );
+    expect(items).toContainEqual(
+      expect.objectContaining({
+        kind: "context_handoff",
+        toProviderThreadId: threads[1]?.id,
+        coveredTurnOrdinals: { from: 1, to: 1 },
+      }),
+    );
+  });
+
+  it("never resumes a replacement the harness opened for a lost thread: the next turn is handed everything", async () => {
+    const project = await projects.create(identity, { name: "Midway" });
+    const session = await sessions.create(identity, project.id, {
+      agentId: "amnesiac",
+    });
+    const projectId = project.id;
+    const sessionId = session.id;
+    await sessions.sendMessage(identity, projectId, sessionId, "first words");
+    // Lost, then carried on in a replacement: the turn ends as it does.
+    const { reply } = await sessions.sendMessage(
+      identity,
+      projectId,
+      sessionId,
+      "[[lost-midway]] second words",
+    );
+    expect(reply?.kind === "assistant_message" && reply.text).toContain(
+      "second words",
+    );
+    await sessions.sendMessage(identity, projectId, sessionId, "third words");
+    const state = await folded(projectId, sessionId);
+    const [, , third] = orderedTurns(state);
+    // The third turn resumed nothing: a new thread, handed both before it.
+    const attempts = await db
+      .selectFrom("agent_turn_attempts")
+      .select(["reason", "status"])
+      .where("turn_id", "=", third?.id ?? "")
+      .execute();
+    expect(attempts).toEqual([{ reason: "initial", status: "completed" }]);
+    const threads = await db
+      .selectFrom("agent_provider_threads")
+      .select("status")
+      .where("session_id", "=", sessionId)
+      .orderBy("created_at")
+      .execute();
+    expect(threads.map((thread) => thread.status)).toEqual([
+      "unavailable",
+      "active",
+    ]);
+    expect(state.items).toContainEqual(
+      expect.objectContaining({
+        turnId: third?.id,
+        kind: "context_handoff",
+        coveredTurnOrdinals: { from: 1, to: 2 },
+      }),
+    );
+  });
+
+  it("runs a turn again on a new thread once, never in a loop", async () => {
+    const project = await projects.create(identity, { name: "Doomed" });
+    const session = await sessions.create(identity, project.id, {
+      agentId: "amnesiac",
+    });
+    const projectId = project.id;
+    const sessionId = session.id;
+    await sessions.sendMessage(identity, projectId, sessionId, "first words");
+    await sessions
+      .sendMessage(identity, projectId, sessionId, "[[always-lost]] again")
+      .catch(() => undefined);
+    await vi.waitFor(
+      async () =>
+        expect(
+          orderedTurns(await folded(projectId, sessionId)).map(
+            (turn) => turn.status,
+          ),
+        ).toEqual(["completed", "failed"]),
+      { timeout: 15_000 },
+    );
+    const second = orderedTurns(await folded(projectId, sessionId))[1];
+    const attempts = await db
+      .selectFrom("agent_turn_attempts")
+      .select(["reason", "status"])
+      .where("turn_id", "=", second?.id ?? "")
+      .orderBy("ordinal")
+      .execute();
+    expect(attempts).toEqual([
+      { reason: "initial", status: "failed" },
+      { reason: "retry", status: "failed" },
+    ]);
+  });
 
   it("settles a turn with what its harness stored on the way out", async () => {
     const { projectId, sessionId } = await chat("Late");

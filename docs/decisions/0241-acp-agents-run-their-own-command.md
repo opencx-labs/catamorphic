@@ -1,6 +1,6 @@
 # 0241 — ACP agents run their own command
 
-- **Status:** Accepted (builds on [0050](0050-project-agent-definitions.md) and [0198](0198-agent-runners-run-harnesses-beside-their-workspace.md))
+- **Status:** Accepted (builds on [0050](0050-project-agent-definitions.md) and [0198](0198-agent-runners-run-harnesses-beside-their-workspace.md); amended by [0245](0245-a-harness-says-its-thread-is-gone.md): a session the agent cannot reopen is reported gone, and the turn goes on in a new one, handed the conversation)
 - **Date:** 2026-10-17
 
 ## Context
@@ -28,16 +28,16 @@ collaborator can change those after approval. The agent runs with Work's
 environment, as a command in the person's own terminal would.
 
 - **Sessions** stay with the agent: the first turn opens one in the
-  checkout, later turns reopen it with `session/resume` when the agent
-  offers it (nothing replayed), else `session/load` (its history replayed
-  and ignored). Work hears of a session only once it holds the
+  checkout, later turns reopen it with `session/load` when the agent
+  offers it (its history replayed and ignored, the replay the proof the
+  session is there), else `session/resume`. Work hears of a session only once it holds the
   conversation and can be reopened: a new session after its first turn
   completes, never one from an agent that cannot reopen sessions, so Work
   hands that agent the whole conversation each turn instead. A session the
-  agent refuses to reopen (deleted, pruned) is replaced by a new one,
-  reported at once, rather than failing every later turn; that one lacks
-  the earlier conversation, since a harness cannot yet tell core its
-  thread is gone.
+  agent can no longer reopen (deleted, pruned, or the agent stopped
+  offering either) is reported gone (ADR 0245): the attempt fails before
+  beginning the turn, and Work runs it again on a new session handed the
+  whole conversation.
   A restart on a thread Work never heard of starts the turn's input over:
   core's restart rule (ADR 0240) now carries only what no thread took in
   just when the attempt continues the thread. Native state is
@@ -90,7 +90,5 @@ members to approve. Each turn starts the agent's process. A host tool call that 
 than the agent's own MCP timeout (Hermes: five minutes) fails on its side.
 Still open: the `acp.endpoint` transport, ACP agents on the Work server
 (the agent must be in the sandbox image), model choice through ACP,
-streaming the agent's plans and usage, a way for a harness to tell core its
-thread is gone (so a replaced session gets the whole conversation), a
-stdio bridge for agents that take no HTTP MCP, and keeping a thread's
-process warm between turns.
+streaming the agent's plans and usage, a stdio bridge for agents that take
+no HTTP MCP, and keeping a thread's process warm between turns.
