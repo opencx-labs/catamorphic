@@ -84,6 +84,7 @@ import {
 } from "./services/model-gateway.js";
 import { NodeRecoveryService } from "./services/node-recovery-service.js";
 import { PersonalEnvironmentService } from "./services/personal-environment-service.js";
+import { PlacementWaitsService } from "./services/placement-waits.js";
 import { PluginsService } from "./services/plugins-service.js";
 import { ProjectEnvironmentsService } from "./services/project-environments-service.js";
 import { ProjectEventDispatcher } from "./services/project-event-dispatcher.js";
@@ -418,6 +419,8 @@ export class CatamorphicCore {
   readonly executionEnvironments: ExecutionEnvironmentsService;
   readonly agentCapabilities: AgentCapabilitiesService;
   readonly executionAllocations: ExecutionAllocationsService;
+  /** Work waiting for a machine (ADR 0258), the demand machine rules read. */
+  readonly placementWaits: PlacementWaitsService;
   /** Moves the work of lost disposable machines (ADR 0190). */
   readonly nodeRecovery: NodeRecoveryService;
   readonly connections?: ConnectionsService;
@@ -759,6 +762,7 @@ export class CatamorphicCore {
       this.projectManager,
     );
     this.executionAllocations = new ExecutionAllocationsService(this.db);
+    this.placementWaits = new PlacementWaitsService(this.db);
     this.clientRunners = config.clientExecution
       ? new ClientRunnersService(this.db, this.projectEnvironments)
       : undefined;

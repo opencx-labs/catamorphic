@@ -208,6 +208,8 @@ export class ExecutionAllocationsService {
     const executor = args.transaction;
     let policy = args.policy;
     if (args.workerNodeId) {
+      // The node's row lock orders this with a machine being drained before
+      // it is removed (ADR 0258): one that is disabled takes nothing new.
       const node = await executor
         .selectFrom("worker_nodes")
         .selectAll()
@@ -277,6 +279,11 @@ export class ExecutionAllocationsService {
         })
         .returningAll()
         .executeTakeFirstOrThrow();
+      // Placed: the workload no longer waits for a machine (ADR 0258).
+      await executor
+        .deleteFrom("placement_waits")
+        .where("root_workload_id", "=", args.rootWorkloadId)
+        .execute();
       return mapAllocation(row);
     } catch (cause) {
       if (

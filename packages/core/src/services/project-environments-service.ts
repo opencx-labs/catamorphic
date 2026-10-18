@@ -198,6 +198,17 @@ const ProjectEnvironmentDefinitionSchema = z
       .min(0)
       .max(60 * 24 * 30)
       .optional(),
+    /**
+     * Minutes work may wait for a machine when none open to it has room or
+     * is online (ADR 0258): a new chat starts waiting and its turn fails
+     * after this. `0`, the default, fails a new chat at once.
+     */
+    waitMinutes: z
+      .number()
+      .int()
+      .min(0)
+      .max(60 * 24)
+      .optional(),
     requirements: z
       .strictObject({
         trust: z.enum(["local", "managed"]).optional(),
@@ -280,6 +291,8 @@ export interface ProjectEnvironmentDefinition {
   device?: "member";
   strict?: boolean;
   idleReleaseMinutes?: number;
+  /** Minutes work may wait for a machine (ADR 0258); 0 by default. */
+  waitMinutes?: number;
   connections?: Readonly<Record<string, EnvironmentConnectionBinding>>;
   requirements?: Omit<EnvironmentRequirements, "workload" | "topology"> & {
     containers?: boolean;
