@@ -254,13 +254,17 @@ deletes its session branch, and frees the key. Capacity follows activity,
 not open chats.
 
 When no machine open to a chat has room, or none is online, a new chat
-fails at once unless its Environment says how long work may wait:
-`"waitMinutes": 30` starts the chat without a workspace, its turns wait
+fails at once unless an Environment says how long work may wait:
+`"waitMinutes": 30` starts the chat without a workspace (in the first
+Environment, in admission order, that lets work wait), its turns wait
 (tried again every 5 to 30 seconds, and at once when a worker connects), and
 fail after 30 minutes saying why; the next message waits again. A chat whose
 workspace was given back always waits for a machine, and with `waitMinutes`
-gives up after that long too. Waiting work is recorded in Postgres
-(`placement_waits`, ADR 0258), which is what
+gives up after that long too. A waiting chat whose Environment was removed
+or can no longer take it fails its turns with that error, and `ask_agent`
+answers at once that the chat waits for a machine. Waiting work is recorded
+in Postgres (`placement_waits`, ADR 0258) until it is placed or its chat is
+closed or archived; with a turn queued, it is what
 [machines on demand](#machines-on-demand) read.
 
 Groups come from the Google Workspace directory (see [company
@@ -300,8 +304,9 @@ the JSON file `WORK_MACHINES_CONFIG` names:
 - `pool`: machines you enrolled yourself ([pools](#dedicated-servers-and-other-machines-pools)).
 - `custom`: a custom server's `machineProvisioner` hook creates and destroys
   them (`create({ name, class, rule, options, waiting, labels, enrollment })`
-  returns a platform reference, `destroy({ name, ref })` destroys by the
-  reference, or by the name when it is `null`). `options` is the class's own
+  returns a platform reference; `destroy({ name, ref })` removes the machine
+  the reference names and every machine with that name, and answers
+  `{ done }`: Work asks again on later passes until it is done). `options` is the class's own
   object from the file, passed through unread (an instance type, an image, a
   subnet: `"review": { "platform": "custom", "options": { ... } }`);
   `waiting` is what the work a machine on demand is made for needs
@@ -309,11 +314,11 @@ the JSON file `WORK_MACHINES_CONFIG` names:
   cloud-init a Hetzner machine gets. `create` throws
   `MachineProvisioningRefusedError` when the platform made nothing, so its
   code is withdrawn and the next pass tries again; after any other error the
-  code waits for the machine to enroll. Work then cannot know whether the
-  machine exists and may later destroy it by name and ask for the name
-  again, so `create` must be idempotent by `name` (an EC2 `ClientToken`
-  derived from it, say). A server with the hook and no classes file treats
-  every class as custom.
+  code waits for the machine to enroll. Work never calls `create` twice with
+  one code, so make it idempotent per code: pass `enrollment.idempotencyKey`
+  (a hash of the code) as the platform's token, an EC2 `ClientToken` say,
+  never the name, which a later machine of the rule reuses. A server with
+  the hook and no classes file treats every class as custom.
 
 The server refuses to start when a class needs what it lacks (a Hetzner
 class without the token, a custom class without the hook), and refuses a
@@ -397,29 +402,38 @@ work such as [pull request reviews](review-pull-requests.md):
   isolate with microsandbox or gVisor unless `"trusted": true`) or
   `projects` (machines opened to those projects' own work: project chats
   and automations).
-- Work counts for the rule when the rule's `labels`, its class and
-  `plane: worker` satisfy the work's Environment `pool`, and its access
-  takes the work's owner. Each piece of waiting work counts for one rule,
-  the first by name. Give the Environment a `waitMinutes`, or new chats fail
-  before they wait.
-- A pass keeps machines still enrolling, holding work, or idle for less than
-  `idleMinutes` (default 10, at least 1), then the most recently idle up to
-  `min` (default 0). Work none of them has room for, beyond one piece for
-  each machine still enrolling, gets new machines, up to `max` (at most
-  100). A machine that does not enroll within `enrollMinutes` (default 15),
-  or holds work but has not called for that long, is destroyed and
+- Work counts for the rule when it has a turn queued, the rule's `labels`,
+  its class and `plane: worker` satisfy the work's Environment `pool`, and
+  the rule's access takes the work's owner. Each piece of waiting work
+  counts for one rule: the first by name whose connected machines can take
+  it. When they report they cannot (too little memory, no `containers`),
+  the rule's status says so and the work goes to the next rule. Give the
+  Environment a `waitMinutes`, or new chats fail before they wait.
+- A pass keeps machines still enrolling or connecting, holding work, or idle
+  for less than `idleMinutes` (default 10, at least 1), then the most
+  recently idle up to `min` (default 0). Work no connected machine has room
+  for (charged its resources, or the machine's per-workspace defaults),
+  beyond one piece for each machine still enrolling or connecting, gets new
+  machines, up to `max` (at most 100, counting machines the rule served
+  under an earlier group or projects until they go). A machine that does
+  not enroll within `enrollMinutes` (default 15), or is not seen for that
+  long (since it enrolled, when it never connected), is destroyed and
   replaced. A machine no longer wanted is destroyed at once: `retainDays`
   does not apply.
+- A machine that enrolled but never connected within `enrollMinutes` stops
+  the rule: it makes no more machines until you write the rule again (after
+  fixing the cause), and its status says why. A machine serving a group, or
+  several projects, must isolate its agents (microsandbox or gVisor) unless
+  the rule says `"trusted": true`; such a rule is refused when it is written
+  if machines of its class are known to run plain processes.
 - Only `hetzner-cloud` and `custom` classes scale; a pool class is refused.
 - A machine is revoked only while nothing holds it: the drain and a new
   Allocation take the same lock, so work never lands on a machine being
-  destroyed.
+  destroyed. One holding workspaces goes anyway only once it has been
+  disconnected and unseen for `enrollMinutes`.
 - With a rule on demand, each replica looks at waiting work every 10 seconds
-  and starts a pass when it changed. The rule's status adds `queued`: work
-  waiting for one of its machines.
-
-Work whose needs the class cannot meet still counts, so the rule makes a
-machine, which idles and goes; `queued` that does not fall points to it.
+  and starts a pass when it changed since its latest pass looked. The rule's
+  status adds `queued`: work waiting for one of its machines.
 
 ### The install script
 
