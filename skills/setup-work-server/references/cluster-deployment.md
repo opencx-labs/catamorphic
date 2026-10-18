@@ -12,6 +12,7 @@ deployment.
 | A person or a small trusted team | One Work server, PGlite, default execution (`WORK_SANDBOX=auto`). Nothing below applies. |
 | More agent capacity, or agents that must not run beside the server's secrets | One server (the control plane) plus enrolled **workers** |
 | Each person or team gets their own machine | Workers with **access** lists, created by hand or by **machine rules** |
+| Bursty work (pull request reviews) needs big machines only while it runs | **Machines on demand**: a machine rule that creates machines for waiting work and destroys them once idle |
 | Cloud VMs or dedicated servers without hardware virtualization | Workers with the **container backend** under gVisor (see [sandbox backends](#sandbox-backends)) |
 | The brain must survive a machine failure | Control-plane **replicas** on shared Postgres, plus workers |
 
@@ -252,6 +253,16 @@ admits a fresh workspace and restores it. Closing a chat
 deletes its session branch, and frees the key. Capacity follows activity,
 not open chats.
 
+When no machine open to a chat has room, or none is online, a new chat
+fails at once unless its Environment says how long work may wait:
+`"waitMinutes": 30` starts the chat without a workspace, its turns wait
+(tried again every 5 to 30 seconds, and at once when a worker connects), and
+fail after 30 minutes saying why; the next message waits again. A chat whose
+workspace was given back always waits for a machine, and with `waitMinutes`
+gives up after that long too. Waiting work is recorded in Postgres
+(`placement_waits`, ADR 0258), which is what
+[machines on demand](#machines-on-demand) read.
+
 Groups come from the Google Workspace directory (see [company
 identity](company-identity.md)): the server checks the groups that access
 lists, machine rules, and project role mappings name.
@@ -288,14 +299,21 @@ the JSON file `WORK_MACHINES_CONFIG` names:
   The API token is `WORK_HETZNER_TOKEN` (read and write), never the file.
 - `pool`: machines you enrolled yourself ([pools](#dedicated-servers-and-other-machines-pools)).
 - `custom`: a custom server's `machineProvisioner` hook creates and destroys
-  them (`create({ name, class, labels, enrollment })` returns a platform
-  reference, `destroy({ name, ref })` destroys by the reference, or by the
-  name when it is `null`). `enrollment.cloudInit` is the same cloud-init a
-  Hetzner machine gets. `create` throws `MachineProvisioningRefusedError`
-  when the platform made nothing, so its code is withdrawn and the next pass
-  tries again; after any other error the code waits for the machine to
-  enroll. A server with the hook and no classes file treats every class as
-  custom.
+  them (`create({ name, class, rule, options, waiting, labels, enrollment })`
+  returns a platform reference, `destroy({ name, ref })` destroys by the
+  reference, or by the name when it is `null`). `options` is the class's own
+  object from the file, passed through unread (an instance type, an image, a
+  subnet: `"review": { "platform": "custom", "options": { ... } }`);
+  `waiting` is what the work a machine on demand is made for needs
+  (`resources`, `capabilities`). `enrollment.cloudInit` is the same
+  cloud-init a Hetzner machine gets. `create` throws
+  `MachineProvisioningRefusedError` when the platform made nothing, so its
+  code is withdrawn and the next pass tries again; after any other error the
+  code waits for the machine to enroll. Work then cannot know whether the
+  machine exists and may later destroy it by name and ask for the name
+  again, so `create` must be idempotent by `name` (an EC2 `ClientToken`
+  derived from it, say). A server with the hook and no classes file treats
+  every class as custom.
 
 The server refuses to start when a class needs what it lacks (a Hetzner
 class without the token, a custom class without the hook), and refuses a
@@ -360,6 +378,49 @@ no longer configured, whose machines are then left as they are; and a
 `failure` (`{ error, at }`) when something failed for the rule's machines
 in the latest pass.
 
+### Machines on demand
+
+A rule with `{ "machines": { "demand": { "max": 9 } } }` creates machines
+while work waits for one and destroys them once idle (ADR 0258), for bursty
+work such as [pull request reviews](review-pull-requests.md):
+
+```json
+{
+  "projects": ["<project id>"],
+  "machines": { "demand": { "max": 9, "min": 0, "idleMinutes": 10, "enrollMinutes": 15 } },
+  "class": "review",
+  "labels": { "pool": "review" }
+}
+```
+
+- Name exactly one of `group` (machines for its members' chats, which must
+  isolate with microsandbox or gVisor unless `"trusted": true`) or
+  `projects` (machines opened to those projects' own work: project chats
+  and automations).
+- Work counts for the rule when the rule's `labels`, its class and
+  `plane: worker` satisfy the work's Environment `pool`, and its access
+  takes the work's owner. Each piece of waiting work counts for one rule,
+  the first by name. Give the Environment a `waitMinutes`, or new chats fail
+  before they wait.
+- A pass keeps machines still enrolling, holding work, or idle for less than
+  `idleMinutes` (default 10, at least 1), then the most recently idle up to
+  `min` (default 0). Work none of them has room for, beyond one piece for
+  each machine still enrolling, gets new machines, up to `max` (at most
+  100). A machine that does not enroll within `enrollMinutes` (default 15),
+  or holds work but has not called for that long, is destroyed and
+  replaced. A machine no longer wanted is destroyed at once: `retainDays`
+  does not apply.
+- Only `hetzner-cloud` and `custom` classes scale; a pool class is refused.
+- A machine is revoked only while nothing holds it: the drain and a new
+  Allocation take the same lock, so work never lands on a machine being
+  destroyed.
+- With a rule on demand, each replica looks at waiting work every 10 seconds
+  and starts a pass when it changed. The rule's status adds `queued`: work
+  waiting for one of its machines.
+
+Work whose needs the class cannot meet still counts, so the rule makes a
+machine, which idles and goes; `queued` that does not fall points to it.
+
 ### The install script
 
 `GET /api/workers/install.sh` is public and holds no secret: a POSIX sh
@@ -419,7 +480,8 @@ each worker's `state` (`serving`, `released`, `resetting`, `free`,
 
 ### Passes
 
-The server reconciles every minute and when an account is disabled. One
+The server reconciles every minute, when an account is disabled, and, with
+[machines on demand](#machines-on-demand), when waiting work changed. One
 replica at a time runs a pass, under a claim in Postgres (ADR 0193) renewed
 while platform calls run and checked before every change; a replica whose
 claim moved stops changing anything. A machine whose enrollment code is
