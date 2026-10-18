@@ -4,6 +4,7 @@ import type {
   WorkflowExecutionDescriptor,
 } from "@catamorphic/parser";
 import type { RuntimeInvocationReceipt } from "@catamorphic/sandbox";
+import { MAX_CARRIED_STATE_BYTES } from "@catamorphic/workflow";
 import type { Kysely } from "kysely";
 import type { Identity } from "../identity.js";
 import { ConnectionUnavailableError } from "./connections-service.js";
@@ -210,6 +211,18 @@ export class BoundaryExecutionHandler {
       return;
     }
     const result = jsonRecord(receipt.terminal.result);
+    // State rides with the call (ADR 0260); refuse it before the call runs,
+    // so nothing is done that its step could not then record.
+    const carriedBytes = stateBytes(jsonRecord(result.transition));
+    if (carriedBytes > MAX_CARRIED_STATE_BYTES) {
+      await this.deps.coordinator.failStep({
+        workflowStepAttemptId: context.workflowStepAttemptId,
+        job: args.job,
+        error: `A call's state is ${carriedBytes} bytes; at most ${MAX_CARRIED_STATE_BYTES} ride with it`,
+        allowBoundaryRetry: false,
+      });
+      return;
+    }
     if (result.type === "completed") {
       await this.deps.coordinator.completeStep({
         workflowStepAttemptId: context.workflowStepAttemptId,
@@ -585,4 +598,11 @@ function carried(args: {
   return args.transition.statePresent === true
     ? toJson({ result: args.output, state: args.transition.state ?? null })
     : args.output;
+}
+
+/** The size of the state a transition carries, serialized; 0 without. */
+function stateBytes(transition: Record<string, unknown>): number {
+  return transition.statePresent === true
+    ? Buffer.byteLength(JSON.stringify(transition.state ?? null) ?? "null")
+    : 0;
 }

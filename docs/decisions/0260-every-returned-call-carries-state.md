@@ -26,10 +26,17 @@ With state, the next boundary receives `{ result, state }`; without it, the
 result alone, as before. The types are overloads (`TransitionCall`,
 `HostCall`, `CallWorkflow`), so `state` flows into the next step's
 `BoundaryContext<Carried<Result, State>>` and the step chain is checked as
-any other; the boundary's JSON check covers the state.
+any other. State must be JSON, as `pause`'s is: `CarriedState<State>` checks
+it at the call (type aliases with optional fields pass, a `Date` does not),
+and the boundary's own JSON check covers it again.
 
 **State is persisted with the run.** The runtime records it on the
-transition (`statePresent`, `state`) and refuses any other second argument.
+transition (`statePresent`, `state`) and refuses any other second argument,
+and any key of `callWorkflow`'s options beside `input` and `state`, so a
+misspelling fails instead of dropping state. State is at most 256 KiB as
+JSON (`MAX_CARRIED_STATE_BYTES`); the runtime refuses more, and core refuses
+it again before running the call, so nothing is done that the step could
+not record.
 Host and connection calls finish within their step, so core wraps their
 result there. A child workflow outlives its step, so the waiting step
 attempt holds the state (`call_state_present`, `call_state`, migration 066)

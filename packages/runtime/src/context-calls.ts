@@ -30,7 +30,25 @@ export function carriedState(options: unknown): RuntimeCarriedState {
       "A call's second argument is { state }: the state the next step receives beside the call's result",
     );
   }
-  return { statePresent: true, state: Reflect.get(options, "state") };
+  const state: unknown = Reflect.get(options, "state");
+  requireCarriedStateSize(state);
+  return { statePresent: true, state };
+}
+
+/**
+ * The largest state a call carries, serialized as JSON (ADR 0260): the
+ * same as `MAX_CARRIED_STATE_BYTES` in `@catamorphic/workflow`, whose
+ * values this runtime does not load.
+ */
+export const MAX_CARRIED_STATE_BYTES = 256 * 1024;
+
+/** Refuse state too large to persist beside a step's result. */
+export function requireCarriedStateSize(state: unknown): void {
+  const bytes = Buffer.byteLength(JSON.stringify(state ?? null) ?? "null");
+  if (bytes > MAX_CARRIED_STATE_BYTES)
+    throw new Error(
+      `A call's state is ${bytes} bytes; at most ${MAX_CARRIED_STATE_BYTES} ride with it: carry ids and the data later steps use`,
+    );
 }
 
 /** The `host_call` transition a boundary returns (ADR 0055). */

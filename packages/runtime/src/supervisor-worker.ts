@@ -212,6 +212,11 @@ async function executeInvocationTarget(args: {
       metadata?: Record<string, unknown>,
     ): Record<string, unknown> => {
       const { input, ...rest } = options;
+      const unknown = Object.keys(rest).find((key) => key !== "state");
+      if (unknown !== undefined)
+        throw new Error(
+          `callWorkflow takes { input, state? }; '${unknown}' is not one of them`,
+        );
       return {
         __catamorphicDurableTransition: "child_workflow",
         input,

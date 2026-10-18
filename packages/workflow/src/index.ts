@@ -68,6 +68,7 @@ export type {
   BoundaryRateLimit,
   CallWorkflow,
   Carried,
+  CarriedState,
   ConnectionNamespace,
   DefineBoundary,
   DocumentEntry,
@@ -89,6 +90,7 @@ export type {
 } from "./workflow.js";
 export {
   defineWorkflow,
+  MAX_CARRIED_STATE_BYTES,
   RateLimitedError,
   rateLimited,
 } from "./workflow.js";

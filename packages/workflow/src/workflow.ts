@@ -193,6 +193,19 @@ export interface Carried<Result, State> {
 }
 
 /**
+ * `{ state }` handed to a returned call: JSON-compatible, checked at the
+ * call as `pause` checks its state, and at most {@link MAX_CARRIED_STATE_BYTES}
+ * once serialized.
+ */
+export type CarriedState<State> = { state: State } & AssertJsonCompatible<
+  State,
+  "Carried state must be JSON-compatible"
+>;
+
+/** The largest state a call carries, serialized as JSON (ADR 0260). */
+export const MAX_CARRIED_STATE_BYTES = 256 * 1024;
+
+/**
  * A returned call (ADR 0260): pass `{ state }` as a second argument and
  * the next step receives `{ result, state }`. State is JSON, persisted with
  * the run; a retried step runs the call again with its state.
@@ -200,7 +213,7 @@ export interface Carried<Result, State> {
 export interface TransitionCall<Input, Output> {
   <State>(
     input: Input,
-    options: { state: State },
+    options: CarriedState<State>,
   ): WorkflowTransition<Carried<Output, State>>;
   (input: Input): WorkflowTransition<Output>;
 }
@@ -208,7 +221,7 @@ export interface TransitionCall<Input, Output> {
 export interface CallWorkflow {
   <Input, Output, State>(
     workflow: WorkflowDefinition<Input, Output>,
-    options: { input: Input; state: State },
+    options: { input: Input } & CarriedState<State>,
   ): WorkflowTransition<Carried<Output, State>>;
   <Input, Output>(
     workflow: WorkflowDefinition<Input, Output>,
@@ -241,7 +254,7 @@ export interface WorkflowCaller {
 export interface HostCall<Result = unknown> {
   <Args, State>(
     args: Args,
-    options: { state: State },
+    options: CarriedState<State>,
   ): WorkflowTransition<Carried<Result, State>>;
   <Args>(args: Args): WorkflowTransition<Result>;
 }
