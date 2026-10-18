@@ -60,14 +60,21 @@ const pageKey = async (keyCode: string, modifiers: string[] = []) => {
   await app.eval(
     `${view}.executeJavaScript("if (!window.__e2eKeys) { window.__e2eKeys = []; addEventListener('keydown', (event) => window.__e2eKeys.push(event.key + (event.metaKey ? '+meta' : '') + (event.ctrlKey ? '+ctrl' : '')), true); } true", true)`,
   );
+  const seen = await app.eval<number>(
+    `${view}.executeJavaScript('window.__e2eKeys.length', true)`,
+  );
+  const sawIt = `${view}.executeJavaScript('window.__e2eKeys.length', true).then((count) => count > ${seen})`;
   for (let attempt = 1; ; attempt += 1) {
+    // A key that reached the page late is never sent twice.
+    if (attempt > 1 && (await app.eval<boolean>(sawIt))) return;
+    if (attempt > 1)
+      console.warn(
+        `[find-in-page] the page never saw ${modifiers.join("+")}+${keyCode}: sending it again (attempt ${attempt})`,
+      );
     await focusWindow(app);
     await app.waitFor(
       `(() => { const page = ${view}; page.focus(); return page.executeJavaScript('document.hasFocus()', true); })()`,
       { label: "the page has focus" },
-    );
-    const seen = await app.eval<number>(
-      `${view}.executeJavaScript('window.__e2eKeys.length', true)`,
     );
     await app.eval(`(() => {
       const page = ${view};
@@ -76,10 +83,10 @@ const pageKey = async (keyCode: string, modifiers: string[] = []) => {
       return true;
     })()`);
     try {
-      await app.waitFor(
-        `${view}.executeJavaScript('window.__e2eKeys.length', true).then((count) => count > ${seen})`,
-        { timeoutMs: 2_000, label: "the page saw the key" },
-      );
+      await app.waitFor(sawIt, {
+        timeoutMs: 2_000,
+        label: "the page saw the key",
+      });
       return;
     } catch (error) {
       if (attempt === 3) throw error;
@@ -202,13 +209,15 @@ afterAll(async () => {
 
 /** The find bar, focus and the keys the page saw, for a wait that timed out. */
 const findState = () =>
-  app.eval<string>(`(async () => JSON.stringify({
-    bar: !!document.querySelector('[data-testid="find-bar"]'),
-    input: !!${findInput},
-    focused: (() => { const el = document.activeElement; return el && [el.tagName, el.getAttribute('aria-label')]; })(),
-    windowFocused: document.hasFocus(),
-    page: await ${view}.executeJavaScript('({ focused: document.hasFocus(), keys: window.__e2eKeys ?? null })', true).catch((error) => String(error)),
-  }))()`);
+  app
+    .eval<string>(`(async () => JSON.stringify({
+      bar: !!document.querySelector('[data-testid="find-bar"]'),
+      input: !!${findInput},
+      focused: (() => { const el = document.activeElement; return el && [el.tagName, el.getAttribute('aria-label')]; })(),
+      appDocumentHasFocus: document.hasFocus(),
+      page: await ${view}.executeJavaScript('({ hasFocus: document.hasFocus(), keys: window.__e2eKeys ?? null })', true).catch((error) => String(error)),
+    }))()`)
+    .catch((error: unknown) => `unreadable (${String(error)})`);
 
 describe("find in page", () => {
   it("Cmd+F in the page opens the find bar, which counts and steps through matches", async () => {

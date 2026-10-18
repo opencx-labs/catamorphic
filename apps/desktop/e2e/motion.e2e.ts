@@ -1154,8 +1154,8 @@ describe("inputs grow by gliding", () => {
   interface Glide {
     before: number;
     frames: { at: number; height: number; scrolled: number; inset: number }[];
-    /** Height transitions the frame ran, as `transitionrun` reported them. */
-    transitions: number;
+    /** The frame's height transitions: begun, finished and cut short. */
+    transitions: { ran: number; ended: number; cancelled: number };
   }
   /**
    * The frame's height while a real Shift+Enter adds a line, with how far
@@ -1178,11 +1178,12 @@ describe("inputs grow by gliding", () => {
       }
       const before = frame.getBoundingClientRect().height;
       const frames = [];
-      let transitions = 0;
-      const ran = (event) => {
-        if (event.target === frame && event.propertyName === 'height') transitions += 1;
+      const transitions = { ran: 0, ended: 0, cancelled: 0 };
+      const counted = (field) => (event) => {
+        if (event.target === frame && event.propertyName === 'height') transitions[field] += 1;
       };
-      frame.addEventListener('transitionrun', ran);
+      const listeners = [['transitionrun', counted('ran')], ['transitionend', counted('ended')], ['transitioncancel', counted('cancelled')]];
+      for (const [type, listener] of listeners) frame.addEventListener(type, listener);
       const started = performance.now();
       window.__glide = new Promise((resolve) => {
         const tick = () => {
@@ -1193,9 +1194,13 @@ describe("inputs grow by gliding", () => {
             scrolled: frame.scrollTop,
             inset: input.getBoundingClientRect().top - box.top,
           });
-          if (performance.now() - started < 500) requestAnimationFrame(tick);
+          // Half a second of frames, and on until the glide has ended (a
+          // slow renderer can end it late), two seconds at most.
+          const elapsed = performance.now() - started;
+          if (elapsed < 500 || (transitions.ended === 0 && elapsed < 2000))
+            requestAnimationFrame(tick);
           else {
-            frame.removeEventListener('transitionrun', ran);
+            for (const [type, listener] of listeners) frame.removeEventListener(type, listener);
             resolve({ before, frames, transitions });
           }
         };
@@ -1210,10 +1215,13 @@ describe("inputs grow by gliding", () => {
     const end = frames.at(-1)?.height ?? 0;
     const trace = JSON.stringify({ before, frames, transitions });
     expect(end, trace).toBeGreaterThan(before);
-    // The frame's height transitioned: it glided rather than snapped. Told
-    // by the transition itself, not by frames caught midway, which a slow
-    // renderer (macOS CI draws without a GPU) can space past its 150 ms.
-    expect(transitions, trace).toBeGreaterThan(0);
+    // The frame's height transitioned to its end: it glided rather than
+    // snapped. Told by the transition itself, not by frames caught midway,
+    // which a slow renderer (macOS CI draws without a GPU) can space past
+    // its 150 ms. One retargeted as the height settles is cut short for
+    // the next, which ends: only an ending counts.
+    expect(transitions.ran, trace).toBeGreaterThan(0);
+    expect(transitions.ended, trace).toBeGreaterThan(0);
     // The new line is clipped until it has glided into view, never scrolled
     // to: the first line stays on the frame's top edge throughout.
     expect(

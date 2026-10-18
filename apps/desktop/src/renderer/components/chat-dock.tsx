@@ -2302,9 +2302,15 @@ function ChatDockContent({
     if (!steppedDown && !steppedUp) return;
     const userInteraction = userInteractionRef.current;
     const focus = () => {
-      if (userInteractionRef.current === userInteraction) {
-        focusComposerInternally();
-      }
+      if (userInteractionRef.current !== userInteraction) return;
+      // Stepping up keeps a focus already in the chat (a question's answer).
+      if (
+        steppedUp &&
+        sectionRef.current?.contains(document.activeElement) &&
+        document.activeElement !== sectionRef.current
+      )
+        return;
+      focusComposerInternally();
     };
     focus();
     const frame = requestAnimationFrame(focus);
