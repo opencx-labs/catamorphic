@@ -947,6 +947,27 @@ describe("postReviews", () => {
     ]);
   });
 
+  it("takes null for a field the block may leave out", async () => {
+    const { writes, error } = await post({
+      content: reply({
+        ...REQUESTED,
+        comments: [{ ...REQUESTED.comments[0], side: null }],
+        resolve: null,
+        reply: null,
+      }),
+    });
+    expect(error).toBeUndefined();
+    expect(actions(writes)).toEqual([
+      "create_review",
+      "create_check_run",
+      "update_pull_request",
+    ]);
+    expect(writes[0]?.[1]).toMatchObject({
+      event: "REQUEST_CHANGES",
+      comments: [{ path: "src/orders.ts", line: 11, side: "RIGHT" }],
+    });
+  });
+
   it("reports action_required, not a pass, when no usable review came for an unmarked commit", async () => {
     const missing = async (scenario: PosterScenario) => {
       const { writes, error } = await post(scenario);

@@ -187,7 +187,11 @@ export const REVIEW_OPENCODE_BINDING = `"model": {
 /** `.work/agents/reviewer.md`: the review doctrine, as the agent's persona. */
 export const REVIEWER_DOCTRINE = `You review pull requests for this company's repository. Each pull request has
 its own chat; your workspace is checked out at its head, and each later push
-moves it to the new head and tells you what changed.
+moves it to the new head and tells you what changed. The checkout is shallow,
+the head without its history: \`pull_request_files\` lists the change as
+GitHub shows it, and Git fetches more through the gateway (\`git fetch
+--depth=1 origin <base>\` for the base your message names, \`git fetch
+--deepen=50\` for \`git log\` and \`git blame\`).
 
 When you start, record the pull request on this chat so people opening it see
 what it reviews: discover \`set_session_metadata\`, read \`pull_requests\` (no
@@ -256,9 +260,10 @@ you report, and checks it first. End every turn with exactly one fenced
   line outside the diff moves into the review's body.
 - \`resolve\`: threads you opened earlier that this head fixes, by the node
   id \`review_threads\` gives, each with an optional short reply.
-- \`reply\`: your answer when someone asked you something with \`@work\`.
-  \`inReplyTo\` is the inline comment's id the message gave you; leave it
-  out to answer in the pull request's conversation.
+- \`reply\`: your answer when someone asked you something with \`@work\`;
+  leave it out when nobody did. \`inReplyTo\` is the inline comment's id the
+  message gave you; leave it out to answer in the pull request's
+  conversation.
 
 A turn that only answers a question still ends with the block, with
 \`comments\` and \`resolve\` empty and the same verdict as before. Be
@@ -922,8 +927,10 @@ function parseWorkReview(content: string): WorkReview | string {
     resolve: [],
     reply: null,
   };
+  // A field it may leave out may also be null, as models often write it.
   for (const entry of comments.map(record)) {
-    const { path, line, side = "RIGHT", body } = entry;
+    const { path, line, body } = entry;
+    const side = entry.side ?? "RIGHT";
     if (
       Object.keys(entry).some((key) => !["path", "line", "side", "body"].includes(key)) ||
       !text(path, 300) ||
@@ -942,12 +949,12 @@ function parseWorkReview(content: string): WorkReview | string {
       Object.keys(entry).some((key) => !["threadId", "reply"].includes(key)) ||
       typeof threadId !== "string" ||
       !/^[\\w+/=-]{1,200}$/.test(threadId) ||
-      (reply !== undefined && !text(reply, 1000))
+      (reply != null && !text(reply, 1000))
     )
       return "a resolve entry is not { threadId, reply? } within its limits";
     checked.resolve.push({ threadId, ...(typeof reply === "string" ? { reply: plain(reply) } : {}) });
   }
-  if (report.reply !== undefined) {
+  if (report.reply != null) {
     const reply = record(report.reply);
     const { inReplyTo, body } = reply;
     if (
