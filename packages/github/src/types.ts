@@ -138,6 +138,65 @@ export interface GithubReviewComment {
   startSide?: "LEFT" | "RIGHT";
 }
 
+/**
+ * Who wrote a review, comment, or thread. `login` is the REST form: a GitHub
+ * App's bot is `<app-slug>[bot]` with `type` `Bot`. `id` is the account's
+ * database id when GitHub reports it (not for bots over GraphQL).
+ */
+export interface GithubActor {
+  login: string;
+  type: string;
+  id: number | null;
+}
+
+export interface GithubReviewThreadComment {
+  /** The comment's database id, for REST replies. */
+  id: number;
+  author: GithubActor | null;
+  body: string;
+  url: string;
+  createdAt: string;
+}
+
+/** A pull request review thread (GraphQL `PullRequestReviewThread`). */
+export interface GithubReviewThread {
+  /** Node id, for `resolveReviewThread`. */
+  id: string;
+  isResolved: boolean;
+  isOutdated: boolean;
+  path: string;
+  line: number | null;
+  startLine: number | null;
+  side: "LEFT" | "RIGHT" | null;
+  /** Oldest first: the first comment opened the thread. */
+  comments: GithubReviewThreadComment[];
+}
+
+export interface GithubPullRequestReview {
+  id: number;
+  /** APPROVED, CHANGES_REQUESTED, COMMENTED, DISMISSED or PENDING. */
+  state: string;
+  author: GithubActor | null;
+  body: string;
+  commitId: string | null;
+  submittedAt: string | null;
+  url: string;
+  /** The pull request the review belongs to. */
+  number: number | null;
+}
+
+/** A pull request review comment or an issue comment, as REST reads one. */
+export interface GithubComment {
+  id: number;
+  author: GithubActor | null;
+  body: string;
+  url: string;
+  /** The pull request (or issue) the comment is on. */
+  number: number | null;
+  /** For a reply in a review thread, the comment it replies to. */
+  inReplyTo?: number;
+}
+
 export interface GithubCheckRunAnnotation {
   path: string;
   startLine: number;
@@ -273,6 +332,23 @@ export class GithubApiError extends Error {
   ) {
     super(message);
     this.name = "GithubApiError";
+  }
+}
+
+/**
+ * GraphQL answered, with errors (HTTP 200 and an `errors` list). `type` is
+ * GitHub's error class, such as `NOT_FOUND` or `FORBIDDEN`.
+ */
+export class GithubGraphqlError extends GithubApiError {
+  constructor(
+    readonly errors: ReadonlyArray<{ message: string; type?: string }>,
+    status = 200,
+  ) {
+    super(
+      status,
+      `GitHub GraphQL: ${errors.map((error) => error.message).join("; ") || "unknown error"}`,
+    );
+    this.name = "GithubGraphqlError";
   }
 }
 

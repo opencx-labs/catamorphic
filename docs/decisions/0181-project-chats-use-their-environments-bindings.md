@@ -1,6 +1,6 @@
 # 0181 — Project chats use their Environment's bindings; session events carry keys
 
-- **Status:** Accepted
+- **Status:** Accepted (refined by [0259](0259-reviews-post-from-a-workflow.md): reviews post from a workflow, the chat only reports)
 - **Date:** 2026-09-27
 - **Refines:** 0156, 0171, 0172, 0173, 0179
 

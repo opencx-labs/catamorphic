@@ -114,7 +114,7 @@ it("shipped workflow recipes typecheck against the public API and real host trig
     HOST_SKILLS["reviewing-pull-requests/SKILL.md"],
   ]);
   // The review skill repeats the GitHub library verbatim (one file).
-  expect(count).toBe(14);
+  expect(count).toBe(15);
   expect(parseProject(files).triggerKinds.map((kind) => kind.name)).toEqual([
     "github.delivery",
     "github.issue_comment",

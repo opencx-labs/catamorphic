@@ -257,6 +257,9 @@ export class BoundaryExecutionHandler {
           ...(child.displayName ? { displayName: child.displayName } : {}),
           input: toJson(transition.input),
         },
+        ...(transition.statePresent === true
+          ? { state: { value: toJson(transition.state ?? null) } }
+          : {}),
       });
       return;
     }
@@ -300,7 +303,10 @@ export class BoundaryExecutionHandler {
       await this.deps.coordinator.completeStep({
         workflowStepAttemptId: context.workflowStepAttemptId,
         job: args.job,
-        output: toJson(output === undefined ? null : output),
+        output: carried({
+          transition,
+          output: toJson(output === undefined ? null : output),
+        }),
       });
       return;
     }
@@ -332,7 +338,7 @@ export class BoundaryExecutionHandler {
         await this.deps.coordinator.completeStep({
           workflowStepAttemptId: context.workflowStepAttemptId,
           job: args.job,
-          output,
+          output: carried({ transition, output }),
         });
       } catch (error) {
         if (
@@ -566,4 +572,17 @@ function readRateLimits(policy: Json): readonly RateLimit[] {
       },
     ];
   });
+}
+
+/**
+ * A call's result as the next step receives it (ADR 0260): beside the
+ * state the boundary handed the call, or alone when it handed none.
+ */
+function carried(args: {
+  transition: Record<string, unknown>;
+  output: Json;
+}): Json {
+  return args.transition.statePresent === true
+    ? toJson({ result: args.output, state: args.transition.state ?? null })
+    : args.output;
 }

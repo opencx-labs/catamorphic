@@ -62,6 +62,23 @@ export const lookupAccount = defineWorkflow(({ defineBoundary }) => ({
   ],
 }));
 
+/** @displayname Carry the account through two calls */
+export const carryAccount = defineWorkflow(({ defineBoundary }) => ({
+  steps: [
+    defineBoundary({
+      run: ({ input, host }: BoundaryContext<{ id: string }>) =>
+        host.acme.crm.lookupAccount({ id: input.id }, { state: { asked: input.id } }),
+    }),
+    defineBoundary({
+      run: ({ input, callWorkflow }: BoundaryContext<Carried<{ name: string; seenBy: string }, { asked: string }>>) =>
+        callWorkflow(whoAmI, { input: {}, state: { ...input.state, name: input.result.name } }),
+    }),
+    defineBoundary({
+      run: ({ input }: BoundaryContext<Carried<{ caller: unknown }, { asked: string; name: string }>>) => input,
+    }),
+  ],
+}));
+
 /** @displayname Who am I */
 export const whoAmI = defineWorkflow(({ defineBoundary }) => ({
   steps: [
@@ -124,6 +141,47 @@ function invokeRuntime(
           args: { id: value.id },
         },
       },
+      steps: [],
+    };
+  } else if (exportName === "carryAccount" && stepIndex === 0) {
+    terminal = {
+      status: "completed",
+      result: {
+        type: "host_call",
+        transition: {
+          __catamorphicDurableTransition: "host_call",
+          capability: "acme.crm",
+          fn: "lookupAccount",
+          args: { id: value.id },
+          statePresent: true,
+          state: { asked: value.id },
+        },
+      },
+      steps: [],
+    };
+  } else if (exportName === "carryAccount" && stepIndex === 1) {
+    const carried = value as {
+      result: { name: string };
+      state: { asked: string };
+    };
+    terminal = {
+      status: "completed",
+      result: {
+        type: "child_workflow",
+        transition: {
+          __catamorphicDurableTransition: "child_workflow",
+          input: {},
+          statePresent: true,
+          state: { ...carried.state, name: carried.result.name },
+          workflow: { exportName: "whoAmI" },
+        },
+      },
+      steps: [],
+    };
+  } else if (exportName === "carryAccount") {
+    terminal = {
+      status: "completed",
+      result: { type: "completed", output: value },
       steps: [],
     };
   } else if (exportName === "lookupAccount") {
@@ -386,6 +444,67 @@ describeIf("host calls from workflows (ADR 0055)", () => {
         projectPermissions: [{ projectId, permission: "sessions:write" }],
       },
       args: { id: "A-1" },
+    });
+  });
+
+  it("a returned call carries state to the next step beside its result (ADR 0260)", async () => {
+    const outcome = await core.runs.call({
+      identity: root,
+      projectId,
+      workflowName: "carryAccount",
+      input: { id: "A-2" },
+      budgetMs: 20_000,
+    });
+    // The run waits on its child, then finishes on a worker.
+    const worker = core.runs.startWorker({
+      name: "carry-state",
+      kinds: ["durable_boundary"],
+      concurrency: 2,
+      pollIntervalMs: 5,
+      leaseSeconds: 5,
+    });
+    let run = { status: "", result: null as unknown };
+    try {
+      for (let tries = 0; tries < 300 && run.status !== "completed"; tries++) {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        run = await db
+          .selectFrom("workflow_runs")
+          .select(["status", "result"])
+          .where("id", "=", outcome.runId)
+          .executeTakeFirstOrThrow();
+      }
+    } finally {
+      await worker.stop();
+    }
+    expect(run.status).toBe("completed");
+    // A host call, then a child workflow, each with state: the step after
+    // each receives { result, state }.
+    const inputOf = (stepIndex: number) =>
+      (
+        seen.find(
+          (entry) =>
+            entry.exportName === "carryAccount" &&
+            entry.stepIndex === stepIndex,
+        )?.input as { value?: unknown } | undefined
+      )?.value;
+    expect(inputOf(1)).toEqual({
+      result: { name: "Account A-2", seenBy: "root" },
+      state: { asked: "A-2" },
+    });
+    expect(run.result).toEqual({
+      result: { caller: { externalUserId: "root" } },
+      state: { asked: "A-2", name: "Account A-2" },
+    });
+    // The waiting step held the child's state on its row.
+    const held = await db
+      .selectFrom("workflow_step_attempts")
+      .select(["call_state_present", "call_state"])
+      .where("run_id", "=", outcome.runId)
+      .where("step_index", "=", 1)
+      .executeTakeFirstOrThrow();
+    expect(held).toEqual({
+      call_state_present: true,
+      call_state: { asked: "A-2", name: "Account A-2" },
     });
   });
 });

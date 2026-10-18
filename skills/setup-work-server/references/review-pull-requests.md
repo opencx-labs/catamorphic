@@ -2,21 +2,29 @@
 
 Every pull request in a company repository gets a code and security review
 from an agent that checks out the change, verifies it by running it, reads
-production's shape from a read-only replica, and posts a review with inline
-comments and a check run. It is ordinary project code (issue #118, ADR 0181):
+production's shape from a read-only replica, and reports a review with inline
+comments and a check run. It is ordinary project code (issue #118, ADRs 0181
+and 0259):
 the host skill `reviewing-pull-requests` holds every file. This guide is the
 server side: GitHub, the service connections, and the review machines.
 
 What runs where:
 
-- The **control plane** receives GitHub's signed webhook, runs the three
-  workflows (in the project's `default` Environment), and holds every
-  credential: the App's key, the replica's password, Slack's token.
+- The **control plane** receives GitHub's signed webhook, runs the
+  workflows, and holds every credential: the App's key, the replica's
+  password, Slack's token. It also **posts**: when a review chat's turn ends,
+  the `postReviews` workflow (in the workflow-only `github-poster`
+  Environment) reads the review the agent reported, checks it, and writes the
+  review, the check run, thread replies and resolutions, and the summary in
+  the pull request's description.
 - A **review machine** (a worker labelled `pool=review`, opened to the
   project) runs each pull request's chat in the `review` Environment: its own
   sandbox from the project's image, with Docker inside it, checked out at the
   pull request's head. It holds no credential; Git and the agent's tools go
-  through the gateway with the session's grant.
+  through the gateway with the session's grant. Its `github` binding only
+  reads (and pushes `work/*` branches), so nothing on a review machine can
+  write to GitHub: the pull request's own code runs there, and whatever it
+  forges in the chat is only a report the poster validates.
 
 ## 1. Connect GitHub
 
@@ -25,8 +33,17 @@ with the project's id (so its webhook points at the project's `github` URL and
 its webhook secret becomes the project's `GITHUB_WEBHOOK_SECRET`), install it
 on the repository, and attach the repository as the project
 (`POST /_work/operator/projects` with `"repository": "acme/web"`). The App
-needs checks (write) and pull requests (write), which the manifest requests,
-and subscribes to pull request, pull request review comment, and issue
+needs, and the manifest requests:
+
+- **Pull requests: write**: reviews and inline comments, replies, resolving
+  threads, dismissing its own change requests, the description's summary.
+- **Checks: write**: the "Work review" check run.
+- **Issues: write**: editing and deleting its own conversation comments.
+- **Contents: read**: fetching the change. Reviews need no more; the
+  manifest asks for write, which pushes of `work/*` fix branches and the
+  project's own sync use.
+
+It subscribes to pull request, pull request review comment, and issue
 comment events.
 
 The App's one webhook feeds this one project, with events from every
@@ -96,15 +113,17 @@ Ask an agent in the project to add the review automation from the
 `reviewing-pull-requests` skill, or copy its files:
 
 - `.work/project.json`: the `review` Environment (pool, image, containers,
-  egress, `idleReleaseMinutes`, `approvals.waitMinutes`, and the `github`,
-  `prod`, and `slack` bindings) merged beside the existing `default`.
+  egress, `idleReleaseMinutes`, `approvals.waitMinutes`, and the read-only
+  `github`, `prod`, and `slack` bindings) and the `github-poster` Environment
+  (workflows only; the `github` binding with the poster's typed write
+  actions) merged beside the existing `default`.
 - `.work/images/review.Dockerfile`: Git, Node, Bun, and Docker on
   `docker:dind`; add the repository's toolchains.
 - `.work/triggers/github.ts`: the GitHub trigger library.
 - `.work/agents/reviewer.json` and `reviewer.md`: the reviewer and its
   review doctrine.
 - `.work/workflows/src/reviews.ts`: `reviewPullRequests`,
-  `answerReviewComments`, `closePullRequestChats`.
+  `answerReviewComments`, `closePullRequestChats`, and `postReviews`.
 
 Replace `acme/web` in each trigger's `where` with the project's repository,
 so events from the App's other repositories start nothing. Map GitHub logins
@@ -116,27 +135,36 @@ a pull request like any other.
 
 ## 5. Turn it on
 
-Someone with `automations:write` enables the three workflows for the project.
-The `github` webhook listens once they are on; `GET
-/api/projects/:id/webhooks` shows its URL, which the App registered from a
-manifest already uses.
+Someone with `automations:write` enables the workflows for the project:
+`reviewPullRequests`, `answerReviewComments`, and `closePullRequestChats` in
+the `default` Environment, and `postReviews` in `github-poster`, with its
+`github` connection consented. The `github` webhook listens once they are on;
+`GET /api/projects/:id/webhooks` shows its URL, which the App registered from
+a manifest already uses.
 
 ## 6. Verify
 
 1. Open a small pull request. A project chat `pr-acme/web-<number>` appears:
    Environment `review`, machine `worker.review-1`, workspace at the pull
-   request's head commit. The agent's review (inline comments) and a "Work
-   review" check run appear on GitHub.
-2. Push to the branch: the same chat moves to the new head and updates its
-   check run.
+   request's head commit. When its turn ends, a `postReviews` run posts the
+   review (inline comments), a "Work review" check run, and a summary between
+   `<!-- work-review:start -->` and `<!-- work-review:end -->` in the
+   description.
+2. Push to the branch: the same chat moves to the new head; the next review
+   resolves the threads it fixed and, once nothing blocks, dismisses the
+   App's earlier change requests.
 3. Comment `@work is this migration safe on production?`: the answer arrives
-   as a comment.
+   as a reply.
 4. Merge or close it: the chat closes, its sandbox and containers are gone,
    and its session branch and grants are deleted. The transcript stays.
-5. The connection audit lists each fetch, query, and GitHub action with its
-   session; no file on the review machine holds a token or password.
+5. The connection audit lists each fetch, query, and GitHub read with its
+   session, and each GitHub write with the `postReviews` run; no file on the
+   review machine holds a token or password.
 
 If nothing happens: the webhook's deliveries show a `401` when the secret
 differs; a draft pull request starts no run until it is ready for review; a
 chat that never starts a turn usually has no review machine available to the
-project (check the chat's placement and `GET /_work/operator/machines`).
+project (check the chat's placement and `GET /_work/operator/machines`). A
+review that never reaches GitHub shows in `postReviews`' runs: a turn whose
+reply has no valid `work-review` block, or one for a commit the chat no
+longer stands on, posts nothing but a neutral check run saying so.

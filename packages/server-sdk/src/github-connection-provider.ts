@@ -12,11 +12,13 @@ import {
   buildAuthorizeUrl,
   exchangeCode,
   type FetchLike,
+  type GithubActor,
   GithubApi,
   GithubApiError,
   GithubAppAuth,
   type GithubAppConfig,
   GithubAuthError,
+  type GithubInstallation,
   type GithubPermissions,
   type GithubRestMethod,
   type GithubTokenSet,
@@ -114,6 +116,12 @@ const Repository = z
   .describe("Repository as owner/name");
 const Number_ = z.number().int().positive();
 const Side = z.enum(["LEFT", "RIGHT"]);
+/** GitHub's limit on a description, comment, or review body. */
+const MAX_BODY = 65_536;
+const Body = z.string().min(1).max(MAX_BODY);
+const NodeId = z.string().regex(/^[\w+/=-]{1,200}$/);
+/** Items one call may change: each is checked before any is changed. */
+const MAX_ITEMS = 20;
 const CheckRunFields = {
   status: z.enum(["queued", "in_progress", "completed"]).optional(),
   conclusion: z
@@ -226,6 +234,53 @@ const TypedSchemas = {
     number: Number_,
     body: z.string().min(1),
   }),
+  review_threads: z.strictObject({ repository: Repository, number: Number_ }),
+  resolve_review_thread: z.strictObject({
+    repository: Repository,
+    number: Number_,
+    threads: z
+      .array(
+        z.strictObject({
+          threadId: NodeId.describe(
+            "Review thread node id, from review_threads",
+          ),
+          reply: Body.optional().describe(
+            "Posted in the thread first, unless its last comment already says it",
+          ),
+        }),
+      )
+      .min(1)
+      .max(MAX_ITEMS),
+  }),
+  update_pull_request: z.strictObject({
+    repository: Repository,
+    number: Number_,
+    body: z.string().max(MAX_BODY).describe("The whole new description"),
+  }),
+  list_reviews: z.strictObject({ repository: Repository, number: Number_ }),
+  dismiss_review: z.strictObject({
+    repository: Repository,
+    number: Number_,
+    reviewIds: z.array(Number_).min(1).max(MAX_ITEMS),
+    message: Body,
+  }),
+  reply_to_review_comment: z.strictObject({
+    repository: Repository,
+    number: Number_,
+    commentId: Number_.describe(
+      "The review comment that opened the thread (its database id)",
+    ),
+    body: Body,
+  }),
+  update_issue_comment: z.strictObject({
+    repository: Repository,
+    commentId: Number_,
+    body: Body,
+  }),
+  delete_issue_comment: z.strictObject({
+    repository: Repository,
+    commentId: Number_,
+  }),
 };
 
 type RestAction = keyof typeof RestSchemas;
@@ -244,7 +299,21 @@ const TYPED_ACTIONS: readonly TypedAction[] = [
   "create_check_run",
   "update_check_run",
   "issue_comment",
+  "review_threads",
+  "resolve_review_thread",
+  "update_pull_request",
+  "list_reviews",
+  "dismiss_review",
+  "reply_to_review_comment",
+  "update_issue_comment",
+  "delete_issue_comment",
 ];
+/** Typed actions that only read. */
+const TYPED_READS: ReadonlySet<TypedAction> = new Set([
+  "pull_request_files",
+  "review_threads",
+  "list_reviews",
+]);
 /** Every action; roles narrow them through the binding's capabilities. */
 export const GITHUB_CONNECTION_ACTIONS: readonly string[] = [
   ...REST_ACTIONS,
@@ -259,6 +328,15 @@ const TYPED_PERMISSIONS: Record<TypedAction, GithubPermissions | undefined> = {
   update_check_run: { checks: "write" },
   // Comments on pull requests need pull_requests, on issues need issues.
   issue_comment: undefined,
+  review_threads: { pull_requests: "read" },
+  resolve_review_thread: { pull_requests: "write" },
+  update_pull_request: { pull_requests: "write" },
+  list_reviews: { pull_requests: "read" },
+  dismiss_review: { pull_requests: "write" },
+  reply_to_review_comment: { pull_requests: "write" },
+  // Editing or deleting a pull request's conversation comment: Issues.
+  update_issue_comment: { issues: "write" },
+  delete_issue_comment: { issues: "write" },
 };
 
 const DESCRIPTIONS: Record<TypedAction, string> = {
@@ -270,6 +348,21 @@ const DESCRIPTIONS: Record<TypedAction, string> = {
     "Report a check run on a commit, with an optional summary and line annotations",
   update_check_run: "Update a check run's status, conclusion, or output",
   issue_comment: "Comment on an issue or pull request conversation",
+  review_threads:
+    "List a pull request's review threads: node id, resolved or not, path and line, and every comment with its database id, author, and whether this connection wrote it (own)",
+  resolve_review_thread:
+    "Resolve review threads of the pull request (up to 20), each with an optional reply; only threads this connection opened",
+  update_pull_request: "Replace a pull request's description",
+  list_reviews:
+    "List a pull request's reviews: id, state, author, whether this connection wrote it (own), and the commit reviewed",
+  dismiss_review:
+    "Dismiss reviews of the pull request (up to 20) that approved or requested changes; only reviews this connection wrote",
+  reply_to_review_comment:
+    "Reply in the review thread an inline comment of the pull request opened",
+  update_issue_comment:
+    "Edit a conversation comment; only comments this connection wrote",
+  delete_issue_comment:
+    "Delete a conversation comment; only comments this connection wrote",
 };
 
 const AppMaterial = z
@@ -335,7 +428,11 @@ const PrivateState = z.discriminatedUnion("flow", [
  * call. A member connection holds the person's user-to-server token, so
  * actions are attributed to them. Both serve REST actions (`get`, `post`,
  * ... plus typed conveniences) and Git credentials for the gateway.
- * Credentials stay in the vault; callers never see a token.
+ * Credentials stay in the vault; callers never see a token. Typed actions
+ * that change or remove an existing review, thread, or comment touch only
+ * the connection's own (the App's bot, or the connected person), so a
+ * binding that grants them and no raw write verbs cannot reach anyone
+ * else's (ADR 0259).
  */
 export function defineGithubConnectionProvider(
   options: GithubConnectionOptions = {},
@@ -360,7 +457,7 @@ export function defineGithubConnectionProvider(
   const maxPatchChars = options.maxPatchChars ?? 20_000;
   const appAuth = new GithubAppAuth({ fetch: doFetch, apiBaseUrl, now });
   const installations = new Map<string, Promise<number>>();
-  const readGrants = new Map<string, Promise<GithubPermissions>>();
+  const installationDetails = new Map<string, Promise<GithubInstallation>>();
   const unscopedRestPaths = options.unscopedRestPaths ?? [];
 
   const actions: ConnectionActionDefinition[] = [
@@ -374,7 +471,12 @@ export function defineGithubConnectionProvider(
       name: action,
       description: DESCRIPTIONS[action],
       inputSchema: jsonSchema(TypedSchemas[action]),
-      annotations: { readOnlyHint: action === "pull_request_files" },
+      annotations: {
+        readOnlyHint: TYPED_READS.has(action),
+        ...(action === "delete_issue_comment" || action === "dismiss_review"
+          ? { destructiveHint: true }
+          : {}),
+      },
     })),
   ];
 
@@ -401,27 +503,53 @@ export function defineGithubConnectionProvider(
     return pending;
   };
 
-  /**
-   * Every permission of the App's installation at read level, for tokens
-   * that serve reads: a GET never carries write access.
-   */
-  const readPermissionsFor = async (
+  /** The App's installation: its permissions and the App's slug. */
+  const installationOf = async (
     app: AppMaterial,
-  ): Promise<GithubPermissions> => {
+  ): Promise<GithubInstallation> => {
     const installationId = await installationIdFor(app);
     const key = JSON.stringify([
       app.appId,
       createHash("sha256").update(app.privateKey).digest("hex"),
       installationId,
     ]);
-    const cached = readGrants.get(key);
+    const cached = installationDetails.get(key);
     if (cached) return cached;
-    const pending = appAuth
-      .installation({ app, installationId })
-      .then((installation) => readOnlyPermissions(installation.permissions));
-    readGrants.set(key, pending);
-    pending.catch(() => readGrants.delete(key));
+    const pending = appAuth.installation({ app, installationId });
+    installationDetails.set(key, pending);
+    pending.catch(() => installationDetails.delete(key));
     return pending;
+  };
+
+  /**
+   * Every permission of the App's installation at read level, for tokens
+   * that serve reads: a GET never carries write access.
+   */
+  const readPermissionsFor = async (
+    app: AppMaterial,
+  ): Promise<GithubPermissions> =>
+    readOnlyPermissions((await installationOf(app)).permissions);
+
+  /**
+   * Whether this connection wrote an item: the App's own bot
+   * (`<slug>[bot]`) for an installation, the connected person for a member.
+   */
+  const ownAuthor = async (
+    credential: Material,
+  ): Promise<(author: GithubActor | null) => boolean> => {
+    if (credential.kind === "user")
+      return (author) =>
+        author !== null &&
+        author.type === "User" &&
+        (author.id !== null
+          ? author.id === credential.userId
+          : author.login.toLowerCase() === credential.login.toLowerCase());
+    const bot =
+      `${(await installationOf(credential)).appSlug}[bot]`.toLowerCase();
+    return (author) =>
+      author !== null &&
+      author.type === "Bot" &&
+      author.login.toLowerCase() === bot;
   };
 
   /**
@@ -522,6 +650,23 @@ export function defineGithubConnectionProvider(
     }
   };
 
+  /** Refuse a conversation comment this connection did not write. */
+  const requireOwnIssueComment = async (args: {
+    api: GithubApi;
+    credential: Material;
+    input: { repository: string; commentId: number };
+  }): Promise<void> => {
+    const own = await ownAuthor(args.credential);
+    const comment = await args.api.issueComment({
+      fullName: args.input.repository,
+      commentId: args.input.commentId,
+    });
+    if (!own(comment.author))
+      throw new ConnectionActionRefusedError(
+        `Comment ${args.input.commentId} is ${comment.author?.login ?? "someone else"}'s; this connection changes only its own comments`,
+      );
+  };
+
   const invokeTyped = async (args: {
     credential: Material;
     action: TypedAction;
@@ -594,6 +739,190 @@ export function defineGithubConnectionProvider(
             body: input.body,
           });
           return { id: comment.id, url: comment.url };
+        }
+        case "review_threads": {
+          const input = TypedSchemas.review_threads.parse(args.input);
+          const own = await ownAuthor(args.credential);
+          const threads = await api.reviewThreads({
+            fullName: input.repository,
+            number: input.number,
+          });
+          return {
+            threads: threads.map((thread) => ({
+              ...thread,
+              comments: thread.comments.map((comment) => ({
+                id: comment.id,
+                author: comment.author?.login ?? null,
+                own: own(comment.author),
+                body: comment.body,
+                url: comment.url,
+                createdAt: comment.createdAt,
+              })),
+            })),
+          };
+        }
+        case "resolve_review_thread": {
+          const input = TypedSchemas.resolve_review_thread.parse(args.input);
+          requireDistinct(input.threads.map((thread) => thread.threadId));
+          const own = await ownAuthor(args.credential);
+          // Every thread is checked before any is touched: a forged id must
+          // not reach another pull request's thread, or one a person opened.
+          const threads = [];
+          for (const item of input.threads) {
+            const thread = await api.reviewThread({ threadId: item.threadId });
+            if (
+              !thread ||
+              thread.number !== input.number ||
+              thread.repository.toLowerCase() !== input.repository.toLowerCase()
+            )
+              throw new ConnectionActionRefusedError(
+                `${item.threadId} is not a review thread of ${input.repository}#${input.number}`,
+              );
+            if (!own(thread.firstComment?.author ?? null))
+              throw new ConnectionActionRefusedError(
+                `${item.threadId} was opened by ${thread.firstComment?.author?.login ?? "someone else"}; this connection resolves only threads it opened`,
+              );
+            threads.push({ item, thread });
+          }
+          const resolved = [];
+          for (const { item, thread } of threads) {
+            // A retry finds its reply already last and does not repeat it.
+            const reply = item.reply?.trim();
+            const replied =
+              reply !== undefined &&
+              thread.firstComment !== null &&
+              thread.lastComment?.body.trim() !== reply;
+            if (replied && thread.firstComment)
+              await api.commentOnPullRequest({
+                fullName: input.repository,
+                number: input.number,
+                body: reply,
+                replyTo: thread.firstComment.id,
+              });
+            if (!thread.isResolved)
+              await api.resolveReviewThread({ threadId: thread.id });
+            resolved.push({ id: thread.id, isResolved: true, replied });
+          }
+          return { threads: resolved };
+        }
+        case "update_pull_request": {
+          const input = TypedSchemas.update_pull_request.parse(args.input);
+          return await api.updatePullRequest({
+            fullName: input.repository,
+            number: input.number,
+            body: input.body,
+          });
+        }
+        case "list_reviews": {
+          const input = TypedSchemas.list_reviews.parse(args.input);
+          const own = await ownAuthor(args.credential);
+          const reviews = await api.listReviews({
+            fullName: input.repository,
+            number: input.number,
+          });
+          return {
+            reviews: reviews.map((review) => ({
+              id: review.id,
+              state: review.state,
+              author: review.author?.login ?? null,
+              own: own(review.author),
+              body: review.body,
+              commitId: review.commitId,
+              submittedAt: review.submittedAt,
+              url: review.url,
+            })),
+          };
+        }
+        case "dismiss_review": {
+          const input = TypedSchemas.dismiss_review.parse(args.input);
+          requireDistinct(input.reviewIds);
+          const own = await ownAuthor(args.credential);
+          const reviews = [];
+          for (const reviewId of input.reviewIds) {
+            const review = await api.review({
+              fullName: input.repository,
+              number: input.number,
+              reviewId,
+            });
+            if (review.number !== null && review.number !== input.number)
+              throw new ConnectionActionRefusedError(
+                `Review ${reviewId} is not on ${input.repository}#${input.number}`,
+              );
+            if (!own(review.author))
+              throw new ConnectionActionRefusedError(
+                `Review ${reviewId} is ${review.author?.login ?? "someone else"}'s; this connection dismisses only its own reviews`,
+              );
+            if (
+              review.state !== "CHANGES_REQUESTED" &&
+              review.state !== "APPROVED" &&
+              review.state !== "DISMISSED"
+            )
+              throw new ConnectionActionRefusedError(
+                `Review ${reviewId} is ${review.state}; only reviews that approved or requested changes can be dismissed`,
+              );
+            reviews.push(review);
+          }
+          for (const review of reviews)
+            if (review.state !== "DISMISSED")
+              await api.dismissReview({
+                fullName: input.repository,
+                number: input.number,
+                reviewId: review.id,
+                message: input.message,
+              });
+          return {
+            reviews: reviews.map((review) => ({
+              id: review.id,
+              state: "DISMISSED",
+              url: review.url,
+            })),
+          };
+        }
+        case "reply_to_review_comment": {
+          const input = TypedSchemas.reply_to_review_comment.parse(args.input);
+          const parent = await api.reviewComment({
+            fullName: input.repository,
+            commentId: input.commentId,
+          });
+          if (parent.number !== input.number)
+            throw new ConnectionActionRefusedError(
+              `Comment ${input.commentId} is not a review comment of ${input.repository}#${input.number}`,
+            );
+          const reply = await api.commentOnPullRequest({
+            fullName: input.repository,
+            number: input.number,
+            body: input.body,
+            // GitHub threads replies under the comment that opened them.
+            replyTo: parent.inReplyTo ?? parent.id,
+          });
+          return { id: reply.id, url: reply.url };
+        }
+        case "update_issue_comment": {
+          const input = TypedSchemas.update_issue_comment.parse(args.input);
+          await requireOwnIssueComment({
+            api,
+            credential: args.credential,
+            input,
+          });
+          const updated = await api.updateIssueComment({
+            fullName: input.repository,
+            commentId: input.commentId,
+            body: input.body,
+          });
+          return { id: updated.id, url: updated.url };
+        }
+        case "delete_issue_comment": {
+          const input = TypedSchemas.delete_issue_comment.parse(args.input);
+          await requireOwnIssueComment({
+            api,
+            credential: args.credential,
+            input,
+          });
+          await api.deleteIssueComment({
+            fullName: input.repository,
+            commentId: input.commentId,
+          });
+          return { id: input.commentId, deleted: true };
         }
       }
     } catch (error) {
@@ -1019,6 +1348,13 @@ function requireRepository(
       ? `${full} is outside this connection's repositories (${allowed.join(", ")})`
       : `This connection reaches no repository, so ${full} is refused: link the project to a GitHub remote or name repositories in the binding`,
   );
+}
+
+/** Refuse a list that names one item twice. */
+function requireDistinct(items: readonly (string | number)[]): void {
+  const repeated = items.find((item, index) => items.indexOf(item) !== index);
+  if (repeated !== undefined)
+    throw new ConnectionActionRefusedError(`${repeated} is listed twice`);
 }
 
 /** Whether a REST path is `prefix` or below it. */

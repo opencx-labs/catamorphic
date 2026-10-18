@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { GithubApi, gitCredentialsFor, pullRequestFromUrl } from "../api.js";
-import { GithubApiError } from "../types.js";
+import {
+  GithubApi,
+  gitCredentialsFor,
+  githubGraphqlUrl,
+  pullRequestFromUrl,
+} from "../api.js";
+import { GithubApiError, GithubGraphqlError } from "../types.js";
 
 const REPO = (over: Partial<Record<string, unknown>> = {}) => ({
   id: 1,
@@ -332,5 +337,166 @@ describe("gitCredentialsFor", () => {
       username: "x-access-token",
       password: "ghu_abc",
     });
+  });
+});
+
+describe("GraphQL", () => {
+  it("lives beside the REST base, on Enterprise Server too", () => {
+    expect(githubGraphqlUrl()).toBe("https://api.github.com/graphql");
+    expect(githubGraphqlUrl("https://api.github.com/")).toBe(
+      "https://api.github.com/graphql",
+    );
+    expect(githubGraphqlUrl("https://ghe.acme.test/api/v3")).toBe(
+      "https://ghe.acme.test/api/graphql",
+    );
+    expect(githubGraphqlUrl("https://ghe.acme.test/api/v3/")).toBe(
+      "https://ghe.acme.test/api/graphql",
+    );
+    expect(githubGraphqlUrl("https://api.acme.ghe.com")).toBe(
+      "https://api.acme.ghe.com/graphql",
+    );
+  });
+
+  it("posts the query and surfaces errors instead of partial data", async () => {
+    const answers: Array<() => Response> = [
+      () => Response.json({ data: { viewer: { login: "octo" } } }),
+      () =>
+        Response.json({
+          data: { node: null },
+          errors: [{ type: "NOT_FOUND", message: "Could not resolve" }],
+        }),
+      () => Response.json({ message: "Bad credentials" }, { status: 401 }),
+      () => Response.json({ data: null }),
+    ];
+    const calls: Array<{ url: string; body: unknown; auth: string | null }> =
+      [];
+    const api = new GithubApi("tok", {
+      baseUrl: "https://ghe.acme.test/api/v3",
+      fetch: (async (url: unknown, init?: RequestInit) => {
+        calls.push({
+          url: String(url),
+          body: JSON.parse(String(init?.body)),
+          auth: new Headers(init?.headers).get("authorization"),
+        });
+        return (answers.shift() ?? (() => Response.json({})))();
+      }) as typeof fetch,
+    });
+    await expect(
+      api.graphql("query { viewer { login } }", { a: 1 }),
+    ).resolves.toEqual({ viewer: { login: "octo" } });
+    expect(calls[0]).toEqual({
+      url: "https://ghe.acme.test/api/graphql",
+      body: { query: "query { viewer { login } }", variables: { a: 1 } },
+      auth: "Bearer tok",
+    });
+    const failed = await api.graphql("query { node }").catch((e) => e);
+    expect(failed).toBeInstanceOf(GithubGraphqlError);
+    expect(failed).toMatchObject({
+      errors: [{ type: "NOT_FOUND", message: "Could not resolve" }],
+      message: "GitHub GraphQL: Could not resolve",
+    });
+    await expect(api.graphql("query { x }")).rejects.toMatchObject({
+      status: 401,
+      message: "Bad credentials",
+    });
+    await expect(api.graphql("query { x }")).rejects.toThrow(/no data/);
+  });
+
+  it("reads a review thread by id, and null for anything else", async () => {
+    const nodes: unknown[] = [
+      {
+        data: {
+          node: {
+            __typename: "PullRequestReviewThread",
+            id: "PRRT_1",
+            isResolved: false,
+            pullRequest: {
+              number: 7,
+              repository: { nameWithOwner: "octo/hello" },
+            },
+            comments: {
+              nodes: [
+                {
+                  databaseId: 21,
+                  body: "Why?",
+                  url: "u",
+                  createdAt: "t",
+                  author: { __typename: "Bot", login: "work" },
+                },
+              ],
+            },
+            latest: {
+              nodes: [
+                {
+                  databaseId: 22,
+                  body: "Because.",
+                  url: "u2",
+                  createdAt: "t2",
+                  author: { __typename: "User", login: "ada", databaseId: 5 },
+                },
+              ],
+            },
+          },
+        },
+      },
+      { data: { node: { __typename: "Issue" } } },
+      { data: { node: null }, errors: [{ type: "NOT_FOUND", message: "x" }] },
+      { data: null, errors: [{ type: "FORBIDDEN", message: "no" }] },
+    ];
+    const api = new GithubApi("tok", {
+      fetch: (async () => Response.json(nodes.shift())) as typeof fetch,
+    });
+    expect(await api.reviewThread({ threadId: "PRRT_1" })).toEqual({
+      id: "PRRT_1",
+      isResolved: false,
+      repository: "octo/hello",
+      number: 7,
+      firstComment: {
+        id: 21,
+        body: "Why?",
+        url: "u",
+        createdAt: "t",
+        // GraphQL drops the [bot] suffix REST logins carry; put it back.
+        author: { login: "work[bot]", type: "Bot", id: null },
+      },
+      lastComment: {
+        id: 22,
+        body: "Because.",
+        url: "u2",
+        createdAt: "t2",
+        author: { login: "ada", type: "User", id: 5 },
+      },
+    });
+    expect(await api.reviewThread({ threadId: "I_1" })).toBeNull();
+    expect(await api.reviewThread({ threadId: "PRRT_x" })).toBeNull();
+    await expect(api.reviewThread({ threadId: "PRRT_y" })).rejects.toThrow(
+      GithubGraphqlError,
+    );
+  });
+});
+
+describe("conversation comments", () => {
+  it("deletes with no body to read, and reports a refusal", async () => {
+    const statuses = [204, 403];
+    const api = new GithubApi("tok", {
+      fetch: (async () => {
+        const status = statuses.shift() ?? 500;
+        return status === 204
+          ? new Response(null, { status })
+          : Response.json({ message: "Resource not accessible" }, { status });
+      }) as typeof fetch,
+    });
+    await expect(
+      api.deleteIssueComment({ fullName: "octo/hello", commentId: 31 }),
+    ).resolves.toBeUndefined();
+    await expect(
+      api.deleteIssueComment({ fullName: "octo/hello", commentId: 31 }),
+    ).rejects.toMatchObject({
+      status: 403,
+      message: "Resource not accessible",
+    });
+    await expect(
+      api.deleteIssueComment({ fullName: "../x", commentId: 31 }),
+    ).rejects.toThrow(GithubApiError);
   });
 });
