@@ -329,27 +329,40 @@ it("fades a list's edges where it continues; thumbs in their own lanes, hidden a
     `document.querySelector('${thumb}').dataset.shown === 'false' && document.querySelector('${panelThumb}').dataset.shown === 'false'`,
     { label: "both thumbs at rest before the sidebar scrolls" },
   );
-  await app.eval(`(() => {
-    const panel = document.querySelector('${side} .sidebar-tab-panel:not([hidden])');
-    panel.scrollTop = panel.scrollHeight;
-  })()`);
-  const sidebarShown = await app.waitFor<{
-    left: number;
-    edge: number;
-    top: number;
-    bottom: number;
-    panelTop: number;
-    panelBottom: number;
-    section: string | undefined;
-  }>(
-    `document.querySelector('${panelThumb}').dataset.shown === 'true' && (() => {
+  // The thumb shows for 900 ms after each scroll, so the sidebar keeps
+  // moving while this looks: a slow runner's poll still lands while it shows.
+  const sidebarShown = await app
+    .waitFor<{
+      left: number;
+      edge: number;
+      top: number;
+      bottom: number;
+      panelTop: number;
+      panelBottom: number;
+      section: string | undefined;
+    }>(
+      `(() => {
+      const scroller = document.querySelector('${side} .sidebar-tab-panel:not([hidden])');
+      const end = scroller.scrollHeight - scroller.clientHeight;
+      if (document.querySelector('${panelThumb}').dataset.shown !== 'true') {
+        scroller.scrollTop = scroller.scrollTop >= end ? end - 40 : end;
+        return false;
+      }
       const bar = document.querySelector('${panelThumb}').getBoundingClientRect();
-      const panel = document.querySelector('${side} .sidebar-tab-panel:not([hidden])').getBoundingClientRect();
+      const panel = scroller.getBoundingClientRect();
       const side = document.querySelector('${side} .sidebar-inner').getBoundingClientRect();
       return { left: bar.left, edge: side.left, top: bar.top, bottom: bar.bottom, panelTop: panel.top, panelBottom: panel.bottom, section: document.querySelector('${thumb}')?.dataset.shown };
     })()`,
-    { label: "the sidebar's own thumb while it scrolls" },
-  );
+      { label: "the sidebar's own thumb while it scrolls" },
+    )
+    .catch(async (error: unknown) => {
+      const panelState = await app.eval(`(() => {
+      const bar = document.querySelector('${panelThumb}');
+      const panel = document.querySelector('${side} .sidebar-tab-panel:not([hidden])');
+      return { shown: bar?.dataset.shown, style: bar?.getAttribute('style'), top: panel?.scrollTop, room: panel && panel.scrollHeight - panel.clientHeight, overflow: panel && getComputedStyle(panel).overflowY };
+    })()`);
+      throw new Error(`${String(error)}; panel: ${JSON.stringify(panelState)}`);
+    });
   expect(sidebarShown.left - sidebarShown.edge).toBeLessThanOrEqual(2);
   expect(sidebarShown.top).toBeGreaterThanOrEqual(sidebarShown.panelTop);
   expect(sidebarShown.bottom).toBeLessThanOrEqual(sidebarShown.panelBottom);
