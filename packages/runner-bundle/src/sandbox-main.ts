@@ -3,6 +3,8 @@
  * `bun runner.mjs` or `node runner.mjs`. Every harness that runs beside its
  * workspace is here.
  */
+
+import { createAcpAdapter } from "@catamorphic/acp";
 import type { HarnessAdapter } from "@catamorphic/agent-protocol/runner";
 import {
   AGENT_RUNNER_VERSION,
@@ -20,6 +22,8 @@ import {
 import { withSandboxPaths } from "./sandbox-paths.js";
 
 const adapters: Record<string, HarnessAdapter> = {
+  // Every ACP agent (`acp:<agent>`) runs its own command (ADRs 0241, 0255).
+  acp: createAcpAdapter(),
   "claude-code": createClaudeCodeAdapter(),
   codex: createCodexAdapter(),
   echo: new EchoAdapter(),

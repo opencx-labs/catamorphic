@@ -125,6 +125,40 @@ describe("attempt runner", () => {
     ).toMatchObject({ status: "completed" });
   });
 
+  it("runs a harness named per agent on its family's adapter, and refuses one it has not", async () => {
+    const named = harness();
+    named.runner.send({
+      id: "start",
+      command: {
+        kind: "start",
+        attempt: attempt("hello", { harness: "echo:project:p:reviewer" }),
+      },
+    });
+    await named.until(() => {
+      named.answerCalls();
+      return named.events().some((event) => event.type === "turn.completed");
+    });
+    expect(
+      named.events().find((event) => event.type === "turn.completed"),
+    ).toMatchObject({ status: "completed" });
+
+    const unknown = harness();
+    unknown.runner.send({
+      id: "start",
+      command: {
+        kind: "start",
+        attempt: attempt("hello", { harness: "acp:project:p:reviewer" }),
+      },
+    });
+    await unknown.until(() =>
+      unknown.frames.some((frame) => frame.type === "ack"),
+    );
+    const ack = unknown.frames.find((frame) => frame.type === "ack");
+    expect(ack?.type === "ack" && ack.error).toContain(
+      "no 'acp:project:p:reviewer' harness",
+    );
+  });
+
   it("acknowledges a repeated command without running it again", async () => {
     const { runner, frames, until } = harness();
     const start = {

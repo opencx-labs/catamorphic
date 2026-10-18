@@ -619,6 +619,7 @@
       "name": "@catamorphic/runner-bundle",
       "version": "0.0.1",
       "dependencies": {
+        "@catamorphic/acp": "workspace:*",
         "@catamorphic/agent-protocol": "workspace:*",
         "@catamorphic/agent-runner": "workspace:*",
         "@catamorphic/claude-code": "workspace:*",

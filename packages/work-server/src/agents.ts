@@ -202,7 +202,9 @@ function assistantRegistry(config: {
       const definition = entry.definition;
       if (
         definition &&
-        (definition.kind === "claude-code" || definition.kind === "codex")
+        (definition.kind === "claude-code" ||
+          definition.kind === "codex" ||
+          definition.kind === "acp")
       )
         return sandboxProjectAgent({
           id,
@@ -234,11 +236,14 @@ function assistantRegistry(config: {
 }
 
 /**
- * A committed `claude-code` or `codex` agent, served when its credentials
- * name a model connection of its Environment (ADR 0180), or, for Codex,
- * `personal`: the chat owner's own sign-in on a machine of theirs (ADRs
- * 0199, 0213). A personal Claude Code agent is not served here: Claude
- * Code subscriptions run only on the member's own computer.
+ * A committed agent whose harness runs in its chat's sandbox (ADRs 0180,
+ * 0198): `claude-code`, `codex`, or an ACP agent's own command (ADR 0255).
+ * Served when its credentials name a model connection of its Environment,
+ * or, for Codex, `personal`: the chat owner's own sign-in on a machine of
+ * theirs (ADRs 0199, 0213). A personal Claude Code agent is not served
+ * here: Claude Code subscriptions run only on the member's own computer.
+ * An ACP agent runs only on a model connection: on a server it has no
+ * sign-in of its own, and its command comes from the Environment's image.
  */
 function sandboxProjectAgent(input: {
   id: string;
@@ -246,13 +251,20 @@ function sandboxProjectAgent(input: {
   promptFile: string | undefined;
 }): RegisteredCodingAgent | undefined {
   const { definition } = input;
-  const kind = definition.kind === "codex" ? "codex" : "claude-code";
   const requirements = (definition.connections ?? []).map(
     normalizeConnectionRequirement,
   );
+  const command = definition.acp?.command;
+  const harness =
+    definition.kind === "acp"
+      ? command?.[0]
+        ? acpHarness({ id: input.id, command })
+        : undefined
+      : sandboxHarness(definition.kind === "codex" ? "codex" : "claude-code");
+  if (!harness) return undefined;
   const common = {
     id: input.id,
-    ...sandboxHarness(kind),
+    ...harness,
     topology: "controller" as const,
     sandboxing: definition.sandboxing ?? "propose",
     environment: definition.environment,
@@ -266,8 +278,8 @@ function sandboxProjectAgent(input: {
     },
   };
   if (definition.credentials?.source === "personal")
-    return kind === "codex"
-      ? { ...common, connectionRequirements: requirements, signIn: kind }
+    return definition.kind === "codex"
+      ? { ...common, connectionRequirements: requirements, signIn: "codex" }
       : undefined;
   const alias =
     definition.credentials?.source === "connection"
@@ -283,5 +295,20 @@ function sandboxProjectAgent(input: {
       ? requirements
       : [...requirements, { alias }],
     modelConnection: alias,
+  };
+}
+
+/**
+ * An ACP agent's command in its chat's sandbox (ADR 0255): the bundled ACP
+ * adapter, under a harness of its own so a chat stays with its agent. The
+ * sandbox is the boundary, so the command needs no member's approval here.
+ */
+function acpHarness(input: { id: string; command: readonly string[] }): {
+  harness: AgentHarness;
+  options: RegisteredCodingAgent["options"];
+} {
+  return {
+    harness: { placement: "sandbox", id: `acp:${input.id}` },
+    options: { command: [...input.command] },
   };
 }

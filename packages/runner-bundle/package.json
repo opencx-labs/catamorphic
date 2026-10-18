@@ -21,6 +21,7 @@
     ]
   },
   "dependencies": {
+    "@catamorphic/acp": "workspace:*",
     "@catamorphic/agent-protocol": "workspace:*",
     "@catamorphic/agent-runner": "workspace:*",
     "@catamorphic/claude-code": "workspace:*",

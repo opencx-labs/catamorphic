@@ -24,6 +24,12 @@ import {
   type CallToolResult,
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
+import {
+  type LoopbackModel,
+  loopbackModelEnv,
+  loopbackModelHeaders,
+  serveLoopbackModel,
+} from "./model-endpoint.js";
 
 /**
  * What an Agent Client Protocol agent offers through the protocol itself.
@@ -53,7 +59,9 @@ const CANCEL_GRACE_MS = 10_000;
  * The ACP harness adapter (ADR 0050, 0241): runs one agent process per
  * attempt from `options.command` (`["hermes", "acp"]`) in the workspace,
  * speaks ACP over its stdio, and serves Work's host tools to it as a
- * loopback MCP server. The agent uses its own configuration and sign-in.
+ * loopback MCP server. On the host the agent uses its own configuration and
+ * sign-in; in a sandbox with a model connection it reaches its model
+ * through the gateway on loopback (ADR 0255).
  */
 export function createAcpAdapter(input: { id?: string } = {}): HarnessAdapter {
   return {
@@ -74,6 +82,7 @@ function startAttempt(
     : [];
   let child: ChildProcess | undefined;
   let tools: Server | undefined;
+  let model: LoopbackModel | undefined;
   let connection: acp.ClientSideConnection | undefined;
   let sessionId: string | undefined;
   let interrupted = false;
@@ -90,9 +99,26 @@ function startAttempt(
       throw new Error(
         'This ACP agent names no command. Set "acp": { "command": [...] } in its definition.',
       );
+    // A model connection (ADR 0255): the gateway, served on loopback with
+    // the grant read per request. Otherwise the agent's own configuration.
+    const access = attempt.modelAccess;
+    if (access.kind === "sign_in")
+      throw new Error(
+        "ACP agents run on their own sign-in or a model connection, not a Work sign-in.",
+      );
+    if (access.kind === "gateway") model = await serveLoopbackModel({ access });
     const spawned = spawn(executable, args, {
       cwd: attempt.workingDirectory,
-      env: { ...process.env, ...attempt.env },
+      env: {
+        ...process.env,
+        ...attempt.env,
+        ...(model
+          ? loopbackModelEnv({
+              model,
+              ...(attempt.model ? { modelId: attempt.model } : {}),
+            })
+          : {}),
+      },
       stdio: ["pipe", "pipe", "pipe"],
       // Its own process group, so stopping it stops what it started too
       // (the agent behind an `npx` or `sh -c` command, its MCP servers).
@@ -225,6 +251,10 @@ function startAttempt(
     agentName =
       initialized.agentInfo?.title ?? initialized.agentInfo?.name ?? agentName;
     const capabilities = initialized.agentCapabilities;
+    // An agent that takes its providers from its client (ACP's
+    // `providers/set`) is pointed at the gateway that way too.
+    if (model && capabilities?.providers)
+      await until(pointProviders({ connection, model }));
     const earlier =
       attempt.thread.mode === "resume" || attempt.thread.mode === "restore"
         ? attempt.thread.nativeRef.id
@@ -243,6 +273,8 @@ function startAttempt(
         : undefined;
     let reopened = false;
     let refused: string | undefined;
+    /** The session's options as the agent last described them. */
+    let options: acp.SessionConfigOption[] | null | undefined;
     if (earlier && reopen) {
       const session = {
         sessionId: earlier,
@@ -251,8 +283,11 @@ function startAttempt(
       };
       let loaded = false;
       try {
-        if (reopen === "resume") await until(connection.resumeSession(session));
-        else await until(connection.loadSession(session));
+        options = (
+          reopen === "resume"
+            ? await until(connection.resumeSession(session))
+            : await until(connection.loadSession(session))
+        )?.configOptions;
         loaded = true;
       } catch (error) {
         // Only the agent's own answer that the session is gone counts: a
@@ -284,18 +319,28 @@ function startAttempt(
       host.emit({ type: "thread.lost", reason });
       throw new Error(reason);
     }
-    const opened =
-      reopened && earlier
-        ? earlier
-        : (
-            await until(
-              connection.newSession({
-                cwd: attempt.workingDirectory,
-                mcpServers,
-              }),
-            )
-          ).sessionId;
+    let opened: string;
+    if (reopened && earlier) opened = earlier;
+    else {
+      const created = await until(
+        connection.newSession({ cwd: attempt.workingDirectory, mcpServers }),
+      );
+      opened = created.sessionId;
+      options = created.configOptions;
+    }
     sessionId = opened;
+    // The definition's model, where the agent offers a choice of models.
+    const choice = attempt.model
+      ? modelChoice({ options, model: attempt.model })
+      : undefined;
+    if (choice)
+      await until(
+        connection.setSessionConfigOption({
+          sessionId: opened,
+          configId: choice.configId,
+          value: choice.value,
+        }),
+      );
     // Work hears of a session once it holds the conversation and can be
     // reopened: a reopened one at once, a new one after its first turn ends
     // (an interrupted one starts afresh, told Work's instructions again),
@@ -341,6 +386,8 @@ function startAttempt(
       tools?.close();
       tools?.closeAllConnections();
       await stop(child);
+      // After the agent, so a call it made on the way out still lands.
+      model?.close();
       host.emit({
         type: "turn.completed",
         status:
@@ -377,6 +424,52 @@ function startAttempt(
     },
     finished,
   };
+}
+
+/**
+ * Points every provider the agent lists that speaks the model's API at the
+ * loopback gateway (ACP's unstable `providers/set`), with the key Work gave
+ * it. Those that speak another API are left alone: they have no route out.
+ */
+async function pointProviders(input: {
+  connection: acp.ClientSideConnection;
+  model: LoopbackModel;
+}): Promise<void> {
+  const { connection, model } = input;
+  const { providers } = await connection.unstable_listProviders({});
+  for (const provider of providers)
+    if (provider.supported.includes(model.api))
+      await connection.unstable_setProvider({
+        providerId: provider.providerId,
+        apiType: model.api,
+        baseUrl: model.baseUrl,
+        headers: loopbackModelHeaders(model),
+      });
+}
+
+/**
+ * The value of the agent's model option that is `model` (by id, else by
+ * name), when the agent offers models as a session option and another is
+ * chosen now.
+ */
+export function modelChoice(input: {
+  options: readonly acp.SessionConfigOption[] | null | undefined;
+  model: string;
+}): { configId: string; value: string } | undefined {
+  for (const option of input.options ?? []) {
+    if (option.category !== "model" || option.type !== "select") continue;
+    const values = option.options.flatMap((entry) =>
+      "group" in entry ? entry.options : [entry],
+    );
+    const match =
+      values.find((value) => value.value === input.model) ??
+      values.find((value) => value.name === input.model);
+    if (!match) continue;
+    return match.value === option.currentValue
+      ? undefined
+      : { configId: option.id, value: match.value };
+  }
+  return undefined;
 }
 
 /** Signals the agent and everything it started, its process group. */

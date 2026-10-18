@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -15,6 +16,7 @@ import { InProcessRunner } from "@catamorphic/agent-runner";
 import { agentQuestionJsonSchema } from "@catamorphic/sandbox";
 import { afterEach, describe, expect, it } from "vitest";
 import { createAcpAdapter } from "../adapter.js";
+import { serveLoopbackModel } from "../model-endpoint.js";
 
 /*
  * The ACP adapter end to end (ADR 0241): the real runner drives the real
@@ -899,5 +901,217 @@ describe("ACP adapter", () => {
       status: "failed",
       error: { message: expect.stringContaining("Couldn't start hermes") },
     });
+  });
+});
+
+/**
+ * A stand-in for the gateway's model route: a Chat Completions API that
+ * answers only the grant now in `keyFile`, echoing the model it was asked
+ * for. `rotate` renews the grant as the gateway does, the old one refused
+ * at once; `renewDuringNextCall` renews it while the next call is on its
+ * way, so that call arrives with the grant just revoked.
+ */
+async function fakeGateway(keyFile: string) {
+  const seen: Array<{ authorization: string; body: string }> = [];
+  let grant = "grant-1";
+  let renewal: string | undefined;
+  fs.writeFileSync(keyFile, `${grant}\n`);
+  const server = http.createServer((request, response) => {
+    let body = "";
+    request.on("data", (chunk: Buffer) => {
+      body += chunk.toString();
+    });
+    request.on("end", () => {
+      const authorization = String(request.headers.authorization ?? "");
+      seen.push({ authorization, body });
+      if (renewal) {
+        grant = renewal;
+        renewal = undefined;
+        fs.writeFileSync(keyFile, `${grant}\n`);
+      }
+      if (
+        authorization !== `Bearer ${grant}` ||
+        request.url !== "/gateway/model/models/chat/completions"
+      ) {
+        response.writeHead(401, { "content-type": "application/json" });
+        response.end(JSON.stringify({ error: { message: "bad grant" } }));
+        return;
+      }
+      const model = String(JSON.parse(body).model);
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(
+        JSON.stringify({
+          choices: [{ message: { content: `hi from ${model}` } }],
+        }),
+      );
+    });
+  });
+  await new Promise<void>((resolve) =>
+    server.listen(0, "127.0.0.1", () => resolve()),
+  );
+  const address = server.address();
+  const port = typeof address === "object" && address ? address.port : 0;
+  return {
+    seen,
+    baseUrl: `http://127.0.0.1:${port}/gateway/model/models`,
+    rotate: (next: string) => {
+      grant = next;
+      fs.writeFileSync(keyFile, `${next}\n`);
+    },
+    renewDuringNextCall: (next: string) => {
+      renewal = next;
+    },
+    close: () =>
+      new Promise<void>((resolve) => {
+        server.closeAllConnections();
+        server.close(() => resolve());
+      }),
+  };
+}
+
+describe("ACP agents on a model connection (ADR 0255)", () => {
+  const gatewayAttempt = (
+    space: ReturnType<typeof workspace>,
+    gateway: { baseUrl: string },
+    env: Record<string, string> = {},
+  ) =>
+    attempt(space, "[[model]]", {
+      model: "deepseek/v4-flash",
+      modelAccess: {
+        kind: "gateway",
+        api: "openai",
+        baseUrl: gateway.baseUrl,
+        keyFile: path.join(space.dir, "grant"),
+      },
+      env: { TEST_AGENT_STATE: space.stateFile, ...env },
+    });
+
+  it("reaches its model through the gateway on loopback, never holding the grant", async () => {
+    const space = workspace();
+    const gateway = await fakeGateway(path.join(space.dir, "grant"));
+    try {
+      const turn = run(gatewayAttempt(space, gateway));
+      await turn.finished();
+      expect(turn.completed()).toMatchObject({ status: "completed" });
+      expect(turn.text("assistant_message")).toBe(
+        "Model said (200): hi from deepseek/v4-flash",
+      );
+      // The agent sent its own key; the gateway saw the grant.
+      expect(gateway.seen.map((call) => call.authorization)).toEqual([
+        "Bearer grant-1",
+      ]);
+    } finally {
+      await gateway.close();
+    }
+  });
+
+  it("chooses the definition's model where the agent offers models, and points its providers at the gateway", async () => {
+    const space = workspace();
+    const gateway = await fakeGateway(path.join(space.dir, "grant"));
+    try {
+      const turn = run(
+        gatewayAttempt(space, gateway, {
+          TEST_AGENT_MODELS: "1",
+          TEST_AGENT_PROVIDERS: "1",
+        }),
+      );
+      await turn.finished();
+      expect(turn.text("assistant_message")).toBe(
+        "Model said (200): hi from deepseek/v4-flash",
+      );
+      const state = space.state() as ReturnType<typeof space.state> & {
+        providers?: Record<
+          string,
+          { apiType: string; baseUrl: string; headers: Record<string, string> }
+        >;
+      };
+      expect(state.sessions["session-1"]).toMatchObject({
+        model: "deepseek/v4-flash",
+      });
+      // Only the provider that speaks the connection's API, at loopback.
+      expect(Object.keys(state.providers ?? {})).toEqual(["main"]);
+      expect(state.providers?.main).toMatchObject({ apiType: "openai" });
+      expect(state.providers?.main?.baseUrl).toMatch(
+        /^http:\/\/127\.0\.0\.1:\d+$/,
+      );
+      expect(state.providers?.main?.headers.authorization).toMatch(
+        /^Bearer work-/,
+      );
+      expect(JSON.stringify(state)).not.toContain("grant-1");
+    } finally {
+      await gateway.close();
+    }
+  });
+
+  it("refuses a Work sign-in: an ACP agent brings its own or uses a connection", async () => {
+    const space = workspace();
+    const turn = run(
+      attempt(space, "hello", {
+        modelAccess: { kind: "sign_in", home: space.dir },
+      }),
+    );
+    await turn.finished();
+    expect(turn.completed()).toMatchObject({
+      status: "failed",
+      error: { message: expect.stringContaining("not a Work sign-in") },
+    });
+  });
+});
+
+describe("the loopback model endpoint", () => {
+  it("opens only to its own key, reads the grant per request, and retries once after a renewal", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "acp-model-"));
+    dirs.push(dir);
+    const keyFile = path.join(dir, "grant");
+    const gateway = await fakeGateway(keyFile);
+    const model = await serveLoopbackModel({
+      access: {
+        kind: "gateway",
+        api: "openai",
+        baseUrl: gateway.baseUrl,
+        keyFile,
+      },
+    });
+    const ask = (key: string) =>
+      fetch(`${model.baseUrl}/chat/completions`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${key}`,
+        },
+        body: JSON.stringify({ model: "m", messages: [] }),
+      });
+    try {
+      const stranger = await ask("not-the-key");
+      expect(stranger.status).toBe(401);
+      expect(gateway.seen).toHaveLength(0);
+
+      expect((await ask(model.apiKey)).status).toBe(200);
+      // Renewed between two calls: the next reads the new grant.
+      gateway.rotate("grant-2");
+      expect((await ask(model.apiKey)).status).toBe(200);
+      expect(gateway.seen.map((call) => call.authorization)).toEqual([
+        "Bearer grant-1",
+        "Bearer grant-2",
+      ]);
+
+      // Renewed while a call was on its way: refused once, then sent again
+      // with the grant the file holds now.
+      gateway.renewDuringNextCall("grant-3");
+      const retried = await ask(model.apiKey);
+      expect(retried.status).toBe(200);
+      expect(gateway.seen.slice(2).map((call) => call.authorization)).toEqual([
+        "Bearer grant-2",
+        "Bearer grant-3",
+      ]);
+      // A refusal the grant file cannot fix comes back as the gateway said.
+      fs.writeFileSync(keyFile, "grant-revoked\n");
+      const refused = await ask(model.apiKey);
+      expect(refused.status).toBe(401);
+      expect(gateway.seen).toHaveLength(5);
+    } finally {
+      model.close();
+      await gateway.close();
+    }
   });
 });
