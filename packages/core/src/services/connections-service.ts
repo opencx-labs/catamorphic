@@ -344,7 +344,7 @@ export class ConnectionsService {
         outcome: "allowed",
         metadata: { personal: true },
       });
-      return mapConnection(row);
+      return this.record(row);
     } catch (cause) {
       await this.vault.delete({ tenantId: args.identity.tenantId, ref });
       throw cause;
@@ -366,7 +366,7 @@ export class ConnectionsService {
       .where("project_id", "is", null)
       .where("status", "!=", "revoked")
       .executeTakeFirst();
-    return row ? mapConnection(row) : undefined;
+    return row ? this.record(row) : undefined;
   }
 
   /**
@@ -400,7 +400,7 @@ export class ConnectionsService {
     const chosen =
       rows.find((row) => row.project_id !== null) ??
       rows.find((row) => row.project_id === null);
-    return chosen ? mapConnection(chosen) : undefined;
+    return chosen ? this.record(chosen) : undefined;
   }
 
   /**
@@ -426,7 +426,7 @@ export class ConnectionsService {
           .where("principal_kind", "=", "tenant_service")
           .where("status", "!=", "revoked")
           .executeTakeFirst();
-    return row ? mapConnection(row) : undefined;
+    return row ? this.record(row) : undefined;
   }
 
   async authorizationStatus(args: {
@@ -687,7 +687,7 @@ export class ConnectionsService {
         eventType: "connection.created",
         outcome: "allowed",
       });
-      return mapConnection(row);
+      return this.record(row);
     } catch (cause) {
       await this.vault.delete({ tenantId: args.identity.tenantId, ref });
       throw cause;
@@ -771,7 +771,7 @@ export class ConnectionsService {
       outcome: "allowed",
       metadata: { name: args.name, principalKind: args.principalKind },
     });
-    return mapConnection(row);
+    return this.record(row);
   }
 
   async list(args: {
@@ -1245,10 +1245,26 @@ export class ConnectionsService {
    * the gateway (ADR 0175). Bindings and roles narrow them.
    */
   private connectionCapabilities(connection: ConnectionRow): string[] {
-    const own = stringArray(connection.capabilities);
+    const own = this.offered(connection);
     return this.providers.get(connection.provider_kind)?.git
       ? [...own, ...GIT_CAPABILITIES.filter((git) => !own.includes(git))]
       : own;
+  }
+
+  /**
+   * The actions a connection offers: its provider's own list when it has
+   * one, so actions a later release adds reach connections authorized
+   * before it, else what its authorization recorded (an MCP server's tools).
+   */
+  private offered(connection: ConnectionRow): string[] {
+    const provider = this.providers.get(connection.provider_kind);
+    return provider?.capabilities
+      ? [...provider.capabilities]
+      : stringArray(connection.capabilities);
+  }
+
+  private record(row: ConnectionRow): ConnectionRecord {
+    return { ...mapConnection(row), capabilities: this.offered(row) };
   }
 
   async revoke(args: {
@@ -1801,7 +1817,7 @@ export class ConnectionsService {
       });
     }
     await this.release(current);
-    return mapConnection(row);
+    return this.record(row);
   }
 
   private async release(connection: ConnectionRow): Promise<void> {

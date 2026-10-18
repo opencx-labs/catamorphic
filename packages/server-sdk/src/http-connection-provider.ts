@@ -122,6 +122,7 @@ export function defineHttpApiConnectionProvider(
   return {
     kind: options.kind,
     displayName: options.displayName,
+    capabilities: actions.map((action) => action.name),
     // Code in sandboxes reaches the generic API, never named operations.
     ...(named
       ? {}

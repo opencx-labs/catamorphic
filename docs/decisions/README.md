@@ -262,3 +262,4 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0258](0258-machines-on-demand.md) | Machines on demand: work waits for a machine, rules scale with it, and a machine drains under its node lock | Accepted (refines 0173, 0193, 0205) |
 | [0259](0259-reviews-post-from-a-workflow.md) | Reviews post from a workflow: the review chat never writes to GitHub | Accepted (refines 0177, 0181) |
 | [0260](0260-every-returned-call-carries-state.md) | Every returned call carries state to the next step | Accepted (amends 0020, 0024) |
+| [0261](0261-a-connection-offers-its-providers-actions.md) | A connection offers its provider's actions, those a later release adds included | Accepted (amends 0172) |

@@ -425,6 +425,69 @@ describe("credential connections", () => {
     delete committed.shared;
   });
 
+  it("offers its provider's actions, those added after it was authorized too", async () => {
+    const listed: ConnectionProvider = {
+      kind: "listed",
+      displayName: "Listed",
+      capabilities: ["read"],
+      beginAuthorization: async () => ({
+        challenge: { kind: "url", url: "https://auth.test/listed" },
+      }),
+      completeAuthorization: async () => ({
+        material: new TextEncoder().encode("listed-token"),
+        capabilities: ["read"],
+      }),
+      invoke: async ({ action }) => ({ action }),
+    };
+    const bindings: Record<string, EnvironmentConnectionBinding> = {
+      listed: {
+        provider: "listed",
+        principal: "service",
+        service: "listed-bot",
+      },
+    };
+    const serving = (one: ConnectionProvider) =>
+      new ConnectionsService({
+        db,
+        vault,
+        providers: new ConnectionProviderRegistry([one]),
+        bindings: async ({ environment }) =>
+          environment === "listed" ? bindings : {},
+      });
+    const first = serving(listed);
+    const bot = await first.createService({
+      identity: admin,
+      name: "listed-bot",
+      providerKind: "listed",
+      principalKind: "tenant_service",
+    });
+    await authorizeService(first, bot.id, "listed-token");
+    const offered = async (service: ConnectionsService) => {
+      const [resolved] = await service.resolve({
+        identity: admin,
+        projectId,
+        environment: "listed",
+        aliases: ["listed"],
+        unattended: true,
+      });
+      const record = (await service.listServices({ identity: admin })).find(
+        (connection) => connection.id === bot.id,
+      );
+      return { resolved: resolved?.capabilities, listed: record?.capabilities };
+    };
+    // A later release adds an action: the connection offers it unasked.
+    expect(
+      await offered(serving({ ...listed, capabilities: ["read", "write"] })),
+    ).toEqual({ resolved: ["read", "write"], listed: ["read", "write"] });
+    // A provider without its own list offers what authorization recorded.
+    const { capabilities: _list, ...recorded } = listed;
+    expect(await offered(serving(recorded))).toEqual({
+      resolved: ["read"],
+      listed: ["read"],
+    });
+    await first.revoke({ identity: admin, connectionId: bot.id });
+  });
+
   it("rotates a service credential by authorizing again and drops old sessions", async () => {
     const service = (await connections.listServices({ identity: admin })).find(
       (connection) => connection.name === "directory-bot",

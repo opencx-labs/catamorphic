@@ -1,6 +1,6 @@
 # 0172 — Committed connection bindings, named service connections, organization administrators
 
-- **Status:** Accepted
+- **Status:** Accepted (amended by [0261](0261-a-connection-offers-its-providers-actions.md): a connection offers its provider's declared actions, not only those its authorization recorded)
 - **Date:** 2026-09-27
 - **Refines:** 0065, 0086, 0158, 0162, 0163
 

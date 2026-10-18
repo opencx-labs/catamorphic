@@ -1251,6 +1251,9 @@ export function defineGithubConnectionProvider(
   return {
     kind,
     displayName,
+    // GitHub decides what the App or person may do; a connection offers
+    // every action, including those added after it was authorized.
+    capabilities: GITHUB_CONNECTION_ACTIONS,
 
     beginAuthorization: async ({ principal, redirectUri, state }) => {
       // An organization connects its GitHub App installation; a person

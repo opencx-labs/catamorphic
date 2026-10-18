@@ -169,6 +169,7 @@ export function definePostgresConnectionProvider(
   return {
     kind: options.kind,
     displayName: options.displayName,
+    capabilities: ["query", "explain", "schema"],
     beginAuthorization: async () => ({
       challenge: {
         kind: "form",
