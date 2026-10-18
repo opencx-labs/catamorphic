@@ -218,6 +218,36 @@ describe("GithubAppAuth installation tokens", () => {
     ).toBe("ghs_ok");
   });
 
+  it("gives up on a mint GitHub never answers, so the callers sharing it can try again", async () => {
+    let answer = false;
+    const auth = new GithubAppAuth({
+      now: () => NOW,
+      timeoutMs: 50,
+      fetch: (async (_url: unknown, init?: RequestInit) => {
+        if (answer)
+          return Response.json({
+            token: "ghs_late",
+            expires_at: new Date(NOW + 3_600_000).toISOString(),
+          });
+        // A request that never answers, until its signal gives up on it.
+        return new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () =>
+            reject(init.signal?.reason),
+          );
+        });
+      }) as typeof fetch,
+    });
+    const waiting = [
+      auth.installationToken({ app: APP, installationId: 77 }),
+      auth.installationToken({ app: APP, installationId: 77 }),
+    ];
+    for (const caller of waiting) await expect(caller).rejects.toThrow();
+    answer = true;
+    expect(
+      (await auth.installationToken({ app: APP, installationId: 77 })).token,
+    ).toBe("ghs_late");
+  });
+
   it("revokes and forgets cached tokens", async () => {
     const github = fakeGithub({ now: () => NOW });
     const auth = new GithubAppAuth({ fetch: github.fetch, now: () => NOW });

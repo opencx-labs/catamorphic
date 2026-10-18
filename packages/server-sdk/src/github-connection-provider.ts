@@ -494,7 +494,12 @@ export function defineGithubConnectionProvider(
     ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   const timeoutMs = options.timeoutMs ?? 30_000;
   const maxPatchChars = options.maxPatchChars ?? 20_000;
-  const appAuth = new GithubAppAuth({ fetch: doFetch, apiBaseUrl, now });
+  const appAuth = new GithubAppAuth({
+    fetch: doFetch,
+    apiBaseUrl,
+    now,
+    timeoutMs,
+  });
   const installations = new Map<string, Promise<number>>();
   const installationDetails = new Map<string, Promise<GithubInstallation>>();
   const unscopedRestPaths = options.unscopedRestPaths ?? [];
@@ -1176,6 +1181,7 @@ export function defineGithubConnectionProvider(
     const user = await new GithubApi(tokens.accessToken, {
       fetch: doFetch,
       baseUrl: apiBaseUrl,
+      signal: AbortSignal.timeout(timeoutMs),
     }).getUser();
     const material: UserMaterial = {
       kind: "user",
