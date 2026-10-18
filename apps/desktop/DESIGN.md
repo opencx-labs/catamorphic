@@ -2030,6 +2030,15 @@ The agent wizard names the product people hold an account with (Claude,
 ChatGPT), and that is a new agent's default name. Harness names (Claude
 Code, Codex) stay where the harness itself is the subject.
 
+Hermes is a wizard preset of an ACP agent (ADR 0241): Work finds the
+person's install (PATH, or `~/.local/bin` where its installer puts it) and
+adds an agent that runs `hermes acp`, or shows Hermes' own install and
+setup commands with a "Check again". Work never installs it and never asks
+for a key: an ACP agent keeps its model and sign-in, and its settings say
+where (for Hermes, `hermes model` and `hermes setup`) instead of offering
+fields that would do nothing. The app knows Hermes only by its command: a
+project's other ACP agents never wear its feather.
+
 The right sidebar starts collapsed (`rightSidebarOpen` defaults to false).
 A first launch shows the work, not the chrome around it; the companion is
 one click away and the choice is remembered from then on.

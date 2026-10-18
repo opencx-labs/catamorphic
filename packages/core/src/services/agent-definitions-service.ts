@@ -86,9 +86,9 @@ export function parseProjectAgentId(
  * Harness kinds a project agent may declare:
  *  - `claude-code` / `codex`: the CLI harnesses, host execution.
  *  - `builtin`: the embedder's built-in sandboxed agent.
- *  - `acp`: an Agent Client Protocol harness (local command or remote
- *    endpoint). Validates today, resolves to an "unsupported yet" registry
- *    entry — designed in, built later (see TODO.md "ACP harness").
+ *  - `acp`: an Agent Client Protocol agent (ADR 0241). The desktop runs
+ *    `acp.command` through `@catamorphic/acp`; the remote `acp.endpoint`
+ *    validates but is not built yet (see TODO.md "ACP harness").
  *  - `e2e-fake`: the desktop e2e scripted harness. Only accepted when the
  *    host passes `allowE2eFake` (the desktop gates it on
  *    CATAMORPHIC_E2E_FAKE_AGENT=1), mirroring the pick-folder e2e seam —
@@ -363,7 +363,7 @@ export function agentDefinitionSchema(opts?: { allowE2eFake?: boolean }) {
         .optional(),
       /** Which agents this agent may create as first-class subsessions. */
       delegation: AgentDelegationPolicySchema.optional(),
-      /** Reserved for kind "acp": how to reach the agent. */
+      /** For kind "acp": the command that starts the agent, or its endpoint. */
       acp: z
         .object({
           endpoint: z.string().min(1).optional(),

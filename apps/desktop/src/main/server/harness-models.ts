@@ -38,6 +38,9 @@ export async function listAgentModels(
     ) => Promise<string | null>;
   },
 ): Promise<HarnessModel[]> {
+  // An ACP agent keeps its model in its own configuration (ADR 0241),
+  // under e2e too: it is never the fake agent.
+  if (config.harness === "acp") return [];
   // E2E: deterministic stub, no CLIs or network.
   if (process.env.CATAMORPHIC_E2E_FAKE_AGENT === "1") {
     return [
@@ -113,6 +116,9 @@ async function fetchModels(
     }
     case "codex":
       return codexModels(config, deps);
+    // An ACP agent keeps its model in its own configuration (ADR 0241).
+    case "acp":
+      return [];
     case "ai-sdk":
       if (config.provider === "anthropic") return anthropicModels(config);
       if (config.provider === "openai") return openaiModels(config);

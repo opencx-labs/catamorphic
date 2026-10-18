@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { createAcpAdapter } from "@catamorphic/acp";
 import type { JsonObject } from "@catamorphic/agent-protocol";
 import type {
   AttemptStart,
@@ -34,6 +35,7 @@ import {
   type TurnContextFragment,
 } from "@catamorphic/sandbox";
 import { PROJECT_AGENTS_DIR } from "@catamorphic/workflow/project-layout";
+import { acpHarnessId } from "../../shared/acp-agents.js";
 import type { AgentCommandsResult } from "../../shared/agent-commands.js";
 import type { AgentDefaultModelResult } from "../../shared/agent-default-model.js";
 import {
@@ -43,6 +45,7 @@ import {
 import { parseAssistantAgentId } from "../../shared/voice.js";
 import type { WorkspaceBridge } from "../agent-bridge.js";
 import type { AgentSignIn } from "../agent-credentials.js";
+import { agentSearchPath } from "../agent-path.js";
 import type { AgentConfig } from "../agents-store.js";
 import { readableAttachments } from "../composer-files.js";
 import type { ConnectorsService } from "../connectors.js";
@@ -422,7 +425,9 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     const { config, profileId } = resolved;
     if (profileId !== this.deps.profiles.profileForProject(projectId).id)
       return { commands: [], error: "This agent belongs to another profile." };
-    if (config.harness === "ai-sdk") return { commands: [] };
+    // An ACP agent's own commands stay in it (ADR 0241).
+    if (config.harness === "ai-sdk" || config.harness === "acp")
+      return { commands: [] };
     if (this.deps.e2eFake) {
       return {
         commands:
@@ -541,7 +546,10 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     const { config, profileId } = resolved;
     if (profileId !== this.deps.profiles.profileForProject(projectId).id)
       return { model: null, error: "This agent belongs to another profile." };
-    // E2E: every harness is the fake agent, whose catalog lists this model.
+    // An ACP agent names its model in its own configuration (ADR 0241),
+    // under e2e too: it is never the fake agent.
+    if (config.harness === "acp") return { model: null };
+    // E2E: every other harness is the fake agent, whose catalog lists this.
     if (this.deps.e2eFake)
       return { model: { id: "fake-model-a-2.1", name: "Fake Model A" } };
     if (config.harness === "ai-sdk") {
@@ -574,7 +582,8 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     config: AgentConfig,
     workingDirectory: string,
   ): Promise<AgentDefaultModelResult> {
-    if (config.harness === "ai-sdk") return { model: null };
+    if (config.harness === "ai-sdk" || config.harness === "acp")
+      return { model: null };
     try {
       const { component, environment } = await this.ensureNativeComponents(
         config.harness,
@@ -800,12 +809,6 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     }
     const def = validated.definition;
 
-    if (def.kind === "acp") {
-      return {
-        error: `"${def.name}" is an ACP agent. ACP harness support isn't built yet. Pick another agent for now.`,
-      };
-    }
-
     // The security core: a committed definition is collaborator-authored
     // code. Before it runs on THIS user's own credentials, the owning
     // profile must hold a consent binding whose hash matches the
@@ -813,7 +816,10 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     // persona). "secret" definitions skip this — the project secret is
     // the authorization and nothing personal is used. The e2e fake kind
     // auto-consents under the e2e flag (it never touches credentials).
-    const source = def.credentials?.source ?? "profile";
+    // An ACP agent runs a command on this machine, so its member approves
+    // it whatever its credentials say (ADR 0241).
+    const source =
+      def.kind === "acp" ? "profile" : (def.credentials?.source ?? "profile");
     if (source === "connection") {
       // ADR 0180: the harness runs in a server sandbox and reaches its
       // model through that server's gateway; nothing here can serve it.
@@ -847,13 +853,14 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
       id,
       name: def.name,
       harness:
-        def.kind === "claude-code"
-          ? "claude-code"
-          : def.kind === "codex"
-            ? "codex"
-            : "ai-sdk",
+        def.kind === "claude-code" || def.kind === "codex" || def.kind === "acp"
+          ? def.kind
+          : "ai-sdk",
       ...(def.kind === "builtin" || def.kind === "e2e-fake"
         ? { provider: "anthropic" as const }
+        : {}),
+      ...(def.kind === "acp" && def.acp?.command
+        ? { acp: { command: def.acp.command } }
         : {}),
       model: def.model ?? "",
       effort: def.effort ?? "medium",
@@ -902,6 +909,11 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     if ("error" in resolved)
       return resolved.missing ? undefined : this.failFast(id, resolved.error);
     const { config, profileId, def, persona, source } = resolved;
+    if (def.kind === "acp" && !def.acp?.command?.[0])
+      return this.failFast(
+        id,
+        `"${def.name}" is an ACP agent without a command. Set "acp": { "command": [...] } in agents/${slug}.json and try again.`,
+      );
     // A secret-credentialed agent reads its key from the project's secrets
     // at each attempt: the registry is synchronous, secrets are not, and a
     // secret set after a failed turn is picked up by the next one.
@@ -941,11 +953,15 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
       sandboxing: def.sandboxing ?? DESKTOP_DEFAULT_SANDBOXING,
       ...(def.environment ? { environment: def.environment } : {}),
       ...(def.connections ? { connectionRequirements: def.connections } : {}),
-      defaults: {
-        ...built.defaults,
-        effort: def.effort ?? "medium",
-        ...(def.model ? { model: def.model } : {}),
-      },
+      // An ACP agent runs its own model and effort (ADR 0241).
+      defaults:
+        def.kind === "acp"
+          ? built.defaults
+          : {
+              ...built.defaults,
+              effort: def.effort ?? "medium",
+              ...(def.model ? { model: def.model } : {}),
+            },
       ...(persona ? { systemPrompt: persona } : {}),
       delegation: resolveProjectDelegation(def.delegation, projectId),
     };
@@ -1007,6 +1023,24 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
       toolAnnotations: () => live().annotations,
       ...this.workspaceHooks({ config, profileId, assistant }),
     } satisfies Partial<HostHarness>;
+
+    // An ACP agent (ADR 0241) runs its own command in the chat's checkout,
+    // on its own model, memory and sign-in, with Work's tools. Never the
+    // scripted fake: e2e runs a real ACP agent process.
+    if (config.harness === "acp") {
+      const command = config.acp?.command;
+      if (!command?.[0]) return undefined;
+      return {
+        harness: {
+          placement: "host",
+          adapter: createAcpAdapter({ id: acpHarnessId(config.id) }),
+          ...served,
+          env: { PATH: agentSearchPath() },
+        },
+        options: { command },
+        defaults: {},
+      };
+    }
 
     // E2E: same registry mechanics, scripted harness, so renderer flows
     // (agent lists, switching, effort) exercise the real plumbing. It

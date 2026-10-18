@@ -7,6 +7,7 @@ import {
   Star,
 } from "lucide-react";
 import { type FormEvent, useEffect, useMemo, useState } from "react";
+import { displayCommand, HERMES, runsHermes } from "../../shared/acp-agents.js";
 import {
   permissionModeLabel,
   SANDBOXING_OPTIONS,
@@ -52,12 +53,14 @@ const HARNESS_LABELS: Record<AgentHarness, string> = {
   "ai-sdk": "Built-in",
   "claude-code": "Claude Code",
   codex: "Codex",
+  acp: "ACP",
 };
 
 const MODEL_PLACEHOLDERS: Record<AgentHarness, string> = {
   "ai-sdk": "claude-sonnet-4-5",
   "claude-code": "claude-sonnet-4-5",
   codex: "gpt-5.3-codex",
+  acp: "",
 };
 
 const COORDINATION_OPTIONS: Array<{
@@ -282,6 +285,9 @@ function ProfileAgentBody({
   onClose: () => void;
 }) {
   const harness = agent.harness;
+  // What an ACP agent runs (ADR 0241); Hermes' own commands say the rest.
+  const command = agent.acp?.command ?? [];
+  const hermes = runsHermes(command);
   const [tab, setTab] = useState<Tab>("general");
   const [name, setName] = useState(agent.name);
   const [provider, setProvider] = useState(agent.provider ?? "anthropic");
@@ -360,7 +366,9 @@ function ProfileAgentBody({
           : { harnessPermissions }),
         coordination,
         memory,
-        ...(harness === "ai-sdk" ? {} : { syncSessions }),
+        ...(harness === "claude-code" || harness === "codex"
+          ? { syncSessions }
+          : {}),
         instructions,
         auth: effectiveAuth,
         connections,
@@ -468,7 +476,25 @@ function ProfileAgentBody({
                 </label>
               )}
 
-              {harness === "ai-sdk" && provider === "openrouter" ? (
+              {harness === "acp" ? (
+                // An ACP agent keeps its model in its own configuration.
+                <p
+                  className="text-xs text-fg-faint"
+                  data-testid="agent-acp-model"
+                >
+                  Work runs{" "}
+                  <code className="font-mono">{displayCommand(command)}</code>,
+                  on the model its own configuration names.{" "}
+                  {hermes ? (
+                    <>
+                      Run <code className="font-mono">{HERMES.model}</code> in a
+                      terminal to change it.
+                    </>
+                  ) : (
+                    "Change it in the agent itself."
+                  )}
+                </p>
+              ) : harness === "ai-sdk" && provider === "openrouter" ? (
                 <OpenRouterModelField value={model} onChange={setModel} />
               ) : (
                 <label className="flex flex-col gap-1 text-xs text-fg-muted">
@@ -488,29 +514,31 @@ function ProfileAgentBody({
                 </label>
               )}
 
-              <label className="flex flex-col gap-1 text-xs text-fg-muted">
-                Effort
-                <select
-                  value={effort}
-                  onChange={(event) =>
-                    setEffort(event.target.value as AgentEffort)
-                  }
-                  className="field h-8 px-2 text-[13px] text-fg"
-                  data-testid="agent-effort"
-                >
-                  {EFFORT_LEVELS.map((level) => (
-                    <option key={level} value={level}>
-                      {level}
-                    </option>
-                  ))}
-                </select>
-                {harness === "codex" &&
-                  (effort === "max" || effort === "xhigh") && (
-                    <span className="text-fg-faint">
-                      Codex tops out at xhigh; max runs there.
-                    </span>
-                  )}
-              </label>
+              {harness !== "acp" && (
+                <label className="flex flex-col gap-1 text-xs text-fg-muted">
+                  Effort
+                  <select
+                    value={effort}
+                    onChange={(event) =>
+                      setEffort(event.target.value as AgentEffort)
+                    }
+                    className="field h-8 px-2 text-[13px] text-fg"
+                    data-testid="agent-effort"
+                  >
+                    {EFFORT_LEVELS.map((level) => (
+                      <option key={level} value={level}>
+                        {level}
+                      </option>
+                    ))}
+                  </select>
+                  {harness === "codex" &&
+                    (effort === "max" || effort === "xhigh") && (
+                      <span className="text-fg-faint">
+                        Codex tops out at xhigh; max runs there.
+                      </span>
+                    )}
+                </label>
+              )}
 
               <label className="flex flex-col gap-1 text-xs text-fg-muted">
                 Voice
@@ -558,7 +586,7 @@ function ProfileAgentBody({
                 data={data}
                 projectId={projectId}
               />
-              {harness !== "ai-sdk" && (
+              {(harness === "claude-code" || harness === "codex") && (
                 <label className="flex cursor-pointer items-start justify-between gap-3 text-xs text-fg-muted">
                   <span>
                     <span className="block text-[12px] text-fg">
@@ -807,7 +835,21 @@ function ProfileAgentBody({
             </>
           )}
 
-          {tab === "auth" && (
+          {tab === "auth" && harness === "acp" && (
+            <p className="text-xs text-fg-muted" data-testid="agent-acp-auth">
+              This agent signs in on its own, on this machine.{" "}
+              {hermes ? (
+                <>
+                  Run <code className="font-mono">{HERMES.setup}</code> in a
+                  terminal to change its provider or sign-in.
+                </>
+              ) : (
+                "Change its provider or sign-in in the agent itself."
+              )}
+            </p>
+          )}
+
+          {tab === "auth" && harness !== "acp" && (
             <>
               {(harness !== "ai-sdk" || provider === "openrouter") && (
                 <label className="flex flex-col gap-1 text-xs text-fg-muted">
@@ -934,10 +976,12 @@ function ProjectAgentBody({
     const result = await desktopApi.projectAgentApprove(
       agent.projectId,
       agent.slug,
+      agent.definitionHash ?? "",
     );
     setApproving(false);
     if (!result.ok) setError(result.error ?? "Approval failed.");
-    else onRefresh();
+    // Approved, or changed under review: show the definition as it is now.
+    onRefresh();
   };
 
   const fact = (label: string, value: string | null) =>
@@ -965,8 +1009,28 @@ function ProjectAgentBody({
       ) : (
         <div className="flex flex-col gap-1.5 rounded-lg border border-border bg-bg-inset/60 p-3">
           {fact("Harness", agent.kind)}
-          {fact("Model", agent.model ?? "harness default")}
-          {fact("Effort", agent.effort ?? "medium")}
+          {agent.command && (
+            // Approving an ACP agent runs this on this machine (ADR 0241).
+            <div className="flex items-baseline gap-2 text-[12px]">
+              <span className="w-24 shrink-0 text-fg-faint">Runs</span>
+              <code
+                className="min-w-0 flex-1 break-all font-mono text-fg"
+                data-testid="project-agent-command"
+              >
+                {displayCommand(agent.command)}
+              </code>
+            </div>
+          )}
+          {fact(
+            "Model",
+            agent.kind === "acp"
+              ? "its own"
+              : (agent.model ?? "harness default"),
+          )}
+          {fact(
+            "Effort",
+            agent.kind === "acp" ? null : (agent.effort ?? "medium"),
+          )}
           {fact(
             "Permission mode",
             permissionModeLabel({
@@ -985,13 +1049,15 @@ function ProjectAgentBody({
           )}
           {fact(
             "Credentials",
-            agent.credentialsSource === "secret"
-              ? `project secret ${agent.secretName ?? ""}`
-              : agent.credentialsSource === "local"
-                ? "this machine's login"
-                : agent.credentialsSource === "connection"
-                  ? "a Work server's model connection"
-                  : "your profile credentials",
+            agent.kind === "acp"
+              ? "its own configuration and sign-in"
+              : agent.credentialsSource === "secret"
+                ? `project secret ${agent.secretName ?? ""}`
+                : agent.credentialsSource === "local"
+                  ? "this machine's login"
+                  : agent.credentialsSource === "connection"
+                    ? "a Work server's model connection"
+                    : "your profile credentials",
           )}
           {fact(
             "Connections",
@@ -1031,7 +1097,9 @@ function ProjectAgentBody({
           <p className="min-w-0 flex-1 text-[11px] text-fg-faint">
             {agent.consent === "stale"
               ? "The definition changed since you approved it."
-              : "Needed before it runs on your credentials."}
+              : agent.kind === "acp"
+                ? "Needed before it runs its command on this machine."
+                : "Needed before it runs on your credentials."}
           </p>
         </div>
       ) : null}

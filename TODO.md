@@ -95,17 +95,20 @@
   directory, add/modify/delete badges, click-through to the editor diff.
   The data is already persisted per assistant message
   (`metadata.changedFiles`, with `path` + `kind`).
-- **ACP harness.** Project agent definitions (ADR 0050) accept
-  `kind: "acp"` today but resolve it to a fail-fast "not built yet"
-  entry. Build the real ACP client harness: a `HarnessAdapter` (ADR 0198)
-  speaking the Agent Client Protocol over both transports — a local
-  command (`acp.command`, stdio) and a remote endpoint (`acp.endpoint`).
+- **ACP harness, the rest.** The desktop runs local ACP command agents
+  (`acp.command`, ADR 0241). Still to build: the remote endpoint
+  transport (`acp.endpoint`), ACP agents on the Work server (the agent in
+  the sandbox image), model choice, plans and usage over ACP. A harness
+  event telling core its native thread is gone, so a session an agent
+  refused to reopen is replaced with a full handoff (needs its own ADR).
+  A stdio MCP bridge for agents that take no HTTP MCP (Work's tools ride
+  HTTP today, which Hermes accepts without advertising). A warm process
+  per thread instead of one per turn.
   The remote-Catamorphic-server agent story rides the endpoint transport:
   a stock server exposes its agents over ACP and a project definition
   points at it, with `credentials.source: "secret"` carrying the token so
-  no personal consent is involved. Map ACP's session/turn/interrupt
-  semantics onto the provider contract; per-agent home-dir isolation for
-  the command transport.
+  no personal consent is involved. Per-agent home-dir isolation for the
+  command transport (today an agent uses its own home, as Hermes does).
 - **Agent configuration follow-ups (ADR 0056).** v1 cuts to close when
   they start mattering: `read_skill` is not gated by an agent's picked
   skills (the prompt's skills section is the offer; the tool reads any

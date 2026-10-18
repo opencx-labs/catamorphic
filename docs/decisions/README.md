@@ -253,3 +253,4 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0238](0238-one-ring-per-list-and-sidebar-focus.md) | One ring per list; an opened sidebar focuses what is in front | Accepted (amends 0168) |
 | [0239](0239-chips-are-a-source.md) | A chat's chips are a source, and agents attach chips by metadata | Accepted (builds on 0226, 0234) |
 | [0240](0240-a-message-sent-while-the-agent-works-reaches-it.md) | A message sent while the agent works reaches it at its next step, and can stop it to be read now | Accepted (amends 0197, 0217) |
+| [0241](0241-acp-agents-run-their-own-command.md) | Hermes and other ACP agents run their own command: added in Settings, or approved from a project | Accepted (builds on 0050, 0198) |

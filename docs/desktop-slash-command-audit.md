@@ -11,7 +11,7 @@ review-theme changes. Final pushed-head validation is tracked by CI.
 | Built-in AI SDK | Project, personal, and app skills | None | Existing harness-neutral skill message |
 | Claude Code | Same shared skills | Pinned CLI's `supportedCommands`, including `/compact`, project commands and installed plugin skills | Literal native command with arguments, or the shared skill message |
 | Codex | Same shared skills | Pinned app-server's `skills/list`, with disabled entries excluded | Skill message naming its discovered file |
-| ACP | Not an executing harness in this repository | None | Existing unavailable-agent explanation |
+| ACP (ADR 0241) | Same shared skills | None: the agent's own commands stay in it | Harness-neutral skill message |
 
 Codex CLI UI actions are not app-server chat commands. This change does not
 advertise `/compact`, `/clear`, or other terminal UI actions for Codex by

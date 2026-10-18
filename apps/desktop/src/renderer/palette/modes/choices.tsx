@@ -26,7 +26,7 @@ import {
   supportedEfforts,
 } from "../../lib/agent-effort.js";
 import { permissionModeChoices } from "../../lib/agent-permissions.js";
-import { startsNewChat } from "../../lib/agent-switch.js";
+import { agentHarnessId, startsNewChat } from "../../lib/agent-switch.js";
 import { commandScore } from "../../lib/command-score.js";
 import {
   type AgentInfo,
@@ -103,6 +103,7 @@ const HARNESS_LABELS: Record<AgentInfo["harness"], string> = {
   "ai-sdk": "Built-in",
   "claude-code": "Claude Code",
   codex: "Codex",
+  acp: "ACP",
 };
 
 const PROVIDER_LABELS: Record<string, string> = {
@@ -620,7 +621,7 @@ export function useChoiceModes({
                     id: `pick:agent:${agent.id}`,
                     icon: picker === "configure-agent" ? Settings2 : Bot,
                     label: agent.name,
-                    detail: newChat(agent.harness)
+                    detail: newChat(agentHarnessId(agent))
                       ? `${agentSourceLabel(agent)} · starts a new chat`
                       : [
                           agentSourceLabel(agent),
@@ -645,7 +646,7 @@ export function useChoiceModes({
                         ? onPickDefaultAgent(agent.id)
                         : picker === "configure-agent"
                           ? onConfigureAgent(agent.id)
-                          : newChat(agent.harness)
+                          : newChat(agentHarnessId(agent))
                             ? onStartChatWithAgent(agent.id)
                             : onPickSessionAgent(agent.id),
                   };
@@ -671,7 +672,7 @@ export function useChoiceModes({
                     // Its approval state stays first: it decides the pick.
                     detail:
                       !agent.invalid &&
-                      newChat(projectAgentAsInfo(agent).harness)
+                      newChat(agentHarnessId(projectAgentAsInfo(agent)))
                         ? `${projectAgentDetail(agent)} · starts a new chat`
                         : projectAgentDetail(agent),
                     keywords: [agent.name, agent.slug, "project", agent.kind],
@@ -691,7 +692,7 @@ export function useChoiceModes({
                         agent,
                         picker === "default-agent"
                           ? "default"
-                          : newChat(projectAgentAsInfo(agent).harness)
+                          : newChat(agentHarnessId(projectAgentAsInfo(agent)))
                             ? "chat"
                             : "session",
                       );

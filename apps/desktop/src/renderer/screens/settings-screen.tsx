@@ -17,6 +17,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { displayCommand } from "../../shared/acp-agents.js";
 import { ACTION_LABELS, KEYBINDING_ACTIONS } from "../../shared/actions.js";
 import { bindingFromEvent, parseBinding } from "../../shared/keybindings.js";
 import {
@@ -471,6 +472,7 @@ const HARNESS_LABELS: Record<AgentHarness, string> = {
   "ai-sdk": "Built-in",
   "claude-code": "Claude Code",
   codex: "Codex",
+  acp: "ACP",
 };
 
 interface AgentLoginUi {
@@ -635,15 +637,31 @@ function AgentsSection({
                 <div className="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[11px] text-fg-faint">
                   <span>{HARNESS_LABELS[agent.harness]}</span>
                   <span>·</span>
-                  <span className={agent.model ? "font-mono" : ""}>
-                    {agent.model || "default model"}
-                  </span>
-                  <span>·</span>
-                  <span>{agent.effort} effort</span>
-                  <span>·</span>
-                  <span className={keyed && agent.hasApiKey ? "font-mono" : ""}>
-                    {authText}
-                  </span>
+                  {agent.harness === "acp" ? (
+                    // An ACP agent keeps these in its own configuration
+                    // (ADR 0241).
+                    <>
+                      <span className="font-mono">
+                        {displayCommand(agent.acp?.command ?? [])}
+                      </span>
+                      <span>·</span>
+                      <span>its own model and sign-in</span>
+                    </>
+                  ) : (
+                    <>
+                      <span className={agent.model ? "font-mono" : ""}>
+                        {agent.model || "default model"}
+                      </span>
+                      <span>·</span>
+                      <span>{agent.effort} effort</span>
+                      <span>·</span>
+                      <span
+                        className={keyed && agent.hasApiKey ? "font-mono" : ""}
+                      >
+                        {authText}
+                      </span>
+                    </>
+                  )}
                 </div>
                 {agent.auth === "account" && !connected && (
                   <div className="mt-2 flex flex-col gap-1.5">

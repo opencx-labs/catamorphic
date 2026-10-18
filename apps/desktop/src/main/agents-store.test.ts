@@ -304,3 +304,32 @@ it("syncs a tool's chats on one agent of that tool at a time (ADR 0233)", () => 
   expect(synced.sort()).toEqual([codex.id, second.id].sort());
   expect(synced).not.toContain(first.id);
 });
+
+it("keeps an ACP agent's command, refuses one without, and gives it nothing of the CLIs' (ADR 0241)", () => {
+  const file = storeFile();
+  const store = new AgentsStore(file);
+  const hermes = store.create({
+    name: "Hermes",
+    harness: "acp",
+    acp: { command: ["hermes", "acp"] },
+    syncSessions: true,
+  });
+  expect(hermes.acp).toEqual({ command: ["hermes", "acp"] });
+  expect(hermes.auth).toBe("local");
+  expect(hermes.syncSessions).toBeUndefined();
+  expect(
+    store.update(hermes.id, { syncSessions: true })?.syncSessions,
+  ).toBeUndefined();
+  expect(toPublicAgent(hermes).accepts).toEqual(["image"]);
+  expect(new AgentsStore(file).get(hermes.id)?.acp).toEqual({
+    command: ["hermes", "acp"],
+  });
+  for (const acp of [undefined, { command: [] }, { command: [""] }, {}])
+    expect(() =>
+      // A malformed input, as the renderer could send one.
+      store.create(JSON.parse(JSON.stringify({ harness: "acp", acp }))),
+    ).toThrow("An ACP agent needs the command that starts it.");
+  expect(
+    store.create({ harness: "codex", acp: { command: ["hermes", "acp"] } }).acp,
+  ).toBeUndefined();
+});

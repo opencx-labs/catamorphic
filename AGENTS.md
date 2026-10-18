@@ -122,6 +122,7 @@ Internal packages:
 - `packages/hetzner` — **`@catamorphic/hetzner`**: Hetzner Cloud client and `HetznerCloudMachines`, the Work server's `hetzner-cloud` machine class (ADR 0205): one labeled server per machine, created idempotently by name, destroyed by id or label after an optional snapshot. `@catamorphic/hetzner/testing` fakes its API in process.
 - `packages/ai-sdk` — **`@catamorphic/ai-sdk`** harness adapter: `createAiSdkAdapter` (Vercel AI SDK tool loop, any API model) running in the host process; the desktop's and Work server's built-in agent.
 - `packages/claude-code` — **`@catamorphic/claude-code`** harness adapter backed by the Claude Agent SDK / Claude Code CLI (`createClaudeCodeAdapter`): preset system prompt + settings-source fidelity (ADR 0045), `ask_user`, subagents and background-task events, native state through the SDK's `SessionStore`, model and slash-command catalogs. Hosts add MCP servers per turn through the harness's `mcpServers(context)`. With `warm`, a thread's CLI serves its next attempt when nothing it started with changed (ADR 0222; the desktop's setting).
+- `packages/acp` — **`@catamorphic/acp`** harness adapter for Agent Client Protocol agents (`createAcpAdapter`): runs an agent's command (such as `hermes acp`) per attempt over stdio, serves Work's host tools to it as a loopback MCP server, and reopens its session with `session/resume` or `session/load` (ADR 0241). The desktop runs it for ACP agents added in Settings (Hermes is a preset) and for approved project agents (`acp.command`).
 - `packages/codex` — **`@catamorphic/codex`** harness adapter using the pinned OpenAI Codex app-server protocol (`createCodexAdapter`), with its rollout file as portable native state; `warm` keeps a thread's app-server between attempts (ADR 0222).
 - `packages/mcp` — **`@catamorphic/mcp`**: MCP client infrastructure — both protocol generations with auto-negotiation, elicitation (form + URL), official MCP registry search, plugin-marketplace fetch/install.
 - `packages/otel` — OpenTelemetry helpers (`getTracer`, `withSpan`) over `@opentelemetry/api`.
@@ -423,6 +424,7 @@ agent-protocol → agent-runner → core
 sandbox → agent-runner → runner-bundle
 agent-protocol → claude-code → runner-bundle → core
 agent-protocol → codex → runner-bundle
+agent-protocol → acp
 agent-protocol → ai-sdk
 agent-protocol → react
 otel → core
