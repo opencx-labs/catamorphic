@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import net from "node:net";
 import path from "node:path";
 import { volumeKey } from "@catamorphic/sandbox";
 import { afterEach, describe, expect, it } from "vitest";
@@ -154,6 +155,108 @@ describe("ContainerSandboxProvider without Docker", () => {
     ).rejects.toThrow("are nested");
   });
 
+  it("switches a restricted sandbox's egress in memory only, back to its own when it starts again", async () => {
+    const echo = net.createServer((socket) => socket.pipe(socket));
+    await new Promise<void>((resolve) =>
+      echo.listen(0, "127.0.0.1", () => resolve()),
+    );
+    const address = echo.address();
+    if (typeof address !== "object" || address === null)
+      throw new Error("No port");
+    const own = ["registry.test"];
+    const wide = [...own, `127.0.0.1:${address.port}`];
+    const { fake, provider, stateDirectory } = await setup({
+      lookup: async () => [{ address: "192.0.2.1", family: 4 }],
+    });
+    const first = provider();
+    const sandbox = await first.createSandbox({
+      egress: { mode: "allowlist", allow: own },
+    });
+    const socketPath = path.join(
+      stateDirectory,
+      "egress",
+      sandbox.id,
+      "proxy.sock",
+    );
+    const connect = () =>
+      new Promise<string>((resolve, reject) => {
+        const socket = net.connect(socketPath);
+        let reply = "";
+        socket.on("data", (chunk) => {
+          reply += chunk.toString();
+          if (reply.includes("\r\n\r\n")) socket.destroy();
+        });
+        socket.on("close", () => resolve(reply.split("\r\n")[0] ?? ""));
+        socket.on("error", reject);
+        socket.write(`CONNECT 127.0.0.1:${address.port} HTTP/1.1\r\n\r\n`);
+      });
+    try {
+      expect(first.capabilities).toContain("network.setup");
+      expect(await connect()).toMatch(/403/);
+      await first.setEgress({
+        sandboxId: sandbox.id,
+        egress: { mode: "allowlist", allow: wide },
+      });
+      expect(await connect()).toMatch(/200 Connection Established/);
+      // The container's label keeps the Environment's own policy.
+      const labels = fake.containers.get(sandbox.id)?.body.Labels;
+      expect(labels).toMatchObject({
+        "work.sandbox.egress": JSON.stringify({ allow: own }),
+      });
+      await first.setEgress({
+        sandboxId: sandbox.id,
+        egress: { mode: "allowlist", allow: own },
+      });
+      expect(await connect()).toMatch(/403/);
+
+      // Widened, then stopped and started: its own policy again.
+      await first.setEgress({
+        sandboxId: sandbox.id,
+        egress: { mode: "allowlist", allow: wide },
+      });
+      await first.stopSandbox(sandbox.id);
+      await first.startSandbox(sandbox.id);
+      expect(await connect()).toMatch(/403/);
+
+      // A worker that restarts finds the sandbox running, narrow.
+      await first.setEgress({
+        sandboxId: sandbox.id,
+        egress: { mode: "allowlist", allow: wide },
+      });
+      await first.stopSandbox(sandbox.id);
+      const container = fake.containers.get(sandbox.id);
+      if (container) container.running = true;
+      const restarted = provider();
+      await restarted.startSandbox(sandbox.id);
+      expect(await connect()).toMatch(/403/);
+      await restarted.destroySandbox(sandbox.id);
+    } finally {
+      await new Promise((resolve) => echo.close(resolve));
+    }
+  });
+
+  it("refuses to switch an open sandbox's egress, or a restricted one to open", async () => {
+    const { provider } = await setup();
+    const sandboxProvider = provider();
+    const open = await sandboxProvider.createSandbox({});
+    await expect(
+      sandboxProvider.setEgress({
+        sandboxId: open.id,
+        egress: { mode: "allowlist", allow: ["example.com"] },
+      }),
+    ).rejects.toThrow("created with open egress");
+    const restricted = await sandboxProvider.createSandbox({
+      egress: { mode: "allowlist", allow: ["example.com"] },
+    });
+    await expect(
+      sandboxProvider.setEgress({
+        sandboxId: restricted.id,
+        egress: { mode: "open" },
+      }),
+    ).rejects.toThrow("only to another allowlist");
+    await sandboxProvider.destroySandbox(restricted.id);
+  });
+
   it("does not offer egress policies with privileged runc containers", async () => {
     const { provider } = await setup({
       runtime: { kind: "runc", name: "runc" },
@@ -161,6 +264,7 @@ describe("ContainerSandboxProvider without Docker", () => {
     });
     const privileged = provider();
     expect(privileged.capabilities).not.toContain("network.policy");
+    expect(privileged.capabilities).not.toContain("network.setup");
     expect(privileged.capabilities).toContain("containers");
     await expect(
       privileged.createSandbox({

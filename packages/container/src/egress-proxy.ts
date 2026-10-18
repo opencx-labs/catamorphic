@@ -170,7 +170,26 @@ export function addressAllowed(
 
 export interface EgressProxy {
   readonly socketPath: string;
+  /** What it admits now. */
+  readonly policy: EgressPolicy;
+  /**
+   * Admit by another policy from now on (ADR 0257). Every connection open
+   * through the proxy is closed, those still being decided included, and
+   * a decision begun under the old policy is dropped when it ends; the
+   * proxy keeps listening. Invalid entries throw before anything changes.
+   */
+  setPolicy(policy: EgressPolicy): void;
   close(): Promise<void>;
+}
+
+/** Whether two policies admit the same entries, whatever their order. */
+export function samePolicy(left: EgressPolicy, right: EgressPolicy): boolean {
+  if ("any" in left || "any" in right) return "any" in left && "any" in right;
+  const entries = new Set(left.allow);
+  return (
+    entries.size === new Set(right.allow).size &&
+    right.allow.every((entry) => entries.has(entry))
+  );
 }
 
 /** Where a request goes, once admitted: an address, never a name. */
@@ -254,8 +273,13 @@ export async function startEgressProxy(args: {
   /** How long a request head may take; 30 seconds by default. */
   headTimeoutMs?: number;
 }): Promise<EgressProxy> {
-  const rules = "allow" in args.policy ? egressRules(args.policy.allow) : [];
-  const any = "any" in args.policy;
+  const compile = (policy: EgressPolicy) => ({
+    policy,
+    rules: "allow" in policy ? egressRules(policy.allow) : [],
+    any: "any" in policy,
+  });
+  // Each switch is a new generation; a decision remembers the one it began in.
+  let current = { ...compile(args.policy), generation: 0 };
   const lookup = args.lookup ?? defaultLookup;
   const sockets = new Set<net.Socket>();
   const clients = new Set<net.Socket>();
@@ -280,15 +304,20 @@ export async function startEgressProxy(args: {
           answer(client, 400, target.error);
           return;
         }
+        const decided = current;
         const decision = await egressDecision({
-          rules,
-          any,
+          rules: decided.rules,
+          any: decided.any,
           host: target.host,
           port: target.port,
           lookup,
         });
-        // The client may have left while the name resolved.
-        if (!clients.has(client)) return;
+        // The client may have left while the name resolved, or the policy
+        // it was decided under may have been switched since.
+        if (!clients.has(client) || decided.generation !== current.generation) {
+          client.destroy();
+          return;
+        }
         if (!decision.allowed) {
           args.onRefused?.(`${target.host}:${target.port}`, decision.reason);
           answer(client, decision.status, decision.reason);
@@ -334,6 +363,13 @@ export async function startEgressProxy(args: {
   fs.chmodSync(args.socketPath, 0o666);
   return {
     socketPath: args.socketPath,
+    get policy() {
+      return current.policy;
+    },
+    setPolicy: (policy) => {
+      current = { ...compile(policy), generation: current.generation + 1 };
+      for (const socket of sockets) socket.destroy();
+    },
     close: () =>
       new Promise<void>((resolve) => {
         for (const socket of sockets) socket.destroy();

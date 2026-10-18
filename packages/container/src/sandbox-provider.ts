@@ -9,6 +9,7 @@ import type {
   ExecResult,
   GitCloneOpts,
   SandboxCapability,
+  SandboxEgress,
   SandboxHandle,
   SandboxProcessProvider,
   SandboxProvider,
@@ -42,6 +43,7 @@ import {
   type EgressPolicy,
   type EgressProxy,
   FORWARDER_SOURCE,
+  samePolicy,
   startEgressProxy,
 } from "./egress-proxy.js";
 import { type HostPathOf, hostPathResolver } from "./host-paths.js";
@@ -284,7 +286,10 @@ export class ContainerSandboxProvider implements SandboxProvider {
     this.capabilities = [
       SANDBOX_CAPABILITIES.images,
       ...((config.imageBuild ?? true) ? [SANDBOX_CAPABILITIES.imageBuild] : []),
-      ...(this.hostSockets ? [SANDBOX_CAPABILITIES.egressPolicy] : []),
+      // The proxy that enforces a policy switches it too (ADR 0257).
+      ...(this.hostSockets
+        ? [SANDBOX_CAPABILITIES.egressPolicy, SANDBOX_CAPABILITIES.setupNetwork]
+        : []),
       ...(this.nested ? [SANDBOX_CAPABILITIES.containers] : []),
       SANDBOX_CAPABILITIES.volumes,
     ];
@@ -558,10 +563,16 @@ export class ContainerSandboxProvider implements SandboxProvider {
    */
   async startSandbox(sandboxId: string): Promise<void> {
     const record = await this.record(sandboxId);
-    if (record.proxy) await this.ensureProxy(sandboxId, record.proxy);
+    const proxy = record.proxy
+      ? await this.ensureProxy(sandboxId, record.proxy)
+      : undefined;
     const inspected = await this.docker.inspectContainer(sandboxId);
     if (!inspected) throw new Error(`Sandbox '${sandboxId}' does not exist`);
     if (objectField(inspected, "State").Running !== true) {
+      // A sandbox that starts again starts with its own policy (ADR 0257),
+      // whatever it was switched to before it stopped.
+      if (proxy && record.proxy && !samePolicy(proxy.policy, record.proxy))
+        proxy.setPolicy(record.proxy);
       await this.docker.startContainer(sandboxId);
       await this.prepare({ id: sandboxId, record, fresh: false });
     }
@@ -578,6 +589,34 @@ export class ContainerSandboxProvider implements SandboxProvider {
     });
     await this.closeProxy(sandboxId);
     await this.deploymentRuntime.releaseSandbox?.({ sandboxId });
+  }
+
+  /**
+   * Switch a restricted sandbox's proxy to another allowlist (ADR 0257),
+   * closing every connection through it; the same policy again changes
+   * nothing. The switch lives in this process's memory only: the
+   * container's label keeps the policy it was created with, so a sandbox
+   * started again, or one this process finds after a restart, has that
+   * one. Nested containers reach out through the same proxy.
+   */
+  async setEgress(args: {
+    sandboxId: string;
+    egress: SandboxEgress;
+  }): Promise<void> {
+    const { sandboxId, egress } = args;
+    const record = await this.record(sandboxId);
+    if (!record.proxy || !("allow" in record.proxy))
+      throw new Error(
+        "This sandbox was created with open egress, so its network cannot be switched",
+      );
+    if (egress.mode !== "allowlist")
+      throw new Error(
+        "A sandbox created with an egress policy switches only to another allowlist",
+      );
+    await this.ready(sandboxId);
+    const proxy = await this.ensureProxy(sandboxId, record.proxy);
+    const policy: EgressPolicy = { allow: egress.allow };
+    if (!samePolicy(proxy.policy, policy)) proxy.setPolicy(policy);
   }
 
   /** Remove the container and its temporary volumes; a missing one is gone already. */

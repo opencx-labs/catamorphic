@@ -242,6 +242,15 @@ export interface SandboxProvider {
   gitCheckout(sandboxId: string, path: string, ref: string): Promise<void>;
 
   /**
+   * Switch a running sandbox's egress (ADR 0257), where the provider lists
+   * `network.setup`. Every switch closes every connection open through the
+   * sandbox, so nothing admitted under one policy outlives it. A switch
+   * lasts until the next one, or until the sandbox stops: it starts again
+   * with the policy it was created with.
+   */
+  setEgress?(args: { sandboxId: string; egress: SandboxEgress }): Promise<void>;
+
+  /**
    * Optional warm deployment-runtime capability. Existing providers can omit
    * it and continue using command-based execution.
    */
