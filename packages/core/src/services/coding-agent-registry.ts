@@ -126,7 +126,8 @@ export interface RegisteredCodingAgent {
   /**
    * What a turn whose machine stopped does (ADR 0198): `continue` queues a
    * continuation when the native thread can resume exactly; `stop` leaves
-   * it interrupted. Default `continue`.
+   * it interrupted. Default `continue`. A turn its harness had not begun
+   * is prepared again with its input either way: none of it ran (ADR 0246).
    */
   recovery?: "continue" | "stop";
   /**

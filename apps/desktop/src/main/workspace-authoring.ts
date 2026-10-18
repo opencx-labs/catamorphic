@@ -44,7 +44,8 @@ of icons), collapsed, hideEmpty (hide while it lists nothing; a hidden list that
 takes drops shows while something it takes is dragged), empty (its one sentence
 when empty), height (the most a list shows before it scrolls; a list fades the
 edge it continues past), scrollbar (true adds a scroll thumb, a lane in from the
-sidebar's own, while the list scrolls; off by default), rowHeight, open (default open
+sidebar's own, while the list scrolls, and widens that sidebar's outer padding by
+8px to hold it; off by default), rowHeight, open (default open
 mode: replace, tab, side, floating), when, headerActions, menu, contextMenu,
 actions, itemDefaults and itemOverrides (presentation for every row, or by row
 id). Grants: collections (Work lists an app or module may read) and workflows
@@ -71,8 +72,8 @@ Work's lists (bare names in grants and work.read; work:<name> in source):
 - tabs: the window's open tabs in strip order; a chat's opened tabs nest under
   it, open. Rows carry signal and data {kind, name, active, working,
   attention (waiting for the person included), unread, groupId?, sessionId?,
-  url?, faviconUrl?, path?}; action close; drag reorders the strip, a tab
-  among the tabs beside it.
+  url?, faviconUrl?, path?}; actions close, and rename on a chat's tab (opens
+  the rename dialog); drag reorders the strip, a tab among the tabs beside it.
 - remote: a connected project's server: a status row (its dialogs), a row per
   file changed on this device (upload, history, publish), files needing a
   proposal. Header actions sync and upload-all.

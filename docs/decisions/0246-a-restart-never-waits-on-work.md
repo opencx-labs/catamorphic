@@ -57,4 +57,6 @@ followed by the agent carrying on, as after a crash; work a tool was
 doing as Work quit is checked again by the agent rather than repeated
 blindly. A harness without a strong thread reference (or an agent whose
 recovery is `stop`) is not continued: its turn ends interrupted, as before.
+A turn its harness had not begun is prepared again whatever the agent's
+recovery, since none of it ran.
 Hosts that restart themselves can call `handBackTurns()` too.

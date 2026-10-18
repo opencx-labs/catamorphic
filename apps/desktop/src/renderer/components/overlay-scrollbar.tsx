@@ -40,9 +40,10 @@ function scrolls(element: Element, lane: ScrollLane): element is HTMLElement {
  * whichever list that asked for a thumb is moving: the one that scrolled
  * last, or the one beside the pointer as it nears the outer edge. A thumb
  * spans its list's own height, fades in, can be dragged, and fades out once
- * nothing needs it. It takes no room, so nothing is narrowed or shifted,
- * and at rest nothing shows. The lists stay the things that scroll: wheel,
- * keyboard and find all still move them.
+ * nothing needs it. The panel's thumb takes no room; a section's takes
+ * the 8px of outer padding its sidebar adds for it. At rest nothing
+ * shows. The lists stay the things that scroll: wheel, keyboard and find
+ * all still move them.
  */
 export function OverlayScrollbar({
   getArea,

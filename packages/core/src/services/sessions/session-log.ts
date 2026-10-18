@@ -31,11 +31,15 @@ export class SessionCommandRejectedError extends Error {
   }
 }
 
-/** A person's rename of their chat, as its command id (ADR 0247). */
+/**
+ * A person's rename of their chat, as its command id (ADR 0247): a prefix
+ * of its own, which no other command's id (a person's are `user:...`)
+ * ever starts with.
+ */
 export function renameCommandId(externalUserId: string): string {
-  return `user:${externalUserId}:rename:${randomUUID()}`;
+  return `rename:${externalUserId}:${randomUUID()}`;
 }
-const RENAME_COMMAND_PATTERN = "user:%:rename:%";
+const RENAME_COMMAND_PATTERN = "rename:%";
 
 /** The replicated log does not continue where this copy's log ends. */
 export class SessionLogGapError extends Error {

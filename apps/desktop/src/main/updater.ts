@@ -141,7 +141,12 @@ export function registerDesktopUpdater(options: {
     channel: () => controller.current().channel,
     async setChannel(nextChannel) {
       if (!controller.setChannel(nextChannel)) return false;
-      preferences.save(nextChannel);
+      // The channel holds for this run whether or not the file takes it.
+      try {
+        preferences.save(nextChannel);
+      } catch (error) {
+        logger.warn("[desktop] could not save the update channel", error);
+      }
       await checkNow(true);
       return true;
     },
