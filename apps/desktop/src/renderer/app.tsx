@@ -84,7 +84,7 @@ import {
 } from "../shared/surface-link.js";
 import type { TerminalMacro } from "../shared/terminal-macros.js";
 import { fieldKeepsKey } from "../shared/text-field.js";
-import { rosterAgentId } from "../shared/voice.js";
+import { isVoiceAction, rosterAgentId } from "../shared/voice.js";
 import { parseWorkPage } from "../shared/work-pages.js";
 import {
   chipsModule,
@@ -229,6 +229,7 @@ import {
   useVisitRecording,
 } from "./lib/use-visit-recording.js";
 import { useWorkspaceConfig } from "./lib/use-workspace-config.js";
+import { voiceTap } from "./lib/voice.js";
 import { NEW_WORKFLOW_PROMPT } from "./lib/workflow-authoring.js";
 import { useWorkspace } from "./lib/workspace-context.js";
 import {
@@ -1535,9 +1536,6 @@ export function App({
     );
   };
   const floatingEscapeEnabledRef = useRef(false);
-  // Push to talk's keys are the window's only while voice is set to it.
-  const pushToTalkRef = useRef(false);
-  pushToTalkRef.current = prefs?.voicePushToTalk ?? false;
   floatingEscapeEnabledRef.current = Boolean(
     workspace.floatingKey &&
       !paletteOpen &&
@@ -4061,6 +4059,15 @@ export function App({
   const actionChat = (ws: Workspace) =>
     ws.chats.find((chat) => chat.localId === ws.activeChatId) ??
     ws.chats.at(-1);
+  // Talk to this chat (voice): the chat in front, for its shortcut.
+  const frontChatSession = actionChat(workspace)?.sessionId ?? null;
+  useEffect(() => {
+    desktopApi.voiceFrontChat(
+      projectId && frontChatSession
+        ? { projectId, sessionId: frontChatSession }
+        : null,
+    );
+  }, [projectId, frontChatSession]);
 
   const toggleChatMinimized = () => {
     const ws = workspaceRef.current;
@@ -4361,21 +4368,19 @@ export function App({
       const chat = actionChat(workspaceRef.current);
       if (chat?.sessionId) askChatPreview(chat.sessionId);
     },
-    // Off wherever voice is on; else on, talking to the assistant.
-    "toggle-voice": () =>
-      void desktopApi
-        .voiceStatus()
-        .then((status) =>
-          desktopApi.voiceToggle(
-            status.phase !== "off" && status.target?.kind === "chat"
-              ? status.target
-              : projectId
-                ? { projectId }
-                : {},
-          ),
-        ),
-    // Held: the main process reads it before any page sees it (voice).
-    "push-to-talk": () => {},
+    // Voice's shortcuts from the palette are taps: on, or off. Their keys
+    // never come here: the main process reads them, to hear them held.
+    dictate: () => void voiceTap({ action: "dictate", projectId }),
+    "talk-to-work": () => void voiceTap({ action: "talk-to-work", projectId }),
+    // With no chat to talk to, voice says so, as for its keys.
+    "talk-to-chat": () => {
+      const sessionId = actionChat(workspaceRef.current)?.sessionId;
+      void voiceTap({
+        action: "talk-to-chat",
+        projectId,
+        ...(sessionId ? { sessionId } : {}),
+      });
+    },
     "continue-on-mobile": () =>
       setMobilePairing({
         open: true,
@@ -4431,7 +4436,6 @@ export function App({
             guestId !== undefined ||
             commandBrowserIdRef.current() !== undefined ||
             (candidate === "find" && Boolean(findSearchInput(candidate)))) &&
-          (candidate !== "push-to-talk" || pushToTalkRef.current) &&
           // A text field keeps its caret keys (Cmd+Left and Cmd+Right go to
           // the line's start and end), whatever they are bound to.
           !(
@@ -4469,6 +4473,8 @@ export function App({
               ([, id]) => id === guestId,
             )?.[0];
       try {
+        // Voice's keys are the main process's, held or tapped (ADR 0236).
+        if (action && isVoiceAction(action)) return true;
         if (action) actionHandlersRef.current[action]();
         else if (macro) runTerminalMacroRef.current(macro);
       } finally {
@@ -4719,28 +4725,21 @@ export function App({
      * A floating surface over the view leaves with its paired exit before an
      * agent shows something else, as its close button plays it, and the
      * dismissal commits before this resolves, so the open decides on the
-     * view as it now is. The open goes ahead regardless: a dismissal
+     * view as it now is. It resolves however the surface left: a dismissal
      * already under way, or a newer floating surface, skips this one's
      * finish.
      */
-    const leaveFloating = (keep?: string) =>
-      new Promise<void>((resolve) => {
-        const key = workspaceRef.current.floatingKey;
-        if (!key || key === keep) {
-          resolve();
-          return;
-        }
-        const fallback = window.setTimeout(resolve, 400);
-        floatingMotionRef.current.dismiss(() => {
-          window.clearTimeout(fallback);
-          flushSync(() =>
-            updateWorkspace((current) =>
-              transitionWorkspace(current, { type: "dismiss-floating", key }),
-            ),
-          );
-          resolve();
-        });
-      });
+    const leaveFloating = async (keep?: string) => {
+      const key = workspaceRef.current.floatingKey;
+      if (!key || key === keep) return;
+      await floatingMotionRef.current.dismiss(() =>
+        flushSync(() =>
+          updateWorkspace((current) =>
+            transitionWorkspace(current, { type: "dismiss-floating", key }),
+          ),
+        ),
+      );
+    };
 
     /**
      * An agent's open or close that changes the tab in front narrates the
@@ -6753,8 +6752,16 @@ export function App({
             data-window-buttons={windowButtons ? "on" : "off"}
             // The project's workspace is restored, revealed, and taking
             // shortcuts: what automation waits for before pressing keys.
+            // Taking them means knowing whether the project is on a server:
+            // that decides the server's commands, and every list is read
+            // again (its rows drawn anew) when it arrives.
             data-workspace-ready={
-              workspaceReady && bootRevealed && runtime.visible ? "" : undefined
+              workspaceReady &&
+              remoteSurfaceResolved &&
+              bootRevealed &&
+              runtime.visible
+                ? ""
+                : undefined
             }
             // Clip, not hide: a closed right sidebar waits past the right edge,
             // and a scroll container here would let scrollIntoView shift the app.

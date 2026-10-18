@@ -196,6 +196,11 @@ export interface VoiceControl {
   /** Whether the person is talking with this chat by voice now. */
   talking(sessionId: string): boolean;
   /**
+   * Where the person was when they last spoke to this chat, when that was
+   * another app than Work (ADR 0236).
+   */
+  where(sessionId: string): { app: string; window: string | null } | null;
+  /**
    * The chat's agent stops listening: the person is no longer heard, and
    * voice turns off once the chat's turn is over and said. False when
    * voice is not on in that chat.

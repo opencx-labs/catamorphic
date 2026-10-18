@@ -21,6 +21,7 @@ import {
   paletteCountsVisit,
   webUsageKey,
 } from "../../shared/palette.js";
+import { moveFocusAsApp } from "../lib/app-focus.js";
 import { normalizeCommandQuery } from "../lib/command-score.js";
 import { desktopApi, projectAgentAsInfo } from "../lib/desktop-api.js";
 import { formatBinding, useKeybindings } from "../lib/keybindings.js";
@@ -247,7 +248,12 @@ export function CommandPalette({
 
   useLayoutEffect(() => {
     if (!open) return;
-    const frame = requestAnimationFrame(() => inputRef.current?.focus());
+    const focus = () => inputRef.current?.focus();
+    // A New Tab greeting its user is the app's own move (lib/app-focus): a
+    // chat opened in the same frame still lands its composer autofocus.
+    const frame = requestAnimationFrame(() =>
+      variant === "tab" ? moveFocusAsApp(focus) : focus(),
+    );
     const cancel = () => cancelAnimationFrame(frame);
     // The tab can finish mounting behind a newly opened chat. Once another
     // interaction owns focus, this delayed frame must not take it back.
@@ -320,7 +326,8 @@ export function CommandPalette({
     const onWindowFocus = () => {
       requestAnimationFrame(() => {
         const active = document.activeElement;
-        if (!active || active === document.body) inputRef.current?.focus();
+        if (!active || active === document.body)
+          moveFocusAsApp(() => inputRef.current?.focus());
       });
     };
     window.addEventListener("focus", onWindowFocus);

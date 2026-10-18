@@ -21,6 +21,8 @@ declare module "sherpa-onnx-node" {
     isDetected(): boolean;
     front(enableExternalBuffer?: boolean): { samples: Float32Array };
     pop(): void;
+    clear(): void;
+    reset(): void;
   }
 
   export interface OfflineRecognizerConfig {
@@ -43,7 +45,11 @@ declare module "sherpa-onnx-node" {
       config: OfflineRecognizerConfig,
     ): Promise<OfflineRecognizer>;
     createStream(): OfflineStream;
-    decodeAsync(stream: OfflineStream): Promise<{ text: string }>;
+    decodeAsync(stream: OfflineStream): Promise<{
+      text: string;
+      /** Each token's log probability, from the transducer's decoder. */
+      ys_log_probs?: number[];
+    }>;
   }
 
   export interface OfflineTtsConfig {
@@ -75,23 +81,6 @@ declare module "sherpa-onnx-node" {
     }): Promise<{ samples: Float32Array; sampleRate: number }>;
   }
 
-  /** Streaming noise removal. */
-  export class OnlineSpeechDenoiser {
-    constructor(config: {
-      model: {
-        dpdfnet: { model: string };
-        numThreads: number;
-        provider: "cpu";
-      };
-    });
-    run(request: {
-      samples: Float32Array;
-      sampleRate: number;
-      enableExternalBuffer: false;
-    }): { samples: Float32Array };
-    reset(): void;
-  }
-
   export interface SpeakerEmbeddingStream {
     acceptWaveform(input: { samples: Float32Array; sampleRate: number }): void;
     inputFinished(): void;
@@ -108,7 +97,6 @@ declare module "sherpa-onnx-node" {
 
   const sherpa: {
     Vad: typeof Vad;
-    OnlineSpeechDenoiser: typeof OnlineSpeechDenoiser;
     SpeakerEmbeddingExtractor: typeof SpeakerEmbeddingExtractor;
     OfflineRecognizer: typeof OfflineRecognizer;
     OfflineTts: typeof OfflineTts;

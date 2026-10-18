@@ -9,7 +9,9 @@ const SPEECH_ENDS_AFTER = SPEECH_SAMPLE_RATE * 1.5;
  * Scripted speech for end-to-end tests: no models, deterministic. Once
  * half a second of microphone audio has arrived (so the capture path is
  * proven to flow), the "person" talks for a second and is heard saying the
- * script's utterance. Synthesis is a quiet tone as long as the words.
+ * script's utterance: a stretch of a second and a half or more is all of
+ * it, a shorter one its first words, as dictation hears it while the
+ * person is still talking. Synthesis is a quiet tone as long as the words.
  */
 export function fakeSpeech(script: FakeSpeechScript): SpeechParts {
   let samples = 0;
@@ -30,8 +32,18 @@ export function fakeSpeech(script: FakeSpeechScript): SpeechParts {
       detected: () =>
         !heard && samples >= SPEECH_STARTS_AFTER && samples < SPEECH_ENDS_AFTER,
       takeSegments: () => segments.splice(0),
+      reset: () => {
+        segments.length = 0;
+      },
     },
-    recognize: async () => script.utterance,
+    recognize: async (heard) => {
+      const words = script.utterance.split(/\s+/).filter(Boolean);
+      const share = Math.min(1, heard.length / SPEECH_ENDS_AFTER);
+      return {
+        text: words.slice(0, Math.ceil(words.length * share)).join(" "),
+        confidence: 0,
+      };
+    },
     synthesize: async (text, onSentence) => {
       const sampleRate = 24_000;
       const words = text.split(/\s+/).filter(Boolean).length;

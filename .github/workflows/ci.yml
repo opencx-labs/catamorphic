@@ -174,7 +174,10 @@ jobs:
           electron: "true"
       - name: Install private desktop
         run: |
-          sudo apt-get update
+          # A list the runner image adds for itself (Google Chrome's,
+          # Microsoft's) can be mid-sync; the install fails on its own if
+          # what it needs is missing.
+          sudo apt-get update -o Acquire::Retries=3 || echo "::warning::apt-get update could not read every package list"
           sudo apt-get install --yes xvfb xauth x11-utils xdotool openbox
           display_versions=$(dpkg-query -W --showformat='${Package}=${Version}\n' | LC_ALL=C sort | sha256sum | cut -d ' ' -f 1)
           echo "CATAMORPHIC_TEST_RUNTIME=$CATAMORPHIC_TEST_RUNTIME|display=$display_versions" >> "$GITHUB_ENV"
@@ -279,7 +282,7 @@ jobs:
         run: |
           curl -fsSL https://gvisor.dev/archive.key | sudo gpg --dearmor -o /usr/share/keyrings/gvisor-archive-keyring.gpg
           echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/gvisor-archive-keyring.gpg] https://storage.googleapis.com/gvisor/releases $GVISOR_RELEASE main" | sudo tee /etc/apt/sources.list.d/gvisor.list
-          sudo apt-get update
+          sudo apt-get update -o Acquire::Retries=3 || echo "::warning::apt-get update could not read every package list"
           sudo apt-get install --yes "runsc=$GVISOR_RELEASE.0"
           runsc --version
       - name: Register runsc with Work's runtime arguments
@@ -338,7 +341,7 @@ jobs:
       - name: Prepare eval desktop
         if: env.MODEL_EVAL_AVAILABLE == '1'
         run: |
-          sudo apt-get update
+          sudo apt-get update -o Acquire::Retries=3 || echo "::warning::apt-get update could not read every package list"
           sudo apt-get install --yes xvfb xauth x11-utils xdotool openbox
           mkdir -p "$CATAMORPHIC_E2E_ARTIFACTS_DIR"
           bun run build

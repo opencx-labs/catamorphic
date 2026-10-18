@@ -1,4 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import { motionMs } from "./motion.js";
 import { chatTabKey } from "./workspace-state.js";
 
@@ -81,36 +87,70 @@ export function useRecedingSurface({
   return receding;
 }
 
-/** Keep the live surface mounted until its paired exit finishes. */
+interface FloatingExit {
+  target: string;
+  finish: () => void;
+  /** Dismissals waiting for the surface to leave. */
+  waiting: Array<() => void>;
+}
+
+function settle(exit: FloatingExit) {
+  for (const resolve of exit.waiting.splice(0)) resolve();
+}
+
+/**
+ * Keep the live surface mounted until its paired exit finishes. The exit's
+ * time runs from the commit that shows the closing state: a busy renderer
+ * can commit it late, and a surface removed on a timer started before that
+ * leaves without its exit. `dismiss` resolves once the exit has ended or
+ * the surface has left, however it left: a dismissal already under way, or
+ * a newer floating surface, skips this one's finish.
+ */
 export function useFloatingMotion(identity: string | undefined) {
-  const [closing, setClosing] = useState(false);
-  const timerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const [exit, setExit] = useState<FloatingExit | undefined>(undefined);
+  // The exit asked for, from the dismissal on: it commits later.
+  const exitRef = useRef<FloatingExit | undefined>(undefined);
   const identityRef = useRef(identity);
   identityRef.current = identity;
-  useEffect(() => {
-    identityRef.current = identity;
-    setClosing(false);
-    clearTimeout(timerRef.current);
-    timerRef.current = undefined;
-    return () => clearTimeout(timerRef.current);
+  // In the commit that changes the surface, so a dismissal after it is
+  // never undone.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: a change of surface is the only trigger
+  useLayoutEffect(() => {
+    setExit(undefined);
+    return () => {
+      if (exitRef.current) settle(exitRef.current);
+      exitRef.current = undefined;
+    };
   }, [identity]);
-  const dismiss = useCallback((finish: () => void) => {
-    if (!identityRef.current) {
-      finish();
-      return;
-    }
-    if (timerRef.current !== undefined) return;
-    const target = identityRef.current;
-    setClosing(true);
+  useLayoutEffect(() => {
+    if (!exit) return;
     const duration = matchMedia("(prefers-reduced-motion: reduce)").matches
       ? 0
       : 200;
-    timerRef.current = setTimeout(() => {
-      timerRef.current = undefined;
-      if (identityRef.current !== target) return;
-      finish();
-      setClosing(false);
+    const timer = setTimeout(() => {
+      if (exitRef.current === exit) exitRef.current = undefined;
+      if (identityRef.current === exit.target) exit.finish();
+      setExit((current) => (current === exit ? undefined : current));
     }, duration);
+    return () => {
+      clearTimeout(timer);
+      settle(exit);
+    };
+  }, [exit]);
+  const dismiss = useCallback((finish: () => void): Promise<void> => {
+    const target = identityRef.current;
+    if (!target) {
+      finish();
+      return Promise.resolve();
+    }
+    const underWay = exitRef.current;
+    const next = underWay ?? { target, finish, waiting: [] };
+    const left = new Promise<void>((resolve) => next.waiting.push(resolve));
+    if (!underWay) {
+      exitRef.current = next;
+      setExit(next);
+    }
+    return left;
   }, []);
-  return { closing, dismiss };
+  return { closing: exit !== undefined, dismiss };
 }

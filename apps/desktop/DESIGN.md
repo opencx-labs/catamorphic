@@ -387,6 +387,7 @@ screen, or under reduced motion.
 | `.workspace-tab-close` transition (a strip tab's close button showing on hover or keyboard focus: opacity and scale 0.8 to 1, over the label's end; the title's end fades under it through `--tab-title-end`) | 150ms | itself: one transition both ways, so a pointer crossing the strip turns each back from where it is; nothing beside it moves |
 | `.sidebar-tab-slot` transition (a sidebar tab's place growing in or shrinking out of its strip: a tab of `when.session` sections beside a chat; `@starting-style` for arrival) | 200ms | itself: one transition both ways on one element, so a quick change back reverses from where it is; at no width the place gives back its flex gap |
 | `.sidebar-strip` transition (a sidebar's tab strip opening as a second tab arrives, folding as the count drops to one; never for the sidebar's own opening) | 200ms | itself, reversing the same way; the panel below follows its height |
+| Menu rows changing while it is open (a microphone plugged in or out; `useMenuListMotion` in `components/menu.tsx`: rows glide and arrive by `useListMotion`, the panel's height follows by Web Animations, a changed detail such as "Default" fades in) | 200ms; the detail 160ms | each other, on one curve: the panel grows or shrinks with its rows, reversing from where it is drawn; opening a menu or another submenu moves nothing |
 | `fade-in` / `fade-out` (modal section swap; agent-control overlay) | 200ms | each other (exact mirror; `fade-out` holds its final frame for removal on animationend) |
 | `modal-in` / `modal-out` (dialog panel: opacity + scale 0.96↔1) | 200ms in, 160ms out | the backdrop's `fade-in`/`fade-out`; `modal-out` holds its final frame until the backdrop unmounts both |
 | `pairing-qr-in` (QR readiness reveal) | 200ms | — (one-shot content-ready signal inside a fixed stage) |
@@ -3219,3 +3220,36 @@ through the frames between one line and two; `e2e/chat-motion.e2e.ts`
 samples every painted frame of a followed chat while the composer grows
 and shrinks; `chat-timeline-embed.test.tsx` covers the archived turn and
 the action lines.
+
+### 2026-10-16: Voice hears the person, dictates anywhere, and its keys tap or hold
+
+A television across the room used to talk to the agent: its words were
+sent as messages, it cut the agent off, and it ran on into the person's
+own turn. Voice now hears the nearest voice that keeps talking. It learns
+the person's voice from what they say, with a speaker model that tells
+voices apart (ERes2Net), and how loud they speak; a voice that is not
+theirs, or far quieter, is not heard and never draws out their turn, and
+words the recognizer made of noise are dropped. "Learn my voice" pins it.
+
+Every way in taps or holds. Dictate (⌥Space), Talk to Work (⌘⇧Space) and
+Talk to this chat (unbound) are shortcuts that work in any app once Work
+is allowed in Accessibility, and a microphone's click and press are the
+same: a tap turns voice on or off, a hold talks while held. The push to
+talk switch is gone. Nothing said while the models load is lost: the
+microphone opens at once, and the models stay loaded a while after.
+
+Dictation writes where the cursor is, in Work or any app: the words show
+as they are said, muted with a pulsing dot in a composer, each new word
+fading in as an agent's prose does and settling into the text's colour as
+the dot goes; typed and retyped only where they changed elsewhere; and
+sending them ends it. "Dictation only" makes a microphone's click
+dictate. Out of Work, the dock's microphone floats at the bottom of the
+screen while voice is on, unless the dock is detached: it eases in and
+out, rests left, in the middle or right where it was last dragged (the
+spots show while it moves, the dock's way), wears the colours of the
+window the person was last in, and its menu moves voice to another open
+window's assistant at any time, colours and all, pausing the one it
+leaves. A press on it is voice's only once it is a tap or a hold, so a
+drag never interrupts the agent. An agent talked to from another app hears
+which app and window the person was in, nothing more, and decides whether
+what they said was meant to be written there. See ADR 0236.

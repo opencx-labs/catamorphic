@@ -15,6 +15,8 @@ import {
   type MenuSeparator,
 } from "../../shared/menu.js";
 import { moveFocusAsApp } from "../lib/app-focus.js";
+import { useListMotion } from "../lib/list-motion.js";
+import { EASE_STANDARD, motionMs } from "../lib/motion.js";
 
 /** A menu row the app draws; `icon` and `url` serve sidebar placements. */
 export interface ContextMenuEntry extends MenuEntry {
@@ -127,6 +129,10 @@ export function MenuPortal<TEntry extends ContextMenuEntry>({
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const subRef = useRef<HTMLDivElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+  const sizerRef = useRef<HTMLDivElement>(null);
+  const subListRef = useRef<HTMLDivElement>(null);
+  const subSizerRef = useRef<HTMLDivElement>(null);
   const frozenEntriesRef = useRef(entries);
   const [placed, setPlaced] = useState<{
     left: number;
@@ -269,6 +275,22 @@ export function MenuPortal<TEntry extends ContextMenuEntry>({
     );
   }, [atKey, entriesKey]);
 
+  // Rows that change while the menu is open move rather than jump: a
+  // microphone plugged in arrives, one unplugged leaves, and the panel's
+  // height follows.
+  useMenuListMotion({
+    list: listRef,
+    sizer: sizerRef,
+    rows: rowsKey(visibleEntries),
+    scope: open ? "open" : "closed",
+  });
+  useMenuListMotion({
+    list: subListRef,
+    sizer: subSizerRef,
+    rows: rowsKey(subEntry?.submenu ?? []),
+    scope: open && subEntry ? `open:${subEntry.action}` : "closed",
+  });
+
   // A nested menu opens beside its row, on whichever side has room,
   // with its first row level with the one it opened from.
   useLayoutEffect(() => {
@@ -336,21 +358,25 @@ export function MenuPortal<TEntry extends ContextMenuEntry>({
 
   const items = (list: readonly (TEntry | MenuSeparator)[], nested: boolean) =>
     list.map((entry, index) => {
-      if (isMenuSeparator(entry))
+      if (isMenuSeparator(entry)) {
+        // A rule is known by the row above it, so it moves with the rows.
+        const id = separatorKey(list, index);
         return (
           <hr
-            // biome-ignore lint/suspicious/noArrayIndexKey: rules have no identity but their place
-            key={`separator:${index}`}
+            key={id}
+            data-item-id={id}
             className="mx-2 my-1 h-px border-0 bg-border"
           />
         );
+      }
       const parent = Boolean(entry.submenu?.length);
       // By action: a menu rebuilt while open (a live state changed) keeps
       // its open row and shows the submenu's current entries.
       const expanded = parent && sub?.entry.action === entry.action;
       return (
         <button
-          key={`${entry.action}:${entry.label}`}
+          key={rowKey(entry)}
+          data-item-id={rowKey(entry)}
           type="button"
           {...(parent
             ? {
@@ -400,7 +426,9 @@ export function MenuPortal<TEntry extends ContextMenuEntry>({
           <span className="min-w-0 flex-1 truncate">
             {entry.label}
             {entry.detail && (
-              <span className="ms-2 text-fg-faint">{entry.detail}</span>
+              <span data-menu-detail className="ms-2 text-fg-faint">
+                {entry.detail}
+              </span>
             )}
           </span>
           {entry.checked && (
@@ -478,7 +506,9 @@ export function MenuPortal<TEntry extends ContextMenuEntry>({
         style={panelStyle}
         className={panelClass(open)}
       >
-        <div className={listClass}>{items(visibleEntries, false)}</div>
+        <div ref={listRef} className={listClass}>
+          <div ref={sizerRef}>{items(visibleEntries, false)}</div>
+        </div>
       </div>
       {subEntry?.submenu && (
         <div
@@ -502,7 +532,9 @@ export function MenuPortal<TEntry extends ContextMenuEntry>({
           }
           className={`${panelClass(open)} origin-top-left`}
         >
-          <div className={listClass}>{items(subEntry.submenu, true)}</div>
+          <div ref={subListRef} className={listClass}>
+            <div ref={subSizerRef}>{items(subEntry.submenu, true)}</div>
+          </div>
         </div>
       )}
     </>,
@@ -518,4 +550,129 @@ function menuButtons(
       "[role=menuitem]:not(:disabled), [role=menuitemradio]:not(:disabled), [role=menuitemcheckbox]:not(:disabled)",
     ) ?? []),
   ];
+}
+
+/** A row's identity across a menu rebuilt while open. */
+function rowKey(entry: MenuEntry): string {
+  return `${entry.action}:${entry.label}`;
+}
+
+function separatorKey(
+  list: readonly (MenuEntry | MenuSeparator)[],
+  index: number,
+): string {
+  for (let above = index - 1; above >= 0; above--) {
+    const entry = list[above];
+    if (entry && !isMenuSeparator(entry)) return `rule:${rowKey(entry)}`;
+  }
+  return "rule:";
+}
+
+/** What a list shows: its rows, and what each says beside its label. */
+function rowsKey(list: readonly (MenuEntry | MenuSeparator)[]): string {
+  return list
+    .map((entry, index) =>
+      isMenuSeparator(entry)
+        ? separatorKey(list, index)
+        : `${rowKey(entry)}:${entry.detail ?? ""}`,
+    )
+    .join("\n");
+}
+
+/**
+ * A menu list whose rows change while it is open: rows glide to their new
+ * places and new ones rise in, as lists do (useListMotion); the panel's
+ * height follows them on the same curve instead of snapping; and a detail
+ * that changes (the default moving to another microphone) fades in. A new
+ * scope (the menu opening, another submenu) is a first paint: nothing
+ * moves.
+ */
+function useMenuListMotion({
+  list,
+  sizer,
+  rows,
+  scope,
+}: {
+  list: RefObject<HTMLDivElement | null>;
+  sizer: RefObject<HTMLDivElement | null>;
+  rows: string;
+  scope: string;
+}) {
+  const shownScope = useRef(scope);
+  const reset = useRef<() => void>(() => {});
+  const height = useRef<number | null>(null);
+  const growing = useRef<Animation | null>(null);
+  const details = useRef<Map<string, string> | null>(null);
+  // Before the rows are measured: a new scope starts afresh.
+  useLayoutEffect(() => {
+    if (shownScope.current === scope) return;
+    shownScope.current = scope;
+    reset.current();
+    growing.current?.cancel();
+    height.current = null;
+    details.current = null;
+  }, [scope]);
+  // The height it is drawn at, kept as it changes between rows changing
+  // (a font arriving, a label growing), so a glide starts from there. A
+  // submenu's list is drawn anew for each submenu (its scope).
+  // biome-ignore lint/correctness/useExhaustiveDependencies: observed again for each scope's list
+  useLayoutEffect(() => {
+    const box = list.current;
+    if (!box || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => {
+      if (!growing.current && height.current !== null)
+        height.current = box.getBoundingClientRect().height;
+    });
+    observer.observe(box);
+    return () => observer.disconnect();
+  }, [list, scope]);
+  const motion = useListMotion(sizer, `${scope}\n${rows}`, {
+    keepTransitions:
+      "color 150ms cubic-bezier(0.4, 0, 0.2, 1), background-color 150ms cubic-bezier(0.4, 0, 0.2, 1)",
+  });
+  reset.current = motion.reset;
+  // biome-ignore lint/correctness/useExhaustiveDependencies: measured again only when the rows or the scope change
+  useLayoutEffect(() => {
+    const box = list.current;
+    const inner = sizer.current;
+    if (!box || !inner) return;
+    const seen = new Map<string, string>();
+    for (const row of inner.children) {
+      if (!(row instanceof HTMLElement) || !row.dataset.itemId) continue;
+      const detail = row.querySelector<HTMLElement>("[data-menu-detail]");
+      const text = detail?.textContent ?? "";
+      const before = details.current?.get(row.dataset.itemId);
+      seen.set(row.dataset.itemId, text);
+      if (detail && text && before !== undefined && before !== text)
+        detail.animate([{ opacity: 0 }, { opacity: 1 }], {
+          duration: motionMs(160),
+          easing: EASE_STANDARD,
+        });
+    }
+    details.current = seen;
+    // From where it is drawn now, mid-way through a change still under
+    // way, to the height of what it shows.
+    const running = growing.current;
+    const from = running ? box.getBoundingClientRect().height : height.current;
+    running?.cancel();
+    growing.current = null;
+    const to = box.getBoundingClientRect().height;
+    height.current = to;
+    const duration = motionMs(200);
+    if (from === null || Math.abs(from - to) < 0.5 || duration === 0) return;
+    // Rows taller than the panel for a moment would show its scrollbar.
+    box.style.overflowY = "hidden";
+    const animation = box.animate(
+      [{ height: `${from}px` }, { height: `${to}px` }],
+      { duration, easing: EASE_STANDARD },
+    );
+    growing.current = animation;
+    const settled = () => {
+      if (growing.current !== animation) return;
+      growing.current = null;
+      box.style.overflowY = "";
+    };
+    animation.addEventListener("finish", settled);
+    animation.addEventListener("cancel", settled);
+  }, [scope, rows]);
 }

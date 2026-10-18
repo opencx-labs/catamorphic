@@ -13,9 +13,10 @@ import {
 } from "./engine.js";
 
 /**
- * The speech models (ADR 0216), all on sherpa-onnx and the CPU: Silero
- * voice activity, Parakeet TDT 0.6B recognition, a WeSpeaker voice print
- * on speech DPDFNet removed the noise from, and Kokoro v1.0 speech.
+ * The speech models (ADR 0216, 0236), all on sherpa-onnx and the CPU:
+ * Silero voice activity, Parakeet TDT 0.6B recognition, ERes2Net to tell
+ * who speaks (on the microphone as heard: it needs no noise removal), and
+ * Kokoro v1.0 speech.
  * Kokoro speaks a text in one call that runs the model once per sentence,
  * and each sentence is handed on as soon as it is made. Its pauses are kept
  * as made (sherpa-onnx would shrink them to a fifth by default), and each
@@ -59,28 +60,12 @@ export async function loadSherpaSpeech(
       silenceScale: 1,
     });
   let generation = generationFor(voice);
-  const denoiser = new sherpa.OnlineSpeechDenoiser({
-    model: {
-      dpdfnet: { model: paths.denoiser },
-      numThreads: 1,
-      provider: "cpu",
-    },
-  });
   const speakers = new sherpa.SpeakerEmbeddingExtractor({
     model: paths.speaker,
     numThreads: 2,
   });
   return {
     activity: sileroActivity(paths.vad),
-    denoise: (samples) => {
-      // Each stretch is cleaned on its own, from a fresh start.
-      denoiser.reset();
-      return denoiser.run({
-        samples,
-        sampleRate: SPEECH_SAMPLE_RATE,
-        enableExternalBuffer: false,
-      }).samples;
-    },
     voiceprint: (samples) => {
       const stream = speakers.createStream();
       stream.acceptWaveform({ samples, sampleRate: SPEECH_SAMPLE_RATE });
@@ -92,7 +77,14 @@ export async function loadSherpaSpeech(
     recognize: async (samples) => {
       const stream = recognizer.createStream();
       stream.acceptWaveform({ samples, sampleRate: SPEECH_SAMPLE_RATE });
-      return (await recognizer.decodeAsync(stream)).text;
+      const { text, ys_log_probs: probabilities = [] } =
+        await recognizer.decodeAsync(stream);
+      return {
+        text,
+        confidence:
+          probabilities.reduce((sum, value) => sum + value, 0) /
+          Math.max(1, probabilities.length),
+      };
     },
     synthesize: async (text, onSentence) => {
       const sentences: Float32Array[] = [];
@@ -163,6 +155,10 @@ function sileroActivity(model: string): VoiceActivity {
         vad.pop();
       }
       return segments;
+    },
+    reset: () => {
+      vad.clear();
+      vad.reset();
     },
   };
 }

@@ -115,6 +115,7 @@ describe("workspace coordination tools", () => {
     await open?.execute(target, context);
     toolkit.setVoiceControl({
       talking: (sessionId) => sessionId === "session",
+      where: () => null,
       stopListening: () => false,
     });
     await open?.execute(target, context);
@@ -387,6 +388,7 @@ describe("workspace coordination tools", () => {
     const stopped: string[] = [];
     toolkit.setVoiceControl({
       talking: (sessionId) => sessionId === "session",
+      where: () => null,
       stopListening: (sessionId) => {
         stopped.push(sessionId);
         return sessionId === "session";

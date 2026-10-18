@@ -244,4 +244,74 @@ describe("MenuPortal", () => {
     act(() => vi.advanceTimersByTime(180));
     expect(onExited).toHaveBeenCalled();
   });
+
+  it("moves rather than jumps when its rows change while it is open", () => {
+    // Rows 28 px tall in a list with 8 px of padding; anything else none.
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(
+      function (this: HTMLElement) {
+        const rows = this.matches("[data-sidebar-menu] > div")
+          ? this.querySelectorAll("[data-item-id]").length
+          : 0;
+        return DOMRect.fromRect({ height: rows ? rows * 28 + 8 : 0 });
+      },
+    );
+    const animate = vi.fn(() => {
+      const animation = new EventTarget();
+      return Object.assign(animation, { cancel: vi.fn() });
+    });
+    vi.stubGlobal("requestAnimationFrame", () => 0);
+    Object.defineProperty(HTMLElement.prototype, "animate", {
+      value: animate,
+      configurable: true,
+    });
+    const container = document.createElement("div");
+    document.body.append(container);
+    containers.push(container);
+    const root = createRoot(container);
+    roots.push(root);
+    const show = (entries: MenuItem[]) =>
+      act(() =>
+        root.render(
+          <MenuPortal
+            open
+            at={{ pointer: { x: 100, y: 100 } }}
+            entries={entries}
+            onPick={() => {}}
+            onDismiss={() => {}}
+            onExited={() => {}}
+          />,
+        ),
+      );
+    try {
+      show([
+        { label: "Built-in", action: "mic:a", detail: "Default" },
+        { label: "Headset", action: "mic:b" },
+      ]);
+      // Opening is the menu's own entrance: nothing in it moves.
+      expect(animate).not.toHaveBeenCalled();
+      show([
+        { label: "Built-in", action: "mic:a" },
+        { label: "Headset", action: "mic:b", detail: "Default" },
+        { label: "Earbuds", action: "mic:c" },
+      ]);
+      const detail = document.querySelector(
+        '[data-item-id="mic:b:Headset"] [data-menu-detail]',
+      );
+      // The default fades in beside the headset, and the panel grows to
+      // the new row rather than snapping.
+      expect(animate.mock.contexts).toContain(detail);
+      expect(animate.mock.calls).toContainEqual([
+        [{ height: "64px" }, { height: "92px" }],
+        expect.objectContaining({ duration: 200 }),
+      ]);
+      expect(
+        [...document.querySelectorAll("[data-item-id]")].map((row) =>
+          row.getAttribute("data-item-id"),
+        ),
+      ).toEqual(["mic:a:Built-in", "mic:b:Headset", "mic:c:Earbuds"]);
+    } finally {
+      Reflect.deleteProperty(HTMLElement.prototype, "animate");
+      vi.restoreAllMocks();
+    }
+  });
 });

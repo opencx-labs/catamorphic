@@ -10,6 +10,25 @@ const execute: Execute = (command, args) => {
   return `${result.stdout}${result.stderr}`.trim();
 };
 
+/**
+ * The native helpers a macOS package carries: each must be signed by the
+ * app's team, hold both architectures and speak its protocol.
+ * `--version` is the only invocation: it reads no Keychain and taps no
+ * keys.
+ */
+const HELPERS = [
+  {
+    file: "browser-keychain",
+    name: "Browser import helper",
+    protocol: "work-browser-keychain 1",
+  },
+  {
+    file: "voice-keys",
+    name: "Voice keys helper",
+    protocol: "work-voice-keys 1",
+  },
+] as const;
+
 /** Verify the actual release signatures, never the ad-hoc repository prebuild. */
 export function verifyDesktopSignature({
   appPath,
@@ -18,7 +37,6 @@ export function verifyDesktopSignature({
   appPath: string;
   run?: Execute;
 }) {
-  const helperPath = path.join(appPath, "Contents/MacOS/browser-keychain");
   const team = (file: string) => {
     run("codesign", ["--verify", "--deep", "--strict", file]);
     const signature = run("codesign", ["--display", "--verbose=4", file]);
@@ -28,16 +46,18 @@ export function verifyDesktopSignature({
     return teamId;
   };
   const teamId = team(appPath);
-  if (team(helperPath) !== teamId)
-    throw new Error(
-      "Browser import helper and app must have the same signing team",
-    );
-  run("lipo", [helperPath, "-verify_arch", "arm64", "x86_64"]);
-  // --version never accesses Keychain and is the only helper invocation here.
-  const protocol = run(helperPath, ["--version"]);
-  if (protocol !== "work-browser-keychain 1")
-    throw new Error("Browser import helper has an unsupported protocol");
-  return { teamId, protocol, architectures: ["arm64", "x86_64"] };
+  const protocols: Record<string, string> = {};
+  for (const helper of HELPERS) {
+    const helperPath = path.join(appPath, "Contents/MacOS", helper.file);
+    if (team(helperPath) !== teamId)
+      throw new Error(`${helper.name} and app must have the same signing team`);
+    run("lipo", [helperPath, "-verify_arch", "arm64", "x86_64"]);
+    const protocol = run(helperPath, ["--version"]);
+    if (protocol !== helper.protocol)
+      throw new Error(`${helper.name} has an unsupported protocol`);
+    protocols[helper.file] = protocol;
+  }
+  return { teamId, protocols, architectures: ["arm64", "x86_64"] };
 }
 
 if (import.meta.main) {

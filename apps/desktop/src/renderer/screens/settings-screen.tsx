@@ -46,10 +46,7 @@ import { DefaultBrowserButton } from "../components/default-browser.js";
 import { Modal } from "../components/modal.js";
 import { PendingButton } from "../components/pending-button.js";
 import { ShortcutHint } from "../components/shortcut-hint.js";
-import {
-  useMicrophones,
-  useProfileAgents,
-} from "../components/voice-button.js";
+import { useProfileAgents, useVoiceKeys } from "../components/voice-button.js";
 import {
   type AgentHarness,
   type AgentsData,
@@ -67,6 +64,7 @@ import {
   useKeybindings,
 } from "../lib/keybindings.js";
 import { useListMotion } from "../lib/list-motion.js";
+import { useMicrophones } from "../lib/microphones.js";
 import { EASE_STANDARD, motionMs } from "../lib/motion.js";
 import { useTerminalAppearance } from "../lib/terminal-appearance.js";
 import { useAppPreferences } from "../lib/use-app-preferences.js";
@@ -909,7 +907,9 @@ function VoiceSection({
   const agents = useProfileAgents();
   const microphones = useMicrophones();
   const bindings = useKeybindings();
-  const holdKeys = formatBinding(bindings["push-to-talk"]);
+  const dictateKeys = formatBinding(bindings.dictate);
+  const talkKeys = formatBinding(bindings["talk-to-work"]);
+  const keys = useVoiceKeys();
   const assistant =
     agents.find((agent) => agent.id === prefs.voiceAssistant)?.id ?? "";
   return (
@@ -996,22 +996,49 @@ function VoiceSection({
         </select>
       </SettingRow>
       <SettingRow
-        id="voicePushToTalk"
-        label="Push to talk"
-        description={
-          holdKeys
-            ? `Voice listens only while you hold ${holdKeys}, wherever you are in Work.`
-            : "Voice listens only while you hold the push-to-talk keys."
-        }
+        id="voiceKeys"
+        label="Voice shortcuts"
+        control={keys === "needs-permission"}
+        description={`${[
+          dictateKeys && `${dictateKeys} dictates where you type`,
+          talkKeys && `${talkKeys} talks to Work`,
+        ]
+          .filter(Boolean)
+          .join(", ")
+          .replace(/^./, (first) => first.toUpperCase())}${
+          dictateKeys || talkKeys ? ". " : ""
+        }Tap one to start or stop; hold it to talk while you hold it. ${
+          keys === "everywhere"
+            ? "They work in any app."
+            : keys === "needs-permission"
+              ? "To use them in other apps, allow Work in System Settings, Privacy & Security, Accessibility."
+              : "They work in Work."
+        }`}
+      >
+        {keys === "needs-permission" && (
+          <button
+            id="setting-voiceKeys"
+            type="button"
+            className="btn rounded-md px-3 py-1.5 text-xs"
+            onClick={() => void desktopApi.voiceKeysAllow()}
+          >
+            Allow…
+          </button>
+        )}
+      </SettingRow>
+      <SettingRow
+        id="voiceDictation"
+        label="Dictation only"
+        description="A microphone's click dictates where you type, a chat's into its message box, instead of talking. Nothing is sent or read aloud: edit it and send it as you would typed text."
       >
         <input
-          id="setting-voicePushToTalk"
+          id="setting-voiceDictation"
           type="checkbox"
           role="switch"
-          aria-checked={prefs.voicePushToTalk}
-          checked={prefs.voicePushToTalk}
+          aria-checked={prefs.voiceDictation}
+          checked={prefs.voiceDictation}
           onChange={(event) =>
-            void update({ voicePushToTalk: event.target.checked })
+            void update({ voiceDictation: event.target.checked })
           }
         />
       </SettingRow>
@@ -1030,6 +1057,26 @@ function VoiceSection({
             void update({ voiceInDock: event.target.checked })
           }
         />
+      </SettingRow>
+      <SettingRow
+        id="voiceBubbleSpot"
+        label="Floating microphone"
+        description="Where the microphone floats over other apps while voice is on. Drag it to move it."
+      >
+        <select
+          id="setting-voiceBubbleSpot"
+          value={prefs.voiceBubbleSpot}
+          className="field h-8 min-w-0 max-w-full rounded-md px-2 text-sm"
+          onChange={(event) => {
+            const spot = event.target.value;
+            if (spot === "left" || spot === "center" || spot === "right")
+              void update({ voiceBubbleSpot: spot });
+          }}
+        >
+          <option value="left">Left</option>
+          <option value="center">Middle</option>
+          <option value="right">Right</option>
+        </select>
       </SettingRow>
       <SettingRow
         id="voiceInChats"
