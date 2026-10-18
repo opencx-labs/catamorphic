@@ -821,7 +821,7 @@ function graphqlFixture(
   return { errors: [{ message: `Unknown operation ${operation}` }] };
 }
 
-const review = (id: number, state: string, user = BOT, pull = 7) => ({
+const review_ = (id: number, state: string, user = BOT, pull = 7) => ({
   id,
   state,
   user,
@@ -846,21 +846,21 @@ const REVIEW_ROUTES: Record<string, (body: unknown) => Response> = {
     }),
   "GET /repos/octo/hello/pulls/7/reviews": () =>
     Response.json([
-      review(11, "CHANGES_REQUESTED"),
-      review(12, "APPROVED", ADA),
+      review_(11, "CHANGES_REQUESTED"),
+      review_(12, "APPROVED", ADA),
     ]),
   "GET /repos/octo/hello/pulls/7/reviews/11": () =>
-    Response.json(review(11, "CHANGES_REQUESTED")),
+    Response.json(review_(11, "CHANGES_REQUESTED")),
   "GET /repos/octo/hello/pulls/7/reviews/12": () =>
-    Response.json(review(12, "APPROVED", ADA)),
+    Response.json(review_(12, "APPROVED", ADA)),
   "GET /repos/octo/hello/pulls/7/reviews/13": () =>
-    Response.json(review(13, "COMMENTED")),
+    Response.json(review_(13, "COMMENTED")),
   "GET /repos/octo/hello/pulls/7/reviews/14": () =>
-    Response.json(review(14, "DISMISSED")),
+    Response.json(review_(14, "DISMISSED")),
   "GET /repos/octo/hello/pulls/7/reviews/15": () =>
-    Response.json(review(15, "CHANGES_REQUESTED", BOT, 8)),
+    Response.json(review_(15, "CHANGES_REQUESTED", BOT, 8)),
   "PUT /repos/octo/hello/pulls/7/reviews/11/dismissals": () =>
-    Response.json(review(11, "DISMISSED")),
+    Response.json(review_(11, "DISMISSED")),
   "GET /repos/octo/hello/pulls/comments/21": () =>
     Response.json({
       id: 21,
@@ -953,6 +953,23 @@ describe("GitHub connections: the actions a review poster needs", () => {
         )
         .map((entry) => `${entry.method} ${new URL(entry.url).pathname}`);
     return { github, call, mints, requests };
+  }
+
+  async function setupWith(
+    routes: Record<string, (body: unknown, url: URL) => Response>,
+  ) {
+    const { github, provider } = appProvider({ ...REVIEW_ROUTES, ...routes });
+    const material = await appMaterial(provider);
+    const call = (action: string, input: Record<string, unknown>) =>
+      provider.invoke({
+        connection: TEST_CONNECTION,
+        material,
+        action,
+        input: JSON.parse(JSON.stringify(input)),
+        capabilities: ALL,
+        repositories: REPOS,
+      });
+    return { github, call };
   }
 
   it("lists every review thread with every comment, marking the App's own", async () => {
@@ -1195,6 +1212,255 @@ describe("GitHub connections: the actions a review poster needs", () => {
     ).rejects.toThrow(/outside this connection's repositories/);
   });
 
+  it("posts a stamped review, check run, comment or reply once, however often the call is redelivered", async () => {
+    const STAMP_MARK = "<!-- work-review turn=t1 -->";
+    const posted = {
+      reviews: [] as unknown[],
+      runs: [] as unknown[],
+      comments: [] as unknown[],
+      replies: [] as unknown[],
+    };
+    const { github, provider } = appProvider({
+      ...REVIEW_ROUTES,
+      "GET /repos/octo/hello/pulls/7/reviews": () =>
+        Response.json(posted.reviews),
+      "POST /repos/octo/hello/pulls/7/reviews": (body) => {
+        const review = {
+          ...review_(901, "CHANGES_REQUESTED"),
+          body: (body as { body: string }).body,
+        };
+        posted.reviews.push(review);
+        return Response.json(review);
+      },
+      [`GET /repos/octo/hello/commits/${SHA}/check-runs`]: () =>
+        Response.json({
+          total_count: posted.runs.length,
+          check_runs: posted.runs,
+        }),
+      "POST /repos/octo/hello/check-runs": (body) => {
+        const run = {
+          id: 77,
+          html_url: "https://github.com/octo/hello/runs/77",
+          status: "completed",
+          conclusion: "failure",
+          external_id: (body as { external_id?: string }).external_id ?? null,
+          app: { slug: "work" },
+        };
+        posted.runs.push(run);
+        return Response.json(run, { status: 201 });
+      },
+      "GET /repos/octo/hello/issues/7": () =>
+        Response.json({ number: 7, pull_request: { url: `${PULLS}/7` } }),
+      "GET /repos/octo/hello/issues/7/comments": () =>
+        Response.json(posted.comments),
+      "POST /repos/octo/hello/issues/7/comments": (body) => {
+        const comment = {
+          id: 300 + posted.comments.length,
+          user: BOT,
+          body: (body as { body: string }).body,
+          html_url: "https://github.com/octo/hello/pull/7#issuecomment-300",
+          issue_url: "https://api.github.com/repos/octo/hello/issues/7",
+        };
+        posted.comments.push(comment);
+        return Response.json(comment, { status: 201 });
+      },
+      "GET /repos/octo/hello/pulls/7/comments": () =>
+        Response.json(posted.replies),
+      "POST /repos/octo/hello/pulls/7/comments/21/replies": (body) => {
+        const reply = {
+          id: 400,
+          user: BOT,
+          body: (body as { body: string }).body,
+          html_url: "https://github.com/octo/hello/pull/7#discussion_r400",
+          pull_request_url: `${PULLS}/7`,
+          in_reply_to_id: 21,
+        };
+        posted.replies.push(reply);
+        return Response.json(reply, { status: 201 });
+      },
+    });
+    const material = await appMaterial(provider);
+    const call = (action: string, input: Record<string, unknown>) =>
+      provider.invoke({
+        connection: TEST_CONNECTION,
+        material,
+        action,
+        input: JSON.parse(JSON.stringify(input)),
+        capabilities: ALL,
+        repositories: REPOS,
+      });
+    const writes = {
+      create_review: {
+        repository: "octo/hello",
+        number: 7,
+        event: "REQUEST_CHANGES",
+        body: `Blocking.\n\n${STAMP_MARK}`,
+        stamp: STAMP_MARK,
+      },
+      create_check_run: {
+        repository: "octo/hello",
+        name: "Work review",
+        headSha: SHA,
+        conclusion: "failure",
+        stamp: "turn=t1",
+      },
+      issue_comment: {
+        repository: "octo/hello",
+        number: 7,
+        body: `Yes.\n\n${STAMP_MARK}`,
+        stamp: STAMP_MARK,
+      },
+      reply_to_review_comment: {
+        repository: "octo/hello",
+        number: 7,
+        commentId: 21,
+        body: `Because.\n\n${STAMP_MARK}`,
+        stamp: STAMP_MARK,
+      },
+    };
+    for (const [action, input] of Object.entries(writes)) {
+      const first = await call(action, input);
+      const again = await call(action, input);
+      expect(first, action).not.toHaveProperty("existing");
+      expect(again, action).toMatchObject({ existing: true });
+    }
+    expect(posted.reviews).toHaveLength(1);
+    expect(posted.runs).toHaveLength(1);
+    expect(posted.comments).toHaveLength(1);
+    expect(posted.replies).toHaveLength(1);
+    // The stamp is the run's external id.
+    expect(posted.runs[0]).toMatchObject({ external_id: "turn=t1" });
+    // A stamp the body lacks could never be found again.
+    await expect(
+      call("create_review", { ...writes.create_review, body: "Blocking." }),
+    ).rejects.toThrow(/must contain its stamp/);
+    await expect(
+      call("create_check_run", {
+        ...writes.create_check_run,
+        externalId: "other",
+      }),
+    ).rejects.toThrow(/external id is its stamp/);
+    // A comment on a pull request needs pull_requests, never the whole
+    // installation; an issue's needs issues.
+    const commentMints = github.calls
+      .filter((entry) => entry.url.endsWith("/access_tokens"))
+      .map((entry) => entry.body);
+    expect(commentMints).toContainEqual({
+      repositories: ["hello"],
+      permissions: { pull_requests: "write" },
+    });
+    expect(commentMints).not.toContainEqual({ repositories: ["hello"] });
+  });
+
+  it("lists a commit's check runs, marking the App's own", async () => {
+    const { github, call } = await setupWith({
+      [`GET /repos/octo/hello/commits/${SHA}/check-runs`]: () =>
+        Response.json({
+          total_count: 2,
+          check_runs: [
+            {
+              id: 1,
+              external_id: "turn=t1",
+              app: { slug: "work" },
+              status: "completed",
+              conclusion: "failure",
+              html_url: "u1",
+            },
+            {
+              id: 2,
+              external_id: "turn=t2",
+              app: { slug: "github-actions" },
+              status: "completed",
+              conclusion: "success",
+              html_url: "u2",
+            },
+          ],
+        }),
+    });
+    await expect(
+      call("check_runs", {
+        repository: "octo/hello",
+        commit: SHA,
+        name: "Work review",
+      }),
+    ).resolves.toEqual({
+      runs: [
+        expect.objectContaining({ id: 1, conclusion: "failure", own: true }),
+        expect.objectContaining({ id: 2, conclusion: "success", own: false }),
+      ],
+    });
+    expect(github.calls.at(-1)?.url).toContain("check_name=Work%20review");
+  });
+
+  it("comments on an issue with issues alone", async () => {
+    const { github, provider } = appProvider({
+      ...REVIEW_ROUTES,
+      "GET /repos/octo/hello/issues/8": () => Response.json({ number: 8 }),
+      "POST /repos/octo/hello/issues/8/comments": () =>
+        Response.json(
+          {
+            id: 1,
+            user: BOT,
+            body: "x",
+            html_url: "https://github.com/octo/hello/issues/8#issuecomment-1",
+          },
+          { status: 201 },
+        ),
+    });
+    const material = await appMaterial(provider);
+    await provider.invoke({
+      connection: TEST_CONNECTION,
+      material,
+      action: "issue_comment",
+      input: { repository: "octo/hello", number: 8, body: "x" },
+      capabilities: ALL,
+      repositories: REPOS,
+    });
+    expect(
+      github.calls
+        .filter((entry) => entry.url.endsWith("/access_tokens"))
+        .map((entry) => entry.body),
+    ).toEqual([
+      { repositories: ["hello"], permissions: READ_PERMISSIONS },
+      { repositories: ["hello"], permissions: { issues: "write" } },
+    ]);
+  });
+
+  it("refuses to dismiss a review whose pull request it cannot read, and takes up to 100", async () => {
+    const { call } = await setupWith({
+      "GET /repos/octo/hello/pulls/7/reviews/16": () =>
+        Response.json({
+          ...review_(16, "CHANGES_REQUESTED"),
+          pull_request_url: undefined,
+        }),
+    });
+    const dismiss = (reviewIds: number[]) =>
+      call("dismiss_review", {
+        repository: "octo/hello",
+        number: 7,
+        reviewIds,
+        message: "m",
+      });
+    await expect(dismiss([16])).rejects.toThrow(/not on octo\/hello#7/);
+    await expect(
+      dismiss(Array.from({ length: 101 }, (_, index) => index + 1)),
+    ).rejects.toThrow();
+  });
+
+  it("throws when GitHub fails to serve a read, so the caller asks again", async () => {
+    const { call } = await setupWith({
+      "GET /repos/octo/hello/pulls/9": () =>
+        Response.json({ message: "Server Error" }, { status: 502 }),
+    });
+    await expect(
+      call("get", { path: "/repos/octo/hello/pulls/9" }),
+    ).rejects.toMatchObject({ status: 502 });
+    // An answer GitHub did give, a 404 included, is data.
+    await expect(
+      call("get", { path: "/repos/octo/hello/pulls/10" }),
+    ).resolves.toMatchObject({ status: 404 });
+  });
+
   it("lists the read actions as read-only", async () => {
     const { provider } = appProvider();
     const material = await appMaterial(provider);
@@ -1213,6 +1479,7 @@ describe("GitHub connections: the actions a review poster needs", () => {
       "get",
       "pull_request_files",
       "review_threads",
+      "check_runs",
       "list_reviews",
     ]);
   });
