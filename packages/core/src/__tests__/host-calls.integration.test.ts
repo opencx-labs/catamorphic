@@ -79,6 +79,15 @@ export const carryAccount = defineWorkflow(({ defineBoundary }) => ({
   ],
 }));
 
+export const carryTooMuch = defineWorkflow(({ defineBoundary }) => ({
+  steps: [
+    defineBoundary({
+      run: ({ input, host }: BoundaryContext<{ id: string }>) =>
+        host.acme.crm.lookupAccount({ id: input.id }, { state: { blob: "" } }),
+    }),
+  ],
+}));
+
 /** @displayname Who am I */
 export const whoAmI = defineWorkflow(({ defineBoundary }) => ({
   steps: [
@@ -139,6 +148,22 @@ function invokeRuntime(
           capability: "acme.crm",
           fn: "lookupAccount",
           args: { id: value.id },
+        },
+      },
+      steps: [],
+    };
+  } else if (exportName === "carryTooMuch") {
+    terminal = {
+      status: "completed",
+      result: {
+        type: "host_call",
+        transition: {
+          __catamorphicDurableTransition: "host_call",
+          capability: "acme.crm",
+          fn: "lookupAccount",
+          args: { id: value.id },
+          statePresent: true,
+          state: { blob: "x".repeat(300_000) },
         },
       },
       steps: [],
@@ -506,5 +531,20 @@ describeIf("host calls from workflows (ADR 0055)", () => {
       call_state_present: true,
       call_state: { asked: "A-2", name: "Account A-2" },
     });
+  });
+
+  it("refuses state over 256 KiB before the call runs", async () => {
+    const before = crmCalls.length;
+    const outcome = await core.runs.call({
+      identity: root,
+      projectId,
+      workflowName: "carryTooMuch",
+      input: { id: "A-3" },
+      budgetMs: 20_000,
+    });
+    expect(outcome.status).toBe("failed");
+    if (outcome.status === "failed")
+      expect(outcome.error).toMatch(/at most 262144 ride with it/);
+    expect(crmCalls).toHaveLength(before);
   });
 });

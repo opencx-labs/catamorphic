@@ -483,13 +483,26 @@ defineWorkflow(({ defineBoundary }) =>
 
 defineWorkflow(({ defineBoundary }) => ({
   steps: [
-    // @ts-expect-error Carried state must be JSON-compatible.
+    // @ts-expect-error The boundary's result must be JSON-compatible too.
     defineBoundary({
       run: ({ host }: BoundaryContext<OrderInput>) =>
         host["catamorphic.sessions"].history(
           { key: "k" },
+          // @ts-expect-error Carried state must be JSON-compatible, at the call.
           { state: { at: new Date() } },
         ),
+    }),
+  ],
+}));
+
+// Type aliases with optional fields are JSON-compatible state.
+type Optional = { reply?: string; inReplyTo?: number };
+const optional: Optional = { reply: "x" };
+defineWorkflow(({ defineBoundary }) => ({
+  steps: [
+    defineBoundary({
+      run: ({ host }: BoundaryContext<OrderInput>) =>
+        host["catamorphic.sessions"].history({ key: "k" }, { state: optional }),
     }),
   ],
 }));

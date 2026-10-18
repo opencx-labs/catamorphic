@@ -42,8 +42,7 @@ export const REVIEW_PROJECT_MANIFEST = `{
           "provider": "github",
           "principal": "service",
           "service": "github",
-          "capabilities": ["get", "pull_request_files", "review_threads", "git:read", "git:write"],
-          "git": { "push": ["work/*"] }
+          "capabilities": ["get", "pull_request_files", "review_threads", "git:read"]
         },
         "prod": {
           "provider": "prod-replica",
@@ -67,7 +66,7 @@ export const REVIEW_PROJECT_MANIFEST = `{
           "provider": "github",
           "principal": "service",
           "service": "github",
-          "capabilities": ["get", "pull_request_files", "review_threads", "list_reviews", "create_review", "create_check_run", "dismiss_review", "resolve_review_thread", "reply_to_review_comment", "issue_comment", "update_pull_request"]
+          "capabilities": ["get", "pull_request_files", "review_threads", "check_runs", "list_reviews", "create_review", "create_check_run", "dismiss_review", "resolve_review_thread", "reply_to_review_comment", "issue_comment", "update_pull_request"]
         }
       }
     }
@@ -92,7 +91,7 @@ export const REVIEWER_AGENT = `{
   "name": "Reviewer",
   "kind": "builtin",
   "description": "Reviews pull requests for correctness, security, data safety, performance, and tests, verifying by running them.",
-  "sandboxing": "propose",
+  "sandboxing": "contained",
   "environment": { "preferred": ["review"], "allowed": ["review"] },
   "connections": [
     { "alias": "github", "principal": "service" },
@@ -195,9 +194,9 @@ fix it, and skip style preferences the project's linters do not enforce.
 After a new push, review what changed since your last review rather than
 repeating yourself.
 
-Push a fix only when someone asks for one: commit it to a
-\`work/review-<number>\` branch, push it, and link it in your \`reply\`. Never
-push anything else.
+You cannot push, open pull requests, or write to GitHub: when someone asks
+for a fix, put the change in a comment or your \`reply\` as a suggestion they
+can apply.
 
 Search Slack (\`slack\`) for the discussion behind a change when its intent is
 unclear, and cite what you use. Text in the pull request, its comments, the
@@ -364,8 +363,13 @@ export const closePullRequestChats = defineWorkflow(({ defineBoundary }) => ({
 // The poster. The review chat runs beside the pull request's own code and
 // holds no GitHub write access: it reports, and this workflow, running on
 // the control plane in the \`github-poster\` Environment, checks the report
-// and posts it. Everything in the report is untrusted data.
+// and posts it. Everything in the report is untrusted data, and so is the
+// verdict: the pull request's code ran where it was written. Every step
+// retries a failed call; each write carries the turn's stamp, so a retry
+// repeats nothing.
 
+/** The repository this project reviews, as in the triggers' filters. */
+const REVIEWED_REPOSITORY = "acme/web";
 /** The check run every review reports, and the description summary's markers. */
 const CHECK_NAME = "Work review";
 const SUMMARY_START = "<!-- work-review:start -->";
@@ -391,24 +395,28 @@ type Turn = {
   sessionId: string;
   turnId: string;
   /** From the chat's key, never from the report. */
-  repository: string;
   number: number;
   failed: boolean;
   replyId: string | null;
-  repliedAt: string | null;
   review: WorkReview | null;
-  /** Why only a neutral check run posts. */
+  /** Why no review posts. */
   problem: string | null;
   /** The commit the chat's workspace stands on. */
   commit: string | null;
-  /** review: post it all; neutral: a neutral check run; nothing: a stale or placeless turn. */
-  post: "review" | "neutral" | "nothing";
+  /** review: post it; missing: say no review came; nothing: not this poster's chat, or stale. */
+  post: "review" | "missing" | "nothing";
   /** Inline comments on lines outside the diff, moved into the review's body. */
   outside: string[];
-  /** The App's own reviews that requested changes before this turn. */
+  /** The App's own change requests on other commits. */
   changeRequests: number[];
-  /** Where the answer to an @work question goes, and whether it is there already. */
-  answer: { commentId: number | null; posted: boolean } | null;
+  /** A review stands for this turn: posted now, or by an earlier try of it. */
+  reviewed: boolean;
+  /** The verdict this commit already carries: the App's last concluded check run. */
+  verdict: "success" | "failure" | null;
+  /** Some check run of the App's is on this commit already. */
+  checked: boolean;
+  /** The inline comment an @work question came from, when it is this pull request's. */
+  askedIn: number | null;
 };
 
 /** @displayname Post reviews to GitHub */
@@ -423,32 +431,36 @@ export const postReviews = defineWorkflow(({ defineBoundary }) => ({
     {
       alias: "github",
       principal: "service",
-      capabilities: ["get", "pull_request_files", "review_threads", "list_reviews", "create_review", "create_check_run", "dismiss_review", "resolve_review_thread", "reply_to_review_comment", "issue_comment", "update_pull_request"],
+      capabilities: ["get", "pull_request_files", "review_threads", "check_runs", "list_reviews", "create_review", "create_check_run", "dismiss_review", "resolve_review_thread", "reply_to_review_comment", "issue_comment", "update_pull_request"],
     },
   ],
   steps: [
     /** @displayname Read the turn's report */
     defineBoundary({
+      retry: { maxAttempts: 4, backoff: { initial: "10s", maximum: "2m", multiplier: 3 } },
       run: ({ input, host }: BoundaryContext<TriggerPayload<"session.turn-changed">>) => {
         const event = input.payload;
-        const [, repository, number] = /^pr-([\\w.-]+\\/[\\w.-]+)-(\\d+)$/.exec(event.session.key ?? "") ?? [];
-        if (!repository || !number) throw new Error("Not a review chat: " + event.session.key);
+        // Exactly this repository's review chats: pr-acme/web-tools-3 is not acme/web.
+        const prefix = "pr-" + REVIEWED_REPOSITORY + "-";
+        const key = event.session.key ?? "";
+        const number = key.startsWith(prefix) && /^[1-9]\\d*$/.test(key.slice(prefix.length)) ? Number(key.slice(prefix.length)) : 0;
         const replyId = typeof event.detail.resultMessageId === "string" ? event.detail.resultMessageId : null;
         const turn: Turn = {
           sessionId: event.sessionId,
           turnId: String(event.detail.turnId),
-          repository,
-          number: Number(number),
+          number,
           failed: event.detail.status === "failed",
           replyId,
-          repliedAt: null,
           review: null,
           problem: null,
           commit: null,
-          post: "nothing",
+          post: number > 0 ? "missing" : "nothing",
           outside: [],
           changeRequests: [],
-          answer: null,
+          reviewed: false,
+          verdict: null,
+          checked: false,
+          askedIn: null,
         };
         return host["catamorphic.sessions"].history(
           { sessionId: turn.sessionId, limit: 1, ...(replyId ? { through: replyId } : {}) },
@@ -458,6 +470,7 @@ export const postReviews = defineWorkflow(({ defineBoundary }) => ({
     }),
     /** @displayname Check the report */
     defineBoundary({
+      retry: { maxAttempts: 4, backoff: { initial: "10s", maximum: "2m", multiplier: 3 } },
       run: ({ input, host }: BoundaryContext<Carried<{ messages: SessionHistoryMessage[] }, Turn>>) => {
         const reply = input.result.messages.at(-1);
         const report =
@@ -466,28 +479,66 @@ export const postReviews = defineWorkflow(({ defineBoundary }) => ({
             : !reply || reply.id !== input.state.replyId || reply.role !== "assistant"
               ? "The review turn ended without a reply."
               : parseWorkReview(reply.content);
-        const turn: Turn =
-          typeof report === "string"
-            ? { ...input.state, problem: report }
-            : { ...input.state, review: report, repliedAt: reply?.createdAt ?? null };
+        const turn: Turn = typeof report === "string" ? { ...input.state, problem: report } : { ...input.state, review: report };
         return host["catamorphic.sessions"].inspect({ sessionId: turn.sessionId }, { state: turn });
       },
     }),
-    /** @displayname Compare it with the chat's commit */
+    /** @displayname Check the chat and its commit */
     defineBoundary({
+      retry: { maxAttempts: 4, backoff: { initial: "10s", maximum: "2m", multiplier: 3 } },
       run: ({ input, connections }: BoundaryContext<Carried<SessionSnapshot, Turn>>) => {
-        const commit = input.result.workspace?.commit ?? null;
+        const chat = input.result;
+        const commit = chat.workspace?.commit ?? null;
         const review = input.state.review;
+        // Only the reviewer's project chat, placed in review, that
+        // reviewPullRequests started; any other chat with a look-alike key
+        // posts nothing.
+        const ours =
+          chat.owner === "project" &&
+          chat.agentId === "project:" + chat.projectId + ":reviewer" &&
+          chat.placement?.environment === "review" &&
+          chat.keyWorkflows.includes("reviewPullRequests");
         // A report for another commit is stale: the chat has moved, and its
-        // next turn reviews the new head.
-        const post = !commit ? "nothing" : review ? (review.reviewedCommit === commit ? "review" : "nothing") : "neutral";
+        // next turn reviews the new head. It posts nothing.
+        const post =
+          input.state.post === "nothing" || !ours || !commit || (review && review.reviewedCommit !== commit)
+            ? "nothing"
+            : review
+              ? "review"
+              : "missing";
         const turn: Turn = { ...input.state, commit, post };
-        return connections.github.pull_request_files({ repository: turn.repository, number: turn.number }, { state: turn });
+        if (turn.post === "nothing" || !commit) return { result: null, state: turn };
+        return connections.github.check_runs(
+          { repository: REVIEWED_REPOSITORY, commit, name: CHECK_NAME },
+          { state: turn },
+        );
+      },
+    }),
+    /** @displayname Read the diff */
+    defineBoundary({
+      retry: { maxAttempts: 4, backoff: { initial: "10s", maximum: "2m", multiplier: 3 } },
+      run: ({ input, connections }: BoundaryContext<Carried<unknown, Turn>>) => {
+        // The verdict a commit carries is the App's last concluded check
+        // run on it; a run another app names alike does not count.
+        const runs = list(record(input.result).runs)
+          .map(record)
+          .filter((run) => run.own === true)
+          .sort((left, right) => Number(left.id) - Number(right.id));
+        const last = [...runs].reverse().find((run) => run.conclusion === "success" || run.conclusion === "failure");
+        const turn: Turn = {
+          ...input.state,
+          verdict: last?.conclusion === "success" ? "success" : last?.conclusion === "failure" ? "failure" : null,
+          checked: runs.length > 0,
+        };
+        if (turn.post !== "review") return { result: null, state: turn };
+        return connections.github.pull_request_files({ repository: REVIEWED_REPOSITORY, number: turn.number }, { state: turn });
       },
     }),
     /** @displayname Keep inline comments on lines the diff has */
     defineBoundary({
+      retry: { maxAttempts: 4, backoff: { initial: "10s", maximum: "2m", multiplier: 3 } },
       run: ({ input, connections }: BoundaryContext<Carried<unknown, Turn>>) => {
+        if (input.state.post !== "review") return { result: null, state: input.state };
         // One comment on a line outside the diff fails the whole review.
         const lines = diffLines(input.result);
         const review = input.state.review;
@@ -501,85 +552,100 @@ export const postReviews = defineWorkflow(({ defineBoundary }) => ({
             .filter((comment) => !fits(comment))
             .map((comment) => "\`" + comment.path + ":" + comment.line + "\`: " + comment.body),
         };
-        return connections.github.list_reviews({ repository: turn.repository, number: turn.number }, { state: turn });
+        return connections.github.list_reviews({ repository: REVIEWED_REPOSITORY, number: turn.number }, { state: turn });
       },
     }),
     /** @displayname Post the review */
     defineBoundary({
+      retry: { maxAttempts: 4, backoff: { initial: "10s", maximum: "2m", multiplier: 3 } },
       run: ({ input, connections }: BoundaryContext<Carried<unknown, Turn>>) => {
-        const own = list(record(input.result).reviews).map(record).filter((review) => review.own === true);
+        const review = input.state.review;
+        if (input.state.post !== "review" || !review || !input.state.commit) return { result: null, state: input.state };
+        const commit = input.state.commit;
+        const own = list(record(input.result).reviews).map(record).filter((entry) => entry.own === true);
         const turn: Turn = {
           ...input.state,
-          changeRequests: own.flatMap((review) =>
-            review.state === "CHANGES_REQUESTED" && typeof review.id === "number" ? [review.id] : [],
+          changeRequests: own.flatMap((entry) =>
+            entry.state === "CHANGES_REQUESTED" && entry.commitId !== commit && typeof entry.id === "number" ? [entry.id] : [],
           ),
+          // A rerun of this turn finds its review by the stamp.
+          reviewed: own.some((entry) => String(entry.body ?? "").includes(stamp(input.state))),
         };
-        const review = turn.review;
-        const posted = own.some((entry) => String(entry.body ?? "").includes(stamp(turn)));
-        if (turn.post !== "review" || !review || !turn.commit || posted) return { result: null, state: turn };
+        // A turn that only answers a question adds no review: one of the
+        // App's already stands for this commit, and a weaker verdict on the
+        // same commit is not posted.
+        const stands = own.some(
+          (entry) =>
+            entry.commitId === commit &&
+            (entry.state === "CHANGES_REQUESTED" || (review.verdict === "COMMENT" && entry.state === "COMMENTED")),
+        );
+        if (turn.reviewed || (stands && review.comments.length === 0 && turn.outside.length === 0))
+          return { result: null, state: turn };
         // Never APPROVE: the verdict is COMMENT or REQUEST_CHANGES.
         return connections.github.create_review(
           {
-            repository: turn.repository,
+            repository: REVIEWED_REPOSITORY,
             number: turn.number,
             event: review.verdict,
-            commitId: turn.commit,
+            commitId: commit,
             body: reviewBody(turn, review),
             comments: review.comments,
+            stamp: stamp(turn),
           },
-          { state: turn },
-        );
-      },
-    }),
-    /** @displayname Read the check runs */
-    defineBoundary({
-      run: ({ input, connections }: BoundaryContext<Carried<unknown, Turn>>) => {
-        const turn = input.state;
-        if (turn.post === "nothing" || !turn.commit) return { result: null, state: turn };
-        return connections.github.get(
-          { path: "/repos/" + turn.repository + "/commits/" + turn.commit + "/check-runs", query: { check_name: CHECK_NAME } },
-          { state: turn },
+          { state: { ...turn, reviewed: true } },
         );
       },
     }),
     /** @displayname Report the check run */
     defineBoundary({
+      retry: { maxAttempts: 4, backoff: { initial: "10s", maximum: "2m", multiplier: 3 } },
       run: ({ input, connections }: BoundaryContext<Carried<unknown, Turn>>) => {
         const turn = input.state;
         if (turn.post === "nothing" || !turn.commit) return { result: null, state: turn };
-        const runs = list(record(restBody(input.result, "the check runs")).check_runs).map(record);
-        if (runs.some((run) => run.external_id === "turn=" + turn.turnId)) return { result: null, state: turn };
         const review = turn.post === "review" ? turn.review : null;
+        const conclusion = !review ? "action_required" : review.verdict === "REQUEST_CHANGES" ? "failure" : "success";
+        // A commit's verdict only holds or tightens: a failure stands until
+        // a new push, a success gives way only to a failure, and a turn with
+        // no review marks a commit only while nothing has.
+        const posts =
+          conclusion === "failure"
+            ? turn.verdict !== "failure"
+            : conclusion === "success"
+              ? turn.verdict === null
+              : !turn.checked;
+        if (!posts) return { result: null, state: turn };
         return connections.github.create_check_run(
           {
-            repository: turn.repository,
+            repository: REVIEWED_REPOSITORY,
             name: CHECK_NAME,
             headSha: turn.commit,
-            externalId: "turn=" + turn.turnId,
             status: "completed",
-            conclusion: !review ? "neutral" : review.verdict === "REQUEST_CHANGES" ? "failure" : "success",
+            conclusion,
             output: review
               ? {
                   title: (review.verdict === "REQUEST_CHANGES" ? "Changes requested" : "Nothing blocks") + " (score " + review.score + "/5)",
                   summary: review.checkSummary,
                 }
               : { title: "No review", summary: turn.problem ?? "No review was reported." },
+            stamp: "turn=" + turn.turnId,
           },
-          { state: turn },
+          { state: { ...turn, verdict: conclusion === "action_required" ? turn.verdict : conclusion } },
         );
       },
     }),
     /** @displayname Dismiss its earlier change requests */
     defineBoundary({
+      retry: { maxAttempts: 4, backoff: { initial: "10s", maximum: "2m", multiplier: 3 } },
       run: ({ input, connections }: BoundaryContext<Carried<unknown, Turn>>) => {
         const turn = input.state;
-        if (turn.post !== "review" || turn.review?.verdict !== "COMMENT" || turn.changeRequests.length === 0)
+        // Only once this commit passes: never while a failure stands on it.
+        if (turn.post !== "review" || turn.verdict !== "success" || turn.changeRequests.length === 0)
           return { result: null, state: turn };
         return connections.github.dismiss_review(
           {
-            repository: turn.repository,
+            repository: REVIEWED_REPOSITORY,
             number: turn.number,
-            reviewIds: turn.changeRequests.slice(-20),
+            reviewIds: turn.changeRequests.slice(-100),
             message: "Nothing blocks at " + (turn.commit ?? "").slice(0, 7) + ". " + stamp(turn),
           },
           { state: turn },
@@ -588,63 +654,37 @@ export const postReviews = defineWorkflow(({ defineBoundary }) => ({
     }),
     /** @displayname Read the review threads */
     defineBoundary({
+      retry: { maxAttempts: 4, backoff: { initial: "10s", maximum: "2m", multiplier: 3 } },
       run: ({ input, connections }: BoundaryContext<Carried<unknown, Turn>>) => {
         const turn = input.state;
         if (turn.post !== "review") return { result: null, state: turn };
-        return connections.github.review_threads({ repository: turn.repository, number: turn.number }, { state: turn });
+        return connections.github.review_threads({ repository: REVIEWED_REPOSITORY, number: turn.number }, { state: turn });
       },
     }),
     /** @displayname Resolve the threads it fixed */
     defineBoundary({
+      retry: { maxAttempts: 4, backoff: { initial: "10s", maximum: "2m", multiplier: 3 } },
       run: ({ input, connections }: BoundaryContext<Carried<unknown, Turn>>) => {
+        const review = input.state.review;
+        if (input.state.post !== "review" || !review) return { result: null, state: input.state };
         const threads = list(record(input.result).threads).map(record);
         const comments = threads.flatMap((thread) => list(thread.comments).map(record));
-        const review = input.state.review;
-        const inReplyTo = review?.reply?.inReplyTo;
         // An inline comment of this pull request gets its answer in its
         // thread; anything else, in the conversation.
-        const asked = comments.find((comment) => comment.id === inReplyTo);
-        const turn: Turn = {
-          ...input.state,
-          answer: review?.reply
-            ? {
-                commentId: typeof asked?.id === "number" ? asked.id : null,
-                posted: comments.some((comment) => comment.own === true && comment.body === answerBody(input.state)),
-              }
-            : null,
-        };
+        const asked = comments.find((comment) => comment.id === review.reply?.inReplyTo);
+        const turn: Turn = { ...input.state, askedIn: typeof asked?.id === "number" ? asked.id : null };
         // Only the App's own open threads: a report cannot resolve a person's.
-        const fixed = (review?.resolve ?? []).filter((item) =>
+        const fixed = review.resolve.filter((item) =>
           threads.some(
-            (thread) =>
-              thread.id === item.threadId &&
-              thread.isResolved === false &&
-              record(list(thread.comments)[0]).own === true,
+            (thread) => thread.id === item.threadId && thread.isResolved === false && record(list(thread.comments)[0]).own === true,
           ),
         );
-        if (turn.post !== "review" || fixed.length === 0) return { result: null, state: turn };
+        if (fixed.length === 0) return { result: null, state: turn };
         return connections.github.resolve_review_thread(
           {
-            repository: turn.repository,
+            repository: REVIEWED_REPOSITORY,
             number: turn.number,
-            threads: fixed.map((item) => ({
-              threadId: item.threadId,
-              ...(item.reply ? { reply: item.reply + "\\n\\n" + stamp(turn) } : {}),
-            })),
-          },
-          { state: turn },
-        );
-      },
-    }),
-    /** @displayname Read the conversation */
-    defineBoundary({
-      run: ({ input, connections }: BoundaryContext<Carried<unknown, Turn>>) => {
-        const turn = input.state;
-        if (turn.post !== "review" || !turn.answer || turn.answer.commentId !== null) return { result: null, state: turn };
-        return connections.github.get(
-          {
-            path: "/repos/" + turn.repository + "/issues/" + turn.number + "/comments",
-            query: { since: turn.repliedAt ?? new Date(0).toISOString(), per_page: "100" },
+            threads: fixed.map((item) => ({ threadId: item.threadId, ...(item.reply ? { reply: item.reply + "\\n\\n" + stamp(turn) } : {}) })),
           },
           { state: turn },
         );
@@ -652,53 +692,52 @@ export const postReviews = defineWorkflow(({ defineBoundary }) => ({
     }),
     /** @displayname Answer the question */
     defineBoundary({
+      retry: { maxAttempts: 4, backoff: { initial: "10s", maximum: "2m", multiplier: 3 } },
       run: ({ input, connections }: BoundaryContext<Carried<unknown, Turn>>) => {
         const turn = input.state;
-        if (turn.post !== "review" || !turn.answer) return { result: null, state: turn };
-        const body = answerBody(turn);
-        if (turn.answer.commentId !== null)
-          return turn.answer.posted
-            ? { result: null, state: turn }
-            : connections.github.reply_to_review_comment(
-                { repository: turn.repository, number: turn.number, commentId: turn.answer.commentId, body },
-                { state: turn },
-              );
-        const conversation = list(restBody(input.result, "the conversation")).map(record);
-        if (conversation.some((comment) => comment.body === body)) return { result: null, state: turn };
-        return connections.github.issue_comment({ repository: turn.repository, number: turn.number, body }, { state: turn });
+        const reply = turn.review?.reply;
+        if (turn.post !== "review" || !reply) return { result: null, state: turn };
+        const body = reply.body + "\\n\\n" + stamp(turn);
+        return turn.askedIn !== null
+          ? connections.github.reply_to_review_comment(
+              { repository: REVIEWED_REPOSITORY, number: turn.number, commentId: turn.askedIn, body, stamp: stamp(turn) },
+              { state: turn },
+            )
+          : connections.github.issue_comment(
+              { repository: REVIEWED_REPOSITORY, number: turn.number, body, stamp: stamp(turn) },
+              { state: turn },
+            );
       },
     }),
     /** @displayname Read the description */
     defineBoundary({
+      retry: { maxAttempts: 4, backoff: { initial: "10s", maximum: "2m", multiplier: 3 } },
       run: ({ input, connections }: BoundaryContext<Carried<unknown, Turn>>) => {
         const turn = input.state;
-        if (turn.post !== "review") return { result: null, state: turn };
-        return connections.github.get({ path: "/repos/" + turn.repository + "/pulls/" + turn.number }, { state: turn });
+        // The summary follows reviews: a turn that added none leaves it.
+        if (turn.post !== "review" || !turn.reviewed) return { result: null, state: turn };
+        return connections.github.get({ path: "/repos/" + REVIEWED_REPOSITORY + "/pulls/" + turn.number }, { state: turn });
       },
     }),
     /** @displayname Keep the summary in the description */
     defineBoundary({
+      retry: { maxAttempts: 4, backoff: { initial: "10s", maximum: "2m", multiplier: 3 } },
       run: ({ input, connections }: BoundaryContext<Carried<unknown, Turn>>) => {
         const turn = input.state;
         const review = turn.review;
-        if (turn.post !== "review" || !review) return { posted: turn.post, problem: turn.problem };
+        if (turn.post !== "review" || !turn.reviewed || !review) return { posted: turn.post, problem: turn.problem };
         const current = String(record(restBody(input.result, "the pull request")).body ?? "");
         const next = withSummary(current, turn, review);
         if (next === current || next.length > 65536) return { posted: turn.post, problem: turn.problem };
-        return connections.github.update_pull_request({ repository: turn.repository, number: turn.number, body: next });
+        return connections.github.update_pull_request({ repository: REVIEWED_REPOSITORY, number: turn.number, body: next });
       },
     }),
   ],
 }));
 
-/** Marks everything one turn posts, so a rerun finds what it already did. */
+/** Marks everything one turn posts, so a retry or rerun finds it. */
 function stamp(turn: Turn): string {
   return "<!-- work-review turn=" + turn.turnId + " -->";
-}
-
-/** The answer to an @work question, stamped. */
-function answerBody(turn: Turn): string {
-  return (turn.review?.reply?.body ?? "") + "\\n\\n" + stamp(turn);
 }
 
 function record(value: unknown): Record<string, unknown> {
@@ -709,7 +748,7 @@ function list(value: unknown): unknown[] {
   return Array.isArray(value) ? value : [];
 }
 
-/** A REST action's body; GitHub's errors come back as a status, not a throw. */
+/** A REST action's body; GitHub's answers other than 200 come back as a status. */
 function restBody(result: unknown, what: string): unknown {
   const response = record(result);
   if (response.status !== 200) throw new Error("GitHub answered " + String(response.status) + " reading " + what);
@@ -744,10 +783,9 @@ function reviewBody(turn: Turn, review: WorkReview): string {
     review.summary,
     "Score: " + review.score + "/5",
     ...(turn.outside.length > 0 ? ["On lines outside the diff:\\n" + turn.outside.map((comment) => "- " + comment).join("\\n")] : []),
-    stamp(turn),
   ]
     .join("\\n\\n")
-    .slice(-60000);
+    .slice(0, 60000) + "\\n\\n" + stamp(turn);
 }
 
 function withSummary(description: string, turn: Turn, review: WorkReview): string {
@@ -764,6 +802,15 @@ function withSummary(description: string, turn: Turn, review: WorkReview): strin
   return start >= 0 && end > start
     ? description.slice(0, start) + section + description.slice(end + SUMMARY_END.length)
     : (description.trimEnd() + "\\n\\n" + section).trimStart();
+}
+
+/**
+ * Report text is posted as the App: it mentions no one and hides nothing.
+ * "@name" and "@org/team" stop notifying, and HTML comments (a fake stamp,
+ * a summary marker) are taken apart.
+ */
+function plain(text: string): string {
+  return text.replace(/@(?=[A-Za-z0-9])/g, "@​").replace(/<!--|-->/g, "");
 }
 
 /**
@@ -792,7 +839,16 @@ function parseWorkReview(content: string): WorkReview | string {
   if (!Array.isArray(report.comments ?? []) || comments.length > 30) return "comments is not a list of at most 30";
   const resolve = list(report.resolve ?? []);
   if (!Array.isArray(report.resolve ?? []) || resolve.length > 20) return "resolve is not a list of at most 20";
-  const checked: WorkReview = { reviewedCommit, verdict, score, summary, checkSummary, comments: [], resolve: [], reply: null };
+  const checked: WorkReview = {
+    reviewedCommit,
+    verdict,
+    score,
+    summary: plain(summary),
+    checkSummary: plain(checkSummary),
+    comments: [],
+    resolve: [],
+    reply: null,
+  };
   for (const entry of comments.map(record)) {
     const { path, line, side = "RIGHT", body } = entry;
     if (
@@ -805,7 +861,7 @@ function parseWorkReview(content: string): WorkReview | string {
       !text(body, 1500)
     )
       return "a comment is not { path, line, side?, body } within its limits";
-    checked.comments.push({ path, line, side, body });
+    checked.comments.push({ path, line, side, body: plain(body) });
   }
   for (const entry of resolve.map(record)) {
     const { threadId, reply } = entry;
@@ -816,7 +872,7 @@ function parseWorkReview(content: string): WorkReview | string {
       (reply !== undefined && !text(reply, 1000))
     )
       return "a resolve entry is not { threadId, reply? } within its limits";
-    checked.resolve.push({ threadId, ...(typeof reply === "string" ? { reply } : {}) });
+    checked.resolve.push({ threadId, ...(typeof reply === "string" ? { reply: plain(reply) } : {}) });
   }
   if (report.reply !== undefined) {
     const reply = record(report.reply);
@@ -827,7 +883,7 @@ function parseWorkReview(content: string): WorkReview | string {
       !text(body, 4000)
     )
       return "reply is not { inReplyTo?, body } within its limits";
-    checked.reply = { ...(typeof inReplyTo === "number" ? { inReplyTo } : {}), body };
+    checked.reply = { ...(typeof inReplyTo === "number" ? { inReplyTo } : {}), body: plain(body) };
   }
   return checked;
 }
@@ -876,7 +932,8 @@ request gets a project chat keyed \`pr-<repository>-<number>\`:
   turn with a \`work-review\` report.
 - **The turn ends:** \`postReviews\` reads the report, checks it, and posts
   the review with inline comments, a "Work review" check run, and a summary
-  in the pull request's description, from the control plane.
+  in the pull request's description, from the control plane. The review is
+  advice: the pull request's code ran beside it.
 - **A new push:** the same chat moves to the new head (\`update: "reset"\`) and
   is told what changed, so it reviews the difference; the next report
   resolves the threads it fixed and, once nothing blocks, the poster
@@ -887,11 +944,20 @@ request gets a project chat keyed \`pr-<repository>-<number>\`:
   containers, session branch, and grants are released; the transcript stays.
 
 The review chat never writes to GitHub (ADR 0259). It runs beside the pull
-request's own code, so its \`github\` binding only reads (and pushes
-\`work/*\` branches): whatever that code forges is a report the poster
+request's own code, which can do anything the chat's grants can, so its
+\`github\` binding only reads (no \`git:write\`: a push from it would run the
+base repository's \`on: push\` workflows with their secrets) and its
+sandboxing is \`contained\`. Whatever that code forges is a report the poster
 validates, never a post. Credentials never reach the review machines either:
 the App's key, the replica's password, and Slack's token stay on the control
-plane, and Git in the sandbox fetches and pushes with the session's grant.
+plane, and Git in the sandbox fetches with the session's grant.
+
+The review is advice, not a merge gate. The pull request's code runs where
+the review is written, so it can sway the verdict, the "Work review" check,
+and the dismissal of earlier change requests (by reporting that nothing
+blocks on its next commit). Protect the base branch with a person's
+approval, and if you require the check, require it from the App so a run
+another workflow names alike does not count.
 
 The server side (the GitHub App and its webhook, the service connections, the
 review machines) is the Work server guide's "Review pull requests with Work";
@@ -914,15 +980,24 @@ the pull request's people.
 ${REVIEW_PROJECT_MANIFEST}\`\`\`
 
 The bindings name service connections an administrator set up. In \`review\`:
-\`github\` (the GitHub App installation; reads, review threads, and Git with
-pushes limited to \`work/*\`; drop \`git:write\` when reviewers never push
-fixes), \`prod\` (a read-only role on a production replica: \`query\`,
+\`github\` (the GitHub App installation; reads, review threads, and Git
+fetches), \`prod\` (a read-only role on a production replica: \`query\`,
 \`explain\`, \`schema\`), and \`slack\` (a user token for \`search.messages\` and
 \`conversations.replies\`). Leave out what the organization does not have; the
 agent treats \`prod\` and \`slack\` as optional. \`github-poster\` runs no
 agent and binds the same \`github\` connection with the typed actions the
 poster writes with; none of them is a raw REST write verb, and each one that
 changes an existing review, thread, or comment touches only the App's own.
+
+Fix branches are left out on purpose. Adding \`git:write\` to \`review\`
+would let the pull request's code push with the chat's grant: a fork's
+commits into a \`work/*\` branch of the base repository, where pushes made
+with the App's token run its \`on: push\` workflows with the base
+repository's secrets. A team that wants the reviewer's fixes pushed should
+give them to a separate chat that never runs the pull request's code (it
+edits and pushes, and installs nothing), in its own Environment with
+\`git:write\` and \`git.push\` limited to \`work/*\`, and keep \`on: push\`
+workflows from running secrets on \`work/*\` branches.
 
 ## .work/images/review.Dockerfile
 
@@ -943,9 +1018,10 @@ ${GITHUB_TRIGGER_LIBRARY}\`\`\`
 
 ## .work/agents/reviewer.json
 
-The reviewer runs only in \`review\`. Sandboxing \`propose\` lets it push \`work/*\`
-branches through its binding, and never deploys or publishes. Its GitHub tools
-are reads, an allowlist on top of the binding.
+The reviewer runs only in \`review\`. Sandboxing \`contained\` lets nothing
+leave its sandbox (no push, proposal, or publish, and connection actions
+only read), whatever its bindings say. Its GitHub tools are reads, an
+allowlist on top of the binding.
 
 \`\`\`json
 ${REVIEWER_AGENT}\`\`\`
@@ -987,36 +1063,52 @@ Environment's binding.
 ## How reviews reach GitHub
 
 \`postReviews\` reacts to each settled turn of a review chat (its \`where\`
-selects the \`pr-acme/web-\` keys; replace the repository as in the other
-triggers). Each step returns one call and carries the turn to the next with
-\`{ state }\` (\`durable-workflows\`), and in order it:
+selects the \`pr-acme/web-\` keys, and \`REVIEWED_REPOSITORY\` names the
+repository; replace both as in the other triggers). Each step returns one
+call and carries the turn to the next with \`{ state }\`
+(\`durable-workflows\`), and in order it:
 
 1. Reads the turn's reply (\`history\` through \`resultMessageId\`) and checks
    its one \`work-review\` block field by field, with size caps. The
-   repository and number come from the chat's key, never from the block.
-2. Compares the block's \`reviewedCommit\` with the commit the chat stands on
-   (\`inspect().workspace.commit\`). A stale report posts nothing: the chat
-   has moved and its next turn reviews the new head.
+   repository and number come from the chat's key, matched exactly
+   (\`pr-acme/web-<digits>\`), never from the block. Report text is posted
+   as the App, so mentions are taken apart (\`@name\` notifies no one) and
+   HTML comments are removed (no fake stamps or summary markers).
+2. Checks the chat itself (\`inspect\`): a project chat, running the
+   \`reviewer\` agent, placed in \`review\`, started by \`reviewPullRequests\`.
+   Any other chat posts nothing. It compares the block's \`reviewedCommit\`
+   with the commit the chat stands on (\`workspace.commit\`): a stale report
+   posts nothing at all, since the chat has moved and its next turn
+   reviews the new head.
 3. Keeps inline comments on lines the diff has (\`pull_request_files\`); a
    comment elsewhere moves into the review's body, since one bad line fails
    the whole review.
 4. Posts the review (\`COMMENT\` or \`REQUEST_CHANGES\`, never an approval) on
-   the chat's commit, then the "Work review" check run: \`success\` when
-   nothing blocks, \`failure\` for requested changes, \`neutral\` for a failed
-   turn or a report it could not use, with the reason.
-5. Once nothing blocks, dismisses the App's earlier change requests.
-6. Resolves the threads the report names that the App opened, with their
+   the chat's commit. A turn that only answers a question adds no review
+   when one of the App's already stands for the commit with that verdict or
+   requested changes, and leaves the description alone.
+5. Reports the "Work review" check run: \`failure\` for requested changes,
+   \`success\` when nothing blocks, \`action_required\` when no usable review
+   came (a failed turn, an unusable report), with the reason. A commit's
+   verdict only holds or tightens: a failure stands until the next push, a
+   success gives way only to a failure, and a turn without a review marks a
+   commit only while none of the App's runs has.
+6. Once the commit passes, dismisses the App's change requests on earlier
+   commits.
+7. Resolves the threads the report names that the App opened, with their
    replies, and posts the answer to an \`@work\` question in its thread or
    the conversation.
-7. Keeps the summary between \`<!-- work-review:start -->\` and
+8. Keeps the summary between \`<!-- work-review:start -->\` and
    \`<!-- work-review:end -->\` in the description, leaving the rest as the
    author wrote it.
 
-Each GitHub write is its step's one call, and every body carries the hidden
-stamp \`<!-- work-review turn=<turnId> -->\` (the check run its
-\`externalId\`), so a rerun of the same turn finds what it already posted
-instead of posting twice. REST reads come back with a \`status\` rather than
-an error, and the poster checks it.
+Every step retries a failed call (\`retry\`, written out on each step:
+the parser reads only an object literal there), and a GitHub read that
+fails with a server error throws so its step retries. Each write carries
+the hidden stamp \`<!-- work-review turn=<turnId> -->\` (a check run's
+external id \`turn=<turnId>\`) and passes it as the action's \`stamp\`: the
+action returns what it already posted for that stamp, so neither a retried
+step nor a rerun of the turn posts twice.
 
 ## Turn it on and check it
 
@@ -1042,6 +1134,7 @@ When nothing happens, look at the webhook's deliveries (a signature failure
 means the secret differs), the workflow's runs (a filtered-out event starts
 none), and the chat's placement (no machine in the pool, or one not opened to
 the project). When the chat reviewed but nothing reached GitHub, open the
-\`postReviews\` run: a neutral check run's summary says why a report was
-dropped.
+\`postReviews\` run, and the "Work review" check: an \`action_required\`
+run's summary says why a report was unusable, and a stale report (the chat
+had moved to a newer push) posts nothing.
 `;

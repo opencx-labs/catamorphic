@@ -23,6 +23,8 @@ export interface SessionSnapshot {
   icon: string | null;
   /** The project's key for this chat (`pr-42`), or null. */
   key: string | null;
+  /** A project chat runs as the project; a member's chat as that member. */
+  owner: "project" | "member";
   /** Workflows that delivered to this chat by its key. */
   keyWorkflows: string[];
   /** Where the chat runs and why; null for chats from before placement was recorded. */

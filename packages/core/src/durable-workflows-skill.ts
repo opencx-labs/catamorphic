@@ -106,8 +106,10 @@ not return (the trigger's ids, a parsed plan, an earlier read), pass
 \`{ result, state }\`, typed \`Carried<Result, State>\`. Every returned call
 takes it: \`connections.*\`, \`host.*\`, \`documents.*\`, and
 \`callWorkflow(child, { input, state })\`, as \`pause\` takes \`state\`. State is
-JSON, persisted with the run, and a retried step runs the call again with
-the same state. Carry ids and the data later steps use, not whole responses.
+JSON (checked at the call), at most 256 KiB, persisted with the run, and a
+retried step runs the call again with the same state; any other key in that
+argument is refused. Carry ids and the data later steps use, not whole
+responses.
 
 \`\`\`typescript
 import { type BoundaryContext, type Carried, defineWorkflow } from "@catamorphic/workflow";

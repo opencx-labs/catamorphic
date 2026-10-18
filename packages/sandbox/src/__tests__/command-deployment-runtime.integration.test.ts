@@ -165,6 +165,13 @@ const checkpoint = {
         exportName: "analyze",
       });
     }
+    if (input.action === "child-typo") {
+      return callWorkflow(analyze, { input: { records: [] }, stat: 1 }, {
+        workflowName: "analyze",
+        modulePath: "defined-workflow.mjs",
+        exportName: "analyze",
+      });
+    }
     if (input.action === "bad-carry") {
       return connections.github.get({ path: "/x" }, { stat: 1 });
     }
@@ -675,6 +682,14 @@ export const analyze = { steps: [checkpoint, batch] };`,
     });
     expect(JSON.stringify(refused.terminal)).toMatch(
       /second argument is \{ state \}/,
+    );
+    // A misspelled key is refused, not silently dropped.
+    const typo = await invokeBoundary({
+      invocationId: "boundary-child-typo",
+      value: { action: "child-typo" },
+    });
+    expect(JSON.stringify(typo.terminal)).toMatch(
+      /callWorkflow takes \{ input, state\? \}; 'stat' is not one of them/,
     );
   }, 30_000);
 

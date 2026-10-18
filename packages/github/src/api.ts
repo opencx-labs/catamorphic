@@ -696,6 +696,85 @@ export class GithubApi {
     );
   }
 
+  /** Whether an issue number names a pull request. */
+  async issueKind(input: {
+    fullName: string;
+    number: number;
+  }): Promise<"issue" | "pull_request"> {
+    const raw = await this.request<{ pull_request?: unknown }>(
+      `/repos/${repositoryPath(input.fullName)}/issues/${positive(input.number)}`,
+    );
+    return raw.pull_request ? "pull_request" : "issue";
+  }
+
+  /** An issue's or pull request's conversation comments, oldest first. */
+  async issueComments(input: {
+    fullName: string;
+    number: number;
+  }): Promise<GithubComment[]> {
+    const raw = await this.requestPages<RawComment>(
+      `/repos/${repositoryPath(input.fullName)}/issues/${positive(input.number)}/comments`,
+    );
+    return raw.map(commentOf);
+  }
+
+  /** A pull request's inline review comments, oldest first. */
+  async reviewComments(input: {
+    fullName: string;
+    number: number;
+  }): Promise<GithubComment[]> {
+    const raw = await this.requestPages<RawComment>(
+      `/repos/${repositoryPath(input.fullName)}/pulls/${positive(input.number)}/comments`,
+    );
+    return raw.map(commentOf);
+  }
+
+  /** Check runs on a commit, by name when given, with the App that made each. */
+  async checkRuns(input: {
+    fullName: string;
+    sha: string;
+    name?: string;
+  }): Promise<
+    Array<{
+      id: number;
+      externalId: string | null;
+      app: string | null;
+      status: string;
+      conclusion: string | null;
+      url: string | null;
+    }>
+  > {
+    if (!/^[0-9a-f]{40}$/.test(input.sha)) {
+      throw new GithubApiError(400, `Invalid commit: ${input.sha}`);
+    }
+    const runs: Array<{
+      id: number;
+      external_id: string | null;
+      app: { slug: string } | null;
+      status: string;
+      conclusion: string | null;
+      html_url: string | null;
+    }> = [];
+    const name = input.name
+      ? `&check_name=${encodeURIComponent(input.name)}`
+      : "";
+    for (let page = 1; page <= MAX_PAGES; page++) {
+      const batch = await this.request<{ check_runs: typeof runs }>(
+        `/repos/${repositoryPath(input.fullName)}/commits/${input.sha}/check-runs?filter=all&per_page=100&page=${page}${name}`,
+      );
+      runs.push(...batch.check_runs);
+      if (batch.check_runs.length < 100) break;
+    }
+    return runs.map((run) => ({
+      id: run.id,
+      externalId: run.external_id ?? null,
+      app: run.app?.slug ?? null,
+      status: run.status,
+      conclusion: run.conclusion,
+      url: run.html_url,
+    }));
+  }
+
   async deleteIssueComment(input: {
     fullName: string;
     commentId: number;

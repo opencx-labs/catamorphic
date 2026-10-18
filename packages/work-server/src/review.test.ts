@@ -152,6 +152,7 @@ async function fakeGithub(input: unknown, init?: RequestInit) {
         html_url: `https://github.test/acme/web/runs/${501 + pull.checkRuns.length}`,
         head_sha: body?.head_sha,
         external_id: body?.external_id ?? null,
+        app: { slug: "work-acme" },
         status: body?.status ?? "queued",
         conclusion: body?.conclusion ?? null,
       };
@@ -171,6 +172,8 @@ async function fakeGithub(input: unknown, init?: RequestInit) {
         body: pull.body,
         html_url: "https://github.test/acme/web/pull/1",
       });
+    case "GET /repos/acme/web/issues/1":
+      return Response.json({ number: 1, pull_request: { url: PULL_API } });
     case "GET /repos/acme/web/issues/1/comments":
       return Response.json(pull.comments);
     case "POST /repos/acme/web/issues/1/comments": {
@@ -793,6 +796,7 @@ describe.skipIf(!databaseUrl)("reviewing pull requests (#118)", () => {
       'mcp slack search.messages {"query":{"query":"order totals"}}',
       `mcp github create_review ${forgedReview}`,
       `mcp github post ${forgedComment}`,
+      "run git push origin HEAD:refs/heads/work/review-1 2>&1; echo pushed=$?",
       reportStep(report),
     ].join(" ;; ");
     const delivered = await fromGithub(
@@ -824,8 +828,16 @@ describe.skipIf(!databaseUrl)("reviewing pull requests (#118)", () => {
     expect(run.environment_name).toBe("default");
 
     const [answer = ""] = await answers(sessionId);
-    const [located, env, counted, searched, reviewed, commented, reported] =
-      answer.split("\n---\n");
+    const [
+      located,
+      env,
+      counted,
+      searched,
+      reviewed,
+      commented,
+      pushed,
+      reported,
+    ] = answer.split("\n---\n");
     // Git in the sandbox fetched through the gateway with the session's
     // grant; the checkout stands on the pull request head.
     expect(located).toMatch(/^exit=0\n/);
@@ -845,6 +857,16 @@ describe.skipIf(!databaseUrl)("reviewing pull requests (#118)", () => {
     // typed one nor a raw REST verb reaches the chat.
     expect(reviewed).toMatch(/^error: /);
     expect(commented).toMatch(/^error: /);
+    // Nor can Git in the sandbox push: the binding holds no git:write, so
+    // the gateway refuses, and the base repository gains no branch.
+    expect(pushed).toMatch(/pushed=[1-9]/);
+    expect(
+      await git(repository, [
+        "for-each-ref",
+        "--format=%(refname)",
+        "refs/heads/work",
+      ]),
+    ).toBe("");
     expect(reported).toContain("```work-review\n{");
 
     // The poster ran on the control plane in `github-poster` and posted
@@ -957,12 +979,12 @@ describe.skipIf(!databaseUrl)("reviewing pull requests (#118)", () => {
     expect(delivered2.text).toContain(
       `New commits since your last review (${previous}..${pullHead})`,
     );
-    // That turn reported nothing usable: a neutral check run says so on
-    // the new head, and nothing else is posted.
-    const neutral = await waitFor("the neutral check run", () =>
+    // That turn reported nothing usable: the new head is marked
+    // action_required (never passing), and nothing else is posted.
+    const missing = await waitFor("the check run for the new head", () =>
       pull.checkRuns.find((entry) => entry.head_sha === pullHead),
     );
-    expect(neutral).toMatchObject({ conclusion: "neutral" });
+    expect(missing).toMatchObject({ conclusion: "action_required" });
     const [, checkCall] = posted("POST", "/repos/acme/web/check-runs");
     expect(checkCall?.body).toMatchObject({
       output: {

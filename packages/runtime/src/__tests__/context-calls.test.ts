@@ -1,8 +1,10 @@
+import { MAX_CARRIED_STATE_BYTES as AUTHORED_LIMIT } from "@catamorphic/workflow";
 import { describe, expect, it } from "vitest";
 import {
   connectionNamespace,
   documentsCalls,
   hostNamespace,
+  MAX_CARRIED_STATE_BYTES,
 } from "../context-calls.js";
 
 describe("host call transitions (ADR 0055)", () => {
@@ -77,6 +79,18 @@ describe("calls that carry state (ADR 0260)", () => {
     expect(
       documentsCalls().read?.({ path: "docs/a.md" }, { state: ["a"] }),
     ).toMatchObject({ fn: "read", statePresent: true, state: ["a"] });
+  });
+
+  it("refuses state over 256 KiB, the limit authors are told", () => {
+    expect(MAX_CARRIED_STATE_BYTES).toBe(AUTHORED_LIMIT);
+    // biome-ignore lint/suspicious/noExplicitAny: exercising the untyped proxy
+    const connections = connectionNamespace([]) as Record<string, any>;
+    expect(
+      connections.github.get({ path: "/x" }, { state: "x".repeat(200_000) }),
+    ).toMatchObject({ statePresent: true });
+    expect(() =>
+      connections.github.get({ path: "/x" }, { state: "x".repeat(300_000) }),
+    ).toThrow(/at most 262144 ride with it/);
   });
 
   it("refuses a second argument that is not { state }", () => {
