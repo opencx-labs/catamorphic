@@ -796,7 +796,7 @@ export class ConnectionsService {
     }
     return (
       await query.selectAll().orderBy("created_at", "desc").execute()
-    ).map(mapConnection);
+    ).map((row) => this.record(row));
   }
 
   /** The organization's live service connections, by name. */
@@ -823,7 +823,7 @@ export class ConnectionsService {
       .selectAll()
       .orderBy("name")
       .execute();
-    return rows.map(mapConnection);
+    return rows.map((row) => this.record(row));
   }
 
   /** Host-side adoption/refresh of an already authenticated member account. */
