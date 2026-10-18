@@ -13,9 +13,12 @@ export const WORKER_PROTOCOL_HEADER = "work-protocol";
  * 2: operations are sealed to the worker's key, which it registers when it
  * enrolls, connects or rotates its credential (ADR 0207); a worker of
  * protocol 1 could open none of them.
+ * 3: the `egress` operation switches a running sandbox's network (ADR
+ * 0257). Workers of protocol 2 are still driven: they never offer
+ * `network.setup`, so placement never sends them one.
  */
 export const WORKER_PROTOCOL = {
-  server: 2,
+  server: 3,
   minimum: 2,
 } as const;
 

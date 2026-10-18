@@ -6,19 +6,23 @@ import type { SandboxProvider } from "@catamorphic/sandbox";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { sandboxSecretsPrelude } from "../services/sandbox-secrets.js";
 import {
+  environmentSetupDue,
   parseSetupRecord,
   planWorkspaceSetup,
   runWorkspaceSetup,
   SETUP_PROCESS_NAME,
+  SetupNetworkError,
   setupFingerprint,
+  setupRecordAfter,
   workspaceSetupFailedNote,
+  workspaceSetupNetworkRefusedNote,
   workspaceSetupScript,
   workspaceSetupUnavailableNote,
 } from "../services/workspace-setup.js";
 
 /*
- * Workspace setup (ADR 0208): what runs when, the script that runs it, and
- * running it in a local-process sandbox.
+ * Workspace setup (ADRs 0208, 0257): what runs when, the script that runs
+ * it, and running it in a local-process sandbox, on its own network.
  */
 
 describe("planning a workspace's setup", () => {
@@ -34,9 +38,20 @@ describe("planning a workspace's setup", () => {
   });
 
   it("reads back only what a setup wrote", () => {
-    const record = { environment: setupFingerprint(env), personal: "none" };
+    const record = {
+      environment: setupFingerprint(env),
+      personal: "none",
+      base: "none",
+    };
     expect(parseSetupRecord(JSON.stringify(record))).toEqual(record);
-    for (const text of ["", "{", "[]", '{"environment":1,"personal":"none"}'])
+    for (const text of [
+      "",
+      "{",
+      "[]",
+      '{"environment":1,"personal":"none","base":"none"}',
+      // Written before records named their base: set up again.
+      '{"environment":"none","personal":"none"}',
+    ])
       expect(parseSetupRecord(text)).toBeNull();
   });
 
@@ -47,7 +62,11 @@ describe("planning a workspace's setup", () => {
       recorded: null,
     });
     expect(first).toEqual({
-      record: { environment: setupFingerprint(env), personal: "none" },
+      record: {
+        environment: setupFingerprint(env),
+        personal: "none",
+        base: "none",
+      },
       environment: env,
     });
     expect(
@@ -66,6 +85,47 @@ describe("planning a workspace's setup", () => {
     ).toMatchObject({ environment: `${env} --prefer-offline` });
   });
 
+  it("runs the Environment's part again when the workspace's base moves", () => {
+    const first = planWorkspaceSetup({
+      environment: env,
+      personal: mine,
+      personalAllowed: true,
+      base: "a".repeat(40),
+      recorded: null,
+    });
+    expect(first?.record.base).toBe("a".repeat(40));
+    const recorded = first?.record ?? null;
+    expect(
+      planWorkspaceSetup({
+        environment: env,
+        personal: mine,
+        personalAllowed: true,
+        base: "a".repeat(40),
+        recorded,
+      }),
+    ).toBeNull();
+    expect(
+      environmentSetupDue({ environment: env, base: "a".repeat(40), recorded }),
+    ).toBe(false);
+    // A review chat's next push: everything runs again on the new head.
+    expect(
+      planWorkspaceSetup({
+        environment: env,
+        personal: mine,
+        personalAllowed: true,
+        base: "b".repeat(40),
+        recorded,
+      }),
+    ).toEqual({
+      record: { ...recorded, base: "b".repeat(40) },
+      environment: env,
+      personal: mine,
+    });
+    expect(
+      environmentSetupDue({ environment: env, base: "b".repeat(40), recorded }),
+    ).toBe(true);
+  });
+
   it("adds the owner's own setup only where it may run, and never reruns for its absence", () => {
     const both = planWorkspaceSetup({
       environment: env,
@@ -77,6 +137,7 @@ describe("planning a workspace's setup", () => {
       record: {
         environment: setupFingerprint(env),
         personal: setupFingerprint(mine),
+        base: "none",
       },
       environment: env,
       personal: mine,
@@ -99,24 +160,74 @@ describe("planning a workspace's setup", () => {
         recorded: null,
       }),
     ).toEqual({
-      record: { environment: setupFingerprint(env), personal: "none" },
+      record: {
+        environment: setupFingerprint(env),
+        personal: "none",
+        base: "none",
+      },
       environment: env,
     });
-    // The owner's next turn adds it.
+    // The owner's next turn adds theirs alone: the Environment's is current.
     expect(
       planWorkspaceSetup({
         environment: env,
         personal: mine,
         personalAllowed: true,
-        recorded: { environment: setupFingerprint(env), personal: "none" },
+        recorded: {
+          environment: setupFingerprint(env),
+          personal: "none",
+          base: "none",
+        },
       }),
-    ).toMatchObject({ environment: env, personal: mine });
+    ).toEqual({
+      record: {
+        environment: setupFingerprint(env),
+        personal: setupFingerprint(mine),
+        base: "none",
+      },
+      personal: mine,
+    });
+  });
+
+  it("records each part as it succeeds, the owner's still to run after the Environment's", () => {
+    const plan = {
+      record: {
+        environment: setupFingerprint(env),
+        personal: setupFingerprint(mine),
+        base: "none",
+      },
+      environment: env,
+      personal: mine,
+    };
+    expect(setupRecordAfter({ plan, part: "environment" })).toEqual({
+      ...plan.record,
+      personal: "none",
+    });
+    expect(setupRecordAfter({ plan, part: "personal" })).toEqual(plan.record);
+    const environmentOnly = workspaceSetupScript({
+      plan,
+      parts: ["environment"],
+    });
+    expect(environmentOnly).toContain(`'Environment setup'`);
+    expect(environmentOnly).not.toContain(`'Personal setup'`);
+    expect(environmentOnly).toContain(
+      JSON.stringify(setupRecordAfter({ plan, part: "environment" })),
+    );
+    expect(environmentOnly).not.toContain(JSON.stringify(plan.record));
+    const both = workspaceSetupScript({ plan });
+    expect(both.indexOf(`'Personal setup'`)).toBeLessThan(
+      both.indexOf(JSON.stringify(plan.record)),
+    );
   });
 
   it("writes a script that loads secrets, stops each part at its first failure, and records only success", () => {
     const script = workspaceSetupScript({
       plan: {
-        record: { environment: setupFingerprint(env), personal: "none" },
+        record: {
+          environment: setupFingerprint(env),
+          personal: "none",
+          base: "none",
+        },
         environment: env,
       },
     });
@@ -171,7 +282,9 @@ describe("planning a workspace's setup", () => {
     ).toBe(
       "[Workspace] Setting up this workspace could not run (The machine did not answer), so what it installs may be missing. It runs again before the next turn.",
     );
-    for (const text of [note, timedOut]) expect(text).not.toMatch(/[–—]/);
+    expect(workspaceSetupNetworkRefusedNote()).toContain("setup.network");
+    for (const text of [note, timedOut, workspaceSetupNetworkRefusedNote()])
+      expect(text).not.toMatch(/[–—]/);
   });
 });
 
@@ -225,7 +338,13 @@ describe("running a workspace's setup", () => {
     ).toEqual({
       environment: setupFingerprint(setup.environment),
       personal: "none",
+      base: "none",
     });
+    // The workspace's base moved: it sets up again on the new one.
+    expect(
+      await runWorkspaceSetup({ ...setup, base: "c".repeat(40), onRun }),
+    ).toEqual({ status: "succeeded" });
+    expect(await read(id, "../runs")).toBe("ran in project\nran in project\n");
   }, 30_000);
 
   it("stops a part at its first failing command and does not record it", async () => {
@@ -353,5 +472,217 @@ describe("running a workspace's setup", () => {
       }),
     ).toEqual({ status: "current" });
     expect(await read(id, "../count")).toBe("once\n");
+  }, 30_000);
+});
+
+describe("a setup on its own network (ADR 0257)", () => {
+  let root: string;
+  let machine: LocalProcessSandboxProvider;
+  const projectDir = "/workspace/project";
+  const own = { mode: "allowlist" as const, allow: ["work.acme.com:443"] };
+  const wide = {
+    mode: "allowlist" as const,
+    allow: ["work.acme.com:443", "registry.npmjs.org"],
+  };
+  const network = { setup: wide, own };
+
+  beforeAll(() => {
+    root = fs.mkdtempSync(path.join(os.tmpdir(), "catamorphic-setup-net-"));
+    machine = new LocalProcessSandboxProvider({
+      root,
+      acceptUnenforcedEgress: true,
+    });
+  });
+
+  afterAll(() => {
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  /**
+   * The machine, with every switch written into the sandbox's `../order`
+   * beside what setup writes there, and stops recorded.
+   */
+  const switching = (options?: { failNarrow?: boolean }) => {
+    const switches: string[] = [];
+    const stopped: string[] = [];
+    const provider = new Proxy(machine, {
+      get(target, property) {
+        if (property === "setEgress")
+          return async (args: { sandboxId: string; egress: typeof own }) => {
+            const label = args.egress.allow.length > 1 ? "wide" : "narrow";
+            if (label === "narrow" && options?.failNarrow)
+              throw new Error("The machine did not answer");
+            switches.push(label);
+            await target.executeCommand(
+              args.sandboxId,
+              `echo ${label} >> ../order`,
+              { cwd: projectDir },
+            );
+          };
+        if (property === "stopSandbox")
+          return async (sandboxId: string) => {
+            stopped.push(sandboxId);
+          };
+        const value: unknown = Reflect.get(target, property, target);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    }) satisfies SandboxProvider;
+    return { provider, switches, stopped };
+  };
+  const order = async (sandboxId: string) =>
+    (
+      await machine.executeCommand(sandboxId, "cat ../order 2>/dev/null", {
+        cwd: projectDir,
+      })
+    ).result
+      .split("\n")
+      .filter(Boolean);
+
+  it("widens for the Environment's part alone and narrows before the owner's", async () => {
+    const { id } = await machine.createSandbox({});
+    const { provider } = switching();
+    expect(
+      await runWorkspaceSetup({
+        provider,
+        sandboxId: id,
+        projectDir,
+        environment: "echo environment >> ../order",
+        personal: "echo personal >> ../order",
+        personalAllowed: true,
+        timeoutMinutes: 1,
+        network,
+      }),
+    ).toEqual({ status: "succeeded" });
+    expect(await order(id)).toEqual([
+      "wide",
+      "environment",
+      "narrow",
+      "personal",
+    ]);
+    const log = (
+      await machine.executeCommand(id, "cat ../.work-session/setup.log", {
+        cwd: projectDir,
+      })
+    ).result;
+    expect(log).toContain("Environment setup");
+    expect(log).toContain("Personal setup");
+  }, 30_000);
+
+  it("narrows once the part ended however it ended: failed, timed out or stopped", async () => {
+    const failing = await machine.createSandbox({});
+    const failed = switching();
+    expect(
+      await runWorkspaceSetup({
+        provider: failed.provider,
+        sandboxId: failing.id,
+        projectDir,
+        environment: "echo environment >> ../order\nexit 3",
+        personal: "echo personal >> ../order",
+        personalAllowed: true,
+        timeoutMinutes: 1,
+        network,
+      }),
+    ).toMatchObject({
+      status: "failed",
+      exitCode: 3,
+      parts: ["environment"],
+    });
+    // The owner's part never ran after the Environment's failed.
+    expect(await order(failing.id)).toEqual(["wide", "environment", "narrow"]);
+
+    const slow = await machine.createSandbox({});
+    const timed = switching();
+    expect(
+      await runWorkspaceSetup({
+        provider: timed.provider,
+        sandboxId: slow.id,
+        projectDir,
+        environment: "sleep 30",
+        personalAllowed: false,
+        timeoutMinutes: 0.02,
+        network,
+      }),
+    ).toMatchObject({ status: "failed", timedOut: true });
+    expect(timed.switches).toEqual(["wide", "narrow"]);
+
+    const stopping = await machine.createSandbox({});
+    const stopped = switching();
+    const abort = new AbortController();
+    expect(
+      await runWorkspaceSetup({
+        provider: stopped.provider,
+        sandboxId: stopping.id,
+        projectDir,
+        environment: "sleep 30",
+        personalAllowed: false,
+        timeoutMinutes: 1,
+        network,
+        signal: abort.signal,
+        onRun: async () => {
+          setTimeout(() => abort.abort(), 200);
+        },
+      }),
+    ).toEqual({ status: "aborted" });
+    expect(stopped.switches).toEqual(["wide", "narrow"]);
+  }, 30_000);
+
+  it("stops the sandbox and fails when it cannot be narrowed again", async () => {
+    const { id } = await machine.createSandbox({});
+    const { provider, switches, stopped } = switching({ failNarrow: true });
+    const ran = runWorkspaceSetup({
+      provider,
+      sandboxId: id,
+      projectDir,
+      environment: "echo environment >> ../order",
+      personal: "echo personal >> ../order",
+      personalAllowed: true,
+      timeoutMinutes: 1,
+      network,
+    });
+    await expect(ran).rejects.toBeInstanceOf(SetupNetworkError);
+    await expect(ran).rejects.toThrow("The machine did not answer");
+    expect(switches).toEqual(["wide"]);
+    expect(stopped).toEqual([id]);
+    expect(await order(id)).toEqual(["wide", "environment"]);
+  }, 30_000);
+
+  it("never widens while following a setup an earlier preparation started", async () => {
+    const { id } = await machine.createSandbox({});
+    const earlier = new AbortController();
+    // The earlier preparation goes away without stopping its setup.
+    void runWorkspaceSetup({
+      provider: machine,
+      sandboxId: id,
+      projectDir,
+      environment: "sleep 1; echo earlier >> ../order",
+      personalAllowed: false,
+      timeoutMinutes: 1,
+      signal: earlier.signal,
+    }).catch(() => {});
+    const deadline = Date.now() + 10_000;
+    while (
+      !(await machine.processes.listProcesses({ sandboxId: id })).some(
+        (process) => process.name === SETUP_PROCESS_NAME,
+      )
+    ) {
+      if (Date.now() > deadline) throw new Error("The setup never started");
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    const { provider, switches } = switching();
+    // Its command changed meanwhile, so it runs again after the earlier
+    // one ends: narrow, never widened in a sandbox something ran in.
+    expect(
+      await runWorkspaceSetup({
+        provider,
+        sandboxId: id,
+        projectDir,
+        environment: "echo later >> ../order",
+        personalAllowed: false,
+        timeoutMinutes: 1,
+        network,
+      }),
+    ).toEqual({ status: "succeeded" });
+    expect(switches).toEqual([]);
+    expect(await order(id)).toEqual(["earlier", "later"]);
   }, 30_000);
 });

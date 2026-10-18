@@ -10145,7 +10145,7 @@ export interface paths {
                         /** @enum {string} */
                         isolation?: "none" | "process" | "sandbox";
                         processes?: boolean;
-                        capabilities?: ("images" | "images.build" | "containers" | "network.policy" | "volumes")[];
+                        capabilities?: ("images" | "images.build" | "containers" | "network.policy" | "network.setup" | "volumes")[];
                         publicKey?: string;
                     };
                 };

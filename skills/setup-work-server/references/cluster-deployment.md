@@ -824,7 +824,7 @@ An Environment chooses its sandbox (ADR 0176) in `.work/project.json`:
   directory, as the stock server and workers do.
 
 Machines advertise `images`, `images.build`, `containers`,
-`network.policy`, and `volumes`, `sign-ins` and one
+`network.policy`, `network.setup`, and `volumes`, `sign-ins` and one
 `sign-in:<harness>:<member>` per member signed in on them, and a
 local-process machine `harness.claude-code` and `harness.codex` when those
 CLIs are on its `PATH`; `GET /_work/operator/machines` shows them with the
@@ -846,8 +846,10 @@ caches (ADR 0208):
       "workloads": ["agent"],
       "image": ".work/images/dev.Dockerfile",
       "requirements": { "containers": true },
-      "setup": "corepack enable && pnpm install --frozen-lockfile",
-      "setupTimeoutMinutes": 45,
+      "setup": {
+        "command": "corepack enable && pnpm install --frozen-lockfile",
+        "timeoutMinutes": 45
+      },
       "volumes": {
         "pnpm": "~/.local/share/pnpm/store",
         "docker": { "path": "/var/lib/docker", "exclusive": true, "sizeMb": 20480 }
@@ -857,18 +859,33 @@ caches (ADR 0208):
 }
 ```
 
-- `setup` is a shell command run in the project folder of every new
-  workspace before its first turn, once the chat's secrets and the member's
-  personal files are in place, and again when the command changes. A
-  workspace rebuilt after idle release runs it again. Its first failing
-  command stops it. Output is appended to `.work-session/setup.log` beside
-  the project, and the chat shows that the workspace is being set up. A
-  failure, or a run longer than `setupTimeoutMinutes` (30 by default), is
-  told to the agent with the end of the log; the turn goes on, and setup
-  runs again before the next turn. A member may add their own `setup` in
-  `.work/personal/environment.json`: it runs after the Environment's, only
-  in their own chats in Environments with `"personalCredentials": true`,
-  and only for turns they wrote.
+- `setup.command` is a shell command run in the project folder of every
+  new workspace before its first turn, once the chat's secrets and the
+  member's personal files are in place, again when the command changes,
+  and again when the workspace's base moves (a review chat reset to each
+  push). A workspace rebuilt after idle release runs it again. Its first
+  failing command stops it. Output is appended to `.work-session/setup.log`
+  beside the project, and the chat shows that the workspace is being set
+  up. A failure, or a run longer than `setup.timeoutMinutes` (30 by
+  default), is told to the agent with the end of the log; the turn goes
+  on, and setup runs again before the next turn. A member may add their
+  own `setup` in `.work/personal/environment.json`: it runs after the
+  Environment's, only in their own chats in Environments with
+  `"personalCredentials": true`, and only for turns they wrote.
+- `setup.network.allow` lists hosts the Environment's setup reaches beside
+  the Environment's own, while it runs (ADR 0257), for an Environment whose
+  `network` is `gateway` or `allowlist`: `"setup": { "command": "pnpm
+  install --frozen-lockfile", "network": { "allow": ["registry.npmjs.org",
+  "npm.pkg.github.com"] } }`. The sandbox is widened only when this
+  preparation made it, and narrowed again before the member's own setup and
+  the agent's turn; a setup that must run again gets a new sandbox in the
+  same Allocation (volumes stay). It needs a machine that advertises
+  `network.setup`: the container backend wherever it enforces
+  `network.policy`, or local-process under `WORK_UNENFORCED_EGRESS=accept`.
+  Microsandbox fixes a VM's network when it is created and does not offer
+  it. Project secrets, and in a member's own chats their files, are in place
+  while setup runs, so the hosts it may reach could receive them: keep only
+  caches in a review Environment's volumes, and list only hosts you trust.
 - `volumes` name directories kept on the machine for each owner (a member,
   or the project for its own chats and runs) and project: the owner's next
   sandbox on that machine mounts the same directory, and nobody else's does.

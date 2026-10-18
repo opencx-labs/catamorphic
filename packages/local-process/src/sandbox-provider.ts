@@ -11,6 +11,7 @@ import type {
   ProcessOutput,
   ReadProcessOutputArgs,
   SandboxCapability,
+  SandboxEgress,
   SandboxHandle,
   SandboxProcess,
   SandboxProcessProvider,
@@ -88,7 +89,8 @@ export interface LocalProcessProviderConfig {
   /**
    * The operator accepts that this machine cannot enforce an Environment's
    * egress policy and runs such Environments anyway (ADR 0176). Advertises
-   * `network.policy`; nothing restricts the network.
+   * `network.policy` and `network.setup` (ADR 0257); nothing restricts the
+   * network, and switching it changes nothing.
    */
   acceptUnenforcedEgress?: boolean;
   /**
@@ -201,7 +203,7 @@ export class LocalProcessSandboxProvider implements SandboxProvider {
     this.capabilities = [
       ...(this.docker ? [SANDBOX_CAPABILITIES.containers] : []),
       ...(this.acceptUnenforcedEgress
-        ? [SANDBOX_CAPABILITIES.egressPolicy]
+        ? [SANDBOX_CAPABILITIES.egressPolicy, SANDBOX_CAPABILITIES.setupNetwork]
         : []),
       SANDBOX_CAPABILITIES.volumes,
     ];
@@ -532,6 +534,20 @@ export class LocalProcessSandboxProvider implements SandboxProvider {
     if (opts?.commitId) {
       await this.gitCheckout(sandboxId, clonePath, opts.commitId);
     }
+  }
+
+  /**
+   * Nothing restricts a local process's network, so there is nothing to
+   * switch (ADR 0257); only an operator who accepted that may be asked.
+   */
+  async setEgress(_args: {
+    sandboxId: string;
+    egress: SandboxEgress;
+  }): Promise<void> {
+    if (!this.acceptUnenforcedEgress)
+      throw new Error(
+        "Local-process sandboxes cannot enforce an egress policy, so they cannot switch one",
+      );
   }
 
   async gitCheckout(

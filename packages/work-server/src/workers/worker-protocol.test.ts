@@ -88,6 +88,9 @@ describe("worker protocol versions", () => {
     expect(workerProtocolRefusal(String(WORKER_PROTOCOL.server))).toBe(
       undefined,
     );
+    // Protocol 2 workers lack only the egress switch, which placement never
+    // asks of a worker that does not offer it (ADR 0257).
+    expect(workerProtocolRefusal("2")).toBe(undefined);
     expect(workerProtocolRefusal(undefined)?.code).toBe("upgrade_required");
   });
 

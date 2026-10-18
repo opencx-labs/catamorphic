@@ -107,6 +107,31 @@ describe("remote operation queue (ADR 0187)", () => {
     expect(left).toEqual([]);
   });
 
+  it("switches a sandbox's egress through its executor (ADR 0257)", async () => {
+    const remote = await executor();
+    const egress = {
+      mode: "allowlist" as const,
+      allow: ["registry.npmjs.org", "work.acme.com:443"],
+    };
+    const switched = remote.provider.setEgress?.({
+      sandboxId: "sandbox-1",
+      egress,
+    });
+    expect(switched).toBeDefined();
+    const job = await remote.poll(crypto.randomUUID());
+    expect(job?.operation).toEqual({
+      kind: "egress",
+      sandboxId: "sandbox-1",
+      egress,
+    });
+    await remote.queue.complete({
+      ...remote.lease,
+      operationId: job?.id ?? "",
+      response: null,
+    });
+    await expect(switched).resolves.toBeUndefined();
+  });
+
   it("stores a receipt only sealed to the waiting controller (ADR 0207)", async () => {
     // Every response written to a queued row, as Postgres stores it.
     for (const statement of [

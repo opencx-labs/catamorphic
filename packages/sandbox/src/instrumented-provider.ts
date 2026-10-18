@@ -196,6 +196,25 @@ export function instrumentSandboxProvider(
       ),
   };
 
+  const setEgress = provider.setEgress?.bind(provider);
+  if (setEgress)
+    instrumented.setEgress = (args) =>
+      withSpan(
+        {
+          tracer,
+          name: "sandbox.set_egress",
+          attributes: {
+            ...base,
+            "catamorphic.sandbox.id": args.sandboxId,
+            "catamorphic.sandbox.egress.mode": args.egress.mode,
+            ...(args.egress.mode === "allowlist"
+              ? { "catamorphic.sandbox.egress.hosts": args.egress.allow.length }
+              : {}),
+          },
+        },
+        () => setEgress(args),
+      );
+
   if (hasHydrateWorkspace(provider)) {
     instrumented.hydrateWorkspace = (
       sandboxId: string,

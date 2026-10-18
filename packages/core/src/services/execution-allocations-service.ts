@@ -24,6 +24,14 @@ import {
   workerUsage,
 } from "./worker-capacity.js";
 
+const EgressSchema = z.discriminatedUnion("mode", [
+  z.object({ mode: z.literal("open") }),
+  z.object({
+    mode: z.literal("allowlist"),
+    allow: z.array(z.string()),
+  }),
+]);
+
 const AllocationPolicySchema = z.object({
   binding: z.object({
     id: z.string(),
@@ -92,15 +100,8 @@ const AllocationPolicySchema = z.object({
         ])
         .optional(),
       containers: z.boolean().optional(),
-      egress: z
-        .discriminatedUnion("mode", [
-          z.object({ mode: z.literal("open") }),
-          z.object({
-            mode: z.literal("allowlist"),
-            allow: z.array(z.string()),
-          }),
-        ])
-        .optional(),
+      egress: EgressSchema.optional(),
+      setupEgress: EgressSchema.optional(),
       volumes: z
         .array(
           z.object({
@@ -122,6 +123,12 @@ export interface EnvironmentSandbox {
   image?: SandboxImage;
   containers?: boolean;
   egress?: SandboxEgress;
+  /**
+   * What the sandbox reaches while its Environment's setup runs (ADR
+   * 0257): its own egress and the setup's hosts. Present only for a
+   * restricted Environment whose setup names a network.
+   */
+  setupEgress?: SandboxEgress;
   /** The Environment's volumes, keyed for the work's owner (ADR 0208). */
   volumes?: readonly EnvironmentSandboxVolume[];
 }

@@ -33,6 +33,7 @@ const capabilitiesSchema = z.array(
     SANDBOX_CAPABILITIES.imageBuild,
     SANDBOX_CAPABILITIES.containers,
     SANDBOX_CAPABILITIES.egressPolicy,
+    SANDBOX_CAPABILITIES.setupNetwork,
     SANDBOX_CAPABILITIES.volumes,
   ]),
 );

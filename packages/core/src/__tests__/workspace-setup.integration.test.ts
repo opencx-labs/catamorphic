@@ -10,6 +10,7 @@ import {
   type EnvironmentProvider,
   type EnvironmentRuntimeBinding,
   SANDBOX_CAPABILITIES,
+  type SandboxEgress,
   type SandboxProvider,
 } from "@catamorphic/sandbox";
 import { PROJECT_MANIFEST_PATH } from "@catamorphic/workflow/project-layout";
@@ -31,7 +32,9 @@ import { RecordingAdapter } from "./recording-adapter.js";
  * per workspace before its first turn, again when the command changes or
  * the workspace is rebuilt, with the session's secrets and after it the
  * owner's own setup; a failure is told to the agent and runs again next
- * turn. A new workspace that got an empty exclusive volume says so.
+ * turn. A new workspace that got an empty exclusive volume says so. A
+ * setup with its own network (ADR 0257) runs widened only in a sandbox
+ * nothing ran in: run again, it gets a new one.
  */
 
 const connectionString = process.env.DATABASE_URL ?? "";
@@ -134,12 +137,16 @@ describeIf("workspace setup in chats (ADR 0208)", () => {
       seedFiles: {},
     });
     projectId = (await projects.create(ada, { name: "Setup" })).id;
-    await writeManifest({ setup: `echo "environment v1" >> '${runs}'` });
+    await writeManifest({
+      setup: { command: `echo "environment v1" >> '${runs}'` },
+    });
     machine = new LocalProcessSandboxProvider({
       root: path.join(tmpDir, "machine"),
+      acceptUnenforcedEgress: true,
     });
     // The machine keeps volumes; mounting them is the provider's own work,
-    // so this one records them and boots a plain sandbox.
+    // so this one records them and boots a plain sandbox. Its egress
+    // switches are written into the runs, between setup's own lines.
     const keeping = new Proxy(machine, {
       get(target, property) {
         if (property === "createSandbox")
@@ -147,6 +154,13 @@ describeIf("workspace setup in chats (ADR 0208)", () => {
             created.push(opts);
             const { volumes: _volumes, ...rest } = opts;
             return target.createSandbox(rest);
+          };
+        if (property === "setEgress")
+          return async (args: { sandboxId: string; egress: SandboxEgress }) => {
+            await fs.appendFile(
+              runs,
+              `network ${args.egress.mode === "allowlist" && args.egress.allow.length > 0 ? "wide" : "narrow"}\n`,
+            );
           };
         const value: unknown = Reflect.get(target, property, target);
         return typeof value === "function" ? value.bind(target) : value;
@@ -160,7 +174,11 @@ describeIf("workspace setup in chats (ADR 0208)", () => {
         isolation: "sandbox",
         workloads: ["agent"],
         agentTopologies: ["controller"],
-        capabilities: [SANDBOX_CAPABILITIES.volumes],
+        capabilities: [
+          SANDBOX_CAPABILITIES.volumes,
+          SANDBOX_CAPABILITIES.egressPolicy,
+          SANDBOX_CAPABILITIES.setupNetwork,
+        ],
         resources: {},
       },
       sandboxProvider: keeping,
@@ -243,7 +261,9 @@ describeIf("workspace setup in chats (ADR 0208)", () => {
     await send(ada, chat.id, "second");
     expect(await ranLines()).toEqual(["environment v1"]);
 
-    await writeManifest({ setup: `echo "environment v2" >> '${runs}'` });
+    await writeManifest({
+      setup: { command: `echo "environment v2" >> '${runs}'` },
+    });
     await send(ada, chat.id, "third");
     expect(await ranLines()).toEqual(["environment v1", "environment v2"]);
 
@@ -272,7 +292,9 @@ describeIf("workspace setup in chats (ADR 0208)", () => {
   it("loads the chat's secrets and runs the owner's own setup only for the owner", async () => {
     await fs.rm(runs, { force: true });
     await writeManifest({
-      setup: `echo "environment \${DEMO_TOKEN:-none}" >> '${runs}'`,
+      setup: {
+        command: `echo "environment \${DEMO_TOKEN:-none}" >> '${runs}'`,
+      },
     });
     await personal.replace({
       identity: ada,
@@ -294,7 +316,9 @@ describeIf("workspace setup in chats (ADR 0208)", () => {
       "/workspace/.work-session/env",
     );
     await writeManifest({
-      setup: `echo "environment \${DEMO_TOKEN:-none} v2" >> '${runs}'`,
+      setup: {
+        command: `echo "environment \${DEMO_TOKEN:-none} v2" >> '${runs}'`,
+      },
     });
     await send(ada, chat.id, "second");
     expect((await ranLines()).slice(2)).toEqual([
@@ -317,7 +341,9 @@ describeIf("workspace setup in chats (ADR 0208)", () => {
     const flag = path.join(tmpDir, "fail");
     await fs.writeFile(flag, "");
     await writeManifest({
-      setup: `echo "attempt" >> '${runs}'\nif [ -f '${flag}' ]; then echo "boom: the registry is down"; exit 3; fi\necho "installed" >> '${runs}'`,
+      setup: {
+        command: `echo "attempt" >> '${runs}'\nif [ -f '${flag}' ]; then echo "boom: the registry is down"; exit 3; fi\necho "installed" >> '${runs}'`,
+      },
     });
     const chat = await sessions.create(ada, projectId);
     const failed = await send(ada, chat.id, "first");
@@ -364,5 +390,82 @@ describeIf("workspace setup in chats (ADR 0208)", () => {
     // Told once, when the workspace was made.
     const later = await send(cy, second.id, "later");
     expect(later.input).not.toContain("holds the data volume");
+  }, 120_000);
+
+  it("widens only a new sandbox for its setup, and makes a new one to set up again (ADR 0257)", async () => {
+    await fs.rm(runs, { force: true });
+    await personal.replace({
+      identity: ada,
+      projectId,
+      input: { files: [], setup: `echo "personal" >> '${runs}'` },
+    });
+    const installing = (version: string) =>
+      writeManifest({
+        network: { egress: "gateway" },
+        setup: {
+          command: `echo "install ${version}" >> '${runs}'`,
+          network: { allow: ["registry.npmjs.org"] },
+        },
+      });
+    await installing("v1");
+    const chat = await sessions.create(ada, projectId);
+    const { allocation_id } = await db!
+      .selectFrom("agent_sessions")
+      .select("allocation_id")
+      .where("id", "=", chat.id)
+      .executeTakeFirstOrThrow();
+    const allocation = await allocations().get({
+      identity: ada,
+      allocationId: allocation_id ?? "",
+    });
+    expect(allocation?.policy).toMatchObject({
+      sandbox: {
+        egress: { mode: "allowlist", allow: [] },
+        setupEgress: { mode: "allowlist", allow: ["registry.npmjs.org"] },
+      },
+    });
+    await send(ada, chat.id, "first");
+    // The Environment's part on the setup's network; the owner's after.
+    expect(await ranLines()).toEqual([
+      "network wide",
+      "install v1",
+      "network narrow",
+      "personal",
+    ]);
+    const first = await sandboxOf(chat.id);
+    expect(created.at(-1)?.egress).toEqual({ mode: "allowlist", allow: [] });
+
+    // A later turn in the same sandbox: narrowed first, nothing widens.
+    await send(ada, chat.id, "second");
+    expect((await ranLines()).slice(4)).toEqual(["network narrow"]);
+    expect(await sandboxOf(chat.id)).toBe(first);
+
+    // What the agent gathered there must not meet the next setup's hosts.
+    await machine.executeCommand(first, "echo rows > ~/gathered", {
+      cwd: "/workspace/project",
+    });
+    await installing("v2");
+    await send(ada, chat.id, "third");
+    expect((await ranLines()).slice(5)).toEqual([
+      "network narrow",
+      "network wide",
+      "install v2",
+      "network narrow",
+      "personal",
+    ]);
+    const second = await sandboxOf(chat.id);
+    expect(second).not.toBe(first);
+    // The used sandbox is gone, not stopped.
+    await expect(
+      fs.stat(path.join(tmpDir, "machine", first)),
+    ).rejects.toThrow();
+    expect(
+      (
+        await machine.executeCommand(second, "cat ~/gathered 2>/dev/null", {
+          cwd: "/workspace/project",
+        })
+      ).result,
+    ).toBe("");
+    await personal.remove({ identity: ada, projectId });
   }, 120_000);
 });

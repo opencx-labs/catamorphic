@@ -375,7 +375,7 @@ describe("egress proxy", () => {
         : {}),
     });
     closers.push(() => started.close());
-    return { socketPath: started.socketPath, refused };
+    return { socketPath: started.socketPath, refused, started };
   }
 
   /** Send raw bytes through the proxy socket and collect the reply. */
@@ -603,6 +603,97 @@ describe("egress proxy", () => {
     await closed;
     release();
     // A later request connects: by its answer the first had its turn.
+    const later = await exchange(
+      socketPath,
+      `CONNECT 127.0.0.1:${echoPort} HTTP/1.1\r\n\r\n`,
+      "pong",
+    );
+    expect(later).toContain("pong");
+    expect(connections).toHaveLength(1);
+  });
+
+  it("switches its policy: open tunnels close, new connections follow the new rules", async () => {
+    const narrow = { allow: [`127.0.0.1:${echoPort}`] };
+    const { socketPath, started } = await proxy(narrow);
+    // A tunnel held open under the first policy.
+    const tunnel = net.connect(socketPath);
+    const tunnelClosed = new Promise((resolve) =>
+      tunnel.once("close", resolve),
+    );
+    let tunnelReply = "";
+    tunnel.on("data", (chunk) => {
+      tunnelReply += chunk.toString();
+    });
+    tunnel.write(`CONNECT 127.0.0.1:${echoPort} HTTP/1.1\r\n\r\n`);
+    await vitestPoll(() => tunnelReply.includes("Connection Established"));
+    tunnel.write("ping");
+    await vitestPoll(() => tunnelReply.endsWith("ping"));
+
+    started.setPolicy({ allow: [`127.0.0.1:${originPort}`] });
+    expect(started.policy).toEqual({ allow: [`127.0.0.1:${originPort}`] });
+    await tunnelClosed;
+    expect(
+      await exchange(
+        socketPath,
+        `CONNECT 127.0.0.1:${echoPort} HTTP/1.1\r\n\r\n`,
+      ),
+    ).toMatch(/^HTTP\/1\.1 403/);
+    expect(
+      await exchange(
+        socketPath,
+        `GET http://127.0.0.1:${originPort}/wide HTTP/1.1\r\n\r\n`,
+      ),
+    ).toContain("origin saw /wide");
+
+    // And back: the first policy's host again, nothing else.
+    started.setPolicy(narrow);
+    expect(
+      await exchange(
+        socketPath,
+        `CONNECT 127.0.0.1:${echoPort} HTTP/1.1\r\n\r\n`,
+        "pong",
+      ),
+    ).toBe("HTTP/1.1 200 Connection Established\r\n\r\npong");
+    expect(
+      await exchange(
+        socketPath,
+        `GET http://127.0.0.1:${originPort}/narrow HTTP/1.1\r\n\r\n`,
+      ),
+    ).toMatch(/^HTTP\/1\.1 403/);
+    // Entries are checked before anything changes.
+    expect(() => started.setPolicy({ allow: ["not a host"] })).toThrow(
+      "is not an egress entry",
+    );
+    expect(started.policy).toEqual(narrow);
+  });
+
+  it("drops a request decided under a policy switched while its name resolved", async () => {
+    let release: () => void = () => {};
+    const resolving = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let asked = false;
+    const connections: net.Socket[] = [];
+    echo.on("connection", (socket) => connections.push(socket));
+    const { socketPath, started } = await proxy(
+      { allow: [`127.0.0.1:${echoPort}`, "slow.test"] },
+      {
+        lookup: async () => {
+          asked = true;
+          await resolving;
+          return [{ address: "127.0.0.1", family: 4 }];
+        },
+      },
+    );
+    const client = net.connect(socketPath);
+    const closed = new Promise((resolve) => client.once("close", resolve));
+    client.write(`CONNECT slow.test:${echoPort} HTTP/1.1\r\n\r\n`);
+    await vitestPoll(() => asked);
+    // The name resolves at once after the switch, before the proxy has
+    // seen its client close: the generation, not the close, drops it.
+    started.setPolicy({ allow: [`127.0.0.1:${echoPort}`] });
+    release();
+    await closed;
     const later = await exchange(
       socketPath,
       `CONNECT 127.0.0.1:${echoPort} HTTP/1.1\r\n\r\n`,

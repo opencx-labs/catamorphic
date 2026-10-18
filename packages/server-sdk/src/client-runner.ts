@@ -418,6 +418,14 @@ async function executeClientOperation({
         operation.path,
         operation.ref,
       );
+    case "egress":
+      if (!provider.setEgress)
+        throw new Error("This machine cannot switch a sandbox's network");
+      await provider.setEgress({
+        sandboxId: operation.sandboxId,
+        egress: operation.egress,
+      });
+      return null;
     case "process.start": {
       const { kind: _, ...args } = operation;
       return processesOf(provider).startProcess(args);

@@ -108,21 +108,28 @@ const ImageSchema = z
       "image must be an OCI reference (e.g. node:22) or a project Dockerfile path (e.g. .work/images/review.Dockerfile)",
   });
 
+const EgressAllowSchema = z
+  .array(
+    z.string().toLowerCase().refine(isEgressPattern, {
+      message: "allow entries are domains, *.suffix patterns, or IPv4",
+    }),
+  )
+  .min(1)
+  .max(200);
+
 const NetworkSchema = z.discriminatedUnion("egress", [
   z.strictObject({ egress: z.literal("open") }),
   z.strictObject({ egress: z.literal("gateway") }),
-  z.strictObject({
-    egress: z.literal("allowlist"),
-    allow: z
-      .array(
-        z.string().toLowerCase().refine(isEgressPattern, {
-          message: "allow entries are domains, *.suffix patterns, or IPv4",
-        }),
-      )
-      .min(1)
-      .max(200),
-  }),
+  z.strictObject({ egress: z.literal("allowlist"), allow: EgressAllowSchema }),
 ]);
+
+/** An Environment's workspace setup (ADRs 0208, 0257). */
+const SetupSchema = z.strictObject({
+  command: z.string().min(1).max(16_384),
+  timeoutMinutes: z.number().int().positive().max(240).optional(),
+  /** Hosts the setup reaches beside the Environment's own, while it runs. */
+  network: z.strictObject({ allow: EgressAllowSchema }).optional(),
+});
 
 /**
  * A secret name an Environment may list or `project.json` may declare (ADR
@@ -232,9 +239,8 @@ const ProjectEnvironmentDefinitionSchema = z
     personalCredentials: z.boolean().optional(),
     /** Project secrets this Environment's sandboxes receive (ADR 0206). */
     secrets: z.array(SecretNameSchema).max(200).optional(),
-    /** Run in every new workspace's project folder (ADR 0208). */
-    setup: z.string().min(1).max(16_384).optional(),
-    setupTimeoutMinutes: z.number().int().positive().max(240).optional(),
+    /** Run in every new workspace's project folder (ADRs 0208, 0257). */
+    setup: SetupSchema.optional(),
     /** Directories kept on the machine for each owner (ADR 0208). */
     volumes: z
       .record(
@@ -257,7 +263,18 @@ const ProjectEnvironmentDefinitionSchema = z
   })
   .refine((definition) => !(definition.device && definition.pool), {
     message: "An Environment runs on a member's device or on a pool, not both",
-  });
+  })
+  .refine(
+    (definition) =>
+      !definition.setup?.network ||
+      (definition.network !== undefined &&
+        definition.network.egress !== "open"),
+    {
+      message:
+        "Open egress has nothing to widen: setup.network needs the Environment's network to be gateway or allowlist",
+      path: ["setup", "network"],
+    },
+  );
 
 /** The Environment every project has unless its manifest declares others. */
 export const DEFAULT_ENVIRONMENT = "default";
@@ -291,11 +308,22 @@ export interface ProjectEnvironmentDefinition {
   personalCredentials?: boolean;
   /** Project secrets this Environment's sandboxes receive (ADR 0206). */
   secrets?: readonly string[];
-  /** Run in every new workspace's project folder (ADR 0208). */
-  setup?: string;
-  setupTimeoutMinutes?: number;
+  /** Run in every new workspace's project folder (ADRs 0208, 0257). */
+  setup?: EnvironmentSetup;
   /** Directories kept on the machine for each owner (ADR 0208). */
   volumes?: Readonly<Record<string, EnvironmentVolume>>;
+}
+
+/**
+ * An Environment's workspace setup (ADR 0208): a shell command run in the
+ * project folder of every new workspace, again when it changes or the
+ * workspace's base moves, within `timeoutMinutes`. `network` lists hosts
+ * it reaches beside the Environment's own while it runs (ADR 0257).
+ */
+export interface EnvironmentSetup {
+  command: string;
+  timeoutMinutes?: number;
+  network?: { allow: readonly string[] };
 }
 
 /** One volume an Environment declares (ADR 0208). */

@@ -213,6 +213,20 @@ export class ConnectionCapabilityGrantsService {
     return rows.length;
   }
 
+  /** End a session's grants of one channel at once. */
+  async revokeSession(args: {
+    agentSessionId: string;
+    channel: ConnectionGrantChannel;
+  }): Promise<void> {
+    await this.db
+      .updateTable("connection_capability_grants")
+      .set({ revoked_at: new Date() })
+      .where("agent_session_id", "=", args.agentSessionId)
+      .where("channel", "=", args.channel)
+      .where("revoked_at", "is", null)
+      .execute();
+  }
+
   async revokeAllocation(args: { allocationId: string }): Promise<void> {
     await this.db
       .updateTable("connection_capability_grants")

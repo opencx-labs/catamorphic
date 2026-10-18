@@ -335,6 +335,59 @@ describe("client runner transport (ADR 0187)", () => {
   });
 });
 
+describe("network switches (ADR 0257)", () => {
+  const egress = {
+    mode: "allowlist" as const,
+    allow: ["registry.npmjs.org"],
+  };
+  const sealedEgress = (id: string): Job => ({
+    id,
+    operation: sealRemoteOperation({
+      operationId: id,
+      executor: EXECUTOR,
+      operation: { kind: "egress", sandboxId: "sandbox-1", egress },
+      publicKey: KEYS.publicKey,
+    }),
+  });
+
+  it("switches a sandbox's egress where its provider can, and says so where it cannot", async () => {
+    const { provider } = recordingProvider();
+    const switched: unknown[] = [];
+    const switching = controlPlane([sealedEgress("job-1")]);
+    const worker = startClientRunner({
+      provider: {
+        ...provider,
+        setEgress: async (args) => {
+          switched.push(args);
+        },
+      },
+      transport: switching.transport,
+      keys: RUNNER_KEYS,
+      sandboxes: new Set(["sandbox-1"]),
+    });
+    await until(() => switching.receipts.length === 1, "the switch receipt");
+    await worker.stop();
+    expect(switched).toEqual([{ sandboxId: "sandbox-1", egress }]);
+    expect(switching.receipts).toEqual([{ jobId: "job-1", response: null }]);
+
+    const fixed = controlPlane([sealedEgress("job-2")]);
+    const runner = startClientRunner({
+      provider,
+      transport: fixed.transport,
+      keys: RUNNER_KEYS,
+      sandboxes: new Set(["sandbox-1"]),
+    });
+    await until(() => fixed.receipts.length === 1, "the refusal");
+    await runner.stop();
+    expect(fixed.receipts).toEqual([
+      {
+        jobId: "job-2",
+        error: "This machine cannot switch a sandbox's network",
+      },
+    ]);
+  });
+});
+
 describe("operations sealed to the runner (ADR 0207)", () => {
   it("runs nothing it cannot open with its own keys", async () => {
     const { provider, commands } = recordingProvider();

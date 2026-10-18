@@ -28,6 +28,13 @@ import { type Wakeup, WorkWakeups } from "./work-wakeups.js";
 const tracer = getTracer("@catamorphic/core");
 
 const stringMap = z.record(z.string(), z.string());
+const egressSchema = z.discriminatedUnion("mode", [
+  z.object({ mode: z.literal("open") }),
+  z.object({
+    mode: z.literal("allowlist"),
+    allow: z.array(z.string()).readonly(),
+  }),
+]);
 export const RemoteOperationSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("create"),
@@ -53,15 +60,7 @@ export const RemoteOperationSchema = z.discriminatedUnion("kind", [
         ])
         .optional(),
       containers: z.boolean().optional(),
-      egress: z
-        .discriminatedUnion("mode", [
-          z.object({ mode: z.literal("open") }),
-          z.object({
-            mode: z.literal("allowlist"),
-            allow: z.array(z.string()).readonly(),
-          }),
-        ])
-        .optional(),
+      egress: egressSchema.optional(),
       language: z.string().optional(),
       envVars: stringMap.optional(),
       autoStopInterval: z.number().optional(),
@@ -137,6 +136,13 @@ export const RemoteOperationSchema = z.discriminatedUnion("kind", [
     sandboxId: z.string(),
     path: z.string(),
     ref: z.string(),
+  }),
+  // A running sandbox's egress switches (ADR 0257): sent only to executors
+  // that offer `network.setup`.
+  z.object({
+    kind: z.literal("egress"),
+    sandboxId: z.string(),
+    egress: egressSchema,
   }),
   // Background processes (ADR 0174): short request/response operations; a
   // follower reads again from the cursor the last read returned.
@@ -564,6 +570,11 @@ function forwardingSandboxProvider(args: {
     gitCheckout: async (sandboxId, path, ref) => {
       await call({ kind: "checkout", sandboxId, path, ref });
     },
+    // Placement sends it only to executors offering `network.setup`; one
+    // that cannot switch refuses (ADR 0257).
+    setEgress: async ({ sandboxId, egress }) => {
+      await call({ kind: "egress", sandboxId, egress });
+    },
   };
 }
 
@@ -648,6 +659,9 @@ function operationTimeoutMs(operation: RemoteOperation): number {
   if (operation.kind === "machine.reset") return 15 * 60_000;
   // Codex prints its sign-in code within seconds, or not at all.
   if (operation.kind === "machine.codexSignIn") return 60_000;
+  // A switch only swaps the policy and closes connections. Narrowing that
+  // does not answer in time fails closed: the caller stops the sandbox.
+  if (operation.kind === "egress") return 60_000;
   // A command's own timeout plus a margin, never less than five minutes.
   const commandSeconds =
     operation.kind === "execute" ? (operation.options?.timeout ?? 0) : 0;

@@ -471,6 +471,7 @@ export {
   DEFAULT_ENVIRONMENT,
   DEFAULT_IDLE_RELEASE_MINUTES,
   DEFAULT_SETUP_TIMEOUT_MINUTES,
+  type EnvironmentSetup,
   type ProjectEnvironmentDefinition,
   type ProjectEnvironmentEntry,
   type ProjectEnvironmentPolicy,
@@ -876,7 +877,9 @@ export {
   parseSetupRecord,
   planWorkspaceSetup,
   SETUP_LOG_TAIL_LINES,
+  type SetupPart,
   type SetupRecord,
+  setupRecordAfter,
   type WorkspaceSetupOutcome,
 } from "./services/workspace-setup.js";
 export {

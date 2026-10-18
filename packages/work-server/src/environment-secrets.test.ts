@@ -547,7 +547,9 @@ it("masks every value the workspace held in what setup hands a teammate's turn",
           dev: {
             workloads: ["agent"],
             secrets: ["CLICKHOUSE_API_KEY"],
-            setup: `printf 'setup saw %s\\n' "$CLICKHOUSE_API_KEY"; exit 3`,
+            setup: {
+              command: `printf 'setup saw %s\\n' "$CLICKHOUSE_API_KEY"; exit 3`,
+            },
           },
         },
         defaultEnvironment: "dev",
