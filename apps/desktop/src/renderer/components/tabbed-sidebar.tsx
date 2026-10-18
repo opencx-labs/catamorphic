@@ -779,12 +779,23 @@ export function TabbedSidebar({
               ))}
             </div>
           ))}
-          {/* Only a section that asks for one has a thumb; every other
-              list fades the edge it continues past (cat-edge-fade). */}
+          {/* Every list fades the edge it continues past (cat-edge-fade).
+              The sidebar's own thumb rests on its outer edge, hidden until
+              it scrolls; a section that asks for one has its thumb a lane
+              in, never over the sidebar's (ADR 0248). */}
+          <OverlayScrollbar
+            lane="panel"
+            edge={side}
+            getArea={() => panelArea.current}
+          />
           {configuredTabs.some((tab) =>
             tab.sections.some((section) => section.scrollbar),
           ) && (
-            <OverlayScrollbar edge={side} getArea={() => panelArea.current} />
+            <OverlayScrollbar
+              lane="section"
+              edge={side}
+              getArea={() => panelArea.current}
+            />
           )}
           {tabs.length === 0 && (
             <div className="grid h-full place-items-center p-4">

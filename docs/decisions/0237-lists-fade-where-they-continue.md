@@ -1,6 +1,6 @@
 # 0237 — Lists fade where they continue
 
-- **Status:** Accepted
+- **Status:** Accepted (amended by [0248](0248-sidebar-thumbs-take-lanes.md): the sidebar's panel has a thumb too, hidden at rest, and a section's takes the lane inside it)
 - **Date:** 2026-10-17
 
 ## Context

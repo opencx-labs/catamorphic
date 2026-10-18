@@ -401,7 +401,7 @@ screen, or under reduced motion.
 | `.tabbed-sidebar[data-push]` width (the sidebar's place growing or shrinking with its panel beside content Work draws, so that content rides the panel's edge) | 200ms, the panel's easing and item wait | the panel's own slide, reversing with it |
 | `.chrome-toggle-slot` fold (the chrome's sidebar toggle folding away as a pushing panel arrives and unfolding as it leaves, its gap with it; `@starting-style` for arrival) | 200ms, the panel's easing and item wait | the panel's own slide; gone or at its own width once the panel is still |
 | `[data-tree-focus]` glide (a list's keyboard ring following focus from row to row: its `top` and `left`, only while it moves between rows, `data-glide`; arriving in a list it appears in place, and otherwise it rides its row's own 200ms slide when rows move under it) | 150ms | itself: the ring turns from where it is when the arrows outpace it |
-| `.overlay-scrollbar` fade (the scroll position of a section's list that asks for a thumb, `scrollbar: true`, on the window's edge while it scrolls or the pointer nears that edge) | 150ms | itself: one transition both ways, fading 900ms after the last scroll |
+| `.overlay-scrollbar` fade (the scroll position of the sidebar's panel, on its outer edge, and of a section's list that asks for a thumb, `scrollbar: true`, a lane in, while it scrolls or the pointer nears that edge) | 150ms | itself: one transition both ways, fading 900ms after the last scroll |
 | Markdown format bar (Web Animations in `components/markdown/motion.ts`: in, rising 4px from 97% and transparent; out, the same way back, in place and inert) | 160ms | itself: one motion both ways; shown again mid-exit, or hidden mid-entrance, it turns from where it is over the share of the 160ms left |
 | Markdown drag handle (`.cat-mdedit-handle`: appears with opacity and scale 0.9 to 1; the extension jumps the box to each block and the grip inside glides there on a `transform` animation, which runs on the compositor) and table row grip (`.cat-mdedit-rowgrip`, placed and gliding by `transform`) | 160ms appear / 140ms glide | itself |
 | Chip motion (Web Animations in `components/chip-rail.tsx`: a chip arriving rises 4px from 96% and transparent; one leaving fades and sinks the same way where it stood; chips that stay slide from their old place; the rail's `height` transition follows its lines) | 200ms in and slides, 180ms out | each other (exit snappier); reduced motion settles at once |
@@ -590,13 +590,14 @@ and one component (`source-section.tsx`) draws every list.
   their content out over the last 24px of an edge with more beyond it, and
   only then (the registry's `edge-fade` with `cat-edge-fade`); the chat's
   conversation and the palette's results do the same, instead of cutting
-  their content at a hard edge. A section may ask for a thumb
-  (`scrollbar: true`; none of Work's do): one thin thumb on the sidebar's
-  outer edge (the window's edge) stands for that section's list while it
-  moves, spanning its height; the sidebar's panel itself never has one. It
-  fades in as the list scrolls or the pointer nears the edge beside it, can
-  be dragged, and fades out a moment after
-  (`components/overlay-scrollbar.tsx`).
+  their content at a hard edge; a long note does too. Thin overlay thumbs
+  stand in for scrollbars, in lanes from the sidebar's outer edge in, and
+  never over each other (ADR 0248): the sidebar's own panel has one on the
+  edge, and a section that asks (`scrollbar: true`; none of Work's do) has
+  one a lane in, over its rows' leading padding, spanning that list's
+  height. Each is hidden at rest, fades in as its list scrolls or the
+  pointer nears the edge beside it, can be dragged, and fades out a moment
+  after (`components/overlay-scrollbar.tsx`).
 - **A row's chevron ends it.** A row with children ends with its
   disclosure, after its actions and centered under its section header's,
   so every row's icon starts in one place and only a child's indent says
@@ -3331,7 +3332,7 @@ drag never interrupts the agent. An agent talked to from another app hears
 which app and window the person was in, nothing more, and decides whether
 what they said was meant to be written there. See ADR 0236.
 
-### 2026-10-18: A restart never waits on work; a person names a chat
+### 2026-10-18: A restart never waits on work; a person names a chat; sidebar thumbs take lanes
 
 Restart to update was disabled while an agent or a terminal worked, so a
 busy day meant no update. It is never disabled now: Work hands every
@@ -3346,3 +3347,11 @@ dock, and the palette's "Rename chat…" names the chat in front. All open
 one rename dialog, the small form other actions use, filled with the
 current name. The chat keeps a name its person gave it; an agent that
 titles its conversations no longer replaces it. See ADR 0247.
+
+The sidebar itself had no thumb, so a long one gave no sense of where it
+was; a thumb for it on the outer edge would have sat where a section's
+showed. Thumbs now take lanes: the sidebar's on its outer edge, a
+section's that asks for one a lane in, over its rows' padding, never over
+the sidebar's. Both stay hidden until their list scrolls or the pointer
+nears that edge. Every other list still shows only the fade where it
+continues, a long note now included. See ADR 0248.

@@ -7,6 +7,7 @@ import {
   localEditorPath,
   useLocalProjectFiles,
 } from "../lib/local-project-files.js";
+import { fadeEdges } from "./catamorphic/edge-fade.js";
 import { OpenResourceButton } from "./open-resource-button.js";
 import {
   useSidebarContent,
@@ -131,7 +132,12 @@ export function SidebarNote({
           ) : note.isLoading ? (
             <p className="text-fg-faint">Loading note…</p>
           ) : (
-            <div className="sidebar-note max-h-96 overflow-y-auto break-words">
+            // A long note scrolls in place and fades the edge it
+            // continues past, as every sidebar list does (ADR 0237).
+            <div
+              ref={(scroller) => (scroller ? fadeEdges(scroller) : undefined)}
+              className="sidebar-note cat-edge-fade max-h-96 overflow-y-auto break-words"
+            >
               <ReactMarkdown
                 components={{
                   a: ({ children }) => <span>{children}</span>,

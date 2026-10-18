@@ -1903,9 +1903,11 @@ kbd {
 }
 /* The sidebar's lists (the panel, a section's own list) keep no scrollbar
    and no column for one, so rows sit evenly and nothing narrows when a
-   section grows. Each fades the edge it continues past (cat-edge-fade); a
-   section that asks for a thumb (scrollbar: true) also shows one on the
-   sidebar's outer edge while it scrolls (components/overlay-scrollbar.tsx). */
+   section grows. Each fades the edge it continues past (cat-edge-fade).
+   Thin overlay thumbs stand in while they scroll, in lanes from the outer
+   edge in (components/overlay-scrollbar.tsx, ADR 0248): the panel's on the
+   edge, in the panel's padding; a section's that asks for one (scrollbar:
+   true) a lane in, over its rows' leading padding, clear of their icons. */
 .sidebar-tab-panel,
 .sidebar-tab-panel * {
   scrollbar-width: none;
@@ -1919,24 +1921,31 @@ kbd {
   position: absolute;
   top: 4px;
   z-index: 1;
-  width: 8px;
+  width: 5px;
   pointer-events: none;
   opacity: 0;
   transition: opacity 150ms var(--ease-standard);
 }
-.overlay-scrollbar[data-edge="left"] {
+.overlay-scrollbar[data-lane="panel"][data-edge="left"] {
   left: 1px;
 }
-.overlay-scrollbar[data-edge="right"] {
+.overlay-scrollbar[data-lane="panel"][data-edge="right"] {
   right: 1px;
+}
+/* Past the panel's 8px padding and a 1px gap, in the rows' own 8px
+   padding: 3px from the panel's thumb and 2px from the rows' icons. */
+.overlay-scrollbar[data-lane="section"][data-edge="left"] {
+  left: 9px;
+}
+.overlay-scrollbar[data-lane="section"][data-edge="right"] {
+  right: 9px;
 }
 .overlay-scrollbar[data-shown="true"] {
   opacity: 1;
 }
 .overlay-scrollbar-thumb {
-  width: 6px;
-  margin-inline: auto;
-  border-radius: 3px;
+  width: 100%;
+  border-radius: 2.5px;
   background: color-mix(in srgb, var(--color-fg) 22%, transparent);
   transition: background-color 150ms var(--ease-standard);
 }
