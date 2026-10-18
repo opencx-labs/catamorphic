@@ -121,6 +121,36 @@ describe("session log", () => {
       id: "stubborn",
       harness: { placement: "host", adapter: stubbornAdapter },
     };
+    // The same, but its first attempt never reports its thread, as an ACP
+    // agent does until a new session holds the conversation (ADR 0241).
+    const forgetfulAdapter: HarnessAdapter = {
+      id: "echo",
+      capabilities: () => inner.capabilities(),
+      start: (attempt, host) => {
+        const first = attempt.reason === "initial";
+        const control = inner.start(attempt, {
+          emit: (event) => {
+            if (!(first && event.type === "thread")) host.emit(event);
+          },
+          callTool: (call) => host.callTool(call),
+          authorize: (call) => host.authorize(call),
+          request: (key, request, options) =>
+            host.request(key, request, options),
+          nativeState: host.nativeState,
+          signal: host.signal,
+        });
+        return {
+          ...control,
+          steer: (input) =>
+            first ? Promise.resolve(false) : control.steer(input),
+        };
+      },
+    };
+    const forgetful: RegisteredCodingAgent = {
+      ...echo,
+      id: "forgetful",
+      harness: { placement: "host", adapter: forgetfulAdapter },
+    };
     // Rate-limited on its first attempt: the turn waits to retry itself.
     let flakyStarts = 0;
     const flakyAdapter: HarnessAdapter = {
@@ -322,6 +352,7 @@ describe("session log", () => {
               echo,
               guarded,
               stubborn,
+              forgetful,
               flaky,
               signedIn,
               forger,
@@ -1159,6 +1190,52 @@ describe("session log", () => {
       .where("status", "in", ["pending", "sent"])
       .execute();
     expect(open).toEqual([]);
+  }, 40_000);
+
+  it("starts the turn's input over on a restart whose earlier attempt never reported its thread", async () => {
+    const project = await projects.create(identity, { name: "Forgetful" });
+    const session = await sessions.create(identity, project.id, {
+      agentId: "forgetful",
+    });
+    const projectId = project.id;
+    const sessionId = session.id;
+    await sessions.command(identity, projectId, sessionId, {
+      type: "send",
+      commandId: randomUUID(),
+      text: "[[wait 1500]] build the page",
+    });
+    await running(projectId, sessionId);
+    await sessions.command(identity, projectId, sessionId, {
+      type: "send",
+      commandId: randomUUID(),
+      text: "and the footer",
+      dispatch: "steer",
+    });
+    await vi.waitFor(
+      async () =>
+        expect(
+          orderedTurns(await folded(projectId, sessionId)).map(
+            (turn) => turn.status,
+          ),
+        ).toEqual(["completed"]),
+      { timeout: 20_000 },
+    );
+    const attempts = await db
+      .selectFrom("agent_turn_attempts")
+      .select(["reason", "status"])
+      .where("session_id", "=", sessionId)
+      .orderBy("ordinal")
+      .execute();
+    expect(attempts).toEqual([
+      { reason: "initial", status: "superseded" },
+      { reason: "steer_restart", status: "completed" },
+    ]);
+    const replies = (await folded(projectId, sessionId)).items.flatMap(
+      (item) => (item.kind === "assistant_message" ? [item.text] : []),
+    );
+    // A fresh thread never had the turn's input: it starts over with it.
+    expect(replies.join("\n")).toContain("build the page");
+    expect(replies.join("\n")).toContain("and the footer");
   }, 40_000);
 
   it("settles a turn with what its harness stored on the way out", async () => {

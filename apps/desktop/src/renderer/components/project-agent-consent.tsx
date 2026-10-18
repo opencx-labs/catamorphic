@@ -1,5 +1,6 @@
 import { Bot, KeyRound, ShieldAlert } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { displayCommand } from "../../shared/acp-agents.js";
 import { desktopApi, type ProjectAgentInfo } from "../lib/desktop-api.js";
 import { Modal } from "./modal.js";
 import { PendingButton } from "./pending-button.js";
@@ -40,13 +41,20 @@ export function ProjectAgentConsentDialog({
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const agent = request?.agent ?? null;
+  /** The definition as it is now, when it changed under review. */
+  const [latest, setLatest] = useState<ProjectAgentInfo | null>(null);
+  const agent = latest ?? request?.agent ?? null;
+  const acp = agent?.kind === "acp";
+  /** The request on screen now, so a late answer never lands on another. */
+  const shown = useRef(request);
+  shown.current = request;
 
   // Reset transient state whenever a new request comes in.
   // biome-ignore lint/correctness/useExhaustiveDependencies: request is the reset trigger, not a body dependency
   useEffect(() => {
     setBusy(false);
     setError(null);
+    setLatest(null);
   }, [request]);
 
   const approve = async () => {
@@ -54,16 +62,30 @@ export function ProjectAgentConsentDialog({
     setBusy(true);
     setError(null);
     const result = await desktopApi
-      .projectAgentApprove(agent.projectId, agent.slug)
+      .projectAgentApprove(
+        agent.projectId,
+        agent.slug,
+        agent.definitionHash ?? "",
+      )
       .catch((cause) => ({
         ok: false as const,
         error: cause instanceof Error ? cause.message : String(cause),
       }));
-    setBusy(false);
     if (!result.ok) {
+      const asked = request;
+      // Changed under review: what shows becomes what approving binds,
+      // and nothing can be approved until it does.
+      const now = await desktopApi
+        .projectAgentsList(agent.projectId)
+        .then((data) => data.agents.find((each) => each.slug === agent.slug))
+        .catch(() => undefined);
+      if (shown.current !== asked) return;
       setError(result.error ?? "Approval failed");
+      if (now && now.definitionHash !== agent.definitionHash) setLatest(now);
+      setBusy(false);
       return;
     }
+    setBusy(false);
     onApproved(agent);
   };
 
@@ -86,7 +108,7 @@ export function ProjectAgentConsentDialog({
           <p className="mb-4 text-xs text-fg-muted">
             {agent.consent === "stale"
               ? "This project agent's definition changed since you approved it, so your approval was reset."
-              : "This agent is defined by files committed to the project — anyone with write access can change it. Approving lets it run with your credentials."}
+              : `This agent is defined by files committed to the project, and anyone with write access can change them. ${acp ? "Approving runs its command on this machine as you." : "Approving lets it run with your credentials."}`}
           </p>
 
           <dl className="mb-4 space-y-2 text-xs">
@@ -94,15 +116,25 @@ export function ProjectAgentConsentDialog({
               <dt className="w-24 shrink-0 text-fg-faint">Harness</dt>
               <dd>{KIND_LABELS[agent.kind] ?? agent.kind}</dd>
             </div>
+            {agent.command && (
+              <div className="flex gap-2">
+                <dt className="w-24 shrink-0 text-fg-faint">Runs</dt>
+                <dd className="break-all font-mono">
+                  {displayCommand(agent.command)}
+                </dd>
+              </div>
+            )}
             <div className="flex gap-2">
               <dt className="w-24 shrink-0 text-fg-faint">Model</dt>
-              <dd>{agent.model || "Harness default"}</dd>
+              <dd>{acp ? "Its own" : agent.model || "Harness default"}</dd>
             </div>
             <div className="flex gap-2">
               <dt className="w-24 shrink-0 text-fg-faint">Runs with</dt>
               <dd className="flex items-center gap-1.5">
                 <KeyRound className="size-3.5 text-fg-faint" />
-                {SOURCE_LABELS[agent.credentialsSource]}
+                {acp
+                  ? "Its own configuration and sign-in"
+                  : SOURCE_LABELS[agent.credentialsSource]}
               </dd>
             </div>
             {agent.connections.length > 0 && (
@@ -156,9 +188,11 @@ export function ProjectAgentConsentDialog({
             >
               Cancel
             </button>
-            <span className="ml-auto text-[11px] text-fg-faint">
-              Uses your existing sign-in — configure in Settings
-            </span>
+            {!acp && (
+              <span className="ml-auto text-[11px] text-fg-faint">
+                Uses your existing sign-in. Configure it in Settings.
+              </span>
+            )}
           </div>
         </div>
       )}

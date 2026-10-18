@@ -13,7 +13,7 @@
  * test keeps the two in step.
  */
 
-export type AgentHarnessKind = "ai-sdk" | "claude-code" | "codex";
+export type AgentHarnessKind = "ai-sdk" | "claude-code" | "codex" | "acp";
 
 export type Sandboxing = "contained" | "propose" | "publish";
 export type ClaudeCodePermissionMode =
@@ -172,6 +172,7 @@ export function effectiveHarnessPermissions(args: {
         approvals: chosen.approvals ?? DESKTOP_HARNESS_DEFAULTS.approvals,
       };
     case "ai-sdk":
+    case "acp":
       return {};
   }
 }
@@ -198,6 +199,7 @@ export function permissionModeLabel(args: {
         effective.approvals,
       ).toLowerCase()}`;
     case "ai-sdk":
+    case "acp":
       return null;
   }
 }

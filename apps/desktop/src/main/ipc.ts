@@ -31,6 +31,7 @@ import {
   shell,
   type WebContents,
 } from "electron";
+import { HERMES } from "../shared/acp-agents.js";
 import type { AgentCommandsResult } from "../shared/agent-commands.js";
 import type { AgentDefaultModelResult } from "../shared/agent-default-model.js";
 import type {
@@ -52,6 +53,7 @@ import type { UsageSummary, UsageWindowDays } from "../shared/usage.js";
 import { rosterAgentId } from "../shared/voice.js";
 import type { BindingAuth } from "./agent-bindings-store.js";
 import { readAgentCredentials } from "./agent-credentials.js";
+import { findOnAgentPath } from "./agent-path.js";
 import {
   type AgentsStore,
   type CreateAgentInput,
@@ -228,6 +230,10 @@ export interface ProjectAgentInfo {
   delegation: import("@catamorphic/core").AgentDelegationPolicy | null;
   /** First lines of the persona file, for the consent dialog. */
   promptPreview: string | null;
+  /** The command an ACP agent runs on this machine once approved. */
+  command: string[] | null;
+  /** The definition as listed, which approving binds and nothing else. */
+  definitionHash: string | null;
   /**
    * Consent state for THIS profile: `not-required` (secret-credentialed),
    * `none` (never approved), `stale` (definition changed since approval),
@@ -789,7 +795,14 @@ export function registerIpcHandlers(
   ): ProjectAgentInfo => {
     const owning = profileConfig.forProject(projectId);
     const definition = entry.definition;
-    const source = definition?.credentials?.source ?? "profile";
+    // An ACP agent always needs its member's approval (ADR 0241).
+    const source =
+      definition?.kind === "acp"
+        ? "profile"
+        : (definition?.credentials?.source ?? "profile");
+    const hash = definition
+      ? definitionHash(definition, entry.promptFile)
+      : null;
     let consent: ProjectAgentInfo["consent"] = "not-required";
     // A connection-credentialed agent uses no personal credential (ADR 0180).
     if (
@@ -799,7 +812,6 @@ export function registerIpcHandlers(
       source !== "connection"
     ) {
       const binding = owning.agentBindings.get(projectId, entry.slug);
-      const hash = definitionHash(definition, entry.promptFile);
       consent = !binding
         ? "none"
         : binding.consentHash === hash
@@ -831,6 +843,11 @@ export function registerIpcHandlers(
       skills: definition?.skills ?? null,
       delegation: definition?.delegation ?? null,
       promptPreview,
+      command:
+        definition?.kind === "acp" && definition.acp?.command?.length
+          ? definition.acp.command
+          : null,
+      definitionHash: hash,
       consent,
       invalid: entry.invalid?.error ?? null,
     };
@@ -885,6 +902,8 @@ export function registerIpcHandlers(
       _event,
       projectId: string,
       slug: string,
+      /** The definition the person reviewed (`ProjectAgentInfo.definitionHash`). */
+      reviewedHash: string,
     ): Promise<{ ok: boolean; error?: string }> => {
       const server = state.current;
       if (!server) return { ok: false, error: "Server not running" };
@@ -897,7 +916,19 @@ export function registerIpcHandlers(
         return { ok: false, error: entry?.invalid?.error ?? "Agent not found" };
       }
       const definition = entry.definition;
-      const source = definition.credentials?.source ?? "profile";
+      const hash = definitionHash(definition, entry.promptFile);
+      // Approval binds what the person reviewed: a definition changed since
+      // (a sync, another chat's edit) is reviewed again first.
+      if (hash !== reviewedHash)
+        return {
+          ok: false,
+          error:
+            "This agent's definition changed while you were reviewing it. Review it again before approving.",
+        };
+      const source =
+        definition.kind === "acp"
+          ? "profile"
+          : (definition.credentials?.source ?? "profile");
       if (source === "secret" || source === "connection") {
         // Nothing personal to consent to; the secret or the Environment's
         // model connection is the authorization.
@@ -909,7 +940,8 @@ export function registerIpcHandlers(
         .list()
         .find((agent) => agent.harness === harness);
       let auth: BindingAuth;
-      if (definition.kind === "e2e-fake") {
+      // An ACP agent signs in on its own (ADR 0241): nothing of ours to bind.
+      if (definition.kind === "e2e-fake" || definition.kind === "acp") {
         auth = { mode: "local" };
       } else if (match?.auth === "api-key" && match.apiKey) {
         auth = { mode: "api-key", apiKey: match.apiKey };
@@ -924,10 +956,7 @@ export function registerIpcHandlers(
       } else {
         auth = { mode: "local" };
       }
-      owning.agentBindings.bind(projectId, slug, {
-        consentHash: definitionHash(definition, entry.promptFile),
-        auth,
-      });
+      owning.agentBindings.bind(projectId, slug, { consentHash: hash, auth });
       return { ok: true };
     },
   );
@@ -1182,11 +1211,15 @@ export function registerIpcHandlers(
   // already have a Claude Code / Codex login the `local` auth mode can
   // inherit? (E2E reports both present so wizard flows stay scripted.)
   ipcMain.handle("catamorphic:agent-setup-status", () => {
+    // Hermes (ADR 0241): the person's own install, where its agent will
+    // look for it.
+    const hermes = findOnAgentPath(HERMES.command[0]);
     if (process.env.CATAMORPHIC_E2E_FAKE_AGENT === "1") {
-      return { claudeCode: true, codex: true };
+      return { claudeCode: true, codex: true, hermes };
     }
     const home = app.getPath("home");
     return {
+      hermes,
       claudeCode: [
         path.join(home, ".claude", ".credentials.json"),
         path.join(home, ".claude.json"),
@@ -1295,6 +1328,8 @@ export function registerIpcHandlers(
     async (event, id: string) => {
       const agent = storesFor(event).agents.get(id);
       if (!agent) return false;
+      // An ACP agent signs in on its own (ADR 0241); Work never sees it.
+      if (agent.harness === "acp") return true;
       if (agent.auth === "api-key" || agent.harness === "ai-sdk") {
         return agent.apiKey !== null;
       }
@@ -1327,6 +1362,7 @@ export function registerIpcHandlers(
         return { health: forced, reauth: agent === undefined ? true : reauth };
       }
       if (!agent) return { health: "missing", reauth };
+      if (agent.harness === "acp") return { health: "ok", reauth };
       if (agent.auth === "api-key" || agent.harness === "ai-sdk") {
         return { health: agent.apiKey !== null ? "ok" : "missing", reauth };
       }
@@ -1502,6 +1538,14 @@ export function registerIpcHandlers(
     const agent = store.get(id);
     if (agent === undefined || agent.auth === "api-key") {
       return { started: false, error: "This agent authenticates with a key" };
+    }
+    // An ACP agent signs in on its own (ADR 0241), never through Work.
+    if (agent.harness === "acp") {
+      return {
+        started: false,
+        error:
+          "This agent signs in on its own. Change its sign-in in the agent itself.",
+      };
     }
 
     // E2E: logins would open browsers/terminals — stamp a fake credential

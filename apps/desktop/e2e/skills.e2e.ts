@@ -370,8 +370,13 @@ describe("skills as commands", () => {
     );
     expect(before.error).toBeTruthy();
     expect(before.commands).toEqual([]);
+    // Approves the definition as listed, as the consent dialog does.
     await app.eval(
-      `${invoke}.then(({api,projectId}) => api.projectAgentApprove(projectId, 'release-claude'))`,
+      `${invoke}.then(async ({api,projectId}) => {
+        const { agents } = await api.projectAgentsList(projectId);
+        const agent = agents.find((each) => each.slug === 'release-claude');
+        return api.projectAgentApprove(projectId, 'release-claude', agent.definitionHash);
+      })`,
     );
     const approved = await app.eval<{
       error?: string;

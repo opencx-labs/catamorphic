@@ -8,7 +8,7 @@
 > without Git until an operation requires it), git-native work tracking (per-turn agent checkpoint commits,
 > automatic remote sync with rescue branches, GitHub through a
 > provider-neutral CodeHost seam), multi-harness coding agents (built-in
-> AI SDK loop, Claude Code, Codex; durable sessions; MCP in both
+> AI SDK loop, Claude Code, Codex, ACP agents such as Hermes; durable sessions; MCP in both
 > directions), durable TypeScript workflows rendered as a visual graph and
 > executed on Postgres, and sandboxed user-built apps wired to workflows
 > through typed contracts. The host owns auth, tenancy, database, and
@@ -76,7 +76,7 @@ embedding architecture.
 
 ## Roadmap (direction, not shipped)
 
-- ACP harness: project agent definitions already accept kind "acp"; the Agent Client Protocol client is the planned harness behind it
+- ACP beyond the desktop: the desktop runs a project's local ACP agents (kind "acp", such as Hermes); the remote endpoint transport and ACP agents on the Work server are next
 - TS defineAgent authoring layer compiling to the committed agents/*.json substrate
 - Review-mode collaboration: PR-first sync, invites, native PR review depth
 - User-connected remote blob storage for large binaries beside git-tracked text

@@ -7,7 +7,9 @@ import type {
   HarnessEvent,
 } from "@catamorphic/agent-protocol/runner";
 import { NO_CAPABILITIES } from "@catamorphic/agent-protocol/runner";
-import { describe, expect, it, vi } from "vitest";
+import { definitionHash, validateAgentDefinition } from "@catamorphic/core";
+import { PROJECT_AGENTS_DIR } from "@catamorphic/workflow/project-layout";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 const starts = vi.hoisted(() => [] as AttemptStart[]);
 vi.mock("@catamorphic/claude-code", () => ({
@@ -104,6 +106,112 @@ it("registers Claude Code as a native host harness with the agent's settings", (
     harnessPermissions: { permissionMode: "plan" },
   });
   expect(harness.env?.CLAUDE_CONFIG_DIR).toContain("claude");
+});
+
+it("registers an ACP agent as its own command over ACP, one harness per agent, never the scripted fake (ADR 0241)", () => {
+  const hermes = {
+    id: "hermes-id",
+    name: "Hermes",
+    harness: "acp",
+    acp: { command: ["hermes", "acp"] },
+    model: "",
+    effort: "medium",
+    auth: "local",
+    apiKey: null,
+  };
+  const { agent, harness } = hostOf(
+    registryWith(hermes, { e2eFake: true }),
+    "hermes-id",
+  );
+  expect(harness.adapter.id).toBe("acp:hermes-id");
+  expect(agent.options).toEqual({ command: ["hermes", "acp"] });
+  expect(agent.defaults).toEqual({});
+  // Where Hermes' installer puts it, should PATH not say.
+  expect(harness.env?.PATH?.split(path.delimiter)).toContain(
+    path.join(os.homedir(), ".local", "bin"),
+  );
+});
+
+const projectRoots: string[] = [];
+afterEach(() => {
+  for (const root of projectRoots.splice(0))
+    fs.rmSync(root, { recursive: true, force: true });
+});
+
+/** A project folder holding one committed agent definition, `runner`. */
+function projectWith(definition: Record<string, unknown>): string {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "acp-project-"));
+  projectRoots.push(root);
+  const agents = path.join(root, PROJECT_AGENTS_DIR);
+  fs.mkdirSync(agents, { recursive: true });
+  fs.writeFileSync(
+    path.join(agents, "runner.json"),
+    JSON.stringify(definition),
+  );
+  return root;
+}
+
+const runnerDefinition = {
+  version: 1,
+  name: "Runner",
+  kind: "acp",
+  acp: { command: ["sh", "-c", "echo hi"] },
+} as const;
+
+it("waits for its member's approval before running a project's ACP agent, whatever its credentials say (ADR 0241)", () => {
+  const root = projectWith({
+    ...runnerDefinition,
+    credentials: { source: "secret", secret: "token" },
+  });
+  const agent = registryWith(claudeAgent, {
+    projectRootPath: () => root,
+  }).get("project:project:runner");
+  expect(agent?.unavailable).toContain("needs your approval");
+});
+
+/** A registry where the member approved `definition`, as committed. */
+function approvedRegistry(definition: Record<string, unknown>) {
+  const root = projectWith(definition);
+  const validated = validateAgentDefinition(definition);
+  if ("error" in validated) throw new Error(validated.error);
+  return registryWith(claudeAgent, {
+    e2eFake: true,
+    projectRootPath: () => root,
+    profileConfig: {
+      forProfile: () => ({
+        agents: { list: () => [claudeAgent], get: () => claudeAgent },
+        connections: { list: () => [] },
+      }),
+      forProject: () => ({
+        agentBindings: {
+          get: () => ({
+            consentHash: definitionHash(validated.definition),
+            auth: { mode: "local" },
+          }),
+        },
+      }),
+    },
+  });
+}
+
+it("runs an approved project ACP agent as its own command, on a harness of its own (ADR 0241)", () => {
+  const { agent, harness } = hostOf(
+    approvedRegistry(runnerDefinition),
+    "project:project:runner",
+  );
+  expect(agent.unavailable).toBeUndefined();
+  expect(harness.adapter.id).toBe("acp:project:project:runner");
+  expect(agent.options).toEqual({ command: ["sh", "-c", "echo hi"] });
+  expect(agent.defaults).toEqual({});
+});
+
+it("says how to fix an approved project ACP agent that names no command (ADR 0241)", () => {
+  const agent = approvedRegistry({
+    version: 1,
+    name: "Runner",
+    kind: "acp",
+  }).get("project:project:runner");
+  expect(agent?.unavailable).toContain("is an ACP agent without a command");
 });
 
 const probeConnection = {

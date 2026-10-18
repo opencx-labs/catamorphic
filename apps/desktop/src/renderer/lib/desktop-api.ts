@@ -169,7 +169,7 @@ export interface SessionCheckoutDetail {
   changedFiles: number | null;
 }
 
-export type AgentHarness = "ai-sdk" | "claude-code" | "codex";
+export type AgentHarness = "ai-sdk" | "claude-code" | "codex" | "acp";
 export type AgentEffort = "low" | "medium" | "high" | "xhigh" | "max";
 export type AgentAuthMode = "local" | "account" | "api-key";
 
@@ -213,6 +213,8 @@ export interface AgentInfo {
   name: string;
   harness: AgentHarness;
   provider?: "anthropic" | "openai" | "openrouter";
+  /** What an ACP agent runs (ADR 0241). */
+  acp?: { command: string[] };
   model: string;
   effort: AgentEffort;
   auth: AgentAuthMode;
@@ -276,6 +278,10 @@ export interface ProjectAgentInfo {
   skills: string[] | null;
   delegation: AgentDelegationPolicy | null;
   promptPreview: string | null;
+  /** The command an ACP agent runs on this machine once approved. */
+  command: string[] | null;
+  /** The definition as listed, which approving binds and nothing else. */
+  definitionHash: string | null;
   consent: "not-required" | "none" | "stale" | "ok";
   invalid: string | null;
 }
@@ -293,22 +299,26 @@ export interface ProjectAgentsData {
  */
 export function projectAgentAsInfo(agent: ProjectAgentInfo): AgentInfo {
   const harness: AgentHarness =
-    agent.kind === "claude-code"
-      ? "claude-code"
-      : agent.kind === "codex"
-        ? "codex"
-        : "ai-sdk";
+    agent.kind === "claude-code" ||
+    agent.kind === "codex" ||
+    agent.kind === "acp"
+      ? agent.kind
+      : "ai-sdk";
   return {
     id: agent.id,
     name: agent.name,
     harness,
     ...(harness === "ai-sdk" ? { provider: "anthropic" as const } : {}),
+    ...(harness === "acp" && agent.command
+      ? { acp: { command: agent.command } }
+      : {}),
     model: agent.model ?? "",
     effort: agent.effort ?? "medium",
     auth: agent.credentialsSource === "secret" ? "api-key" : "local",
     hasApiKey: false,
     apiKeyMasked: null,
-    accepts: ["image", "document"],
+    // ACP carries images; documents are named as not delivered.
+    accepts: harness === "acp" ? ["image"] : ["image", "document"],
     instructions: "",
     sandboxing: agent.sandboxing ?? DESKTOP_DEFAULT_SANDBOXING,
     harnessPermissions: effectiveHarnessPermissions({
@@ -341,6 +351,8 @@ export interface CreateAgentInput {
   name?: string;
   harness: AgentHarness;
   provider?: "anthropic" | "openai" | "openrouter";
+  /** What an ACP agent runs; required for one (ADR 0241). */
+  acp?: { command: string[] };
   model?: string;
   effort?: AgentEffort;
   auth?: AgentAuthMode;
@@ -1309,11 +1321,18 @@ export interface CatamorphicDesktopApi {
     id: string,
   ) => Promise<{ models: HarnessModelInfo[]; error?: string }>;
   projectAgentsList: (projectId: string) => Promise<ProjectAgentsData>;
+  /** Approves the definition the person reviewed, by its hash. */
   projectAgentApprove: (
     projectId: string,
     slug: string,
+    reviewedHash: string,
   ) => Promise<{ ok: boolean; error?: string }>;
-  agentSetupStatus: () => Promise<{ claudeCode: boolean; codex: boolean }>;
+  agentSetupStatus: () => Promise<{
+    claudeCode: boolean;
+    codex: boolean;
+    /** Where the person's Hermes is installed, if it is. */
+    hermes: string | null;
+  }>;
   /** Which Claude Code runs: the person's own install or Work's copy. */
   claudeCodeStatus: () => Promise<ClaudeCodeInstallStatus | null>;
   /** Run the person's own Claude Code updater. */
