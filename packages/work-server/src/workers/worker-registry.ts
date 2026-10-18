@@ -3,12 +3,14 @@ import {
   cleanupWorkerAllocations,
   forgetExecutorKey,
   nodeExecutor,
+  PlacementWaitsService,
   REMOTE_EPOCH_PATTERN,
   RemoteEpochSupersededError,
   RemoteExecutorLeaseLostError,
   RemoteOperationQueue,
   registerExecutorKey,
   type WorkerCapacity,
+  WorkerCapacitySchema,
   WorkerNodeLeaseHeldError,
   type WorkerNodesService,
 } from "@catamorphic/core";
@@ -179,6 +181,21 @@ export interface ProvisionedMachine {
   placement: WorkerPlacement;
 }
 
+/**
+ * How busy a machine a rule provisioned is (ADR 0258), by the database's
+ * clock: Allocations holding its capacity, how long since it last held
+ * one (or enrolled), how long since it last called, and while it is
+ * connected what it has free.
+ */
+export interface MachineLoad {
+  holding: number;
+  idleForMs: number;
+  /** Null when it never called. */
+  seenForMs: number | null;
+  /** Free capacity, while its lease is live; null otherwise. */
+  free: { workspaces: number; cpuMillis?: number; memoryMb?: number } | null;
+}
+
 /** Milliseconds since `released_at`, measured by the database. */
 const releasedFor = sql<
   number | null
@@ -246,16 +263,24 @@ export class WorkerSupersededError extends RemoteExecutorLeaseLostError {
 export class WorkWorkerRegistry {
   private readonly queue: RemoteOperationQueue;
 
+  private readonly waits: PlacementWaitsService;
+
   constructor(
     private readonly deps: {
       db: Kysely<DB>;
       nodes: WorkerNodesService;
       tenantId: string;
       authorityId: string;
+      /**
+       * A worker connected: hint this process's agent sweep, which tries
+       * chats waiting for a machine (ADR 0258) again at once.
+       */
+      connected?: () => void;
       log?: (line: string) => void;
     },
   ) {
     this.queue = new RemoteOperationQueue(deps.db);
+    this.waits = new PlacementWaitsService(deps.db);
   }
 
   /**
@@ -768,6 +793,10 @@ export class WorkWorkerRegistry {
       if (connected.superseded)
         this.deps.log?.(`Worker ${args.name} restarted and connected`);
       else this.deps.log?.(`Worker ${args.name} connected`);
+      // Work waiting for a machine may fit here now (ADR 0258): every
+      // replica's sweep tries it again at once.
+      await this.waits.wake({ tenantId: this.deps.tenantId });
+      this.deps.connected?.();
     } catch (error) {
       if (error instanceof WorkerNodeLeaseHeldError)
         throw new WorkerDisabledError();
@@ -987,6 +1016,100 @@ export class WorkWorkerRegistry {
         .execute();
       return true;
     });
+  }
+
+  /**
+   * How busy each enrolled machine of a rule is (ADR 0258), by name, for
+   * machines that scale with demand.
+   */
+  async machineLoad(): Promise<Map<string, MachineLoad>> {
+    const machines = this.deps.db
+      .selectFrom("work_workers")
+      .select("node_id")
+      .where("tenant_id", "=", this.deps.tenantId)
+      .where("machine_rule", "is not", null)
+      .where("revoked_at", "is", null);
+    const load = this.deps.db
+      .selectFrom("execution_allocations")
+      .select([
+        "worker_node_id",
+        sql<string>`count(*) FILTER (WHERE capacity_released_at IS NULL)`.as(
+          "holding",
+        ),
+        sql<string>`coalesce(sum(reserved_cpu_millis) FILTER (WHERE capacity_released_at IS NULL), 0)`.as(
+          "cpu",
+        ),
+        sql<string>`coalesce(sum(reserved_memory_mb) FILTER (WHERE capacity_released_at IS NULL), 0)`.as(
+          "memory",
+        ),
+        sql<Date | null>`max(capacity_released_at)`.as("last_released"),
+      ])
+      .where("worker_node_id", "in", machines)
+      .groupBy("worker_node_id")
+      .as("load");
+    const rows = await this.deps.db
+      .selectFrom("work_workers")
+      .leftJoin("worker_nodes", "worker_nodes.id", "work_workers.node_id")
+      .leftJoin(load, "load.worker_node_id", "work_workers.node_id")
+      .select([
+        "work_workers.name",
+        "worker_nodes.capacity",
+        "load.holding",
+        "load.cpu",
+        "load.memory",
+        sql<boolean>`coalesce(worker_nodes.enabled AND worker_nodes.lease_expires_at > now(), false)`.as(
+          "connected",
+        ),
+        sql<number>`(extract(epoch from (now() - greatest(work_workers.enrolled_at, load.last_released))) * 1000)::float8`.as(
+          "idle_for_ms",
+        ),
+        sql<
+          number | null
+        >`(extract(epoch from (now() - work_workers.last_seen_at)) * 1000)::float8`.as(
+          "seen_for_ms",
+        ),
+      ])
+      .where("work_workers.tenant_id", "=", this.deps.tenantId)
+      .where("work_workers.machine_rule", "is not", null)
+      .where("work_workers.revoked_at", "is", null)
+      .execute();
+    return new Map(
+      rows.map((row) => {
+        const holding = Number(row.holding ?? 0);
+        const capacity = WorkerCapacitySchema.safeParse(row.capacity);
+        const free =
+          row.connected && capacity.success
+            ? {
+                workspaces: Math.max(0, capacity.data.workspaces - holding),
+                ...(capacity.data.cpuMillis !== undefined
+                  ? {
+                      cpuMillis: Math.max(
+                        0,
+                        capacity.data.cpuMillis - Number(row.cpu ?? 0),
+                      ),
+                    }
+                  : {}),
+                ...(capacity.data.memoryMb !== undefined
+                  ? {
+                      memoryMb: Math.max(
+                        0,
+                        capacity.data.memoryMb - Number(row.memory ?? 0),
+                      ),
+                    }
+                  : {}),
+              }
+            : null;
+        return [
+          row.name,
+          {
+            holding,
+            idleForMs: Number(row.idle_for_ms),
+            seenForMs: msOrNull(row.seen_for_ms),
+            free,
+          },
+        ];
+      }),
+    );
   }
 
   /** The platform's id for the machine created with this enrollment code. */

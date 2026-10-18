@@ -488,6 +488,9 @@ async function createWorkServerInner(
     userId: string,
   ) => Promise<{ userId: string; groups: string[] } | undefined> = async () =>
     undefined;
+  // A worker that connects may take chats waiting for a machine (ADR
+  // 0258): this process's agent sweep hears it once the core is up.
+  let workerConnected = () => {};
   // Enrolled remote workers (ADR 0164). Each worker owns its node lease
   // (ADR 0192), so any replica serves its calls and runs its agents.
   const workers = new WorkWorkerRegistry({
@@ -495,6 +498,7 @@ async function createWorkServerInner(
     nodes: new WorkerNodesService(ownDb),
     tenantId: SERVER_TENANT_ID,
     authorityId: hostId,
+    connected: () => workerConnected(),
     log,
   });
   // A single person's server whose operator accepted personal credentials
@@ -711,6 +715,7 @@ async function createWorkServerInner(
   });
   disposers.push(() => worker.stop());
   const core = catamorphic.core;
+  workerConnected = () => core.wakeups.notify("agent");
   // Any replica recovers the work of replicas that are gone for good: runs
   // move to a live machine, chats are admitted again on their next turn.
   {
@@ -876,8 +881,28 @@ async function createWorkServerInner(
   if (machineReconciler) {
     const machineTimer = setInterval(reconcileMachines, 60_000);
     machineTimer.unref();
+    // Machines on demand (ADR 0258): demand is looked at every few seconds
+    // with one statement, and a pass runs when it changed.
+    let checking: Promise<void> | undefined;
+    const demandTimer = setInterval(() => {
+      checking ??= machineReconciler
+        .checkDemand()
+        .catch((error: unknown) =>
+          log(
+            `Machine demand check failed: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          ),
+        )
+        .finally(() => {
+          checking = undefined;
+        });
+    }, 10_000);
+    demandTimer.unref();
     disposers.push(async () => {
       clearInterval(machineTimer);
+      clearInterval(demandTimer);
+      await checking;
       await machineReconciler.settle();
     });
   }

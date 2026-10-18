@@ -71,9 +71,14 @@ export const HetznerCloudClassSchema = z.strictObject({
 /** Machines the operator enrolled into a pool with this class label. */
 export const PoolClassSchema = z.strictObject({ platform: z.literal("pool") });
 
-/** Machines the `machineProvisioner` hook creates and destroys. */
+/**
+ * Machines the `machineProvisioner` hook creates and destroys. `options`
+ * is the hook's own (an instance type, an image, a subnet): Work passes it
+ * through to every `create` unread.
+ */
 export const CustomClassSchema = z.strictObject({
   platform: z.literal("custom"),
+  options: z.record(z.string(), z.json()).optional(),
 });
 
 export const MachineClassSchema = z.discriminatedUnion("platform", [
