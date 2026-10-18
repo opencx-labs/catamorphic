@@ -52,7 +52,15 @@ export interface DesktopUpdaterControllerOptions {
   broadcast: (state: DesktopUpdateState) => void;
   logger?: Pick<Console, "error" | "info" | "warn">;
   prepareInstall?: () => Promise<void>;
-  canInstall?: () => Promise<boolean>;
+  /**
+   * The release downloaded and not installed yet, kept across launches: a
+   * check that finds it again has electron-updater verify its cached copy
+   * and offers Restart, never Download a second time.
+   */
+  downloaded?: {
+    load(): string | undefined;
+    save(version: string | undefined): void;
+  };
   /**
    * Whether the app runs from a place macOS can update in place. An app
    * opened from its disk image or from Downloads runs from a read-only
@@ -77,6 +85,15 @@ function releaseUrl(version: string): string {
   return `https://github.com/opencx-labs/catamorphic/releases/tag/desktop-v${version}`;
 }
 
+/** What the state says about a release found. */
+function release(info: UpdateInfoLike) {
+  return {
+    version: info.version,
+    ...(info.releaseName ? { releaseName: info.releaseName } : {}),
+    releaseUrl: releaseUrl(info.version),
+  };
+}
+
 function messageFor(error: unknown): string {
   if (error instanceof Error && error.message.trim()) return error.message;
   return "The update service could not be reached.";
@@ -98,6 +115,9 @@ export class DesktopUpdaterController {
       channel: options.channel,
       manual: false,
     };
+    // The release that waited is the one running now.
+    if (options.downloaded?.load() === options.currentVersion)
+      options.downloaded.save(undefined);
     const updater = options.updater;
     if (!options.supported || !updater) return;
 
@@ -114,6 +134,17 @@ export class DesktopUpdaterController {
       });
     });
     updater.on("update-available", (info) => {
+      // Downloaded before Work last quit: its cached copy is verified (or
+      // fetched again) without asking, and the release shows once ready.
+      // Failing that, it is offered for download as any release is.
+      if (info.version === options.downloaded?.load()) {
+        this.setState({ ...this.state, ...release(info) });
+        void this.fetchRelease((error) => {
+          this.logger.warn("[desktop] downloaded update unavailable:", error);
+          this.setReleaseState("available", info);
+        });
+        return;
+      }
       this.setReleaseState("available", info);
     });
     updater.on("update-not-available", () => {
@@ -133,6 +164,7 @@ export class DesktopUpdaterController {
       });
     });
     updater.on("update-downloaded", (info) => {
+      options.downloaded?.save(info.version);
       this.setReleaseState("downloaded", info);
     });
     updater.on("error", (error) => {
@@ -242,10 +274,19 @@ export class DesktopUpdaterController {
       manual: true,
       percent: 0,
     });
-    this.downloading = this.options.updater
+    return this.fetchRelease();
+  }
+
+  /** Start electron-updater's download of the release found, or join it. */
+  private fetchRelease(
+    failed: (error: unknown) => void = (error) => this.handleError(error),
+  ): Promise<void> {
+    const updater = this.options.updater;
+    if (!updater) return Promise.resolve();
+    this.downloading ??= updater
       .downloadUpdate()
       .then(() => undefined)
-      .catch((error) => this.handleError(error))
+      .catch(failed)
       .finally(() => {
         this.downloading = null;
       });
@@ -262,11 +303,9 @@ export class DesktopUpdaterController {
       message: undefined,
     });
     try {
-      if (this.options.canInstall && !(await this.options.canInstall()))
-        throw new Error(
-          "Finish active agents and terminals before restarting.",
-        );
-      // Never call MacUpdater.quitAndInstall until native preparation has
+      // Work never waits on agents or terminals to restart: working agents
+      // continue after it, and the rest ends with Work (ADR 0246). Never
+      // call MacUpdater.quitAndInstall until native preparation has
       // completed. Its preparation path registers an uncancellable late quit.
       this.preparing = true;
       try {
@@ -275,10 +314,6 @@ export class DesktopUpdaterController {
         this.preparing = false;
       }
       if (this.current().phase !== "installing") return;
-      if (this.options.canInstall && !(await this.options.canInstall()))
-        throw new Error(
-          "Work started while the update was preparing. Finish it, then restart.",
-        );
       this.options.updater.quitAndInstall(false, true);
     } catch (error) {
       this.logger.error("[desktop] update preparation failed:", error);
@@ -302,9 +337,7 @@ export class DesktopUpdaterController {
     )
       return;
     try {
-      // Moving relaunches Work, which ends running agents and terminals.
-      if (this.options.canInstall && !(await this.options.canInstall()))
-        throw new Error("Finish active agents and terminals first");
+      // Moving relaunches Work, as an update restart does (ADR 0246).
       const moved = await this.options.moveToApplications();
       if (!moved)
         this.setState({
@@ -341,9 +374,7 @@ export class DesktopUpdaterController {
       currentVersion: this.options.currentVersion,
       channel: this.state.channel,
       manual: true,
-      version: info.version,
-      ...(info.releaseName ? { releaseName: info.releaseName } : {}),
-      releaseUrl: releaseUrl(info.version),
+      ...release(info),
     });
   }
 

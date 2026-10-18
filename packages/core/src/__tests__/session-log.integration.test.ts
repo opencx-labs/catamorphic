@@ -2420,6 +2420,67 @@ describe("session log", () => {
     }
   }, 40_000);
 
+  it("hands every turn back when its host restarts, and the next process continues it", async () => {
+    const { projectId, sessionId } = await chat("Restart");
+    const restarting = makeService();
+    await restarting.sendMessage(identity, projectId, sessionId, "remember me");
+    await restarting.command(identity, projectId, sessionId, {
+      type: "send",
+      commandId: randomUUID(),
+      text: "[[wait 20000]]",
+    });
+    await vi.waitFor(
+      async () => {
+        const detail = await restarting.get(identity, projectId, sessionId);
+        expect(
+          orderedTurns(sessionStateFromSnapshot(detail.snapshot))[1]?.status,
+        ).toBe("running");
+      },
+      { timeout: 10_000 },
+    );
+    // A host installing an update: its in-process runner goes with it.
+    await restarting.stopLocalTurns({ handBack: "all" });
+    const handedBack = await db
+      .selectFrom("agent_turns")
+      .select(["status", "lease_owner"])
+      .where("session_id", "=", sessionId)
+      .orderBy("ordinal", "desc")
+      .executeTakeFirstOrThrow();
+    // Not interrupted here: the turn is the next process's to take.
+    expect(handedBack).toEqual({ status: "running", lease_owner: null });
+    const commands = await db
+      .selectFrom("agent_turn_commands")
+      .innerJoin("agent_turns", "agent_turns.id", "agent_turn_commands.turn_id")
+      .select("agent_turn_commands.kind")
+      .where("agent_turns.session_id", "=", sessionId)
+      .execute();
+    expect(commands.map((command) => command.kind)).not.toContain("interrupt");
+
+    const next = makeService();
+    const worker = next.startWorker({
+      resolveIdentity: async () => identity,
+      pollIntervalMs: 200,
+    });
+    try {
+      await vi.waitFor(
+        async () => {
+          const detail = await next.get(identity, projectId, sessionId);
+          const turns = orderedTurns(sessionStateFromSnapshot(detail.snapshot));
+          expect(turns.map((turn) => turn.status)).toEqual([
+            "completed",
+            "interrupted",
+            "completed",
+          ]);
+          expect(turns[2]?.continuationOf).toBe(turns[1]?.id);
+        },
+        { timeout: 20_000 },
+      );
+    } finally {
+      await worker.stop();
+      await next.stopLocalTurns();
+    }
+  }, 40_000);
+
   it("rolls back a turn and every later one", async () => {
     const { projectId, sessionId } = await chat("Rollback");
     await sessions.sendMessage(identity, projectId, sessionId, "one");

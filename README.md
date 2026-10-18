@@ -30,8 +30,10 @@ brew install --cask opencx-labs/tap/work
 You can also download the signed and notarized DMG from
 [GitHub Releases](https://github.com/opencx-labs/catamorphic/releases) and drag
 Work into Applications. Installed builds let you choose when to download and
-restart. Switch channels under **Help > Update Channel**, or use `brew upgrade`
-with the same cask you installed. Work keeps a pre-migration database backup.
+restart, and a restart never waits on running agents: they continue where they
+left off once Work reopens. Switch channels under **Help > Update Channel**, or
+use `brew upgrade` with the same cask you installed. Work keeps a
+pre-migration database backup.
 
 Work uses a fresh application identity and storage directory. Alpha data and
 credentials from the previous app are not migrated automatically. Project

@@ -91,7 +91,7 @@ function setup(
       | "installedInPlace"
       | "moveToApplications"
       | "prepareInstall"
-      | "canInstall"
+      | "downloaded"
       | "checkTimeoutMs"
     >
   > = {},
@@ -325,19 +325,13 @@ describe("DesktopUpdaterController", () => {
     expect(updater.quitAndInstall).not.toHaveBeenCalled();
   });
 
-  it("keeps Work where it is when the person declines the move or work is running", async () => {
-    let active = true;
+  it("keeps Work where it is when the person declines the move", async () => {
     const moveToApplications = vi.fn(async () => false);
     const { controller } = setup({
       installedInPlace: () => false,
       moveToApplications,
-      canInstall: async () => !active,
     });
     await controller.check(true);
-    await controller.move();
-    expect(moveToApplications).not.toHaveBeenCalled();
-    expect(controller.current().message).toMatch(/Finish active agents/);
-    active = false;
     await controller.move();
     expect(moveToApplications).toHaveBeenCalledTimes(1);
     expect(controller.current()).toMatchObject({
@@ -363,28 +357,72 @@ describe("DesktopUpdaterController", () => {
   });
 });
 
-it("checks active work again after preparation and requires another restart click", async () => {
-  const updater = new FakeUpdater();
-  let activeWork = false;
-  const controller = new DesktopUpdaterController({
-    currentVersion: "1",
-    channel: "preview",
-    supported: true,
-    updater,
-    broadcast: () => {},
-    logger: { error: vi.fn(), info: vi.fn(), warn: vi.fn() },
-    canInstall: async () => !activeWork,
-    prepareInstall: async () => {
-      activeWork = true;
+it("offers Restart, not Download, for a release downloaded before Work last quit", async () => {
+  let remembered: string | undefined;
+  const downloaded = {
+    load: () => remembered,
+    save: (version: string | undefined) => {
+      remembered = version;
+    },
+  };
+  const first = setup({ downloaded });
+  const checking = first.controller.check(false);
+  first.updater.available("0.1.0-alpha.2");
+  await checking;
+  const downloading = first.controller.download();
+  first.updater.downloaded("0.1.0-alpha.2");
+  await downloading;
+  expect(remembered).toBe("0.1.0-alpha.2");
+
+  // Work quit without restarting; the next launch finds the release again.
+  const next = setup({ downloaded });
+  const found = next.controller.check(false);
+  next.updater.available("0.1.0-alpha.2");
+  await found;
+  expect(next.updater.downloadUpdate).toHaveBeenCalledOnce();
+  next.updater.downloaded("0.1.0-alpha.2");
+  expect(next.states.map((state) => state.phase)).not.toContain("available");
+  expect(next.controller.current()).toMatchObject({
+    phase: "downloaded",
+    version: "0.1.0-alpha.2",
+  });
+
+  // A newer release than the one downloaded is offered as usual.
+  const newer = setup({ downloaded });
+  const checked = newer.controller.check(false);
+  newer.updater.available("0.1.0-alpha.3");
+  await checked;
+  expect(newer.updater.downloadUpdate).not.toHaveBeenCalled();
+  expect(newer.controller.current().phase).toBe("available");
+});
+
+it("offers the download again when the remembered one cannot be had", async () => {
+  const { controller, updater } = setup({
+    downloaded: { load: () => "0.1.0-alpha.2", save: () => {} },
+  });
+  updater.downloadUpdate.mockRejectedValueOnce(new Error("offline"));
+  const checking = controller.check(false);
+  updater.available("0.1.0-alpha.2");
+  await checking;
+  await vi.waitFor(() =>
+    expect(controller.current()).toMatchObject({
+      phase: "available",
+      version: "0.1.0-alpha.2",
+    }),
+  );
+});
+
+it("forgets the downloaded release once it is the one running", () => {
+  let remembered: string | undefined = "0.1.0-alpha.1";
+  setup({
+    downloaded: {
+      load: () => remembered,
+      save: (version) => {
+        remembered = version;
+      },
     },
   });
-  updater.downloaded("2");
-  await controller.install();
-  expect(updater.quitAndInstall).not.toHaveBeenCalled();
-  expect(controller.current()).toMatchObject({
-    phase: "downloaded",
-    message: expect.stringContaining("Work started"),
-  });
+  expect(remembered).toBeUndefined();
 });
 
 it("distinguishes an explicit status request from background progress", async () => {

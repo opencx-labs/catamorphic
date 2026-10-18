@@ -379,21 +379,25 @@ export class TurnEngine {
   }
 
   /**
-   * Stop claiming. Turns whose runner survives this process (a sandbox on
-   * a worker or a member's machine) are handed back at once for another
-   * replica to reattach; the rest are interrupted and settle here, within
-   * `timeoutMs`.
+   * Stop claiming. Turns `handBack` names (one whose runner survives this
+   * process, a sandbox on a worker or a member's machine, or every turn
+   * when the host starts again, ADR 0246) are handed back at once for the
+   * next holder; the rest are interrupted and settle here, within
+   * `timeoutMs`. A turn that finalizes always settles here.
    */
   async stop(input: {
     timeoutMs: number;
-    reattachable: (location: RunnerLocation) => boolean;
+    /** Its runner's location, or none while its attempt prepares. */
+    handBack: (location: RunnerLocation | undefined) => boolean;
   }): Promise<void> {
     this.stopping = true;
     this.stopDeadline = Date.now() + input.timeoutMs;
     const pending: Promise<void>[] = [];
     for (const local of this.local.values()) {
-      const location = local.channel?.location;
-      if (location && !local.finalizing && input.reattachable(location)) {
+      // Handed back by an earlier stop and still leaving: it is the next
+      // holder's, never interrupted here.
+      if (local.handingBack) continue;
+      if (!local.finalizing && input.handBack(local.channel?.location)) {
         local.handingBack = true;
         local.abort.abort();
         pending.push(
@@ -2217,7 +2221,17 @@ export class TurnEngine {
       if (ingested.started) runner = { ...runner, started: true };
       let turn = ingested.turn;
       const extra: SessionEvent[] = [];
-      if (ingested.title)
+      // A chat a person named keeps its name (ADR 0247).
+      if (
+        ingested.title &&
+        !(await trx
+          .selectFrom("agent_session_commands")
+          .select("command_id")
+          .where("session_id", "=", input.turn.sessionId)
+          .where("type", "=", "rename")
+          .where("status", "=", "accepted")
+          .executeTakeFirst())
+      )
         extra.push({
           type: "session.changed",
           session: { title: ingested.title },
@@ -2874,7 +2888,8 @@ export class TurnEngine {
     channel: RunnerChannel | undefined,
   ): Promise<void> {
     if (!channel) return;
-    // A runner on a sandbox that outlives this holder is left for the next.
+    // A runner handed back is left for the next holder (one in this
+    // process stops with it as its run ends).
     if (local.handingBack) return;
     await channel
       .send([{ id: `stop:${randomUUID()}`, command: { kind: "stop" } }])

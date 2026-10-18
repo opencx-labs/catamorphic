@@ -24,12 +24,17 @@ export interface DesktopUpdaterService {
   check(manual: boolean): Promise<boolean>;
   channel(): DesktopUpdateChannel;
   setChannel(channel: DesktopUpdateChannel): Promise<boolean>;
+  /**
+   * Work is quitting to relaunch (installing an update, moving into
+   * Applications): its shutdown hands working agents back for the next
+   * launch instead of stopping them (ADR 0246).
+   */
+  restarting(): boolean;
   dispose(): void;
 }
 
 export function registerDesktopUpdater(options: {
   broadcast: (channel: string, payload: unknown) => void;
-  canInstall: () => Promise<boolean>;
 }): DesktopUpdaterService {
   const { autoUpdater } = electronUpdater;
   const logger = createUpdaterLog(
@@ -43,13 +48,26 @@ export function registerDesktopUpdater(options: {
     defaultDesktopUpdateChannel(app.getVersion()),
   );
   const preparation = createUpdatePreparation({ updater: nativeUpdater });
+  let restarting = false;
   const controller = new DesktopUpdaterController({
     prepareInstall: () => preparation.prepare(),
-    canInstall: options.canInstall,
+    downloaded: {
+      load: () => preferences.downloaded(),
+      save: (version) => preferences.saveDownloaded(version),
+    },
     installedInPlace: () => app.isInApplicationsFolder(),
     // Electron moves the bundle (out of a disk image or App Translocation
     // too) and relaunches from Applications; false when the person declines.
-    moveToApplications: async () => app.moveToApplicationsFolder(),
+    moveToApplications: async () => {
+      restarting = true;
+      try {
+        restarting = app.moveToApplicationsFolder();
+      } catch (error) {
+        restarting = false;
+        throw error;
+      }
+      return restarting;
+    },
     currentVersion: app.getVersion(),
     channel,
     supported: app.isPackaged && process.platform === "darwin",
@@ -83,10 +101,13 @@ export function registerDesktopUpdater(options: {
   const supported = app.isPackaged && process.platform === "darwin";
   // The installer relaunches the app in the background; the next launch
   // reads this marker and brings its window to the front.
-  const onBeforeQuitForUpdate = () =>
+  const onBeforeQuitForUpdate = () => {
+    restarting = true;
     markUpdateRestart(app.getPath("userData"));
-  if (supported)
-    nativeUpdater.on("before-quit-for-update", onBeforeQuitForUpdate);
+  };
+  // Every build listens: a development build's restart rehearsal (the e2e
+  // suite's) announces the same quit.
+  nativeUpdater.on("before-quit-for-update", onBeforeQuitForUpdate);
   // Shortly after launch, every six hours of wall-clock time, a minute
   // after waking, and again soon after a failure (update-schedule.ts).
   const schedule = new UpdateSchedule({
@@ -108,15 +129,15 @@ export function registerDesktopUpdater(options: {
       await checkNow(true);
       return true;
     },
+    restarting: () => restarting,
     dispose() {
       preparation.dispose();
       schedule.dispose();
       if (supported) powerMonitor.removeListener("resume", onResume);
-      if (supported)
-        nativeUpdater.removeListener(
-          "before-quit-for-update",
-          onBeforeQuitForUpdate,
-        );
+      nativeUpdater.removeListener(
+        "before-quit-for-update",
+        onBeforeQuitForUpdate,
+      );
       for (const channel of [
         "catamorphic:update-state",
         "catamorphic:update-check",

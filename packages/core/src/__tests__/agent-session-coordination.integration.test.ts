@@ -1286,6 +1286,28 @@ describe("agent session coordination", () => {
     );
   });
 
+  it("keeps the name a person gives a chat, whatever its harness titles it", async () => {
+    const project = await projects.create(identity, { name: "Renamed chat" });
+    const session = await sessions.create(identity, project.id);
+    await sessions.sendMessage(identity, project.id, session.id, "Plan it");
+    await sessions.rename(identity, project.id, session.id, "  Offsite\n2027 ");
+    expect((await sessions.get(identity, project.id, session.id)).title).toBe(
+      "Offsite 2027",
+    );
+    await sessions.sendMessage(
+      identity,
+      project.id,
+      session.id,
+      "And the budget [[title Offsite plan]]",
+    );
+    expect((await sessions.get(identity, project.id, session.id)).title).toBe(
+      "Offsite 2027",
+    );
+    await expect(
+      sessions.rename(identity, project.id, session.id, "   "),
+    ).rejects.toThrow("1 to 500 characters");
+  });
+
   it("steers a subsession's result into its parent's working turn, like a subagent's", async () => {
     const project = await projects.create(identity, { name: "Subagents" });
     const parent = await sessions.create(identity, project.id);

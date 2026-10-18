@@ -6,6 +6,7 @@ import {
   useCreateAgentSession,
   useForkAgentSession,
   useProjects,
+  useRenameAgentSession,
   useUnarchiveAgentSession,
   useUpdateAgentSession,
   useWorkflows,
@@ -91,6 +92,7 @@ import {
   sidebarSections,
   visibleWorkspaceConfig,
 } from "../shared/workspace-config.js";
+import { ActionInputDialog } from "./components/action-input-dialog.js";
 import { findSearchInput } from "./components/action-search-input.js";
 import {
   type AgentPointer,
@@ -162,7 +164,9 @@ import { notePersonInput } from "./lib/app-focus.js";
 import {
   type ChatSessionAction,
   type ChatSessionMenuEntry,
+  chatName,
   chatSessionMenu,
+  renameChatInput,
 } from "./lib/chat-session-actions.js";
 import {
   type Chip,
@@ -1127,6 +1131,12 @@ export function App({
   );
   const archiveSession = useArchiveAgentSession(projectId);
   const unarchiveSession = useUnarchiveAgentSession(projectId);
+  const renameSession = useRenameAgentSession(projectId);
+  /** A chat being renamed from its tab or the dock, with the name it had. */
+  const [renameRequest, setRenameRequest] = useState<{
+    sessionId: string;
+    title: string;
+  } | null>(null);
   const createSubsession = useCreateAgentSession(projectId);
   const [subsessionParent, setSubsessionParent] = useState<AgentSession | null>(
     null,
@@ -1326,6 +1336,12 @@ export function App({
   const applySessionAction = (sessionId: string, action: ChatSessionAction) => {
     const session = sessionsById.get(sessionId);
     switch (action) {
+      case "rename":
+        setRenameRequest({
+          sessionId,
+          title: session ? sessionLabel(session) : "",
+        });
+        break;
       case "new-subsession":
         if (session) {
           setSubsessionError(null);
@@ -6850,6 +6866,20 @@ export function App({
                 setConsentRequest(null);
                 applyProjectAgent(agent, target);
               }}
+            />
+            <ActionInputDialog
+              request={
+                renameRequest && {
+                  label: "Rename chat",
+                  input: renameChatInput(renameRequest.title),
+                  run: (values) =>
+                    renameSession.mutateAsync({
+                      sessionId: renameRequest.sessionId,
+                      title: chatName(values),
+                    }),
+                }
+              }
+              onClose={() => setRenameRequest(null)}
             />
             <CreateSubsessionDialog
               parent={subsessionParent}

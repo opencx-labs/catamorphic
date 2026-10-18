@@ -3330,3 +3330,18 @@ leaves. A press on it is voice's only once it is a tap or a hold, so a
 drag never interrupts the agent. An agent talked to from another app hears
 which app and window the person was in, nothing more, and decides whether
 what they said was meant to be written there. See ADR 0236.
+
+### 2026-10-18: A restart never waits on work; a person names a chat
+
+Restart to update was disabled while an agent or a terminal worked, so a
+busy day meant no update. It is never disabled now: Work hands every
+working agent back as it quits, and the next launch continues each one
+where it left off, the way it does after a crash; terminals and other
+processes simply end. The alert says so while work runs. A release
+downloaded before Work quit for another reason stays downloaded: the
+next check offers Restart, not Download. See ADR 0246.
+
+"Rename…" leads a chat's menu, in the sidebar, on its tab and in the
+dock, and opens the same small form other actions use, filled with the
+current name. The chat keeps a name its person gave it; an agent that
+titles its conversations no longer replaces it. See ADR 0247.

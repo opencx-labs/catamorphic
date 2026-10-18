@@ -114,7 +114,7 @@ describe("UpdateBanner", () => {
     expect(desktopApi.updateDownload).toHaveBeenCalledOnce();
   });
 
-  it("holds restart while agents or terminals are active", async () => {
+  it("restarts while agents or terminals are active, saying what becomes of them", async () => {
     const container = await mount(
       {
         phase: "downloaded",
@@ -127,12 +127,14 @@ describe("UpdateBanner", () => {
     );
 
     expect(container.textContent).toContain(
-      "Finish active agents and terminals before restarting.",
+      "Working agents pick up where they left off, and open terminals close.",
     );
     const restart = Array.from(container.querySelectorAll("button")).find(
       (button) => button.textContent === "Restart to update",
     );
-    expect(restart?.disabled).toBe(true);
+    expect(restart?.disabled).toBe(false);
+    act(() => restart?.click());
+    expect(desktopApi.updateInstall).toHaveBeenCalledOnce();
   });
 });
 

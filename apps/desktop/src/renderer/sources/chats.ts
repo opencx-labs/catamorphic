@@ -9,7 +9,9 @@ import type { SidebarSourceItem } from "../../shared/sidebar-source.js";
 import { importedHarnessLabel } from "../components/harness-icon.js";
 import {
   type ChatSessionAction,
+  chatName,
   chatSessionMenu,
+  renameChatInput,
 } from "../lib/chat-session-actions.js";
 import { desktopApi } from "../lib/desktop-api.js";
 import { sessionLabel } from "../lib/session-label.js";
@@ -90,7 +92,13 @@ export function chatRow({
     unread,
     archived: session.visibility === "archived",
     remote: deps.remote,
-  }).map((entry) => ({ label: entry.label, action: entry.action }));
+  }).map((entry) => ({
+    label: entry.label,
+    action: entry.action,
+    ...(entry.action === "rename"
+      ? { input: renameChatInput(sessionLabel(session)) }
+      : {}),
+  }));
   return {
     id: session.id,
     parentId,
@@ -137,12 +145,30 @@ export function chatRow({
   };
 }
 
-/** Run a chat row's verb in the window that shows it. */
-export function chatAction(
+/** The person names the chat (ADR 0247); its rows follow the session's hint. */
+async function renameChat(
+  deps: WorkSourceDeps,
+  sessionId: string,
+  title: string,
+): Promise<void> {
+  const { error } = await deps.apiClient.PATCH(
+    "/api/projects/{projectId}/agent/sessions/{sessionId}/title",
+    {
+      params: { path: { projectId: deps.projectId, sessionId } },
+      body: { title },
+    },
+  );
+  if (error) throw new Error(error.error || "Could not rename this chat.");
+}
+
+/** Run a chat row's verb: a rename here, the rest in the window that shows it. */
+export async function chatAction(
   deps: WorkSourceDeps,
   itemId: string,
   action: string,
-) {
+  values?: Record<string, string>,
+): Promise<void> {
+  if (action === "rename") return renameChat(deps, itemId, chatName(values));
   if (!isChatAction(action))
     throw new Error("This chat does not support that action");
   deps.host().sessionAction(itemId, action);
@@ -221,7 +247,7 @@ export function chatsSource(
         stopSessions();
       };
     },
-    action: async ({ itemId, action }) => {
+    action: async ({ itemId, action, values }) => {
       // A chat opens through its address; these are its own verbs.
       if (openModeForAction(action) || action === "open")
         return {
@@ -231,7 +257,7 @@ export function chatsSource(
           }),
           mode: openModeForAction(action),
         };
-      chatAction(deps, itemId, action);
+      await chatAction(deps, itemId, action, values);
       return undefined;
     },
     ...(kind === "chats"

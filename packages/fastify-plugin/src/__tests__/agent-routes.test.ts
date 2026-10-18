@@ -165,6 +165,47 @@ describe("agent routes", () => {
       await app.close();
     });
 
+    it("renames a chat through core, trimmed and bounded, only where it is held", async () => {
+      const rename = vi.fn(async (_identity, _projectId, _sessionId, title) => {
+        if (title === "Elsewhere")
+          throw new AgentSessionAuthorityRequiredError(SESSION_ID, "laptop", 2);
+      });
+      const app = createTestApp({
+        core: { agentSessions: { rename } } as never,
+      });
+      await app.ready();
+      const url = `/api/projects/${PROJECT_ID}/agent/sessions/${SESSION_ID}/title`;
+      const renamed = await app.inject({
+        method: "PATCH",
+        url,
+        payload: { title: "  Release notes " },
+      });
+      expect(renamed.statusCode).toBe(200);
+      expect(rename).toHaveBeenCalledWith(
+        expect.anything(),
+        PROJECT_ID,
+        SESSION_ID,
+        "Release notes",
+      );
+      for (const title of ["   ", "x".repeat(501)]) {
+        const refused = await app.inject({
+          method: "PATCH",
+          url,
+          payload: { title },
+        });
+        expect(refused.statusCode).toBe(400);
+      }
+      const elsewhere = await app.inject({
+        method: "PATCH",
+        url,
+        payload: { title: "Elsewhere" },
+      });
+      expect(elsewhere.statusCode).toBe(409);
+      expect(elsewhere.json()).toMatchObject({ code: "authority_required" });
+      expect(rename).toHaveBeenCalledTimes(2);
+      await app.close();
+    });
+
     it("sets session metadata by key through core, with core's refusals", async () => {
       const setMetadata = vi.fn(async ({ values }) => {
         if ("forbidden" in values) throw new AccessDeniedError();

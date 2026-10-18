@@ -255,7 +255,7 @@ describe("the turn engine over sandbox runners", () => {
   afterAll(async () => {
     await Promise.all(
       engines.map((engine) =>
-        engine.stop({ timeoutMs: 1_000, reattachable: () => false }),
+        engine.stop({ timeoutMs: 1_000, handBack: () => false }),
       ),
     );
     for (const sandboxId of sandboxes.values())
@@ -284,7 +284,10 @@ describe("the turn engine over sandbox runners", () => {
       async () => (await turnOf(sessionId)).status === "finalizing",
       "the turn to finalize",
     );
-    await a.stop({ timeoutMs: 10_000, reattachable: () => true });
+    await a.stop({
+      timeoutMs: 10_000,
+      handBack: (location) => location !== undefined,
+    });
     expect(await working).toBe(true);
     expect((await turnOf(sessionId)).status).toBe("completed");
     expect(await stored(sessionId)).toEqual([
@@ -347,7 +350,10 @@ describe("the turn engine over sandbox runners", () => {
       "the attempt to be superseded",
     );
     // Replica a stops meanwhile and hands the restart back.
-    await a.stop({ timeoutMs: 5_000, reattachable: () => true });
+    await a.stop({
+      timeoutMs: 5_000,
+      handBack: (location) => location !== undefined,
+    });
     await working;
     // Replica a left the superseded runner winding down, nothing stored.
     const [superseded] = await attemptsOf(sessionId);

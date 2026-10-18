@@ -1238,6 +1238,11 @@ export const UpdateAgentSessionActivitySchema = z.object({
   activity: z.string().max(500).nullable(),
 });
 
+/** A person's name for their chat; it keeps it (ADR 0247). */
+export const RenameAgentSessionSchema = z.object({
+  title: z.string().trim().min(1).max(500),
+});
+
 export const CreateAgentSessionSchema = z.object({
   systemPrompt: z.string().optional(),
   /** Host-registry key of the agent to run this session on. */

@@ -70,6 +70,7 @@ import {
   OkSchema,
   ProjectAgentEntrySchema,
   ProjectIdParamsSchema,
+  RenameAgentSessionSchema,
   ResumeAgentSessionSchema,
   SessionCommandSchema,
   SessionConflictSchema,
@@ -1021,6 +1022,49 @@ export function registerAgentRoutes(app: FastifyInstance, ctx: RouteContext) {
           request.params.projectId,
           request.params.sessionId,
           request.body.activity,
+        );
+        return reply.send({ ok: true });
+      } catch (error) {
+        if (
+          error instanceof ProjectNotFoundError ||
+          error instanceof AgentSessionNotFoundError
+        ) {
+          return reply.status(404).send({ error: "Session not found" });
+        }
+        // Only the host holding the session changes it.
+        const conflict = sessionConflict(error);
+        if (conflict) return reply.status(409).send(conflict);
+        throw error;
+      }
+    },
+  });
+
+  // A person names their chat; a harness's title no longer replaces it
+  // (ADR 0247).
+  typed.route({
+    method: "PATCH",
+    url: "/projects/:projectId/agent/sessions/:sessionId/title",
+    schema: {
+      params: AgentSessionIdParamsSchema,
+      body: RenameAgentSessionSchema,
+      response: {
+        200: OkSchema,
+        404: ErrorSchema,
+        409: SessionConflictSchema,
+        503: ErrorSchema,
+      },
+    },
+    handler: async (request, reply) => {
+      const agentSessions = ctx.core?.agentSessions;
+      if (!agentSessions) {
+        return reply.status(503).send({ error: "Coding agent not configured" });
+      }
+      try {
+        await agentSessions.rename(
+          resolveIdentity(request),
+          request.params.projectId,
+          request.params.sessionId,
+          request.body.title,
         );
         return reply.send({ ok: true });
       } catch (error) {
