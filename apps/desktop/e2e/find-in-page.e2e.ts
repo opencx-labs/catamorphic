@@ -50,25 +50,41 @@ const count = `document.querySelector('[data-testid="find-count"]')?.textContent
 /**
  * A key pressed in the page, through its real input path. That needs the
  * window focused, and the page's own document: focusing the <webview>
- * hands focus over a frame or more later, and a key sent before then lands
- * nowhere (the first Cmd+F on macOS CI).
+ * hands focus over a frame or more later. Even then macOS CI can drop an
+ * injected key with the page focused (the first Cmd+F: the page saw no
+ * key at all), so the key is sent again only when the page never saw it.
  */
 const pageKey = async (keyCode: string, modifiers: string[] = []) => {
-  await focusWindow(app);
-  // The keys the page sees, for a wait on what they do that times out.
+  // The keys the page sees: what tells a dropped key from a slow one, and
+  // what a wait on what they do reports when it times out.
   await app.eval(
     `${view}.executeJavaScript("if (!window.__e2eKeys) { window.__e2eKeys = []; addEventListener('keydown', (event) => window.__e2eKeys.push(event.key + (event.metaKey ? '+meta' : '') + (event.ctrlKey ? '+ctrl' : '')), true); } true", true)`,
   );
-  await app.waitFor(
-    `(() => { const page = ${view}; page.focus(); return page.executeJavaScript('document.hasFocus()', true); })()`,
-    { label: "the page has focus" },
-  );
-  return app.eval(`(() => {
-    const page = ${view};
-    page.sendInputEvent({ type: 'keyDown', keyCode: ${JSON.stringify(keyCode)}, modifiers: ${JSON.stringify(modifiers)} });
-    page.sendInputEvent({ type: 'keyUp', keyCode: ${JSON.stringify(keyCode)}, modifiers: ${JSON.stringify(modifiers)} });
-    return true;
-  })()`);
+  for (let attempt = 1; ; attempt += 1) {
+    await focusWindow(app);
+    await app.waitFor(
+      `(() => { const page = ${view}; page.focus(); return page.executeJavaScript('document.hasFocus()', true); })()`,
+      { label: "the page has focus" },
+    );
+    const seen = await app.eval<number>(
+      `${view}.executeJavaScript('window.__e2eKeys.length', true)`,
+    );
+    await app.eval(`(() => {
+      const page = ${view};
+      page.sendInputEvent({ type: 'keyDown', keyCode: ${JSON.stringify(keyCode)}, modifiers: ${JSON.stringify(modifiers)} });
+      page.sendInputEvent({ type: 'keyUp', keyCode: ${JSON.stringify(keyCode)}, modifiers: ${JSON.stringify(modifiers)} });
+      return true;
+    })()`);
+    try {
+      await app.waitFor(
+        `${view}.executeJavaScript('window.__e2eKeys.length', true).then((count) => count > ${seen})`,
+        { timeoutMs: 2_000, label: "the page saw the key" },
+      );
+      return;
+    } catch (error) {
+      if (attempt === 3) throw error;
+    }
+  }
 };
 const command = mac ? "meta" : "control";
 const SHIFT = 8;

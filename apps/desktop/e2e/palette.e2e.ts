@@ -715,6 +715,12 @@ it("opens a chat asked for from a New Tab in that tab, in its place", async () =
   const page = (await keys()).find((key) => key.startsWith("browser:"));
   if (!page) throw new Error("No page to put in front");
   await select(page);
+  // In front before Cmd+N: asked while the fresh chat still is, Cmd+N
+  // keeps to that chat, as it should.
+  await wait(
+    `return !!document.querySelector('[data-tab-orientation] [data-point-key="${page}"] [aria-current]')`,
+    "the page in front",
+  );
   await shortcut("n");
   await wait(
     `return !!document.querySelector('section[data-floating-chat] [data-composer-input]')`,
