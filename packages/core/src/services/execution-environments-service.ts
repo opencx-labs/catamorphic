@@ -16,6 +16,7 @@ import {
   harnessCapability,
   MACHINE_CAPABILITIES,
   resolveEgress,
+  resolveSetupEgress,
   SANDBOX_CAPABILITIES,
   signInCapability,
   volumeKey,
@@ -67,8 +68,10 @@ export interface EnvironmentAdmission {
   /**
    * What runs in each new workspace's project folder before its first turn
    * (ADR 0208), as the Environment says now: a changed command runs again.
+   * `network` asks for the setup's own network while it runs (ADR 0257);
+   * the Allocation fixed what that is when it was admitted.
    */
-  setup?: { command: string; timeoutMinutes: number };
+  setup?: AdmittedSetup;
   /** How long unattended escalations wait for a person (ADR 0176). */
   approvals?: { waitMinutes: number };
   /**
@@ -83,6 +86,13 @@ export interface EnvironmentAdmission {
    * reach its sandboxes (ADR 0206).
    */
   isolated: boolean;
+}
+
+/** An Environment's setup as admission reads it (ADRs 0208, 0257). */
+export interface AdmittedSetup {
+  command: string;
+  timeoutMinutes: number;
+  network?: { allow: readonly string[] };
 }
 
 /**
@@ -212,6 +222,9 @@ export function sandboxCapabilitiesFor(
     ...(definition.network && definition.network.egress !== "open"
       ? [SANDBOX_CAPABILITIES.egressPolicy]
       : []),
+    // A setup with its own network needs a machine that switches a running
+    // sandbox's egress (ADR 0257).
+    ...(definition.setup?.network ? [SANDBOX_CAPABILITIES.setupNetwork] : []),
     ...(Object.keys(definition.volumes ?? {}).length > 0
       ? [SANDBOX_CAPABILITIES.volumes]
       : []),
@@ -749,10 +762,13 @@ export class ExecutionEnvironmentsService {
         ...(definition.setup
           ? {
               setup: {
-                command: definition.setup,
+                command: definition.setup.command,
                 timeoutMinutes:
-                  definition.setupTimeoutMinutes ??
+                  definition.setup.timeoutMinutes ??
                   DEFAULT_SETUP_TIMEOUT_MINUTES,
+                ...(definition.setup.network
+                  ? { network: definition.setup.network }
+                  : {}),
               },
             }
           : {}),
@@ -765,7 +781,9 @@ export class ExecutionEnvironmentsService {
 
   /**
    * Resolve the image, containers, egress and volumes one Allocation's
-   * sandbox gets; volumes are the placement owner's.
+   * sandbox gets; volumes are the placement owner's. A setup with its own
+   * network also fixes the policy the sandbox runs that setup under (ADR
+   * 0257): no caller can widen it beyond these two.
    */
   private async sandboxFor(args: {
     identity: Identity;
@@ -774,10 +792,15 @@ export class ExecutionEnvironmentsService {
     owner: string | null;
   }): Promise<EnvironmentSandbox | { reason: string }> {
     const { definition } = args;
-    const egress = resolveEgress({
-      policy: definition.network,
-      gatewayHosts: this.options.gatewayHosts ?? [],
-    });
+    const gatewayHosts = this.options.gatewayHosts ?? [];
+    const egress = resolveEgress({ policy: definition.network, gatewayHosts });
+    const setupEgress = definition.setup?.network
+      ? resolveSetupEgress({
+          policy: definition.network,
+          allow: definition.setup.network.allow,
+          gatewayHosts,
+        })
+      : undefined;
     const volumes = environmentSandboxVolumes({
       projectId: args.projectId,
       owner: args.owner,
@@ -786,6 +809,7 @@ export class ExecutionEnvironmentsService {
     const common: EnvironmentSandbox = {
       ...(definition.requirements?.containers ? { containers: true } : {}),
       ...(egress.mode === "open" ? {} : { egress }),
+      ...(setupEgress ? { setupEgress } : {}),
       ...(volumes.length > 0 ? { volumes } : {}),
     };
     const image = definition.image;

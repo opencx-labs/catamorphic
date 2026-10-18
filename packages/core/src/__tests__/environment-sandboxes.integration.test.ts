@@ -8,6 +8,7 @@ import {
   dockerfileDigest,
   type EnvironmentRuntimeBinding,
   environmentSatisfies,
+  type SandboxEgress,
   type SandboxProvider,
 } from "@catamorphic/sandbox";
 import { PROJECT_MANIFEST_PATH } from "@catamorphic/workflow/project-layout";
@@ -16,7 +17,10 @@ import { pgcrypto } from "@electric-sql/pglite/contrib/pgcrypto";
 import { Kysely, PGliteDialect, WithSchemaPlugin } from "kysely";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { Identity } from "../identity.js";
-import { allocationSandboxProvider } from "../services/allocation-sandbox-provider.js";
+import {
+  allocationSandboxProvider,
+  withAllocationSandboxPolicy,
+} from "../services/allocation-sandbox-provider.js";
 import { ExecutionAllocationsService } from "../services/execution-allocations-service.js";
 import {
   EnvironmentIncompatibleError,
@@ -38,12 +42,20 @@ const identity: Identity = {
 };
 const DOCKERFILE = "FROM docker:dind\nRUN apk add --no-cache git bash nodejs\n";
 
-/** A machine with the given capabilities, recording what sandboxes get. */
+/**
+ * A machine with the given capabilities, recording what sandboxes get and
+ * every switch of their egress.
+ */
 function machine(capabilities: string[]) {
   const created: CreateSandboxOpts[] = [];
+  const switched: Array<{ sandboxId: string; egress: SandboxEgress }> = [];
   const provider = new Proxy({} as SandboxProvider, {
     get(_target, prop) {
       if (prop === "workspaceRoot") return "/workspace";
+      if (prop === "setEgress")
+        return async (args: { sandboxId: string; egress: SandboxEgress }) => {
+          switched.push(args);
+        };
       if (prop === "createSandbox")
         return async (opts: CreateSandboxOpts) => {
           created.push(opts);
@@ -70,7 +82,7 @@ function machine(capabilities: string[]) {
     },
     sandboxProvider: provider,
   };
-  return { created, binding };
+  return { created, switched, binding };
 }
 
 describe("Environment sandboxes from admission to creation (ADR 0176)", () => {
@@ -102,6 +114,14 @@ describe("Environment sandboxes from admission to creation (ADR 0176)", () => {
             missing: {
               workloads: ["agent"],
               image: ".work/images/missing.Dockerfile",
+            },
+            install: {
+              workloads: ["agent"],
+              network: { egress: "gateway" },
+              setup: {
+                command: "pnpm install --frozen-lockfile",
+                network: { allow: ["registry.npmjs.org"] },
+              },
             },
           },
           defaultEnvironment: "review",
@@ -204,6 +224,97 @@ describe("Environment sandboxes from admission to creation (ADR 0176)", () => {
       containers: true,
       egress: { mode: "allowlist", allow: ["work.acme.com", "github.com"] },
     });
+  });
+
+  it("admits a setup with its own network only where egress switches, fixing both policies (ADR 0257)", async () => {
+    const fixed = machine(["network.policy"]);
+    await expect(
+      environments([fixed.binding]).admit({
+        identity,
+        projectId,
+        environment: "install",
+        requirements: { workload: "agent", topology: "controller" },
+      }),
+    ).rejects.toThrow(/No machine|incompatible/);
+    expect(
+      environmentSatisfies(fixed.binding.descriptor, {
+        workload: "agent",
+        capabilities: ["network.policy", "network.setup"],
+      }),
+    ).toEqual({
+      compatible: false,
+      reasons: ["Capability 'network.setup' is not available"],
+    });
+
+    const switching = machine(["network.policy", "network.setup"]);
+    const admission = await environments([
+      fixed.binding,
+      switching.binding,
+    ]).admit({
+      identity,
+      projectId,
+      environment: "install",
+      requirements: { workload: "agent", topology: "controller" },
+    });
+    expect(admission.binding.id).toBe(switching.binding.descriptor.id);
+    const own: SandboxEgress = { mode: "allowlist", allow: ["work.acme.com"] };
+    const setup: SandboxEgress = {
+      mode: "allowlist",
+      allow: ["work.acme.com", "registry.npmjs.org"],
+    };
+    expect(admission.sandbox).toEqual({ egress: own, setupEgress: setup });
+    expect(admission.setup).toEqual({
+      command: "pnpm install --frozen-lockfile",
+      timeoutMinutes: 30,
+      network: { allow: ["registry.npmjs.org"] },
+    });
+
+    // A switch goes only to what the Allocation fixed, compared by value.
+    const allocation = await new ExecutionAllocationsService(db).create({
+      identity,
+      projectId,
+      environmentName: admission.environmentName,
+      workloadKind: "agent",
+      rootWorkloadId: crypto.randomUUID(),
+      policy: {
+        binding: admission.binding,
+        requirements: admission.effectiveRequirements,
+        sandbox: admission.sandbox,
+      },
+    });
+    const sandboxProvider = switching.binding.sandboxProvider;
+    if (!sandboxProvider) throw new Error("unreachable");
+    for (const provider of [
+      allocationSandboxProvider({ db, allocation, provider: sandboxProvider }),
+      withAllocationSandboxPolicy({
+        db,
+        allocation,
+        provider: sandboxProvider,
+      }),
+    ]) {
+      switching.switched.length = 0;
+      const { providerId } = await provider.createSandbox({});
+      expect(switching.created.at(-1)?.egress).toEqual(own);
+      await provider.setEgress?.({
+        sandboxId: providerId,
+        egress: { mode: "allowlist", allow: [...setup.allow].reverse() },
+      });
+      await provider.setEgress?.({ sandboxId: providerId, egress: own });
+      for (const wider of [
+        { mode: "open" as const },
+        {
+          mode: "allowlist" as const,
+          allow: [...setup.allow, "attacker.example"],
+        },
+      ])
+        await expect(
+          provider.setEgress?.({ sandboxId: providerId, egress: wider }),
+        ).rejects.toThrow("fixed at admission");
+      expect(switching.switched.map((entry) => entry.egress)).toEqual([
+        { mode: "allowlist", allow: [...setup.allow].reverse() },
+        own,
+      ]);
+    }
   });
 
   it("explains a missing Dockerfile", async () => {

@@ -2,6 +2,8 @@ import {
   type EnvironmentBinding,
   environmentSatisfies,
   resolveEgress,
+  resolveSetupEgress,
+  sameEgress,
 } from "@catamorphic/sandbox";
 import { describe, expect, it } from "vitest";
 import { sandboxCapabilitiesFor } from "../services/execution-environments-service.js";
@@ -77,6 +79,14 @@ describe("Environment images, containers and egress (ADR 0176)", () => {
           image: "node:22",
           network: { egress: "open" },
         },
+        install: {
+          workloads: ["agent"],
+          network: { egress: "gateway" },
+          setup: {
+            command: "pnpm install",
+            network: { allow: ["registry.npmjs.org"] },
+          },
+        },
       },
     });
     expect(
@@ -85,6 +95,56 @@ describe("Environment images, containers and egress (ADR 0176)", () => {
     expect(
       environments.open && sandboxCapabilitiesFor(environments.open),
     ).toEqual(["images"]);
+    // A setup with its own network needs a machine that switches egress
+    // (ADR 0257); microsandbox, whose policy is fixed, does not offer it.
+    expect(
+      environments.install && sandboxCapabilitiesFor(environments.install),
+    ).toEqual(["network.policy", "network.setup"]);
+  });
+
+  it("resolves the setup's network beside the Environment's own (ADR 0257)", () => {
+    expect(
+      resolveSetupEgress({
+        policy: { egress: "gateway" },
+        allow: ["Registry.npmjs.org"],
+        gatewayHosts: ["work.acme.com:443"],
+      }),
+    ).toEqual({
+      mode: "allowlist",
+      allow: ["work.acme.com:443", "registry.npmjs.org"],
+    });
+    expect(
+      resolveSetupEgress({
+        policy: { egress: "allowlist", allow: ["github.com"] },
+        allow: ["npm.pkg.github.com", "github.com"],
+        gatewayHosts: ["work.acme.com:443"],
+      }),
+    ).toEqual({
+      mode: "allowlist",
+      allow: ["work.acme.com:443", "github.com", "npm.pkg.github.com"],
+    });
+    expect(
+      resolveSetupEgress({
+        policy: { egress: "open" },
+        allow: ["registry.npmjs.org"],
+        gatewayHosts: [],
+      }),
+    ).toBeUndefined();
+    expect(
+      sameEgress(
+        { mode: "allowlist", allow: ["a.com", "b.com"] },
+        { mode: "allowlist", allow: ["b.com", "a.com"] },
+      ),
+    ).toBe(true);
+    expect(
+      sameEgress(
+        { mode: "allowlist", allow: ["a.com"] },
+        { mode: "allowlist", allow: ["a.com", "b.com"] },
+      ),
+    ).toBe(false);
+    expect(sameEgress({ mode: "open" }, { mode: "allowlist", allow: [] })).toBe(
+      false,
+    );
   });
 
   it("places capability needs only on machines that provide them", () => {

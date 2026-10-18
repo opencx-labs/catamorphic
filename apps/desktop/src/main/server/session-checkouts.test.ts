@@ -1151,6 +1151,28 @@ describe("SessionCheckouts", () => {
           "utf8",
         ),
       ).toBe("ran\nran\n");
+      // A checkout moved to another base sets up again (ADR 0257).
+      const onBase = (base: string) =>
+        checkouts.setup({
+          projectId,
+          sessionId,
+          workingDirectory: worktree,
+          environment: command,
+          personalAllowed: false,
+          base,
+          timeoutMinutes: 1,
+          signal: new AbortController().signal,
+          onRun: async () => {},
+        });
+      expect((await onBase("a".repeat(40))).outcome).toEqual({
+        status: "succeeded",
+      });
+      expect((await onBase("a".repeat(40))).outcome).toEqual({
+        status: "current",
+      });
+      expect((await onBase("b".repeat(40))).outcome).toEqual({
+        status: "succeeded",
+      });
     });
   });
 });
