@@ -210,7 +210,7 @@ describe("text attachments", () => {
     ]);
     expect(
       out.startsWith(
-        "Grid, like [attachment 1: notes.txt] with [attachment 2: shot.png, in the message after these answers]",
+        "Grid, like [attachment 1: notes.txt] with [attachment 2: shot.png, attachment 1 of the message after these answers]",
       ),
     ).toBe(true);
     expect(out).toContain(
@@ -218,13 +218,21 @@ describe("text attachments", () => {
     );
     expect(out).not.toContain(M);
     expect(renderQuestionAnswer("Grid", undefined)).toBe("Grid");
+    // A later answer's media count on from the earlier answers' in that
+    // message.
+    expect(renderQuestionAnswer(`${M} ${M}`, [image, image], 3)).toBe(
+      "[attachment 1: shot.png, attachment 3 of the message after these answers] [attachment 2: shot.png, attachment 4 of the message after these answers]",
+    );
   });
 
   it("keeps one marker per attachment", () => {
     const M = ATTACHMENT_MARKER;
     expect(withMarkerCount(`a ${M} b`, 1)).toBe(`a ${M} b`);
-    // Markers past the attachments go; missing ones join at the end.
+    // Markers past the attachments go; missing ones join at the end; the
+    // ones in place stay there.
     expect(withMarkerCount(`a ${M} b ${M}`, 0)).toBe("a  b ");
+    expect(withMarkerCount(`a ${M} b ${M}`, 1)).toBe(`a ${M} b `);
+    expect(withMarkerCount(`a ${M} b`, 2)).toBe(`a ${M} b${M}`);
     expect(withMarkerCount("a", 2)).toBe(`a${M}${M}`);
   });
 

@@ -455,30 +455,52 @@ describe("talking around questions", () => {
         `return { chat: here().textContent, ready: !${submit}.disabled };`,
       ),
     ).toEqual({ chat: "", ready: true });
-    // A long paste becomes a pill and a pasted image attaches, as they do
-    // in a message (ADR 0244).
+    // A long paste becomes a pill, and an image dropped on the box attaches
+    // there, as they do in a message (ADR 0244); the image's reading is
+    // held, so Enter comes while it still attaches.
     await run(`
       const input = $('[data-testid="question-answer-input"]');
       const text = new DataTransfer();
       text.setData('text/plain', Array.from({ length: 14 }, (_, i) => 'card ' + i).join('\\n'));
       input.dispatchEvent(new ClipboardEvent('paste', { clipboardData: text, bubbles: true, cancelable: true }));
+      window.__originalFileRead = File.prototype.arrayBuffer;
+      File.prototype.arrayBuffer = function () {
+        return new Promise((resolve, reject) => {
+          window.__releaseFile = () => window.__originalFileRead.call(this).then(resolve, reject);
+        });
+      };
       const png = Uint8Array.from(atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=='), (c) => c.charCodeAt(0));
       const image = new DataTransfer();
       image.items.add(new File([png], 'dot.png', { type: 'image/png' }));
-      input.dispatchEvent(new ClipboardEvent('paste', { clipboardData: image, bubbles: true, cancelable: true }));
+      const box = input.getBoundingClientRect();
+      input.dispatchEvent(new DragEvent('drop', { dataTransfer: image, bubbles: true, cancelable: true, clientX: box.right - 4, clientY: box.top + 8 }));
       return true;
     `);
+    await runWait(`return typeof window.__releaseFile === 'function';`, {
+      label: "the dropped image attaching",
+    });
+    // Sending waits for it rather than going without it.
+    await app.press("Enter");
+    expect(await run(`return !!modal() && here().textContent === '';`)).toBe(
+      true,
+    );
+    await run(
+      `File.prototype.arrayBuffer = window.__originalFileRead; window.__releaseFile(); return true;`,
+    );
     await runWait(
-      `return $('[data-testid="question-answer-input"]').querySelectorAll('[data-pill-id]').length === 2;`,
-      { label: "a text pill and an image in the answer" },
+      `return $('[data-testid="question-answer-input"]').querySelectorAll('[data-pill-id]').length === 2 && !here().querySelector('[data-pill-id]');`,
+      { label: "a text pill and the image in the answer, none in the chat" },
     );
     const cards = `[...hereChat().querySelectorAll('[data-testid="question-answer"]')]`;
     const before = await run<number>(`return ${cards}.length;`);
     // Enter on the last unanswered question sends the answers.
+    await run(
+      `$('[data-testid="question-answer-input"]').focus(); return true;`,
+    );
     await app.press("Enter");
     // The agent read the pasted text in the answer, and where the image is.
     await runWait(
-      `return !modal() && hereLog().includes('Using the Cards in columns') && hereLog().includes('card 13') && hereLog().includes('dot.png, in the message after these answers');`,
+      `return !modal() && hereLog().includes('Using the Cards in columns') && hereLog().includes('card 13') && hereLog().includes('dot.png, attachment 1 of the message after these answers');`,
       { timeoutMs: 30_000, label: "the agent read the words and the paste" },
     );
     // One card holds the answer, its pills in place; the image's message
@@ -486,6 +508,38 @@ describe("talking around questions", () => {
     await runWait(
       `const all = ${cards}; const card = all.at(-1); return all.length === ${before} + 1 && card.textContent.includes('Which layout should I use?') && card.textContent.includes('sorted by date') && card.querySelectorAll('[data-testid="sent-pill"]').length === 2 && ![...hereChat().querySelectorAll('[data-user-message]')].some((el) => el.textContent.includes('With my answer to'));`,
       { timeoutMs: 30_000, label: "the answer and its pills in history" },
+    );
+  }, 60_000);
+
+  it("moves through several questions with Enter, focus going along", async () => {
+    await settled();
+    await run(`sendHere('ask me two questions'); return true;`);
+    await runWait(
+      `return !!modal() && modal().textContent.includes('What is your favorite color?');`,
+      { timeoutMs: 30_000, label: "two questions" },
+    );
+    await settle();
+    await run(`answer('Other'); return true;`);
+    await runWait(
+      `return document.activeElement?.dataset.testid === 'question-answer-input';`,
+      { label: "the first answer takes the caret" },
+    );
+    await app.insertText("Teal");
+    await app.press("Enter");
+    // The question left turns inert; focus goes on to the next one's first
+    // option, so Escape there is still the panel's.
+    await runWait(
+      `const active = document.activeElement; return !!active?.closest('section[aria-label="The agent has a question"]') && !active.closest('[inert]') && active.textContent.includes('Cats');`,
+      { label: "focus on the next question" },
+    );
+    await app.press("Enter");
+    await runWait(
+      `const submit = byText('section[aria-label="The agent has a question"] button', 'Submit'); if (!submit || submit.disabled) return false; submit.click(); return true;`,
+      { label: "both answered" },
+    );
+    await runWait(
+      `return !modal() && hereLog().includes('Got it, noted') && hereLog().includes('Teal');`,
+      { timeoutMs: 30_000, label: "the answers reached the agent" },
     );
   }, 60_000);
 

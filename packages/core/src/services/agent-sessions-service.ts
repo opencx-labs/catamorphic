@@ -4108,13 +4108,13 @@ export class AgentSessionsService {
     });
     if (response.kind === "question") {
       const questions = request.questions ?? [];
-      // The batch and the raw answers, pills and all, render the history
-      // entry where this message lands.
+      // The batch and the raw answers render the history entry where this
+      // message lands; the pills their markers stand for are the request's,
+      // never a second copy here.
       const answer: QuestionAnswer = {
         requestId: request.id,
         questions,
         answers: response.answers,
-        ...(response.attachments ? { attachments: response.attachments } : {}),
       };
       const author = {
         kind: "user" as const,
@@ -4129,7 +4129,9 @@ export class AgentSessionsService {
           input: {
             kind: "user_message",
             author,
-            text: `${questions.map((question) => question.question).join("\n")}\n\nUser answer:\n${response.answers.join("\n")}`,
+            // Only the answers' markers count: the questions' text is the
+            // agent's own, and a marker there would shift every pill.
+            text: `${questions.map((question) => question.question.split(ATTACHMENT_MARKER).join("")).join("\n")}\n\nUser answer:\n${response.answers.join("\n")}`,
             attachments: response.attachments?.flat() ?? [],
             answer,
           },
@@ -4139,7 +4141,8 @@ export class AgentSessionsService {
         });
       } else {
         // An answer the agent waited on is text; its images and documents
-        // follow at once, in the same turn, as a message (ADR 0244).
+        // follow at once as a message (ADR 0244), which the turn takes at
+        // its next step, or runs as the next turn should this one end first.
         const media = answerMedia(questions, response);
         if (media)
           await this.deliverIn(trx, {
@@ -12004,34 +12007,36 @@ type QuestionResponse = Extract<RuntimeRequestResponse, { kind: "question" }>;
 
 /**
  * An answer's pills ride beside it, as a message's do (ADR 0244): one list
- * per answer, each answer holding one marker per pill. Answers with none
- * carry no lists.
+ * per answer, each answer holding one marker per pill (a stray one goes).
+ * Answers with none carry no lists.
  */
 function withAnswerPills(response: QuestionResponse): QuestionResponse {
   const lists = response.answers.map(
     (_answer, index) => response.attachments?.[index] ?? [],
   );
-  if (lists.every((list) => list.length === 0))
-    return { kind: "question", answers: response.answers };
-  return {
-    kind: "question",
-    answers: response.answers.map((answer, index) =>
-      withMarkerCount(answer, lists[index]?.length ?? 0),
-    ),
-    attachments: lists,
-  };
+  const answers = response.answers.map((answer, index) =>
+    withMarkerCount(answer, lists[index]?.length ?? 0),
+  );
+  return lists.some((list) => list.length > 0)
+    ? { kind: "question", answers, attachments: lists }
+    : { kind: "question", answers };
 }
 
-/** What the asking agent reads: each answer as text, its pills in it. */
+/**
+ * What the asking agent reads: each answer as text, its pills in it, and
+ * its media numbered as the message that follows the answers numbers them.
+ */
 function agentResponse(
   response: RuntimeRequestResponse,
 ): RuntimeRequestResponse {
   if (response.kind !== "question" || !response.attachments) return response;
   const { answers, attachments } = response;
+  const mediaBefore = (index: number) =>
+    attachments.slice(0, index).flat().filter(isMediaAttachment).length;
   return {
     kind: "question",
     answers: answers.map((answer, index) =>
-      renderQuestionAnswer(answer, attachments[index]),
+      renderQuestionAnswer(answer, attachments[index], 1 + mediaBefore(index)),
     ),
   };
 }

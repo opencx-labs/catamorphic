@@ -130,7 +130,6 @@ export const questionAnswerSchema = z.object({
   requestId: z.string(),
   questions: z.array(agentQuestionSchema),
   answers: z.array(z.string()),
-  attachments: z.array(z.array(attachmentSchema)).optional(),
 });
 
 /** {@link SettledAlert} as a schema. */

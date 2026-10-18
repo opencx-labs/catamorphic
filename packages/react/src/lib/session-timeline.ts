@@ -135,6 +135,7 @@ function hiddenTurn(turn: Turn, starting: Turn | undefined): boolean {
  * sit between the turns that ran before and after them.
  */
 export function sessionTimeline(state: SessionState): TimelineTurn[] {
+  const starting = startingTurn(state);
   const answeredByMessage = new Set<string>();
   const turnItems = new Map<string, Item[]>();
   // Items outside the loaded turns: deliveries and notices between turns,
@@ -142,8 +143,13 @@ export function sessionTimeline(state: SessionState): TimelineTurn[] {
   const others: { key: string; at: string; items: Item[] }[] = [];
   const unknownTurns = new Map<string, Item[]>();
   for (const item of state.items) {
+    // A message answers in its request's place only once it shows: one
+    // still queued (an answer's media the turn ended before taking) leaves
+    // the request's card in the conversation meanwhile.
     const questionRequestId = answerRequestId(item);
-    if (questionRequestId) answeredByMessage.add(questionRequestId);
+    const itemTurn = item.turnId ? state.turns[item.turnId] : undefined;
+    if (questionRequestId && !(itemTurn && hiddenTurn(itemTurn, starting)))
+      answeredByMessage.add(questionRequestId);
     if (item.turnId && state.turns[item.turnId]) {
       const list = turnItems.get(item.turnId);
       if (list) list.push(item);
@@ -159,7 +165,6 @@ export function sessionTimeline(state: SessionState): TimelineTurn[] {
     } else others.push({ key: item.id, at: item.createdAt, items: [item] });
   }
   const context = { state, answeredByMessage };
-  const starting = startingTurn(state);
   const turns = orderedTurns(state).filter(
     (turn) => !hiddenTurn(turn, starting),
   );
@@ -316,7 +321,7 @@ function entriesOf(
   for (const item of items) {
     switch (item.kind) {
       case "user_message": {
-        const answered = answerFromMessage(item);
+        const answered = answerFromMessage(item, context.state);
         flushSteps();
         entries.push(answered ?? { kind: "input", item });
         break;
@@ -387,14 +392,20 @@ function answerFromRequest(
   });
 }
 
-function answerFromMessage(item: UserMessageItem): TimelineEntry | undefined {
+function answerFromMessage(
+  item: UserMessageItem,
+  state: SessionState,
+): TimelineEntry | undefined {
   // An old answer whose questions are gone reads as the words it was.
   if (!item.answer?.questions.length) return undefined;
+  // The pills its markers stand for are the request's (ADR 0244).
+  const response = state.requests[item.answer.requestId]?.response;
   return answerEntry({
     id: item.id,
     questions: item.answer.questions,
     answers: item.answer.answers,
-    attachments: item.answer.attachments,
+    attachments:
+      response?.kind === "question" ? response.attachments : undefined,
   });
 }
 

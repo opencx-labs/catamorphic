@@ -609,9 +609,11 @@ describe("session log", () => {
     );
     const said = transcript.map((message) => message.content).join("\n");
     expect(said).toContain(
-      "You answered: Like [attachment 1: notes.txt] and [attachment 2: shot.png, in the message after these answers]",
+      "You answered: Like [attachment 1: notes.txt] and [attachment 2: shot.png, attachment 1 of the message after these answers]",
     );
     expect(said).toContain("columns of cards");
+    // And it read that message in the same turn.
+    expect(said).toContain('Steered: With my answer to "Which layout?"');
     const detail = await sessions.get(identity, projectId, sessionId);
     const state = sessionStateFromSnapshot(detail.snapshot);
     // The answer keeps its words and pills for history, as a message does.
@@ -625,8 +627,14 @@ describe("session log", () => {
       turnId: turn.id,
       text: `With my answer to "Which layout?": ${M}`,
       attachments: [image],
-      answer: { answers: response.answers, attachments: response.attachments },
+      answer: { requestId: request.id, answers: response.answers },
     });
+    // The pills are the request's alone: not a second copy on the message.
+    expect(
+      media?.kind === "user_message" &&
+        media.answer &&
+        "attachments" in media.answer,
+    ).toBe(false);
   });
 
   it("interrupts a turn and runs the next queued one", async () => {
@@ -2398,7 +2406,6 @@ describe("session log", () => {
         expect(answer?.kind === "user_message" && answer.answer).toMatchObject({
           questions: question?.questions,
           answers: [`Dark ${ATTACHMENT_MARKER}`],
-          attachments: [[swatch]],
         });
       },
       { timeout: 15_000 },

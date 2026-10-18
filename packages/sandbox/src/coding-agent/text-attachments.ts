@@ -183,12 +183,12 @@ export function renderUserMessage(
  * the n-th marker always names the n-th attachment.
  */
 export function withMarkerCount(text: string, attachments: number): string {
-  const withoutMarkers = text.split(ATTACHMENT_MARKER).join("");
-  const markers =
-    (text.length - withoutMarkers.length) / ATTACHMENT_MARKER.length;
-  return markers === attachments
-    ? text
-    : withoutMarkers + ATTACHMENT_MARKER.repeat(attachments);
+  let kept = 0;
+  const placed = text.replace(new RegExp(ATTACHMENT_MARKER, "g"), () => {
+    kept += 1;
+    return kept <= attachments ? ATTACHMENT_MARKER : "";
+  });
+  return placed + ATTACHMENT_MARKER.repeat(Math.max(0, attachments - kept));
 }
 
 /**
@@ -196,17 +196,21 @@ export function withMarkerCount(text: string, attachments: number): string {
  * with inline references and each text pill's block after them, as a
  * message renders. An answer is text to every harness (Claude Code and
  * Codex take nothing else), so its images and documents follow the answers
- * as a message in the same turn; the answer says so where each one sat.
+ * as a message in the same turn; the answer names each one where it sat by
+ * its number in that message, `firstFollowing` being this answer's first.
  */
 export function renderQuestionAnswer(
   answer: string,
   attachments: AgentAttachment[] | undefined,
+  firstFollowing = 1,
 ): string {
   const list = attachments ?? [];
+  const following = (index: number) =>
+    firstFollowing + list.slice(0, index).filter(isMediaAttachment).length;
   const prose = inlineAttachmentReferences(answer, list, (index, attachment) =>
     isTextAttachment(attachment)
       ? inlineReference(index, attachment)
-      : `[attachment ${index + 1}: ${attachment.name}, in the message after these answers]`,
+      : `[attachment ${index + 1}: ${attachment.name}, attachment ${following(index)} of the message after these answers]`,
   );
   return `${prose}${renderTextAttachments(list)}`;
 }

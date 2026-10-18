@@ -19,18 +19,22 @@ composer's own input. An Other answer carries its pills the way a message
 does: `RuntimeRequestResponse` of kind `question` keeps `answers: string[]`,
 in which an answer may hold attachment markers (U+FFFC), and gains
 `attachments?: AgentAttachment[][]`, each answer's pills in the order of its
-markers. `QuestionAnswer`, which a message answering a non-blocking question
-carries for history, gains the same field. The request stores the answers as
-they were written, so history draws each answer with its pills in place.
+markers (a stray marker goes; a pill without one gets one at the end). The
+request stores the answers as they were written, so history draws each answer
+with its pills in place. A message that carries an answer (`QuestionAnswer`)
+keeps only the words: its card takes the pills from the request, so a large
+file is never stored twice for one answer.
 
 Core turns a blocking answer into what the asking agent reads before the
 runner sees it: each answer becomes text, its text pills rendered in as a
 message renders them (`renderQuestionAnswer`). Images and documents cannot
-ride in a text answer, so they follow at once, in the same turn, as a steered
-message from the person ("With my answer to …") that carries the same
-`QuestionAnswer`; the answer names each one where it sat. A non-blocking
-answer already reaches the agent as a message, which now carries every pill
-as its attachments.
+ride in a text answer, so they follow at once as a steered message from the
+person ("With my answer to …") that carries the same `QuestionAnswer`; the
+answer names each one where it sat by its number in that message. The turn
+takes the message at its next step; should it end first, the message runs as
+the next turn, and until then history shows the request's own card. A
+non-blocking answer already reaches the agent as a message, which now carries
+every pill as its attachments.
 
 Alternatives: spelling pills out in the answer's text works with no format
 change, but history then shows a long paste in full instead of a pill.
@@ -41,6 +45,7 @@ Claude Code and Codex would still need the message underneath.
 
 Answers and messages share one pill model, markers and all; the timeline
 draws an answer's pills with the message renderer. A response may carry at
-most 50 attachments in all. Hosts that give the panel a plain text box send
+most 50 attachments in all; the desktop budgets each answer box as it budgets
+a message, so several full boxes can exceed that and are refused whole. Hosts that give the panel a plain text box send
 answers without attachments, as before. The message that carries an answer's
 media shows as that answer's card, so history keeps one card per answer.

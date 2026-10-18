@@ -23,7 +23,7 @@ export interface OtherAnswerInputProps {
   focusRequest: number;
   /**
    * Every change: the words, with a marker (U+FFFC) where each pill sits,
-   * as a message has them; "" when empty.
+   * as a message has them, and the pills.
    */
   onChange: (answer: OtherAnswer) => void;
   /** Enter without Shift: this question is answered, move on. */
@@ -82,7 +82,9 @@ const ownWords = (answer: Answer): OtherAnswer | null =>
 /** The answer to one question: picked labels, then the person's own words. */
 const answerText = (answer: Answer): string => {
   const words = ownWords(answer)?.text.trim();
-  return [...answer.selected, ...(words ? [words] : [])].join(", ");
+  // Only the person's words carry markers: a label is the agent's text.
+  const labels = answer.selected.map((label) => label.replaceAll("\uFFFC", ""));
+  return [...labels, ...(words ? [words] : [])].join(", ");
 };
 
 const isAnswered = (answer: Answer): boolean =>
@@ -203,14 +205,14 @@ export function AgentQuestionPanel({
     if (!question.multiSelect && questions.length > 1) {
       clearTimeout(advanceTimerRef.current);
       advanceTimerRef.current = setTimeout(() => {
-        setActiveIndex((current) => {
-          const unanswered = answers.findIndex(
-            (answer, i) => i !== index && i > current && !isAnswered(answer),
-          );
-          return unanswered === -1
-            ? Math.min(current + 1, questions.length - 1)
-            : unanswered;
-        });
+        const unanswered = answers.findIndex(
+          (answer, i) => i !== index && i > index && !isAnswered(answer),
+        );
+        showQuestion(
+          unanswered === -1
+            ? Math.min(index + 1, questions.length - 1)
+            : unanswered,
+        );
       }, 220);
     }
   };
@@ -228,12 +230,28 @@ export function AgentQuestionPanel({
       other,
       selected: question.multiSelect ? current.selected : [],
     }));
-    if (other)
-      setFocusRequests((current) => {
-        const next = [...current];
-        next[index] = (next[index] ?? 0) + 1;
-        return next;
-      });
+    if (other) requestFocus(index);
+  };
+
+  const requestFocus = (index: number) =>
+    setFocusRequests((current) => {
+      const next = [...current];
+      next[index] = (next[index] ?? 0) + 1;
+      return next;
+    });
+
+  // Moving on keeps focus in the panel: the question left behind turns
+  // inert, which drops focus to the page, where the next Escape would
+  // dismiss every question. Its answer box takes the caret if it is open,
+  // else its first option takes focus.
+  const showQuestion = (index: number) => {
+    setActiveIndex(index);
+    if (answers[index]?.other || questions[index]?.options.length === 0)
+      requestFocus(index);
+    else
+      requestAnimationFrame(() =>
+        panelRefs.current[index]?.querySelector<HTMLElement>("button")?.focus(),
+      );
   };
 
   // Enter in an Other answer: on to the next unanswered question, or send
@@ -246,7 +264,7 @@ export function AgentQuestionPanel({
       .map(({ i }) => i);
     const next = pending.find((i) => i > index) ?? pending[0];
     if (next === undefined) submit();
-    else setActiveIndex(next);
+    else showQuestion(next);
   };
 
   if (collapsed)
@@ -538,6 +556,8 @@ function OtherAnswerTextarea({
       aria-label={ariaLabel}
       placeholder={placeholder}
       disabled={disabled}
+      // A phone's Return moves on or sends, as Enter does here.
+      enterKeyHint="next"
       onChange={(event) =>
         onChange({ text: event.target.value, attachments: [] })
       }

@@ -764,11 +764,13 @@ A terminal opened from a chat's command chip showed another terminal's
 output, sheared into a staircase, behind its own. ghostty-web's terminals
 share one WASM heap, and a new one is handed memory a closed one used
 without it being zeroed: every cell the new terminal had not written yet
-showed the old one's text, read at the new width. The terminal tab now
-erases the screen once it is created and sized (`lib/fresh-terminal.ts`);
-rows that scroll in or come with a later resize arrive blank.
-`fresh-terminal.test.ts` shows the library's behaviour and the erase
-against the real WASM module.
+showed the old one's text, read at the new width, and so did the rows a
+terminal grown taller gained. Erasing the screen once was not enough for
+those rows. Each terminal tab now loads a WASM instance of its own
+(`lib/terminal-ghostty.ts`), which starts on zeroed memory, for about a
+megabyte and a few milliseconds. `terminal-ghostty.test.ts` shows the shared
+heap's leftovers and a terminal of its own staying blank through every
+resize, against the real WASM module.
 
 The question panel dropped its Other row when the composer became the place
 for free text (ADR 0195), but one reply cannot answer each of several
@@ -777,10 +779,13 @@ composer's own input (`components/answer-input.tsx`): it glides taller, a
 long paste, a selection, a link or a path becomes a pill, and a pasted image
 or file attaches through the dock's own attaching. Enter moves to the next
 unanswered question or sends the answers; Escape leaves the box before it
-dismisses the questions. An answer carries its pills as a message does, so
-history draws them in place; core renders the text pills into what the
-asking agent reads, and its images follow in the same turn as a message,
-which shows as the answer's card. The box opens in a wrapper that clips: a
+dismisses the questions; moving on, focus follows to the next question,
+since the one left turns inert. Sending waits for a file still attaching,
+and a file or tab dropped on an answer box goes into it. An answer carries
+its pills as a message does, so history draws them in place; core renders
+the text pills into what the asking agent reads, and its images follow as a
+message the turn takes at its next step, which shows as the answer's card
+with the request's pills. The box opens in a wrapper that clips: a
 hidden overflow scrolled to the caret as the box opened, and text typed
 then landed behind the caret.
 

@@ -217,6 +217,80 @@ describe("sessionTimeline", () => {
     ]);
   });
 
+  it("shows an answer's media message as its one card, its pills the request's", () => {
+    const image = {
+      kind: "image" as const,
+      name: "shot.png",
+      mediaType: "image/png",
+      dataBase64: "AAAA",
+    };
+    const asked = question("q1", {
+      status: "resolved",
+      response: {
+        kind: "question",
+        answers: ["Like \uFFFC"],
+        attachments: [[image]],
+      },
+    });
+    const media = (turnId: string) =>
+      userMessage(
+        "media",
+        3,
+        turnId,
+        'With my answer to "Which layout?": \uFFFC',
+        {
+          attachments: [image],
+          dispatch: "steer",
+          answer: {
+            requestId: "q1",
+            questions: asked.questions ?? [],
+            answers: ["Like \uFFFC"],
+          },
+        },
+      );
+    const timeline = (
+      turns: Parameters<typeof snapshot>[0]["turns"],
+      turnId: string,
+    ) =>
+      sessionTimeline(
+        sessionStateFromSnapshot(
+          snapshot({
+            sequence: 10,
+            turns,
+            items: [
+              userMessage("t1:input", 1, "t1", "Make a page"),
+              requestItem("x", 2, "t1", "q1"),
+              media(turnId),
+            ],
+            requests: [asked],
+          }),
+        ),
+      ).flatMap((entry) => entry.entries);
+    // Taken in by the turn: the message reads as the answer, once.
+    const answers = timeline([turn("t1", 1)], "t1").filter(
+      (entry) => entry.kind === "answer",
+    );
+    expect(answers.map((entry) => entry.id)).toEqual(["media"]);
+    const [card] = answers;
+    expect(card?.kind === "answer" ? answerRows(card) : null).toEqual([
+      {
+        question: "Which layout?",
+        answer: "Like \uFFFC",
+        attachments: [image],
+      },
+    ]);
+    // Waiting as a turn of its own behind a running one: the request's card
+    // stays in the conversation meanwhile.
+    const waiting = timeline(
+      [
+        turn("t1", 1, { status: "running" }),
+        turn("t2", 2, { status: "queued" }),
+      ],
+      "t2",
+    ).filter((entry) => entry.kind === "answer");
+    expect(waiting.map((entry) => entry.id)).toEqual(["x"]);
+  });
+
   it("reads a later answer message once, at the message", () => {
     const state = sessionStateFromSnapshot(
       snapshot({

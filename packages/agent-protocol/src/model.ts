@@ -232,10 +232,11 @@ export interface QuestionAnswer {
   /** The question request it answers. */
   requestId: string;
   questions: AgentQuestion[];
-  /** One per question, as the person picked or wrote it. */
+  /**
+   * One per question, as the person picked or wrote it; the pills its
+   * markers stand for live on the request's response (ADR 0244).
+   */
   answers: string[];
-  /** Each answer's pills, in the order of its markers (ADR 0244). */
-  attachments?: AgentAttachment[][];
 }
 
 /** What people are told when the turn an input started settles. */

@@ -130,7 +130,8 @@ Answer with `useAgentChat().respond(requestId, { kind: "question", answers, atta
 one answer per question; an answer in the person's own words may hold
 attachment markers, and `attachments` holds each answer's pills in marker
 order (ADR 0244). Core gives the asking agent text answers with the text pills
-rendered in; their images and documents follow in the same turn as a message.
+rendered in; their images and documents follow as a steered message carrying
+the answer (its card takes the pills from the request).
 Non-blocking
 questions stay answerable while work continues and after the turn finishes.
 Collapsing a question preserves its draft. The existing inbox delivers answers to

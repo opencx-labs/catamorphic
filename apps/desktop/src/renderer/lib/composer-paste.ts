@@ -1,5 +1,6 @@
 import type { AgentTextAttachment } from "@catamorphic/react";
 import { selectionFromClipboard } from "./editor-selection";
+import { TAB_DRAG_TYPE, type TabDragPayload } from "./tab-drag";
 import { classifyPastedText, selectionName, textPill } from "./text-pills";
 
 /**
@@ -79,4 +80,45 @@ export function readComposerPaste(data: DataTransfer | null): ComposerPaste {
   return text
     ? { kind: "text", text: text.replace(/\r\n?/g, "\n") }
     : { kind: "nothing" };
+}
+
+/** A workspace tab dropped on the chat becomes a tab pill. */
+export function tabPillFromDrag(
+  data: DataTransfer | null,
+): AgentTextAttachment | null {
+  const raw = data?.getData(TAB_DRAG_TYPE);
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as Partial<
+      Record<keyof TabDragPayload, unknown>
+    >;
+    if (typeof parsed.key !== "string" || typeof parsed.kind !== "string") {
+      return null;
+    }
+    const title =
+      typeof parsed.title === "string" && parsed.title
+        ? parsed.title
+        : parsed.kind;
+    const detail =
+      typeof parsed.detail === "string" ? parsed.detail : undefined;
+    const source: AgentTextAttachment["source"] = {
+      type: "tab",
+      key: parsed.key,
+      kind: parsed.kind,
+      title,
+      ...(parsed.kind === "browser" && detail ? { url: detail } : {}),
+      ...(parsed.kind === "editor" && detail ? { filePath: detail } : {}),
+    };
+    // What the model reads without a tool call: title + address/path.
+    const text = detail ? `${title} — ${detail}` : title;
+    return textPill(text, source, title);
+  } catch {
+    return null;
+  }
+}
+
+/** Whether a drag carries something the composer can attach. */
+export function isComposerTransfer(data: DataTransfer | null): boolean {
+  const types = [...(data?.types ?? [])];
+  return types.includes("Files") || types.includes(TAB_DRAG_TYPE);
 }

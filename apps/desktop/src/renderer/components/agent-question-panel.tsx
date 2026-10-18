@@ -12,8 +12,12 @@ export function AgentQuestionPanel({
   onAnswerFiles,
   ...props
 }: AgentQuestionPanelProps & {
-  /** Files pasted into an Other answer: the chat's own attaching, into it. */
-  onAnswerFiles?: (input: ComposerInputHandle, files: File[]) => void;
+  /** Files pasted or dropped on an Other answer: the chat's own attaching. */
+  onAnswerFiles?: (
+    input: ComposerInputHandle,
+    files: File[],
+    at?: { x: number; y: number },
+  ) => void;
 }) {
   return (
     <QuestionPanel

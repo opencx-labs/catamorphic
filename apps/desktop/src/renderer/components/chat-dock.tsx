@@ -76,7 +76,12 @@ import {
   isAttachedChipId,
   workChips,
 } from "../lib/chips.js";
-import { filesFrom, readComposerPaste } from "../lib/composer-paste";
+import {
+  filesFrom,
+  isComposerTransfer,
+  readComposerPaste,
+  tabPillFromDrag,
+} from "../lib/composer-paste";
 import {
   type AgentInfo,
   desktopApi,
@@ -95,7 +100,6 @@ import {
   type SlashEntry,
   slashEntries,
 } from "../lib/slash-commands";
-import { TAB_DRAG_TYPE, type TabDragPayload } from "../lib/tab-drag";
 import { selectionName, textPill } from "../lib/text-pills";
 import { useBackgroundCommands } from "../lib/use-background-commands";
 import { useChips } from "../lib/use-chips.js";
@@ -187,47 +191,6 @@ const MAX_TOTAL_MEDIA_BYTES = 48 * 1024 * 1024;
 const MAX_ATTACHMENTS = 32;
 /** One empty list, so what depends on the chips settles. */
 const NO_CHIPS: Chip[] = [];
-
-/** A workspace tab dropped on the chat becomes a tab pill. */
-function tabPillFromDrag(
-  data: DataTransfer | null,
-): AgentTextAttachment | null {
-  const raw = data?.getData(TAB_DRAG_TYPE);
-  if (!raw) return null;
-  try {
-    const parsed = JSON.parse(raw) as Partial<
-      Record<keyof TabDragPayload, unknown>
-    >;
-    if (typeof parsed.key !== "string" || typeof parsed.kind !== "string") {
-      return null;
-    }
-    const title =
-      typeof parsed.title === "string" && parsed.title
-        ? parsed.title
-        : parsed.kind;
-    const detail =
-      typeof parsed.detail === "string" ? parsed.detail : undefined;
-    const source: AgentTextAttachment["source"] = {
-      type: "tab",
-      key: parsed.key,
-      kind: parsed.kind,
-      title,
-      ...(parsed.kind === "browser" && detail ? { url: detail } : {}),
-      ...(parsed.kind === "editor" && detail ? { filePath: detail } : {}),
-    };
-    // What the model reads without a tool call: title + address/path.
-    const text = detail ? `${title} — ${detail}` : title;
-    return textPill(text, source, title);
-  } catch {
-    return null;
-  }
-}
-
-/** Whether a drag carries something the composer can attach. */
-function isComposerTransfer(data: DataTransfer | null): boolean {
-  const types = [...(data?.types ?? [])];
-  return types.includes("Files") || types.includes(TAB_DRAG_TYPE);
-}
 
 /** The media kind a file would ship as, or null for unsupported types. */
 function mediaKindOf(file: File): "image" | "document" | null {
@@ -2451,9 +2414,12 @@ function ChatDockContent({
           // state only paints the cue and may not have committed yet when a
           // quick dragenter → drop sequence completes in one browser turn.
           if (!isComposerTransfer(event.dataTransfer)) return;
+          // A question's answer box took the drop for itself.
+          const claimed = event.isDefaultPrevented();
           event.preventDefault();
           dragDepthRef.current = 0;
           setDropActive(false);
+          if (claimed) return;
           // Dropped onto the composer itself: the pill lands where the
           // pointer let go; anywhere else on the chat: at the caret/end.
           const overComposer =
@@ -3315,7 +3281,12 @@ function ChatDockContent({
                           answers: [QUESTIONS_DISMISSED_MESSAGE],
                         })
                       }
-                      disabled={!expanded || responding.has(request.id)}
+                      // A file still attaching to an answer goes with it.
+                      disabled={
+                        !expanded ||
+                        responding.has(request.id) ||
+                        pendingTransfers > 0
+                      }
                     />
                   ),
               )}

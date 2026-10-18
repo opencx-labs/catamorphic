@@ -1,13 +1,13 @@
-import { FitAddon, init as initGhostty, Terminal } from "ghostty-web";
+import { FitAddon, Terminal } from "ghostty-web";
 import { useEffect, useRef, useState } from "react";
 import { KEYBINDING_ACTIONS } from "../../shared/actions.js";
 import { desktopApi } from "../lib/desktop-api.js";
-import { FRESH_SCREEN } from "../lib/fresh-terminal.js";
 import { matchesBinding, useKeybindings } from "../lib/keybindings.js";
 import { isMoving } from "../lib/project-move.js";
 import { ipcErrorText } from "../lib/remote-workspace.js";
 import { sanitizeScrollback } from "../lib/scrollback.js";
 import { useTerminalAppearance } from "../lib/terminal-appearance.js";
+import { terminalGhostty } from "../lib/terminal-ghostty.js";
 
 /**
  * A terminal tab. Emulation runs in-process via ghostty-web — libghostty-vt
@@ -16,10 +16,6 @@ import { useTerminalAppearance } from "../lib/terminal-appearance.js";
  * IPC. The component stays mounted while its tab is hidden; unmounting
  * kills the shell.
  */
-
-// The WASM module is shared by every Terminal instance; load it once.
-let ghosttyReady: Promise<void> | null = null;
-const ensureGhostty = () => (ghosttyReady ??= initGhostty());
 
 // Matches the browser tab's deferred mount: opening the (canvas-heavy)
 // terminal mid tab-animation would stutter the slide-in.
@@ -132,11 +128,12 @@ export function TerminalScreen({
 
     const timer = window.setTimeout(() => {
       void (async () => {
-        await ensureGhostty();
+        const ghostty = await terminalGhostty();
         if (disposed) return;
         const currentAppearance = appearanceRef.current;
         setAppliedAppearance(currentAppearance);
         term = new Terminal({
+          ghostty,
           fontSize: currentAppearance.fontSize,
           fontFamily: currentAppearance.fontFamily,
           cursorBlink: true,
@@ -204,7 +201,6 @@ export function TerminalScreen({
           if (dimensions) term?.resize(dimensions.cols, dimensions.rows);
         };
         fitToContainer();
-        term.write(FRESH_SCREEN);
         // FitAddon's observer drops changes during its 50ms resize lock.
         // A window manager or layout transition can shrink again inside
         // that interval, leaving a permanently cropped canvas. Coalesce

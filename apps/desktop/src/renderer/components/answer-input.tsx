@@ -1,5 +1,9 @@
-import { type ClipboardEvent, useEffect, useRef } from "react";
-import { readComposerPaste } from "../lib/composer-paste";
+import { type ClipboardEvent, type DragEvent, useEffect, useRef } from "react";
+import {
+  filesFrom,
+  readComposerPaste,
+  tabPillFromDrag,
+} from "../lib/composer-paste";
 import type { OtherAnswerInputProps } from "./catamorphic/agent-question-panel";
 import { ComposerInput, type ComposerInputHandle } from "./composer-input";
 
@@ -18,8 +22,12 @@ export function AnswerInput({
   onEnter,
   onFiles,
 }: OtherAnswerInputProps & {
-  /** Pasted files, attached into this input. */
-  onFiles?: (input: ComposerInputHandle, files: File[]) => void;
+  /** Pasted or dropped files, attached into this input (where dropped). */
+  onFiles?: (
+    input: ComposerInputHandle,
+    files: File[],
+    at?: { x: number; y: number },
+  ) => void;
 }) {
   const inputRef = useRef<ComposerInputHandle>(null);
   useEffect(() => {
@@ -47,8 +55,25 @@ export function AnswerInput({
     }
   };
 
+  // A file or tab dropped here is this answer's: claimed, so the chat
+  // around it lets the drop go instead of putting it in its composer.
+  const onDrop = (event: DragEvent<HTMLDivElement>) => {
+    const input = inputRef.current;
+    if (!input) return;
+    const tab = tabPillFromDrag(event.dataTransfer);
+    const files = tab ? [] : filesFrom(event.dataTransfer);
+    if (!tab && files.length === 0) return;
+    event.preventDefault();
+    const at = { x: event.clientX, y: event.clientY };
+    if (tab) input.insertPills([{ ...tab, id: crypto.randomUUID() }], { at });
+    else onFiles?.(input, files, at);
+  };
+
   return (
+    // biome-ignore lint/a11y/noStaticElementInteractions: a drop target around the textbox, which is the control
     <div
+      aria-disabled={disabled || undefined}
+      onDrop={onDrop}
       className={`field ${disabled ? "pointer-events-none opacity-60" : ""}`}
     >
       <ComposerInput
