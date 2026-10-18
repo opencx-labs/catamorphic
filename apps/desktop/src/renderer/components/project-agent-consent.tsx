@@ -41,13 +41,17 @@ export function ProjectAgentConsentDialog({
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const agent = request?.agent ?? null;
+  /** The definition as it is now, when it changed under review. */
+  const [latest, setLatest] = useState<ProjectAgentInfo | null>(null);
+  const agent = latest ?? request?.agent ?? null;
+  const acp = agent?.kind === "acp";
 
   // Reset transient state whenever a new request comes in.
   // biome-ignore lint/correctness/useExhaustiveDependencies: request is the reset trigger, not a body dependency
   useEffect(() => {
     setBusy(false);
     setError(null);
+    setLatest(null);
   }, [request]);
 
   const approve = async () => {
@@ -67,6 +71,12 @@ export function ProjectAgentConsentDialog({
     setBusy(false);
     if (!result.ok) {
       setError(result.error ?? "Approval failed");
+      // Changed under review: what shows becomes what approving binds.
+      const now = await desktopApi
+        .projectAgentsList(agent.projectId)
+        .then((data) => data.agents.find((each) => each.slug === agent.slug))
+        .catch(() => undefined);
+      if (now && now.definitionHash !== agent.definitionHash) setLatest(now);
       return;
     }
     onApproved(agent);
@@ -91,7 +101,7 @@ export function ProjectAgentConsentDialog({
           <p className="mb-4 text-xs text-fg-muted">
             {agent.consent === "stale"
               ? "This project agent's definition changed since you approved it, so your approval was reset."
-              : `This agent is defined by files committed to the project, and anyone with write access can change them. ${agent.command ? "Approving runs its command on this machine as you." : "Approving lets it run with your credentials."}`}
+              : `This agent is defined by files committed to the project, and anyone with write access can change them. ${acp ? "Approving runs its command on this machine as you." : "Approving lets it run with your credentials."}`}
           </p>
 
           <dl className="mb-4 space-y-2 text-xs">
@@ -109,13 +119,13 @@ export function ProjectAgentConsentDialog({
             )}
             <div className="flex gap-2">
               <dt className="w-24 shrink-0 text-fg-faint">Model</dt>
-              <dd>{agent.model || "Harness default"}</dd>
+              <dd>{acp ? "Its own" : agent.model || "Harness default"}</dd>
             </div>
             <div className="flex gap-2">
               <dt className="w-24 shrink-0 text-fg-faint">Runs with</dt>
               <dd className="flex items-center gap-1.5">
                 <KeyRound className="size-3.5 text-fg-faint" />
-                {agent.command
+                {acp
                   ? "Its own configuration and sign-in"
                   : SOURCE_LABELS[agent.credentialsSource]}
               </dd>
@@ -171,7 +181,7 @@ export function ProjectAgentConsentDialog({
             >
               Cancel
             </button>
-            {!agent.command && (
+            {!acp && (
               <span className="ml-auto text-[11px] text-fg-faint">
                 Uses your existing sign-in. Configure it in Settings.
               </span>

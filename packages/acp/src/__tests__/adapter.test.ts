@@ -43,6 +43,8 @@ function workspace() {
     state: (): {
       savedOnExit?: boolean;
       cancelled?: boolean;
+      sleeper?: number;
+      askedAfterCancel?: string;
       sessions: Record<
         string,
         {
@@ -496,7 +498,24 @@ describe("ACP adapter", () => {
     turn.send({ kind: "interrupt" });
     await turn.until(() => turn.completed() !== undefined, 20_000);
     expect(turn.completed()).toMatchObject({ status: "interrupted" });
+    // What it started goes with it.
+    const sleeper = space.state().sleeper;
+    expect(sleeper).toBeGreaterThan(0);
+    expect(() => process.kill(sleeper ?? 0, 0)).toThrow();
   }, 30_000);
+
+  it("cancels a permission request the agent makes after the interrupt, opening no approval", async () => {
+    const space = workspace();
+    const turn = run(attempt(space, "[[hang then ask]]"));
+    await turn.until(() => turn.text("assistant_message") === "Working");
+    const interruptedAt = Date.now();
+    turn.send({ kind: "interrupt" });
+    await turn.finished();
+    expect(turn.completed()).toMatchObject({ status: "interrupted" });
+    expect(space.state().askedAfterCancel).toBe("cancelled");
+    expect(turn.requests()).toEqual([]);
+    expect(Date.now() - interruptedAt).toBeLessThan(5_000);
+  });
 
   it("withdraws its own waiting permission request when the turn is interrupted", async () => {
     // The adapter alone, so nothing else closes the request for it.

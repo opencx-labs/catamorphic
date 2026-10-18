@@ -288,15 +288,32 @@ describe("project agents", () => {
     // Approving runs a command on this machine: the dialog names it.
     await runWait(
       `return !!byText('[data-testid="project-agent-consent"] dd', 'test-agent.mjs') &&
-              !!byText('[data-testid="project-agent-consent"] dd', 'ACP');`,
+              !!byText('[data-testid="project-agent-consent"] dd', 'ACP') &&
+              $$('[data-testid="project-agent-consent"] dl > div').some((row) =>
+                row.querySelector('dt')?.textContent === 'Model' &&
+                row.querySelector('dd')?.textContent.trim() === 'Its own');`,
       { timeoutMs: 15_000, label: "consent dialog naming the command" },
     );
+    // Lets the screenshot catch the dialog, not the palette's fade.
+    await new Promise((resolve) => setTimeout(resolve, 400));
     await app.screenshot(
       path.join(
         process.env.CATAMORPHIC_E2E_ARTIFACTS_DIR ?? os.tmpdir(),
         "acp-agent-consent.png",
       ),
     );
+    // Approval binds only the definition the person reviewed.
+    const stale = await runWaitAsync<{ ok: boolean; error?: string }>(
+      `const server = await window.catamorphicDesktop.getServerState();
+       const data = await (await fetch(server.url + '/api/projects')).json();
+       const project = data.items.find((p) => p.name === 'e2e-proj-agents');
+       return window.catamorphicDesktop.projectAgentApprove(project.id, 'echoer', 'not-what-was-reviewed');`,
+      { label: "approving a definition other than the one reviewed" },
+    );
+    if (stale.ok || !stale.error?.includes("changed while you were reviewing"))
+      throw new Error(
+        `approval bound a definition nobody reviewed: ${JSON.stringify(stale)}`,
+      );
     await run(
       `$('[data-testid="project-agent-approve"]').click(); return true;`,
     );

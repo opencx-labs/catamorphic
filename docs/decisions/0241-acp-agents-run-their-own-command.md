@@ -34,8 +34,12 @@ environment, as a command in the person's own terminal would.
   conversation and can be reopened: a new session after its first turn
   completes, never one from an agent that cannot reopen sessions, so Work
   hands that agent the whole conversation each turn instead. A session the
-  agent refuses to reopen (deleted, pruned) is replaced by a new one with
-  a warning, rather than failing every later turn. Native state is
+  agent refuses to reopen (deleted, pruned) is replaced by a new one,
+  rather than failing every later turn; that one lacks the earlier
+  conversation, since a harness cannot yet tell core its thread is gone.
+  A restart on a thread Work never heard of starts the turn's input over:
+  core's restart rule (ADR 0240) now carries only what no thread took in
+  just when the attempt continues the thread. Native state is
   `none`, so a chat moved to another machine starts fresh with a handoff.
   A turn ends once the agent's process has exited, so a session the agent
   saves on exit is saved before the next turn reopens it. The harness id
@@ -54,8 +58,9 @@ environment, as a command in the person's own terminal would.
   cancels the request.
 - **Interrupt** is `session/cancel`, which withdraws the agent's waiting
   permission requests; an agent that has not ended its turn ten seconds
-  later is killed. ACP has no steer, so a message sent mid-turn restarts
-  the attempt with it.
+  later is killed with everything it started (its process group, so the
+  agent behind an `npx` or `sh -c` command goes too). ACP has no steer, so
+  a message sent mid-turn restarts the attempt with it.
 
 **An ACP agent can also be the person's own.** A profile agent of harness
 `acp` stores the command it runs, and runs through the same adapter and
@@ -83,5 +88,8 @@ commit `{"kind": "acp", "acp": {"command": ["hermes", "acp"]}}` for its
 members to approve. Each turn starts the agent's process. A host tool call that waits longer
 than the agent's own MCP timeout (Hermes: five minutes) fails on its side.
 Still open: the `acp.endpoint` transport, ACP agents on the Work server
-(the agent must be in the sandbox image), model choice through ACP, and
-streaming the agent's plans and usage.
+(the agent must be in the sandbox image), model choice through ACP,
+streaming the agent's plans and usage, a way for a harness to tell core its
+thread is gone (so a replaced session gets the whole conversation), a
+stdio bridge for agents that take no HTTP MCP, and keeping a thread's
+process warm between turns.

@@ -98,7 +98,12 @@
 - **ACP harness, the rest.** The desktop runs local ACP command agents
   (`acp.command`, ADR 0241). Still to build: the remote endpoint
   transport (`acp.endpoint`), ACP agents on the Work server (the agent in
-  the sandbox image), model choice, plans and usage over ACP.
+  the sandbox image), model choice, plans and usage over ACP. A harness
+  event telling core its native thread is gone, so a session an agent
+  refused to reopen is replaced with a full handoff (needs its own ADR).
+  A stdio MCP bridge for agents that take no HTTP MCP (Work's tools ride
+  HTTP today, which Hermes accepts without advertising). A warm process
+  per thread instead of one per turn.
   The remote-Catamorphic-server agent story rides the endpoint transport:
   a stock server exposes its agents over ACP and a project definition
   points at it, with `credentials.source: "secret"` carrying the token so

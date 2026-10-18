@@ -92,6 +92,9 @@ function startAttempt(
       cwd: attempt.workingDirectory,
       env: { ...process.env, ...attempt.env },
       stdio: ["pipe", "pipe", "pipe"],
+      // Its own process group, so stopping it stops what it started too
+      // (the agent behind an `npx` or `sh -c` command, its MCP servers).
+      detached: process.platform !== "win32",
     });
     child = spawned;
     spawned.stderr.setEncoding("utf8");
@@ -279,7 +282,7 @@ function startAttempt(
     if (interrupted) return "cancelled";
     host.emit({ type: "turn.started" });
     items.live = true;
-    const response = await until(
+    await until(
       connection.prompt({
         sessionId: opened,
         prompt: promptBlocks({
@@ -289,10 +292,9 @@ function startAttempt(
         }),
       }),
     );
-    const outcome =
-      interrupted || response.stopReason === "cancelled"
-        ? "cancelled"
-        : "completed";
+    // Only Work's interrupt makes the turn interrupted: an agent that ends
+    // its own turn as cancelled (a request it was told no to) finished it.
+    const outcome = interrupted ? "cancelled" : "completed";
     if (!reopened && reopen && outcome === "completed") report();
     return outcome;
   };
@@ -340,13 +342,29 @@ function startAttempt(
       for (const ask of asks) ask.abort();
       if (connection && sessionId)
         void connection.cancel({ sessionId }).catch(() => {});
-      else child?.kill();
+      else if (child) signal({ child, name: "SIGTERM" });
       // An agent that ignores the cancel, and the stop, is killed.
-      const timer = setTimeout(() => child?.kill("SIGKILL"), CANCEL_GRACE_MS);
+      const timer = setTimeout(
+        () => child && signal({ child, name: "SIGKILL" }),
+        CANCEL_GRACE_MS,
+      );
       void finished.finally(() => clearTimeout(timer));
     },
     finished,
   };
+}
+
+/** Signals the agent and everything it started, its process group. */
+function signal(input: { child: ChildProcess; name: NodeJS.Signals }): void {
+  const { child, name } = input;
+  try {
+    if (child.pid !== undefined && process.platform !== "win32")
+      process.kill(-child.pid, name);
+    else child.kill(name);
+  } catch {
+    // The group is gone: the agent alone, if it is still there.
+    child.kill(name);
+  }
 }
 
 /**
@@ -366,8 +384,14 @@ async function stop(child: ChildProcess | undefined): Promise<void> {
     child.once("exit", () => resolve()),
   );
   child.stdin?.end();
-  const term = setTimeout(() => child.kill(), EXIT_GRACE_MS);
-  const kill = setTimeout(() => child.kill("SIGKILL"), 2 * EXIT_GRACE_MS);
+  const term = setTimeout(
+    () => signal({ child, name: "SIGTERM" }),
+    EXIT_GRACE_MS,
+  );
+  const kill = setTimeout(
+    () => signal({ child, name: "SIGKILL" }),
+    2 * EXIT_GRACE_MS,
+  );
   await exited;
   clearTimeout(term);
   clearTimeout(kill);

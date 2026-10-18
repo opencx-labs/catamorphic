@@ -1002,6 +1002,8 @@ export class TurnEngine {
         [binding.handoff, ...(prepared.notes ?? [])]
           .filter(Boolean)
           .join("\n\n") || null,
+      continuing:
+        binding.binding.mode === "resume" || binding.binding.mode === "restore",
     });
     if (
       prepared.checkpointBefore !== undefined &&
@@ -1199,7 +1201,9 @@ export class TurnEngine {
    * inputs that joined the turn while it waited, in the order they came;
    * a handoff before them. Input steered in that no attempt took in yet is
    * read with it (ADR 0240). A restart for steered input carries only
-   * what no thread took in, unless no attempt's harness began the turn.
+   * what no thread took in, unless no attempt's harness began the turn on
+   * the thread this attempt continues: one bound fresh (the earlier
+   * attempt never reported its thread) holds nothing of the turn.
    */
   private async attemptInput(input: {
     turn: Turn;
@@ -1208,6 +1212,8 @@ export class TurnEngine {
     inputItem: Item | null;
     riders: InputItem[];
     handoff: string | null;
+    /** The attempt resumes the thread earlier attempts of the turn ran on. */
+    continuing: boolean;
   }): Promise<{
     input: AttemptStart["input"];
     steered: string[];
@@ -1238,8 +1244,11 @@ export class TurnEngine {
         .execute()
     ).map((row) => row.runner as unknown as RunnerState | null);
     // What an attempt whose harness began the turn took in is on its
-    // thread; what one that never began carried is not.
-    const began = earlier.filter((runner) => runner?.started === true);
+    // thread; what one that never began carried is not, nor is anything
+    // on a thread this attempt does not continue.
+    const began = input.continuing
+      ? earlier.filter((runner) => runner?.started === true)
+      : [];
     const taken = new Set(began.flatMap((runner) => runner?.consumed ?? []));
     // A restart goes on from where the thread is, unless no attempt ever
     // began the turn: then its input starts over, with what was steered.

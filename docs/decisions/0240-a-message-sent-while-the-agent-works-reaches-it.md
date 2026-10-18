@@ -46,8 +46,9 @@ meanwhile, or a turn not working, has nothing to stop for: the command is
 accepted and changes nothing. A restart carries what no thread took in
 (what an attempt whose harness never began carried counts as not taken),
 and with nothing left tells the agent to carry on, never its input again;
-when no attempt's harness began the turn (`turn.started`), the turn's
-input starts over with what was steered. A harness waits for its own
+when no attempt's harness began the turn (`turn.started`), or the
+restart is bound to a fresh thread (its earlier attempt never reported
+one, ADR 0241), the turn's input starts over with what was steered. A harness waits for its own
 input to be sent before it takes a steer, rather than refusing one.
 
 **Notifications reach the turn.** A task notification steers into any

@@ -980,7 +980,8 @@ function ProjectAgentBody({
     );
     setApproving(false);
     if (!result.ok) setError(result.error ?? "Approval failed.");
-    else onRefresh();
+    // Approved, or changed under review: show the definition as it is now.
+    onRefresh();
   };
 
   const fact = (label: string, value: string | null) =>
@@ -1022,9 +1023,14 @@ function ProjectAgentBody({
           )}
           {fact(
             "Model",
-            agent.command ? "its own" : (agent.model ?? "harness default"),
+            agent.kind === "acp"
+              ? "its own"
+              : (agent.model ?? "harness default"),
           )}
-          {fact("Effort", agent.command ? null : (agent.effort ?? "medium"))}
+          {fact(
+            "Effort",
+            agent.kind === "acp" ? null : (agent.effort ?? "medium"),
+          )}
           {fact(
             "Permission mode",
             permissionModeLabel({
@@ -1043,7 +1049,7 @@ function ProjectAgentBody({
           )}
           {fact(
             "Credentials",
-            agent.command
+            agent.kind === "acp"
               ? "its own configuration and sign-in"
               : agent.credentialsSource === "secret"
                 ? `project secret ${agent.secretName ?? ""}`
@@ -1091,7 +1097,7 @@ function ProjectAgentBody({
           <p className="min-w-0 flex-1 text-[11px] text-fg-faint">
             {agent.consent === "stale"
               ? "The definition changed since you approved it."
-              : agent.command
+              : agent.kind === "acp"
                 ? "Needed before it runs its command on this machine."
                 : "Needed before it runs on your credentials."}
           </p>

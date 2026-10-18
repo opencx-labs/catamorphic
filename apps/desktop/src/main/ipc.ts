@@ -844,7 +844,9 @@ export function registerIpcHandlers(
       delegation: definition?.delegation ?? null,
       promptPreview,
       command:
-        definition?.kind === "acp" ? (definition.acp?.command ?? null) : null,
+        definition?.kind === "acp" && definition.acp?.command?.length
+          ? definition.acp.command
+          : null,
       definitionHash: hash,
       consent,
       invalid: entry.invalid?.error ?? null,

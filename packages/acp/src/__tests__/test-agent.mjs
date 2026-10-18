@@ -9,14 +9,17 @@
 //   [[permission no-reject-once]]    the same, offering no "reject once"
 //
 //   [[hang]]                         work until cancelled
+//   [[hang then ask]]                the same, then ask permission once cancelled
 //   [[recall]]                       say how many turns the session has seen
 //
 // With TEST_AGENT_NO_LOAD=1 it cannot reopen a session, as ACP allows; with
 // TEST_AGENT_RESUME=1 it also offers `session/resume`, which replays
 // nothing. TEST_AGENT_EXIT_SAVE_MS=<ms> saves its state that long after its
 // input closes, as Hermes saves its session on the way out. With
-// TEST_AGENT_STUBBORN=1 it ignores a cancel and SIGTERM alike. It notes a
-// cancel it heard as `cancelled` in its state.
+// TEST_AGENT_STUBBORN=1 it ignores a cancel and SIGTERM alike, and starts a
+// process of its own (`sleeper` in its state). It notes a cancel it heard
+// as `cancelled` in its state.
+import { spawn } from "node:child_process";
 import fs from "node:fs";
 import { Readable, Writable } from "node:stream";
 import * as acp from "@agentclientprotocol/sdk";
@@ -200,11 +203,26 @@ new acp.AgentSideConnection(
           );
           return { stopReason: "end_turn" };
         }
-        if (words.includes("[[hang]]")) {
+        if (words.includes("[[hang")) {
+          if (process.env.TEST_AGENT_STUBBORN === "1") {
+            const sleeper = spawn("sleep", ["60"], { stdio: "ignore" });
+            write({ ...read(), sleeper: sleeper.pid });
+          }
           await say(sessionId, "agent_message_chunk", "Working");
           await new Promise((resolve) => {
             cancel = resolve;
           });
+          if (words.includes("[[hang then ask]]")) {
+            // Asked after the cancel, as an agent mid-step might.
+            const { outcome } = await connection.requestPermission({
+              sessionId,
+              toolCall: { toolCallId: "call-3", title: "one more thing" },
+              options: [
+                { optionId: "allow_once", kind: "allow_once", name: "Allow" },
+              ],
+            });
+            write({ ...read(), askedAfterCancel: outcome.outcome });
+          }
           return { stopReason: "cancelled" };
         }
         if (words.includes("[[recall]]")) {
