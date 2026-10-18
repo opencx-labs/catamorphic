@@ -934,6 +934,61 @@ export class WorkWorkerRegistry {
     return true;
   }
 
+  /**
+   * Take a machine out of service for good, unless work landed on it (ADR
+   * 0258): under its node's row lock, which creating an Allocation takes
+   * too, it is revoked and disabled only while no Allocation holds its
+   * capacity, so nothing is placed on a machine about to be destroyed.
+   * `force` revokes it whatever it holds: a machine that is not connected
+   * cannot give its workspaces back. False when it was kept, or was not
+   * enrolled.
+   */
+  async drain(args: { name: string; force?: boolean }): Promise<boolean> {
+    const nodeId = `${WORKER_NODE_PREFIX}${args.name}`;
+    return this.deps.db.transaction().execute(async (trx) => {
+      await trx
+        .selectFrom("worker_nodes")
+        .select("id")
+        .where("id", "=", nodeId)
+        .where("tenant_id", "=", this.deps.tenantId)
+        .forUpdate()
+        .executeTakeFirst();
+      if (!args.force) {
+        const held = await trx
+          .selectFrom("execution_allocations")
+          .select((eb) => eb.fn.countAll<string>().as("count"))
+          .where("worker_node_id", "=", nodeId)
+          .where("capacity_released_at", "is", null)
+          .executeTakeFirst();
+        if (Number(held?.count ?? 0) > 0) return false;
+      }
+      const revoked = await trx
+        .updateTable("work_workers")
+        .set({
+          revoked_at: sql`now()`,
+          pending_credential_hash: null,
+          pending_public_key: null,
+          pending_issued_at: null,
+          pending_rotation: null,
+        })
+        .where("tenant_id", "=", this.deps.tenantId)
+        .where("name", "=", args.name)
+        .where("revoked_at", "is", null)
+        .returning("node_id")
+        .executeTakeFirst();
+      if (!revoked) return false;
+      await forgetExecutorKey({ db: trx, executor: nodeExecutor(nodeId) });
+      await trx
+        .updateTable("worker_nodes")
+        .set({ enabled: false })
+        .where("id", "=", nodeId)
+        .where("tenant_id", "=", this.deps.tenantId)
+        .where("authority_id", "=", this.deps.authorityId)
+        .execute();
+      return true;
+    });
+  }
+
   /** The platform's id for the machine created with this enrollment code. */
   async recordMachineRef(args: { code: string; ref: string }): Promise<void> {
     const enrollment = await this.deps.db

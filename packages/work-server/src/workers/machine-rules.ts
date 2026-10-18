@@ -597,18 +597,22 @@ export class MachineReconciler {
               return;
             // Chats on it give their workspaces back saved once they idle
             // (ADR 0173); a machine that can no longer save them goes at
-            // once.
+            // once. Revoked under its node's lock, so no Allocation lands
+            // on it between this check and its revocation (ADR 0258).
+            const connected = await this.deps.workers.connected({
+              name: machine.name,
+            });
+            await fence();
             if (
-              (await this.deps.workers.connected({ name: machine.name })) &&
-              (await this.deps.workers.activeWorkspaces({
+              !(await this.deps.workers.drain({
                 name: machine.name,
-              })) > 0
+                force: !connected,
+              }))
             )
               return;
           }
           if (machine.state === "enrolled" || machine.state === "pending") {
             await fence();
-            await this.deps.workers.revoke({ name: machine.name });
             // Its code stops working, and it stays listed until destroyed.
             await this.deps.workers.expireEnrollments({ name: machine.name });
           }
