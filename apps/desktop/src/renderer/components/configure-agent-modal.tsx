@@ -7,6 +7,7 @@ import {
   Star,
 } from "lucide-react";
 import { type FormEvent, useEffect, useMemo, useState } from "react";
+import { HERMES, runsHermes } from "../../shared/acp-agents.js";
 import {
   permissionModeLabel,
   SANDBOXING_OPTIONS,
@@ -52,14 +53,14 @@ const HARNESS_LABELS: Record<AgentHarness, string> = {
   "ai-sdk": "Built-in",
   "claude-code": "Claude Code",
   codex: "Codex",
-  hermes: "Hermes",
+  acp: "ACP",
 };
 
 const MODEL_PLACEHOLDERS: Record<AgentHarness, string> = {
   "ai-sdk": "claude-sonnet-4-5",
   "claude-code": "claude-sonnet-4-5",
   codex: "gpt-5.3-codex",
-  hermes: "",
+  acp: "",
 };
 
 const COORDINATION_OPTIONS: Array<{
@@ -284,6 +285,9 @@ function ProfileAgentBody({
   onClose: () => void;
 }) {
   const harness = agent.harness;
+  // What an ACP agent runs (ADR 0241); Hermes' own commands say the rest.
+  const command = agent.acp?.command ?? [];
+  const hermes = runsHermes(command);
   const [tab, setTab] = useState<Tab>("general");
   const [name, setName] = useState(agent.name);
   const [provider, setProvider] = useState(agent.provider ?? "anthropic");
@@ -362,9 +366,9 @@ function ProfileAgentBody({
           : { harnessPermissions }),
         coordination,
         memory,
-        ...(harness === "ai-sdk" || harness === "hermes"
-          ? {}
-          : { syncSessions }),
+        ...(harness === "claude-code" || harness === "codex"
+          ? { syncSessions }
+          : {}),
         instructions,
         auth: effectiveAuth,
         connections,
@@ -472,15 +476,23 @@ function ProfileAgentBody({
                 </label>
               )}
 
-              {harness === "hermes" ? (
-                // Hermes keeps its model in its own configuration (ADR 0241).
+              {harness === "acp" ? (
+                // An ACP agent keeps its model in its own configuration.
                 <p
                   className="text-xs text-fg-faint"
-                  data-testid="agent-hermes-model"
+                  data-testid="agent-acp-model"
                 >
-                  Hermes runs the model its own configuration names. Run{" "}
-                  <code className="font-mono">hermes model</code> in a terminal
-                  to change it.
+                  Work runs{" "}
+                  <code className="font-mono">{command.join(" ")}</code>, on the
+                  model its own configuration names.{" "}
+                  {hermes ? (
+                    <>
+                      Run <code className="font-mono">{HERMES.model}</code> in a
+                      terminal to change it.
+                    </>
+                  ) : (
+                    "Change it in the agent itself."
+                  )}
                 </p>
               ) : harness === "ai-sdk" && provider === "openrouter" ? (
                 <OpenRouterModelField value={model} onChange={setModel} />
@@ -502,7 +514,7 @@ function ProfileAgentBody({
                 </label>
               )}
 
-              {harness !== "hermes" && (
+              {harness !== "acp" && (
                 <label className="flex flex-col gap-1 text-xs text-fg-muted">
                   Effort
                   <select
@@ -574,7 +586,7 @@ function ProfileAgentBody({
                 data={data}
                 projectId={projectId}
               />
-              {harness !== "ai-sdk" && harness !== "hermes" && (
+              {(harness === "claude-code" || harness === "codex") && (
                 <label className="flex cursor-pointer items-start justify-between gap-3 text-xs text-fg-muted">
                   <span>
                     <span className="block text-[12px] text-fg">
@@ -823,18 +835,21 @@ function ProfileAgentBody({
             </>
           )}
 
-          {tab === "auth" && harness === "hermes" && (
-            <p
-              className="text-xs text-fg-muted"
-              data-testid="agent-hermes-auth"
-            >
-              Hermes signs in on its own, on this machine. Run{" "}
-              <code className="font-mono">hermes setup</code> in a terminal to
-              change its provider or sign-in.
+          {tab === "auth" && harness === "acp" && (
+            <p className="text-xs text-fg-muted" data-testid="agent-acp-auth">
+              This agent signs in on its own, on this machine.{" "}
+              {hermes ? (
+                <>
+                  Run <code className="font-mono">{HERMES.setup}</code> in a
+                  terminal to change its provider or sign-in.
+                </>
+              ) : (
+                "Change its provider or sign-in in the agent itself."
+              )}
             </p>
           )}
 
-          {tab === "auth" && harness !== "hermes" && (
+          {tab === "auth" && harness !== "acp" && (
             <>
               {(harness !== "ai-sdk" || provider === "openrouter") && (
                 <label className="flex flex-col gap-1 text-xs text-fg-muted">

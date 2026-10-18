@@ -169,7 +169,7 @@ export interface SessionCheckoutDetail {
   changedFiles: number | null;
 }
 
-export type AgentHarness = "ai-sdk" | "claude-code" | "codex" | "hermes";
+export type AgentHarness = "ai-sdk" | "claude-code" | "codex" | "acp";
 export type AgentEffort = "low" | "medium" | "high" | "xhigh" | "max";
 export type AgentAuthMode = "local" | "account" | "api-key";
 
@@ -213,6 +213,8 @@ export interface AgentInfo {
   name: string;
   harness: AgentHarness;
   provider?: "anthropic" | "openai" | "openrouter";
+  /** What an ACP agent runs (ADR 0241). */
+  acp?: { command: string[] };
   model: string;
   effort: AgentEffort;
   auth: AgentAuthMode;
@@ -295,26 +297,26 @@ export interface ProjectAgentsData {
  */
 export function projectAgentAsInfo(agent: ProjectAgentInfo): AgentInfo {
   const harness: AgentHarness =
-    agent.kind === "claude-code"
-      ? "claude-code"
-      : agent.kind === "codex"
-        ? "codex"
-        : // ACP agents run as Hermes does: their own model, no effort or
-          // model choice of Work's, images only (ADR 0241).
-          agent.kind === "acp"
-          ? "hermes"
-          : "ai-sdk";
+    agent.kind === "claude-code" ||
+    agent.kind === "codex" ||
+    agent.kind === "acp"
+      ? agent.kind
+      : "ai-sdk";
   return {
     id: agent.id,
     name: agent.name,
     harness,
     ...(harness === "ai-sdk" ? { provider: "anthropic" as const } : {}),
+    ...(harness === "acp" && agent.command
+      ? { acp: { command: agent.command } }
+      : {}),
     model: agent.model ?? "",
     effort: agent.effort ?? "medium",
     auth: agent.credentialsSource === "secret" ? "api-key" : "local",
     hasApiKey: false,
     apiKeyMasked: null,
-    accepts: ["image", "document"],
+    // ACP carries images; documents are named as not delivered.
+    accepts: harness === "acp" ? ["image"] : ["image", "document"],
     instructions: "",
     sandboxing: agent.sandboxing ?? DESKTOP_DEFAULT_SANDBOXING,
     harnessPermissions: effectiveHarnessPermissions({
@@ -347,6 +349,8 @@ export interface CreateAgentInput {
   name?: string;
   harness: AgentHarness;
   provider?: "anthropic" | "openai" | "openrouter";
+  /** What an ACP agent runs; required for one (ADR 0241). */
+  acp?: { command: string[] };
   model?: string;
   effort?: AgentEffort;
   auth?: AgentAuthMode;

@@ -37,6 +37,7 @@ export function SessionInspector({
   agentName,
   harness,
   provider,
+  command,
   environmentControl,
   environmentLabel,
   onManageConnections,
@@ -76,6 +77,8 @@ export function SessionInspector({
   agentName: string;
   harness?: string;
   provider?: string;
+  /** What an ACP agent runs (ADR 0241), which its icon reflects. */
+  command?: readonly string[];
   environmentControl?: ReactNode;
   /** The environment's name as its control shows it, for its row's copy. */
   environmentLabel?: string;
@@ -256,6 +259,7 @@ export function SessionInspector({
           <HarnessIcon
             harness={harness}
             provider={provider}
+            command={command}
             className="size-3.5"
           />
           <span className="truncate">{agentName}</span>

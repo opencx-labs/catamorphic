@@ -25,10 +25,14 @@ in the checkout its command runs: as with Claude Code's project hooks
 (ADR 0045), a collaborator can change those after approval.
 
 - **Sessions** stay with the agent: the first turn opens one in the
-  checkout, later turns reopen it with `session/load`. Native state is
-  `none`, so a chat moved to another machine starts fresh with a handoff,
-  and an agent that cannot reopen a session starts a new one. The harness
-  id is `acp:<definition slug>`, so a chat stays with its agent.
+  checkout, later turns reopen it with `session/resume` when the agent
+  offers it (nothing replayed), else `session/load` (its history replayed
+  and ignored). Native state is `none`, so a chat moved to another machine
+  starts fresh with a handoff, and an agent that cannot reopen a session
+  starts a new one. A turn ends once the agent's process has exited, so a
+  session the agent saves on exit is saved before the next turn reopens
+  it. The harness id is `acp:<agent id>`, one per agent, so a chat stays
+  with its agent.
 - **Work's tools** (workspace tools, `ask_user`) reach the agent as a
   loopback MCP server per attempt behind a bearer only that agent is
   given, decided by the attempt's tool policy, over HTTP even when the
@@ -44,16 +48,19 @@ in the checkout its command runs: as with Claude Code's project hooks
   ACP has no steer, so a message sent mid-turn restarts the attempt with
   it.
 
-**Hermes is also an agent of the person's own.** Settings' setup wizard
-offers Hermes beside Claude and ChatGPT: it finds the install on PATH or
-in `~/.local/bin` (where Hermes' installer puts it) and adds an agent of
-harness `hermes` that runs `hermes acp` through the same adapter. Nothing
-is approved, since the person set it up; when Hermes is missing the wizard
-shows Hermes' own install and setup commands. Work never downloads it (a
-Python install cannot be integrity-pinned like ADR 0091's components) and
-offers no model, effort or key fields for it: those stay in Hermes
-(`hermes model`, `hermes setup`). Its harness id is `hermes`, so its chats
-stay with it; a project's ACP agents are `acp:<definition slug>`.
+**An ACP agent can also be the person's own.** A profile agent of harness
+`acp` stores the command it runs, and runs through the same adapter and
+the same registry path as a project's. Settings' setup wizard offers
+Hermes as a preset beside Claude and ChatGPT: it finds the install on
+PATH or in `~/.local/bin` (where Hermes' installer puts it) and adds an
+ACP agent running `hermes acp`. Nothing is approved, since the person set
+it up; when Hermes is missing the wizard shows Hermes' own install and
+setup commands. Work never downloads it (a Python install cannot be
+integrity-pinned like ADR 0091's components) and offers no model, effort
+or key fields for an ACP agent: those stay in the agent (for Hermes,
+`hermes model` and `hermes setup`). The app knows Hermes only by its
+command, for its icon and those hints; every other ACP agent is shown as
+itself.
 
 Considered: Hermes' TUI gateway protocol, which adds steering, questions and
 branching. It is Hermes' own and changes with it; ACP is the seam ADR 0050
@@ -61,7 +68,8 @@ chose and covers other agents too.
 
 ## Consequences
 
-A person adds their Hermes in Settings in one step, and a project can
+A person adds their Hermes in Settings in one step, another ACP agent is
+a preset away, and a project can
 commit `{"kind": "acp", "acp": {"command": ["hermes", "acp"]}}` for its
 members to approve. Each turn starts the agent's process. A host tool call that waits longer
 than the agent's own MCP timeout (Hermes: five minutes) fails on its side.

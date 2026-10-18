@@ -160,8 +160,9 @@ describe("Hermes as the person's own agent", () => {
     });
     await runWaitAsync(
       `const { agents } = await window.catamorphicDesktop.agentsList();
-       return agents.some((agent) => agent.harness === 'hermes' && agent.name === 'Hermes');`,
-      { label: "a Hermes agent in the roster" },
+       return agents.some((agent) => agent.harness === 'acp' && agent.name === 'Hermes' &&
+         agent.acp?.command.join(' ') === 'hermes acp');`,
+      { label: "Hermes in the roster, an ACP agent running `hermes acp`" },
     );
   });
 
@@ -191,6 +192,10 @@ describe("Hermes as the person's own agent", () => {
         .some((el) => el.textContent.includes('Echo: hello hermes'));`,
       { timeoutMs: 30_000, label: "Hermes' reply" },
     );
+    await runWait(
+      `return !!hermesDock().querySelector('[data-harness-icon="hermes"]');`,
+      { label: "the chat marked as Hermes'" },
+    );
     await settle();
     await app.screenshot(path.join(shots, "hermes-chat.png"));
   });
@@ -203,7 +208,7 @@ describe("Hermes as the person's own agent", () => {
     });
     await run(`$('[aria-label="Edit Hermes"]').click(); return true;`);
     await runWait(
-      `return !!$('[data-testid="agent-hermes-model"]') &&
+      `return !!byText('[data-testid="agent-acp-model"] code', 'hermes model') &&
               !$('[data-testid="agent-effort"]') &&
               !$('[data-testid="agent-sync-sessions"]');`,
       { timeoutMs: 15_000, label: "Hermes' model note, no effort or sync" },
@@ -211,8 +216,11 @@ describe("Hermes as the person's own agent", () => {
     await settle();
     await app.screenshot(path.join(shots, "hermes-settings.png"));
     await run(`$('[data-testid="agent-tab-auth"]').click(); return true;`);
-    await runWait(`return !!$('[data-testid="agent-hermes-auth"]');`, {
-      label: "Hermes signs in on its own",
-    });
+    await runWait(
+      `return !!byText('[data-testid="agent-acp-auth"] code', 'hermes setup');`,
+      {
+        label: "Hermes signs in on its own",
+      },
+    );
   });
 });

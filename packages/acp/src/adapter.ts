@@ -44,9 +44,10 @@ const EXIT_GRACE_MS = 3_000;
 /** How long an interrupted agent gets to end its turn before it is killed. */
 const CANCEL_GRACE_MS = 10_000;
 
-// ponytail: one agent process per attempt, its session reopened (and its
-// history replayed) each turn; keep a thread's process warm between attempts
-// (ADR 0222's pattern) when start-up or long histories cost too much.
+// ponytail: one agent process per attempt, its session reopened each turn
+// (its history replayed by an agent without `session/resume`); keep a
+// thread's process warm between attempts (ADR 0222's pattern) when start-up
+// or long histories cost too much.
 /**
  * The ACP harness adapter (ADR 0050, 0241): runs one agent process per
  * attempt from `options.command` (`["hermes", "acp"]`) in the workspace,
@@ -80,7 +81,7 @@ function startAttempt(
   const stderr: string[] = [];
   const items = new ItemStream(host);
 
-  const run = async () => {
+  const run = async (): Promise<"completed" | "cancelled"> => {
     const [executable, ...args] = command;
     if (!executable)
       throw new Error(
@@ -210,26 +211,33 @@ function startAttempt(
       attempt.thread.mode === "resume" || attempt.thread.mode === "restore"
         ? attempt.thread.nativeRef.id
         : undefined;
-    // An agent that cannot reopen a session starts a new one, told Work's
+    // The earlier session reopens with `session/resume` when the agent
+    // offers it (nothing replayed), else `session/load` (the agent replays
+    // its history first, which the stream ignores until the turn starts).
+    // An agent that can do neither starts a new one, told Work's
     // instructions again, rather than failing every later turn.
-    const reopen = capabilities?.loadSession ? earlier : undefined;
+    const reopen = !earlier
+      ? undefined
+      : capabilities?.sessionCapabilities?.resume
+        ? "resume"
+        : capabilities?.loadSession
+          ? "load"
+          : undefined;
     if (earlier && !reopen)
       host.emit({
         type: "diagnostic",
         level: "warn",
         message: `${agentName} can't reopen its earlier session, so this turn starts a new one.`,
       });
-    if (reopen) {
-      // The agent replays the session's history before answering; the
-      // stream ignores it until the turn starts.
-      await until(
-        connection.loadSession({
-          sessionId: reopen,
-          cwd: attempt.workingDirectory,
-          mcpServers,
-        }),
-      );
-      sessionId = reopen;
+    if (earlier && reopen) {
+      const session = {
+        sessionId: earlier,
+        cwd: attempt.workingDirectory,
+        mcpServers,
+      };
+      if (reopen === "resume") await until(connection.resumeSession(session));
+      else await until(connection.loadSession(session));
+      sessionId = earlier;
     } else {
       sessionId = (
         await until(
@@ -238,10 +246,7 @@ function startAttempt(
       ).sessionId;
     }
     host.emit({ type: "thread", ref: { id: sessionId, strength: "strong" } });
-    if (interrupted) {
-      host.emit({ type: "turn.completed", status: "interrupted" });
-      return;
-    }
+    if (interrupted) return "cancelled";
     host.emit({ type: "turn.started" });
     items.live = true;
     const response = await until(
@@ -254,35 +259,44 @@ function startAttempt(
         }),
       }),
     );
-    const cancelled = interrupted || response.stopReason === "cancelled";
-    items.live = false;
-    items.closeAll(cancelled ? "cancelled" : "completed");
-    host.emit({
-      type: "turn.completed",
-      status: cancelled ? "interrupted" : "completed",
-    });
+    return interrupted || response.stopReason === "cancelled"
+      ? "cancelled"
+      : "completed";
   };
 
+  // The turn ends once the agent's process has, so an agent that saves its
+  // session as it exits (Hermes) has saved it before a next attempt, such
+  // as the restart a mid-turn message causes, reopens it.
   const finished = run()
-    .catch((error: unknown) => {
+    .then(
+      (outcome) => ({ outcome, error: undefined }),
+      (error: unknown) => ({
+        outcome: interrupted ? ("cancelled" as const) : ("failed" as const),
+        error,
+      }),
+    )
+    .then(async ({ outcome, error }) => {
       items.live = false;
-      items.closeAll(interrupted ? "cancelled" : "failed");
-      host.emit({
-        type: "turn.completed",
-        status: interrupted ? "interrupted" : "failed",
-        ...(interrupted
-          ? {}
-          : {
-              error: {
-                message: error instanceof Error ? error.message : String(error),
-              },
-            }),
-      });
-    })
-    .finally(async () => {
+      items.closeAll(outcome);
       tools?.close();
       tools?.closeAllConnections();
       await stop(child);
+      host.emit({
+        type: "turn.completed",
+        status:
+          outcome === "completed"
+            ? "completed"
+            : outcome === "cancelled"
+              ? "interrupted"
+              : "failed",
+        ...(outcome === "failed"
+          ? {
+              error: {
+                message: error instanceof Error ? error.message : String(error),
+              },
+            }
+          : {}),
+      });
     });
 
   return {
@@ -308,7 +322,13 @@ function startAttempt(
  * then killed.
  */
 async function stop(child: ChildProcess | undefined): Promise<void> {
-  if (!child || child.exitCode !== null || child.signalCode !== null) return;
+  // A command that never started has no process to end.
+  if (
+    child?.pid === undefined ||
+    child.exitCode !== null ||
+    child.signalCode !== null
+  )
+    return;
   const exited = new Promise<void>((resolve) =>
     child.once("exit", () => resolve()),
   );

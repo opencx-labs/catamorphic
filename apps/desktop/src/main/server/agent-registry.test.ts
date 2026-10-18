@@ -7,8 +7,9 @@ import type {
   HarnessEvent,
 } from "@catamorphic/agent-protocol/runner";
 import { NO_CAPABILITIES } from "@catamorphic/agent-protocol/runner";
+import { definitionHash, validateAgentDefinition } from "@catamorphic/core";
 import { PROJECT_AGENTS_DIR } from "@catamorphic/workflow/project-layout";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 const starts = vi.hoisted(() => [] as AttemptStart[]);
 vi.mock("@catamorphic/claude-code", () => ({
@@ -107,11 +108,12 @@ it("registers Claude Code as a native host harness with the agent's settings", (
   expect(harness.env?.CLAUDE_CONFIG_DIR).toContain("claude");
 });
 
-it("registers Hermes as `hermes acp` over ACP, never the scripted fake (ADR 0241)", () => {
+it("registers an ACP agent as its own command over ACP, one harness per agent, never the scripted fake (ADR 0241)", () => {
   const hermes = {
-    id: "hermes",
+    id: "hermes-id",
     name: "Hermes",
-    harness: "hermes",
+    harness: "acp",
+    acp: { command: ["hermes", "acp"] },
     model: "",
     effort: "medium",
     auth: "local",
@@ -119,9 +121,9 @@ it("registers Hermes as `hermes acp` over ACP, never the scripted fake (ADR 0241
   };
   const { agent, harness } = hostOf(
     registryWith(hermes, { e2eFake: true }),
-    "hermes",
+    "hermes-id",
   );
-  expect(harness.adapter.id).toBe("hermes");
+  expect(harness.adapter.id).toBe("acp:hermes-id");
   expect(agent.options).toEqual({ command: ["hermes", "acp"] });
   expect(agent.defaults).toEqual({});
   // Where Hermes' installer puts it, should PATH not say.
@@ -130,28 +132,72 @@ it("registers Hermes as `hermes acp` over ACP, never the scripted fake (ADR 0241
   );
 });
 
-it("waits for its member's approval before running a project's ACP agent, whatever its credentials say (ADR 0241)", () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "acp-consent-"));
+const projectRoots: string[] = [];
+afterEach(() => {
+  for (const root of projectRoots.splice(0))
+    fs.rmSync(root, { recursive: true, force: true });
+});
+
+/** A project folder holding one committed agent definition, `runner`. */
+function projectWith(definition: Record<string, unknown>): string {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "acp-project-"));
+  projectRoots.push(root);
   const agents = path.join(root, PROJECT_AGENTS_DIR);
   fs.mkdirSync(agents, { recursive: true });
   fs.writeFileSync(
     path.join(agents, "runner.json"),
-    JSON.stringify({
-      version: 1,
-      name: "Runner",
-      kind: "acp",
-      acp: { command: ["sh", "-c", "echo hi"] },
-      credentials: { source: "secret", secret: "token" },
-    }),
+    JSON.stringify(definition),
   );
-  try {
-    const agent = registryWith(claudeAgent, {
+  return root;
+}
+
+const runnerDefinition = {
+  version: 1,
+  name: "Runner",
+  kind: "acp",
+  acp: { command: ["sh", "-c", "echo hi"] },
+} as const;
+
+it("waits for its member's approval before running a project's ACP agent, whatever its credentials say (ADR 0241)", () => {
+  const root = projectWith({
+    ...runnerDefinition,
+    credentials: { source: "secret", secret: "token" },
+  });
+  const agent = registryWith(claudeAgent, {
+    projectRootPath: () => root,
+  }).get("project:project:runner");
+  expect(agent?.unavailable).toContain("needs your approval");
+});
+
+it("runs an approved project ACP agent as its own command, on a harness of its own (ADR 0241)", () => {
+  const root = projectWith(runnerDefinition);
+  const validated = validateAgentDefinition(runnerDefinition);
+  if ("error" in validated) throw new Error(validated.error);
+  const { agent, harness } = hostOf(
+    registryWith(claudeAgent, {
+      e2eFake: true,
       projectRootPath: () => root,
-    }).get("project:project:runner");
-    expect(agent?.unavailable).toContain("needs your approval");
-  } finally {
-    fs.rmSync(root, { recursive: true, force: true });
-  }
+      profileConfig: {
+        forProfile: () => ({
+          agents: { list: () => [claudeAgent], get: () => claudeAgent },
+          connections: { list: () => [] },
+        }),
+        forProject: () => ({
+          agentBindings: {
+            get: () => ({
+              consentHash: definitionHash(validated.definition),
+              auth: { mode: "local" },
+            }),
+          },
+        }),
+      },
+    }),
+    "project:project:runner",
+  );
+  expect(agent.unavailable).toBeUndefined();
+  expect(harness.adapter.id).toBe("acp:project:project:runner");
+  expect(agent.options).toEqual({ command: ["sh", "-c", "echo hi"] });
+  expect(agent.defaults).toEqual({});
 });
 
 const probeConnection = {

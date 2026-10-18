@@ -41,10 +41,12 @@ function workspace() {
     dir,
     stateFile,
     state: (): {
+      savedOnExit?: boolean;
       sessions: Record<
         string,
         {
           cwd: string;
+          reopenedWith?: "load" | "resume";
           mcpServers: Array<{
             name: string;
             url?: string;
@@ -202,9 +204,46 @@ describe("ACP adapter", () => {
     expect(second.completed()).toMatchObject({ status: "completed" });
     expect(second.text("assistant_message")).toBe("Turn 2");
     expect(JSON.stringify(second.events())).not.toContain("(replayed)");
+    expect(space.state().sessions["session-1"]?.reopenedWith).toBe("load");
     expect(space.state().sessions["session-1"]?.prompts[1]).toEqual([
       { type: "text", text: "[[recall]]" },
     ]);
+  });
+
+  it("reopens with session/resume when the agent offers it, so nothing is replayed", async () => {
+    const space = workspace();
+    const env = { TEST_AGENT_STATE: space.stateFile, TEST_AGENT_RESUME: "1" };
+    const first = run(attempt(space, "hello", { env }));
+    await first.finished();
+    const second = run(
+      attempt(space, "[[recall]]", {
+        env,
+        thread: {
+          mode: "resume",
+          providerThreadId: "thread",
+          nativeRef: { id: "session-1", strength: "strong" },
+        },
+      }),
+    );
+    await second.finished();
+    expect(second.completed()).toMatchObject({ status: "completed" });
+    expect(second.text("assistant_message")).toBe("Turn 2");
+    expect(space.state().sessions["session-1"]?.reopenedWith).toBe("resume");
+  });
+
+  it("ends the turn once the agent has exited, so a session it saves on exit is saved before a next turn reopens it", async () => {
+    const space = workspace();
+    const turn = run(
+      attempt(space, "hello", {
+        env: {
+          TEST_AGENT_STATE: space.stateFile,
+          TEST_AGENT_EXIT_SAVE_MS: "500",
+        },
+      }),
+    );
+    await turn.finished();
+    expect(turn.completed()).toMatchObject({ status: "completed" });
+    expect(space.state().savedOnExit).toBe(true);
   });
 
   it("fails the turn clearly when the session to reopen is gone", async () => {

@@ -31,6 +31,7 @@ import {
   shell,
   type WebContents,
 } from "electron";
+import { HERMES } from "../shared/acp-agents.js";
 import type { AgentCommandsResult } from "../shared/agent-commands.js";
 import type { AgentDefaultModelResult } from "../shared/agent-default-model.js";
 import type {
@@ -52,6 +53,7 @@ import type { UsageSummary, UsageWindowDays } from "../shared/usage.js";
 import { rosterAgentId } from "../shared/voice.js";
 import type { BindingAuth } from "./agent-bindings-store.js";
 import { readAgentCredentials } from "./agent-credentials.js";
+import { findOnAgentPath } from "./agent-path.js";
 import {
   type AgentsStore,
   type CreateAgentInput,
@@ -1194,27 +1196,13 @@ export function registerIpcHandlers(
   // already have a Claude Code / Codex login the `local` auth mode can
   // inherit? (E2E reports both present so wizard flows stay scripted.)
   ipcMain.handle("catamorphic:agent-setup-status", () => {
-    const home = app.getPath("home");
-    // Hermes (ADR 0241): the person's own install, on PATH or where its
-    // installer puts it, which the agent's PATH also includes.
-    const hermes =
-      [
-        ...(process.env.PATH ?? "").split(path.delimiter),
-        path.join(home, ".local", "bin"),
-      ]
-        .filter(Boolean)
-        .map((dir) => path.join(dir, "hermes"))
-        .find((file) => {
-          try {
-            fs.accessSync(file, fs.constants.X_OK);
-            return true;
-          } catch {
-            return false;
-          }
-        }) ?? null;
+    // Hermes (ADR 0241): the person's own install, where its agent will
+    // look for it.
+    const hermes = findOnAgentPath(HERMES.command[0]);
     if (process.env.CATAMORPHIC_E2E_FAKE_AGENT === "1") {
       return { claudeCode: true, codex: true, hermes };
     }
+    const home = app.getPath("home");
     return {
       hermes,
       claudeCode: [
@@ -1325,8 +1313,8 @@ export function registerIpcHandlers(
     async (event, id: string) => {
       const agent = storesFor(event).agents.get(id);
       if (!agent) return false;
-      // Hermes signs in on its own (ADR 0241); Work never sees it.
-      if (agent.harness === "hermes") return true;
+      // An ACP agent signs in on its own (ADR 0241); Work never sees it.
+      if (agent.harness === "acp") return true;
       if (agent.auth === "api-key" || agent.harness === "ai-sdk") {
         return agent.apiKey !== null;
       }
@@ -1359,7 +1347,7 @@ export function registerIpcHandlers(
         return { health: forced, reauth: agent === undefined ? true : reauth };
       }
       if (!agent) return { health: "missing", reauth };
-      if (agent.harness === "hermes") return { health: "ok", reauth };
+      if (agent.harness === "acp") return { health: "ok", reauth };
       if (agent.auth === "api-key" || agent.harness === "ai-sdk") {
         return { health: agent.apiKey !== null ? "ok" : "missing", reauth };
       }

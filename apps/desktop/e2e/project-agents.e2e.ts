@@ -321,6 +321,12 @@ describe("project agents", () => {
         .some((el) => el.textContent.includes('Echo: hello acp'));`,
       { timeoutMs: 30_000, label: "reply from the ACP agent" },
     );
+    // An ACP agent is its own, never presented as Hermes.
+    await runWait(
+      `return !!${echoDock}.querySelector('[data-harness-icon]') &&
+              !${echoDock}.querySelector('[data-harness-icon="hermes"]');`,
+      { label: "the chat marked as a generic agent, not Hermes" },
+    );
     // The agent's own permission request is a Work approval card.
     await send("[[permission]]");
     await runWait(

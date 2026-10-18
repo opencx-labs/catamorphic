@@ -7,9 +7,13 @@
 //   [[permission]]                   ask permission, say the chosen option
 //   [[permission always-only]]       the same, offering no "once"
 //
-// With TEST_AGENT_NO_LOAD=1 it cannot reopen a session, as ACP allows.
 //   [[hang]]                         work until cancelled
 //   [[recall]]                       say how many turns the session has seen
+//
+// With TEST_AGENT_NO_LOAD=1 it cannot reopen a session, as ACP allows; with
+// TEST_AGENT_RESUME=1 it also offers `session/resume`, which replays
+// nothing. TEST_AGENT_EXIT_SAVE_MS=<ms> saves its state that long after its
+// input closes, as Hermes saves its session on the way out.
 import fs from "node:fs";
 import { Readable, Writable } from "node:stream";
 import * as acp from "@agentclientprotocol/sdk";
@@ -27,6 +31,15 @@ const write = (state) =>
 
 let cancel = () => {};
 
+const exitSave = Number(process.env.TEST_AGENT_EXIT_SAVE_MS ?? 0);
+if (exitSave > 0)
+  process.stdin.once("end", () =>
+    setTimeout(() => {
+      write({ ...read(), savedOnExit: true });
+      process.exit(0);
+    }, exitSave),
+  );
+
 new acp.AgentSideConnection(
   (connection) => {
     const say = (sessionId, sessionUpdate, text) =>
@@ -41,6 +54,8 @@ new acp.AgentSideConnection(
         agentCapabilities: {
           loadSession: process.env.TEST_AGENT_NO_LOAD !== "1",
           promptCapabilities: { image: true },
+          sessionCapabilities:
+            process.env.TEST_AGENT_RESUME === "1" ? { resume: {} } : {},
         },
       }),
       authenticate: async () => {},
@@ -51,11 +66,19 @@ new acp.AgentSideConnection(
         write(state);
         return { sessionId };
       },
+      resumeSession: async ({ sessionId, cwd, mcpServers }) => {
+        const state = read();
+        const session = state.sessions[sessionId];
+        if (!session) throw acp.RequestError.resourceNotFound(sessionId);
+        Object.assign(session, { cwd, mcpServers, reopenedWith: "resume" });
+        write(state);
+        return {};
+      },
       loadSession: async ({ sessionId, cwd, mcpServers }) => {
         const state = read();
         const session = state.sessions[sessionId];
         if (!session) throw acp.RequestError.resourceNotFound(sessionId);
-        Object.assign(session, { cwd, mcpServers });
+        Object.assign(session, { cwd, mcpServers, reopenedWith: "load" });
         write(state);
         // ACP replays the history before answering.
         for (const prompt of session.prompts) {

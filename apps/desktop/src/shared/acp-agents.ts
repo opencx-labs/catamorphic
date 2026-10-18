@@ -1,0 +1,32 @@
+/**
+ * Agent Client Protocol agents (ADR 0241): a person's or a project's agent
+ * that Work runs as its own command, on its own model and sign-in. Hermes
+ * is the one Settings offers by name; any other ACP agent runs the same way.
+ *
+ * Dependency-free, so the main process and the renderer share it.
+ */
+
+/** Hermes Agent, as Settings sets it up: Hermes' own commands, not Work's. */
+export const HERMES = {
+  name: "Hermes",
+  command: ["hermes", "acp"],
+  /** Hermes' own installer (hermes-agent.nousresearch.com). */
+  install: "curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash",
+  /** Where Hermes keeps its provider and sign-in. */
+  setup: "hermes setup",
+  /** Where Hermes keeps its model. */
+  model: "hermes model",
+} as const;
+
+/**
+ * The harness a chat on an ACP agent binds: one per agent, so a chat stays
+ * with the agent it began on and never reopens its session in another.
+ */
+export function acpHarnessId(agentId: string): string {
+  return `acp:${agentId}`;
+}
+
+/** Whether an ACP agent's command runs Hermes. */
+export function runsHermes(command: readonly string[] | undefined): boolean {
+  return /(^|[\\/])hermes$/.test(command?.[0] ?? "");
+}

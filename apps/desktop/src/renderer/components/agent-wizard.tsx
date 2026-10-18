@@ -1,5 +1,6 @@
 import { ArrowLeft, Bot, ChevronRight, KeyRound, Sparkles } from "lucide-react";
 import { type FormEvent, useEffect, useRef, useState } from "react";
+import { HERMES } from "../../shared/acp-agents.js";
 import {
   type AgentConnectionsSetting,
   type ConnectionInfo,
@@ -28,10 +29,6 @@ type Flow =
   | "hermes"
   | "free";
 type AiSdkProvider = "anthropic" | "openai" | "openrouter";
-
-/** Hermes' own installer (hermes-agent.nousresearch.com). */
-const HERMES_INSTALL =
-  "curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash";
 
 const primaryActionClass =
   "min-h-9 w-full cursor-pointer rounded-md bg-accent px-3 py-2 text-sm font-medium text-accent-fg transition-[opacity,transform] duration-150 hover:opacity-90 active:scale-[0.98] motion-reduce:transition-none motion-reduce:active:scale-100 disabled:cursor-not-allowed disabled:opacity-50";
@@ -276,12 +273,22 @@ export function AgentWizard({
                 connections,
                 ...customName,
               })
-            : await desktopApi.agentsCreate({
-                harness: flow,
-                auth: "local",
-                connections,
-                ...customName,
-              });
+            : flow === "hermes"
+              ? // Hermes is an ACP agent of the person's own (ADR 0241).
+                await desktopApi.agentsCreate({
+                  name: HERMES.name,
+                  harness: "acp",
+                  acp: { command: [...HERMES.command] },
+                  auth: "local",
+                  connections,
+                  ...customName,
+                })
+              : await desktopApi.agentsCreate({
+                  harness: flow,
+                  auth: "local",
+                  connections,
+                  ...customName,
+                });
     createdRef.current[flow] = agent.id;
     return agent.id;
   };
@@ -695,7 +702,7 @@ export function AgentWizard({
                 >
                   {status.hermes}
                 </p>
-                <div className="mt-3">{nameField("Hermes")}</div>
+                <div className="mt-3">{nameField(HERMES.name)}</div>
                 {connectionsField}
                 <PendingButton
                   type="button"
@@ -720,7 +727,7 @@ export function AgentWizard({
                   Install it in a terminal, choose its model, then check again.
                 </p>
                 <div className="mt-3 flex flex-col gap-1.5">
-                  {[HERMES_INSTALL, "hermes setup"].map((command) => (
+                  {[HERMES.install, HERMES.setup].map((command) => (
                     <div
                       key={command}
                       data-copyable

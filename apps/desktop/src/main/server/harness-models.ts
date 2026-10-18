@@ -113,8 +113,8 @@ async function fetchModels(
     }
     case "codex":
       return codexModels(config, deps);
-    // Hermes keeps its model in its own configuration (`hermes model`).
-    case "hermes":
+    // An ACP agent keeps its model in its own configuration (ADR 0241).
+    case "acp":
       return [];
     case "ai-sdk":
       if (config.provider === "anthropic") return anthropicModels(config);

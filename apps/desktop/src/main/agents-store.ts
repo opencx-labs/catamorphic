@@ -30,6 +30,8 @@ import {
  *  - `claude-code`: the Claude Code CLI on this machine, working directly
  *    in the project folder.
  *  - `codex`: the OpenAI Codex CLI on this machine, likewise.
+ *  - `acp`: an Agent Client Protocol agent (ADR 0241), its own command
+ *    (`hermes acp`) on its own model, memory and sign-in.
  *
  * Auth is per agent: an API key (encrypted at rest via safeStorage) or
  * `account` — for the CLIs that's their own login isolated per agent
@@ -37,7 +39,7 @@ import {
  * built-in agent on OpenRouter it's the browser PKCE flow, whose scoped
  * key lands back in the config so the user never pastes one.
  */
-export type AgentHarness = "ai-sdk" | "claude-code" | "codex" | "hermes";
+export type AgentHarness = "ai-sdk" | "claude-code" | "codex" | "acp";
 export type AgentEffortSetting = "low" | "medium" | "high" | "xhigh" | "max";
 
 /**
@@ -80,6 +82,8 @@ export interface AgentConfig {
   harness: AgentHarness;
   /** Model provider — built-in (ai-sdk) only; the CLIs imply theirs. */
   provider?: AiSdkProvider;
+  /** What an `acp` agent runs (ADR 0241); absent for every other harness. */
+  acp?: { command: string[] };
   /** Model id; empty string = the harness default. */
   model: string;
   effort: AgentEffortSetting;
@@ -161,6 +165,7 @@ export interface PublicAgentConfig {
   name: string;
   harness: AgentHarness;
   provider?: AiSdkProvider;
+  acp?: { command: string[] };
   model: string;
   effort: AgentEffortSetting;
   auth: AgentAuthMode;
@@ -213,8 +218,8 @@ export function agentAccepts(config: {
       return ["image", "document"];
     case "codex":
       return ["image", "document"];
-    // Hermes takes images over ACP; documents are named as not delivered.
-    case "hermes":
+    // ACP carries images; documents are named as not delivered.
+    case "acp":
       return ["image"];
   }
 }
@@ -225,13 +230,15 @@ export const DEFAULT_AGENT_NAMES: Record<AgentHarness, string> = {
   "ai-sdk": "Built-in",
   "claude-code": "Claude",
   codex: "ChatGPT",
-  hermes: "Hermes",
+  acp: "ACP agent",
 };
 
 export interface CreateAgentInput {
   name?: string;
   harness: AgentHarness;
   provider?: AiSdkProvider;
+  /** What an `acp` agent runs; required for one. */
+  acp?: { command: string[] };
   model?: string;
   effort?: AgentEffortSetting;
   auth?: AgentAuthMode;
@@ -380,6 +387,9 @@ export class AgentsStore {
   }
 
   create(input: CreateAgentInput): AgentConfig {
+    const command = input.acp?.command.filter(Boolean) ?? [];
+    if (input.harness === "acp" && command.length === 0)
+      throw new Error("An ACP agent needs the command that starts it.");
     const harnessPermissions = checkedHarnessPermissions({
       harness: input.harness,
       permissions: input.harnessPermissions,
@@ -391,6 +401,7 @@ export class AgentsStore {
       ...(input.harness === "ai-sdk"
         ? { provider: input.provider ?? "anthropic" }
         : {}),
+      ...(input.harness === "acp" ? { acp: { command } } : {}),
       // Empty model = the harness/provider default, resolved at run time —
       // no model ids hardcoded here (OpenRouter picks its best free model).
       model: input.model?.trim() ?? "",
@@ -412,7 +423,7 @@ export class AgentsStore {
         : {}),
       ...(input.environment ? { environment: input.environment } : {}),
       ...(input.memory === true ? { memory: true } : {}),
-      ...(input.syncSessions === true && input.harness !== "ai-sdk"
+      ...(input.syncSessions === true && syncsSessions(input.harness)
         ? { syncSessions: true }
         : {}),
       ...(input.connections ? { connections: input.connections } : {}),
@@ -469,8 +480,7 @@ export class AgentsStore {
       else delete stored.memory;
     }
     if (patch.syncSessions !== undefined) {
-      // Only Claude Code and Codex keep sessions Work can import.
-      if (patch.syncSessions && stored.harness !== "ai-sdk") {
+      if (patch.syncSessions && syncsSessions(stored.harness)) {
         stored.syncSessions = true;
         this.soleSyncing(stored);
       } else delete stored.syncSessions;
@@ -555,6 +565,11 @@ export class AgentsStore {
     }
     return { ...rest, apiKey };
   }
+}
+
+/** Only Claude Code and Codex keep sessions Work can import (ADR 0233). */
+function syncsSessions(harness: AgentHarness): boolean {
+  return harness === "claude-code" || harness === "codex";
 }
 
 /**

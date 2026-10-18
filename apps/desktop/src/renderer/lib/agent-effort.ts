@@ -29,8 +29,8 @@ export function supportedEfforts(
   if (model?.supportsEffort === false) return [];
   if (model?.supportedEffortLevels) return model.supportedEffortLevels;
   if (agent.harness === "codex") return EFFORT_LEVELS;
-  // Hermes reasons as its own configuration says.
-  if (agent.harness === "hermes") return [];
+  // An ACP agent reasons as its own configuration says (ADR 0241).
+  if (agent.harness === "acp") return [];
   if (agent.harness === "ai-sdk" && agent.provider === "openrouter") return [];
   if (agent.harness === "ai-sdk" && agent.provider === "openai")
     return ["low", "medium", "high"];

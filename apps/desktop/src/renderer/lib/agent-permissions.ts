@@ -75,7 +75,7 @@ export function permissionModeChoices(
         })),
       ];
     case "ai-sdk":
-    case "hermes":
+    case "acp":
       return [];
   }
 }
