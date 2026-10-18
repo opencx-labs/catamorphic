@@ -117,18 +117,22 @@ export function AppMount({
   // them only when their value changes.
   const theme = useByValue(themeProp);
   const display = useByValue(displayProp);
+  // Likewise the callback: a host is told of each state once, not again
+  // whenever its callback is new (it would re-render the host forever).
+  const onContentStateRef = useRef(onContentState);
+  onContentStateRef.current = onContentState;
   const { apiClient } = useCatamorphic();
   const frameRef = useRef<HTMLIFrameElement>(null);
   const [view, setView] = useState<ViewState>({ state: "loading" });
   useEffect(() => {
-    onContentState?.(
+    onContentStateRef.current?.(
       view.state === "ready"
         ? "ready"
         : view.state === "loading"
           ? "loading"
           : "error",
     );
-  }, [view.state, onContentState]);
+  }, [view.state]);
   const [height, setHeight] = useState(MIN_HEIGHT_PX);
   const inFlightCalls = useRef(0);
   const inFlightPolls = useRef(0);
@@ -254,7 +258,7 @@ export function AppMount({
             message.state,
           )
         )
-          onContentState?.(message.state);
+          onContentStateRef.current?.(message.state);
         return;
       }
       if (message.kind === "collection") {
@@ -575,7 +579,7 @@ export function AppMount({
         }
       }
     },
-    [apiClient, projectId, appName, channel, view, collections, onContentState],
+    [apiClient, projectId, appName, channel, view, collections],
   );
 
   const sendDisplay = useCallback(() => {
