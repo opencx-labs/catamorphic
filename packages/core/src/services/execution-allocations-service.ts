@@ -125,8 +125,8 @@ export interface EnvironmentSandbox {
   egress?: SandboxEgress;
   /**
    * What the sandbox reaches while its Environment's setup runs (ADR
-   * 0257): its own egress and the setup's hosts. Present only for a
-   * restricted Environment whose setup names a network.
+   * 0257): the setup's hosts alone. Present only for a restricted
+   * Environment whose setup names a network.
    */
   setupEgress?: SandboxEgress;
   /** The Environment's volumes, keyed for the work's owner (ADR 0208). */

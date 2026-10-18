@@ -137,12 +137,20 @@ export const RemoteOperationSchema = z.discriminatedUnion("kind", [
     path: z.string(),
     ref: z.string(),
   }),
-  // A running sandbox's egress switches (ADR 0257): sent only to executors
-  // that offer `network.setup`.
+  // A setup's network (ADR 0257): sent only to executors that offer
+  // `network.setup`. The executor narrows at `until` by itself, and refuses
+  // a widening whose id a narrowing already ended.
   z.object({
-    kind: z.literal("egress"),
+    kind: z.literal("egress.widen"),
     sandboxId: z.string(),
     egress: egressSchema,
+    id: z.string().min(1).max(200),
+    until: z.string().datetime(),
+  }),
+  z.object({
+    kind: z.literal("egress.narrow"),
+    sandboxId: z.string(),
+    id: z.string().min(1).max(200),
   }),
   // Background processes (ADR 0174): short request/response operations; a
   // follower reads again from the cursor the last read returned.
@@ -570,10 +578,13 @@ function forwardingSandboxProvider(args: {
     gitCheckout: async (sandboxId, path, ref) => {
       await call({ kind: "checkout", sandboxId, path, ref });
     },
-    // Placement sends it only to executors offering `network.setup`; one
-    // that cannot switch refuses (ADR 0257).
-    setEgress: async ({ sandboxId, egress }) => {
-      await call({ kind: "egress", sandboxId, egress });
+    // Placement sends these only to executors offering `network.setup`;
+    // one that cannot widen refuses (ADR 0257).
+    widenEgress: async (args) => {
+      await call({ kind: "egress.widen", ...args });
+    },
+    narrowEgress: async (args) => {
+      await call({ kind: "egress.narrow", ...args });
     },
   };
 }
@@ -659,9 +670,11 @@ function operationTimeoutMs(operation: RemoteOperation): number {
   if (operation.kind === "machine.reset") return 15 * 60_000;
   // Codex prints its sign-in code within seconds, or not at all.
   if (operation.kind === "machine.codexSignIn") return 60_000;
-  // A switch only swaps the policy and closes connections. Narrowing that
-  // does not answer in time fails closed: the caller stops the sandbox.
-  if (operation.kind === "egress") return 60_000;
+  // A switch only swaps the policy and closes connections. A widening
+  // abandoned here is ended by the narrowing that follows it; narrowing
+  // that does not answer in time fails closed: the sandbox is stopped.
+  if (operation.kind === "egress.widen" || operation.kind === "egress.narrow")
+    return 60_000;
   // A command's own timeout plus a margin, never less than five minutes.
   const commandSeconds =
     operation.kind === "execute" ? (operation.options?.timeout ?? 0) : 0;

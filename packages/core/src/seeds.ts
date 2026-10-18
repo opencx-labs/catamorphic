@@ -556,9 +556,11 @@ provide it take the work:
   member may add their own \`setup\` in their
   \`.work/personal/environment.json\`, run after this one in their own chats.
   With a \`gateway\` or \`allowlist\` network, \`"network": { "allow":
-  ["registry.npmjs.org"] }\` lets the setup alone reach more hosts while it
-  runs; the agent's turn finds the sandbox narrow again. The setup's hosts
-  could receive the project secrets it runs with.
+  ["registry.npmjs.org"] }\` lets the setup reach those hosts alone while it
+  runs, in a workspace at a ref of the project's remote: a new sandbox
+  holding the base commit, with only the secrets \`"secrets"\` names, narrow
+  again before the session's work arrives. Such an Environment declares no
+  volumes; its image holds the caches.
 - \`volumes\`: directories kept on the machine for each owner and project,
   so later workspaces start warm: \`{ "pnpm": "~/.local/share/pnpm/store",
   "docker": { "path": "/var/lib/docker", "exclusive": true, "sizeMb":

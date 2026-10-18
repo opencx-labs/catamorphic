@@ -102,34 +102,13 @@ describe("Environment images, containers and egress (ADR 0176)", () => {
     ).toEqual(["network.policy", "network.setup"]);
   });
 
-  it("resolves the setup's network beside the Environment's own (ADR 0257)", () => {
+  it("resolves the setup's network to its own hosts alone (ADR 0257)", () => {
+    // Not the gateway, nor the Environment's own allowlist.
     expect(
       resolveSetupEgress({
-        policy: { egress: "gateway" },
-        allow: ["Registry.npmjs.org"],
-        gatewayHosts: ["work.acme.com:443"],
+        allow: ["Registry.npmjs.org", "registry.npmjs.org"],
       }),
-    ).toEqual({
-      mode: "allowlist",
-      allow: ["work.acme.com:443", "registry.npmjs.org"],
-    });
-    expect(
-      resolveSetupEgress({
-        policy: { egress: "allowlist", allow: ["github.com"] },
-        allow: ["npm.pkg.github.com", "github.com"],
-        gatewayHosts: ["work.acme.com:443"],
-      }),
-    ).toEqual({
-      mode: "allowlist",
-      allow: ["work.acme.com:443", "github.com", "npm.pkg.github.com"],
-    });
-    expect(
-      resolveSetupEgress({
-        policy: { egress: "open" },
-        allow: ["registry.npmjs.org"],
-        gatewayHosts: [],
-      }),
-    ).toBeUndefined();
+    ).toEqual({ mode: "allowlist", allow: ["registry.npmjs.org"] });
     expect(
       sameEgress(
         { mode: "allowlist", allow: ["a.com", "b.com"] },

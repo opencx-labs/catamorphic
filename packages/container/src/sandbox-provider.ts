@@ -85,6 +85,11 @@ const VOLUMES_LABEL = "work.sandbox.volumes";
 export const VOLUME_LABEL = "work.volume";
 const VOLUME_PREFIX = "work-volume-";
 
+/**
+ * The longest a sandbox stays widened (ADR 0257): the longest setup, 240
+ * minutes, and a margin.
+ */
+const MAX_WIDENING_MS = 245 * 60_000;
 /** Where a sandbox sees its proxy's socket and forwarder. */
 const PROXY_MOUNT = "/run/work";
 const PROXY_PORT = 3128;
@@ -249,6 +254,13 @@ export class ContainerSandboxProvider implements SandboxProvider {
   private readonly owner: string;
   private readonly records = new Map<string, SandboxRecord>();
   private readonly proxies = new Map<string, Promise<EgressProxy>>();
+  /** Each sandbox's current widening (ADR 0257), ended when its time is up. */
+  private readonly widenings = new Map<
+    string,
+    { id: string; timer: ReturnType<typeof setTimeout> }
+  >();
+  /** Widenings each sandbox has seen end, refused should they arrive late. */
+  private readonly endedWidenings = new Map<string, string[]>();
   private readonly images = new Map<string, Promise<void>>();
   private hostPaths: Promise<HostPathOf> | undefined;
   private network: Promise<void> | undefined;
@@ -570,7 +582,8 @@ export class ContainerSandboxProvider implements SandboxProvider {
     if (!inspected) throw new Error(`Sandbox '${sandboxId}' does not exist`);
     if (objectField(inspected, "State").Running !== true) {
       // A sandbox that starts again starts with its own policy (ADR 0257),
-      // whatever it was switched to before it stopped.
+      // whatever it was widened to before it stopped.
+      this.endWidening(sandboxId);
       if (proxy && record.proxy && !samePolicy(proxy.policy, record.proxy))
         proxy.setPolicy(record.proxy);
       await this.docker.startContainer(sandboxId);
@@ -583,6 +596,7 @@ export class ContainerSandboxProvider implements SandboxProvider {
   async stopSandbox(sandboxId: string): Promise<void> {
     const record = this.records.get(sandboxId);
     if (record) record.ready = false;
+    this.endWidening(sandboxId);
     await this.docker.stopContainer(sandboxId, 5).catch((error: unknown) => {
       if (!(error instanceof DockerApiError && error.status === 404))
         throw error;
@@ -592,36 +606,87 @@ export class ContainerSandboxProvider implements SandboxProvider {
   }
 
   /**
-   * Switch a restricted sandbox's proxy to another allowlist (ADR 0257),
-   * closing every connection through it; the same policy again changes
-   * nothing. The switch lives in this process's memory only: the
-   * container's label keeps the policy it was created with, so a sandbox
-   * started again, or one this process finds after a restart, has that
-   * one. Nested containers reach out through the same proxy.
+   * Widen a restricted sandbox's proxy to another allowlist for one setup
+   * (ADR 0257), closing every connection through it. This process narrows
+   * it again at `until` (at most 245 minutes ahead) by itself. The widening
+   * lives in this process's memory only: the container's label keeps the
+   * policy it was created with, so a sandbox started again, or one this
+   * process finds after a restart, has that one. Nested containers reach
+   * out through the same proxy.
    */
-  async setEgress(args: {
+  async widenEgress(args: {
     sandboxId: string;
     egress: SandboxEgress;
+    id: string;
+    until: string;
   }): Promise<void> {
-    const { sandboxId, egress } = args;
+    const { sandboxId, egress, id } = args;
+    const ended = () => this.endedWidenings.get(sandboxId)?.includes(id);
+    if (ended()) throw new Error("This widening already ended");
+    const until = Date.parse(args.until);
+    if (!Number.isFinite(until) || until <= Date.now())
+      throw new Error("This widening's time has passed");
     const record = await this.record(sandboxId);
     if (!record.proxy || !("allow" in record.proxy))
       throw new Error(
-        "This sandbox was created with open egress, so its network cannot be switched",
+        "This sandbox was created with open egress, so its network cannot be widened",
       );
     if (egress.mode !== "allowlist")
       throw new Error(
-        "A sandbox created with an egress policy switches only to another allowlist",
+        "A sandbox created with an egress policy widens only to another allowlist",
       );
     await this.ready(sandboxId);
     const proxy = await this.ensureProxy(sandboxId, record.proxy);
+    // A narrowing may have arrived while this waited: it wins.
+    if (ended()) throw new Error("This widening already ended");
+    const current = this.widenings.get(sandboxId);
+    if (current && current.id !== id)
+      throw new Error("Another setup has this sandbox's network widened");
+    if (current) clearTimeout(current.timer);
+    const timer = setTimeout(
+      () =>
+        void this.narrowEgress({ sandboxId, id }).catch((error: unknown) =>
+          this.config.log?.(
+            `Sandbox ${sandboxId}: narrowing its network when its widening ran out failed: ${error instanceof Error ? error.message : String(error)}`,
+          ),
+        ),
+      Math.min(until - Date.now(), MAX_WIDENING_MS),
+    );
+    timer.unref?.();
+    this.widenings.set(sandboxId, { id, timer });
     const policy: EgressPolicy = { allow: egress.allow };
     if (!samePolicy(proxy.policy, policy)) proxy.setPolicy(policy);
+  }
+
+  /**
+   * Return a sandbox's proxy to the policy on its label, closing every
+   * connection through it, and remember `id` as ended (ADR 0257). A proxy
+   * this process does not serve starts with that policy anyway.
+   */
+  async narrowEgress(args: { sandboxId: string; id: string }): Promise<void> {
+    const { sandboxId, id } = args;
+    const ended = this.endedWidenings.get(sandboxId) ?? [];
+    this.endedWidenings.set(sandboxId, [...ended.slice(-63), id]);
+    this.endWidening(sandboxId);
+    const proxy = await this.proxies.get(sandboxId)?.catch(() => undefined);
+    if (!proxy) return;
+    const record = await this.record(sandboxId);
+    if (record.proxy && !samePolicy(proxy.policy, record.proxy))
+      proxy.setPolicy(record.proxy);
+  }
+
+  /** Forget a sandbox's widening and its timer; its proxy is the caller's. */
+  private endWidening(sandboxId: string): void {
+    const current = this.widenings.get(sandboxId);
+    if (current) clearTimeout(current.timer);
+    this.widenings.delete(sandboxId);
   }
 
   /** Remove the container and its temporary volumes; a missing one is gone already. */
   async destroySandbox(sandboxId: string): Promise<void> {
     this.records.delete(sandboxId);
+    this.endWidening(sandboxId);
+    this.endedWidenings.delete(sandboxId);
     await this.docker.removeContainer(sandboxId);
     await this.closeProxy(sandboxId);
     fs.rmSync(this.egressDirectory(sandboxId), {

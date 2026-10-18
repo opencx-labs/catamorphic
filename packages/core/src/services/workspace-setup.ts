@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { shellQuote } from "@catamorphic/git";
 import {
   followProcess,
@@ -15,9 +15,10 @@ import { sandboxSecretsPrelude } from "./sandbox-secrets.js";
  * workspace's base moves (ADR 0257). What last succeeded is recorded in the
  * session directory (`setup.done`), beside the project and gone with the
  * sandbox, so a workspace rebuilt after idle release sets up again. Output
- * is appended to `setup.log` there. A setup with its own network runs the
- * Environment's part with the sandbox widened to it, and the member's part
- * once it is narrow again (ADR 0257).
+ * is appended to `setup.log` there. A setup with its own network (ADR 0257)
+ * runs the Environment's part alone, on that network, before anything but
+ * the base checkout is in the sandbox; the member's part runs later, once
+ * the sandbox is narrow and holds the session's work.
  */
 
 /** The background process a setup runs as, found again by a later preparation. */
@@ -117,7 +118,8 @@ export function environmentSetupDue(input: {
  * Environment's runs. A turn that may not run the member's own setup
  * (another person wrote it, or the placement may not hold personal
  * credentials) keeps what an earlier turn's did, so it never runs the
- * Environment's setup again just for that.
+ * Environment's setup again just for that, unless the Environment's ran:
+ * then the owner's is recorded as not run, for their next turn.
  */
 export function planWorkspaceSetup(input: {
   environment?: string;
@@ -134,18 +136,20 @@ export function planWorkspaceSetup(input: {
       ? input.personal
       : undefined;
   const recorded = input.recorded ?? NOTHING_RECORDED;
-  const record: SetupRecord = {
-    environment: setupFingerprint(environment),
-    personal: input.personalAllowed
-      ? setupFingerprint(personal)
-      : recorded.personal,
-    base: input.base ?? NONE,
-  };
   const environmentDue = environmentSetupDue({
     ...(environment ? { environment } : {}),
     ...(input.base ? { base: input.base } : {}),
     recorded,
   });
+  const record: SetupRecord = {
+    environment: setupFingerprint(environment),
+    personal: input.personalAllowed
+      ? setupFingerprint(personal)
+      : environmentDue
+        ? NONE
+        : recorded.personal,
+    base: input.base ?? NONE,
+  };
   const personalDue =
     input.personalAllowed &&
     (environmentDue || record.personal !== recorded.personal);
@@ -167,14 +171,14 @@ export function planParts(plan: WorkspaceSetupPlan): SetupPart[] {
 
 /**
  * What `setup.done` says once `part` succeeded. After the Environment's
- * part, an owner's part still to run is recorded as not run, so its
- * failure runs only it again.
+ * part, the owner's is recorded as not run, whether or not it runs next,
+ * so their own setup runs again on what the Environment's set up.
  */
 export function setupRecordAfter(input: {
   plan: WorkspaceSetupPlan;
   part: SetupPart;
 }): SetupRecord {
-  return input.part === "environment" && input.plan.personal
+  return input.part === "environment"
     ? { ...input.plan.record, personal: NONE }
     : input.plan.record;
 }
@@ -187,13 +191,14 @@ const PART_LABELS: Record<SetupPart, string> = {
 /**
  * The script one setup runs from the project folder (POSIX shell, run
  * with bash): output appended to the log, the session's secrets loaded
- * when present (ADR 0206), then each of `parts` (the plan's, by default)
- * with `bash -e` so its first failing command stops it, the record written
- * after each part that succeeded.
+ * when present (ADR 0206) unless `loadSecrets` is false, then each of
+ * `parts` (the plan's, by default) with `bash -e` so its first failing
+ * command stops it, the record written after each part that succeeded.
  */
 export function workspaceSetupScript(input: {
   plan: WorkspaceSetupPlan;
   parts?: readonly SetupPart[];
+  loadSecrets?: boolean;
 }): string {
   const { plan } = input;
   const parts = planParts(plan).filter(
@@ -215,7 +220,7 @@ export function workspaceSetupScript(input: {
     `printf '\\n== Workspace setup started %s ==\\n' "$(date -u '+%Y-%m-%d %H:%M:%S UTC')"`,
     // The Environment's secrets (ADR 0206) and the gateway's variables
     // (ADR 0212), from the project folder where the script starts.
-    sandboxSecretsPrelude(),
+    ...(input.loadSecrets === false ? [] : [sandboxSecretsPrelude()]),
     "work_part() {",
     "  printf '\\n-- %s\\n' \"$1\"",
     '  bash -e "$2"',
@@ -272,35 +277,35 @@ export async function readSetupRecord(input: {
 }
 
 /**
- * A sandbox could not be switched to its Environment's own network, so it
+ * A sandbox could not be returned to its Environment's own network, so it
  * was stopped (ADR 0257). The preparation fails rather than let an agent
  * work in a sandbox that may still reach the setup's hosts.
  */
 export class SetupNetworkError extends Error {
   constructor(args: { cause: unknown }) {
     super(
-      `The workspace could not be switched back to its Environment's network, so it was stopped: ${args.cause instanceof Error ? args.cause.message : String(args.cause)}`,
+      `The workspace could not be returned to its Environment's network, so it was stopped: ${args.cause instanceof Error ? args.cause.message : String(args.cause)}`,
     );
     this.name = "SetupNetworkError";
   }
 }
 
 /**
- * Switch a sandbox to its Environment's own egress (ADR 0257), closing
- * every connection open through it. A sandbox that cannot be switched is
- * stopped, and {@link SetupNetworkError} thrown: fail closed.
+ * Return a sandbox to its own egress (ADR 0257), closing every connection
+ * open through it, and end the widening `id`. A sandbox that cannot be
+ * narrowed is stopped, and {@link SetupNetworkError} thrown: fail closed.
  */
 export async function narrowSandboxEgress(input: {
   provider: SandboxProvider;
   sandboxId: string;
-  egress: SandboxEgress;
+  id: string;
 }): Promise<void> {
   try {
-    if (!input.provider.setEgress)
-      throw new Error("This machine cannot switch a sandbox's network");
-    await input.provider.setEgress({
+    if (!input.provider.narrowEgress)
+      throw new Error("This machine cannot narrow a sandbox's network");
+    await input.provider.narrowEgress({
       sandboxId: input.sandboxId,
-      egress: input.egress,
+      id: input.id,
     });
   } catch (error) {
     await input.provider.stopSandbox(input.sandboxId).catch(() => {});
@@ -308,42 +313,54 @@ export async function narrowSandboxEgress(input: {
   }
 }
 
+/** How long past its own timeout a setup's network may stay wide. */
+const WIDENING_GRACE_MS = 60_000;
+
 /**
  * Run `run` with the sandbox on the setup's network (ADR 0257), then
  * narrow it again once `run` ended however it ended, its process exited
- * or killed. Narrowing that fails stops the sandbox and throws, whatever
- * `run` did.
+ * or killed. The machine narrows by itself at `until` should this never
+ * happen, and refuses the widening should it arrive after its narrowing.
+ * Narrowing that fails stops the sandbox and throws, whatever `run` did.
  */
 async function onSetupNetwork<T>(input: {
   provider: SandboxProvider;
   sandboxId: string;
-  network: { setup: SandboxEgress; own: SandboxEgress };
+  egress: SandboxEgress;
+  until: Date;
   run: () => Promise<T>;
 }): Promise<T> {
+  const id = randomUUID();
   try {
-    if (!input.provider.setEgress)
+    if (!input.provider.widenEgress)
       throw new Error(
-        "This machine cannot switch a sandbox's network, so the setup's network cannot be given",
+        "This machine cannot widen a sandbox's network, so the setup's network cannot be given",
       );
-    await input.provider.setEgress({
+    await input.provider.widenEgress({
       sandboxId: input.sandboxId,
-      egress: input.network.setup,
+      egress: input.egress,
+      id,
+      until: input.until.toISOString(),
     });
     return await input.run();
   } finally {
     await narrowSandboxEgress({
       provider: input.provider,
       sandboxId: input.sandboxId,
-      egress: input.network.own,
+      id,
     });
   }
 }
 
 /**
  * Set up one workspace if it needs it (ADR 0208). A setup an earlier,
- * interrupted preparation started is waited for rather than started again,
- * and never on a wider network than the sandbox has. `onRun` is called
- * just before commands run, so the chat can show it.
+ * interrupted preparation started is waited for rather than started again.
+ * `onRun` is called just before commands run, so the chat can show it.
+ *
+ * With `network` (ADR 0257), only the Environment's part runs, on the
+ * setup's network, in a sandbox this preparation made that holds the base
+ * checkout alone: it loads no secrets file, and has only `network.env`
+ * (the secrets the setup names). The owner's part is a later call's.
  */
 export async function runWorkspaceSetup(input: {
   provider: SandboxProvider;
@@ -355,18 +372,13 @@ export async function runWorkspaceSetup(input: {
   /** The workspace's base commit, when it stands on one (ADR 0178). */
   base?: string;
   timeoutMinutes: number;
-  /**
-   * The setup's own network (ADR 0257): the Environment's part runs with
-   * the sandbox switched to `setup`, then it is switched back to `own`
-   * before anything else runs. Given only for a sandbox this preparation
-   * created, in which nothing has run.
-   */
-  network?: { setup: SandboxEgress; own: SandboxEgress };
+  network?: { egress: SandboxEgress; env: Record<string, string> };
   signal?: AbortSignal;
   onRun?: () => Promise<void>;
 }): Promise<WorkspaceSetupOutcome> {
-  const { provider, sandboxId, projectDir } = input;
-  const personal = input.personalAllowed ? input.personal : undefined;
+  const { provider, sandboxId, projectDir, network } = input;
+  const personal =
+    input.personalAllowed && !network ? input.personal : undefined;
   if (!input.environment?.trim() && !personal?.trim())
     return { status: "current" };
   const session = SESSION_FROM_PROJECT;
@@ -378,6 +390,11 @@ export async function runWorkspaceSetup(input: {
           process.name === SETUP_PROCESS_NAME && process.status === "running",
       )
     : undefined;
+  // Nothing ran in a sandbox a setup may widen (ADR 0257).
+  if (running && network)
+    throw new Error(
+      "A setup is already running in a sandbox that was to be set up on its own network",
+    );
   if (processes && running) {
     await input.onRun?.();
     const earlier = await followProcess({
@@ -400,35 +417,21 @@ export async function runWorkspaceSetup(input: {
   }
   const plan = planWorkspaceSetup({
     ...(input.environment ? { environment: input.environment } : {}),
-    ...(input.personal ? { personal: input.personal } : {}),
-    personalAllowed: input.personalAllowed,
+    ...(personal ? { personal } : {}),
+    personalAllowed: input.personalAllowed && !network,
     ...(input.base ? { base: input.base } : {}),
     recorded: await readSetupRecord({ provider, sandboxId, projectDir }),
   });
   if (!plan) return { status: "current" };
   const parts = planParts(plan);
   if (parts.length > 0) await input.onRun?.();
-  // Only the Environment's part runs on the setup's network, and never a
-  // part that follows what an earlier preparation started (ADR 0257).
-  const network =
-    input.network && plan.environment && !running ? input.network : undefined;
-  const phases: Array<{ script: string; parts: SetupPart[] }> = network
-    ? [
-        { script: "environment.run.sh", parts: ["environment"] },
-        ...(plan.personal
-          ? [{ script: "personal.run.sh", parts: ["personal" as const] }]
-          : []),
-      ]
-    : [{ script: "run.sh", parts }];
   await provider.uploadFiles(
     sandboxId,
     {
-      ...Object.fromEntries(
-        phases.map((phase) => [
-          phase.script,
-          workspaceSetupScript({ plan, parts: phase.parts }),
-        ]),
-      ),
+      "run.sh": workspaceSetupScript({
+        plan,
+        ...(network ? { loadSecrets: false } : {}),
+      }),
       ...(plan.environment
         ? { "environment.sh": `${plan.environment}\n` }
         : {}),
@@ -436,39 +439,40 @@ export async function runWorkspaceSetup(input: {
     },
     `${sessionDirectory(provider)}/setup`,
   );
-  const deadline = Date.now() + timeoutMs;
-  const ran: SetupPart[] = [];
-  for (const phase of phases) {
-    ran.push(...phase.parts);
-    const run = () =>
-      runSetupCommand({
-        provider,
-        sandboxId,
-        projectDir,
-        command: `bash ${shellQuote(`${session}/setup/${phase.script}`)}`,
-        timeoutMs: Math.max(0, deadline - Date.now()),
-        ...(input.signal ? { signal: input.signal } : {}),
-      });
-    const result =
-      network && phase.parts.includes("environment")
-        ? await onSetupNetwork({ provider, sandboxId, network, run })
-        : await run();
-    if (result === "aborted") return { status: "aborted" };
-    const { exitCode, timedOut } = result;
-    if (exitCode === 0 && !timedOut) continue;
-    const tail = await provider
-      .executeCommand(
-        sandboxId,
-        `tail -n ${SETUP_LOG_TAIL_LINES} ${shellQuote(`${session}/setup.log`)} 2>/dev/null || true`,
-        { cwd: projectDir, timeout: 60 },
-      )
-      .then(
-        (result) => result.result,
-        () => "",
-      );
-    return { status: "failed", exitCode, timedOut, log: tail, parts: ran };
-  }
-  return { status: "succeeded" };
+  const run = () =>
+    runSetupCommand({
+      provider,
+      sandboxId,
+      projectDir,
+      command: `bash ${shellQuote(`${session}/setup/run.sh`)}`,
+      timeoutMs,
+      ...(network ? { env: network.env } : {}),
+      ...(input.signal ? { signal: input.signal } : {}),
+    });
+  const ran =
+    network && plan.environment
+      ? await onSetupNetwork({
+          provider,
+          sandboxId,
+          egress: network.egress,
+          until: new Date(Date.now() + timeoutMs + WIDENING_GRACE_MS),
+          run,
+        })
+      : await run();
+  if (ran === "aborted") return { status: "aborted" };
+  const { exitCode, timedOut } = ran;
+  if (exitCode === 0 && !timedOut) return { status: "succeeded" };
+  const tail = await provider
+    .executeCommand(
+      sandboxId,
+      `tail -n ${SETUP_LOG_TAIL_LINES} ${shellQuote(`${session}/setup.log`)} 2>/dev/null || true`,
+      { cwd: projectDir, timeout: 60 },
+    )
+    .then(
+      (result) => result.result,
+      () => "",
+    );
+  return { status: "failed", exitCode, timedOut, log: tail, parts };
 }
 
 /**
@@ -483,6 +487,7 @@ async function runSetupCommand(input: {
   projectDir: string;
   command: string;
   timeoutMs: number;
+  env?: Record<string, string>;
   signal?: AbortSignal;
 }): Promise<{ exitCode: number | null; timedOut: boolean } | "aborted"> {
   const { provider, sandboxId } = input;
@@ -491,6 +496,7 @@ async function runSetupCommand(input: {
     const result = await provider.executeCommand(sandboxId, input.command, {
       cwd: input.projectDir,
       timeout: Math.max(1, Math.ceil(input.timeoutMs / 1000)),
+      ...(input.env ? { env: input.env } : {}),
     });
     return input.signal?.aborted
       ? "aborted"
@@ -501,6 +507,7 @@ async function runSetupCommand(input: {
     command: input.command,
     cwd: input.projectDir,
     name: SETUP_PROCESS_NAME,
+    ...(input.env ? { env: input.env } : {}),
   });
   const followed = await followProcess({
     processes,
@@ -562,13 +569,36 @@ export function workspaceSetupFailedNote(input: {
   ].join("\n\n");
 }
 
+/** Why an Environment's setup with its own network did not run (ADR 0257). */
+export type SetupNetworkRefusal =
+  /** A chat's folder on a person's computer, which has no network to switch. */
+  | "folder"
+  /** A workspace that does not start from a commit of the project's remote. */
+  | "no-base"
+  /** A sandbox holding its owner's sign-in from its start. */
+  | "sign-in"
+  /** A workspace admitted before the Environment named a setup network. */
+  | "not-admitted";
+
+const REFUSALS: Record<SetupNetworkRefusal, string> = {
+  folder:
+    "this chat works in a folder on this computer, and only a sandbox can switch its network while setup runs",
+  "no-base":
+    "this chat's workspace does not start from a commit of the project's remote (a delivery's `workspace: { ref }`), so there is no checkout free of earlier work to run it in",
+  "sign-in":
+    "this chat's sandbox holds its owner's sign-in from the start, which the setup's hosts could receive",
+  "not-admitted":
+    "this chat's workspace was admitted before the Environment named it; it runs once the workspace is made again",
+};
+
 /**
- * What the agent is told when its Environment's setup asks for a network of
- * its own in a folder on a person's computer, which has none to switch
- * (ADR 0257).
+ * What the agent is told when its Environment's setup names a network of
+ * its own and could not run with it (ADR 0257).
  */
-export function workspaceSetupNetworkRefusedNote(): string {
-  return "[Workspace] The Environment's setup did not run here: it names a network of its own (`setup.network` in .work/project.json), which only a sandbox can switch to while it runs, and this chat works in a folder on this computer. Run the chat in a sandbox Environment, or remove `setup.network`.";
+export function workspaceSetupNetworkRefusedNote(input: {
+  reason: SetupNetworkRefusal;
+}): string {
+  return `[Workspace] The Environment's setup did not run: it names a network of its own (\`setup.network\` in .work/project.json), and ${REFUSALS[input.reason]}. What it installs may be missing.`;
 }
 
 /**
