@@ -77,15 +77,18 @@ import {
   workChips,
 } from "../lib/chips.js";
 import {
+  filesFrom,
+  isComposerTransfer,
+  readComposerPaste,
+  tabPillFromDrag,
+} from "../lib/composer-paste";
+import {
   type AgentInfo,
   desktopApi,
   projectAgentAsInfo,
 } from "../lib/desktop-api";
 import { focusMovedByPerson, pointerLeft } from "../lib/dock-attention.js";
-import {
-  readEditorSelection,
-  selectionFromClipboard,
-} from "../lib/editor-selection";
+import { readEditorSelection } from "../lib/editor-selection";
 import { usePopoverDismiss } from "../lib/popover-dismiss.js";
 import { usePullRequestStatuses } from "../lib/pr-status.js";
 import { ipcErrorText } from "../lib/remote-workspace.js";
@@ -97,8 +100,7 @@ import {
   type SlashEntry,
   slashEntries,
 } from "../lib/slash-commands";
-import { TAB_DRAG_TYPE, type TabDragPayload } from "../lib/tab-drag";
-import { classifyPastedText, selectionName, textPill } from "../lib/text-pills";
+import { selectionName, textPill } from "../lib/text-pills";
 import { useBackgroundCommands } from "../lib/use-background-commands";
 import { useChips } from "../lib/use-chips.js";
 import { useQueueMessages } from "../lib/use-queue-messages.js";
@@ -190,47 +192,6 @@ const MAX_ATTACHMENTS = 32;
 /** One empty list, so what depends on the chips settles. */
 const NO_CHIPS: Chip[] = [];
 
-/** A workspace tab dropped on the chat becomes a tab pill. */
-function tabPillFromDrag(
-  data: DataTransfer | null,
-): AgentTextAttachment | null {
-  const raw = data?.getData(TAB_DRAG_TYPE);
-  if (!raw) return null;
-  try {
-    const parsed = JSON.parse(raw) as Partial<
-      Record<keyof TabDragPayload, unknown>
-    >;
-    if (typeof parsed.key !== "string" || typeof parsed.kind !== "string") {
-      return null;
-    }
-    const title =
-      typeof parsed.title === "string" && parsed.title
-        ? parsed.title
-        : parsed.kind;
-    const detail =
-      typeof parsed.detail === "string" ? parsed.detail : undefined;
-    const source: AgentTextAttachment["source"] = {
-      type: "tab",
-      key: parsed.key,
-      kind: parsed.kind,
-      title,
-      ...(parsed.kind === "browser" && detail ? { url: detail } : {}),
-      ...(parsed.kind === "editor" && detail ? { filePath: detail } : {}),
-    };
-    // What the model reads without a tool call: title + address/path.
-    const text = detail ? `${title} — ${detail}` : title;
-    return textPill(text, source, title);
-  } catch {
-    return null;
-  }
-}
-
-/** Whether a drag carries something the composer can attach. */
-function isComposerTransfer(data: DataTransfer | null): boolean {
-  const types = [...(data?.types ?? [])];
-  return types.includes("Files") || types.includes(TAB_DRAG_TYPE);
-}
-
 /** The media kind a file would ship as, or null for unsupported types. */
 function mediaKindOf(file: File): "image" | "document" | null {
   return file.type.startsWith("image/")
@@ -273,21 +234,6 @@ function pathPillFor(file: File): ComposerAttachment | null {
     id: crypto.randomUUID(),
     ...textPill(path, { type: "path", path }, name),
   };
-}
-
-/**
- * Files from a DataTransfer, robust across sources: `files` covers
- * screenshots and copied images; the `items` fallback covers sources
- * that only populate the item list.
- */
-function filesFrom(data: DataTransfer | null): File[] {
-  if (!data) return [];
-  const files = [...data.files];
-  if (files.length > 0) return files;
-  return [...data.items]
-    .filter((item) => item.kind === "file")
-    .map((item) => item.getAsFile())
-    .filter((file): file is File => file !== null);
 }
 
 const APP_SOURCE_PATTERN = new RegExp(
@@ -2063,10 +2009,18 @@ function ChatDockContent({
 
   /** Serialize transfers so budgets, caret position and send stay coherent. */
   const addFilesQueueRef = useRef<Promise<void>>(Promise.resolve());
-  const addFiles = (files: File[], at?: { x: number; y: number }) => {
-    const composer = composerRef.current;
+  /**
+   * Files into a composer-style input, the chat's composer or a question's
+   * Other answer, which a message or an answer carries alike.
+   */
+  const addFilesTo = (
+    composer: ComposerInputHandle | null,
+    files: File[],
+    at?: { x: number; y: number },
+  ) => {
     const root = composer?.element();
     if (files.length === 0 || !composer || !root) return;
+    const chatComposer = composerRef.current;
     const selection = window.getSelection();
     const currentRange = at
       ? document.caretRangeFromPoint(at.x, at.y)
@@ -2086,8 +2040,11 @@ function ChatDockContent({
     setTransferError(undefined);
     addFilesQueueRef.current = addFilesQueueRef.current
       .then(async () => {
-        // A closed/replaced composer must never receive another chat's files.
-        if (composerRef.current !== composer || !root.isConnected) return;
+        // A closed/replaced input must never receive another chat's files.
+        const gone = () =>
+          !root.isConnected ||
+          (composer === chatComposer && composerRef.current !== composer);
+        if (gone()) return;
         const current = composer.read().attachments;
         let budget =
           MAX_TOTAL_MEDIA_BYTES -
@@ -2147,7 +2104,7 @@ function ChatDockContent({
             );
           }
         }
-        if (composerRef.current !== composer || !root.isConnected) return;
+        if (gone()) return;
         // Text pills can arrive while a file is being read; report overflow.
         const room = Math.max(
           0,
@@ -2173,6 +2130,8 @@ function ChatDockContent({
       });
   };
 
+  const addFiles = (files: File[], at?: { x: number; y: number }) =>
+    addFilesTo(composerRef.current, files, at);
   const addFilesRef = useRef(addFiles);
   addFilesRef.current = addFiles;
 
@@ -2189,58 +2148,17 @@ function ChatDockContent({
     data: DataTransfer | null,
     opts: { intoComposer: boolean },
   ): boolean => {
-    const files = filesFrom(data);
-    if (files.length > 0) {
-      addFilesRef.current(files);
+    const paste = readComposerPaste(data);
+    if (paste.kind === "files") {
+      addFilesRef.current(paste.files);
       return true;
     }
-    const fromEditor = selectionFromClipboard(data);
-    if (fromEditor) {
-      addTextPillRef.current(
-        textPill(
-          fromEditor.text.replace(/\r\n?/g, "\n"),
-          {
-            type: "selection",
-            filePath: fromEditor.filePath,
-            ...(fromEditor.startLine !== undefined
-              ? { startLine: fromEditor.startLine }
-              : {}),
-            ...(fromEditor.endLine !== undefined
-              ? { endLine: fromEditor.endLine }
-              : {}),
-          },
-          selectionName(fromEditor),
-        ),
-      );
+    if (paste.kind === "pill") {
+      addTextPillRef.current(paste.pill);
       return true;
     }
-    let text = data?.getData("text/plain") ?? "";
-    if (!text) {
-      // Copy buttons that write only a text/html flavor (ClipboardItem)
-      // must still paste something: take the markup's text. Without this,
-      // the unconditional preventDefault would swallow the paste whole.
-      const html = data?.getData("text/html") ?? "";
-      if (html) {
-        text =
-          new DOMParser().parseFromString(html, "text/html").body.textContent ??
-          "";
-      }
-    }
-    const classified = classifyPastedText(text);
-    if (classified.kind === "pill") {
-      addTextPillRef.current(
-        textPill(
-          text.replace(/\r\n?/g, "\n"),
-          classified.source,
-          classified.name,
-        ),
-      );
-      return true;
-    }
-    if (!opts.intoComposer || !text) return false;
-    // Rich clipboards (HTML from a page) land as plain text — the composer
-    // is prose, not a document.
-    composerRef.current?.insertText(text.replace(/\r\n?/g, "\n"));
+    if (!opts.intoComposer || paste.kind === "nothing") return false;
+    composerRef.current?.insertText(paste.text);
     return true;
   };
   const consumePasteRef = useRef(consumePaste);
@@ -2496,9 +2414,12 @@ function ChatDockContent({
           // state only paints the cue and may not have committed yet when a
           // quick dragenter → drop sequence completes in one browser turn.
           if (!isComposerTransfer(event.dataTransfer)) return;
+          // A question's answer box took the drop for itself.
+          const claimed = event.isDefaultPrevented();
           event.preventDefault();
           dragDepthRef.current = 0;
           setDropActive(false);
+          if (claimed) return;
           // Dropped onto the composer itself: the pill lands where the
           // pointer let go; anywhere else on the chat: at the caret/end.
           const overComposer =
@@ -3353,16 +3274,20 @@ function ChatDockContent({
                       key={request.id}
                       questions={request.questions}
                       blocking={request.blocking}
-                      onSubmit={(answers) =>
-                        respond(request.id, { kind: "question", answers })
-                      }
+                      onSubmit={(response) => respond(request.id, response)}
+                      onAnswerFiles={addFilesTo}
                       onDismiss={() =>
                         respond(request.id, {
                           kind: "question",
                           answers: [QUESTIONS_DISMISSED_MESSAGE],
                         })
                       }
-                      disabled={!expanded || responding.has(request.id)}
+                      // A file still attaching to an answer goes with it.
+                      disabled={
+                        !expanded ||
+                        responding.has(request.id) ||
+                        pendingTransfers > 0
+                      }
                     />
                   ),
               )}
@@ -3543,8 +3468,8 @@ function ChatDockContent({
                     }
                     maxPills={MAX_ATTACHMENTS}
                     placeholder={
-                      // An open question takes free-text answers here: the
-                      // panel has no "Other" row (ADR 0195).
+                      // An open question takes free-text answers here too,
+                      // beside each question's Other answer (ADR 0195, 0244).
                       // A permission request is no question: typing declines it.
                       questionRequests.length > 0
                         ? "Answer in your own words…"

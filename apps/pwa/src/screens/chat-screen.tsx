@@ -538,9 +538,7 @@ function Chat({
                   questions={request.questions ?? []}
                   blocking={request.blocking}
                   disabled={responding === request.id}
-                  onSubmit={(answers) =>
-                    void respond(request.id, { kind: "question", answers })
-                  }
+                  onSubmit={(response) => void respond(request.id, response)}
                   onDismiss={() =>
                     void respond(request.id, {
                       kind: "question",

@@ -1,8 +1,13 @@
 import { type RefObject, useEffect } from "react";
 
-/** Classes for the frame: it clips what has not glided into view yet. */
+/**
+ * Classes for the frame: it clips what has not glided into view yet. Clip,
+ * not hidden: a hidden frame is still a scroll container, and Chromium
+ * scrolled it to show the caret on a new line, so the first line jumped up
+ * and slid back while the frame grew.
+ */
 export const GLIDING_FRAME =
-  "overflow-hidden transition-[height] duration-150 ease-[cubic-bezier(0.2,0,0,1)]";
+  "overflow-clip transition-[height] duration-150 ease-[cubic-bezier(0.2,0,0,1)]";
 
 /**
  * Size changes glide instead of snapping: a frame around an auto-height

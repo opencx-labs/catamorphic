@@ -1148,40 +1148,95 @@ describe("a floating chat grows into its tab", () => {
 });
 
 describe("inputs grow by gliding", () => {
+  const SHIFT = 8;
   const paletteInput = `$$('textarea[aria-label="Search commands, pages, and more"]').find((el) => !el.closest('[inert]'))`;
-  it("the palette's input glides taller for a new line, as the composer does", async () => {
+  const composerInput = `visibleDock()?.querySelector('[data-composer-input]')`;
+  interface Glide {
+    before: number;
+    frames: { height: number; scrolled: number; inset: number }[];
+  }
+  /**
+   * The frame's height while a real Shift+Enter adds a line, with how far
+   * the input sits from the frame's top edge. A value set by script adds a
+   * line too, but only the browser's own newline scrolls to the caret.
+   */
+  const glide = async (input: string): Promise<Glide> => {
+    await run(`
+      const input = ${input};
+      const frame = input.parentElement;
+      input.focus();
+      if (input instanceof HTMLTextAreaElement) {
+        input.setSelectionRange(input.value.length, input.value.length);
+      } else {
+        const range = document.createRange();
+        range.selectNodeContents(input);
+        range.collapse(false);
+        getSelection().removeAllRanges();
+        getSelection().addRange(range);
+      }
+      const before = frame.getBoundingClientRect().height;
+      const frames = [];
+      const started = performance.now();
+      window.__glide = new Promise((resolve) => {
+        const tick = () => {
+          const box = frame.getBoundingClientRect();
+          frames.push({
+            height: box.height,
+            scrolled: frame.scrollTop,
+            inset: input.getBoundingClientRect().top - box.top,
+          });
+          if (performance.now() - started < 500) requestAnimationFrame(tick);
+          else resolve({ before, frames });
+        };
+        requestAnimationFrame(tick);
+      });
+      return true;
+    `);
+    await app.press("Enter", SHIFT);
+    return run<Glide>("return window.__glide;");
+  };
+  const expectGlide = ({ before, frames }: Glide) => {
+    const end = frames.at(-1)?.height ?? 0;
+    const trace = JSON.stringify({ before, frames });
+    expect(end, trace).toBeGreaterThan(before);
+    // Frames between one line and two: it glided rather than snapped.
+    expect(
+      frames.some(({ height }) => height > before + 1 && height < end - 1),
+      trace,
+    ).toBe(true);
+    // The new line is clipped until it has glided into view, never scrolled
+    // to: the first line stays on the frame's top edge throughout.
+    expect(
+      frames.every(
+        ({ scrolled, inset }) => scrolled === 0 && Math.abs(inset) < 0.5,
+      ),
+      trace,
+    ).toBe(true);
+  };
+
+  it("the palette's input glides taller for a new line, its first line in place", async () => {
     await run(
       `if (!(${paletteInput})) pressKey('p', { metaKey: true }); return true;`,
     );
     await runWait(`return !!(${paletteInput});`, { label: "palette open" });
-    const glide = await run<{ before: number; heights: number[] }>(`
-      const input = ${paletteInput};
-      const frame = input.parentElement;
-      setReactValue(input, 'first line');
-      return new Promise((resolve) => requestAnimationFrame(() => {
-        const before = frame.getBoundingClientRect().height;
-        const heights = [];
-        const started = performance.now();
-        // Shift+Enter in a textarea is a newline.
-        setReactValue(input, 'first line\\nsecond line');
-        const tick = () => {
-          heights.push(frame.getBoundingClientRect().height);
-          if (performance.now() - started < 500) requestAnimationFrame(tick);
-          else resolve({ before, heights });
-        };
-        requestAnimationFrame(tick);
-      }));
-    `);
-    const end = glide.heights.at(-1) ?? 0;
-    expect(end, JSON.stringify(glide)).toBeGreaterThan(glide.before);
-    // Frames between one line and two: it glided rather than snapped.
-    expect(
-      glide.heights.some(
-        (height) => height > glide.before + 1 && height < end - 1,
-      ),
-      JSON.stringify(glide),
-    ).toBe(true);
+    await run(`setReactValue(${paletteInput}, 'first line'); return true;`);
+    expectGlide(await glide(paletteInput));
     await run(`setReactValue(${paletteInput}, ''); return true;`);
+    // Cancelable, as a real key is: the palette takes it, and the chat
+    // behind keeps its place.
+    await run(`pressKey('Escape'); return true;`);
+    await runWait(`return !(${paletteInput});`, { label: "palette closed" });
+    expect(app.getRendererErrors()).toEqual([]);
+  });
+
+  it("the composer glides taller for a new line the same way", async () => {
+    await run(`if (!(${composerInput})) newFloatingChat(); return true;`);
+    await runWait(`return !!(${composerInput});`, {
+      label: "a chat to type in",
+    });
+    await run(`setReactValue(${composerInput}, 'first line'); return true;`);
+    expectGlide(await glide(composerInput));
+    await run(`setReactValue(${composerInput}, ''); return true;`);
     expect(app.getRendererErrors()).toEqual([]);
   });
 });
