@@ -546,14 +546,19 @@ provide it take the work:
   only on a machine that isolates them; read the personal-environment skill
   before relying on one. A value that grants access to a company system
   belongs in a connection instead.
-- \`setup\`: a shell command run in the project folder of every new
-  workspace before its first turn, and again when it changes
-  (\`"pnpm install --frozen-lockfile"\`), within \`setupTimeoutMinutes\` (30
-  by default). The image holds the toolchain; setup installs the project's
+- \`setup\`: \`{ "command": "pnpm install --frozen-lockfile",
+  "timeoutMinutes": 30 }\`, a shell command run in the project folder of
+  every new workspace before its first turn, again when it changes, and
+  again when the workspace's base moves, within \`timeoutMinutes\` (30 by
+  default). The image holds the toolchain; setup installs the project's
   dependencies. Its output is in \`.work-session/setup.log\` beside the
   project; a failure is told to the agent and runs again next turn. A
   member may add their own \`setup\` in their
   \`.work/personal/environment.json\`, run after this one in their own chats.
+  With a \`gateway\` or \`allowlist\` network, \`"network": { "allow":
+  ["registry.npmjs.org"] }\` lets the setup alone reach more hosts while it
+  runs; the agent's turn finds the sandbox narrow again. The setup's hosts
+  could receive the project secrets it runs with.
 - \`volumes\`: directories kept on the machine for each owner and project,
   so later workspaces start warm: \`{ "pnpm": "~/.local/share/pnpm/store",
   "docker": { "path": "/var/lib/docker", "exclusive": true, "sizeMb":

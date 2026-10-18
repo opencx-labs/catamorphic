@@ -220,7 +220,7 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0205](0205-machine-classes-pools-and-retention.md) | Machine classes: cloud servers, pooled machines, and retention | Accepted |
 | [0206](0206-project-secrets-reach-environments-per-member.md) | Project secrets reach Environments, with a value per member | Accepted (amends 0162, 0175, 0184; refined by 0212; directory events by 0210) |
 | [0207](0207-operations-are-sealed-to-their-executor.md) | Operations are sealed to their executor; worker credentials rotate | Accepted (terminals and previews by 0209) |
-| [0208](0208-workspaces-keep-what-members-build.md) | Workspaces keep what members build: setup and volumes | Accepted (refined by 0215: setup also runs in a chat's own worktree) |
+| [0208](0208-workspaces-keep-what-members-build.md) | Workspaces keep what members build: setup and volumes | Accepted (refined by 0215: setup also runs in a chat's own worktree; amended by 0257: setup is an object with its own network, and runs again when the base moves) |
 | [0209](0209-people-reach-their-sandboxes.md) | People reach their sandboxes: terminals and previews | Accepted (the loopback API guard by 0211) |
 | [0210](0210-directory-events-start-workflows.md) | Directory events start workflows; workflows set members' secrets | Accepted |
 | [0211](0211-the-desktop-api-refuses-web-pages.md) | The desktop's loopback API refuses web pages | Accepted |
@@ -256,3 +256,4 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0241](0241-acp-agents-run-their-own-command.md) | Hermes and other ACP agents run their own command: added in Settings, or approved from a project | Accepted (builds on 0050, 0198; amended by 0245) |
 | [0244](0244-each-question-takes-its-own-answer-with-pills.md) | Each question takes its own answer, pills and all | Accepted (amends 0195) |
 | [0245](0245-a-harness-says-its-thread-is-gone.md) | A harness says its thread is gone; the turn goes on in a new one, handed the conversation | Accepted (amends 0198, 0241) |
+| [0257](0257-setup-has-its-own-network.md) | Setup has its own network: widened only in a new sandbox, narrow before the agent's turn | Accepted (amends 0208) |
