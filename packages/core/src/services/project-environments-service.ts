@@ -127,8 +127,13 @@ const NetworkSchema = z.discriminatedUnion("egress", [
 const SetupSchema = z.strictObject({
   command: z.string().min(1).max(16_384),
   timeoutMinutes: z.number().int().positive().max(240).optional(),
-  /** Hosts the setup reaches beside the Environment's own, while it runs. */
+  /** The only hosts the setup reaches, while it runs (ADR 0257). */
   network: z.strictObject({ allow: EgressAllowSchema }).optional(),
+  /**
+   * The Environment's secrets a setup with its own network runs with (ADR
+   * 0257); it runs with no others.
+   */
+  secrets: z.array(z.string()).max(200).optional(),
 });
 
 /**
@@ -285,6 +290,29 @@ const ProjectEnvironmentDefinitionSchema = z
         "Open egress has nothing to widen: setup.network needs the Environment's network to be gateway or allowlist",
       path: ["setup", "network"],
     },
+  )
+  .refine(
+    (definition) =>
+      !definition.setup?.network ||
+      Object.keys(definition.volumes ?? {}).length === 0,
+    {
+      message:
+        "A volume would carry what agents wrote into the next setup's wider network: an Environment whose setup has its own network keeps no volumes, so bake caches into its image instead",
+      path: ["volumes"],
+    },
+  )
+  .refine(
+    (definition) =>
+      !definition.setup?.secrets ||
+      (definition.setup.network !== undefined &&
+        definition.setup.secrets.every((name) =>
+          definition.secrets?.includes(name),
+        )),
+    {
+      message:
+        "setup.secrets names secrets of the Environment's own secrets for a setup with its own network, which runs with no others",
+      path: ["setup", "secrets"],
+    },
   );
 
 /** The Environment every project has unless its manifest declares others. */
@@ -330,13 +358,16 @@ export interface ProjectEnvironmentDefinition {
 /**
  * An Environment's workspace setup (ADR 0208): a shell command run in the
  * project folder of every new workspace, again when it changes or the
- * workspace's base moves, within `timeoutMinutes`. `network` lists hosts
- * it reaches beside the Environment's own while it runs (ADR 0257).
+ * workspace's base moves, within `timeoutMinutes`. With `network` (ADR
+ * 0257) it reaches only those hosts while it runs, in a sandbox holding
+ * the base checkout alone, with only the `secrets` it names.
  */
 export interface EnvironmentSetup {
   command: string;
   timeoutMinutes?: number;
   network?: { allow: readonly string[] };
+  /** The Environment's secrets a setup with its own network runs with. */
+  secrets?: readonly string[];
 }
 
 /** One volume an Environment declares (ADR 0208). */

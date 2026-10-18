@@ -194,8 +194,9 @@ describe("native checkouts a chat owns (ADR 0215)", () => {
     await sessions.sendMessage(identity, projectId, chat.id, "first");
     expect(setups).toHaveLength(before);
     expect(adapter.lastInput()).toContain(
-      "[Workspace] The Environment's setup did not run here",
+      "[Workspace] The Environment's setup did not run",
     );
+    expect(adapter.lastInput()).toContain("a folder on this computer");
     expect(adapter.lastInput()).toContain("setup.network");
   }, 30_000);
 

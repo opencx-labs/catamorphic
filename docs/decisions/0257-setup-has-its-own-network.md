@@ -2,87 +2,91 @@
 
 - **Status:** Accepted (amends 0208)
 - **Date:** 2026-10-18
-- **Refines:** 0175, 0176, 0204, 0207, 0212
+- **Refines:** 0175, 0176, 0178, 0204, 0206, 0207, 0212
 
 ## Context
 
 A pull request review runs the pull request's code in a sandbox whose only
-way out is the gateway. Installing its dependencies needs package registries
-(npm, GitHub Packages, Docker Hub). Setup cannot run outside the sandbox: it
-runs the pull request's install scripts. Setup needs more network while it
-runs, and the agent's first turn must find the sandbox narrow again.
+way out is the gateway. Installing its dependencies needs package registries,
+and setup cannot run outside the sandbox: it runs the pull request's install
+scripts. A first design widened the agent's own sandbox for setup; a review
+found that those scripts could then read a grant, rows an agent saved in
+earlier turns, or a volume, and publish them to an allowed registry.
 
 ## Decision
 
-**The manifest.** An Environment's `setup` is an object, replacing the
-string and `setupTimeoutMinutes`: `{ "command": "pnpm install
+**The manifest.** `setup` is an object: `{ "command": "pnpm install
 --frozen-lockfile", "timeoutMinutes": 30, "network": { "allow":
-["registry.npmjs.org"] } }`. Entries follow `network.allow`'s rules.
-`setup.network` needs a `gateway` or `allowlist` network: open egress has
-nothing to widen.
+["registry.npmjs.org"] }, "secrets": ["NPM_TOKEN"] }`. `setup.network` needs
+a `gateway` or `allowlist` network. Its Environment declares no volumes: a
+volume would carry what agents wrote into the next setup's wider network, so
+caches belong in the image. `setup.secrets` names some of the Environment's
+secrets; the setup's hosts could receive them.
 
-**When it runs.** As before, and when the workspace's base moved (ADR 0178):
-`setup.done` records the base commit, so a review chat reset to each push
-sets up again. The Environment's part runs when its command or the base
-changed, the member's when theirs changed or after the Environment's. Each
-part is recorded as it succeeds.
+**The widened setup sees the base checkout and the image, nothing else.** It
+runs only in a workspace standing on a commit of the project's remote (ADR
+0178), in a sandbox this preparation made, decided on the control plane.
+The sandbox is made empty and seeded with the base commit alone, as a pack
+from the session's copy (no grant is needed, so none can leak), with
+everything else removed. Its session directory holds no grant, secret or
+gateway variable. It is widened to the setup's hosts alone, neither the
+gateway nor the Environment's own list. The Environment's setup runs with
+the secrets it names as its environment and no secrets file. The sandbox is
+narrowed; then the session's saved work is seeded, fresh grants issued,
+secrets and the member's files written, the member's own setup run, and the
+turn starts. Elsewhere the Environment's setup does not run and the agent is
+told why: a folder on a person's computer, a workspace not at a ref (a fork,
+or a chat on a draft), a sandbox holding its owner's sign-in from creation,
+an Allocation admitted before the Environment named a setup network.
 
-**Admission fixes both policies.** An Allocation fixes `egress` and
-`setupEgress`: the Environment's allowlist, the setup's hosts and the
-gateway. Its sandbox switches only to one of the two, compared by value.
-Placement requires `network.setup`: the machine switches a running
-sandbox's egress, closing every connection open through it.
+**When it runs.** As before, and when the base moved: `setup.done` records
+the base commit, so a review chat reset to each push sets up again. The
+Environment's part runs when its command or the base changed, the member's
+when theirs changed or after the Environment's ran.
 
-**Only a new sandbox widens**, one this preparation made, decided from the
-control plane (the session had none), never from files in the sandbox.
-Order: created narrow, widened, the Environment's part, narrowed in a
-`finally` once its process exited or was killed, the session's sandbox
-grants issued again with the old ones revoked at once, the member's part,
-the turn. A sandbox an earlier preparation made is narrowed before anything
-reaches it, in case that one stopped while it was wide. Following a setup
-an earlier preparation started never widens. Where narrowing fails, the
-sandbox is stopped, its grants revoked, and the attempt fails. A setup that
-must run again in such a sandbox (command changed, base moved, an earlier
-failure) gets a new one in the same Allocation first: changes since the
-last turn are saved as at idle release, the sandbox is destroyed, and its
-volumes stay. A restart is not enough: what an agent gathered (rows read
-through the gateway) survives on disk, and the next setup's install scripts
-could send it to a host the setup may reach.
+**A used sandbox is replaced, never widened.** Every sandbox an earlier
+preparation made is narrowed first when its Allocation fixed a setup network.
+When the setup must run again (command changed, base moved, an earlier
+failure), the sandbox is marked, the work changed since the last turn saved
+as at idle release (a contained agent's is lost, and it is told), destroyed,
+forgotten, and a new one made in the same Allocation. A preparation that
+stops midway leaves the mark, or a managed Allocation no longer owning the
+sandbox; the next one finishes the replacement.
 
-**What setup can reach.** Volumes persist on the machine (ADR 0208) and
-carry data between sandboxes: a review Environment keeps only caches there
-and accepts that risk. Project secrets (ADR 0206), the session's grants and,
-in a member's own chats, their files and sign-ins are in place while the
-Environment's part runs, so the allowed hosts could receive them; those
-hosts are reviewed with the command.
+**Providers.** `widenEgress({ sandboxId, egress, id, until })` and
+`narrowEgress({ sandboxId, id })`, capability `network.setup`. Every switch
+closes every connection. The machine narrows by itself at `until` (the
+setup's timeout and a minute, at most 245 minutes), so a dead control plane
+cannot leave a sandbox wide, and refuses a widening whose `id` a narrowing
+already ended, so one the control plane gave up waiting for cannot land
+later. Allocation wrappers widen only to the fixed setup egress, compared by
+value. Narrowing, and stopping a sandbox that cannot be narrowed, skip the
+ownership checks: returning to a sandbox's own policy is always safe, and a
+runner narrows sandboxes of an ended connection too. A failed narrowing
+stops the sandbox, revokes the session's sandbox grants, and fails the
+attempt. The container backend swaps its proxy's policy in memory: each
+switch a generation, every socket destroyed, a decision begun under an older
+generation dropped; the label keeps the Environment's own policy for a
+restart. Microsandbox fixes a VM's network at creation and does not offer
+`network.setup`. Local-process offers it, as a no-op, only under
+`WORK_UNENFORCED_EGRESS=accept`. The queue carries `egress.widen` and
+`egress.narrow`; workers speak protocol 3 and protocol 2 is still driven,
+since placement never sends them either.
 
-**Providers.** `setEgress` and `network.setup`. The container backend swaps
-its proxy's compiled policy in memory: each switch is a generation, every
-socket is destroyed while the proxy keeps listening, and a decision begun
-under an older generation (awaiting DNS) is dropped. The container label
-keeps the Environment's own policy, so a worker restart or a stop and start
-falls back to narrow; nested containers use the same proxy. Microsandbox
-fixes a VM's network policy at creation (snapshot and restore make a new
-sandbox), so it does not offer `network.setup`. Local-process offers it, as
-a no-op, only under `WORK_UNENFORCED_EGRESS=accept`. A chat's folder on a
-person's computer (ADR 0215) skips an Environment's setup that names a
-network, and says so.
-
-**Remote executors.** The queue carries an `egress` operation, answered
-within a minute. Capability gating keeps older executors safe: they never
-offer `network.setup`, so placement never sends them a switch, and protocol
-2 workers are still driven. Workers speak protocol 3 so one meeting an older
-control plane is told to update it, rather than failing on a capability its
-offer schema does not know.
+**What remains.** Code a setup leaves running stays in the sandbox once it
+is narrow, and can use the grants and secrets written after, through the
+gateway only: the authority the agent has anyway while it runs the pull
+request's code.
 
 Considered: setup outside the sandbox (it runs the pull request's scripts),
-a restart before a second setup (files survive), and wider egress for the
-whole chat (the agent could send what it reads).
+a restart before a second setup (files survive), widening the agent's
+sandbox after its grants and work were in place (the first design), and
+seeding through the gateway with a grant revoked after (a pack needs none).
 
 ## Consequences
 
-Review sandboxes install from registries, and the agent reaches only the
-gateway. Every push to a reviewed pull request makes a new sandbox, kept
-cheap by warm volumes. Microsandbox machines cannot host these
-Environments. A terminal a person opened before setup ran again goes with
-its sandbox.
+Review sandboxes install from registries while holding nothing worth
+sending, and the agent reaches only the gateway. Every push makes a new
+sandbox and, with no volumes, installs from what the image caches.
+Microsandbox machines cannot host these Environments. A terminal a person
+opened before setup ran again goes with its sandbox.

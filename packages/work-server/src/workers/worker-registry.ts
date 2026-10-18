@@ -58,7 +58,7 @@ export const WorkerOfferSchema = z.strictObject({
           "images.build",
           "containers",
           "network.policy",
-          // It switches a running sandbox's egress (ADR 0257).
+          // It widens a running sandbox for its setup, for a while (ADR 0257).
           "network.setup",
           // It keeps volumes across sandboxes (ADR 0208).
           "volumes",

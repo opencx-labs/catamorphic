@@ -121,6 +121,25 @@ describe("planning a workspace's setup", () => {
       environment: env,
       personal: mine,
     });
+    // Someone else's turn on the new head runs the Environment's part and
+    // leaves the owner's to run again on their next turn.
+    const moved = planWorkspaceSetup({
+      environment: env,
+      personal: mine,
+      personalAllowed: false,
+      base: "b".repeat(40),
+      recorded,
+    });
+    expect(moved?.record.personal).toBe("none");
+    expect(
+      planWorkspaceSetup({
+        environment: env,
+        personal: mine,
+        personalAllowed: true,
+        base: "b".repeat(40),
+        recorded: moved?.record ?? null,
+      }),
+    ).toMatchObject({ personal: mine });
     expect(
       environmentSetupDue({ environment: env, base: "b".repeat(40), recorded }),
     ).toBe(true);
@@ -203,6 +222,13 @@ describe("planning a workspace's setup", () => {
       ...plan.record,
       personal: "none",
     });
+    // Even with no owner's part to follow: theirs runs again on their turn.
+    expect(
+      setupRecordAfter({
+        plan: { record: plan.record, environment: env },
+        part: "environment",
+      }),
+    ).toEqual({ ...plan.record, personal: "none" });
     expect(setupRecordAfter({ plan, part: "personal" })).toEqual(plan.record);
     const environmentOnly = workspaceSetupScript({
       plan,
@@ -282,8 +308,12 @@ describe("planning a workspace's setup", () => {
     ).toBe(
       "[Workspace] Setting up this workspace could not run (The machine did not answer), so what it installs may be missing. It runs again before the next turn.",
     );
-    expect(workspaceSetupNetworkRefusedNote()).toContain("setup.network");
-    for (const text of [note, timedOut, workspaceSetupNetworkRefusedNote()])
+    const refusals = (
+      ["folder", "no-base", "sign-in", "not-admitted"] as const
+    ).map((reason) => workspaceSetupNetworkRefusedNote({ reason }));
+    for (const refusal of refusals) expect(refusal).toContain("setup.network");
+    expect(refusals[1]).toContain("workspace: { ref }");
+    for (const text of [note, timedOut, ...refusals])
       expect(text).not.toMatch(/[–—]/);
   });
 });
@@ -479,12 +509,8 @@ describe("a setup on its own network (ADR 0257)", () => {
   let root: string;
   let machine: LocalProcessSandboxProvider;
   const projectDir = "/workspace/project";
-  const own = { mode: "allowlist" as const, allow: ["work.acme.com:443"] };
-  const wide = {
-    mode: "allowlist" as const,
-    allow: ["work.acme.com:443", "registry.npmjs.org"],
-  };
-  const network = { setup: wide, own };
+  const wide = { mode: "allowlist" as const, allow: ["registry.npmjs.org"] };
+  const network = { egress: wide, env: { SETUP_TOKEN: "named-secret" } };
 
   beforeAll(() => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), "catamorphic-setup-net-"));
@@ -499,23 +525,44 @@ describe("a setup on its own network (ADR 0257)", () => {
   });
 
   /**
-   * The machine, with every switch written into the sandbox's `../order`
-   * beside what setup writes there, and stops recorded.
+   * The machine, with every widening and narrowing written into the
+   * sandbox's `../order` beside what setup writes there, and stops
+   * recorded.
    */
   const switching = (options?: { failNarrow?: boolean }) => {
-    const switches: string[] = [];
+    const widenings: Array<{ id: string; until: string; allow: string[] }> = [];
+    const narrowed: string[] = [];
     const stopped: string[] = [];
     const provider = new Proxy(machine, {
       get(target, property) {
-        if (property === "setEgress")
-          return async (args: { sandboxId: string; egress: typeof own }) => {
-            const label = args.egress.allow.length > 1 ? "wide" : "narrow";
-            if (label === "narrow" && options?.failNarrow)
-              throw new Error("The machine did not answer");
-            switches.push(label);
+        if (property === "widenEgress")
+          return async (args: {
+            sandboxId: string;
+            egress: { mode: "allowlist"; allow: string[] };
+            id: string;
+            until: string;
+          }) => {
+            widenings.push({
+              id: args.id,
+              until: args.until,
+              allow: args.egress.allow,
+            });
             await target.executeCommand(
               args.sandboxId,
-              `echo ${label} >> ../order`,
+              "echo wide >> ../order",
+              {
+                cwd: projectDir,
+              },
+            );
+          };
+        if (property === "narrowEgress")
+          return async (args: { sandboxId: string; id: string }) => {
+            if (options?.failNarrow)
+              throw new Error("The machine did not answer");
+            narrowed.push(args.id);
+            await target.executeCommand(
+              args.sandboxId,
+              "echo narrow >> ../order",
               { cwd: projectDir },
             );
           };
@@ -527,7 +574,7 @@ describe("a setup on its own network (ADR 0257)", () => {
         return typeof value === "function" ? value.bind(target) : value;
       },
     }) satisfies SandboxProvider;
-    return { provider, switches, stopped };
+    return { provider, widenings, narrowed, stopped };
   };
   const order = async (sandboxId: string) =>
     (
@@ -538,34 +585,50 @@ describe("a setup on its own network (ADR 0257)", () => {
       .split("\n")
       .filter(Boolean);
 
-  it("widens for the Environment's part alone and narrows before the owner's", async () => {
+  it("runs the Environment's part alone, widened, with only the secrets it names", async () => {
     const { id } = await machine.createSandbox({});
-    const { provider } = switching();
+    // Even a secrets file that should not be there is not loaded.
+    await machine.uploadFiles(
+      id,
+      { "secrets.sh": "export OTHER_SECRET=from-file\n" },
+      "/workspace/.work-session/env",
+    );
+    const { provider, widenings, narrowed } = switching();
+    const before = Date.now();
     expect(
       await runWorkspaceSetup({
         provider,
         sandboxId: id,
         projectDir,
-        environment: "echo environment >> ../order",
+        environment: `echo "environment \${SETUP_TOKEN:-none} \${OTHER_SECRET:-none}" >> ../order`,
         personal: "echo personal >> ../order",
         personalAllowed: true,
         timeoutMinutes: 1,
         network,
       }),
     ).toEqual({ status: "succeeded" });
+    // The owner's part is not this call's: it runs once the sandbox is narrow.
     expect(await order(id)).toEqual([
       "wide",
-      "environment",
+      "environment named-secret none",
       "narrow",
-      "personal",
     ]);
-    const log = (
-      await machine.executeCommand(id, "cat ../.work-session/setup.log", {
-        cwd: projectDir,
-      })
-    ).result;
-    expect(log).toContain("Environment setup");
-    expect(log).toContain("Personal setup");
+    expect(widenings).toHaveLength(1);
+    expect(widenings[0]?.allow).toEqual(["registry.npmjs.org"]);
+    expect(narrowed).toEqual([widenings[0]?.id]);
+    // The machine narrows by itself a minute after the setup's own time.
+    const until = Date.parse(widenings[0]?.until ?? "");
+    expect(until - before).toBeGreaterThanOrEqual(120_000);
+    expect(until - Date.now()).toBeLessThanOrEqual(120_000);
+    expect(
+      parseSetupRecord(
+        (
+          await machine.executeCommand(id, "cat ../.work-session/setup.done", {
+            cwd: projectDir,
+          })
+        ).result,
+      ),
+    ).toMatchObject({ personal: "none" });
   }, 30_000);
 
   it("narrows once the part ended however it ended: failed, timed out or stopped", async () => {
@@ -577,8 +640,7 @@ describe("a setup on its own network (ADR 0257)", () => {
         sandboxId: failing.id,
         projectDir,
         environment: "echo environment >> ../order\nexit 3",
-        personal: "echo personal >> ../order",
-        personalAllowed: true,
+        personalAllowed: false,
         timeoutMinutes: 1,
         network,
       }),
@@ -587,7 +649,6 @@ describe("a setup on its own network (ADR 0257)", () => {
       exitCode: 3,
       parts: ["environment"],
     });
-    // The owner's part never ran after the Environment's failed.
     expect(await order(failing.id)).toEqual(["wide", "environment", "narrow"]);
 
     const slow = await machine.createSandbox({});
@@ -603,7 +664,7 @@ describe("a setup on its own network (ADR 0257)", () => {
         network,
       }),
     ).toMatchObject({ status: "failed", timedOut: true });
-    expect(timed.switches).toEqual(["wide", "narrow"]);
+    expect(await order(slow.id)).toEqual(["wide", "narrow"]);
 
     const stopping = await machine.createSandbox({});
     const stopped = switching();
@@ -623,33 +684,30 @@ describe("a setup on its own network (ADR 0257)", () => {
         },
       }),
     ).toEqual({ status: "aborted" });
-    expect(stopped.switches).toEqual(["wide", "narrow"]);
+    expect(await order(stopping.id)).toEqual(["wide", "narrow"]);
   }, 30_000);
 
   it("stops the sandbox and fails when it cannot be narrowed again", async () => {
     const { id } = await machine.createSandbox({});
-    const { provider, switches, stopped } = switching({ failNarrow: true });
+    const { provider, stopped } = switching({ failNarrow: true });
     const ran = runWorkspaceSetup({
       provider,
       sandboxId: id,
       projectDir,
       environment: "echo environment >> ../order",
-      personal: "echo personal >> ../order",
-      personalAllowed: true,
+      personalAllowed: false,
       timeoutMinutes: 1,
       network,
     });
     await expect(ran).rejects.toBeInstanceOf(SetupNetworkError);
     await expect(ran).rejects.toThrow("The machine did not answer");
-    expect(switches).toEqual(["wide"]);
     expect(stopped).toEqual([id]);
     expect(await order(id)).toEqual(["wide", "environment"]);
   }, 30_000);
 
-  it("never widens while following a setup an earlier preparation started", async () => {
+  it("never widens a sandbox in which a setup is already running", async () => {
     const { id } = await machine.createSandbox({});
     const earlier = new AbortController();
-    // The earlier preparation goes away without stopping its setup.
     void runWorkspaceSetup({
       provider: machine,
       sandboxId: id,
@@ -668,11 +726,9 @@ describe("a setup on its own network (ADR 0257)", () => {
       if (Date.now() > deadline) throw new Error("The setup never started");
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
-    const { provider, switches } = switching();
-    // Its command changed meanwhile, so it runs again after the earlier
-    // one ends: narrow, never widened in a sandbox something ran in.
-    expect(
-      await runWorkspaceSetup({
+    const { provider, widenings } = switching();
+    await expect(
+      runWorkspaceSetup({
         provider,
         sandboxId: id,
         projectDir,
@@ -681,8 +737,7 @@ describe("a setup on its own network (ADR 0257)", () => {
         timeoutMinutes: 1,
         network,
       }),
-    ).toEqual({ status: "succeeded" });
-    expect(switches).toEqual([]);
-    expect(await order(id)).toEqual(["earlier", "later"]);
+    ).rejects.toThrow("already running");
+    expect(widenings).toEqual([]);
   }, 30_000);
 });

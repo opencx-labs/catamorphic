@@ -90,7 +90,7 @@ export interface LocalProcessProviderConfig {
    * The operator accepts that this machine cannot enforce an Environment's
    * egress policy and runs such Environments anyway (ADR 0176). Advertises
    * `network.policy` and `network.setup` (ADR 0257); nothing restricts the
-   * network, and switching it changes nothing.
+   * network, and widening or narrowing it changes nothing.
    */
   acceptUnenforcedEgress?: boolean;
   /**
@@ -538,17 +538,22 @@ export class LocalProcessSandboxProvider implements SandboxProvider {
 
   /**
    * Nothing restricts a local process's network, so there is nothing to
-   * switch (ADR 0257); only an operator who accepted that may be asked.
+   * widen (ADR 0257); only an operator who accepted that may be asked.
    */
-  async setEgress(_args: {
+  async widenEgress(_args: {
     sandboxId: string;
     egress: SandboxEgress;
+    id: string;
+    until: string;
   }): Promise<void> {
     if (!this.acceptUnenforcedEgress)
       throw new Error(
-        "Local-process sandboxes cannot enforce an egress policy, so they cannot switch one",
+        "Local-process sandboxes cannot enforce an egress policy, so they cannot widen one",
       );
   }
+
+  /** Nothing to narrow, as there was nothing to widen (ADR 0257). */
+  async narrowEgress(_args: { sandboxId: string; id: string }): Promise<void> {}
 
   async gitCheckout(
     sandboxId: string,

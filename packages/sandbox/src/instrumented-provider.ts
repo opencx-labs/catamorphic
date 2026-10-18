@@ -196,23 +196,38 @@ export function instrumentSandboxProvider(
       ),
   };
 
-  const setEgress = provider.setEgress?.bind(provider);
-  if (setEgress)
-    instrumented.setEgress = (args) =>
+  const widenEgress = provider.widenEgress?.bind(provider);
+  if (widenEgress)
+    instrumented.widenEgress = (args) =>
       withSpan(
         {
           tracer,
-          name: "sandbox.set_egress",
+          name: "sandbox.widen_egress",
           attributes: {
             ...base,
             "catamorphic.sandbox.id": args.sandboxId,
-            "catamorphic.sandbox.egress.mode": args.egress.mode,
+            "catamorphic.sandbox.egress.widening": args.id,
             ...(args.egress.mode === "allowlist"
               ? { "catamorphic.sandbox.egress.hosts": args.egress.allow.length }
               : {}),
           },
         },
-        () => setEgress(args),
+        () => widenEgress(args),
+      );
+  const narrowEgress = provider.narrowEgress?.bind(provider);
+  if (narrowEgress)
+    instrumented.narrowEgress = (args) =>
+      withSpan(
+        {
+          tracer,
+          name: "sandbox.narrow_egress",
+          attributes: {
+            ...base,
+            "catamorphic.sandbox.id": args.sandboxId,
+            "catamorphic.sandbox.egress.widening": args.id,
+          },
+        },
+        () => narrowEgress(args),
       );
 
   if (hasHydrateWorkspace(provider)) {

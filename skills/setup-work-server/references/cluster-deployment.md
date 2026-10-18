@@ -948,20 +948,25 @@ caches (ADR 0208):
   own `setup` in `.work/personal/environment.json`: it runs after the
   Environment's, only in their own chats in Environments with
   `"personalCredentials": true`, and only for turns they wrote.
-- `setup.network.allow` lists hosts the Environment's setup reaches beside
-  the Environment's own, while it runs (ADR 0257), for an Environment whose
-  `network` is `gateway` or `allowlist`: `"setup": { "command": "pnpm
-  install --frozen-lockfile", "network": { "allow": ["registry.npmjs.org",
-  "npm.pkg.github.com"] } }`. The sandbox is widened only when this
-  preparation made it, and narrowed again before the member's own setup and
-  the agent's turn; a setup that must run again gets a new sandbox in the
-  same Allocation (volumes stay). It needs a machine that advertises
+- `setup.network.allow` lists the only hosts the Environment's setup
+  reaches while it runs (ADR 0257), for an Environment whose `network` is
+  `gateway` or `allowlist`; `setup.secrets` names the Environment's secrets
+  it runs with: `"setup": { "command": "pnpm install --frozen-lockfile",
+  "network": { "allow": ["registry.npmjs.org", "npm.pkg.github.com"] },
+  "secrets": ["NPM_TOKEN"] }`. It runs in a new sandbox holding the
+  workspace's base commit alone, with no grant, gateway variable or other
+  secret, widened to those hosts (not even the gateway), and narrowed again
+  before the session's work, grants, secrets and files arrive; a setup that
+  must run again gets a new sandbox in the same Allocation. Only workspaces
+  at a ref of the project's remote (a delivery's `workspace: { ref }`) run
+  it; elsewhere the agent is told it did not run. Such an Environment
+  declares no volumes, which would carry what agents wrote into the next
+  setup: put caches in its image. It needs a machine that advertises
   `network.setup`: the container backend wherever it enforces
-  `network.policy`, or local-process under `WORK_UNENFORCED_EGRESS=accept`.
-  Microsandbox fixes a VM's network when it is created and does not offer
-  it. Project secrets, and in a member's own chats their files, are in place
-  while setup runs, so the hosts it may reach could receive them: keep only
-  caches in a review Environment's volumes, and list only hosts you trust.
+  `network.policy` (the worker narrows by itself when the setup's time is
+  up), or local-process under `WORK_UNENFORCED_EGRESS=accept`. Microsandbox
+  fixes a VM's network when it is created and does not offer it. The hosts
+  you list could receive the base checkout and the secrets the setup names.
 - `volumes` name directories kept on the machine for each owner (a member,
   or the project for its own chats and runs) and project: the owner's next
   sandbox on that machine mounts the same directory, and nobody else's does.

@@ -4,7 +4,6 @@ import type { DB } from "@catamorphic/db";
 import { getTracer, withSpan } from "@catamorphic/otel";
 import {
   type CreateSandboxOpts,
-  type SandboxEgress,
   type SandboxProvider,
   type SandboxResources,
   sameEgress,
@@ -18,24 +17,42 @@ import {
 } from "./volume-holds.js";
 
 /**
- * A switch of the Allocation's sandbox to its own egress or to its setup's
- * (ADR 0257), compared by value: the only policies admission fixed, so no
- * caller widens a sandbox beyond them.
+ * A widening of the Allocation's sandbox for its setup (ADR 0257): only to
+ * the setup egress admission fixed, compared by value, so no caller widens
+ * a sandbox beyond it.
  */
-function allocationEgressSwitch(args: {
+function allocationWidening(args: {
   allocation: ExecutionAllocation;
-  setEgress: NonNullable<SandboxProvider["setEgress"]>;
-}): NonNullable<SandboxProvider["setEgress"]> {
-  const sandbox = args.allocation.policy.sandbox;
-  const fixed = [sandbox?.egress, sandbox?.setupEgress].filter(
-    (egress): egress is SandboxEgress => egress !== undefined,
-  );
+  widenEgress: NonNullable<SandboxProvider["widenEgress"]>;
+}): NonNullable<SandboxProvider["widenEgress"]> {
+  const fixed = args.allocation.policy.sandbox?.setupEgress;
   return async (input) => {
-    if (!fixed.some((egress) => sameEgress(egress, input.egress)))
+    if (!fixed || !sameEgress(fixed, input.egress))
       throw new Error(
-        "A workspace's network switches only to a policy its Allocation fixed at admission",
+        "A workspace's network widens only to the setup network its Allocation fixed at admission",
       );
-    await args.setEgress(input);
+    await args.widenEgress(input);
+  };
+}
+
+/**
+ * A narrowing of the Allocation's sandbox (ADR 0257), with no ownership
+ * check: returning a sandbox to its own policy is always safe, and must
+ * work after the Allocation or its machine's lease has moved on. A sandbox
+ * that cannot be narrowed is stopped, unchecked as well.
+ */
+function allocationNarrowing(
+  provider: SandboxProvider,
+): SandboxProvider["narrowEgress"] {
+  const narrowEgress = provider.narrowEgress?.bind(provider);
+  if (!narrowEgress) return undefined;
+  return async (input) => {
+    try {
+      await narrowEgress(input);
+    } catch (error) {
+      await provider.stopSandbox(input.sandboxId).catch(() => {});
+      throw error;
+    }
   };
 }
 
@@ -52,11 +69,13 @@ export function withAllocationSandboxPolicy(args: {
 }): SandboxProvider {
   const { provider } = args;
   const sandbox = args.allocation.policy.sandbox;
+  // A provider that widens is always wrapped: only admission says how far.
   if (
     !sandbox?.image &&
     !sandbox?.containers &&
     !sandbox?.egress &&
-    !sandbox?.volumes?.length
+    !sandbox?.volumes?.length &&
+    !provider.widenEgress
   )
     return provider;
   const createSandbox = async (opts: CreateSandboxOpts) => {
@@ -66,20 +85,22 @@ export function withAllocationSandboxPolicy(args: {
     });
     return provider.createSandbox({
       ...opts,
-      ...(sandbox.image ? { image: sandbox.image } : {}),
-      ...(sandbox.containers ? { containers: true } : {}),
-      ...(sandbox.egress ? { egress: sandbox.egress } : {}),
+      ...(sandbox?.image ? { image: sandbox.image } : {}),
+      ...(sandbox?.containers ? { containers: true } : {}),
+      ...(sandbox?.egress ? { egress: sandbox.egress } : {}),
       ...(volumes.length > 0 ? { volumes } : {}),
     });
   };
-  const setEgress = provider.setEgress?.bind(provider);
-  const switchEgress = setEgress
-    ? allocationEgressSwitch({ allocation: args.allocation, setEgress })
+  const widenEgress = provider.widenEgress?.bind(provider);
+  const widening = widenEgress
+    ? allocationWidening({ allocation: args.allocation, widenEgress })
     : undefined;
+  const narrowing = allocationNarrowing(provider);
   return new Proxy(provider, {
     get(target, property) {
       if (property === "createSandbox") return createSandbox;
-      if (property === "setEgress") return switchEgress;
+      if (property === "widenEgress") return widening;
+      if (property === "narrowEgress") return narrowing;
       const value: unknown = Reflect.get(target, property, target);
       return typeof value === "function" ? value.bind(target) : value;
     },
@@ -174,10 +195,11 @@ export function allocationSandboxProvider(args: {
   };
   const runtime = provider.deploymentRuntime;
   const processes = provider.processes;
-  const setEgress = provider.setEgress?.bind(provider);
-  const switchEgress = setEgress
-    ? allocationEgressSwitch({ allocation, setEgress })
+  const widenEgress = provider.widenEgress?.bind(provider);
+  const widening = widenEgress
+    ? allocationWidening({ allocation, widenEgress })
     : undefined;
+  const narrowing = allocationNarrowing(provider);
   return {
     workspaceRoot: provider.workspaceRoot,
     resourceLimits: provider.resourceLimits,
@@ -211,12 +233,13 @@ export function allocationSandboxProvider(args: {
       guard(id, () => provider.gitClone(id, url, path, opts)),
     gitCheckout: (id, path, ref) =>
       guard(id, () => provider.gitCheckout(id, path, ref)),
-    ...(switchEgress
+    ...(widening
       ? {
-          setEgress: (input: { sandboxId: string; egress: SandboxEgress }) =>
-            guard(input.sandboxId, () => switchEgress(input)),
+          widenEgress: (input: Parameters<typeof widening>[0]) =>
+            guard(input.sandboxId, () => widening(input)),
         }
       : {}),
+    ...(narrowing ? { narrowEgress: narrowing } : {}),
     // Background processes live in the Allocation's sandbox and end with
     // it; each operation proves the Allocation still owns that sandbox.
     ...(processes

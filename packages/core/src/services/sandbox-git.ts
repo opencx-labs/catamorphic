@@ -1,3 +1,4 @@
+import path from "node:path";
 import { formatEnvFile } from "@catamorphic/agent-protocol/runner";
 import {
   buildSeedPack,
@@ -86,13 +87,21 @@ export async function seedSandboxRepository(input: {
   base: string;
   branch: string;
   originUrl: string | null;
+  /**
+   * The checkout holds the base alone and what a setup made on it (ADR
+   * 0257): seed whatever its refs say, and keep the files Git does not
+   * track, which that setup made. Otherwise they go, as after a base move.
+   */
+  afterSetup?: boolean;
 }): Promise<{ seeded: boolean }> {
-  const current = await input.provider.executeCommand(
-    input.sandboxId,
-    "git rev-parse -q --verify refs/work/base 2>/dev/null || true",
-    { cwd: input.projectDir },
-  );
-  if (current.exitCode === 0 && current.result.trim() === input.base)
+  const current = input.afterSetup
+    ? undefined
+    : await input.provider.executeCommand(
+        input.sandboxId,
+        "git rev-parse -q --verify refs/work/base 2>/dev/null || true",
+        { cwd: input.projectDir },
+      );
+  if (current?.exitCode === 0 && current.result.trim() === input.base)
     return { seeded: false };
   const { pack, shallow } = await buildSeedPack({
     repoPath: input.sessionCopyPath,
@@ -116,7 +125,7 @@ export async function seedSandboxRepository(input: {
         shallow,
       }),
       `git checkout -q -f -B ${shellQuote(input.branch)} ${input.head}`,
-      "git clean -fdq",
+      ...(input.afterSetup ? [] : ["git clean -fdq"]),
       // The branch stands on the base; the session's saved work (its
       // checkpoints since the base) is in the working tree, uncommitted, so
       // Work's own checkpoint commits never reach anything the agent pushes.
@@ -127,6 +136,70 @@ export async function seedSandboxRepository(input: {
     ].join(" && "),
   });
   return { seeded: true };
+}
+
+/**
+ * Seed the sandbox repository with the workspace's base commit alone (ADR
+ * 0257): all a setup on its own network may see. Uploaded as one shallow
+ * pack, like {@link seedSandboxRepository}, so it needs no grant. It leaves
+ * `refs/work/base` unset, so that seeding still brings the session's saved
+ * work once the sandbox is narrow again.
+ */
+export async function seedSandboxBase(input: {
+  provider: SandboxProvider;
+  sandboxId: string;
+  projectDir: string;
+  sessionCopyPath: string;
+  base: string;
+}): Promise<void> {
+  const { pack, shallow } = await buildSeedPack({
+    repoPath: input.sessionCopyPath,
+    head: input.base,
+    base: input.base,
+  });
+  const root = input.provider.workspaceRoot;
+  await input.provider.uploadFiles(
+    input.sandboxId,
+    { "seed.pack.b64": Buffer.from(pack).toString("base64") },
+    `${root}/${SESSION_DIRECTORY}`,
+  );
+  // Paths relative to the workspace root, the command's folder: only that
+  // is resolved for commands on every provider.
+  const project = path.posix.relative(root, input.projectDir);
+  await run({
+    ...input,
+    cwd: root,
+    what: "seed the sandbox with its base",
+    command: [
+      `mkdir -p ${shellQuote(project)}`,
+      `cd ${shellQuote(project)}`,
+      "(git rev-parse --git-dir >/dev/null 2>&1 || git init -q -b main)",
+      seedPackInstallScript({
+        packFile: `../${SESSION_DIRECTORY}/seed.pack.b64`,
+        shallow,
+      }),
+      `git checkout -q -f --detach ${input.base}`,
+      // Nothing but the base: ignored files too.
+      "git clean -ffdqx",
+    ].join(" && "),
+  });
+}
+
+/**
+ * Take every grant, secret and gateway variable out of a sandbox's session
+ * directory (ADR 0257), before its setup's network is opened. A sandbox
+ * this preparation made holds none; this makes sure.
+ */
+export async function removeSessionCredentials(input: {
+  provider: SandboxProvider;
+  sandboxId: string;
+}): Promise<void> {
+  await run({
+    ...input,
+    cwd: input.provider.workspaceRoot,
+    what: "clear the sandbox's grants and variables",
+    command: `rm -rf ${SESSION_DIRECTORY}/grants ${SESSION_DIRECTORY}/env ${SESSION_DIRECTORY}/gitconfig`,
+  });
 }
 
 /** One Git-capable alias as the sandbox configures it. */

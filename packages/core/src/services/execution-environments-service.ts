@@ -117,6 +117,8 @@ export interface AdmittedSetup {
   command: string;
   timeoutMinutes: number;
   network?: { allow: readonly string[] };
+  /** The secrets a setup with its own network runs with, and no others. */
+  secrets?: readonly string[];
 }
 
 /**
@@ -851,6 +853,9 @@ export class ExecutionEnvironmentsService {
                 ...(definition.setup.network
                   ? { network: definition.setup.network }
                   : {}),
+                ...(definition.setup.secrets
+                  ? { secrets: definition.setup.secrets }
+                  : {}),
               },
             }
           : {}),
@@ -871,8 +876,8 @@ export class ExecutionEnvironmentsService {
   /**
    * Resolve the image, containers, egress and volumes one Allocation's
    * sandbox gets; volumes are the placement owner's. A setup with its own
-   * network also fixes the policy the sandbox runs that setup under (ADR
-   * 0257): no caller can widen it beyond these two.
+   * network also fixes the only policy the sandbox widens to for that
+   * setup (ADR 0257).
    */
   private async sandboxFor(args: {
     identity: Identity;
@@ -881,14 +886,13 @@ export class ExecutionEnvironmentsService {
     owner: string | null;
   }): Promise<EnvironmentSandbox | { reason: string }> {
     const { definition } = args;
-    const gatewayHosts = this.options.gatewayHosts ?? [];
-    const egress = resolveEgress({ policy: definition.network, gatewayHosts });
+    const egress = resolveEgress({
+      policy: definition.network,
+      gatewayHosts: this.options.gatewayHosts ?? [],
+    });
+    // The setup's hosts alone: not the gateway, nor the Environment's own.
     const setupEgress = definition.setup?.network
-      ? resolveSetupEgress({
-          policy: definition.network,
-          allow: definition.setup.network.allow,
-          gatewayHosts,
-        })
+      ? resolveSetupEgress({ allow: definition.setup.network.allow })
       : undefined;
     const volumes = environmentSandboxVolumes({
       projectId: args.projectId,

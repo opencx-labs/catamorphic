@@ -107,29 +107,50 @@ describe("remote operation queue (ADR 0187)", () => {
     expect(left).toEqual([]);
   });
 
-  it("switches a sandbox's egress through its executor (ADR 0257)", async () => {
+  it("widens and narrows a sandbox's egress through its executor (ADR 0257)", async () => {
     const remote = await executor();
     const egress = {
       mode: "allowlist" as const,
-      allow: ["registry.npmjs.org", "work.acme.com:443"],
+      allow: ["registry.npmjs.org"],
     };
-    const switched = remote.provider.setEgress?.({
+    const until = new Date(Date.now() + 60_000).toISOString();
+    const widened = remote.provider.widenEgress?.({
       sandboxId: "sandbox-1",
       egress,
+      id: "setup-1",
+      until,
     });
-    expect(switched).toBeDefined();
-    const job = await remote.poll(crypto.randomUUID());
-    expect(job?.operation).toEqual({
-      kind: "egress",
+    expect(widened).toBeDefined();
+    const widen = await remote.poll(crypto.randomUUID());
+    expect(widen?.operation).toEqual({
+      kind: "egress.widen",
       sandboxId: "sandbox-1",
       egress,
+      id: "setup-1",
+      until,
     });
     await remote.queue.complete({
       ...remote.lease,
-      operationId: job?.id ?? "",
+      operationId: widen?.id ?? "",
       response: null,
     });
-    await expect(switched).resolves.toBeUndefined();
+    await expect(widened).resolves.toBeUndefined();
+    const narrowed = remote.provider.narrowEgress?.({
+      sandboxId: "sandbox-1",
+      id: "setup-1",
+    });
+    const narrow = await remote.poll(crypto.randomUUID());
+    expect(narrow?.operation).toEqual({
+      kind: "egress.narrow",
+      sandboxId: "sandbox-1",
+      id: "setup-1",
+    });
+    await remote.queue.complete({
+      ...remote.lease,
+      operationId: narrow?.id ?? "",
+      response: null,
+    });
+    await expect(narrowed).resolves.toBeUndefined();
   });
 
   it("stores a receipt only sealed to the waiting controller (ADR 0207)", async () => {

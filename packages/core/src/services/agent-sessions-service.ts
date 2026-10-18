@@ -201,8 +201,10 @@ import {
   configureSandboxGateway,
   ensureSandboxBaseline,
   removeSandboxGateway,
+  removeSessionCredentials,
   SESSION_DIRECTORY,
   sandboxGrantFile,
+  seedSandboxBase,
   seedSandboxRepository,
 } from "./sandbox-git.js";
 import {
@@ -313,6 +315,7 @@ import {
   readSetupRecord,
   runWorkspaceSetup,
   SetupNetworkError,
+  type SetupNetworkRefusal,
   sessionDirectory,
   type WorkspaceSetupOutcome,
   workspaceSetupFailedNote,
@@ -744,6 +747,12 @@ export const INTERRUPTED_TURN_MESSAGE =
  * the system author used for generated-file syncs, so history reads honestly.
  */
 const CHECKPOINT_AUTHOR = AGENT_COMMIT_AUTHOR;
+
+/**
+ * A session's sandbox being replaced for a setup on its own network (ADR
+ * 0257), marked before it is destroyed: the next preparation finishes it.
+ */
+const REPLACING_SANDBOX = "replacing";
 
 const SESSION_TASK_SUMMARY_LIMIT = 240;
 
@@ -4997,14 +5006,23 @@ export class AgentSessionsService {
           move: workspaceMove,
         }),
       );
-    const hadSandbox = session.sandbox_id !== null;
     const baseBefore = parseWorkspaceBase(session.workspace)?.commit;
+    if (workspaceMove && agent.topology !== "native")
+      session = await this.db
+        .selectFrom("agent_sessions")
+        .selectAll()
+        .where("id", "=", sessionId)
+        .executeTakeFirstOrThrow();
+    // A setup on its own network (ADR 0257) widens only a sandbox this
+    // preparation makes, holding the base checkout alone; why it cannot.
+    const setupNetwork = this.setupNetworkOf({ runtime, session });
     let workspace = await this.ensureWorkspace(
       identity,
       projectId,
       session,
       agent,
       runtime,
+      { populate: !setupNetwork.widens },
     );
     session = await this.db
       .selectFrom("agent_sessions")
@@ -5039,7 +5057,8 @@ export class AgentSessionsService {
         runtime,
         provider: runtime.provider,
         sandboxProviderId: workspace.sandboxProviderId,
-        created: !hadSandbox,
+        created: workspace.created === true,
+        widens: setupNetwork.widens,
         moved: baseBefore !== parseWorkspaceBase(session.workspace)?.commit,
       });
       if (prepared.note) notes.push(prepared.note);
@@ -5052,12 +5071,45 @@ export class AgentSessionsService {
           .where("id", "=", sessionId)
           .executeTakeFirstOrThrow();
       }
+      // The Environment's setup on its own network, before Git, grants,
+      // secrets and files reach the sandbox (ADR 0257).
+      const widened =
+        fresh && setupNetwork.widens && runtime.setup
+          ? await this.setUpOnItsNetwork({
+              identity,
+              projectId,
+              session,
+              turn,
+              runtime,
+              setup: runtime.setup,
+              egress: setupNetwork.widens.egress,
+              base: setupNetwork.widens.base,
+              provider: runtime.provider,
+              sandboxProviderId,
+              ownerAuthored,
+              signal: input.signal,
+            })
+          : undefined;
+      // The log's tail may print a secret the setup named, or one an
+      // earlier workspace held (ADR 0206). Read now, not kept: this turn's
+      // secrets arrive below.
+      if (widened?.note)
+        notes.push(
+          new SecretMask(
+            await this.sessionSecretValues({
+              identity,
+              projectId,
+              sessionId: session.id,
+            }),
+          ).text(widened.note),
+        );
       const models = await this.prepareSandboxGit({
         identity,
         projectId,
         sessionId,
         provider: runtime.provider,
         sandboxProviderId,
+        afterSetup: widened !== undefined,
       });
       if (agent.signIn) {
         // The owner's own sign-in, mounted from the machine's disk (ADR 0199).
@@ -5129,46 +5181,32 @@ export class AgentSessionsService {
         });
         if (volumes) notes.push(volumes);
       }
-      // Only a sandbox this preparation made, in which nothing has run, is
-      // widened for its setup (ADR 0257).
-      const setupNetwork = fresh ? this.setupNetworkOf(runtime) : undefined;
-      const setup = await this.prepareWorkspaceSetup({
-        identity,
-        projectId,
-        session,
-        turn,
-        runner: {
-          kind: "sandbox",
-          provider: runtime.provider,
-          sandboxProviderId,
-          ...(setupNetwork ? { network: setupNetwork } : {}),
-        },
-        environment: runtime.setup,
-        personalAllowed: runtime.personalCredentials === true && ownerAuthored,
-        signal: input.signal,
-      }).catch(async (error: unknown) => {
-        // A sandbox that may still be wide holds no live grant.
-        if (error instanceof SetupNetworkError)
-          await this.connectionGrants
-            ?.revokeSession({ agentSessionId: sessionId, channel: "sandbox" })
-            .catch(() => {});
-        throw error;
-      });
-      // Setup could read the grants it ran beside; now that the sandbox is
-      // narrow again, they are replaced and end at once (ADR 0257).
-      if (setupNetwork && session.allocation_id)
-        await this.renewSandboxGrants({
-          identity,
-          projectId,
-          sessionId,
-          allocationId: session.allocation_id,
-          provider: runtime.provider,
-          sandboxProviderId,
-        });
-      // The log's tail may print any secret the workspace ever held,
-      // this turn's or an earlier one's (ADR 0206).
-      if (setup)
-        notes.push(new SecretMask(await secretValuesOfChat()).text(setup));
+      // The rest of setup, once the sandbox is narrow and holds the
+      // session's work: the owner's own, or all of it without a network of
+      // its own. A widened setup that did not succeed runs again next turn.
+      const setup =
+        widened && !widened.settled
+          ? undefined
+          : await this.prepareWorkspaceSetup({
+              identity,
+              projectId,
+              session,
+              turn,
+              runner: {
+                kind: "sandbox",
+                provider: runtime.provider,
+                sandboxProviderId,
+                ...(setupNetwork.refusal
+                  ? { networkRefusal: setupNetwork.refusal }
+                  : {}),
+              },
+              environment: runtime.setup,
+              personalAllowed:
+                runtime.personalCredentials === true && ownerAuthored,
+              signal: input.signal,
+            });
+      if (setup?.note)
+        notes.push(new SecretMask(await secretValuesOfChat()).text(setup.note));
       if (session.allocation_id)
         this.startGrantRenewal({
           identity,
@@ -5195,7 +5233,7 @@ export class AgentSessionsService {
         personalAllowed: runtime.personalCredentials === true && ownerAuthored,
         signal: input.signal,
       });
-      if (setup) notes.push(setup);
+      if (setup.note) notes.push(setup.note);
     }
 
     const workingDirectory = workspace.workingDirectory;
@@ -6225,6 +6263,8 @@ export class AgentSessionsService {
     sessionId: string;
     provider: SandboxProvider;
     sandboxProviderId: string;
+    /** The sandbox holds its base and what a setup made on it (ADR 0257). */
+    afterSetup?: boolean;
   }): Promise<readonly SandboxModelGateway[]> {
     const row = await this.db
       .selectFrom("agent_sessions")
@@ -6251,6 +6291,7 @@ export class AgentSessionsService {
             input.identity,
             input.projectId,
           ),
+          ...(input.afterSetup ? { afterSetup: true } : {}),
         });
       } finally {
         await copy.dispose();
@@ -6638,8 +6679,12 @@ export class AgentSessionsService {
    * personal files are in place, or a native checkout the chat owns (ADR
    * 0215). The Environment's `setup`, then the owner's own where their
    * personal files may go, run in the project folder when this workspace
-   * has not run them yet. The chat shows the setup while it runs. Returns
-   * a note for the agent when it failed; it runs again before the next turn.
+   * has not run them yet. With `network`, only the Environment's part runs,
+   * on its own network, in a sandbox holding the base alone (ADR 0257). An
+   * Environment's setup that names a network runs nowhere else; the agent
+   * is told why. The chat shows the setup while it runs. Returns a note for
+   * the agent when it failed (it runs again before the next turn), and
+   * whether it settled: ran, or had nothing to run.
    */
   private async prepareWorkspaceSetup(input: {
     identity: Identity;
@@ -6651,8 +6696,10 @@ export class AgentSessionsService {
           kind: "sandbox";
           provider: SandboxProvider;
           sandboxProviderId: string;
-          /** The setup's own network, in a sandbox nothing ran in (ADR 0257). */
-          network?: { setup: SandboxEgress; own: SandboxEgress };
+          /** The setup's own network, in a sandbox holding its base alone. */
+          network?: { egress: SandboxEgress; env: Record<string, string> };
+          /** Why its setup's network cannot be given here. */
+          networkRefusal?: SetupNetworkRefusal;
         }
       | {
           kind: "native";
@@ -6663,11 +6710,13 @@ export class AgentSessionsService {
     /** The placement may hold the owner's credentials and the owner wrote the turn. */
     personalAllowed: boolean;
     signal: AbortSignal;
-  }): Promise<string | undefined> {
+  }): Promise<{ note?: string; settled: boolean }> {
     const { session, runner } = input;
     const owner = session.external_user_id;
+    const widening = runner.kind === "sandbox" ? runner.network : undefined;
     const personalAllowed =
       input.personalAllowed &&
+      !widening &&
       Boolean(this.personalEnvironments) &&
       !isProjectPrincipal(owner);
     const personal = personalAllowed
@@ -6677,15 +6726,19 @@ export class AgentSessionsService {
           owner,
         })
       : undefined;
-    if (!input.environment && !personal) return undefined;
-    // A folder on a person's computer has no network to switch: a setup
-    // that needs its own runs only in sandboxes (ADR 0257).
-    const refused =
-      runner.kind === "native" && input.environment?.network
-        ? workspaceSetupNetworkRefusedNote()
-        : undefined;
+    // A setup that needs its own network runs only where it can have it
+    // (ADR 0257): a folder on a person's computer has none to switch.
+    const refusal: SetupNetworkRefusal | undefined = input.environment?.network
+      ? runner.kind === "native"
+        ? "folder"
+        : runner.networkRefusal
+      : undefined;
+    const refused = refusal
+      ? workspaceSetupNetworkRefusedNote({ reason: refusal })
+      : undefined;
     const environment = refused ? undefined : input.environment;
-    if (!environment && !personal) return refused;
+    if (!environment && !personal)
+      return { ...(refused ? { note: refused } : {}), settled: true };
     const timeoutMinutes =
       input.environment?.timeoutMinutes ?? DEFAULT_SETUP_TIMEOUT_MINUTES;
     const base = parseWorkspaceBase(session.workspace)?.commit;
@@ -6717,6 +6770,7 @@ export class AgentSessionsService {
           "catamorphic.project.id": input.projectId,
           "catamorphic.agent.session.id": session.id,
           "catamorphic.agent.turn.id": input.turn.id,
+          "catamorphic.workspace.setup.network": Boolean(widening),
         },
       },
       async (): Promise<{
@@ -6749,7 +6803,7 @@ export class AgentSessionsService {
           ...commands,
           personalAllowed,
           timeoutMinutes,
-          ...(runner.network ? { network: runner.network } : {}),
+          ...(widening ? { network: widening } : {}),
           signal: input.signal,
           onRun,
         }).then(
@@ -6776,34 +6830,179 @@ export class AgentSessionsService {
         : outcome.status === "failed"
           ? workspaceSetupFailedNote({ outcome, timeoutMinutes, logPath })
           : undefined;
-    return [refused, note].filter(Boolean).join("\n\n") || undefined;
+    const notes = [refused, note].filter(Boolean).join("\n\n");
+    return {
+      ...(notes ? { note: notes } : {}),
+      settled: outcome.status === "succeeded" || outcome.status === "current",
+    };
   }
 
   /**
-   * The setup's network and the Environment's own (ADR 0257): present when
-   * the Environment's setup names a network and its Allocation fixed both
-   * policies at admission.
+   * Whether this turn's Environment setup runs on its own network (ADR
+   * 0257), and on which base, or why it cannot. It needs the setup network
+   * the Allocation fixed at admission, a workspace standing on a commit of
+   * the project's remote (the base, free of any agent's work), and no sign-in
+   * mounted in the sandbox from its start.
    */
-  private setupNetworkOf(
-    runtime: AgentExecutionRuntime,
-  ): { setup: SandboxEgress; own: SandboxEgress } | undefined {
-    const sandbox = runtime.allocation?.policy.sandbox;
-    return runtime.setup?.network && sandbox?.egress && sandbox.setupEgress
-      ? { setup: sandbox.setupEgress, own: sandbox.egress }
-      : undefined;
+  private setupNetworkOf(input: {
+    runtime: AgentExecutionRuntime;
+    session: Pick<SessionRow, "workspace">;
+  }): {
+    widens?: { egress: SandboxEgress; base: string };
+    refusal?: SetupNetworkRefusal;
+  } {
+    const { runtime } = input;
+    if (!runtime.setup?.network || !runtime.provider) return {};
+    const egress = runtime.allocation?.policy.sandbox?.setupEgress;
+    const base = parseWorkspaceBase(input.session.workspace)?.commit;
+    if (!egress) return { refusal: "not-admitted" };
+    if (!base) return { refusal: "no-base" };
+    if (runtime.signInHome) return { refusal: "sign-in" };
+    return { widens: { egress, base } };
+  }
+
+  /**
+   * The Environment's setup on its own network (ADR 0257), in a sandbox
+   * this preparation made: seeded with the base commit alone, holding no
+   * grant, secret, gateway variable or file of anyone's, widened to the
+   * setup's hosts only, and narrowed once it ended. Only the secrets the
+   * setup names reach it, as its environment. The session's work, grants,
+   * secrets and files arrive after.
+   */
+  private async setUpOnItsNetwork(input: {
+    identity: Identity;
+    projectId: string;
+    session: SessionRow;
+    turn: Turn;
+    runtime: AgentExecutionRuntime;
+    setup: AdmittedSetup;
+    egress: SandboxEgress;
+    base: string;
+    provider: SandboxProvider;
+    sandboxProviderId: string;
+    ownerAuthored: boolean;
+    signal: AbortSignal;
+  }): Promise<{ note?: string; settled: boolean }> {
+    const { identity, projectId, session, provider } = input;
+    const copy = await this.projectManager.openSession({
+      tenantId: identity.tenantId,
+      projectId,
+      sessionId: session.id,
+    });
+    try {
+      await seedSandboxBase({
+        provider,
+        sandboxId: input.sandboxProviderId,
+        projectDir: this.projectDir(provider),
+        sessionCopyPath: copy.repoPath,
+        base: input.base,
+      });
+    } finally {
+      await copy.dispose();
+    }
+    await removeSessionCredentials({
+      provider,
+      sandboxId: input.sandboxProviderId,
+    });
+    const env = await this.setupSecretValues({
+      identity,
+      projectId,
+      session,
+      runtime: input.runtime,
+      names: input.setup.secrets ?? [],
+      ownerAuthored: input.ownerAuthored,
+    });
+    return this.prepareWorkspaceSetup({
+      identity,
+      projectId,
+      session,
+      turn: input.turn,
+      runner: {
+        kind: "sandbox",
+        provider,
+        sandboxProviderId: input.sandboxProviderId,
+        network: { egress: input.egress, env },
+      },
+      environment: input.setup,
+      personalAllowed: false,
+      signal: input.signal,
+    }).catch(async (error: unknown) => {
+      // A sandbox that may still be wide fails the attempt (ADR 0257).
+      if (error instanceof SetupNetworkError)
+        await this.connectionGrants
+          ?.revokeSession({ agentSessionId: session.id, channel: "sandbox" })
+          .catch(() => {});
+      throw error;
+    });
+  }
+
+  /**
+   * The secrets a setup on its own network names (ADR 0257), resolved as
+   * the turn's own are (ADR 0206) but never written into the sandbox: they
+   * reach the setup's process alone. Remembered, so its log is masked, and
+   * audited as delivered. None where the turn would get none.
+   */
+  private async setupSecretValues(input: {
+    identity: Identity;
+    projectId: string;
+    session: SessionRow;
+    runtime: AgentExecutionRuntime;
+    names: readonly string[];
+    ownerAuthored: boolean;
+  }): Promise<Record<string, string>> {
+    const { identity, projectId, session } = input;
+    const service = this.secrets;
+    const owner = placementOwner(session.external_user_id);
+    if (
+      !service ||
+      input.names.length === 0 ||
+      input.runtime.isolated !== true ||
+      (owner !== null && !input.ownerAuthored)
+    )
+      return {};
+    const resolved = await service.resolveForSandbox({
+      identity,
+      projectId,
+      environment: input.runtime.environmentName,
+      owner,
+    });
+    const variables = Object.fromEntries(
+      Object.entries(resolved.variables).filter(([name]) =>
+        input.names.includes(name),
+      ),
+    );
+    if (Object.keys(variables).length === 0) return {};
+    await service.rememberDelivery({
+      tenantId: identity.tenantId,
+      sessionId: session.id,
+      variables,
+    });
+    await service.auditDelivery({
+      identity,
+      projectId,
+      sessionId: session.id,
+      ...(session.allocation_id ? { allocationId: session.allocation_id } : {}),
+      delivered: resolved.delivered.filter((entry) =>
+        input.names.includes(entry.name),
+      ),
+      missing: resolved.missing.filter((entry) =>
+        input.names.includes(entry.name),
+      ),
+      unmasked: resolved.unmasked.filter((name) => input.names.includes(name)),
+    });
+    return variables;
   }
 
   /**
    * Ready a sandbox an earlier preparation made for a turn whose
    * Allocation fixed a setup network (ADR 0257). It is narrowed first: a
    * preparation that stopped while its setup ran may have left it wide.
-   * When that setup must run again (its command changed, the base moved,
-   * or it never finished), the sandbox is replaced by a new one in the
-   * same Allocation, since only a sandbox in which nothing has run may be
-   * widened: files an agent gathered survive a restart, and the setup's
-   * install scripts could send them to a host the setup may reach.
-   * Volumes, which persist on the machine, stay. Returns the turn's
-   * sandbox and whether this preparation made it.
+   * When that setup must run again on its own network (its command
+   * changed, the base moved, or it never finished), the sandbox is replaced
+   * by a new one in the same Allocation, since only a sandbox holding its
+   * base alone may be widened: the session's work comes back once the new
+   * one is narrow. Returns the turn's sandbox, whether this preparation
+   * made it, and a note for the agent.
    */
   private async prepareSetupSandbox(input: {
     identity: Identity;
@@ -6815,12 +7014,13 @@ export class AgentSessionsService {
     sandboxProviderId: string;
     /** This preparation made the sandbox. */
     created: boolean;
+    /** The setup may run on its own network, on this base. */
+    widens: { egress: SandboxEgress; base: string } | undefined;
     /** This preparation moved the workspace's base (ADR 0178). */
     moved: boolean;
   }): Promise<{ sandboxProviderId: string; fresh: boolean; note?: string }> {
     const { identity, projectId, session, runtime, provider } = input;
-    const fixed = runtime.allocation?.policy.sandbox;
-    if (input.created || !fixed?.setupEgress || !fixed.egress)
+    if (input.created || !runtime.allocation?.policy.sandbox?.setupEgress)
       return {
         sandboxProviderId: input.sandboxProviderId,
         fresh: input.created,
@@ -6828,52 +7028,53 @@ export class AgentSessionsService {
     await narrowSandboxEgress({
       provider,
       sandboxId: input.sandboxProviderId,
-      egress: fixed.egress,
+      id: randomUUID(),
     }).catch(async (error: unknown) => {
       await this.connectionGrants
         ?.revokeSession({ agentSessionId: session.id, channel: "sandbox" })
         .catch(() => {});
       throw error;
     });
-    const base = parseWorkspaceBase(session.workspace)?.commit;
     const due =
-      runtime.setup?.network &&
+      input.widens &&
+      runtime.setup &&
       environmentSetupDue({
         environment: runtime.setup.command,
-        ...(base ? { base } : {}),
+        base: input.widens.base,
         recorded: await readSetupRecord({
           provider,
           sandboxId: input.sandboxProviderId,
           projectDir: this.projectDir(provider),
         }),
       });
-    if (!due || !runtime.destroySandbox)
+    if (!due || !session.sandbox_id)
       return { sandboxProviderId: input.sandboxProviderId, fresh: false };
+    // Marked first, so a preparation that stops midway is finished by the
+    // next one rather than left pointing at a sandbox that is gone.
+    await this.db
+      .updateTable("project_sandboxes")
+      .set({ status: REPLACING_SANDBOX })
+      .where("id", "=", session.sandbox_id)
+      .execute();
     // What changed since the last turn is kept, as when a workspace is
     // given back while idle; a moved base replaces it anyway, and a
     // contained agent's work never leaves its sandbox (ADR 0182).
-    const note =
-      !input.moved && input.agent.sandboxing !== "contained"
-        ? await this.saveSandboxChanges({
+    const note = input.moved
+      ? undefined
+      : input.agent.sandboxing === "contained"
+        ? "[Workspace] This workspace was made again to run its setup on its own network. This agent's sandboxing is contained, so what it changed here before is gone with the old workspace."
+        : await this.saveSandboxChanges({
             identity,
             projectId,
             session,
             provider,
             sandboxProviderId: input.sandboxProviderId,
-          })
-        : undefined;
-    await runtime.destroySandbox(input.sandboxProviderId);
-    await this.db.transaction().execute(async (trx) => {
-      await trx
-        .updateTable("agent_sessions")
-        .set({ sandbox_id: null })
-        .where("id", "=", session.id)
-        .execute();
-      if (session.sandbox_id)
-        await trx
-          .deleteFrom("project_sandboxes")
-          .where("id", "=", session.sandbox_id)
-          .execute();
+          });
+    await this.finishReplacingSandbox({
+      session,
+      runtime,
+      sandboxId: session.sandbox_id,
+      providerId: input.sandboxProviderId,
     });
     const workspace = await this.ensureWorkspace(
       identity,
@@ -6881,6 +7082,7 @@ export class AgentSessionsService {
       { ...session, sandbox_id: null },
       input.agent,
       runtime,
+      { populate: false },
     );
     if (!workspace.sandboxProviderId)
       throw new Error("The workspace's new sandbox did not start");
@@ -6889,6 +7091,44 @@ export class AgentSessionsService {
       fresh: true,
       ...(note ? { note } : {}),
     };
+  }
+
+  /**
+   * Destroy a session's sandbox that is being replaced, then forget it
+   * (ADR 0257): destroyed first, so a sandbox is never left running
+   * unowned. One its Allocation no longer owns was destroyed already.
+   */
+  private async finishReplacingSandbox(input: {
+    session: Pick<SessionRow, "id">;
+    runtime: AgentExecutionRuntime;
+    sandboxId: string;
+    providerId: string;
+  }): Promise<void> {
+    const { runtime } = input;
+    const allocation = runtime.allocation;
+    const owned =
+      !allocation ||
+      !this.managedWorkspace(allocation) ||
+      (
+        await this.db
+          .selectFrom("execution_allocations")
+          .select("sandbox_provider_id")
+          .where("id", "=", allocation.id)
+          .executeTakeFirst()
+      )?.sandbox_provider_id === input.providerId;
+    if (owned) await runtime.destroySandbox?.(input.providerId);
+    await this.db.transaction().execute(async (trx) => {
+      await trx
+        .updateTable("agent_sessions")
+        .set({ sandbox_id: null })
+        .where("id", "=", input.session.id)
+        .where("sandbox_id", "=", input.sandboxId)
+        .execute();
+      await trx
+        .deleteFrom("project_sandboxes")
+        .where("id", "=", input.sandboxId)
+        .execute();
+    });
   }
 
   /**
@@ -6927,29 +7167,6 @@ export class AgentSessionsService {
         author: CHECKPOINT_AUTHOR,
       });
     return unsaved;
-  }
-
-  /**
-   * Issue the session's sandbox grants again and write them into its
-   * sandbox, ending the ones they replace at once (ADR 0257). Should that
-   * fail, the session's sandbox grants all end and the preparation fails.
-   */
-  private async renewSandboxGrants(input: {
-    identity: Identity;
-    projectId: string;
-    sessionId: string;
-    allocationId: string;
-    provider: SandboxProvider;
-    sandboxProviderId: string;
-  }): Promise<void> {
-    try {
-      await this.configureSandboxGateway({ ...input, renewOnly: true });
-    } catch (error) {
-      await this.connectionGrants
-        ?.revokeSession({ agentSessionId: input.sessionId, channel: "sandbox" })
-        .catch(() => {});
-      throw error;
-    }
   }
 
   /** What a preparing turn shows its chat, while it is still preparing. */
@@ -11111,9 +11328,15 @@ export class AgentSessionsService {
     session: SessionRow,
     agent: RegisteredCodingAgent,
     runtime: AgentExecutionRuntime,
+    options: {
+      /** Put the session's files in a new sandbox (default); see DevSandboxService. */
+      populate?: boolean;
+    } = {},
   ): Promise<{
     workingDirectory: string;
     sandboxProviderId?: string;
+    /** This call made the sandbox. */
+    created?: boolean;
     /** The checkout a native agent works in. */
     checkout?: NativeCheckout;
   }> {
@@ -11131,20 +11354,35 @@ export class AgentSessionsService {
         "The selected Environment has no agent workspace provider",
       );
     if (session.sandbox_id) {
-      const sandboxProviderId = await this.resolveSandboxProviderId(
+      const replaced = await this.replacedSandbox({
         session,
-        runtime.provider,
-      );
-      return {
-        workingDirectory: this.projectDir(runtime.provider),
-        sandboxProviderId,
-      };
+        sandboxId: session.sandbox_id,
+        runtime,
+      });
+      if (!replaced) {
+        const sandboxProviderId = await this.resolveSandboxProviderId(
+          session,
+          runtime.provider,
+        );
+        return {
+          workingDirectory: this.projectDir(runtime.provider),
+          sandboxProviderId,
+        };
+      }
+      // An earlier preparation stopped while replacing it (ADR 0257).
+      await this.finishReplacingSandbox({
+        session,
+        runtime,
+        sandboxId: session.sandbox_id,
+        providerId: replaced.providerId,
+      });
     }
     const { handle, baseCommitSha } = await this.prepareDevSandbox(
       { provider: runtime.provider, devSandboxes: runtime.devSandboxes },
       identity,
       projectId,
       session,
+      options.populate ?? true,
     );
     await this.db
       .updateTable("agent_sessions")
@@ -11154,7 +11392,41 @@ export class AgentSessionsService {
     return {
       workingDirectory: this.projectDir(runtime.provider),
       sandboxProviderId: handle.providerId,
+      created: true,
     };
+  }
+
+  /**
+   * The session's sandbox when an earlier preparation stopped while
+   * replacing it (ADR 0257): marked for replacing, or one its managed
+   * Allocation no longer owns. Undefined for a sandbox in use.
+   */
+  private async replacedSandbox(input: {
+    session: Pick<SessionRow, "id">;
+    sandboxId: string;
+    runtime: AgentExecutionRuntime;
+  }): Promise<{ providerId: string } | undefined> {
+    const row = await this.db
+      .selectFrom("project_sandboxes")
+      .select(["provider_id", "status"])
+      .where("id", "=", input.sandboxId)
+      .executeTakeFirst();
+    if (!row) return undefined;
+    if (row.status === REPLACING_SANDBOX)
+      return { providerId: row.provider_id };
+    const allocation = input.runtime.allocation;
+    if (!allocation || !this.managedWorkspace(allocation)) return undefined;
+    const owner = await this.db
+      .selectFrom("execution_allocations")
+      .select(["sandbox_provider_id", "sandbox_creation_started"])
+      .where("id", "=", allocation.id)
+      .executeTakeFirst();
+    // The Allocation gave this sandbox up, and has not started another.
+    return owner &&
+      owner.sandbox_provider_id === null &&
+      !owner.sandbox_creation_started
+      ? { providerId: row.provider_id }
+      : undefined;
   }
 
   private async connectionMcpServers(
@@ -11268,6 +11540,7 @@ export class AgentSessionsService {
     identity: Identity,
     projectId: string,
     session: SessionRow,
+    populate: boolean,
   ): Promise<{
     handle: { id: string; providerId: string };
     baseCommitSha: string | null;
@@ -11276,6 +11549,7 @@ export class AgentSessionsService {
       identity,
       projectId,
       refresh: true,
+      populate,
     });
     // A workspace at a ref is seeded with its real history before the turn
     // (prepareSandboxGit); any other sandbox gets a local baseline.
