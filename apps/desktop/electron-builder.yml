@@ -61,7 +61,9 @@ mac:
     - Contents/MacOS/browser-keychain
     - Contents/MacOS/voice-keys
   category: public.app-category.developer-tools
-  icon: build/icon.icns
+  # Icon Composer source: packaging compiles it with Xcode 26's actool into
+  # the Assets.car macOS 26 draws, plus the icns earlier versions show.
+  icon: build/icon.icon
   minimumSystemVersion: "13.0"
   hardenedRuntime: true
   entitlements: build/entitlements.mac.plist

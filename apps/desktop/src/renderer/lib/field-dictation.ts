@@ -472,9 +472,10 @@ export function installFieldDictation(port: DictationPort): () => void {
       if (!event.metaKey && !event.ctrlKey) sent(target);
       return;
     }
-    // In a longer text Return may only start a new line.
+    // In a longer text Return may only start a new line. A field it took
+    // away (a question's answer, sent with the answers) was sent too.
     setTimeout(() => {
-      if (!textOf(target).trim()) sent(target);
+      if (!target.isConnected || !textOf(target).trim()) sent(target);
     }, SENT_MS);
   };
   const onPointer = (event: PointerEvent) => {

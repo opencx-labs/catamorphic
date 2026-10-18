@@ -1356,6 +1356,9 @@ function describes<T>() {
 // naming it lets the OpenAPI document reference it instead of an anonymous
 // cycle.
 z.globalRegistry.add(jsonValueSchema, { id: "ProtocolJsonValue" });
+// Messages, answers and their history carry attachments: one definition
+// the document references rather than a copy at each use.
+z.globalRegistry.add(attachmentSchema, { id: "ProtocolAttachment" });
 
 export const DispatchModeSchema = describes<DispatchMode>()(
   dispatchModeSchema.describe(
@@ -1657,7 +1660,12 @@ const RuntimeRequestResponseSchema = describes<RuntimeRequestResponse>()(
       /** Why Work denied it when no person did: told to the agent. */
       reason: z.string().optional(),
     }),
-    z.object({ kind: z.literal("question"), answers: z.array(z.string()) }),
+    z.object({
+      kind: z.literal("question"),
+      answers: z.array(z.string()),
+      /** Each answer's pills, in the order of its markers (ADR 0244). */
+      attachments: z.array(z.array(attachmentSchema)).optional(),
+    }),
     z.object({
       kind: z.literal("elicitation"),
       action: z.enum(["accept", "decline", "cancel"]),

@@ -126,8 +126,13 @@ Queue mutations resolve to `true` only after server confirmation. A `false` resu
 ## Agent questions
 
 Question batches are durable session requests with a `blocking` flag (default true).
-Answer with `useAgentChat().respond(requestId, { kind: "question", answers })`,
-one answer per question. Non-blocking
+Answer with `useAgentChat().respond(requestId, { kind: "question", answers, attachments })`,
+one answer per question; an answer in the person's own words may hold
+attachment markers, and `attachments` holds each answer's pills in marker
+order (ADR 0244). Core gives the asking agent text answers with the text pills
+rendered in; their images and documents follow as a steered message carrying
+the answer (its card takes the pills from the request).
+Non-blocking
 questions stay answerable while work continues and after the turn finishes.
 Collapsing a question preserves its draft. The existing inbox delivers answers to
 the current harness or starts a continuation if the turn has already ended.
@@ -135,11 +140,14 @@ See ADR 0122 and the question schemas in `@catamorphic/sandbox`.
 
 A message sent while a blocking question waits reaches the agent in the same
 turn, attachments included, and the question stays open as "Answer when ready"
-(ADR 0195). A permission request is withdrawn instead. Panels have no "Other"
-row: free text goes through the composer, whose placeholder says so while a
-question is open. The waiting status sits in the panel header. Answers render in
-history as the questions and what was picked: from the resolved request, or a
-later answer message's `answer`. Agents close questions a reply settled with `close_questions`.
+(ADR 0195). A permission request is withdrawn instead. Each question also has
+an Other answer (ADR 0244), which the desktop types in the composer's own input
+(`components/answer-input.tsx`): it glides, takes pills, and attaches pasted
+files through the dock's own attaching. The composer still takes free text,
+and its placeholder says so while a question is open. The waiting status sits
+in the panel header. Answers render in history as the questions and what was
+picked or written, pills in place: from the resolved request, or a later
+answer message's `answer`. Agents close questions a reply settled with `close_questions`.
 
 Attachment preparation shows on the composer's attach button. Never add a row
 above the composer for transient state: it moves the dock and any open question.

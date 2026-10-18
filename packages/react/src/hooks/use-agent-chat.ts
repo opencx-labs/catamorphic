@@ -11,7 +11,7 @@ import {
   type SessionState,
   type Turn,
 } from "@catamorphic/agent-protocol";
-import { ATTACHMENT_MARKER } from "@catamorphic/sandbox/attachments";
+import { withMarkerCount } from "@catamorphic/sandbox/attachments";
 import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CatamorphicError, toCatamorphicError } from "../lib/errors.js";
@@ -692,19 +692,6 @@ function isItemOf(item: Item, message: PendingAgentMessage): boolean {
     item.idempotencyKey !== null &&
     item.idempotencyKey.endsWith(`:${message.commandId}`)
   );
-}
-
-/**
- * Edited text keeps one inline marker per attachment: pills the person
- * removed while editing come back at the end rather than going missing.
- */
-function withMarkerCount(text: string, attachments: number): string {
-  const withoutMarkers = text.split(ATTACHMENT_MARKER).join("");
-  const markers =
-    (text.length - withoutMarkers.length) / ATTACHMENT_MARKER.length;
-  return markers === attachments
-    ? text
-    : withoutMarkers + ATTACHMENT_MARKER.repeat(attachments);
 }
 
 export function authenticationRequiredFrom(

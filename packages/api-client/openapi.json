@@ -91,6 +91,136 @@
         ],
         "nullable": true
       },
+      "ProtocolAttachmentInput": {
+        "anyOf": [
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": ["image", "document"]
+              },
+              "name": {
+                "type": "string",
+                "maxLength": 500
+              },
+              "mediaType": {
+                "type": "string",
+                "maxLength": 200
+              },
+              "dataBase64": {
+                "type": "string"
+              }
+            },
+            "required": ["kind", "name", "mediaType", "dataBase64"]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": ["text"]
+              },
+              "name": {
+                "type": "string",
+                "maxLength": 500
+              },
+              "text": {
+                "type": "string"
+              },
+              "source": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "type": {
+                        "type": "string",
+                        "enum": ["paste"]
+                      }
+                    },
+                    "required": ["type"]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "type": {
+                        "type": "string",
+                        "enum": ["selection"]
+                      },
+                      "filePath": {
+                        "type": "string"
+                      },
+                      "startLine": {
+                        "type": "integer",
+                        "minimum": -9007199254740991,
+                        "maximum": 9007199254740991
+                      },
+                      "endLine": {
+                        "type": "integer",
+                        "minimum": -9007199254740991,
+                        "maximum": 9007199254740991
+                      }
+                    },
+                    "required": ["type", "filePath"]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "type": {
+                        "type": "string",
+                        "enum": ["url"]
+                      },
+                      "url": {
+                        "type": "string"
+                      }
+                    },
+                    "required": ["type", "url"]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "type": {
+                        "type": "string",
+                        "enum": ["path"]
+                      },
+                      "path": {
+                        "type": "string"
+                      }
+                    },
+                    "required": ["type", "path"]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "type": {
+                        "type": "string",
+                        "enum": ["tab"]
+                      },
+                      "key": {
+                        "type": "string"
+                      },
+                      "kind": {
+                        "type": "string"
+                      },
+                      "title": {
+                        "type": "string"
+                      },
+                      "url": {
+                        "type": "string"
+                      },
+                      "filePath": {
+                        "type": "string"
+                      }
+                    },
+                    "required": ["type", "key", "kind", "title"]
+                  }
+                ]
+              }
+            },
+            "required": ["kind", "name", "text", "source"]
+          }
+        ]
+      },
       "InboundSenderInput": {
         "anyOf": [
           {
@@ -245,134 +375,7 @@
               "attachments": {
                 "type": "array",
                 "items": {
-                  "anyOf": [
-                    {
-                      "type": "object",
-                      "properties": {
-                        "kind": {
-                          "type": "string",
-                          "enum": ["image", "document"]
-                        },
-                        "name": {
-                          "type": "string",
-                          "maxLength": 500
-                        },
-                        "mediaType": {
-                          "type": "string",
-                          "maxLength": 200
-                        },
-                        "dataBase64": {
-                          "type": "string"
-                        }
-                      },
-                      "required": ["kind", "name", "mediaType", "dataBase64"]
-                    },
-                    {
-                      "type": "object",
-                      "properties": {
-                        "kind": {
-                          "type": "string",
-                          "enum": ["text"]
-                        },
-                        "name": {
-                          "type": "string",
-                          "maxLength": 500
-                        },
-                        "text": {
-                          "type": "string"
-                        },
-                        "source": {
-                          "anyOf": [
-                            {
-                              "type": "object",
-                              "properties": {
-                                "type": {
-                                  "type": "string",
-                                  "enum": ["paste"]
-                                }
-                              },
-                              "required": ["type"]
-                            },
-                            {
-                              "type": "object",
-                              "properties": {
-                                "type": {
-                                  "type": "string",
-                                  "enum": ["selection"]
-                                },
-                                "filePath": {
-                                  "type": "string"
-                                },
-                                "startLine": {
-                                  "type": "integer",
-                                  "minimum": -9007199254740991,
-                                  "maximum": 9007199254740991
-                                },
-                                "endLine": {
-                                  "type": "integer",
-                                  "minimum": -9007199254740991,
-                                  "maximum": 9007199254740991
-                                }
-                              },
-                              "required": ["type", "filePath"]
-                            },
-                            {
-                              "type": "object",
-                              "properties": {
-                                "type": {
-                                  "type": "string",
-                                  "enum": ["url"]
-                                },
-                                "url": {
-                                  "type": "string"
-                                }
-                              },
-                              "required": ["type", "url"]
-                            },
-                            {
-                              "type": "object",
-                              "properties": {
-                                "type": {
-                                  "type": "string",
-                                  "enum": ["path"]
-                                },
-                                "path": {
-                                  "type": "string"
-                                }
-                              },
-                              "required": ["type", "path"]
-                            },
-                            {
-                              "type": "object",
-                              "properties": {
-                                "type": {
-                                  "type": "string",
-                                  "enum": ["tab"]
-                                },
-                                "key": {
-                                  "type": "string"
-                                },
-                                "kind": {
-                                  "type": "string"
-                                },
-                                "title": {
-                                  "type": "string"
-                                },
-                                "url": {
-                                  "type": "string"
-                                },
-                                "filePath": {
-                                  "type": "string"
-                                }
-                              },
-                              "required": ["type", "key", "kind", "title"]
-                            }
-                          ]
-                        }
-                      },
-                      "required": ["kind", "name", "text", "source"]
-                    }
-                  ]
+                  "$ref": "#/components/schemas/ProtocolAttachmentInput"
                 }
               },
               "answer": {
@@ -423,6 +426,15 @@
                     "type": "array",
                     "items": {
                       "type": "string"
+                    }
+                  },
+                  "attachments": {
+                    "type": "array",
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ProtocolAttachmentInput"
+                      }
                     }
                   }
                 },
@@ -521,134 +533,7 @@
               "attachments": {
                 "type": "array",
                 "items": {
-                  "anyOf": [
-                    {
-                      "type": "object",
-                      "properties": {
-                        "kind": {
-                          "type": "string",
-                          "enum": ["image", "document"]
-                        },
-                        "name": {
-                          "type": "string",
-                          "maxLength": 500
-                        },
-                        "mediaType": {
-                          "type": "string",
-                          "maxLength": 200
-                        },
-                        "dataBase64": {
-                          "type": "string"
-                        }
-                      },
-                      "required": ["kind", "name", "mediaType", "dataBase64"]
-                    },
-                    {
-                      "type": "object",
-                      "properties": {
-                        "kind": {
-                          "type": "string",
-                          "enum": ["text"]
-                        },
-                        "name": {
-                          "type": "string",
-                          "maxLength": 500
-                        },
-                        "text": {
-                          "type": "string"
-                        },
-                        "source": {
-                          "anyOf": [
-                            {
-                              "type": "object",
-                              "properties": {
-                                "type": {
-                                  "type": "string",
-                                  "enum": ["paste"]
-                                }
-                              },
-                              "required": ["type"]
-                            },
-                            {
-                              "type": "object",
-                              "properties": {
-                                "type": {
-                                  "type": "string",
-                                  "enum": ["selection"]
-                                },
-                                "filePath": {
-                                  "type": "string"
-                                },
-                                "startLine": {
-                                  "type": "integer",
-                                  "minimum": -9007199254740991,
-                                  "maximum": 9007199254740991
-                                },
-                                "endLine": {
-                                  "type": "integer",
-                                  "minimum": -9007199254740991,
-                                  "maximum": 9007199254740991
-                                }
-                              },
-                              "required": ["type", "filePath"]
-                            },
-                            {
-                              "type": "object",
-                              "properties": {
-                                "type": {
-                                  "type": "string",
-                                  "enum": ["url"]
-                                },
-                                "url": {
-                                  "type": "string"
-                                }
-                              },
-                              "required": ["type", "url"]
-                            },
-                            {
-                              "type": "object",
-                              "properties": {
-                                "type": {
-                                  "type": "string",
-                                  "enum": ["path"]
-                                },
-                                "path": {
-                                  "type": "string"
-                                }
-                              },
-                              "required": ["type", "path"]
-                            },
-                            {
-                              "type": "object",
-                              "properties": {
-                                "type": {
-                                  "type": "string",
-                                  "enum": ["tab"]
-                                },
-                                "key": {
-                                  "type": "string"
-                                },
-                                "kind": {
-                                  "type": "string"
-                                },
-                                "title": {
-                                  "type": "string"
-                                },
-                                "url": {
-                                  "type": "string"
-                                },
-                                "filePath": {
-                                  "type": "string"
-                                }
-                              },
-                              "required": ["type", "key", "kind", "title"]
-                            }
-                          ]
-                        }
-                      },
-                      "required": ["kind", "name", "text", "source"]
-                    }
-                  ]
+                  "$ref": "#/components/schemas/ProtocolAttachmentInput"
                 }
               },
               "alert": {
@@ -1192,134 +1077,7 @@
               "attachments": {
                 "type": "array",
                 "items": {
-                  "anyOf": [
-                    {
-                      "type": "object",
-                      "properties": {
-                        "kind": {
-                          "type": "string",
-                          "enum": ["image", "document"]
-                        },
-                        "name": {
-                          "type": "string",
-                          "maxLength": 500
-                        },
-                        "mediaType": {
-                          "type": "string",
-                          "maxLength": 200
-                        },
-                        "dataBase64": {
-                          "type": "string"
-                        }
-                      },
-                      "required": ["kind", "name", "mediaType", "dataBase64"]
-                    },
-                    {
-                      "type": "object",
-                      "properties": {
-                        "kind": {
-                          "type": "string",
-                          "enum": ["text"]
-                        },
-                        "name": {
-                          "type": "string",
-                          "maxLength": 500
-                        },
-                        "text": {
-                          "type": "string"
-                        },
-                        "source": {
-                          "anyOf": [
-                            {
-                              "type": "object",
-                              "properties": {
-                                "type": {
-                                  "type": "string",
-                                  "enum": ["paste"]
-                                }
-                              },
-                              "required": ["type"]
-                            },
-                            {
-                              "type": "object",
-                              "properties": {
-                                "type": {
-                                  "type": "string",
-                                  "enum": ["selection"]
-                                },
-                                "filePath": {
-                                  "type": "string"
-                                },
-                                "startLine": {
-                                  "type": "integer",
-                                  "minimum": -9007199254740991,
-                                  "maximum": 9007199254740991
-                                },
-                                "endLine": {
-                                  "type": "integer",
-                                  "minimum": -9007199254740991,
-                                  "maximum": 9007199254740991
-                                }
-                              },
-                              "required": ["type", "filePath"]
-                            },
-                            {
-                              "type": "object",
-                              "properties": {
-                                "type": {
-                                  "type": "string",
-                                  "enum": ["url"]
-                                },
-                                "url": {
-                                  "type": "string"
-                                }
-                              },
-                              "required": ["type", "url"]
-                            },
-                            {
-                              "type": "object",
-                              "properties": {
-                                "type": {
-                                  "type": "string",
-                                  "enum": ["path"]
-                                },
-                                "path": {
-                                  "type": "string"
-                                }
-                              },
-                              "required": ["type", "path"]
-                            },
-                            {
-                              "type": "object",
-                              "properties": {
-                                "type": {
-                                  "type": "string",
-                                  "enum": ["tab"]
-                                },
-                                "key": {
-                                  "type": "string"
-                                },
-                                "kind": {
-                                  "type": "string"
-                                },
-                                "title": {
-                                  "type": "string"
-                                },
-                                "url": {
-                                  "type": "string"
-                                },
-                                "filePath": {
-                                  "type": "string"
-                                }
-                              },
-                              "required": ["type", "key", "kind", "title"]
-                            }
-                          ]
-                        }
-                      },
-                      "required": ["kind", "name", "text", "source"]
-                    }
-                  ]
+                  "$ref": "#/components/schemas/ProtocolAttachmentInput"
                 }
               },
               "answer": {
@@ -1370,6 +1128,15 @@
                     "type": "array",
                     "items": {
                       "type": "string"
+                    }
+                  },
+                  "attachments": {
+                    "type": "array",
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ProtocolAttachmentInput"
+                      }
                     }
                   }
                 },
@@ -1495,134 +1262,7 @@
               "attachments": {
                 "type": "array",
                 "items": {
-                  "anyOf": [
-                    {
-                      "type": "object",
-                      "properties": {
-                        "kind": {
-                          "type": "string",
-                          "enum": ["image", "document"]
-                        },
-                        "name": {
-                          "type": "string",
-                          "maxLength": 500
-                        },
-                        "mediaType": {
-                          "type": "string",
-                          "maxLength": 200
-                        },
-                        "dataBase64": {
-                          "type": "string"
-                        }
-                      },
-                      "required": ["kind", "name", "mediaType", "dataBase64"]
-                    },
-                    {
-                      "type": "object",
-                      "properties": {
-                        "kind": {
-                          "type": "string",
-                          "enum": ["text"]
-                        },
-                        "name": {
-                          "type": "string",
-                          "maxLength": 500
-                        },
-                        "text": {
-                          "type": "string"
-                        },
-                        "source": {
-                          "anyOf": [
-                            {
-                              "type": "object",
-                              "properties": {
-                                "type": {
-                                  "type": "string",
-                                  "enum": ["paste"]
-                                }
-                              },
-                              "required": ["type"]
-                            },
-                            {
-                              "type": "object",
-                              "properties": {
-                                "type": {
-                                  "type": "string",
-                                  "enum": ["selection"]
-                                },
-                                "filePath": {
-                                  "type": "string"
-                                },
-                                "startLine": {
-                                  "type": "integer",
-                                  "minimum": -9007199254740991,
-                                  "maximum": 9007199254740991
-                                },
-                                "endLine": {
-                                  "type": "integer",
-                                  "minimum": -9007199254740991,
-                                  "maximum": 9007199254740991
-                                }
-                              },
-                              "required": ["type", "filePath"]
-                            },
-                            {
-                              "type": "object",
-                              "properties": {
-                                "type": {
-                                  "type": "string",
-                                  "enum": ["url"]
-                                },
-                                "url": {
-                                  "type": "string"
-                                }
-                              },
-                              "required": ["type", "url"]
-                            },
-                            {
-                              "type": "object",
-                              "properties": {
-                                "type": {
-                                  "type": "string",
-                                  "enum": ["path"]
-                                },
-                                "path": {
-                                  "type": "string"
-                                }
-                              },
-                              "required": ["type", "path"]
-                            },
-                            {
-                              "type": "object",
-                              "properties": {
-                                "type": {
-                                  "type": "string",
-                                  "enum": ["tab"]
-                                },
-                                "key": {
-                                  "type": "string"
-                                },
-                                "kind": {
-                                  "type": "string"
-                                },
-                                "title": {
-                                  "type": "string"
-                                },
-                                "url": {
-                                  "type": "string"
-                                },
-                                "filePath": {
-                                  "type": "string"
-                                }
-                              },
-                              "required": ["type", "key", "kind", "title"]
-                            }
-                          ]
-                        }
-                      },
-                      "required": ["kind", "name", "text", "source"]
-                    }
-                  ]
+                  "$ref": "#/components/schemas/ProtocolAttachmentInput"
                 }
               },
               "alert": {
@@ -2965,6 +2605,15 @@
                     "items": {
                       "type": "string"
                     }
+                  },
+                  "attachments": {
+                    "type": "array",
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ProtocolAttachmentInput"
+                      }
+                    }
                   }
                 },
                 "required": ["kind", "answers"]
@@ -3743,6 +3392,143 @@
         ],
         "nullable": true
       },
+      "ProtocolAttachment": {
+        "anyOf": [
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": ["image", "document"]
+              },
+              "name": {
+                "type": "string",
+                "maxLength": 500
+              },
+              "mediaType": {
+                "type": "string",
+                "maxLength": 200
+              },
+              "dataBase64": {
+                "type": "string"
+              }
+            },
+            "required": ["kind", "name", "mediaType", "dataBase64"],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": ["text"]
+              },
+              "name": {
+                "type": "string",
+                "maxLength": 500
+              },
+              "text": {
+                "type": "string"
+              },
+              "source": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "type": {
+                        "type": "string",
+                        "enum": ["paste"]
+                      }
+                    },
+                    "required": ["type"],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "type": {
+                        "type": "string",
+                        "enum": ["selection"]
+                      },
+                      "filePath": {
+                        "type": "string"
+                      },
+                      "startLine": {
+                        "type": "integer",
+                        "minimum": -9007199254740991,
+                        "maximum": 9007199254740991
+                      },
+                      "endLine": {
+                        "type": "integer",
+                        "minimum": -9007199254740991,
+                        "maximum": 9007199254740991
+                      }
+                    },
+                    "required": ["type", "filePath"],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "type": {
+                        "type": "string",
+                        "enum": ["url"]
+                      },
+                      "url": {
+                        "type": "string"
+                      }
+                    },
+                    "required": ["type", "url"],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "type": {
+                        "type": "string",
+                        "enum": ["path"]
+                      },
+                      "path": {
+                        "type": "string"
+                      }
+                    },
+                    "required": ["type", "path"],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "type": {
+                        "type": "string",
+                        "enum": ["tab"]
+                      },
+                      "key": {
+                        "type": "string"
+                      },
+                      "kind": {
+                        "type": "string"
+                      },
+                      "title": {
+                        "type": "string"
+                      },
+                      "url": {
+                        "type": "string"
+                      },
+                      "filePath": {
+                        "type": "string"
+                      }
+                    },
+                    "required": ["type", "key", "kind", "title"],
+                    "additionalProperties": false
+                  }
+                ]
+              }
+            },
+            "required": ["kind", "name", "text", "source"],
+            "additionalProperties": false
+          }
+        ]
+      },
       "InboundSender": {
         "anyOf": [
           {
@@ -3905,141 +3691,7 @@
               "attachments": {
                 "type": "array",
                 "items": {
-                  "anyOf": [
-                    {
-                      "type": "object",
-                      "properties": {
-                        "kind": {
-                          "type": "string",
-                          "enum": ["image", "document"]
-                        },
-                        "name": {
-                          "type": "string",
-                          "maxLength": 500
-                        },
-                        "mediaType": {
-                          "type": "string",
-                          "maxLength": 200
-                        },
-                        "dataBase64": {
-                          "type": "string"
-                        }
-                      },
-                      "required": ["kind", "name", "mediaType", "dataBase64"],
-                      "additionalProperties": false
-                    },
-                    {
-                      "type": "object",
-                      "properties": {
-                        "kind": {
-                          "type": "string",
-                          "enum": ["text"]
-                        },
-                        "name": {
-                          "type": "string",
-                          "maxLength": 500
-                        },
-                        "text": {
-                          "type": "string"
-                        },
-                        "source": {
-                          "anyOf": [
-                            {
-                              "type": "object",
-                              "properties": {
-                                "type": {
-                                  "type": "string",
-                                  "enum": ["paste"]
-                                }
-                              },
-                              "required": ["type"],
-                              "additionalProperties": false
-                            },
-                            {
-                              "type": "object",
-                              "properties": {
-                                "type": {
-                                  "type": "string",
-                                  "enum": ["selection"]
-                                },
-                                "filePath": {
-                                  "type": "string"
-                                },
-                                "startLine": {
-                                  "type": "integer",
-                                  "minimum": -9007199254740991,
-                                  "maximum": 9007199254740991
-                                },
-                                "endLine": {
-                                  "type": "integer",
-                                  "minimum": -9007199254740991,
-                                  "maximum": 9007199254740991
-                                }
-                              },
-                              "required": ["type", "filePath"],
-                              "additionalProperties": false
-                            },
-                            {
-                              "type": "object",
-                              "properties": {
-                                "type": {
-                                  "type": "string",
-                                  "enum": ["url"]
-                                },
-                                "url": {
-                                  "type": "string"
-                                }
-                              },
-                              "required": ["type", "url"],
-                              "additionalProperties": false
-                            },
-                            {
-                              "type": "object",
-                              "properties": {
-                                "type": {
-                                  "type": "string",
-                                  "enum": ["path"]
-                                },
-                                "path": {
-                                  "type": "string"
-                                }
-                              },
-                              "required": ["type", "path"],
-                              "additionalProperties": false
-                            },
-                            {
-                              "type": "object",
-                              "properties": {
-                                "type": {
-                                  "type": "string",
-                                  "enum": ["tab"]
-                                },
-                                "key": {
-                                  "type": "string"
-                                },
-                                "kind": {
-                                  "type": "string"
-                                },
-                                "title": {
-                                  "type": "string"
-                                },
-                                "url": {
-                                  "type": "string"
-                                },
-                                "filePath": {
-                                  "type": "string"
-                                }
-                              },
-                              "required": ["type", "key", "kind", "title"],
-                              "additionalProperties": false
-                            }
-                          ]
-                        }
-                      },
-                      "required": ["kind", "name", "text", "source"],
-                      "additionalProperties": false
-                    }
-                  ]
+                  "$ref": "#/components/schemas/ProtocolAttachment"
                 }
               },
               "answer": {
@@ -4092,6 +3744,15 @@
                     "type": "array",
                     "items": {
                       "type": "string"
+                    }
+                  },
+                  "attachments": {
+                    "type": "array",
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ProtocolAttachment"
+                      }
                     }
                   }
                 },
@@ -4196,141 +3857,7 @@
               "attachments": {
                 "type": "array",
                 "items": {
-                  "anyOf": [
-                    {
-                      "type": "object",
-                      "properties": {
-                        "kind": {
-                          "type": "string",
-                          "enum": ["image", "document"]
-                        },
-                        "name": {
-                          "type": "string",
-                          "maxLength": 500
-                        },
-                        "mediaType": {
-                          "type": "string",
-                          "maxLength": 200
-                        },
-                        "dataBase64": {
-                          "type": "string"
-                        }
-                      },
-                      "required": ["kind", "name", "mediaType", "dataBase64"],
-                      "additionalProperties": false
-                    },
-                    {
-                      "type": "object",
-                      "properties": {
-                        "kind": {
-                          "type": "string",
-                          "enum": ["text"]
-                        },
-                        "name": {
-                          "type": "string",
-                          "maxLength": 500
-                        },
-                        "text": {
-                          "type": "string"
-                        },
-                        "source": {
-                          "anyOf": [
-                            {
-                              "type": "object",
-                              "properties": {
-                                "type": {
-                                  "type": "string",
-                                  "enum": ["paste"]
-                                }
-                              },
-                              "required": ["type"],
-                              "additionalProperties": false
-                            },
-                            {
-                              "type": "object",
-                              "properties": {
-                                "type": {
-                                  "type": "string",
-                                  "enum": ["selection"]
-                                },
-                                "filePath": {
-                                  "type": "string"
-                                },
-                                "startLine": {
-                                  "type": "integer",
-                                  "minimum": -9007199254740991,
-                                  "maximum": 9007199254740991
-                                },
-                                "endLine": {
-                                  "type": "integer",
-                                  "minimum": -9007199254740991,
-                                  "maximum": 9007199254740991
-                                }
-                              },
-                              "required": ["type", "filePath"],
-                              "additionalProperties": false
-                            },
-                            {
-                              "type": "object",
-                              "properties": {
-                                "type": {
-                                  "type": "string",
-                                  "enum": ["url"]
-                                },
-                                "url": {
-                                  "type": "string"
-                                }
-                              },
-                              "required": ["type", "url"],
-                              "additionalProperties": false
-                            },
-                            {
-                              "type": "object",
-                              "properties": {
-                                "type": {
-                                  "type": "string",
-                                  "enum": ["path"]
-                                },
-                                "path": {
-                                  "type": "string"
-                                }
-                              },
-                              "required": ["type", "path"],
-                              "additionalProperties": false
-                            },
-                            {
-                              "type": "object",
-                              "properties": {
-                                "type": {
-                                  "type": "string",
-                                  "enum": ["tab"]
-                                },
-                                "key": {
-                                  "type": "string"
-                                },
-                                "kind": {
-                                  "type": "string"
-                                },
-                                "title": {
-                                  "type": "string"
-                                },
-                                "url": {
-                                  "type": "string"
-                                },
-                                "filePath": {
-                                  "type": "string"
-                                }
-                              },
-                              "required": ["type", "key", "kind", "title"],
-                              "additionalProperties": false
-                            }
-                          ]
-                        }
-                      },
-                      "required": ["kind", "name", "text", "source"],
-                      "additionalProperties": false
-                    }
-                  ]
+                  "$ref": "#/components/schemas/ProtocolAttachment"
                 }
               },
               "alert": {
@@ -4894,141 +4421,7 @@
               "attachments": {
                 "type": "array",
                 "items": {
-                  "anyOf": [
-                    {
-                      "type": "object",
-                      "properties": {
-                        "kind": {
-                          "type": "string",
-                          "enum": ["image", "document"]
-                        },
-                        "name": {
-                          "type": "string",
-                          "maxLength": 500
-                        },
-                        "mediaType": {
-                          "type": "string",
-                          "maxLength": 200
-                        },
-                        "dataBase64": {
-                          "type": "string"
-                        }
-                      },
-                      "required": ["kind", "name", "mediaType", "dataBase64"],
-                      "additionalProperties": false
-                    },
-                    {
-                      "type": "object",
-                      "properties": {
-                        "kind": {
-                          "type": "string",
-                          "enum": ["text"]
-                        },
-                        "name": {
-                          "type": "string",
-                          "maxLength": 500
-                        },
-                        "text": {
-                          "type": "string"
-                        },
-                        "source": {
-                          "anyOf": [
-                            {
-                              "type": "object",
-                              "properties": {
-                                "type": {
-                                  "type": "string",
-                                  "enum": ["paste"]
-                                }
-                              },
-                              "required": ["type"],
-                              "additionalProperties": false
-                            },
-                            {
-                              "type": "object",
-                              "properties": {
-                                "type": {
-                                  "type": "string",
-                                  "enum": ["selection"]
-                                },
-                                "filePath": {
-                                  "type": "string"
-                                },
-                                "startLine": {
-                                  "type": "integer",
-                                  "minimum": -9007199254740991,
-                                  "maximum": 9007199254740991
-                                },
-                                "endLine": {
-                                  "type": "integer",
-                                  "minimum": -9007199254740991,
-                                  "maximum": 9007199254740991
-                                }
-                              },
-                              "required": ["type", "filePath"],
-                              "additionalProperties": false
-                            },
-                            {
-                              "type": "object",
-                              "properties": {
-                                "type": {
-                                  "type": "string",
-                                  "enum": ["url"]
-                                },
-                                "url": {
-                                  "type": "string"
-                                }
-                              },
-                              "required": ["type", "url"],
-                              "additionalProperties": false
-                            },
-                            {
-                              "type": "object",
-                              "properties": {
-                                "type": {
-                                  "type": "string",
-                                  "enum": ["path"]
-                                },
-                                "path": {
-                                  "type": "string"
-                                }
-                              },
-                              "required": ["type", "path"],
-                              "additionalProperties": false
-                            },
-                            {
-                              "type": "object",
-                              "properties": {
-                                "type": {
-                                  "type": "string",
-                                  "enum": ["tab"]
-                                },
-                                "key": {
-                                  "type": "string"
-                                },
-                                "kind": {
-                                  "type": "string"
-                                },
-                                "title": {
-                                  "type": "string"
-                                },
-                                "url": {
-                                  "type": "string"
-                                },
-                                "filePath": {
-                                  "type": "string"
-                                }
-                              },
-                              "required": ["type", "key", "kind", "title"],
-                              "additionalProperties": false
-                            }
-                          ]
-                        }
-                      },
-                      "required": ["kind", "name", "text", "source"],
-                      "additionalProperties": false
-                    }
-                  ]
+                  "$ref": "#/components/schemas/ProtocolAttachment"
                 }
               },
               "answer": {
@@ -5081,6 +4474,15 @@
                     "type": "array",
                     "items": {
                       "type": "string"
+                    }
+                  },
+                  "attachments": {
+                    "type": "array",
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ProtocolAttachment"
+                      }
                     }
                   }
                 },
@@ -5209,141 +4611,7 @@
               "attachments": {
                 "type": "array",
                 "items": {
-                  "anyOf": [
-                    {
-                      "type": "object",
-                      "properties": {
-                        "kind": {
-                          "type": "string",
-                          "enum": ["image", "document"]
-                        },
-                        "name": {
-                          "type": "string",
-                          "maxLength": 500
-                        },
-                        "mediaType": {
-                          "type": "string",
-                          "maxLength": 200
-                        },
-                        "dataBase64": {
-                          "type": "string"
-                        }
-                      },
-                      "required": ["kind", "name", "mediaType", "dataBase64"],
-                      "additionalProperties": false
-                    },
-                    {
-                      "type": "object",
-                      "properties": {
-                        "kind": {
-                          "type": "string",
-                          "enum": ["text"]
-                        },
-                        "name": {
-                          "type": "string",
-                          "maxLength": 500
-                        },
-                        "text": {
-                          "type": "string"
-                        },
-                        "source": {
-                          "anyOf": [
-                            {
-                              "type": "object",
-                              "properties": {
-                                "type": {
-                                  "type": "string",
-                                  "enum": ["paste"]
-                                }
-                              },
-                              "required": ["type"],
-                              "additionalProperties": false
-                            },
-                            {
-                              "type": "object",
-                              "properties": {
-                                "type": {
-                                  "type": "string",
-                                  "enum": ["selection"]
-                                },
-                                "filePath": {
-                                  "type": "string"
-                                },
-                                "startLine": {
-                                  "type": "integer",
-                                  "minimum": -9007199254740991,
-                                  "maximum": 9007199254740991
-                                },
-                                "endLine": {
-                                  "type": "integer",
-                                  "minimum": -9007199254740991,
-                                  "maximum": 9007199254740991
-                                }
-                              },
-                              "required": ["type", "filePath"],
-                              "additionalProperties": false
-                            },
-                            {
-                              "type": "object",
-                              "properties": {
-                                "type": {
-                                  "type": "string",
-                                  "enum": ["url"]
-                                },
-                                "url": {
-                                  "type": "string"
-                                }
-                              },
-                              "required": ["type", "url"],
-                              "additionalProperties": false
-                            },
-                            {
-                              "type": "object",
-                              "properties": {
-                                "type": {
-                                  "type": "string",
-                                  "enum": ["path"]
-                                },
-                                "path": {
-                                  "type": "string"
-                                }
-                              },
-                              "required": ["type", "path"],
-                              "additionalProperties": false
-                            },
-                            {
-                              "type": "object",
-                              "properties": {
-                                "type": {
-                                  "type": "string",
-                                  "enum": ["tab"]
-                                },
-                                "key": {
-                                  "type": "string"
-                                },
-                                "kind": {
-                                  "type": "string"
-                                },
-                                "title": {
-                                  "type": "string"
-                                },
-                                "url": {
-                                  "type": "string"
-                                },
-                                "filePath": {
-                                  "type": "string"
-                                }
-                              },
-                              "required": ["type", "key", "kind", "title"],
-                              "additionalProperties": false
-                            }
-                          ]
-                        }
-                      },
-                      "required": ["kind", "name", "text", "source"],
-                      "additionalProperties": false
-                    }
-                  ]
+                  "$ref": "#/components/schemas/ProtocolAttachment"
                 }
               },
               "alert": {
@@ -6719,6 +5987,15 @@
                     "type": "array",
                     "items": {
                       "type": "string"
+                    }
+                  },
+                  "attachments": {
+                    "type": "array",
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ProtocolAttachment"
+                      }
                     }
                   }
                 },
@@ -23456,144 +22733,7 @@
                         "maxItems": 50,
                         "type": "array",
                         "items": {
-                          "anyOf": [
-                            {
-                              "type": "object",
-                              "properties": {
-                                "kind": {
-                                  "type": "string",
-                                  "enum": ["image", "document"]
-                                },
-                                "name": {
-                                  "type": "string",
-                                  "maxLength": 500
-                                },
-                                "mediaType": {
-                                  "type": "string",
-                                  "maxLength": 200
-                                },
-                                "dataBase64": {
-                                  "type": "string"
-                                }
-                              },
-                              "required": [
-                                "kind",
-                                "name",
-                                "mediaType",
-                                "dataBase64"
-                              ]
-                            },
-                            {
-                              "type": "object",
-                              "properties": {
-                                "kind": {
-                                  "type": "string",
-                                  "enum": ["text"]
-                                },
-                                "name": {
-                                  "type": "string",
-                                  "maxLength": 500
-                                },
-                                "text": {
-                                  "type": "string"
-                                },
-                                "source": {
-                                  "anyOf": [
-                                    {
-                                      "type": "object",
-                                      "properties": {
-                                        "type": {
-                                          "type": "string",
-                                          "enum": ["paste"]
-                                        }
-                                      },
-                                      "required": ["type"]
-                                    },
-                                    {
-                                      "type": "object",
-                                      "properties": {
-                                        "type": {
-                                          "type": "string",
-                                          "enum": ["selection"]
-                                        },
-                                        "filePath": {
-                                          "type": "string"
-                                        },
-                                        "startLine": {
-                                          "type": "integer",
-                                          "minimum": -9007199254740991,
-                                          "maximum": 9007199254740991
-                                        },
-                                        "endLine": {
-                                          "type": "integer",
-                                          "minimum": -9007199254740991,
-                                          "maximum": 9007199254740991
-                                        }
-                                      },
-                                      "required": ["type", "filePath"]
-                                    },
-                                    {
-                                      "type": "object",
-                                      "properties": {
-                                        "type": {
-                                          "type": "string",
-                                          "enum": ["url"]
-                                        },
-                                        "url": {
-                                          "type": "string"
-                                        }
-                                      },
-                                      "required": ["type", "url"]
-                                    },
-                                    {
-                                      "type": "object",
-                                      "properties": {
-                                        "type": {
-                                          "type": "string",
-                                          "enum": ["path"]
-                                        },
-                                        "path": {
-                                          "type": "string"
-                                        }
-                                      },
-                                      "required": ["type", "path"]
-                                    },
-                                    {
-                                      "type": "object",
-                                      "properties": {
-                                        "type": {
-                                          "type": "string",
-                                          "enum": ["tab"]
-                                        },
-                                        "key": {
-                                          "type": "string"
-                                        },
-                                        "kind": {
-                                          "type": "string"
-                                        },
-                                        "title": {
-                                          "type": "string"
-                                        },
-                                        "url": {
-                                          "type": "string"
-                                        },
-                                        "filePath": {
-                                          "type": "string"
-                                        }
-                                      },
-                                      "required": [
-                                        "type",
-                                        "key",
-                                        "kind",
-                                        "title"
-                                      ]
-                                    }
-                                  ]
-                                }
-                              },
-                              "required": ["kind", "name", "text", "source"]
-                            }
-                          ]
+                          "$ref": "#/components/schemas/ProtocolAttachmentInput"
                         }
                       },
                       "dispatch": {
@@ -23786,6 +22926,15 @@
                                 "items": {
                                   "type": "string",
                                   "maxLength": 200000
+                                }
+                              },
+                              "attachments": {
+                                "type": "array",
+                                "items": {
+                                  "type": "array",
+                                  "items": {
+                                    "$ref": "#/components/schemas/ProtocolAttachmentInput"
+                                  }
                                 }
                               }
                             },

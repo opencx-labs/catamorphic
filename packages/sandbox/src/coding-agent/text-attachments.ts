@@ -176,3 +176,41 @@ export function renderUserMessage(
     : undefined;
   return `${inlineAttachmentReferences(message, list, render)}${renderTextAttachments(list)}`;
 }
+
+/**
+ * Text that keeps one inline marker per attachment: markers past the
+ * attachments go, and attachments without one get theirs at the end, so
+ * the n-th marker always names the n-th attachment.
+ */
+export function withMarkerCount(text: string, attachments: number): string {
+  let kept = 0;
+  const placed = text.replace(new RegExp(ATTACHMENT_MARKER, "g"), () => {
+    kept += 1;
+    return kept <= attachments ? ATTACHMENT_MARKER : "";
+  });
+  return placed + ATTACHMENT_MARKER.repeat(Math.max(0, attachments - kept));
+}
+
+/**
+ * A question's answer as the agent reads it (ADR 0244): the person's words
+ * with inline references and each text pill's block after them, as a
+ * message renders. An answer is text to every harness (Claude Code and
+ * Codex take nothing else), so its images and documents follow the answers
+ * as a message in the same turn; the answer names each one where it sat by
+ * its number in that message, `firstFollowing` being this answer's first.
+ */
+export function renderQuestionAnswer(
+  answer: string,
+  attachments: AgentAttachment[] | undefined,
+  firstFollowing = 1,
+): string {
+  const list = attachments ?? [];
+  const following = (index: number) =>
+    firstFollowing + list.slice(0, index).filter(isMediaAttachment).length;
+  const prose = inlineAttachmentReferences(answer, list, (index, attachment) =>
+    isTextAttachment(attachment)
+      ? inlineReference(index, attachment)
+      : `[attachment ${index + 1}: ${attachment.name}, attachment ${following(index)} of the message after these answers]`,
+  );
+  return `${prose}${renderTextAttachments(list)}`;
+}

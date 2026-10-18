@@ -4,6 +4,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import {
   ACTIVE_TURN_STATUSES,
   type AgentErrorKind,
+  type AgentQuestion,
   type Attempt,
   type CommandReceipt,
   type DispatchMode,
@@ -24,6 +25,7 @@ import {
   type NativeRef,
   type NotifiedTask,
   type JsonObject as ProtocolJsonObject,
+  type QuestionAnswer,
   type RuntimeRequest,
   type RuntimeRequestResponse,
   type SessionCommand,
@@ -62,6 +64,7 @@ import {
   type AgentEffort,
   type AgentMcpServerConfig,
   type AgentTurnUsage,
+  ATTACHMENT_MARKER,
   type AttachedPluginForAgent,
   agentCapabilityTools,
   agentQuestionDescription,
@@ -72,10 +75,12 @@ import {
   type ExtraTool,
   extraToolResult,
   type HarnessPermissions,
+  isMediaAttachment,
   type McpToolPolicyLayers,
   mergePolicyLayers,
   narrowingLayer,
   PROJECT_TOOLS_SERVER_KEY,
+  renderQuestionAnswer,
   renderTurnContext,
   SANDBOXING_LEVELS,
   type Sandboxing,
@@ -89,6 +94,7 @@ import {
   stagePluginDocs,
   type ToolPermission,
   type TurnContextFragment,
+  withMarkerCount,
 } from "@catamorphic/sandbox";
 import {
   AGENT_COMMIT_AUTHOR,
@@ -4033,6 +4039,7 @@ export class AgentSessionsService {
         response = decision;
       }
     }
+    if (response.kind === "question") response = withAnswerPills(response);
     const now = new Date().toISOString();
     const resolved: RuntimeRequest = {
       ...request,
@@ -4069,7 +4076,7 @@ export class AgentSessionsService {
           kind: "respond",
           payload: {
             requestKey: request.runnerKey,
-            response: protocolJson(response),
+            response: protocolJson(agentResponse(response)),
           },
         });
       events.push(...(await this.unblockedTurn(trx, request)));
@@ -4099,33 +4106,53 @@ export class AgentSessionsService {
       events,
       commandId: input.commandId,
     });
-    if (!live && response.kind === "question") {
-      const questions = (request.questions ?? [])
-        .map((question) => question.question)
-        .join("\n");
-      // The agent learns a non-blocking answer as a message: within the
-      // turn still working, else as a turn of its own.
-      await this.deliverIn(trx, {
-        session: input.session,
-        input: {
-          kind: "user_message",
-          author: {
-            kind: "user",
-            externalUserId: input.identity.externalUserId,
+    if (response.kind === "question") {
+      const questions = request.questions ?? [];
+      // The batch and the raw answers render the history entry where this
+      // message lands; the pills their markers stand for are the request's,
+      // never a second copy here.
+      const answer: QuestionAnswer = {
+        requestId: request.id,
+        questions,
+        answers: response.answers,
+      };
+      const author = {
+        kind: "user" as const,
+        externalUserId: input.identity.externalUserId,
+      };
+      if (!live) {
+        // The agent learns a non-blocking answer as a message, pills
+        // included: within the turn still working, else as a turn of its
+        // own.
+        await this.deliverIn(trx, {
+          session: input.session,
+          input: {
+            kind: "user_message",
+            author,
+            // Only the answers' markers count: the questions' text is the
+            // agent's own, and a marker there would shift every pill.
+            text: `${questions.map((question) => question.question.split(ATTACHMENT_MARKER).join("")).join("\n")}\n\nUser answer:\n${response.answers.join("\n")}`,
+            attachments: response.attachments?.flat() ?? [],
+            answer,
           },
-          text: `${questions}\n\nUser answer:\n${response.answers.join("\n")}`,
-          attachments: [],
-          // The batch and the raw answer render the history entry.
-          answer: {
-            requestId: request.id,
-            questions: request.questions ?? [],
-            answers: response.answers,
-          },
-        },
-        dispatch: turn && isActiveTurnStatus(turn.status) ? "steer" : "queue",
-        idempotencyKey: `question-answer:${request.id}`,
-        deliveredBy: input.identity.externalUserId,
-      });
+          dispatch: turn && isActiveTurnStatus(turn.status) ? "steer" : "queue",
+          idempotencyKey: `question-answer:${request.id}`,
+          deliveredBy: input.identity.externalUserId,
+        });
+      } else {
+        // An answer the agent waited on is text; its images and documents
+        // follow at once as a message (ADR 0244), which the turn takes at
+        // its next step, or runs as the next turn should this one end first.
+        const media = answerMedia(questions, response);
+        if (media)
+          await this.deliverIn(trx, {
+            session: input.session,
+            input: { kind: "user_message", author, ...media, answer },
+            dispatch: "steer",
+            idempotencyKey: `question-media:${request.id}`,
+            deliveredBy: input.identity.externalUserId,
+          });
+      }
     }
     return { requestId: request.id };
   }
@@ -11974,4 +12001,68 @@ function importedNativeEntries(value: Json | null): number {
   if (!value || typeof value !== "object" || Array.isArray(value)) return 0;
   const count = value.nativeEntries;
   return typeof count === "number" && count >= 0 ? count : 0;
+}
+
+type QuestionResponse = Extract<RuntimeRequestResponse, { kind: "question" }>;
+
+/**
+ * An answer's pills ride beside it, as a message's do (ADR 0244): one list
+ * per answer, each answer holding one marker per pill (a stray one goes).
+ * Answers with none carry no lists.
+ */
+function withAnswerPills(response: QuestionResponse): QuestionResponse {
+  const lists = response.answers.map(
+    (_answer, index) => response.attachments?.[index] ?? [],
+  );
+  const answers = response.answers.map((answer, index) =>
+    withMarkerCount(answer, lists[index]?.length ?? 0),
+  );
+  return lists.some((list) => list.length > 0)
+    ? { kind: "question", answers, attachments: lists }
+    : { kind: "question", answers };
+}
+
+/**
+ * What the asking agent reads: each answer as text, its pills in it, and
+ * its media numbered as the message that follows the answers numbers them.
+ */
+function agentResponse(
+  response: RuntimeRequestResponse,
+): RuntimeRequestResponse {
+  if (response.kind !== "question" || !response.attachments) return response;
+  const { answers, attachments } = response;
+  const mediaBefore = (index: number) =>
+    attachments.slice(0, index).flat().filter(isMediaAttachment).length;
+  return {
+    kind: "question",
+    answers: answers.map((answer, index) =>
+      renderQuestionAnswer(answer, attachments[index], 1 + mediaBefore(index)),
+    ),
+  };
+}
+
+/**
+ * The answers' images and documents as the message that follows them, each
+ * beside the question it answers; null when they have none.
+ */
+function answerMedia(
+  questions: AgentQuestion[],
+  response: QuestionResponse,
+): { text: string; attachments: AgentAttachment[] } | null {
+  const groups = (response.attachments ?? [])
+    .map((list, index) => ({
+      question: questions[index]?.question ?? `Question ${index + 1}`,
+      media: list.filter(isMediaAttachment),
+    }))
+    .filter((group) => group.media.length > 0);
+  if (groups.length === 0) return null;
+  return {
+    text: groups
+      .map(
+        ({ question, media }) =>
+          `With my answer to "${question}": ${ATTACHMENT_MARKER.repeat(media.length)}`,
+      )
+      .join("\n"),
+    attachments: groups.flatMap(({ media }) => media),
+  };
 }

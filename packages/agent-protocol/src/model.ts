@@ -232,7 +232,10 @@ export interface QuestionAnswer {
   /** The question request it answers. */
   requestId: string;
   questions: AgentQuestion[];
-  /** One per question, as the person picked or wrote it. */
+  /**
+   * One per question, as the person picked or wrote it; the pills its
+   * markers stand for live on the request's response (ADR 0244).
+   */
   answers: string[];
 }
 
@@ -691,7 +694,16 @@ export type RuntimeRequestResponse =
       /** Why Work denied it when no person did: told to the agent. */
       reason?: string;
     }
-  | { kind: "question"; answers: string[] }
+  | {
+      kind: "question";
+      /**
+       * One per question. An answer in the person's own words may hold
+       * attachment markers (U+FFFC), as a message does: the n-th marker is
+       * the n-th of that answer's `attachments` (ADR 0244).
+       */
+      answers: string[];
+      attachments?: AgentAttachment[][];
+    }
   | {
       kind: "elicitation";
       action: "accept" | "decline" | "cancel";

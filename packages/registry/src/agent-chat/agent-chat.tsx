@@ -240,9 +240,7 @@ export function AgentChat({
               questions={request.questions ?? []}
               blocking={request.blocking}
               disabled={responding === request.id}
-              onSubmit={(answers) =>
-                void respond(request, { kind: "question", answers })
-              }
+              onSubmit={(response) => void respond(request, response)}
               onDismiss={() =>
                 void respond(request, {
                   kind: "question",

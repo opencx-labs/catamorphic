@@ -722,6 +722,79 @@ the historical log explains how it arrived here.
 - [Performance](docs/performance.md): idle lifecycle checks and sustained measurement.
 
 ## Design log
+### 2026-10-18: The Mac app's icon is drawn as designed; the palette's input grows in place and its arrows move the caret; a terminal opens blank; each question takes its own answer
+
+The installed app's icon looked worse than the dev app's. macOS 26 draws an
+app icon from an asset catalog; an app with only an `icns` gets the system's
+automatic treatment, which softened the tile's edge and embossed the W into
+a brownish glass. The dev app escaped it only because it hands the Dock the
+flat PNG while it runs. The icon's source is now `build/icon.icon`, an Icon
+Composer icon: the orange fill, a flat W without glass, and for the dark
+icon style the W in orange on Work's dark. Its `Assets/W.svg` is the mark
+of `build/icon.svg` drawn on Icon Composer's full canvas (as the PWA's
+maskable icon draws it): a change to the mark changes both. Packaging
+compiles it with Xcode 26's `actool` into the `Assets.car` macOS draws,
+with renderings for macOS 13 to 15 in it and an `icns` beside it. The
+release job selects a released Xcode 26 and checks the catalog is in the
+app; `.github/workflows/desktop-icon.yml` compiles the icon on any pull
+request that changes it, fails on `actool`'s warnings, and has macOS 15
+read the catalog's renderings for earlier systems.
+
+As the palette's input grew a line, its first line jumped up and slid back.
+The gliding frame (`lib/use-gliding-height.ts`) clipped with
+`overflow: hidden`, which still makes it a scroll container: Chromium
+scrolled it to show the caret on the new line, and the frame's growth
+scrolled it back. The composer did the same, unseen because it grows upward
+and its text rose anyway. The frame now clips with `overflow: clip`, so
+nothing can scroll it and the new line is revealed as the frame grows: what
+has not glided into view is clipped, not scrolled to.
+
+↑ and ↓ in the palette always moved the highlight, so a caret on the second
+line of a long query could not go back to the first. They move the caret
+between the input's lines now, wrapped lines included (`lib/caret-line.ts`
+lays the text out in a hidden copy, at the textarea's unrounded width, to
+find them), and the highlight from the first line up and the last line
+down. A caret that starts a wrapped line is on that line: the copy marks
+the character after it, since an empty marker there sits at the end of the
+line above. A one-line query is both first and last, so its arrows move
+the highlight as before. With Shift, Alt or ⌘ the arrows select or jump in
+the text, as the composer's do.
+
+A terminal opened from a chat's command chip showed another terminal's
+output, sheared into a staircase, behind its own. ghostty-web's terminals
+share one WASM heap, and a new one is handed memory a closed one used
+without it being zeroed: every cell the new terminal had not written yet
+showed the old one's text, read at the new width, and so did the rows a
+terminal grown taller gained. Erasing the screen once was not enough for
+those rows. Each terminal tab now loads a WASM instance of its own
+(`lib/terminal-ghostty.ts`), which starts on zeroed memory, for about a
+megabyte and a few milliseconds. `terminal-ghostty.test.ts` shows the shared
+heap's leftovers and a terminal of its own staying blank through every
+resize, against the real WASM module.
+
+The question panel dropped its Other row when the composer became the place
+for free text (ADR 0195), but one reply cannot answer each of several
+questions. Every question has an Other answer again (ADR 0244), typed in the
+composer's own input (`components/answer-input.tsx`): it glides taller, a
+long paste, a selection, a link or a path becomes a pill, and a pasted image
+or file attaches through the dock's own attaching. Enter moves to the next
+unanswered question or sends the answers; Escape leaves the box before it
+dismisses the questions; moving on, focus follows to the next question,
+since the one left turns inert. Sending waits for a file still attaching,
+and a file or tab dropped on an answer box goes into it. An answer carries
+its pills as a message does, so history draws them in place; core renders
+the text pills into what the asking agent reads, and its images follow as a
+message the turn takes at its next step, which shows as the answer's card
+with the request's pills. The box opens in a wrapper that clips: a
+hidden overflow scrolled to the caret as the box opened, and text typed
+then landed behind the caret.
+
+`e2e/motion.e2e.ts` presses a real Shift+Enter in the palette and the
+composer and checks the first line never leaves the frame's top edge;
+`e2e/palette.e2e.ts` walks the arrows through two lines, a wrapped line
+(from its start too), Shift and one line; `e2e/tool-permissions.e2e.ts`
+answers through Other with typed words, a text pill and an image.
+
 ### 2026-10-17: A message sent while the agent works reaches it
 
 A message sent while the agent worked waited, a dashed ghost, until the
@@ -1967,6 +2040,8 @@ about it or asks to use it.
 
 The desktop product is Work, powered by the Catamorphic framework. Its icon is
 the orange W in `build/icon.svg`, shared with Work mobile and work.software.
+The packaged Mac app draws it from the Icon Composer source `build/icon.icon`,
+whose `Assets/W.svg` is the same W on the icon's full canvas.
 Theme presets are Work Dark and Work Light; the existing palette and motion
 contract continue to apply. Packaging, invitations and storage identity follow
 [ADR 0146](../../docs/decisions/0146-work-application-identity.md).
