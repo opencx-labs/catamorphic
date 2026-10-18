@@ -42,6 +42,7 @@ function workspace() {
     stateFile,
     state: (): {
       savedOnExit?: boolean;
+      cancelled?: boolean;
       sessions: Record<
         string,
         {
@@ -246,10 +247,11 @@ describe("ACP adapter", () => {
     expect(space.state().savedOnExit).toBe(true);
   });
 
-  it("fails the turn clearly when the session to reopen is gone", async () => {
+  it("starts a new session, and says so, when the one to reopen is gone, so the chat goes on", async () => {
     const space = workspace();
     const turn = run(
       attempt(space, "hello", {
+        systemPrompt: "Be brief.",
         thread: {
           mode: "resume",
           providerThreadId: "thread",
@@ -258,7 +260,22 @@ describe("ACP adapter", () => {
       }),
     );
     await turn.finished();
-    expect(turn.completed()).toMatchObject({ status: "failed" });
+    expect(turn.completed()).toMatchObject({ status: "completed" });
+    expect(turn.events()).toContainEqual(
+      expect.objectContaining({
+        type: "diagnostic",
+        level: "warn",
+        message: expect.stringContaining("couldn't reopen its earlier session"),
+      }),
+    );
+    expect(turn.events()).toContainEqual({
+      type: "thread",
+      ref: { id: "session-1", strength: "strong" },
+    });
+    expect(space.state().sessions["session-1"]?.prompts[0]?.[0]).toEqual({
+      type: "text",
+      text: "<work-instructions>\nBe brief.\n</work-instructions>",
+    });
   });
 
   it("serves host tools over MCP: the host runs the call and the agent reads its result", async () => {
@@ -292,6 +309,16 @@ describe("ACP adapter", () => {
     await turn.finished();
     expect(turn.completed()).toMatchObject({ status: "completed" });
     expect(turn.text("assistant_message")).toBe("Tool said: found 3 cats");
+    // A late word on the finished call never splits the reply around it.
+    expect(
+      turn
+        .events()
+        .filter(
+          (event) =>
+            event.type === "item.started" &&
+            event.item.kind === "assistant_message",
+        ),
+    ).toHaveLength(1);
     expect(
       space
         .state()
@@ -446,28 +473,79 @@ describe("ACP adapter", () => {
     const space = workspace();
     const turn = run(attempt(space, "[[hang]]"));
     await turn.until(() => turn.text("assistant_message") === "Working");
+    const interruptedAt = Date.now();
     turn.send({ kind: "interrupt" });
     await turn.finished();
     expect(turn.completed()).toMatchObject({ status: "interrupted" });
     expect(turn.events()).toContainEqual(
       expect.objectContaining({ type: "item.completed", status: "completed" }),
     );
+    // The agent ended its turn on the cancel, long before it would be killed.
+    expect(space.state().cancelled).toBe(true);
+    expect(Date.now() - interruptedAt).toBeLessThan(5_000);
   });
 
-  it("withdraws a waiting permission request when the turn is interrupted", async () => {
+  it("kills an interrupted agent that ignores the cancel and the stop alike", async () => {
     const space = workspace();
-    const turn = run(attempt(space, "[[permission]]"));
-    await turn.until(() => turn.requests().length > 0);
+    const turn = run(
+      attempt(space, "[[hang]]", {
+        env: { TEST_AGENT_STATE: space.stateFile, TEST_AGENT_STUBBORN: "1" },
+      }),
+    );
+    await turn.until(() => turn.text("assistant_message") === "Working");
     turn.send({ kind: "interrupt" });
-    await turn.finished();
+    await turn.until(() => turn.completed() !== undefined, 20_000);
     expect(turn.completed()).toMatchObject({ status: "interrupted" });
+  }, 30_000);
+
+  it("withdraws its own waiting permission request when the turn is interrupted", async () => {
+    // The adapter alone, so nothing else closes the request for it.
+    const space = workspace();
+    const events: HarnessEvent[] = [];
+    let asked: AbortSignal | undefined;
+    const control = createAcpAdapter().start(attempt(space, "[[permission]]"), {
+      emit: (event) => events.push(event),
+      callTool: async () => ({ content: [] }),
+      authorize: async () => ({ allowed: true }),
+      request: (_key, _request, options) =>
+        new Promise((_, reject) => {
+          asked = options?.signal;
+          options?.signal?.addEventListener("abort", () =>
+            reject(new Error("withdrawn")),
+          );
+        }),
+      nativeState: {
+        append: async () => {},
+        load: async () => null,
+        subpaths: async () => [],
+      },
+      signal: new AbortController().signal,
+    });
+    const deadline = Date.now() + 20_000;
+    while (!asked && Date.now() < deadline)
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    control.interrupt();
+    await control.finished;
+    expect(asked?.aborted).toBe(true);
+    const said = events.flatMap((event) =>
+      event.type === "item.delta" ? [event.text] : [],
+    );
+    expect(said).toContain("Permission: cancelled");
+    expect(events.at(-1)).toMatchObject({
+      type: "turn.completed",
+      status: "interrupted",
+    });
   });
 
   // The person's own Hermes (`hermes acp`), its model and sign-in: an
   // external integration, run only with `bun run test:external`.
   const hermes =
     process.env.CATAMORPHIC_EXTERNAL_INTEGRATIONS === "1"
-      ? spawnSync("which", ["hermes"], { encoding: "utf8" }).stdout.trim()
+      ? spawnSync("which", ["hermes"], { encoding: "utf8" }).stdout.trim() ||
+        [path.join(os.homedir(), ".local", "bin", "hermes")].find((file) =>
+          fs.existsSync(file),
+        ) ||
+        ""
       : "";
   it.skipIf(!hermes)(
     "runs Hermes: a host tool over MCP, a streamed reply, and the session reopened on the next turn",
@@ -536,6 +614,42 @@ describe("ACP adapter", () => {
     400_000,
   );
 
+  it("never makes a one-time denial permanent: offered no 'reject once', the request is cancelled", async () => {
+    const space = workspace();
+    const turn = run(attempt(space, "[[permission no-reject-once]]"));
+    await turn.until(() => turn.requests().length > 0);
+    const [asked] = turn.requests();
+    turn.send({
+      kind: "respond",
+      requestKey: asked?.key ?? "",
+      response: { kind: "approval", decision: "denied" },
+    });
+    await turn.finished();
+    expect(turn.text("assistant_message")).toBe("Permission: cancelled");
+  });
+
+  it("reports a new session only once its first turn is done, so an interrupted one starts afresh", async () => {
+    const space = workspace();
+    const turn = run(attempt(space, "[[hang]]"));
+    await turn.until(() => turn.text("assistant_message") === "Working");
+    turn.send({ kind: "interrupt" });
+    await turn.finished();
+    expect(turn.completed()).toMatchObject({ status: "interrupted" });
+    expect(turn.events().some((event) => event.type === "thread")).toBe(false);
+  });
+
+  it("never reports a session the agent cannot reopen, so Work hands it the whole conversation each turn", async () => {
+    const space = workspace();
+    const turn = run(
+      attempt(space, "hello", {
+        env: { TEST_AGENT_STATE: space.stateFile, TEST_AGENT_NO_LOAD: "1" },
+      }),
+    );
+    await turn.finished();
+    expect(turn.completed()).toMatchObject({ status: "completed" });
+    expect(turn.events().some((event) => event.type === "thread")).toBe(false);
+  });
+
   it("never widens a one-time approval: offered no 'once', the agent is told no", async () => {
     const space = workspace();
     const turn = run(attempt(space, "[[permission always-only]]"));
@@ -573,10 +687,9 @@ describe("ACP adapter", () => {
     expect(second.events()).toContainEqual(
       expect.objectContaining({ type: "diagnostic", level: "warn" }),
     );
-    expect(second.events()).toContainEqual({
-      type: "thread",
-      ref: { id: "session-2", strength: "strong" },
-    });
+    expect(second.events().some((event) => event.type === "thread")).toBe(
+      false,
+    );
     expect(space.state().sessions["session-2"]?.prompts[0]?.[0]).toEqual({
       type: "text",
       text: "<work-instructions>\nBe brief.\n</work-instructions>",

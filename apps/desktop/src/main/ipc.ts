@@ -232,6 +232,8 @@ export interface ProjectAgentInfo {
   promptPreview: string | null;
   /** The command an ACP agent runs on this machine once approved. */
   command: string[] | null;
+  /** The definition as listed, which approving binds and nothing else. */
+  definitionHash: string | null;
   /**
    * Consent state for THIS profile: `not-required` (secret-credentialed),
    * `none` (never approved), `stale` (definition changed since approval),
@@ -798,6 +800,9 @@ export function registerIpcHandlers(
       definition?.kind === "acp"
         ? "profile"
         : (definition?.credentials?.source ?? "profile");
+    const hash = definition
+      ? definitionHash(definition, entry.promptFile)
+      : null;
     let consent: ProjectAgentInfo["consent"] = "not-required";
     // A connection-credentialed agent uses no personal credential (ADR 0180).
     if (
@@ -807,7 +812,6 @@ export function registerIpcHandlers(
       source !== "connection"
     ) {
       const binding = owning.agentBindings.get(projectId, entry.slug);
-      const hash = definitionHash(definition, entry.promptFile);
       consent = !binding
         ? "none"
         : binding.consentHash === hash
@@ -841,6 +845,7 @@ export function registerIpcHandlers(
       promptPreview,
       command:
         definition?.kind === "acp" ? (definition.acp?.command ?? null) : null,
+      definitionHash: hash,
       consent,
       invalid: entry.invalid?.error ?? null,
     };
@@ -895,6 +900,8 @@ export function registerIpcHandlers(
       _event,
       projectId: string,
       slug: string,
+      /** The definition the person reviewed (`ProjectAgentInfo.definitionHash`). */
+      reviewedHash: string,
     ): Promise<{ ok: boolean; error?: string }> => {
       const server = state.current;
       if (!server) return { ok: false, error: "Server not running" };
@@ -907,6 +914,15 @@ export function registerIpcHandlers(
         return { ok: false, error: entry?.invalid?.error ?? "Agent not found" };
       }
       const definition = entry.definition;
+      const hash = definitionHash(definition, entry.promptFile);
+      // Approval binds what the person reviewed: a definition changed since
+      // (a sync, another chat's edit) is reviewed again first.
+      if (hash !== reviewedHash)
+        return {
+          ok: false,
+          error:
+            "This agent's definition changed while you were reviewing it. Review it again before approving.",
+        };
       const source =
         definition.kind === "acp"
           ? "profile"
@@ -938,10 +954,7 @@ export function registerIpcHandlers(
       } else {
         auth = { mode: "local" };
       }
-      owning.agentBindings.bind(projectId, slug, {
-        consentHash: definitionHash(definition, entry.promptFile),
-        auth,
-      });
+      owning.agentBindings.bind(projectId, slug, { consentHash: hash, auth });
       return { ok: true };
     },
   );
@@ -1523,6 +1536,14 @@ export function registerIpcHandlers(
     const agent = store.get(id);
     if (agent === undefined || agent.auth === "api-key") {
       return { started: false, error: "This agent authenticates with a key" };
+    }
+    // An ACP agent signs in on its own (ADR 0241), never through Work.
+    if (agent.harness === "acp") {
+      return {
+        started: false,
+        error:
+          "This agent signs in on its own. Change its sign-in in the agent itself.",
+      };
     }
 
     // E2E: logins would open browsers/terminals — stamp a fake credential

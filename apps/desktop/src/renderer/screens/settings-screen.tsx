@@ -17,6 +17,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { displayCommand } from "../../shared/acp-agents.js";
 import { ACTION_LABELS, KEYBINDING_ACTIONS } from "../../shared/actions.js";
 import { bindingFromEvent, parseBinding } from "../../shared/keybindings.js";
 import {
@@ -641,7 +642,7 @@ function AgentsSection({
                     // (ADR 0241).
                     <>
                       <span className="font-mono">
-                        {agent.acp?.command.join(" ")}
+                        {displayCommand(agent.acp?.command ?? [])}
                       </span>
                       <span>·</span>
                       <span>its own model and sign-in</span>

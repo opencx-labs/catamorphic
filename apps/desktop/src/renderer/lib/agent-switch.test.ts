@@ -1,6 +1,5 @@
 import { expect, it } from "vitest";
 import { agentHarnessId, startsNewChat } from "./agent-switch.js";
-import { type ProjectAgentInfo, projectAgentAsInfo } from "./desktop-api.js";
 
 it("switches in place before a chat starts and on its harness, else starts a new chat", () => {
   expect(startsNewChat({ bound: null, next: "codex" })).toBe(false);

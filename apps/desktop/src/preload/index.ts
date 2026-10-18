@@ -301,8 +301,9 @@ const api = {
   projectAgentApprove: (
     projectId: string,
     slug: string,
+    reviewedHash: string,
   ): Promise<{ ok: boolean; error?: string }> =>
-    invoke("catamorphic:project-agent-approve", projectId, slug),
+    invoke("catamorphic:project-agent-approve", projectId, slug, reviewedHash),
   agentSetupStatus: (): Promise<{
     claudeCode: boolean;
     codex: boolean;

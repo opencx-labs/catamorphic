@@ -348,6 +348,25 @@ describe("project agents", () => {
     );
   });
 
+  it("shows an ACP agent's command where it is configured, with its own sign-in", async () => {
+    await openPicker("Configure agent…", "Configure");
+    await runWait(pickOption("Echoer"), {
+      timeoutMs: 15_000,
+      label: "configure Echoer",
+    });
+    await runWait(
+      `const modal = $('[data-testid="configure-agent-modal"]');
+       return !!modal &&
+         !!modal.querySelector('[data-testid="project-agent-command"]')?.textContent.includes('test-agent.mjs') &&
+         modal.textContent.includes('its own configuration and sign-in');`,
+      { timeoutMs: 15_000, label: "Echoer's command in its configuration" },
+    );
+    await run(paletteEscape);
+    await runWait(`return !$('[data-testid="configure-agent-modal"]');`, {
+      label: "configuration closed",
+    });
+  });
+
   it("re-requires consent after the persona file changes", async () => {
     // A persona edit changes the definition hash → stored consent stale.
     fs.appendFileSync(

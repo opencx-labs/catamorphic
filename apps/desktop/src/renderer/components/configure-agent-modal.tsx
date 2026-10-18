@@ -7,7 +7,7 @@ import {
   Star,
 } from "lucide-react";
 import { type FormEvent, useEffect, useMemo, useState } from "react";
-import { HERMES, runsHermes } from "../../shared/acp-agents.js";
+import { displayCommand, HERMES, runsHermes } from "../../shared/acp-agents.js";
 import {
   permissionModeLabel,
   SANDBOXING_OPTIONS,
@@ -483,8 +483,8 @@ function ProfileAgentBody({
                   data-testid="agent-acp-model"
                 >
                   Work runs{" "}
-                  <code className="font-mono">{command.join(" ")}</code>, on the
-                  model its own configuration names.{" "}
+                  <code className="font-mono">{displayCommand(command)}</code>,
+                  on the model its own configuration names.{" "}
                   {hermes ? (
                     <>
                       Run <code className="font-mono">{HERMES.model}</code> in a
@@ -976,6 +976,7 @@ function ProjectAgentBody({
     const result = await desktopApi.projectAgentApprove(
       agent.projectId,
       agent.slug,
+      agent.definitionHash ?? "",
     );
     setApproving(false);
     if (!result.ok) setError(result.error ?? "Approval failed.");
@@ -1007,8 +1008,23 @@ function ProjectAgentBody({
       ) : (
         <div className="flex flex-col gap-1.5 rounded-lg border border-border bg-bg-inset/60 p-3">
           {fact("Harness", agent.kind)}
-          {fact("Model", agent.model ?? "harness default")}
-          {fact("Effort", agent.effort ?? "medium")}
+          {agent.command && (
+            // Approving an ACP agent runs this on this machine (ADR 0241).
+            <div className="flex items-baseline gap-2 text-[12px]">
+              <span className="w-24 shrink-0 text-fg-faint">Runs</span>
+              <code
+                className="min-w-0 flex-1 break-all font-mono text-fg"
+                data-testid="project-agent-command"
+              >
+                {displayCommand(agent.command)}
+              </code>
+            </div>
+          )}
+          {fact(
+            "Model",
+            agent.command ? "its own" : (agent.model ?? "harness default"),
+          )}
+          {fact("Effort", agent.command ? null : (agent.effort ?? "medium"))}
           {fact(
             "Permission mode",
             permissionModeLabel({
@@ -1027,13 +1043,15 @@ function ProjectAgentBody({
           )}
           {fact(
             "Credentials",
-            agent.credentialsSource === "secret"
-              ? `project secret ${agent.secretName ?? ""}`
-              : agent.credentialsSource === "local"
-                ? "this machine's login"
-                : agent.credentialsSource === "connection"
-                  ? "a Work server's model connection"
-                  : "your profile credentials",
+            agent.command
+              ? "its own configuration and sign-in"
+              : agent.credentialsSource === "secret"
+                ? `project secret ${agent.secretName ?? ""}`
+                : agent.credentialsSource === "local"
+                  ? "this machine's login"
+                  : agent.credentialsSource === "connection"
+                    ? "a Work server's model connection"
+                    : "your profile credentials",
           )}
           {fact(
             "Connections",
@@ -1073,7 +1091,9 @@ function ProjectAgentBody({
           <p className="min-w-0 flex-1 text-[11px] text-fg-faint">
             {agent.consent === "stale"
               ? "The definition changed since you approved it."
-              : "Needed before it runs on your credentials."}
+              : agent.command
+                ? "Needed before it runs its command on this machine."
+                : "Needed before it runs on your credentials."}
           </p>
         </div>
       ) : null}

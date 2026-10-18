@@ -14,6 +14,13 @@ import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
 
 let app: AppHandle;
 const bin = fs.mkdtempSync(path.join(os.tmpdir(), "hermes-bin-"));
+/** A home without the person's own Hermes in `~/.local/bin`. */
+const home = fs.mkdtempSync(path.join(os.tmpdir(), "hermes-home-"));
+/** PATH without the person's own Hermes, so the wizard starts from missing. */
+const pathWithoutHermes = (process.env.PATH ?? "")
+  .split(path.delimiter)
+  .filter((dir) => dir && !fs.existsSync(path.join(dir, "hermes")))
+  .join(path.delimiter);
 const shots = process.env.CATAMORPHIC_E2E_ARTIFACTS_DIR ?? os.tmpdir();
 /** Lets a screenshot catch the step, not its fade-in. */
 const settle = () => new Promise((resolve) => setTimeout(resolve, 400));
@@ -34,13 +41,14 @@ function installHermes() {
 
 beforeAll(async () => {
   app = await launchApp({
-    env: { PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}` },
+    env: { HOME: home, PATH: `${bin}${path.delimiter}${pathWithoutHermes}` },
   });
 });
 
 afterAll(async () => {
   await app?.stop();
   fs.rmSync(bin, { recursive: true, force: true });
+  fs.rmSync(home, { recursive: true, force: true });
 });
 
 const helpers = `
@@ -206,6 +214,13 @@ describe("Hermes as the person's own agent", () => {
       timeoutMs: 30_000,
       label: "Hermes in Settings",
     });
+    // The agents list names what it runs and where its model lives.
+    await runWait(
+      `return !!byText('div', 'hermes acp') && !!byText('span', 'its own model and sign-in');`,
+      { label: "Hermes' row: its command and its own model and sign-in" },
+    );
+    await settle();
+    await app.screenshot(path.join(shots, "hermes-settings-list.png"));
     await run(`$('[aria-label="Edit Hermes"]').click(); return true;`);
     await runWait(
       `return !!byText('[data-testid="agent-acp-model"] code', 'hermes model') &&

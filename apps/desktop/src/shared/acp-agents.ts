@@ -30,3 +30,22 @@ export function acpHarnessId(agentId: string): string {
 export function runsHermes(command: readonly string[] | undefined): boolean {
   return /(^|[\\/])hermes$/.test(command?.[0] ?? "");
 }
+
+/**
+ * A command as the person reviews it before it runs: each argument whole,
+ * quoted when it holds anything but plain characters, and every invisible
+ * or direction-changing character spelled out, so what shows is what runs.
+ */
+export function displayCommand(command: readonly string[]): string {
+  return command
+    .map((part) => {
+      const shown = part.replace(
+        /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu,
+        (char) => `\\u{${char.codePointAt(0)?.toString(16) ?? ""}}`,
+      );
+      return /^[\w@%+=:,./~-]+$/.test(shown)
+        ? shown
+        : `'${shown.replaceAll("'", `'\\''`)}'`;
+    })
+    .join(" ");
+}

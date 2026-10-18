@@ -280,6 +280,8 @@ export interface ProjectAgentInfo {
   promptPreview: string | null;
   /** The command an ACP agent runs on this machine once approved. */
   command: string[] | null;
+  /** The definition as listed, which approving binds and nothing else. */
+  definitionHash: string | null;
   consent: "not-required" | "none" | "stale" | "ok";
   invalid: string | null;
 }
@@ -1319,9 +1321,11 @@ export interface CatamorphicDesktopApi {
     id: string,
   ) => Promise<{ models: HarnessModelInfo[]; error?: string }>;
   projectAgentsList: (projectId: string) => Promise<ProjectAgentsData>;
+  /** Approves the definition the person reviewed, by its hash. */
   projectAgentApprove: (
     projectId: string,
     slug: string,
+    reviewedHash: string,
   ) => Promise<{ ok: boolean; error?: string }>;
   agentSetupStatus: () => Promise<{
     claudeCode: boolean;

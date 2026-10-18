@@ -18,21 +18,28 @@ per attempt from the definition's `acp.command` in the chat's checkout and
 speaks ACP over its stdio with the official SDK. The agent keeps its own
 configuration, model and sign-in (`modelAccess: host`). The desktop runs it
 for an approved project definition; approving one runs its command on
-this machine, so the consent dialog names the command, the consent hash
-already covers it, and an ACP definition needs its member's approval
-whatever its `credentials` say. Approval covers the definition, not files
-in the checkout its command runs: as with Claude Code's project hooks
-(ADR 0045), a collaborator can change those after approval.
+this machine, so every place that approves names the command (each
+argument whole, hidden characters spelled out), the consent hash already
+covers it, approval binds only the definition the person reviewed, and an
+ACP definition needs its member's approval whatever its `credentials`
+say. Approval covers the definition, not files in the checkout its
+command runs: as with Claude Code's project hooks (ADR 0045), a
+collaborator can change those after approval. The agent runs with Work's
+environment, as a command in the person's own terminal would.
 
 - **Sessions** stay with the agent: the first turn opens one in the
   checkout, later turns reopen it with `session/resume` when the agent
   offers it (nothing replayed), else `session/load` (its history replayed
-  and ignored). Native state is `none`, so a chat moved to another machine
-  starts fresh with a handoff, and an agent that cannot reopen a session
-  starts a new one. A turn ends once the agent's process has exited, so a
-  session the agent saves on exit is saved before the next turn reopens
-  it. The harness id is `acp:<agent id>`, one per agent, so a chat stays
-  with its agent.
+  and ignored). Work hears of a session only once it holds the
+  conversation and can be reopened: a new session after its first turn
+  completes, never one from an agent that cannot reopen sessions, so Work
+  hands that agent the whole conversation each turn instead. A session the
+  agent refuses to reopen (deleted, pruned) is replaced by a new one with
+  a warning, rather than failing every later turn. Native state is
+  `none`, so a chat moved to another machine starts fresh with a handoff.
+  A turn ends once the agent's process has exited, so a session the agent
+  saves on exit is saved before the next turn reopens it. The harness id
+  is `acp:<agent id>`, one per agent, so a chat stays with its agent.
 - **Work's tools** (workspace tools, `ask_user`) reach the agent as a
   loopback MCP server per attempt behind a bearer only that agent is
   given, decided by the attempt's tool policy, over HTTP even when the
@@ -42,11 +49,13 @@ in the checkout its command runs: as with Claude Code's project hooks
   as blocks of their own (`<work-instructions>` on a new session's first
   turn, `<work-context>` every turn), apart from the person's words.
 - **The agent's permission requests** become Work approvals. "Always"
-  picks the agent's own persistent option; a one-time approval never
-  becomes it, and is a refusal when the agent offers no "once".
-- **Interrupt** is `session/cancel`; an agent that ignores it is stopped.
-  ACP has no steer, so a message sent mid-turn restarts the attempt with
-  it.
+  picks the agent's own persistent option; a one-time answer never
+  becomes it: offered no "once", an approval is a refusal and a refusal
+  cancels the request.
+- **Interrupt** is `session/cancel`, which withdraws the agent's waiting
+  permission requests; an agent that has not ended its turn ten seconds
+  later is killed. ACP has no steer, so a message sent mid-turn restarts
+  the attempt with it.
 
 **An ACP agent can also be the person's own.** A profile agent of harness
 `acp` stores the command it runs, and runs through the same adapter and

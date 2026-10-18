@@ -387,7 +387,12 @@ export class AgentsStore {
   }
 
   create(input: CreateAgentInput): AgentConfig {
-    const command = input.acp?.command.filter(Boolean) ?? [];
+    // From the renderer: a malformed `acp` is refused like a missing one.
+    const command = Array.isArray(input.acp?.command)
+      ? input.acp.command.filter(
+          (part): part is string => typeof part === "string" && part !== "",
+        )
+      : [];
     if (input.harness === "acp" && command.length === 0)
       throw new Error("An ACP agent needs the command that starts it.");
     const harnessPermissions = checkedHarnessPermissions({

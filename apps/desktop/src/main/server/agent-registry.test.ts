@@ -169,35 +169,49 @@ it("waits for its member's approval before running a project's ACP agent, whatev
   expect(agent?.unavailable).toContain("needs your approval");
 });
 
-it("runs an approved project ACP agent as its own command, on a harness of its own (ADR 0241)", () => {
-  const root = projectWith(runnerDefinition);
-  const validated = validateAgentDefinition(runnerDefinition);
+/** A registry where the member approved `definition`, as committed. */
+function approvedRegistry(definition: Record<string, unknown>) {
+  const root = projectWith(definition);
+  const validated = validateAgentDefinition(definition);
   if ("error" in validated) throw new Error(validated.error);
+  return registryWith(claudeAgent, {
+    e2eFake: true,
+    projectRootPath: () => root,
+    profileConfig: {
+      forProfile: () => ({
+        agents: { list: () => [claudeAgent], get: () => claudeAgent },
+        connections: { list: () => [] },
+      }),
+      forProject: () => ({
+        agentBindings: {
+          get: () => ({
+            consentHash: definitionHash(validated.definition),
+            auth: { mode: "local" },
+          }),
+        },
+      }),
+    },
+  });
+}
+
+it("runs an approved project ACP agent as its own command, on a harness of its own (ADR 0241)", () => {
   const { agent, harness } = hostOf(
-    registryWith(claudeAgent, {
-      e2eFake: true,
-      projectRootPath: () => root,
-      profileConfig: {
-        forProfile: () => ({
-          agents: { list: () => [claudeAgent], get: () => claudeAgent },
-          connections: { list: () => [] },
-        }),
-        forProject: () => ({
-          agentBindings: {
-            get: () => ({
-              consentHash: definitionHash(validated.definition),
-              auth: { mode: "local" },
-            }),
-          },
-        }),
-      },
-    }),
+    approvedRegistry(runnerDefinition),
     "project:project:runner",
   );
   expect(agent.unavailable).toBeUndefined();
   expect(harness.adapter.id).toBe("acp:project:project:runner");
   expect(agent.options).toEqual({ command: ["sh", "-c", "echo hi"] });
   expect(agent.defaults).toEqual({});
+});
+
+it("says how to fix an approved project ACP agent that names no command (ADR 0241)", () => {
+  const agent = approvedRegistry({
+    version: 1,
+    name: "Runner",
+    kind: "acp",
+  }).get("project:project:runner");
+  expect(agent?.unavailable).toContain("is an ACP agent without a command");
 });
 
 const probeConnection = {

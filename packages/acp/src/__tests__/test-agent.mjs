@@ -5,7 +5,8 @@
 //
 //   [[tool <server> <name> <json>]]  call a tool on an MCP server it was given
 //   [[permission]]                   ask permission, say the chosen option
-//   [[permission always-only]]       the same, offering no "once"
+//   [[permission always-only]]       the same, offering no "allow once"
+//   [[permission no-reject-once]]    the same, offering no "reject once"
 //
 //   [[hang]]                         work until cancelled
 //   [[recall]]                       say how many turns the session has seen
@@ -13,7 +14,9 @@
 // With TEST_AGENT_NO_LOAD=1 it cannot reopen a session, as ACP allows; with
 // TEST_AGENT_RESUME=1 it also offers `session/resume`, which replays
 // nothing. TEST_AGENT_EXIT_SAVE_MS=<ms> saves its state that long after its
-// input closes, as Hermes saves its session on the way out.
+// input closes, as Hermes saves its session on the way out. With
+// TEST_AGENT_STUBBORN=1 it ignores a cancel and SIGTERM alike. It notes a
+// cancel it heard as `cancelled` in its state.
 import fs from "node:fs";
 import { Readable, Writable } from "node:stream";
 import * as acp from "@agentclientprotocol/sdk";
@@ -30,6 +33,7 @@ const write = (state) =>
   fs.writeFileSync(stateFile, JSON.stringify(state, null, 2));
 
 let cancel = () => {};
+if (process.env.TEST_AGENT_STUBBORN === "1") process.on("SIGTERM", () => {});
 
 const exitSave = Number(process.env.TEST_AGENT_EXIT_SAVE_MS ?? 0);
 if (exitSave > 0)
@@ -87,7 +91,10 @@ new acp.AgentSideConnection(
         }
         return {};
       },
-      cancel: async () => cancel(),
+      cancel: async () => {
+        write({ ...read(), cancelled: true });
+        if (process.env.TEST_AGENT_STUBBORN !== "1") cancel();
+      },
       prompt: async ({ sessionId, prompt }) => {
         const state = read();
         const session = state.sessions[sessionId];
@@ -137,7 +144,9 @@ new acp.AgentSideConnection(
               content: [{ type: "content", content: { type: "text", text } }],
             },
           });
-          // Agents may still say something about a call they finished.
+          // Agents may still say something about a call they finished,
+          // even in the middle of a reply.
+          await say(sessionId, "agent_message_chunk", "Tool said: ");
           await connection.sessionUpdate({
             sessionId,
             update: {
@@ -146,11 +155,12 @@ new acp.AgentSideConnection(
               title: "Called it",
             },
           });
-          await say(sessionId, "agent_message_chunk", `Tool said: ${text}`);
+          await say(sessionId, "agent_message_chunk", text);
           return { stopReason: "end_turn" };
         }
         if (words.includes("[[permission")) {
           const alwaysOnly = words.includes("[[permission always-only]]");
+          const noRejectOnce = words.includes("[[permission no-reject-once]]");
           const { outcome } = await connection.requestPermission({
             sessionId,
             toolCall: {
@@ -174,7 +184,13 @@ new acp.AgentSideConnection(
                 kind: "allow_always",
                 name: "Allow for session",
               },
-              { optionId: "deny", kind: "reject_once", name: "Deny" },
+              noRejectOnce
+                ? {
+                    optionId: "deny_always",
+                    kind: "reject_always",
+                    name: "Always deny",
+                  }
+                : { optionId: "deny", kind: "reject_once", name: "Deny" },
             ],
           });
           await say(

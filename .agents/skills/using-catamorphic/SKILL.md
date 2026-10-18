@@ -296,6 +296,7 @@ const apiClient = createApiClient({
 | `@catamorphic/agent-protocol` | Session log model, events, commands and the shared reducer; `/runner`: `HarnessAdapter`, `AttemptStart`, runner frames and commands |
 | `@catamorphic/agent-runner` | `AttemptRunner`, `InProcessRunner`, `runStdioRunner` |
 | `@catamorphic/ai-sdk`, `claude-code`, `codex` | `createAiSdkAdapter`, `createClaudeCodeAdapter`, `createCodexAdapter` (harness adapters), model and skill catalogs, `/testing` replay |
+| `@catamorphic/acp` | `createAcpAdapter`: runs an Agent Client Protocol agent's own command (such as `hermes acp`) as a harness (ADR 0241) |
 | `@catamorphic/plugins` | `LocalPluginResolver`, `PluginManifestSchema` |
 | `@catamorphic/fastify-plugin` | `catamorphicPlugin`, `createApp`, `identityFromBearer`, `identityFromHeaders` |
 | `@catamorphic/otel` | `getTracer`, `withSpan` (the host owns the OpenTelemetry SDK) |

@@ -27,8 +27,9 @@ import {
 
 /**
  * What an Agent Client Protocol agent offers through the protocol itself.
- * Its session lives with the agent (`session/load` reopens it where it was
- * made), so a chat moved elsewhere starts fresh with a handoff.
+ * Its session lives with the agent (`session/resume` or `session/load`
+ * reopens it where it was made), so a chat moved elsewhere starts fresh
+ * with a handoff.
  */
 export const ACP_CAPABILITIES: HarnessCapabilities = {
   ...NO_CAPABILITIES,
@@ -137,6 +138,8 @@ function startAttempt(
       () => ({
         sessionUpdate: ({ update }) => items.update(update),
         requestPermission: async ({ toolCall, options }) => {
+          // Asked before the agent read the cancel: nobody is left to answer.
+          if (interrupted) return { outcome: { outcome: "cancelled" } };
           const withdrawn = new AbortController();
           asks.add(withdrawn);
           const action = toolCall.title ?? "Run a tool";
@@ -165,14 +168,20 @@ function startAttempt(
               },
               { signal: withdrawn.signal },
             );
-            // A one-time approval never becomes the agent's "always":
-            // offered no "once", the agent is told no.
-            const kinds: acp.PermissionOptionKind[] =
-              response.kind !== "approval" || response.decision === "denied"
-                ? ["reject_once", "reject_always"]
-                : response.remember === "always"
-                  ? ["allow_always", "allow_once"]
-                  : ["allow_once", "reject_once", "reject_always"];
+            // A one-time answer never becomes the agent's "always": offered
+            // no "once", an approval is a refusal and a refusal is the
+            // request cancelled.
+            const approved =
+              response.kind === "approval" && response.decision === "approved";
+            const always =
+              response.kind === "approval" && response.remember === "always";
+            const kinds: acp.PermissionOptionKind[] = approved
+              ? always
+                ? ["allow_always", "allow_once"]
+                : ["allow_once", "reject_once"]
+              : always
+                ? ["reject_always", "reject_once"]
+                : ["reject_once"];
             const option = kinds
               .map((kind) =>
                 options.find((candidate) => candidate.kind === kind),
@@ -214,54 +223,78 @@ function startAttempt(
     // The earlier session reopens with `session/resume` when the agent
     // offers it (nothing replayed), else `session/load` (the agent replays
     // its history first, which the stream ignores until the turn starts).
-    // An agent that can do neither starts a new one, told Work's
-    // instructions again, rather than failing every later turn.
-    const reopen = !earlier
-      ? undefined
-      : capabilities?.sessionCapabilities?.resume
-        ? "resume"
-        : capabilities?.loadSession
-          ? "load"
-          : undefined;
-    if (earlier && !reopen)
-      host.emit({
-        type: "diagnostic",
-        level: "warn",
-        message: `${agentName} can't reopen its earlier session, so this turn starts a new one.`,
-      });
+    const reopen = capabilities?.sessionCapabilities?.resume
+      ? "resume"
+      : capabilities?.loadSession
+        ? "load"
+        : undefined;
+    let reopened = false;
     if (earlier && reopen) {
       const session = {
         sessionId: earlier,
         cwd: attempt.workingDirectory,
         mcpServers,
       };
-      if (reopen === "resume") await until(connection.resumeSession(session));
-      else await until(connection.loadSession(session));
-      sessionId = earlier;
-    } else {
-      sessionId = (
-        await until(
-          connection.newSession({ cwd: attempt.workingDirectory, mcpServers }),
+      try {
+        if (reopen === "resume") await until(connection.resumeSession(session));
+        else await until(connection.loadSession(session));
+        reopened = true;
+      } catch (error) {
+        // Refused (the session was deleted or pruned): a new one keeps the
+        // chat going. An interrupt or a process gone ends the turn.
+        if (
+          interrupted ||
+          spawned.exitCode !== null ||
+          spawned.signalCode !== null
         )
-      ).sessionId;
+          throw error;
+      }
     }
-    host.emit({ type: "thread", ref: { id: sessionId, strength: "strong" } });
+    if (earlier && !reopened)
+      host.emit({
+        type: "diagnostic",
+        level: "warn",
+        message: `${agentName} couldn't reopen its earlier session, so this turn starts a new one.`,
+      });
+    const opened =
+      reopened && earlier
+        ? earlier
+        : (
+            await until(
+              connection.newSession({
+                cwd: attempt.workingDirectory,
+                mcpServers,
+              }),
+            )
+          ).sessionId;
+    sessionId = opened;
+    // Work hears of a session once it holds the conversation and can be
+    // reopened: a reopened one at once, a new one after its first turn ends
+    // (an interrupted one starts afresh, told Work's instructions again),
+    // and never one the agent cannot reopen, so that Work hands the agent
+    // the whole conversation each turn instead.
+    const report = () =>
+      host.emit({ type: "thread", ref: { id: opened, strength: "strong" } });
+    if (reopened) report();
     if (interrupted) return "cancelled";
     host.emit({ type: "turn.started" });
     items.live = true;
     const response = await until(
       connection.prompt({
-        sessionId,
+        sessionId: opened,
         prompt: promptBlocks({
           attempt,
           takesImages: capabilities?.promptCapabilities?.image === true,
-          newSession: !reopen,
+          newSession: !reopened,
         }),
       }),
     );
-    return interrupted || response.stopReason === "cancelled"
-      ? "cancelled"
-      : "completed";
+    const outcome =
+      interrupted || response.stopReason === "cancelled"
+        ? "cancelled"
+        : "completed";
+    if (!reopened && reopen && outcome === "completed") report();
+    return outcome;
   };
 
   // The turn ends once the agent's process has, so an agent that saves its
@@ -308,8 +341,8 @@ function startAttempt(
       if (connection && sessionId)
         void connection.cancel({ sessionId }).catch(() => {});
       else child?.kill();
-      // An agent that ignores the cancel is stopped.
-      const timer = setTimeout(() => child?.kill(), CANCEL_GRACE_MS);
+      // An agent that ignores the cancel, and the stop, is killed.
+      const timer = setTimeout(() => child?.kill("SIGKILL"), CANCEL_GRACE_MS);
       void finished.finally(() => clearTimeout(timer));
     },
     finished,
@@ -612,9 +645,9 @@ class ItemStream {
       }
       case "tool_call":
       case "tool_call_update": {
-        this.closeText();
         const key = `tool:${update.toolCallId}`;
         if (this.done.has(key)) return;
+        this.closeText();
         if (!this.tools.has(key)) {
           this.tools.add(key);
           this.host.emit({

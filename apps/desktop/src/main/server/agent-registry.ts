@@ -546,7 +546,10 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     const { config, profileId } = resolved;
     if (profileId !== this.deps.profiles.profileForProject(projectId).id)
       return { model: null, error: "This agent belongs to another profile." };
-    // E2E: every harness is the fake agent, whose catalog lists this model.
+    // An ACP agent names its model in its own configuration (ADR 0241),
+    // under e2e too: it is never the fake agent.
+    if (config.harness === "acp") return { model: null };
+    // E2E: every other harness is the fake agent, whose catalog lists this.
     if (this.deps.e2eFake)
       return { model: { id: "fake-model-a-2.1", name: "Fake Model A" } };
     if (config.harness === "ai-sdk") {
@@ -579,7 +582,6 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     config: AgentConfig,
     workingDirectory: string,
   ): Promise<AgentDefaultModelResult> {
-    // An ACP agent names its model in its own configuration (ADR 0241).
     if (config.harness === "ai-sdk" || config.harness === "acp")
       return { model: null };
     try {

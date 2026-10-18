@@ -27,7 +27,7 @@ Hosts construct concrete providers explicitly at boot and pass them to
 | Harness helpers | `packages/sandbox/src/coding-agent/` (`types.ts`, `plugin-staging.ts`, `tool-policy.ts`, `harness-permissions.ts`, `questions.ts`) |
 | Supervisor inside the runtime | `packages/runtime/src/` (`supervisor-http.ts`, `supervisor-stdio.ts`, `supervisor-dispatcher.ts`, `bun-worker.ts`) |
 | Core services | `packages/core/src/services/`: `deployment-runtime-service.ts`, `execution-worker-service.ts`, `dev-sandbox-service.ts`, `execution-environments-service.ts`, `execution-allocations-service.ts`, `worker-nodes-service.ts`, `client-runners-service.ts`, `coding-agent-registry.ts`, `agent-sessions-service.ts`, `sessions/` (`session-log.ts`, `turn-queue.ts`, `turn-engine.ts`, `turn-ingest.ts`, `native-state.ts`, `context-handoff.ts`), `agent-capabilities-service.ts` |
-| Harness adapters | `packages/ai-sdk` (`createAiSdkAdapter`), `packages/claude-code` (`createClaudeCodeAdapter`), `packages/codex` (`createCodexAdapter`); each has a `/testing` subpath for recorded-transcript replay |
+| Harness adapters | `packages/ai-sdk` (`createAiSdkAdapter`), `packages/claude-code` (`createClaudeCodeAdapter`), `packages/codex` (`createCodexAdapter`), each with a `/testing` subpath for recorded-transcript replay; `packages/acp` (`createAcpAdapter`, an Agent Client Protocol agent's own command, ADR 0241), tested against a real ACP agent process |
 | Providers | `packages/microsandbox` (desktop default), `packages/local-process` (trusted single-tenant, ADR 0047), `packages/container` (gVisor or runc, ADR 0204), `packages/cloudflare` (+ `packages/cloudflare-sandbox-bridge` Worker) |
 
 ## Sandbox providers

@@ -1,5 +1,6 @@
 import { Bot, KeyRound, ShieldAlert } from "lucide-react";
 import { useEffect, useState } from "react";
+import { displayCommand } from "../../shared/acp-agents.js";
 import { desktopApi, type ProjectAgentInfo } from "../lib/desktop-api.js";
 import { Modal } from "./modal.js";
 import { PendingButton } from "./pending-button.js";
@@ -54,7 +55,11 @@ export function ProjectAgentConsentDialog({
     setBusy(true);
     setError(null);
     const result = await desktopApi
-      .projectAgentApprove(agent.projectId, agent.slug)
+      .projectAgentApprove(
+        agent.projectId,
+        agent.slug,
+        agent.definitionHash ?? "",
+      )
       .catch((cause) => ({
         ok: false as const,
         error: cause instanceof Error ? cause.message : String(cause),
@@ -98,7 +103,7 @@ export function ProjectAgentConsentDialog({
               <div className="flex gap-2">
                 <dt className="w-24 shrink-0 text-fg-faint">Runs</dt>
                 <dd className="break-all font-mono">
-                  {agent.command.join(" ")}
+                  {displayCommand(agent.command)}
                 </dd>
               </div>
             )}
