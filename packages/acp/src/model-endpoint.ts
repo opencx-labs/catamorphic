@@ -55,11 +55,13 @@ export interface LoopbackModel {
 /**
  * The gateway's model API for one attempt on this sandbox's loopback (ADR
  * 0255). An ACP agent holds its key for its lifetime, while the session's
- * grant is renewed every 20 minutes and the old one revoked at once (ADR
- * 0212): so the agent gets a key of its own for this endpoint, and every
- * request goes on to the gateway with the grant read from its file just
- * before, once more after a refusal in case it was renewed in between.
- * Paths, bodies and answers pass unchanged, streamed both ways.
+ * grant is renewed every 20 minutes: so the agent gets a key of its own for
+ * this endpoint, and every request goes on to the gateway with the grant
+ * read from its file just before, once more after a refusal in case it was
+ * renewed in between. Paths and answers pass unchanged, answers streamed;
+ * a request body is read whole first, so the retry can send it again. An
+ * agent that stops waiting stops the call, and closing the endpoint ends
+ * every call still running.
  */
 export async function serveLoopbackModel(input: {
   access: Extract<ModelAccess, { kind: "gateway" }>;
@@ -69,19 +71,38 @@ export async function serveLoopbackModel(input: {
   const send = input.fetch ?? ((url, init) => fetch(url, init));
   const apiKey = `work-${randomBytes(24).toString("hex")}`;
   const upstream = access.baseUrl.replace(/\/+$/, "");
-  const grant = async () => (await readFile(access.keyFile, "utf8")).trim();
+  /** Calls still running, so closing the endpoint ends them. */
+  const running = new Set<AbortController>();
+  const grant = async () => {
+    try {
+      return (await readFile(access.keyFile, "utf8")).trim();
+    } catch (error) {
+      throw new UnreadableGrantError(error);
+    }
+  };
 
   const forward = async (
     request: IncomingMessage,
     response: ServerResponse,
+    signal: AbortSignal,
   ) => {
     if (!authorized(request, apiKey)) {
-      refuse(response, 401, "This endpoint takes the key Work gave this agent");
+      refuse({
+        response,
+        api: access.api,
+        status: 401,
+        message: "This endpoint takes the key Work gave this agent",
+      });
       return;
     }
     const body = await readBody(request);
     if (body === "too large") {
-      refuse(response, 413, "The request is larger than the gateway takes");
+      refuse({
+        response,
+        api: access.api,
+        status: 413,
+        message: "The request is larger than the gateway takes",
+      });
       return;
     }
     const url = `${upstream}${request.url ?? "/"}`;
@@ -90,6 +111,7 @@ export async function serveLoopbackModel(input: {
         method: request.method ?? "GET",
         headers: upstreamHeaders({ request, api: access.api, key }),
         redirect: "manual",
+        signal,
         ...(body.length > 0 ? { body } : {}),
       });
     let key = await grant();
@@ -103,6 +125,10 @@ export async function serveLoopbackModel(input: {
         answer = await call(key);
       }
     }
+    if (response.destroyed) {
+      await answer.body?.cancel();
+      return;
+    }
     const headers: Record<string, string> = {};
     answer.headers.forEach((value, name) => {
       if (!DROPPED_RESPONSE_HEADERS.has(name.toLowerCase()))
@@ -114,21 +140,31 @@ export async function serveLoopbackModel(input: {
       return;
     }
     const stream = Readable.fromWeb(answer.body);
-    // An agent that stops reading (an interrupt) stops the upstream call.
-    response.once("close", () => stream.destroy());
     stream.on("error", () => response.destroy());
     stream.pipe(response);
   };
 
   const server: Server = createServer((request, response) => {
-    forward(request, response).catch((error: unknown) => {
-      if (response.headersSent) response.destroy();
+    const call = new AbortController();
+    running.add(call);
+    // Registered before the call starts: an agent that stops waiting, even
+    // before the answer's headers, stops the call upstream.
+    response.once("close", () => {
+      call.abort();
+      running.delete(call);
+    });
+    forward(request, response, call.signal).catch((error: unknown) => {
+      if (response.headersSent || response.destroyed) response.destroy();
       else
-        refuse(
+        refuse({
           response,
-          502,
-          `The gateway could not be reached: ${error instanceof Error ? error.message : String(error)}`,
-        );
+          api: access.api,
+          status: error instanceof UnreadableGrantError ? 500 : 502,
+          message:
+            error instanceof UnreadableGrantError
+              ? error.message
+              : `The gateway could not be reached: ${error instanceof Error ? error.message : String(error)}`,
+        });
     });
   });
   await new Promise<void>((resolve, reject) => {
@@ -142,10 +178,22 @@ export async function serveLoopbackModel(input: {
     baseUrl: `http://127.0.0.1:${port}`,
     apiKey,
     close: () => {
+      for (const call of running) call.abort();
+      running.clear();
       server.close();
       server.closeAllConnections();
     },
   };
+}
+
+/** The session's grant file could not be read. */
+class UnreadableGrantError extends Error {
+  constructor(cause: unknown) {
+    super(
+      `The session's model grant could not be read: ${cause instanceof Error ? cause.message : String(cause)}`,
+    );
+    this.name = "UnreadableGrantError";
+  }
 }
 
 /**
@@ -224,18 +272,22 @@ async function readBody(
   return Buffer.concat(chunks);
 }
 
-function refuse(
-  response: ServerResponse,
-  status: number,
-  message: string,
-): void {
-  response.writeHead(status, { "content-type": "application/json" });
-  response.end(
-    JSON.stringify({
-      error: {
-        message,
-        type: status === 401 ? "authentication_error" : "api_error",
-      },
-    }),
+/** A refusal in the calling API's own error shape, as the gateway's are. */
+function refuse(input: {
+  response: ServerResponse;
+  api: "anthropic" | "openai";
+  status: number;
+  message: string;
+}): void {
+  const type = input.status === 401 ? "authentication_error" : "api_error";
+  input.response.writeHead(input.status, {
+    "content-type": "application/json",
+  });
+  input.response.end(
+    JSON.stringify(
+      input.api === "anthropic"
+        ? { type: "error", error: { type, message: input.message } }
+        : { error: { message: input.message, type } },
+    ),
   );
 }

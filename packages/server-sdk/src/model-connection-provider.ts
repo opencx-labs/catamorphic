@@ -1,10 +1,9 @@
 import {
-  type ConnectionModelEndpoint,
   type ConnectionProvider,
   MODEL_CAPABILITY,
   type ModelApi,
 } from "@catamorphic/core";
-import type { Json, JsonObject } from "@catamorphic/db";
+import type { Json } from "@catamorphic/db";
 
 export interface ModelConnectionOptions {
   kind: string;
@@ -19,18 +18,17 @@ export interface ModelConnectionOptions {
    */
   baseUrl?: string;
   /**
-   * Rewrites each request body before the gateway's policy reads it and the
-   * provider receives it (ADR 0256), e.g. pinning the providers OpenRouter
-   * may route to. Host code: it sees the request's path, body and caller.
-   */
-  rewrite?: ConnectionModelEndpoint["rewrite"];
-  /**
    * Top-level body fields set on every request, each replacing whatever the
-   * caller sent (`null` removes the field): the declarative form of
-   * `rewrite`, applied after it. `{ "provider": { "only": ["together"],
-   * "allow_fallbacks": false } }` keeps OpenRouter on the providers named.
+   * caller sent (`null` removes the field), after the host's rewrites
+   * (ADR 0256). `{ "provider": { "only": ["together"], "allow_fallbacks":
+   * false } }` keeps OpenRouter on the providers named.
    */
   override?: Readonly<Record<string, Json>>;
+  /**
+   * Path prefixes below `baseUrl` the gateway serves (`/chat/completions`),
+   * matched by whole segments; absent serves every path.
+   */
+  paths?: readonly string[];
 }
 
 const DEFAULT_BASE_URLS: Record<ModelApi, string> = {
@@ -52,14 +50,14 @@ export function defineModelConnectionProvider(
   if (base.protocol !== "https:" && !isLoopback(base.hostname))
     throw new Error(`${options.kind}: baseUrl must use HTTPS`);
   const baseUrl = base.href.replace(/\/+$/, "");
-  const rewrite = modelRequestRewrite(options);
   return {
     kind: options.kind,
     displayName: options.displayName,
     model: {
       api: options.api,
       baseUrl,
-      ...(rewrite ? { rewrite } : {}),
+      ...(options.override ? { override: { ...options.override } } : {}),
+      ...(options.paths ? { paths: [...options.paths] } : {}),
       headers: ({ material }): Record<string, string> => {
         const key = decodeKey(material);
         return options.api === "anthropic"
@@ -90,24 +88,6 @@ export function defineModelConnectionProvider(
         `${options.displayName} is reached by harnesses through the gateway's model routes, not with actions`,
       );
     },
-  };
-}
-
-/** The provider's rewrite, then its overrides, as one rewrite; none without either. */
-function modelRequestRewrite(
-  options: ModelConnectionOptions,
-): ConnectionModelEndpoint["rewrite"] {
-  const { rewrite, override } = options;
-  if (!rewrite && !override) return undefined;
-  const fields = Object.entries(override ?? {});
-  return async (request) => {
-    const body: JsonObject = rewrite ? await rewrite(request) : request.body;
-    if (fields.length === 0) return body;
-    const next: JsonObject = { ...body };
-    for (const [field, value] of fields)
-      if (value === null) delete next[field];
-      else next[field] = value;
-    return next;
   };
 }
 

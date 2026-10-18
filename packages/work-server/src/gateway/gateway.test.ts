@@ -63,7 +63,7 @@ describe("gateway configuration", () => {
     ).toThrow("guards");
   });
 
-  it("pins a model connection's request fields from the file (ADR 0256)", async () => {
+  it("pins a model connection's request fields and paths from the file (ADR 0256)", () => {
     const config = gatewayConfigFromFile({
       path: write({
         connections: [
@@ -77,6 +77,7 @@ describe("gateway configuration", () => {
               provider: { only: ["together"], allow_fallbacks: false },
               models: null,
             },
+            paths: ["/chat/completions", "/models"],
           },
           {
             type: "model",
@@ -90,43 +91,34 @@ describe("gateway configuration", () => {
       env: {},
     });
     const [pinned, plain] = gatewayProviders(config);
-    expect(plain?.model?.rewrite).toBeUndefined();
-    const body = await pinned?.model?.rewrite?.({
-      method: "POST",
-      path: "chat/completions",
-      body: {
-        model: "deepseek/v4-flash",
-        provider: { order: ["anyone"] },
-        models: ["openai/gpt-x"],
-      },
-      context: {
-        tenantId: "tenant",
-        projectId: "project",
-        alias: "models",
-        sessionId: null,
-      },
-    });
-    expect(body).toEqual({
-      model: "deepseek/v4-flash",
+    expect(pinned?.model?.override).toEqual({
       provider: { only: ["together"], allow_fallbacks: false },
+      models: null,
     });
-    // An override names fields, so an empty field name is refused.
-    expect(() =>
-      gatewayConfigFromFile({
-        path: write({
-          connections: [
-            {
-              type: "model",
-              kind: "openrouter",
-              displayName: "OpenRouter",
-              api: "openai",
-              override: { "": 1 },
-            },
-          ],
+    expect(pinned?.model?.paths).toEqual(["/chat/completions", "/models"]);
+    expect(plain?.model?.override).toBeUndefined();
+    // An override names fields, and paths are plain prefixes.
+    for (const entry of [
+      { override: { "": 1 } },
+      { paths: ["chat/completions"] },
+      { paths: ["/presets/../chat"] },
+    ])
+      expect(() =>
+        gatewayConfigFromFile({
+          path: write({
+            connections: [
+              {
+                type: "model",
+                kind: "openrouter",
+                displayName: "OpenRouter",
+                api: "openai",
+                ...entry,
+              },
+            ],
+          }),
+          env: {},
         }),
-        env: {},
-      }),
-    ).toThrow("connections.0");
+      ).toThrow("connections.0");
   });
 
   it("takes typed config with resolved secrets and validates it like the file", () => {

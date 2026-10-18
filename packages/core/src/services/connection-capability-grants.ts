@@ -35,7 +35,10 @@ export class ConnectionCapabilityGrantsService {
   /**
    * Issue a bearer bound to one allocation, session, alias, and the
    * binding's capabilities. A session keeps one live grant per alias and
-   * channel: issuing again revokes the previous one.
+   * channel: issuing again revokes the previous one, at once, or with
+   * `keepPrevious` once the caller has put the new one where it is used
+   * and calls {@link revokeOthers} (a sandbox's grant file, ADR 0255), so a
+   * request between the two still finds a live grant.
    */
   async issue(args: {
     identity: Identity;
@@ -44,7 +47,8 @@ export class ConnectionCapabilityGrantsService {
     alias: string;
     ttlSeconds?: number;
     channel?: ConnectionGrantChannel;
-  }): Promise<{ token: string; expiresAt: string }> {
+    keepPrevious?: boolean;
+  }): Promise<{ id: string; token: string; expiresAt: string }> {
     const channel = args.channel ?? "mcp";
     const allocation = await this.allocations.get({
       identity: args.identity,
@@ -64,7 +68,7 @@ export class ConnectionCapabilityGrantsService {
     // Issue under a share lock on the Allocation: a release (close, idle
     // release, archive) that commits first leaves nothing to issue against,
     // and one that commits later revokes what this inserted.
-    await this.db.transaction().execute(async (trx) => {
+    const inserted = await this.db.transaction().execute(async (trx) => {
       const live = await trx
         .selectFrom("execution_allocations")
         .select("status")
@@ -74,7 +78,7 @@ export class ConnectionCapabilityGrantsService {
       if (live?.status !== "active") {
         throw new Error("Connection grant cannot be issued");
       }
-      if (args.agentSessionId) {
+      if (args.agentSessionId && !args.keepPrevious) {
         await trx
           .updateTable("connection_capability_grants")
           .set({ revoked_at: new Date() })
@@ -84,7 +88,7 @@ export class ConnectionCapabilityGrantsService {
           .where("revoked_at", "is", null)
           .execute();
       }
-      await trx
+      return trx
         .insertInto("connection_capability_grants")
         .values({
           tenant_id: args.identity.tenantId,
@@ -98,9 +102,31 @@ export class ConnectionCapabilityGrantsService {
           expires_at: expiresAt,
           channel,
         })
-        .execute();
+        .returning("id")
+        .executeTakeFirstOrThrow();
     });
-    return { token, expiresAt: expiresAt.toISOString() };
+    return { id: inserted.id, token, expiresAt: expiresAt.toISOString() };
+  }
+
+  /**
+   * Revoke a session's other live grants for an alias and channel, keeping
+   * `keepId`: the second half of an issue with `keepPrevious`.
+   */
+  async revokeOthers(args: {
+    agentSessionId: string;
+    alias: string;
+    channel: ConnectionGrantChannel;
+    keepId: string;
+  }): Promise<void> {
+    await this.db
+      .updateTable("connection_capability_grants")
+      .set({ revoked_at: new Date() })
+      .where("agent_session_id", "=", args.agentSessionId)
+      .where("alias", "=", args.alias)
+      .where("channel", "=", args.channel)
+      .where("id", "!=", args.keepId)
+      .where("revoked_at", "is", null)
+      .execute();
   }
 
   async validate(args: {

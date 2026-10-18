@@ -1082,7 +1082,18 @@ capability, and a binding may add `model: { allow? }`. The plugin serves
 bearer), a thin pass-through: any method and path below the base URL, the
 body byte for byte, headers but a small denylist (the caller's key, host,
 cookies, hop-by-hop, proxy and forwarding headers), and the answer streamed
-back unchanged. Guards see kind `model` with action = method and path
+back unchanged. Bodies may be rewritten first (ADR 0256): pass
+`modelRequestRewrites` to `createCatamorphic`, each
+`{ name, kinds?, rewrite(request) }`, where `rewrite` gets the method,
+path, query, headers, parsed body and caller (tenant, project, alias,
+provider kind, connection, principal kind, session) and returns the body to
+send or throws `ConnectionActionRefusedError`; a provider adds
+`defineModelConnectionProvider({ ..., override, paths })`, top-level fields
+set on every body after the rewrites (`null` removes one) and the endpoints
+it serves. Rewrites run before the allowlist and guards, bounded by the
+guard timeout; the gateway sends its own serialization, refuses bodies it
+cannot parse or that arrive content-encoded, and audits each refusal.
+Pinning OpenRouter's providers per project is a few lines of host code. Guards see kind `model` with action = method and path
 (`POST v1/messages`) and input = provider, model, stream; endpoint and
 spending rules belong in guards. Usage lands in `model_usage` per session and
 turn, read passively from Anthropic and OpenAI answers (zero when a format is
@@ -1096,7 +1107,11 @@ as a process with standard input (providers implement
 `processes.writeProcessInput` for a process started with `stdin: true`); the
 runner runs the harness's CLI beside the workspace, with the gateway as its
 only model endpoint, and any replica can read it or reattach to it (ADR
-0198). Harness binaries come from the Environment image.
+0198). Harness binaries come from the Environment image. The bundle's
+harnesses are `claude-code`, `codex` and `acp`: an ACP agent registers
+`harness: { placement: "sandbox", id: "acp:<agent>" }` with
+`options: { command }`, and the adapter serves its model connection on the
+sandbox's loopback, reading the grant per request (ADR 0255).
 
 MCP connections (ADR 0225): a provider whose actions are an MCP server's
 tools sets `mcp: true` (`defineMcpConnectionProvider` from `@catamorphic/mcp`

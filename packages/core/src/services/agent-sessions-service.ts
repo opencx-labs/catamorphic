@@ -6131,6 +6131,9 @@ export class AgentSessionsService {
       );
       return [];
     }
+    // The previous grants stay live until the sandbox holds the new ones,
+    // so a harness reading its grant file between the two still has a live
+    // one (ADR 0255); then they are revoked.
     const issued = [];
     for (const binding of bindings) {
       const grant = await grants.issue({
@@ -6140,8 +6143,9 @@ export class AgentSessionsService {
         alias: binding.alias,
         ttlSeconds: 3600,
         channel: "sandbox",
+        keepPrevious: true,
       });
-      issued.push({ alias: binding.alias, grant: grant.token });
+      issued.push({ alias: binding.alias, grant: grant.token, id: grant.id });
     }
     await configureSandboxGateway({
       provider: input.provider,
@@ -6160,6 +6164,13 @@ export class AgentSessionsService {
       ),
       renewOnly: input.renewOnly,
     });
+    for (const grant of issued)
+      await grants.revokeOthers({
+        agentSessionId: input.sessionId,
+        alias: grant.alias,
+        channel: "sandbox",
+        keepId: grant.id,
+      });
     return bindings.flatMap((binding) =>
       binding.api
         ? [

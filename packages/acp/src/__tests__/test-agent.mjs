@@ -13,6 +13,7 @@
 //   [[recall]]                       say how many turns the session has seen
 //   [[model]]                        ask its model (a Chat Completions API) and
 //                                    say what it answered
+//   [[where]]                        say where its model is (WORK_MODEL_BASE_URL)
 //
 // With TEST_AGENT_NO_LOAD=1 it cannot reopen a session, as ACP allows; with
 // TEST_AGENT_RESUME=1 it also offers `session/resume`, which replays
@@ -33,7 +34,8 @@
 // TEST_AGENT_MODELS=1 a session offers a model option, `default-model` or
 // `deepseek/v4-flash`, and notes the one chosen as the session's `model`.
 // Without a provider set, its model is at WORK_MODEL_BASE_URL with
-// WORK_MODEL_API_KEY.
+// WORK_MODEL_API_KEY. TEST_AGENT_PROVIDERS=fail advertises providers and
+// then fails to list them.
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import { Readable, Writable } from "node:stream";
@@ -95,17 +97,25 @@ new acp.AgentSideConnection(
             ...(process.env.TEST_AGENT_RESUME === "1" ? { resume: {} } : {}),
             ...(process.env.TEST_AGENT_LIST === "1" ? { list: {} } : {}),
           },
-          ...(process.env.TEST_AGENT_PROVIDERS === "1"
-            ? { providers: {} }
-            : {}),
+          ...(process.env.TEST_AGENT_PROVIDERS ? { providers: {} } : {}),
         },
       }),
-      unstable_listProviders: async () => ({
-        providers: [
-          { providerId: "main", supported: ["openai"], required: true },
-          { providerId: "cloud", supported: ["bedrock"], required: false },
-        ],
-      }),
+      unstable_listProviders: async () => {
+        if (process.env.TEST_AGENT_PROVIDERS === "fail")
+          throw acp.RequestError.methodNotFound("providers/list");
+        return {
+          providers: [
+            { providerId: "main", supported: ["openai"], required: true },
+            { providerId: "cloud", supported: ["bedrock"], required: false },
+          ],
+        };
+      },
+      unstable_disableProvider: async ({ providerId }) => {
+        const state = read();
+        state.disabled = [...(state.disabled ?? []), providerId];
+        write(state);
+        return {};
+      },
       unstable_setProvider: async (provider) => {
         const state = read();
         state.providers = {
@@ -322,6 +332,14 @@ new acp.AgentSideConnection(
             sessionId,
             "agent_message_chunk",
             `Model said (${answer.status}): ${json.choices?.[0]?.message?.content ?? JSON.stringify(json)}`,
+          );
+          return { stopReason: "end_turn" };
+        }
+        if (words.includes("[[where]]")) {
+          await say(
+            sessionId,
+            "agent_message_chunk",
+            process.env.WORK_MODEL_BASE_URL ?? "nowhere",
           );
           return { stopReason: "end_turn" };
         }

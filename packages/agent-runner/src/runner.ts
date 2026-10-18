@@ -213,9 +213,13 @@ export class AttemptRunner {
       );
     // A harness named per agent (`acp:<agent>`, so a chat stays with its
     // agent) runs on its family's adapter.
-    const adapter =
-      this.options.adapters[attempt.harness] ??
-      this.options.adapters[attempt.harness.split(":", 1)[0] ?? ""];
+    const adapters = this.options.adapters;
+    const family = attempt.harness.split(":", 1)[0] ?? "";
+    const adapter = Object.hasOwn(adapters, attempt.harness)
+      ? adapters[attempt.harness]
+      : Object.hasOwn(adapters, family)
+        ? adapters[family]
+        : undefined;
     if (!adapter)
       throw new Error(`This runner has no '${attempt.harness}' harness`);
     this.emitFrame({

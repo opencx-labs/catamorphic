@@ -63,7 +63,7 @@ Start small and add only what the situation needs:
 | More execution capacity, workers, replicas for availability; a machine for every engineer on Hetzner Cloud or from a pool of the company's own servers | [Machines: control plane, replicas, and workers](references/cluster-deployment.md) |
 | Sharing documents, folders, or apps with customers behind a sign-in | [Sharing outside the company](references/sharing.md) |
 | Members working from Claude Code, Codex, or another MCP client | [Working from your own agent](references/members-over-mcp.md) |
-| Project agents that are Claude Code or Codex, running on the server with a model key the gateway holds, or on a member's own subscription signed in on the machine | [Harnesses on the server](references/harnesses.md) |
+| Project agents that are Claude Code, Codex or an ACP agent (OpenCode, Hermes), running on the server with a model key the gateway holds (and providers it pins), or Codex on a member's own subscription signed in on the machine | [Harnesses on the server](references/harnesses.md) |
 | Work server plus company code (a guard or classifier, a directory, a connection provider, seeds, or a route) | [`@catamorphic/work-server`](../../packages/work-server/README.md): extend the published image with hooks; never fork the server |
 | Existing or custom application | [Custom host](references/custom-host.md) |
 | Sign-in, OIDC, invitations, roles, permissions | [Auth and identity](references/auth-and-identity.md) |

@@ -610,6 +610,33 @@ describe("credential connections", () => {
     expect(Date.parse(renewed.expiresAt) - Date.now()).toBeLessThanOrEqual(
       3600 * 1000,
     );
+    // A renewal that keeps the previous grant until the sandbox holds the
+    // new one (ADR 0255): both live in between, then only the new one.
+    const overlapping = await grants.issue({
+      ...session,
+      channel: "sandbox",
+      keepPrevious: true,
+    });
+    await expect(
+      grants.validate({ token: renewed.token }),
+    ).resolves.toMatchObject({ channel: "sandbox" });
+    await expect(
+      grants.validate({ token: overlapping.token }),
+    ).resolves.toMatchObject({ channel: "sandbox" });
+    await grants.revokeOthers({
+      agentSessionId: sessionId,
+      alias: "directory",
+      channel: "sandbox",
+      keepId: overlapping.id,
+    });
+    await expect(grants.validate({ token: renewed.token })).resolves.toBeNull();
+    await expect(
+      grants.validate({ token: overlapping.token }),
+    ).resolves.toMatchObject({ channel: "sandbox" });
+    // The session's MCP grant is another channel's, untouched.
+    await expect(
+      grants.validate({ token: mcpGrant.token }),
+    ).resolves.toMatchObject({ channel: "mcp" });
     // A long-lived chat's harness keeps its MCP bearer (#122): the grant
     // lapses while the chat idles and the next turn extends the same one.
     await db
@@ -642,10 +669,12 @@ describe("credential connections", () => {
     ).resolves.toMatchObject({ channel: "mcp" });
     // Extending MCP grants leaves the sandbox's own grant as it was.
     await expect(
-      grants.validate({ token: renewed.token }),
+      grants.validate({ token: overlapping.token }),
     ).resolves.toMatchObject({ channel: "sandbox" });
     await grants.revokeAllocation({ allocationId: live.id });
-    await expect(grants.validate({ token: renewed.token })).resolves.toBeNull();
+    await expect(
+      grants.validate({ token: overlapping.token }),
+    ).resolves.toBeNull();
     await expect(
       grants.validate({ token: mcpGrant.token }),
     ).resolves.toBeNull();

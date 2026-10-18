@@ -7,6 +7,7 @@ import {
   type ConnectionActionGuard,
   type ConnectionProvider,
   type Identity,
+  type ModelRequestRewrite,
   startEventDispatcher,
   WorkerNodesService,
 } from "@catamorphic/core";
@@ -176,6 +177,14 @@ export interface WorkServerHooks {
    * slower than `config.connectionGuardTimeoutMs` escalates to a person.
    */
   connectionGuards?: readonly ConnectionActionGuard[];
+  /**
+   * Rewrites of model request bodies through the gateway, in order, before
+   * its policy reads them and after nothing else (ADR 0256): pin the
+   * providers OpenRouter may route to, per project or session. They apply
+   * to every model connection of their `kinds`, configured or built in; a
+   * connection's own `override` in WORK_GATEWAY_CONFIG has the last word.
+   */
+  modelRequestRewrites?: readonly ModelRequestRewrite[];
   /**
    * Credential vault keys from a key service (for example a KMS unwrap at
    * boot), current first. Overrides `config.vaultKeys`.
@@ -602,6 +611,9 @@ async function createWorkServerInner(
     credentialVault,
     ...(hooks.connectionGuards
       ? { connectionGuards: hooks.connectionGuards }
+      : {}),
+    ...(hooks.modelRequestRewrites
+      ? { modelRequestRewrites: hooks.modelRequestRewrites }
       : {}),
     ...(config.connectionGuardTimeoutMs
       ? { connectionGuardTimeoutMs: config.connectionGuardTimeoutMs }

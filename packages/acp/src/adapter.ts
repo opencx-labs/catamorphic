@@ -251,10 +251,18 @@ function startAttempt(
     agentName =
       initialized.agentInfo?.title ?? initialized.agentInfo?.name ?? agentName;
     const capabilities = initialized.agentCapabilities;
-    // An agent that takes its providers from its client (ACP's
-    // `providers/set`) is pointed at the gateway that way too.
+    // An agent that takes its providers from its client (ACP's unstable
+    // `providers/set`) is pointed at the gateway that way too; one that
+    // fails at it still has the variables.
     if (model && capabilities?.providers)
-      await until(pointProviders({ connection, model }));
+      await until(pointProviders({ connection, model })).catch(
+        (error: unknown) =>
+          host.emit({
+            type: "diagnostic",
+            level: "warn",
+            message: `${agentName} did not take the gateway as its provider (${error instanceof Error ? error.message : String(error)}); it has WORK_MODEL_BASE_URL.`,
+          }),
+      );
     const earlier =
       attempt.thread.mode === "resume" || attempt.thread.mode === "restore"
         ? attempt.thread.nativeRef.id
@@ -333,14 +341,26 @@ function startAttempt(
     const choice = attempt.model
       ? modelChoice({ options, model: attempt.model })
       : undefined;
-    if (choice)
+    if (choice?.kind === "set")
       await until(
         connection.setSessionConfigOption({
           sessionId: opened,
           configId: choice.configId,
           value: choice.value,
         }),
+      ).catch((error: unknown) =>
+        host.emit({
+          type: "diagnostic",
+          level: "warn",
+          message: `${agentName} refused the model ${attempt.model}: ${error instanceof Error ? error.message : String(error)}`,
+        }),
       );
+    else if (choice?.kind === "unknown")
+      host.emit({
+        type: "diagnostic",
+        level: "warn",
+        message: `${agentName} offers no model ${attempt.model}; it offers ${choice.offered.join(", ")}.`,
+      });
     // Work hears of a session once it holds the conversation and can be
     // reopened: a reopened one at once, a new one after its first turn ends
     // (an interrupted one starts afresh, told Work's instructions again),
@@ -429,7 +449,8 @@ function startAttempt(
 /**
  * Points every provider the agent lists that speaks the model's API at the
  * loopback gateway (ACP's unstable `providers/set`), with the key Work gave
- * it. Those that speak another API are left alone: they have no route out.
+ * it, and turns off the optional ones that speak another API, so none
+ * reaches a model around the gateway's policy.
  */
 async function pointProviders(input: {
   connection: acp.ClientSideConnection;
@@ -445,31 +466,48 @@ async function pointProviders(input: {
         baseUrl: model.baseUrl,
         headers: loopbackModelHeaders(model),
       });
+    else if (!provider.required)
+      await connection.unstable_disableProvider({
+        providerId: provider.providerId,
+      });
 }
 
 /**
- * The value of the agent's model option that is `model` (by id, else by
- * name), when the agent offers models as a session option and another is
- * chosen now.
+ * The definition's model as the agent's model option (by id, else by name,
+ * else the one value ending in `/<model>`): to set, already chosen, or
+ * unknown to the agent with what it offers instead. Undefined when the
+ * agent offers no model option.
  */
 export function modelChoice(input: {
   options: readonly acp.SessionConfigOption[] | null | undefined;
   model: string;
-}): { configId: string; value: string } | undefined {
+}):
+  | { kind: "set"; configId: string; value: string }
+  | { kind: "chosen" }
+  | { kind: "unknown"; offered: string[] }
+  | undefined {
+  let offered: string[] | undefined;
   for (const option of input.options ?? []) {
     if (option.category !== "model" || option.type !== "select") continue;
     const values = option.options.flatMap((entry) =>
       "group" in entry ? entry.options : [entry],
     );
+    const suffixed = values.filter((value) =>
+      value.value.endsWith(`/${input.model}`),
+    );
     const match =
       values.find((value) => value.value === input.model) ??
-      values.find((value) => value.name === input.model);
-    if (!match) continue;
+      values.find((value) => value.name === input.model) ??
+      (suffixed.length === 1 ? suffixed[0] : undefined);
+    if (!match) {
+      offered = [...(offered ?? []), ...values.map((value) => value.value)];
+      continue;
+    }
     return match.value === option.currentValue
-      ? undefined
-      : { configId: option.id, value: match.value };
+      ? { kind: "chosen" }
+      : { kind: "set", configId: option.id, value: match.value };
   }
-  return undefined;
+  return offered ? { kind: "unknown", offered } : undefined;
 }
 
 /** Signals the agent and everything it started, its process group. */

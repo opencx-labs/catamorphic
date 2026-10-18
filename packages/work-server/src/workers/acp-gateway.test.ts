@@ -152,8 +152,8 @@ beforeAll(async () => {
   );
   const port = await freePort();
   base = `http://127.0.0.1:${port}`;
-  server = await createWorkServer(
-    testServerOptions({
+  server = await createWorkServer({
+    ...testServerOptions({
       dataDir: path.join(root, "control-plane"),
       publicBases: [base],
       env: {
@@ -163,7 +163,22 @@ beforeAll(async () => {
         PATH: process.env.PATH,
       },
     }),
-  );
+    hooks: {
+      // Host code beside the file: it names the project to OpenRouter, and
+      // what it says of providers yields to the file's override.
+      modelRequestRewrites: [
+        {
+          name: "attribute calls",
+          kinds: ["openrouter"],
+          rewrite: ({ body, context }) => ({
+            ...body,
+            user: `project:${context.projectId}`,
+            provider: { only: ["anywhere"] },
+          }),
+        },
+      ],
+    },
+  });
   await server.app.listen({ port, host: "127.0.0.1" });
   const operatorSecret = fs
     .readFileSync(path.join(root, "control-plane", "operator-secret"), "utf8")
@@ -309,6 +324,7 @@ describe("an ACP agent on a worker, with its model through the gateway", () => {
     expect(call?.key).toBe(REAL_KEY);
     expect(JSON.parse(call?.body ?? "{}")).toMatchObject({
       model: "deepseek/v4-flash",
+      user: `project:${projectId}`,
       provider: {
         only: ["together", "parasail"],
         allow_fallbacks: false,
@@ -330,11 +346,10 @@ describe("an ACP agent on a worker, with its model through the gateway", () => {
         (
           await server.catamorphic.core.db
             .selectFrom("model_usage")
-            .select("id")
+            .select("output_tokens")
             .where("agent_session_id", "=", session.id)
-            .where("output_tokens", "=", 3)
             .execute()
-        ).length === 1,
+        ).some((row) => Number(row.output_tokens) === 3),
       "the gateway's usage row",
     );
   }, 120_000);

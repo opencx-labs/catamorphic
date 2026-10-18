@@ -1,4 +1,4 @@
-import type { Json, JsonObject } from "@catamorphic/db";
+import type { Json } from "@catamorphic/db";
 
 export type AuthorizationChallenge =
   | { kind: "url"; url: string; expiresAt?: string }
@@ -116,30 +116,17 @@ export interface ConnectionModelEndpoint {
   /** The headers that carry the stored key on one upstream request. */
   headers(args: { material: Uint8Array }): Record<string, string>;
   /**
-   * Rewrites each POST's JSON body before the gateway's policy reads it and
-   * the provider receives it (ADR 0256): pin the providers an aggregator
-   * may route to, drop fields, ask for usage. Returns the body to send, or
-   * throws `ConnectionActionRefusedError` to refuse the call. A POST whose
-   * body is not one JSON object, or that is content-encoded, is refused
-   * rather than forwarded unrewritten.
+   * Top-level body fields set on every request that carries a body, each
+   * replacing whatever the caller sent, `null` removing it (ADR 0256): the
+   * providers an aggregator may route to, say. Applied after the host's
+   * rewrites, so it has the last word.
    */
-  rewrite?(request: ModelRequest): JsonObject | Promise<JsonObject>;
-}
-
-/** One model request as a rewrite sees it (ADR 0256). */
-export interface ModelRequest {
-  method: string;
-  /** Path below the connection's base URL, e.g. `chat/completions`. */
-  path: string;
-  /** The parsed body; the rewrite may return it changed. */
-  body: JsonObject;
-  context: {
-    tenantId: string;
-    projectId: string;
-    /** The Environment binding alias the call came through. */
-    alias: string;
-    sessionId: string | null;
-  };
+  readonly override?: Readonly<Record<string, Json>>;
+  /**
+   * Path prefixes below `baseUrl` requests may reach (`/chat/completions`),
+   * matched by whole segments; absent reaches every path (ADR 0256).
+   */
+  readonly paths?: readonly string[];
 }
 
 /**

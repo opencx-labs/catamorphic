@@ -232,6 +232,8 @@ export {
   type ConnectionGuardRecord,
   type ConnectionGuardVerdict,
   type ConnectionReviewOutcome,
+  type ModelRequest,
+  type ModelRequestRewrite,
   reviewConnectionAction,
 } from "./services/connection-guards.js";
 export {
@@ -247,7 +249,6 @@ export {
   ConnectionProviderRegistry,
   type GitRemoteCredentials,
   type ModelApi,
-  type ModelRequest,
 } from "./services/connection-providers.js";
 export {
   bindingPrincipalKinds,

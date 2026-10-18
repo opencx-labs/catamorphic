@@ -49,7 +49,10 @@ import {
 import { ConnectionAdmissionService } from "./services/connection-admission.js";
 import { ConnectionBroker } from "./services/connection-broker.js";
 import { ConnectionCapabilityGrantsService } from "./services/connection-capability-grants.js";
-import type { ConnectionActionGuard } from "./services/connection-guards.js";
+import type {
+  ConnectionActionGuard,
+  ModelRequestRewrite,
+} from "./services/connection-guards.js";
 import {
   type ConnectionProvider,
   ConnectionProviderRegistry,
@@ -203,6 +206,12 @@ export interface CatamorphicCoreConfig {
    * person (default 30 seconds). A throwing guard always denies.
    */
   connectionGuardTimeoutMs?: number;
+  /**
+   * Rewrite model request bodies through the gateway before its policy
+   * reads them (ADR 0256), in order: pin an aggregator's providers, drop
+   * fields. Host code, as guards are; each is bounded by the guard timeout.
+   */
+  modelRequestRewrites?: readonly ModelRequestRewrite[];
   /** Re-resolve current member authority for workflow dispatch and agent capabilities. */
   resolveMemberIdentity?: (args: {
     tenantId: string;
@@ -922,6 +931,10 @@ export class CatamorphicCore {
       this.modelGateway = new ModelGatewayService({
         store: dbModelGatewayStore(this.db),
         broker: this.connectionBroker,
+        rewrites: config.modelRequestRewrites ?? [],
+        ...(config.connectionGuardTimeoutMs
+          ? { rewriteTimeoutMs: config.connectionGuardTimeoutMs }
+          : {}),
       });
       this.httpGateway = new HttpGatewayService({
         store: dbHttpGatewayStore(this.db),

@@ -97,8 +97,10 @@
   (`metadata.changedFiles`, with `path` + `kind`).
 - **ACP harness, the rest.** The desktop runs local ACP command agents
   (`acp.command`, ADR 0241), and a Work server runs them in the chat's
-  sandbox on a model connection (ADR 0255). Still to build: the remote
-  endpoint transport (`acp.endpoint`), plans and usage over ACP. A stdio MCP
+  sandbox on a model connection (ADR 0255), choosing the definition's model
+  through the agent's model option. Still to build: the remote endpoint
+  transport (`acp.endpoint`), effort through ACP, plans and usage over
+  ACP. A stdio MCP
   bridge for agents that take no HTTP MCP (Work's tools ride
   HTTP today, which Hermes accepts without advertising). A warm process
   per thread instead of one per turn.
