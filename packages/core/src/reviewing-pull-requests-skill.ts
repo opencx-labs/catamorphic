@@ -1237,8 +1237,10 @@ step nor a rerun of the turn posts twice.
    when it registered the App for this project) and turn on
    \`reviewPullRequests\`, \`answerReviewComments\`, and \`closePullRequestChats\`
    for the project, and \`postReviews\` for the project in the \`github-poster\`
-   Environment with its \`github\` connection. The \`github\` webhook listens
-   once they are on.
+   Environment with its \`github\` connection. Whoever turns them on needs
+   \`automations:write\` and a role whose \`environments\` list both
+   Environments the workflows run in (\`default\` and \`github-poster\`). The
+   \`github\` webhook listens once they are on.
 3. Open a small pull request. Within a minute a chat \`pr-<repository>-<number>\`
    appears; inspect it: Environment \`review\`, a review-pool machine, and a
    workspace at the head commit. When its turn ends, a \`postReviews\` run
