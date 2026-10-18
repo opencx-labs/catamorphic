@@ -179,7 +179,9 @@ a pull request like any other.
 ## 5. Turn it on
 
 Someone with `automations:write`, in a role whose `environments` list
-`default` and `github-poster`, enables the workflows for the project:
+`default` and `github-poster` and whose `connections` include
+`{ "environment": "github-poster", "alias": "github" }`, enables the
+workflows for the project:
 `reviewPullRequests`, `answerReviewComments`, and `closePullRequestChats` in
 the `default` Environment, and `postReviews` in `github-poster`, with its
 `github` connection consented. The `github` webhook listens once they are on;
