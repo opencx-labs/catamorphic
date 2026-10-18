@@ -791,6 +791,42 @@ export class TurnEngine {
     }
   }
 
+  /**
+   * Prepare an attempt again from the start, its runner forgotten: one
+   * whose runner never got its start, or went away before its harness
+   * began the turn. The turn's input goes to the next runner whole.
+   */
+  private async prepareAgain(
+    local: LocalTurn,
+    turn: Turn,
+    attempt: Attempt,
+  ): Promise<Turn> {
+    const preparing: Turn = {
+      ...turn,
+      status: "preparing",
+      updatedAt: new Date().toISOString(),
+    };
+    await this.deps.db.transaction().execute(async (trx) => {
+      await this.assertOwned(local, trx);
+      await trx
+        .updateTable("agent_turn_attempts")
+        .set({ runner: null, provider_started_at: null })
+        .where("id", "=", attempt.id)
+        .execute();
+      await this.deps.log.append(trx, {
+        sessionId: turn.sessionId,
+        events: [
+          {
+            type: "attempt.changed",
+            attempt: { ...attempt, status: "preparing" },
+          },
+          { type: "turn.changed", turn: preparing },
+        ],
+      });
+    });
+    return preparing;
+  }
+
   private async loadTurn(turnId: string): Promise<Turn> {
     const row = await this.deps.db
       .selectFrom("agent_turns")
@@ -1537,13 +1573,23 @@ export class TurnEngine {
               session: ctx.session,
               location: runner.location,
             });
-      if (!channel)
+      if (!channel) {
+        // Gone before its harness began the turn (a host that restarted,
+        // ADR 0246): the turn's input never reached the thread, so the
+        // same attempt is prepared again with it, never continued
+        // without it.
+        if (!runner.started)
+          return {
+            kind: "restart",
+            turn: await this.prepareAgain(local, turn, attempt),
+          };
         return {
           kind: "lost",
           turn,
           attempt,
           reason: "The machine running this turn stopped before it finished.",
         };
+      }
       local.channel = channel;
       await this.maskTakenOver(local, ctx);
       // A holder can stop between recording the runner and sending its
@@ -1560,30 +1606,10 @@ export class TurnEngine {
         if (!heard) {
           await channel.kill().catch(() => {});
           local.channel = undefined;
-          const preparing: Turn = {
-            ...turn,
-            status: "preparing",
-            updatedAt: new Date().toISOString(),
+          return {
+            kind: "restart",
+            turn: await this.prepareAgain(local, turn, attempt),
           };
-          await db.transaction().execute(async (trx) => {
-            await this.assertOwned(local, trx);
-            await trx
-              .updateTable("agent_turn_attempts")
-              .set({ runner: null, provider_started_at: null })
-              .where("id", "=", attempt.id)
-              .execute();
-            await log.append(trx, {
-              sessionId: turn.sessionId,
-              events: [
-                {
-                  type: "attempt.changed",
-                  attempt: { ...attempt, status: "preparing" },
-                },
-                { type: "turn.changed", turn: preparing },
-              ],
-            });
-          });
-          return { kind: "restart", turn: preparing };
         }
       }
       // Answer again what the previous holder took and did not answer.
@@ -2224,13 +2250,7 @@ export class TurnEngine {
       // A chat a person named keeps its name (ADR 0247).
       if (
         ingested.title &&
-        !(await trx
-          .selectFrom("agent_session_commands")
-          .select("command_id")
-          .where("session_id", "=", input.turn.sessionId)
-          .where("type", "=", "rename")
-          .where("status", "=", "accepted")
-          .executeTakeFirst())
+        !(await this.deps.log.namedByPerson(trx, input.turn.sessionId))
       )
         extra.push({
           type: "session.changed",

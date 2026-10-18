@@ -11,8 +11,8 @@ const EDGE_PX = 16;
  * Which list a thumb stands for, and so its lane from the sidebar's outer
  * edge in (ADR 0248): the sidebar's own panel on the edge itself, and a
  * section's list that asks for a thumb (`scrollbar: true`) one lane in,
- * over its rows' leading padding. Nested lists, nested lanes: the two
- * never overlap.
+ * in padding the panel widens for it. Nested lists, nested lanes: the two
+ * never overlap, and neither lies over a row.
  */
 export type ScrollLane = "panel" | "section";
 
@@ -127,6 +127,18 @@ export function OverlayScrollbar({
     };
     const onScroll = (event: Event) => {
       if (drag) {
+        place();
+        return;
+      }
+      // A list holding the shown one scrolled (the panel, under a
+      // section's list): the track follows its list.
+      if (
+        active &&
+        bar.dataset.shown === "true" &&
+        event.target instanceof Node &&
+        event.target !== active &&
+        event.target.contains(active)
+      ) {
         place();
         return;
       }

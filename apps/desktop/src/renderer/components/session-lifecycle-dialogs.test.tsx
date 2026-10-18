@@ -65,6 +65,16 @@ it("opens with the chat's name and renames it to what was typed", async () => {
   expect(onClose).toHaveBeenCalledOnce();
 });
 
+it("closes without renaming when the name is unchanged", async () => {
+  const onRename = vi.fn(async () => {});
+  const { onClose } = mount(onRename);
+  const input = field();
+  if (!input) throw new Error("No name field");
+  await act(async () => input.form?.requestSubmit());
+  expect(onRename).not.toHaveBeenCalled();
+  expect(onClose).toHaveBeenCalledOnce();
+});
+
 it("refuses an empty name and stays open with why", async () => {
   const onRename = vi.fn(async () => {});
   const { onClose } = mount(onRename);

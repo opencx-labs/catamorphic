@@ -415,6 +415,10 @@ export function TabbedSidebar({
       matchesSidebarSurface(tab.when, surface) &&
       tab.sections.some(sectionAvailable),
   );
+  /** A section asks for a scroll thumb: its lane takes panel padding. */
+  const sectionThumbs = configuredTabs.some((tab) =>
+    tab.sections.some((section) => section.scrollbar),
+  );
   // The person's choice while it is on offer; otherwise the first tab that
   // stays whatever is in front, so a contextual tab arriving never takes
   // the panel from what the person was looking at.
@@ -734,6 +738,8 @@ export function TabbedSidebar({
         <div
           ref={panelArea}
           className="relative min-h-0 flex-1 overflow-hidden"
+          // A section's thumb has a lane of the panel's padding (ADR 0248).
+          data-section-thumbs={sectionThumbs ? "" : undefined}
         >
           {configuredTabs.map((tab) => (
             <div
@@ -788,9 +794,7 @@ export function TabbedSidebar({
             edge={side}
             getArea={() => panelArea.current}
           />
-          {configuredTabs.some((tab) =>
-            tab.sections.some((section) => section.scrollbar),
-          ) && (
+          {sectionThumbs && (
             <OverlayScrollbar
               lane="section"
               edge={side}

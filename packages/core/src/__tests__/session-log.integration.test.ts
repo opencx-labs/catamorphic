@@ -343,6 +343,40 @@ describe("session log", () => {
       id: "lingering",
       harness: { placement: "host", adapter: lingeringAdapter },
     };
+    // Slow to begin its first `[[hesitate]]` turn: it names its thread and
+    // never reports the turn begun, as a harness still starting up when its
+    // host restarts (ADR 0246). Every later attempt is echo's.
+    let hesitated = false;
+    const hesitantAdapter: HarnessAdapter = {
+      id: "echo",
+      capabilities: () => inner.capabilities(),
+      start: (attempt, host) => {
+        if (hesitated || !attempt.input?.text.includes("[[hesitate]]"))
+          return inner.start(attempt, host);
+        hesitated = true;
+        host.emit({
+          type: "thread",
+          ref:
+            attempt.thread.mode === "resume"
+              ? attempt.thread.nativeRef
+              : { id: randomUUID(), strength: "strong" },
+        });
+        return {
+          steer: async () => false,
+          interrupt: () => {},
+          finished: new Promise<void>((resolve) =>
+            host.signal.addEventListener("abort", () => resolve(), {
+              once: true,
+            }),
+          ),
+        };
+      },
+    };
+    const hesitant: RegisteredCodingAgent = {
+      ...echo,
+      id: "hesitant",
+      harness: { placement: "host", adapter: hesitantAdapter },
+    };
     // Its tools on `prod` ask the person first (ADR 0054).
     const guarded: RegisteredCodingAgent = {
       ...echo,
@@ -410,6 +444,7 @@ describe("session log", () => {
               elsewhere,
               blocked,
               recording,
+              hesitant,
             ].find((agent) => agent.id === id),
           list: () => [
             echo,
@@ -2472,6 +2507,74 @@ describe("session log", () => {
             "completed",
           ]);
           expect(turns[2]?.continuationOf).toBe(turns[1]?.id);
+        },
+        { timeout: 20_000 },
+      );
+    } finally {
+      await worker.stop();
+      await next.stopLocalTurns();
+    }
+  }, 40_000);
+
+  it("starts a turn over with its input when its host restarts before its harness began it", async () => {
+    const project = await projects.create(identity, {
+      name: "Restart before start",
+    });
+    const restarting = makeService();
+    const { id: sessionId } = await restarting.create(identity, project.id, {
+      agentId: "hesitant",
+    });
+    await restarting.sendMessage(
+      identity,
+      project.id,
+      sessionId,
+      "remember me",
+    );
+    await restarting.command(identity, project.id, sessionId, {
+      type: "send",
+      commandId: randomUUID(),
+      text: "plan the launch [[hesitate]]",
+    });
+    await vi.waitFor(
+      async () => {
+        const detail = await restarting.get(identity, project.id, sessionId);
+        expect(
+          orderedTurns(sessionStateFromSnapshot(detail.snapshot))[1]?.status,
+        ).toBe("running");
+      },
+      { timeout: 10_000 },
+    );
+    await restarting.stopLocalTurns({ handBack: "all" });
+
+    const next = makeService();
+    const worker = next.startWorker({
+      resolveIdentity: async () => identity,
+      pollIntervalMs: 200,
+    });
+    try {
+      await vi.waitFor(
+        async () => {
+          const detail = await next.get(identity, project.id, sessionId);
+          const turns = orderedTurns(sessionStateFromSnapshot(detail.snapshot));
+          // The same turn ran again with the person's message, rather than
+          // being continued without it.
+          expect(turns.map((turn) => turn.status)).toEqual([
+            "completed",
+            "completed",
+          ]);
+          expect(
+            detail.snapshot.items.some(
+              (item) =>
+                item.kind === "assistant_message" &&
+                item.text.startsWith("Echo: plan the launch"),
+            ),
+          ).toBe(true);
+          expect(
+            detail.snapshot.items.some(
+              (item) =>
+                item.kind === "notice" && item.code === "turn_continued",
+            ),
+          ).toBe(false);
         },
         { timeout: 20_000 },
       );

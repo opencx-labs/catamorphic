@@ -1904,10 +1904,11 @@ kbd {
 /* The sidebar's lists (the panel, a section's own list) keep no scrollbar
    and no column for one, so rows sit evenly and nothing narrows when a
    section grows. Each fades the edge it continues past (cat-edge-fade).
-   Thin overlay thumbs stand in while they scroll, in lanes from the outer
-   edge in (components/overlay-scrollbar.tsx, ADR 0248): the panel's on the
-   edge, in the panel's padding; a section's that asks for one (scrollbar:
-   true) a lane in, over its rows' leading padding, clear of their icons. */
+   Thin overlay thumbs stand in while they scroll, in lanes of the panel's
+   padding from the outer edge in (components/overlay-scrollbar.tsx, ADR
+   0248): the panel's on the edge; a section's that asks for one (scrollbar:
+   true) a lane in, the panel's outer padding widened for it. Neither ever
+   lies over a row. */
 .sidebar-tab-panel,
 .sidebar-tab-panel * {
   scrollbar-width: none;
@@ -1932,13 +1933,19 @@ kbd {
 .overlay-scrollbar[data-lane="panel"][data-edge="right"] {
   right: 1px;
 }
-/* Past the panel's 8px padding and a 1px gap, in the rows' own 8px
-   padding: 3px from the panel's thumb and 2px from the rows' icons. */
+/* The section lane: 2px past the panel's thumb, 3px before the rows,
+   whose outer padding grows from 8px to 16px to keep it. */
 .overlay-scrollbar[data-lane="section"][data-edge="left"] {
-  left: 9px;
+  left: 8px;
 }
 .overlay-scrollbar[data-lane="section"][data-edge="right"] {
-  right: 9px;
+  right: 8px;
+}
+[data-sidebar="left"] [data-section-thumbs] > .sidebar-tab-panel {
+  padding-left: 16px;
+}
+[data-sidebar="right"] [data-section-thumbs] > .sidebar-tab-panel {
+  padding-right: 16px;
 }
 .overlay-scrollbar[data-shown="true"] {
   opacity: 1;

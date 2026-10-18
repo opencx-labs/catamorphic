@@ -60,9 +60,9 @@ Work's lists (bare names in grants and work.read; work:<name> in source):
 - workflows, apps: the project's; a row opens it (workflow:<name>, app:<name>).
 - chats: the project's chats, newest first, paged; their forks and children
   nest. Rows carry signal and data (the session's fields: running,
-  attentionRequired, owner, createdAt, ...). Actions: new-subsession,
-  mark-read, mark-unread, archive, unarchive (open-terminal and open-preview
-  for a server's chats).
+  attentionRequired, owner, createdAt, ...). Actions: rename (opens the
+  rename dialog), new-subsession, mark-read, mark-unread, archive, unarchive
+  (open-terminal and open-preview for a server's chats).
 - subsessions: the children of the chat in front; needs when: {session:true}.
 - activity: chats working or waiting for you, and workflow runs going or
   stopped.

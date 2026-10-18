@@ -412,6 +412,27 @@ it("offers the download again when the remembered one cannot be had", async () =
   );
 });
 
+it("holds the channel while a remembered release is verified again", async () => {
+  const { controller, updater } = setup({
+    downloaded: { load: () => "0.1.0-alpha.2", save: () => {} },
+  });
+  let verified = () => {};
+  updater.downloadUpdate.mockReturnValueOnce(
+    new Promise<undefined>((resolve) => {
+      verified = () => resolve(undefined);
+    }),
+  );
+  const checking = controller.check(false);
+  updater.available("0.1.0-alpha.2");
+  await checking;
+  expect(controller.setChannel("stable")).toBe(false);
+  expect(await controller.check(true)).toBe(true);
+  expect(updater.checkForUpdates).toHaveBeenCalledOnce();
+  verified();
+  updater.downloaded("0.1.0-alpha.2");
+  expect(controller.current().phase).toBe("downloaded");
+});
+
 it("forgets the downloaded release once it is the one running", () => {
   let remembered: string | undefined = "0.1.0-alpha.1";
   setup({

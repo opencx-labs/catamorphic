@@ -184,6 +184,8 @@ export class DesktopUpdaterController {
   setChannel(channel: DesktopUpdateChannel): boolean {
     if (
       this.checking ||
+      // A remembered release being verified again, phase still "checking".
+      this.downloading ||
       this.state.phase === "downloading" ||
       this.state.phase === "downloaded" ||
       this.state.phase === "installing"
@@ -219,6 +221,7 @@ export class DesktopUpdaterController {
       return false;
     }
     if (
+      this.downloading ||
       this.state.phase === "downloading" ||
       this.state.phase === "downloaded" ||
       this.state.phase === "installing" ||

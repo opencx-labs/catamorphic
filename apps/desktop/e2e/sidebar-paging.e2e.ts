@@ -267,6 +267,8 @@ it("fades a list's edges where it continues; thumbs in their own lanes, hidden a
       left: number;
       edge: number;
       panelRight: number;
+      rowLeft: number;
+      right: number;
       top: number;
       bottom: number;
       listTop: number;
@@ -277,7 +279,8 @@ it("fades a list's edges where it continues; thumbs in their own lanes, hidden a
       const panel = document.querySelector('${panelThumb}').getBoundingClientRect();
       const list = document.querySelector('${tree}').getBoundingClientRect();
       const side = document.querySelector('${side} .sidebar-inner').getBoundingClientRect();
-      return { left: bar.left, edge: side.left, panelRight: panel.right, top: bar.top, bottom: bar.bottom, listTop: list.top, listBottom: list.bottom };
+      const row = document.querySelector('${chats} [role="treeitem"]').getBoundingClientRect();
+      return { left: bar.left, right: bar.right, edge: side.left, panelRight: panel.right, rowLeft: row.left, top: bar.top, bottom: bar.bottom, listTop: list.top, listBottom: list.bottom };
     })()`,
       { label: "the thumb beside the scrolled list" },
     )
@@ -291,9 +294,11 @@ it("fades a list's edges where it continues; thumbs in their own lanes, hidden a
     })()`);
       throw new Error(`${String(error)}; thumb: ${JSON.stringify(thumbState)}`);
     });
-  expect(shown.left - shown.edge).toBeGreaterThanOrEqual(8);
-  expect(shown.left - shown.edge).toBeLessThanOrEqual(10);
+  expect(shown.left - shown.edge).toBeGreaterThanOrEqual(7);
+  expect(shown.left - shown.edge).toBeLessThanOrEqual(9);
+  // Its own lane: past the sidebar's thumb, and before the rows begin.
   expect(shown.left).toBeGreaterThan(shown.panelRight);
+  expect(shown.rowLeft).toBeGreaterThan(shown.right);
   expect(shown.top).toBeGreaterThanOrEqual(shown.listTop);
   expect(shown.bottom).toBeLessThanOrEqual(shown.listBottom);
   // A moment after the list is still, it fades away.

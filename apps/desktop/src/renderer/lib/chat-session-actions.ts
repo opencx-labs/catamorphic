@@ -48,7 +48,14 @@ export function renameChatInput(title: string): SidebarActionInput {
   return {
     title: "Rename chat",
     submit: "Rename",
-    fields: [{ name: "title", label: "Name", value: title }],
+    fields: [
+      {
+        name: "title",
+        label: "Name",
+        value: title,
+        placeholder: "What this chat is about",
+      },
+    ],
   };
 }
 

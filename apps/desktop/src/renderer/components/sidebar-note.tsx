@@ -14,6 +14,10 @@ import {
   useSidebarRefresh,
 } from "./sidebar-contribution.js";
 
+/** Stable, so a render does not tear the fade down and build it again. */
+const fadeNote = (scroller: HTMLDivElement | null) =>
+  scroller ? fadeEdges(scroller) : undefined;
+
 /** The note is an existing project file. Personal pinning creates no new document model. */
 export function SidebarNote({
   projectId,
@@ -135,7 +139,7 @@ export function SidebarNote({
             // A long note scrolls in place and fades the edge it
             // continues past, as every sidebar list does (ADR 0237).
             <div
-              ref={(scroller) => (scroller ? fadeEdges(scroller) : undefined)}
+              ref={fadeNote}
               className="sidebar-note cat-edge-fade max-h-96 overflow-y-auto break-words"
             >
               <ReactMarkdown

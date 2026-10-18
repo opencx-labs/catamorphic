@@ -253,6 +253,7 @@ import {
   importedTranscriptEvents,
 } from "./sessions/session-import.js";
 import {
+  renameCommandId,
   SessionCommandRejectedError,
   SessionLog,
 } from "./sessions/session-log.js";
@@ -1984,15 +1985,18 @@ export class AgentSessionsService {
     const normalized = title.replace(/\s+/g, " ").trim();
     if (!normalized || normalized.length > 500)
       throw new Error("A chat's name is 1 to 500 characters");
+    const commandId = renameCommandId(identity.externalUserId);
     await this.log.command({
       sessionId,
-      commandId: `user:${identity.externalUserId}:rename:${randomUUID()}`,
+      commandId,
       type: "rename",
       externalUserId: identity.externalUserId,
       run: async (trx) => {
         await this.assertLocalAuthority(trx, sessionId);
+        // Its command id marks the name the person's (namedByPerson).
         await this.log.append(trx, {
           sessionId,
+          commandId,
           events: [{ type: "session.changed", session: { title: normalized } }],
         });
         return null;
@@ -7808,10 +7812,13 @@ export class AgentSessionsService {
             existing: current,
             lastOrdinal: existing ? await lastOrdinal() : 0,
           });
+          // The tool's own title, unless the person named the chat
+          // (ADR 0247).
           if (
             existing &&
             transcript.title &&
-            transcript.title !== existing.title
+            transcript.title !== existing.title &&
+            !(await this.log.namedByPerson(trx, sessionId))
           )
             events.push({
               type: "session.changed",

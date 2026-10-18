@@ -27,9 +27,13 @@ agent worker and calls `stopLocalTurns({ handBack: "all" })`) before
 anything a turn uses stops. A handed back turn is not interrupted: its
 lease is released, its in-process runner ends with Work, and the next
 launch claims it, finds its runner gone and continues it, exactly as after
-a crash. A turn that was finalizing settles before Work quits. Terminals,
-previews and background commands simply end. An ordinary quit is
-unchanged: it still interrupts working agents.
+a crash. A turn whose harness had not yet begun it (no `turn.started`)
+is prepared again with its input instead, so the person's message is
+never continued without. A turn that was finalizing settles before Work
+quits. Terminals, previews and background commands simply end. An
+ordinary quit is unchanged: it still interrupts working agents, and an
+install that fails after quitting began (Squirrel's error) clears the
+restart, so a later Quit is ordinary again.
 
 **A downloaded release is remembered.** `<userData>/updates.json` keeps the
 version downloaded beside the channel. A check that finds that version

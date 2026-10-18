@@ -53,7 +53,17 @@ export function registerDesktopUpdater(options: {
     prepareInstall: () => preparation.prepare(),
     downloaded: {
       load: () => preferences.downloaded(),
-      save: (version) => preferences.saveDownloaded(version),
+      // Losing the record only costs a second download: never a failure.
+      save: (version) => {
+        try {
+          preferences.saveDownloaded(version);
+        } catch (error) {
+          logger.warn(
+            "[desktop] could not record the downloaded update",
+            error,
+          );
+        }
+      },
     },
     installedInPlace: () => app.isInApplicationsFolder(),
     // Electron moves the bundle (out of a disk image or App Translocation
@@ -105,9 +115,15 @@ export function registerDesktopUpdater(options: {
     restarting = true;
     markUpdateRestart(app.getPath("userData"));
   };
+  // Squirrel failing to relaunch leaves Work running: a later Quit is an
+  // ordinary one again, which stops agents rather than handing them back.
+  const onUpdateError = () => {
+    restarting = false;
+  };
   // Every build listens: a development build's restart rehearsal (the e2e
   // suite's) announces the same quit.
   nativeUpdater.on("before-quit-for-update", onBeforeQuitForUpdate);
+  nativeUpdater.on("error", onUpdateError);
   // Shortly after launch, every six hours of wall-clock time, a minute
   // after waking, and again soon after a failure (update-schedule.ts).
   const schedule = new UpdateSchedule({
@@ -138,6 +154,7 @@ export function registerDesktopUpdater(options: {
         "before-quit-for-update",
         onBeforeQuitForUpdate,
       );
+      nativeUpdater.removeListener("error", onUpdateError);
       for (const channel of [
         "catamorphic:update-state",
         "catamorphic:update-check",

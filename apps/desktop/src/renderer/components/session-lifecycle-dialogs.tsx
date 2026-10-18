@@ -9,7 +9,8 @@ import { PendingButton } from "./pending-button.js";
  * The one dialog that renames a chat (ADR 0247), whether its menu (a
  * sidebar row, its tab, the dock) or the palette's Rename chat asked: the
  * action input form, filled with the name it has. It stays open with the
- * error when the rename is refused.
+ * error when the rename is refused; the name unchanged, it just closes,
+ * claiming nothing.
  */
 export function RenameChatDialog({
   chat,
@@ -26,8 +27,11 @@ export function RenameChatDialog({
         chat && {
           label: "Rename chat",
           input: renameChatInput(chat.title),
-          run: (values) =>
-            onRename({ sessionId: chat.sessionId, title: chatName(values) }),
+          run: async (values) => {
+            const title = chatName(values);
+            if (title !== chat.title)
+              await onRename({ sessionId: chat.sessionId, title });
+          },
         }
       }
       onClose={onClose}

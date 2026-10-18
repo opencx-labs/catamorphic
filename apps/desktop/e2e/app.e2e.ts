@@ -906,7 +906,7 @@ describe("chat flows", () => {
     );
   });
 
-  it("renames a chat from its sidebar row and its dock bubble, and keeps the name", async () => {
+  it("renames a chat from its sidebar row, dock bubble, the palette and its tab, in one dialog, and keeps the name", async () => {
     const sidebarRow = (text: string) =>
       `[...document.querySelectorAll('aside [data-session-id]')].find((row) => row.textContent.includes(${JSON.stringify(text)}))`;
     const dockBubble = (text: string) =>
@@ -1024,6 +1024,35 @@ describe("chat flows", () => {
       { label: "Rename chat in the palette" },
     );
     await rename("Launch notes", "Launch plan");
+
+    // As a tab, its right-click has the chat's verbs after the ways to
+    // open it.
+    await run(`pressKey('M', { metaKey: true, shiftKey: true }); return true;`);
+    await runWait(
+      `return !floatingDock() && !!visibleDock() &&
+              visibleDock().className.includes('max-w-full');`,
+      { label: "the chat as a tab" },
+    );
+    await runWait(
+      `const label = $$('.workspace-tab-label').find((el) => el.textContent.includes('Launch plan'));
+       if (!label) return false;
+       const r = label.getBoundingClientRect();
+       label.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: r.left + 10, clientY: r.top + 10 }));
+       return true;`,
+      { label: "the chat's tab in the strip" },
+    );
+    await runWait(
+      `const labels = $$('[role="menuitem"]').map((item) => item.textContent.trim());
+       return labels[0] === 'Open here' && labels.includes('Rename…');`,
+      { label: "the tab's menu: open modes, then the chat's verbs" },
+    );
+    await run(`byText('[role="menuitem"]', 'Rename…').click(); return true;`);
+    await rename("Launch plan", "Launch tab");
+    // Back to floating, as the next tests expect.
+    await run(`pressKey('Escape'); return true;`);
+    await runWait(`return !!floatingDock();`, {
+      label: "the chat floating again",
+    });
   });
 });
 

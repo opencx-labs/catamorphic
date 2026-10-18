@@ -594,8 +594,8 @@ and one component (`source-section.tsx`) draws every list.
   stand in for scrollbars, in lanes from the sidebar's outer edge in, and
   never over each other (ADR 0248): the sidebar's own panel has one on the
   edge, and a section that asks (`scrollbar: true`; none of Work's do) has
-  one a lane in, over its rows' leading padding, spanning that list's
-  height. Each is hidden at rest, fades in as its list scrolls or the
+  one a lane in, in 8px more outer padding its sidebar keeps for it,
+  spanning that list's height. Each is hidden at rest, fades in as its list scrolls or the
   pointer nears the edge beside it, can be dragged, and fades out a moment
   after (`components/overlay-scrollbar.tsx`).
 - **A row's chevron ends it.** A row with children ends with its
@@ -3345,13 +3345,13 @@ next check offers Restart, not Download. See ADR 0246.
 "Rename…" leads a chat's menu, in the sidebar, on its tab and in the
 dock, and the palette's "Rename chat…" names the chat in front. All open
 one rename dialog, the small form other actions use, filled with the
-current name. The chat keeps a name its person gave it; an agent that
+current name (empty for an untitled chat). The chat keeps a name its person gave it; an agent that
 titles its conversations no longer replaces it. See ADR 0247.
 
 The sidebar itself had no thumb, so a long one gave no sense of where it
 was; a thumb for it on the outer edge would have sat where a section's
 showed. Thumbs now take lanes: the sidebar's on its outer edge, a
-section's that asks for one a lane in, over its rows' padding, never over
-the sidebar's. Both stay hidden until their list scrolls or the pointer
+section's that asks for one a lane in, in padding the sidebar widens for
+it, never over the sidebar's thumb or a row. Both stay hidden until their list scrolls or the pointer
 nears that edge. Every other list still shows only the fade where it
 continues, a long note now included. See ADR 0248.
