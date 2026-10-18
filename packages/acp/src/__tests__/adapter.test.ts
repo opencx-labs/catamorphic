@@ -270,6 +270,16 @@ describe("ACP adapter", () => {
         message: expect.stringContaining("couldn't reopen its earlier session"),
       }),
     );
+    // Reported before the turn starts, so a restart for a message sent
+    // meanwhile continues the new session, never the refused one.
+    const order = turn
+      .events()
+      .flatMap((event) =>
+        event.type === "thread" || event.type === "turn.started"
+          ? [event.type]
+          : [],
+      );
+    expect(order).toEqual(["thread", "turn.started"]);
     expect(turn.events()).toContainEqual({
       type: "thread",
       ref: { id: "session-1", strength: "strong" },
@@ -498,10 +508,18 @@ describe("ACP adapter", () => {
     turn.send({ kind: "interrupt" });
     await turn.until(() => turn.completed() !== undefined, 20_000);
     expect(turn.completed()).toMatchObject({ status: "interrupted" });
-    // What it started goes with it.
-    const sleeper = space.state().sleeper;
+    // What it started goes with it (gone, or a zombie its new parent has
+    // yet to reap).
+    const sleeper = space.state().sleeper ?? 0;
     expect(sleeper).toBeGreaterThan(0);
-    expect(() => process.kill(sleeper ?? 0, 0)).toThrow();
+    const stat = () =>
+      spawnSync("ps", ["-o", "stat=", "-p", String(sleeper)], {
+        encoding: "utf8",
+      }).stdout.trim();
+    const deadline = Date.now() + 5_000;
+    while (stat() && !stat().startsWith("Z") && Date.now() < deadline)
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(stat() === "" || stat().startsWith("Z")).toBe(true);
   }, 30_000);
 
   it("cancels a permission request the agent makes after the interrupt, opening no approval", async () => {

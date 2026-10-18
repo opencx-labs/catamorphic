@@ -1,5 +1,5 @@
 import { Bot, KeyRound, ShieldAlert } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { displayCommand } from "../../shared/acp-agents.js";
 import { desktopApi, type ProjectAgentInfo } from "../lib/desktop-api.js";
 import { Modal } from "./modal.js";
@@ -45,6 +45,9 @@ export function ProjectAgentConsentDialog({
   const [latest, setLatest] = useState<ProjectAgentInfo | null>(null);
   const agent = latest ?? request?.agent ?? null;
   const acp = agent?.kind === "acp";
+  /** The request on screen now, so a late answer never lands on another. */
+  const shown = useRef(request);
+  shown.current = request;
 
   // Reset transient state whenever a new request comes in.
   // biome-ignore lint/correctness/useExhaustiveDependencies: request is the reset trigger, not a body dependency
@@ -68,17 +71,21 @@ export function ProjectAgentConsentDialog({
         ok: false as const,
         error: cause instanceof Error ? cause.message : String(cause),
       }));
-    setBusy(false);
     if (!result.ok) {
-      setError(result.error ?? "Approval failed");
-      // Changed under review: what shows becomes what approving binds.
+      const asked = request;
+      // Changed under review: what shows becomes what approving binds,
+      // and nothing can be approved until it does.
       const now = await desktopApi
         .projectAgentsList(agent.projectId)
         .then((data) => data.agents.find((each) => each.slug === agent.slug))
         .catch(() => undefined);
+      if (shown.current !== asked) return;
+      setError(result.error ?? "Approval failed");
       if (now && now.definitionHash !== agent.definitionHash) setLatest(now);
+      setBusy(false);
       return;
     }
+    setBusy(false);
     onApproved(agent);
   };
 

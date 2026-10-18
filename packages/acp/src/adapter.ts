@@ -275,10 +275,13 @@ function startAttempt(
     // reopened: a reopened one at once, a new one after its first turn ends
     // (an interrupted one starts afresh, told Work's instructions again),
     // and never one the agent cannot reopen, so that Work hands the agent
-    // the whole conversation each turn instead.
+    // the whole conversation each turn instead. One replacing a session the
+    // agent refused is reported at once, so Work never resumes the refused
+    // one again (a restart for a mid-turn message continues this one).
     const report = () =>
       host.emit({ type: "thread", ref: { id: opened, strength: "strong" } });
-    if (reopened) report();
+    const replacing = Boolean(earlier && reopen);
+    if (reopened || replacing) report();
     if (interrupted) return "cancelled";
     host.emit({ type: "turn.started" });
     items.live = true;
@@ -295,7 +298,7 @@ function startAttempt(
     // Only Work's interrupt makes the turn interrupted: an agent that ends
     // its own turn as cancelled (a request it was told no to) finished it.
     const outcome = interrupted ? "cancelled" : "completed";
-    if (!reopened && reopen && outcome === "completed") report();
+    if (!reopened && !replacing && reopen && outcome === "completed") report();
     return outcome;
   };
 

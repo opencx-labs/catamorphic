@@ -35,8 +35,9 @@ environment, as a command in the person's own terminal would.
   completes, never one from an agent that cannot reopen sessions, so Work
   hands that agent the whole conversation each turn instead. A session the
   agent refuses to reopen (deleted, pruned) is replaced by a new one,
-  rather than failing every later turn; that one lacks the earlier
-  conversation, since a harness cannot yet tell core its thread is gone.
+  reported at once, rather than failing every later turn; that one lacks
+  the earlier conversation, since a harness cannot yet tell core its
+  thread is gone.
   A restart on a thread Work never heard of starts the turn's input over:
   core's restart rule (ADR 0240) now carries only what no thread took in
   just when the attempt continues the thread. Native state is
