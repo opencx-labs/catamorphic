@@ -82,7 +82,11 @@ a later machine of the rule reuses (EC2 keeps a token for a day). `destroy`
 removes the machine its ref names and every machine with its name, and
 answers `{ done }`: Work asks again on later passes and forgets the machine
 only once it is done, so a destroy right after an uncertain create leaves
-no orphan. Work ships no cloud SDK for this.
+no orphan. Work ships no cloud SDK for this. A Hetzner or custom class
+names the sandbox backend its machines run (`"sandbox": "container"`,
+passed to the install script as `--sandbox`), since `auto` picks microVMs
+wherever KVM is usable and they cannot give setup its own network (ADR
+0257).
 
 **Cadence.** With demand rules, each replica looks at demand every 10 seconds
 with one statement and starts a pass when it differs from what its latest

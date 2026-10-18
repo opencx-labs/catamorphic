@@ -21,20 +21,22 @@ export const REVIEW_PROJECT_MANIFEST = `{
         "containers": true,
         "resources": { "commandTimeoutSeconds": 1800 }
       },
-      "network": {
-        "egress": "allowlist",
-        "allow": [
-          "registry.npmjs.org",
-          "registry.yarnpkg.com",
-          "registry-1.docker.io",
-          "auth.docker.io",
-          "production.cloudflare.docker.com",
-          "ghcr.io",
-          "pkg-containers.githubusercontent.com",
-          "pypi.org",
-          "files.pythonhosted.org"
-        ]
+      "network": { "egress": "gateway" },
+      "setup": {
+        "command": "if [ -f pnpm-lock.yaml ]; then pnpm install --frozen-lockfile; elif [ -f bun.lock ]; then bun install --frozen-lockfile; elif [ -f package-lock.json ]; then npm ci --no-audit --no-fund; fi; if [ -f compose.yaml ] || [ -f docker-compose.yml ]; then docker compose pull --ignore-buildable --quiet; fi",
+        "timeoutMinutes": 20,
+        "network": {
+          "allow": [
+            "registry.npmjs.org",
+            "registry-1.docker.io",
+            "auth.docker.io",
+            "production.cloudflare.docker.com",
+            "ghcr.io",
+            "pkg-containers.githubusercontent.com"
+          ]
+        }
       },
+      "waitMinutes": 30,
       "idleReleaseMinutes": 20,
       "approvals": { "waitMinutes": 60 },
       "connections": {
@@ -81,7 +83,7 @@ export const REVIEW_DOCKERFILE = `# The review Environment's image. Review machi
 # so the reviewer can start a change's services inside its own sandbox.
 FROM docker:27-dind
 RUN apk add --no-cache bash curl git jq nodejs npm postgresql-client python3 \\
-  && npm install --global bun@1
+  && npm install --global bun@1 pnpm@10
 WORKDIR /workspace
 `;
 
@@ -110,6 +112,77 @@ export const REVIEWER_AGENT = `{
   }
 }
 `;
+
+/**
+ * `.work/images/review.Dockerfile` for a reviewer on an open model: the
+ * default image's tools and OpenCode, configured to reach its model through
+ * the Work gateway (ADR 0255).
+ */
+export const REVIEW_OPENCODE_DOCKERFILE = `# The review Environment's image, with OpenCode run by Work as an ACP agent.
+# The sandbox reaches only the gateway, so OpenCode's configuration is baked
+# in here and the pull request's own is ignored.
+FROM docker:27-dind
+RUN apk add --no-cache bash curl git jq nodejs npm postgresql-client python3 ripgrep \\
+  && npm install --global bun@1 pnpm@10 opencode-ai@1.18.15
+RUN mkdir -p /etc/opencode && printf '%s\\n' \\
+  '{' \\
+  '  "provider": {' \\
+  '    "work": {' \\
+  '      "npm": "@ai-sdk/openai-compatible",' \\
+  '      "name": "Work gateway",' \\
+  '      "options": { "baseURL": "{env:WORK_MODEL_BASE_URL}", "apiKey": "{env:WORK_MODEL_API_KEY}" },' \\
+  '      "models": { "deepseek/deepseek-v4.1-flash": { "name": "DeepSeek V4.1 Flash" } }' \\
+  '    }' \\
+  '  },' \\
+  '  "model": "work/deepseek/deepseek-v4.1-flash",' \\
+  '  "small_model": "work/deepseek/deepseek-v4.1-flash",' \\
+  '  "permission": { "edit": "allow", "bash": "allow", "webfetch": "deny" },' \\
+  '  "autoupdate": false,' \\
+  '  "share": "disabled"' \\
+  '}' > /etc/opencode/work.json
+ENV OPENCODE_CONFIG=/etc/opencode/work.json \\
+  OPENCODE_DISABLE_PROJECT_CONFIG=1 \\
+  OPENCODE_DISABLE_AUTOUPDATE=1 \\
+  OPENCODE_DISABLE_MODELS_FETCH=1
+WORKDIR /workspace
+`;
+
+/** `.work/agents/reviewer.json` for OpenCode over ACP, on a model connection. */
+export const REVIEWER_OPENCODE_AGENT = `{
+  "version": 1,
+  "name": "Reviewer",
+  "kind": "acp",
+  "acp": { "command": ["opencode", "acp"] },
+  "model": "deepseek/deepseek-v4.1-flash",
+  "credentials": { "source": "connection", "connection": "model" },
+  "description": "Reviews pull requests for correctness, security, data safety, performance, and tests, verifying by running them.",
+  "sandboxing": "contained",
+  "environment": { "preferred": ["review"], "allowed": ["review"] },
+  "connections": [
+    { "alias": "github", "principal": "service" },
+    { "alias": "prod", "principal": "service", "optional": true },
+    { "alias": "slack", "principal": "service", "optional": true }
+  ],
+  "toolPolicies": {
+    "github": {
+      "default": "deny",
+      "tools": {
+        "get": "allow",
+        "pull_request_files": "allow",
+        "review_threads": "allow"
+      }
+    }
+  }
+}
+`;
+
+/** The `review` Environment's model binding for the OpenCode reviewer. */
+export const REVIEW_OPENCODE_BINDING = `"model": {
+  "provider": "openrouter",
+  "principal": "service",
+  "service": "openrouter",
+  "model": { "allow": ["deepseek/deepseek-v4.1-flash"] }
+}`;
 
 /** `.work/agents/reviewer.md`: the review doctrine, as the agent's persona. */
 export const REVIEWER_DOCTRINE = `You review pull requests for this company's repository. Each pull request has
@@ -968,13 +1041,24 @@ and \`where\`, \`session-workflows\` keyed chats and workspaces.
 
 Merge the \`review\` Environment into the project's manifest; keep an existing
 \`default\` Environment as it is. \`pool\` places the chats on machines
-enrolled with the label \`pool=review\` (opened to this project). The image
-brings Git, Node, Bun, and Docker; \`containers\` lets the agent run the
-change's services with Docker Compose inside its own sandbox; egress reaches
-only package registries (the control plane's gateway is always reachable).
-\`idleReleaseMinutes\` gives a quiet review's machine back and rehydrates it on
-the next push. \`approvals.waitMinutes\` is how long an escalation waits for
-the pull request's people.
+enrolled with the label \`pool=review\` (opened to this project), which a
+machine rule can create on demand. The image brings Git, Node, Bun, pnpm,
+and Docker; \`containers\` lets the agent run the change's services with
+Docker Compose inside its own sandbox. The agent's sandbox reaches only the
+control plane's gateway (\`egress: gateway\`): GitHub and the other
+bindings, and its model.
+
+\`setup\` installs the change's dependencies and pulls its Compose images
+before the first turn and after each push, in a sandbox of its own that
+reaches only the registries listed and holds the checkout alone, with no
+grant or secret (ADR 0257); replace the command with the repository's
+install, and add a private registry's host and the secret it needs
+(\`setup.secrets\`). With a setup network the Environment keeps no volumes,
+so caches belong in the image. \`waitMinutes\` lets a new review wait for a
+machine (one made on demand takes a few minutes) instead of failing.
+\`idleReleaseMinutes\` gives a quiet review's machine back and rehydrates it
+on the next push. \`approvals.waitMinutes\` is how long an escalation waits
+for the pull request's people.
 
 \`\`\`json
 ${REVIEW_PROJECT_MANIFEST}\`\`\`
@@ -1033,6 +1117,39 @@ codebase, which tests are slow, what never to touch.
 
 \`\`\`\`markdown
 ${REVIEWER_DOCTRINE}\`\`\`\`
+
+## An open model: OpenCode
+
+To review on an open-weight model (DeepSeek, Qwen, Kimi) through OpenRouter
+or another OpenAI-compatible API, the reviewer is OpenCode, which Work runs
+as an ACP agent in the same sandbox (ADR 0255). Three files change.
+
+The image adds OpenCode and its configuration, which points it at
+\`WORK_MODEL_BASE_URL\` and \`WORK_MODEL_API_KEY\`: Work serves the model
+connection on the sandbox's loopback for each turn, so no key reaches the
+machine, and the pull request's own OpenCode configuration is ignored.
+
+\`\`\`dockerfile
+${REVIEW_OPENCODE_DOCKERFILE}\`\`\`
+
+The reviewer is an \`acp\` agent on the \`model\` connection. Its \`model\`
+picks OpenCode's \`work/<model>\`, and its doctrine, connections and
+sandboxing stay as above.
+
+\`\`\`json
+${REVIEWER_OPENCODE_AGENT}\`\`\`
+
+The \`review\` Environment binds the model connection beside \`github\`, with
+the exact model ids it serves:
+
+\`\`\`json
+${REVIEW_OPENCODE_BINDING}
+\`\`\`
+
+The connection is the server's (the Work server guide's "Harnesses on the
+server"), and so is the routing: which OpenRouter providers
+serve the prompts, with no fallbacks and no data retention, is pinned on the
+control plane, never in this configuration.
 
 ## .work/workflows/src/reviews.ts
 

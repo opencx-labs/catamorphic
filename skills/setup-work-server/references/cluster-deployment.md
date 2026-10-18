@@ -301,6 +301,12 @@ the JSON file `WORK_MACHINES_CONFIG` names:
   `firewalls` and `networks` (ids) and extra server `labels` are optional;
   `snapshot: true` keeps an image of a machine's disk when it is destroyed.
   The API token is `WORK_HETZNER_TOKEN` (read and write), never the file.
+- `sandbox` (Hetzner and custom classes): the backend the machines run,
+  passed to the [install script](#the-install-script) as `--sandbox`:
+  `auto` (default), `microsandbox`, or `container`, which runs gVisor even
+  where KVM is usable. Give `container` to classes for Environments whose
+  setup has its own network ([setup and volumes](#setup-and-volumes)),
+  which microVMs cannot host.
 - `pool`: machines you enrolled yourself ([pools](#dedicated-servers-and-other-machines-pools)).
 - `custom`: a custom server's `machineProvisioner` hook creates and destroys
   them (`create({ name, class, rule, options, waiting, labels, enrollment })`
@@ -440,7 +446,8 @@ work such as [pull request reviews](review-pull-requests.md):
 `GET /api/workers/install.sh` is public and holds no secret: a POSIX sh
 script with this server's public URL and worker image in it. Run it as root
 with `--code` (required) and optionally `--image`, `--data-dir` (default
-`/var/lib/work`) and `--name` (the container's, default `work-worker`). The
+`/var/lib/work`), `--name` (the container's, default `work-worker`) and
+`--sandbox` (`auto`, `microsandbox` or `container`, default `auto`). The
 data directory must be new, or an empty one (or a worker's) under
 `/var/lib`, `/srv`, `/opt`, `/data` or `/home/<user>`; the script refuses
 system directories. It:
@@ -448,17 +455,18 @@ system directories. It:
 - installs Docker with Docker's convenience script when `docker` is missing,
   downloaded to a file and checked first, waiting up to ten minutes for
   another package installation (a cloud machine's first boot) to finish;
-- with a usable `/dev/kvm`, gives the worker the device and its group, so
-  agents run in microVMs. libkrun needs nothing more: never `--privileged`
-  or added capabilities;
-- without KVM, installs gVisor from its apt repository (Debian and Ubuntu;
+- with a usable `/dev/kvm`, unless `--sandbox container`, gives the worker
+  the device and its group, so agents run in microVMs. libkrun needs
+  nothing more: never `--privileged` or added capabilities;
+- otherwise installs gVisor from its apt repository (Debian and Ubuntu;
   elsewhere install `runsc` first) and registers the `runsc` runtime with
   `--host-uds=open --net-raw` (ADR 0204), restarting Docker only when that
   changed;
 - creates the data directory for the image's user (uid 1000, mode 0700),
   pulls the image, replaces any container of that name, and runs the worker
   with `--restart unless-stopped`, the Docker socket and its group, the data
-  directory mounted at the same path, and `WORK_SANDBOX=auto`.
+  directory mounted at the same path, and `WORK_SANDBOX` set to
+  `--sandbox`.
 
 Running it again is safe: the worker keeps its enrollment in its data
 directory. The endpoint answers 503 naming what is missing when the server

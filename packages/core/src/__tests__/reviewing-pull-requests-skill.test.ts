@@ -5,7 +5,13 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { matchesAllWhere, parseProject } from "@catamorphic/parser";
 import { describe, expect, it } from "vitest";
-import { REVIEW_AUTOMATION_FILES } from "../reviewing-pull-requests-skill.js";
+import {
+  REVIEW_AUTOMATION_FILES,
+  REVIEW_OPENCODE_BINDING,
+  REVIEW_OPENCODE_DOCKERFILE,
+  REVIEW_PROJECT_MANIFEST,
+  REVIEWER_OPENCODE_AGENT,
+} from "../reviewing-pull-requests-skill.js";
 import { HOST_SKILLS } from "../seeds.js";
 import { agentDefinitionSchema } from "../services/agent-definitions-service.js";
 import { parseProjectEnvironmentPolicy } from "../services/project-environments-service.js";
@@ -204,9 +210,16 @@ describe("the reviewing-pull-requests skill", () => {
       pool: { pool: "review" },
       image: { kind: "dockerfile", path: ".work/images/review.Dockerfile" },
       requirements: { containers: true },
-      network: { egress: "allowlist" },
+      // The agent reaches only the gateway; registries are setup's alone,
+      // with no volume to carry what agents wrote into it (ADR 0257).
+      network: { egress: "gateway" },
+      setup: {
+        network: { allow: expect.arrayContaining(["registry.npmjs.org"]) },
+      },
+      waitMinutes: 30,
       approvals: { waitMinutes: 60 },
     });
+    expect(review?.volumes).toBeUndefined();
     expect(Object.keys(review?.connections ?? {})).toEqual([
       "github",
       "prod",
@@ -255,6 +268,46 @@ describe("the reviewing-pull-requests skill", () => {
     expect(
       Object.keys(agent.data?.toolPolicies?.github?.tools ?? {}),
     ).toHaveLength(3);
+  });
+
+  it("shows a valid OpenCode reviewer on a model connection", () => {
+    for (const content of [
+      REVIEW_OPENCODE_DOCKERFILE,
+      REVIEWER_OPENCODE_AGENT,
+      REVIEW_OPENCODE_BINDING,
+    ])
+      expect(SKILL).toContain(content);
+    const manifest = JSON.parse(REVIEW_PROJECT_MANIFEST);
+    manifest.environments.review.connections = {
+      ...manifest.environments.review.connections,
+      ...JSON.parse(`{${REVIEW_OPENCODE_BINDING}}`),
+    };
+    const policy = parseProjectEnvironmentPolicy(manifest);
+    expect(policy.invalid).toBeUndefined();
+    expect(policy.environments.review?.connections?.model).toMatchObject({
+      principal: "service",
+      model: { allow: ["deepseek/deepseek-v4.1-flash"] },
+    });
+    const agent = agentDefinitionSchema().safeParse(
+      JSON.parse(REVIEWER_OPENCODE_AGENT),
+    );
+    expect(agent.success, JSON.stringify(agent.error)).toBe(true);
+    expect(agent.data).toMatchObject({
+      kind: "acp",
+      acp: { command: ["opencode", "acp"] },
+      credentials: { source: "connection", connection: "model" },
+      sandboxing: "contained",
+      environment: { allowed: ["review"] },
+    });
+    // OpenCode's configuration names the model the agent chooses, and the
+    // image keeps the pull request's own configuration out.
+    expect(REVIEW_OPENCODE_DOCKERFILE).toMatch(/^FROM docker:[\w.-]+-dind$/m);
+    expect(REVIEW_OPENCODE_DOCKERFILE).toContain(
+      `"model": "work/${agent.data?.model}"`,
+    );
+    expect(REVIEW_OPENCODE_DOCKERFILE).toContain(
+      "OPENCODE_DISABLE_PROJECT_CONFIG=1",
+    );
   });
 
   it("parses as four workflows on the GitHub library and session events", () => {

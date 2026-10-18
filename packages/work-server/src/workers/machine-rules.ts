@@ -1105,6 +1105,9 @@ export class MachineReconciler {
         ? workerCloudInit({
             script: workerInstallScript(this.deps.install.target),
             code,
+            ...(machineClass?.platform !== "pool" && machineClass?.sandbox
+              ? { sandbox: machineClass.sandbox }
+              : {}),
           })
         : undefined;
     if (machineClass?.platform === "hetzner-cloud") {
