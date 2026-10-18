@@ -161,10 +161,14 @@ export function AgentQuestionPanel({
   onDismissRef.current = dismiss;
   const disabledRef = useRef(disabled);
   disabledRef.current = disabled;
+  const sectionRef = useRef<HTMLElement>(null);
   useEffect(() => {
     const onWindowKeyDown = (event: globalThis.KeyboardEvent) => {
       if (event.key !== "Escape" || event.isComposing) return;
       if (event.defaultPrevented || disabledRef.current || collapsed) return;
+      // An inert panel (closing as its answer is sent, in a chat out of
+      // view) is not the one Escape speaks to.
+      if (sectionRef.current?.closest("[inert]")) return;
       event.preventDefault();
       // Typing an answer, Escape leaves the answer; the next one dismisses.
       const typing = document.activeElement;
@@ -282,6 +286,7 @@ export function AgentQuestionPanel({
 
   return (
     <section
+      ref={sectionRef}
       className="animate-question-in mx-3 mb-1 overflow-hidden rounded-xl border border-accent/35 bg-bg-overlay/60"
       aria-label="The agent has a question"
     >

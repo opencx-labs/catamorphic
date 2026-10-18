@@ -68,6 +68,8 @@ export type TimelineEntry =
       kind: "answer";
       /** The item it reads at: the answer message or the request. */
       id: string;
+      /** The request it answers, whichever item it reads at. */
+      requestId: string;
       questions: AgentQuestion[];
       answers: string[];
       /** Each answer's pills, in the order of its markers (ADR 0244). */
@@ -389,6 +391,7 @@ function answerFromRequest(
     return undefined;
   return answerEntry({
     id: item.id,
+    requestId: request.id,
     questions: request.questions ?? [],
     answers: request.response.answers,
     attachments: request.response.attachments,
@@ -405,6 +408,7 @@ function answerFromMessage(
   const response = state.requests[item.answer.requestId]?.response;
   return answerEntry({
     id: item.id,
+    requestId: item.answer.requestId,
     questions: item.answer.questions,
     answers: item.answer.answers,
     attachments:
@@ -414,6 +418,7 @@ function answerFromMessage(
 
 function answerEntry(input: {
   id: string;
+  requestId: string;
   questions: AgentQuestion[];
   answers: string[];
   attachments?: AgentAttachment[][];
@@ -421,6 +426,7 @@ function answerEntry(input: {
   return {
     kind: "answer",
     id: input.id,
+    requestId: input.requestId,
     questions: input.questions,
     answers: input.answers,
     attachments: input.answers.map(

@@ -9,6 +9,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  answerSentHere,
   ChatTimeline,
   type ChatTimelineProps,
   sentTime,
@@ -303,6 +304,7 @@ describe("ChatTimeline DOM contract", () => {
           {
             kind: "answer",
             id: "q1",
+            requestId: "q1",
             questions: [
               {
                 question: "Which?",
@@ -338,6 +340,69 @@ describe("ChatTimeline DOM contract", () => {
     const answer = $('[data-testid="question-answer"]');
     expect(answer?.tagName).toBe("ARTICLE");
     expect(answer?.className).toContain("ml-auto");
+  });
+
+  it("enters an answer once: the session's message for it does not fade in again", async () => {
+    const answer = (id: string) => ({
+      kind: "answer" as const,
+      id,
+      requestId: "asked-once",
+      questions: [
+        {
+          question: "Which?",
+          header: "Which",
+          multiSelect: false,
+          options: [],
+        },
+      ],
+      answers: ["Grid"],
+      attachments: [[]],
+      dismissed: false,
+    });
+    const at = (id: string): TimelineTurn[] => [
+      { key: "t1", turn: turn("t1", 1), entries: [answer(id)] },
+    ];
+    // Sent: it shows where its question stood, rising in.
+    await render({ timeline: at("request-item") });
+    const sentCard = $('[data-testid="question-answer"]');
+    expect(sentCard?.dataset.messageId).toBe("request-item");
+    expect(sentCard?.className).toContain("motion-safe:opacity-0");
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    expect(sentCard?.className).toContain("motion-safe:opacity-100");
+    // The session records it as a message: the same answer, already in.
+    await render({ timeline: at("answer-message") });
+    const recorded = $('[data-testid="question-answer"]');
+    expect(recorded?.dataset.messageId).toBe("answer-message");
+    expect(recorded?.className).toContain("motion-safe:opacity-100");
+    expect(recorded?.className).not.toContain("motion-safe:opacity-0");
+  });
+
+  it("shows an answer sent from this window where its question stood, without rising in", async () => {
+    answerSentHere("sent-here");
+    await render({
+      timeline: [
+        {
+          key: "t1",
+          turn: turn("t1", 1),
+          entries: [
+            {
+              kind: "answer",
+              id: "request-item",
+              requestId: "sent-here",
+              questions: [],
+              answers: ["Grid"],
+              attachments: [[]],
+              dismissed: false,
+            },
+          ],
+        },
+      ],
+    });
+    expect($('[data-testid="question-answer"]')?.className).toContain(
+      "motion-safe:opacity-100",
+    );
   });
 
   /** What the unread line says, or is about to: its label swaps in place. */
