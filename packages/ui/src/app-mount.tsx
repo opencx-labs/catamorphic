@@ -12,7 +12,7 @@ import {
   isGuestMessage,
 } from "@catamorphic/app";
 import { useCatamorphic } from "@catamorphic/react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 const MIN_HEIGHT_PX = 240;
 const MAX_HEIGHT_PX = 2000;
@@ -105,14 +105,18 @@ export function AppMount({
   context,
   renderState,
   channel,
-  theme,
+  theme: themeProp,
   className,
-  display = { mode: "full", visible: true },
+  display: displayProp = { mode: "full", visible: true },
   viewportHeight,
   refreshIntervalMs,
   collections,
   onContentState,
 }: AppMountProps) {
+  // Hosts pass these inline, a new object each render; the guest hears of
+  // them only when their value changes.
+  const theme = useByValue(themeProp);
+  const display = useByValue(displayProp);
   const { apiClient } = useCatamorphic();
   const frameRef = useRef<HTMLIFrameElement>(null);
   const [view, setView] = useState<ViewState>({ state: "loading" });
@@ -650,11 +654,13 @@ export function AppMount({
   );
 }
 
-/**
- * The served guest document URL, with the mount-time theme riding along as
- * JSON so the first paint is already in the host's colors. The server
- * validates the theme and the browser cache key varies with it naturally.
- */
+/** `value`, keeping one identity for as long as it stays equal by value. */
+function useByValue<T>(value: T): T {
+  const key = JSON.stringify(value);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: compared by value, through its key
+  return useMemo(() => value, [key]);
+}
+
 /** Only flat string entries cross to the server; the guest is untrusted. */
 function sanitizeStorageSnapshot(raw: unknown): Record<string, string> {
   if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return {};
@@ -665,6 +671,11 @@ function sanitizeStorageSnapshot(raw: unknown): Record<string, string> {
   return out;
 }
 
+/**
+ * The served guest document URL, with the mount-time theme riding along as
+ * JSON so the first paint is already in the host's colors. The server
+ * validates the theme and the browser cache key varies with it naturally.
+ */
 function guestSrc(guestUrl: string, theme?: AppHostTheme): string {
   if (!theme) return guestUrl;
   const url = new URL(guestUrl);

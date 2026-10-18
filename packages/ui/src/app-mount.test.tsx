@@ -545,6 +545,31 @@ describe("compact app slots", () => {
 });
 
 describe("app collection broker", () => {
+  it("tells the guest nothing when its host re-renders with the same display and theme", async () => {
+    const apiClient = makeApiClient();
+    // Inline objects, as hosts write them: new each render, equal in value.
+    const view = () => (
+      <CatamorphicProvider apiClient={apiClient as never}>
+        <AppMount
+          projectId={PROJECT_ID}
+          appName="ops-dashboard"
+          context={{ tenantId: "t-1", user: { id: "viewer-1" } }}
+          display={{ mode: "full", visible: true }}
+          theme={{ appearance: "dark", colors: { bg: "#121212" } }}
+        />
+      </CatamorphicProvider>
+    );
+    const { container, rerender } = render(view());
+    await waitFor(() => expect(container.querySelector("iframe")).toBeTruthy());
+    const frame = container.querySelector("iframe");
+    if (!frame?.contentWindow) throw new Error("Missing frame");
+    const messages = vi.spyOn(frame.contentWindow, "postMessage");
+
+    rerender(view());
+    rerender(view());
+    expect(messages).not.toHaveBeenCalled();
+  });
+
   it("bounds subscriptions even when the host has no event subscription adapter", async () => {
     const apiClient = makeApiClient();
     const collections: AppCollections = {
