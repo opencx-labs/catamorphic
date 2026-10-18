@@ -11,10 +11,12 @@ person had no way to name a chat themselves.
 
 ## Decision
 
-**Rename is one of a chat's verbs.** "Rename…" leads the chat menu
-wherever it appears: a sidebar row (Chats, Activity), its tab and the
-dock. It opens the action input form (ADR 0234) with the current name;
-an empty name is refused there.
+**Rename is one of a chat's verbs, with one dialog.** "Rename…" leads the
+chat menu wherever it appears: a sidebar row (Chats, Activity), its tab
+and the dock. The palette's "Rename chat…" renames the focused chat. Each
+opens the same rename dialog (the action input form, ADR 0234) filled
+with the chat's current name, read from the server for a chat older than
+the loaded list; an empty name is refused there.
 
 **The name is the person's command.** `PATCH
 /projects/:projectId/agent/sessions/:sessionId/title { title }` records a
@@ -29,8 +31,8 @@ only an untitled chat, as before.
 
 Considered: a column marking a person's title, which needs a migration and
 a field every mirror carries while the command log already records who
-renamed; renaming inline in the sidebar row, which the chat's tab and the
-dock could not share.
+renamed; renaming inline in the sidebar row, which the chat's tab, the
+dock and the palette could not share.
 
 ## Consequences
 

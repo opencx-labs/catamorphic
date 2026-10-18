@@ -174,13 +174,7 @@ it("draws a chat as a row: its address, signals, branch and own verbs", async ()
     icon: "MessageSquare",
     badges: [{ label: "fix-login", icon: "GitBranch" }],
     menu: [
-      {
-        action: "rename",
-        input: {
-          title: "Rename chat",
-          fields: [{ name: "title", value: "Chat c1" }],
-        },
-      },
+      { action: "rename" },
       { action: "new-subsession" },
       { action: "mark-unread" },
       { action: "archive" },
@@ -208,45 +202,15 @@ it("draws a chat as a row: its address, signals, branch and own verbs", async ()
   client.clear();
 });
 
-it("renames a chat with the name the person typed, and refuses an empty one", async () => {
+it("asks the window to rename a chat, in the one rename dialog", async () => {
   chatList(1);
   const { source, client } = view();
-  const renamed: Array<{ url: string; method: string; body: unknown }> = [];
-  const read = mocks.fetch.getMockImplementation();
-  mocks.fetch.mockImplementation(async (request: Request) => {
-    if (request.method === "PATCH") {
-      renamed.push({
-        url: new URL(request.url).pathname,
-        method: request.method,
-        body: await request.json(),
-      });
-      return Response.json({ ok: true });
-    }
-    return read?.(request);
-  });
   await source.action?.({
     itemId: "c0",
     action: "rename",
-    values: { title: "  Release\nnotes " },
     signal: new AbortController().signal,
   });
-  expect(renamed).toEqual([
-    {
-      url: "/api/projects/paged/agent/sessions/c0/title",
-      method: "PATCH",
-      body: { title: "Release notes" },
-    },
-  ]);
-  await expect(
-    source.action?.({
-      itemId: "c0",
-      action: "rename",
-      values: { title: "  " },
-      signal: new AbortController().signal,
-    }),
-  ).rejects.toThrow("Name the chat.");
-  expect(renamed).toHaveLength(1);
-  expect(mocks.actions).not.toHaveBeenCalled();
+  expect(mocks.actions).toHaveBeenCalledWith("c0", "rename");
   client.clear();
 });
 

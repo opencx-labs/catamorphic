@@ -3342,6 +3342,7 @@ downloaded before Work quit for another reason stays downloaded: the
 next check offers Restart, not Download. See ADR 0246.
 
 "Rename…" leads a chat's menu, in the sidebar, on its tab and in the
-dock, and opens the same small form other actions use, filled with the
+dock, and the palette's "Rename chat…" names the chat in front. All open
+one rename dialog, the small form other actions use, filled with the
 current name. The chat keeps a name its person gave it; an agent that
 titles its conversations no longer replaces it. See ADR 0247.

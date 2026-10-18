@@ -999,6 +999,31 @@ describe("chat flows", () => {
     });
     await run(`byText('[role="menuitem"]', 'Rename…').click(); return true;`);
     await rename("Launch checklist", "Launch notes");
+
+    // The palette's Rename chat opens the same dialog for the chat in front.
+    await run(`
+      const input = $$('textarea[aria-label="Search commands, pages, and more"]')
+        .find((el) => !el.closest('[inert]'));
+      if (!input) pressKey('p', { metaKey: true });
+      return true;
+    `);
+    await runWait(
+      `const input = $$('textarea[aria-label="Search commands, pages, and more"]')
+        .find((el) => !el.closest('[inert]'));
+       if (!input) return false;
+       setReactValue(input, '>rename chat');
+       return true;`,
+      { label: "palette asked for Rename chat" },
+    );
+    await runWait(
+      `const option = $$('[role="option"]')
+        .find((el) => !el.closest('[inert]') && el.textContent.includes('Rename chat'));
+       if (!option) return false;
+       option.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+       return true;`,
+      { label: "Rename chat in the palette" },
+    );
+    await rename("Launch notes", "Launch plan");
   });
 });
 

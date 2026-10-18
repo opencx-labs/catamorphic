@@ -108,8 +108,8 @@ export function activitySource(deps: WorkSourceDeps): SectionSource {
         clearInterval(timer);
       };
     },
-    action: async ({ itemId, action, values }) => {
-      await chatAction(deps, itemId, action, values);
+    action: async ({ itemId, action }) => {
+      chatAction(deps, itemId, action);
       return undefined;
     },
   };
