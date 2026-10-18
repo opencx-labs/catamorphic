@@ -180,14 +180,19 @@ new acp.AgentSideConnection(
         }
         return {};
       },
-      listSessions: async () => ({
-        sessions: Object.entries(read().sessions).map(
-          ([sessionId, session]) => ({
-            sessionId,
-            cwd: session.cwd,
-          }),
-        ),
-      }),
+      listSessions: async () => {
+        // Noted, so a test can tell the adapter asked.
+        const state = read();
+        write({ ...state, listed: (state.listed ?? 0) + 1 });
+        return {
+          sessions: Object.entries(state.sessions).map(
+            ([sessionId, session]) => ({
+              sessionId,
+              cwd: session.cwd,
+            }),
+          ),
+        };
+      },
       cancel: async () => {
         write({ ...read(), cancelled: true });
         if (process.env.TEST_AGENT_STUBBORN !== "1") cancel();

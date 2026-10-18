@@ -47,6 +47,8 @@ function workspace() {
       cancelled?: boolean;
       sleeper?: number;
       askedAfterCancel?: string;
+      /** How often the agent was asked to list its sessions. */
+      listed?: number;
       sessions: Record<
         string,
         {
@@ -886,6 +888,27 @@ describe("ACP adapter", () => {
     await second.finished();
     expect(second.completed()).toMatchObject({ status: "failed" });
     expect(second.events().some((event) => event.type === "thread.lost")).toBe(
+      false,
+    );
+    // The agent was asked, and it still had the session.
+    expect(space.state().listed).toBeGreaterThan(0);
+  });
+
+  it("leaves the session for the next turn when an agent that cannot list sessions answers a load with an internal error", async () => {
+    const space = workspace();
+    const turn = run(
+      attempt(space, "hello", {
+        env: { TEST_AGENT_STATE: space.stateFile, TEST_AGENT_LOAD: "opencode" },
+        thread: {
+          mode: "resume",
+          providerThreadId: "thread",
+          nativeRef: { id: "session-9", strength: "strong" },
+        },
+      }),
+    );
+    await turn.finished();
+    expect(turn.completed()).toMatchObject({ status: "failed" });
+    expect(turn.events().some((event) => event.type === "thread.lost")).toBe(
       false,
     );
   });

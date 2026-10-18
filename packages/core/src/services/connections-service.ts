@@ -1240,9 +1240,10 @@ export class ConnectionsService {
   }
 
   /**
-   * What a connection itself may do: the capabilities its authorization
-   * recorded, and Git reads and writes when its provider serves Git through
-   * the gateway (ADR 0175). Bindings and roles narrow them.
+   * What a connection itself may do: the actions it offers (its provider's
+   * list, else what its authorization recorded, ADR 0261), and Git reads and
+   * writes when its provider serves Git through the gateway (ADR 0175).
+   * Bindings and roles narrow them.
    */
   private connectionCapabilities(connection: ConnectionRow): string[] {
     const own = this.offered(connection);

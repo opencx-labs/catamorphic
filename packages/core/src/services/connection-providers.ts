@@ -174,7 +174,9 @@ export interface ConnectionProvider {
    * list, not the one its authorization recorded, so actions a later
    * release or configuration adds reach connections made before it;
    * bindings and roles narrow it as always. Absent, a connection offers
-   * what its authorization recorded (an MCP server's tools).
+   * what its authorization recorded (an MCP server's tools). Leave it out
+   * when what a connection may do depends on what it was granted, such as
+   * OAuth scopes: this list would widen every connection to all of it.
    */
   readonly capabilities?: readonly string[];
   /**

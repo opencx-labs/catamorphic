@@ -128,7 +128,7 @@ process.on("message", (message) => {
   if (message.type !== "init") return;
   process.send({
     type: "terminal",
-    terminal: { status: "completed", result: { length: message.invocation.input.state.length }, steps: [] },
+    terminal: { status: "completed", result: { length: message.invocation.input.state.length, inEnvironment: "CATAMORPHIC_TRIGGER_DATA" in process.env }, steps: [] },
   });
 });
 `,
@@ -152,7 +152,7 @@ process.on("message", (message) => {
       }),
     ).resolves.toMatchObject({
       status: "completed",
-      result: { length: state.length },
+      result: { length: state.length, inEnvironment: false },
     });
   });
 

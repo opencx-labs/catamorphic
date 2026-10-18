@@ -34,6 +34,10 @@ configuration changes without a migration).
 
 Upgrading Work or editing a gateway connection's actions reaches existing
 connections at once, so a committed binding is the only list that decides
-what an Environment may use. What GitHub itself allows is still decided by
+what an Environment may use: a binding or role that lists no capabilities
+gains every action a release adds, GitHub writes included, so bindings that
+must stay narrow name their actions. A provider whose connections may do
+only what they were granted (OAuth scopes) declares no list. An enablement
+or trigger keeps the capabilities it was consented with. What GitHub itself allows is still decided by
 the App's permissions or the person's account. An allocation keeps the
 capabilities it was admitted with.

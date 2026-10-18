@@ -952,7 +952,7 @@ describe("postReviews", () => {
       content: reply({
         ...REQUESTED,
         comments: [{ ...REQUESTED.comments[0], side: null }],
-        resolve: null,
+        resolve: [{ threadId: "PRRT_own", reply: null }],
         reply: null,
       }),
     });
@@ -960,12 +960,24 @@ describe("postReviews", () => {
     expect(actions(writes)).toEqual([
       "create_review",
       "create_check_run",
+      "resolve_review_thread",
       "update_pull_request",
     ]);
     expect(writes[0]?.[1]).toMatchObject({
       event: "REQUEST_CHANGES",
       comments: [{ path: "src/orders.ts", line: 11, side: "RIGHT" }],
     });
+    expect(writes[2]?.[1]).toEqual({
+      repository: "acme/web",
+      number: 42,
+      threads: [{ threadId: "PRRT_own" }],
+    });
+    // An answer in the conversation may name no comment as null.
+    const answered = await post({
+      content: reply({ ...PASSING, reply: { inReplyTo: null, body: "Yes." } }),
+    });
+    expect(answered.error).toBeUndefined();
+    expect(actions(answered.writes)).toContain("issue_comment");
   });
 
   it("reports action_required, not a pass, when no usable review came for an unmarked commit", async () => {

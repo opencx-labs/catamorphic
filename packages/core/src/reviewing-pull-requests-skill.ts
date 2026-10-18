@@ -23,7 +23,7 @@ export const REVIEW_PROJECT_MANIFEST = `{
       },
       "network": { "egress": "gateway" },
       "setup": {
-        "command": "if [ -f pnpm-lock.yaml ]; then pnpm install --frozen-lockfile; elif [ -f bun.lock ]; then bun install --frozen-lockfile; elif [ -f package-lock.json ]; then npm ci --no-audit --no-fund; fi; if [ -f compose.yaml ] || [ -f docker-compose.yml ]; then docker compose pull --ignore-buildable --quiet; fi",
+        "command": "if [ -f pnpm-lock.yaml ]; then pnpm install --frozen-lockfile; elif [ -f bun.lock ] || [ -f bun.lockb ]; then bun install --frozen-lockfile; elif [ -f package-lock.json ]; then npm ci --no-audit --no-fund; fi; for f in compose.yaml compose.yml docker-compose.yaml docker-compose.yml; do if [ -f \\"$f\\" ]; then docker compose -f \\"$f\\" pull --ignore-buildable --ignore-pull-failures --quiet; break; fi; done",
         "timeoutMinutes": 20,
         "network": {
           "allow": [
@@ -959,7 +959,7 @@ function parseWorkReview(content: string): WorkReview | string {
     const { inReplyTo, body } = reply;
     if (
       Object.keys(reply).some((key) => !["inReplyTo", "body"].includes(key)) ||
-      (inReplyTo !== undefined && (typeof inReplyTo !== "number" || !Number.isSafeInteger(inReplyTo) || inReplyTo < 1)) ||
+      (inReplyTo != null && (typeof inReplyTo !== "number" || !Number.isSafeInteger(inReplyTo) || inReplyTo < 1)) ||
       !text(body, 4000)
     )
       return "reply is not { inReplyTo?, body } within its limits";
@@ -1058,10 +1058,15 @@ bindings, and its model.
 \`setup\` installs the change's dependencies and pulls its Compose images
 before the first turn and after each push, in a sandbox of its own that
 reaches only the registries listed and holds the checkout alone, with no
-grant or secret (ADR 0257); replace the command with the repository's
-install, and add a private registry's host and the secret it needs
-(\`setup.secrets\`). With a setup network the Environment keeps no volumes,
-so caches belong in the image. \`waitMinutes\` lets a new review wait for a
+grant or secret (ADR 0257). The command installs with pnpm, Bun, or npm,
+whichever lockfile the change has, and pulls the Compose file's images
+(one it cannot pull is left for the agent to report); replace it with the
+repository's own install, and add every host the install reaches (a
+private registry and the secret it needs in \`setup.secrets\`, a binary
+host such as \`binaries.prisma.sh\`, another image registry). A setup that
+fails runs again before every turn, each time in a new sandbox, so a host
+missing from the list costs every turn. With a setup network the
+Environment keeps no volumes, so caches belong in the image. \`waitMinutes\` lets a new review wait for a
 machine (one made on demand takes a few minutes) instead of failing.
 \`idleReleaseMinutes\` gives a quiet review's machine back and rehydrates it
 on the next push. \`approvals.waitMinutes\` is how long an escalation waits
@@ -1134,7 +1139,9 @@ as an ACP agent in the same sandbox (ADR 0255). Three files change.
 The image adds OpenCode and its configuration, which points it at
 \`WORK_MODEL_BASE_URL\` and \`WORK_MODEL_API_KEY\`: Work serves the model
 connection on the sandbox's loopback for each turn, so no key reaches the
-machine, and the pull request's own OpenCode configuration is ignored.
+machine. \`OPENCODE_DISABLE_PROJECT_CONFIG\` keeps the pull request's own
+OpenCode settings, \`.opencode/\` agents and plugins, and \`AGENTS.md\` out
+of the reviewer: the doctrine comes from \`reviewer.md\` alone.
 
 \`\`\`dockerfile
 ${REVIEW_OPENCODE_DOCKERFILE}\`\`\`

@@ -3,6 +3,7 @@ import {
   type CatamorphicCore,
   EnvironmentAccessDeniedError,
   EnvironmentNotFoundError,
+  EnvironmentPolicyInvalidError,
 } from "@catamorphic/core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTestApp, TEST_IDENTITY } from "./test-app.js";
@@ -76,6 +77,7 @@ describe("workflow enablement routes", () => {
     for (const [error, status] of [
       [new EnvironmentAccessDeniedError("github-poster"), 403],
       [new EnvironmentNotFoundError("github-poster"), 409],
+      [new EnvironmentPolicyInvalidError("bad manifest"), 409],
     ] as const) {
       const preview = vi.fn(async () => {
         throw error;
