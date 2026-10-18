@@ -1153,7 +1153,9 @@ describe("inputs grow by gliding", () => {
   const composerInput = `visibleDock()?.querySelector('[data-composer-input]')`;
   interface Glide {
     before: number;
-    frames: { height: number; scrolled: number; inset: number }[];
+    frames: { at: number; height: number; scrolled: number; inset: number }[];
+    /** Height transitions the frame ran, as `transitionrun` reported them. */
+    transitions: number;
   }
   /**
    * The frame's height while a real Shift+Enter adds a line, with how far
@@ -1176,17 +1178,26 @@ describe("inputs grow by gliding", () => {
       }
       const before = frame.getBoundingClientRect().height;
       const frames = [];
+      let transitions = 0;
+      const ran = (event) => {
+        if (event.target === frame && event.propertyName === 'height') transitions += 1;
+      };
+      frame.addEventListener('transitionrun', ran);
       const started = performance.now();
       window.__glide = new Promise((resolve) => {
         const tick = () => {
           const box = frame.getBoundingClientRect();
           frames.push({
+            at: Math.round(performance.now() - started),
             height: box.height,
             scrolled: frame.scrollTop,
             inset: input.getBoundingClientRect().top - box.top,
           });
           if (performance.now() - started < 500) requestAnimationFrame(tick);
-          else resolve({ before, frames });
+          else {
+            frame.removeEventListener('transitionrun', ran);
+            resolve({ before, frames, transitions });
+          }
         };
         requestAnimationFrame(tick);
       });
@@ -1195,15 +1206,14 @@ describe("inputs grow by gliding", () => {
     await app.press("Enter", SHIFT);
     return run<Glide>("return window.__glide;");
   };
-  const expectGlide = ({ before, frames }: Glide) => {
+  const expectGlide = ({ before, frames, transitions }: Glide) => {
     const end = frames.at(-1)?.height ?? 0;
-    const trace = JSON.stringify({ before, frames });
+    const trace = JSON.stringify({ before, frames, transitions });
     expect(end, trace).toBeGreaterThan(before);
-    // Frames between one line and two: it glided rather than snapped.
-    expect(
-      frames.some(({ height }) => height > before + 1 && height < end - 1),
-      trace,
-    ).toBe(true);
+    // The frame's height transitioned: it glided rather than snapped. Told
+    // by the transition itself, not by frames caught midway, which a slow
+    // renderer (macOS CI draws without a GPU) can space past its 150 ms.
+    expect(transitions, trace).toBeGreaterThan(0);
     // The new line is clipped until it has glided into view, never scrolled
     // to: the first line stays on the frame's top edge throughout.
     expect(

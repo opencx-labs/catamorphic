@@ -55,6 +55,10 @@ const count = `document.querySelector('[data-testid="find-count"]')?.textContent
  */
 const pageKey = async (keyCode: string, modifiers: string[] = []) => {
   await focusWindow(app);
+  // The keys the page sees, for a wait on what they do that times out.
+  await app.eval(
+    `${view}.executeJavaScript("if (!window.__e2eKeys) { window.__e2eKeys = []; addEventListener('keydown', (event) => window.__e2eKeys.push(event.key + (event.metaKey ? '+meta' : '') + (event.ctrlKey ? '+ctrl' : '')), true); } true", true)`,
+  );
   await app.waitFor(
     `(() => { const page = ${view}; page.focus(); return page.executeJavaScript('document.hasFocus()', true); })()`,
     { label: "the page has focus" },
@@ -180,12 +184,28 @@ afterAll(async () => {
   server.close();
 });
 
+/** The find bar, focus and the keys the page saw, for a wait that timed out. */
+const findState = () =>
+  app.eval<string>(`(async () => JSON.stringify({
+    bar: !!document.querySelector('[data-testid="find-bar"]'),
+    input: !!${findInput},
+    focused: (() => { const el = document.activeElement; return el && [el.tagName, el.getAttribute('aria-label')]; })(),
+    windowFocused: document.hasFocus(),
+    page: await ${view}.executeJavaScript('({ focused: document.hasFocus(), keys: window.__e2eKeys ?? null })', true).catch((error) => String(error)),
+  }))()`);
+
 describe("find in page", () => {
   it("Cmd+F in the page opens the find bar, which counts and steps through matches", async () => {
     await pageKey("F", [command]);
-    await app.waitFor(`document.activeElement === ${findInput}`, {
-      label: "find bar focused",
-    });
+    await app
+      .waitFor(`document.activeElement === ${findInput}`, {
+        label: "find bar focused",
+      })
+      .catch(async (error: unknown) => {
+        throw new Error(
+          `${error instanceof Error ? error.message : String(error)}; state: ${await findState()}`,
+        );
+      });
     await app.insertText("apple");
     await app.waitFor(`${count} === '1/3'`, { label: "first of three" });
     await app.press("Enter");

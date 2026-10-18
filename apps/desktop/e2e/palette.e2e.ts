@@ -47,6 +47,24 @@ const shot = async (name: string) => {
 };
 const type = (text: string) =>
   run(`setReactValue(input(),${JSON.stringify(text)})`);
+/** Where the chats are and what has focus, for a wait that timed out. */
+const chatState = `JSON.stringify({
+  floating: [...document.querySelectorAll('section[data-floating-chat]')].map((el) => el.dataset.chatLocalId),
+  inTabs: [...document.querySelectorAll('section[data-chat-tab]')].map((el) => el.dataset.chatLocalId),
+  strip: [...document.querySelectorAll('[data-tab-orientation] [data-point-key]:not([data-sidebar-item-id])')].map((el) => el.dataset.pointKey),
+  focused: (() => { const el = document.activeElement; return el && [el.tagName, el.getAttribute('aria-label'), el.closest('section')?.dataset.chatLocalId ?? null, el.closest('[data-palette]')?.dataset.palette ?? null]; })(),
+  windowFocused: document.hasFocus(),
+})`;
+/** A wait that, timed out, says where the chats are and what has focus. */
+const waitTelling = async <T>(code: string, label: string): Promise<T> => {
+  try {
+    return await wait<T>(code, label);
+  } catch (error) {
+    throw new Error(
+      `${error instanceof Error ? error.message : String(error)}; state: ${await app.eval<string>(chatState)}`,
+    );
+  }
+};
 
 beforeAll(async () => {
   app = await launchApp();
@@ -673,7 +691,7 @@ it("opens a chat asked for from a New Tab in that tab, in its place", async () =
     "a chat floating over the New Tab",
   );
   await shortcut("n");
-  expect(await wait<string>(`return ${chatInTab}`, "it moved in")).toBe(
+  expect(await waitTelling<string>(`return ${chatInTab}`, "it moved in")).toBe(
     floated,
   );
   expect(await withoutNewTab("the fourth New Tab replaced")).toContain(
