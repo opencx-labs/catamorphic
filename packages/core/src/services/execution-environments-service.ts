@@ -556,11 +556,11 @@ export class ExecutionEnvironmentsService {
   }
 
   /**
-   * Admit work that may wait for a machine (ADR 0258). When the first
-   * Environment in admission order that had no machine for the work (none
-   * open to it had room or was online) lets work wait (`waitMinutes`), or
-   * with `always` (a chat already open, whose next turn waits as long as it
-   * is queued), it answers that the work waits there instead of failing.
+   * Admit work that may wait for a machine (ADR 0258). When no Environment
+   * could take it because no machine open to it had room or was online, it
+   * answers that the work waits in the first of those, in admission order,
+   * whose `waitMinutes` lets work wait, or with `always` (a chat already
+   * open, whose next turn waits as long as it is queued) the first of them.
    * Any other failure throws as {@link admit} does.
    */
   async admitOrWait(
@@ -570,8 +570,10 @@ export class ExecutionEnvironmentsService {
   > {
     const placed = await this.place(args);
     if ("admission" in placed) return placed;
-    const [wait] = placed.waits;
-    if (wait && (args.always || wait.waitMinutes > 0)) return { wait };
+    const wait = placed.waits.find(
+      (candidate) => args.always || candidate.waitMinutes > 0,
+    );
+    if (wait) return { wait };
     throw placed.error;
   }
 
@@ -945,6 +947,9 @@ function waitRequirements(
       ...(gpu ? { gpu } : {}),
     },
     capabilities: requirements.capabilities ?? [],
+    ...(requirements.trust ? { trust: requirements.trust } : {}),
+    ...(requirements.isolation ? { isolation: requirements.isolation } : {}),
+    ...(requirements.topology ? { topology: requirements.topology } : {}),
   };
 }
 
