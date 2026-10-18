@@ -1,4 +1,4 @@
-import type { WorkflowTransition } from "./workflow.js";
+import type { TransitionCall } from "./workflow.js";
 
 /** Current host snapshot; authority fields identify its owner. Mirrors may lag. */
 export interface SessionSnapshot {
@@ -95,9 +95,7 @@ type DeliverTarget =
       environment?: string;
     };
 type Action = Target & { idempotencyKey: string };
-type Call<Input, Output = unknown> = (
-  input: Input,
-) => WorkflowTransition<Output>;
+type Call<Input, Output = unknown> = TransitionCall<Input, Output>;
 /** Host transitions must be returned from a boundary, never awaited as IO. */
 export interface SessionHostOperations {
   inspect: Call<Target, SessionSnapshot>;

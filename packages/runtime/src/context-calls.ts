@@ -1,5 +1,6 @@
 import {
   DOCUMENTS_CAPABILITY,
+  type RuntimeCarriedState,
   type RuntimeConnectionCallTransition,
   type RuntimeHostCallTransition,
 } from "./supervisor-protocol.js";
@@ -8,27 +9,58 @@ export type HostCallBuilder = (
   capability: string,
   fn: string,
   args: unknown,
+  options?: unknown,
 ) => RuntimeHostCallTransition;
+
+/**
+ * A call's optional second argument, `{ state }` (ADR 0260): the state the
+ * host hands the next step beside the call's result. Anything else there is
+ * a mistake, refused before the boundary ends.
+ */
+export function carriedState(options: unknown): RuntimeCarriedState {
+  if (options === undefined) return {};
+  if (
+    typeof options !== "object" ||
+    options === null ||
+    Array.isArray(options) ||
+    !Object.hasOwn(options, "state") ||
+    Object.keys(options).some((key) => key !== "state")
+  ) {
+    throw new Error(
+      "A call's second argument is { state }: the state the next step receives beside the call's result",
+    );
+  }
+  return { statePresent: true, state: Reflect.get(options, "state") };
+}
 
 /** The `host_call` transition a boundary returns (ADR 0055). */
 export function hostCallTransition(
   capability: string,
   fn: string,
   args: unknown,
+  options?: unknown,
 ): RuntimeHostCallTransition {
-  return { __catamorphicDurableTransition: "host_call", capability, fn, args };
+  return {
+    __catamorphicDurableTransition: "host_call",
+    capability,
+    fn,
+    args,
+    ...carriedState(options),
+  };
 }
 
 export function connectionCallTransition(
   alias: string,
   action: string,
   args: unknown,
+  options?: unknown,
 ): RuntimeConnectionCallTransition {
   return {
     __catamorphicDurableTransition: "connection_call",
     alias,
     action,
     args,
+    ...carriedState(options),
   };
 }
 
@@ -53,7 +85,7 @@ export function connectionNamespace(path: readonly string[]): unknown {
           "Connection calls need an alias and action: context.connections.<alias>.<action>(args)",
         );
       }
-      return connectionCallTransition(alias, action, args[0]);
+      return connectionCallTransition(alias, action, args[0], args[1]);
     },
   });
 }
@@ -85,7 +117,7 @@ export function hostNamespace(
           "context.host calls need a capability namespace and a function: context.host.<capability>.<fn>(args)",
         );
       }
-      return call(capability, fn, argList[0]);
+      return call(capability, fn, argList[0], argList[1]);
     },
   });
 }
@@ -93,11 +125,15 @@ export function hostNamespace(
 /** `context.documents`: the built-in documents capability, one fn per op. */
 export function documentsCalls(
   call: HostCallBuilder = hostCallTransition,
-): Record<string, (args: unknown) => RuntimeHostCallTransition> {
+): Record<
+  string,
+  (args: unknown, options?: unknown) => RuntimeHostCallTransition
+> {
   return Object.fromEntries(
     ["list", "read", "write", "delete", "history", "search"].map((fn) => [
       fn,
-      (args: unknown) => call(DOCUMENTS_CAPABILITY, fn, args),
+      (args: unknown, options?: unknown) =>
+        call(DOCUMENTS_CAPABILITY, fn, args, options),
     ]),
   );
 }

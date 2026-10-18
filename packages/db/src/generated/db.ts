@@ -1304,6 +1304,8 @@ export interface WorkflowRunSteps {
 
 export interface WorkflowStepAttempts {
   attempt: number;
+  call_state: Json | null;
+  call_state_present: Generated<boolean>;
   completed_at: Timestamp | null;
   created_at: Generated<Timestamp>;
   error: string | null;

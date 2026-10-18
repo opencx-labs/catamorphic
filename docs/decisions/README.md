@@ -32,11 +32,11 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0017](0017-public-workflow-authoring-package.md) | Public workflow authoring package | Accepted (expanded by 0020, 0026) |
 | [0018](0018-ai-sdk-coding-agent.md) | AI SDK ToolLoopAgent is the built-in in-process coding agent | Accepted; registry/runtime behavior refined by 0038, 0067, and 0090; paths superseded by 0142 |
 | [0019](0019-headless-agent-chat-and-dock.md) | Agent chat is headless state plus a controlled dock | Accepted |
-| [0020](0020-typed-durable-workflow-boundaries.md) | Typed persisted workflow boundaries | Accepted (updated by 0026) |
+| [0020](0020-typed-durable-workflow-boundaries.md) | Typed persisted workflow boundaries | Accepted (updated by 0026, 0260) |
 | [0021](0021-durable-workflow-visualization.md) | Persisted workflow visualization | Accepted (updated by 0026) |
 | [0022](0022-workflow-cancellation-semantics.md) | Workflow cancellation is a host run control | Accepted (implemented by 0025; updated by 0026) |
 | [0023](0023-postgres-durable-boundary-execution.md) | Postgres boundary execution | Accepted (updated by 0026) |
-| [0024](0024-postgres-durable-pauses.md) | Postgres persisted pauses and timeouts | Accepted (updated by 0026) |
+| [0024](0024-postgres-durable-pauses.md) | Postgres persisted pauses and timeouts | Accepted (updated by 0026, 0260) |
 | [0025](0025-durable-cancellation-state-machine.md) | Persisted cancellation state machine | Accepted (updated by 0026) |
 | [0026](0026-unified-workflows-runs-and-batch-scopes.md) | Unified workflows, runs, and batch scopes | Accepted |
 | [0027](0027-correlation-keys-and-external-signals.md) | Correlation keys and named external signals | Accepted |
@@ -256,3 +256,4 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0241](0241-acp-agents-run-their-own-command.md) | Hermes and other ACP agents run their own command: added in Settings, or approved from a project | Accepted (builds on 0050, 0198; amended by 0245) |
 | [0244](0244-each-question-takes-its-own-answer-with-pills.md) | Each question takes its own answer, pills and all | Accepted (amends 0195) |
 | [0245](0245-a-harness-says-its-thread-is-gone.md) | A harness says its thread is gone; the turn goes on in a new one, handed the conversation | Accepted (amends 0198, 0241) |
+| [0260](0260-every-returned-call-carries-state.md) | Every returned call carries state to the next step | Accepted (amends 0020, 0024) |

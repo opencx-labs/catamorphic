@@ -879,7 +879,8 @@ export const recentSessions = defineWorkflow(({ defineBoundary }) => ({
 \`\`\`
 
 A host call is a boundary transition: return it, and read its result as the
-next boundary's input, as above. The workflow's output is the last
+next boundary's input, as above (or, given \`{ state }\` as a second argument,
+its \`result\` beside that state). The workflow's output is the last
 boundary's return value.
 
 3. Put it in \`app-api.ts\` and call it from the app with the generated
