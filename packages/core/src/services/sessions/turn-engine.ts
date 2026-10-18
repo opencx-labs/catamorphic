@@ -1597,6 +1597,8 @@ export class TurnEngine {
           ref?: NativeRef;
         }
       | undefined;
+    /** Why the harness reported its thread gone, if it did (ADR 0245). */
+    let threadLost: string | undefined;
     let interruptAt = runner.interruptSentAt
       ? Date.parse(runner.interruptSentAt)
       : null;
@@ -1692,6 +1694,7 @@ export class TurnEngine {
         thread = outcome.thread;
         runner = outcome.runner;
         if (outcome.completion) completion = outcome.completion;
+        if (outcome.threadLost !== undefined) threadLost = outcome.threadLost;
         if (outcome.appended.length > 0)
           await this.sendResults(
             local,
@@ -1720,6 +1723,17 @@ export class TurnEngine {
         }
       }
       if (completion) {
+        const rebound = await this.rebindLostThread(local, {
+          ...ctx,
+          turn,
+          attempt,
+          thread,
+          runner,
+          completion,
+          channel,
+          threadLost,
+        });
+        if (rebound) return rebound;
         if (
           completion.status === "interrupted" &&
           (runner.restartWith.length > 0 ||
@@ -1828,6 +1842,127 @@ export class TurnEngine {
         };
       }
     }
+  }
+
+  /**
+   * The thread this attempt was to resume is gone (ADR 0245): when its
+   * harness said so and failed before beginning the turn, the turn runs
+   * once more, on a new thread that is handed the conversation, instead of
+   * failing every turn after. Once per turn: never after an earlier attempt
+   * of it failed. The failed attempt keeps its error; a notice says why the
+   * agent starts over. A person's stop meanwhile ends the turn as it failed.
+   */
+  private async rebindLostThread(
+    local: LocalTurn,
+    ctx: {
+      identity: Identity;
+      session: SessionRow;
+      turn: Turn;
+      attempt: Attempt;
+      thread: ProviderThread;
+      runner: RunnerState;
+      completion: {
+        status: "completed" | "failed" | "interrupted";
+        error?: TurnError;
+      };
+      channel: RunnerChannel;
+      threadLost: string | undefined;
+    },
+  ): Promise<
+    | { kind: "restart"; turn: Turn }
+    | { kind: "aborted"; channel: RunnerChannel }
+    | undefined
+  > {
+    const { db, log } = this.deps;
+    const { turn, attempt } = ctx;
+    if (
+      ctx.completion.status !== "failed" ||
+      ctx.thread.status !== "unavailable" ||
+      ctx.runner.started ||
+      local.abort.signal.aborted ||
+      this.stopping
+    )
+      return undefined;
+    const earlier = await db
+      .selectFrom("agent_turn_attempts")
+      .select("id")
+      .where("turn_id", "=", turn.id)
+      .where("id", "!=", attempt.id)
+      .where("status", "=", "failed")
+      .limit(1)
+      .executeTakeFirst();
+    if (earlier) return undefined;
+    const now = new Date().toISOString();
+    const failed: Attempt = {
+      ...attempt,
+      status: "failed",
+      completedAt: now,
+      ...(ctx.completion.error ? { error: ctx.completion.error } : {}),
+    };
+    const preparing: Turn = {
+      ...turn,
+      status: "preparing",
+      activity: "Handing the agent the conversation",
+      activityAt: now,
+      updatedAt: now,
+    };
+    let stopped = false;
+    await db.transaction().execute(async (trx) => {
+      await this.assertOwned(local, trx);
+      await log.lock(trx, turn.sessionId);
+      const current = await trx
+        .selectFrom("agent_turns")
+        .select("cancellation_requested_at")
+        .where("id", "=", turn.id)
+        .executeTakeFirstOrThrow();
+      if (current.cancellation_requested_at !== null) {
+        stopped = true;
+        return;
+      }
+      await log.append(trx, {
+        sessionId: turn.sessionId,
+        events: [
+          { type: "attempt.changed", attempt: failed },
+          {
+            type: "item.added",
+            item: {
+              id: derivedId(attempt.id, "thread-lost"),
+              sessionId: turn.sessionId,
+              turnId: turn.id,
+              attemptId: attempt.id,
+              parentItemId: null,
+              position: 0,
+              status: "completed",
+              nativeRef: null,
+              createdAt: now,
+              updatedAt: now,
+              startedAt: now,
+              endedAt: now,
+              kind: "notice",
+              code: "thread_lost",
+              text: "The agent couldn't reopen its earlier conversation, so it starts a new one, handed the conversation so far.",
+              data: {
+                providerThreadId: ctx.thread.id,
+                ...(ctx.threadLost ? { reason: ctx.threadLost } : {}),
+              },
+            },
+          },
+          { type: "turn.changed", turn: preparing },
+        ],
+      });
+    });
+    if (stopped) return undefined;
+    // The failed harness winds down first, storing what it wrote.
+    await this.drainRunner(
+      local,
+      { ...ctx, turn: preparing, attempt: failed },
+      ctx.channel,
+      ctx.runner.cursor,
+    );
+    if (local.abort.signal.aborted)
+      return { kind: "aborted", channel: ctx.channel };
+    local.results.clear();
+    return { kind: "restart", turn: preparing };
   }
 
   /** A person stopped this attempt for it to read what they sent (ADR 0240). */
@@ -1960,6 +2095,8 @@ export class TurnEngine {
     /** Appends stored with these frames: their results are due now. */
     appended: string[];
     refusedSteers: string[];
+    /** The harness's words for why its thread is gone (ADR 0245). */
+    threadLost?: string;
     completion?: {
       status: "completed" | "failed" | "interrupted";
       error?: TurnError;
@@ -2249,6 +2386,9 @@ export class TurnEngine {
         calls,
         appended,
         refusedSteers: restartSteers,
+        ...(ingested.threadLost !== undefined
+          ? { threadLost: ingested.threadLost }
+          : {}),
         ...(ingested.completed ? { completion: ingested.completed } : {}),
       };
     });

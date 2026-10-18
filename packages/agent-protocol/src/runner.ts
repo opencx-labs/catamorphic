@@ -278,6 +278,13 @@ export type ItemDraft = ItemPayload & { parentKey?: string };
 export type HarnessEvent =
   /** The native thread's identity, as soon as the harness knows it. */
   | { type: "thread"; ref: NativeRef; statePath?: string }
+  /**
+   * The native thread this attempt was bound to resume is gone: the harness
+   * cannot reopen it (deleted, pruned, expired). Work never resumes it
+   * again. An attempt that reports it, then fails before beginning the
+   * turn, runs once more on a new thread handed the conversation (ADR 0245).
+   */
+  | { type: "thread.lost"; reason: string }
   | { type: "turn.started"; ref?: NativeRef }
   | {
       type: "item.started";

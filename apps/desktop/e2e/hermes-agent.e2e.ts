@@ -208,6 +208,34 @@ describe("Hermes as the person's own agent", () => {
     await app.screenshot(path.join(shots, "hermes-chat.png"));
   });
 
+  it("goes on in a new session, handed the conversation, when Hermes lost its own (ADR 0245)", async () => {
+    // Hermes' own sessions are gone (deleted, pruned): it can't reopen the
+    // chat's. Work runs the turn on a new one and hands it what was said.
+    fs.rmSync(path.join(bin, "sessions.json"), { force: true });
+    await run(`
+      const ta = hermesDock().querySelector('[data-composer-input]');
+      setReactValue(ta, 'what did I say');
+      ta.closest('form').requestSubmit();
+      return true;
+    `);
+    await runWait(
+      `return hermesDock().textContent.includes("couldn't reopen its earlier conversation");`,
+      { timeoutMs: 30_000, label: "the notice saying why it starts over" },
+    );
+    await runWait(
+      `return [...hermesDock().querySelectorAll('[role="log"] article')]
+        .some((el) => el.textContent.includes('Echo:') &&
+          el.textContent.includes('hello hermes') &&
+          el.textContent.includes('what did I say'));`,
+      {
+        timeoutMs: 30_000,
+        label: "Hermes' reply, the conversation handed over",
+      },
+    );
+    await settle();
+    await app.screenshot(path.join(shots, "hermes-thread-lost.png"));
+  });
+
   it("its settings say where its model and sign-in live", async () => {
     await run(`byText('button', 'Settings').click(); return true;`);
     await runWait(`return !!$('[aria-label="Edit Hermes"]');`, {

@@ -150,6 +150,38 @@ describe("session log", () => {
       id: "forgetful",
       harness: { placement: "host", adapter: forgetfulAdapter },
     };
+    // Its threads are gone whenever it is asked to resume one, as an agent
+    // whose sessions were deleted (ADR 0245); with `[[always-lost]]`, on a
+    // fresh thread too.
+    const amnesiacAdapter: HarnessAdapter = {
+      id: "echo",
+      capabilities: () => inner.capabilities(),
+      start: (attempt, host) => {
+        const resuming =
+          attempt.thread.mode === "resume" || attempt.thread.mode === "restore";
+        if (
+          !resuming &&
+          !(attempt.input?.text ?? "").includes("[[always-lost]]")
+        )
+          return inner.start(attempt, host);
+        host.emit({ type: "thread.lost", reason: "Its session was deleted." });
+        host.emit({
+          type: "turn.completed",
+          status: "failed",
+          error: { message: "The agent couldn't reopen its session." },
+        });
+        return {
+          steer: async () => false,
+          interrupt: () => {},
+          finished: Promise.resolve(),
+        };
+      },
+    };
+    const amnesiac: RegisteredCodingAgent = {
+      ...echo,
+      id: "amnesiac",
+      harness: { placement: "host", adapter: amnesiacAdapter },
+    };
     // Rate-limited on its first attempt: the turn waits to retry itself.
     let flakyStarts = 0;
     const flakyAdapter: HarnessAdapter = {
@@ -352,6 +384,7 @@ describe("session log", () => {
               guarded,
               stubborn,
               forgetful,
+              amnesiac,
               flaky,
               signedIn,
               forger,
@@ -1153,6 +1186,106 @@ describe("session log", () => {
     expect(replies.join("\n")).toContain("build the page");
     expect(replies.join("\n")).toContain("and the footer");
   }, 40_000);
+
+  it("runs a turn whose thread is gone again on a new thread, handed the conversation (ADR 0245)", async () => {
+    const project = await projects.create(identity, { name: "Amnesiac" });
+    const session = await sessions.create(identity, project.id, {
+      agentId: "amnesiac",
+    });
+    const projectId = project.id;
+    const sessionId = session.id;
+    await sessions.sendMessage(identity, projectId, sessionId, "first words");
+    const { reply } = await sessions.sendMessage(
+      identity,
+      projectId,
+      sessionId,
+      "second words",
+    );
+    // A new thread (its turn 1), told what came before, then asked.
+    const said = reply?.kind === "assistant_message" ? reply.text : "";
+    expect(said).toContain("(turn 1)");
+    expect(said).toContain("Person: first words");
+    expect(said).toMatch(/---\s*second words$/);
+    const state = await folded(projectId, sessionId);
+    expect(orderedTurns(state).map((turn) => turn.status)).toEqual([
+      "completed",
+      "completed",
+    ]);
+    const second = orderedTurns(state)[1];
+    const attempts = await db
+      .selectFrom("agent_turn_attempts")
+      .select(["reason", "status", "provider_thread_id"])
+      .where("turn_id", "=", second?.id ?? "")
+      .orderBy("ordinal")
+      .execute();
+    expect(attempts.map(({ reason, status }) => ({ reason, status }))).toEqual([
+      { reason: "initial", status: "failed" },
+      { reason: "retry", status: "completed" },
+    ]);
+    const threads = await db
+      .selectFrom("agent_provider_threads")
+      .select(["id", "status"])
+      .where("session_id", "=", sessionId)
+      .orderBy("created_at")
+      .execute();
+    expect(threads.map((thread) => thread.status)).toEqual([
+      "unavailable",
+      "active",
+    ]);
+    expect(attempts[0]?.provider_thread_id).toBe(threads[0]?.id);
+    expect(attempts[1]?.provider_thread_id).toBe(threads[1]?.id);
+    const items = state.items.filter((item) => item.turnId === second?.id);
+    expect(items).toContainEqual(
+      expect.objectContaining({
+        kind: "notice",
+        code: "thread_lost",
+        data: {
+          providerThreadId: threads[0]?.id,
+          reason: "Its session was deleted.",
+        },
+      }),
+    );
+    expect(items).toContainEqual(
+      expect.objectContaining({
+        kind: "context_handoff",
+        toProviderThreadId: threads[1]?.id,
+        coveredTurnOrdinals: { from: 1, to: 1 },
+      }),
+    );
+  });
+
+  it("runs a turn again on a new thread once, never in a loop", async () => {
+    const project = await projects.create(identity, { name: "Doomed" });
+    const session = await sessions.create(identity, project.id, {
+      agentId: "amnesiac",
+    });
+    const projectId = project.id;
+    const sessionId = session.id;
+    await sessions.sendMessage(identity, projectId, sessionId, "first words");
+    await sessions
+      .sendMessage(identity, projectId, sessionId, "[[always-lost]] again")
+      .catch(() => undefined);
+    await vi.waitFor(
+      async () =>
+        expect(
+          orderedTurns(await folded(projectId, sessionId)).map(
+            (turn) => turn.status,
+          ),
+        ).toEqual(["completed", "failed"]),
+      { timeout: 15_000 },
+    );
+    const second = orderedTurns(await folded(projectId, sessionId))[1];
+    const attempts = await db
+      .selectFrom("agent_turn_attempts")
+      .select(["reason", "status"])
+      .where("turn_id", "=", second?.id ?? "")
+      .orderBy("ordinal")
+      .execute();
+    expect(attempts).toEqual([
+      { reason: "initial", status: "failed" },
+      { reason: "retry", status: "failed" },
+    ]);
+  });
 
   it("settles a turn with what its harness stored on the way out", async () => {
     const { projectId, sessionId } = await chat("Late");

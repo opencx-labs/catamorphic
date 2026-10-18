@@ -249,11 +249,10 @@ describe("ACP adapter", () => {
     expect(space.state().savedOnExit).toBe(true);
   });
 
-  it("starts a new session, and says so, when the one to reopen is gone, so the chat goes on", async () => {
+  it("tells Work its session is gone when the agent refuses to reopen it, and fails before beginning the turn", async () => {
     const space = workspace();
     const turn = run(
       attempt(space, "hello", {
-        systemPrompt: "Be brief.",
         thread: {
           mode: "resume",
           providerThreadId: "thread",
@@ -262,32 +261,29 @@ describe("ACP adapter", () => {
       }),
     );
     await turn.finished();
-    expect(turn.completed()).toMatchObject({ status: "completed" });
-    expect(turn.events()).toContainEqual(
-      expect.objectContaining({
-        type: "diagnostic",
-        level: "warn",
-        message: expect.stringContaining("couldn't reopen its earlier session"),
-      }),
-    );
-    // Reported before the turn starts, so a restart for a message sent
-    // meanwhile continues the new session, never the refused one.
-    const order = turn
-      .events()
-      .flatMap((event) =>
-        event.type === "thread" || event.type === "turn.started"
-          ? [event.type]
-          : [],
-      );
-    expect(order).toEqual(["thread", "turn.started"]);
+    // Work runs the turn again on a new thread it hands the conversation
+    // (ADR 0245): this attempt neither starts the turn nor a session.
     expect(turn.events()).toContainEqual({
-      type: "thread",
-      ref: { id: "session-1", strength: "strong" },
+      type: "thread.lost",
+      reason: expect.stringContaining(
+        "test-agent couldn't reopen its earlier session (",
+      ),
     });
-    expect(space.state().sessions["session-1"]?.prompts[0]?.[0]).toEqual({
-      type: "text",
-      text: "<work-instructions>\nBe brief.\n</work-instructions>",
+    expect(turn.completed()).toMatchObject({
+      status: "failed",
+      error: { message: expect.stringContaining("couldn't reopen") },
     });
+    expect(
+      turn
+        .events()
+        .some(
+          (event) => event.type === "turn.started" || event.type === "thread",
+        ),
+    ).toBe(false);
+    // The agent opened no session of its own.
+    expect(
+      fs.existsSync(space.stateFile) ? space.state().sessions : {},
+    ).toEqual({});
   });
 
   it("serves host tools over MCP: the host runs the call and the agent reads its result", async () => {
@@ -701,16 +697,11 @@ describe("ACP adapter", () => {
     expect(turn.text("assistant_message")).toBe("Permission: deny");
   });
 
-  it("starts a new session, with Work's instructions, for an agent that cannot reopen its own", async () => {
+  it("tells Work its session is gone when the agent no longer reopens sessions", async () => {
     const space = workspace();
     const env = { TEST_AGENT_STATE: space.stateFile, TEST_AGENT_NO_LOAD: "1" };
-    const first = run(
-      attempt(space, "hello", { systemPrompt: "Be brief.", env }),
-    );
-    await first.finished();
-    const second = run(
+    const turn = run(
       attempt(space, "[[recall]]", {
-        systemPrompt: "Be brief.",
         env,
         thread: {
           mode: "resume",
@@ -719,18 +710,15 @@ describe("ACP adapter", () => {
         },
       }),
     );
-    await second.finished();
-    expect(second.completed()).toMatchObject({ status: "completed" });
-    expect(second.events()).toContainEqual(
-      expect.objectContaining({ type: "diagnostic", level: "warn" }),
-    );
-    expect(second.events().some((event) => event.type === "thread")).toBe(
+    await turn.finished();
+    expect(turn.events()).toContainEqual({
+      type: "thread.lost",
+      reason: "test-agent couldn't reopen its earlier session.",
+    });
+    expect(turn.completed()).toMatchObject({ status: "failed" });
+    expect(turn.events().some((event) => event.type === "turn.started")).toBe(
       false,
     );
-    expect(space.state().sessions["session-2"]?.prompts[0]?.[0]).toEqual({
-      type: "text",
-      text: "<work-instructions>\nBe brief.\n</work-instructions>",
-    });
   });
 
   it("fails the turn clearly when the agent's command cannot start", async () => {

@@ -14,7 +14,10 @@ const adapters = { acp: createAcpAdapter() };
 
 Work's host tools reach the agent as a loopback MCP server for the attempt;
 the attempt's own MCP servers pass through. A later turn reopens the agent's
-session with `session/resume` when the agent offers it, else `session/load`.
+session with `session/resume` when the agent offers it, else `session/load`;
+a session the agent can no longer reopen is reported gone (`thread.lost`,
+ADR 0245), and Work runs the turn again on a new one, handed the
+conversation.
 A turn ends once the agent's process has exited, so a session it saves on
 exit is saved before the next turn reopens it.
 
