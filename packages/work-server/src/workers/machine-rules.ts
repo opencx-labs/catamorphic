@@ -11,7 +11,7 @@ import {
   type HetznerCloudMachines,
 } from "@catamorphic/hetzner";
 import { getTracer, withSpan } from "@catamorphic/otel";
-import { poolMatches } from "@catamorphic/sandbox";
+import { environmentSatisfies, poolMatches } from "@catamorphic/sandbox";
 import { type Kysely, sql } from "kysely";
 import { z } from "zod";
 import {
@@ -163,11 +163,17 @@ export function demandOf(rule: {
  * enrolls itself. `create` throws {@link MachineProvisioningRefusedError}
  * when the platform refused and created nothing, so the next pass tries
  * again with a new code; any other error keeps the code, since the machine
- * may still come up and enroll. After such a failure Work cannot know
- * whether the machine exists: it may later destroy it by `name` and ask
- * for that name again. So `create` must be idempotent by `name` (an EC2
- * `ClientToken` derived from it, say), never making a second machine for
- * one name, and `destroy` must find a machine by `name` when `ref` is null.
+ * may still come up and enroll.
+ *
+ * Work never calls `create` twice with one enrollment code, so `create` is
+ * idempotent per code: use `enrollment.idempotencyKey`, a hash of the code,
+ * as the platform's token (an EC2 `ClientToken`), never the name, which a
+ * later machine of the same rule reuses once this one is gone. `destroy`
+ * removes the machine `ref` names and every machine named `name` (a create
+ * that failed uncertainly may have made one with no recorded ref), and
+ * says whether they are gone: `{ done: false }` while a destruction is
+ * under way or a machine may still appear, and Work asks again on later
+ * passes, forgetting the machine only once it is done.
  */
 export interface MachineProvisioner {
   create(args: {
@@ -194,6 +200,8 @@ export interface MachineProvisioner {
     enrollment: {
       controlPlaneUrl: string;
       code: string;
+      /** A hash of `code`: the platform's idempotency token for this create. */
+      idempotencyKey: string;
       /**
        * Cloud-init user data that installs the worker with this code (ADR
        * 0205), when the server knows its worker image.
@@ -201,8 +209,13 @@ export interface MachineProvisioner {
       cloudInit?: string;
     };
   }): Promise<{ ref: string }>;
-  /** Destroy the machine, by `ref` or else by `name`; succeed when gone. */
-  destroy(args: { name: string; ref: string | null }): Promise<void>;
+  /**
+   * Destroy the machine `ref` names and every machine named `name`; done
+   * once none is left.
+   */
+  destroy(args: { name: string; ref: string | null }): Promise<{
+    done: boolean;
+  }>;
 }
 
 /** A platform refused to create a machine, and created nothing. */
@@ -250,7 +263,12 @@ export interface MachineRuleStatus {
   released: number;
   /** Machines on demand: work waiting for one of this rule's machines. */
   queued?: number;
-  /** Why the rule cannot be acted on, such as an unknown class. */
+  /**
+   * What keeps the rule from being acted on fully: an unknown class (its
+   * machines are left as they are), a machine on demand that never
+   * connected (no more are made until the rule is written again), or work
+   * its machines cannot take.
+   */
   problem?: string;
   /** What failed for the rule's machines in the latest pass. */
   failure?: { error: string; at: string };
@@ -266,7 +284,10 @@ interface DesiredMachine {
   /** Minutes it has to enroll once created (machines on demand). */
   enrollMinutes?: number;
   /** What the work it is created for needs (machines on demand). */
-  waiting?: DemandWait["requirements"];
+  waiting?: {
+    resources: DemandWait["requirements"]["resources"];
+    capabilities: string[];
+  };
 }
 
 /** Work waiting for a machine, as machine rules on demand read it. */
@@ -277,15 +298,7 @@ interface DemandWait {
   /** The owner's directory groups, for a group's machines. */
   groups: readonly string[];
   pool: Readonly<Record<string, string>>;
-  requirements: {
-    resources: {
-      cpuMillis?: number;
-      memoryMb?: number;
-      storageMb?: number;
-      gpu?: boolean;
-    };
-    capabilities: string[];
-  };
+  requirements: z.output<typeof DemandWaitRequirements>;
 }
 
 const DemandWaitPool = z.record(z.string(), z.string());
@@ -299,6 +312,11 @@ const DemandWaitRequirements = z.object({
     })
     .default({}),
   capabilities: z.array(z.string()).default([]),
+  trust: z.enum(["local", "managed"]).optional(),
+  isolation: z.enum(["none", "process", "sandbox"]).optional(),
+  topology: z
+    .enum(["controller", "contained", "native", "external"])
+    .optional(),
 });
 
 /** A place a pool rule fills with one of its class's free machines. */
@@ -322,6 +340,8 @@ interface Desired {
   problems: Map<string, string>;
   /** Machines on demand: work waiting for each rule's machines. */
   queued: Map<string, number>;
+  /** What keeps rules on demand from serving all their work, by rule. */
+  notices: Map<string, string[]>;
 }
 
 /** Marks a ref as a Hetzner Cloud server id. */
@@ -399,6 +419,17 @@ export class MachineReconciler {
       throw new Error(
         `Machines on demand are created on a platform, and class '${rule.class}' is a pool of enrolled machines. Use a hetzner-cloud or custom class`,
       );
+    // A machine serving several owners must isolate its agents to connect
+    // (ADR 0167): refuse a rule whose class's machines are known not to.
+    if (
+      demandOf(rule) &&
+      !rule.trusted &&
+      servesSeveral(rule) &&
+      (await this.runsPlainProcesses(rule.class))
+    )
+      throw new Error(
+        `Machines of class '${rule.class}' run agents as plain processes, so a machine serving ${rule.group ? "a group" : "several projects"} would be refused when it connects. Give the class machines that isolate agents (microsandbox or gVisor), or add "trusted": true if everyone it serves trusts each other`,
+      );
     await this.deps.db
       .insertInto("work_machine_rules")
       .values({
@@ -470,7 +501,8 @@ export class MachineReconciler {
     const status: Record<string, MachineRuleStatus> = {};
     for (const [name, rule] of Object.entries(desired.rules)) {
       const platform = this.classOf(rule.class)?.platform ?? null;
-      const problem = desired.problems.get(name);
+      const problem =
+        desired.problems.get(name) ?? desired.notices.get(name)?.join(" ");
       const failed = failures.find((row) => row.name === name);
       const extra = {
         ...(problem ? { problem } : {}),
@@ -591,6 +623,8 @@ export class MachineReconciler {
       // Another replica is reconciling; its pass covers this one.
       return { ...summary, busy: true };
     }
+    // Demand this pass sees; a change after this starts another pass.
+    this.demandSeen = await this.demandSignature().catch(() => this.demandSeen);
     const lease = { lost: false };
     // A platform call can outlast the claim; keep it while the pass runs.
     const heartbeat = setInterval(
@@ -681,6 +715,9 @@ export class MachineReconciler {
     const desired = await this.desired();
     for (const [rule, problem] of desired.problems)
       args.summary.failed.push({ name: rule, error: problem, rule });
+    for (const [rule, notices] of desired.notices)
+      for (const notice of notices)
+        args.summary.failed.push({ name: rule, error: notice, rule });
     await this.reconcileProvisioned({ ...args, desired });
     await this.reconcilePooled({ ...args, desired });
     return desired;
@@ -759,14 +796,11 @@ export class MachineReconciler {
             // (ADR 0173); a machine that can no longer save them goes at
             // once. Revoked under its node's lock, so no Allocation lands
             // on it between this check and its revocation (ADR 0258).
-            const connected = await this.deps.workers.connected({
-              name: machine.name,
-            });
             await fence();
             if (
               !(await this.deps.workers.drain({
                 name: machine.name,
-                force: !connected,
+                unseenForMs: this.lostAfterMs(machine.rule, desired),
               }))
             )
               return;
@@ -1065,6 +1099,7 @@ export class MachineReconciler {
   }): Promise<string> {
     const { machine, code } = args;
     const machineClass = this.classOf(machine.class);
+    const idempotencyKey = createHash("sha256").update(code).digest("hex");
     const cloudInit =
       "target" in this.deps.install
         ? workerCloudInit({
@@ -1113,6 +1148,7 @@ export class MachineReconciler {
         enrollment: {
           controlPlaneUrl: this.deps.controlPlaneUrl,
           code,
+          idempotencyKey,
           ...(cloudInit ? { cloudInit } : {}),
         },
       });
@@ -1163,11 +1199,34 @@ export class MachineReconciler {
       throw new Error(
         `No platform destroys machines of class '${className ?? "unknown"}'`,
       );
-    await this.deps.provisioner.destroy({
+    const destroyed = await this.deps.provisioner.destroy({
       name: machine.name,
       ref: machine.ref,
     });
-    return true;
+    return destroyed.done;
+  }
+
+  /**
+   * How long a machine holding workspaces may go unseen before it is lost
+   * and revoked anyway: its rule's `enrollMinutes` for machines on demand.
+   */
+  private lostAfterMs(rule: string, desired: Desired): number {
+    const definition = desired.rules[rule];
+    const demand = definition ? demandOf(definition) : undefined;
+    return (demand?.enrollMinutes ?? DEFAULT_ENROLL_MINUTES) * 60_000;
+  }
+
+  /** Whether machines of this class are known to run plain processes. */
+  private async runsPlainProcesses(machineClass: string): Promise<boolean> {
+    const row = await this.deps.db
+      .selectFrom("work_workers")
+      .innerJoin("worker_nodes", "worker_nodes.id", "work_workers.node_id")
+      .select("work_workers.name")
+      .where("work_workers.tenant_id", "=", this.deps.tenantId)
+      .where(sql<boolean>`work_workers.labels ->> 'class' = ${machineClass}`)
+      .where(sql<boolean>`worker_nodes.descriptor ->> 'isolation' = 'process'`)
+      .executeTakeFirst();
+    return Boolean(row);
   }
 
   /**
@@ -1199,12 +1258,42 @@ export class MachineReconciler {
       slots: [],
       problems: new Map(),
       queued: new Map(),
+      notices: new Map(),
     };
     const demand = Object.values(rules).some((rule) => demandOf(rule))
       ? await this.demandState()
       : undefined;
-    /** Waits a rule on demand counted already: each is one rule's to serve. */
-    const claimed = new Set<DemandWait>();
+    const { notices } = desired;
+    // Each piece of waiting work is one rule's to serve: the first by name
+    // that takes it and whose machines are not known to fall short of it.
+    const assigned = new Map<string, DemandWait[]>();
+    if (demand)
+      for (const wait of demand.waits)
+        for (const [rule, definition] of Object.entries(rules)) {
+          const machineClass = this.classOf(definition.class);
+          if (
+            !demandOf(definition) ||
+            !machineClass ||
+            machineClass.platform === "pool" ||
+            !demandWaitMatches(definition, wait)
+          )
+            continue;
+          const short = demandShortfall({
+            machines: demand.machines.filter(
+              (machine) => machine.rule === rule,
+            ),
+            loads: demand.loads,
+            wait,
+          });
+          if (short) {
+            const said = notices.get(rule) ?? [];
+            const notice = `Work waiting for this rule needs what its machines do not offer (${short}); they take none of it.`;
+            if (!said.includes(notice)) notices.set(rule, [...said, notice]);
+            continue;
+          }
+          assigned.set(rule, [...(assigned.get(rule) ?? []), wait]);
+          break;
+        }
     for (const [rule, definition] of Object.entries(rules)) {
       const machineClass = this.classOf(definition.class);
       if (!machineClass) {
@@ -1223,11 +1312,22 @@ export class MachineReconciler {
           );
           continue;
         }
-        const waits = demand.waits.filter(
-          (wait) => !claimed.has(wait) && demandWaitMatches(definition, wait),
-        );
-        for (const wait of waits) claimed.add(wait);
+        const waits = assigned.get(rule) ?? [];
         desired.queued.set(rule, waits.length);
+        const stalled = demand.stalled.find(
+          (machine) =>
+            machine.rule === rule &&
+            machine.enrolledForMs >= ruleDemand.enrollMinutes * 60_000,
+        );
+        if (stalled)
+          notices.set(rule, [
+            ...(notices.get(rule) ?? []),
+            neverConnectedNotice({
+              name: stalled.name,
+              minutes: ruleDemand.enrollMinutes,
+              definition,
+            }),
+          ]);
         for (const machine of demandMachines({
           rule,
           definition,
@@ -1235,6 +1335,7 @@ export class MachineReconciler {
           machines: demand.machines.filter((machine) => machine.rule === rule),
           loads: demand.loads,
           waits,
+          stalled: Boolean(stalled),
         }))
           desired.provisioned.set(machine.name, machine);
         continue;
@@ -1307,16 +1408,18 @@ export class MachineReconciler {
 
   /**
    * What machines on demand decide on (ADR 0258): the work waiting for a
-   * machine, tried recently and oldest first, with its owner's directory
-   * groups; every machine a rule provisioned; and how busy each enrolled
-   * one is.
+   * machine with a turn queued, tried recently and oldest first, with its
+   * owner's directory groups; every machine a rule provisioned; how busy
+   * each enrolled one is; and machines that enrolled since their rule was
+   * last written and never connected.
    */
   private async demandState(): Promise<{
     waits: DemandWait[];
     machines: ProvisionedMachine[];
     loads: Map<string, MachineLoad>;
+    stalled: Array<{ rule: string; name: string; enrolledForMs: number }>;
   }> {
-    const [rows, machines, loads] = await Promise.all([
+    const [rows, machines, loads, stalled] = await Promise.all([
       this.deps.db
         .selectFrom("placement_waits")
         .leftJoin(
@@ -1333,15 +1436,51 @@ export class MachineReconciler {
           "work_accounts.disabled_at",
         ])
         .where("placement_waits.tenant_id", "=", this.deps.tenantId)
-        .where(
-          "placement_waits.last_tried_at",
-          ">",
-          sql<Date>`now() - make_interval(secs => ${PLACEMENT_WAIT_FRESH_SECONDS})`,
+        .where("placement_waits.last_tried_at", ">", waitFresh())
+        .where(({ exists, selectFrom }) =>
+          exists(
+            selectFrom("agent_turns")
+              .select("agent_turns.id")
+              .whereRef(
+                "agent_turns.session_id",
+                "=",
+                "placement_waits.root_workload_id",
+              )
+              .where("agent_turns.status", "=", "queued"),
+          ),
         )
         .orderBy("placement_waits.waiting_since")
         .execute(),
       this.deps.workers.machines(),
       this.deps.workers.machineLoad(),
+      this.deps.db
+        .selectFrom("work_workers")
+        .innerJoin("work_machine_rules", (join) =>
+          join
+            .onRef(
+              "work_machine_rules.tenant_id",
+              "=",
+              "work_workers.tenant_id",
+            )
+            .onRef("work_machine_rules.name", "=", "work_workers.machine_rule"),
+        )
+        .select([
+          "work_workers.machine_rule",
+          "work_workers.name",
+          sql<number>`(extract(epoch from (now() - work_workers.enrolled_at)) * 1000)::float8`.as(
+            "enrolled_for_ms",
+          ),
+        ])
+        .where("work_workers.tenant_id", "=", this.deps.tenantId)
+        .where("work_workers.pool", "=", false)
+        .where("work_workers.last_seen_at", "is", null)
+        .whereRef(
+          "work_workers.enrolled_at",
+          ">",
+          "work_machine_rules.updated_at",
+        )
+        .orderBy("work_workers.enrolled_at")
+        .execute(),
     ]);
     const waits: DemandWait[] = [];
     for (const row of rows) {
@@ -1362,18 +1501,39 @@ export class MachineReconciler {
         requirements: requirements.data,
       });
     }
-    return { waits, machines, loads };
+    return {
+      waits,
+      machines,
+      loads,
+      stalled: stalled.map((row) => ({
+        rule: row.machine_rule ?? "",
+        name: row.name,
+        enrolledForMs: Number(row.enrolled_for_ms),
+      })),
+    };
   }
 
   /**
-   * Whether demand changed since this replica last looked (ADR 0258): one
-   * indexed statement every few seconds, a full pass only when the work
-   * waiting for machines, or the work on rules' machines, changed. Idle
+   * Whether demand changed since a pass of this replica last looked (ADR
+   * 0258): one indexed statement every few seconds, a full pass only when
+   * the work waiting for machines, or the work on rules' machines, changed
+   * since the latest pass started. A change that came during a pass, or
+   * while another replica held the claim, starts one on the next look. Idle
    * machines go on the regular pass. What it remembers is this replica's
-   * own shortcut (ADR 0193): another replica looks for itself, and the
-   * pass runs under the tenant's claim either way.
+   * own shortcut (ADR 0193): another replica looks for itself, and the pass
+   * runs under the tenant's claim either way.
    */
   async checkDemand(): Promise<void> {
+    const seen = await this.demandSignature();
+    if (seen === undefined || seen === this.demandSeen) return;
+    this.reconcileSoon();
+  }
+
+  /** What the latest pass of this replica saw; see {@link checkDemand}. */
+  private demandSeen: string | undefined;
+
+  /** Demand, in one statement; undefined while no rule is on demand. */
+  private async demandSignature(): Promise<string | undefined> {
     const row = await this.deps.db
       .selectNoFrom((eb) => [
         eb
@@ -1393,10 +1553,18 @@ export class MachineReconciler {
             ),
           )
           .where("tenant_id", "=", this.deps.tenantId)
-          .where(
-            "last_tried_at",
-            ">",
-            sql<Date>`now() - make_interval(secs => ${PLACEMENT_WAIT_FRESH_SECONDS})`,
+          .where("last_tried_at", ">", waitFresh())
+          .where(({ exists, selectFrom }) =>
+            exists(
+              selectFrom("agent_turns")
+                .select("agent_turns.id")
+                .whereRef(
+                  "agent_turns.session_id",
+                  "=",
+                  "placement_waits.root_workload_id",
+                )
+                .where("agent_turns.status", "=", "queued"),
+            ),
           )
           .as("waits"),
         eb
@@ -1419,15 +1587,9 @@ export class MachineReconciler {
           .as("work"),
       ])
       .executeTakeFirst();
-    if (!row?.demand) return;
-    const seen = `${row.waits ?? ""}|${row.work ?? ""}`;
-    if (seen === this.demandSeen) return;
-    this.demandSeen = seen;
-    this.reconcileSoon();
+    if (!row?.demand) return undefined;
+    return `${row.waits ?? ""}|${row.work ?? ""}`;
   }
-
-  /** What {@link checkDemand} last saw. */
-  private demandSeen: string | undefined;
 
   /** Active accounts the directory last placed in the group. */
   private async members(
@@ -1561,13 +1723,87 @@ function demandWaitMatches(rule: MachineRule, wait: DemandWait): boolean {
   );
 }
 
+/** Since when a wait for a machine still counts as demand (ADR 0258). */
+function waitFresh() {
+  return sql<Date>`now() - make_interval(secs => ${PLACEMENT_WAIT_FRESH_SECONDS})`;
+}
+
+/** A rule whose machines serve more than one person or project. */
+function servesSeveral(rule: MachineRule): boolean {
+  return rule.group !== undefined || (rule.projects?.length ?? 0) > 1;
+}
+
+/**
+ * What a rule's connected machines lack for a piece of waiting work, from
+ * what they report, or undefined when one could take it or none reported
+ * yet. The work's own needs are checked as admission checks them; a
+ * machine's free room is not.
+ */
+function demandShortfall(args: {
+  machines: readonly ProvisionedMachine[];
+  loads: ReadonlyMap<string, MachineLoad>;
+  wait: DemandWait;
+}): string | undefined {
+  const { requirements } = args.wait;
+  const reasons: string[][] = [];
+  for (const machine of args.machines) {
+    const descriptor = args.loads.get(machine.name)?.live?.descriptor;
+    if (!descriptor) continue;
+    const fit = environmentSatisfies(descriptor, {
+      workload: "agent",
+      capabilities: requirements.capabilities,
+      resources: requirements.resources,
+      ...(requirements.trust ? { trust: requirements.trust } : {}),
+      ...(requirements.isolation ? { isolation: requirements.isolation } : {}),
+      ...(requirements.topology ? { topology: requirements.topology } : {}),
+    });
+    if (fit.compatible) return undefined;
+    reasons.push([...fit.reasons]);
+  }
+  return reasons[0]?.join("; ");
+}
+
+/** Why a rule on demand makes no more machines: one never connected. */
+function neverConnectedNotice(args: {
+  name: string;
+  minutes: number;
+  definition: MachineRule;
+}): string {
+  const why =
+    !args.definition.trusted && servesSeveral(args.definition)
+      ? `It serves ${args.definition.group ? "a group" : "several projects"}, so it must isolate agents (microsandbox or gVisor) to connect; one running plain processes is refused. Check its log, or add "trusted": true if everyone it serves trusts each other.`
+      : "Check its log: it may not reach this server, or its sandboxes may not start.";
+  return `Machine ${args.name} enrolled but did not connect within ${args.minutes} minutes, so this rule makes no more machines until it is written again. ${why}`;
+}
+
+/** What one machine has room for, as admission charges it. */
+function roomFor(
+  room: { workspaces: number; cpuMillis?: number; memoryMb?: number },
+  defaults: { cpuMillis?: number; memoryMb?: number },
+  wait: DemandWait,
+): { cpuMillis: number; memoryMb: number } | undefined {
+  const cpuMillis =
+    wait.requirements.resources.cpuMillis ?? defaults.cpuMillis ?? 0;
+  const memoryMb =
+    wait.requirements.resources.memoryMb ?? defaults.memoryMb ?? 0;
+  if (room.workspaces < 1) return undefined;
+  if (room.cpuMillis !== undefined && room.cpuMillis < cpuMillis)
+    return undefined;
+  if (room.memoryMb !== undefined && room.memoryMb < memoryMb) return undefined;
+  return { cpuMillis, memoryMb };
+}
+
 /**
  * The machines a rule on demand calls for now (ADR 0258). It keeps every
- * machine still enrolling, every machine holding work, every machine idle
- * for less than `idleMinutes`, then the most recently idle up to `min`.
- * Work no kept machine has room for, beyond one piece per machine still
- * enrolling, gets new machines, up to `max` in all. A machine holding work
- * that has not called for `enrollMinutes` is lost, and replaced.
+ * machine still enrolling, every machine that enrolled and is still
+ * connecting, every machine holding work, every machine idle for less than
+ * `idleMinutes`, then the most recently idle up to `min`. A machine not
+ * seen for `enrollMinutes` (since it enrolled, when it never connected) is
+ * lost and kept for nothing. Work no connected machine has room for (each
+ * piece charged its resources, or the machine's defaults), beyond one
+ * piece per machine still enrolling or connecting, gets new machines up to
+ * `max`, counting the rule's machines for whom it served before. A rule
+ * whose machine never connected makes none.
  */
 function demandMachines(args: {
   rule: string;
@@ -1576,6 +1812,7 @@ function demandMachines(args: {
   machines: readonly ProvisionedMachine[];
   loads: ReadonlyMap<string, MachineLoad>;
   waits: readonly DemandWait[];
+  stalled: boolean;
 }): DesiredMachine[] {
   const { rule, definition, demand } = args;
   const scope: { group: string } | { projects: readonly string[] } =
@@ -1605,24 +1842,36 @@ function demandMachines(args: {
     ...(waiting ? { waiting } : {}),
   });
   // Only machines for whom the rule serves now: another group's or
-  // projects' machines go once their work is done.
+  // projects' machines go once their work is done, and count meanwhile.
   const own = args.machines.filter((machine) =>
     machine.name.startsWith(prefix),
   );
-  const pending = own.filter((machine) => machine.state === "pending");
-  const kept: ProvisionedMachine[] = [...pending];
+  const before = args.machines.filter(
+    (machine) =>
+      !machine.name.startsWith(prefix) &&
+      (machine.state === "pending" || machine.state === "enrolled"),
+  ).length;
+  const lostAfter = demand.enrollMinutes * 60_000;
+  const kept: ProvisionedMachine[] = [];
+  /** Kept machines that will take a piece of work once they connect. */
+  let coming = 0;
   const idle: Array<{ machine: ProvisionedMachine; idleForMs: number }> = [];
   for (const machine of own) {
+    if (machine.state === "pending") {
+      kept.push(machine);
+      coming += 1;
+      continue;
+    }
     if (machine.state !== "enrolled") continue;
     const load = args.loads.get(machine.name);
     if (!load) continue;
-    const lost =
-      load.free === null &&
-      (load.seenForMs === null ||
-        load.seenForMs >= demand.enrollMinutes * 60_000);
-    if (load.holding > 0 && !lost) kept.push(machine);
-    else if (load.idleForMs < demand.idleMinutes * 60_000 && !lost)
+    if (!load.live && load.unseenForMs >= lostAfter) continue;
+    if (load.holding > 0) kept.push(machine);
+    else if (load.neverConnected) {
+      // Enrolled, and still starting its worker.
       kept.push(machine);
+      coming += 1;
+    } else if (load.idleForMs < demand.idleMinutes * 60_000) kept.push(machine);
     else idle.push({ machine, idleForMs: load.idleForMs });
   }
   idle.sort((left, right) => left.idleForMs - right.idleForMs);
@@ -1630,37 +1879,47 @@ function demandMachines(args: {
     if (kept.length >= demand.min) break;
     kept.push(machine);
   }
-  // Work a kept machine has room for is admitted there on its next try.
+  // Work a connected kept machine has room for is admitted there on its
+  // next try.
   const free = kept.flatMap((machine) => {
-    const room = args.loads.get(machine.name)?.free;
-    return room ? [{ ...room }] : [];
+    const live = args.loads.get(machine.name)?.live;
+    return live ? [{ room: { ...live.free }, defaults: live.defaults }] : [];
   });
   const uncovered = args.waits.filter((wait) => {
-    const { cpuMillis = 0, memoryMb = 0 } = wait.requirements.resources;
-    const room = free.find(
-      (slot) =>
-        slot.workspaces > 0 &&
-        (slot.cpuMillis === undefined || slot.cpuMillis >= cpuMillis) &&
-        (slot.memoryMb === undefined || slot.memoryMb >= memoryMb),
-    );
-    if (!room) return true;
-    room.workspaces -= 1;
-    if (room.cpuMillis !== undefined) room.cpuMillis -= cpuMillis;
-    if (room.memoryMb !== undefined) room.memoryMb -= memoryMb;
-    return false;
+    for (const slot of free) {
+      const charged = roomFor(slot.room, slot.defaults, wait);
+      if (!charged) continue;
+      slot.room.workspaces -= 1;
+      if (slot.room.cpuMillis !== undefined)
+        slot.room.cpuMillis -= charged.cpuMillis;
+      if (slot.room.memoryMb !== undefined)
+        slot.room.memoryMb -= charged.memoryMb;
+      return false;
+    }
+    return true;
   });
-  const unmet = uncovered.slice(pending.length);
-  const room = Math.max(0, demand.max - kept.length);
-  const add = Math.min(
-    room,
-    Math.max(unmet.length, demand.min - kept.length, 0),
-  );
+  const unmet = uncovered.slice(coming);
+  const room = Math.max(0, demand.max - kept.length - before);
+  const add = args.stalled
+    ? 0
+    : Math.min(room, Math.max(unmet.length, demand.min - kept.length, 0));
   const machines = kept.map((machine) => desired(machine.name));
   const taken = new Set(own.map((machine) => machine.name));
   for (let index = 1, made = 0; made < add; index += 1) {
     const name = `${prefix}${index}`;
     if (taken.has(name)) continue;
-    machines.push(desired(name, unmet[made]?.requirements));
+    const wait = unmet[made];
+    machines.push(
+      desired(
+        name,
+        wait
+          ? {
+              resources: wait.requirements.resources,
+              capabilities: wait.requirements.capabilities,
+            }
+          : undefined,
+      ),
+    );
     made += 1;
   }
   return machines;

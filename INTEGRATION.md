@@ -968,11 +968,13 @@ When the provider has no machine for a chat (it throws
 up to `n` minutes; a chat whose Allocation was released waits as long as it
 is queued. Core records each piece of waiting work in `placement_waits`
 (Environment, pool, owner, needs, on the database clock), deletes it in the
-transaction that creates the Allocation, and exposes
+transaction that creates the Allocation and when the chat's queued work is
+withdrawn (close, archive), and exposes
 `core.placementWaits.wake({ tenantId })` for a host to call when a machine
-comes online. A host that scales machines reads the table as demand,
-ignoring rows not tried for `PLACEMENT_WAIT_FRESH_SECONDS`
-([ADR 0258](docs/decisions/0258-machines-on-demand.md)).
+comes online. A host that scales machines reads the table as demand: rows
+whose chat has a queued turn, tried within `PLACEMENT_WAIT_FRESH_SECONDS`
+([ADR 0258](docs/decisions/0258-machines-on-demand.md)). `sendMessage` on a
+waiting chat throws `AgentTurnUnsettledError` with state `waiting` at once.
 
 The managed multi-machine target is multiple Catamorphic server instances of
 one logical authority, sharing network Postgres and accessible authoritative

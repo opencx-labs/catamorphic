@@ -143,9 +143,11 @@ it.skipIf(!process.env.DATABASE_URL)(
       });
       await madeOne;
       let settled = false;
-      const drain = registry.drain({ name: "racer" }).finally(() => {
-        settled = true;
-      });
+      const drain = registry
+        .drain({ name: "racer", unseenForMs: 15 * 60_000 })
+        .finally(() => {
+          settled = true;
+        });
       await new Promise((resolve) => setTimeout(resolve, 300));
       expect(settled).toBe(false);
       commit();
@@ -153,13 +155,25 @@ it.skipIf(!process.env.DATABASE_URL)(
       expect(await drain).toBe(false);
       expect(await registry.connected({ name: "racer" })).toBe(true);
 
-      // Its work done, the machine is drained, and nothing lands on it.
+      // Its lease lapses (a restart, a network blip) with the workspace
+      // still on it: one reading is not enough to give the workspace up.
       await sql`
-        UPDATE execution_allocations
-        SET status = 'released', released_at = now(), capacity_released_at = now()
-        WHERE id = ${allocation.id}
+        UPDATE worker_nodes SET lease_expires_at = now() - interval '1 second'
+        WHERE id = ${nodeId}
       `.execute(db);
-      expect(await registry.drain({ name: "racer" })).toBe(true);
+      expect(
+        await registry.drain({ name: "racer", unseenForMs: 15 * 60_000 }),
+      ).toBe(false);
+      expect(
+        (await registry.list()).find((worker) => worker.name === "racer"),
+      ).toMatchObject({ revoked: false });
+      // Unseen for longer than the rule allows, it is lost: drained though
+      // it holds the workspace, and nothing lands on it any more.
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(await registry.drain({ name: "racer", unseenForMs: 10 })).toBe(
+        true,
+      );
+      expect(allocation.workerNodeId).toBe(nodeId);
       await expect(allocate()).rejects.toBeInstanceOf(EnvironmentCapacityError);
       expect(await registry.connected({ name: "racer" })).toBe(false);
       expect(

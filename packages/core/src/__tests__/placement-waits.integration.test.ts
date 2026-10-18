@@ -14,7 +14,10 @@ import { pgcrypto } from "@electric-sql/pglite/contrib/pgcrypto";
 import { Kysely, PGliteDialect, sql, WithSchemaPlugin } from "kysely";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { Identity } from "../identity.js";
-import { AgentSessionsService } from "../services/agent-sessions-service.js";
+import {
+  AgentSessionsService,
+  AgentTurnUnsettledError,
+} from "../services/agent-sessions-service.js";
 import { projectChatIdentity } from "../services/chat-delivery.js";
 import { ExecutionAllocationsService } from "../services/execution-allocations-service.js";
 import {
@@ -100,6 +103,40 @@ describe("chats waiting for a machine (ADR 0258)", () => {
       .set({ retry_at: sql`now()` })
       .where("root_workload_id", "=", sessionId)
       .execute();
+  /** The project's Environments: some let work wait, one may be gone. */
+  async function setManifest(args: {
+    withWaiting: boolean;
+    withSpare?: boolean;
+  }) {
+    const waiting = { waitMinutes: args.withWaiting ? 30 : 0 };
+    const repo = await projectManager.open(tenantId, projectId);
+    try {
+      await repo.writeFile(
+        PROJECT_MANIFEST_PATH,
+        JSON.stringify({
+          environments: {
+            default: { workloads: ["agent"] },
+            review: {
+              workloads: ["agent"],
+              pool: { pool: "review" },
+              requirements: { capabilities: ["review.tools"] },
+              ...waiting,
+            },
+            ...(args.withSpare === false
+              ? {}
+              : { spare: { workloads: ["agent"], ...waiting } }),
+          },
+          defaultEnvironment: "default",
+        }),
+      );
+      await repo.commit("Environments", {
+        name: "Test",
+        email: "test@example.com",
+      });
+    } finally {
+      await repo.dispose();
+    }
+  }
   const send = (identity: Identity, sessionId: string, content: string) =>
     sessions.deliver(identity, projectId, sessionId, {
       content,
@@ -117,30 +154,7 @@ describe("chats waiting for a machine (ADR 0258)", () => {
       seedFiles: {},
     });
     projectId = (await projects.create(alice, { name: "Reviews" })).id;
-    const repo = await projectManager.open(tenantId, projectId);
-    try {
-      await repo.writeFile(
-        PROJECT_MANIFEST_PATH,
-        JSON.stringify({
-          environments: {
-            default: { workloads: ["agent"] },
-            review: {
-              workloads: ["agent"],
-              pool: { pool: "review" },
-              requirements: { capabilities: ["review.tools"] },
-              waitMinutes: 30,
-            },
-          },
-          defaultEnvironment: "default",
-        }),
-      );
-      await repo.commit("Review Environment", {
-        name: "Test",
-        email: "test@example.com",
-      });
-    } finally {
-      await repo.dispose();
-    }
+    await setManifest({ withWaiting: true });
     const agent = {
       id: "reviewer",
       harness: { placement: "host" as const, adapter, local: () => ({}) },
@@ -219,11 +233,8 @@ describe("chats waiting for a machine (ADR 0258)", () => {
     expect(await waitOf(chat.sessionId)).toBeUndefined();
   }, 30_000);
 
-  it("fails a new chat at once in an Environment that does not let work wait", async () => {
+  it("fails a new chat at once in an Environment that does not let work wait, and waits in the first that does", async () => {
     machines.state = "full";
-    await expect(
-      sessions.chatForKey(alice, projectId, { key: "pr-2" }),
-    ).rejects.toBeInstanceOf(NoCompatibleEnvironmentError);
     await expect(
       sessions.chatForKey(alice, projectId, {
         key: "pr-2",
@@ -237,7 +248,74 @@ describe("chats waiting for a machine (ADR 0258)", () => {
         .where("chat_key", "=", "pr-2")
         .execute(),
     ).toEqual([]);
+    // Named by none, it is placed in admission order: the default lets no
+    // work wait, so it waits in the next that does.
+    const chat = await sessions.chatForKey(alice, projectId, { key: "pr-2" });
+    expect(await waitOf(chat.sessionId)).toMatchObject({
+      environment_name: "review",
+    });
+    await sessions.close(alice, projectId, chat.sessionId);
+    // With no Environment that lets work wait, it still fails.
+    await setManifest({ withWaiting: false });
+    try {
+      await expect(
+        sessions.chatForKey(alice, projectId, { key: "pr-2b" }),
+      ).rejects.toBeInstanceOf(NoCompatibleEnvironmentError);
+    } finally {
+      await setManifest({ withWaiting: true });
+    }
   });
+
+  it("answers a message to a waiting chat at once with where it stands", async () => {
+    machines.state = "full";
+    const chat = await sessions.chatForKey(alice, projectId, {
+      key: "pr-ask",
+      environment: "review",
+    });
+    const started = Date.now();
+    await expect(
+      sessions.sendMessage(alice, projectId, chat.sessionId, "Are you there?"),
+    ).rejects.toMatchObject({
+      name: AgentTurnUnsettledError.name,
+      state: "waiting",
+    });
+    expect(Date.now() - started).toBeLessThan(4_000);
+    // Archived, its queued work is withdrawn and nothing of it waits.
+    await sessions.archive(alice, projectId, chat.sessionId, {
+      confirmStop: true,
+    });
+    expect(await waitOf(chat.sessionId)).toBeUndefined();
+    expect((await turnsOf(chat.sessionId)).map((turn) => turn.status)).toEqual([
+      "cancelled",
+    ]);
+  }, 30_000);
+
+  it("fails a waiting chat's turn when its Environment can no longer take it", async () => {
+    machines.state = "full";
+    const chat = await sessions.chatForKey(alice, projectId, {
+      key: "pr-gone",
+      environment: "spare",
+    });
+    await setManifest({ withWaiting: true, withSpare: false });
+    try {
+      await send(alice, chat.sessionId, "Still there?");
+      await retryNow(chat.sessionId);
+      await vi.waitFor(
+        async () =>
+          expect(
+            (await turnsOf(chat.sessionId)).map((turn) => turn.status),
+          ).toEqual(["failed"]),
+        { timeout: 10_000 },
+      );
+      const [turn] = await turnsOf(chat.sessionId);
+      expect(JSON.stringify(turn?.error)).toContain(
+        "Environment 'spare' is not declared",
+      );
+      expect(await waitOf(chat.sessionId)).toBeUndefined();
+    } finally {
+      await setManifest({ withWaiting: true });
+    }
+  }, 30_000);
 
   it("fails the turn once the chat waited as long as its Environment allows", async () => {
     machines.state = "none";

@@ -60,6 +60,7 @@ const provisioner: MachineProvisioner = {
     if (platform.failDestroy || platform.failDestroyFor.has(name))
       throw new Error("platform unavailable");
     platform.destroyed.push(`${name}:${ref ?? "unknown"}`);
+    return { done: true };
   },
 };
 

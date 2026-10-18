@@ -10,7 +10,6 @@ import {
   RemoteOperationQueue,
   registerExecutorKey,
   type WorkerCapacity,
-  WorkerCapacitySchema,
   WorkerNodeLeaseHeldError,
   type WorkerNodesService,
 } from "@catamorphic/core";
@@ -186,16 +185,24 @@ export interface ProvisionedMachine {
 /**
  * How busy a machine a rule provisioned is (ADR 0258), by the database's
  * clock: Allocations holding its capacity, how long since it last held
- * one (or enrolled), how long since it last called, and while it is
- * connected what it has free.
+ * one (or enrolled), how long since it last called (or enrolled, when it
+ * never did), and while it is connected what it offers and has free.
  */
 export interface MachineLoad {
   holding: number;
   idleForMs: number;
-  /** Null when it never called. */
-  seenForMs: number | null;
-  /** Free capacity, while its lease is live; null otherwise. */
-  free: { workspaces: number; cpuMillis?: number; memoryMb?: number } | null;
+  unseenForMs: number;
+  /** It enrolled and has not connected yet. */
+  neverConnected: boolean;
+  /**
+   * While its lease is live: what it offers, what it has free, and what a
+   * workspace naming no resources is charged there.
+   */
+  live: {
+    descriptor: EnvironmentBinding;
+    free: { workspaces: number; cpuMillis?: number; memoryMb?: number };
+    defaults: { cpuMillis?: number; memoryMb?: number };
+  } | null;
 }
 
 /** Milliseconds since `released_at`, measured by the database. */
@@ -969,29 +976,40 @@ export class WorkWorkerRegistry {
    * Take a machine out of service for good, unless work landed on it (ADR
    * 0258): under its node's row lock, which creating an Allocation takes
    * too, it is revoked and disabled only while no Allocation holds its
-   * capacity, so nothing is placed on a machine about to be destroyed.
-   * `force` revokes it whatever it holds: a machine that is not connected
-   * cannot give its workspaces back. False when it was kept, or was not
-   * enrolled.
+   * capacity, so nothing is placed on a machine about to be destroyed. A
+   * machine that holds workspaces it cannot give back, because it is not
+   * connected and has not called for `unseenForMs`, is revoked anyway. False
+   * when it was kept, or was not enrolled.
    */
-  async drain(args: { name: string; force?: boolean }): Promise<boolean> {
+  async drain(args: { name: string; unseenForMs: number }): Promise<boolean> {
     const nodeId = `${WORKER_NODE_PREFIX}${args.name}`;
     return this.deps.db.transaction().execute(async (trx) => {
-      await trx
+      const node = await trx
         .selectFrom("worker_nodes")
-        .select("id")
+        .select(sql<boolean>`enabled AND lease_expires_at > now()`.as("live"))
         .where("id", "=", nodeId)
         .where("tenant_id", "=", this.deps.tenantId)
         .forUpdate()
         .executeTakeFirst();
-      if (!args.force) {
-        const held = await trx
-          .selectFrom("execution_allocations")
-          .select((eb) => eb.fn.countAll<string>().as("count"))
-          .where("worker_node_id", "=", nodeId)
-          .where("capacity_released_at", "is", null)
+      const held = await trx
+        .selectFrom("execution_allocations")
+        .select((eb) => eb.fn.countAll<string>().as("count"))
+        .where("worker_node_id", "=", nodeId)
+        .where("capacity_released_at", "is", null)
+        .executeTakeFirst();
+      if (Number(held?.count ?? 0) > 0) {
+        // Connected, it gives them back as its chats idle (ADR 0173).
+        if (node?.live) return false;
+        const lost = await trx
+          .selectFrom("work_workers")
+          .select("node_id")
+          .where("tenant_id", "=", this.deps.tenantId)
+          .where("name", "=", args.name)
+          .where(
+            sql<boolean>`coalesce(last_seen_at, enrolled_at) <= now() - make_interval(secs => ${args.unseenForMs / 1000})`,
+          )
           .executeTakeFirst();
-        if (Number(held?.count ?? 0) > 0) return false;
+        if (!lost) return false;
       }
       const revoked = await trx
         .updateTable("work_workers")
@@ -1038,76 +1056,78 @@ export class WorkWorkerRegistry {
         sql<string>`count(*) FILTER (WHERE capacity_released_at IS NULL)`.as(
           "holding",
         ),
-        sql<string>`coalesce(sum(reserved_cpu_millis) FILTER (WHERE capacity_released_at IS NULL), 0)`.as(
-          "cpu",
-        ),
-        sql<string>`coalesce(sum(reserved_memory_mb) FILTER (WHERE capacity_released_at IS NULL), 0)`.as(
-          "memory",
-        ),
         sql<Date | null>`max(capacity_released_at)`.as("last_released"),
       ])
       .where("worker_node_id", "in", machines)
       .groupBy("worker_node_id")
       .as("load");
-    const rows = await this.deps.db
-      .selectFrom("work_workers")
-      .leftJoin("worker_nodes", "worker_nodes.id", "work_workers.node_id")
-      .leftJoin(load, "load.worker_node_id", "work_workers.node_id")
-      .select([
-        "work_workers.name",
-        "worker_nodes.capacity",
-        "load.holding",
-        "load.cpu",
-        "load.memory",
-        sql<boolean>`coalesce(worker_nodes.enabled AND worker_nodes.lease_expires_at > now(), false)`.as(
-          "connected",
-        ),
-        sql<number>`(extract(epoch from (now() - greatest(work_workers.enrolled_at, load.last_released))) * 1000)::float8`.as(
-          "idle_for_ms",
-        ),
-        sql<
-          number | null
-        >`(extract(epoch from (now() - work_workers.last_seen_at)) * 1000)::float8`.as(
-          "seen_for_ms",
-        ),
-      ])
-      .where("work_workers.tenant_id", "=", this.deps.tenantId)
-      .where("work_workers.machine_rule", "is not", null)
-      .where("work_workers.revoked_at", "is", null)
-      .execute();
+    const [rows, nodes] = await Promise.all([
+      this.deps.db
+        .selectFrom("work_workers")
+        .leftJoin(load, "load.worker_node_id", "work_workers.node_id")
+        .select([
+          "work_workers.name",
+          "work_workers.node_id",
+          "load.holding",
+          sql<boolean>`work_workers.last_seen_at IS NULL`.as("never_connected"),
+          sql<number>`(extract(epoch from (now() - greatest(work_workers.enrolled_at, load.last_released))) * 1000)::float8`.as(
+            "idle_for_ms",
+          ),
+          sql<number>`(extract(epoch from (now() - coalesce(work_workers.last_seen_at, work_workers.enrolled_at))) * 1000)::float8`.as(
+            "unseen_for_ms",
+          ),
+        ])
+        .where("work_workers.tenant_id", "=", this.deps.tenantId)
+        .where("work_workers.machine_rule", "is not", null)
+        .where("work_workers.revoked_at", "is", null)
+        .execute(),
+      this.deps.nodes.list({
+        tenantId: this.deps.tenantId,
+        authorityId: this.deps.authorityId,
+      }),
+    ]);
+    const byId = new Map(nodes.map((node) => [node.id, node]));
     return new Map(
       rows.map((row) => {
-        const holding = Number(row.holding ?? 0);
-        const capacity = WorkerCapacitySchema.safeParse(row.capacity);
-        const free =
-          row.connected && capacity.success
+        const node = byId.get(row.node_id);
+        const capacity = node?.capacity;
+        const live =
+          node?.available && capacity
             ? {
-                workspaces: Math.max(0, capacity.data.workspaces - holding),
-                ...(capacity.data.cpuMillis !== undefined
-                  ? {
-                      cpuMillis: Math.max(
-                        0,
-                        capacity.data.cpuMillis - Number(row.cpu ?? 0),
-                      ),
-                    }
-                  : {}),
-                ...(capacity.data.memoryMb !== undefined
-                  ? {
-                      memoryMb: Math.max(
-                        0,
-                        capacity.data.memoryMb - Number(row.memory ?? 0),
-                      ),
-                    }
-                  : {}),
+                descriptor: node.descriptor,
+                defaults: node.defaults,
+                free: {
+                  workspaces: Math.max(
+                    0,
+                    capacity.workspaces - node.usage.workspaces,
+                  ),
+                  ...(capacity.cpuMillis !== undefined
+                    ? {
+                        cpuMillis: Math.max(
+                          0,
+                          capacity.cpuMillis - node.usage.cpuMillis,
+                        ),
+                      }
+                    : {}),
+                  ...(capacity.memoryMb !== undefined
+                    ? {
+                        memoryMb: Math.max(
+                          0,
+                          capacity.memoryMb - node.usage.memoryMb,
+                        ),
+                      }
+                    : {}),
+                },
               }
             : null;
         return [
           row.name,
           {
-            holding,
+            holding: Number(row.holding ?? 0),
             idleForMs: Number(row.idle_for_ms),
-            seenForMs: msOrNull(row.seen_for_ms),
-            free,
+            unseenForMs: Number(row.unseen_for_ms),
+            neverConnected: row.never_connected,
+            live,
           },
         ];
       }),

@@ -1,5 +1,6 @@
 import type { DB } from "@catamorphic/db";
 import type {
+  EnvironmentRequirements,
   EnvironmentResourcePolicy,
   WorkloadKind,
 } from "@catamorphic/sandbox";
@@ -19,11 +20,14 @@ export interface PlacementWaitTarget {
   pool: Readonly<Record<string, string>>;
   /** Whose work it is: a member, or null for the project's own. */
   owner: string | null;
-  /** What a machine must offer it. */
+  /**
+   * What a machine must offer it: what sizes a machine (resources and
+   * capabilities), and the trust, isolation and agent topology it needs.
+   */
   requirements: {
     resources: EnvironmentResourcePolicy;
     capabilities: readonly string[];
-  };
+  } & Pick<EnvironmentRequirements, "trust" | "isolation" | "topology">;
   /** Minutes the Environment lets work wait; 0 lets a new chat fail at once. */
   waitMinutes: number;
 }
@@ -88,10 +92,7 @@ export class PlacementWaitsService {
         environment_name: target.environmentName,
         pool: JSON.stringify(target.pool),
         owner: target.owner,
-        requirements: JSON.stringify({
-          resources: target.requirements.resources,
-          capabilities: target.requirements.capabilities,
-        }),
+        requirements: JSON.stringify(target.requirements),
         reason: target.reason,
         retry_at: sql<Date>`now() + interval '5 seconds'`,
         expires_at:

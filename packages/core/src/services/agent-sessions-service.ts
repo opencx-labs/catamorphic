@@ -163,8 +163,13 @@ import type {
 import {
   type AdmittedSetup,
   admissionPolicy,
+  EnvironmentAccessDeniedError,
   type EnvironmentAdmission,
+  EnvironmentIncompatibleError,
+  EnvironmentNotFoundError,
+  EnvironmentPolicyInvalidError,
   type ExecutionEnvironmentsService,
+  NoCompatibleEnvironmentError,
   type PlacementReason,
   placementOwner,
 } from "./execution-environments-service.js";
@@ -687,6 +692,7 @@ export class AgentTurnInProgressError extends Error {
 /** Where a sent message's turn stands when it has no reply to return. */
 export type UnsettledTurnState =
   | "queued"
+  | "waiting"
   | "held"
   | "cancelled"
   | "interrupted";
@@ -694,6 +700,8 @@ export type UnsettledTurnState =
 const UNSETTLED_TURN_MESSAGES: Record<UnsettledTurnState, string> = {
   queued:
     "The message is queued: the machine that runs this chat is away or busy. It runs when a machine takes it; read the chat for the reply.",
+  waiting:
+    "The message waits for a machine: none open to this chat has room or is online yet. It runs once one does, or fails when the chat has waited as long as its Environment allows; read the chat for the reply rather than sending it again.",
   held: "The message is held: it runs once it is released.",
   cancelled: "The message was cancelled before it ran.",
   interrupted:
@@ -1415,6 +1423,18 @@ export class AgentSessionsService {
           .select(({ fn }) => fn.min("placement_waits.retry_at").as("at"))
           .where("agent_sessions.authority_host_id", "=", this.hostId)
           .where("placement_waits.last_tried_at", ">", waitFresh())
+          .where(({ exists, selectFrom }) =>
+            exists(
+              selectFrom("agent_turns")
+                .select("agent_turns.id")
+                .whereRef(
+                  "agent_turns.session_id",
+                  "=",
+                  "placement_waits.root_workload_id",
+                )
+                .where("agent_turns.status", "=", "queued"),
+            ),
+          )
           .as("waits"),
         eb
           .selectFrom("agent_turns")
@@ -3022,6 +3042,9 @@ export class AgentSessionsService {
           .limit(1)
           .executeTakeFirst();
         if (ahead) unclaimedSince = Date.now();
+        else if (await this.placementWaits.get({ rootWorkloadId: sessionId }))
+          // Waiting for a machine (ADR 0258) can take minutes: say so now.
+          throw new AgentTurnUnsettledError(sessionId, turnId, "waiting");
         else if (Date.now() - unclaimedSince > 5_000)
           throw new AgentTurnUnsettledError(sessionId, turnId, "queued");
       } else {
@@ -9174,7 +9197,16 @@ export class AgentSessionsService {
     if (wait && !wait.due) return { kind: "waiting" };
     const placed = await this.readmit(identity, session.project_id, session, {
       wait: true,
+    }).catch((error: unknown) => {
+      // Its Environment cannot take it at all (gone, refused, invalid):
+      // waiting would never end, so its due turns fail saying why.
+      if (isPlacementRefusal(error)) return { refused: error.message } as const;
+      throw error;
     });
+    if ("refused" in placed) {
+      await this.placementWaits.clear({ rootWorkloadIds: [session.id] });
+      return { kind: "expired", reason: placed.refused };
+    }
     if ("admitted" in placed) return { kind: "admitted" };
     const recorded = await this.db.transaction().execute(async (trx) => {
       const current = await trx
@@ -9932,11 +9964,6 @@ export class AgentSessionsService {
           // Work delivered while the running turns stopped would wait on a
           // closed chat forever: cancel it with the closing, under the lock.
           await cancelOpenTurns(trx);
-          // Nothing of it waits for a machine any more (ADR 0258).
-          await this.placementWaits.clear({
-            rootWorkloadIds: sessionIds,
-            transaction: trx,
-          });
           return this.sessionsWithRunningTurns({
             sessionIds,
             executor: trx,
@@ -10019,6 +10046,11 @@ export class AgentSessionsService {
     }
     for (const [sessionId, events] of bySession)
       await this.log.append(trx, { sessionId, events });
+    // Nothing of them is queued, so nothing waits for a machine (ADR 0258).
+    await this.placementWaits.clear({
+      rootWorkloadIds: input.sessionIds,
+      transaction: trx,
+    });
   }
 
   /**
@@ -12165,6 +12197,20 @@ function mapSession(
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString(),
   };
+}
+
+/**
+ * Admission failed for a reason no machine coming online fixes: the chat's
+ * Environment is gone, invalid, not allowed, or cannot run it (ADR 0258).
+ */
+function isPlacementRefusal(error: unknown): error is Error {
+  return (
+    error instanceof EnvironmentNotFoundError ||
+    error instanceof EnvironmentPolicyInvalidError ||
+    error instanceof EnvironmentAccessDeniedError ||
+    error instanceof EnvironmentIncompatibleError ||
+    error instanceof NoCompatibleEnvironmentError
+  );
 }
 
 /** Since when a wait for a machine still counts (ADR 0258). */

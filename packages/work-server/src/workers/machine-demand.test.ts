@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -23,29 +23,36 @@ import {
   type MachineProvisioner,
   MachineReconciler,
 } from "./machine-rules.js";
-import { WORKER_PROTOCOL, WORKER_PROTOCOL_HEADER } from "./worker-protocol.js";
-import { WorkWorkerRegistry } from "./worker-registry.js";
+import {
+  type WorkerOffer,
+  WorkerOfferSchema,
+  WorkWorkerRegistry,
+} from "./worker-registry.js";
 import { startWorkWorker } from "./worker-runtime.js";
-
-/** What every worker call states (ADR 0198). */
-const PROTOCOL = { [WORKER_PROTOCOL_HEADER]: String(WORKER_PROTOCOL.server) };
 
 /**
  * Machines on demand (ADR 0258): a rule creates machines for the work
  * waiting for one, up to its maximum, keeps those holding work, and
- * destroys them once idle. A fake platform records what it was asked.
+ * destroys them once idle. A fake platform records what it was asked;
+ * machines enroll and connect through the registry, as a worker does.
  */
 let root: string;
 let server: WorkServer;
 let base: string;
 let operatorSecret: string;
 let projectId: string;
+let registry: WorkWorkerRegistry;
 const owner: Identity = {
   tenantId: SERVER_TENANT_ID,
   externalUserId: "machine-demand-test",
 };
 type Created = Parameters<MachineProvisioner["create"]>[0];
-const platform = { created: [] as Created[], destroyed: [] as string[] };
+const platform = {
+  created: [] as Created[],
+  destroyed: [] as string[],
+  /** Machines whose destruction stays under way while listed here. */
+  unfinished: new Set<string>(),
+};
 const provisioner: MachineProvisioner = {
   create: async (args) => {
     platform.created.push(args);
@@ -53,6 +60,7 @@ const provisioner: MachineProvisioner = {
   },
   destroy: async ({ name }) => {
     platform.destroyed.push(name);
+    return { done: !platform.unfinished.has(name) };
   },
 };
 const OPTIONS = { instanceType: "m7i.4xlarge", subnet: "subnet-review" };
@@ -87,6 +95,15 @@ async function reconcile() {
   }
 }
 
+async function putRule(name: string, rule: unknown) {
+  const response = await operator(
+    "PUT",
+    `/_work/operator/machine-rules/${name}`,
+    rule,
+  );
+  expect(response.statusCode, response.body).toBe(200);
+}
+
 async function status() {
   return (await operator("GET", "/_work/operator/machine-rules")).json().status;
 }
@@ -112,13 +129,32 @@ async function waitFor(
 
 const db = () => server.catamorphic.core.db;
 
-/** A piece of work waiting for a machine, as core records it. */
+/**
+ * A chat waiting for a machine, as core records it: its session (served
+ * by another replica, so this one's sweep leaves it alone), a queued turn
+ * unless `queued` is false, and its wait.
+ */
 async function waiting(args: {
   pool: Record<string, string>;
   owner?: string;
   requirements?: unknown;
+  queued?: boolean;
 }): Promise<string> {
   const id = randomUUID();
+  await db()
+    .insertInto("agent_sessions")
+    .values({
+      id,
+      project_id: projectId,
+      external_user_id: args.owner ?? "project",
+      authority_host_id: "another-replica",
+    })
+    .execute();
+  if (args.queued !== false)
+    await db()
+      .insertInto("agent_turns")
+      .values({ session_id: id, ordinal: 1, status: "queued" })
+      .execute();
   await db()
     .insertInto("placement_waits")
     .values({
@@ -142,21 +178,61 @@ async function forgetWaits() {
   await db().deleteFrom("placement_waits").execute();
 }
 
-async function enroll(code: string) {
-  const enrolled = await server.app.inject({
-    method: "POST",
-    url: "/api/workers/enroll",
-    headers: PROTOCOL,
-    payload: { code, publicKey: generateExecutorKeyPair().publicKey },
-  });
-  expect(enrolled.statusCode).toBe(200);
-}
-
 const createdFor = (name: string) =>
   platform.created.find((machine) => machine.name === name);
 
+const nameOf = (rule: string, machineClass: string, index: number) =>
+  demandName({
+    rule,
+    machineClass,
+    scope: { projects: [projectId] },
+    index,
+  });
+
+/** A worker process's epoch: a UUIDv7 (ADR 0192). */
+function epoch(): string {
+  const bytes = randomBytes(16);
+  bytes.writeUIntBE(Date.now(), 0, 6);
+  bytes.writeUInt8(((bytes.readUInt8(6) & 0x0f) | 0x70) >>> 0, 6);
+  bytes.writeUInt8(((bytes.readUInt8(8) & 0x3f) | 0x80) >>> 0, 8);
+  const hex = bytes.toString("hex");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+/** The created machine enrolls with its code, as its worker does first. */
+async function enroll(name: string) {
+  const made = createdFor(name);
+  if (!made) throw new Error(`No machine ${name} was made`);
+  const { publicKey } = generateExecutorKeyPair();
+  const { nodeId } = await registry.enroll({
+    code: made.enrollment.code,
+    publicKey,
+  });
+  return { nodeId, publicKey };
+}
+
+/** It enrolls and its worker connects, offering what it says. */
+async function connect(name: string, offer: Partial<WorkerOffer> = {}) {
+  const { nodeId, publicKey } = await enroll(name);
+  await registry.connect({
+    nodeId,
+    name,
+    session: epoch(),
+    offer: WorkerOfferSchema.parse({
+      isolation: "sandbox",
+      workspaceRoot: "/workspaces",
+      capacity: { workspaces: 2 },
+      ...offer,
+    }),
+    publicKey,
+  });
+}
+
 /** Work on a machine: an Allocation holding its capacity. */
-async function holdWork(name: string): Promise<string> {
+async function holdWork(
+  name: string,
+  reserved: { memoryMb?: number } = {},
+): Promise<string> {
   const row = await db()
     .insertInto("execution_allocations")
     .values({
@@ -168,13 +244,17 @@ async function holdWork(name: string): Promise<string> {
       root_workload_id: randomUUID(),
       worker_node_id: `worker.${name}`,
       policy_snapshot: JSON.stringify({}),
+      reserved_memory_mb: reserved.memoryMb ?? 0,
     })
     .returning("id")
     .executeTakeFirstOrThrow();
   return row.id;
 }
 
-/** The machine has been idle this long, by the database's clock. */
+/**
+ * The machine's work ended this many minutes ago (and it enrolled before
+ * that), by the database's clock.
+ */
 async function idleFor(name: string, minutes: number) {
   await sql`
     UPDATE execution_allocations
@@ -184,10 +264,15 @@ async function idleFor(name: string, minutes: number) {
   `.execute(db());
   await sql`
     UPDATE work_workers
-    SET enrolled_at = now() - make_interval(mins => ${minutes + 60}),
-        last_seen_at = now()
+    SET enrolled_at = now() - make_interval(mins => ${minutes + 1})
     WHERE name = ${name}
   `.execute(db());
+}
+
+async function deleteRule(name: string) {
+  await operator("DELETE", `/_work/operator/machine-rules/${name}`);
+  await forgetWaits();
+  await reconcile();
 }
 
 beforeAll(async () => {
@@ -198,6 +283,9 @@ beforeAll(async () => {
     JSON.stringify({
       classes: {
         "review-16": { platform: "custom", options: OPTIONS },
+        "plain-16": { platform: "custom" },
+        "small-8": { platform: "custom" },
+        "big-64": { platform: "custom" },
         office: { platform: "pool" },
       },
     }),
@@ -222,6 +310,12 @@ beforeAll(async () => {
   operatorSecret = fs
     .readFileSync(path.join(dataDir, "operator-secret"), "utf8")
     .trim();
+  registry = new WorkWorkerRegistry({
+    db: db(),
+    nodes: new WorkerNodesService(db()),
+    tenantId: SERVER_TENANT_ID,
+    authorityId: fs.readFileSync(path.join(dataDir, "host-id"), "utf8").trim(),
+  });
   const project = await server.catamorphic.core.projects.create(owner, {
     name: "Reviews",
   });
@@ -312,19 +406,44 @@ describe("machines on demand (ADR 0258)", () => {
     }
   });
 
+  it("refuses an untrusted rule for several owners on machines known to run plain processes", async () => {
+    // A machine of the class serving one project connects with processes.
+    await putRule("plain", {
+      projects: [projectId],
+      machines: { demand: { max: 1, min: 1 } },
+      class: "plain-16",
+      labels: { pool: "plain" },
+    });
+    await reconcile();
+    await connect(nameOf("plain", "plain-16", 1), { isolation: "process" });
+    const group = await operator("PUT", "/_work/operator/machine-rules/team", {
+      group: "eng@example.com",
+      machines: { demand: { max: 2 } },
+      class: "plain-16",
+    });
+    expect(group.statusCode).toBe(400);
+    expect(group.json().error).toContain("plain processes");
+    await putRule("team", {
+      group: "eng@example.com",
+      machines: { demand: { max: 2 } },
+      class: "plain-16",
+      trusted: true,
+    });
+    await operator("DELETE", "/_work/operator/machine-rules/team");
+    await deleteRule("plain");
+  });
+
   it("creates machines for waiting work up to its maximum, sized for that work", async () => {
-    const stored = await operator(
-      "PUT",
-      "/_work/operator/machine-rules/burst",
-      {
-        projects: [projectId],
-        machines: { demand: { max: 2 } },
-        class: "review-16",
-        labels: { pool: "burst" },
-      },
-    );
-    expect(stored.statusCode).toBe(200);
-    expect(stored.json().rule).toMatchObject({
+    await putRule("burst", {
+      projects: [projectId],
+      machines: { demand: { max: 2 } },
+      class: "review-16",
+      labels: { pool: "burst" },
+    });
+    expect(
+      (await operator("GET", "/_work/operator/machine-rules")).json().rules
+        .burst,
+    ).toMatchObject({
       machines: {
         demand: { max: 2, min: 0, idleMinutes: 10, enrollMinutes: 15 },
       },
@@ -336,27 +455,33 @@ describe("machines on demand (ADR 0258)", () => {
     };
     for (let index = 0; index < 3; index += 1)
       await waiting({ pool: { pool: "burst" }, requirements: needs });
-    // Neither another pool's work nor a member's is this rule's.
+    // Neither another pool's work nor a member's is this rule's, nor work
+    // with nothing queued any more.
     await waiting({ pool: { pool: "other" } });
     await waiting({ pool: { pool: "burst" }, owner: "someone" });
+    await waiting({ pool: { pool: "burst" }, queued: false });
     await reconcile();
 
-    const names = [1, 2].map((index) =>
-      demandName({
-        rule: "burst",
-        machineClass: "review-16",
-        scope: { projects: [projectId] },
-        index,
-      }),
-    );
-    expect(platform.created.map((machine) => machine.name)).toEqual(names);
-    expect(createdFor(names[0] ?? "")).toMatchObject({
+    const names = [1, 2].map((index) => nameOf("burst", "review-16", index));
+    expect(
+      platform.created
+        .filter((machine) => machine.rule === "burst")
+        .map((machine) => machine.name),
+    ).toEqual(names);
+    const first = createdFor(names[0] ?? "");
+    expect(first).toMatchObject({
       rule: "burst",
       class: "review-16",
       options: OPTIONS,
       waiting: needs,
       labels: { pool: "burst", class: "review-16" },
     });
+    // Idempotent per code, never per name, which a later machine reuses.
+    expect(first?.enrollment.idempotencyKey).toBe(
+      createHash("sha256")
+        .update(first?.enrollment.code ?? "")
+        .digest("hex"),
+    );
     expect((await status()).burst).toMatchObject({
       desired: 2,
       starting: 2,
@@ -365,14 +490,63 @@ describe("machines on demand (ADR 0258)", () => {
     // A machine still enrolling covers one piece of work; at the maximum
     // nothing more is made.
     await reconcile();
-    expect(platform.created).toHaveLength(2);
-    await operator("DELETE", "/_work/operator/machine-rules/burst");
-    await forgetWaits();
+    expect(
+      platform.created.filter((machine) => machine.rule === "burst"),
+    ).toHaveLength(2);
+    await deleteRule("burst");
+  });
+
+  it("waits for a machine that enrolled to connect, and stops making machines when one never does", async () => {
+    await putRule("slow", {
+      projects: [projectId],
+      machines: { demand: { max: 3, enrollMinutes: 5 } },
+      class: "review-16",
+      labels: { pool: "slow" },
+    });
+    await waiting({ pool: { pool: "slow" } });
     await reconcile();
+    const made = () =>
+      platform.created.filter((machine) => machine.rule === "slow").length;
+    const [first, second] = [1, 2].map((index) =>
+      nameOf("slow", "review-16", index),
+    );
+    if (!first || !second) throw new Error("Two names");
+    // Enrolled, its worker is still starting: neither lost nor replaced,
+    // and its work gets no second machine.
+    await enroll(first);
+    await reconcile();
+    expect(platform.destroyed).not.toContain(first);
+    expect(createdFor(second)).toBeUndefined();
+
+    // Six minutes pass and it never connects, within the rule's five.
+    await sql`
+      UPDATE work_machine_rules SET updated_at = now() - interval '10 minutes'
+      WHERE name = 'slow'
+    `.execute(db());
+    await sql`
+      UPDATE work_workers SET enrolled_at = now() - interval '6 minutes'
+      WHERE name = ${first}
+    `.execute(db());
+    await reconcile();
+    expect(platform.destroyed).toContain(first);
+    expect(made()).toBe(1);
+    expect((await status()).slow.problem).toContain(
+      `Machine ${first} enrolled but did not connect within 5 minutes`,
+    );
+    // Written again (its cause fixed), the rule makes machines again.
+    await putRule("slow", {
+      projects: [projectId],
+      machines: { demand: { max: 3, enrollMinutes: 5 } },
+      class: "review-16",
+      labels: { pool: "slow" },
+    });
+    await reconcile();
+    expect(made()).toBe(2);
+    await deleteRule("slow");
   });
 
   it("keeps a machine while it holds work, and destroys it once idle", async () => {
-    await operator("PUT", "/_work/operator/machine-rules/busy", {
+    await putRule("busy", {
       projects: [projectId],
       machines: { demand: { max: 1 } },
       class: "review-16",
@@ -380,21 +554,11 @@ describe("machines on demand (ADR 0258)", () => {
     });
     await waiting({ pool: { pool: "busy" } });
     await reconcile();
-    const name = demandName({
-      rule: "busy",
-      machineClass: "review-16",
-      scope: { projects: [projectId] },
-      index: 1,
-    });
-    const made = createdFor(name);
-    if (!made) throw new Error("No machine was made");
-    await enroll(made.enrollment.code);
+    const name = nameOf("busy", "review-16", 1);
+    await connect(name);
     // Its work landed: nothing waits, and the machine holds it.
     await forgetWaits();
     await holdWork(name);
-    await sql`UPDATE work_workers SET last_seen_at = now() WHERE name = ${name}`.execute(
-      db(),
-    );
     await reconcile();
     expect(platform.destroyed).not.toContain(name);
     expect((await status()).busy).toMatchObject({ desired: 1, ready: 1 });
@@ -411,11 +575,11 @@ describe("machines on demand (ADR 0258)", () => {
       expect.objectContaining({ name, revoked: true, state: "revoked" }),
     );
     expect((await status()).busy).toMatchObject({ desired: 0, queued: 0 });
-    await operator("DELETE", "/_work/operator/machine-rules/busy");
+    await deleteRule("busy");
   });
 
   it("keeps the most recently idle machines warm up to its minimum", async () => {
-    await operator("PUT", "/_work/operator/machine-rules/warm", {
+    await putRule("warm", {
       projects: [projectId],
       machines: { demand: { max: 3, min: 1 } },
       class: "review-16",
@@ -424,24 +588,17 @@ describe("machines on demand (ADR 0258)", () => {
     // Nothing waits: one machine is made, to be ready.
     await reconcile();
     const [first, second] = [1, 2].map((index) =>
-      demandName({
-        rule: "warm",
-        machineClass: "review-16",
-        scope: { projects: [projectId] },
-        index,
-      }),
+      nameOf("warm", "review-16", index),
     );
     if (!first || !second) throw new Error("Two names");
-    const warm = createdFor(first);
-    expect(warm).toBeDefined();
-    expect(warm?.waiting).toBeUndefined();
-    await enroll(warm?.enrollment.code ?? "");
-    // Work comes: a second machine.
+    expect(createdFor(first)?.waiting).toBeUndefined();
+    await connect(first);
+    // Work comes, and more than it has room for: a second machine.
+    await holdWork(first);
+    await holdWork(first);
     await waiting({ pool: { pool: "warm" } });
     await reconcile();
-    const extra = createdFor(second);
-    if (!extra) throw new Error("No second machine");
-    await enroll(extra.enrollment.code);
+    await connect(second);
     await forgetWaits();
     // Both idle long past ten minutes: the one idle for less time stays.
     await idleFor(first, 40);
@@ -450,13 +607,12 @@ describe("machines on demand (ADR 0258)", () => {
     expect(platform.destroyed).toContain(first);
     expect(platform.destroyed).not.toContain(second);
     expect((await status()).warm).toMatchObject({ desired: 1, ready: 1 });
-    await operator("DELETE", "/_work/operator/machine-rules/warm");
-    await reconcile();
+    await deleteRule("warm");
     expect(platform.destroyed).toContain(second);
   });
 
   it("replaces a machine that does not enroll in time", async () => {
-    await operator("PUT", "/_work/operator/machine-rules/late", {
+    await putRule("late", {
       projects: [projectId],
       machines: { demand: { max: 1, enrollMinutes: 5 } },
       class: "review-16",
@@ -465,12 +621,7 @@ describe("machines on demand (ADR 0258)", () => {
     await waiting({ pool: { pool: "late" } });
     await reconcile();
     const [first, second] = [1, 2].map((index) =>
-      demandName({
-        rule: "late",
-        machineClass: "review-16",
-        scope: { projects: [projectId] },
-        index,
-      }),
+      nameOf("late", "review-16", index),
     );
     if (!first || !second) throw new Error("Two names");
     const code = await db()
@@ -490,21 +641,140 @@ describe("machines on demand (ADR 0258)", () => {
     await reconcile();
     expect(platform.destroyed).toContain(first);
     expect(createdFor(second)).toBeDefined();
-    await operator("DELETE", "/_work/operator/machine-rules/late");
-    await forgetWaits();
-    await reconcile();
+    await deleteRule("late");
   });
 
-  it("starts a pass only when demand changed", async () => {
+  it("keeps destroying a machine until its platform says it is gone", async () => {
+    await putRule("gone", {
+      projects: [projectId],
+      machines: { demand: { max: 1 } },
+      class: "review-16",
+      labels: { pool: "gone" },
+    });
+    await waiting({ pool: { pool: "gone" } });
+    await reconcile();
+    const name = nameOf("gone", "review-16", 1);
+    expect(createdFor(name)).toBeDefined();
+    // No work waits any more and the platform is slow to let the machine go.
+    platform.unfinished.add(name);
+    await forgetWaits();
+    await operator("DELETE", "/_work/operator/machine-rules/gone");
+    await reconcile();
+    const listed = async () =>
+      (await registry.machines()).some((machine) => machine.name === name);
+    // Asked on every pass, and kept until it is done.
+    expect(
+      platform.destroyed.filter((entry) => entry === name).length,
+    ).toBeGreaterThan(1);
+    expect(await listed()).toBe(true);
+    platform.unfinished.delete(name);
+    await reconcile();
+    expect(await listed()).toBe(false);
+  });
+
+  it("leaves work its machines cannot take to a rule whose machines can", async () => {
+    // A rule of small machines, first by name, and one of big machines.
+    for (const [rule, machineClass] of [
+      ["fit-a", "small-8"],
+      ["fit-b", "big-64"],
+    ] as const)
+      await putRule(rule, {
+        projects: [projectId],
+        machines: { demand: { max: 4 } },
+        class: machineClass,
+        labels: { pool: "fit" },
+      });
+    await waiting({
+      pool: { pool: "fit" },
+      requirements: { resources: { memoryMb: 65_536 }, capabilities: [] },
+    });
+    await reconcile();
+    const small = nameOf("fit-a", "small-8", 1);
+    expect(createdFor(small)).toBeDefined();
+    // The small machine comes up with 8 GB: the work is not its rule's.
+    await connect(small, {
+      capacity: { workspaces: 2, memoryMb: 8_192 },
+      resourceLimits: ["memoryMb"],
+    });
+    await reconcile();
+    expect(createdFor(nameOf("fit-a", "small-8", 2))).toBeUndefined();
+    const current = await status();
+    expect(current["fit-a"]).toMatchObject({ queued: 0 });
+    expect(current["fit-a"].problem).toContain("do not offer");
+    expect(current["fit-b"]).toMatchObject({ queued: 1, desired: 1 });
+    expect(createdFor(nameOf("fit-b", "big-64", 1))).toBeDefined();
+    await operator("DELETE", "/_work/operator/machine-rules/fit-a");
+    await deleteRule("fit-b");
+  });
+
+  it("charges work that names no resources what its machine charges by default", async () => {
+    await putRule("dflt", {
+      projects: [projectId],
+      machines: { demand: { max: 3 } },
+      class: "review-16",
+      labels: { pool: "dflt" },
+    });
+    await waiting({ pool: { pool: "dflt" } });
+    await reconcile();
+    const [first, second] = [1, 2].map((index) =>
+      nameOf("dflt", "review-16", index),
+    );
+    if (!first || !second) throw new Error("Two names");
+    // Its one workspace's worth of memory is taken: room for no more.
+    await connect(first, {
+      capacity: { workspaces: 4, memoryMb: 16_384 },
+      defaults: { memoryMb: 16_384 },
+    });
+    await holdWork(first, { memoryMb: 16_384 });
+    await reconcile();
+    expect(createdFor(second)).toBeDefined();
+    await deleteRule("dflt");
+  });
+
+  it("counts the machines a rule served before against its maximum", async () => {
+    await putRule("scope", {
+      projects: [projectId],
+      machines: { demand: { max: 2 } },
+      class: "review-16",
+      labels: { pool: "scope" },
+    });
+    await waiting({ pool: { pool: "scope" } });
+    await waiting({ pool: { pool: "scope" } });
+    await reconcile();
+    const before = [1, 2].map((index) => nameOf("scope", "review-16", index));
+    for (const name of before) {
+      await connect(name);
+      await holdWork(name);
+    }
+    // It now serves another project too: the old machines finish their
+    // work, and until they go no more than two machines exist.
+    const other = randomUUID();
+    await putRule("scope", {
+      projects: [projectId, other],
+      machines: { demand: { max: 2 } },
+      class: "review-16",
+      labels: { pool: "scope" },
+    });
+    await reconcile();
+    const after = demandName({
+      rule: "scope",
+      machineClass: "review-16",
+      scope: { projects: [projectId, other] },
+      index: 1,
+    });
+    expect(createdFor(after)).toBeUndefined();
+    for (const name of before) await idleFor(name, 1);
+    await reconcile();
+    expect(platform.destroyed).toEqual(expect.arrayContaining(before));
+    expect(createdFor(after)).toBeDefined();
+    await deleteRule("scope");
+  });
+
+  it("starts a pass when demand changed since a pass last looked", async () => {
     const reconciler = new MachineReconciler({
       db: db(),
       tenantId: SERVER_TENANT_ID,
-      workers: new WorkWorkerRegistry({
-        db: db(),
-        nodes: new WorkerNodesService(db()),
-        tenantId: SERVER_TENANT_ID,
-        authorityId: "demand-check",
-      }),
+      workers: registry,
       classes: { "review-16": { platform: "custom" } },
       provisioner,
       install: installTarget({ publicBase: base }),
@@ -514,6 +784,13 @@ describe("machines on demand (ADR 0258)", () => {
     const passes = vi
       .spyOn(reconciler, "reconcileSoon")
       .mockImplementation(() => {});
+    /** A pass of this reconciler, once the server's is out of the way. */
+    const pass = async () => {
+      for (;;) {
+        if (!(await reconciler.reconcile()).busy) return;
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+    };
     // Without a rule on demand, nothing is watched.
     await waiting({ pool: { pool: "quiet" } });
     await reconciler.checkDemand();
@@ -531,23 +808,20 @@ describe("machines on demand (ADR 0258)", () => {
         }),
       })
       .execute();
+    await pass();
+    // Nothing changed since that pass: no pass.
     await reconciler.checkDemand();
-    expect(passes).toHaveBeenCalledTimes(1);
-    // Nothing changed: no pass.
-    await reconciler.checkDemand();
-    expect(passes).toHaveBeenCalledTimes(1);
-    // More work waits.
+    expect(passes).not.toHaveBeenCalled();
+    // More work waits. Until a pass sees it, every look asks for one: a
+    // pass already running, or another replica's, may have missed it.
     await waiting({ pool: { pool: "quiet" } });
     await reconciler.checkDemand();
-    expect(passes).toHaveBeenCalledTimes(2);
-    // Work was placed.
-    await forgetWaits();
     await reconciler.checkDemand();
-    expect(passes).toHaveBeenCalledTimes(3);
-    await db()
-      .deleteFrom("work_machine_rules")
-      .where("name", "=", "quiet")
-      .execute();
+    expect(passes).toHaveBeenCalledTimes(2);
+    await pass();
+    await reconciler.checkDemand();
+    expect(passes).toHaveBeenCalledTimes(2);
+    await deleteRule("quiet");
   });
 
   it("serves a group's members, and nobody else", async () => {
@@ -563,7 +837,7 @@ describe("machines on demand (ADR 0258)", () => {
       INSERT INTO work_accounts (user_id, directory_groups, directory_checked_at)
       VALUES (${ada}, ${JSON.stringify(["eng@example.com"])}::jsonb, now())
     `.execute(db());
-    await operator("PUT", "/_work/operator/machine-rules/desks", {
+    await putRule("desks", {
       group: "eng@example.com",
       machines: { demand: { max: 4 } },
       class: "review-16",
@@ -584,15 +858,13 @@ describe("machines on demand (ADR 0258)", () => {
     expect(createdFor(name)).toMatchObject({
       labels: { pool: "desks", class: "review-16" },
     });
-    await operator("DELETE", "/_work/operator/machine-rules/desks");
-    await forgetWaits();
-    await reconcile();
+    await deleteRule("desks");
   });
 
   it("creates a machine for a waiting project chat, runs the chat there, and destroys the machine once idle", async () => {
     const sessions = server.catamorphic.core.agentSessions;
     if (!sessions) throw new Error("Agent sessions are unavailable");
-    await operator("PUT", "/_work/operator/machine-rules/live", {
+    await putRule("live", {
       projects: [projectId],
       machines: { demand: { max: 1, idleMinutes: 1 } },
       class: "review-16",
@@ -616,12 +888,7 @@ describe("machines on demand (ADR 0258)", () => {
       text: "execution-location",
     });
     const turnId = String(sent.result?.turnId ?? "");
-    const name = demandName({
-      rule: "live",
-      machineClass: "review-16",
-      scope: { projects: [projectId] },
-      index: 1,
-    });
+    const name = nameOf("live", "review-16", 1);
     await waitFor(async () => {
       await reconcile();
       return Boolean(createdFor(name));
