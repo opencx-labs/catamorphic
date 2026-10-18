@@ -73,8 +73,14 @@ The accepted multi-machine architecture uses server instances sharing one
 Postgres and one authority, with machines exposed as permitted Environments.
 Postgres mode shares origins, artifacts, credentials, auth, and leased execution.
 Each Environment can choose its sandbox image, give agents their own Docker,
-and limit which hosts they reach; an agent's sandboxing decides what leaves
-its sandbox, apart from its harness's own permission mode. See
+and limit which hosts they reach, with a wider list for its setup alone
+(package registries) while agents reach only the gateway; an agent's
+sandboxing decides what leaves its sandbox, apart from its harness's own
+permission mode. Claude Code, Codex and ACP agents such as OpenCode run in
+those sandboxes on the organization's model keys, held by the gateway, which
+can pin the providers an aggregator routes to; work that needs a machine can
+wait for one, and machine rules can create machines on demand and remove
+them when idle. See
 [the machine setup and recovery model](skills/setup-work-server/references/cluster-deployment.md).
 The Work server is single-tenant because its local-process execution can access
 the host machine. Run one trusted organization or household per deployment.
@@ -181,7 +187,8 @@ git verbs (`sync_project`, `create_pull_request`) rather than raw git.
 One agent-session engine over pluggable harnesses: the built-in
 `@catamorphic/ai-sdk` tool loop (any API model), Claude Code
 (`@catamorphic/claude-code`), Codex (`@catamorphic/codex`), and any Agent
-Client Protocol agent such as Hermes (`@catamorphic/acp`), selectable
+Client Protocol agent such as Hermes or OpenCode (`@catamorphic/acp`, on
+the desktop or in a Work server's sandbox), selectable
 per session and switchable mid-session, with a normalized effort scale.
 Agents run either in a sandbox or directly on the host filesystem.
 `ask_user` questions, durable sessions that survive restarts, and
