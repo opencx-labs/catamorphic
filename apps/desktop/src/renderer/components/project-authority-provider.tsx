@@ -5,7 +5,7 @@ import {
   speaksSessionProtocol,
   useCatamorphic,
 } from "@catamorphic/react";
-import { QueryClient, useQuery } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import {
   createContext,
   type ReactNode,
@@ -14,6 +14,7 @@ import {
   useMemo,
 } from "react";
 import { desktopApi } from "../lib/desktop-api.js";
+import { workQueryClient } from "../lib/query-client.js";
 import {
   remoteQueryClients,
   remoteQueryClientUsers,
@@ -91,9 +92,7 @@ export function ProjectAuthorityProvider({
     }
     let queries = authorityCaches.get(key);
     if (!queries) {
-      queries = new QueryClient({
-        defaultOptions: { queries: { retry: 1, staleTime: 1000 } },
-      });
+      queries = workQueryClient({ retry: 1, staleTime: 1000 });
       // Shared at once: a chat and the sidebar beside it mounting in the
       // same commit read one cache, so the chat's stream reaches both.
       authorityCaches.set(key, queries);

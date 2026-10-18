@@ -3332,7 +3332,7 @@ drag never interrupts the agent. An agent talked to from another app hears
 which app and window the person was in, nothing more, and decides whether
 what they said was meant to be written there. See ADR 0236.
 
-### 2026-10-18: A restart never waits on work; a person names a chat; sidebar thumbs take lanes
+### 2026-10-18: A restart never waits on work; a person names a chat; sidebar thumbs take lanes; a window comes back smoothly
 
 Restart to update was disabled while an agent or a terminal worked, so a
 busy day meant no update. It is never disabled now: Work hands every
@@ -3355,3 +3355,13 @@ section's that asks for one a lane in, in padding the sidebar widens for
 it, never over the sidebar's thumb or a row. Both stay hidden until their list scrolls or the pointer
 nears that edge. Every other list still shows only the fade where it
 continues, a long note now included. See ADR 0248.
+
+Coming back to a Work window stuttered, most after a while away: every
+open project's workspace refetched its stale queries on focus, and the
+chat lists read every loaded page again, each reader rendering twice.
+Focus now reads nothing by itself; hints and polls already keep the
+window current. Only what changes outside Work with no hint opts back
+in (a pull request's state, an open file, a pinned note), and a hidden
+window catches up once, only if it dropped a hint. A return after 45 s
+went from about 183 ms of render work and 7 requests to 21 ms and 2.
+See ADR 0249.

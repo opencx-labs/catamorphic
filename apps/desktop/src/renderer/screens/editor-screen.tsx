@@ -80,6 +80,10 @@ export function EditorScreen({
         filePath: await localEditorPath(projectId, filePath ?? ""),
       }),
     retry: false,
+    // A file changed outside Work shows once its window is back, as an
+    // agent's change does (below); a draft keeps what it started from.
+    refetchOnWindowFocus: () =>
+      filePath ? draftsRef.current[filePath] === undefined : false,
   });
   const writeFile = useMutation({
     mutationFn: async ({ path, content }: { path: string; content: string }) =>

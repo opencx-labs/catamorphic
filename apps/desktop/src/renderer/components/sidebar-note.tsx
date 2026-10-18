@@ -43,6 +43,8 @@ export function SidebarNote({
         filePath: await localEditorPath(projectId, file),
       }),
     enabled: Boolean(file) && visible,
+    // A note edited outside Work shows once its window is back.
+    refetchOnWindowFocus: true,
   });
   useSidebarContent({
     state:
