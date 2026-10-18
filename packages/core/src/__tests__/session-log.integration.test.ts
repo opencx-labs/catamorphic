@@ -2077,6 +2077,38 @@ describe("session log", () => {
     expect(turn.error?.message).toContain("Credentials revoked");
   });
 
+  it("never hands a thread back a turn it began, however that turn ended", async () => {
+    const { projectId, sessionId } = await chat("Failed after working");
+    await sessions.sendMessage(identity, projectId, sessionId, "first words");
+    // The harness began it and did the work, then failed (a weekly limit).
+    const failed = await sessions.sendMessage(
+      identity,
+      projectId,
+      sessionId,
+      "[[fail Weekly limit reached]]",
+    );
+    expect(failed.turn.status).toBe("failed");
+    const { reply } = await sessions.sendMessage(
+      identity,
+      projectId,
+      sessionId,
+      "third words",
+    );
+    const said = reply?.kind === "assistant_message" ? reply.text : "";
+    expect(said).not.toContain("While you were away");
+    expect(said).toContain("third words");
+    const state = await folded(projectId, sessionId);
+    expect(state.items.map((item) => item.kind)).not.toContain(
+      "context_handoff",
+    );
+    const threads = await db
+      .selectFrom("agent_provider_threads")
+      .select("last_turn_ordinal")
+      .where("session_id", "=", sessionId)
+      .execute();
+    expect(threads.map((thread) => thread.last_turn_ordinal)).toEqual([3]);
+  });
+
   describe("a sign-in that can still refresh (ADR 0228)", () => {
     async function signInChat(name: string) {
       const project = await projects.create(identity, { name });

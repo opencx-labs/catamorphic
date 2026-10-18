@@ -90,7 +90,13 @@ rollout file. Resuming in a new sandbox or on another machine
 materializes them first. Where state cannot move (a store gap, an
 unsupported harness, a switch of harness), the next turn records a
 `context_handoff` item: an auditable, budgeted summary of the turns the
-target thread has not seen, delta when returning to an earlier thread.
+target thread has not seen, delta when returning to an earlier thread. A
+thread has seen a turn once its harness began it there, however the turn
+ended: one that failed after working (a rate limit, a lost sign-in) is
+never summarized back to the thread that did it. The summary keeps what
+was said in full, counts a turn's commands with its last few named, and
+names each changed file once; a chat shows each turn's handoff once, as
+"Told the agent what it missed" (or "the conversation so far").
 
 **Versions are checked, not assumed.** A runner's hello states its protocol
 and an attempt of another protocol is refused. Workers state the protocol of

@@ -3094,7 +3094,24 @@ export class TurnEngine {
       events.push({ type: "turn.changed", turn: settled });
       if (!transient)
         events.push(...(await this.requeueSteers(trx, input.turn, now)));
-      if (input.attempt.providerThreadId && input.status !== "failed") {
+      // The thread saw the turn once its harness began it there, however
+      // it ended: a turn that failed after working (a rate limit, a lost
+      // sign-in) is never handed back to the thread that did the work.
+      const seen =
+        input.attempt.providerThreadId !== null &&
+        (input.status !== "failed" ||
+          (
+            await trx
+              .selectFrom("agent_turn_attempts")
+              .select("runner")
+              .where("turn_id", "=", input.turn.id)
+              .where("provider_thread_id", "=", input.attempt.providerThreadId)
+              .execute()
+          ).some(
+            (row) =>
+              (row.runner as unknown as RunnerState | null)?.started === true,
+          ));
+      if (input.attempt.providerThreadId && seen) {
         const threadRow = await trx
           .selectFrom("agent_provider_threads")
           .selectAll()

@@ -332,7 +332,9 @@ describe("ChatTimeline for embedders", () => {
     expect($('[data-testid="chat-divider"]')?.textContent).toBe(
       "Switched to Helper",
     );
-    expect(container.textContent).toContain("Caught up on 3 earlier turns");
+    expect(container.textContent).toContain(
+      "Told the agent the conversation so far",
+    );
     expect($('[data-testid="question-answer"]')?.textContent).toContain(
       "Which layout?",
     );
@@ -340,7 +342,7 @@ describe("ChatTimeline for embedders", () => {
     expect(container.textContent).toContain("Questions dismissed");
   });
 
-  it("never counts fewer than one turn a handoff caught up on", async () => {
+  it("says an agent that missed part of the conversation was told what it missed", async () => {
     await render({
       timeline: [
         {
@@ -363,11 +365,11 @@ describe("ChatTimeline for embedders", () => {
                 startedAt: null,
                 endedAt: null,
                 kind: "context_handoff",
-                strategy: "full",
+                strategy: "delta",
                 fromProviderThreadIds: [],
                 toProviderThreadId: "p",
-                coveredTurnOrdinals: { from: 3, to: 2 },
-                text: "Nothing new.",
+                coveredTurnOrdinals: { from: 2, to: 3 },
+                text: "While you were away from this conversation, it continued.",
               },
             },
           ],
@@ -375,7 +377,7 @@ describe("ChatTimeline for embedders", () => {
       ],
     });
     expect($('[data-testid="chat-handoff"] button')?.textContent).toBe(
-      "Caught up on 1 earlier turn",
+      "Told the agent what it missed",
     );
   });
 

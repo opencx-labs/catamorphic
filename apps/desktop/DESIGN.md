@@ -3365,3 +3365,13 @@ in (a pull request's state, an open file, a pinned note), and a hidden
 window catches up once, only if it dropped a hint. A return after 45 s
 went from about 183 ms of render work and 7 requests to 21 ms and 2.
 See ADR 0249.
+
+A chat whose agent hit its usage limit mid-turn then showed "Caught up on
+1 earlier turn" again and again: Work counted a failed turn as unseen by
+the agent that did it, so every retry summarized that turn back to it,
+words it had already read included. A turn the agent began now counts as
+seen however it ended, a turn shows one such line however often it was
+retried, and the line says what happened in plain words: "Told the agent
+what it missed", as a coding agent's "conversation compacted" does. The
+summary itself names a long turn's last few commands instead of every
+one. See ADR 0198.
