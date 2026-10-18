@@ -37,8 +37,10 @@ export {
   isMediaAttachment,
   isTextAttachment,
   messageWithAttachmentNames,
+  renderQuestionAnswer,
   renderTextAttachments,
   renderUserMessage,
+  withMarkerCount,
 } from "./coding-agent/text-attachments.js";
 export {
   type McpToolPolicy,

@@ -455,15 +455,37 @@ describe("talking around questions", () => {
         `return { chat: here().textContent, ready: !${submit}.disabled };`,
       ),
     ).toEqual({ chat: "", ready: true });
+    // A long paste becomes a pill and a pasted image attaches, as they do
+    // in a message (ADR 0244).
+    await run(`
+      const input = $('[data-testid="question-answer-input"]');
+      const text = new DataTransfer();
+      text.setData('text/plain', Array.from({ length: 14 }, (_, i) => 'card ' + i).join('\\n'));
+      input.dispatchEvent(new ClipboardEvent('paste', { clipboardData: text, bubbles: true, cancelable: true }));
+      const png = Uint8Array.from(atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=='), (c) => c.charCodeAt(0));
+      const image = new DataTransfer();
+      image.items.add(new File([png], 'dot.png', { type: 'image/png' }));
+      input.dispatchEvent(new ClipboardEvent('paste', { clipboardData: image, bubbles: true, cancelable: true }));
+      return true;
+    `);
+    await runWait(
+      `return $('[data-testid="question-answer-input"]').querySelectorAll('[data-pill-id]').length === 2;`,
+      { label: "a text pill and an image in the answer" },
+    );
+    const cards = `[...hereChat().querySelectorAll('[data-testid="question-answer"]')]`;
+    const before = await run<number>(`return ${cards}.length;`);
     // Enter on the last unanswered question sends the answers.
     await app.press("Enter");
+    // The agent read the pasted text in the answer, and where the image is.
     await runWait(
-      `return !modal() && hereLog().includes('Using the Cards in columns') && hereLog().includes('sorted by date layout');`,
-      { timeoutMs: 30_000, label: "the agent read the words" },
+      `return !modal() && hereLog().includes('Using the Cards in columns') && hereLog().includes('card 13') && hereLog().includes('dot.png, in the message after these answers');`,
+      { timeoutMs: 30_000, label: "the agent read the words and the paste" },
     );
+    // One card holds the answer, its pills in place; the image's message
+    // shows as that card.
     await runWait(
-      `const cards = hereChat().querySelectorAll('[data-testid="question-answer"]'); const card = cards[cards.length - 1]; return !!card && card.textContent.includes('Which layout should I use?') && card.textContent.includes('sorted by date');`,
-      { timeoutMs: 30_000, label: "the words in history" },
+      `const all = ${cards}; const card = all.at(-1); return all.length === ${before} + 1 && card.textContent.includes('Which layout should I use?') && card.textContent.includes('sorted by date') && card.querySelectorAll('[data-testid="sent-pill"]').length === 2 && ![...hereChat().querySelectorAll('[data-user-message]')].some((el) => el.textContent.includes('With my answer to'));`,
+      { timeoutMs: 30_000, label: "the answer and its pills in history" },
     );
   }, 60_000);
 

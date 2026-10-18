@@ -1,4 +1,3 @@
-import { renderUserMessage } from "@catamorphic/react";
 import { type ClipboardEvent, useEffect, useRef } from "react";
 import { readComposerPaste } from "../lib/composer-paste";
 import type { OtherAnswerInputProps } from "./catamorphic/agent-question-panel";
@@ -6,9 +5,9 @@ import { ComposerInput, type ComposerInputHandle } from "./composer-input";
 
 /**
  * A question's Other answer, typed in the composer's own input: it glides
- * taller as it grows, and a long paste, an editor selection, a link or a
- * path becomes a pill. The agent reads the answer as it reads a chat
- * message: the words, then each pill's text.
+ * taller as it grows; a long paste, an editor selection, a link or a path
+ * becomes a pill, and a pasted image or file attaches as it would to a
+ * message. The answer carries its pills as a message does (ADR 0244).
  */
 export function AnswerInput({
   ariaLabel,
@@ -17,7 +16,11 @@ export function AnswerInput({
   focusRequest,
   onChange,
   onEnter,
-}: OtherAnswerInputProps) {
+  onFiles,
+}: OtherAnswerInputProps & {
+  /** Pasted files, attached into this input. */
+  onFiles?: (input: ComposerInputHandle, files: File[]) => void;
+}) {
   const inputRef = useRef<ComposerInputHandle>(null);
   useEffect(() => {
     if (focusRequest > 0) inputRef.current?.focusToType();
@@ -26,8 +29,8 @@ export function AnswerInput({
   const report = () => {
     const input = inputRef.current;
     if (!input) return;
-    const { text, attachments } = input.read({ trim: true });
-    onChange(renderUserMessage(text, attachments).trim());
+    const { message, attachments } = input.read({ trim: true });
+    onChange({ text: message, attachments });
   };
 
   const onPaste = (event: ClipboardEvent<HTMLDivElement>) => {
@@ -36,7 +39,8 @@ export function AnswerInput({
     const paste = readComposerPaste(event.clipboardData);
     if (paste.kind === "nothing") return;
     event.preventDefault();
-    if (paste.kind === "pill") {
+    if (paste.kind === "files") onFiles?.(input, paste.files);
+    else if (paste.kind === "pill") {
       input.insertPills([{ ...paste.pill, id: crypto.randomUUID() }]);
     } else if (paste.kind === "text") {
       input.insertText(paste.text);

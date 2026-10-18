@@ -1,6 +1,6 @@
 # 0195: The conversation continues around agent questions
 
-- **Status:** Accepted (amended by [0197](0197-agent-sessions-are-an-event-log-of-turns.md): replies to a waiting question steer the turn)
+- **Status:** Accepted (amended by [0197](0197-agent-sessions-are-an-event-log-of-turns.md): replies to a waiting question steer the turn; by [0244](0244-each-question-takes-its-own-answer-with-pills.md): each question has an Other answer again, carrying pills)
 - **Date:** 2026-10-02
 - **Refines:** 0122
 

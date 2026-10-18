@@ -3,11 +3,18 @@ import {
   type AgentQuestionPanelProps,
   AgentQuestionPanel as QuestionPanel,
 } from "./catamorphic/agent-question-panel";
+import type { ComposerInputHandle } from "./composer-input";
 import { ShortcutHint } from "./shortcut-hint";
 
 export type { AgentQuestionPanelProps } from "./catamorphic/agent-question-panel";
 
-export function AgentQuestionPanel(props: AgentQuestionPanelProps) {
+export function AgentQuestionPanel({
+  onAnswerFiles,
+  ...props
+}: AgentQuestionPanelProps & {
+  /** Files pasted into an Other answer: the chat's own attaching, into it. */
+  onAnswerFiles?: (input: ComposerInputHandle, files: File[]) => void;
+}) {
   return (
     <QuestionPanel
       {...props}
@@ -16,7 +23,9 @@ export function AgentQuestionPanel(props: AgentQuestionPanelProps) {
           {button}
         </ShortcutHint>
       )}
-      renderOtherInput={(input) => <AnswerInput {...input} />}
+      renderOtherInput={(input) => (
+        <AnswerInput {...input} onFiles={onAnswerFiles} />
+      )}
     />
   );
 }

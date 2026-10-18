@@ -234,6 +234,8 @@ export interface QuestionAnswer {
   questions: AgentQuestion[];
   /** One per question, as the person picked or wrote it. */
   answers: string[];
+  /** Each answer's pills, in the order of its markers (ADR 0244). */
+  attachments?: AgentAttachment[][];
 }
 
 /** What people are told when the turn an input started settles. */
@@ -691,7 +693,16 @@ export type RuntimeRequestResponse =
       /** Why Work denied it when no person did: told to the agent. */
       reason?: string;
     }
-  | { kind: "question"; answers: string[] }
+  | {
+      kind: "question";
+      /**
+       * One per question. An answer in the person's own words may hold
+       * attachment markers (U+FFFC), as a message does: the n-th marker is
+       * the n-th of that answer's `attachments` (ADR 0244).
+       */
+      answers: string[];
+      attachments?: AgentAttachment[][];
+    }
   | {
       kind: "elicitation";
       action: "accept" | "decline" | "cancel";

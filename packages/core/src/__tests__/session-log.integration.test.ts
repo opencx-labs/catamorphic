@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
+  type AgentAttachment,
   applySessionEvents,
   itemsOfTurn,
   orderedTurns,
@@ -19,7 +20,7 @@ import { EchoAdapter } from "@catamorphic/agent-runner";
 import type { DB } from "@catamorphic/db";
 import { migrateToLatest } from "@catamorphic/db";
 import { FsBackend, ProjectManager } from "@catamorphic/git";
-import type { SandboxProvider } from "@catamorphic/sandbox";
+import { ATTACHMENT_MARKER, type SandboxProvider } from "@catamorphic/sandbox";
 import { PGlite } from "@electric-sql/pglite";
 import { pgcrypto } from "@electric-sql/pglite/contrib/pgcrypto";
 import { Kysely, PGliteDialect, sql, WithSchemaPlugin } from "kysely";
@@ -551,6 +552,81 @@ describe("session log", () => {
       response: { kind: "question", answers: ["No"] },
     });
     expect(again.status).toBe("rejected");
+  });
+
+  it("carries an answer's pills: the agent reads them in it, and its images follow as a message (ADR 0244)", async () => {
+    const { projectId, sessionId } = await chat("Answer pills");
+    const running = sessions.sendMessage(
+      identity,
+      projectId,
+      sessionId,
+      "[[ask Which layout?]]",
+    );
+    const request = await vi.waitFor(
+      async () => {
+        const detail = await sessions.get(identity, projectId, sessionId);
+        const [pending] = pendingRequests(
+          sessionStateFromSnapshot(detail.snapshot),
+        );
+        expect(pending?.kind).toBe("question");
+        return pending;
+      },
+      { timeout: 10_000 },
+    );
+    if (!request) throw new Error("No question");
+    const M = ATTACHMENT_MARKER;
+    const paste: AgentAttachment = {
+      kind: "text",
+      name: "notes.txt",
+      text: "columns of cards",
+      source: { type: "paste" },
+    };
+    const image: AgentAttachment = {
+      kind: "image",
+      name: "shot.png",
+      mediaType: "image/png",
+      dataBase64: "AAAA",
+    };
+    const response = {
+      kind: "question" as const,
+      answers: [`Like ${M} and ${M}`],
+      attachments: [[paste, image]],
+    };
+    const receipt = await sessions.command(identity, projectId, sessionId, {
+      type: "respond",
+      commandId: randomUUID(),
+      requestId: request.id,
+      response,
+    });
+    expect(receipt.status).toBe("accepted");
+    const { turn } = await running;
+    expect(turn.status).toBe("completed");
+    // The agent read the pasted text in the answer, and where the image is.
+    const transcript = await sessions.transcript(
+      identity,
+      projectId,
+      sessionId,
+    );
+    const said = transcript.map((message) => message.content).join("\n");
+    expect(said).toContain(
+      "You answered: Like [attachment 1: notes.txt] and [attachment 2: shot.png, in the message after these answers]",
+    );
+    expect(said).toContain("columns of cards");
+    const detail = await sessions.get(identity, projectId, sessionId);
+    const state = sessionStateFromSnapshot(detail.snapshot);
+    // The answer keeps its words and pills for history, as a message does.
+    expect(state.requests[request.id]?.response).toEqual(response);
+    // The image followed in that turn, a message carrying the same answer.
+    const media = detail.snapshot.items.find(
+      (item) =>
+        item.kind === "user_message" && item.answer?.requestId === request.id,
+    );
+    expect(media).toMatchObject({
+      turnId: turn.id,
+      text: `With my answer to "Which layout?": ${M}`,
+      attachments: [image],
+      answer: { answers: response.answers, attachments: response.attachments },
+    });
   });
 
   it("interrupts a turn and runs the next queued one", async () => {
@@ -2288,12 +2364,23 @@ describe("session log", () => {
       },
       { timeout: 15_000 },
     );
-    // The answer that comes later reaches the agent as a message.
+    // The answer that comes later reaches the agent as a message, its
+    // pills that message's attachments (ADR 0244).
+    const swatch: AgentAttachment = {
+      kind: "text",
+      name: "swatch.css",
+      text: "--bg: #0a0a0b;",
+      source: { type: "paste" },
+    };
     await sessions.command(identity, projectId, sessionId, {
       type: "respond",
       commandId: randomUUID(),
       requestId: question?.id ?? "",
-      response: { kind: "question", answers: ["Dark"] },
+      response: {
+        kind: "question",
+        answers: [`Dark ${ATTACHMENT_MARKER}`],
+        attachments: [[swatch]],
+      },
     });
     await vi.waitFor(
       async () => {
@@ -2307,9 +2394,11 @@ describe("session log", () => {
           (item) =>
             item.kind === "user_message" && item.text.includes("User answer:"),
         );
+        expect(answer).toMatchObject({ attachments: [swatch] });
         expect(answer?.kind === "user_message" && answer.answer).toMatchObject({
           questions: question?.questions,
-          answers: ["Dark"],
+          answers: [`Dark ${ATTACHMENT_MARKER}`],
+          attachments: [[swatch]],
         });
       },
       { timeout: 15_000 },

@@ -311,6 +311,7 @@ describe("ChatTimeline for embedders", () => {
               },
             ],
             answers: ["Grid"],
+            attachments: [[]],
             dismissed: false,
           },
           {
@@ -318,6 +319,7 @@ describe("ChatTimeline for embedders", () => {
             id: "q2",
             questions: [],
             answers: [],
+            attachments: [],
             dismissed: true,
           },
         ],

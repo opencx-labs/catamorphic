@@ -130,6 +130,7 @@ export const questionAnswerSchema = z.object({
   requestId: z.string(),
   questions: z.array(agentQuestionSchema),
   answers: z.array(z.string()),
+  attachments: z.array(z.array(attachmentSchema)).optional(),
 });
 
 /** {@link SettledAlert} as a schema. */
@@ -183,6 +184,13 @@ export const runtimeRequestResponseSchema = z.union([
   z.object({
     kind: z.literal("question"),
     answers: z.array(z.string().max(200_000)).min(1),
+    /** Each answer's pills; as many in all as a message may carry. */
+    attachments: z
+      .array(z.array(attachmentSchema))
+      .refine((each) => each.flat().length <= 50, {
+        message: "Answers can carry at most 50 attachments",
+      })
+      .optional(),
   }),
   z.object({
     kind: z.literal("elicitation"),

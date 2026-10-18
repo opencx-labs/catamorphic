@@ -1,4 +1,5 @@
 import {
+  type AgentAttachment,
   type AgentQuestion,
   type AssistantMessageItem,
   activeTurn,
@@ -69,6 +70,8 @@ export type TimelineEntry =
       id: string;
       questions: AgentQuestion[];
       answers: string[];
+      /** Each answer's pills, in the order of its markers (ADR 0244). */
+      attachments: AgentAttachment[][];
       /** The person closed the panel without answering. */
       dismissed: boolean;
     }
@@ -380,6 +383,7 @@ function answerFromRequest(
     id: item.id,
     questions: request.questions ?? [],
     answers: request.response.answers,
+    attachments: request.response.attachments,
   });
 }
 
@@ -390,6 +394,7 @@ function answerFromMessage(item: UserMessageItem): TimelineEntry | undefined {
     id: item.id,
     questions: item.answer.questions,
     answers: item.answer.answers,
+    attachments: item.answer.attachments,
   });
 }
 
@@ -397,12 +402,16 @@ function answerEntry(input: {
   id: string;
   questions: AgentQuestion[];
   answers: string[];
+  attachments?: AgentAttachment[][];
 }): TimelineEntry {
   return {
     kind: "answer",
     id: input.id,
     questions: input.questions,
     answers: input.answers,
+    attachments: input.answers.map(
+      (_answer, index) => input.attachments?.[index] ?? [],
+    ),
     dismissed: input.answers[0] === QUESTIONS_DISMISSED_MESSAGE,
   };
 }
@@ -411,20 +420,27 @@ function answerEntry(input: {
  * Question rows of an answer: each question with what was picked. A
  * single answer to several questions (an older client) reads whole.
  */
-export function answerRows(
-  entry: Extract<TimelineEntry, { kind: "answer" }>,
-): { question: string; answer: string }[] {
-  if (entry.questions.length === 0)
-    return [{ question: "", answer: entry.answers.join("\n") }];
+export function answerRows(entry: Extract<TimelineEntry, { kind: "answer" }>): {
+  question: string;
+  answer: string;
+  /** The answer's pills, in the order of its markers. */
+  attachments: AgentAttachment[];
+}[] {
+  const whole = {
+    answer: entry.answers.join("\n"),
+    attachments: entry.attachments.flat(),
+  };
+  if (entry.questions.length === 0) return [{ question: "", ...whole }];
   if (entry.answers.length === entry.questions.length)
     return entry.questions.map((question, index) => ({
       question: question.question,
       answer: entry.answers[index] ?? "",
+      attachments: entry.attachments[index] ?? [],
     }));
   return [
     {
       question: entry.questions.map((question) => question.question).join("\n"),
-      answer: entry.answers.join("\n"),
+      ...whole,
     },
   ];
 }

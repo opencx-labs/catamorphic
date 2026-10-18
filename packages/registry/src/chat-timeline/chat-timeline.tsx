@@ -2294,7 +2294,11 @@ function AnswerCard({
               </dt>
             )}
             <dd className="whitespace-pre-wrap break-words font-medium leading-6">
-              {row.answer}
+              {/* An answer in the person's own words keeps its pills in place. */}
+              <InlineMessage
+                content={row.answer}
+                attachments={row.attachments}
+              />
             </dd>
           </div>
         ))}

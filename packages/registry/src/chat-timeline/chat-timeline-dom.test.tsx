@@ -312,6 +312,7 @@ describe("ChatTimeline DOM contract", () => {
               },
             ],
             answers: ["This one"],
+            attachments: [[]],
             dismissed: false,
           },
         ],

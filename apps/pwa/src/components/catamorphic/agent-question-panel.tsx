@@ -1,8 +1,18 @@
 "use client";
 
-import type { AgentQuestion } from "@catamorphic/react";
+import type {
+  AgentAttachment,
+  AgentQuestion,
+  RuntimeRequestResponse,
+} from "@catamorphic/react";
 import { Check, PencilLine, X } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
+
+/** An Other answer: the words, and the pills its markers stand for. */
+export interface OtherAnswer {
+  text: string;
+  attachments: AgentAttachment[];
+}
 
 /** What a host's own input for an Other answer is given. */
 export interface OtherAnswerInputProps {
@@ -11,8 +21,11 @@ export interface OtherAnswerInputProps {
   disabled: boolean;
   /** Changes each time the input should take focus (Other was picked). */
   focusRequest: number;
-  /** Every change: the answer as the agent reads it, "" when empty. */
-  onChange: (answer: string) => void;
+  /**
+   * Every change: the words, with a marker (U+FFFC) where each pill sits,
+   * as a message has them; "" when empty.
+   */
+  onChange: (answer: OtherAnswer) => void;
   /** Enter without Shift: this question is answered, move on. */
   onEnter: () => void;
 }
@@ -20,10 +33,12 @@ export interface OtherAnswerInputProps {
 export interface AgentQuestionPanelProps {
   questions: AgentQuestion[];
   /**
-   * The answers, one per question (picked labels joined with ", "): send
-   * them as `respond(id, { kind: "question", answers })`.
+   * The answers, one per question (picked labels, then the person's own
+   * words), with each answer's pills: send it as `respond(id, response)`.
    */
-  onSubmit: (answers: string[]) => void;
+  onSubmit: (
+    response: Extract<RuntimeRequestResponse, { kind: "question" }>,
+  ) => void;
   /**
    * Dismissing blocking questions without answering (X button or Escape):
    * answer with `QUESTIONS_DISMISSED_MESSAGE`. A non-blocking panel only
@@ -46,26 +61,32 @@ interface Answer {
   selected: string[];
   /** Whether Other is picked: the person answers in their own words. */
   other: boolean;
-  /** The Other answer as the agent reads it. */
-  otherText: string;
+  /** The Other answer, pills and all. */
+  otherAnswer: OtherAnswer;
 }
 
 const emptyAnswer = (): Answer => ({
   selected: [],
   other: false,
-  otherText: "",
+  otherAnswer: { text: "", attachments: [] },
 });
 
-/** The answer to one question: picked labels, then the person's own words. */
-const answerText = (answer: Answer): string =>
-  [
-    ...answer.selected,
-    ...(answer.other && answer.otherText.trim()
-      ? [answer.otherText.trim()]
-      : []),
-  ].join(", ");
+/** The person's own words, when Other is picked and they wrote some. */
+const ownWords = (answer: Answer): OtherAnswer | null =>
+  answer.other &&
+  (answer.otherAnswer.text.trim() !== "" ||
+    answer.otherAnswer.attachments.length > 0)
+    ? answer.otherAnswer
+    : null;
 
-const isAnswered = (answer: Answer): boolean => answerText(answer) !== "";
+/** The answer to one question: picked labels, then the person's own words. */
+const answerText = (answer: Answer): string => {
+  const words = ownWords(answer)?.text.trim();
+  return [...answer.selected, ...(words ? [words] : [])].join(", ");
+};
+
+const isAnswered = (answer: Answer): boolean =>
+  answer.selected.length > 0 || ownWords(answer) !== null;
 
 /**
  * Tabbed question form for agent `ask_user` turns, styled after the Claude
@@ -396,10 +417,10 @@ export function AgentQuestionPanel({
                           placeholder: "Type your answer…",
                           disabled,
                           focusRequest: focusRequests[index] ?? 0,
-                          onChange: (otherText) =>
+                          onChange: (otherAnswer) =>
                             setAnswer(index, (current) => ({
                               ...current,
-                              otherText,
+                              otherAnswer,
                               other:
                                 current.other || question.options.length === 0,
                             })),
@@ -517,7 +538,9 @@ function OtherAnswerTextarea({
       aria-label={ariaLabel}
       placeholder={placeholder}
       disabled={disabled}
-      onChange={(event) => onChange(event.target.value)}
+      onChange={(event) =>
+        onChange({ text: event.target.value, attachments: [] })
+      }
       onKeyDown={(event) => {
         if (event.key !== "Enter" || event.shiftKey) return;
         if (event.nativeEvent.isComposing) return;
@@ -529,12 +552,21 @@ function OtherAnswerTextarea({
   );
 }
 
-/** One answer per question: the picked labels, then the person's words. */
+/**
+ * One answer per question (the picked labels, then the person's words),
+ * and the pills of answers that have them.
+ */
 function formatAnswers(
   questions: AgentQuestion[],
   answers: Answer[],
-): string[] {
-  return questions.map((_question, index) =>
-    answerText(answers[index] ?? emptyAnswer()),
+): Extract<RuntimeRequestResponse, { kind: "question" }> {
+  const each = questions.map(
+    (_question, index) => answers[index] ?? emptyAnswer(),
   );
+  const attachments = each.map((answer) => ownWords(answer)?.attachments ?? []);
+  return {
+    kind: "question",
+    answers: each.map(answerText),
+    ...(attachments.some((list) => list.length > 0) ? { attachments } : {}),
+  };
 }

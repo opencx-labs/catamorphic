@@ -176,7 +176,44 @@ describe("sessionTimeline", () => {
     ]);
     const answer = entries[1];
     expect(answer?.kind === "answer" ? answerRows(answer) : null).toEqual([
-      { question: "Which layout?", answer: "Grid" },
+      { question: "Which layout?", answer: "Grid", attachments: [] },
+    ]);
+  });
+
+  it("keeps an answer's pills beside its words (ADR 0244)", () => {
+    const paste = {
+      kind: "text" as const,
+      name: "notes.txt",
+      text: "columns of cards",
+      source: { type: "paste" as const },
+    };
+    const state = sessionStateFromSnapshot(
+      snapshot({
+        sequence: 10,
+        turns: [turn("t1", 1)],
+        items: [
+          userMessage("t1:input", 1, "t1", "Make a page"),
+          requestItem("x", 2, "t1", "q1"),
+        ],
+        requests: [
+          question("q1", {
+            status: "resolved",
+            response: {
+              kind: "question",
+              answers: ["Like \uFFFC"],
+              attachments: [[paste]],
+            },
+          }),
+        ],
+      }),
+    );
+    const answer = sessionTimeline(state)[0]?.entries[1];
+    expect(answer?.kind === "answer" ? answerRows(answer) : null).toEqual([
+      {
+        question: "Which layout?",
+        answer: "Like \uFFFC",
+        attachments: [paste],
+      },
     ]);
   });
 

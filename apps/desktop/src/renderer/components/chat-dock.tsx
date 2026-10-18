@@ -2046,10 +2046,18 @@ function ChatDockContent({
 
   /** Serialize transfers so budgets, caret position and send stay coherent. */
   const addFilesQueueRef = useRef<Promise<void>>(Promise.resolve());
-  const addFiles = (files: File[], at?: { x: number; y: number }) => {
-    const composer = composerRef.current;
+  /**
+   * Files into a composer-style input, the chat's composer or a question's
+   * Other answer, which a message or an answer carries alike.
+   */
+  const addFilesTo = (
+    composer: ComposerInputHandle | null,
+    files: File[],
+    at?: { x: number; y: number },
+  ) => {
     const root = composer?.element();
     if (files.length === 0 || !composer || !root) return;
+    const chatComposer = composerRef.current;
     const selection = window.getSelection();
     const currentRange = at
       ? document.caretRangeFromPoint(at.x, at.y)
@@ -2069,8 +2077,11 @@ function ChatDockContent({
     setTransferError(undefined);
     addFilesQueueRef.current = addFilesQueueRef.current
       .then(async () => {
-        // A closed/replaced composer must never receive another chat's files.
-        if (composerRef.current !== composer || !root.isConnected) return;
+        // A closed/replaced input must never receive another chat's files.
+        const gone = () =>
+          !root.isConnected ||
+          (composer === chatComposer && composerRef.current !== composer);
+        if (gone()) return;
         const current = composer.read().attachments;
         let budget =
           MAX_TOTAL_MEDIA_BYTES -
@@ -2130,7 +2141,7 @@ function ChatDockContent({
             );
           }
         }
-        if (composerRef.current !== composer || !root.isConnected) return;
+        if (gone()) return;
         // Text pills can arrive while a file is being read; report overflow.
         const room = Math.max(
           0,
@@ -2156,6 +2167,8 @@ function ChatDockContent({
       });
   };
 
+  const addFiles = (files: File[], at?: { x: number; y: number }) =>
+    addFilesTo(composerRef.current, files, at);
   const addFilesRef = useRef(addFiles);
   addFilesRef.current = addFiles;
 
@@ -3294,9 +3307,8 @@ function ChatDockContent({
                       key={request.id}
                       questions={request.questions}
                       blocking={request.blocking}
-                      onSubmit={(answers) =>
-                        respond(request.id, { kind: "question", answers })
-                      }
+                      onSubmit={(response) => respond(request.id, response)}
+                      onAnswerFiles={addFilesTo}
                       onDismiss={() =>
                         respond(request.id, {
                           kind: "question",
@@ -3484,8 +3496,8 @@ function ChatDockContent({
                     }
                     maxPills={MAX_ATTACHMENTS}
                     placeholder={
-                      // An open question takes free-text answers here: the
-                      // panel has no "Other" row (ADR 0195).
+                      // An open question takes free-text answers here too,
+                      // beside each question's Other answer (ADR 0195, 0244).
                       // A permission request is no question: typing declines it.
                       questionRequests.length > 0
                         ? "Answer in your own words…"

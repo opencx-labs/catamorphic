@@ -7218,44 +7218,7 @@ export interface paths {
                         type: "send";
                         commandId: string;
                         text: string;
-                        attachments?: ({
-                            /** @enum {string} */
-                            kind: "image" | "document";
-                            name: string;
-                            mediaType: string;
-                            dataBase64: string;
-                        } | {
-                            /** @enum {string} */
-                            kind: "text";
-                            name: string;
-                            text: string;
-                            source: {
-                                /** @enum {string} */
-                                type: "paste";
-                            } | {
-                                /** @enum {string} */
-                                type: "selection";
-                                filePath: string;
-                                startLine?: number;
-                                endLine?: number;
-                            } | {
-                                /** @enum {string} */
-                                type: "url";
-                                url: string;
-                            } | {
-                                /** @enum {string} */
-                                type: "path";
-                                path: string;
-                            } | {
-                                /** @enum {string} */
-                                type: "tab";
-                                key: string;
-                                kind: string;
-                                title: string;
-                                url?: string;
-                                filePath?: string;
-                            };
-                        })[];
+                        attachments?: components["schemas"]["ProtocolAttachmentInput"][];
                         /** @enum {string} */
                         dispatch?: "queue" | "steer" | "interrupt";
                         workspace?: {
@@ -7312,6 +7275,7 @@ export interface paths {
                             /** @enum {string} */
                             kind: "question";
                             answers: string[];
+                            attachments?: components["schemas"]["ProtocolAttachmentInput"][][];
                         } | {
                             /** @enum {string} */
                             kind: "elicitation";
@@ -17379,6 +17343,44 @@ export interface components {
         ProtocolJsonValueInput: (string | number | boolean | components["schemas"]["ProtocolJsonValueInput"][] | {
             [key: string]: components["schemas"]["ProtocolJsonValueInput"];
         }) | null;
+        ProtocolAttachmentInput: {
+            /** @enum {string} */
+            kind: "image" | "document";
+            name: string;
+            mediaType: string;
+            dataBase64: string;
+        } | {
+            /** @enum {string} */
+            kind: "text";
+            name: string;
+            text: string;
+            source: {
+                /** @enum {string} */
+                type: "paste";
+            } | {
+                /** @enum {string} */
+                type: "selection";
+                filePath: string;
+                startLine?: number;
+                endLine?: number;
+            } | {
+                /** @enum {string} */
+                type: "url";
+                url: string;
+            } | {
+                /** @enum {string} */
+                type: "path";
+                path: string;
+            } | {
+                /** @enum {string} */
+                type: "tab";
+                key: string;
+                kind: string;
+                title: string;
+                url?: string;
+                filePath?: string;
+            };
+        };
         InboundSenderInput: {
             /** @enum {string} */
             kind: "agent";
@@ -17427,44 +17429,7 @@ export interface components {
                 externalUserId: string;
             };
             text: string;
-            attachments: ({
-                /** @enum {string} */
-                kind: "image" | "document";
-                name: string;
-                mediaType: string;
-                dataBase64: string;
-            } | {
-                /** @enum {string} */
-                kind: "text";
-                name: string;
-                text: string;
-                source: {
-                    /** @enum {string} */
-                    type: "paste";
-                } | {
-                    /** @enum {string} */
-                    type: "selection";
-                    filePath: string;
-                    startLine?: number;
-                    endLine?: number;
-                } | {
-                    /** @enum {string} */
-                    type: "url";
-                    url: string;
-                } | {
-                    /** @enum {string} */
-                    type: "path";
-                    path: string;
-                } | {
-                    /** @enum {string} */
-                    type: "tab";
-                    key: string;
-                    kind: string;
-                    title: string;
-                    url?: string;
-                    filePath?: string;
-                };
-            })[];
+            attachments: components["schemas"]["ProtocolAttachmentInput"][];
             answer?: {
                 requestId: string;
                 questions: {
@@ -17477,6 +17442,7 @@ export interface components {
                     }[];
                 }[];
                 answers: string[];
+                attachments?: components["schemas"]["ProtocolAttachmentInput"][][];
             };
         } | {
             /** @enum {string} */
@@ -17506,44 +17472,7 @@ export interface components {
                 firedAt?: string;
             };
             text: string;
-            attachments: ({
-                /** @enum {string} */
-                kind: "image" | "document";
-                name: string;
-                mediaType: string;
-                dataBase64: string;
-            } | {
-                /** @enum {string} */
-                kind: "text";
-                name: string;
-                text: string;
-                source: {
-                    /** @enum {string} */
-                    type: "paste";
-                } | {
-                    /** @enum {string} */
-                    type: "selection";
-                    filePath: string;
-                    startLine?: number;
-                    endLine?: number;
-                } | {
-                    /** @enum {string} */
-                    type: "url";
-                    url: string;
-                } | {
-                    /** @enum {string} */
-                    type: "path";
-                    path: string;
-                } | {
-                    /** @enum {string} */
-                    type: "tab";
-                    key: string;
-                    kind: string;
-                    title: string;
-                    url?: string;
-                    filePath?: string;
-                };
-            })[];
+            attachments: components["schemas"]["ProtocolAttachmentInput"][];
             alert?: {
                 title?: string;
                 body?: string;
@@ -17698,44 +17627,7 @@ export interface components {
                 externalUserId: string;
             };
             text: string;
-            attachments: ({
-                /** @enum {string} */
-                kind: "image" | "document";
-                name: string;
-                mediaType: string;
-                dataBase64: string;
-            } | {
-                /** @enum {string} */
-                kind: "text";
-                name: string;
-                text: string;
-                source: {
-                    /** @enum {string} */
-                    type: "paste";
-                } | {
-                    /** @enum {string} */
-                    type: "selection";
-                    filePath: string;
-                    startLine?: number;
-                    endLine?: number;
-                } | {
-                    /** @enum {string} */
-                    type: "url";
-                    url: string;
-                } | {
-                    /** @enum {string} */
-                    type: "path";
-                    path: string;
-                } | {
-                    /** @enum {string} */
-                    type: "tab";
-                    key: string;
-                    kind: string;
-                    title: string;
-                    url?: string;
-                    filePath?: string;
-                };
-            })[];
+            attachments: components["schemas"]["ProtocolAttachmentInput"][];
             answer?: {
                 requestId: string;
                 questions: {
@@ -17748,6 +17640,7 @@ export interface components {
                     }[];
                 }[];
                 answers: string[];
+                attachments?: components["schemas"]["ProtocolAttachmentInput"][][];
             };
         } | {
             id: string;
@@ -17781,44 +17674,7 @@ export interface components {
             kind: "inbound_message";
             from: components["schemas"]["InboundSenderInput"];
             text: string;
-            attachments: ({
-                /** @enum {string} */
-                kind: "image" | "document";
-                name: string;
-                mediaType: string;
-                dataBase64: string;
-            } | {
-                /** @enum {string} */
-                kind: "text";
-                name: string;
-                text: string;
-                source: {
-                    /** @enum {string} */
-                    type: "paste";
-                } | {
-                    /** @enum {string} */
-                    type: "selection";
-                    filePath: string;
-                    startLine?: number;
-                    endLine?: number;
-                } | {
-                    /** @enum {string} */
-                    type: "url";
-                    url: string;
-                } | {
-                    /** @enum {string} */
-                    type: "path";
-                    path: string;
-                } | {
-                    /** @enum {string} */
-                    type: "tab";
-                    key: string;
-                    kind: string;
-                    title: string;
-                    url?: string;
-                    filePath?: string;
-                };
-            })[];
+            attachments: components["schemas"]["ProtocolAttachmentInput"][];
             alert?: {
                 title?: string;
                 body?: string;
@@ -18165,6 +18021,7 @@ export interface components {
                 /** @enum {string} */
                 kind: "question";
                 answers: string[];
+                attachments?: components["schemas"]["ProtocolAttachmentInput"][][];
             } | {
                 /** @enum {string} */
                 kind: "elicitation";
@@ -18362,6 +18219,44 @@ export interface components {
         ProtocolJsonValue: (string | number | boolean | components["schemas"]["ProtocolJsonValue"][] | {
             [key: string]: components["schemas"]["ProtocolJsonValue"];
         }) | null;
+        ProtocolAttachment: {
+            /** @enum {string} */
+            kind: "image" | "document";
+            name: string;
+            mediaType: string;
+            dataBase64: string;
+        } | {
+            /** @enum {string} */
+            kind: "text";
+            name: string;
+            text: string;
+            source: {
+                /** @enum {string} */
+                type: "paste";
+            } | {
+                /** @enum {string} */
+                type: "selection";
+                filePath: string;
+                startLine?: number;
+                endLine?: number;
+            } | {
+                /** @enum {string} */
+                type: "url";
+                url: string;
+            } | {
+                /** @enum {string} */
+                type: "path";
+                path: string;
+            } | {
+                /** @enum {string} */
+                type: "tab";
+                key: string;
+                kind: string;
+                title: string;
+                url?: string;
+                filePath?: string;
+            };
+        };
         InboundSender: {
             /** @enum {string} */
             kind: "agent";
@@ -18410,44 +18305,7 @@ export interface components {
                 externalUserId: string;
             };
             text: string;
-            attachments: ({
-                /** @enum {string} */
-                kind: "image" | "document";
-                name: string;
-                mediaType: string;
-                dataBase64: string;
-            } | {
-                /** @enum {string} */
-                kind: "text";
-                name: string;
-                text: string;
-                source: {
-                    /** @enum {string} */
-                    type: "paste";
-                } | {
-                    /** @enum {string} */
-                    type: "selection";
-                    filePath: string;
-                    startLine?: number;
-                    endLine?: number;
-                } | {
-                    /** @enum {string} */
-                    type: "url";
-                    url: string;
-                } | {
-                    /** @enum {string} */
-                    type: "path";
-                    path: string;
-                } | {
-                    /** @enum {string} */
-                    type: "tab";
-                    key: string;
-                    kind: string;
-                    title: string;
-                    url?: string;
-                    filePath?: string;
-                };
-            })[];
+            attachments: components["schemas"]["ProtocolAttachment"][];
             answer?: {
                 requestId: string;
                 questions: {
@@ -18460,6 +18318,7 @@ export interface components {
                     }[];
                 }[];
                 answers: string[];
+                attachments?: components["schemas"]["ProtocolAttachment"][][];
             };
         } | {
             /** @enum {string} */
@@ -18489,44 +18348,7 @@ export interface components {
                 firedAt?: string;
             };
             text: string;
-            attachments: ({
-                /** @enum {string} */
-                kind: "image" | "document";
-                name: string;
-                mediaType: string;
-                dataBase64: string;
-            } | {
-                /** @enum {string} */
-                kind: "text";
-                name: string;
-                text: string;
-                source: {
-                    /** @enum {string} */
-                    type: "paste";
-                } | {
-                    /** @enum {string} */
-                    type: "selection";
-                    filePath: string;
-                    startLine?: number;
-                    endLine?: number;
-                } | {
-                    /** @enum {string} */
-                    type: "url";
-                    url: string;
-                } | {
-                    /** @enum {string} */
-                    type: "path";
-                    path: string;
-                } | {
-                    /** @enum {string} */
-                    type: "tab";
-                    key: string;
-                    kind: string;
-                    title: string;
-                    url?: string;
-                    filePath?: string;
-                };
-            })[];
+            attachments: components["schemas"]["ProtocolAttachment"][];
             alert?: {
                 title?: string;
                 body?: string;
@@ -18681,44 +18503,7 @@ export interface components {
                 externalUserId: string;
             };
             text: string;
-            attachments: ({
-                /** @enum {string} */
-                kind: "image" | "document";
-                name: string;
-                mediaType: string;
-                dataBase64: string;
-            } | {
-                /** @enum {string} */
-                kind: "text";
-                name: string;
-                text: string;
-                source: {
-                    /** @enum {string} */
-                    type: "paste";
-                } | {
-                    /** @enum {string} */
-                    type: "selection";
-                    filePath: string;
-                    startLine?: number;
-                    endLine?: number;
-                } | {
-                    /** @enum {string} */
-                    type: "url";
-                    url: string;
-                } | {
-                    /** @enum {string} */
-                    type: "path";
-                    path: string;
-                } | {
-                    /** @enum {string} */
-                    type: "tab";
-                    key: string;
-                    kind: string;
-                    title: string;
-                    url?: string;
-                    filePath?: string;
-                };
-            })[];
+            attachments: components["schemas"]["ProtocolAttachment"][];
             answer?: {
                 requestId: string;
                 questions: {
@@ -18731,6 +18516,7 @@ export interface components {
                     }[];
                 }[];
                 answers: string[];
+                attachments?: components["schemas"]["ProtocolAttachment"][][];
             };
         } | {
             id: string;
@@ -18764,44 +18550,7 @@ export interface components {
             kind: "inbound_message";
             from: components["schemas"]["InboundSender"];
             text: string;
-            attachments: ({
-                /** @enum {string} */
-                kind: "image" | "document";
-                name: string;
-                mediaType: string;
-                dataBase64: string;
-            } | {
-                /** @enum {string} */
-                kind: "text";
-                name: string;
-                text: string;
-                source: {
-                    /** @enum {string} */
-                    type: "paste";
-                } | {
-                    /** @enum {string} */
-                    type: "selection";
-                    filePath: string;
-                    startLine?: number;
-                    endLine?: number;
-                } | {
-                    /** @enum {string} */
-                    type: "url";
-                    url: string;
-                } | {
-                    /** @enum {string} */
-                    type: "path";
-                    path: string;
-                } | {
-                    /** @enum {string} */
-                    type: "tab";
-                    key: string;
-                    kind: string;
-                    title: string;
-                    url?: string;
-                    filePath?: string;
-                };
-            })[];
+            attachments: components["schemas"]["ProtocolAttachment"][];
             alert?: {
                 title?: string;
                 body?: string;
@@ -19148,6 +18897,7 @@ export interface components {
                 /** @enum {string} */
                 kind: "question";
                 answers: string[];
+                attachments?: components["schemas"]["ProtocolAttachment"][][];
             } | {
                 /** @enum {string} */
                 kind: "elicitation";

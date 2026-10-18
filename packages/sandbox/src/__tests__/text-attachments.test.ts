@@ -5,9 +5,11 @@ import {
   isMediaAttachment,
   isTextAttachment,
   messageWithAttachmentNames,
+  renderQuestionAnswer,
   renderTextAttachments,
   renderUserMessage,
   splitAttachmentMarkers,
+  withMarkerCount,
 } from "../coding-agent/text-attachments.js";
 import type { AgentAttachment } from "../coding-agent/types.js";
 
@@ -198,6 +200,32 @@ describe("text attachments", () => {
       "[Attachment 2: notes.txt — Pasted text]\n<<<\na\nb\n>>>",
     );
     expect(out).not.toContain(M);
+  });
+
+  it("renders an answer's pills in it, and says its media follow (ADR 0244)", () => {
+    const M = ATTACHMENT_MARKER;
+    const out = renderQuestionAnswer(`Grid, like ${M} with ${M}`, [
+      paste,
+      image,
+    ]);
+    expect(
+      out.startsWith(
+        "Grid, like [attachment 1: notes.txt] with [attachment 2: shot.png, in the message after these answers]",
+      ),
+    ).toBe(true);
+    expect(out).toContain(
+      "[Attachment 1: notes.txt — Pasted text]\n<<<\na\nb\n>>>",
+    );
+    expect(out).not.toContain(M);
+    expect(renderQuestionAnswer("Grid", undefined)).toBe("Grid");
+  });
+
+  it("keeps one marker per attachment", () => {
+    const M = ATTACHMENT_MARKER;
+    expect(withMarkerCount(`a ${M} b`, 1)).toBe(`a ${M} b`);
+    // Markers past the attachments go; missing ones join at the end.
+    expect(withMarkerCount(`a ${M} b ${M}`, 0)).toBe("a  b ");
+    expect(withMarkerCount("a", 2)).toBe(`a${M}${M}`);
   });
 
   it("names attachments in plain-text renderings (titles)", () => {

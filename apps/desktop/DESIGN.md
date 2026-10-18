@@ -722,7 +722,7 @@ the historical log explains how it arrived here.
 - [Performance](docs/performance.md): idle lifecycle checks and sustained measurement.
 
 ## Design log
-### 2026-10-18: The Mac app's icon is drawn as designed; the palette's input grows in place and its arrows move the caret; a terminal opens blank
+### 2026-10-18: The Mac app's icon is drawn as designed; the palette's input grows in place and its arrows move the caret; a terminal opens blank; each question takes its own answer
 
 The installed app's icon looked worse than the dev app's. macOS 26 draws an
 app icon from an asset catalog; an app with only an `icns` gets the system's
@@ -770,10 +770,25 @@ rows that scroll in or come with a later resize arrive blank.
 `fresh-terminal.test.ts` shows the library's behaviour and the erase
 against the real WASM module.
 
+The question panel dropped its Other row when the composer became the place
+for free text (ADR 0195), but one reply cannot answer each of several
+questions. Every question has an Other answer again (ADR 0244), typed in the
+composer's own input (`components/answer-input.tsx`): it glides taller, a
+long paste, a selection, a link or a path becomes a pill, and a pasted image
+or file attaches through the dock's own attaching. Enter moves to the next
+unanswered question or sends the answers; Escape leaves the box before it
+dismisses the questions. An answer carries its pills as a message does, so
+history draws them in place; core renders the text pills into what the
+asking agent reads, and its images follow in the same turn as a message,
+which shows as the answer's card. The box opens in a wrapper that clips: a
+hidden overflow scrolled to the caret as the box opened, and text typed
+then landed behind the caret.
+
 `e2e/motion.e2e.ts` presses a real Shift+Enter in the palette and the
 composer and checks the first line never leaves the frame's top edge;
 `e2e/palette.e2e.ts` walks the arrows through two lines, a wrapped line
-(from its start too), Shift and one line.
+(from its start too), Shift and one line; `e2e/tool-permissions.e2e.ts`
+answers through Other with typed words, a text pill and an image.
 
 ### 2026-10-17: A message sent while the agent works reaches it
 
