@@ -786,7 +786,7 @@ describe("chat flows", () => {
     );
     await runWait(
       `const labels = $$('[role="menuitem"]').map((item) => item.textContent.trim());
-       return labels.join('|') === 'New subsession|Mark as unread|Archive';`,
+       return labels.join('|') === 'Rename…|New subsession|Mark as unread|Archive';`,
       { label: "dock session menu" },
     );
     await run(
@@ -816,7 +816,7 @@ describe("chat flows", () => {
     `);
     await runWait(
       `const labels = $$('[role="menuitem"]').map((item) => item.textContent.trim());
-       return labels.join('|') === 'Open here|Open in new tab|Open to the side|Open floating|New subsession|Mark as read|Archive';`,
+       return labels.join('|') === 'Open here|Open in new tab|Open to the side|Open floating|Rename…|New subsession|Mark as read|Archive';`,
       { label: "sidebar session menu matches the dock" },
     );
     await run(
@@ -904,6 +904,155 @@ describe("chat flows", () => {
         .find((row) => row.textContent.includes('Session menu'));`,
       { label: "unarchived chat restored to the sidebar" },
     );
+  });
+
+  it("renames a chat from its sidebar row, dock bubble, the palette and its tab, in one dialog, and keeps the name", async () => {
+    const sidebarRow = (text: string) =>
+      `[...document.querySelectorAll('aside [data-session-id]')].find((row) => row.textContent.includes(${JSON.stringify(text)}))`;
+    const dockBubble = (text: string) =>
+      `[...document.querySelectorAll('[data-chat-bubble][data-session-id]')].find((row) => !row.closest('aside') && row.querySelector(${JSON.stringify(`button[aria-label*="${text}"]`)}))`;
+    // The rename form (ADR 0234's action input) opens with the name it had.
+    const rename = async (from: string, to: string) => {
+      await runWait(
+        `const field = document.querySelector('form input[name="title"]');
+         return field?.value === ${JSON.stringify(from)};`,
+        { label: `rename form filled with ${from}` },
+      );
+      await run(`
+        const field = document.querySelector('form input[name="title"]');
+        setReactValue(field, ${JSON.stringify(to)});
+        field.closest('form').requestSubmit();
+        return true;
+      `);
+      await runWait(`return !!${sidebarRow(to)};`, {
+        timeoutMs: 30_000,
+        label: `sidebar row renamed to ${to}`,
+      });
+      await runWait(
+        `return !document.querySelector('form input[name="title"]');`,
+        {
+          label: "rename form closed",
+        },
+      );
+    };
+
+    await run(`pressKey('n', { metaKey: true }); return true;`);
+    await runWait(`return !!floatingDock();`, { label: "chat dock open" });
+    await run(`
+      const input = floatingDock().querySelector('[data-composer-input]');
+      setReactValue(input, 'answer slowly private-marker');
+      input.closest('form').requestSubmit();
+      return true;
+    `);
+    await runWait(`return !!${sidebarRow("Private marker")};`, {
+      timeoutMs: 30_000,
+      label: "the agent's own title in the sidebar",
+    });
+    await run(`
+      ${sidebarRow("Private marker")}.firstElementChild.dispatchEvent(
+        new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 210, clientY: 360 }),
+      );
+      return true;
+    `);
+    await runWait(`return !!byText('[role="menuitem"]', 'Rename…');`, {
+      label: "rename in the sidebar row's menu",
+    });
+    await run(`byText('[role="menuitem"]', 'Rename…').click(); return true;`);
+    await rename("Private marker", "Launch checklist");
+
+    // The agent titles every reply; the person's name stays.
+    await runWait(
+      `return [...document.querySelectorAll('[role="log"] article')]
+        .some((article) => article.textContent.includes('Done after a long think.'));`,
+      { timeoutMs: 30_000, label: "the slow turn settled" },
+    );
+    await run(`
+      const input = floatingDock().querySelector('[data-composer-input]');
+      setReactValue(input, 'and once more');
+      input.closest('form').requestSubmit();
+      return true;
+    `);
+    await runWait(
+      `return [...document.querySelectorAll('[role="log"] article')]
+        .some((article) => article.textContent.includes('You said: and once more'));`,
+      { timeoutMs: 30_000, label: "the agent answered and titled the chat" },
+    );
+    expect(
+      await run<boolean>(`return !!${sidebarRow("Launch checklist")};`),
+    ).toBe(true);
+
+    // The dock's bubble offers the same verb.
+    await runWait(`return !document.querySelector('[data-sidebar-menu]');`, {
+      label: "sidebar menu dismissed",
+    });
+    await runWait(
+      `const bubble = ${dockBubble("Launch checklist")};
+       if (!bubble) return false;
+       bubble.querySelector('button').dispatchEvent(
+         new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 420, clientY: 500 }),
+       );
+       return true;`,
+      { label: "dock bubble named by the person" },
+    );
+    await runWait(`return !!byText('[role="menuitem"]', 'Rename…');`, {
+      label: "rename in the dock bubble's menu",
+    });
+    await run(`byText('[role="menuitem"]', 'Rename…').click(); return true;`);
+    await rename("Launch checklist", "Launch notes");
+
+    // The palette's Rename chat opens the same dialog for the chat in front.
+    await run(`
+      const input = $$('textarea[aria-label="Search commands, pages, and more"]')
+        .find((el) => !el.closest('[inert]'));
+      if (!input) pressKey('p', { metaKey: true });
+      return true;
+    `);
+    await runWait(
+      `const input = $$('textarea[aria-label="Search commands, pages, and more"]')
+        .find((el) => !el.closest('[inert]'));
+       if (!input) return false;
+       setReactValue(input, '>rename chat');
+       return true;`,
+      { label: "palette asked for Rename chat" },
+    );
+    await runWait(
+      `const option = $$('[role="option"]')
+        .find((el) => !el.closest('[inert]') && el.textContent.includes('Rename chat'));
+       if (!option) return false;
+       option.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+       return true;`,
+      { label: "Rename chat in the palette" },
+    );
+    await rename("Launch notes", "Launch plan");
+
+    // As a tab, its right-click has the chat's verbs after the ways to
+    // open it.
+    await run(`pressKey('M', { metaKey: true, shiftKey: true }); return true;`);
+    await runWait(
+      `return !floatingDock() && !!visibleDock() &&
+              visibleDock().className.includes('max-w-full');`,
+      { label: "the chat as a tab" },
+    );
+    await runWait(
+      `const label = $$('.workspace-tab-label').find((el) => el.textContent.includes('Launch plan'));
+       if (!label) return false;
+       const r = label.getBoundingClientRect();
+       label.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: r.left + 10, clientY: r.top + 10 }));
+       return true;`,
+      { label: "the chat's tab in the strip" },
+    );
+    await runWait(
+      `const labels = $$('[role="menuitem"]').map((item) => item.textContent.trim());
+       return labels[0] === 'Open here' && labels.includes('Rename…');`,
+      { label: "the tab's menu: open modes, then the chat's verbs" },
+    );
+    await run(`byText('[role="menuitem"]', 'Rename…').click(); return true;`);
+    await rename("Launch plan", "Launch tab");
+    // Back to floating, as the next tests expect.
+    await run(`pressKey('Escape'); return true;`);
+    await runWait(`return !!floatingDock();`, {
+      label: "the chat floating again",
+    });
   });
 });
 

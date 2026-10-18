@@ -128,6 +128,7 @@ describe("chat menu", () => {
         (entry) => entry.action,
       );
     expect(actions(true)).toEqual([
+      "rename",
       "new-subsession",
       "open-terminal",
       "open-preview",

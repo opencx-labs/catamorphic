@@ -415,6 +415,10 @@ export function TabbedSidebar({
       matchesSidebarSurface(tab.when, surface) &&
       tab.sections.some(sectionAvailable),
   );
+  /** A section asks for a scroll thumb: its lane takes panel padding. */
+  const sectionThumbs = configuredTabs.some((tab) =>
+    tab.sections.some((section) => section.scrollbar),
+  );
   // The person's choice while it is on offer; otherwise the first tab that
   // stays whatever is in front, so a contextual tab arriving never takes
   // the panel from what the person was looking at.
@@ -734,6 +738,8 @@ export function TabbedSidebar({
         <div
           ref={panelArea}
           className="relative min-h-0 flex-1 overflow-hidden"
+          // A section's thumb has a lane of the panel's padding (ADR 0248).
+          data-section-thumbs={sectionThumbs ? "" : undefined}
         >
           {configuredTabs.map((tab) => (
             <div
@@ -779,12 +785,21 @@ export function TabbedSidebar({
               ))}
             </div>
           ))}
-          {/* Only a section that asks for one has a thumb; every other
-              list fades the edge it continues past (cat-edge-fade). */}
-          {configuredTabs.some((tab) =>
-            tab.sections.some((section) => section.scrollbar),
-          ) && (
-            <OverlayScrollbar edge={side} getArea={() => panelArea.current} />
+          {/* Every list fades the edge it continues past (cat-edge-fade).
+              The sidebar's own thumb rests on its outer edge, hidden until
+              it scrolls; a section that asks for one has its thumb a lane
+              in, never over the sidebar's (ADR 0248). */}
+          <OverlayScrollbar
+            lane="panel"
+            edge={side}
+            getArea={() => panelArea.current}
+          />
+          {sectionThumbs && (
+            <OverlayScrollbar
+              lane="section"
+              edge={side}
+              getArea={() => panelArea.current}
+            />
           )}
           {tabs.length === 0 && (
             <div className="grid h-full place-items-center p-4">

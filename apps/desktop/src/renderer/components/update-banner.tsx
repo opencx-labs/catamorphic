@@ -146,45 +146,25 @@ export function UpdateBanner({
               </button>
             )}
             {state.phase === "move-required" && (
-              <ShortcutHint
-                label={
-                  hasActiveWork
-                    ? "Finish active agents and terminals before moving"
-                    : "Move Work to Applications and reopen it"
-                }
-              >
-                <span tabIndex={hasActiveWork ? 0 : undefined}>
-                  <button
-                    type="button"
-                    onClick={() => void desktopApi.updateMove()}
-                    disabled={hasActiveWork}
-                    data-disabled-reason="Finish active agents and terminals before moving"
-                    className="button-primary button-sm"
-                  >
-                    Move to Applications
-                  </button>
-                </span>
+              <ShortcutHint label="Move Work to Applications and reopen it">
+                <button
+                  type="button"
+                  onClick={() => void desktopApi.updateMove()}
+                  className="button-primary button-sm"
+                >
+                  Move to Applications
+                </button>
               </ShortcutHint>
             )}
             {state.phase === "downloaded" && (
-              <ShortcutHint
-                label={
-                  hasActiveWork
-                    ? "Finish active agents and terminals before restarting"
-                    : "Restart to install the update"
-                }
-              >
-                <span tabIndex={hasActiveWork ? 0 : undefined}>
-                  <button
-                    type="button"
-                    onClick={() => void desktopApi.updateInstall()}
-                    disabled={hasActiveWork}
-                    data-disabled-reason="Finish active agents and terminals before restarting"
-                    className="button-primary button-sm"
-                  >
-                    Restart to update
-                  </button>
-                </span>
+              <ShortcutHint label="Restart to install the update">
+                <button
+                  type="button"
+                  onClick={() => void desktopApi.updateInstall()}
+                  className="button-primary button-sm"
+                >
+                  Restart to update
+                </button>
               </ShortcutHint>
             )}
             {(state.phase === "error" || state.phase === "up-to-date") && (
@@ -222,6 +202,10 @@ export function UpdateBanner({
   );
 }
 
+/** What a relaunch does to work in progress (ADR 0246). */
+const RESTART_KEEPS_AGENTS =
+  " Working agents pick up where they left off, and open terminals close.";
+
 function updateContent(
   state: DesktopUpdateState | null,
   hasActiveWork: boolean,
@@ -249,9 +233,7 @@ function updateContent(
         title: "Update ready",
         description:
           state.message ??
-          (hasActiveWork
-            ? "Finish active agents and terminals before restarting."
-            : `Restart to install Work ${state.version ?? "the update"}.`),
+          `Restart to install Work ${state.version ?? "the update"}.${hasActiveWork ? RESTART_KEEPS_AGENTS : ""}`,
       };
     case "installing":
       return {
@@ -274,7 +256,7 @@ function updateContent(
         title: "Move Work to Applications",
         description:
           state.message ??
-          "Work is running from its download, where macOS cannot update it. Move it to Applications and it reopens from there.",
+          `Work is running from its download, where macOS cannot update it. Move it to Applications and it reopens from there.${hasActiveWork ? RESTART_KEEPS_AGENTS : ""}`,
       };
     case "unsupported":
       return {

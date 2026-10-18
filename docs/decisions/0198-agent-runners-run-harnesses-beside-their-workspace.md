@@ -1,6 +1,6 @@
 # 0198 — Agent runners run harnesses beside their workspace
 
-- **Status:** Accepted (amended by [0214](0214-a-chat-runs-on-one-harness.md): a started chat keeps its harness; another harness is a new chat; by [0222](0222-desktop-harnesses-stay-warm-between-turns.md): a desktop harness may outlive its attempt, and native state is stored as written; by [0225](0225-harnesses-get-connectors-as-mcp-servers-results-unchanged.md): a mounted connector's endpoint decides its calls; by [0245](0245-a-harness-says-its-thread-is-gone.md): a harness says its thread is gone, and the turn goes on in a new one, handed the conversation)
+- **Status:** Accepted (amended by [0214](0214-a-chat-runs-on-one-harness.md): a started chat keeps its harness; another harness is a new chat; by [0222](0222-desktop-harnesses-stay-warm-between-turns.md): a desktop harness may outlive its attempt, and native state is stored as written; by [0225](0225-harnesses-get-connectors-as-mcp-servers-results-unchanged.md): a mounted connector's endpoint decides its calls; by [0245](0245-a-harness-says-its-thread-is-gone.md): a harness says its thread is gone, and the turn goes on in a new one, handed the conversation; by [0246](0246-a-restart-never-waits-on-work.md): a host that restarts hands every turn back, and the next process continues it)
 - **Date:** 2026-10-02
 - **Supersedes:** [0067](0067-long-lived-agent-runtimes-and-capability-gateway.md) (runtime contract), the control-loop placement in [0180](0180-harnesses-run-in-the-sandbox-models-through-the-gateway.md), the recovery half of [0095](0095-authoritative-agent-execution.md)
 - **Amends:** [0174](0174-background-processes-as-a-sandbox-capability.md), [0187](0187-remote-executors-ride-out-transient-failures.md), [0190](0190-disposable-control-plane-replicas.md), [0193](0193-no-cross-replica-state-in-replica-memory.md)
@@ -90,7 +90,13 @@ rollout file. Resuming in a new sandbox or on another machine
 materializes them first. Where state cannot move (a store gap, an
 unsupported harness, a switch of harness), the next turn records a
 `context_handoff` item: an auditable, budgeted summary of the turns the
-target thread has not seen, delta when returning to an earlier thread.
+target thread has not seen, delta when returning to an earlier thread. A
+thread has seen a turn once its harness began it there, however the turn
+ended: one that failed after working (a rate limit, a lost sign-in) is
+never summarized back to the thread that did it. The summary keeps what
+was said in full, counts a turn's commands with its last few named, and
+names each changed file once; a chat shows each turn's handoff once, as
+"Told the agent what it missed" (or "the conversation so far").
 
 **Versions are checked, not assumed.** A runner's hello states its protocol
 and an attempt of another protocol is refused. Workers state the protocol of

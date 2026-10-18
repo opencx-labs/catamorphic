@@ -248,7 +248,13 @@ export function tabsSource(deps: WorkSourceDeps): SectionSource {
               actions: [
                 { label: `Close ${label}`, action: "close", icon: "X" },
               ],
-              menu: [{ label: `Close ${label}`, action: "close" }],
+              menu: [
+                // A chat's tab is named as the chat is (ADR 0247).
+                ...(tab.kind === "chat" && tab.sessionId
+                  ? [{ label: "Rename…", action: "rename" }]
+                  : []),
+                { label: `Close ${label}`, action: "close" },
+              ],
               data: {
                 kind: tab.kind,
                 name: tab.name,
@@ -276,9 +282,16 @@ export function tabsSource(deps: WorkSourceDeps): SectionSource {
         invalidateBranches(publish, branches()),
       ),
     action: async ({ itemId, action }) => {
+      const host = deps.host();
+      const tab = host.tabs.find((candidate) => tabKey(candidate) === itemId);
+      const sessionId = tab?.kind === "chat" ? tab.sessionId : undefined;
+      if (action === "rename" && sessionId) {
+        host.sessionAction(sessionId, "rename");
+        return undefined;
+      }
       if (action !== "close")
         throw new Error("This tab does not support that action");
-      deps.host().closeTab(itemId);
+      host.closeTab(itemId);
       return undefined;
     },
     move: async ({ itemId, parentId, beforeId }) => {

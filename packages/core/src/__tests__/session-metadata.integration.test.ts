@@ -31,6 +31,10 @@ import { ExecutionEnvironmentsService } from "../services/execution-environments
 import { ProjectEnvironmentsService } from "../services/project-environments-service.js";
 import { ProjectsService } from "../services/projects-service.js";
 import { copySettledHistory } from "../services/sessions/session-copy.js";
+import {
+  renameCommandId,
+  SessionLog,
+} from "../services/sessions/session-log.js";
 import { readFullSnapshot } from "../services/sessions/session-reads.js";
 import { testEnvironmentProvider } from "./test-environment.js";
 
@@ -443,6 +447,43 @@ describe("session metadata", () => {
         events: [],
       }),
     ).rejects.toThrow(SessionMetadataError);
+  });
+
+  it("carries a person's name for a chat to its mirror, so the copy keeps it (ADR 0247)", async () => {
+    const project = await projects.create(identity, { name: "Named copies" });
+    const source = await sessions.create(identity, project.id);
+    await sessions.sendMessage(identity, project.id, source.id, "Mirror me");
+    const sessionId = randomUUID();
+    const copy = copySettledHistory({
+      snapshot: await readFullSnapshot({ db, sessionId: source.id }),
+      sessionId,
+    });
+    if (!copy) throw new Error("Expected a copy");
+    await sessions.mirror(identity, project.id, sessionId, {
+      authority: { hostId: "desktop-origin", revision: 1 },
+      todos: [],
+      base: copy.snapshot,
+      events: [],
+    });
+    const log = new SessionLog(db);
+    expect(await log.namedByPerson(db, sessionId)).toBe(false);
+    // The source's rename arrives as the event its command appended.
+    await sessions.mirror(identity, project.id, sessionId, {
+      authority: { hostId: "desktop-origin", revision: 1 },
+      events: [
+        {
+          sessionId,
+          sequence: copy.snapshot.sequence + 1,
+          at: new Date().toISOString(),
+          commandId: renameCommandId(identity.externalUserId),
+          event: { type: "session.changed", session: { title: "Launch" } },
+        },
+      ],
+    });
+    expect((await sessions.get(identity, project.id, sessionId)).title).toBe(
+      "Launch",
+    );
+    expect(await log.namedByPerson(db, sessionId)).toBe(true);
   });
 
   it("writes only where the session's authority is, and reads anywhere", async () => {

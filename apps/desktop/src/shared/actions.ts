@@ -442,6 +442,15 @@ export const BUILTIN_ACTIONS = [
     ],
   },
   {
+    id: "rename-chat",
+    label: "Rename chat…",
+    icon: "Pencil",
+    description:
+      "name the focused chat; it keeps the name, whatever its agent titles it",
+    defaultBinding: null,
+    keywords: ["rename", "name", "title", "chat", "conversation", "session"],
+  },
+  {
     id: "archive-chat",
     label: "Archive chat",
     icon: "Archive",

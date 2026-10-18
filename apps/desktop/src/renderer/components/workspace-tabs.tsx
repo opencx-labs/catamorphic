@@ -42,7 +42,10 @@ import { AppGlyph } from "./app-icon";
 import { ChatGlyph, hasCustomChatIcon } from "./chat-icon";
 import { SignalBadge, SignalGlyph } from "./chat-signals";
 import type { FileTarget } from "./file-menu.js";
-import { OpenResourceButton } from "./open-resource-button.js";
+import {
+  OpenResourceButton,
+  type ResourceActions,
+} from "./open-resource-button.js";
 import { ShortcutHint } from "./shortcut-hint";
 
 /** The card's status line — most urgent signal first. */
@@ -284,6 +287,7 @@ function TabStrip({
   onReorder,
   onDragStateChange,
   tabFile,
+  tabActions,
 }: {
   alignment?: "start" | "center";
   tabs: WorkspaceTab[];
@@ -309,6 +313,8 @@ function TabStrip({
   onDragStateChange?: (key: string | null) => void;
   /** The file a tab shows (an editor's): its menu adds the file's actions. */
   tabFile?: (key: string) => FileTarget | undefined;
+  /** What a tab's resource does itself (a chat's verbs), after opening it. */
+  tabActions?: (key: string) => ResourceActions | undefined;
 }) {
   const keybindings = useKeybindings();
   const [rendered, setRendered] = useState<RenderedTab[]>(() =>
@@ -634,6 +640,7 @@ function TabStrip({
                 <OpenResourceButton
                   type="button"
                   file={tabFile?.(key)}
+                  actions={tabActions?.(key)}
                   onOpen={(mode) => {
                     disarmHoverCard();
                     onSelect(key, mode);

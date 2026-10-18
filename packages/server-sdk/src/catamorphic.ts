@@ -557,6 +557,21 @@ export class Catamorphic {
   }
 
   /**
+   * Hand every turn this process runs back for the next process to take,
+   * instead of interrupting it (ADR 0246). For a host that starts again
+   * on the same database, such as a desktop app restarting to update: a
+   * runner that outlives this process is reattached, and a turn whose
+   * runner goes with it continues where it left off, as after a crash
+   * (ADR 0198). This process claims no more turns; `close()` follows.
+   */
+  async handBackTurns(): Promise<void> {
+    await Promise.allSettled(
+      [...this.agentWorkerHandles].map((handle) => handle.stop()),
+    );
+    await this.core.agentSessions?.stopLocalTurns({ handBack: "all" });
+  }
+
+  /**
    * Release resources catamorphic created itself (currently: the pg pool when
    * booted from a connection string). Host-owned pools and Kysely instances
    * are left untouched.

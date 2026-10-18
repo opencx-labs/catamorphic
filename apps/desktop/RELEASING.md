@@ -139,9 +139,13 @@ the selected feed shortly after launch, every six hours of wall-clock time
 (sleep counts), a minute after wake, and 15 minutes after a failed check. A
 check that does not answer within two minutes is abandoned. Update activity
 is logged to `~/Library/Logs/Work/updates.log`. It
-asks before downloading and again before restarting, and never restarts while
-an agent or terminal is active. DMG users can still install a newer Work
-app over the existing copy in Applications.
+asks before downloading a release and again before restarting. A release
+downloaded before Work last quit is verified again from its cache (or, if
+the cache lost it, downloaded again) without asking, and the next prompt
+offers Restart. A restart never waits on work:
+working agents are handed back and continue after the relaunch, and
+terminals end (ADR 0246). DMG users can still install a newer Work app over
+the existing copy in Applications.
 
 Before a packaged version first opens an existing PGlite database, it creates
 a copy under `data/migration-backups` in the Work application-support

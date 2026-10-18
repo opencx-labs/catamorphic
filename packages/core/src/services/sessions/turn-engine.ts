@@ -381,21 +381,25 @@ export class TurnEngine {
   }
 
   /**
-   * Stop claiming. Turns whose runner survives this process (a sandbox on
-   * a worker or a member's machine) are handed back at once for another
-   * replica to reattach; the rest are interrupted and settle here, within
-   * `timeoutMs`.
+   * Stop claiming. Turns `handBack` names (one whose runner survives this
+   * process, a sandbox on a worker or a member's machine, or every turn
+   * when the host starts again, ADR 0246) are handed back at once for the
+   * next holder; the rest are interrupted and settle here, within
+   * `timeoutMs`. A turn that finalizes always settles here.
    */
   async stop(input: {
     timeoutMs: number;
-    reattachable: (location: RunnerLocation) => boolean;
+    /** Its runner's location, or none while its attempt prepares. */
+    handBack: (location: RunnerLocation | undefined) => boolean;
   }): Promise<void> {
     this.stopping = true;
     this.stopDeadline = Date.now() + input.timeoutMs;
     const pending: Promise<void>[] = [];
     for (const local of this.local.values()) {
-      const location = local.channel?.location;
-      if (location && !local.finalizing && input.reattachable(location)) {
+      // Handed back by an earlier stop and still leaving: it is the next
+      // holder's, never interrupted here.
+      if (local.handingBack) continue;
+      if (!local.finalizing && input.handBack(local.channel?.location)) {
         local.handingBack = true;
         local.abort.abort();
         pending.push(
@@ -791,6 +795,42 @@ export class TurnEngine {
       await abortableSleep(left, local.abort.signal, local.waiter);
       rearm();
     }
+  }
+
+  /**
+   * Prepare an attempt again from the start, its runner forgotten: one
+   * whose runner never got its start, or went away before its harness
+   * began the turn. The turn's input goes to the next runner whole.
+   */
+  private async prepareAgain(
+    local: LocalTurn,
+    turn: Turn,
+    attempt: Attempt,
+  ): Promise<Turn> {
+    const preparing: Turn = {
+      ...turn,
+      status: "preparing",
+      updatedAt: new Date().toISOString(),
+    };
+    await this.deps.db.transaction().execute(async (trx) => {
+      await this.assertOwned(local, trx);
+      await trx
+        .updateTable("agent_turn_attempts")
+        .set({ runner: null, provider_started_at: null })
+        .where("id", "=", attempt.id)
+        .execute();
+      await this.deps.log.append(trx, {
+        sessionId: turn.sessionId,
+        events: [
+          {
+            type: "attempt.changed",
+            attempt: { ...attempt, status: "preparing" },
+          },
+          { type: "turn.changed", turn: preparing },
+        ],
+      });
+    });
+    return preparing;
   }
 
   private async loadTurn(turnId: string): Promise<Turn> {
@@ -1540,13 +1580,23 @@ export class TurnEngine {
               session: ctx.session,
               location: runner.location,
             });
-      if (!channel)
+      if (!channel) {
+        // Gone before its harness began the turn (a host that restarted,
+        // ADR 0246): the turn's input never reached the thread, so the
+        // same attempt is prepared again with it, never continued
+        // without it.
+        if (!runner.started)
+          return {
+            kind: "restart",
+            turn: await this.prepareAgain(local, turn, attempt),
+          };
         return {
           kind: "lost",
           turn,
           attempt,
           reason: "The machine running this turn stopped before it finished.",
         };
+      }
       local.channel = channel;
       await this.maskTakenOver(local, ctx);
       // A holder can stop between recording the runner and sending its
@@ -1563,30 +1613,10 @@ export class TurnEngine {
         if (!heard) {
           await channel.kill().catch(() => {});
           local.channel = undefined;
-          const preparing: Turn = {
-            ...turn,
-            status: "preparing",
-            updatedAt: new Date().toISOString(),
+          return {
+            kind: "restart",
+            turn: await this.prepareAgain(local, turn, attempt),
           };
-          await db.transaction().execute(async (trx) => {
-            await this.assertOwned(local, trx);
-            await trx
-              .updateTable("agent_turn_attempts")
-              .set({ runner: null, provider_started_at: null })
-              .where("id", "=", attempt.id)
-              .execute();
-            await log.append(trx, {
-              sessionId: turn.sessionId,
-              events: [
-                {
-                  type: "attempt.changed",
-                  attempt: { ...attempt, status: "preparing" },
-                },
-                { type: "turn.changed", turn: preparing },
-              ],
-            });
-          });
-          return { kind: "restart", turn: preparing };
         }
       }
       // Answer again what the previous holder took and did not answer.
@@ -2224,7 +2254,11 @@ export class TurnEngine {
       if (ingested.started) runner = { ...runner, started: true };
       let turn = ingested.turn;
       const extra: SessionEvent[] = [];
-      if (ingested.title)
+      // A chat a person named keeps its name (ADR 0247).
+      if (
+        ingested.title &&
+        !(await this.deps.log.namedByPerson(trx, input.turn.sessionId))
+      )
         extra.push({
           type: "session.changed",
           session: { title: ingested.title },
@@ -2881,7 +2915,8 @@ export class TurnEngine {
     channel: RunnerChannel | undefined,
   ): Promise<void> {
     if (!channel) return;
-    // A runner on a sandbox that outlives this holder is left for the next.
+    // A runner handed back is left for the next holder (one in this
+    // process stops with it as its run ends).
     if (local.handingBack) return;
     await channel
       .send([{ id: `stop:${randomUUID()}`, command: { kind: "stop" } }])
@@ -3066,7 +3101,24 @@ export class TurnEngine {
       events.push({ type: "turn.changed", turn: settled });
       if (!transient)
         events.push(...(await this.requeueSteers(trx, input.turn, now)));
-      if (input.attempt.providerThreadId && input.status !== "failed") {
+      // The thread saw the turn once its harness began it there, however
+      // it ended: a turn that failed after working (a rate limit, a lost
+      // sign-in) is never handed back to the thread that did the work.
+      const seen =
+        input.attempt.providerThreadId !== null &&
+        (input.status !== "failed" ||
+          (
+            await trx
+              .selectFrom("agent_turn_attempts")
+              .select("runner")
+              .where("turn_id", "=", input.turn.id)
+              .where("provider_thread_id", "=", input.attempt.providerThreadId)
+              .execute()
+          ).some(
+            (row) =>
+              (row.runner as unknown as RunnerState | null)?.started === true,
+          ));
+      if (input.attempt.providerThreadId && seen) {
         const threadRow = await trx
           .selectFrom("agent_provider_threads")
           .selectAll()

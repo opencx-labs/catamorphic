@@ -2333,12 +2333,11 @@ function NoticeLine({ item }: { item: NoticeItem }) {
 
 /**
  * What an agent was told about turns its own conversation had not seen
- * (a switch of agent, a fork): collapsed, opens to the text it read.
+ * (a new agent, a fork, turns it never began): one quiet line, as a
+ * coding agent's "conversation compacted", that opens to the text it read.
  */
 function HandoffLine({ item }: { item: ContextHandoffItem }) {
   const [open, setOpen] = useState(false);
-  const { from, to } = item.coveredTurnOrdinals;
-  const count = Math.max(1, to - from + 1);
   return (
     <div className="flex flex-col gap-1" data-testid="chat-handoff">
       <button
@@ -2350,9 +2349,9 @@ function HandoffLine({ item }: { item: ContextHandoffItem }) {
         <ChevronRight
           className={`size-3 transition-transform duration-150 ${open ? "rotate-90" : ""}`}
         />
-        {count === 1
-          ? "Caught up on 1 earlier turn"
-          : `Caught up on ${count} earlier turns`}
+        {item.strategy === "delta"
+          ? "Told the agent what it missed"
+          : "Told the agent the conversation so far"}
       </button>
       <div
         className={`grid transition-[grid-template-rows] duration-200 ease-[cubic-bezier(0.2,0,0,1)] ${open ? "grid-rows-[1fr]" : "grid-rows-[0fr]"}`}

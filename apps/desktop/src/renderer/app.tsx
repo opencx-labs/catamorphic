@@ -6,6 +6,7 @@ import {
   useCreateAgentSession,
   useForkAgentSession,
   useProjects,
+  useRenameAgentSession,
   useUnarchiveAgentSession,
   useUpdateAgentSession,
   useWorkflows,
@@ -141,6 +142,7 @@ import { ScreenShareHost } from "./components/screen-share-picker.js";
 import {
   ArchiveSessionDialog,
   CreateSubsessionDialog,
+  RenameChatDialog,
 } from "./components/session-lifecycle-dialogs.js";
 import {
   DisabledControlHints,
@@ -1127,6 +1129,36 @@ export function App({
   );
   const archiveSession = useArchiveAgentSession(projectId);
   const unarchiveSession = useUnarchiveAgentSession(projectId);
+  const renameSession = useRenameAgentSession(projectId);
+  /** The chat the rename dialog names, with the name it had (ADR 0247). */
+  const [renameRequest, setRenameRequest] = useState<{
+    sessionId: string;
+    title: string;
+  } | null>(null);
+  /** The latest ask to rename: a slower read for an earlier one is dropped. */
+  const renameAttemptRef = useRef(0);
+  /**
+   * Open the rename dialog for a chat, from any of its menus or the
+   * palette, with the name it has (none for an untitled chat, which shows
+   * only a date). A chat older than the loaded list is read for its name.
+   */
+  const openRename = async (sessionId: string) => {
+    renameAttemptRef.current += 1;
+    const attempt = renameAttemptRef.current;
+    const session =
+      sessionsById.get(sessionId) ??
+      (projectId
+        ? (
+            await apiClient
+              .GET("/api/projects/{projectId}/agent/sessions/{sessionId}", {
+                params: { path: { projectId, sessionId } },
+              })
+              .catch(() => undefined)
+          )?.data
+        : undefined);
+    if (attempt !== renameAttemptRef.current) return;
+    setRenameRequest({ sessionId, title: session?.title ?? "" });
+  };
   const createSubsession = useCreateAgentSession(projectId);
   const [subsessionParent, setSubsessionParent] = useState<AgentSession | null>(
     null,
@@ -1326,6 +1358,9 @@ export function App({
   const applySessionAction = (sessionId: string, action: ChatSessionAction) => {
     const session = sessionsById.get(sessionId);
     switch (action) {
+      case "rename":
+        void openRename(sessionId);
+        break;
       case "new-subsession":
         if (session) {
           setSubsessionError(null);
@@ -4347,6 +4382,10 @@ export function App({
       const chat = actionChat(workspaceRef.current);
       if (chat?.sessionId) applySessionAction(chat.sessionId, "archive");
     },
+    "rename-chat": () => {
+      const chat = actionChat(workspaceRef.current);
+      if (chat?.sessionId) applySessionAction(chat.sessionId, "rename");
+    },
     "switch-agent": () => openPalettePicker("switch-agent"),
     "configure-agent": () => openPalettePicker("configure-agent"),
     "change-effort": () => openPalettePicker("effort"),
@@ -6175,6 +6214,8 @@ export function App({
     "open-chat-preview": remoteChatSession(paletteTargetChat?.sessionId),
     "archive-chat":
       focusedSession !== undefined && focusedSession.visibility !== "archived",
+    // Any focused chat that has a session, loaded in the list or not.
+    "rename-chat": focusedChat?.sessionId !== undefined,
     // Project-agent models are committed in their project definition, so
     // the mutable model picker only applies to configured profile agents.
     "switch-model":
@@ -6717,6 +6758,23 @@ export function App({
         )?.filePath;
         return filePath && projectId ? { projectId, filePath } : undefined;
       }}
+      // A chat's tab has the chat's own verbs, as its row and bubble do.
+      tabActions={(key) => {
+        const chat = workspace.chats.find(
+          (candidate) => chatTabKey(candidate.localId) === key,
+        );
+        const sessionId = chat?.sessionId;
+        const entries = chat ? chatMenus[chat.localId] : undefined;
+        return sessionId && entries
+          ? {
+              entries,
+              onAction: (action) => {
+                const entry = entries.find((item) => item.action === action);
+                if (entry) applySessionAction(sessionId, entry.action);
+              },
+            }
+          : undefined;
+      }}
       onDragStateChange={(key) => {
         setTabDragKey(key);
         if (!key) setDropSideHover(null);
@@ -6850,6 +6908,14 @@ export function App({
                 setConsentRequest(null);
                 applyProjectAgent(agent, target);
               }}
+            />
+            <RenameChatDialog
+              chat={renameRequest}
+              onClose={() => {
+                renameAttemptRef.current += 1;
+                setRenameRequest(null);
+              }}
+              onRename={(input) => renameSession.mutateAsync(input)}
             />
             <CreateSubsessionDialog
               parent={subsessionParent}

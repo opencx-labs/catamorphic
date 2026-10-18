@@ -32,10 +32,15 @@ ADR 0229 records the measurements. An idle Work does nothing on a short
 timer: the embedded server's pollers wait `idlePollMs` (5 s) after a poll
 that found nothing, unless known work falls due sooner, and are woken by
 the writes that queue work; the window's chat lists, attention and
-watchers read again on main's "chats changed" hint and when a hidden
-window shows again, with a 30 s safety poll (remote projects keep their
-2 s polls); a routine read never shows a refreshing state, and a view
-renders only when its rows changed. Streamed deltas after an item's first
+watchers read again on main's "chats changed" hint, and once when a hidden
+window that dropped a hint shows again, with a 30 s safety poll (remote
+projects keep their 2 s polls); a routine read never shows a refreshing
+state, and a view renders only when its rows changed. A window coming
+back to the front reads nothing by itself (`lib/query-client.ts`): every
+open project's workspace stays mounted, and refetching each one's stale
+queries at once made returning to Work stutter. Only what can change
+with no hint opts back in: a pull request's state, and a file shown from
+disk. Streamed deltas after an item's first
 are recorded in 100 ms batches. Rules that follow:
 
 - **A timer needs a reason on screen.** Before adding a poll, interval or

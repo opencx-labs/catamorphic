@@ -1,6 +1,6 @@
 # 0229 — Idle pollers wait for hints from their own process
 
-- **Status:** Accepted (refines [0193](0193-no-cross-replica-state-in-replica-memory.md), [0197](0197-agent-sessions-are-an-event-log-of-turns.md) and [0207](0207-operations-are-sealed-to-their-executor.md))
+- **Status:** Accepted (refines [0193](0193-no-cross-replica-state-in-replica-memory.md), [0197](0197-agent-sessions-are-an-event-log-of-turns.md) and [0207](0207-operations-are-sealed-to-their-executor.md); refined by [0249](0249-a-window-coming-back-reads-only-what-it-missed.md): a window shown again reads once, only if it dropped a hint, and focus reads nothing)
 - **Date:** 2026-10-13
 
 ## Context

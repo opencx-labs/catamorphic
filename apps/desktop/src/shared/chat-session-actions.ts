@@ -1,4 +1,6 @@
 export type ChatSessionAction =
+  /** The person names the chat; it keeps the name (ADR 0247). */
+  | "rename"
   | "new-subsession"
   | "mark-read"
   | "mark-unread"

@@ -11,6 +11,7 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
+import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AppMount } from "./app-mount.js";
 
@@ -109,6 +110,58 @@ async function mountReadyFrame(apiClient: ReturnType<typeof makeApiClient>) {
 }
 
 describe("AppMount", () => {
+  it("tells the guest nothing when its host re-renders with the same display and theme", async () => {
+    const apiClient = makeApiClient();
+    // A theme written inline, as hosts write it, and the default display:
+    // both new objects each render, equal in value.
+    const view = () => (
+      <CatamorphicProvider apiClient={apiClient as never}>
+        <AppMount
+          projectId={PROJECT_ID}
+          appName="ops-dashboard"
+          context={{ tenantId: "t-1", user: { id: "viewer-1" } }}
+          theme={{ appearance: "dark", colors: { bg: "#121212" } }}
+        />
+      </CatamorphicProvider>
+    );
+    const { container, rerender } = render(view());
+    await waitFor(() => expect(container.querySelector("iframe")).toBeTruthy());
+    const frame = container.querySelector("iframe");
+    if (!frame?.contentWindow) throw new Error("Missing frame");
+    const messages = vi.spyOn(frame.contentWindow, "postMessage");
+
+    rerender(view());
+    rerender(view());
+    expect(messages).not.toHaveBeenCalled();
+  });
+
+  it("tells a host each content state once, though it passes its callback inline", async () => {
+    const apiClient = makeApiClient();
+    const told: string[] = [];
+    // As the sidebar writes it: an inline callback setting a new object.
+    function Host() {
+      const [, setStatus] = useState<{ state: string }>({ state: "loading" });
+      return (
+        <CatamorphicProvider apiClient={apiClient as never}>
+          <AppMount
+            projectId={PROJECT_ID}
+            appName="ops-dashboard"
+            context={{ tenantId: "t-1", user: { id: "viewer-1" } }}
+            onContentState={(state) => {
+              told.push(state);
+              // Bounded, so a loop fails this test instead of hanging it.
+              if (told.length < 10) setStatus({ state });
+            }}
+          />
+        </CatamorphicProvider>
+      );
+    }
+    const { container } = render(<Host />);
+    await waitFor(() => expect(container.querySelector("iframe")).toBeTruthy());
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(told).toEqual(["loading", "ready"]);
+  });
+
   it("delivers the current theme on load, on switches and when returning to the initial theme", async () => {
     const initial: AppHostTheme = {
       appearance: "light",

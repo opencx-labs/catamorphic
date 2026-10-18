@@ -1,4 +1,5 @@
 import type { ChatSessionMenuEntry } from "../../shared/chat-session-actions.js";
+import type { SidebarActionInput } from "../../shared/sidebar.js";
 
 export type {
   ChatSessionAction,
@@ -16,6 +17,7 @@ export function chatSessionMenu(args: {
   remote?: boolean;
 }): ChatSessionMenuEntry[] {
   return [
+    { label: "Rename…", action: "rename" },
     ...(args.archived
       ? []
       : [
@@ -39,4 +41,27 @@ export function chatSessionMenu(args: {
       action: args.archived ? "unarchive" : "archive",
     },
   ];
+}
+
+/** What renaming a chat asks for: its name, the current one filled in. */
+export function renameChatInput(title: string): SidebarActionInput {
+  return {
+    title: "Rename chat",
+    submit: "Rename",
+    fields: [
+      {
+        name: "title",
+        label: "Name",
+        value: title,
+        placeholder: "What this chat is about",
+      },
+    ],
+  };
+}
+
+/** The name typed for a chat, or why it cannot be one. */
+export function chatName(values: Record<string, string> | undefined): string {
+  const title = values?.title?.replace(/\s+/g, " ").trim() ?? "";
+  if (!title) throw new Error("Name the chat.");
+  return title;
 }

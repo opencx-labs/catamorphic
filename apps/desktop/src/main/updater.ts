@@ -24,12 +24,17 @@ export interface DesktopUpdaterService {
   check(manual: boolean): Promise<boolean>;
   channel(): DesktopUpdateChannel;
   setChannel(channel: DesktopUpdateChannel): Promise<boolean>;
+  /**
+   * Work is quitting to relaunch (installing an update, moving into
+   * Applications): its shutdown hands working agents back for the next
+   * launch instead of stopping them (ADR 0246).
+   */
+  restarting(): boolean;
   dispose(): void;
 }
 
 export function registerDesktopUpdater(options: {
   broadcast: (channel: string, payload: unknown) => void;
-  canInstall: () => Promise<boolean>;
 }): DesktopUpdaterService {
   const { autoUpdater } = electronUpdater;
   const logger = createUpdaterLog(
@@ -43,13 +48,36 @@ export function registerDesktopUpdater(options: {
     defaultDesktopUpdateChannel(app.getVersion()),
   );
   const preparation = createUpdatePreparation({ updater: nativeUpdater });
+  let restarting = false;
   const controller = new DesktopUpdaterController({
     prepareInstall: () => preparation.prepare(),
-    canInstall: options.canInstall,
+    downloaded: {
+      load: () => preferences.downloaded(),
+      // Losing the record only costs a second download: never a failure.
+      save: (version) => {
+        try {
+          preferences.saveDownloaded(version);
+        } catch (error) {
+          logger.warn(
+            "[desktop] could not record the downloaded update",
+            error,
+          );
+        }
+      },
+    },
     installedInPlace: () => app.isInApplicationsFolder(),
     // Electron moves the bundle (out of a disk image or App Translocation
     // too) and relaunches from Applications; false when the person declines.
-    moveToApplications: async () => app.moveToApplicationsFolder(),
+    moveToApplications: async () => {
+      restarting = true;
+      try {
+        restarting = app.moveToApplicationsFolder();
+      } catch (error) {
+        restarting = false;
+        throw error;
+      }
+      return restarting;
+    },
     currentVersion: app.getVersion(),
     channel,
     supported: app.isPackaged && process.platform === "darwin",
@@ -83,10 +111,19 @@ export function registerDesktopUpdater(options: {
   const supported = app.isPackaged && process.platform === "darwin";
   // The installer relaunches the app in the background; the next launch
   // reads this marker and brings its window to the front.
-  const onBeforeQuitForUpdate = () =>
+  const onBeforeQuitForUpdate = () => {
+    restarting = true;
     markUpdateRestart(app.getPath("userData"));
-  if (supported)
-    nativeUpdater.on("before-quit-for-update", onBeforeQuitForUpdate);
+  };
+  // Squirrel failing to relaunch leaves Work running: a later Quit is an
+  // ordinary one again, which stops agents rather than handing them back.
+  const onUpdateError = () => {
+    restarting = false;
+  };
+  // Every build listens: a development build's restart rehearsal (the e2e
+  // suite's) announces the same quit.
+  nativeUpdater.on("before-quit-for-update", onBeforeQuitForUpdate);
+  nativeUpdater.on("error", onUpdateError);
   // Shortly after launch, every six hours of wall-clock time, a minute
   // after waking, and again soon after a failure (update-schedule.ts).
   const schedule = new UpdateSchedule({
@@ -104,19 +141,25 @@ export function registerDesktopUpdater(options: {
     channel: () => controller.current().channel,
     async setChannel(nextChannel) {
       if (!controller.setChannel(nextChannel)) return false;
-      preferences.save(nextChannel);
+      // The channel holds for this run whether or not the file takes it.
+      try {
+        preferences.save(nextChannel);
+      } catch (error) {
+        logger.warn("[desktop] could not save the update channel", error);
+      }
       await checkNow(true);
       return true;
     },
+    restarting: () => restarting,
     dispose() {
       preparation.dispose();
       schedule.dispose();
       if (supported) powerMonitor.removeListener("resume", onResume);
-      if (supported)
-        nativeUpdater.removeListener(
-          "before-quit-for-update",
-          onBeforeQuitForUpdate,
-        );
+      nativeUpdater.removeListener(
+        "before-quit-for-update",
+        onBeforeQuitForUpdate,
+      );
+      nativeUpdater.removeListener("error", onUpdateError);
       for (const channel of [
         "catamorphic:update-state",
         "catamorphic:update-check",

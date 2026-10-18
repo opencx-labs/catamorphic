@@ -7,6 +7,7 @@ import {
   type WebContents,
 } from "electron";
 import { z } from "zod";
+import type { ChatSessionAction } from "../shared/chat-session-actions.js";
 import type {
   ChatDraft,
   DockCommand,
@@ -53,6 +54,14 @@ const RELEASE_SLOW_MS = 3_000;
 const RELEASE_ABANDON_MS = 30_000;
 /** How long agent calls for a moving project wait for its new window. */
 const ARRIVAL_TIMEOUT_MS = 15_000;
+/** Chat verbs that show something in the chat's window, not in the dock. */
+const WINDOW_VERBS: ReadonlySet<ChatSessionAction> = new Set([
+  "rename",
+  "new-subsession",
+  "archive",
+  "open-terminal",
+  "open-preview",
+]);
 
 /** One owner per project. Presentation can be hidden without disposing resources. */
 export class DesktopWorkspaces {
@@ -356,7 +365,10 @@ export class DesktopWorkspaces {
           ["surface", "mcpApp", "link", "file", "focus", "unsplit"].includes(
             action.kind,
           ) ||
-          (action.kind === "entry" && action.entry.mode === "tab")
+          (action.kind === "entry" && action.entry.mode === "tab") ||
+          // A verb that shows something in the chat's window (a rename or
+          // subsession dialog, a terminal) brings that window forward.
+          (action.kind === "menu" && WINDOW_VERBS.has(action.entry.action))
         ) {
           this.navigate({
             sender: event.sender,

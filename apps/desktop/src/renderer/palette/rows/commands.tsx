@@ -22,6 +22,7 @@ import type { PaletteHighlight, PaletteItem } from "../types.js";
 /** Commands that act on a specific surface accent it while highlighted. */
 const ACTION_HIGHLIGHTS: Partial<Record<ActionId, PaletteHighlight>> = {
   "switch-agent": "chat",
+  "rename-chat": "chat",
   "change-effort": "chat-if-focused",
   "change-permission-mode": "chat-if-focused",
   "switch-model": "chat-if-focused",
@@ -86,6 +87,7 @@ export function useCommandRows({
     // means in the moment, and ties in fuzzy scores resolve by this order.
     const chatScoped = new Set([
       "switch-agent",
+      "rename-chat",
       "switch-model",
       "change-effort",
       "change-permission-mode",

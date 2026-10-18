@@ -234,6 +234,10 @@ export { useProjectGitState } from "./hooks/use-project-git-state.js";
 export { useProjectPlugins } from "./hooks/use-project-plugins.js";
 export { useProjectSecrets } from "./hooks/use-project-secrets.js";
 export { type UseProjectsOptions, useProjects } from "./hooks/use-projects.js";
+export {
+  type RenameAgentSessionInput,
+  useRenameAgentSession,
+} from "./hooks/use-rename-agent-session.js";
 // Runs
 export {
   runKeys,
