@@ -47,6 +47,27 @@ const shot = async (name: string) => {
 };
 const type = (text: string) =>
   run(`setReactValue(input(),${JSON.stringify(text)})`);
+/** Where the chats are and what has focus, for a wait that timed out. */
+const chatState = `JSON.stringify({
+  floating: [...document.querySelectorAll('section[data-floating-chat]')].map((el) => el.dataset.chatLocalId),
+  inTabs: [...document.querySelectorAll('section[data-chat-tab]')].map((el) => el.dataset.chatLocalId),
+  strip: [...document.querySelectorAll('[data-tab-orientation] [data-point-key]:not([data-sidebar-item-id])')].map((el) => el.dataset.pointKey),
+  focused: (() => { const el = document.activeElement; return el && [el.tagName, el.getAttribute('aria-label'), el.closest('section')?.dataset.chatLocalId ?? null, el.closest('[data-palette]')?.dataset.palette ?? null]; })(),
+  appDocumentHasFocus: document.hasFocus(),
+})`;
+/** A wait that, timed out, says where the chats are and what has focus. */
+const waitTelling = async <T>(code: string, label: string): Promise<T> => {
+  try {
+    return await wait<T>(code, label);
+  } catch (error) {
+    const state = await app
+      .eval<string>(chatState)
+      .catch((cause: unknown) => `unreadable (${String(cause)})`);
+    throw new Error(
+      `${error instanceof Error ? error.message : String(error)}; state: ${state}`,
+    );
+  }
+};
 
 beforeAll(async () => {
   app = await launchApp();
@@ -672,8 +693,21 @@ it("opens a chat asked for from a New Tab in that tab, in its place", async () =
     `return document.querySelector('section[data-floating-chat]')?.dataset.chatLocalId;`,
     "a chat floating over the New Tab",
   );
+  // The person clicks back into the New Tab before Cmd+N, as a key pressed
+  // before the floating chat's autofocus frame does (on a slow machine):
+  // the chat it moves in still takes focus.
+  await run(`
+    const field = document.querySelector('[data-palette="tab"] textarea');
+    field.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+    field.focus();
+    return true;
+  `);
+  await wait(
+    `return document.activeElement?.closest('[data-palette="tab"]') && !document.querySelector('section[data-floating-chat] [data-composer-input]:focus')`,
+    "focus back in the New Tab",
+  );
   await shortcut("n");
-  expect(await wait<string>(`return ${chatInTab}`, "it moved in")).toBe(
+  expect(await waitTelling<string>(`return ${chatInTab}`, "it moved in")).toBe(
     floated,
   );
   expect(await withoutNewTab("the fourth New Tab replaced")).toContain(
@@ -684,6 +718,12 @@ it("opens a chat asked for from a New Tab in that tab, in its place", async () =
   const page = (await keys()).find((key) => key.startsWith("browser:"));
   if (!page) throw new Error("No page to put in front");
   await select(page);
+  // In front before Cmd+N: asked while the fresh chat still is, Cmd+N
+  // keeps to that chat, as it should.
+  await wait(
+    `return !!document.querySelector('[data-tab-orientation] [data-point-key="${page}"] [aria-current]')`,
+    "the page in front",
+  );
   await shortcut("n");
   await wait(
     `return !!document.querySelector('section[data-floating-chat] [data-composer-input]')`,

@@ -50,21 +50,48 @@ const count = `document.querySelector('[data-testid="find-count"]')?.textContent
 /**
  * A key pressed in the page, through its real input path. That needs the
  * window focused, and the page's own document: focusing the <webview>
- * hands focus over a frame or more later, and a key sent before then lands
- * nowhere (the first Cmd+F on macOS CI).
+ * hands focus over a frame or more later. Even then macOS CI can drop an
+ * injected key with the page focused (the first Cmd+F: the page saw no
+ * key at all), so the key is sent again only when the page never saw it.
  */
 const pageKey = async (keyCode: string, modifiers: string[] = []) => {
-  await focusWindow(app);
-  await app.waitFor(
-    `(() => { const page = ${view}; page.focus(); return page.executeJavaScript('document.hasFocus()', true); })()`,
-    { label: "the page has focus" },
+  // The keys the page sees: what tells a dropped key from a slow one, and
+  // what a wait on what they do reports when it times out.
+  await app.eval(
+    `${view}.executeJavaScript("if (!window.__e2eKeys) { window.__e2eKeys = []; addEventListener('keydown', (event) => window.__e2eKeys.push(event.key + (event.metaKey ? '+meta' : '') + (event.ctrlKey ? '+ctrl' : '')), true); } true", true)`,
   );
-  return app.eval(`(() => {
-    const page = ${view};
-    page.sendInputEvent({ type: 'keyDown', keyCode: ${JSON.stringify(keyCode)}, modifiers: ${JSON.stringify(modifiers)} });
-    page.sendInputEvent({ type: 'keyUp', keyCode: ${JSON.stringify(keyCode)}, modifiers: ${JSON.stringify(modifiers)} });
-    return true;
-  })()`);
+  const seen = await app.eval<number>(
+    `${view}.executeJavaScript('window.__e2eKeys.length', true)`,
+  );
+  const sawIt = `${view}.executeJavaScript('window.__e2eKeys.length', true).then((count) => count > ${seen})`;
+  for (let attempt = 1; ; attempt += 1) {
+    // A key that reached the page late is never sent twice.
+    if (attempt > 1 && (await app.eval<boolean>(sawIt))) return;
+    if (attempt > 1)
+      console.warn(
+        `[find-in-page] the page never saw ${modifiers.join("+")}+${keyCode}: sending it again (attempt ${attempt})`,
+      );
+    await focusWindow(app);
+    await app.waitFor(
+      `(() => { const page = ${view}; page.focus(); return page.executeJavaScript('document.hasFocus()', true); })()`,
+      { label: "the page has focus" },
+    );
+    await app.eval(`(() => {
+      const page = ${view};
+      page.sendInputEvent({ type: 'keyDown', keyCode: ${JSON.stringify(keyCode)}, modifiers: ${JSON.stringify(modifiers)} });
+      page.sendInputEvent({ type: 'keyUp', keyCode: ${JSON.stringify(keyCode)}, modifiers: ${JSON.stringify(modifiers)} });
+      return true;
+    })()`);
+    try {
+      await app.waitFor(sawIt, {
+        timeoutMs: 2_000,
+        label: "the page saw the key",
+      });
+      return;
+    } catch (error) {
+      if (attempt === 3) throw error;
+    }
+  }
 };
 const command = mac ? "meta" : "control";
 const SHIFT = 8;
@@ -180,12 +207,30 @@ afterAll(async () => {
   server.close();
 });
 
+/** The find bar, focus and the keys the page saw, for a wait that timed out. */
+const findState = () =>
+  app
+    .eval<string>(`(async () => JSON.stringify({
+      bar: !!document.querySelector('[data-testid="find-bar"]'),
+      input: !!${findInput},
+      focused: (() => { const el = document.activeElement; return el && [el.tagName, el.getAttribute('aria-label')]; })(),
+      appDocumentHasFocus: document.hasFocus(),
+      page: await ${view}.executeJavaScript('({ hasFocus: document.hasFocus(), keys: window.__e2eKeys ?? null })', true).catch((error) => String(error)),
+    }))()`)
+    .catch((error: unknown) => `unreadable (${String(error)})`);
+
 describe("find in page", () => {
   it("Cmd+F in the page opens the find bar, which counts and steps through matches", async () => {
     await pageKey("F", [command]);
-    await app.waitFor(`document.activeElement === ${findInput}`, {
-      label: "find bar focused",
-    });
+    await app
+      .waitFor(`document.activeElement === ${findInput}`, {
+        label: "find bar focused",
+      })
+      .catch(async (error: unknown) => {
+        throw new Error(
+          `${error instanceof Error ? error.message : String(error)}; state: ${await findState()}`,
+        );
+      });
     await app.insertText("apple");
     await app.waitFor(`${count} === '1/3'`, { label: "first of three" });
     await app.press("Enter");
