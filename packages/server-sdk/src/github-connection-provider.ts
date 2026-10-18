@@ -120,6 +120,8 @@ const Side = z.enum(["LEFT", "RIGHT"]);
 const MAX_BODY = 65_536;
 const Body = z.string().min(1).max(MAX_BODY);
 const NodeId = z.string().regex(/^[\w+/=-]{1,200}$/);
+/** Items one call may change: each is checked before any is changed. */
+const MAX_ITEMS = 20;
 const CheckRunFields = {
   status: z.enum(["queued", "in_progress", "completed"]).optional(),
   conclusion: z
@@ -236,7 +238,19 @@ const TypedSchemas = {
   resolve_review_thread: z.strictObject({
     repository: Repository,
     number: Number_,
-    threadId: NodeId.describe("Review thread node id, from review_threads"),
+    threads: z
+      .array(
+        z.strictObject({
+          threadId: NodeId.describe(
+            "Review thread node id, from review_threads",
+          ),
+          reply: Body.optional().describe(
+            "Posted in the thread first, unless its last comment already says it",
+          ),
+        }),
+      )
+      .min(1)
+      .max(MAX_ITEMS),
   }),
   update_pull_request: z.strictObject({
     repository: Repository,
@@ -247,7 +261,7 @@ const TypedSchemas = {
   dismiss_review: z.strictObject({
     repository: Repository,
     number: Number_,
-    reviewId: Number_,
+    reviewIds: z.array(Number_).min(1).max(MAX_ITEMS),
     message: Body,
   }),
   reply_to_review_comment: z.strictObject({
@@ -337,12 +351,12 @@ const DESCRIPTIONS: Record<TypedAction, string> = {
   review_threads:
     "List a pull request's review threads: node id, resolved or not, path and line, and every comment with its database id, author, and whether this connection wrote it (own)",
   resolve_review_thread:
-    "Resolve a review thread of the pull request; only threads this connection opened",
+    "Resolve review threads of the pull request (up to 20), each with an optional reply; only threads this connection opened",
   update_pull_request: "Replace a pull request's description",
   list_reviews:
     "List a pull request's reviews: id, state, author, whether this connection wrote it (own), and the commit reviewed",
   dismiss_review:
-    "Dismiss a review of the pull request that approved or requested changes; only reviews this connection wrote",
+    "Dismiss reviews of the pull request (up to 20) that approved or requested changes; only reviews this connection wrote",
   reply_to_review_comment:
     "Reply in the review thread an inline comment of the pull request opened",
   update_issue_comment:
@@ -749,24 +763,47 @@ export function defineGithubConnectionProvider(
         }
         case "resolve_review_thread": {
           const input = TypedSchemas.resolve_review_thread.parse(args.input);
+          requireDistinct(input.threads.map((thread) => thread.threadId));
           const own = await ownAuthor(args.credential);
-          // A forged id must not reach another pull request's thread, or a
-          // thread a person opened.
-          const thread = await api.reviewThread({ threadId: input.threadId });
-          if (
-            !thread ||
-            thread.number !== input.number ||
-            thread.repository.toLowerCase() !== input.repository.toLowerCase()
-          )
-            throw new ConnectionActionRefusedError(
-              `${input.threadId} is not a review thread of ${input.repository}#${input.number}`,
-            );
-          if (!own(thread.firstComment?.author ?? null))
-            throw new ConnectionActionRefusedError(
-              `${input.threadId} was opened by ${thread.firstComment?.author?.login ?? "someone else"}; this connection resolves only threads it opened`,
-            );
-          if (thread.isResolved) return { id: thread.id, isResolved: true };
-          return await api.resolveReviewThread({ threadId: thread.id });
+          // Every thread is checked before any is touched: a forged id must
+          // not reach another pull request's thread, or one a person opened.
+          const threads = [];
+          for (const item of input.threads) {
+            const thread = await api.reviewThread({ threadId: item.threadId });
+            if (
+              !thread ||
+              thread.number !== input.number ||
+              thread.repository.toLowerCase() !== input.repository.toLowerCase()
+            )
+              throw new ConnectionActionRefusedError(
+                `${item.threadId} is not a review thread of ${input.repository}#${input.number}`,
+              );
+            if (!own(thread.firstComment?.author ?? null))
+              throw new ConnectionActionRefusedError(
+                `${item.threadId} was opened by ${thread.firstComment?.author?.login ?? "someone else"}; this connection resolves only threads it opened`,
+              );
+            threads.push({ item, thread });
+          }
+          const resolved = [];
+          for (const { item, thread } of threads) {
+            // A retry finds its reply already last and does not repeat it.
+            const reply = item.reply?.trim();
+            const replied =
+              reply !== undefined &&
+              thread.firstComment !== null &&
+              thread.lastComment?.body.trim() !== reply;
+            if (replied && thread.firstComment)
+              await api.commentOnPullRequest({
+                fullName: input.repository,
+                number: input.number,
+                body: reply,
+                replyTo: thread.firstComment.id,
+              });
+            if (!thread.isResolved)
+              await api.resolveReviewThread({ threadId: thread.id });
+            resolved.push({ id: thread.id, isResolved: true, replied });
+          }
+          return { threads: resolved };
         }
         case "update_pull_request": {
           const input = TypedSchemas.update_pull_request.parse(args.input);
@@ -798,40 +835,48 @@ export function defineGithubConnectionProvider(
         }
         case "dismiss_review": {
           const input = TypedSchemas.dismiss_review.parse(args.input);
+          requireDistinct(input.reviewIds);
           const own = await ownAuthor(args.credential);
-          const review = await api.review({
-            fullName: input.repository,
-            number: input.number,
-            reviewId: input.reviewId,
-          });
-          if (review.number !== null && review.number !== input.number)
-            throw new ConnectionActionRefusedError(
-              `Review ${input.reviewId} is not on ${input.repository}#${input.number}`,
-            );
-          if (!own(review.author))
-            throw new ConnectionActionRefusedError(
-              `Review ${input.reviewId} is ${review.author?.login ?? "someone else"}'s; this connection dismisses only its own reviews`,
-            );
-          const dismissed = () => ({
-            id: review.id,
-            state: "DISMISSED",
-            url: review.url,
-          });
-          if (review.state === "DISMISSED") return dismissed();
-          if (
-            review.state !== "CHANGES_REQUESTED" &&
-            review.state !== "APPROVED"
-          )
-            throw new ConnectionActionRefusedError(
-              `Review ${input.reviewId} is ${review.state}; only reviews that approved or requested changes can be dismissed`,
-            );
-          await api.dismissReview({
-            fullName: input.repository,
-            number: input.number,
-            reviewId: input.reviewId,
-            message: input.message,
-          });
-          return dismissed();
+          const reviews = [];
+          for (const reviewId of input.reviewIds) {
+            const review = await api.review({
+              fullName: input.repository,
+              number: input.number,
+              reviewId,
+            });
+            if (review.number !== null && review.number !== input.number)
+              throw new ConnectionActionRefusedError(
+                `Review ${reviewId} is not on ${input.repository}#${input.number}`,
+              );
+            if (!own(review.author))
+              throw new ConnectionActionRefusedError(
+                `Review ${reviewId} is ${review.author?.login ?? "someone else"}'s; this connection dismisses only its own reviews`,
+              );
+            if (
+              review.state !== "CHANGES_REQUESTED" &&
+              review.state !== "APPROVED" &&
+              review.state !== "DISMISSED"
+            )
+              throw new ConnectionActionRefusedError(
+                `Review ${reviewId} is ${review.state}; only reviews that approved or requested changes can be dismissed`,
+              );
+            reviews.push(review);
+          }
+          for (const review of reviews)
+            if (review.state !== "DISMISSED")
+              await api.dismissReview({
+                fullName: input.repository,
+                number: input.number,
+                reviewId: review.id,
+                message: input.message,
+              });
+          return {
+            reviews: reviews.map((review) => ({
+              id: review.id,
+              state: "DISMISSED",
+              url: review.url,
+            })),
+          };
         }
         case "reply_to_review_comment": {
           const input = TypedSchemas.reply_to_review_comment.parse(args.input);
@@ -1303,6 +1348,13 @@ function requireRepository(
       ? `${full} is outside this connection's repositories (${allowed.join(", ")})`
       : `This connection reaches no repository, so ${full} is refused: link the project to a GitHub remote or name repositories in the binding`,
   );
+}
+
+/** Refuse a list that names one item twice. */
+function requireDistinct(items: readonly (string | number)[]): void {
+  const repeated = items.find((item, index) => items.indexOf(item) !== index);
+  if (repeated !== undefined)
+    throw new ConnectionActionRefusedError(`${repeated} is listed twice`);
 }
 
 /** Whether a REST path is `prefix` or below it. */

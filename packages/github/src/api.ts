@@ -203,6 +203,7 @@ interface RawThreadNode {
   isResolved?: boolean;
   pullRequest?: { number: number; repository: { nameWithOwner: string } };
   comments?: { nodes: RawThreadComment[] };
+  latest?: { nodes: RawThreadComment[] };
 }
 
 const THREAD_COMMENT_FIELDS = `databaseId body url createdAt
@@ -237,6 +238,7 @@ const REVIEW_THREAD_QUERY = `query ReviewThread($id: ID!) {
       id isResolved
       pullRequest { number repository { nameWithOwner } }
       comments(first: 1) { nodes { ${THREAD_COMMENT_FIELDS} } }
+      latest: comments(last: 1) { nodes { ${THREAD_COMMENT_FIELDS} } }
     }
   }
 }`;
@@ -539,7 +541,8 @@ export class GithubApi {
 
   /**
    * One review thread by node id: where it lives, whether it is resolved,
-   * and its first comment. Null when the id names no review thread.
+   * and its first and last comments. Null when the id names no review
+   * thread.
    */
   async reviewThread(input: { threadId: string }): Promise<{
     id: string;
@@ -547,6 +550,7 @@ export class GithubApi {
     repository: string;
     number: number;
     firstComment: GithubReviewThreadComment | null;
+    lastComment: GithubReviewThreadComment | null;
   } | null> {
     const data = await this.graphql<{ node: RawThreadNode | null }>(
       REVIEW_THREAD_QUERY,
@@ -567,12 +571,14 @@ export class GithubApi {
     )
       return null;
     const [first] = node.comments?.nodes ?? [];
+    const [last] = node.latest?.nodes ?? [];
     return {
       id: node.id,
       isResolved: node.isResolved === true,
       repository: node.pullRequest.repository.nameWithOwner,
       number: node.pullRequest.number,
       firstComment: first ? threadCommentOf(first) : null,
+      lastComment: last ? threadCommentOf(last) : null,
     };
   }
 

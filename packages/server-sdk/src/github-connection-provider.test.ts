@@ -799,6 +799,15 @@ function graphqlFixture(
                 : comment(21, "work"),
             ],
           },
+          latest: {
+            nodes: [
+              id === "PRRT_replied"
+                ? { ...comment(25, "work"), body: "Fixed in abc. turn=t1" }
+                : id === "PRRT_human"
+                  ? comment(41, "ada", "User")
+                  : comment(22, "ada", "User"),
+            ],
+          },
         },
       };
     }
@@ -985,14 +994,15 @@ describe("GitHub connections: the actions a review poster needs", () => {
     ]);
   });
 
-  it("resolves only the pull request's threads the App opened, once", async () => {
-    const { call, mints, requests } = await setup();
-    const resolve = (threadId: string) =>
+  it("resolves the pull request's threads the App opened, each reply once, checking all first", async () => {
+    const { github, call, mints, requests } = await setup();
+    const resolve = (threads: Array<{ threadId: string; reply?: string }>) =>
       call("resolve_review_thread", {
         repository: "octo/hello",
         number: 7,
-        threadId,
+        threads,
       });
+    // A refused thread anywhere in the list stops the whole call first.
     for (const [threadId, refusal] of [
       ["PRRT_other", /not a review thread of octo\/hello#7/],
       ["PRRT_missing", /not a review thread of octo\/hello#7/],
@@ -1002,18 +1012,51 @@ describe("GitHub connections: the actions a review poster needs", () => {
         /opened by ada; this connection resolves only threads it opened/,
       ],
     ] as const)
-      await expect(resolve(threadId), threadId).rejects.toThrow(refusal);
-    await expect(resolve("PRRT_done")).resolves.toEqual({
-      id: "PRRT_done",
-      isResolved: true,
+      await expect(
+        resolve([{ threadId: "PRRT_own", reply: "Fixed." }, { threadId }]),
+        threadId,
+      ).rejects.toThrow(refusal);
+    expect(requests().filter((entry) => entry !== "POST /graphql")).toEqual([]);
+    const graphqlBefore = requests().length;
+    await expect(
+      resolve([
+        { threadId: "PRRT_own", reply: "Fixed in abc. turn=t1" },
+        { threadId: "PRRT_replied", reply: "Fixed in abc. turn=t1" },
+        { threadId: "PRRT_done" },
+      ]),
+    ).resolves.toEqual({
+      threads: [
+        { id: "PRRT_own", isResolved: true, replied: true },
+        { id: "PRRT_replied", isResolved: true, replied: false },
+        { id: "PRRT_done", isResolved: true, replied: false },
+      ],
     });
-    await expect(resolve("PRRT_own")).resolves.toEqual({
-      id: "PRRT_own",
-      isResolved: true,
-    });
-    await expect(resolve("x y")).rejects.toThrow();
-    // Six lookups, one mutation: only the App's own open thread.
-    expect(requests()).toEqual(Array(7).fill("POST /graphql"));
+    // Three lookups, one reply (the other thread already ends with it),
+    // two resolutions (one was resolved).
+    expect(requests().slice(graphqlBefore)).toEqual([
+      "POST /graphql",
+      "POST /graphql",
+      "POST /graphql",
+      "POST /repos/octo/hello/pulls/7/comments/21/replies",
+      "POST /graphql",
+      "POST /graphql",
+    ]);
+    const replies = github.calls.filter((entry) =>
+      entry.url.endsWith("/replies"),
+    );
+    expect(replies.map((entry) => entry.body)).toEqual([
+      { body: "Fixed in abc. turn=t1" },
+    ]);
+    await expect(
+      resolve([{ threadId: "PRRT_own" }, { threadId: "PRRT_own" }]),
+    ).rejects.toThrow(/PRRT_own is listed twice/);
+    await expect(resolve([])).rejects.toThrow();
+    await expect(resolve([{ threadId: "x y" }])).rejects.toThrow();
+    await expect(
+      resolve(
+        Array.from({ length: 21 }, (_, index) => ({ threadId: `T_${index}` })),
+      ),
+    ).rejects.toThrow();
     expect(mints()).toEqual([
       { repositories: ["hello"], permissions: { pull_requests: "write" } },
     ]);
@@ -1048,27 +1091,27 @@ describe("GitHub connections: the actions a review poster needs", () => {
         expect.objectContaining({ id: 12, author: "ada", own: false }),
       ],
     });
-    const dismiss = (reviewId: number) =>
+    const dismiss = (reviewIds: number[]) =>
       call("dismiss_review", {
         repository: "octo/hello",
         number: 7,
-        reviewId,
+        reviewIds,
         message: "Resolved in a later push",
       });
-    await expect(dismiss(12)).rejects.toThrow(
+    // One refused review stops the whole call before anything changes.
+    await expect(dismiss([11, 12])).rejects.toThrow(
       /ada's; this connection dismisses only its own/,
     );
-    await expect(dismiss(13)).rejects.toThrow(
+    await expect(dismiss([11, 13])).rejects.toThrow(
       /COMMENTED; only reviews that approved or requested changes/,
     );
-    await expect(dismiss(15)).rejects.toThrow(/not on octo\/hello#7/);
-    await expect(dismiss(14)).resolves.toMatchObject({
-      id: 14,
-      state: "DISMISSED",
-    });
-    await expect(dismiss(11)).resolves.toMatchObject({
-      id: 11,
-      state: "DISMISSED",
+    await expect(dismiss([15])).rejects.toThrow(/not on octo\/hello#7/);
+    await expect(dismiss([11, 11])).rejects.toThrow(/listed twice/);
+    await expect(dismiss([14, 11])).resolves.toEqual({
+      reviews: [
+        expect.objectContaining({ id: 14, state: "DISMISSED" }),
+        expect.objectContaining({ id: 11, state: "DISMISSED" }),
+      ],
     });
     expect(github.calls.at(-1)?.body).toEqual({
       message: "Resolved in a later push",
@@ -1389,7 +1432,7 @@ describe("GitHub connections: members (user-to-server OAuth)", () => {
         input: {
           repository: "octo/hello",
           number: 7,
-          reviewId: 11,
+          reviewIds: [11],
           message: "m",
         },
         capabilities: ALL,
@@ -1450,7 +1493,11 @@ describe("GitHub connections: members (user-to-server OAuth)", () => {
       connection: TEST_CONNECTION,
       material,
       action: "resolve_review_thread",
-      input: { repository: "octo/hello", number: 7, threadId: "PRRT_own" },
+      input: {
+        repository: "octo/hello",
+        number: 7,
+        threads: [{ threadId: "PRRT_own" }],
+      },
       capabilities: ALL,
       repositories: REPOS,
     });

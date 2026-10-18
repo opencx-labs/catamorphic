@@ -425,6 +425,17 @@ describe("GraphQL", () => {
                 },
               ],
             },
+            latest: {
+              nodes: [
+                {
+                  databaseId: 22,
+                  body: "Because.",
+                  url: "u2",
+                  createdAt: "t2",
+                  author: { __typename: "User", login: "ada", databaseId: 5 },
+                },
+              ],
+            },
           },
         },
       },
@@ -447,6 +458,13 @@ describe("GraphQL", () => {
         createdAt: "t",
         // GraphQL drops the [bot] suffix REST logins carry; put it back.
         author: { login: "work[bot]", type: "Bot", id: null },
+      },
+      lastComment: {
+        id: 22,
+        body: "Because.",
+        url: "u2",
+        createdAt: "t2",
+        author: { login: "ada", type: "User", id: 5 },
       },
     });
     expect(await api.reviewThread({ threadId: "I_1" })).toBeNull();
