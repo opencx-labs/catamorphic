@@ -247,6 +247,7 @@ export {
   ConnectionProviderRegistry,
   type GitRemoteCredentials,
   type ModelApi,
+  type ModelRequest,
 } from "./services/connection-providers.js";
 export {
   bindingPrincipalKinds,

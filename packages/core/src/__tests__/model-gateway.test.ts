@@ -1,7 +1,10 @@
 import { createHash } from "node:crypto";
 import type { JsonObject } from "@catamorphic/db";
 import { describe, expect, it } from "vitest";
-import { ConnectionActionDeniedError } from "../services/connection-broker.js";
+import {
+  ConnectionActionDeniedError,
+  ConnectionActionRefusedError,
+} from "../services/connection-broker.js";
 import type { ConnectionModelEndpoint } from "../services/connection-providers.js";
 import type {
   ConnectionModelPolicy,
@@ -82,6 +85,8 @@ function harness(options: {
   runningTurn?: string | false;
   /** How long a usage or audit write takes. */
   writeDelayMs?: number;
+  /** The provider's rewrite of request bodies (ADR 0256). */
+  rewrite?: ConnectionModelEndpoint["rewrite"];
 }) {
   const binding: ResolvedConnectionBinding = {
     connectionId: "connection-1",
@@ -102,6 +107,7 @@ function harness(options: {
       options.api === "anthropic"
         ? { "x-api-key": state.key }
         : { authorization: `Bearer ${state.key}` },
+    ...(options.rewrite ? { rewrite: options.rewrite } : {}),
   };
   const upstreamCalls: Array<{
     url: string;
@@ -849,5 +855,141 @@ describe("the model gateway", () => {
     await waitFor(() => audits.length === 1);
     expect(audits).toEqual([{ outcome: "error", metadata: { status: 429 } }]);
     expect(recorded).toHaveLength(0);
+  });
+});
+
+describe("model request rewrites (ADR 0256)", () => {
+  const chat = (
+    body: string,
+    headers: Record<string, string> = {},
+    method = "POST",
+  ) => ({
+    alias: "model",
+    path: "chat/completions",
+    method,
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${GRANT}`,
+      ...headers,
+    },
+    body: encoder.encode(body),
+  });
+  /** Pins OpenRouter's providers, whatever the caller asked for. */
+  const pin: ConnectionModelEndpoint["rewrite"] = ({ body }) => ({
+    ...body,
+    provider: { only: ["together"], allow_fallbacks: false },
+  });
+  const sent = (call: { body: Uint8Array | undefined } | undefined) =>
+    JSON.parse(decoder.decode(call?.body ?? new Uint8Array()));
+
+  it("sends the provider the rewritten body, once, as our own JSON", async () => {
+    const seen: Array<{ path: string; context: unknown }> = [];
+    const { gateway, upstreamCalls } = harness({
+      api: "openai",
+      rewrite: (request) => {
+        seen.push({ path: request.path, context: request.context });
+        return pin(request);
+      },
+    });
+    // Two `provider` fields: parsers disagree on which one wins, so only
+    // the gateway's serialization may reach the provider.
+    const response = await gateway.handle(
+      chat(
+        '{"model":"m","provider":{"only":["deepinfra"]},"provider":{"order":["chutes"]}}',
+        { "content-type": "text/plain" },
+      ),
+    );
+    expect(response.status).toBe(200);
+    await bodyText(response);
+    const text = decoder.decode(upstreamCalls[0]?.body ?? new Uint8Array());
+    expect(text.match(/"provider"/g)).toHaveLength(1);
+    expect(sent(upstreamCalls[0])).toEqual({
+      model: "m",
+      provider: { only: ["together"], allow_fallbacks: false },
+    });
+    expect(upstreamCalls[0]?.headers.get("content-type")).toBe(
+      "application/json",
+    );
+    expect(seen).toEqual([
+      {
+        path: "chat/completions",
+        context: {
+          tenantId: "tenant-1",
+          projectId: "project-1",
+          alias: "model",
+          sessionId: "session-1",
+        },
+      },
+    ]);
+  });
+
+  it("lets the policy judge what the provider will receive", async () => {
+    const { gateway, upstreamCalls, reviews } = harness({
+      api: "openai",
+      policy: { allow: ["deepseek/*"] },
+      guarded: true,
+      rewrite: ({ body }) => ({ ...body, model: "deepseek/v4-flash" }),
+    });
+    const response = await gateway.handle(chat('{"model":"openai/gpt-x"}'));
+    expect(response.status).toBe(200);
+    await bodyText(response);
+    expect(sent(upstreamCalls[0]).model).toBe("deepseek/v4-flash");
+    expect(reviews[0]?.input).toMatchObject({ model: "deepseek/v4-flash" });
+  });
+
+  it("refuses what it cannot rewrite rather than forwarding it unrewritten", async () => {
+    const { gateway, upstreamCalls } = harness({ api: "openai", rewrite: pin });
+    for (const request of [
+      chat("not json"),
+      chat('["a","list"]'),
+      chat('{"model":"m"}', { "content-encoding": "gzip" }),
+    ]) {
+      const response = await gateway.handle(request);
+      expect(response.status).toBe(400);
+      expect(await bodyText(response)).toContain("invalid_request_error");
+    }
+    // A body on another method is reviewed too.
+    const put = await gateway.handle(chat("not json", {}, "PUT"));
+    expect(put.status).toBe(400);
+    await bodyText(put);
+    expect(upstreamCalls).toHaveLength(0);
+    // A request without a body has nothing to rewrite.
+    const models = await gateway.handle({
+      alias: "model",
+      path: "models",
+      method: "GET",
+      headers: { authorization: `Bearer ${GRANT}` },
+    });
+    expect(models.status).toBe(200);
+    await bodyText(models);
+    expect(upstreamCalls).toHaveLength(1);
+  });
+
+  it("refuses a call the rewrite refuses, and one it fails on", async () => {
+    const refusing = harness({
+      api: "openai",
+      rewrite: () => {
+        throw new ConnectionActionRefusedError(
+          "Only pinned providers serve this",
+        );
+      },
+    });
+    const refused = await refusing.gateway.handle(chat('{"model":"m"}'));
+    expect(refused.status).toBe(403);
+    expect(await bodyText(refused)).toContain(
+      "Only pinned providers serve this",
+    );
+    const broken = harness({
+      api: "openai",
+      rewrite: () => {
+        throw new Error("boom");
+      },
+    });
+    const failed = await broken.gateway.handle(chat('{"model":"m"}'));
+    expect(failed.status).toBe(403);
+    expect(await bodyText(failed)).toContain("could not review this request");
+    expect([...refusing.upstreamCalls, ...broken.upstreamCalls]).toHaveLength(
+      0,
+    );
   });
 });

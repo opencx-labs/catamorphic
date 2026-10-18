@@ -63,6 +63,72 @@ describe("gateway configuration", () => {
     ).toThrow("guards");
   });
 
+  it("pins a model connection's request fields from the file (ADR 0256)", async () => {
+    const config = gatewayConfigFromFile({
+      path: write({
+        connections: [
+          {
+            type: "model",
+            kind: "openrouter",
+            displayName: "OpenRouter",
+            api: "openai",
+            baseUrl: "https://openrouter.ai/api/v1",
+            override: {
+              provider: { only: ["together"], allow_fallbacks: false },
+              models: null,
+            },
+          },
+          {
+            type: "model",
+            kind: "local",
+            displayName: "Local model",
+            api: "openai",
+            baseUrl: "https://models.internal.test/v1",
+          },
+        ],
+      }),
+      env: {},
+    });
+    const [pinned, plain] = gatewayProviders(config);
+    expect(plain?.model?.rewrite).toBeUndefined();
+    const body = await pinned?.model?.rewrite?.({
+      method: "POST",
+      path: "chat/completions",
+      body: {
+        model: "deepseek/v4-flash",
+        provider: { order: ["anyone"] },
+        models: ["openai/gpt-x"],
+      },
+      context: {
+        tenantId: "tenant",
+        projectId: "project",
+        alias: "models",
+        sessionId: null,
+      },
+    });
+    expect(body).toEqual({
+      model: "deepseek/v4-flash",
+      provider: { only: ["together"], allow_fallbacks: false },
+    });
+    // An override names fields, so an empty field name is refused.
+    expect(() =>
+      gatewayConfigFromFile({
+        path: write({
+          connections: [
+            {
+              type: "model",
+              kind: "openrouter",
+              displayName: "OpenRouter",
+              api: "openai",
+              override: { "": 1 },
+            },
+          ],
+        }),
+        env: {},
+      }),
+    ).toThrow("connections.0");
+  });
+
   it("takes typed config with resolved secrets and validates it like the file", () => {
     const config = parseGatewayConfig({
       connections: [

@@ -8,7 +8,10 @@ import {
   ConnectionActionRefusedError,
   type ConnectionBroker,
 } from "./connection-broker.js";
-import type { ModelApi } from "./connection-providers.js";
+import type {
+  ConnectionModelEndpoint,
+  ModelApi,
+} from "./connection-providers.js";
 import {
   type ConnectionModelPolicy,
   MODEL_CAPABILITY,
@@ -690,6 +693,8 @@ interface ModelAccess {
   baseUrl: string;
   /** The stored key's headers: they never leave the control plane. */
   headers: Readonly<Record<string, string>>;
+  /** The provider's rewrite of request bodies (ADR 0256). */
+  rewrite: ConnectionModelEndpoint["rewrite"];
 }
 
 /**
@@ -822,13 +827,30 @@ export class ModelGatewayService {
         `The gateway serves only paths below '${request.alias}''s base URL`,
       );
     const method = request.method.toUpperCase();
+    let body =
+      request.body &&
+      request.body.length > 0 &&
+      method !== "GET" &&
+      method !== "HEAD"
+        ? request.body
+        : undefined;
+    // The provider's rewrite (ADR 0256) goes first, so the policy below
+    // judges what the provider will receive. Our own serialization is what
+    // goes upstream: no field a second parser could read differently.
+    const rewritten =
+      body && access.rewrite
+        ? await rewriteRequest({ access, method, path, request, body })
+        : undefined;
+    if (rewritten) body = rewritten.bytes;
     // A POST may generate: it names its model when the binding has an
-    // allowlist. The body is only read, never rewritten.
+    // allowlist.
     const post = method === "POST";
     const allow = access.policy?.allow;
     const fields =
       post && (allow || this.deps.broker.reviews(MODEL_CAPABILITY))
-        ? requestFields(request.body)
+        ? rewritten
+          ? fieldsOf(rewritten.body)
+          : requestFields(body)
         : {};
     if (allow && post) {
       if (!fields.model)
@@ -873,15 +895,13 @@ export class ModelGatewayService {
             .runningTurn({ sessionId: access.sessionId })
             .catch(() => undefined)
         : undefined;
-    const body =
-      request.body && method !== "GET" && method !== "HEAD"
-        ? request.body
-        : undefined;
+    const outgoing = upstreamRequestHeaders(request.headers, access.headers);
+    if (rewritten) outgoing.set("content-type", "application/json");
     let upstream: Response;
     try {
       upstream = await this.fetch(url, {
         method,
-        headers: upstreamRequestHeaders(request.headers, access.headers),
+        headers: outgoing,
         redirect: "manual",
         ...(body ? { body } : {}),
       });
@@ -1041,6 +1061,7 @@ export class ModelGatewayService {
       policy: resolved.binding.model,
       baseUrl: resolved.endpoint.baseUrl,
       headers: resolved.headers,
+      rewrite: resolved.endpoint.rewrite?.bind(resolved.endpoint),
     };
     const until = Math.min(
       now + ACCESS_TTL_MS,
@@ -1100,12 +1121,80 @@ function requestFields(body: Uint8Array | undefined): RequestFields {
   } catch {
     return {};
   }
+  return fieldsOf(parsed);
+}
+
+function fieldsOf(parsed: Readonly<Record<string, unknown>>): RequestFields {
   return {
     ...(typeof parsed.model === "string" && parsed.model
       ? { model: parsed.model }
       : {}),
     ...(typeof parsed.stream === "boolean" ? { stream: parsed.stream } : {}),
   };
+}
+
+/**
+ * A request body as the provider's rewrite returns it (ADR 0256), encoded
+ * once. Fails closed: a body that is content-encoded or is not one JSON
+ * object is refused rather than forwarded unrewritten, and so is one the
+ * rewrite refuses or fails on.
+ */
+async function rewriteRequest(args: {
+  access: ModelAccess;
+  method: string;
+  path: string;
+  request: Pick<ModelGatewayRequest, "alias" | "headers">;
+  body: Uint8Array;
+}): Promise<{ body: JsonObject; bytes: Uint8Array }> {
+  const { access, request } = args;
+  const rewrite = access.rewrite;
+  if (!rewrite) throw new Error("No rewrite for this connection");
+  const encoding = request.headers["content-encoding"]?.trim().toLowerCase();
+  if (encoding && encoding !== "identity")
+    throw new ModelGatewayError(
+      400,
+      "invalid_request_error",
+      `'${request.alias}' reviews its requests; send them without content-encoding`,
+    );
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(decoder.decode(args.body));
+  } catch {
+    parsed = undefined;
+  }
+  if (!isJsonObject(parsed))
+    throw new ModelGatewayError(
+      400,
+      "invalid_request_error",
+      `'${request.alias}' reviews its requests; send one JSON object`,
+    );
+  let body: JsonObject;
+  try {
+    body = await rewrite({
+      method: args.method,
+      path: args.path,
+      body: parsed,
+      context: {
+        tenantId: access.identity.tenantId,
+        projectId: access.projectId,
+        alias: access.alias,
+        sessionId: access.sessionId,
+      },
+    });
+  } catch (error) {
+    if (error instanceof ConnectionActionRefusedError) throw error;
+    console.warn("[catamorphic] A model request rewrite failed", error);
+    throw new ModelGatewayError(
+      403,
+      "permission_error",
+      `'${request.alias}' could not review this request`,
+    );
+  }
+  return { body, bytes: encoder.encode(JSON.stringify(body)) };
+}
+
+function isJsonObject(value: unknown): value is JsonObject {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 /** A call's usage row: its session, and the turn running when it began. */

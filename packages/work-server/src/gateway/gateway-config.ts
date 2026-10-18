@@ -139,7 +139,10 @@ const GitEntry = z.strictObject({
  * 0180), beside the built-in `anthropic` and `openai`: an OpenAI-compatible
  * server such as OpenRouter or a self-hosted model, or a provider at
  * another base URL. The key is the service connection's; an entry with a
- * built-in kind replaces it.
+ * built-in kind replaces it. `override` sets top-level fields of every
+ * request body, replacing the caller's (`null` removes one), e.g. the
+ * providers OpenRouter may route to (ADR 0256); rewrites that need code
+ * are a provider a custom server passes as `hooks.connectionProviders`.
  */
 const ModelEntry = z.strictObject({
   type: z.literal("model"),
@@ -148,6 +151,7 @@ const ModelEntry = z.strictObject({
   api: z.enum(["anthropic", "openai"]),
   /** Where the API's paths go, e.g. `https://openrouter.ai/api/v1`. */
   baseUrl: z.url().optional(),
+  override: z.record(z.string().min(1), z.json()).optional(),
 });
 
 /** A database reached with a stored read-only credential (ADR 0163). */
@@ -283,6 +287,7 @@ export function gatewayProviders(
         displayName: entry.displayName,
         api: entry.api,
         ...(entry.baseUrl ? { baseUrl: entry.baseUrl } : {}),
+        ...(entry.override ? { override: entry.override } : {}),
       });
     }
     if (entry.type === "git") {
