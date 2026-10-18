@@ -300,9 +300,21 @@ function startAttempt(
       } catch (error) {
         // Only the agent's own answer that the session is gone counts: a
         // crash, an interrupt, a sign-in or a passing error ends this turn
-        // and leaves the session to the next one.
-        if (interrupted || !sessionGone(error)) throw error;
-        refused = error.message;
+        // and leaves the session to the next one. An agent that answers a
+        // lost session with a plain internal error (OpenCode's "service
+        // failure") shows it is gone by no longer listing it.
+        const gone =
+          sessionGone(error) ||
+          (error instanceof acp.RequestError &&
+            !PASSING_CODES.has(error.code) &&
+            Boolean(capabilities?.sessionCapabilities?.list) &&
+            !(await listsSession({
+              connection,
+              sessionId: earlier,
+              until,
+            }).catch(() => true)));
+        if (interrupted || !gone) throw error;
+        refused = error instanceof Error ? error.message : String(error);
       }
       reopened = loaded && (reopen === "resume" || replayed > 0);
       // A load that replayed nothing: Hermes answers so for a session it

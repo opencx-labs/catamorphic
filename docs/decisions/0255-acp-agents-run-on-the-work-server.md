@@ -83,6 +83,11 @@ boundary" holds where the machine isolates: on a trusted local-process
 worker, or a member's own machine, a committed ACP command runs on that
 machine itself, as a committed Claude Code hook would. An agent that ignores all
 three channels runs on whatever its own configuration says, and in a
-restricted Environment has no other route out. Still open from ADR 0241:
+restricted Environment has no other route out. A sandbox replaced for a new base (ADR 0257) takes the agent's saved
+sessions with it, so the next turn's reopen fails: an agent that answers
+that with a plain internal error, as OpenCode does, and offers
+`session/list` is judged by its list, and a session it no longer lists is
+gone (ADR 0245), so the turn goes on in a new one, handed the
+conversation. Still open from ADR 0241:
 the `acp.endpoint` transport, streaming an agent's plans and usage, and a
 warm process between turns.

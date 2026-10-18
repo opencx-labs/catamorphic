@@ -301,8 +301,9 @@ if docker container inspect "$NAME" >/dev/null 2>&1; then
 fi
 
 # The data directory is mounted at the same path, so the Docker daemon
-# mounts what the worker writes there into its sandboxes.
-set -- --detach --name "$NAME" --restart unless-stopped \\
+# mounts what the worker writes there into its sandboxes. The image's health
+# check asks the server's HTTP port, which a worker does not open.
+set -- --detach --name "$NAME" --restart unless-stopped --no-healthcheck \\
   --volume "$DATA_DIR:$DATA_DIR" --env "WORK_DATA_DIR=$DATA_DIR" \\
   --volume /var/run/docker.sock:/var/run/docker.sock \\
   --group-add "$(stat -c %g /var/run/docker.sock)" \\

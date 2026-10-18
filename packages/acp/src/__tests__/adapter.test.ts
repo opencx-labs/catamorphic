@@ -840,6 +840,56 @@ describe("ACP adapter", () => {
     );
   });
 
+  it("tells Work its session is gone when the agent answers a load with an internal error and no longer lists it, as OpenCode does", async () => {
+    const space = workspace();
+    const turn = run(
+      attempt(space, "hello", {
+        env: {
+          TEST_AGENT_STATE: space.stateFile,
+          TEST_AGENT_LOAD: "opencode",
+          TEST_AGENT_LIST: "1",
+        },
+        thread: {
+          mode: "resume",
+          providerThreadId: "thread",
+          nativeRef: { id: "session-9", strength: "strong" },
+        },
+      }),
+    );
+    await turn.finished();
+    expect(turn.events()).toContainEqual(
+      expect.objectContaining({
+        type: "thread.lost",
+        reason: expect.stringContaining("OpenCode service failure"),
+      }),
+    );
+  });
+
+  it("leaves a session the agent still lists for the next turn when its load fails with an internal error", async () => {
+    const space = workspace();
+    const first = run(attempt(space, "hello"));
+    await first.finished();
+    const second = run(
+      attempt(space, "again", {
+        env: {
+          TEST_AGENT_STATE: space.stateFile,
+          TEST_AGENT_LOAD: "busy",
+          TEST_AGENT_LIST: "1",
+        },
+        thread: {
+          mode: "resume",
+          providerThreadId: "thread",
+          nativeRef: { id: "session-1", strength: "strong" },
+        },
+      }),
+    );
+    await second.finished();
+    expect(second.completed()).toMatchObject({ status: "failed" });
+    expect(second.events().some((event) => event.type === "thread.lost")).toBe(
+      false,
+    );
+  });
+
   it("tells Work its session is gone when the agent refuses to resume it", async () => {
     const space = workspace();
     const turn = run(

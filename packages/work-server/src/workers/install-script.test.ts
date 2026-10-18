@@ -226,7 +226,7 @@ describe("the worker install script", () => {
     const runCall = first.log.find((call) => call.startsWith("docker run"));
     expect(runCall).toBeDefined();
     for (const part of [
-      "--detach --name work-worker --restart unless-stopped",
+      "--detach --name work-worker --restart unless-stopped --no-healthcheck",
       `--volume ${dataDir}:${dataDir} --env WORK_DATA_DIR=${dataDir}`,
       "--volume /var/run/docker.sock:/var/run/docker.sock --group-add 998",
       `--env WORK_CONTROL_PLANE_URL=${target.controlPlaneUrl}`,

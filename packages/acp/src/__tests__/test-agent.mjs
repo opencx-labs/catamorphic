@@ -24,7 +24,8 @@
 // `hermes-flaky` for any session, as Hermes does when restoring one fails;
 // `plain` throws a plain error ("Invalid session identifier", as Gemini CLI
 // does), `auth` asks for a sign-in, `busy` errs with a passing internal
-// error, and `crash` exits mid-load. TEST_AGENT_LIST=1 offers
+// error, `opencode` answers a session it lacks with an internal error, as
+// OpenCode does, and `crash` exits mid-load. TEST_AGENT_LIST=1 offers
 // `session/list`. With
 // TEST_AGENT_STUBBORN=1 it ignores a cancel and SIGTERM alike, and starts a
 // process of its own (`sleeper` in its state). It notes a cancel it heard
@@ -163,6 +164,11 @@ new acp.AgentSideConnection(
         if (failing === "hermes-flaky") return null;
         const state = read();
         const session = state.sessions[sessionId];
+        if (!session && failing === "opencode")
+          throw acp.RequestError.internalError(
+            { service: "session" },
+            "OpenCode service failure",
+          );
         if (!session && failing === "hermes") return null;
         if (!session) throw acp.RequestError.resourceNotFound(sessionId);
         Object.assign(session, { cwd, mcpServers, reopenedWith: "load" });
