@@ -16,6 +16,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CatamorphicError, toCatamorphicError } from "../lib/errors.js";
 import { randomId } from "../lib/random-id.js";
+import { type SentResponse, withSentResponses } from "../lib/sent-responses.js";
 import {
   type SessionCommandInput,
   sendSessionCommand,
@@ -296,8 +297,35 @@ export function useAgentChat(
   );
   const heldRef = useRef<string | null>(null);
 
+  // Responses sent that the session does not show yet: their requests read
+  // as answered at once (a refused one opens again), and leave once the
+  // session's own request moves on.
+  const [sent, setSent] = useState<ReadonlyMap<string, SentResponse>>(
+    () => new Map(),
+  );
+  const forgetSent = useCallback(
+    (requestId: string) =>
+      setSent((current) => {
+        if (!current.has(requestId)) return current;
+        const next = new Map(current);
+        next.delete(requestId);
+        return next;
+      }),
+    [],
+  );
+  const liveState = live.state;
+  useEffect(() => {
+    if (!liveState) return;
+    for (const requestId of sent.keys())
+      if (liveState.requests[requestId]?.status !== "pending")
+        forgetSent(requestId);
+  }, [liveState, sent, forgetSent]);
+  const state = useMemo(
+    () => liveState && withSentResponses(liveState, sent),
+    [liveState, sent],
+  );
+
   // A pending message leaves once the session shows its item.
-  const state = live.state;
   useEffect(() => {
     if (!state || pending.length === 0) return;
     const shown = new Set<string>();
@@ -630,8 +658,22 @@ export function useAgentChat(
       if (!target) return false;
       return (await run({ type: "retry", turnId: target })) !== null;
     },
-    respond: async (requestId, response) =>
-      (await run({ type: "respond", requestId, response })) !== null,
+    respond: async (requestId, response) => {
+      setSent((current) =>
+        new Map(current).set(requestId, {
+          response,
+          sentAt: new Date().toISOString(),
+        }),
+      );
+      let accepted = false;
+      try {
+        accepted =
+          (await run({ type: "respond", requestId, response })) !== null;
+      } finally {
+        if (!accepted) forgetSent(requestId);
+      }
+      return accepted;
+    },
     rollback: async (turnId) => {
       const receipt = await run({ type: "rollback", turnId });
       if (receipt && projectId && sessionId)

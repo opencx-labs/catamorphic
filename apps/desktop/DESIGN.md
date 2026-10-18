@@ -3375,3 +3375,18 @@ retried, and the line says what happened in plain words: "Told the agent
 what it missed", as a coding agent's "conversation compacted" does. The
 summary itself names a long turn's last few commands instead of every
 one. See ADR 0198.
+
+### 2026-10-18: An answered question closes as its answer takes its place
+
+Submitting an answer snapped: the panel dimmed, then vanished in one
+frame, the conversation above it jumped as the question's step left, and
+the answer faded in after, somewhere else. Now a sent answer shows at
+once, as a sent message does (`useAgentChat` reads the request as answered
+until the session has it; a refused one asks again): the answer stands
+where the question's step was in the same frame, and the panel, inert at
+once and unchanged, closes over the next few hundred milliseconds while
+the conversation and composer glide into the room it leaves. The close
+starts two frames on, after the frame that swapped the answer in, so a
+slow commit never shows it as a jump. The answer message the session may
+record after it is the same card and does not enter again. See
+`docs/chat-state.md` (Agent questions).

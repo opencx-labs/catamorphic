@@ -302,6 +302,7 @@ describe("ChatTimeline for embedders", () => {
           {
             kind: "answer",
             id: "q1",
+            requestId: "q1",
             questions: [
               {
                 question: "Which layout?",
@@ -317,6 +318,7 @@ describe("ChatTimeline for embedders", () => {
           {
             kind: "answer",
             id: "q2",
+            requestId: "q2",
             questions: [],
             answers: [],
             attachments: [],

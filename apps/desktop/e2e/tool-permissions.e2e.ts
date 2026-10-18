@@ -419,13 +419,34 @@ describe("talking around questions", () => {
       `),
     ).toBe(true);
     await run(`answer('Grid'); return true;`);
+    // Sent, the answer takes the question's place while the panel closes
+    // as it was, taking no second press; it never vanishes first.
     await runWait(
-      `const button = byText('section[aria-label="The agent has a question"] button', 'Submit'); if (!button || button.disabled) return false; button.click(); return true;`,
+      `const button = byText('section[aria-label="The agent has a question"] button', 'Submit');
+       if (!button || button.disabled) return false;
+       const cards = () => hereChat().querySelectorAll('[data-testid="question-answer"]').length;
+       const before = cards();
+       window.__answerSent = { both: false, live: false };
+       const look = () => {
+         const panel = modal();
+         if (!panel || cards() === before) return;
+         window.__answerSent.both = true;
+         if (!panel.closest('[inert]')) window.__answerSent.live = true;
+       };
+       window.__answerWatch = new MutationObserver(look);
+       window.__answerWatch.observe(hereChat(), { subtree: true, childList: true, attributes: true, attributeFilter: ['inert'] });
+       button.click();
+       return true;`,
     );
     await runWait(
       `const card = hereChat().querySelector('[data-testid="question-answer"]'); return !modal() && !!card && card.textContent.includes('Which layout should I use?') && card.textContent.includes('Grid') && !card.textContent.includes('User answer');`,
       { timeoutMs: 30_000, label: "answer card in history" },
     );
+    expect(
+      await run(
+        `window.__answerWatch.disconnect(); return window.__answerSent;`,
+      ),
+    ).toEqual({ both: true, live: false });
   }, 90_000);
 
   it("answers a question in its own words through Other", async () => {
