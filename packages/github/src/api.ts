@@ -1,15 +1,21 @@
 import {
   type FetchLike,
+  type GithubActor,
   GithubApiError,
   type GithubCheckRun,
   type GithubCheckRunFields,
+  type GithubComment,
+  GithubGraphqlError,
   type GithubPullRequest,
   type GithubPullRequestFile,
+  type GithubPullRequestReview,
   type GithubPullRequestStatus,
   type GithubRepo,
   type GithubRepositoryEvent,
   type GithubReviewComment,
   type GithubReviewEvent,
+  type GithubReviewThread,
+  type GithubReviewThreadComment,
   type GithubUser,
 } from "./types.js";
 
@@ -132,6 +138,180 @@ interface RawDiscussionComment {
   side?: "LEFT" | "RIGHT";
 }
 
+interface RawUser {
+  login: string;
+  id: number;
+  type?: string;
+}
+
+interface RawReview {
+  id: number;
+  state: string;
+  user: RawUser | null;
+  body: string | null;
+  commit_id: string | null;
+  submitted_at?: string | null;
+  html_url: string;
+  pull_request_url?: string;
+}
+
+interface RawComment {
+  id: number;
+  user: RawUser | null;
+  body: string | null;
+  html_url: string;
+  pull_request_url?: string;
+  issue_url?: string;
+  in_reply_to_id?: number;
+}
+
+/** GraphQL's actor: a bot's login has no `[bot]` suffix there. */
+interface RawGraphqlActor {
+  __typename: string;
+  login: string;
+  databaseId?: number | null;
+}
+
+interface RawThreadComment {
+  databaseId: number;
+  body: string;
+  url: string;
+  createdAt: string;
+  author: RawGraphqlActor | null;
+}
+
+interface RawThreadComments {
+  pageInfo: { hasNextPage: boolean; endCursor: string | null };
+  nodes: RawThreadComment[];
+}
+
+interface RawThread {
+  id: string;
+  isResolved: boolean;
+  isOutdated: boolean;
+  path: string;
+  line: number | null;
+  startLine: number | null;
+  diffSide: "LEFT" | "RIGHT" | null;
+  comments: RawThreadComments;
+}
+
+/** Any node by id: only a review thread fills the thread fields. */
+interface RawThreadNode {
+  __typename: string;
+  id?: string;
+  isResolved?: boolean;
+  pullRequest?: { number: number; repository: { nameWithOwner: string } };
+  comments?: { nodes: RawThreadComment[] };
+}
+
+const THREAD_COMMENT_FIELDS = `databaseId body url createdAt
+  author { __typename login ... on User { databaseId } }`;
+
+const REVIEW_THREADS_QUERY = `query ReviewThreads($owner: String!, $name: String!, $number: Int!, $after: String) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      reviewThreads(first: 100, after: $after) {
+        pageInfo { hasNextPage endCursor }
+        nodes {
+          id isResolved isOutdated path line startLine diffSide
+          comments(first: 100) { pageInfo { hasNextPage endCursor } nodes { ${THREAD_COMMENT_FIELDS} } }
+        }
+      }
+    }
+  }
+}`;
+
+const THREAD_COMMENTS_QUERY = `query ThreadComments($id: ID!, $after: String) {
+  node(id: $id) {
+    ... on PullRequestReviewThread {
+      comments(first: 100, after: $after) { pageInfo { hasNextPage endCursor } nodes { ${THREAD_COMMENT_FIELDS} } }
+    }
+  }
+}`;
+
+const REVIEW_THREAD_QUERY = `query ReviewThread($id: ID!) {
+  node(id: $id) {
+    __typename
+    ... on PullRequestReviewThread {
+      id isResolved
+      pullRequest { number repository { nameWithOwner } }
+      comments(first: 1) { nodes { ${THREAD_COMMENT_FIELDS} } }
+    }
+  }
+}`;
+
+const RESOLVE_REVIEW_THREAD_MUTATION = `mutation ResolveReviewThread($id: ID!) {
+  resolveReviewThread(input: { threadId: $id }) { thread { id isResolved } }
+}`;
+
+/** Most pages any paginated read follows, so a loop always ends. */
+const MAX_PAGES = 50;
+
+function actorOf(user: RawUser | null): GithubActor | null {
+  return user
+    ? { login: user.login, type: user.type ?? "User", id: user.id }
+    : null;
+}
+
+function graphqlActorOf(actor: RawGraphqlActor | null): GithubActor | null {
+  if (!actor) return null;
+  const bot = actor.__typename === "Bot";
+  return {
+    login:
+      bot && !actor.login.endsWith("[bot]")
+        ? `${actor.login}[bot]`
+        : actor.login,
+    type: actor.__typename,
+    id: actor.databaseId ?? null,
+  };
+}
+
+function threadCommentOf(raw: RawThreadComment): GithubReviewThreadComment {
+  return {
+    id: raw.databaseId,
+    author: graphqlActorOf(raw.author),
+    body: raw.body,
+    url: raw.url,
+    createdAt: raw.createdAt,
+  };
+}
+
+function reviewOf(raw: RawReview): GithubPullRequestReview {
+  return {
+    id: raw.id,
+    state: raw.state,
+    author: actorOf(raw.user),
+    body: raw.body ?? "",
+    commitId: raw.commit_id ?? null,
+    submittedAt: raw.submitted_at ?? null,
+    url: raw.html_url,
+    number: trailingNumber(raw.pull_request_url, "pulls"),
+  };
+}
+
+function commentOf(raw: RawComment): GithubComment {
+  return {
+    id: raw.id,
+    author: actorOf(raw.user),
+    body: raw.body ?? "",
+    url: raw.html_url,
+    number:
+      trailingNumber(raw.pull_request_url, "pulls") ??
+      trailingNumber(raw.issue_url, "issues"),
+    ...(raw.in_reply_to_id ? { inReplyTo: raw.in_reply_to_id } : {}),
+  };
+}
+
+/** `…/pulls/42` → 42; null when the URL does not end that way. */
+function trailingNumber(
+  url: string | undefined,
+  collection: "pulls" | "issues",
+): number | null {
+  const match = url ? new RegExp(`/${collection}/(\\d+)$`).exec(url) : null;
+  return match?.[1] ? Number(match[1]) : null;
+}
+
 function pullRequestSummary(pr: RawPullRequest): GithubPullRequest {
   return {
     number: pr.number,
@@ -216,6 +396,308 @@ export class GithubApi {
       values.push(...batch);
       if (batch.length < 100) return values;
     }
+  }
+
+  /** A call GitHub answers with no body (204), such as a DELETE. */
+  private async requestNoContent(path: string, method: string): Promise<void> {
+    const response = await this.fetch(`${this.baseUrl}${path}`, {
+      ...(this.signal ? { signal: this.signal } : {}),
+      method,
+      headers: {
+        Accept: "application/vnd.github+json",
+        Authorization: `Bearer ${this.accessToken}`,
+        "X-GitHub-Api-Version": "2022-11-28",
+      },
+    });
+    if (!response.ok) {
+      const body = (await response.json().catch(() => ({}))) as {
+        message?: string;
+      };
+      throw new GithubApiError(
+        response.status,
+        body.message ?? `GitHub API returned ${response.status}`,
+      );
+    }
+  }
+
+  /**
+   * One GraphQL request against {@link githubGraphqlUrl} of the API base.
+   * HTTP failures throw {@link GithubApiError}; an answer carrying `errors`
+   * throws {@link GithubGraphqlError}, so a partial answer is never taken
+   * for a whole one.
+   */
+  async graphql<T>(
+    query: string,
+    variables: Readonly<Record<string, unknown>> = {},
+  ): Promise<T> {
+    const response = await this.fetch(githubGraphqlUrl(this.baseUrl), {
+      ...(this.signal ? { signal: this.signal } : {}),
+      method: "POST",
+      redirect: "error",
+      headers: {
+        Accept: "application/json",
+        Authorization: `Bearer ${this.accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ query, variables }),
+    });
+    const body = (await response.json().catch(() => ({}))) as {
+      data?: T | null;
+      errors?: Array<{ message?: string; type?: string }>;
+      message?: string;
+    };
+    if (!response.ok) {
+      throw new GithubApiError(
+        response.status,
+        body.message ?? `GitHub GraphQL returned ${response.status}`,
+      );
+    }
+    if (body.errors?.length) {
+      throw new GithubGraphqlError(
+        body.errors.map((error) => ({
+          message: error.message ?? "unknown error",
+          ...(error.type ? { type: error.type } : {}),
+        })),
+        response.status,
+      );
+    }
+    if (body.data === undefined || body.data === null) {
+      throw new GithubApiError(
+        response.status,
+        "GitHub GraphQL returned no data",
+      );
+    }
+    return body.data;
+  }
+
+  /**
+   * Every review thread of a pull request with all of its comments, oldest
+   * first, following GraphQL's pages.
+   */
+  async reviewThreads(input: {
+    fullName: string;
+    number: number;
+  }): Promise<GithubReviewThread[]> {
+    const [owner = "", name = ""] = repositoryPath(input.fullName).split("/");
+    const threads: GithubReviewThread[] = [];
+    let after: string | null = null;
+    for (let page = 0; page < MAX_PAGES; page++) {
+      const data: {
+        repository: {
+          pullRequest: {
+            reviewThreads: {
+              pageInfo: { hasNextPage: boolean; endCursor: string | null };
+              nodes: RawThread[];
+            };
+          } | null;
+        } | null;
+      } = await this.graphql(REVIEW_THREADS_QUERY, {
+        owner,
+        name,
+        number: positive(input.number),
+        after,
+      });
+      const connection = data.repository?.pullRequest?.reviewThreads;
+      if (!connection) {
+        throw new GithubApiError(
+          404,
+          `Pull request ${input.fullName}#${input.number} was not found`,
+        );
+      }
+      for (const thread of connection.nodes) {
+        const comments = thread.comments.nodes.map(threadCommentOf);
+        let more = thread.comments.pageInfo;
+        for (let next = 0; more.hasNextPage && next < MAX_PAGES; next++) {
+          const rest: { node: { comments: RawThreadComments } | null } =
+            await this.graphql(THREAD_COMMENTS_QUERY, {
+              id: thread.id,
+              after: more.endCursor,
+            });
+          if (!rest.node) break;
+          comments.push(...rest.node.comments.nodes.map(threadCommentOf));
+          more = rest.node.comments.pageInfo;
+        }
+        threads.push({
+          id: thread.id,
+          isResolved: thread.isResolved,
+          isOutdated: thread.isOutdated,
+          path: thread.path,
+          line: thread.line,
+          startLine: thread.startLine,
+          side: thread.diffSide,
+          comments,
+        });
+      }
+      if (!connection.pageInfo.hasNextPage) return threads;
+      after = connection.pageInfo.endCursor;
+    }
+    throw new GithubApiError(
+      422,
+      `${input.fullName}#${input.number} has more review threads than Work reads`,
+    );
+  }
+
+  /**
+   * One review thread by node id: where it lives, whether it is resolved,
+   * and its first comment. Null when the id names no review thread.
+   */
+  async reviewThread(input: { threadId: string }): Promise<{
+    id: string;
+    isResolved: boolean;
+    repository: string;
+    number: number;
+    firstComment: GithubReviewThreadComment | null;
+  } | null> {
+    const data = await this.graphql<{ node: RawThreadNode | null }>(
+      REVIEW_THREAD_QUERY,
+      { id: input.threadId },
+    ).catch((error: unknown) => {
+      if (
+        error instanceof GithubGraphqlError &&
+        error.errors.every((entry) => entry.type === "NOT_FOUND")
+      )
+        return null;
+      throw error;
+    });
+    const node = data?.node;
+    if (
+      node?.__typename !== "PullRequestReviewThread" ||
+      !node.id ||
+      !node.pullRequest
+    )
+      return null;
+    const [first] = node.comments?.nodes ?? [];
+    return {
+      id: node.id,
+      isResolved: node.isResolved === true,
+      repository: node.pullRequest.repository.nameWithOwner,
+      number: node.pullRequest.number,
+      firstComment: first ? threadCommentOf(first) : null,
+    };
+  }
+
+  /** Mark a review thread resolved (GraphQL `resolveReviewThread`). */
+  async resolveReviewThread(input: {
+    threadId: string;
+  }): Promise<{ id: string; isResolved: boolean }> {
+    const data = await this.graphql<{
+      resolveReviewThread: {
+        thread: { id: string; isResolved: boolean };
+      } | null;
+    }>(RESOLVE_REVIEW_THREAD_MUTATION, { id: input.threadId });
+    const thread = data.resolveReviewThread?.thread;
+    if (!thread) {
+      throw new GithubApiError(422, "GitHub did not resolve the review thread");
+    }
+    return { id: thread.id, isResolved: thread.isResolved };
+  }
+
+  /** Replace a pull request's description. */
+  async updatePullRequest(input: {
+    fullName: string;
+    number: number;
+    body: string;
+  }): Promise<{ number: number; url: string; body: string }> {
+    const raw = await this.request<{
+      number: number;
+      html_url: string;
+      body: string | null;
+    }>(
+      `/repos/${repositoryPath(input.fullName)}/pulls/${positive(input.number)}`,
+      { method: "PATCH", body: { body: input.body } },
+    );
+    return { number: raw.number, url: raw.html_url, body: raw.body ?? "" };
+  }
+
+  /** A pull request's reviews, oldest first. */
+  async listReviews(input: {
+    fullName: string;
+    number: number;
+  }): Promise<GithubPullRequestReview[]> {
+    const raw = await this.requestPages<RawReview>(
+      `/repos/${repositoryPath(input.fullName)}/pulls/${positive(input.number)}/reviews`,
+    );
+    return raw.map(reviewOf);
+  }
+
+  async review(input: {
+    fullName: string;
+    number: number;
+    reviewId: number;
+  }): Promise<GithubPullRequestReview> {
+    return reviewOf(
+      await this.request<RawReview>(
+        `/repos/${repositoryPath(input.fullName)}/pulls/${positive(input.number)}/reviews/${positive(input.reviewId)}`,
+      ),
+    );
+  }
+
+  /**
+   * Dismiss a review that approved or requested changes, so it no longer
+   * counts toward the pull request's review decision.
+   */
+  async dismissReview(input: {
+    fullName: string;
+    number: number;
+    reviewId: number;
+    message: string;
+  }): Promise<GithubPullRequestReview> {
+    return reviewOf(
+      await this.request<RawReview>(
+        `/repos/${repositoryPath(input.fullName)}/pulls/${positive(input.number)}/reviews/${positive(input.reviewId)}/dismissals`,
+        {
+          method: "PUT",
+          body: { message: input.message, event: "DISMISS" },
+        },
+      ),
+    );
+  }
+
+  /** A pull request review comment (an inline comment) by id. */
+  async reviewComment(input: {
+    fullName: string;
+    commentId: number;
+  }): Promise<GithubComment> {
+    return commentOf(
+      await this.request<RawComment>(
+        `/repos/${repositoryPath(input.fullName)}/pulls/comments/${positive(input.commentId)}`,
+      ),
+    );
+  }
+
+  /** An issue or pull request conversation comment by id. */
+  async issueComment(input: {
+    fullName: string;
+    commentId: number;
+  }): Promise<GithubComment> {
+    return commentOf(
+      await this.request<RawComment>(
+        `/repos/${repositoryPath(input.fullName)}/issues/comments/${positive(input.commentId)}`,
+      ),
+    );
+  }
+
+  async updateIssueComment(input: {
+    fullName: string;
+    commentId: number;
+    body: string;
+  }): Promise<GithubComment> {
+    return commentOf(
+      await this.request<RawComment>(
+        `/repos/${repositoryPath(input.fullName)}/issues/comments/${positive(input.commentId)}`,
+        { method: "PATCH", body: { body: input.body } },
+      ),
+    );
+  }
+
+  async deleteIssueComment(input: {
+    fullName: string;
+    commentId: number;
+  }): Promise<void> {
+    await this.requestNoContent(
+      `/repos/${repositoryPath(input.fullName)}/issues/comments/${positive(input.commentId)}`,
+      "DELETE",
+    );
   }
 
   async getUser(): Promise<GithubUser> {
@@ -905,6 +1387,22 @@ function checkRunBody(fields: GithubCheckRunFields) {
         }
       : {}),
   };
+}
+
+/**
+ * The GraphQL endpoint beside a REST API base: `https://api.github.com/graphql`
+ * for github.com (and GHE.com's `api.<subdomain>.ghe.com`), and `/api/graphql`
+ * for GitHub Enterprise Server, whose REST base is `https://HOST/api/v3`.
+ */
+export function githubGraphqlUrl(apiBaseUrl: string = API_BASE): string {
+  const url = new URL(apiBaseUrl);
+  const path = url.pathname.replace(/\/+$/, "");
+  url.pathname = /\/api\/v3$/.test(path)
+    ? `${path.slice(0, -"/v3".length)}/graphql`
+    : `${path}/graphql`;
+  url.search = "";
+  url.hash = "";
+  return url.toString();
 }
 
 function repositoryPath(fullName: string): string {
