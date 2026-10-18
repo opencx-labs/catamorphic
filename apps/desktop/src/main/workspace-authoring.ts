@@ -43,8 +43,9 @@ presentation ("rows" or "tiles": tiles draw root rows without children as a grid
 of icons), collapsed, hideEmpty (hide while it lists nothing; a hidden list that
 takes drops shows while something it takes is dragged), empty (its one sentence
 when empty), height (the most a list shows before it scrolls; a list fades the
-edge it continues past), scrollbar (true adds a scroll thumb on the sidebar's
-edge while the list scrolls; off by default), rowHeight, open (default open
+edge it continues past), scrollbar (true adds a scroll thumb, a lane in from the
+sidebar's own, while the list scrolls, and widens that sidebar's outer padding by
+8px to hold it; off by default), rowHeight, open (default open
 mode: replace, tab, side, floating), when, headerActions, menu, contextMenu,
 actions, itemDefaults and itemOverrides (presentation for every row, or by row
 id). Grants: collections (Work lists an app or module may read) and workflows
@@ -60,9 +61,9 @@ Work's lists (bare names in grants and work.read; work:<name> in source):
 - workflows, apps: the project's; a row opens it (workflow:<name>, app:<name>).
 - chats: the project's chats, newest first, paged; their forks and children
   nest. Rows carry signal and data (the session's fields: running,
-  attentionRequired, owner, createdAt, ...). Actions: new-subsession,
-  mark-read, mark-unread, archive, unarchive (open-terminal and open-preview
-  for a server's chats).
+  attentionRequired, owner, createdAt, ...). Actions: rename (opens the
+  rename dialog), new-subsession, mark-read, mark-unread, archive, unarchive
+  (open-terminal and open-preview for a server's chats).
 - subsessions: the children of the chat in front; needs when: {session:true}.
 - activity: chats working or waiting for you, and workflow runs going or
   stopped.
@@ -71,8 +72,8 @@ Work's lists (bare names in grants and work.read; work:<name> in source):
 - tabs: the window's open tabs in strip order; a chat's opened tabs nest under
   it, open. Rows carry signal and data {kind, name, active, working,
   attention (waiting for the person included), unread, groupId?, sessionId?,
-  url?, faviconUrl?, path?}; action close; drag reorders the strip, a tab
-  among the tabs beside it.
+  url?, faviconUrl?, path?}; actions close, and rename on a chat's tab (opens
+  the rename dialog); drag reorders the strip, a tab among the tabs beside it.
 - remote: a connected project's server: a status row (its dialogs), a row per
   file changed on this device (upload, history, publish), files needing a
   proposal. Header actions sync and upload-all.

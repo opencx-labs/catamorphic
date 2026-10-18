@@ -26,6 +26,7 @@ import type { WorkSourceDeps } from "./deps.js";
 const REVEAL_ANCESTORS = 8;
 
 const CHAT_ACTIONS = new Set<string>([
+  "rename",
   "new-subsession",
   "open-terminal",
   "open-preview",

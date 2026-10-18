@@ -1,6 +1,6 @@
 # 0083: Desktop updates and migration backups
 
-- **Status:** Accepted; channel policy updated by [0085](0085-desktop-stable-and-preview-channels.md)
+- **Status:** Accepted; channel policy updated by [0085](0085-desktop-stable-and-preview-channels.md); restart rule amended by [0246](0246-a-restart-never-waits-on-work.md)
 - **Date:** 2026-09-02
 
 ## Context

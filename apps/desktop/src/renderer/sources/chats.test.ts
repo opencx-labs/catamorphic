@@ -174,6 +174,7 @@ it("draws a chat as a row: its address, signals, branch and own verbs", async ()
     icon: "MessageSquare",
     badges: [{ label: "fix-login", icon: "GitBranch" }],
     menu: [
+      { action: "rename" },
       { action: "new-subsession" },
       { action: "mark-unread" },
       { action: "archive" },
@@ -198,6 +199,18 @@ it("draws a chat as a row: its address, signals, branch and own verbs", async ()
     mode: "tab",
   });
   release();
+  client.clear();
+});
+
+it("asks the window to rename a chat, in the one rename dialog", async () => {
+  chatList(1);
+  const { source, client } = view();
+  await source.action?.({
+    itemId: "c0",
+    action: "rename",
+    signal: new AbortController().signal,
+  });
+  expect(mocks.actions).toHaveBeenCalledWith("c0", "rename");
   client.clear();
 });
 

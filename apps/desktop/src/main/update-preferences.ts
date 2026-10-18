@@ -3,7 +3,9 @@ import path from "node:path";
 import type { DesktopUpdateChannel } from "../shared/update.js";
 
 interface UpdatePreferencesFile {
-  channel: DesktopUpdateChannel;
+  channel?: DesktopUpdateChannel;
+  /** The release downloaded and not installed yet. */
+  downloaded?: string;
 }
 
 function isDesktopUpdateChannel(value: unknown): value is DesktopUpdateChannel {
@@ -16,29 +18,45 @@ export function defaultDesktopUpdateChannel(
   return version.includes("-") ? "preview" : "stable";
 }
 
-/** Machine-wide update preference stored at `<userData>/updates.json`. */
+/** Machine-wide update preference and state stored at `<userData>/updates.json`. */
 export class UpdatePreferencesStore {
   constructor(private readonly file: string) {}
 
   load(defaultChannel: DesktopUpdateChannel): DesktopUpdateChannel {
-    try {
-      const parsed: unknown = JSON.parse(fs.readFileSync(this.file, "utf8"));
-      if (
-        typeof parsed === "object" &&
-        parsed !== null &&
-        "channel" in parsed &&
-        isDesktopUpdateChannel(parsed.channel)
-      ) {
-        return parsed.channel;
-      }
-    } catch {
-      // Missing or malformed preferences fall back to the installed build.
-    }
-    return defaultChannel;
+    return this.read().channel ?? defaultChannel;
   }
 
   save(channel: DesktopUpdateChannel): void {
-    const data: UpdatePreferencesFile = { channel };
+    this.write({ ...this.read(), channel });
+  }
+
+  /** The release downloaded and waiting for a restart, if any. */
+  downloaded(): string | undefined {
+    return this.read().downloaded;
+  }
+
+  saveDownloaded(version: string | undefined): void {
+    const { downloaded: _previous, ...rest } = this.read();
+    this.write(version ? { ...rest, downloaded: version } : rest);
+  }
+
+  private read(): UpdatePreferencesFile {
+    try {
+      const parsed: unknown = JSON.parse(fs.readFileSync(this.file, "utf8"));
+      if (typeof parsed !== "object" || parsed === null) return {};
+      const channel = Reflect.get(parsed, "channel");
+      const downloaded = Reflect.get(parsed, "downloaded");
+      return {
+        ...(isDesktopUpdateChannel(channel) ? { channel } : {}),
+        ...(typeof downloaded === "string" && downloaded ? { downloaded } : {}),
+      };
+    } catch {
+      // Missing or malformed preferences fall back to the installed build.
+      return {};
+    }
+  }
+
+  private write(data: UpdatePreferencesFile): void {
     fs.mkdirSync(path.dirname(this.file), { recursive: true });
     const temporary = `${this.file}.tmp`;
     fs.writeFileSync(temporary, `${JSON.stringify(data, null, 2)}\n`, {

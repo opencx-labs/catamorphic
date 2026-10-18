@@ -1,6 +1,6 @@
 # 0202 — Agents see the browser, their subagents and their PATH
 
-- **Status:** Accepted
+- **Status:** Accepted (amended by [0247](0247-a-person-names-a-chat-and-it-keeps-the-name.md): a name the person gives a chat stays)
 - **Date:** 2026-10-05
 - **Amends:** 0133 (eager surface), 0090 (delegated results), 0112 (browser control), 0093 (desktop PATH)
 

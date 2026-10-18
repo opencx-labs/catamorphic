@@ -351,6 +351,9 @@ function entriesOf(
         entries.push({ kind: "notice", item });
         break;
       case "context_handoff":
+        // Each attempt records the handoff it began with; retries of a
+        // turn say the same again, so the turn shows its first.
+        if (entries.some((entry) => entry.kind === "handoff")) break;
         flushSteps();
         entries.push({ kind: "handoff", item });
         break;

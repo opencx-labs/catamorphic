@@ -343,6 +343,40 @@ describe("session log", () => {
       id: "lingering",
       harness: { placement: "host", adapter: lingeringAdapter },
     };
+    // Slow to begin its first `[[hesitate]]` turn: it names its thread and
+    // never reports the turn begun, as a harness still starting up when its
+    // host restarts (ADR 0246). Every later attempt is echo's.
+    let hesitated = false;
+    const hesitantAdapter: HarnessAdapter = {
+      id: "echo",
+      capabilities: () => inner.capabilities(),
+      start: (attempt, host) => {
+        if (hesitated || !attempt.input?.text.includes("[[hesitate]]"))
+          return inner.start(attempt, host);
+        hesitated = true;
+        host.emit({
+          type: "thread",
+          ref:
+            attempt.thread.mode === "resume"
+              ? attempt.thread.nativeRef
+              : { id: randomUUID(), strength: "strong" },
+        });
+        return {
+          steer: async () => false,
+          interrupt: () => {},
+          finished: new Promise<void>((resolve) =>
+            host.signal.addEventListener("abort", () => resolve(), {
+              once: true,
+            }),
+          ),
+        };
+      },
+    };
+    const hesitant: RegisteredCodingAgent = {
+      ...echo,
+      id: "hesitant",
+      harness: { placement: "host", adapter: hesitantAdapter },
+    };
     // Its tools on `prod` ask the person first (ADR 0054).
     const guarded: RegisteredCodingAgent = {
       ...echo,
@@ -410,6 +444,7 @@ describe("session log", () => {
               elsewhere,
               blocked,
               recording,
+              hesitant,
             ].find((agent) => agent.id === id),
           list: () => [
             echo,
@@ -2042,6 +2077,38 @@ describe("session log", () => {
     expect(turn.error?.message).toContain("Credentials revoked");
   });
 
+  it("never hands a thread back a turn it began, however that turn ended", async () => {
+    const { projectId, sessionId } = await chat("Failed after working");
+    await sessions.sendMessage(identity, projectId, sessionId, "first words");
+    // The harness began it and did the work, then failed (a weekly limit).
+    const failed = await sessions.sendMessage(
+      identity,
+      projectId,
+      sessionId,
+      "[[fail Weekly limit reached]]",
+    );
+    expect(failed.turn.status).toBe("failed");
+    const { reply } = await sessions.sendMessage(
+      identity,
+      projectId,
+      sessionId,
+      "third words",
+    );
+    const said = reply?.kind === "assistant_message" ? reply.text : "";
+    expect(said).not.toContain("While you were away");
+    expect(said).toContain("third words");
+    const state = await folded(projectId, sessionId);
+    expect(state.items.map((item) => item.kind)).not.toContain(
+      "context_handoff",
+    );
+    const threads = await db
+      .selectFrom("agent_provider_threads")
+      .select("last_turn_ordinal")
+      .where("session_id", "=", sessionId)
+      .execute();
+    expect(threads.map((thread) => thread.last_turn_ordinal)).toEqual([3]);
+  });
+
   describe("a sign-in that can still refresh (ADR 0228)", () => {
     async function signInChat(name: string) {
       const project = await projects.create(identity, { name });
@@ -2417,6 +2484,135 @@ describe("session log", () => {
     } finally {
       await worker.stop();
       await survivor.stopLocalTurns();
+    }
+  }, 40_000);
+
+  it("hands every turn back when its host restarts, and the next process continues it", async () => {
+    const { projectId, sessionId } = await chat("Restart");
+    const restarting = makeService();
+    await restarting.sendMessage(identity, projectId, sessionId, "remember me");
+    await restarting.command(identity, projectId, sessionId, {
+      type: "send",
+      commandId: randomUUID(),
+      text: "[[wait 20000]]",
+    });
+    await vi.waitFor(
+      async () => {
+        const detail = await restarting.get(identity, projectId, sessionId);
+        expect(
+          orderedTurns(sessionStateFromSnapshot(detail.snapshot))[1]?.status,
+        ).toBe("running");
+      },
+      { timeout: 10_000 },
+    );
+    // A host installing an update: its in-process runner goes with it.
+    await restarting.stopLocalTurns({ handBack: "all" });
+    const handedBack = await db
+      .selectFrom("agent_turns")
+      .select(["status", "lease_owner"])
+      .where("session_id", "=", sessionId)
+      .orderBy("ordinal", "desc")
+      .executeTakeFirstOrThrow();
+    // Not interrupted here: the turn is the next process's to take.
+    expect(handedBack).toEqual({ status: "running", lease_owner: null });
+    const commands = await db
+      .selectFrom("agent_turn_commands")
+      .innerJoin("agent_turns", "agent_turns.id", "agent_turn_commands.turn_id")
+      .select("agent_turn_commands.kind")
+      .where("agent_turns.session_id", "=", sessionId)
+      .execute();
+    expect(commands.map((command) => command.kind)).not.toContain("interrupt");
+
+    const next = makeService();
+    const worker = next.startWorker({
+      resolveIdentity: async () => identity,
+      pollIntervalMs: 200,
+    });
+    try {
+      await vi.waitFor(
+        async () => {
+          const detail = await next.get(identity, projectId, sessionId);
+          const turns = orderedTurns(sessionStateFromSnapshot(detail.snapshot));
+          expect(turns.map((turn) => turn.status)).toEqual([
+            "completed",
+            "interrupted",
+            "completed",
+          ]);
+          expect(turns[2]?.continuationOf).toBe(turns[1]?.id);
+        },
+        { timeout: 20_000 },
+      );
+    } finally {
+      await worker.stop();
+      await next.stopLocalTurns();
+    }
+  }, 40_000);
+
+  it("starts a turn over with its input when its host restarts before its harness began it", async () => {
+    const project = await projects.create(identity, {
+      name: "Restart before start",
+    });
+    const restarting = makeService();
+    const { id: sessionId } = await restarting.create(identity, project.id, {
+      agentId: "hesitant",
+    });
+    await restarting.sendMessage(
+      identity,
+      project.id,
+      sessionId,
+      "remember me",
+    );
+    await restarting.command(identity, project.id, sessionId, {
+      type: "send",
+      commandId: randomUUID(),
+      text: "plan the launch [[hesitate]]",
+    });
+    await vi.waitFor(
+      async () => {
+        const detail = await restarting.get(identity, project.id, sessionId);
+        expect(
+          orderedTurns(sessionStateFromSnapshot(detail.snapshot))[1]?.status,
+        ).toBe("running");
+      },
+      { timeout: 10_000 },
+    );
+    await restarting.stopLocalTurns({ handBack: "all" });
+
+    const next = makeService();
+    const worker = next.startWorker({
+      resolveIdentity: async () => identity,
+      pollIntervalMs: 200,
+    });
+    try {
+      await vi.waitFor(
+        async () => {
+          const detail = await next.get(identity, project.id, sessionId);
+          const turns = orderedTurns(sessionStateFromSnapshot(detail.snapshot));
+          // The same turn ran again with the person's message, rather than
+          // being continued without it.
+          expect(turns.map((turn) => turn.status)).toEqual([
+            "completed",
+            "completed",
+          ]);
+          expect(
+            detail.snapshot.items.some(
+              (item) =>
+                item.kind === "assistant_message" &&
+                item.text.startsWith("Echo: plan the launch"),
+            ),
+          ).toBe(true);
+          expect(
+            detail.snapshot.items.some(
+              (item) =>
+                item.kind === "notice" && item.code === "turn_continued",
+            ),
+          ).toBe(false);
+        },
+        { timeout: 20_000 },
+      );
+    } finally {
+      await worker.stop();
+      await next.stopLocalTurns();
     }
   }, 40_000);
 

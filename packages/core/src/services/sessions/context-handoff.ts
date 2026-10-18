@@ -10,6 +10,8 @@ import { itemFromRow } from "./session-rows.js";
 /** About 16k tokens: enough to carry a conversation, small enough to stay cheap. */
 export const HANDOFF_BUDGET_CHARS = 64_000;
 const LINE_MAX = 2_000;
+/** The commands a turn's summary still names, its last ones. */
+const COMMANDS_SHOWN = 3;
 
 export interface ContextHandoff {
   strategy: ContextHandoffStrategy;
@@ -124,8 +126,17 @@ export async function buildContextHandoff(input: {
   };
 }
 
-function renderTurn(ordinal: number, items: readonly Item[]): string {
+/**
+ * One turn as the handoff tells it: what was said, in order, and what the
+ * agent ran and changed. A turn's commands are counted with only its last
+ * few named (a long turn runs hundreds, which tell the next agent little and
+ * crowd out what was said), and each changed file is named once.
+ */
+export function renderTurn(ordinal: number, items: readonly Item[]): string {
   const lines: string[] = [];
+  const commands = items.filter((item) => item.kind === "command");
+  const shown = new Set(commands.slice(-COMMANDS_SHOWN));
+  const changed = new Set<string>();
   for (const item of items) {
     switch (item.kind) {
       case "user_message":
@@ -144,11 +155,18 @@ function renderTurn(ordinal: number, items: readonly Item[]): string {
           lines.push(`Agent: ${quoted(item.text, LINE_MAX)}`);
         break;
       case "command":
+        if (!shown.has(item)) break;
+        if (item === commands.at(-shown.size) && commands.length > shown.size)
+          lines.push(
+            `- ran ${commands.length} commands; the last ${shown.size}:`,
+          );
         lines.push(
           `- ran \`${truncate(item.command, 300)}\`${item.exitCode === null ? "" : ` (exit ${item.exitCode})`}`,
         );
         break;
       case "file_change":
+        if (changed.has(item.path)) break;
+        changed.add(item.path);
         lines.push(`- changed ${item.path}`);
         break;
       case "notice":

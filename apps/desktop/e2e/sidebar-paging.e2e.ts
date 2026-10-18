@@ -152,9 +152,10 @@ it("loads the next page of chats as the person scrolls to the end", async () => 
   expect(app.getRendererErrors()).toEqual([]);
 });
 
-it("fades a list's edges where it continues; a thumb only where a section asks", async () => {
+it("fades a list's edges where it continues; thumbs in their own lanes, hidden at rest", async () => {
   const side = `[data-workspace-visible="true"] [data-sidebar="left"]`;
-  const thumb = `${side} .overlay-scrollbar`;
+  const thumb = `${side} .overlay-scrollbar[data-lane="section"]`;
+  const panelThumb = `${side} .overlay-scrollbar[data-lane="panel"]`;
   // No list in the sidebar keeps a scrollbar, or a column for one.
   expect(
     await app.eval<
@@ -169,9 +170,14 @@ it("fades a list's edges where it continues; a thumb only where a section asks",
       return panel.offsetWidth === panel.clientWidth;
     })()`),
   ).toBe(true);
-  // Work's lists ask for no thumb: there is none to show.
+  // Work's lists ask for no thumb: there is none to show. The sidebar's
+  // own waits on its edge, unseen until the sidebar scrolls (ADR 0248).
   expect(await app.eval<boolean>(`!!document.querySelector('${thumb}')`)).toBe(
     false,
+  );
+  await app.waitFor(
+    `document.querySelector('${panelThumb}')?.dataset.shown === 'false' && getComputedStyle(document.querySelector('${panelThumb}')).opacity === '0'`,
+    { label: "the sidebar's thumb hidden at rest" },
   );
   /** How far each edge of the list fades, in pixels. */
   const fades = `(() => {
@@ -223,8 +229,9 @@ it("fades a list's edges where it continues; a thumb only where a section asks",
     "only the bottom edge fades at the top of the list",
   );
 
-  // A section that asks for a thumb shows it on the outer edge, beside the
-  // list that moved and no taller than it, only while it moves.
+  // A section that asks for a thumb shows it a lane in from the outer
+  // edge, beside the list that moved and no taller than it, only while it
+  // moves: never over the sidebar's own thumb.
   await writeSidebarSections(app, [{ ...CHATS_SECTION, scrollbar: true }]);
   await app.waitFor(
     `!!document.querySelector('${chats}[data-sidebar-scrollbar]') && !!document.querySelector('${thumb}')`,
@@ -259,6 +266,9 @@ it("fades a list's edges where it continues; a thumb only where a section asks",
     .waitFor<{
       left: number;
       edge: number;
+      panelRight: number;
+      rowLeft: number;
+      right: number;
       top: number;
       bottom: number;
       listTop: number;
@@ -266,9 +276,11 @@ it("fades a list's edges where it continues; a thumb only where a section asks",
     }>(
       `document.querySelector('${thumb}').dataset.shown === 'true' && (() => {
       const bar = document.querySelector('${thumb}').getBoundingClientRect();
+      const panel = document.querySelector('${panelThumb}').getBoundingClientRect();
       const list = document.querySelector('${tree}').getBoundingClientRect();
       const side = document.querySelector('${side} .sidebar-inner').getBoundingClientRect();
-      return { left: bar.left, edge: side.left, top: bar.top, bottom: bar.bottom, listTop: list.top, listBottom: list.bottom };
+      const row = document.querySelector('${chats} [role="treeitem"]').getBoundingClientRect();
+      return { left: bar.left, right: bar.right, edge: side.left, panelRight: panel.right, rowLeft: row.left, top: bar.top, bottom: bar.bottom, listTop: list.top, listBottom: list.bottom };
     })()`,
       { label: "the thumb beside the scrolled list" },
     )
@@ -282,7 +294,11 @@ it("fades a list's edges where it continues; a thumb only where a section asks",
     })()`);
       throw new Error(`${String(error)}; thumb: ${JSON.stringify(thumbState)}`);
     });
-  expect(shown.left - shown.edge).toBeLessThanOrEqual(2);
+  expect(shown.left - shown.edge).toBeGreaterThanOrEqual(7);
+  expect(shown.left - shown.edge).toBeLessThanOrEqual(9);
+  // Its own lane: past the sidebar's thumb, and before the rows begin.
+  expect(shown.left).toBeGreaterThan(shown.panelRight);
+  expect(shown.rowLeft).toBeGreaterThan(shown.right);
   expect(shown.top).toBeGreaterThanOrEqual(shown.listTop);
   expect(shown.bottom).toBeLessThanOrEqual(shown.listBottom);
   // A moment after the list is still, it fades away.
@@ -294,6 +310,66 @@ it("fades a list's edges where it continues; a thumb only where a section asks",
   await app.waitFor(
     `document.querySelector('${thumb}').dataset.shown === 'false' && getComputedStyle(document.querySelector('${thumb}')).opacity === '0'`,
     { label: "the thumb faded once the list was still" },
+  );
+
+  // Sections taller than the sidebar: the sidebar itself scrolls, and its
+  // own thumb shows on the outer edge, the section's staying hidden.
+  await writeSidebarSections(app, [
+    { ...CHATS_SECTION, height: 1200, scrollbar: true },
+  ]);
+  await app.waitFor(
+    `(() => {
+      const panel = document.querySelector('${side} .sidebar-tab-panel:not([hidden])');
+      return !!panel && panel.scrollHeight - panel.clientHeight > 100 &&
+        panel.getAnimations({ subtree: true }).every((a) => a.playState !== 'running');
+    })()`,
+    { label: "the sidebar taller than its window" },
+  );
+  await app.waitFor(
+    `document.querySelector('${thumb}').dataset.shown === 'false' && document.querySelector('${panelThumb}').dataset.shown === 'false'`,
+    { label: "both thumbs at rest before the sidebar scrolls" },
+  );
+  // The thumb shows for 900 ms after each scroll, so the sidebar keeps
+  // moving while this looks: a slow runner's poll still lands while it shows.
+  const sidebarShown = await app
+    .waitFor<{
+      left: number;
+      edge: number;
+      top: number;
+      bottom: number;
+      panelTop: number;
+      panelBottom: number;
+      section: string | undefined;
+    }>(
+      `(() => {
+      const scroller = document.querySelector('${side} .sidebar-tab-panel:not([hidden])');
+      const end = scroller.scrollHeight - scroller.clientHeight;
+      if (document.querySelector('${panelThumb}').dataset.shown !== 'true') {
+        scroller.scrollTop = scroller.scrollTop >= end ? end - 40 : end;
+        return false;
+      }
+      const bar = document.querySelector('${panelThumb}').getBoundingClientRect();
+      const panel = scroller.getBoundingClientRect();
+      const side = document.querySelector('${side} .sidebar-inner').getBoundingClientRect();
+      return { left: bar.left, edge: side.left, top: bar.top, bottom: bar.bottom, panelTop: panel.top, panelBottom: panel.bottom, section: document.querySelector('${thumb}')?.dataset.shown };
+    })()`,
+      { label: "the sidebar's own thumb while it scrolls" },
+    )
+    .catch(async (error: unknown) => {
+      const panelState = await app.eval(`(() => {
+      const bar = document.querySelector('${panelThumb}');
+      const panel = document.querySelector('${side} .sidebar-tab-panel:not([hidden])');
+      return { shown: bar?.dataset.shown, style: bar?.getAttribute('style'), top: panel?.scrollTop, room: panel && panel.scrollHeight - panel.clientHeight, overflow: panel && getComputedStyle(panel).overflowY };
+    })()`);
+      throw new Error(`${String(error)}; panel: ${JSON.stringify(panelState)}`);
+    });
+  expect(sidebarShown.left - sidebarShown.edge).toBeLessThanOrEqual(2);
+  expect(sidebarShown.top).toBeGreaterThanOrEqual(sidebarShown.panelTop);
+  expect(sidebarShown.bottom).toBeLessThanOrEqual(sidebarShown.panelBottom);
+  expect(sidebarShown.section).toBe("false");
+  await app.waitFor(
+    `document.querySelector('${panelThumb}').dataset.shown === 'false' && getComputedStyle(document.querySelector('${panelThumb}')).opacity === '0'`,
+    { label: "the sidebar's thumb faded once it was still" },
   );
   expect(app.getRendererErrors()).toEqual([]);
 });

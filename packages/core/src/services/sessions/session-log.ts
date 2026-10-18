@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import {
   ACTIVE_TURN_STATUSES,
   assertSessionMetadata,
@@ -29,6 +30,16 @@ export class SessionCommandRejectedError extends Error {
     this.name = "SessionCommandRejectedError";
   }
 }
+
+/**
+ * A person's rename of their chat, as its command id (ADR 0247): a prefix
+ * of its own, which no other command's id (a person's are `user:...`)
+ * ever starts with.
+ */
+export function renameCommandId(externalUserId: string): string {
+  return `rename:${externalUserId}:${randomUUID()}`;
+}
+const RENAME_COMMAND_PATTERN = "rename:%";
 
 /** The replicated log does not continue where this copy's log ends. */
 export class SessionLogGapError extends Error {
@@ -91,6 +102,22 @@ export class SessionLog {
       .where("id", "=", sessionId)
       .forUpdate()
       .executeTakeFirstOrThrow();
+  }
+
+  /**
+   * Whether the person named the chat (ADR 0247): its log holds an event
+   * their rename command appended. The log, command ids and all, is what
+   * a mirror replicates, so a copy that goes on elsewhere knows it too.
+   */
+  async namedByPerson(db: Executor, sessionId: string): Promise<boolean> {
+    const named = await db
+      .selectFrom("agent_session_events")
+      .select("sequence")
+      .where("session_id", "=", sessionId)
+      .where("command_id", "like", RENAME_COMMAND_PATTERN)
+      .limit(1)
+      .executeTakeFirst();
+    return named !== undefined;
   }
 
   async append(

@@ -38,6 +38,21 @@ describe("UpdatePreferencesStore", () => {
     });
   });
 
+  it("keeps the downloaded release beside the channel", () => {
+    const { file, value } = store();
+    value.save("preview");
+    value.saveDownloaded("1.1.0-alpha.4");
+    value.save("stable");
+    expect(value.downloaded()).toBe("1.1.0-alpha.4");
+    expect(JSON.parse(fs.readFileSync(file, "utf8"))).toEqual({
+      channel: "stable",
+      downloaded: "1.1.0-alpha.4",
+    });
+    value.saveDownloaded(undefined);
+    expect(value.downloaded()).toBeUndefined();
+    expect(value.load("preview")).toBe("stable");
+  });
+
   it("ignores malformed and unknown preferences", () => {
     const { file, value } = store();
     fs.writeFileSync(file, '{"channel":"nightly"}\n');

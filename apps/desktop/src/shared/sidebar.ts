@@ -304,9 +304,10 @@ export interface SidebarSectionConfig {
   actions?: SidebarMenuEntry[];
   height?: number;
   /**
-   * Show a scroll thumb on the sidebar's edge while this section's list
-   * scrolls. Off by default: a list shows where it continues by fading
-   * that edge.
+   * Show a scroll thumb while this section's list scrolls, a lane in from
+   * the sidebar's own (ADR 0248); its sidebar widens its outer padding by
+   * 8px to hold it. Off by default: a list shows where it continues by
+   * fading that edge.
    */
   scrollbar?: boolean;
   /** Start collapsed (default open). */

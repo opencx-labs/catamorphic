@@ -253,6 +253,7 @@ import {
   importedTranscriptEvents,
 } from "./sessions/session-import.js";
 import {
+  renameCommandId,
   SessionCommandRejectedError,
   SessionLog,
 } from "./sessions/session-log.js";
@@ -1128,8 +1129,14 @@ export class AgentSessionsService {
    * outlives this process (on a worker or a member's machine) is handed
    * back at once and continues where another replica claims it; the rest
    * are asked to stop and settle here within `timeoutMs` (default 15 s).
+   * `handBack: "all"` is for a host that starts again (a desktop
+   * restarting to update, ADR 0246): every turn is handed back, and the
+   * next process continues one whose runner went with this one, as after
+   * a crash (ADR 0198).
    */
-  async stopLocalTurns(input: { timeoutMs?: number } = {}): Promise<void> {
+  async stopLocalTurns(
+    input: { timeoutMs?: number; handBack?: "reattachable" | "all" } = {},
+  ): Promise<void> {
     this.stoppingTurns = true;
     const localNode = this.workerNode?.id;
     const remoteAllocations = new Set(
@@ -1158,10 +1165,11 @@ export class AgentSessionsService {
     );
     await this.engine.stop({
       timeoutMs: input.timeoutMs ?? 15_000,
-      reattachable: (location) =>
-        location.kind === "sandbox_process" &&
-        remoteAllocations.has(location.allocationId) &&
-        localNode !== undefined,
+      handBack: (location) =>
+        input.handBack === "all" ||
+        (location?.kind === "sandbox_process" &&
+          remoteAllocations.has(location.allocationId) &&
+          localNode !== undefined),
     });
     this.feed.close();
   }
@@ -1959,6 +1967,40 @@ export class AgentSessionsService {
           { type: "session.changed", session: { activity: normalized } },
         ],
       });
+    });
+  }
+
+  /**
+   * A person names their chat (ADR 0247). The name is their command in the
+   * chat's log, and the chat keeps it: a harness's title no longer
+   * replaces it.
+   */
+  async rename(
+    identity: Identity,
+    projectId: string,
+    sessionId: string,
+    title: string,
+  ): Promise<void> {
+    await this.requireSession(identity, projectId, sessionId);
+    const normalized = title.replace(/\s+/g, " ").trim();
+    if (!normalized || normalized.length > 500)
+      throw new Error("A chat's name is 1 to 500 characters");
+    const commandId = renameCommandId(identity.externalUserId);
+    await this.log.command({
+      sessionId,
+      commandId,
+      type: "rename",
+      externalUserId: identity.externalUserId,
+      run: async (trx) => {
+        await this.assertLocalAuthority(trx, sessionId);
+        // Its command id marks the name the person's (namedByPerson).
+        await this.log.append(trx, {
+          sessionId,
+          commandId,
+          events: [{ type: "session.changed", session: { title: normalized } }],
+        });
+        return null;
+      },
     });
   }
 
@@ -7770,10 +7812,13 @@ export class AgentSessionsService {
             existing: current,
             lastOrdinal: existing ? await lastOrdinal() : 0,
           });
+          // The tool's own title, unless the person named the chat
+          // (ADR 0247).
           if (
             existing &&
             transcript.title &&
-            transcript.title !== existing.title
+            transcript.title !== existing.title &&
+            !(await this.log.namedByPerson(trx, sessionId))
           )
             events.push({
               type: "session.changed",

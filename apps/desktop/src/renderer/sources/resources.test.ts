@@ -136,6 +136,22 @@ it("lists the window's tabs with what their chats are doing, a chat's tabs under
   });
 });
 
+it("renames a chat's tab as its chat, in the window's one rename dialog", async () => {
+  const { value, host } = deps();
+  const source = tabsSource(value);
+  const roots = await source.load({ parentId: null, signal });
+  expect(roots.items[1]?.menu?.map((entry) => entry.action)).toEqual([
+    "rename",
+    "close",
+  ]);
+  expect(roots.items[0]?.menu?.map((entry) => entry.action)).toEqual(["close"]);
+  await source.action?.({ itemId: "chat:c1", action: "rename", signal });
+  expect(host.sessionAction).toHaveBeenCalledWith("s1", "rename");
+  await expect(
+    source.action?.({ itemId: "browser:b1", action: "rename", signal }),
+  ).rejects.toThrow("This tab does not support that action");
+});
+
 it("follows the window's tabs, a chat's pages included", () => {
   const { value, changed } = deps();
   const publish = vi.fn();

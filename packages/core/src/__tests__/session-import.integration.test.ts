@@ -348,6 +348,29 @@ describe("imported sessions", () => {
     expect(last.snapshot.items).toHaveLength(6);
   });
 
+  it("keeps the name a person gave an imported chat as its transcript grows (ADR 0247)", async () => {
+    const project = await projects.create(identity, { name: "Renamed import" });
+    const created = await importInto(
+      project.id,
+      transcript([firstTurn({ done: true })], { title: "Build failure" }),
+      "sha-r1",
+    );
+    const sessionId = created.sessionId ?? "";
+    await sessions.rename(identity, project.id, sessionId, "Release blocker");
+    // The tool goes on in the terminal, and titles the session itself.
+    const updated = await importInto(
+      project.id,
+      transcript([firstTurn({ done: true }), secondTurn], {
+        title: "Fix the build",
+      }),
+      "sha-r2",
+    );
+    expect(updated.outcome).toBe("updated");
+    const after = await sessions.get(identity, project.id, sessionId);
+    expect(after.title).toBe("Release blocker");
+    expect(after.snapshot.turns.map((turn) => turn.ordinal)).toEqual([1, 2]);
+  });
+
   it("takes messages only on an agent of its tool, then stops reading the file", async () => {
     const project = await projects.create(identity, { name: "Codex" });
     const codex = transcript([firstTurn({ done: true })], {

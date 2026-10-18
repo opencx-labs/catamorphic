@@ -635,19 +635,7 @@ app.whenReady().then(async () => {
   ) {
     safeStorage.setUsePlainTextEncryption(true);
   }
-  desktopUpdater = registerDesktopUpdater({
-    broadcast: state.broadcast,
-    canInstall: async () => {
-      if (!server || terminalSupport?.hasActiveWork()) return false;
-      const activeTurn = await server.catamorphic.core.db
-        .selectFrom("agent_turns")
-        .select("id")
-        .where("status", "=", "running")
-        .limit(1)
-        .executeTakeFirst();
-      return !activeTurn;
-    },
-  });
+  desktopUpdater = registerDesktopUpdater({ broadcast: state.broadcast });
   applyMenuForFocusedWindow();
   // Live-reload: agents and users edit the per-profile config files
   // directly. Changes fan out only to that profile's windows.
@@ -926,6 +914,16 @@ registerDesktopShutdown({
   shutdown: async () => {
     await shutdownDesktopServices({
       steps: [
+        // A relaunch hands working agents back before anything they use
+        // stops, and the next launch continues them; terminals and the
+        // rest simply end (ADR 0246).
+        {
+          name: "agent turns",
+          dispose: () =>
+            desktopUpdater?.restarting()
+              ? server?.catamorphic.handBackTurns()
+              : undefined,
+        },
         { name: "profile clients", dispose: () => disposeProfileResources?.() },
         { name: "profile settings", dispose: () => profileConfig.dispose() },
         { name: "browser", dispose: () => browserSupport?.dispose() },

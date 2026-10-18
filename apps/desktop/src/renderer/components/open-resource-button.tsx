@@ -27,37 +27,47 @@ import {
   menuAtPointer,
 } from "./menu.js";
 
+/** A resource's own verbs, after the ways to open it (a chat's Rename…). */
+export interface ResourceActions {
+  entries: readonly ContextMenuEntry[];
+  onAction: (action: string) => void;
+}
+
 /**
  * A resource's right-click menu: the ways to open it, then, for a file,
- * what can be done with the file itself (`fileMenuFor`).
+ * what can be done with the file itself (`fileMenuFor`), then the
+ * resource's own verbs.
  */
 function useResourceMenu() {
   const [menu, setMenu] = useState<{
     at: MenuAt;
     file: FileTarget | undefined;
+    actions: ResourceActions | undefined;
   } | null>(null);
   const [open, setOpen] = useState(false);
-  const pending = useRef<OpenMode | undefined>(undefined);
-  const choose = useRef<(mode: OpenMode) => void>(() => {});
+  const pending = useRef<(() => void) | undefined>(undefined);
   // Stable: the menu leaves 180 ms after it closes, a wait that starts
   // again whenever this changes, and its owner may re-render sooner.
   const exited = useCallback(() => {
     setMenu(null);
-    const mode = pending.current;
+    const chosen = pending.current;
     pending.current = undefined;
-    if (mode) choose.current(mode);
+    chosen?.();
   }, []);
+  const choose = useRef<(mode: OpenMode) => void>(() => {});
   return {
     show(
       position: { x: number; y: number },
       onOpen: (mode: OpenMode) => void,
       file?: FileTarget,
+      actions?: ResourceActions,
     ) {
       pending.current = undefined;
       choose.current = onOpen;
       setMenu({
         at: menuAtPointer({ clientX: position.x, clientY: position.y }),
         file,
+        actions,
       });
       setOpen(true);
     },
@@ -69,10 +79,16 @@ function useResourceMenu() {
         entries={menuGroups<ContextMenuEntry>(
           OPEN_ACTIONS,
           menu.file ? fileMenuFor(menu.file) : [],
+          menu.actions?.entries ?? [],
         )}
         onPick={(entry) => {
           const mode = openModeForAction(entry.action);
-          if (mode) pending.current = mode;
+          const own = menu.actions;
+          // Opening and the resource's verbs run once the menu has left,
+          // so what they open takes focus from nothing in the way.
+          if (mode) pending.current = () => choose.current(mode);
+          else if (own?.entries.some((item) => item.action === entry.action))
+            pending.current = () => own.onAction(entry.action);
           else if (menu.file) {
             const file = menu.file;
             void actOnFile(entry.action, file).catch((cause: unknown) =>
@@ -98,6 +114,7 @@ export function OpenResourceButton({
   onMouseDown,
   openOnMouseDown = false,
   file,
+  actions,
   ...props
 }: Omit<
   ButtonHTMLAttributes<HTMLButtonElement>,
@@ -110,6 +127,8 @@ export function OpenResourceButton({
   openOnMouseDown?: boolean;
   /** The resource is this file: its menu adds what can be done with it. */
   file?: FileTarget;
+  /** The resource's own verbs, after the ways to open it. */
+  actions?: ResourceActions;
 }) {
   const menu = useResourceMenu();
   return (
@@ -145,6 +164,7 @@ export function OpenResourceButton({
             { x: event.clientX || rect.left, y: event.clientY || rect.bottom },
             onOpen,
             file,
+            actions,
           );
         }}
       />

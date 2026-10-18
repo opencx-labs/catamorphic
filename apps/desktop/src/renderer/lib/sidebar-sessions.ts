@@ -164,8 +164,13 @@ export function subscribeSidebarSessions({
     const listeners = new Set<SessionsWakeup>();
     const remote = isRemoteQueryClient(client);
     let ticks = 0;
+    // A wakeup dropped while the window was hidden, to catch up on once.
+    let missed = false;
     const refresh = (pages: CollectionRefresh, asked = false) => {
-      if (document.hidden) return;
+      if (document.hidden) {
+        missed = true;
+        return;
+      }
       if (pages === "loaded") ticks = 0;
       void client.invalidateQueries({
         queryKey: sessionPageKey(projectId),
@@ -186,12 +191,15 @@ export function subscribeSidebarSessions({
     const hinted = remote
       ? () => {}
       : desktopApi.onSessionsChanged(() => refresh("first"));
-    const refreshLoaded = () => refresh("loaded");
-    window.addEventListener("focus", refreshLoaded);
-    // A hidden window drops its wakeups: it catches up once it shows
-    // again, which need not give it focus.
+    // A hidden window drops its wakeups: it catches up once, as it shows
+    // again (which need not give it focus), and only on what it missed. A
+    // window that only regains focus missed nothing: it read every wakeup
+    // while it showed. Reading every loaded page of every open project's
+    // list again on each return is what made coming back stutter.
     const shown = () => {
-      if (!document.hidden) refresh("loaded");
+      if (document.hidden || !missed) return;
+      missed = false;
+      refresh("loaded");
     };
     document.addEventListener("visibilitychange", shown);
     const explicitRefresh = (event: Event) => {
@@ -217,7 +225,6 @@ export function subscribeSidebarSessions({
       dispose: () => {
         clearInterval(timer);
         hinted();
-        window.removeEventListener("focus", refreshLoaded);
         document.removeEventListener("visibilitychange", shown);
         window.removeEventListener(
           "catamorphic:sidebar-refresh",

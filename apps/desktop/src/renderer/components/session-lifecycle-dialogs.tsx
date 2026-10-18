@@ -1,7 +1,43 @@
 import type { AgentSession } from "@catamorphic/react/types";
 import { useEffect, useState } from "react";
+import { chatName, renameChatInput } from "../lib/chat-session-actions.js";
+import { ActionInputDialog } from "./action-input-dialog.js";
 import { Modal } from "./modal.js";
 import { PendingButton } from "./pending-button.js";
+
+/**
+ * The one dialog that renames a chat (ADR 0247), whether its menu (a
+ * sidebar row, its tab, the dock) or the palette's Rename chat asked: the
+ * action input form, filled with the name it has. It stays open with the
+ * error when the rename is refused; the name unchanged, it just closes,
+ * claiming nothing.
+ */
+export function RenameChatDialog({
+  chat,
+  onClose,
+  onRename,
+}: {
+  chat: { sessionId: string; title: string } | null;
+  onClose: () => void;
+  onRename: (input: { sessionId: string; title: string }) => Promise<unknown>;
+}) {
+  return (
+    <ActionInputDialog
+      request={
+        chat && {
+          label: "Rename chat",
+          input: renameChatInput(chat.title),
+          run: async (values) => {
+            const title = chatName(values);
+            if (title !== chat.title)
+              await onRename({ sessionId: chat.sessionId, title });
+          },
+        }
+      }
+      onClose={onClose}
+    />
+  );
+}
 
 export interface SessionAgentOption {
   id: string;

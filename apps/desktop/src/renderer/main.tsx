@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { StrictMode, useEffect, useState } from "react";
+import { StrictMode, useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 
 // Monaco deliberately does NOT load here — lib/monaco-setup.ts runs from
@@ -15,6 +15,7 @@ import { installFieldDictation } from "./lib/field-dictation.js";
 import { installFocusModality } from "./lib/focus-modality.js";
 import { installInertSelectionGuard } from "./lib/inert-selection.js";
 import { KeybindingsProvider } from "./lib/keybindings.js";
+import { workQueryClient } from "./lib/query-client.js";
 import { useSessionChangeHints } from "./lib/session-change-hints.js";
 import { TerminalAppearanceProvider } from "./lib/terminal-appearance.js";
 import { ThemeProvider } from "./lib/theme.js";
@@ -70,15 +71,24 @@ function Root() {
       unsubscribe();
     };
   }, []);
+  // One cache per server, as the provider below is one per server.
+  const queryClient = useMemo(
+    () => (server?.url ? workQueryClient() : null),
+    [server?.url],
+  );
 
-  if (!server?.url) {
+  if (!server?.url || !queryClient) {
     // Silent themed backdrop — the boot veil in App carries the reveal;
     // flashing a "Starting…" label first reads as flicker.
     return <div className={detachedWindow ? "h-full" : "h-full bg-bg"} />;
   }
 
   return (
-    <CatamorphicAppProvider key={server.url} baseUrl={server.url}>
+    <CatamorphicAppProvider
+      key={server.url}
+      baseUrl={server.url}
+      queryClient={queryClient}
+    >
       <SessionChangeHints />
       <KeybindingsProvider>
         <TerminalAppearanceProvider>

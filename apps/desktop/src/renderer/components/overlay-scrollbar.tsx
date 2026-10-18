@@ -4,40 +4,56 @@ import { useEffect, useRef } from "react";
 const MIN_THUMB = 28;
 /** How long the thumb stays after the last scroll. */
 const IDLE_MS = 900;
-/** How near the outer edge the pointer brings the thumb out. */
-const EDGE_PX = 14;
+/** How near the outer edge the pointer brings the thumbs out: both lanes. */
+const EDGE_PX = 16;
 
 /**
- * Whether `element` scrolls vertically, has somewhere to go, and belongs to
- * a section that asked for a thumb (`scrollbar: true`).
+ * Which list a thumb stands for, and so its lane from the sidebar's outer
+ * edge in (ADR 0248): the sidebar's own panel on the edge itself, and a
+ * section's list that asks for a thumb (`scrollbar: true`) one lane in,
+ * in padding the panel widens for it. Nested lists, nested lanes: the two
+ * never overlap, and neither lies over a row.
  */
-function scrolls(element: Element): element is HTMLElement {
+export type ScrollLane = "panel" | "section";
+
+/** Whether `element` is a list this lane's thumb stands for. */
+function belongs(element: HTMLElement, lane: ScrollLane): boolean {
+  const panel = element.classList.contains("sidebar-tab-panel");
+  if (lane === "panel") return panel;
+  return !panel && element.closest("[data-sidebar-scrollbar]") !== null;
+}
+
+/** Whether `element` scrolls vertically, has somewhere to go, and is `lane`'s. */
+function scrolls(element: Element, lane: ScrollLane): element is HTMLElement {
   if (!(element instanceof HTMLElement)) return false;
   if (element.scrollHeight - element.clientHeight <= 1) return false;
-  if (!element.closest("[data-sidebar-scrollbar]")) return false;
+  if (!belongs(element, lane)) return false;
   const { overflowY } = getComputedStyle(element);
   return overflowY === "auto" || overflowY === "scroll";
 }
 
 /**
- * Where a section's list is scrolled to, for a section that asks for it
- * (`scrollbar: true`); every other list shows where it continues by fading
- * that edge (`cat-edge-fade`). The area's scrollers hide their own
- * scrollbars (styles.css); one thin thumb on the area's outer edge (the
- * window's edge, for a sidebar) stands in for whichever of those lists is
- * moving: the one that scrolled last, or the one beside the pointer as it
- * nears that edge. It spans that list's own height, fades in, can be
- * dragged, and fades out once nothing needs it. It takes no room, so
- * nothing is narrowed or shifted, and at rest nothing shows. The lists stay
- * the things that scroll: wheel, keyboard and find all still move them.
+ * Where a sidebar list is scrolled to (ADR 0248). The sidebar's lists hide
+ * their own scrollbars (styles.css) and fade the edge they continue past
+ * (`cat-edge-fade`); one thin thumb per lane stands in for them. The panel
+ * lane's stands for the sidebar's own panel; the section lane's for
+ * whichever list that asked for a thumb is moving: the one that scrolled
+ * last, or the one beside the pointer as it nears the outer edge. A thumb
+ * spans its list's own height, fades in, can be dragged, and fades out once
+ * nothing needs it. The panel's thumb takes no room; a section's takes
+ * the 8px of outer padding its sidebar adds for it. At rest nothing
+ * shows. The lists stay the things that scroll: wheel, keyboard and find
+ * all still move them.
  */
 export function OverlayScrollbar({
   getArea,
   edge,
+  lane,
 }: {
   /** The positioned element holding the scrollers; the thumb rests in it. */
   getArea: () => HTMLElement | null;
   edge: "left" | "right";
+  lane: ScrollLane;
 }) {
   const track = useRef<HTMLDivElement>(null);
   const thumb = useRef<HTMLDivElement>(null);
@@ -56,7 +72,7 @@ export function OverlayScrollbar({
 
     /** Places the track over the active list and the thumb in it. */
     const place = () => {
-      if (!active?.isConnected || !scrolls(active)) {
+      if (!active?.isConnected || !scrolls(active, lane)) {
         bar.dataset.shown = "false";
         return false;
       }
@@ -88,11 +104,15 @@ export function OverlayScrollbar({
     };
     // The list the thumb stands for, and what it holds, as they change
     // size (a section opening, rows arriving) while the thumb shows.
-    const resize = new ResizeObserver(() => {
-      if (bar.dataset.shown === "true") place();
-    });
-    resize.observe(box);
+    const resize =
+      typeof ResizeObserver === "undefined"
+        ? undefined
+        : new ResizeObserver(() => {
+            if (bar.dataset.shown === "true") place();
+          });
+    resize?.observe(box);
     const follow = (list: HTMLElement) => {
+      if (!resize) return;
       resize.disconnect();
       resize.observe(box);
       resize.observe(list);
@@ -111,21 +131,39 @@ export function OverlayScrollbar({
         place();
         return;
       }
+      // A list holding the shown one scrolled (the panel, under a
+      // section's list): the track follows its list.
+      if (
+        active &&
+        bar.dataset.shown === "true" &&
+        event.target instanceof Node &&
+        event.target !== active &&
+        event.target.contains(active)
+      ) {
+        place();
+        return;
+      }
       if (
         event.target instanceof HTMLElement &&
         box.contains(event.target) &&
-        scrolls(event.target)
+        scrolls(event.target, lane)
       )
         show(event.target);
     };
-    // The lists that can scroll, read once as the pointer reaches the edge
-    // and kept while it stays there.
+    // The lane's lists that can scroll, read once as the pointer reaches
+    // the edge and kept while it stays there.
     let lists: HTMLElement[] | null = null;
-    /** The innermost list beside height `y`, or none. */
+    /** The innermost of the lane's lists beside height `y`, or none. */
     const listAt = (y: number) => {
-      lists ??= [box, ...box.querySelectorAll("*")].filter(
+      lists ??= [
+        ...box.querySelectorAll(
+          lane === "panel"
+            ? ".sidebar-tab-panel"
+            : "[data-sidebar-scrollbar], [data-sidebar-scrollbar] *",
+        ),
+      ].filter(
         (element): element is HTMLElement =>
-          scrolls(element) && element.checkVisibility(),
+          scrolls(element, lane) && element.checkVisibility(),
       );
       let found: HTMLElement | null = null;
       for (const list of lists) {
@@ -209,9 +247,9 @@ export function OverlayScrollbar({
     return () => {
       listen.abort();
       window.clearTimeout(idle);
-      resize.disconnect();
+      resize?.disconnect();
     };
-  }, [edge]);
+  }, [edge, lane]);
 
   return (
     <div
@@ -219,6 +257,7 @@ export function OverlayScrollbar({
       aria-hidden="true"
       className="overlay-scrollbar"
       data-edge={edge}
+      data-lane={lane}
       data-shown="false"
     >
       <div ref={thumb} className="overlay-scrollbar-thumb" />

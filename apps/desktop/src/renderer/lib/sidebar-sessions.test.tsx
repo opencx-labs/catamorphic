@@ -91,3 +91,43 @@ it("reads the lists again when they are invalidated, not when one chat's snapsho
     client.clear();
   }
 });
+
+it("catches up once on what a hidden window missed, and not at all on focus", async () => {
+  const client = new QueryClient();
+  const listener = vi.fn();
+  let hidden = false;
+  const visibility = vi
+    .spyOn(document, "hidden", "get")
+    .mockImplementation(() => hidden);
+  const stop = subscribeSidebarSessions({
+    client,
+    projectId: "project",
+    listener,
+  });
+  const hint = () => {
+    for (const notify of mocks.hints) notify();
+  };
+  try {
+    // Shown again with nothing missed, or only focused: nothing to read.
+    document.dispatchEvent(new Event("visibilitychange"));
+    window.dispatchEvent(new Event("focus"));
+    expect(listener).not.toHaveBeenCalled();
+    // A hint while hidden is dropped and remembered.
+    hidden = true;
+    hint();
+    hint();
+    expect(listener).not.toHaveBeenCalled();
+    hidden = false;
+    document.dispatchEvent(new Event("visibilitychange"));
+    window.dispatchEvent(new Event("focus"));
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(listener).toHaveBeenCalledWith("loaded", false);
+    // Caught up: showing again reads nothing more.
+    document.dispatchEvent(new Event("visibilitychange"));
+    expect(listener).toHaveBeenCalledTimes(1);
+  } finally {
+    stop();
+    visibility.mockRestore();
+    client.clear();
+  }
+});

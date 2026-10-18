@@ -4,6 +4,7 @@ import {
 } from "@catamorphic/agent-protocol";
 import { describe, expect, it } from "vitest";
 import {
+  handoff,
   notice,
   question,
   reply,
@@ -45,6 +46,28 @@ describe("sessionTimeline", () => {
           : entry.kind,
       ),
     ).toEqual(["input", "Reading first<c1>", "Done<c2>"]);
+  });
+
+  it("shows a turn's catch-up once, however many of its attempts began with one", () => {
+    const state = sessionStateFromSnapshot(
+      snapshot({
+        sequence: 10,
+        turns: [turn("t2", 2)],
+        items: [
+          userMessage("t2:input", 1, "t2", "Tests finished"),
+          handoff("h1", 2, "t2", { from: 1, to: 1 }),
+          handoff("h2", 3, "t2", { from: 1, to: 1 }),
+          handoff("h3", 4, "t2", { from: 1, to: 1 }),
+          reply("a1", 5, "t2", "All green"),
+        ],
+      }),
+    );
+    const [only] = sessionTimeline(state);
+    expect(
+      only?.entries.map((entry) =>
+        entry.kind === "handoff" ? `handoff:${entry.item.id}` : entry.kind,
+      ),
+    ).toEqual(["input", "handoff:h1", "reply"]);
   });
 
   it("puts a turn's input first even when it was queued during the turn before", () => {

@@ -218,6 +218,24 @@ export function notice(
   };
 }
 
+/** What an attempt's thread was told it missed (ADR 0198). */
+export function handoff(
+  id: string,
+  position: number,
+  turnId: string,
+  covered: { from: number; to: number },
+): Item {
+  return {
+    ...common(id, position, turnId),
+    kind: "context_handoff",
+    strategy: "delta",
+    fromProviderThreadIds: [],
+    toProviderThreadId: "thread",
+    coveredTurnOrdinals: covered,
+    text: "While you were away from this conversation, it continued.",
+  };
+}
+
 export function question(
   id: string,
   overrides: Partial<RuntimeRequest> = {},

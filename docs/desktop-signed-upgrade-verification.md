@@ -1,7 +1,8 @@
 # Signed desktop upgrade verification
 
-The automated suite tests update state, explicit consent, preparation timeouts,
-late native callbacks, active-work checks, and shutdown failure paths. It does
+The automated suite tests update state, explicit consent, a download remembered
+across launches, preparation timeouts, late native callbacks, handing working
+agents back at a restart (ADR 0246), and shutdown failure paths. It does
 not prove that macOS installs a signed release and reopens the user's workspace.
 
 ## Remaining release check
@@ -16,13 +17,17 @@ regular account's `/Applications/Catamorphic.app` or its existing database.
 2. Create and select a local project. Create two chats, open a Markdown document,
    and arrange browser/editor tabs and the window. Record the selected project,
    chat titles/transcripts, tabs, window bounds, app version, and data directory.
-3. Run an agent or foreground terminal. Let the app find alpha.3 automatically.
-   Confirm detection alone does not download or restart. Explicitly download it.
-4. Confirm Restart to update explains why it is unavailable during active work.
-   Finish that work, click Restart to update, and let the signed update complete.
+3. Let the app find alpha.3 automatically. Confirm detection alone does not
+   download or restart. Explicitly download it, then quit and reopen Work:
+   the alert offers Restart to update, not Download update.
+4. Start a long agent turn and a foreground terminal command. Confirm Restart
+   to update stays enabled and says working agents pick up where they left off.
+   Click it and let the signed update complete.
 5. Verify the reopened process runs alpha.3 from the isolated installation. Verify
-   the selected project, chat content, tabs, and window state against the record.
-   Quit and reopen once more; verify the same data and no startup errors.
+   the selected project, chat content, tabs, and window state against the record,
+   that the agent's turn ended interrupted and the agent continued it, and that
+   the terminal command ended. Quit and reopen once more; verify the same data
+   and no startup errors.
 6. Repeat with a remote-linked project when an isolated server is available.
    Verify the connection and selected project survive and remote sessions remain
    accessible. Do not substitute a personal server or copy credentialed configs.

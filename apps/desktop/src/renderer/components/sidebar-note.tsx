@@ -7,11 +7,16 @@ import {
   localEditorPath,
   useLocalProjectFiles,
 } from "../lib/local-project-files.js";
+import { fadeEdges } from "./catamorphic/edge-fade.js";
 import { OpenResourceButton } from "./open-resource-button.js";
 import {
   useSidebarContent,
   useSidebarRefresh,
 } from "./sidebar-contribution.js";
+
+/** Stable, so a render does not tear the fade down and build it again. */
+const fadeNote = (scroller: HTMLDivElement | null) =>
+  scroller ? fadeEdges(scroller) : undefined;
 
 /** The note is an existing project file. Personal pinning creates no new document model. */
 export function SidebarNote({
@@ -38,6 +43,8 @@ export function SidebarNote({
         filePath: await localEditorPath(projectId, file),
       }),
     enabled: Boolean(file) && visible,
+    // A note edited outside Work shows once its window is back.
+    refetchOnWindowFocus: true,
   });
   useSidebarContent({
     state:
@@ -131,7 +138,12 @@ export function SidebarNote({
           ) : note.isLoading ? (
             <p className="text-fg-faint">Loading note…</p>
           ) : (
-            <div className="sidebar-note max-h-96 overflow-y-auto break-words">
+            // A long note scrolls in place and fades the edge it
+            // continues past, as every sidebar list does (ADR 0237).
+            <div
+              ref={fadeNote}
+              className="sidebar-note cat-edge-fade max-h-96 overflow-y-auto break-words"
+            >
               <ReactMarkdown
                 components={{
                   a: ({ children }) => <span>{children}</span>,

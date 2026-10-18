@@ -8900,6 +8900,89 @@ export interface paths {
         };
         trace?: never;
     };
+    "/api/projects/{projectId}/agent/sessions/{sessionId}/title": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    projectId: string;
+                    sessionId: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        title: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Default Response */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @enum {boolean} */
+                            ok: true;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                            /** @enum {string} */
+                            code: "session_closed" | "authority_required" | "handoff_pending" | "imported";
+                            authorityRevision?: number;
+                        };
+                    };
+                };
+                /** @description Default Response */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        trace?: never;
+    };
     "/api/projects/{projectId}/agent/sessions/{sessionId}/metadata": {
         parameters: {
             query?: never;
@@ -17442,7 +17525,6 @@ export interface components {
                     }[];
                 }[];
                 answers: string[];
-                attachments?: components["schemas"]["ProtocolAttachmentInput"][][];
             };
         } | {
             /** @enum {string} */
@@ -17640,7 +17722,6 @@ export interface components {
                     }[];
                 }[];
                 answers: string[];
-                attachments?: components["schemas"]["ProtocolAttachmentInput"][][];
             };
         } | {
             id: string;
@@ -18318,7 +18399,6 @@ export interface components {
                     }[];
                 }[];
                 answers: string[];
-                attachments?: components["schemas"]["ProtocolAttachment"][][];
             };
         } | {
             /** @enum {string} */
@@ -18516,7 +18596,6 @@ export interface components {
                     }[];
                 }[];
                 answers: string[];
-                attachments?: components["schemas"]["ProtocolAttachment"][][];
             };
         } | {
             id: string;
