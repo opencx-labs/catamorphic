@@ -12,72 +12,77 @@ binding. That chat's sandbox also runs the pull request's code: its install
 scripts, tests, and services. With harnesses that run in the sandbox (Claude
 Code, Codex, ACP agents), the agent runner and the session's grants live
 there too (ADR 0175), so the change under review can call the gateway as the
-chat and write whatever the binding allows, or forge the transcript. Nothing
-signed inside that sandbox can be trusted, so the fix is placement: the
-sandbox must hold no GitHub write capability at all.
+chat, push through its Git route, or forge the transcript. Nothing signed in
+that sandbox can be trusted, so the fix is placement: the sandbox holds no
+GitHub write capability at all.
 
 ## Decision
 
-**The review chat never writes to GitHub.** Its binding keeps reads (`get`,
-`pull_request_files`, `review_threads`, `git:read`) and, when fix branches
-are wanted, `git:write` limited to `work/*`. It ends every review turn with
-one fenced `work-review` JSON block: a verdict (`COMMENT` or
-`REQUEST_CHANGES`, never an approval), a score, a summary, the check's
-summary, inline comments, threads to resolve, an answer to an `@work`
-question, and the commit it reviewed. The block is a report, untrusted data.
+**The review chat only reads.** Its binding keeps `get`,
+`pull_request_files`, `review_threads`, and `git:read`; the reviewer's
+sandboxing is `contained`, so no push, proposal, or publish leaves it. There
+is no `git:write`: the pull request's code could push with the chat's grant,
+a fork's commits into a branch of the base repository, and pushes made with
+the App's token run that repository's `on: push` workflows with its secrets.
+Fix branches are out of the recipe; a team that wants them gives them to a
+separate chat that never runs the pull request's code. The chat ends every
+turn with one fenced `work-review` JSON block (verdict `COMMENT` or
+`REQUEST_CHANGES`, score, summaries, inline comments, threads to resolve, an
+answer, the commit reviewed): a report, untrusted data.
 
-**A workflow outside the sandbox posts it.** `postReviews` is project code
-in the recipe, bound to `session.turn-changed` (completed and failed) for
-the review chats' key prefix, enabled in a workflow-only `github-poster`
-Environment whose `github` binding holds the typed write actions. It reads
-the turn's reply with `history({ through })`, validates the block against a
-strict schema with size caps, and takes the repository and number from the
-chat's key, never from the block. A block for any commit other than the one
-the chat stands on (`inspect().workspace.commit`) is dropped. It posts
-inline comments only on lines the diff has, keeps a summary between markers
-in the description, reports the check run (neutral for a failed turn or an
-invalid report), dismisses its own earlier change requests once nothing
-blocks, and resolves the threads the block names that the App opened. Each
-step returns one call and carries the turn to the next with `{ state }`
-(ADR 0260). Each GitHub write is its own step's call and carries a
-`turn=<turnId>` stamp (a check run's external id), so a rerun of the turn
-finds what it already posted.
+**A workflow outside the sandbox posts it.** `postReviews`, project code in
+the recipe, runs on `session.turn-changed` in a workflow-only `github-poster`
+Environment. It posts only for the reviewer's project chat in `review` that
+`reviewPullRequests` started, keyed exactly `pr-<owner>/<repo>-<number>`;
+the repository and number come from that key. It validates the block with
+size caps, defuses mentions and HTML comments in its text, and drops a
+report for any commit but the one the chat stands on. It posts inline
+comments only on diff lines, adds no review for a turn that only answers a
+question, keeps a summary between markers in the description, resolves the
+App's own threads, and answers the question. Each step returns one call,
+carries the turn with `{ state }` (ADR 0260), and retries; each write
+passes the turn's stamp, which the action checks, so neither a retry nor a
+rerun posts twice.
+
+**A commit's verdict only holds or tightens.** The "Work review" check run
+is `failure` for requested changes, `success` when nothing blocks, and
+`action_required` (never passing) when no usable review came. On one
+commit a failure stands until the next push, a success gives way only to a
+failure, and a turn without a review marks a commit only while none of the
+App's runs has; runs other apps name alike do not count. The App's earlier
+change requests are dismissed once a later commit passes.
+
+**The review is advice, not a merge gate.** The pull request's code runs
+where the review is written, so it can sway the verdict, the check, and the
+dismissals on its next commit. Branch protection should require a person's
+approval, and a required check should name the App as its source.
 
 **Typed actions, scoped to their own items.** The GitHub provider gains
-`review_threads`, `resolve_review_thread`, `update_pull_request`,
-`list_reviews`, `dismiss_review`, `reply_to_review_comment`,
-`update_issue_comment`, and `delete_issue_comment`. Each mints a token
-narrowed to the repository and the one permission it needs. An action that
-changes or removes an existing review, thread, or comment refuses one the
-connection did not write: the App's bot (`<slug>[bot]`), or the connected
-person for a member connection. Resolving first checks through GraphQL that
-the thread belongs to the named pull request and that the App opened it.
-Resolving and dismissing take up to twenty items, every one checked before
-any changes, and skip what is already resolved or dismissed; a thread's
-reply rides on its resolve and is posted only if the thread does not already
-end with it. So the poster needs no loop, and a retry repeats nothing.
-GraphQL's address follows the REST base (`/api/graphql` on Enterprise
-Server).
+`review_threads`, `check_runs`, `resolve_review_thread`,
+`update_pull_request`, `list_reviews`, `dismiss_review`,
+`reply_to_review_comment`, `update_issue_comment`, and
+`delete_issue_comment`, and a `stamp` on `create_review`,
+`create_check_run`, `issue_comment`, and replies. Each mints a token for the
+repository and the one permission it needs (a conversation comment reads
+whether its number is a pull request or an issue). An action that changes
+or removes an item refuses one the connection did not write: the App's bot,
+or the connected person, whose own full token a member connection uses.
+Resolving checks through GraphQL that the thread is the pull request's and
+the App's; resolving (20) and dismissing (100) take lists, each item checked
+before any changes. A REST read GitHub fails with a server error throws, so
+its caller retries. GraphQL's address follows the REST base.
 
-Considered:
-
-- **Raw REST write verbs for the poster.** A capability is a verb, so
-  `patch` and `delete` reach everything the App may do under
-  `/repos/{owner}/{name}`: anyone's comments, the pull request's base,
-  labels, releases. A forged id or a bug in the poster would touch people's
-  work. Path-scoped REST capabilities would be a new binding model.
-- **GraphQL passthrough.** A query names any node the installation reaches,
-  so its token cannot be narrowed by reading the request, and guards could
-  no longer see what an action does (ADR 0162).
-- **A signed result from the chat.** Whatever signs it runs in the sandbox.
+Considered: raw REST write verbs for the poster (a verb reaches everything
+the App may do in the repository, anyone's comments included), GraphQL
+passthrough (no narrowing, and guards cannot see what it does, ADR 0162),
+and a signed result from the chat (whatever signs it runs in the sandbox).
 
 ## Consequences
 
-The worst a hostile pull request can do is report something misleading
-about itself, which the poster bounds: it cannot approve, cannot reach
-another pull request, cannot change anyone else's comments, and holds no
-GitHub write access. Reviews reach GitHub a few seconds after the turn ends. The App
-needs Issues: write to edit or delete its conversation comments, beside
-Pull requests: write and Checks: write. Reading the description and writing
-it back can lose an edit made in between; the summary lives between markers
-so the rest of the description is kept.
+A hostile pull request can mislead the review about itself, which a
+person's approval catches; it cannot approve, push, reach another pull
+request, or touch anyone else's comments. The App needs Pull requests:
+write, Checks: write, and Contents: read; Issues: write only for editing or
+deleting conversation comments, which the poster does not do. Reading the
+description and writing it back can lose an edit made in between; the
+summary lives between markers so the rest is kept.

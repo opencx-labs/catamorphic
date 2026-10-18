@@ -21,10 +21,18 @@ What runs where:
   project) runs each pull request's chat in the `review` Environment: its own
   sandbox from the project's image, with Docker inside it, checked out at the
   pull request's head. It holds no credential; Git and the agent's tools go
-  through the gateway with the session's grant. Its `github` binding only
-  reads (and pushes `work/*` branches), so nothing on a review machine can
-  write to GitHub: the pull request's own code runs there, and whatever it
+  through the gateway with the session's grant. The pull request's own code
+  runs there and can use that grant, so the chat's `github` binding only
+  reads (no `git:write`) and the reviewer's sandboxing is `contained`:
+  nothing on a review machine can write to GitHub, and whatever the code
   forges in the chat is only a report the poster validates.
+
+The review is advice, not a merge gate. The code under review runs where
+the review is written, so it can sway the verdict, the "Work review" check,
+and the dismissal of earlier change requests on its next commit. Protect
+the base branch with a person's approval (branch protection or rulesets),
+and if you also require the "Work review" check, pick the App as its
+expected source so a run another workflow names alike does not count.
 
 ## 1. Connect GitHub
 
@@ -35,13 +43,16 @@ on the repository, and attach the repository as the project
 (`POST /_work/operator/projects` with `"repository": "acme/web"`). The App
 needs, and the manifest requests:
 
-- **Pull requests: write**: reviews and inline comments, replies, resolving
-  threads, dismissing its own change requests, the description's summary.
+- **Pull requests: write**: reviews and inline comments, replies and
+  answers in the conversation, resolving threads, dismissing its own change
+  requests, the description's summary.
 - **Checks: write**: the "Work review" check run.
-- **Issues: write**: editing and deleting its own conversation comments.
 - **Contents: read**: fetching the change. Reviews need no more; the
-  manifest asks for write, which pushes of `work/*` fix branches and the
-  project's own sync use.
+  manifest asks for write, which the project's own sync uses.
+
+The manifest also asks for Issues: write. Reviews need it only if you add
+automations that edit or delete the App's conversation comments
+(`update_issue_comment`, `delete_issue_comment`); the poster does neither.
 
 It subscribes to pull request, pull request review comment, and issue
 comment events.
@@ -116,7 +127,11 @@ Ask an agent in the project to add the review automation from the
   egress, `idleReleaseMinutes`, `approvals.waitMinutes`, and the read-only
   `github`, `prod`, and `slack` bindings) and the `github-poster` Environment
   (workflows only; the `github` binding with the poster's typed write
-  actions) merged beside the existing `default`.
+  actions) merged beside the existing `default`. Fix branches are left out:
+  `git:write` in `review` would let the pull request's code push with the
+  chat's grant, and App pushes run the base repository's `on: push`
+  workflows with its secrets. A team that wants fixes pushed gives that to a
+  separate chat that never runs the pull request's code.
 - `.work/images/review.Dockerfile`: Git, Node, Bun, and Docker on
   `docker:dind`; add the repository's toolchains.
 - `.work/triggers/github.ts`: the GitHub trigger library.
@@ -125,8 +140,9 @@ Ask an agent in the project to add the review automation from the
 - `.work/workflows/src/reviews.ts`: `reviewPullRequests`,
   `answerReviewComments`, `closePullRequestChats`, and `postReviews`.
 
-Replace `acme/web` in each trigger's `where` with the project's repository,
-so events from the App's other repositories start nothing. Map GitHub logins
+Replace `acme/web` in each trigger's `where`, and in `REVIEWED_REPOSITORY`,
+with the project's repository, so events from the App's other repositories
+start nothing. Map GitHub logins
 to members in `GITHUB_MEMBERS` (they approve the chat's escalations) or
 commit a `reviewers` role. Check it with the project MCP `program_check`
 tool (`bun run --cwd .work check` needs the `@catamorphic/*` packages, which
@@ -151,10 +167,11 @@ a manifest already uses.
    `<!-- work-review:start -->` and `<!-- work-review:end -->` in the
    description.
 2. Push to the branch: the same chat moves to the new head; the next review
-   resolves the threads it fixed and, once nothing blocks, dismisses the
-   App's earlier change requests.
+   resolves the threads it fixed and, once the new commit passes, dismisses
+   the App's change requests on earlier commits. A commit's check only holds
+   or tightens: a failure stands until the next push.
 3. Comment `@work is this migration safe on production?`: the answer arrives
-   as a reply.
+   as a reply, with no new review when nothing else changed.
 4. Merge or close it: the chat closes, its sandbox and containers are gone,
    and its session branch and grants are deleted. The transcript stays.
 5. The connection audit lists each fetch, query, and GitHub read with its
@@ -166,5 +183,6 @@ differs; a draft pull request starts no run until it is ready for review; a
 chat that never starts a turn usually has no review machine available to the
 project (check the chat's placement and `GET /_work/operator/machines`). A
 review that never reaches GitHub shows in `postReviews`' runs: a turn whose
-reply has no valid `work-review` block, or one for a commit the chat no
-longer stands on, posts nothing but a neutral check run saying so.
+reply has no valid `work-review` block marks the commit `action_required`
+with the reason (when no review marked it yet), and a report for a commit
+the chat no longer stands on posts nothing at all.
