@@ -94,6 +94,16 @@ export interface GitBridge {
   ): Promise<{ url: string; number: number; branch: string }>;
 }
 
+/** How a message reaches another chat's agent (ADR 0240, ADR 0250). */
+const SESSION_MESSAGE_MODES = [
+  "steer",
+  "message_only",
+  "queue",
+  "interrupt",
+] as const;
+export type SessionMessageMode = (typeof SESSION_MESSAGE_MODES)[number];
+const sessionMessageMode = z.enum(SESSION_MESSAGE_MODES);
+
 export interface SessionCoordinationBridge {
   list(projectId: string, sessionId: string): Promise<unknown[]>;
   read(
@@ -109,7 +119,7 @@ export interface SessionCoordinationBridge {
     ownSessionId: string,
     peerSessionId: string,
     content: string,
-    mode: "message_only" | "queue" | "interrupt",
+    mode: SessionMessageMode,
   ): Promise<unknown>;
   spawn(
     projectId: string,
@@ -372,13 +382,11 @@ export function buildWorkspaceToolkit(
     {
       name: "send_project_session_message",
       description:
-        "Send a message to another session in this project. Use message_only for context that should not start work, queue to queue work, or interrupt only when the other agent must change course immediately.",
+        "Send a message to another session in this project. steer (the default) reaches the other agent at its next step while it works, or starts a turn when it is idle: use it for a question, a decision or anything it must see now. message_only is context that should not start work. queue is work for after its current turn ends, however long that is. interrupt stops what it is doing, only when it must change course at once. A message to your parent session reaches it as steer even if you choose queue.",
       parameters: {
         session_id: z.string().min(1).describe("Target session id"),
         message: z.string().min(1).describe("Message to send"),
-        delivery_mode: z
-          .enum(["message_only", "queue", "interrupt"])
-          .default("message_only"),
+        delivery_mode: sessionMessageMode.default("steer"),
       },
       execute: async (input, ctx) => {
         if (!ctx.sessionId) throw new Error("This turn has no chat session.");
@@ -390,7 +398,7 @@ export function buildWorkspaceToolkit(
           ctx.sessionId,
           String(input.session_id),
           String(input.message),
-          input.delivery_mode as "message_only" | "queue" | "interrupt",
+          sessionMessageMode.parse(input.delivery_mode ?? "steer"),
         );
       },
     },

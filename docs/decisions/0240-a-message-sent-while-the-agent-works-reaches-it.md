@@ -1,6 +1,6 @@
 # 0240 — A message sent while the agent works reaches it
 
-- **Status:** Accepted (amends [0197](0197-agent-sessions-are-an-event-log-of-turns.md) and [0217](0217-only-people-write-user-messages.md))
+- **Status:** Accepted (amends [0197](0197-agent-sessions-are-an-event-log-of-turns.md) and [0217](0217-only-people-write-user-messages.md); extended by [0250](0250-a-message-from-another-agent-reaches-a-working-agent.md): a message from another agent steers too, and a subagent's to its parent always does)
 - **Date:** 2026-10-17
 
 ## Context
