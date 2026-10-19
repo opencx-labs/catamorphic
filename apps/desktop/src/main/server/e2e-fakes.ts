@@ -1034,7 +1034,7 @@ async function* fakeScript(turn: FakeTurn): AsyncGenerator<FakeStep> {
   // A session the assistant started, asking the person
   // something through the assistant chat its brief names.
   if (prompt.includes("ask the person which pages to keep")) {
-    const assistantChat = /session_id (\S+), delivery_mode queue/.exec(
+    const assistantChat = /session_id (\S+), delivery_mode steer/.exec(
       turn.message,
     )?.[1];
     if (!assistantChat) throw new Error("The brief names no assistant chat");
@@ -1043,7 +1043,7 @@ async function* fakeScript(turn: FakeTurn): AsyncGenerator<FakeStep> {
     await turn.tool("send_project_session_message", {
       session_id: assistantChat,
       message: "Docs pages: Which pages should I keep?",
-      delivery_mode: "queue",
+      delivery_mode: "steer",
     });
     yield { type: "text", content: "I asked which pages to keep." };
     return;
@@ -1125,6 +1125,26 @@ async function* fakeScript(turn: FakeTurn): AsyncGenerator<FakeStep> {
       message: "Keep the new ones.",
     });
     yield { type: "text", content: "I passed that on." };
+    return;
+  }
+
+  // What the person saw as they started speaking (ADR 0265): the turn's
+  // context, and the picture its tool loads.
+  if (prompt.includes("what was on my screen")) {
+    const result = await turn.toolResult("screen_when_spoken", {});
+    const images = result.content.filter((part) => part.type === "image");
+    const text = result.content.find((part) => part.type === "text");
+    const facts: { in?: string } =
+      text?.type === "text" ? JSON.parse(text.text) : {};
+    yield { type: "tool_call", toolName: "screen_when_spoken", toolInput: {} };
+    yield {
+      type: "text",
+      content: `Saw ${images.length} picture in ${facts.in ?? "nothing"}${
+        turn.context.includes("As the person started saying")
+          ? ", as you began"
+          : ""
+      }.`,
+    };
     return;
   }
 

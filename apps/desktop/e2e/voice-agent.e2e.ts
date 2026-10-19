@@ -1,6 +1,11 @@
 import http from "node:http";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
+import {
+  type AppHandle,
+  focusWindow,
+  launchApp,
+  setReactValueJs,
+} from "./harness.js";
 
 /**
  * Voice (ADR 0216), end to end with scripted speech: the audio page
@@ -17,7 +22,8 @@ import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
  * until they type again. An agent can stop listening, and voice turns off
  * once its goodbye is said. The dock's microphone can leave the dock, and its
  * shortcut turns it on and off with a tap; held, it hears only while held,
- * even in a web page.
+ * even in a web page. What was on screen as the person started speaking
+ * reaches the agent's turn, and its picture loads when the agent asks.
  */
 
 const UTTERANCES = [
@@ -33,6 +39,7 @@ const UTTERANCES = [
   "that's all, stop listening",
   // Held and let go with nothing said.
   "",
+  "what was on my screen",
 ];
 /** The assistant's own tools over the person's chats. */
 const ASSISTANT_SESSION_TOOLS = [
@@ -407,6 +414,8 @@ describe("voice", () => {
       expect.arrayContaining([
         ...ASSISTANT_SESSION_TOOLS,
         "open_surface",
+        // What was on screen as the person spoke, at once (ADR 0265).
+        "screen_when_spoken",
         "stop_listening",
         "update_todo_list",
       ]),
@@ -920,5 +929,16 @@ describe("voice", () => {
       `return api.voiceStatus();`,
     );
     expect(status).toMatchObject({ error: null, pending: false });
+  }, 120_000);
+
+  it("keeps what was on screen as the person started speaking, for the agent to load", async () => {
+    // Work in front: the picture is its window, as on any machine.
+    await focusWindow(app);
+    await talk(UTTERANCES[11] ?? "", "Saw 1 picture in Work, as you began.");
+    await run(`mic().click(); return true;`);
+    await runWait(`return mic().dataset.phase === 'off';`, {
+      timeoutMs: 30_000,
+      label: "voice off again",
+    });
   }, 120_000);
 });

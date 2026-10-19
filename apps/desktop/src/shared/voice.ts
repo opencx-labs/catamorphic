@@ -296,10 +296,14 @@ export interface FakeSpeechScript {
 export type VoiceWorkerEvent =
   | { type: "ready" }
   | { type: "failed"; message: string }
-  | { type: "speech-start" }
+  /** The person started talking: the `segment`th stretch of speech. */
+  | { type: "speech-start"; segment: number }
   | { type: "speech-end" }
-  /** A transcript the person meant, never an echo of the agent. */
-  | { type: "utterance"; text: string }
+  /**
+   * A transcript the person meant, never an echo of the agent, and the
+   * stretch it was said in.
+   */
+  | { type: "utterance"; text: string; segment: number }
   /**
    * Dictation's words for one stretch of speech: while it goes on, what
    * was said so far; once it ends (`final`), what was said, empty when
@@ -338,6 +342,11 @@ export interface VoiceLevels {
   at: number;
   frameMs: number;
   levels: number[];
+  /**
+   * The clips shown before this one are not heard as scheduled: playback
+   * paused, stopped or carried on later (ADR 0265). Their bars go.
+   */
+  reset?: boolean;
 }
 
 /** Audio page → speech worker, over the transferred port. */
@@ -353,6 +362,14 @@ export type VoiceAudioDown =
   | { type: "play"; seq: number; samples: Float32Array; sampleRate: number }
   /** Drop everything queued or playing, now. */
   | { type: "flush"; seq: number }
+  /**
+   * The person is talking over the agent (ADR 0265): hold everything
+   * queued or playing where it is, and what comes after it, until resumed
+   * or flushed.
+   */
+  | { type: "pause" }
+  /** Carry on from where playback paused. */
+  | { type: "resume" }
   /** Stop capturing for good: the microphone goes off, playback goes on. */
   | { type: "close-microphone" };
 

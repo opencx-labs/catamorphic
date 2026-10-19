@@ -6,7 +6,7 @@ import {
   agentCapabilityTools,
   type ExtraToolContext,
 } from "@catamorphic/sandbox";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import type { WorkspaceBridge } from "../agent-bridge.js";
 import { workPlaybook } from "./workspace-context-agent.js";
@@ -14,6 +14,10 @@ import {
   buildWorkspaceToolkit,
   WORKSPACE_TOOL_POLICY,
 } from "./workspace-tools.js";
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 const context: ExtraToolContext = {
   projectId: "project",
@@ -116,7 +120,7 @@ describe("workspace coordination tools", () => {
     await open?.execute(target, context);
     toolkit.setVoiceControl({
       talking: (sessionId) => sessionId === "session",
-      where: () => null,
+      sight: () => null,
       stopListening: () => false,
     });
     await open?.execute(target, context);
@@ -398,6 +402,69 @@ describe("workspace coordination tools", () => {
     ).rejects.toThrow("no chat session");
   });
 
+  it("shows what was on screen as the person started saying their latest message", async () => {
+    const toolkit = buildWorkspaceToolkit({} as WorkspaceBridge);
+    const screen = toolkit.tools.find(
+      (tool) => tool.name === "screen_when_spoken",
+    );
+    expect(await screen?.execute({}, context)).toBe(
+      "The person has not said anything to this chat by voice lately.",
+    );
+    // The clock stands still: seconds_ago is exact.
+    vi.useFakeTimers({ toFake: ["Date"], now: 1_800_000_000_000 });
+    const at = Date.now() - 4_000;
+    toolkit.setVoiceControl({
+      talking: () => false,
+      sight: (sessionId) =>
+        sessionId === "session"
+          ? {
+              at,
+              said: "why is this PR not merged",
+              heardAt: Date.now(),
+              projectId: "project",
+              app: Promise.resolve(null),
+              screen: Promise.resolve(null),
+              picture: Promise.resolve({
+                toPNG: () => Buffer.from("png"),
+                getSize: () => ({ width: 1600, height: 1000 }),
+              }),
+            }
+          : {
+              at,
+              said: "fix this sentence",
+              heardAt: Date.now(),
+              projectId: null,
+              app: Promise.resolve({ app: "Mail", window: "Draft" }),
+              screen: Promise.resolve(null),
+              picture: Promise.resolve(null),
+            },
+      stopListening: () => false,
+    });
+    const seen = (await screen?.execute({}, context)) as {
+      content: { type: string; text?: string; data?: string }[];
+    };
+    expect(JSON.parse(seen.content[0]?.text ?? "{}")).toEqual({
+      said: "why is this PR not merged",
+      seconds_ago: 4,
+      in: "Work",
+    });
+    expect(seen.content[1]).toEqual({
+      type: "image",
+      mimeType: "image/png",
+      data: Buffer.from("png").toString("base64"),
+    });
+    // Out of Work with no leave to record the screen: names, no picture.
+    const elsewhere = (await screen?.execute(
+      {},
+      { ...context, sessionId: "other" },
+    )) as { content: { type: string; text?: string }[] };
+    expect(elsewhere.content).toHaveLength(1);
+    expect(JSON.parse(elsewhere.content[0]?.text ?? "{}")).toMatchObject({
+      in: "Mail: Draft",
+      picture: expect.stringContaining("record the screen"),
+    });
+  });
+
   it("stops listening only in the chat the person is talking with by voice", async () => {
     const toolkit = buildWorkspaceToolkit({} as WorkspaceBridge);
     const stopListening = toolkit.tools.find(
@@ -409,7 +476,7 @@ describe("workspace coordination tools", () => {
     const stopped: string[] = [];
     toolkit.setVoiceControl({
       talking: (sessionId) => sessionId === "session",
-      where: () => null,
+      sight: () => null,
       stopListening: (sessionId) => {
         stopped.push(sessionId);
         return sessionId === "session";

@@ -33,14 +33,17 @@ function harness(initial: VoiceChat, heardThrough?: string) {
   let current = initial;
   const spoken: string[] = [];
   const sent: string[] = [];
+  const dispatched: string[] = [];
   const calls: string[] = [];
   const busy: boolean[] = [];
   const heard: string[] = [];
   const conversation = new VoiceConversation(ref, {
     sessions: {
       get: async () => current,
-      send: async (_ref, text) => {
+      send: async (_ref, { text, dispatch }) => {
         sent.push(text);
+        dispatched.push(dispatch);
+        return { itemId: "item", turnId: "turn", mode: "steer" };
       },
       interrupt: async () => {
         calls.push("interrupt");
@@ -60,6 +63,7 @@ function harness(initial: VoiceChat, heardThrough?: string) {
     conversation,
     spoken,
     sent,
+    dispatched,
     calls,
     busy,
     heard,
@@ -186,6 +190,20 @@ describe("VoiceConversation", () => {
     voice.conversation.stop();
   });
 
+  it("reaches an agent at work at its next step, not after its turn", async () => {
+    vi.useFakeTimers();
+    const voice = harness(detail([], { busy: true }));
+    await voice.conversation.start();
+    expect(await voice.conversation.heard("what PR do you mean")).toEqual({
+      itemId: "item",
+      turnId: "turn",
+      mode: "steer",
+    });
+    expect(voice.sent).toEqual(["what PR do you mean"]);
+    expect(voice.dispatched).toEqual(["steer"]);
+    voice.conversation.stop();
+  });
+
   it("treats stop as a command: silence, and the turn interrupted", async () => {
     vi.useFakeTimers();
     const voice = harness(detail([], { busy: true }));
@@ -273,7 +291,7 @@ describe("VoiceConversation", () => {
           const seen = current;
           return new Promise((resolve) => reads.push(() => resolve(seen)));
         },
-        send: async () => {},
+        send: async () => ({ itemId: null, turnId: null, mode: null }),
         interrupt: async () => {},
       },
       speech: { speak: () => {}, cue: () => {}, stopSpeaking: () => {} },
@@ -314,7 +332,7 @@ describe("VoiceConversation", () => {
           const seen = current;
           return new Promise((resolve) => reads.push(() => resolve(seen)));
         },
-        send: async () => {},
+        send: async () => ({ itemId: null, turnId: null, mode: null }),
         interrupt: async () => {},
       },
       speech: { speak: () => {}, cue: () => {}, stopSpeaking: () => {} },

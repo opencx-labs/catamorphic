@@ -309,6 +309,15 @@ const STOPS_WAITING: ReadonlySet<RunnerCommandFrame["command"]["kind"]> =
 const STEER_RESTART_CONTINUE =
   "Your previous attempt at this turn was stopped. Carry on where you left off.";
 
+/**
+ * The turn a message steered into `turnId` runs as when that turn ends
+ * without reading it (ADR 0240): whoever sent the message knows the turn
+ * that reads it either way (ADR 0265).
+ */
+export function steeredTurnId(turnId: string, itemId: string): string {
+  return derivedId(turnId, `steer:${itemId}`);
+}
+
 /** The text a continuation turn gives the agent (ADR 0198). */
 export const CONTINUATION_PROMPT =
   "Your previous turn was interrupted because the machine running it stopped. Continue where you left off. First check what was already done (files, commands, messages) so you do not repeat anything that had side effects.";
@@ -3454,6 +3463,10 @@ export class TurnEngine {
    * after it (a person's message is never dropped), or joining the turn
    * waiting for notifications. The session row must be locked.
    */
+  /**
+   * A message steered into a turn that ended without reading it runs as a
+   * turn of its own (ADR 0240), with this id: `steeredTurnId`.
+   */
   async requeueSteers(
     trx: Transaction<DB>,
     turn: Turn,
@@ -3530,7 +3543,7 @@ export class TurnEngine {
       }
       ordinal += 1;
       const next: Turn = {
-        id: derivedId(turn.id, `steer:${itemId}`),
+        id: steeredTurnId(turn.id, itemId),
         sessionId: turn.sessionId,
         ordinal,
         status: "queued",

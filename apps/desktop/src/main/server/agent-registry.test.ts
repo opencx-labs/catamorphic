@@ -7,7 +7,11 @@ import type {
   HarnessEvent,
 } from "@catamorphic/agent-protocol/runner";
 import { NO_CAPABILITIES } from "@catamorphic/agent-protocol/runner";
-import { definitionHash, validateAgentDefinition } from "@catamorphic/core";
+import {
+  definitionHash,
+  steeredTurnId,
+  validateAgentDefinition,
+} from "@catamorphic/core";
 import { PROJECT_AGENTS_DIR } from "@catamorphic/workflow/project-layout";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -451,5 +455,205 @@ describe("a sign-in that can still refresh (ADR 0228)", () => {
     } finally {
       fs.rmSync(logsDir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("the assistant sees where the person is (ADR 0265)", () => {
+  const assistantOf = () => {
+    const asked: string[] = [];
+    const registry = registryWith(claudeAgent, {
+      workspaceBridge: {
+        overview: async (projectId: string) => {
+          asked.push(projectId);
+          return {
+            tabs: [
+              {
+                key: `browser:${projectId}`,
+                kind: "browser",
+                active: true,
+                title: `${projectId} pull request`,
+              },
+            ],
+          };
+        },
+        glanceBrowser: async () => ({}),
+        backgroundCommands: () => [],
+      },
+      projectName: async (projectId: string) => projectId,
+      projectRootPath: (projectId: string) => `/work/${projectId}`,
+    });
+    const { harness } = hostOf(registry, "work-assistant:claude");
+    const context = async (turnId = "turn") =>
+      (
+        (await harness.context?.({
+          projectId: "opencx",
+          sessionId: "assistant",
+          turnId,
+        })) ?? []
+      )
+        .map((fragment) => fragment.text)
+        .join("\n");
+    return { registry, asked, context };
+  };
+
+  it("names the project in front of the person's window, and shows that window", async () => {
+    const { registry, asked, context } = assistantOf();
+    registry.setPersonPlace(() => "catamorphic");
+    const text = await context();
+    expect(text).toContain("Project: catamorphic\nFolder: /work/catamorphic");
+    expect(text).toContain("This chat is kept in another project");
+    expect(text).toContain("catamorphic pull request");
+    expect(text).not.toContain("opencx pull request");
+    expect(asked).toEqual(["catamorphic"]);
+  });
+
+  it("by voice, sees where they were and what was on screen as they started speaking", async () => {
+    const { registry, asked, context } = assistantOf();
+    registry.setPersonPlace(() => "website");
+    registry.setVoice({
+      talking: () => true,
+      sight: () => ({
+        at: Date.now() - 3_000,
+        said: "why is this PR not merged",
+        heardAt: Date.now(),
+        projectId: "catamorphic",
+        app: Promise.resolve(null),
+        screen: Promise.resolve(
+          'The person is looking at: web page "Pull request #267"',
+        ),
+        picture: Promise.resolve(null),
+      }),
+      stopListening: () => false,
+    });
+    const text = await context();
+    expect(text).toContain("As the person started saying their latest message");
+    expect(text).toContain("Project: catamorphic");
+    expect(text).toContain("Pull request #267");
+    expect(text).not.toContain("website");
+    expect(asked).toEqual([]);
+  });
+
+  it("sees what they saw in the turn a message talked over the end of a turn runs as", async () => {
+    const { registry, context } = assistantOf();
+    registry.setPersonPlace(() => "website");
+    const turnId = steeredTurnId("ending-turn", "spoken-item");
+    registry.setVoice({
+      talking: () => true,
+      sight: () => ({
+        at: Date.now() - 40_000,
+        said: "and the other one",
+        heardAt: Date.now() - 38_000,
+        turnIds: ["ending-turn", turnId],
+        projectId: "catamorphic",
+        app: Promise.resolve(null),
+        screen: Promise.resolve("Pull request #267"),
+        picture: Promise.resolve(null),
+      }),
+      stopListening: () => false,
+    });
+    expect(await context(turnId)).toContain("Pull request #267");
+  });
+
+  it("sees the screen as it is for a turn the spoken message did not start", async () => {
+    const { registry, asked, context } = assistantOf();
+    registry.setPersonPlace(() => "website");
+    registry.setVoice({
+      talking: () => true,
+      sight: () => ({
+        at: Date.now() - 60_000,
+        said: "why is this PR not merged",
+        heardAt: Date.now() - 58_000,
+        // That message went to an earlier turn.
+        turnIds: ["spoken-turn"],
+        projectId: "catamorphic",
+        app: Promise.resolve(null),
+        screen: Promise.resolve("Pull request #267"),
+        picture: Promise.resolve(null),
+      }),
+      stopListening: () => false,
+    });
+    const text = await context();
+    expect(text).toContain("Project: website");
+    expect(text).not.toContain("Pull request #267");
+    expect(asked).toEqual(["website"]);
+  });
+
+  it("lists no chats of its chat's project as the person's, and can load what they saw", async () => {
+    const peers = vi.fn(async () => [
+      {
+        id: "peer",
+        title: "OpenCX deploy",
+        agentId: null,
+        running: true,
+        task: null,
+        activity: null,
+        checkout: { kind: "primary" as const, branch: null },
+      },
+    ]);
+    const registry = registryWith(claudeAgent, {
+      workspaceBridge: {
+        overview: async () => ({ tabs: [] }),
+        backgroundCommands: () => [],
+      },
+      sessionPeers: peers,
+    });
+    const { harness } = hostOf(registry, "work-assistant:claude");
+    const text = (
+      (await harness.context?.({
+        projectId: "opencx",
+        sessionId: "assistant",
+        turnId: "turn",
+      })) ?? []
+    )
+      .map((fragment) => fragment.text)
+      .join("\n");
+    expect(text).not.toContain("OpenCX deploy");
+    expect((harness.hostTools ?? []).map((tool) => tool.name)).toContain(
+      "screen_when_spoken",
+    );
+    // Its base agent still sees its own project's chats.
+    const base = hostOf(registry, "claude").harness;
+    const own = (
+      (await base.context?.({
+        projectId: "opencx",
+        sessionId: "chat",
+        turnId: "turn",
+      })) ?? []
+    )
+      .map((fragment) => fragment.text)
+      .join("\n");
+    expect(own).toContain("OpenCX deploy");
+  });
+
+  it("is the only agent whose screen follows the person", async () => {
+    const registry = registryWith(claudeAgent, {
+      workspaceBridge: {
+        overview: async (projectId: string) => ({
+          tabs: [
+            {
+              key: "browser:x",
+              kind: "browser",
+              active: true,
+              title: projectId,
+            },
+          ],
+        }),
+        glanceBrowser: async () => ({}),
+        backgroundCommands: () => [],
+      },
+    });
+    registry.setPersonPlace(() => "catamorphic");
+    const { harness } = hostOf(registry, "claude");
+    const text = (
+      (await harness.context?.({
+        projectId: "opencx",
+        sessionId: "chat",
+        turnId: "turn",
+      })) ?? []
+    )
+      .map((fragment) => fragment.text)
+      .join("\n");
+    expect(text).toContain('"opencx"');
+    expect(text).not.toContain("Project:");
   });
 });

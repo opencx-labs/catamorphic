@@ -20,7 +20,13 @@
  *   got in; "missed" counts turns that ran into another.
  * - far*: the person says two things, then only the far talker talks for
  *   45 s: what reached the chat, per minute; with "-speaking", while the
- *   agent talks, and how often it was cut off.
+ *   agent talks, how often it paused for them (ADR 0265) and how often it
+ *   was cut off.
+ * - echo*: the same, with the agent's own voice coming back through the
+ *   speakers, what echo cancellation leaves of it.
+ * - talking over the agent: the person's five things, each said while the
+ *   agent talks: how soon it paused after they started, and whether it
+ *   stopped.
  * - *-noise: two minutes of a room's noise alone.
  */
 import os from "node:os";
@@ -28,6 +34,7 @@ import path from "node:path";
 import {
   HEARING,
   type Hearing,
+  resample,
   type SpeechParts,
   VoiceEngine,
 } from "../../src/main/voice/engine.js";
@@ -58,24 +65,42 @@ const BEFORE: Hearing = {
   gateDb: 0,
   gateHoldSeconds: 0,
   sureOfWords: Number.NEGATIVE_INFINITY,
+  sureOfDictation: Number.NEGATIVE_INFINITY,
   sameVoice: -1,
   nearerDb: Number.POSITIVE_INFINITY,
   bargeInDb: null,
+  // It never paused: the agent stopped once the words were heard.
+  pauseSeconds: Number.POSITIVE_INFINITY,
+  pauseDb: null,
+  pauseAlike: null,
 };
 
 const PERSON_DB = -26;
 
 interface Heard {
   at: number;
-  event: VoiceWorkerEvent;
+  event:
+    | VoiceWorkerEvent
+    /** What the engine told the audio page: the agent paused, or stopped. */
+    | { type: "pause" | "resume" | "flush" };
 }
 
-const all = utterances();
-const speakers = [...new Set(all.map((u) => u.speaker))].sort();
-const people = speakers.slice(0, 8);
-const others = speakers.slice(8, 16);
+/** The speakers, read once the data is there (`fetch` brings it). */
+let corpus: {
+  all: ReturnType<typeof utterances>;
+  people: string[];
+  others: string[];
+} | null = null;
+function speakers() {
+  if (!corpus) {
+    const all = utterances();
+    const ids = [...new Set(all.map((u) => u.speaker))].sort();
+    corpus = { all, people: ids.slice(0, 8), others: ids.slice(8, 16) };
+  }
+  return corpus;
+}
 const said = (speaker: string, min: number, max: number) =>
-  all.filter(
+  speakers().all.filter(
     (u) => u.speaker === speaker && u.seconds >= min && u.seconds <= max,
   );
 
@@ -128,26 +153,36 @@ async function listen(
   parts: SpeechParts,
   hearing: Hearing,
   stream: Float32Array,
-  options: { voiceprint?: number[] | null; speakingFrom?: number } = {},
+  options: {
+    voiceprint?: number[] | null;
+    speakingFrom?: number;
+    /** Cut off, the agent starts talking again: it always talks. */
+    talksOn?: boolean;
+  } = {},
 ): Promise<Heard[]> {
   const heard: Heard[] = [];
   let fed = 0;
   const engine = new VoiceEngine(
     parts,
     (event) => heard.push({ at: fed / RATE, event }),
-    () => {},
+    (message) => {
+      if (message.type !== "play" && message.type !== "close-microphone")
+        heard.push({ at: fed / RATE, event: { type: message.type } });
+    },
     hearing,
   );
   if (options.voiceprint) engine.setVoiceprint(options.voiceprint);
   const frame = RATE / 50;
   let ends = 0;
+  let speaking = false;
   for (let offset = 0; offset < stream.length; offset += frame) {
     // Playback never reports drained here: the agent talks on.
     if (
       options.speakingFrom !== undefined &&
-      fed / RATE >= options.speakingFrom
+      fed / RATE >= options.speakingFrom &&
+      (!speaking || (options.talksOn && !engine.audible))
     ) {
-      options.speakingFrom = undefined;
+      speaking = true;
       engine.speak("reply", "Okay.");
     }
     engine.onAudio({
@@ -186,6 +221,7 @@ async function person(
   },
 ) {
   const at = options.at ?? PERSON_DB;
+  const { people, others } = speakers();
   let errors = 0;
   let total = 0;
   let missed = 0;
@@ -242,11 +278,15 @@ async function background(
   options: {
     far: number;
     speaking?: boolean;
+    /** The agent's own voice, at `far` dB under the person, not a talker. */
+    echo?: Float32Array;
     print?: (speaker: string) => number[];
   },
 ) {
+  const { people, others } = speakers();
   let messages = 0;
   let cutOff = 0;
+  let paused = 0;
   let seconds = 0;
   for (const [index, other] of others.slice(0, 6).entries()) {
     const speaker = people[index] ?? "";
@@ -261,7 +301,12 @@ async function background(
     ]);
     const stream = concat([
       warmup,
-      far(other, 45, 300 + index, PERSON_DB - options.far),
+      options.echo
+        ? gain(
+            options.echo.subarray(0, 45 * RATE),
+            PERSON_DB - options.far - activeLevel(options.echo),
+          )
+        : far(other, 45, 300 + index, PERSON_DB - options.far),
     ]);
     mix(
       stream,
@@ -276,12 +321,89 @@ async function background(
     ).filter((h) => h.at > after + 0.3);
     messages += heard.filter((h) => h.event.type === "utterance").length;
     cutOff += heard.filter((h) => h.event.type === "barge-in").length;
+    paused += heard.filter((h) => h.event.type === "pause").length;
     seconds += 45;
   }
   return {
     "messages/min": +((60 * messages) / seconds).toFixed(2),
-    ...(options.speaking ? { "agent cut off": cutOff } : {}),
+    ...(options.speaking
+      ? { "agent paused": paused, "agent cut off": cutOff }
+      : {}),
   };
+}
+
+/**
+ * The person talking over the agent, five things each, after two to be
+ * known by: how soon the agent pauses once they start (ADR 0265), and
+ * whether their words stop it.
+ */
+async function overAgent(
+  parts: SpeechParts,
+  hearing: Hearing,
+  options: { print?: (speaker: string) => number[] },
+) {
+  const { people } = speakers();
+  const delays: number[] = [];
+  let things = 0;
+  let stopped = 0;
+  for (const [index, speaker] of people.entries()) {
+    const [first, second, ...over] = near(speaker, 7, 500 + index);
+    const gap = new Float32Array(RATE * 2);
+    const pieces: Float32Array[] = [
+      new Float32Array(RATE),
+      first?.samples ?? gap,
+      gap,
+      second?.samples ?? gap,
+      gap,
+    ];
+    const starts: number[] = [];
+    let t = pieces.reduce((sum, part) => sum + part.length, 0) / RATE;
+    const talkFrom = t;
+    for (const thing of over) {
+      starts.push(t + activeOnset(thing.samples));
+      pieces.push(thing.samples, gap);
+      t += (thing.samples.length + gap.length) / RATE;
+    }
+    const stream = concat(pieces);
+    mix(
+      stream,
+      noise("OOFFICE", stream.length / RATE, index * 41, PERSON_DB - 30),
+    );
+    const heard = await listen(parts, hearing, stream, {
+      voiceprint: options.print?.(speaker) ?? null,
+      speakingFrom: talkFrom - 0.5,
+      talksOn: true,
+    });
+    for (const [i, start] of starts.entries()) {
+      const end = starts[i + 1] ?? Number.POSITIVE_INFINITY;
+      things += 1;
+      const pause = heard.find(
+        (h) => h.event.type === "pause" && h.at >= start && h.at < end,
+      );
+      if (pause) delays.push(pause.at - start);
+      if (
+        heard.some(
+          (h) => h.event.type === "barge-in" && h.at >= start && h.at < end,
+        )
+      )
+        stopped += 1;
+    }
+  }
+  delays.sort((a, b) => a - b);
+  const median = delays[Math.floor(delays.length / 2)] ?? Number.NaN;
+  return {
+    paused: `${delays.length}/${things}`,
+    "paused after (median s)": +median.toFixed(2),
+    stopped: `${stopped}/${things}`,
+  };
+}
+
+/** Where speech in a clip starts: its first 32 ms window near its level. */
+function activeOnset(x: Float32Array): number {
+  const level = activeLevel(x);
+  for (let start = 0; start + 512 <= x.length; start += 512)
+    if (rms(x.subarray(start, start + 512)) >= level - 20) return start / RATE;
+  return 0;
 }
 
 async function roomNoise(
@@ -323,6 +445,16 @@ async function main() {
       "voice-models",
     );
   const parts = await loadSherpaSpeech(voiceModelPaths(models), "af_heart");
+  // The agent's own voice, as it would come back through the speakers.
+  const reply = await parts.synthesize(
+    "I looked at the pull request and the build. The tests pass on the main branch, but two checks failed on yours: the desktop suite timed out on the voice test, and the lint step found an unused import in the engine. I can fix the import now and run the suite again, or wait until you have read the review. Tell me which you would like, and I will keep an eye on the checks either way. ".repeat(
+      2,
+    ),
+  );
+  const echo = convolve(
+    resample(reply.samples, reply.sampleRate),
+    impulse(0.4, 0, 7),
+  );
   // The person's voice print, from what they say outside the scenarios.
   const prints = new Map<string, number[]>();
   const print = (speaker: string) => {
@@ -402,6 +534,27 @@ async function main() {
         () =>
           background(parts, hearing, { far: 6, speaking: true, ...withPrint }),
       ],
+      [
+        "echo 20 dB under, agent speaking",
+        () =>
+          background(parts, hearing, {
+            far: 20,
+            speaking: true,
+            echo,
+            ...withPrint,
+          }),
+      ],
+      [
+        "echo 12 dB under, agent speaking",
+        () =>
+          background(parts, hearing, {
+            far: 12,
+            speaking: true,
+            echo,
+            ...withPrint,
+          }),
+      ],
+      ["talking over the agent", () => overAgent(parts, hearing, withPrint)],
       ["café noise", () => roomNoise(parts, hearing, "PCAFETER", -40)],
       ["office noise", () => roomNoise(parts, hearing, "OOFFICE", -40)],
       ["bus noise", () => roomNoise(parts, hearing, "TBUS", -36)],
