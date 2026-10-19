@@ -42,6 +42,14 @@ const HetznerLabels = z
   );
 
 /**
+ * The sandbox backend a class's machines run (`--sandbox` of the install
+ * script): `auto` picks microVMs where KVM is usable, gVisor elsewhere;
+ * `container` runs gVisor anyway, for Environments whose setup has its own
+ * network (ADR 0257), which microVMs cannot give.
+ */
+const MachineSandboxSchema = z.enum(["auto", "microsandbox", "container"]);
+
+/**
  * A Hetzner Cloud server per machine (ADR 0205). The API token is
  * `WORK_HETZNER_TOKEN`, never part of the class.
  */
@@ -66,14 +74,22 @@ export const HetznerCloudClassSchema = z.strictObject({
   labels: HetznerLabels.optional(),
   /** Keep a snapshot of the disk when the machine is destroyed. */
   snapshot: z.boolean().default(false),
+  sandbox: MachineSandboxSchema.optional(),
 });
 
 /** Machines the operator enrolled into a pool with this class label. */
 export const PoolClassSchema = z.strictObject({ platform: z.literal("pool") });
 
-/** Machines the `machineProvisioner` hook creates and destroys. */
+/**
+ * Machines the `machineProvisioner` hook creates and destroys. `options`
+ * is the hook's own (an instance type, an image, a subnet): Work passes it
+ * through to every `create` unread.
+ */
 export const CustomClassSchema = z.strictObject({
   platform: z.literal("custom"),
+  options: z.record(z.string(), z.json()).optional(),
+  /** The backend `enrollment.cloudInit` installs. */
+  sandbox: MachineSandboxSchema.optional(),
 });
 
 export const MachineClassSchema = z.discriminatedUnion("platform", [

@@ -248,6 +248,8 @@ export type InputText = (item: InputItem) => string;
 
 interface LocalTurn {
   claim: ClaimedTurn;
+  /** Fail the turn with this before it starts (see {@link TurnEngine.runNext}). */
+  refusal?: string;
   abort: AbortController;
   wake: () => void;
   waiter?: Promise<void>;
@@ -440,11 +442,14 @@ export class TurnEngine {
 
   /**
    * Claim the session's next due turn (or one whose holder's lease lapsed)
-   * and run it here. False when there was none to take.
+   * and run it here. False when there was none to take. With `refusal`, a
+   * turn that has not started fails with it instead: its chat waited for a
+   * machine as long as it may (ADR 0258).
    */
   async runNext(input: {
     sessionId: string;
     localNode?: { id: string; token: string };
+    refusal?: string;
   }): Promise<boolean> {
     if (this.stopping) return false;
     const claim = await this.deps.queue.claim({
@@ -453,14 +458,15 @@ export class TurnEngine {
       ...(input.localNode ? { localNode: input.localNode } : {}),
     });
     if (!claim) return false;
-    await this.run(claim);
+    await this.run(claim, input.refusal);
     return true;
   }
 
-  private async run(claim: ClaimedTurn): Promise<void> {
+  private async run(claim: ClaimedTurn, refusal?: string): Promise<void> {
     let wake = () => {};
     const local: LocalTurn = {
       claim,
+      ...(refusal ? { refusal } : {}),
       abort: new AbortController(),
       wake: () => wake(),
       handingBack: false,
@@ -963,6 +969,7 @@ export class TurnEngine {
       .where("id", "=", turn.sessionId)
       .executeTakeFirstOrThrow();
     const refusal =
+      local.refusal ??
       harness.unavailable ??
       (bound !== null && bound !== harness.harness
         ? `This chat runs on ${bound}, and its agent now runs on ${harness.harness}. Start a new chat to use it.`

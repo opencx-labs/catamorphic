@@ -65,7 +65,13 @@ export class DevSandboxService {
     identity: Identity;
     projectId: string;
     refresh: boolean;
+    /**
+     * Put the draft's files in a new sandbox; default true. False leaves a
+     * new sandbox empty for a setup that may see its base alone (ADR 0257).
+     */
+    populate?: boolean;
   }): Promise<PreparedDevSandbox> {
+    const populate = opts.populate ?? true;
     const repo = this.deps.sessionId
       ? await this.deps.projectManager.openSession({
           tenantId: opts.identity.tenantId,
@@ -85,18 +91,26 @@ export class DevSandboxService {
         sandboxType: "dev",
         userId: opts.identity.externalUserId,
       });
-      const cloneSource = existing
-        ? undefined
-        : await this.cloneSourceIfInSync({
-            identity: opts.identity,
-            projectId: opts.projectId,
-            repo,
-          });
+      const cloneSource =
+        existing || !populate
+          ? undefined
+          : await this.cloneSourceIfInSync({
+              identity: opts.identity,
+              projectId: opts.projectId,
+              repo,
+            });
       const handle = await this.manager.ensureDevSandbox({
         projectId: opts.projectId,
         userId: opts.identity.externalUserId,
         cloneSource,
       });
+      if (!populate)
+        return {
+          id: handle.id,
+          providerId: handle.providerId,
+          projectDirectory: this.projectDirectory,
+          baseCommitSha,
+        };
       if (!cloneSource && (!existing || opts.refresh)) {
         await this.deps.provider.uploadFiles(
           handle.providerId,

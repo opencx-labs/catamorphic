@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import net from "node:net";
 import path from "node:path";
 import { volumeKey } from "@catamorphic/sandbox";
 import { afterEach, describe, expect, it } from "vitest";
@@ -13,7 +14,9 @@ import { startFakeDocker } from "./fake-docker.js";
 /** The container provider's own logic against an in-memory daemon. */
 describe("ContainerSandboxProvider without Docker", () => {
   const fakes: Array<Awaited<ReturnType<typeof startFakeDocker>>> = [];
+  const closers: Array<() => Promise<void>> = [];
   afterEach(async () => {
+    for (const close of closers.splice(0)) await close();
     for (const fake of fakes.splice(0)) await fake.close();
   });
 
@@ -154,6 +157,181 @@ describe("ContainerSandboxProvider without Docker", () => {
     ).rejects.toThrow("are nested");
   });
 
+  /**
+   * A restricted sandbox, an echo server its own policy does not admit and
+   * a wider one does, and a CONNECT through its proxy answering the status.
+   */
+  async function widening() {
+    const echo = net.createServer((socket) => socket.pipe(socket));
+    await new Promise<void>((resolve) =>
+      echo.listen(0, "127.0.0.1", () => resolve()),
+    );
+    const address = echo.address();
+    if (typeof address !== "object" || address === null)
+      throw new Error("No port");
+    closers.push(() => new Promise((resolve) => echo.close(() => resolve())));
+    const own = ["registry.test"];
+    const wide = {
+      mode: "allowlist" as const,
+      allow: [`127.0.0.1:${address.port}`],
+    };
+    const { fake, provider, stateDirectory } = await setup({
+      lookup: async () => [{ address: "192.0.2.1", family: 4 }],
+    });
+    const first = provider();
+    const sandbox = await first.createSandbox({
+      egress: { mode: "allowlist", allow: own },
+    });
+    const socketPath = path.join(
+      stateDirectory,
+      "egress",
+      sandbox.id,
+      "proxy.sock",
+    );
+    const connect = () =>
+      new Promise<string>((resolve, reject) => {
+        const socket = net.connect(socketPath);
+        let reply = "";
+        socket.on("data", (chunk) => {
+          reply += chunk.toString();
+          if (reply.includes("\r\n\r\n")) socket.destroy();
+        });
+        socket.on("close", () => resolve(reply.split("\r\n")[0] ?? ""));
+        socket.on("error", reject);
+        socket.write(`CONNECT 127.0.0.1:${address.port} HTTP/1.1\r\n\r\n`);
+      });
+    const later = (ms: number) => new Date(Date.now() + ms).toISOString();
+    return { fake, provider, first, sandbox, own, wide, connect, later };
+  }
+
+  it("widens a restricted sandbox in memory only, back to its own when narrowed or started again", async () => {
+    const { fake, provider, first, sandbox, own, wide, connect, later } =
+      await widening();
+    expect(first.capabilities).toContain("network.setup");
+    expect(await connect()).toMatch(/403/);
+    await first.widenEgress({
+      sandboxId: sandbox.id,
+      egress: wide,
+      id: "setup-1",
+      until: later(60_000),
+    });
+    expect(await connect()).toMatch(/200 Connection Established/);
+    // The container's label keeps the Environment's own policy.
+    expect(fake.containers.get(sandbox.id)?.body.Labels).toMatchObject({
+      "work.sandbox.egress": JSON.stringify({ allow: own }),
+    });
+    await first.narrowEgress({ sandboxId: sandbox.id, id: "setup-1" });
+    expect(await connect()).toMatch(/403/);
+
+    // Widened, then stopped and started: its own policy again.
+    await first.widenEgress({
+      sandboxId: sandbox.id,
+      egress: wide,
+      id: "setup-2",
+      until: later(60_000),
+    });
+    await first.stopSandbox(sandbox.id);
+    await first.startSandbox(sandbox.id);
+    expect(await connect()).toMatch(/403/);
+
+    // A worker that restarts finds the sandbox running, narrow.
+    await first.widenEgress({
+      sandboxId: sandbox.id,
+      egress: wide,
+      id: "setup-3",
+      until: later(60_000),
+    });
+    await first.stopSandbox(sandbox.id);
+    const container = fake.containers.get(sandbox.id);
+    if (container) container.running = true;
+    const restarted = provider();
+    await restarted.startSandbox(sandbox.id);
+    expect(await connect()).toMatch(/403/);
+    await restarted.destroySandbox(sandbox.id);
+  });
+
+  it("narrows by itself when a widening's time is up, with no one asking", async () => {
+    const { first, sandbox, wide, connect, later } = await widening();
+    await first.widenEgress({
+      sandboxId: sandbox.id,
+      egress: wide,
+      id: "abandoned",
+      until: later(300),
+    });
+    expect(await connect()).toMatch(/200 Connection Established/);
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    expect(await connect()).toMatch(/403/);
+    await expect(
+      first.widenEgress({
+        sandboxId: sandbox.id,
+        egress: wide,
+        id: "too-late",
+        until: new Date(Date.now() - 1).toISOString(),
+      }),
+    ).rejects.toThrow("time has passed");
+    await first.destroySandbox(sandbox.id);
+  });
+
+  it("refuses a widening that arrives after its narrowing, and one another setup holds", async () => {
+    const { first, sandbox, wide, connect, later } = await widening();
+    // The controller gave up waiting and narrowed; its widening arrives late.
+    await first.narrowEgress({ sandboxId: sandbox.id, id: "late" });
+    await expect(
+      first.widenEgress({
+        sandboxId: sandbox.id,
+        egress: wide,
+        id: "late",
+        until: later(60_000),
+      }),
+    ).rejects.toThrow("already ended");
+    expect(await connect()).toMatch(/403/);
+    await first.widenEgress({
+      sandboxId: sandbox.id,
+      egress: wide,
+      id: "current",
+      until: later(60_000),
+    });
+    await expect(
+      first.widenEgress({
+        sandboxId: sandbox.id,
+        egress: wide,
+        id: "other",
+        until: later(60_000),
+      }),
+    ).rejects.toThrow("Another setup");
+    // Narrowing is always safe: any id returns it to its own policy.
+    await first.narrowEgress({ sandboxId: sandbox.id, id: "pre-turn" });
+    expect(await connect()).toMatch(/403/);
+    await first.destroySandbox(sandbox.id);
+  });
+
+  it("refuses to widen an open sandbox, or a restricted one to open", async () => {
+    const { provider } = await setup();
+    const sandboxProvider = provider();
+    const until = new Date(Date.now() + 60_000).toISOString();
+    const open = await sandboxProvider.createSandbox({});
+    await expect(
+      sandboxProvider.widenEgress({
+        sandboxId: open.id,
+        egress: { mode: "allowlist", allow: ["example.com"] },
+        id: "a",
+        until,
+      }),
+    ).rejects.toThrow("created with open egress");
+    const restricted = await sandboxProvider.createSandbox({
+      egress: { mode: "allowlist", allow: ["example.com"] },
+    });
+    await expect(
+      sandboxProvider.widenEgress({
+        sandboxId: restricted.id,
+        egress: { mode: "open" },
+        id: "b",
+        until,
+      }),
+    ).rejects.toThrow("only to another allowlist");
+    await sandboxProvider.destroySandbox(restricted.id);
+  });
+
   it("does not offer egress policies with privileged runc containers", async () => {
     const { provider } = await setup({
       runtime: { kind: "runc", name: "runc" },
@@ -161,6 +339,7 @@ describe("ContainerSandboxProvider without Docker", () => {
     });
     const privileged = provider();
     expect(privileged.capabilities).not.toContain("network.policy");
+    expect(privileged.capabilities).not.toContain("network.setup");
     expect(privileged.capabilities).toContain("containers");
     await expect(
       privileged.createSandbox({

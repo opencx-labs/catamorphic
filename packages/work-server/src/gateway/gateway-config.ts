@@ -139,7 +139,9 @@ const GitEntry = z.strictObject({
  * 0180), beside the built-in `anthropic` and `openai`: an OpenAI-compatible
  * server such as OpenRouter or a self-hosted model, or a provider at
  * another base URL. The key is the service connection's; an entry with a
- * built-in kind replaces it.
+ * built-in kind replaces it. Changing what requests carry (the providers
+ * an aggregator may route to, the endpoints served) is code in the
+ * server's own image: `hooks.modelRequestRewrites` (ADRs 0256, 0261).
  */
 const ModelEntry = z.strictObject({
   type: z.literal("model"),

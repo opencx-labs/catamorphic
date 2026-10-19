@@ -2,6 +2,8 @@ import {
   type EnvironmentBinding,
   environmentSatisfies,
   resolveEgress,
+  resolveSetupEgress,
+  sameEgress,
 } from "@catamorphic/sandbox";
 import { describe, expect, it } from "vitest";
 import { sandboxCapabilitiesFor } from "../services/execution-environments-service.js";
@@ -77,6 +79,14 @@ describe("Environment images, containers and egress (ADR 0176)", () => {
           image: "node:22",
           network: { egress: "open" },
         },
+        install: {
+          workloads: ["agent"],
+          network: { egress: "gateway" },
+          setup: {
+            command: "pnpm install",
+            network: { allow: ["registry.npmjs.org"] },
+          },
+        },
       },
     });
     expect(
@@ -85,6 +95,35 @@ describe("Environment images, containers and egress (ADR 0176)", () => {
     expect(
       environments.open && sandboxCapabilitiesFor(environments.open),
     ).toEqual(["images"]);
+    // A setup with its own network needs a machine that switches egress
+    // (ADR 0257); microsandbox, whose policy is fixed, does not offer it.
+    expect(
+      environments.install && sandboxCapabilitiesFor(environments.install),
+    ).toEqual(["network.policy", "network.setup"]);
+  });
+
+  it("resolves the setup's network to its own hosts alone (ADR 0257)", () => {
+    // Not the gateway, nor the Environment's own allowlist.
+    expect(
+      resolveSetupEgress({
+        allow: ["Registry.npmjs.org", "registry.npmjs.org"],
+      }),
+    ).toEqual({ mode: "allowlist", allow: ["registry.npmjs.org"] });
+    expect(
+      sameEgress(
+        { mode: "allowlist", allow: ["a.com", "b.com"] },
+        { mode: "allowlist", allow: ["b.com", "a.com"] },
+      ),
+    ).toBe(true);
+    expect(
+      sameEgress(
+        { mode: "allowlist", allow: ["a.com"] },
+        { mode: "allowlist", allow: ["a.com", "b.com"] },
+      ),
+    ).toBe(false);
+    expect(sameEgress({ mode: "open" }, { mode: "allowlist", allow: [] })).toBe(
+      false,
+    );
   });
 
   it("places capability needs only on machines that provide them", () => {

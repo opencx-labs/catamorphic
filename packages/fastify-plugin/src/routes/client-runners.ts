@@ -51,6 +51,7 @@ export function registerClientRunnerRoutes(
                 "images.build",
                 "containers",
                 "network.policy",
+                "network.setup",
                 "volumes",
               ]),
             )

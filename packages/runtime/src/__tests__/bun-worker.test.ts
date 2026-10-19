@@ -119,6 +119,43 @@ process.on("message", (message) => {
     expect(onEvent).toHaveBeenCalledTimes(2);
   });
 
+  it("hands a child an input larger than one environment variable may hold", async () => {
+    const workerPath = path.join(directory, "large.mjs");
+    await fs.writeFile(
+      workerPath,
+      `
+process.on("message", (message) => {
+  if (message.type !== "init") return;
+  process.send({
+    type: "terminal",
+    terminal: { status: "completed", result: { length: message.invocation.input.state.length, inEnvironment: "CATAMORPHIC_TRIGGER_DATA" in process.env }, steps: [] },
+  });
+});
+`,
+    );
+    // Linux caps one environment string at 128 KiB; state may be 256 KiB.
+    const state = "x".repeat(256 * 1024);
+    const worker = new BunWorkerFactory({
+      workerEntryUrl: pathToFileURL(workerPath),
+    }).create({
+      invocation: resolvedInvocation({
+        invocationId: "large-input",
+        input: { state },
+        workingDirectory: directory,
+        env: {},
+      }),
+    });
+    await expect(
+      worker.execute({
+        signal: new AbortController().signal,
+        onEvent: vi.fn(),
+      }),
+    ).resolves.toMatchObject({
+      status: "completed",
+      result: { length: state.length, inEnvironment: false },
+    });
+  });
+
   it("delivers abort and terminates an active invocation child", async () => {
     const childPath = path.join(directory, "cancel.mjs");
     const workingDirectory = path.join(directory, "cancel");

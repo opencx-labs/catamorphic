@@ -22,7 +22,7 @@ retry behavior is needed, not merely to add visual nodes.
 Boundary inputs, outputs, pause state/values, and child inputs/outputs must be
 JSON-compatible. Carry ids and data across boundaries, not resources or functions.
 The output of one boundary becomes the next input; it does not implicitly merge
-with earlier inputs.
+with earlier inputs. A returned call can carry state across, below.
 
 ## Return one transition
 
@@ -30,7 +30,8 @@ with earlier inputs.
 capabilities. Return a transition directly from the callback. Do not await it,
 wrap it in a \`"use step"\` helper, invoke multiple transitions in one boundary,
 or put it inside \`Promise.all\`. Its resolved result becomes the next boundary's
-input. Ordinary step IO can still be awaited before returning a transition.
+input, or with \`{ state }\` its \`result\` beside that state. Ordinary step IO
+can still be awaited before returning a transition.
 
 - \`pause\` retains optional state and waits for explicit resumption. With a
   timeout it resolves to \`reason: "resumed" | "timed_out"\`; handle both.
@@ -96,6 +97,44 @@ export const approveOrder = defineWorkflow(({ defineBoundary }) => ({
 A pause without a timeout has no automatic timeout result. Cancellation is a
 separate authenticated terminal control, declared with \`controls: { cancel: true }\`.
 Do not invent \`context.cancel()\` or a cancelled \`PauseResult\` branch.
+
+## Carry state across a call
+
+A call's result alone reaches the next boundary. To keep what the call does
+not return (the trigger's ids, a parsed plan, an earlier read), pass
+\`{ state }\` as its second argument: the next boundary receives
+\`{ result, state }\`, typed \`Carried<Result, State>\`. Every returned call
+takes it: \`connections.*\`, \`host.*\`, \`documents.*\`, and
+\`callWorkflow(child, { input, state })\`, as \`pause\` takes \`state\`. State is
+JSON (checked at the call), at most 256 KiB, persisted with the run, and a
+retried step runs the call again with the same state; any other key in that
+argument is refused. Carry ids and the data later steps use, not whole
+responses.
+
+\`\`\`typescript
+import { type BoundaryContext, type Carried, defineWorkflow } from "@catamorphic/workflow";
+
+type Order = { orderId: string; customer: string };
+
+/** @displayname Brief an order's customer */
+export const briefOrder = defineWorkflow(({ defineBoundary }) => ({
+  steps: [
+    /** @displayname Read the customer's notes */
+    defineBoundary({
+      run: ({ input, documents }: BoundaryContext<Order>) =>
+        documents.read({ path: "store/customers/" + input.customer + "/notes.md" }, { state: input }),
+    }),
+    /** @displayname Write the brief */
+    defineBoundary({
+      run: ({ input, documents }: BoundaryContext<Carried<{ path: string; text?: string }, Order>>) =>
+        documents.write({
+          path: "store/orders/" + input.state.orderId + "/brief.md",
+          text: "Order " + input.state.orderId + "\\n\\n" + (input.result.text ?? "").slice(0, 2000),
+        }),
+    }),
+  ],
+}));
+\`\`\`
 
 ## Retry policy and diagnostics
 

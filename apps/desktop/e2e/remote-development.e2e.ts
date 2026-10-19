@@ -441,8 +441,10 @@ describe("remote development on a Work server", () => {
                   workloads: ["agent", "workflow"],
                   personalCredentials: true,
                   secrets: ["CLICKHOUSE_API_KEY", "SENTRY_DSN"],
-                  setup:
-                    'echo "project setup saw a key of $(printf %s "$CLICKHOUSE_API_KEY" | wc -c | tr -d " ")" > "$HOME/.project-setup"',
+                  setup: {
+                    command:
+                      'echo "project setup saw a key of $(printf %s "$CLICKHOUSE_API_KEY" | wc -c | tr -d " ")" > "$HOME/.project-setup"',
+                  },
                 },
               },
               defaultEnvironment: "dev",

@@ -1,6 +1,9 @@
 import {
   AuthenticationRequiredError,
   type CatamorphicCore,
+  EnvironmentAccessDeniedError,
+  EnvironmentNotFoundError,
+  EnvironmentPolicyInvalidError,
 } from "@catamorphic/core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTestApp, TEST_IDENTITY } from "./test-app.js";
@@ -68,6 +71,31 @@ describe("workflow enablement routes", () => {
       environment: "default",
       requirements: [{ alias: "mail", providerKind: "mcp-mail" }],
     });
+  });
+
+  it("answers an Environment the caller may not use, or that is not declared, as a refusal", async () => {
+    for (const [error, status] of [
+      [new EnvironmentAccessDeniedError("github-poster"), 403],
+      [new EnvironmentNotFoundError("github-poster"), 409],
+      [new EnvironmentPolicyInvalidError("bad manifest"), 409],
+    ] as const) {
+      const preview = vi.fn(async () => {
+        throw error;
+      });
+      const app = createTestApp({
+        core: {
+          workflowEnablements: { preview },
+        } as unknown as CatamorphicCore,
+      });
+      apps.push(app);
+      const response = await app.inject({
+        method: "POST",
+        url: `/api/projects/${PROJECT_ID}/workflow-enablement-preview`,
+        payload: { workflowName: "postReviews", environment: "github-poster" },
+      });
+      expect(response.statusCode).toBe(status);
+      expect(response.json()).toEqual({ error: error.message });
+    }
   });
 
   it("passes exact consent to creation and returns the pinned enablement", async () => {

@@ -16,10 +16,19 @@ describe("machine classes (ADR 0205)", () => {
           image: "ubuntu-24.04",
         },
         lab: { platform: "custom" },
+        review: {
+          platform: "custom",
+          options: { instanceType: "m7i.4xlarge", subnets: ["a", "b"] },
+        },
         office: { platform: "pool" },
       },
     });
     expect(classes.desk).toMatchObject({ snapshot: false });
+    // The provisioner's own options pass through as written (ADR 0258).
+    expect(classes.review).toEqual({
+      platform: "custom",
+      options: { instanceType: "m7i.4xlarge", subnets: ["a", "b"] },
+    });
     expect(
       machineClassesProblem({
         classes,
@@ -104,5 +113,61 @@ describe("machine rules", () => {
     expect(
       MachineRuleSchema.safeParse({ ...base, machines: { shared: 0 } }).success,
     ).toBe(false);
+  });
+
+  it("scale machines on demand for a group or for projects, keeping none once idle", () => {
+    const project = "0f6a2c55-5b0b-4d64-9b4a-6c1f5a1f4f0e";
+    expect(
+      MachineRuleSchema.parse({
+        projects: [project],
+        machines: { demand: { max: 9 } },
+        class: "review",
+      }),
+    ).toEqual({
+      projects: [project],
+      machines: {
+        demand: { max: 9, min: 0, idleMinutes: 10, enrollMinutes: 15 },
+      },
+      class: "review",
+      labels: {},
+      trusted: false,
+      retainDays: 0,
+    });
+    expect(
+      MachineRuleSchema.safeParse({
+        group: "eng@example.com",
+        machines: { demand: { max: 2, min: 1, idleMinutes: 30 } },
+        class: "review",
+      }).success,
+    ).toBe(true);
+    for (const rule of [
+      { machines: { demand: { max: 2 } }, class: "review" },
+      {
+        group: "eng@example.com",
+        projects: [project],
+        machines: { demand: { max: 2 } },
+        class: "review",
+      },
+      { projects: [project], machines: "each-member", class: "review" },
+      {
+        projects: [project],
+        machines: { demand: { max: 0 } },
+        class: "review",
+      },
+      {
+        projects: [project],
+        machines: { demand: { max: 2, idleMinutes: 0 } },
+        class: "review",
+      },
+      {
+        projects: ["not-a-project"],
+        machines: { demand: { max: 2 } },
+        class: "review",
+      },
+    ])
+      expect(
+        MachineRuleSchema.safeParse(rule).success,
+        JSON.stringify(rule),
+      ).toBe(false);
   });
 });

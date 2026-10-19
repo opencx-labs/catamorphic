@@ -1,10 +1,11 @@
-# Harnesses on the server: Claude Code and Codex
+# Harnesses on the server: Claude Code, Codex and ACP agents
 
-A project agent may be Claude Code or Codex instead of the built-in agent
-(ADR 0180). The CLI runs inside the chat's sandbox, on a worker or on the
-control plane, and reaches its model through the gateway with the chat's
-grant. The model key stays in the control plane's vault; the sandbox holds
-only the grant, which stops working when the chat closes.
+A project agent may be Claude Code, Codex, or any agent that speaks the
+Agent Client Protocol (OpenCode, Hermes) instead of the built-in agent
+(ADRs 0180, 0255). The CLI runs inside the chat's sandbox, on a worker or
+on the control plane, and reaches its model through the gateway with the
+chat's grant. The model key stays in the control plane's vault; the sandbox
+holds only the grant, which stops working when the chat closes.
 
 Members can also run Codex on **their own ChatGPT subscriptions**, signed
 in from the Work app on a machine of their own (ADRs 0199, 0213): see
@@ -32,10 +33,78 @@ another base URL, declare the kind in `WORK_GATEWAY_CONFIG` first:
 ```
 
 `api` is `anthropic` (Messages, for Claude Code) or `openai` (Responses and
-Chat Completions, for Codex). An entry with kind `anthropic` or `openai`
-replaces the built-in one. The server's own `ANTHROPIC_API_KEY` (and the
-other key variables) only serve the built-in assistant and any guards a
-custom server adds; harnesses never receive them.
+Chat Completions, for Codex and most ACP agents). An entry with kind
+`anthropic` or `openai` replaces the built-in one. The server's own
+`OPENROUTER_API_KEY` serves only its built-in assistant on the control
+plane, and the server's own `ANTHROPIC_API_KEY` (and the other key
+variables) only the built-in assistant and any guards your server adds;
+harnesses never receive them.
+
+### Pin what requests carry: your own server image
+
+The stock server forwards what the agent sends. An aggregator such as
+OpenRouter routes a request to whichever providers it names, so deciding
+the routing (only providers that keep no data, no fallback models) is
+control-plane code: build your own image from the stock server file
+([your own image](../../../packages/work-server/README.md#your-own-image),
+ADR 0261) and add a model request rewrite (ADR 0256). In the copied
+`apps/server/src/index.ts`:
+
+```ts
+import {
+  createWorkServer,
+  defineModelConnectionProvider,
+  lanAddresses,
+  type ModelRequestRewrite,
+  startMdnsResponder,
+  workServerConfigFromEnv,
+} from "@catamorphic/work-server";
+
+// OpenRouter, serving completions and the model list only.
+const openrouter = defineModelConnectionProvider({
+  kind: "openrouter",
+  displayName: "OpenRouter",
+  api: "openai",
+  baseUrl: "https://openrouter.ai/api/v1",
+  paths: ["/chat/completions", "/models"],
+});
+
+// Fallback models, routes, presets and plugins reach past `provider`.
+const DROPPED = new Set(["models", "route", "preset", "plugins"]);
+
+// Whatever an agent asks: these providers only, no data kept, no fallbacks.
+const pinProviders: ModelRequestRewrite = {
+  name: "pin-openrouter-providers",
+  kinds: ["openrouter"],
+  rewrite: ({ body }) => ({
+    ...Object.fromEntries(
+      Object.entries(body).filter(([field]) => !DROPPED.has(field)),
+    ),
+    provider: {
+      only: ["<provider slug>"],
+      allow_fallbacks: false,
+      data_collection: "deny",
+      zdr: true,
+    },
+  }),
+};
+
+// …and in the file's createWorkServer call:
+//   hooks: { connectionProviders: [openrouter], modelRequestRewrites: [pinProviders] },
+```
+
+A rewrite gets the method, the path, the headers (read-only), the parsed
+body, and who calls (tenant, project, alias, provider kind, connection,
+whose key, session), and returns the body to send or throws
+`ConnectionActionRefusedError` to refuse. Rewrites run in order, before the
+binding's model allowlist and the guards, so those judge the body that is
+sent; each is bounded by the guard timeout, and a slow or failing one
+refuses the call. A connection with a rewrite serves JSON bodies only: one
+it cannot parse, or one sent content-encoded, is refused, and every refusal
+is audited. What `provider` does not reach belongs in the same rewrite:
+OpenRouter's server tools (web search) and PDF parsing by a plugin provider
+send content elsewhere, so drop those entries too, and allow exact model
+ids in the binding.
 
 ## 2. Bind it in the Environment
 
@@ -54,11 +123,15 @@ custom server adds; harnesses never receive them.
 ```
 
 - `model.allow` lists model id patterns the alias serves; absent, any. With
-  it, every POST must name an allowed model.
-- The gateway passes the provider's API through unchanged: any method and
-  path below the base URL, the body byte for byte, and the answer streamed
-  back. It adds the stored key and drops the caller's key, cookies, and
-  hop-by-hop and forwarding headers.
+  it, every POST must name an allowed model, and every model it may fall
+  back to (OpenRouter's `models`). A `*` stops at `:` and `@`, so
+  `deepseek/*` serves no `:online` variant or `@preset`; name those to
+  allow them. Prefer exact ids.
+- The gateway passes the provider's API through: any method and path below
+  the base URL, the body byte for byte unless the connection rewrites it,
+  and the answer streamed back. It adds the stored key and drops the
+  caller's key, cookies, and hop-by-hop and forwarding headers. A rewrite
+  runs first, so `model.allow` and guards judge the body that is sent.
 - A custom server's guards review every call as connection kind `model`
   (`kinds: ["model"]`), action the method and path (`POST v1/messages`,
   `GET v1/models`), with the provider, model, and stream, never the prompt.
@@ -71,7 +144,8 @@ custom server adds; harnesses never receive them.
 ## 3. Put the CLI in the image
 
 The harness runs the `claude` or `codex` command it finds on the sandbox's
-PATH. Sandboxes need bash, git, `base64`, `tail`, and `mkfifo` besides:
+PATH, or an ACP agent's own command. Sandboxes need bash, git, `base64`,
+`tail`, and `mkfifo` besides:
 
 ```dockerfile
 # .work/images/harness.Dockerfile
@@ -79,8 +153,12 @@ FROM node:22-bookworm
 RUN apt-get update \
   && apt-get install -y --no-install-recommends git ca-certificates \
   && rm -rf /var/lib/apt/lists/*
-RUN npm install -g @anthropic-ai/claude-code @openai/codex
+RUN npm install -g @anthropic-ai/claude-code @openai/codex opencode-ai
 ```
+
+In an Environment with restricted egress, bake in whatever the agent would
+download on first use (OpenCode's provider packages, for example), since
+the sandbox reaches only the gateway.
 
 Microsandbox machines build and boot that image. A local-process worker runs
 commands on its own machine, so install the CLIs there (for the Work image,
@@ -104,8 +182,59 @@ installs Node in an image that has neither.
 }
 ```
 
-`kind` is `claude-code` or `codex`; `credentials.connection` names the
-model alias of the agent's Environment (its API must match the harness).
+`kind` is `claude-code`, `codex` or `acp`; `credentials.connection` names
+the model alias of the agent's Environment (its API must match the
+harness).
+
+An ACP agent names its command, and runs only on a model connection:
+
+```json
+{
+  "version": 1,
+  "name": "Reviewer",
+  "kind": "acp",
+  "acp": { "command": ["opencode", "acp"] },
+  "model": "deepseek/deepseek-v4.1-flash",
+  "credentials": { "source": "connection", "connection": "openrouter" },
+  "environment": { "allowed": ["review"], "preferred": ["review"] }
+}
+```
+
+The agent keeps its key for as long as it runs, while the chat's grant is
+renewed every 20 minutes, so Work serves the connection on the sandbox's
+loopback for the turn under a key of its own and reads the grant for each
+request. The endpoint closes with the turn, so anything the agent left
+running loses its model. The agent finds it three ways: ACP's
+`providers/set` when it takes providers from its client (providers that
+speak another API are turned off); the variables `WORK_MODEL_BASE_URL`,
+`WORK_MODEL_API_KEY`, `WORK_MODEL_API` and `WORK_MODEL` (the definition's
+`model`), plus `OPENAI_BASE_URL` and `OPENAI_API_KEY` (or `ANTHROPIC_*`);
+and the definition's `model` chosen through the agent's model option, when
+it offers one (a turn warns when it offers models but not that one).
+Processes the agent starts inherit the variables. For
+OpenCode, a configuration the command names points a provider at them:
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "provider": {
+    "work": {
+      "npm": "@ai-sdk/openai-compatible",
+      "options": { "baseURL": "{env:WORK_MODEL_BASE_URL}", "apiKey": "{env:WORK_MODEL_API_KEY}" },
+      "models": { "deepseek/deepseek-v4.1-flash": {} }
+    }
+  },
+  "model": "work/deepseek/deepseek-v4.1-flash"
+}
+```
+
+with the file in the image and
+`"command": ["env", "OPENCODE_CONFIG=/etc/opencode/work.json", "OPENCODE_DISABLE_PROJECT_CONFIG=1", "opencode", "acp"]`.
+In a review sandbox the repository is the pull request's, so the agent's
+settings come from the image, not the checkout. On a server
+the ACP command needs no member's approval: it runs in the sandbox, which
+is the boundary, wherever the machine isolates; on a trusted local-process
+worker it runs on that machine itself.
 `sandboxing` works as for every agent: the sandbox is the boundary, and core
 decides what leaves it (ADR 0182). The harness's own permission mode is a
 separate `harnessPermissions` field in its native values:
@@ -120,7 +249,9 @@ are in the definition's consent hash. The repository's `CLAUDE.md` and
 
 From a chat with the agent: it edits a file and runs a command; `env` in
 the sandbox shows `ANTHROPIC_BASE_URL` (or the Codex provider) pointing at
-`<WORK_PUBLIC_URL>/api/gateway/model/<alias>` and no key; the audit lists
+`<WORK_PUBLIC_URL>/api/gateway/model/<alias>`, or for an ACP agent
+`WORK_MODEL_BASE_URL` on `127.0.0.1` with only the loopback key, never the
+grant or the provider's key; the audit lists
 `connection.model` calls; after closing the chat, its grant is refused. If an
 Environment restricts egress, the gateway's host is always reachable.
 
@@ -246,6 +377,8 @@ What the machines need:
 ## Limits
 
 - Codex in a sandbox runs without Work's capability tools (documents,
-  proposals); Claude Code has them.
+  proposals); Claude Code and ACP agents have them.
+- An ACP agent runs one process per turn and cannot be steered mid-turn: a
+  message sent while it works restarts the turn with it (ADR 0241).
 - Model usage on a member's own sign-in comes from the harness's reports,
   not from gateway rows.

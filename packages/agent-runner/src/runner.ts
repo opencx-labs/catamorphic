@@ -211,7 +211,15 @@ export class AttemptRunner {
       throw new Error(
         `This runner speaks protocol ${RUNNER_PROTOCOL_VERSION}; the host sent ${String(attempt.protocol)}. Update the agent runner.`,
       );
-    const adapter = this.options.adapters[attempt.harness];
+    // A harness named per agent (`acp:<agent>`, so a chat stays with its
+    // agent) runs on its family's adapter.
+    const adapters = this.options.adapters;
+    const family = attempt.harness.split(":", 1)[0] ?? "";
+    const adapter = Object.hasOwn(adapters, attempt.harness)
+      ? adapters[attempt.harness]
+      : Object.hasOwn(adapters, family)
+        ? adapters[family]
+        : undefined;
     if (!adapter)
       throw new Error(`This runner has no '${attempt.harness}' harness`);
     this.emitFrame({

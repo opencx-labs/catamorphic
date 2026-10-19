@@ -1,7 +1,11 @@
 import { createHash } from "node:crypto";
 import type { JsonObject } from "@catamorphic/db";
 import { describe, expect, it } from "vitest";
-import { ConnectionActionDeniedError } from "../services/connection-broker.js";
+import {
+  ConnectionActionDeniedError,
+  ConnectionActionRefusedError,
+} from "../services/connection-broker.js";
+import type { ModelRequestRewrite } from "../services/connection-guards.js";
 import type { ConnectionModelEndpoint } from "../services/connection-providers.js";
 import type {
   ConnectionModelPolicy,
@@ -82,6 +86,12 @@ function harness(options: {
   runningTurn?: string | false;
   /** How long a usage or audit write takes. */
   writeDelayMs?: number;
+  /** The host's rewrites of request bodies (ADR 0256). */
+  rewrites?: ModelRequestRewrite[];
+  /** The paths the connection serves (ADR 0256). */
+  paths?: readonly string[];
+  /** How long a rewrite may take. */
+  rewriteTimeoutMs?: number;
 }) {
   const binding: ResolvedConnectionBinding = {
     connectionId: "connection-1",
@@ -102,6 +112,7 @@ function harness(options: {
       options.api === "anthropic"
         ? { "x-api-key": state.key }
         : { authorization: `Bearer ${state.key}` },
+    ...(options.paths ? { paths: options.paths } : {}),
   };
   const upstreamCalls: Array<{
     url: string;
@@ -114,11 +125,16 @@ function harness(options: {
   const open = new Set<string>();
   const audits: Array<{ outcome: string; metadata: unknown }> = [];
   const reviews: Array<{ action: string; input: JsonObject }> = [];
+  const refusals: Array<{ action: string; reason: string }> = [];
   const counts = { resolved: 0, liveGrant: 0 };
   const slow = () =>
     options.writeDelayMs ? until(options.writeDelayMs) : Promise.resolve();
   const gateway = new ModelGatewayService({
     now: () => state.now,
+    ...(options.rewrites ? { rewrites: options.rewrites } : {}),
+    ...(options.rewriteTimeoutMs
+      ? { rewriteTimeoutMs: options.rewriteTimeoutMs }
+      : {}),
     store: {
       liveGrant: async ({ token }): Promise<LiveModelGrant | undefined> => {
         counts.liveGrant++;
@@ -160,6 +176,9 @@ function harness(options: {
     },
     broker: {
       reviews: () => Boolean(options.guarded || options.deny),
+      auditModelRefusal: async ({ action, reason }) => {
+        refusals.push({ action, reason });
+      },
       modelEndpoint: async () => {
         counts.resolved++;
         if (options.fail) throw options.fail;
@@ -202,6 +221,7 @@ function harness(options: {
     recorded,
     audits,
     reviews,
+    refusals,
   };
 }
 
@@ -849,5 +869,267 @@ describe("the model gateway", () => {
     await waitFor(() => audits.length === 1);
     expect(audits).toEqual([{ outcome: "error", metadata: { status: 429 } }]);
     expect(recorded).toHaveLength(0);
+  });
+});
+
+describe("model request rewrites (ADR 0256)", () => {
+  const chat = (
+    body: string | Uint8Array,
+    headers: Record<string, string> = {},
+    method = "POST",
+    path = "chat/completions",
+  ) => ({
+    alias: "model",
+    path,
+    query: "trace=1",
+    method,
+    headers: {
+      "content-type": "application/json",
+      authorization: `Bearer ${GRANT}`,
+      ...headers,
+    },
+    body: typeof body === "string" ? encoder.encode(body) : body,
+  });
+  /** Pins OpenRouter's providers, whatever the caller asked for. */
+  const pin: ModelRequestRewrite = {
+    name: "pin providers",
+    rewrite: ({ body }) => ({
+      ...body,
+      provider: { only: ["provider-a"], allow_fallbacks: false },
+    }),
+  };
+  const sent = (call: { body: Uint8Array | undefined } | undefined) =>
+    JSON.parse(decoder.decode(call?.body ?? new Uint8Array()));
+
+  it("sends the provider the rewritten body, once, as our own JSON, and tells the rewrite who calls", async () => {
+    const seen: unknown[] = [];
+    const { gateway, upstreamCalls } = harness({
+      api: "openai",
+      rewrites: [
+        {
+          name: "record",
+          rewrite: (request) => {
+            seen.push({
+              path: request.path,
+              query: request.query,
+              header: request.headers["x-trace"],
+              context: request.context,
+            });
+            return pin.rewrite(request);
+          },
+        },
+      ],
+    });
+    // Two `provider` fields: parsers disagree on which one wins, so only
+    // the gateway's serialization may reach the provider.
+    const response = await gateway.handle(
+      chat(
+        '{"model":"m","provider":{"only":["deepinfra"]},"provider":{"order":["chutes"]}}',
+        { "content-type": "text/plain", "x-trace": "t" },
+      ),
+    );
+    expect(response.status).toBe(200);
+    await bodyText(response);
+    const text = decoder.decode(upstreamCalls[0]?.body ?? new Uint8Array());
+    expect(text.match(/"provider"/g)).toHaveLength(1);
+    expect(sent(upstreamCalls[0])).toEqual({
+      model: "m",
+      provider: { only: ["provider-a"], allow_fallbacks: false },
+    });
+    expect(upstreamCalls[0]?.headers.get("content-type")).toBe(
+      "application/json",
+    );
+    expect(seen).toEqual([
+      {
+        path: "chat/completions",
+        query: "trace=1",
+        header: "t",
+        context: {
+          tenantId: "tenant-1",
+          projectId: "project-1",
+          alias: "model",
+          providerKind: "openai",
+          connectionId: "connection-1",
+          principalKind: "project_service",
+          sessionId: "session-1",
+        },
+      },
+    ]);
+  });
+
+  it("applies the host's rewrites in order, only to their kinds", async () => {
+    const { gateway, upstreamCalls } = harness({
+      api: "openai",
+      rewrites: [
+        {
+          name: "first",
+          rewrite: ({ body }) => ({ ...body, user: "a", trail: ["first"] }),
+        },
+        {
+          name: "anthropic only",
+          kinds: ["anthropic"],
+          rewrite: ({ body }) => ({ ...body, trail: ["never"] }),
+        },
+        {
+          name: "second",
+          rewrite: ({ body }) => ({
+            ...body,
+            trail: [...(Array.isArray(body.trail) ? body.trail : []), "second"],
+            provider: { only: ["provider-a"] },
+          }),
+        },
+      ],
+    });
+    const response = await gateway.handle(chat('{"model":"m"}'));
+    await bodyText(response);
+    expect(sent(upstreamCalls[0])).toEqual({
+      model: "m",
+      user: "a",
+      trail: ["first", "second"],
+      provider: { only: ["provider-a"] },
+    });
+  });
+
+  it("judges the body it sends: the model, every fallback, and no variant a pattern does not name", async () => {
+    const { gateway, upstreamCalls, reviews, refusals } = harness({
+      api: "openai",
+      policy: { allow: ["deepseek/*"] },
+      guarded: true,
+      rewrites: [
+        {
+          name: "force model",
+          rewrite: ({ body }) => ({ ...body, model: "deepseek/v4-flash" }),
+        },
+      ],
+    });
+    const forced = await gateway.handle(chat('{"model":"openai/gpt-x"}'));
+    expect(forced.status).toBe(200);
+    await bodyText(forced);
+    expect(sent(upstreamCalls[0]).model).toBe("deepseek/v4-flash");
+    expect(reviews[0]?.input).toMatchObject({ model: "deepseek/v4-flash" });
+
+    const plain = harness({
+      api: "openai",
+      policy: { allow: ["deepseek/*"] },
+      rewrites: [pin],
+    });
+    for (const body of [
+      '{"model":"deepseek/v4-flash","models":["meta-llama/llama-5"]}',
+      '{"model":"deepseek/v4-flash:online"}',
+      '{"model":"@preset/anything"}',
+      // Two `model` fields: the one judged is the one sent.
+      '{"model":"deepseek/v4-flash","model":"openai/gpt-x"}',
+    ]) {
+      const refused = await plain.gateway.handle(chat(body));
+      expect(refused.status).toBe(403);
+      await bodyText(refused);
+    }
+    expect(plain.upstreamCalls).toHaveLength(0);
+    expect(plain.refusals).toHaveLength(4);
+    expect(refusals).toHaveLength(0);
+  });
+
+  it("refuses what it cannot rewrite rather than forwarding it unrewritten, and audits it", async () => {
+    const { gateway, upstreamCalls, refusals } = harness({
+      api: "openai",
+      rewrites: [pin],
+    });
+    for (const request of [
+      chat("not json"),
+      chat('["a","list"]'),
+      chat('{"model":"m"}', { "content-encoding": "gzip" }),
+      chat(new Uint8Array([0x7b, 0x22, 0xff, 0x22, 0x3a, 0x31, 0x7d])),
+    ]) {
+      const response = await gateway.handle(request);
+      expect(response.status).toBe(400);
+      expect(await bodyText(response)).toContain("invalid_request_error");
+    }
+    // A body on another method is reviewed too.
+    const put = await gateway.handle(chat("not json", {}, "PUT"));
+    expect(put.status).toBe(400);
+    await bodyText(put);
+    expect(upstreamCalls).toHaveLength(0);
+    expect(refusals).toHaveLength(5);
+    expect(refusals[0]).toMatchObject({ action: "POST chat/completions" });
+    // Nothing to rewrite: no body, or an empty one, passes as before.
+    const models = await gateway.handle({
+      alias: "model",
+      path: "models",
+      method: "GET",
+      headers: { authorization: `Bearer ${GRANT}` },
+    });
+    expect(models.status).toBe(200);
+    await bodyText(models);
+    const empty = await gateway.handle(chat(""));
+    expect(empty.status).toBe(200);
+    await bodyText(empty);
+    expect(upstreamCalls).toHaveLength(2);
+    expect(upstreamCalls[1]?.body).toEqual(new Uint8Array());
+  });
+
+  it("refuses a call the rewrite refuses, fails on, answers wrongly, or takes too long over", async () => {
+    const refusing = harness({
+      api: "openai",
+      rewrites: [
+        {
+          name: "refuse",
+          rewrite: () => {
+            throw new ConnectionActionRefusedError(
+              "Only pinned providers serve this",
+            );
+          },
+        },
+      ],
+    });
+    const refused = await refusing.gateway.handle(chat('{"model":"m"}'));
+    expect(refused.status).toBe(403);
+    expect(await bodyText(refused)).toContain(
+      "Only pinned providers serve this",
+    );
+    const cases: Array<[ModelRequestRewrite["rewrite"], string]> = [
+      [
+        () => {
+          throw new Error("boom");
+        },
+        "could not review this request",
+      ],
+      // @ts-expect-error: a rewrite that answers with something else
+      [() => ["not", "an", "object"], "could not review this request"],
+      [() => new Promise<never>(() => {}), "in time"],
+    ];
+    for (const [rewrite, message] of cases) {
+      const broken = harness({
+        api: "openai",
+        rewrites: [{ name: "broken", rewrite }],
+        rewriteTimeoutMs: 20,
+      });
+      const failed = await broken.gateway.handle(chat('{"model":"m"}'));
+      expect(failed.status).toBe(403);
+      expect(await bodyText(failed)).toContain(message);
+      expect(broken.upstreamCalls).toHaveLength(0);
+    }
+    expect(refusing.upstreamCalls).toHaveLength(0);
+  });
+
+  it("serves only the paths a connection names", async () => {
+    const { gateway, upstreamCalls, refusals } = harness({
+      api: "openai",
+      paths: ["/chat/completions", "/models"],
+    });
+    const preset = await gateway.handle(
+      chat('{"model":"m"}', {}, "POST", "presets/team/chat/completions"),
+    );
+    expect(preset.status).toBe(404);
+    await bodyText(preset);
+    const prefix = await gateway.handle(
+      chat('{"model":"m"}', {}, "POST", "chat/completionsx"),
+    );
+    expect(prefix.status).toBe(404);
+    await bodyText(prefix);
+    const allowed = await gateway.handle(chat('{"model":"m"}'));
+    expect(allowed.status).toBe(200);
+    await bodyText(allowed);
+    expect(upstreamCalls).toHaveLength(1);
+    expect(refusals).toHaveLength(2);
   });
 });

@@ -469,6 +469,11 @@ export class RunCoordinator {
       displayName?: string;
       input: Json;
     };
+    /**
+     * State the call carried (ADR 0260): held on the waiting step until the
+     * child ends, then handed to the next step beside the child's result.
+     */
+    state?: { value: Json };
   }): Promise<string | null> {
     return this.db.transaction().execute(async (trx) => {
       const context = await this.lockActiveAttempt({
@@ -543,7 +548,16 @@ export class RunCoordinator {
         .execute();
       await trx
         .updateTable("workflow_step_attempts")
-        .set({ status: "waiting", updated_at: now })
+        .set({
+          status: "waiting",
+          updated_at: now,
+          ...(args.state
+            ? {
+                call_state_present: true,
+                call_state: jsonColumn(args.state.value),
+              }
+            : {}),
+        })
         .where("id", "=", context.attempt.id)
         .execute();
       await trx
@@ -1156,7 +1170,12 @@ export class RunCoordinator {
       return;
     }
     const now = await databaseNow(args.trx);
-    const output = args.output ?? null;
+    const output = context.attempt.call_state_present
+      ? toJson({
+          result: args.output ?? null,
+          state: context.attempt.call_state ?? null,
+        })
+      : (args.output ?? null);
     await args.trx
       .updateTable("workflow_step_attempts")
       .set({

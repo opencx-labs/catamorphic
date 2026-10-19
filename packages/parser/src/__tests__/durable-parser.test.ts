@@ -455,6 +455,27 @@ export const triage = defineWorkflow(({ defineBoundary }) => ({
       .map((node) => node.label);
     expect(labels).toEqual(["Gmail: search threads", "Message a chat"]);
   });
+
+  it("names calls that carry state the same way (ADR 0260)", () => {
+    const graph = parseWorkflow(`
+export const triage = defineWorkflow(({ defineBoundary }) => ({
+  steps: [
+    defineBoundary({
+      run: ({ input, connections }: BoundaryContext<{ q: string }>) =>
+        connections.gmail.searchThreads({ query: input.q }, { state: input }),
+    }),
+    defineBoundary({
+      run: ({ input, host }: BoundaryContext<Carried<unknown, { q: string }>>) =>
+        host["catamorphic.sessions"].deliver({ key: input.state.q, content: "Triage" }, { state: input.state }),
+    }),
+  ],
+}));
+`);
+    const labels = graph.nodes
+      .filter((node) => node.type === "step")
+      .map((node) => node.label);
+    expect(labels).toEqual(["Gmail: search threads", "Message a chat"]);
+  });
 });
 
 describe("descriptions", () => {

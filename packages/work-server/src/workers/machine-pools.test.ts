@@ -50,6 +50,7 @@ const classes: Record<string, MachineClass> = {
     location: "fsn1",
     image: "ubuntu-24.04",
     snapshot: true,
+    sandbox: "container",
   },
   office: { platform: "pool" },
 };
@@ -330,6 +331,10 @@ describe("machine classes, pools and retention (ADR 0205)", () => {
     expect(adaServer?.user_data.startsWith("#cloud-config\n")).toBe(true);
     const code = adaServer?.user_data.match(/"--code", "(wke_[^"]+)"/)?.[1];
     expect(code).toBeDefined();
+    // The class names its backend, which the install script runs.
+    expect(adaServer?.user_data).toContain(
+      `"--code", "${code}", "--sandbox", "container"]`,
+    );
 
     // A server a lost answer already created is this machine: one server.
     await setGroups(grace.userId, [ENG]);

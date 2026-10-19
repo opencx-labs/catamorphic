@@ -223,6 +223,8 @@ export class MicrosandboxSandboxProvider implements SandboxProvider {
         prune: (args) => this.pruneVolumes(args),
         removeAll: (args) => this.removeAllVolumes(args),
       };
+    // No `network.setup` (ADR 0257): a VM's network policy is fixed when
+    // it is created.
     this.capabilities = [
       SANDBOX_CAPABILITIES.images,
       SANDBOX_CAPABILITIES.egressPolicy,

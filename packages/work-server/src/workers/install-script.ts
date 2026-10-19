@@ -32,16 +32,23 @@ export function installTarget(args: {
   };
 }
 
+/**
+ * The sandbox backend a machine the script installs runs (`--sandbox`):
+ * `auto` picks microVMs where KVM is usable and gVisor elsewhere.
+ */
+export type WorkerSandbox = "auto" | "microsandbox" | "container";
+
 /** The data directory the script uses unless told otherwise. */
 export const DEFAULT_WORKER_DATA_DIR = "/var/lib/work";
 
 /**
  * The worker install script (ADR 0205): a POSIX sh script with the control
  * plane and image baked in, holding no secret. It installs Docker where it
- * is missing; with no usable `/dev/kvm` it installs gVisor and registers
- * the `runsc` runtime with Work's arguments (ADR 0204); then it runs the
- * worker image with `WORK_SANDBOX=auto`, the Docker socket, `/dev/kvm` when
- * present, and its data directory mounted at the same path.
+ * is missing; with no usable `/dev/kvm`, or `--sandbox container`, it
+ * installs gVisor and registers the `runsc` runtime with Work's arguments
+ * (ADR 0204); then it runs the worker image with `WORK_SANDBOX` (`auto`
+ * unless `--sandbox` names a backend), the Docker socket, `/dev/kvm` when
+ * microVMs use it, and its data directory mounted at the same path.
  *
  * microsandbox runs each microVM through libkrun, which only opens
  * `/dev/kvm` and keeps the guest's network in user space: the device and
@@ -71,6 +78,7 @@ CONTROL_PLANE_URL=${shellQuote(target.controlPlaneUrl)}
 IMAGE=${shellQuote(target.image)}
 DATA_DIR=${DEFAULT_WORKER_DATA_DIR}
 NAME=work-worker
+SANDBOX=auto
 CODE=
 
 say() { printf 'work: %s\\n' "$*"; }
@@ -80,7 +88,7 @@ fail() {
 }
 usage() {
   cat <<'USAGE'
-Usage: install.sh --code <code> [--image <image>] [--data-dir <dir>] [--name <name>]
+Usage: install.sh --code <code> [--image <image>] [--data-dir <dir>] [--name <name>] [--sandbox <backend>]
 
   --code <code>      the one-time enrollment code from the Work server (required)
   --image <image>    the worker image (default: this server's release)
@@ -89,18 +97,22 @@ Usage: install.sh --code <code> [--image <image>] [--data-dir <dir>] [--name <na
                      directory, or one under /var/lib, /srv, /opt, /data or
                      /home/<user> that is empty or a worker's
   --name <name>      the worker container's name (default: work-worker)
+  --sandbox <backend> auto (default: microVMs where KVM is usable, else
+                     gVisor), microsandbox, or container (gVisor even where
+                     KVM is usable)
 USAGE
 }
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    --code | --image | --data-dir | --name)
+    --code | --image | --data-dir | --name | --sandbox)
       [ "$#" -ge 2 ] || fail "$1 needs a value"
       case "$1" in
         --code) CODE=$2 ;;
         --image) IMAGE=$2 ;;
         --data-dir) DATA_DIR=$2 ;;
         --name) NAME=$2 ;;
+        --sandbox) SANDBOX=$2 ;;
       esac
       shift 2
       ;;
@@ -108,6 +120,7 @@ while [ "$#" -gt 0 ]; do
     --image=*) IMAGE=\${1#--image=}; shift ;;
     --data-dir=*) DATA_DIR=\${1#--data-dir=}; shift ;;
     --name=*) NAME=\${1#--name=}; shift ;;
+    --sandbox=*) SANDBOX=\${1#--sandbox=}; shift ;;
     -h | --help) usage; exit 0 ;;
     *) usage >&2; fail "Unknown option: $1" ;;
   esac
@@ -153,6 +166,10 @@ data_dir_allowed "$DATA_DIR" ||
 case "$NAME" in
   [a-zA-Z0-9]*) ;;
   *) fail "--name must start with a letter or digit" ;;
+esac
+case "$SANDBOX" in
+  auto | microsandbox | container) ;;
+  *) fail "--sandbox is auto, microsandbox or container" ;;
 esac
 
 WORK_TMP=$(mktemp -d)
@@ -226,11 +243,15 @@ restart_docker() {
   fi
 }
 
-# Isolation: microVMs where KVM is usable, gVisor everywhere else.
+# Isolation: microVMs where KVM is usable, gVisor everywhere else, unless
+# --sandbox names one. gVisor runs what microVMs cannot: a sandbox whose
+# setup has its own network (ADR 0257).
 KVM=0
-if [ -c /dev/kvm ] && [ -r /dev/kvm ] && [ -w /dev/kvm ]; then
+if [ "$SANDBOX" != container ] && [ -c /dev/kvm ] && [ -r /dev/kvm ] && [ -w /dev/kvm ]; then
   KVM=1
   say "KVM is available: agents run in microVMs"
+elif [ "$SANDBOX" = microsandbox ]; then
+  fail "--sandbox microsandbox needs a /dev/kvm this script can open read-write"
 else
   if ! command -v runsc >/dev/null 2>&1; then
     command -v apt-get >/dev/null 2>&1 ||
@@ -280,14 +301,15 @@ if docker container inspect "$NAME" >/dev/null 2>&1; then
 fi
 
 # The data directory is mounted at the same path, so the Docker daemon
-# mounts what the worker writes there into its sandboxes.
-set -- --detach --name "$NAME" --restart unless-stopped \\
+# mounts what the worker writes there into its sandboxes. The image's health
+# check asks the server's HTTP port, which a worker does not open.
+set -- --detach --name "$NAME" --restart unless-stopped --no-healthcheck \\
   --volume "$DATA_DIR:$DATA_DIR" --env "WORK_DATA_DIR=$DATA_DIR" \\
   --volume /var/run/docker.sock:/var/run/docker.sock \\
   --group-add "$(stat -c %g /var/run/docker.sock)" \\
   --env "WORK_CONTROL_PLANE_URL=$CONTROL_PLANE_URL" \\
   --env "WORK_WORKER_ENROLLMENT=$CODE" \\
-  --env WORK_SANDBOX=auto
+  --env "WORK_SANDBOX=$SANDBOX"
 if [ "$KVM" = 1 ]; then
   set -- "$@" --device /dev/kvm --group-add "$(stat -c %g /dev/kvm)"
 fi
@@ -310,8 +332,18 @@ export const CLOUD_INIT_SCRIPT_PATH = "/usr/local/sbin/work-install-worker";
 export function workerCloudInit(args: {
   script: string;
   code: string;
+  /** The machine's sandbox backend, when its class names one. */
+  sandbox?: WorkerSandbox;
 }): string {
-  const command = ["sh", CLOUD_INIT_SCRIPT_PATH, "--code", args.code]
+  const command = [
+    "sh",
+    CLOUD_INIT_SCRIPT_PATH,
+    "--code",
+    args.code,
+    ...(args.sandbox && args.sandbox !== "auto"
+      ? ["--sandbox", args.sandbox]
+      : []),
+  ]
     .map((part) => JSON.stringify(part))
     .join(", ");
   return [

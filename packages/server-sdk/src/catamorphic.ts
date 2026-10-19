@@ -142,6 +142,8 @@ export interface CatamorphicHostConfig {
   connectionGuards?: CatamorphicCoreConfig["connectionGuards"];
   /** How long one guard may take before its action escalates (ADR 0183). */
   connectionGuardTimeoutMs?: CatamorphicCoreConfig["connectionGuardTimeoutMs"];
+  /** Rewrite model request bodies before the gateway's policy (ADR 0256). */
+  modelRequestRewrites?: CatamorphicCoreConfig["modelRequestRewrites"];
   /**
    * Connection aliases the host offers beside those committed in each
    * Environment of `.work/project.json` (ADR 0172).
@@ -379,6 +381,9 @@ export class Catamorphic {
         : {}),
       ...(config.connectionGuardTimeoutMs
         ? { connectionGuardTimeoutMs: config.connectionGuardTimeoutMs }
+        : {}),
+      ...(config.modelRequestRewrites
+        ? { modelRequestRewrites: config.modelRequestRewrites }
         : {}),
       ...(config.connectionBindings
         ? { connectionBindings: config.connectionBindings }

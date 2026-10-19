@@ -2,6 +2,7 @@ import {
   type BatchFailurePolicy,
   type BatchOutput,
   type BoundaryContext,
+  type Carried,
   defineBatchStep,
   defineWorkflow,
   type WorkflowDefinition,
@@ -389,3 +390,119 @@ defineWorkflow(() =>
     steps: [async () => ({ done: true })],
   }),
 );
+
+// ADR 0260: a returned call carries state to the next step beside its result.
+type Plan = { repository: string; number: number; note?: string };
+
+const carriedWorkflow = defineWorkflow(({ defineBoundary }) => ({
+  steps: [
+    defineBoundary({
+      run: ({ input, connections }: BoundaryContext<Plan>) => {
+        const get = connections.github?.get;
+        if (!get) throw new Error("No github connection");
+        return get(
+          { path: `/repos/${input.repository}/pulls/${input.number}` },
+          { state: input },
+        );
+      },
+    }),
+    defineBoundary({
+      run: ({ input, host }: BoundaryContext<Carried<unknown, Plan>>) =>
+        host["catamorphic.sessions"].history(
+          { key: `pr-${input.state.repository}-${input.state.number}` },
+          { state: { ...input.state, pull: input.result === null } },
+        ),
+    }),
+    defineBoundary({
+      run: ({
+        input,
+        callWorkflow,
+      }: BoundaryContext<
+        Carried<{ key: string | null }, Plan & { pull: boolean }>
+      >) =>
+        callWorkflow(childWorkflow, {
+          input: { orderId: input.result.key ?? "", requestId: "r" },
+          state: { number: input.state.number },
+        }),
+    }),
+    defineBoundary({
+      run: ({
+        input,
+        documents,
+      }: BoundaryContext<Carried<CompletedOrder, { number: number }>>) =>
+        documents.read(
+          { path: `store/${input.result.orderId}.md` },
+          { state: input.state },
+        ),
+    }),
+    defineBoundary({
+      run: ({
+        input,
+      }: BoundaryContext<
+        Carried<{ path: string; text?: string }, { number: number }>
+      >) => ({ number: input.state.number, text: input.result.text ?? "" }),
+    }),
+  ],
+}));
+void carriedWorkflow;
+
+// Without state, the next step receives the result alone, as before.
+defineWorkflow(({ defineBoundary }) => ({
+  steps: [
+    defineBoundary({
+      run: ({ host }: BoundaryContext<OrderInput>) =>
+        host["catamorphic.sessions"].history({ key: "k" }),
+    }),
+    defineBoundary({
+      run: ({ input }: BoundaryContext<{ key: string | null }>) => input.key,
+    }),
+  ],
+}));
+
+defineWorkflow(({ defineBoundary }) =>
+  // @ts-expect-error The next step must accept the state the call carried.
+  ({
+    steps: [
+      defineBoundary({
+        run: ({ host }: BoundaryContext<OrderInput>) =>
+          host["catamorphic.sessions"].history(
+            { key: "k" },
+            { state: { number: 1 } },
+          ),
+      }),
+      defineBoundary({
+        run: ({
+          input,
+        }: BoundaryContext<
+          Carried<{ key: string | null }, { number: string }>
+        >) => input.state.number,
+      }),
+    ],
+  }),
+);
+
+defineWorkflow(({ defineBoundary }) => ({
+  steps: [
+    // @ts-expect-error The boundary's result must be JSON-compatible too.
+    defineBoundary({
+      run: ({ host }: BoundaryContext<OrderInput>) =>
+        host["catamorphic.sessions"].history(
+          { key: "k" },
+          // @ts-expect-error Carried state must be JSON-compatible, at the call.
+          { state: { at: new Date() } },
+        ),
+    }),
+  ],
+}));
+
+// Type aliases with optional fields are JSON-compatible state.
+type Optional = { reply?: string; inReplyTo?: number };
+const optional: Optional = { reply: "x" };
+defineWorkflow(({ defineBoundary }) => ({
+  steps: [
+    defineBoundary({
+      run: ({ host }: BoundaryContext<OrderInput>) =>
+        host["catamorphic.sessions"].history({ key: "k" }, { state: optional }),
+    }),
+  ],
+}));

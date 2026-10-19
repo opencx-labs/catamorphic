@@ -16,6 +16,11 @@ export interface ModelConnectionOptions {
    * own, e.g. `https://openrouter.ai/api/v1`.
    */
   baseUrl?: string;
+  /**
+   * Path prefixes below `baseUrl` the gateway serves (`/chat/completions`),
+   * matched by whole segments; absent serves every path.
+   */
+  paths?: readonly string[];
 }
 
 const DEFAULT_BASE_URLS: Record<ModelApi, string> = {
@@ -43,6 +48,7 @@ export function defineModelConnectionProvider(
     model: {
       api: options.api,
       baseUrl,
+      ...(options.paths ? { paths: [...options.paths] } : {}),
       headers: ({ material }): Record<string, string> => {
         const key = decodeKey(material);
         return options.api === "anthropic"

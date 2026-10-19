@@ -87,8 +87,11 @@ export function parseProjectAgentId(
  *  - `claude-code` / `codex`: the CLI harnesses, host execution.
  *  - `builtin`: the embedder's built-in sandboxed agent.
  *  - `acp`: an Agent Client Protocol agent (ADR 0241). The desktop runs
- *    `acp.command` through `@catamorphic/acp`; the remote `acp.endpoint`
- *    validates but is not built yet (see TODO.md "ACP harness").
+ *    `acp.command` through `@catamorphic/acp` on the agent's own
+ *    configuration; a Work server runs it in the chat's sandbox on a
+ *    `connection` model, reached through the gateway (ADR 0255). The
+ *    remote `acp.endpoint` validates but is not built yet (see TODO.md
+ *    "ACP harness").
  *  - `e2e-fake`: the desktop e2e scripted harness. Only accepted when the
  *    host passes `allowE2eFake` (the desktop gates it on
  *    CATAMORPHIC_E2E_FAKE_AGENT=1), mirroring the pick-folder e2e seam —
@@ -128,9 +131,10 @@ export type AgentCoordinationStrategy =
  *  - `local`: the machine's existing CLI login (`claude login` /
  *    `codex login`), no credential overrides. Personal too → consent.
  *  - `connection`: a model connection the agent's Environment binds under
- *    the alias `connection` (ADR 0180). The harness runs in the session's
- *    sandbox and reaches the model through the gateway with its session
- *    grant; the key stays on the control plane. The mode for servers.
+ *    the alias `connection` (ADR 0180). The harness (Claude Code, Codex,
+ *    or an ACP agent's command, ADR 0255) runs in the session's sandbox
+ *    and reaches the model through the gateway with its session grant;
+ *    the key stays on the control plane. The mode for servers.
  *  - `personal`: on a server, the chat owner's own harness login, sent
  *    by their desktop and delivered into their own chats' sandboxes in
  *    Environments that allow personal credentials (ADR 0184).

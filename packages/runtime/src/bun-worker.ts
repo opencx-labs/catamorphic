@@ -8,7 +8,6 @@ import {
   type RuntimeWorkerEvent,
 } from "./supervisor-dispatcher.js";
 import type { RuntimeTerminalResult } from "./supervisor-protocol.js";
-import { toProtocolJson } from "./supervisor-protocol.js";
 
 export interface BunWorkerFactoryOptions {
   workerEntryUrl?: URL;
@@ -85,9 +84,9 @@ class BunInvocationWorker implements RuntimeInvocationWorker {
           CATAMORPHIC_RUN_ID: this.options.invocation.invocationId,
           CATAMORPHIC_WORKFLOW_NAME: this.options.invocation.target.exportName,
           CATAMORPHIC_WORKFLOW_FILE: this.options.invocation.target.modulePath,
-          CATAMORPHIC_TRIGGER_DATA: JSON.stringify(
-            toProtocolJson(this.options.invocation.input),
-          ),
+          // The input travels in the `init` message, never the environment:
+          // one variable holds at most 128 KiB on Linux, and a step's input
+          // carries state up to 256 KiB (ADR 0260).
         },
         serialization: "json",
         stdio: [

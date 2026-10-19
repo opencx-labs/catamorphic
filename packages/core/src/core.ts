@@ -49,7 +49,10 @@ import {
 import { ConnectionAdmissionService } from "./services/connection-admission.js";
 import { ConnectionBroker } from "./services/connection-broker.js";
 import { ConnectionCapabilityGrantsService } from "./services/connection-capability-grants.js";
-import type { ConnectionActionGuard } from "./services/connection-guards.js";
+import type {
+  ConnectionActionGuard,
+  ModelRequestRewrite,
+} from "./services/connection-guards.js";
 import {
   type ConnectionProvider,
   ConnectionProviderRegistry,
@@ -84,6 +87,7 @@ import {
 } from "./services/model-gateway.js";
 import { NodeRecoveryService } from "./services/node-recovery-service.js";
 import { PersonalEnvironmentService } from "./services/personal-environment-service.js";
+import { PlacementWaitsService } from "./services/placement-waits.js";
 import { PluginsService } from "./services/plugins-service.js";
 import { ProjectEnvironmentsService } from "./services/project-environments-service.js";
 import { ProjectEventDispatcher } from "./services/project-event-dispatcher.js";
@@ -203,6 +207,12 @@ export interface CatamorphicCoreConfig {
    * person (default 30 seconds). A throwing guard always denies.
    */
   connectionGuardTimeoutMs?: number;
+  /**
+   * Rewrite model request bodies through the gateway before its policy
+   * reads them (ADR 0256), in order: pin an aggregator's providers, drop
+   * fields. Host code, as guards are; each is bounded by the guard timeout.
+   */
+  modelRequestRewrites?: readonly ModelRequestRewrite[];
   /** Re-resolve current member authority for workflow dispatch and agent capabilities. */
   resolveMemberIdentity?: (args: {
     tenantId: string;
@@ -418,6 +428,8 @@ export class CatamorphicCore {
   readonly executionEnvironments: ExecutionEnvironmentsService;
   readonly agentCapabilities: AgentCapabilitiesService;
   readonly executionAllocations: ExecutionAllocationsService;
+  /** Work waiting for a machine (ADR 0258), the demand machine rules read. */
+  readonly placementWaits: PlacementWaitsService;
   /** Moves the work of lost disposable machines (ADR 0190). */
   readonly nodeRecovery: NodeRecoveryService;
   readonly connections?: ConnectionsService;
@@ -759,6 +771,7 @@ export class CatamorphicCore {
       this.projectManager,
     );
     this.executionAllocations = new ExecutionAllocationsService(this.db);
+    this.placementWaits = new PlacementWaitsService(this.db);
     this.clientRunners = config.clientExecution
       ? new ClientRunnersService(this.db, this.projectEnvironments)
       : undefined;
@@ -922,6 +935,10 @@ export class CatamorphicCore {
       this.modelGateway = new ModelGatewayService({
         store: dbModelGatewayStore(this.db),
         broker: this.connectionBroker,
+        rewrites: config.modelRequestRewrites ?? [],
+        ...(config.connectionGuardTimeoutMs
+          ? { rewriteTimeoutMs: config.connectionGuardTimeoutMs }
+          : {}),
       });
       this.httpGateway = new HttpGatewayService({
         store: dbHttpGatewayStore(this.db),
