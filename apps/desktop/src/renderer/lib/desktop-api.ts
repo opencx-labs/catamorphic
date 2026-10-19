@@ -932,10 +932,21 @@ export interface ThemePreset {
   colors: ThemeColors;
 }
 
+export type ThemeSurface = "left" | "right" | "chat";
+
+export interface ThemeBackground {
+  image: string;
+  position: "top" | "center" | "bottom";
+  opacity: number;
+  blur: number;
+  pixelate: number;
+}
+
 export interface ThemeConfig {
   selection: string;
   overrides: Partial<ThemeColors>;
   fonts?: Partial<ThemeFonts>;
+  backgrounds?: Partial<Record<ThemeSurface, ThemeBackground>>;
 }
 
 export interface ResolvedTheme extends ThemeConfig {

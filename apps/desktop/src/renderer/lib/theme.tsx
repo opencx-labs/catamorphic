@@ -5,9 +5,14 @@ import {
   type ReactNode,
   useContext,
   useEffect,
+  useRef,
   useState,
 } from "react";
-import { desktopApi, type ResolvedTheme } from "./desktop-api.js";
+import {
+  desktopApi,
+  type ResolvedTheme,
+  type ThemeSurface,
+} from "./desktop-api.js";
 
 type AppHostTheme = NonNullable<AppMountProps["theme"]>;
 
@@ -175,5 +180,82 @@ export function ProjectTheme({
         {children}
       </div>
     </ThemeScope>
+  );
+}
+
+/** Where the picture stays visible; it fades into the surface away from it. */
+const BACKDROP_MASK = {
+  top: "linear-gradient(to bottom, black 0%, black 20%, transparent 70%)",
+  center: "radial-gradient(ellipse at center, black 25%, transparent 70%)",
+  bottom: "linear-gradient(to top, black 0%, black 20%, transparent 70%)",
+} as const;
+
+/**
+ * The theme's picture behind a surface (ADR 0263), drawn on a canvas at
+ * 1/pixelate resolution and scaled up without smoothing, so pixelation costs
+ * one small draw per resize. Its parent must isolate a stacking context; the
+ * backdrop sits under the parent's content and over its background.
+ */
+export function ThemeBackdrop({ surface }: { surface: ThemeSurface }) {
+  const background = useTheme()?.backgrounds?.[surface];
+  const canvas = useRef<HTMLCanvasElement>(null);
+  const [loaded, setLoaded] = useState(false);
+  useEffect(() => {
+    const element = canvas.current;
+    if (!background || !element) return;
+    setLoaded(false);
+    const image = new Image();
+    let observer: ResizeObserver | undefined;
+    const draw = () => {
+      const { width, height } = element.getBoundingClientRect();
+      element.width = Math.max(1, Math.round(width / background.pixelate));
+      element.height = Math.max(1, Math.round(height / background.pixelate));
+      const context = element.getContext("2d");
+      if (!context || !image.naturalWidth) return;
+      // Cover the surface, anchored where the picture stays visible.
+      const scale = Math.max(
+        element.width / image.naturalWidth,
+        element.height / image.naturalHeight,
+      );
+      const drawnWidth = image.naturalWidth * scale;
+      const drawnHeight = image.naturalHeight * scale;
+      const y =
+        background.position === "top"
+          ? 0
+          : background.position === "center"
+            ? (element.height - drawnHeight) / 2
+            : element.height - drawnHeight;
+      context.drawImage(
+        image,
+        (element.width - drawnWidth) / 2,
+        y,
+        drawnWidth,
+        drawnHeight,
+      );
+    };
+    image.onload = () => {
+      draw();
+      setLoaded(true);
+      observer = new ResizeObserver(draw);
+      observer.observe(element);
+    };
+    image.src = background.image;
+    return () => {
+      image.onload = null;
+      observer?.disconnect();
+    };
+  }, [background]);
+  if (!background) return null;
+  return (
+    <canvas
+      ref={canvas}
+      className="theme-backdrop"
+      style={{
+        opacity: loaded ? background.opacity : 0,
+        filter: background.blur ? `blur(${background.blur}px)` : undefined,
+        imageRendering: background.pixelate > 1 ? "pixelated" : undefined,
+        maskImage: BACKDROP_MASK[background.position],
+      }}
+    />
   );
 }

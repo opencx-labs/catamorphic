@@ -169,7 +169,7 @@ export interface SidebarBadge {
 }
 
 /**
- * A reading's recent history (ADR 0263): `values` from 0 through 1, oldest
+ * A reading's recent history (ADR 0266): `values` from 0 through 1, oldest
  * first, drawn as a small line at the row's end with `label`, the current
  * reading, beside it. `tone` colors the line by what it says (a value near
  * its limit), never for decoration.

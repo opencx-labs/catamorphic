@@ -1,7 +1,7 @@
 import type { RegisteredOwner } from "../shared/resources.js";
 
 /**
- * Who the processes Work starts run for (ADR 0263): a terminal registers its
+ * Who the processes Work starts run for (ADR 0266): a terminal registers its
  * shell, a sidebar module its worker. Resources credits each process to its
  * nearest registered ancestor.
  */

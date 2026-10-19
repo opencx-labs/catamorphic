@@ -29,7 +29,7 @@ export const RUNNER_PROTOCOL_VERSION = 1;
 
 /**
  * The session an attempt's harness process works for, in its environment
- * (ADR 0263): the runner adds it, and a harness hands its environment to
+ * (ADR 0266): the runner adds it, and a harness hands its environment to
  * what it runs, so a host can tell which chat a process belongs to. A
  * label only; nothing authorizes on it.
  */

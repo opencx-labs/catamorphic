@@ -1,5 +1,5 @@
 /**
- * What Work runs, by who it runs for (ADR 0263): one sample of every process
+ * What Work runs, by who it runs for (ADR 0266): one sample of every process
  * under Work's main process, grouped by owner, as `work:resources` lists it.
  */
 

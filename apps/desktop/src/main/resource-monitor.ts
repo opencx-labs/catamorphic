@@ -174,7 +174,7 @@ export function parseProcStat(
   };
 }
 
-/** The chat a process's environment names (ADR 0263). */
+/** The chat a process's environment names (ADR 0266). */
 export function sessionTag(environment: string): string | undefined {
   return environment.match(
     new RegExp(`(?:^|[\\s\\0])${SESSION_ID_ENV}=([\\w-]+)`),
@@ -218,7 +218,7 @@ const push = (history: number[] | undefined, value: number): number[] =>
   [...(history ?? []), value].slice(-HISTORY);
 
 /**
- * Samples what Work runs when a section asks (ADR 0263). Nothing runs
+ * Samples what Work runs when a section asks (ADR 0266). Nothing runs
  * between reads: the list polls only while a section showing it is.
  */
 export class ResourceMonitor {
@@ -658,7 +658,7 @@ export function createResourceMonitor(): ResourceMonitor {
   });
 }
 
-/** `work:resources` reads and ends through these (ADR 0263). */
+/** `work:resources` reads and ends through these (ADR 0266). */
 export function registerResourceSupport(
   monitor: ResourceMonitor = createResourceMonitor(),
 ): () => void {

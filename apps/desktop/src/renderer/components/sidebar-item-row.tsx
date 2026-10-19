@@ -129,7 +129,7 @@ export function SidebarItemRow<
   keepDescription?: boolean;
   badges?: readonly (string | SidebarBadge)[];
   progress?: number;
-  /** A reading's recent history, drawn as a sparkline (ADR 0263). */
+  /** A reading's recent history, drawn as a sparkline (ADR 0266). */
   trend?: SidebarTrend;
   /** What the row is doing, drawn the same everywhere (ADR 0234). */
   signal?: SidebarSignal;

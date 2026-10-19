@@ -579,7 +579,7 @@ describe("the session's environment file (ADR 0206)", () => {
     expect(said()).toContain("OWN=the host's");
   });
 
-  it("names the attempt's session in the harness's environment (ADR 0263)", async () => {
+  it("names the attempt's session in the harness's environment (ADR 0266)", async () => {
     const { runner, frames, said, answer } = withFiles({});
     runner.handle({
       id: "start",

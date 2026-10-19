@@ -140,7 +140,7 @@ export class SidebarSourceRuntime {
   }
   private attach(child: ChildProcess, started: (error?: Error) => void) {
     child.stdin?.on("error", () => {});
-    // Resources lists the worker under its module (ADR 0263).
+    // Resources lists the worker under its module (ADR 0266).
     const unregister = registerProcessOwner(child.pid, {
       kind: "module",
       modulePath: path.relative(this.opts.projectRoot, this.opts.modulePath),

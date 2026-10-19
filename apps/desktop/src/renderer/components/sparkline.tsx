@@ -29,7 +29,7 @@ export function sparklinePaths(values: readonly number[]): {
 }
 
 /**
- * A row's trend (ADR 0263): a reading's recent history as a small line and
+ * A row's trend (ADR 0266): a reading's recent history as a small line and
  * area in the accent (or its tone), with the current reading beside it.
  */
 export function Sparkline({ trend }: { trend: SidebarTrend }) {

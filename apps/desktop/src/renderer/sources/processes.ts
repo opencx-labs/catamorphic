@@ -95,7 +95,7 @@ function processRow(
 }
 
 /**
- * `work:resources` (ADR 0263): what Work runs, by who it runs for. A Total
+ * `work:resources` (ADR 0266): what Work runs, by who it runs for. A Total
  * row, then Work itself, each chat, terminal, browser tab and sidebar
  * module with processes; their processes nest under them, with CPU drawn
  * as a sparkline and memory beside it. End stops a process Work started;

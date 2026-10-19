@@ -1275,7 +1275,7 @@ const api = {
     invoke("catamorphic:terminal-resize", sessionId, cols, rows),
   terminalKill: (sessionId: string): Promise<void> =>
     invoke("catamorphic:terminal-kill", sessionId),
-  /** What Work runs, by who it runs for (ADR 0263). */
+  /** What Work runs, by who it runs for (ADR 0266). */
   resourcesRead: (): Promise<ResourceSnapshot> =>
     invoke("catamorphic:resources-read"),
   /** End a process Work started, and what it started. */

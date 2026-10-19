@@ -597,7 +597,7 @@ export function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-/** The attempt with its session id in the harness's environment (ADR 0263). */
+/** The attempt with its session id in the harness's environment (ADR 0266). */
 function withSessionTag(attempt: AttemptStart): AttemptStart {
   return {
     ...attempt,

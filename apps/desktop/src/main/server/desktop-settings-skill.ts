@@ -110,6 +110,13 @@ Use hex, rgb/rgba, hsl/hsla or oklch colors. Example:
 {"selection":"system","overrides":{"accent":"#ff5500"}}.
 fonts accepts sans and mono CSS font-stack strings, e.g. {"mono":"'JetBrains Mono', monospace"}.
 Use installed font names and generic fallbacks; do not use url() or CSS declarations.
+backgrounds puts a picture behind the left or right sidebar or the chat:
+{"backgrounds":{"left":{"image":"https://example.com/a.png","position":"bottom","opacity":0.35,"blur":2,"pixelate":3}}}.
+image must be an https address. position (top, center or bottom, default bottom) is
+where the picture stays visible; it fades into the surface's color away from it, so
+keep sidebars at bottom to leave their top readable. opacity is 0 through 1 (default
+0.35), blur 0 through 24 pixels (default 0), pixelate a block size of 1 (none) through
+32. Each surface is replaced whole by a higher scope; delete it to inherit.
 Delete just the affected token or font key to restore its inherited value. Preserve
 unrelated preference keys when editing a project settings file.
 

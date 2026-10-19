@@ -435,7 +435,7 @@ export function registerTerminalSupport(
       },
     };
     sessions.set(sessionId, session);
-    // Resources credits the shell and what runs in it (ADR 0263): an
+    // Resources credits the shell and what runs in it (ADR 0266): an
     // agent's terminal to its chat.
     const unregister = registerProcessOwner(
       pty.pid,

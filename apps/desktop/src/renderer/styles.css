@@ -1782,6 +1782,8 @@ kbd {
   flex-direction: column;
   overflow: hidden;
   background: var(--color-sidebar);
+  /* The theme's picture (ThemeBackdrop) sits between this and the items. */
+  isolation: isolate;
   /* Under reduced motion the global near-zero duration still ends the slide
      through its transition, which the phase follows. */
   transition: transform 200ms var(--ease-standard);
@@ -2812,4 +2814,16 @@ html[data-surface="dock"] #root {
   .voice-button[data-phase="speaking"] .voice-bars > span:nth-child(3) {
     --level: 0.9;
   }
+}
+
+/* A theme picture behind a sidebar or the chat (ADR 0263). It fades in once
+   loaded; its mask, blur and pixelation are set inline from the theme. */
+.theme-backdrop {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: -1;
+  pointer-events: none;
+  transition: opacity 600ms var(--ease-standard);
 }

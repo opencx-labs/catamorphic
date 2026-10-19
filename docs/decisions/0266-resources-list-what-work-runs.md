@@ -1,4 +1,4 @@
-# 0263 — Resources lists what Work runs, by who it runs for
+# 0266 — Resources lists what Work runs, by who it runs for
 
 - **Status:** Accepted (builds on [0102](0102-tabbed-sidebars-and-app-widgets.md), [0140](0140-local-agent-freedom-and-executable-sidebar-sources.md), [0234](0234-sidebar-sections-are-sources.md))
 - **Date:** 2026-10-19
