@@ -63,7 +63,7 @@ describe("gateway configuration", () => {
     ).toThrow("guards");
   });
 
-  it("refuses a model entry that tries to change requests: that is code in the server's own image (ADR 0262)", () => {
+  it("refuses a model entry that tries to change requests: that is code in the server's own image (ADR 0261)", () => {
     // A file that names what requests carry would pin nothing if it were
     // read and ignored, so it does not load.
     for (const entry of [

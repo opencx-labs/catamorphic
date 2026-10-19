@@ -47,7 +47,7 @@ OpenRouter routes a request to whichever providers it names, so deciding
 the routing (only providers that keep no data, no fallback models) is
 control-plane code: build your own image from the stock server file
 ([your own image](../../../packages/work-server/README.md#your-own-image),
-ADR 0262) and add a model request rewrite (ADR 0256). In the copied
+ADR 0261) and add a model request rewrite (ADR 0256). In the copied
 `apps/server/src/index.ts`:
 
 ```ts

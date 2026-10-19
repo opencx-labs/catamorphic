@@ -156,7 +156,7 @@ beforeAll(async () => {
       },
     }),
     hooks: {
-      // The server's own code (ADR 0262): it names the project to
+      // The server's own code (ADR 0261): it names the project to
       // OpenRouter and pins the providers it may route to, with zero data
       // retention, whatever an agent asks.
       modelRequestRewrites: [

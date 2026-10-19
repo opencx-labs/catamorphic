@@ -131,7 +131,7 @@ and read-only database connections. The image ships no guards and changes no
 model request: a company that wants each action reviewed (a model
 classifier, a required approval) or its model routing pinned copies
 [`src/index.ts`](src/index.ts), the whole stock server, into its own image
-and adds hooks (ADRs 0183, 0262;
+and adds hooks (ADRs 0183, 0261;
 [your own image](../../packages/work-server/README.md#your-own-image)). See
 [secrets and the gateway](../../skills/setup-work-server/references/secrets-and-gateway.md).
 

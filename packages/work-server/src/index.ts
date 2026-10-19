@@ -2,9 +2,9 @@
  * The Work server as a library (ADR 0160). The published image calls
  * `createWorkServer({ config: workServerConfigFromEnv(process.env) })`; a
  * company's own server copies `apps/server/src/index.ts` into its own image
- * and adds hooks (ADRs 0183, 0262: config is typed data, hooks are code).
+ * and adds hooks (ADRs 0183, 0261: config is typed data, hooks are code).
  */
-// What a company's own server file needs (ADR 0262), from one package.
+// What a company's own server file needs (ADR 0261), from one package.
 export {
   type ConnectionActionContext,
   type ConnectionActionGuard,

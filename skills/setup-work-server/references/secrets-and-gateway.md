@@ -287,7 +287,7 @@ that does not answer within `connectionGuardTimeoutMs` (default 30 seconds)
 escalates. Every verdict is in the connection audit. Give each guard `kinds`
 so it reviews only the connections it judges.
 
-Your own server (ADRs 0160, 0262) passes guards as `hooks.connectionGuards`:
+Your own server (ADRs 0160, 0261) passes guards as `hooks.connectionGuards`:
 copy `apps/server/src/index.ts` into an image built from the published one
 ([your own image](../../../packages/work-server/README.md#your-own-image)),
 add the model client for the classifier there

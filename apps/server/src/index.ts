@@ -18,7 +18,7 @@ import {
  * This file is the whole stock server. A company that needs its own code
  * (guards, model request rewrites, connection providers, a machine
  * provisioner, routes) copies it into its own image and fills in `hooks`
- * (ADR 0262; packages/work-server/README.md).
+ * (ADR 0261; packages/work-server/README.md).
  *
  *   PORT                 listen port (default 4700)
  *   WORK_OPERATOR_PORT   loopback-only setup port (default 4701)
@@ -81,7 +81,7 @@ const reachableBases = [
 
 const server = await createWorkServer({
   config,
-  // A company's own code, in its own image (ADR 0262).
+  // A company's own code, in its own image (ADR 0261).
   hooks: {},
   log: (line) => console.log(line),
 });

@@ -113,7 +113,7 @@ it judges. Examples:
 
 The stock server is one file,
 [`apps/server/src/index.ts`](../../apps/server/src/index.ts). Anything it
-does not do is code in your own image built from that file (ADR 0262):
+does not do is code in your own image built from that file (ADR 0261):
 guards, model request rewrites (pinning the providers an aggregator routes
 to), your own connection providers, a machine provisioner for your cloud,
 seeds, routes. The stock configuration does not grow to cover them, so this

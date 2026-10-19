@@ -141,7 +141,7 @@ const GitEntry = z.strictObject({
  * another base URL. The key is the service connection's; an entry with a
  * built-in kind replaces it. Changing what requests carry (the providers
  * an aggregator may route to, the endpoints served) is code in the
- * server's own image: `hooks.modelRequestRewrites` (ADRs 0256, 0262).
+ * server's own image: `hooks.modelRequestRewrites` (ADRs 0256, 0261).
  */
 const ModelEntry = z.strictObject({
   type: z.literal("model"),

@@ -1,6 +1,6 @@
 # 0160 — The Work server is a package with typed hooks
 
-- **Status:** Accepted (amended by 0183)
+- **Status:** Accepted (amended by 0183; refined by [0261](0261-customize-the-work-server-with-your-own-image.md): a company copies the one-file stock server into its own image)
 - **Date:** 2026-09-25
 - **Refines:** 0059, 0071, 0159
 

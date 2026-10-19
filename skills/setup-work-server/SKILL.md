@@ -90,7 +90,7 @@ disagree with the installed source, the source wins.
   service connections (ADR 0172) and the workers and machine rules
   (ADR 0205); they gain nothing inside projects.
 - **Beyond the stock server, write code, not configuration.** The stock
-  server is one file and its configuration does not grow (ADR 0262). When a
+  server is one file and its configuration does not grow (ADR 0261). When a
   company needs more than it does, copy `apps/server/src/index.ts` into the
   company's own image and fill in its hooks
   ([your own image](../../packages/work-server/README.md#your-own-image));

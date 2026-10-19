@@ -2,7 +2,7 @@
 
 > Project filesystem locations in this ADR are superseded by [ADR 0142](0142-contained-project-workspace.md). Capability source and configuration now live under `.catamorphic/`.
 
-Status: Accepted (2026-08-21; auth, invites, and administration superseded by 0071 and 0072)
+Status: Accepted (2026-08-21; auth, invites, and administration superseded by 0071 and 0072; refined by [0261](0261-customize-the-work-server-with-your-own-image.md): the stock server is one file a company copies into its own image)
 
 Single-node storage assumption superseded by
 [0099](0099-shared-postgres-server-environments.md) for managed multi-machine
