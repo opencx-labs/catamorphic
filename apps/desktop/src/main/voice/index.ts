@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
-import { parseProjectAgentId } from "@catamorphic/core";
+import { parseProjectAgentId, steeredTurnId } from "@catamorphic/core";
 import {
   app,
   BrowserWindow,
@@ -51,7 +51,13 @@ import {
   voiceChatOf,
 } from "./conversation.js";
 import { VoiceModelStore } from "./models.js";
-import { type Sight, SpokenSights, sightFor, takePicture } from "./sight.js";
+import {
+  type Sight,
+  type SpokenSight,
+  SpokenSights,
+  sightFor,
+  takePicture,
+} from "./sight.js";
 import { isStopCommand } from "./speech-text.js";
 import { SystemKeys } from "./system-keys.js";
 import { createVoiceBubble, voiceBubbleDragSchema } from "./voice-bubble.js";
@@ -717,12 +723,12 @@ export function registerVoiceSupport(deps: {
             throw new Error(
               receipt.error?.message ?? "The message was refused",
             );
-          // What they saw describes the turn this message went to.
-          const seen = spoken.get(target.sessionId);
-          if (seen?.said === text && seen.turnId === undefined) {
-            const turnId = receipt.result?.turnId;
-            seen.turnId = typeof turnId === "string" ? turnId : null;
-          }
+          const { itemId, turnId, mode } = receipt.result ?? {};
+          return {
+            itemId: typeof itemId === "string" ? itemId : null,
+            turnId: typeof turnId === "string" ? turnId : null,
+            mode: typeof mode === "string" ? mode : null,
+          };
         },
         interrupt: (target) =>
           sessions.interrupt(identity, target.projectId, target.sessionId),
@@ -922,12 +928,13 @@ export function registerVoiceSupport(deps: {
     }
     const inWork = workInFront();
     const focused = BrowserWindow.getFocusedWindow();
-    // The window in front, else the one voice talks for: the last one
-    // they were in, or the one they picked in the bubble's menu.
+    // The window in front, else the one they picked in the bubble's menu,
+    // else the last one they were in.
     const window =
       focused && ofProfile(focused, voice.profileId)
         ? focused
-        : (voiceWindow(voice) ?? windowFor(voice.profileId));
+        : ((voice.windowPicked ? voiceWindow(voice) : null) ??
+          windowFor(voice.profileId));
     const projectId = windowProject(window, voice.profileId);
     const target = voice.live.target;
     const chat = target?.kind === "chat" ? target : null;
@@ -966,14 +973,22 @@ export function registerVoiceSupport(deps: {
     text: string,
     seen: Sight | null,
   ) => {
-    if (seen && !isStopCommand(text))
-      spoken.set(conversation.ref.sessionId, {
-        ...seen,
-        said: text,
-        heardAt: Date.now(),
-      });
+    const sight: SpokenSight | null =
+      seen && !isStopCommand(text)
+        ? { ...seen, said: text, heardAt: Date.now() }
+        : null;
+    if (sight) spoken.set(conversation.ref.sessionId, sight);
     if (active !== voice || voice.conversation !== conversation) return;
-    await conversation.heard(text);
+    const delivery = await conversation.heard(text);
+    // What they saw describes the turn this message went to, or, steered
+    // into one that ends without reading it, the turn it runs as then.
+    if (sight && delivery?.turnId)
+      sight.turnIds = [
+        delivery.turnId,
+        ...(delivery.mode === "steer" && delivery.itemId
+          ? [steeredTurnId(delivery.turnId, delivery.itemId)]
+          : []),
+      ];
   };
 
   /**

@@ -61,8 +61,9 @@ window.addEventListener("message", (event: MessageEvent<unknown>) => {
   current = {
     close: () => {
       port.onmessage = null;
-      port.close();
+      // The bars hear that what it scheduled will not play.
       speaker.close();
+      port.close();
       void microphone.then((close) => close?.());
     },
   };

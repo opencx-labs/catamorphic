@@ -64,13 +64,21 @@ export function voiceChatOf(snapshot: SessionSnapshot): VoiceChat {
   };
 }
 
+/** Where a message went: its item, and the turn it went to. */
+export interface VoiceDelivery {
+  itemId: string | null;
+  turnId: string | null;
+  /** `steer` when it joined a turn at work. */
+  mode: string | null;
+}
+
 /** A chat's session operations, bound to the desktop's identity. */
 interface VoiceSessions {
   get(ref: VoiceSessionRef): Promise<VoiceChat>;
   send(
     ref: VoiceSessionRef,
     message: { text: string; dispatch: "steer" },
-  ): Promise<void>;
+  ): Promise<VoiceDelivery>;
   interrupt(ref: VoiceSessionRef): Promise<void>;
 }
 
@@ -180,20 +188,27 @@ export class VoiceConversation {
     this.finishIfSaid();
   }
 
-  /** What the person said, as the recognizer heard it. */
-  async heard(text: string): Promise<void> {
-    if (this.stopped || this.finished) return;
+  /**
+   * What the person said, as the recognizer heard it; where it went, when
+   * it became a message.
+   */
+  async heard(text: string): Promise<VoiceDelivery | null> {
+    if (this.stopped || this.finished) return null;
     if (isStopCommand(text)) {
       this.deps.speech.stopSpeaking();
       if (this.busy) await this.deps.sessions.interrupt(this.ref);
-      return;
+      return null;
     }
     this.deps.speech.cue();
     this.setBusy(true);
+    let delivery: VoiceDelivery | null = null;
     try {
       // Said to an agent at work, it reaches it at its next step (ADR
       // 0240), as speaking to it would, whatever the chat's composer does.
-      await this.deps.sessions.send(this.ref, { text, dispatch: "steer" });
+      delivery = await this.deps.sessions.send(this.ref, {
+        text,
+        dispatch: "steer",
+      });
     } catch (cause) {
       this.setBusy(false);
       this.deps.onError(
@@ -201,6 +216,7 @@ export class VoiceConversation {
       );
     }
     this.schedule(0);
+    return delivery;
   }
 
   private schedule(delay = this.busy ? BUSY_POLL_MS : IDLE_POLL_MS): void {

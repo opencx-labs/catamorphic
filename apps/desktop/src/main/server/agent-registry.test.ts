@@ -7,7 +7,11 @@ import type {
   HarnessEvent,
 } from "@catamorphic/agent-protocol/runner";
 import { NO_CAPABILITIES } from "@catamorphic/agent-protocol/runner";
-import { definitionHash, validateAgentDefinition } from "@catamorphic/core";
+import {
+  definitionHash,
+  steeredTurnId,
+  validateAgentDefinition,
+} from "@catamorphic/core";
 import { PROJECT_AGENTS_DIR } from "@catamorphic/workflow/project-layout";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -479,12 +483,12 @@ describe("the assistant sees where the person is (ADR 0265)", () => {
       projectRootPath: (projectId: string) => `/work/${projectId}`,
     });
     const { harness } = hostOf(registry, "work-assistant:claude");
-    const context = async () =>
+    const context = async (turnId = "turn") =>
       (
         (await harness.context?.({
           projectId: "opencx",
           sessionId: "assistant",
-          turnId: "turn",
+          turnId,
         })) ?? []
       )
         .map((fragment) => fragment.text)
@@ -529,6 +533,27 @@ describe("the assistant sees where the person is (ADR 0265)", () => {
     expect(asked).toEqual([]);
   });
 
+  it("sees what they saw in the turn a message talked over the end of a turn runs as", async () => {
+    const { registry, context } = assistantOf();
+    registry.setPersonPlace(() => "website");
+    const turnId = steeredTurnId("ending-turn", "spoken-item");
+    registry.setVoice({
+      talking: () => true,
+      sight: () => ({
+        at: Date.now() - 40_000,
+        said: "and the other one",
+        heardAt: Date.now() - 38_000,
+        turnIds: ["ending-turn", turnId],
+        projectId: "catamorphic",
+        app: Promise.resolve(null),
+        screen: Promise.resolve("Pull request #267"),
+        picture: Promise.resolve(null),
+      }),
+      stopListening: () => false,
+    });
+    expect(await context(turnId)).toContain("Pull request #267");
+  });
+
   it("sees the screen as it is for a turn the spoken message did not start", async () => {
     const { registry, asked, context } = assistantOf();
     registry.setPersonPlace(() => "website");
@@ -539,7 +564,7 @@ describe("the assistant sees where the person is (ADR 0265)", () => {
         said: "why is this PR not merged",
         heardAt: Date.now() - 58_000,
         // That message went to an earlier turn.
-        turnId: "spoken-turn",
+        turnIds: ["spoken-turn"],
         projectId: "catamorphic",
         app: Promise.resolve(null),
         screen: Promise.resolve("Pull request #267"),

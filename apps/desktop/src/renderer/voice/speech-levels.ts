@@ -21,11 +21,6 @@ const MAX_LIFT = 4;
 const SILENT = 1e-3;
 
 /**
- * Per frame, how loud each band of a clip is, from 0 to 1: a band-pass
- * filter per band (RBJ, 0 dB peak) and the energy of each frame through
- * it, against the band's full level.
- */
-/**
  * The clips the speaking animation follows, once another arrives: those
  * heard already go, and a reset forgets the rest.
  */
@@ -43,6 +38,11 @@ export function scheduleLevels(
   return next.levels.length > 0 ? [...kept, next] : kept;
 }
 
+/**
+ * Per frame, how loud each band of a clip is, from 0 to 1: a band-pass
+ * filter per band (RBJ, 0 dB peak) and the energy of each frame through
+ * it, against the band's full level.
+ */
 export function speechLevels(
   samples: Float32Array,
   sampleRate: number,

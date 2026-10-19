@@ -188,6 +188,32 @@ describe("the assistant", () => {
       ).rejects.toThrow('No project named "Website"');
     });
 
+    it("open a file in the person's project, not its own folder", async () => {
+      const seen: unknown[] = [];
+      const [open] = inThePersonsWindow(
+        [
+          {
+            name: "open_surface",
+            description: "open_surface",
+            parameters: {},
+            execute: async (_input, context) => {
+              seen.push(context);
+              return null;
+            },
+          },
+        ],
+        windowsOf(),
+      );
+      const stopWaiting = new AbortController().signal;
+      await open?.execute(
+        { target: "file:docs/plan.md" },
+        { ...home, workingDirectory: "/work/home", stopWaiting },
+      );
+      expect(seen).toEqual([
+        { projectId: "catamorphic", sessionId: "assistant", stopWaiting },
+      ]);
+    });
+
     it("stay with its chat when no window shows the person's project", async () => {
       const [overview] = inThePersonsWindow([tool("workspace_overview")], {
         ...windowsOf(),

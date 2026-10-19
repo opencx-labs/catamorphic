@@ -43,6 +43,7 @@ function harness(initial: VoiceChat, heardThrough?: string) {
       send: async (_ref, { text, dispatch }) => {
         sent.push(text);
         dispatched.push(dispatch);
+        return { itemId: "item", turnId: "turn", mode: "steer" };
       },
       interrupt: async () => {
         calls.push("interrupt");
@@ -193,7 +194,11 @@ describe("VoiceConversation", () => {
     vi.useFakeTimers();
     const voice = harness(detail([], { busy: true }));
     await voice.conversation.start();
-    await voice.conversation.heard("what PR do you mean");
+    expect(await voice.conversation.heard("what PR do you mean")).toEqual({
+      itemId: "item",
+      turnId: "turn",
+      mode: "steer",
+    });
     expect(voice.sent).toEqual(["what PR do you mean"]);
     expect(voice.dispatched).toEqual(["steer"]);
     voice.conversation.stop();
@@ -286,7 +291,7 @@ describe("VoiceConversation", () => {
           const seen = current;
           return new Promise((resolve) => reads.push(() => resolve(seen)));
         },
-        send: async () => {},
+        send: async () => ({ itemId: null, turnId: null, mode: null }),
         interrupt: async () => {},
       },
       speech: { speak: () => {}, cue: () => {}, stopSpeaking: () => {} },
@@ -327,7 +332,7 @@ describe("VoiceConversation", () => {
           const seen = current;
           return new Promise((resolve) => reads.push(() => resolve(seen)));
         },
-        send: async () => {},
+        send: async () => ({ itemId: null, turnId: null, mode: null }),
         interrupt: async () => {},
       },
       speech: { speak: () => {}, cue: () => {}, stopSpeaking: () => {} },

@@ -54,6 +54,19 @@ describe("what the person saw as they spoke", () => {
     expect(sights.get("chat-19")).not.toBeNull();
   });
 
+  it("lets pictures go once they are old, read or not", () => {
+    vi.useFakeTimers({ now: 0 });
+    try {
+      const sights = new SpokenSights();
+      sights.set("assistant", sight(0));
+      vi.advanceTimersByTime(30 * 60_000 + 1);
+      // Gone without anyone asking: nothing outlives its half hour.
+      expect(Reflect.get(sights, "sights").size).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("takes no picture of another app without leave to record the screen", async () => {
     const capturePage = vi.fn();
     const window = {

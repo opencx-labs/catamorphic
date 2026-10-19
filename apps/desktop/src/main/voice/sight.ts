@@ -39,8 +39,11 @@ export interface SpokenSight extends Sight {
   said: string;
   /** When its words were heard and went to the chat (epoch ms). */
   heardAt: number;
-  /** The turn the message went to, once the chat took it. */
-  turnId?: string | null;
+  /**
+   * The turns that read the message, once the chat took it: the one it
+   * went to, and the one it runs as should that end without reading it.
+   */
+  turnIds?: string[];
 }
 
 /**
@@ -95,19 +98,34 @@ export async function takePicture(
  */
 export class SpokenSights {
   private readonly sights = new Map<string, SpokenSight>();
+  private timer: ReturnType<typeof setTimeout> | undefined;
 
   constructor(private readonly now: () => number = Date.now) {}
 
   set(sessionId: string, sight: SpokenSight): void {
     this.sights.delete(sessionId);
     this.sights.set(sessionId, sight);
-    // Pictures go once they are old, read or not.
-    for (const [key, kept] of this.sights)
-      if (this.now() - kept.at > KEPT_MS) this.sights.delete(key);
     for (const key of this.sights.keys()) {
       if (this.sights.size <= KEPT_CHATS) break;
       this.sights.delete(key);
     }
+    this.prune();
+  }
+
+  /** Pictures go once they are old, whether or not anything reads them. */
+  private prune(): void {
+    clearTimeout(this.timer);
+    this.timer = undefined;
+    let oldest = Number.POSITIVE_INFINITY;
+    for (const [key, kept] of this.sights)
+      if (this.now() - kept.at > KEPT_MS) this.sights.delete(key);
+      else oldest = Math.min(oldest, kept.at);
+    if (oldest === Number.POSITIVE_INFINITY) return;
+    this.timer = setTimeout(
+      () => this.prune(),
+      oldest + KEPT_MS - this.now() + 1,
+    );
+    this.timer.unref?.();
   }
 
   get(sessionId: string): SpokenSight | null {
@@ -121,6 +139,7 @@ export class SpokenSights {
   }
 
   clear(): void {
+    clearTimeout(this.timer);
     this.sights.clear();
   }
 }

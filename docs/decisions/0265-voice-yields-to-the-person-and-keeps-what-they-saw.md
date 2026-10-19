@@ -39,7 +39,7 @@ which 0216 left out because the overlap is where the agent hears itself.
 Pausing first is LiveKit's "false interruption" handling.
 
 **"Yeah" while the agent talks is listening, not a turn.** A transcript of
-acknowledgements alone ("yeah", "okay", "got it", "oh, okay";
+acknowledgements alone ("yeah", "okay", "got it", "oh, okay", "thanks";
 `isAcknowledgement`) said while it talks neither stops it nor is sent.
 "Yes", "no", anything longer, and anything said with a key held are heard
 as before. Messages need words the recognizer is surer of (`sureOfWords`
@@ -54,15 +54,16 @@ by default too (ADR 0250).
 
 **The agent sees what was on screen as the person started speaking.** As
 a stretch of speech starts, voice keeps a sight (`main/voice/sight.ts`):
-the project in front of the Work window they are in (or picked in the
-floating microphone's menu), Work's screen for the chat as a turn
+the project in front of the Work window they are in (or last were in, or
+picked in the floating microphone's menu), Work's screen for the chat as a turn
 describes it (ADR 0152), the app in front when not Work (0236), and a
 picture: Work's window when Work is in front; the display they are on
 from another app, when they already allowed Work to record the screen;
 else none. Work never asks for that access. The words are paired with the
-stretch they were said in. The turn their message goes to describes that
-screen, with its age; `screen_when_spoken` loads the picture when the
-agent wants it. A turn a typed message or a notification starts sees the
+stretch they were said in. The turn their message goes to (or, joined to a
+turn that ends without reading it, the turn it runs as then:
+`steeredTurnId` in core) describes that screen, with its age;
+`screen_when_spoken` loads the picture when the agent wants it. A turn a typed message or a notification starts sees the
 screen as it is. Sights stay in memory, the latest per chat for half an
 hour; a picture the tool loads goes to the model like any tool result.
 

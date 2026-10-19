@@ -90,7 +90,8 @@ const SEEN_TABS = 500;
 
 /** The tab a call is about, when it names one. */
 function tabOf(tool: string, input: Record<string, unknown>): string | null {
-  const key = tool === "point_at" ? input.target : input.key;
+  const key =
+    tool === "point_at" || tool === "open_surface" ? input.target : input.key;
   return typeof key === "string" ? key : null;
 }
 
@@ -171,8 +172,14 @@ export function inThePersonsWindow<T extends ExtraTool>(
         const own = names ? rest : input;
         if (!projectId || projectId === context.projectId)
           return tool.execute(own, context);
+        // Its own folder is not the person's project's: a file named there
+        // is found in the window it opens in.
+        const { workingDirectory: _home, ...elsewhereContext } = context;
         try {
-          const result = await tool.execute(own, { ...context, projectId });
+          const result = await tool.execute(own, {
+            ...elsewhereContext,
+            projectId,
+          });
           if (elsewhere && tool.name === "workspace_overview")
             remember(seenElsewhere, result, elsewhere);
           return result;

@@ -1542,8 +1542,8 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
     if (!sessionId || !this.voice?.talking(sessionId)) return null;
     const sight = this.voice.sight(sessionId);
     if (!sight) return null;
-    if (sight.turnId !== undefined)
-      return sight.turnId !== null && sight.turnId === turnId ? sight : null;
+    if (sight.turnIds)
+      return turnId && sight.turnIds.includes(turnId) ? sight : null;
     return Date.now() - sight.heardAt < SPOKEN_TURN_MS ? sight : null;
   }
 
