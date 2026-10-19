@@ -11,7 +11,7 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { type Identity, REVIEW_AUTOMATION_FILES } from "@catamorphic/core";
+import type { Identity } from "@catamorphic/core";
 import { WORKFLOW_PACKAGE_VERSION } from "@catamorphic/workflow";
 import pg from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -21,12 +21,21 @@ import {
   SERVER_TENANT_ID,
   type WorkServer,
 } from "./server.js";
-import { filesHolding, filesUnder, testServerOptions } from "./test-support.js";
+import {
+  filesHolding,
+  filesUnder,
+  registryPack,
+  testServerOptions,
+} from "./test-support.js";
+
 import { startWorkWorker } from "./workers/worker-runtime.js";
+
+/** What an agent installs from the `pull-request-reviews` pack. */
+const REVIEW_AUTOMATION_FILES = registryPack("pull-request-reviews");
 
 /**
  * Code and security review of pull requests (#118), end to end on a Work
- * server: the `reviewing-pull-requests` skill's files deployed verbatim as
+ * server: the `pull-request-reviews` pack's files deployed verbatim as
  * project code and turned on for the project; a fake GitHub (signed webhook
  * deliveries, the REST endpoints the `github` provider calls, and a Git
  * smart-HTTP upstream holding the repository and `refs/pull/1/head`); a

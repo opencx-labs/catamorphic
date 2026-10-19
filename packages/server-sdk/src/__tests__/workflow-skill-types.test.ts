@@ -104,17 +104,44 @@ async function typecheck(files: Record<string, string>): Promise<void> {
   }
 }
 
+/**
+ * A registry pack's TypeScript files at their project targets (ADR 0262),
+ * read from its source the way the registry build inlines them.
+ */
+async function packSources(pack: string): Promise<Record<string, string>> {
+  const directory = path.join(root, "packages/registry/src", pack);
+  const manifest = JSON.parse(
+    await fs.readFile(path.join(directory, "registry-item.json"), "utf8"),
+  ) as { files: { path: string; target?: string }[] };
+  const sources: Record<string, string> = {};
+  for (const file of manifest.files) {
+    const target = file.target ?? file.path;
+    if (!target.endsWith(".ts")) continue;
+    sources[target] = await fs.readFile(
+      path.join(directory, path.basename(file.path)),
+      "utf8",
+    );
+  }
+  return sources;
+}
+
 it("shipped workflow recipes typecheck against the public API and real host trigger schemas", async () => {
-  const { files, count } = recipeFiles([
+  const skills = recipeFiles([
     ...["writing-workflows", "durable-workflows", "batch-workflows"].map(
       (name) => SEED_SKILLS[`.work/skills/${name}/SKILL.md`],
     ),
     HOST_SKILLS["session-workflows/SKILL.md"],
-    HOST_SKILLS["slack/SKILL.md"],
-    HOST_SKILLS["reviewing-pull-requests/SKILL.md"],
   ]);
-  // The review skill repeats the GitHub library verbatim (one file).
-  expect(count).toBe(15);
+  const packs = {
+    ...(await packSources("slack-threads")),
+    ...(await packSources("pull-request-reviews")),
+  };
+  // The review pack ships the GitHub library writing-workflows teaches.
+  expect(packs[".work/triggers/github.ts"]).toBe(
+    skills.files[".work/triggers/github.ts"],
+  );
+  const files = { ...skills.files, ...packs };
+  expect(skills.count).toBe(11);
   expect(parseProject(files).triggerKinds.map((kind) => kind.name)).toEqual([
     "github.delivery",
     "github.issue_comment",

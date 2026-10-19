@@ -68,7 +68,7 @@ Availability also depends on identity, services, agent sandboxing and topology.
 | `create_watcher`, `list_watchers`, `stop_watcher` | Deferred durable workflows with session-owned lifetime; `eventSource: "github"` polls the project's repository as github webhook deliveries (ADR 0177) |
 | `session_artifact`, `set_app_presentation` | Deferred temporary artifacts and app metadata; title/icon can be supplied at creation |
 | Project-defined workflow tools, `catamorphic_poll_run` | Deferred live deployed workflow bindings and continuation; identical execution service to public MCP |
-| `components.read` | Existing deferred, installable component packs; composition and evidence remain code and skills |
+| `registry.read` | Existing deferred, installable packs (UI components and project recipes, ADR 0262); composition and evidence remain code and skills |
 | `context.read`, `environments.list`, `assignments.current` | Existing deferred framework context and allocation facts |
 | Profile connector tools | A harness with tool search (Claude Code, Codex) gets each connector as its own MCP server, served from the authenticated host pool and loaded on demand (ADR 0225). The built-in agent discovers them per service through the catalog; no global roster fetch on an empty query |
 

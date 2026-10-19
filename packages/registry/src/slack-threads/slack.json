@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "name": "Slack",
+  "kind": "builtin",
+  "connections": [
+    {
+      "alias": "slack",
+      "principal": "service",
+      "capabilities": [
+        "conversations.history",
+        "conversations.replies",
+        "users.info",
+        "chat.getPermalink"
+      ]
+    },
+    { "alias": "slackSearch", "principal": "service", "optional": true }
+  ]
+}

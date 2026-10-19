@@ -8,6 +8,7 @@ export {
 export type { CatamorphicCoreConfig } from "./core.js";
 export { CatamorphicCore, createCatamorphicCore } from "./core.js";
 export { startEventDispatcher } from "./event-dispatcher.js";
+export { GITHUB_TRIGGER_LIBRARY } from "./github-trigger-library.js";
 export {
   type AgentRef,
   type AgentRefToolPolicy,
@@ -50,7 +51,6 @@ export {
   type TenantId,
   type WorkflowRef,
 } from "./identity.js";
-export { REVIEW_AUTOMATION_FILES } from "./reviewing-pull-requests-skill.js";
 export {
   appScaffold,
   HOST_SKILLS,
@@ -548,6 +548,12 @@ export {
   type RateReservationResult,
   RateReservationsService,
 } from "./services/rate-reservations-service.js";
+export {
+  defineRegistryCapability,
+  parseRegistryCatalog,
+  type RegistryItem,
+  RegistryItemSchema,
+} from "./services/registry-capability.js";
 export {
   clientExecutor,
   EXECUTOR_RESTARTED_ERROR,

@@ -91,7 +91,6 @@ import {
   ASSISTANT_WORK_ROUTE,
 } from "./assistant-agent.js";
 import { assistantTools } from "./assistant-tools.js";
-import { componentRegistryCapability } from "./component-registry.js";
 import {
   connectorMcpPath,
   connectorMcpTokens,
@@ -110,6 +109,7 @@ import {
 import { localApiRefusal, newDesktopApiToken } from "./local-api-guard.js";
 import type { DataPaths } from "./paths.js";
 import { ProjectRootsStore } from "./project-roots.js";
+import { registryCapability } from "./registry.js";
 import { REMOTE_ENVIRONMENT_SKILL } from "./remote-environment-skill.js";
 import { SessionCheckouts } from "./session-checkouts.js";
 import { SessionNotes } from "./session-notes.js";
@@ -669,7 +669,7 @@ export async function startEmbeddedServer(
           .remoteProjects.get(projectId)?.capabilities?.roles;
         return { ...localPerson(), ...(roles ? { roles } : {}) };
       },
-      capabilities: [componentRegistryCapability],
+      capabilities: [registryCapability],
       sources: [
         desktopCapabilitySource({
           core: () => catamorphic.core,

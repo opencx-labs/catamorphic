@@ -39,6 +39,7 @@
     "@catamorphic/mcp": "workspace:*",
     "@catamorphic/microsandbox": "workspace:*",
     "@catamorphic/otel": "workspace:*",
+    "@catamorphic/registry": "workspace:*",
     "@catamorphic/sandbox": "workspace:*",
     "@catamorphic/server-sdk": "workspace:*",
     "@catamorphic/workflow": "workspace:*",

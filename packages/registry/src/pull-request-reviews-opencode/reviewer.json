@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "name": "Reviewer",
+  "kind": "acp",
+  "acp": { "command": ["opencode", "acp"] },
+  "model": "deepseek/deepseek-v4.1-flash",
+  "credentials": { "source": "connection", "connection": "model" },
+  "description": "Reviews pull requests for correctness, security, data safety, performance, and tests, verifying by running them.",
+  "sandboxing": "contained",
+  "environment": { "preferred": ["review"], "allowed": ["review"] },
+  "connections": [
+    { "alias": "github", "principal": "service" },
+    { "alias": "prod", "principal": "service", "optional": true },
+    { "alias": "slack", "principal": "service", "optional": true }
+  ],
+  "toolPolicies": {
+    "github": {
+      "default": "deny",
+      "tools": {
+        "get": "allow",
+        "pull_request_files": "allow",
+        "review_threads": "allow"
+      }
+    }
+  }
+}

@@ -597,6 +597,8 @@
       "devDependencies": {
         "@catamorphic/agent-protocol": "workspace:*",
         "@catamorphic/api-client": "workspace:*",
+        "@catamorphic/core": "workspace:*",
+        "@catamorphic/parser": "workspace:*",
         "@monaco-editor/react": "^4.7.0",
         "@types/node": "^26.1.1",
         "@types/react": "^19.2.17",
@@ -743,6 +745,7 @@
         "@catamorphic/mcp": "workspace:*",
         "@catamorphic/microsandbox": "workspace:*",
         "@catamorphic/otel": "workspace:*",
+        "@catamorphic/registry": "workspace:*",
         "@catamorphic/sandbox": "workspace:*",
         "@catamorphic/server-sdk": "workspace:*",
         "@catamorphic/workflow": "workspace:*",

@@ -200,9 +200,11 @@ polling (see \`session-workflows\`), so this library works there too:
 \`\`\`typescript
 ${GITHUB_TRIGGER_LIBRARY}\`\`\`
 
-The Slack library (\`slack.event\`, \`slack.mention\`, \`slack.message\`), with
-the workflows that keep a chat per thread, is in the \`slack\` skill; the pull
-request review automation built on this library is in \`reviewing-pull-requests\`.
+Ready-made automations are packs: \`registry.read\` lists them, and fetches
+one with its files and docs to copy into the project and adapt. The
+\`slack-threads\` pack has the Slack library (\`slack.event\`, \`slack.mention\`,
+\`slack.message\`) and a chat per thread; the \`pull-request-reviews\` pack is a
+code and security review of every pull request, built on this library.
 
 A workflow that runs only for merged pull requests:
 

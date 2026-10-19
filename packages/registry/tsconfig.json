@@ -7,5 +7,11 @@
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "types": ["node"]
   },
-  "include": ["src", "scripts"]
+  "include": ["src", "scripts"],
+  "exclude": [
+    "src/pull-request-reviews/github.ts",
+    "src/pull-request-reviews/reviews.ts",
+    "src/slack-threads/slack.ts",
+    "src/slack-threads/slack-threads.ts"
+  ]
 }

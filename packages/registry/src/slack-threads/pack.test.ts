@@ -1,24 +1,20 @@
+// @vitest-environment node
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
+import {
+  agentDefinitionSchema,
+  parseProjectEnvironmentPolicy,
+} from "@catamorphic/core";
 import { matchesWhere, parseProject } from "@catamorphic/parser";
 import { expect, it } from "vitest";
-import { HOST_SKILLS } from "../seeds.js";
-import { agentDefinitionSchema } from "../services/agent-definitions-service.js";
-import { parseProjectEnvironmentPolicy } from "../services/project-environments-service.js";
+import { packFiles } from "../pack-files.js";
 
-const SKILL = HOST_SKILLS["slack/SKILL.md"] ?? "";
-const blocks = [...SKILL.matchAll(/```typescript\n([\s\S]*?)```/g)].map(
-  (match) => match[1] ?? "",
-);
-const library = blocks.find((source) =>
-  source.startsWith("// .work/triggers/slack.ts"),
-);
-const recipes = blocks.find((source) =>
-  source.includes("export const answerSlackMentions"),
-);
+const PACK = packFiles("slack-threads");
+const library = PACK.files[".work/triggers/slack.ts"];
+const recipes = PACK.files[".work/workflows/src/slack-threads.ts"];
 
 /**
  * Runs the shipped recipes under bun with a fake host and connection
@@ -85,11 +81,24 @@ const mention = (input: { ts: string; threadTs?: string; id: string }) => ({
   },
 });
 
-it("the skill's committed binding and agent are valid project files", () => {
-  const json = [...SKILL.matchAll(/```json\n([\s\S]*?)```/g)].map((match) =>
-    JSON.parse(match[1] ?? ""),
+it("installs valid project files and a project skill that explains them", () => {
+  expect(Object.keys(PACK.files)).toEqual([
+    ".work/project.json",
+    ".work/triggers/slack.ts",
+    ".work/agents/slack.json",
+    ".work/agents/slack.md",
+    ".work/workflows/src/slack-threads.ts",
+    ".work/skills/slack/SKILL.md",
+  ]);
+  expect(PACK.files[".work/skills/slack/SKILL.md"]).toMatch(
+    /^---\nname: slack\n/,
   );
-  const [manifest, agent] = json;
+  // The agent answers as its instructions say: read first, cite.
+  expect(PACK.files[".work/agents/slack.md"]).toContain(
+    "Read the thread before answering",
+  );
+  const manifest = JSON.parse(PACK.files[".work/project.json"] ?? "");
+  const agent = JSON.parse(PACK.files[".work/agents/slack.json"] ?? "");
   const policy = parseProjectEnvironmentPolicy(manifest);
   expect(policy.invalid).toBeUndefined();
   expect(policy.entries).toEqual([
@@ -110,7 +119,7 @@ it("the Slack library parses as three project kinds on one signed webhook", () =
   if (!library || !recipes) throw new Error("Missing Slack skill sources");
   const parsed = parseProject({
     ".work/triggers/slack.ts": library,
-    ".work/workflows/src/slack.ts": recipes,
+    ".work/workflows/src/slack-threads.ts": recipes,
   });
   expect(parsed.errors).toEqual([]);
   expect(parsed.triggerKinds.map((kind) => kind.name).sort()).toEqual([

@@ -15,11 +15,9 @@ import {
 import { BATCH_WORKFLOWS_SKILL } from "./batch-workflows-skill.js";
 import { DURABLE_WORKFLOWS_SKILL } from "./durable-workflows-skill.js";
 import { PERSONAL_ENVIRONMENT_SKILL } from "./personal-environment-skill.js";
-import { REVIEWING_PULL_REQUESTS_SKILL } from "./reviewing-pull-requests-skill.js";
 import { PROJECT_WORKSPACE_IGNORE } from "./services/project-workspace.js";
 import { SESSION_ARTIFACTS_SKILL } from "./session-artifacts-skill.js";
 import { SESSION_WORKFLOWS_SKILL } from "./session-workflows-skill.js";
-import { SLACK_SKILL } from "./slack-skill.js";
 import { WORKFLOW_LIFECYCLE_SKILL } from "./workflow-lifecycle-skill.js";
 import { WRITING_WORKFLOWS_SKILL } from "./writing-workflows-skill.js";
 
@@ -415,6 +413,10 @@ Then:
 
 Do NOT install the workspace preemptively — only when automations or apps are actually wanted.
 
+## Ready-made packs
+
+When someone asks for a common automation, such as reviewing every pull request or answering in Slack threads, start from a pack instead of from scratch. The \`registry.read\` capability lists the host's packs (project recipes such as \`pull-request-reviews\` and \`slack-threads\`, and UI components) and fetches one by name with its files and docs. Copy the files to their targets, merging into files the project already has, follow the docs, and adapt the result: the copy is the project's. A recipe pack also installs a project skill that explains it to whoever works here next.
+
 ## Saving, recording, and sharing files
 
 Call \`documents_storage\` when unsure where an MCP connection saves files.
@@ -676,8 +678,8 @@ description: The mechanics of building frontend apps that call this project's wo
 
 Reuse project-owned components and follow the project's app design guidance first.
 When the user, project or host points to a component registry, fetch the appropriate
-item and read its source, declared dependencies and usage notes. Discover the components.read capability through discover_capabilities when
-available, then invoke it to list or fetch the host's shipped items. Install source into the project,
+item and read its source, declared dependencies and usage notes. The registry.read
+capability lists the host's packs and fetches one by name. Install source into the project,
 then adapt it; do not treat registry components as a hidden runtime dependency.
 Preserve existing customizations. Temporary apps keep installed pack files in their
 explicit artifact snapshot instead of changing the project. For code reviews,
@@ -1294,9 +1296,7 @@ export const HOST_SKILLS: Record<string, string> = {
   "workflow-lifecycle/SKILL.md": WORKFLOW_LIFECYCLE_SKILL,
   "session-workflows/SKILL.md": SESSION_WORKFLOWS_SKILL,
   "searching-documents/SKILL.md": SEARCHING_DOCUMENTS_SKILL,
-  "slack/SKILL.md": SLACK_SKILL,
   "personal-environment/SKILL.md": PERSONAL_ENVIRONMENT_SKILL,
-  "reviewing-pull-requests/SKILL.md": REVIEWING_PULL_REQUESTS_SKILL,
   "publishing-to-github/SKILL.md": `---
 name: publishing-to-github
 title: Publish to GitHub
