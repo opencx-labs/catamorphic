@@ -287,12 +287,12 @@ that does not answer within `connectionGuardTimeoutMs` (default 30 seconds)
 escalates. Every verdict is in the connection audit. Give each guard `kinds`
 so it reviews only the connections it judges.
 
-A custom server (ADR 0160) passes guards as `hooks.connectionGuards`. Place it
-under `apps/server/` in an image built from the published one
-([extending the image](../../../packages/work-server/README.md#extending-the-image)),
+Your own server (ADRs 0160, 0262) passes guards as `hooks.connectionGuards`:
+copy `apps/server/src/index.ts` into an image built from the published one
+([your own image](../../../packages/work-server/README.md#your-own-image)),
 add the model client for the classifier there
-(`RUN cd /app/apps/server && bun add @anthropic-ai/sdk zod`), and copy
-listening and signal handling from `apps/server/src/index.ts`:
+(`RUN cd /app/apps/server && bun add @anthropic-ai/sdk zod`), and fill in
+the file's `hooks` with these:
 
 ```ts
 // apps/server/custom/server.ts

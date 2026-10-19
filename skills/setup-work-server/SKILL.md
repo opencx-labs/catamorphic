@@ -34,8 +34,8 @@ Start small and add only what the situation needs:
   configured sign-in provider (or local sign-in), and invitations.
 - **A company brain:** Google Workspace sign-in with directory
   deprovisioning and groups as roles ([company identity](references/company-identity.md));
-  credentials only through the gateway, with guards in a small custom server
-  on anything touching production
+  credentials only through the gateway, with guards in the company's own
+  server image on anything touching production
   ([secrets and the gateway](references/secrets-and-gateway.md));
   a private GitHub App you register for the company from the server, as the
   `github` service connection ([Connect GitHub](references/connect-github.md)),
@@ -64,7 +64,7 @@ Start small and add only what the situation needs:
 | Sharing documents, folders, or apps with customers behind a sign-in | [Sharing outside the company](references/sharing.md) |
 | Members working from Claude Code, Codex, or another MCP client | [Working from your own agent](references/members-over-mcp.md) |
 | Project agents that are Claude Code, Codex or an ACP agent (OpenCode, Hermes), running on the server with a model key the gateway holds (and providers it pins), or Codex on a member's own subscription signed in on the machine | [Harnesses on the server](references/harnesses.md) |
-| Work server plus company code (a guard or classifier, a directory, a connection provider, seeds, or a route) | [`@catamorphic/work-server`](../../packages/work-server/README.md): extend the published image with hooks; never fork the server |
+| Anything the stock server does not do: company code such as a guard or classifier, model request rewrites (pinning an aggregator's providers), a directory, a connection provider, a machine provisioner, seeds, or a route | [Your own image](../../packages/work-server/README.md#your-own-image): copy the one-file stock server, fill in its hooks, build on the published image; never fork the server |
 | Existing or custom application | [Custom host](references/custom-host.md) |
 | Sign-in, OIDC, invitations, roles, permissions | [Auth and identity](references/auth-and-identity.md) |
 | PGlite, Postgres, migrations, backup | [Database and migrations](references/database-and-migrations.md) |
@@ -89,6 +89,12 @@ disagree with the installed source, the source wins.
   server's own operations. Organization administrators manage the named
   service connections (ADR 0172) and the workers and machine rules
   (ADR 0205); they gain nothing inside projects.
+- **Beyond the stock server, write code, not configuration.** The stock
+  server is one file and its configuration does not grow (ADR 0262). When a
+  company needs more than it does, copy `apps/server/src/index.ts` into the
+  company's own image and fill in its hooks
+  ([your own image](../../packages/work-server/README.md#your-own-image));
+  do not look for a variable or file field that does the same.
 - **After setup, configuration is project code.** Roles, agents,
   `.work/workspace.js`, and `.work/project.json` change through
   ordinary review. Do not create a parallel bootstrap config.

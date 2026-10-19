@@ -109,19 +109,39 @@ is in the connection audit. Name `kinds` so a guard only sees the connections
 it judges. Examples:
 [secrets and the gateway](../../skills/setup-work-server/references/secrets-and-gateway.md#guards-are-host-code).
 
-## Extending the image
+## Your own image
 
-Keep the published image as the base so security fixes arrive with each
-release:
+The stock server is one file,
+[`apps/server/src/index.ts`](../../apps/server/src/index.ts). Anything it
+does not do is code in your own image built from that file (ADR 0262):
+guards, model request rewrites (pinning the providers an aggregator routes
+to), your own connection providers, a machine provisioner for your cloud,
+seeds, routes. The stock configuration does not grow to cover them, so this
+is the path a setup agent takes whenever the stock server is not enough:
 
-```dockerfile
-FROM ghcr.io/<owner>/work-server:<version>
-COPY server.ts /app/apps/server/custom/server.ts
-CMD ["bun", "apps/server/custom/server.ts"]
-```
+1. Copy `apps/server/src/index.ts` from the release you run to `server.ts`
+   and fill in its `hooks: {}`. It imports only `@catamorphic/work-server`,
+   which also exports the guard and rewrite types, the connection provider
+   definers, and `ConnectionActionRefusedError`.
+2. Build it on the published image, so security fixes arrive with each
+   release:
 
-The image's workspace uses isolated installs, so place the file under
-`apps/server/`: from there it resolves `@catamorphic/work-server` and the
-server's other dependencies. Pin an exact version and rebuild on every
-release. Copy the process concerns you need (listening, signals) from
-[`apps/server/src/index.ts`](../../apps/server/src/index.ts).
+   ```dockerfile
+   FROM ghcr.io/<owner>/work-server:<version>
+   COPY server.ts /app/apps/server/custom/server.ts
+   # More packages, when the hooks need them:
+   # RUN cd /app/apps/server && bun add @anthropic-ai/sdk zod
+   CMD ["bun", "apps/server/custom/server.ts"]
+   ```
+
+   The image's workspace uses isolated installs, so place the file under
+   `apps/server/`: from there it resolves `@catamorphic/work-server`.
+3. Push the image to your registry and run it in place of the published one,
+   with the same volume and variables.
+
+Workers keep the published image: hooks run on the control plane, and the
+machines the server creates are given the image it was built from. Pin an
+exact version and rebuild on every release, copying that release's
+`index.ts` again when it changed. Examples:
+[guards](../../skills/setup-work-server/references/secrets-and-gateway.md#guards-are-host-code),
+[pinned model routing](../../skills/setup-work-server/references/harnesses.md#pin-what-requests-carry-your-own-server-image).

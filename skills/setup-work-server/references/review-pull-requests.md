@@ -161,9 +161,10 @@ Ask an agent in the project to add the review automation from the
 - `.work/triggers/github.ts`: the GitHub trigger library.
 - `.work/agents/reviewer.json` and `reviewer.md`: the reviewer and its
   review doctrine. The skill's "An open model: OpenCode" variant runs
-  OpenCode over ACP on a model connection instead, such as an OpenRouter
-  connection whose `override` pins the providers that may serve the prompts
-  ([Harnesses on the server](harnesses.md)).
+  OpenCode over ACP on a model connection instead, such as OpenRouter, with
+  the providers that may serve the prompts pinned by a rewrite in the
+  company's own server image
+  ([Harnesses on the server](harnesses.md#pin-what-requests-carry-your-own-server-image)).
 - `.work/workflows/src/reviews.ts`: `reviewPullRequests`,
   `answerReviewComments`, `closePullRequestChats`, and `postReviews`.
 
