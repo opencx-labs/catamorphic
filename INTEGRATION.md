@@ -1101,13 +1101,14 @@ back unchanged. Bodies may be rewritten first (ADR 0256): pass
 `{ name, kinds?, rewrite(request) }`, where `rewrite` gets the method,
 path, query, headers, parsed body and caller (tenant, project, alias,
 provider kind, connection, principal kind, session) and returns the body to
-send or throws `ConnectionActionRefusedError`; a provider adds
-`defineModelConnectionProvider({ ..., override, paths })`, top-level fields
-set on every body after the rewrites (`null` removes one) and the endpoints
-it serves. Rewrites run before the allowlist and guards, bounded by the
+send or throws `ConnectionActionRefusedError`, and
+`defineModelConnectionProvider({ ..., paths })` limits the endpoints a
+provider serves. Rewrites are the one way a request changes: there is no
+declarative patch. They run before the allowlist and guards, bounded by the
 guard timeout; the gateway sends its own serialization, refuses bodies it
 cannot parse or that arrive content-encoded, and audits each refusal.
-Pinning OpenRouter's providers per project is a few lines of host code. Guards see kind `model` with action = method and path
+Pinning OpenRouter's providers, per project if need be, is a few lines of
+host code (the Work server takes them in its own image, ADR 0261). Guards see kind `model` with action = method and path
 (`POST v1/messages`) and input = provider, model, stream; endpoint and
 spending rules belong in guards. Usage lands in `model_usage` per session and
 turn, read passively from Anthropic and OpenAI answers (zero when a format is

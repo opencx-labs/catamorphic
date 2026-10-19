@@ -704,8 +704,6 @@ interface ModelAccess {
   headers: Readonly<Record<string, string>>;
   /** Whose key it is: a service connection's or a member's own. */
   principalKind: string;
-  /** The connection's fields set on every body (ADR 0256). */
-  override: ConnectionModelEndpoint["override"];
   /** The paths the connection serves, when it names them (ADR 0256). */
   paths: ConnectionModelEndpoint["paths"];
 }
@@ -977,9 +975,9 @@ export class ModelGatewayService {
 
   /**
    * What goes upstream, and what policy reads from it (ADRs 0180, 0256):
-   * the paths the connection serves, the host's rewrites then the
-   * connection's override (once, on our own serialization, so no field a
-   * second parser reads differently), then the binding's model allowlist.
+   * the paths the connection serves, the host's rewrites (once, on our own
+   * serialization, so no field a second parser reads differently), then the
+   * binding's model allowlist.
    */
   private async policy(args: {
     access: ModelAccess;
@@ -1007,9 +1005,7 @@ export class ModelGatewayService {
         !rewrite.kinds || rewrite.kinds.includes(access.providerKind),
     );
     const rewriting =
-      original !== undefined &&
-      original.length > 0 &&
-      (rewrites.length > 0 || access.override !== undefined);
+      original !== undefined && original.length > 0 && rewrites.length > 0;
     let parsed: JsonObject | undefined;
     if (rewriting) {
       let body = parseJsonObject({ request, body: original });
@@ -1022,7 +1018,6 @@ export class ModelGatewayService {
           path,
           body,
         });
-      if (access.override) body = applyOverride(body, access.override);
       parsed = body;
     }
     const body = parsed ? encoder.encode(JSON.stringify(parsed)) : original;
@@ -1206,7 +1201,6 @@ export class ModelGatewayService {
       baseUrl: resolved.endpoint.baseUrl,
       headers: resolved.headers,
       principalKind: resolved.binding.principalKind,
-      override: resolved.endpoint.override,
       paths: resolved.endpoint.paths,
     };
     const until = Math.min(
@@ -1291,7 +1285,7 @@ function fieldsOf(parsed: Readonly<Record<string, unknown>>): RequestFields {
 const strictDecoder = new TextDecoder("utf-8", { fatal: true });
 
 /**
- * A body a rewrite or override governs, as one JSON object; anything else
+ * A body a rewrite governs, as one JSON object; anything else
  * (content-encoded, not UTF-8, not one object) is refused rather than
  * forwarded unrewritten (ADR 0256).
  */
@@ -1320,18 +1314,6 @@ function parseJsonObject(args: {
       `'${request.alias}' reviews its requests; send one JSON object`,
     );
   return parsed;
-}
-
-/** Each overridden field replaces the body's; `null` removes it. */
-function applyOverride(
-  body: JsonObject,
-  override: Readonly<Record<string, Json>>,
-): JsonObject {
-  const next: JsonObject = { ...body };
-  for (const [field, value] of Object.entries(override))
-    if (value === null) delete next[field];
-    else next[field] = value;
-  return next;
 }
 
 /** Whether `path` is one of `prefixes` or below one, by whole segments. */

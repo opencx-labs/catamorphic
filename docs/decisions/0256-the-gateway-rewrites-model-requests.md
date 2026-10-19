@@ -1,6 +1,6 @@
 # 0256 — The gateway rewrites model requests
 
-- **Status:** Accepted (amends 0180)
+- **Status:** Accepted (amends 0180; amended by [0261](0261-customize-the-work-server-with-your-own-image.md): requests change only in the server's own code, and the stock gateway file has no `override` or model `paths`)
 - **Date:** 2026-10-18
 
 ## Context

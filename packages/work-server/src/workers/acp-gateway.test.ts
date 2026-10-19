@@ -138,14 +138,6 @@ beforeAll(async () => {
           displayName: "OpenRouter",
           api: "openai",
           baseUrl: `http://127.0.0.1:${upstreamAddress.port}/api/v1`,
-          // US providers with zero data retention, whatever an agent asks.
-          override: {
-            provider: {
-              only: ["provider-a", "provider-b"],
-              allow_fallbacks: false,
-              data_collection: "deny",
-            },
-          },
         },
       ],
     }),
@@ -164,16 +156,21 @@ beforeAll(async () => {
       },
     }),
     hooks: {
-      // Host code beside the file: it names the project to OpenRouter, and
-      // what it says of providers yields to the file's override.
+      // The server's own code (ADR 0261): it names the project to
+      // OpenRouter and pins the providers it may route to, with zero data
+      // retention, whatever an agent asks.
       modelRequestRewrites: [
         {
-          name: "attribute calls",
+          name: "attribute and pin",
           kinds: ["openrouter"],
           rewrite: ({ body, context }) => ({
             ...body,
             user: `project:${context.projectId}`,
-            provider: { only: ["anywhere"] },
+            provider: {
+              only: ["provider-a", "provider-b"],
+              allow_fallbacks: false,
+              data_collection: "deny",
+            },
           }),
         },
       ],

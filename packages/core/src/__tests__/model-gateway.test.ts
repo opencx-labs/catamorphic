@@ -88,8 +88,7 @@ function harness(options: {
   writeDelayMs?: number;
   /** The host's rewrites of request bodies (ADR 0256). */
   rewrites?: ModelRequestRewrite[];
-  /** The connection's override and paths (ADR 0256). */
-  override?: ConnectionModelEndpoint["override"];
+  /** The paths the connection serves (ADR 0256). */
   paths?: readonly string[];
   /** How long a rewrite may take. */
   rewriteTimeoutMs?: number;
@@ -113,7 +112,6 @@ function harness(options: {
       options.api === "anthropic"
         ? { "x-api-key": state.key }
         : { authorization: `Bearer ${state.key}` },
-    ...(options.override ? { override: options.override } : {}),
     ...(options.paths ? { paths: options.paths } : {}),
   };
   const upstreamCalls: Array<{
@@ -959,7 +957,7 @@ describe("model request rewrites (ADR 0256)", () => {
     ]);
   });
 
-  it("applies the host's rewrites in order, only to their kinds, and the connection's override last", async () => {
+  it("applies the host's rewrites in order, only to their kinds", async () => {
     const { gateway, upstreamCalls } = harness({
       api: "openai",
       rewrites: [
@@ -977,16 +975,16 @@ describe("model request rewrites (ADR 0256)", () => {
           rewrite: ({ body }) => ({
             ...body,
             trail: [...(Array.isArray(body.trail) ? body.trail : []), "second"],
-            provider: { only: ["chutes"] },
+            provider: { only: ["provider-a"] },
           }),
         },
       ],
-      override: { provider: { only: ["provider-a"] }, user: null },
     });
     const response = await gateway.handle(chat('{"model":"m"}'));
     await bodyText(response);
     expect(sent(upstreamCalls[0])).toEqual({
       model: "m",
+      user: "a",
       trail: ["first", "second"],
       provider: { only: ["provider-a"] },
     });
@@ -1013,7 +1011,7 @@ describe("model request rewrites (ADR 0256)", () => {
     const plain = harness({
       api: "openai",
       policy: { allow: ["deepseek/*"] },
-      override: { provider: { only: ["provider-a"] } },
+      rewrites: [pin],
     });
     for (const body of [
       '{"model":"deepseek/v4-flash","models":["meta-llama/llama-5"]}',

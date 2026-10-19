@@ -1,14 +1,25 @@
 /**
  * The Work server as a library (ADR 0160). The published image calls
  * `createWorkServer({ config: workServerConfigFromEnv(process.env) })`; a
- * custom server passes the same config, or builds it in code, plus its hooks
- * (ADR 0183: config is typed data, hooks are code).
+ * company's own server copies `apps/server/src/index.ts` into its own image
+ * and adds hooks (ADRs 0183, 0261: config is typed data, hooks are code).
  */
-export type {
-  ConnectionActionContext,
-  ConnectionActionGuard,
-  ConnectionGuardVerdict,
+// What a company's own server file needs (ADR 0261), from one package.
+export {
+  type ConnectionActionContext,
+  type ConnectionActionGuard,
+  ConnectionActionRefusedError,
+  type ConnectionGuardVerdict,
+  type ConnectionProvider,
+  type ModelRequest,
+  type ModelRequestRewrite,
 } from "@catamorphic/core";
+export {
+  defineGitConnectionProvider,
+  defineHttpApiConnectionProvider,
+  defineModelConnectionProvider,
+  definePostgresConnectionProvider,
+} from "@catamorphic/server-sdk";
 export {
   type WorkAuthConfig,
   WorkAuthConfigSchema,
@@ -45,6 +56,11 @@ export {
   type GoogleServiceAccountKey,
   GoogleWorkspaceDirectory,
 } from "./identity/google-directory.js";
+export {
+  lanAddresses,
+  type MdnsResponder,
+  startMdnsResponder,
+} from "./mdns.js";
 export {
   createWorkServer,
   SERVER_TENANT_ID,

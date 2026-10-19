@@ -5,14 +5,20 @@ import { emitLog } from "@catamorphic/otel";
 import { startTelemetry } from "@catamorphic/otel/node";
 import {
   createWorkServer,
+  lanAddresses,
+  startMdnsResponder,
   workServerConfigFromEnv,
 } from "@catamorphic/work-server";
-import { lanAddresses, startMdnsResponder } from "./mdns.js";
 
 /**
  * The Work server, the prebuilt Catamorphic host (ADR 0059, 0159). Zero
  * external services: everything lives under the data dir (default /data;
  * mount it as a volume).
+ *
+ * This file is the whole stock server. A company that needs its own code
+ * (guards, model request rewrites, connection providers, a machine
+ * provisioner, routes) copies it into its own image and fills in `hooks`
+ * (ADR 0261; packages/work-server/README.md).
  *
  *   PORT                 listen port (default 4700)
  *   WORK_OPERATOR_PORT   loopback-only setup port (default 4701)
@@ -75,6 +81,8 @@ const reachableBases = [
 
 const server = await createWorkServer({
   config,
+  // A company's own code, in its own image (ADR 0261).
+  hooks: {},
   log: (line) => console.log(line),
 });
 

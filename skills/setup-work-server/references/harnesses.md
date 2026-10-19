@@ -29,35 +29,82 @@ another base URL, declare the kind in `WORK_GATEWAY_CONFIG` first:
 
 ```json
 { "type": "model", "kind": "openrouter", "displayName": "OpenRouter",
-  "api": "openai", "baseUrl": "https://openrouter.ai/api/v1",
-  "paths": ["/chat/completions", "/models"],
-  "override": {
-    "provider": { "only": ["<provider slug>"], "allow_fallbacks": false,
-                  "data_collection": "deny" },
-    "models": null, "route": null, "preset": null, "plugins": null } }
+  "api": "openai", "baseUrl": "https://openrouter.ai/api/v1" }
 ```
 
 `api` is `anthropic` (Messages, for Claude Code) or `openai` (Responses and
 Chat Completions, for Codex and most ACP agents). An entry with kind
-`anthropic` or `openai` replaces the built-in one.
-
-`override` sets top-level fields of every request body, replacing whatever
-the agent sent; `null` removes a field (ADR 0256). Above, OpenRouter routes
-only to the providers named, with no fallback models, routes, presets or
-plugins, whatever the agent's configuration asks, and `paths` keeps agents
-to completions and the model list. A custom server that needs logic (per
-project, per session) adds `hooks.modelRequestRewrites`, each
-`{ name, kinds?, rewrite(request) }` returning the body to send; they run
-before the connection's override, which has the last word. A rewrite also
-belongs there for what an override cannot reach: OpenRouter's server tools
-in `tools` (web search) and parsing of PDFs by a plugin provider send
-content outside `provider`. A connection with a rewrite or override serves
-JSON bodies only: one it cannot parse, or one sent content-encoded, is
-refused, and every refusal is audited. The server's own
+`anthropic` or `openai` replaces the built-in one. The server's own
 `OPENROUTER_API_KEY` serves only its built-in assistant on the control
-plane, which rewrites do not reach. The server's own `ANTHROPIC_API_KEY` (and the
-other key variables) only serve the built-in assistant and any guards a
-custom server adds; harnesses never receive them.
+plane, and the server's own `ANTHROPIC_API_KEY` (and the other key
+variables) only the built-in assistant and any guards your server adds;
+harnesses never receive them.
+
+### Pin what requests carry: your own server image
+
+The stock server forwards what the agent sends. An aggregator such as
+OpenRouter routes a request to whichever providers it names, so deciding
+the routing (only providers that keep no data, no fallback models) is
+control-plane code: build your own image from the stock server file
+([your own image](../../../packages/work-server/README.md#your-own-image),
+ADR 0261) and add a model request rewrite (ADR 0256). In the copied
+`apps/server/src/index.ts`:
+
+```ts
+import {
+  createWorkServer,
+  defineModelConnectionProvider,
+  lanAddresses,
+  type ModelRequestRewrite,
+  startMdnsResponder,
+  workServerConfigFromEnv,
+} from "@catamorphic/work-server";
+
+// OpenRouter, serving completions and the model list only.
+const openrouter = defineModelConnectionProvider({
+  kind: "openrouter",
+  displayName: "OpenRouter",
+  api: "openai",
+  baseUrl: "https://openrouter.ai/api/v1",
+  paths: ["/chat/completions", "/models"],
+});
+
+// Fallback models, routes, presets and plugins reach past `provider`.
+const DROPPED = new Set(["models", "route", "preset", "plugins"]);
+
+// Whatever an agent asks: these providers only, no data kept, no fallbacks.
+const pinProviders: ModelRequestRewrite = {
+  name: "pin-openrouter-providers",
+  kinds: ["openrouter"],
+  rewrite: ({ body }) => ({
+    ...Object.fromEntries(
+      Object.entries(body).filter(([field]) => !DROPPED.has(field)),
+    ),
+    provider: {
+      only: ["<provider slug>"],
+      allow_fallbacks: false,
+      data_collection: "deny",
+      zdr: true,
+    },
+  }),
+};
+
+// …and in the file's createWorkServer call:
+//   hooks: { connectionProviders: [openrouter], modelRequestRewrites: [pinProviders] },
+```
+
+A rewrite gets the method, the path, the headers (read-only), the parsed
+body, and who calls (tenant, project, alias, provider kind, connection,
+whose key, session), and returns the body to send or throws
+`ConnectionActionRefusedError` to refuse. Rewrites run in order, before the
+binding's model allowlist and the guards, so those judge the body that is
+sent; each is bounded by the guard timeout, and a slow or failing one
+refuses the call. A connection with a rewrite serves JSON bodies only: one
+it cannot parse, or one sent content-encoded, is refused, and every refusal
+is audited. What `provider` does not reach belongs in the same rewrite:
+OpenRouter's server tools (web search) and PDF parsing by a plugin provider
+send content elsewhere, so drop those entries too, and allow exact model
+ids in the binding.
 
 ## 2. Bind it in the Environment
 
