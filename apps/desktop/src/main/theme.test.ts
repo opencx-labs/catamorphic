@@ -11,6 +11,7 @@ import {
   normalizeTheme,
   resolveTheme,
   ThemeStore,
+  validateThemeConfig,
 } from "./theme.js";
 
 const temporaryDirectories: string[] = [];
@@ -131,6 +132,39 @@ describe("desktop theme", () => {
       selection: "paper",
       overrides: {},
     });
+  });
+
+  it("keeps https backgrounds per surface, fills defaults and drops the rest", () => {
+    expect(
+      normalizeTheme({
+        backgrounds: {
+          left: { image: "https://example.com/a.png", pixelate: 4, blur: 99 },
+          right: { image: "file:///etc/passwd" },
+          chat: { image: "https://example.com/b.png", position: "center" },
+          footer: { image: "https://example.com/c.png" },
+        },
+      }).backgrounds,
+    ).toEqual({
+      left: {
+        image: "https://example.com/a.png",
+        position: "bottom",
+        opacity: 0.35,
+        blur: 0,
+        pixelate: 4,
+      },
+      chat: {
+        image: "https://example.com/b.png",
+        position: "center",
+        opacity: 0.35,
+        blur: 0,
+        pixelate: 1,
+      },
+    });
+    expect(() =>
+      validateThemeConfig({
+        backgrounds: { left: { image: "http://x.test/a.png" } },
+      }),
+    ).toThrow("needs an https image");
   });
 
   it("broadcasts a newly resolved system theme but leaves fixed themes alone", () => {

@@ -699,12 +699,18 @@ and one component (`source-section.tsx`) draws every list.
   `light-dark()` values in `styles.css` (the pre-JS first paint), and
   documented here — then used via Tailwind (`bg-bg-raised`, `text-fg-muted`, …).
 - The active theme lives in `<userData>/profiles/<id>/theme.json`
-  (`{ selection, overrides, fonts? }`) — profile-local, file-watched, agent-editable.
+  (`{ selection, overrides, fonts?, backgrounds? }`) — profile-local, file-watched, agent-editable.
   `selection: "system"` resolves to the Work Light or Dark preset and
   follows operating-system changes live.
   ThemeProvider writes each resolved color as an inline CSS variable on
   `<html>`, sets `color-scheme`, and mirrors the appearance to
   `data-theme` for anything keyed on it.
+- `backgrounds.left`, `.right` and `.chat` put an https picture behind a
+  sidebar or the chat (ADR 0263). It stays visible at its `position` and
+  fades into the surface's own color away from it, so the surface stays
+  readable; opacity, blur and pixelation are data with fixed ranges, never
+  CSS. The surface isolates a stacking context and the picture fades in once
+  loaded.
 - The Work Light and Dark presets in `theme.ts` and the paired
   `light-dark()` values in `styles.css` must stay identical. `:root` follows
   the operating system for the pre-JS first paint.

@@ -102,6 +102,7 @@ import {
   slashEntries,
 } from "../lib/slash-commands";
 import { selectionName, textPill } from "../lib/text-pills";
+import { ThemeBackdrop } from "../lib/theme.js";
 import { useBackgroundCommands } from "../lib/use-background-commands";
 import { useChips } from "../lib/use-chips.js";
 import { useQueueMessages } from "../lib/use-queue-messages.js";
@@ -2840,7 +2841,8 @@ function ChatDockContent({
           the edge of the tab or the floating panel (which the dock host
           widens past the column, styles.css), while everything else keeps
           a centered, readable column. */}
-        <div className="flex min-h-0 w-full flex-1 flex-col">
+        <div className="relative isolate flex min-h-0 w-full flex-1 flex-col">
+          <ThemeBackdrop surface="chat" />
           {visibleWatchers.length > 0 && (
             <div
               className={`mx-auto flex w-full shrink-0 flex-wrap gap-1 border-b border-border-subtle px-3 py-2 ${
