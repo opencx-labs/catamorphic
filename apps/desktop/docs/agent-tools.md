@@ -46,7 +46,7 @@ Availability also depends on identity, services, agent sandboxing and topology.
 | Operations | Projection and purpose |
 |---|---|
 | `workspace_overview`, `read_tab`, `open_surface`, `update_todo_list` | Eager, bounded workspace context, reading what is on screen, and visible handoff/progress |
-| `list_project_sessions`, `read_project_session`, `send_project_session_message` | Deferred, authorized peer coordination; `children_only` filters the listing |
+| `list_project_sessions`, `read_project_session`, `send_project_session_message` | Deferred, authorized peer coordination; `children_only` filters the listing; a message steers by default (read at the other agent's next step, or a turn when it is idle), and a subagent's to its parent always does (ADR 0250) |
 | `spawn_subsession`, `wait_for_subsessions` | Eager, the agent's subagents: host-owned child sessions whose results steer into the parent's working turn (ADR 0202) |
 | `interrupt_subsession` | Deferred, stops a direct child |
 | `request_user_attention`, `set_session_activity`, `set_session_metadata`, `read_todo_list` | Deferred, session state; `set_session_metadata` sets one named value the sidebar reads (ADR 0226) |

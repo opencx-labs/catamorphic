@@ -272,6 +272,12 @@ describe("workspace coordination tools", () => {
       message: "Context",
       delivery_mode: "message_only",
     });
+    // Without a mode, a message reaches the other agent at its next step
+    // (ADR 0250).
+    await execute("send_project_session_message", {
+      session_id: "parent",
+      message: "Option A or B?",
+    });
     await execute("spawn_subsession", {
       task: "Review the API",
       route_id: "reviewer",
@@ -289,6 +295,7 @@ describe("workspace coordination tools", () => {
 
     expect(calls).toEqual([
       ["send", "project", "session", "peer", "Context", "message_only"],
+      ["send", "project", "session", "parent", "Option A or B?", "steer"],
       [
         "spawn",
         "project",

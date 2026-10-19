@@ -2337,6 +2337,7 @@ export class AgentSessionsService {
    * otherwise joins the one turn waiting for notifications, so they never
    * stack up. A `message_only` input waits, `in_progress`, for the next turn
    * to take it in, unless it is only for people to read (`forAgent: false`).
+   * A subagent's queued message to its own parent steers (ADR 0250).
    * Idempotent by `idempotencyKey`. The session row must be locked by the
    * caller.
    */
@@ -2411,6 +2412,22 @@ export class AgentSessionsService {
           const runner = row?.runner as { ownerOnly?: boolean } | null;
           return runner !== null && runner !== undefined && !runner.ownerOnly;
         }));
+    // A subagent's message to its own parent reaches the parent's working
+    // turn at its next step (ADR 0250), whichever of queue or steer it
+    // chose: queued behind a turn that waits on the subagent, each would
+    // wait on the other.
+    const requested: DispatchMode =
+      delivery.dispatch === "queue" &&
+      input.kind === "inbound_message" &&
+      input.from.kind === "agent" &&
+      (await trx
+        .selectFrom("agent_sessions")
+        .select("id")
+        .where("id", "=", input.from.sessionId)
+        .where("parent_session_id", "=", sessionId)
+        .executeTakeFirst()) !== undefined
+        ? "steer"
+        : delivery.dispatch;
     // A person's message while the turn waits on a question joins that
     // turn (ADR 0195), as does their own assistant's asking for them: the
     // question stays open as a non-blocking one and its answer arrives
@@ -2420,7 +2437,7 @@ export class AgentSessionsService {
       ((input.kind === "user_message" && !input.answer) ||
         (input.kind === "inbound_message" &&
           input.from.kind === "assistant")) &&
-      (delivery.dispatch === "queue" || delivery.dispatch === "steer") &&
+      (requested === "queue" || requested === "steer") &&
       active?.status === "waiting";
     // A notification reaches a turn until its work is done, waiting on the
     // person included (the agent reads it once they answer); once its
@@ -2431,9 +2448,9 @@ export class AgentSessionsService {
       (input.kind !== "task_notification" || active.status !== "finalizing");
     const dispatch: DispatchMode = replyToWaiting
       ? "steer"
-      : delivery.dispatch === "steer" && !steerable
+      : requested === "steer" && !steerable
         ? "queue"
-        : delivery.dispatch;
+        : requested;
     // A notification joins the turn waiting for notifications only when
     // both are as much the owner's: one runs on their sign-in or files
     // (ADR 0199), the other may not.

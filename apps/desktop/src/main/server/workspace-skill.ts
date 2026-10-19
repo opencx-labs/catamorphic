@@ -150,8 +150,12 @@ delegation mechanism.
 
 Discover list_project_sessions and read_project_session for authorized peer
 context. children_only lists your direct children. send_project_session_message
-has message_only (read with that agent's next turn), queue and interrupt
-delivery; use interrupt for urgent course changes. Use request_user_attention only when the user should see a
+steers by default: the other agent reads it at its next step while it works,
+or it starts a turn when the agent is idle. Ask a question or report a
+blocker that way; your parent session always gets a message from you that
+way. message_only is context that starts no work, queue is work for after
+that agent's current turn (however long it runs), and interrupt is only for
+urgent course changes. Use request_user_attention only when the user should see a
 latent session.
 
 Before editing, check the turn's list of other active chats. Ordinary document

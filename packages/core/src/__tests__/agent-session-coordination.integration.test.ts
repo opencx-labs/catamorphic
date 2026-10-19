@@ -2541,6 +2541,96 @@ describe("agent session coordination", () => {
     }
   });
 
+  it("brings a subagent's message to its working parent at its next step, even sent to queue (ADR 0250)", async () => {
+    const project = await projects.create(identity, {
+      name: "A subagent asks",
+    });
+    const parent = await sessions.create(identity, project.id);
+    const child = await sessions.createSubsession(
+      identity,
+      project.id,
+      parent.id,
+      { task: "Write the poster" },
+    );
+    const sibling = await sessions.create(identity, project.id);
+    // The child's result has reached the parent and its turn is done.
+    await vi.waitFor(
+      async () => {
+        const turns = await turnsOf(parent.id, project.id);
+        expect(turns.length).toBeGreaterThan(0);
+        expect(turns.every((turn) => turn.status === "completed")).toBe(true);
+      },
+      { timeout: 10_000 },
+    );
+    const settledTurns = (await turnsOf(parent.id, project.id)).length;
+    let working: () => void = () => {};
+    const isWorking = new Promise<void>((resolve) => {
+      working = resolve;
+    });
+    provider.questions = async ({ steered, say }) => {
+      working();
+      // The parent works on, waiting for the poster: the child's question
+      // reaches this turn instead of a turn behind it.
+      await vi.waitFor(
+        () =>
+          expect(steered.some((text) => text.includes("Option A or B?"))).toBe(
+            true,
+          ),
+        { timeout: 10_000 },
+      );
+      say("Option B");
+    };
+    try {
+      const reply = sessions.sendMessage(
+        identity,
+        project.id,
+        parent.id,
+        "questions: wait on the poster",
+      );
+      await isWorking;
+      const running = await vi.waitFor(
+        async () => {
+          const turn = (await turnsOf(parent.id, project.id)).at(-1);
+          expect(turn?.status).toBe("running");
+          return turn;
+        },
+        { timeout: 10_000 },
+      );
+      const from = (session: { id: string; agentId: string | null }) => ({
+        kind: "agent" as const,
+        sessionId: session.id,
+        agentId: session.agentId ?? "",
+      });
+      // Another agent's queued work still waits for the turn to end.
+      const queued = await sessions.deliver(identity, project.id, parent.id, {
+        author: from(sibling),
+        content: "Afterwards, tidy the docs",
+        mode: "queue",
+      });
+      expect(queued.mode).toBe("queue");
+      expect(queued.turnId).not.toBe(running?.id);
+      await sessions.command(identity, project.id, parent.id, {
+        type: "cancel_queued",
+        commandId: randomUUID(),
+        turnId: queued.turnId ?? "",
+      });
+      const asked = await sessions.deliver(identity, project.id, parent.id, {
+        author: from(child.session),
+        content: "Option A or B?",
+        mode: "queue",
+      });
+      expect(asked).toMatchObject({ mode: "steer", turnId: running?.id });
+      await reply;
+      const turns = await turnsOf(parent.id, project.id);
+      expect(turns.slice(settledTurns).map((turn) => turn.status)).toEqual([
+        "completed",
+        "cancelled",
+      ]);
+    } finally {
+      provider.questions = undefined;
+    }
+  });
+
   it("keeps what came before a chat's first turn in its snapshot", async () => {
     const project = await projects.create(identity, {
       name: "Before the first turn",
