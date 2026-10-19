@@ -1,8 +1,13 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import type { AgentTurnUsage, Item, Turn } from "@catamorphic/agent-protocol";
-import type { AgentSessionsService, Identity } from "@catamorphic/core";
+import {
+  type AgentSessionsService,
+  type Identity,
+  parseRegistryCatalog,
+} from "@catamorphic/core";
 import pg from "pg";
 import { workServerConfigFromEnv } from "./config.js";
 import {
@@ -332,4 +337,24 @@ export function filesHolding(directory: string, text: string): string[] {
 
 function isMissing(error: unknown): boolean {
   return error instanceof Error && "code" in error && error.code === "ENOENT";
+}
+
+/**
+ * A registry pack's files by their project targets, from the built catalog
+ * an agent's `registry.read` returns (ADR 0262).
+ */
+export function registryPack(name: string): Record<string, string> {
+  const catalog = parseRegistryCatalog(
+    fs.readFileSync(
+      createRequire(import.meta.url).resolve(
+        "@catamorphic/registry/catalog.json",
+      ),
+      "utf8",
+    ),
+  );
+  const item = catalog.find((entry) => entry.name === name);
+  if (!item) throw new Error(`No pack named ${name}`);
+  return Object.fromEntries(
+    item.files.map((file) => [file.target ?? file.path, file.content]),
+  );
 }

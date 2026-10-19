@@ -1,0 +1,27 @@
+{
+  "environments": {
+    "default": {
+      "workloads": ["agent", "workflow"],
+      "connections": {
+        "slack": {
+          "provider": "slack",
+          "principal": "service",
+          "service": "slack",
+          "capabilities": [
+            "conversations.history",
+            "conversations.replies",
+            "chat.postMessage",
+            "chat.getPermalink",
+            "users.info"
+          ]
+        },
+        "slackSearch": {
+          "provider": "slack",
+          "principal": "service",
+          "service": "slack-search",
+          "capabilities": ["search.messages", "chat.getPermalink"]
+        }
+      }
+    }
+  }
+}

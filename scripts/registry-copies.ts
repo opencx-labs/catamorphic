@@ -192,8 +192,12 @@ export function packageName(specifier: string): string {
   return at === -1 ? name : name.slice(0, at);
 }
 
-/** React itself is every component's peer; items do not declare it. */
-const PEERS = new Set(["react", "react-dom"]);
+/**
+ * What an installed item's host already has, so items do not declare it:
+ * React for every component, and the workflow package for every pack's
+ * workflows, which the project's capability workspace depends on.
+ */
+const PEERS = new Set(["react", "react-dom", "@catamorphic/workflow"]);
 
 /** Why an installed copy may not import this, or undefined when it may. */
 export function disallowedImport(

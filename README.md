@@ -580,11 +580,12 @@ Projects define their own kinds on top of the host's in `.work/triggers/`
 (`defineTrigger({ name, from: trigger("webhook", { ... }), where })`), and
 every binding may add a `where` filter the host checks before a run starts,
 so a GitHub or Slack integration is project code on the webhook kind, whose
-verification schemes and handshakes are declared in its config. The host
-skill `slack` is the worked example: a chat per Slack thread, replies posted
-back through a gateway connection whose named operations are its
-capabilities ([Connect Slack](skills/setup-work-server/references/connect-slack.md)).
-The host skill `reviewing-pull-requests` is the larger one: a code and
+verification schemes and handshakes are declared in its config. The
+`slack-threads` pack is the worked example, which an agent installs into a
+project and adapts: a chat per Slack thread, replies posted back through a
+gateway connection whose named operations are its capabilities
+([Connect Slack](skills/setup-work-server/references/connect-slack.md)).
+The `pull-request-reviews` pack is the larger one: a code and
 security review of every pull request, in a chat per pull request on a
 dedicated review pool, verified by running the change and reported to a
 workflow outside the sandbox that posts it as a review, a check run, and a

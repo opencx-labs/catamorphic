@@ -1,0 +1,84 @@
+{
+  "environments": {
+    "default": { "workloads": ["agent", "workflow"] },
+    "review": {
+      "description": "Pull request reviews, on machines enrolled with the review pool label",
+      "workloads": ["agent"],
+      "pool": { "pool": "review" },
+      "image": ".work/images/review.Dockerfile",
+      "requirements": {
+        "containers": true,
+        "resources": { "commandTimeoutSeconds": 1800 }
+      },
+      "network": { "egress": "gateway" },
+      "setup": {
+        "command": "if [ -f pnpm-lock.yaml ]; then pnpm install --frozen-lockfile; elif [ -f bun.lock ] || [ -f bun.lockb ]; then bun install --frozen-lockfile; elif [ -f package-lock.json ]; then npm ci --no-audit --no-fund; fi; for f in compose.yaml compose.yml docker-compose.yaml docker-compose.yml; do if [ -f \"$f\" ]; then docker compose -f \"$f\" pull --ignore-buildable --ignore-pull-failures --quiet; break; fi; done",
+        "timeoutMinutes": 20,
+        "network": {
+          "allow": [
+            "registry.npmjs.org",
+            "registry-1.docker.io",
+            "auth.docker.io",
+            "production.cloudflare.docker.com",
+            "ghcr.io",
+            "pkg-containers.githubusercontent.com"
+          ]
+        }
+      },
+      "waitMinutes": 30,
+      "idleReleaseMinutes": 20,
+      "approvals": { "waitMinutes": 60 },
+      "connections": {
+        "github": {
+          "provider": "github",
+          "principal": "service",
+          "service": "github",
+          "capabilities": [
+            "get",
+            "pull_request_files",
+            "review_threads",
+            "git:read"
+          ]
+        },
+        "prod": {
+          "provider": "prod-replica",
+          "principal": "service",
+          "service": "prod-replica",
+          "capabilities": ["query", "explain", "schema"]
+        },
+        "slack": {
+          "provider": "slack",
+          "principal": "service",
+          "service": "slack-search",
+          "capabilities": ["conversations.replies", "search.messages"]
+        }
+      }
+    },
+    "github-poster": {
+      "description": "Posts reviews to GitHub from the control plane; no agent runs here",
+      "workloads": ["workflow"],
+      "connections": {
+        "github": {
+          "provider": "github",
+          "principal": "service",
+          "service": "github",
+          "capabilities": [
+            "get",
+            "pull_request_files",
+            "review_threads",
+            "check_runs",
+            "list_reviews",
+            "create_review",
+            "create_check_run",
+            "dismiss_review",
+            "resolve_review_thread",
+            "reply_to_review_comment",
+            "issue_comment",
+            "update_pull_request"
+          ]
+        }
+      }
+    }
+  },
+  "defaultEnvironment": "default"
+}

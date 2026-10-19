@@ -117,13 +117,17 @@ redirect URL.
 
 ## 4. Commit the project side
 
-From the `slack` skill, commit to the project and publish:
+Ask an agent in the project to install the `slack-threads` pack
+(`registry.read` fetches it; its docs say what to merge and enable), then
+publish. It adds:
 
 - `.work/triggers/slack.ts`: the trigger library (signature check, URL
   verification, event ids as delivery ids, `slack.mention`, `slack.message`).
-- `.work/agents/slack.json` (and optional `slack.md`): the agent that answers
-  in threads, allowed to read Slack but not post.
-- The two workflows: answer mentions, post replies.
+- `.work/agents/slack.json` and `slack.md`: the agent that answers in
+  threads, allowed to read Slack but not post, and how it reads and cites.
+- `.work/workflows/src/slack-threads.ts`: answer mentions, post replies.
+- `.work/skills/slack/SKILL.md`: how the project works with Slack, for the
+  agents that work in it later.
 - In `.work/project.json`, the binding for the Environment those automations
   and chats use:
 

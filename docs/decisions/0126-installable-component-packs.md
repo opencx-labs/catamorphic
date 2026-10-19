@@ -1,6 +1,6 @@
 # 0126: Installable component packs
 
-- **Status:** Accepted
+- **Status:** Accepted (refined by [0262](0262-recipes-are-registry-packs.md): recipes are registry packs, served by `registry.read`)
 - **Date:** 2026-09-11
 - **Supersedes:** The review-package distribution choice in 0124
 

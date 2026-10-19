@@ -1,8 +1,12 @@
+import { readFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 import {
   type AgentCapabilityOptions,
   type CatamorphicCore,
   defineAgentCapability,
+  defineRegistryCapability,
   hasProjectPermission,
+  parseRegistryCatalog,
 } from "@catamorphic/core";
 import { projectToolCapabilities } from "@catamorphic/fastify-plugin";
 import { z } from "zod";
@@ -17,6 +21,22 @@ const SERVER_PROJECT_TOOLS = new Set([
   "propose_change",
   "set_session_metadata",
 ]);
+
+/**
+ * The packs the server's agents can install into a project (ADR 0262): the
+ * `@catamorphic/registry` build, read when an agent asks.
+ */
+const registry = defineRegistryCapability({
+  catalog: async () =>
+    parseRegistryCatalog(
+      await readFile(
+        createRequire(import.meta.url).resolve(
+          "@catamorphic/registry/catalog.json",
+        ),
+        "utf8",
+      ),
+    ),
+});
 
 /** Work server profile and directory; no framework-owned identity model. */
 export function workAgentCapabilities(args: {
@@ -96,11 +116,13 @@ export function workAgentCapabilities(args: {
       ...(args.custom?.sources ?? []),
     ],
     capabilities: [
-      ...(args.custom?.capabilities?.some(
-        (item) => item.name === directory.name,
-      )
-        ? []
-        : [directory]),
+      // A host's own capability of the same name replaces the built-in one.
+      ...[directory, registry].filter(
+        (builtIn) =>
+          !args.custom?.capabilities?.some(
+            (item) => item.name === builtIn.name,
+          ),
+      ),
       ...(args.custom?.capabilities ?? []),
     ],
   };

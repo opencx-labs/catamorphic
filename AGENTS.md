@@ -167,10 +167,11 @@ maintained and its examples exercised independently.
 
 `HOST_SKILLS` includes `workflow-lifecycle` (source placement and enablement),
 `session-workflows` (timers, events, attention, and actions), `session-artifacts`,
-`searching-documents`, `publishing-to-github`, `slack` (Slack from project code:
-trigger library, a chat per thread, citing), and `reviewing-pull-requests` (pull
-request review as project code: review Environment, reviewer agent, workflows).
-These reach existing projects without rewriting their seeded files. Read the
+`searching-documents`, and `publishing-to-github`. These reach existing projects
+without rewriting their seeded files. Ready-made automations are not skills: they
+are registry packs (`packages/registry`, ADR 0262), such as `pull-request-reviews`
+and `slack-threads`, which an agent fetches with `registry.read`, installs into a
+project, and adapts; each installs a project skill of its own. Read the
 relevant skill when changing its contract; keep sibling guidance consistent.
 Project and user skill overrides retain their existing precedence.
 

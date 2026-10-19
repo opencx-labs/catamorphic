@@ -1823,7 +1823,7 @@ Real GitHub actions remain host-owned. See ADR 0124.
 
 Review components are installed source from the code-review registry pack (ADR 0126).
 Agents reuse project components first, then fetch the pack and adapt local source.
-The desktop consumes the same pack; its components.read capability exposes registry items
+The desktop consumes the same pack; its registry.read capability (ADR 0262) exposes registry items
 and usage notes without changing the project. Temporary reviews retain their pack
 files with the artifact. Future packs use the same registry model.
 ### 2026-09-10: Conversation consent and one search surface
