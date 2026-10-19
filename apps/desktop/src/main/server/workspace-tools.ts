@@ -219,6 +219,13 @@ export interface VoiceSight {
   at: number;
   /** What they said. */
   said: string;
+  /** When its words were heard and went to the chat (epoch ms). */
+  heardAt: number;
+  /**
+   * The turn the message went to, once the chat took it: that turn is
+   * the one this sight describes (ADR 0265).
+   */
+  turnId?: string | null;
   /** The project in front of the Work window they were in. */
   projectId: string | null;
   /** The app in front, when it was not Work (ADR 0236). */

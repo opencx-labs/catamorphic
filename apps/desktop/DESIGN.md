@@ -3401,7 +3401,7 @@ coming back through the speakers, or someone else in the room lets it
 carry on from where it paused, and the bars pick up its voice again. A
 "yeah" or "okay" said while it talks is listening, not a turn: it carries
 on, and nothing is sent. What the person says reaches an agent at work at
-its next step, as a typed message does.
+its next step, as a typed message does by default.
 
 The assistant answered about the wrong pull request: its chat is kept in
 one project, and it looked at that project's window, not the one the
@@ -3410,6 +3410,6 @@ person is in, sees that window, and its tools look there, or at another
 project's window it names. As the person starts speaking, Work keeps what
 was on their screen, since it often changes by the time they finish: the
 turn describes the screen as it was then, and the agent can load a
-picture of it when it needs one. Work pictures its own window, or the
-whole screen when the person has already allowed Work to record it. See
-ADR 0265.
+picture of it when it needs one. Work pictures its own window when Work
+is in front, and from another app the screen, once the person has
+allowed Work to record it. See ADR 0265.

@@ -270,4 +270,4 @@ Settled design decisions live here as short Architecture Decision Records. They 
 | [0261](0261-customize-the-work-server-with-your-own-image.md) | Customize the Work server with your own image: the stock server is one file, and its configuration does not grow | Accepted (refines 0059, 0160; amends 0256) |
 | [0262](0262-recipes-are-registry-packs.md) | Recipes are registry packs: installed into a project and owned there, served by `registry.read` on every host | Accepted (refines 0126, 0179, 0181) |
 | [0264](0264-a-wait-ends-when-something-reaches-the-agent.md) | A wait ends when something reaches the agent: one signal on every host tool call, one way to wait | Accepted (refines 0155, 0240) |
-| [0265](0265-voice-yields-to-the-person-and-keeps-what-they-saw.md) | Voice yields to the person as they start talking, and keeps what was on screen as they spoke | Accepted (amends 0216, 0236) |
+| [0265](0265-voice-yields-to-the-person-and-keeps-what-they-saw.md) | Voice yields to the person, and keeps what they saw as they spoke | Accepted (amends 0216, 0236) |

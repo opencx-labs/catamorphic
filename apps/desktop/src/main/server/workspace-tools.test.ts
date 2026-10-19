@@ -6,7 +6,7 @@ import {
   agentCapabilityTools,
   type ExtraToolContext,
 } from "@catamorphic/sandbox";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import type { WorkspaceBridge } from "../agent-bridge.js";
 import { workPlaybook } from "./workspace-context-agent.js";
@@ -14,6 +14,10 @@ import {
   buildWorkspaceToolkit,
   WORKSPACE_TOOL_POLICY,
 } from "./workspace-tools.js";
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 const context: ExtraToolContext = {
   projectId: "project",
@@ -406,6 +410,8 @@ describe("workspace coordination tools", () => {
     expect(await screen?.execute({}, context)).toBe(
       "The person has not said anything to this chat by voice lately.",
     );
+    // The clock stands still: seconds_ago is exact.
+    vi.useFakeTimers({ toFake: ["Date"], now: 1_800_000_000_000 });
     const at = Date.now() - 4_000;
     toolkit.setVoiceControl({
       talking: () => false,
@@ -414,6 +420,7 @@ describe("workspace coordination tools", () => {
           ? {
               at,
               said: "why is this PR not merged",
+              heardAt: Date.now(),
               projectId: "project",
               app: Promise.resolve(null),
               screen: Promise.resolve(null),
@@ -425,6 +432,7 @@ describe("workspace coordination tools", () => {
           : {
               at,
               said: "fix this sentence",
+              heardAt: Date.now(),
               projectId: null,
               app: Promise.resolve({ app: "Mail", window: "Draft" }),
               screen: Promise.resolve(null),

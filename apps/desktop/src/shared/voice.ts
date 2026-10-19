@@ -342,6 +342,11 @@ export interface VoiceLevels {
   at: number;
   frameMs: number;
   levels: number[];
+  /**
+   * The clips shown before this one are not heard as scheduled: playback
+   * paused, stopped or carried on later (ADR 0265). Their bars go.
+   */
+  reset?: boolean;
 }
 
 /** Audio page → speech worker, over the transferred port. */

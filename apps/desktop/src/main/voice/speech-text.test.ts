@@ -54,6 +54,11 @@ describe("what the person said", () => {
     expect(isAcknowledgement("Okay, okay.")).toBe(true);
     expect(isAcknowledgement("Uh-huh.")).toBe(true);
     expect(isAcknowledgement("Got it.")).toBe(true);
+    // The recognizer often writes the sound before it.
+    expect(isAcknowledgement("Oh, okay.")).toBe(true);
+    expect(isAcknowledgement("Um, yeah.")).toBe(true);
+    expect(isAcknowledgement("Okay, thanks.")).toBe(true);
+    expect(isAcknowledgement("Hmm.")).toBe(false);
     expect(isAcknowledgement("Yes.")).toBe(false);
     expect(isAcknowledgement("No.")).toBe(false);
     expect(isAcknowledgement("Yeah, open it.")).toBe(false);

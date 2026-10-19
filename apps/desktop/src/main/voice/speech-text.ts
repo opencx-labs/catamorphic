@@ -86,11 +86,19 @@ export function isEcho(transcript: string, recentlySpoken: string): boolean {
  * a decision ("yes", "no") are not among them.
  */
 const ACKNOWLEDGEMENTS =
-  /^((yeah|yep|yup|okay|ok|right|sure|alright|all right|cool|nice|great|true|exactly|totally|uh huh|mhm|mm hmm|i see|got it|makes sense|fair enough)\s?){1,3}$/;
+  /^((yeah|yep|yup|okay|ok|right|sure|alright|all right|cool|nice|great|true|exactly|totally|uh huh|i see|got it|makes sense|fair enough|thanks|thank you)\s?){1,3}$/;
 
-/** A listener's acknowledgement alone, which says go on. */
+/**
+ * A listener's acknowledgement alone, which says go on: "Oh, okay." as
+ * much as "Okay.", hesitation sounds aside.
+ */
 export function isAcknowledgement(transcript: string): boolean {
-  return ACKNOWLEDGEMENTS.test(words(transcript).join(" "));
+  const all = words(transcript);
+  const said = all.filter((word) => !FILLERS.has(word));
+  return (
+    ACKNOWLEDGEMENTS.test(all.join(" ")) ||
+    (said.length > 0 && ACKNOWLEDGEMENTS.test(said.join(" ")))
+  );
 }
 
 /** A short spoken command to stop the agent, not a message for it. */

@@ -1,9 +1,17 @@
 import { describe, expect, it, vi } from "vitest";
 
+const access = vi.hoisted(() => ({ screen: "denied" }));
+const sources = vi.hoisted(() => ({ list: [] as unknown[] }));
 vi.mock("electron", () => ({
-  desktopCapturer: { getSources: vi.fn() },
-  screen: {},
-  systemPreferences: { getMediaAccessStatus: () => "denied" },
+  desktopCapturer: { getSources: vi.fn(async () => sources.list) },
+  screen: {
+    getCursorScreenPoint: () => ({ x: 2000, y: 10 }),
+    getDisplayNearestPoint: () => ({
+      id: 2,
+      size: { width: 1920, height: 1080 },
+    }),
+  },
+  systemPreferences: { getMediaAccessStatus: () => access.screen },
 }));
 
 const { SpokenSights, sightFor, takePicture } = await import("./sight.js");
@@ -11,6 +19,7 @@ const { SpokenSights, sightFor, takePicture } = await import("./sight.js");
 const sight = (at: number, said = "what PR is this") => ({
   at,
   said,
+  heardAt: at,
   projectId: "catamorphic",
   app: Promise.resolve(null),
   screen: Promise.resolve("The person is looking at: web page"),
@@ -53,6 +62,34 @@ describe("what the person saw as they spoke", () => {
     } as unknown as Electron.BrowserWindow;
     expect(await takePicture(window, false)).toBeNull();
     expect(capturePage).not.toHaveBeenCalled();
+  });
+
+  it("pictures the display the person is on in another app, only with leave", async () => {
+    const thumbnail = (name: string) => ({ isEmpty: () => false, name });
+    sources.list = [
+      { display_id: "1", thumbnail: thumbnail("left") },
+      { display_id: "2", thumbnail: thumbnail("right") },
+    ];
+    const platform = Object.getOwnPropertyDescriptor(process, "platform");
+    Object.defineProperty(process, "platform", { value: "darwin" });
+    try {
+      access.screen = "granted";
+      expect(await takePicture(null, false)).toMatchObject({ name: "right" });
+      // In Work, its own window: no recording indicator for that.
+      const capturePage = vi.fn(async () => ({
+        isEmpty: () => false,
+        getSize: () => ({ width: 800, height: 600 }),
+      }));
+      const window = {
+        isDestroyed: () => false,
+        webContents: { capturePage },
+      } as unknown as Electron.BrowserWindow;
+      await takePicture(window, true);
+      expect(capturePage).toHaveBeenCalled();
+    } finally {
+      access.screen = "denied";
+      if (platform) Object.defineProperty(process, "platform", platform);
+    }
   });
 
   it("pictures Work's window when Work is in front, no wider than it shows agents", async () => {

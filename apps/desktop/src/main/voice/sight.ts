@@ -37,18 +37,34 @@ export interface Sight {
 /** What the person saw as they started saying a message they sent. */
 export interface SpokenSight extends Sight {
   said: string;
+  /** When its words were heard and went to the chat (epoch ms). */
+  heardAt: number;
+  /** The turn the message went to, once the chat took it. */
+  turnId?: string | null;
 }
 
 /**
- * A picture of what the person sees: the display they are on, when they
- * allowed Work to record the screen (macOS asks for screen sharing); else
- * Work's window when Work is in front; else none, and the agent hears only
- * the app's name. Never asks for a permission itself.
+ * A picture of what the person sees: Work's window when Work is in front,
+ * which needs no permission and shows no recording indicator; in another
+ * app, the display they are on when they already allowed Work to record
+ * the screen (macOS asks for screen sharing); else none, and the agent
+ * hears only the app's name. Never asks for a permission itself.
  */
 export async function takePicture(
   window: BrowserWindow | null,
   workInFront: boolean,
 ): Promise<NativeImage | null> {
+  if (workInFront) {
+    if (!window || window.isDestroyed()) return null;
+    const image = await window.webContents.capturePage(undefined, {
+      stayHidden: true,
+      stayAwake: true,
+    });
+    if (image.isEmpty()) return null;
+    return image.getSize().width > PICTURE_WIDTH
+      ? image.resize({ width: PICTURE_WIDTH })
+      : image;
+  }
   if (
     process.platform === "darwin" &&
     systemPreferences.getMediaAccessStatus("screen") === "granted"
@@ -69,15 +85,7 @@ export async function takePicture(
       sources[0];
     if (source && !source.thumbnail.isEmpty()) return source.thumbnail;
   }
-  if (!workInFront || !window || window.isDestroyed()) return null;
-  const image = await window.webContents.capturePage(undefined, {
-    stayHidden: true,
-    stayAwake: true,
-  });
-  if (image.isEmpty()) return null;
-  return image.getSize().width > PICTURE_WIDTH
-    ? image.resize({ width: PICTURE_WIDTH })
-    : image;
+  return null;
 }
 
 /**
@@ -93,6 +101,9 @@ export class SpokenSights {
   set(sessionId: string, sight: SpokenSight): void {
     this.sights.delete(sessionId);
     this.sights.set(sessionId, sight);
+    // Pictures go once they are old, read or not.
+    for (const [key, kept] of this.sights)
+      if (this.now() - kept.at > KEPT_MS) this.sights.delete(key);
     for (const key of this.sights.keys()) {
       if (this.sights.size <= KEPT_CHATS) break;
       this.sights.delete(key);

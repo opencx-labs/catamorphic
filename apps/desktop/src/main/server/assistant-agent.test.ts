@@ -73,80 +73,124 @@ describe("the assistant", () => {
 
   describe("its window tools", () => {
     /** Each tool reports the project it acted in, beside what it found. */
-    const tool = (name: string, found: Record<string, unknown> = {}) => ({
+    const tool = (
+      name: string,
+      found: Record<string, unknown> = {},
+      only?: string,
+    ) => ({
       name,
       description: name,
       parameters: {},
       execute: async (
         input: Record<string, unknown>,
         context: { projectId: string },
-      ) => ({ ...found, project: context.projectId, input }),
+      ) => {
+        if (only && context.projectId !== only)
+          throw new Error(`No terminal found for ${String(input.key)}`);
+        return { ...found, project: context.projectId, input };
+      },
     });
-    const windows = {
+    const windowsOf = () => ({
       personProject: () => "catamorphic",
       projectNamed: async (name: string) =>
         name.toLowerCase() === "opencx" ? "opencx" : null,
-    };
+      seenElsewhere: new Map<string, string>(),
+    });
     const home = { projectId: "home", sessionId: "assistant" };
 
     it("look where the person is, not where its chat lives", async () => {
-      const [overview, read, todo] = inThePersonsWindow(
+      const [overview, read, open, point, todo] = inThePersonsWindow(
         [
           tool("workspace_overview"),
           tool("read_tab"),
+          tool("open_surface"),
+          tool("point_at"),
           tool("update_todo_list"),
         ],
-        windows,
+        windowsOf(),
       );
-      expect(await overview?.execute({}, home)).toMatchObject({
-        project: "catamorphic",
-      });
-      expect(await read?.execute({ key: "window" }, home)).toMatchObject({
-        project: "catamorphic",
-      });
+      for (const [each, input] of [
+        [overview, {}],
+        [read, { key: "window" }],
+        [open, { target: "https://example.com" }],
+        [point, { target: "browser:pr" }],
+      ] as const)
+        expect(await each?.execute(input, home)).toMatchObject({
+          project: "catamorphic",
+        });
       // Its own things stay with its chat.
       expect(await todo?.execute({}, home)).toMatchObject({ project: "home" });
     });
 
-    it("look at another project's window by name, and act on what they saw there", async () => {
-      const [overview, act] = inThePersonsWindow(
+    it("leave what it drives itself with its chat, whose turn hands it back", async () => {
+      const [act, open, control, point] = inThePersonsWindow(
+        [
+          tool("browser_act"),
+          tool("open_browser"),
+          tool("surface_control"),
+          tool("point_at"),
+        ],
+        windowsOf(),
+      );
+      expect(await act?.execute({ key: "browser:pr" }, home)).toMatchObject({
+        project: "home",
+      });
+      expect(
+        await open?.execute({ url: "https://x.test" }, home),
+      ).toMatchObject({ project: "home" });
+      expect(
+        await control?.execute({ key: "browser:pr", action: "close" }, home),
+      ).toMatchObject({ project: "home" });
+      // A chip is on its own chat.
+      expect(
+        await point?.execute({ target: "chip:terminal:mine" }, home),
+      ).toMatchObject({ project: "home" });
+    });
+
+    it("read its own terminal where its chat is when the person's window lacks it", async () => {
+      const [read] = inThePersonsWindow(
+        [tool("read_tab", {}, "home")],
+        windowsOf(),
+      );
+      expect(await read?.execute({ key: "terminal:mine" }, home)).toMatchObject(
+        {
+          project: "home",
+        },
+      );
+    });
+
+    it("look at another project's window by name, and at what they saw there", async () => {
+      const windows = windowsOf();
+      const [overview, read] = inThePersonsWindow(
         [
           tool("workspace_overview", {
-            tabs: [{ key: "browser:elsewhere-pr" }],
+            tabs: [{ key: "browser:elsewhere-pr" }, { key: "app:dashboard" }],
           }),
-          tool("browser_act"),
+          tool("read_tab"),
         ],
         windows,
       );
       expect(overview?.parameters).toHaveProperty("project");
-      expect(act?.parameters).not.toHaveProperty("project");
+      expect(read?.parameters).toHaveProperty("project");
       expect(
         await overview?.execute({ project: "OpenCX" }, home),
       ).toMatchObject({ project: "opencx", input: {} });
       expect(
-        await act?.execute({ key: "browser:elsewhere-pr" }, home),
+        await read?.execute({ key: "browser:elsewhere-pr" }, home),
       ).toMatchObject({ project: "opencx" });
-      expect(
-        await act?.execute({ key: "browser:on-screen" }, home),
-      ).toMatchObject({ project: "catamorphic" });
+      // A key made from a name is in every window: the person's is meant.
+      expect(await read?.execute({ key: "app:dashboard" }, home)).toMatchObject(
+        { project: "catamorphic" },
+      );
+      expect(windows.seenElsewhere.has("app:dashboard")).toBe(false);
       await expect(
         overview?.execute({ project: "Website" }, home),
       ).rejects.toThrow('No project named "Website"');
     });
 
-    it("leave its own terminals with its chat", async () => {
-      const [control] = inThePersonsWindow([tool("surface_control")], windows);
-      expect(
-        await control?.execute({ key: "terminal:mine", action: "close" }, home),
-      ).toMatchObject({ project: "home" });
-      expect(
-        await control?.execute({ key: "browser:page", action: "close" }, home),
-      ).toMatchObject({ project: "catamorphic" });
-    });
-
     it("stay with its chat when no window shows the person's project", async () => {
       const [overview] = inThePersonsWindow([tool("workspace_overview")], {
-        ...windows,
+        ...windowsOf(),
         personProject: () => null,
       });
       expect(await overview?.execute({}, home)).toMatchObject({

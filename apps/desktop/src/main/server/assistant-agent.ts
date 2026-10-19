@@ -1,5 +1,5 @@
 import type { AgentDelegationPolicy } from "@catamorphic/core";
-import type { ExtraTool } from "@catamorphic/sandbox";
+import type { ExtraTool, ExtraToolContext } from "@catamorphic/sandbox";
 import { z } from "zod";
 
 /** The route to the person's own agent: where work goes by default. */
@@ -65,9 +65,10 @@ export function assistantHostTools(
 }
 
 /**
- * The workspace tools that look at or act in a window, and which calls of
- * them: the assistant's follow the person to the window they are in (ADR
- * 0265), wherever its own chat lives. Its own terminals stay with its chat.
+ * The assistant's tools that look at the screen, show something or point
+ * (ADR 0265): they act where the person is, wherever its own chat lives.
+ * What it drives itself stays with its chat, whose turns hand it back:
+ * browser tabs it holds, its terminals, the chips on its own chat.
  */
 const FOLLOW_THE_PERSON: Record<
   string,
@@ -76,15 +77,16 @@ const FOLLOW_THE_PERSON: Record<
   workspace_overview: () => true,
   read_tab: () => true,
   open_surface: () => true,
-  point_at: () => true,
-  open_browser: () => true,
-  browser_snapshot: () => true,
-  browser_act: () => true,
-  surface_control: (input) => String(input.key).startsWith("browser:"),
+  point_at: (input) => !String(input.target ?? "").startsWith("chip:"),
 };
 
 /** The tools that look at another project's window when it is named. */
 const NAME_A_PROJECT = new Set(["workspace_overview", "read_tab"]);
+
+/** Tabs whose keys are unique across windows: what can be remembered. */
+const UNIQUE_TAB = /^(browser|terminal|editor|chat):/;
+/** Tabs remembered in other projects' windows, at most. */
+const SEEN_TABS = 500;
 
 /** The tab a call is about, when it names one. */
 function tabOf(tool: string, input: Record<string, unknown>): string | null {
@@ -92,14 +94,11 @@ function tabOf(tool: string, input: Record<string, unknown>): string | null {
   return typeof key === "string" ? key : null;
 }
 
-/**
- * Tabs the assistant saw in another project's window: what it does with
- * them goes there. Tab keys are unique across windows.
- */
-const seenElsewhere = new Map<string, string>();
-const SEEN_TABS = 500;
-
-function remember(overview: unknown, projectId: string): void {
+function remember(
+  seenElsewhere: Map<string, string>,
+  overview: unknown,
+  projectId: string,
+): void {
   const tabs =
     overview && typeof overview === "object" && "tabs" in overview
       ? overview.tabs
@@ -107,7 +106,7 @@ function remember(overview: unknown, projectId: string): void {
   if (!Array.isArray(tabs)) return;
   for (const tab of tabs) {
     const key: unknown = tab && typeof tab === "object" ? tab.key : null;
-    if (typeof key !== "string") continue;
+    if (typeof key !== "string" || !UNIQUE_TAB.test(key)) continue;
     seenElsewhere.delete(key);
     seenElsewhere.set(key, projectId);
   }
@@ -118,18 +117,24 @@ function remember(overview: unknown, projectId: string): void {
 }
 
 /**
- * The assistant's window tools, acting where the person is, or in another
+ * The assistant's window tools, looking where the person is, or at another
  * project's window it names (ADR 0265).
  */
 export function inThePersonsWindow<T extends ExtraTool>(
   tools: readonly T[],
   windows: {
-    /** The project in front of the window the person is in. */
-    personProject(): string | null;
+    /** The project in front of the window the person is in, for a call. */
+    personProject(context: ExtraToolContext): string | null;
     /** One of the person's projects, by its name. */
     projectNamed(name: string): Promise<string | null>;
+    /**
+     * Tabs it saw in another project's window, by key, and that project:
+     * what it does with them goes there. One per profile.
+     */
+    seenElsewhere: Map<string, string>;
   },
 ): T[] {
+  const { seenElsewhere } = windows;
   return tools.map((tool) => {
     const follows = FOLLOW_THE_PERSON[tool.name];
     if (!follows) return tool;
@@ -162,14 +167,21 @@ export function inThePersonsWindow<T extends ExtraTool>(
         const projectId =
           elsewhere ??
           (tab ? seenElsewhere.get(tab) : undefined) ??
-          (follows(rest) ? windows.personProject() : null);
-        const result = await tool.execute(
-          names ? rest : input,
-          projectId ? { ...context, projectId } : context,
-        );
-        if (elsewhere && tool.name === "workspace_overview")
-          remember(result, elsewhere);
-        return result;
+          (follows(rest) ? windows.personProject(context) : null);
+        const own = names ? rest : input;
+        if (!projectId || projectId === context.projectId)
+          return tool.execute(own, context);
+        try {
+          const result = await tool.execute(own, { ...context, projectId });
+          if (elsewhere && tool.name === "workspace_overview")
+            remember(seenElsewhere, result, elsewhere);
+          return result;
+        } catch (cause) {
+          // A tab of its own chat's (a terminal it started) is not in the
+          // person's window: read where it is.
+          if (named || tool.name !== "read_tab") throw cause;
+          return tool.execute(own, context);
+        }
       },
     };
   });

@@ -29,6 +29,7 @@ import { useMicrophones, useWatchedMicrophones } from "../lib/microphones.js";
 import { prefersReducedMotion } from "../lib/motion.js";
 import { useAppPreferences } from "../lib/use-app-preferences.js";
 import { voicePressFor, voiceWindowEntries } from "../lib/voice-menu.js";
+import { scheduleLevels } from "../voice/speech-levels.js";
 import {
   type ContextMenuEntry,
   type MenuAt,
@@ -223,13 +224,11 @@ function VoiceBars({ shown }: { shown: boolean }) {
   useEffect(
     () =>
       desktopApi.onVoiceLevels((levels) => {
-        const clips = scheduled.current;
-        const now = Date.now();
-        while (clips[0] && clipEnded(clips[0], now)) clips.shift();
-        // A clip shown again after a pause starts before the ones it moved.
-        while ((clips.at(-1)?.at ?? Number.NEGATIVE_INFINITY) >= levels.at)
-          clips.pop();
-        clips.push(levels);
+        scheduled.current = scheduleLevels(
+          scheduled.current,
+          levels,
+          Date.now(),
+        );
       }),
     [],
   );

@@ -717,6 +717,12 @@ export function registerVoiceSupport(deps: {
             throw new Error(
               receipt.error?.message ?? "The message was refused",
             );
+          // What they saw describes the turn this message went to.
+          const seen = spoken.get(target.sessionId);
+          if (seen?.said === text && seen.turnId === undefined) {
+            const turnId = receipt.result?.turnId;
+            seen.turnId = typeof turnId === "string" ? turnId : null;
+          }
         },
         interrupt: (target) =>
           sessions.interrupt(identity, target.projectId, target.sessionId),
@@ -863,6 +869,7 @@ export function registerVoiceSupport(deps: {
               at: event.at,
               frameMs: event.frameMs,
               levels: event.levels,
+              ...(event.reset ? { reset: true } : {}),
             });
         return;
       case "learned":
@@ -915,10 +922,12 @@ export function registerVoiceSupport(deps: {
     }
     const inWork = workInFront();
     const focused = BrowserWindow.getFocusedWindow();
+    // The window in front, else the one voice talks for: the last one
+    // they were in, or the one they picked in the bubble's menu.
     const window =
       focused && ofProfile(focused, voice.profileId)
         ? focused
-        : windowFor(voice.profileId);
+        : (voiceWindow(voice) ?? windowFor(voice.profileId));
     const projectId = windowProject(window, voice.profileId);
     const target = voice.live.target;
     const chat = target?.kind === "chat" ? target : null;
@@ -958,7 +967,11 @@ export function registerVoiceSupport(deps: {
     seen: Sight | null,
   ) => {
     if (seen && !isStopCommand(text))
-      spoken.set(conversation.ref.sessionId, { ...seen, said: text });
+      spoken.set(conversation.ref.sessionId, {
+        ...seen,
+        said: text,
+        heardAt: Date.now(),
+      });
     if (active !== voice || voice.conversation !== conversation) return;
     await conversation.heard(text);
   };

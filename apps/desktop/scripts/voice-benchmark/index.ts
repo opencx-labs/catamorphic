@@ -65,6 +65,7 @@ const BEFORE: Hearing = {
   gateDb: 0,
   gateHoldSeconds: 0,
   sureOfWords: Number.NEGATIVE_INFINITY,
+  sureOfDictation: Number.NEGATIVE_INFINITY,
   sameVoice: -1,
   nearerDb: Number.POSITIVE_INFINITY,
   bargeInDb: null,

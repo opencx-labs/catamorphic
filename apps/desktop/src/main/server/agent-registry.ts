@@ -31,6 +31,7 @@ import {
 import {
   type AgentMcpServerConfig,
   type ExtraTool,
+  type ExtraToolContext,
   PROJECT_TOOLS_SERVER_KEY,
   type TurnContextFragment,
 } from "@catamorphic/sandbox";
@@ -99,9 +100,16 @@ import {
 import {
   buildWorkspaceToolkit,
   type VoiceControl,
+  type VoiceSight,
   type WorkspaceTool,
   type WorkspaceToolkit,
 } from "./workspace-tools.js";
+
+/**
+ * A spoken message's turn starts as soon as the chat takes it: until the
+ * chat says which turn it went to, a sight this fresh is that turn's.
+ */
+const SPOKEN_TURN_MS = 15_000;
 
 /** A host-placed harness: what every desktop agent runs on. */
 type HostHarness = Extract<RegisteredHarness, { placement: "host" }>;
@@ -294,6 +302,8 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
   private voice: VoiceControl | null = null;
   /** Where the person is, by profile (ADR 0265); late-bound. */
   private personProject: (profileId: string) => string | null = () => null;
+  /** Tabs each profile's assistant saw in other projects' windows. */
+  private readonly seenElsewhere = new Map<string, Map<string, string>>();
   private readonly harnessComponents: HarnessComponentStore;
   private readonly mcp: DesktopAgentMcp;
   /**
@@ -1430,8 +1440,7 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
         // window they are in, wherever its own chat lives (ADR 0265).
         const talking =
           !!turn.sessionId && !!this.voice?.talking(turn.sessionId);
-        const sight =
-          talking && turn.sessionId ? this.voice?.sight(turn.sessionId) : null;
+        const sight = this.spokenSight(turn);
         const place = assistant
           ? sight
             ? sight.projectId
@@ -1494,8 +1503,16 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
    * in, or one of the profile's projects by name.
    */
   private personsWindows(profileId: string) {
+    let seenElsewhere = this.seenElsewhere.get(profileId);
+    if (!seenElsewhere) {
+      seenElsewhere = new Map();
+      this.seenElsewhere.set(profileId, seenElsewhere);
+    }
     return {
-      personProject: () => this.personProject(profileId),
+      seenElsewhere,
+      // Where they were as they said this turn's message, else now.
+      personProject: (context: ExtraToolContext) =>
+        this.spokenSight(context)?.projectId ?? this.personProject(profileId),
       projectNamed: async (name: string) => {
         const wanted = name.trim().toLowerCase();
         for (const projectId of this.deps.profiles.get(profileId)?.projectIds ??
@@ -1509,6 +1526,25 @@ export class DesktopAgentRegistry implements CodingAgentRegistry {
         return null;
       },
     };
+  }
+
+  /**
+   * What the person saw as they started saying the message that started
+   * this turn (ADR 0265): their latest spoken message's, for the turn it
+   * went to, or, before the chat said which, if it was just heard. A turn
+   * a typed message or a notification started sees the screen as it is.
+   */
+  private spokenSight(context: {
+    sessionId?: string;
+    turnId?: string;
+  }): VoiceSight | null {
+    const { sessionId, turnId } = context;
+    if (!sessionId || !this.voice?.talking(sessionId)) return null;
+    const sight = this.voice.sight(sessionId);
+    if (!sight) return null;
+    if (sight.turnId !== undefined)
+      return sight.turnId !== null && sight.turnId === turnId ? sight : null;
+    return Date.now() - sight.heardAt < SPOKEN_TURN_MS ? sight : null;
   }
 
   /** The project the person is in, named for the assistant (ADR 0265). */

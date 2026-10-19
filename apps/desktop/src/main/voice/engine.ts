@@ -68,6 +68,12 @@ export interface Hearing {
    */
   sureOfWords: number;
   /**
+   * The same for dictation, which writes what it hears for the person to
+   * fix: a name or an identifier the recognizer half knows is still worth
+   * writing, where a message to an agent is not.
+   */
+  sureOfDictation: number;
+  /**
    * How alike a stretch's voice must be to the person's (cosine of
    * ERes2Net embeddings) to be theirs.
    */
@@ -115,6 +121,7 @@ export const HEARING: Hearing = {
   gateDb: 10,
   gateHoldSeconds: 0.25,
   sureOfWords: -0.25,
+  sureOfDictation: -0.35,
   sameVoice: 0.3,
   nearerDb: 4,
   bargeInDb: 4,
@@ -491,7 +498,7 @@ export class VoiceEngine {
       if (this.audible) {
         this.stopSpeaking();
         this.emit({ type: "barge-in" });
-      }
+      } else this.resumeSpeech();
       if (!this.inSpeech) this.beginSpeech();
       this.parts.activity.reset();
       return;
@@ -613,7 +620,8 @@ export class VoiceEngine {
     if (!this.likeThePerson(seconds)) return;
     this.overheard = this.segment;
     this.pausedFor = this.segment;
-    this.pauseChecked = false;
+    // Paused once it was long enough to tell whose: told already.
+    this.pauseChecked = seconds >= VOICE_MIN_SECONDS;
     this.audio({ type: "pause" });
   }
 
@@ -632,10 +640,15 @@ export class VoiceEngine {
       return false;
     this.voiceAsks = { segment: this.segment, times: times + 1 };
     try {
-      return (
-        cosine(this.parts.voiceprint(concat(this.utterance)), voice) >=
-        pauseAlike
-      );
+      const samples = concat(this.utterance);
+      // Long enough to tell, the stretch is judged as it will be once it
+      // ends, so a pause is never undone a moment later.
+      if (seconds >= VOICE_MIN_SECONDS)
+        return (
+          this.whose(this.stretchOf(samples, seconds), { speaking: true }) ===
+          "person"
+        );
+      return cosine(this.parts.voiceprint(samples), voice) >= pauseAlike;
     } catch {
       return false;
     }
@@ -700,7 +713,7 @@ export class VoiceEngine {
           this.listening &&
           this.dictation &&
           text.trim() &&
-          confidence >= this.hearing.sureOfWords
+          confidence >= this.hearing.sureOfDictation
         )
           this.emit({
             type: "dictation",
@@ -836,7 +849,11 @@ export class VoiceEngine {
     // Words made of noise are no words: the keys held say someone spoke.
     const words =
       meaningfulUtterance(text) &&
-      (pressed || recognized.confidence >= this.hearing.sureOfWords);
+      (pressed ||
+        recognized.confidence >=
+          (this.dictation
+            ? this.hearing.sureOfDictation
+            : this.hearing.sureOfWords));
     if (this.dictation) {
       if (words) this.heardFrom(heard, { pressed });
       dictated(words ? text : "");
@@ -857,7 +874,7 @@ export class VoiceEngine {
     if (talking) {
       this.stopSpeaking();
       this.emit({ type: "barge-in" });
-    }
+    } else carryOn();
     this.emit({ type: "utterance", text, segment });
   }
 
@@ -1042,6 +1059,9 @@ export class VoiceEngine {
     if (this.synthesizing || this.drainedSeq < this.sentSeq) return;
     for (const id of this.playing.splice(0))
       this.emit({ type: "spoken", id, interrupted: false });
+    // Its last words ended as the person began: nothing is left to hold,
+    // and what it says next must play.
+    if (!this.audible) this.resumeSpeech();
   }
 
   private remember(text: string): void {

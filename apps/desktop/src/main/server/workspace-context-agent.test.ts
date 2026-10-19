@@ -1,5 +1,5 @@
 import { renderTurnContext } from "@catamorphic/sandbox";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WorkspaceBridge } from "../agent-bridge.js";
 import {
   coordinationStrategyForSession,
@@ -13,6 +13,10 @@ import {
   workspaceInstructions,
   workspaceTurnContext,
 } from "./workspace-context-agent.js";
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 /** The turn context one turn of chat `mine` would carry, rendered. */
 async function contextFor(options: WorkspaceContextOptions): Promise<string> {
@@ -209,6 +213,8 @@ describe("screen context", () => {
 
 describe("where the person is", () => {
   it("describes the screen as the person started speaking, not as it is now", async () => {
+    // The clock stands still: the age is exact.
+    vi.useFakeTimers({ toFake: ["Date"], now: 1_800_000_000_000 });
     const context = renderTurnContext(
       await workspaceTurnContext({
         bridge: bridgeWith({ tabs: [{ ...workSite, title: "Changed since" }] }),

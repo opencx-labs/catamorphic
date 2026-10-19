@@ -1,4 +1,4 @@
-import { VOICE_BARS } from "../../shared/voice.js";
+import { VOICE_BARS, type VoiceLevels } from "../../shared/voice.js";
 
 export const LEVEL_FRAME_MS = 20;
 /**
@@ -25,6 +25,24 @@ const SILENT = 1e-3;
  * filter per band (RBJ, 0 dB peak) and the energy of each frame through
  * it, against the band's full level.
  */
+/**
+ * The clips the speaking animation follows, once another arrives: those
+ * heard already go, and a reset forgets the rest.
+ */
+export function scheduleLevels(
+  clips: readonly VoiceLevels[],
+  next: VoiceLevels,
+  now: number,
+): VoiceLevels[] {
+  const kept = next.reset
+    ? []
+    : clips.filter(
+        (clip) =>
+          clip.at + (clip.levels.length / VOICE_BARS) * clip.frameMs > now,
+      );
+  return next.levels.length > 0 ? [...kept, next] : kept;
+}
+
 export function speechLevels(
   samples: Float32Array,
   sampleRate: number,

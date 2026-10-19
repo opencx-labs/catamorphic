@@ -1,6 +1,11 @@
 import http from "node:http";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { type AppHandle, launchApp, setReactValueJs } from "./harness.js";
+import {
+  type AppHandle,
+  focusWindow,
+  launchApp,
+  setReactValueJs,
+} from "./harness.js";
 
 /**
  * Voice (ADR 0216), end to end with scripted speech: the audio page
@@ -409,6 +414,8 @@ describe("voice", () => {
       expect.arrayContaining([
         ...ASSISTANT_SESSION_TOOLS,
         "open_surface",
+        // What was on screen as the person spoke, at once (ADR 0265).
+        "screen_when_spoken",
         "stop_listening",
         "update_todo_list",
       ]),
@@ -925,6 +932,8 @@ describe("voice", () => {
   }, 120_000);
 
   it("keeps what was on screen as the person started speaking, for the agent to load", async () => {
+    // Work in front: the picture is its window, as on any machine.
+    await focusWindow(app);
     await talk(UTTERANCES[11] ?? "", "Saw 1 picture in Work, as you began.");
     await run(`mic().click(); return true;`);
     await runWait(`return mic().dataset.phase === 'off';`, {

@@ -434,8 +434,58 @@ describe("VoiceEngine voice print", () => {
     voice.frame(0.5, 60);
     expect(controls(voice)).toEqual(["pause"]);
     voice.frame(0.5, 100);
-    // Asked twice before pausing, once as it went on: no more.
-    expect(asked).toBe(3);
+    // Asked twice before pausing, the second time as it will be judged:
+    // never again, and never undone a moment later.
+    expect(asked).toBe(2);
+    expect(controls(voice)).toEqual(["pause"]);
+  });
+
+  it("lets go of a pause when its last words ended just as the person began", async () => {
+    const voice = harness(["wait, the other branch"]);
+    voice.engine.speak("reply", "Done.");
+    await voice.settle();
+    voice.frame(0.5, 40);
+    expect(controls(voice)).toEqual(["pause"]);
+    // Its last clip had already ended on the page.
+    voice.drain();
+    expect(controls(voice)).toEqual(["pause", "resume"]);
+    voice.frame(0);
+    await voice.settle();
+    // The next reply plays.
+    voice.engine.speak("next", "Here is the other branch.");
+    await voice.settle();
+    expect(controls(voice)).toEqual(["pause", "resume"]);
+    expect(voice.events.at(-1)).toEqual({ type: "speaking", id: "next" });
+  });
+
+  it("lets go of a pause when the page plays elsewhere or voice learns", async () => {
+    const voice = harness();
+    voice.engine.speak("reply", "Here is a long answer about the build.");
+    await voice.settle();
+    voice.frame(0.5, 40);
+    voice.engine.audioReplaced();
+    voice.frame(0);
+    voice.engine.speak("again", "Another long answer about the build.");
+    await voice.settle();
+    voice.frame(0.5, 40);
+    voice.engine.learn();
+    expect(controls(voice)).toEqual(["pause", "pause", "resume"]);
+  });
+
+  it("carries on at once once a second of it is someone else's", async () => {
+    const voice = harness([], (parts) => {
+      // Like the person at first, then plainly someone else.
+      parts.voiceprint = (samples) =>
+        samples.length / 16_000 < 0.9 ? [1, 0] : [0, 1];
+    });
+    voice.engine.setVoiceprint([1, 0]);
+    voice.engine.speak("reply", "Here is a long answer about the build.");
+    await voice.settle();
+    voice.frame(0.5, 120);
+    expect(controls(voice)).toEqual(["pause", "resume"]);
+    // The same stretch never pauses it again.
+    voice.frame(0.5, 100);
+    expect(controls(voice)).toEqual(["pause", "resume"]);
   });
 
   it("lets speech too short to check through", async () => {
@@ -912,6 +962,31 @@ describe("VoiceEngine held keys", () => {
 describe("VoiceEngine dictation", () => {
   const dictated = (voice: ReturnType<typeof harness>) =>
     voice.events.filter((event) => event.type === "dictation");
+
+  it("writes words it is less sure of than a message to an agent needs", async () => {
+    const unsure = (parts: SpeechParts) => {
+      parts.recognize = async () => ({
+        text: "run tsc on cata",
+        confidence: -0.3,
+      });
+    };
+    const talking = harness([], unsure);
+    talking.frame(0.5, 40);
+    talking.frame(0);
+    await talking.settle();
+    expect(talking.events.map((event) => event.type)).not.toContain(
+      "utterance",
+    );
+    const voice = harness([], unsure);
+    voice.engine.setDictation(true);
+    voice.frame(0.5, 40);
+    voice.frame(0);
+    await voice.settle();
+    expect(dictated(voice).at(-1)).toMatchObject({
+      text: "run tsc on cata",
+      final: true,
+    });
+  });
 
   it("shows the words while the person talks, then what they said", async () => {
     const heard: number[] = [];

@@ -137,14 +137,18 @@ export async function workspaceTurnContext({
 }): Promise<TurnContextFragment[]> {
   const fragments: TurnContextFragment[] = [];
   const where = personProjectId ?? projectId;
-  const screen = spoken
+  // The screen as they started speaking, else, when Work showed nothing
+  // for the chat then, as it is now.
+  const then = spoken
     ? await within(spoken.screen, SPOKEN_SCREEN_WAIT_MS)
-    : await workspaceScreen({ bridge, projectId: where, sessionId });
+    : null;
+  const screen =
+    then ?? (await workspaceScreen({ bridge, projectId: where, sessionId }));
   if (screen)
     fragments.push({
       source: "workspace",
       trust: "observed",
-      text: spoken ? `${spokenScreenLead(spoken.at)}\n${screen}` : screen,
+      text: then && spoken ? `${spokenScreenLead(spoken.at)}\n${then}` : screen,
     });
   const desktop: string[] = [];
   try {
@@ -241,19 +245,29 @@ export async function workspaceScreen({
 /** A screen taken as speech started is long ready by its turn. */
 const SPOKEN_SCREEN_WAIT_MS = 1_500;
 
-function within<T>(promise: Promise<T | null>, ms: number): Promise<T | null> {
-  return Promise.race([
-    promise.catch(() => null),
-    new Promise<null>((resolve) =>
-      setTimeout(() => resolve(null), ms).unref?.(),
-    ),
-  ]);
+async function within<T>(
+  promise: Promise<T | null>,
+  ms: number,
+): Promise<T | null> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise.catch(() => null),
+      new Promise<null>((resolve) => {
+        timer = setTimeout(() => resolve(null), ms);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 function spokenScreenLead(at: number): string {
   const seconds = Math.max(0, Math.round((Date.now() - at) / 1000));
   const ago =
-    seconds < 90 ? `${seconds} seconds` : `${Math.round(seconds / 60)} minutes`;
+    seconds < 90
+      ? `${seconds} ${seconds === 1 ? "second" : "seconds"}`
+      : `${Math.round(seconds / 60)} minutes`;
   return `As the person started saying their latest message, ${ago} before this turn, Work showed this. screen_when_spoken has a picture of their screen then; workspace_overview and read_tab show it now.`;
 }
 
